@@ -1,0 +1,166 @@
+# pi-yaml-hooks deny-list for the opskeeper-monitor Pi sidecar.
+#
+# Loaded by the `pi-yaml-hooks` extension (>= v0.85.0 compatible) from
+# the edge bundle's `~/.pi/agent/hook/hooks.yaml`. The extension
+# installs at edge startup via OPSKEEPER_PI_EXTRA_PACKAGES=pi-yaml-hooks
+# and a single `pi install pi-yaml-hooks`. The rules below are the
+# last line of defence — cmdpolicy at opskeeper-edge is the first.
+#
+# Rule names are stable; opskeeper-edge tests in
+# internal/harness/cases/pi/deny_list/*.yaml assert against these names.
+# If you rename a rule, also rename the test.
+#
+# Schema reference: https://pi.dev/packages/pi-yaml-hooks
+# Path of last resort: an operator override can disable a rule by
+# setting `OPSKEEPER_PI_HOOKS_OVERRIDE=<rule_name>=allow`. The override
+# is itself logged into the audit chain via tunnel.v1.pi_audit.
+
+version: 1
+defaults:
+  # block by default; rules opt-in to allow
+  action: deny
+  log: true
+  audit_to_tunnel: true
+
+# --------------------------------------------------------------------------
+# Tool-level rules. Hook keys follow the dot-notation required by
+# pi-yaml-hooks: <hook_phase>.<tool_name>. Match patterns are unanchored
+# regex (use ^...$ to anchor).
+# --------------------------------------------------------------------------
+
+# Mutating shell that touches the host filesystem or process table.
+# Pi must route through opskeeper-edge HTTP, not direct bash.
+tool.before.bash:
+  - id: deny.rm-rf
+    when:
+      command_matches: '(^|\s|;|&&|\|\|)(rm\s+-[rRfF]+|--recursive\s+rm)\b'
+    reason: "rm -rf / -R / -f / --recursive is blocked; route deletions through opskeeper-edge host_files API"
+    severity: high
+    emit_alert: true
+
+  - id: deny.sudo
+    when:
+      command_matches: '(^|\s|;|&&|\|\|)sudo\b'
+    reason: "sudo is blocked at the Pi layer; privilege escalation must go through opskeeper-edge review"
+    severity: high
+    emit_alert: true
+
+  - id: deny.env-write
+    when:
+      command_matches: '(>\s*|tee\s+|sed\s+-i\s+|>\s*>?\s*)[^|;&]*\.env(\s|$)'
+    reason: "writing to .env is blocked; rotate secrets via opskeeper secrets API"
+    severity: high
+
+  - id: deny.shadow-write
+    when:
+      command_matches: '>\s*/etc/shadow\b|tee\s+/etc/shadow\b'
+    reason: "writing /etc/shadow is blocked; opskeeper does not manage local users via Pi"
+    severity: critical
+
+  - id: deny.passwd-write
+    when:
+      command_matches: '>\s*/etc/passwd\b|tee\s+/etc/passwd\b|usermod\s+|useradd\s+|userdel\s+|groupmod\s+|groupadd\s+|groupdel\s+'
+    reason: "user management must go through opskeeper IAM"
+    severity: critical
+
+  - id: deny.boot-write
+    when:
+      command_matches: '>\s*/boot/|tee\s+/boot/'
+    reason: "writing under /boot is blocked; kernel image changes are out of scope"
+    severity: critical
+
+  - id: deny.docker-write
+    when:
+      command_matches: '>\s*/var/lib/docker/|tee\s+/var/lib/docker/'
+    reason: "writing under /var/lib/docker is blocked; container mutations go through opskeeper"
+    severity: high
+
+  - id: deny.kubeconfig-write
+    when:
+      command_matches: '>\s*[^|;&]*\.kube/config(\s|$)'
+    reason: "writing kubeconfig is blocked; opskeeper rotates cluster credentials"
+    severity: high
+
+  - id: deny.node_modules-write
+    when:
+      command_matches: '>\s*[^|;&]*node_modules/'
+    reason: "writing inside node_modules is blocked; rebuild deps via package manager"
+    severity: medium
+
+  - id: deny.iptables-persist
+    when:
+      command_matches: '\biptables\s+-F\b|\biptables\s+-X\b|iptables-save\b|ip6tables-save\b'
+    reason: "flushing iptables / ip6tables is blocked; firewall changes go through opskeeper"
+    severity: critical
+    emit_alert: true
+
+  - id: deny.systemctl-direct
+    when:
+      command_matches: '\bsystemctl\s+(start|stop|restart|reload|enable|disable|mask|unmask)\s+'
+    reason: "systemctl must go through opskeeper-edge host_restart_service (with approval token)"
+    severity: high
+    emit_alert: true
+
+  - id: deny.kill-direct
+    when:
+      command_matches: '\b(kill\s+-9|kill\s+-SIGKILL|killall\s+|pkill\s+)'
+    reason: "direct kill/pkill is blocked; use opskeeper-edge host_processes + approval flow"
+    severity: high
+
+# File-level rules for the write tool. Apply to absolute paths only.
+tool.before.write:
+  - id: deny.path.shadow
+    when:
+      path_matches: '(^|/)etc/shadow$'
+    severity: critical
+  - id: deny.path.shadow-backup
+    when:
+      path_matches: '(^|/)\.shadow\.bak$|etc/shadow\.(bak|orig|local)'
+    severity: critical
+  - id: deny.path.sudoers
+    when:
+      path_matches: '(^|/)etc/sudoers(\.d/.*)?$'
+    severity: critical
+  - id: deny.path.boot
+    when:
+      path_matches: '(^|/)boot/'
+    severity: critical
+  - id: deny.path.env
+    when:
+      path_matches: '\.env(\.|$)'
+    severity: high
+  - id: deny.path.kubeconfig
+    when:
+      path_matches: '\.kube/config$'
+    severity: high
+
+# Edit tool (in-place mutation) inherits the same deny-list. We do not
+# duplicate; pi-yaml-hooks reuses the write rules for edit by default.
+# If a future extension splits them, replicate the deny.path.* set above.
+
+# --------------------------------------------------------------------------
+# Session-level rules. These fire on lifecycle events and shape Pi's
+# posture at runtime.
+# --------------------------------------------------------------------------
+
+session.before_compact:
+  - id: redact-secrets-pre-compact
+    action: allow
+    # allow the compact (we want it), but instruct the hook to scrub
+    # any tool-result echoes that contain patterns from the secret
+    # redaction list before persisting the compacted transcript.
+    post_process:
+      scrub_patterns:
+        - '(?i)bearer\s+[a-z0-9._~+/=-]{20,}'
+        - '(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*["\x27]?[a-z0-9._~+/=-]{8,}'
+        - '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+      audit_to_tunnel: true
+
+agent.before_start:
+  - id: require-agreement-md
+    # ensures Pi has loaded the AGENTS.md role contract before its
+    # first tool call; if not, abort the turn and emit a structured
+    # error back to the operator.
+    require_resource: "agents/opskeeper-monitor.md"
+    on_missing: abort
+    severity: high

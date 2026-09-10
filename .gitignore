@@ -34,7 +34,12 @@ bin/darwin-*
 bin/windows-*
 
 # Dependencies
-vendor/
+# Keep Go-vendored deps (if any) ignored, but allow the Pi vendor submodule
+# so plan1.0.md P-1 (`vendor/pi` at tag v0.85.1) can be checked in.
+vendor/*
+!vendor/
+!vendor/pi
+!vendor/pi/**
 
 # Go workspace file
 go.work

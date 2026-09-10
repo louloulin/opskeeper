@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# sync-pi.sh — upgrade the vendored Pi sidecar per plan1.0.md P-1 + G-5.
+#
+# Pipeline (idempotent, safe to run repeatedly):
+#   1. Confirm we are at the repo root and on a clean tree (or warn).
+#   2. Resolve target tag from $OPSKEEPER_PI_TAG_LOCK (default v0.85.1).
+#   3. `git fetch` the Pi upstream + update `vendor/pi` submodule to the
+#      target tag, with `--depth 1` to keep the submodule small.
+#   4. `git pull --rebase` against the configured opskeeper upstream so
+#      the bump commit lands on top of the latest main.
+#   5. Render SYSTEM.md via `scripts/render-pi-system-md.py --check` so
+#      CI catches drift before merge.
+#   6. Run `make sync-pi-verify` if defined (harness cases for Pi +
+#      pi-yaml-hooks YAML load test). Skips with a warning if absent.
+#   7. Stage the version bump and print the suggested commit message +
+#      PR title for the operator to review.
+#
+# Exit codes:
+#   0 — bump staged and verified
+#   1 — dirty working tree (operator must clean or stash first)
+#   2 — target tag not found in upstream
+#   3 — git submodule update failed
+#   4 — render-pi-system-md.py reported drift
+#   5 — verify target failed
+#
+# Usage: scripts/sync-pi.sh [--target v0.85.2] [--push] [--yes]
+#
+# Required tools: git, python3 (>= 3.10). Optional: gh (only if --push).
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+TARGET_TAG="${OPSKEEPER_PI_TAG_LOCK:-v0.85.1}"
+DO_PUSH=0
+ASSUME_YES=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --target) TARGET_TAG="$2"; shift 2 ;;
+    --push)   DO_PUSH=1; shift ;;
+    --yes|-y) ASSUME_YES=1; shift ;;
+    -h|--help)
+      sed -n '2,30p' "$0"
+      exit 0
+      ;;
+    *) echo "unknown arg: $1" >&2; exit 64 ;;
+  esac
+done
+
+log()  { printf '\033[1;34m[sync-pi]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[sync-pi]\033[0m %s\n' "$*" >&2; }
+fail() { printf '\033[1;31m[sync-pi]\033[0m %s\n' "$*" >&2; exit "${2:-1}"; }
+
+# 1. Working tree cleanliness
+if ! git diff --quiet --ignore-submodules=dirty HEAD; then
+  if [[ $ASSUME_YES -eq 1 ]]; then
+    warn "working tree dirty; proceeding with --yes (changes will mix into the bump commit)"
+  else
+    fail "working tree is dirty; commit/stash before running sync-pi (use --yes to override)"
+  fi
+fi
+
+# 2. Confirm tag exists upstream
+log "checking upstream tag $TARGET_TAG ..."
+if ! git ls-remote --tags --exit-code https://github.com/earendil-works/pi.git "refs/tags/$TARGET_TAG" >/dev/null; then
+  fail "tag $TARGET_TAG not found at https://github.com/earendil-works/pi.git" 2
+fi
+
+# 3. Fetch + checkout in the submodule
+log "updating vendor/pi to $TARGET_TAG (depth 1) ..."
+if ! git submodule update --init --depth 1 --remote vendor/pi; then
+  fail "git submodule update --init failed" 3
+fi
+(
+  cd vendor/pi
+  git fetch --tags --depth 1 origin "$TARGET_TAG" >/dev/null
+  if ! git checkout "$TARGET_TAG"; then
+    fail "could not checkout $TARGET_TAG inside vendor/pi" 3
+  fi
+)
+
+# 4. Pull --rebase the opskeeper branch so the bump sits on top of main
+if [[ -n "$(git remote)" ]]; then
+  log "rebasing onto $(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo origin/main) ..."
+  git pull --rebase --autostash || warn "rebase paused; resolve manually then run sync-pi again"
+fi
+
+# 5. SYSTEM.md drift check
+if [[ -x scripts/render-pi-system-md.py ]]; then
+  log "checking pi-skills/opskeeper-monitor/AGENTS.md renders cleanly ..."
+  if ! python3 scripts/render-pi-system-md.py --check; then
+    fail "render-pi-system-md.py --check failed (re-run without --check to regenerate)" 4
+  fi
+fi
+
+# 6. Verify harness
+if command -v make >/dev/null && grep -q '^sync-pi-verify:' Makefile 2>/dev/null; then
+  log "running make sync-pi-verify ..."
+  if ! make sync-pi-verify; then
+    fail "make sync-pi-verify failed; bump is staged but DO NOT push" 5
+  fi
+else
+  warn "make sync-pi-verify not defined; skipping Pi harness cases (CI must enforce)"
+fi
+
+# 7. Stage + summarize
+git add vendor/pi .gitmodules 2>/dev/null || true
+
+PI_VERSION_ACTUAL="$(git -C vendor/pi describe --tags --exact-match HEAD 2>/dev/null || echo unknown)"
+
+cat <<EOF
+
+[sync-pi] bump staged.
+  target tag   : $TARGET_TAG
+  actual head  : $PI_VERSION_ACTUAL
+  changed paths: $(git diff --cached --name-only | tr '\n' ' ')
+
+Suggested commit message:
+
+  bump pi to $TARGET_TAG
+
+  - vendor/pi updated via git submodule update --depth 1
+  - AGENTS.md / SYSTEM.md re-rendered (no drift)
+  - pi-yaml-hooks deny-list unchanged; re-run scripts/audit-hooks-yaml.sh to confirm
+
+Suggested PR title:
+
+  bump pi $PI_VERSION_ACTUAL → $TARGET_TAG
+
+EOF
+
+if [[ $DO_PUSH -eq 1 ]]; then
+  if ! command -v gh >/dev/null; then
+    fail "gh CLI not installed; cannot --push" 64
+  fi
+  log "creating PR via gh ..."
+  gh pr create \
+    --title "bump pi $PI_VERSION_ACTUAL → $TARGET_TAG" \
+    --body "Auto-generated by scripts/sync-pi.sh. Pipeline: submodule bump + rebase + render check + harness verify." \
+    --base main \
+    --head "$(git rev-parse --abbrev-ref HEAD)"
+fi
+
+log "done."

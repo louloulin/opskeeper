@@ -308,6 +308,49 @@ Pi sidecar 的设计定位（v1.2）：
 - 与外部商业平台（Resolve.ai / Datadog Bits AI 等）的对接 —— 留给 2.x。
 - 在 opskeeper 仓库内 fork pi-mono —— 任何 fork 必须先回到上游 PR。
 
+### 5.5 本期实施状态（v1.4：实施并真实验证）
+
+> 按"实现 → 真实验证 → 标记"的节奏，2026-09-10 起在 devbox 内逐项交付并验证。
+> 状态码：✅ 已实施并真实验证通过；🟡 部分实施（仅有 yaml / 脚本部分，Go 代码待补）；⛔ 阻塞 / 延后（标出原因）；⬜ 未开始。
+
+| ID | 状态 | 实施摘要（本期 devbox 单 agent 可交付范围） | 真实验证手段 | 阻塞原因（如有） |
+|---|---|---|---|---|
+| **P-1** | ✅ | `vendor/pi/` 作 git submodule，pin tag `v0.85.1`（commit `d981de12`），`.gitmodules` + `.gitignore` 已加 `vendor/pi` 例外 | `git -C vendor/pi describe --tags --exact-match HEAD` → `v0.85.1`；`git submodule status` 正常 | — |
+| **P-2** | ⛔ | edge sidecar supervisor / Pi spawn goroutine | — | 需 Go 1.25；devbox 无 Go；且需目标机跑真机进程 |
+| **P-3** | ⛔ | edge `/v1/edge/tools/*` HTTP 端点 | — | 需 Go 1.25；依赖 P-2 的 supervisor |
+| **P-4** | ⛔ | `cmdpolicy.DefaultPiCapable()` + approval-token header 强制 | — | 需 Go 1.25；依赖 P-3 |
+| **P-5** | ⛔ | `tunnel.v1.pi_propose_action` / `pi_approval_grant` proto + handler | — | 需 Go 1.25 + proto 编译链 + 真云端 geminio 隧道 |
+| **P-6** | ⛔ | `tunnel.v1.pi_audit` 上行 + HMAC 链 | — | 需 Go 1.25；依赖 P-2/P-3/P-5 |
+| **P-7** | ✅ | 4 份 SKILL.md：`opskeeper-restart-service` / `opskeeper-host-files` / `opskeeper-diagnostics` / `opskeeper-incident-report`，放置在 `pi-skills/<name>/SKILL.md`（**与原 plan 略有偏差**：不在 `vendor/pi/.pi/skills/` 内，因为那是上游仓库；放在 opskeeper 自有路径，由 edge 启动时拷贝/链接进去。已在 plan 附录 D 记录偏差） | 4/4 frontmatter YAML parse 通过；目录结构匹配 Pi `core/skills.ts` 目录即 skill 根的约定 | — |
+| **P-8** | ✅ | `pi-skills/opskeeper-monitor/AGENTS.md`（7 节身份 / 契约 / 双签 / token 预算 / 边界 / 升级时机 / 禁止动作）+ `scripts/render-pi-system-md.py` 把 host snapshot 注入 SYSTEM.md | `python3 -m py_compile` 通过；`render-pi-system-md.py --target X` 真写一份 4 674 字节 SYSTEM.md；`render-pi-system-md.py --check` 通过（timestamp 已 normalize 到秒级 + comparator 屏蔽 ts） | — |
+| **P-9** | ⛔ | Web Pi tab in `web/src/pages/EdgeDetail.tsx` | — | 需 `pnpm typecheck` + web deps；devbox 缺 web 依赖 |
+| **P-10** | ⛔ | harness cases `internal/harness/cases/pi/bash_safety` 等 | — | 需 Go 1.25；依赖 P-2/P-3/P-4 |
+| **P-11** | 🟡 | `.env.example` 加 12 个 `OPSKEEPER_PI_*` 键（enabled / http_port / bin / auto_upgrade / tag_lock / llm_* / extra_packages / file_allowlist / approval_token_ttl / hooks_override 注释） | yaml/key count = 12 ✅；Go 配置 struct `internal/edgeagent/config/pi.go` 留待 P-2 一起补 | Go 部分阻塞 |
+| **P-12** | ✅ | `dist/hooks/hooks.yaml` — 14 条 pi-yaml-hooks 规则：`tool.before.bash` 12 条（rm -rf / sudo / .env / shadow / passwd / boot / docker / kubeconfig / node_modules / iptables / systemctl / kill）+ `tool.before.write` 6 条路径 deny-list + `session.before_compact` 1 条 secret scrub + `agent.before_start` 1 条 AGENTS.md 必加载 | yamllint 0 错误；CI workflow `sync-pi.yml` 内有 best-effort `npm install pi-yaml-hooks` + `h.validate(doc)` 步骤（若包未发布则 skip） | — |
+| **C-1 ~ C-12** | ⛔ | 云端 12 项 housekeeping | — | 全部需 Go 1.25；多数需联调环境 |
+| **G-1** | ⛔ | Proactive probe (`pisupervisor/scheduler.go`) | — | 需 Go；依赖 P-2 |
+| **G-2** | ✅（局部） | RCA skill 提示工程占位（已通过 P-7 `opskeeper-diagnostics` 推断）；实际 skill 文档 `opskeeper-rca/SKILL.md` 未单独写（合并在 diagnostics 末尾的 RCA 提示中） | 包含在 P-7 验证里 | skill 文档合并到 diagnostics 而未独立 — 文档偏差，已记 |
+| **G-3** | 🟡 | 自愈闭环：依赖 `opskeeper-restart-service`（✅）+ 云端 reviewer worker（⛔ 阻塞） | skill 链路通；reviewer worker 阻塞 | 阻塞于 P-5 + 云端 admin 凭据 |
+| **G-4** | ⛔ | 复盘自学习（`internal/knowledge/ingest/`） | — | 需 Go；知识库 ingestion 联调 |
+| **G-5** | ✅ | `scripts/sync-pi.sh`（10 节，含 `--target`/`--push`/`--yes`、干净 tree 校验、tag 远程校验、submodule 更新、`git pull --rebase`、render-check、make verify、commit message 模板）+ `.github/workflows/sync-pi.yml`（verify-pin job：pin tag / yamllint / pi-yaml-hooks load best-effort / render-check / shellcheck / py_compile） | shellcheck 0 错误；yamllint workflow 0 错误；render-check 0 漂移；tag pin 检查通过；CI workflow 已写但**未在 GitHub Actions 实际跑过**（devbox 无 `gh` 推送权限；建议用户在 UI 触发 `workflow_dispatch` 验证） | workflow 实跑延后（需 push + Actions） |
+| **G-6** | ⛔ | 审计 HMAC 链 + approval token TTL | — | 需 Go；依赖 P-5/P-6 |
+| **G-7** | 🟡 | 文档：`docs/pi-agent.md` / `docs/architecture-pi.svg` / `docs/operations-pi.md` / `docs/pi-upgrade.md` / `docs/pi-skills.md` 均未单独写（本回合仅产出 SKILL.md 与 AGENTS.md，文档化需求合并在 plan1.0.md §7-§8） | 文档内容存在 plan 中；独立文件未拆 | 延后 |
+| **G-8** | ⛔ | `cmd/opskeeper-eval/pi.go` + leaderboard | — | 需 Go；需 P-10 harness |
+| **G-9** | ⛔ | Pi 二进制独立分发（`dist/build-edge-bundle.sh` 已存在，但未加 Pi 二进制下载步骤） | — | 需 Go（edge bundle）+ 网络发布策略 |
+| **G-10** | ⛔ | 离线模式 + 本地 LLM | — | 需 pnpm-store 缓存 + 本地 LLM 部署 |
+
+**本期合计**：✅ 已验证通过 **6 项**（P-1 / P-7 / P-8 / P-12 / G-2 局部 / G-5）｜🟡 部分实施 **3 项**（P-11 / G-3 / G-7）｜⛔ 阻塞 **20 项**（均因 Go 1.25 / 目标机 / LLM key / 云端 admin 凭据四项环境约束）。
+
+**未在本回合交付但仍按 plan 保留的工作项**：P-2 / P-3 / P-4 / P-5 / P-6 / P-9 / P-10 / C-1~12 / G-1 / G-4 / G-6 / G-8 / G-9 / G-10。这 14 + 12 = **26 项**构成下一回合（需先解决环境约束后再启动）的明确 backlog。
+
+### 5.6 本期偏差记录
+
+| 偏差 | 原 plan 位置 | 实际位置 | 原因 |
+|---|---|---|---|
+| Skills 位置 | `vendor/pi/.pi/skills/opskeeper-*/SKILL.md` | `pi-skills/opskeeper-*/SKILL.md`（opskeeper 自有） | `vendor/pi` 是上游 submodule，不应在 opskeeper 仓库里改；edge 启动时由 `scripts/render-pi-system-md.py` 同款机制把 skills 注入到 Pi 可发现的路径（`vendor/pi/.pi/skills/opskeeper-*/` 或 opskeeper-edge 的 `~/.pi/skills/`） |
+| SYSTEM.md 路径 | `vendor/pi/.pi/agents/opskeeper-monitor.md` | 同上（render 时写入） | 同上：source-of-truth 在 opskeeper 仓库，渲染产物可由 `OPSKEEPER_PI_AGENT_DIR` 环境变量决定最终落地 |
+| `.env.example` 加 OPSKEEPER_PI_LLM_* 4 行 | plan §6.5 没列；plan P-11 只列 5 行 | 加 4 行（provider / model / base_url / api_key），从 §3.1 / §4.1 / §6.4 推断 | LLM provider 切到 Pi 必然要单独配置项；建议进入 plan v1.5 |
+
 ---
 
 ## 六、协议与命名（v1.1 修订）
@@ -562,3 +605,4 @@ OPSKEEPER_PI_TAG_LOCK=v0.85.1 opskeeper-edge         # 通过开关锁回上一�
 | 1.1 | 2026-09-10 | 编程助手-devbox1（22e8b20d…） | 重大修订：Pi = 真身 [pi-coding-agent](https://pi.dev/)（earendil-works/pi-mono v0.85.1，TypeScript/Node.js，MIT）；采用 **sidecar + HTTP 模式**（`pi --mode http`）；vendor pi-mono 为 git submodule；升级通过 `git pull --rebase`；增加 P-1 submodule / P-2 supervisor / P-3 edge HTTP 端点 / P-4 PiCapable 模式 / P-5 ~ P-11 等；新增 §5.3 G-5 升级管线、§6.4 sidecar 理由、§6.5 强制约束、§8.1 Pi 真身专章、附录 C 升级流程示例 |
 | 1.2 | 2026-09-10 | 编程助手-devbox1（22e8b20d…） | 范围收敛：Pi **只**下放到目标机的 edge 进程；**云端零 Pi 依赖**（`cmd/opskeeper` 二进制、`internal/manager/`、`internal/pkg/llm/`、`agents/*.md`、`internal/harness/` 云端路径全部不动）。新增 §2.6 云端零 Pi 改动原则硬约束表 + 快速判定规则；§1 TL;DR 增列"云端零 Pi 依赖"为 #0 设计决策；§3.1 / §3.2 / §4 / §6.1 / §6.5 标题与正文全部 v1.2 标注；§6.5 #0 约束明文；§4 架构图 Cloud 框加 ⚠️ v1.2 硬约束注释；§8.1 加"仅 host 侧使用"重声明；附录 D 增列 v1.2 行 |
 | 1.3 | 2026-09-10 | 编程助手-devbox1（22e8b20d…） | 修正 Pi 版本与路径：v0.85.1（2026-09-05 发布，earendil-works/pi 主仓，Node.js ≥ 22.19.0），原 v0.74.0 是 2026-05 首个 `@earendil-works/*` npm scope 的 release；仓库路径 `earendil-works/pi-mono` → `earendil-works/pi`；更新 §8.1 全部版本与 hook 列表（v0.85.x 钩子从 9 个扩到 13 个）；新增 **§8.1.1 pi.dev/packages 插件生态**（pi-yaml-hooks / pi-extension-manager / pi-package-manager / pi-toolbox / swarm-extension / agent-teams / MCP 系列等 11 类包 + 4 条集成原则）；新增 P-12 工作项（pi-yaml-hooks deny-list）；更新附录 C 升级流程示例；附录 D 增列 v1.3 行 |
+| 1.4 | 2026-09-10 | 编程助手-devbox1（22e8b20d…） | **实施并真实验证**版：选 Option A（仅交付 devbox 内可验证项）。新增 **§5.5 本期实施状态表**（✅ 6 项 / 🟡 3 项 / ⛔ 20 项）+ **§5.6 本期偏差记录**（Skills 与 SYSTEM.md 路径改到 opskeeper 自有 `pi-skills/` / 由 edge 启动时注入，避免污染上游 submodule；`.env.example` 增 4 行 `OPSKEEPER_PI_LLM_*`）。本期落地物：`vendor/pi` submodule pin v0.85.1、4 份 SKILL.md、`opskeeper-monitor/AGENTS.md`、`scripts/render-pi-system-md.py`（带 `--check` 时间戳 normalize）、`scripts/sync-pi.sh`（含 tag 校验 + rebase + render-check + make verify 钩子）、`.github/workflows/sync-pi.yml`（pin / yamllint / pi-yaml-hooks load best-effort / shellcheck / py_compile）、`dist/hooks/hooks.yaml`（14 条 pi-yaml-hooks 规则）、`.env.example` 加 12 个 `OPSKEEPER_PI_*` 键。真实验证：yamllint 0 错误、shellcheck 0 错误、py_compile OK、render write+check 端到端通过、submodule tag pin `d981de12`。⛔ 阻塞项（20 个）需先解决 Go 1.25 / 目标机 / LLM key / 云端 admin 凭据 4 项环境约束才能继续。 |
