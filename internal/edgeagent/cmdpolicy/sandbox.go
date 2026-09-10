@@ -49,13 +49,22 @@ type PathValidator interface {
 	ValidatePath(path string) error
 }
 
-// Sandbox wires Policy + PathValidator + logger into the executor.
-// Construct via &Sandbox{Policy: ..., PathValidator: ..., Logger: ...}
-// — there is no NewSandbox helper because the wiring is trivial.
+// Sandbox wires Policy + PathValidator + logger + approval-gate into
+// the executor. Construct via &Sandbox{...} — there is no NewSandbox
+// helper because the wiring is trivial.
+//
+// ApprovalChecker is OPTIONAL. When nil (the default), Sandbox.Exec
+// runs every allowed command without consulting a reviewer — this is
+// the right behaviour for opskeeper's default read-only bash skill.
+// When non-nil (set by the Pi-mode endpoint handler), the checker is
+// invoked for any ClassMixed call classified as a write; nil-result
+// means approved, error means denied with that error as the Reason.
+// See CacheApprovalChecker for the in-memory token-cache adapter.
 type Sandbox struct {
-	Policy        *Policy
-	PathValidator PathValidator
-	Logger        *slog.Logger
+	Policy          *Policy
+	PathValidator   PathValidator
+	Logger          *slog.Logger
+	ApprovalChecker ApprovalCheckerFunc
 }
 
 // ShellResult is the wire-friendly outcome of one Sandbox.Exec call.
