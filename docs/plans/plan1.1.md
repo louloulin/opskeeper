@@ -18,7 +18,7 @@ plan1.1 不重写 plan1.0；它是「plan1.0 + 实施前 audit + pi.dev/OSS 资�
 ## 1. 当前基线（plan1.0 v1.12 状态，自动可复现）
 
 ```text
-来源：plan1.0.md §5.5 + 附录 D 修订记录
+来源：plan1.0.md §5.5 + 附录 D（截至 v1.14）
 生成命令：git -C opskeeper log --oneline | head -10
 ```
 
@@ -148,9 +148,9 @@ plan1.1 不重写 plan1.0；它是「plan1.0 + 实施前 audit + pi.dev/OSS 资�
 
 ### 5.1 Phase F — Fleet 维度（3 轮，可与 plan1.0 G-1 并行）
 
-- **F-1**：fleet topology 数据模型 + 云端 fleet view API（`GET /api/v1/fleet/hosts?status=&tag=&since=`）；不引入新依赖；用现有 `internal/manager/` + `web/src/pages/Fleet.tsx`
-- **F-2**：跨 host incident 聚合 —— 同一时间窗 + 同 metric 维度 + 同一类 anomaly 归并为 1 个 cluster-wide incident；用现有 `internal/harness/cases/edge/*` 5 类 case 做 dedup 基准
-- **F-3**：跨 host RCA —— 当 F-2 把 N 个 host 聚成 1 个 incident，云端 LLM 用 eino ReAct（云端 reviewer worker）+ 抓各 host 的 `dmesg/journal/top/iostat` 出 cluster-wide root cause
+- **F-1**：✅ **已实现并验证** — fleet host read model + 云端 fleet view API（`GET /v1/fleet/hosts?status=&role=&since=&limit=&offset=`）；复用现有 `Device` / `Edge` / `edge_devices`，不引入新依赖；新增 `internal/manager/biz/fleet/` 与 `internal/manager/server/fleet/`，并接入 `cmd/opskeeper/main.go`。认证、筛选、分页、host-edge join、secret 不泄漏均有测试。
+- **F-2**：✅ **已实现并验证** — 跨 host incident 聚合（cluster-wide "wave"）read model。`internal/manager/biz/fleet/cluster.go` 把 `alert_incidents` 的 per-host 行折叠成跨 host incident：分组键 = (anomaly class 由 rule key 归一化得出) + (signal dimension，剥离 host 身份标签) + (滑动 first-firing 窗口，默认 10 min / 上限 24 h)，并要求至少 `min_hosts`（默认 2 / 上限 100）台不同主机。窗口外的复发成为独立 wave，不会被并入陈旧分组。纯确定性、无 LLM 依赖：同样的 incident 行永远产出同样的分组与顺序。新增 `GET /v1/fleet/cluster-incidents?status=&severity=&since=&window=&min_hosts=&limit=&offset=`（未接线时 501）。分类器同时覆盖三类真实 rule key：内置 seed 规则（`cpu_high` / `disk_full_warning` / `scrape_down` …，前缀表）、harness/custom `<domain>/<case>`（`host/cpu-spike` / `k8s/pod-oom`，归一化后前缀表）、Alertmanager 告警名（`HostHighCpuLoad` 这类无分隔符 key，子串关键词阶段）。biz 层 13 个 case + HTTP 层 6 个契约 case 全绿；`go vet -mod=mod` 0 错误。
+- **F-3**：跨 host RCA —— 当 F-2 把 N 个 host 聚成 1 个 incident，云端 LLM 用 eino ReAct（云端 reviewer worker）+ 抓各 host 的 `dmesg/journal/top/iostat` 出 cluster-wide root cause（仍待后续轮次；F-2 已提供其分组输入）
 
 ### 5.2 Phase A — AI 运维军团（3 轮，依赖 P-5 tunnel）
 
@@ -171,7 +171,7 @@ plan1.0 §六.5 列了 7 条强制约束（云端零 Pi 依赖、HTTP loopback�
 | plan1.1 维度 | plan1.0 §六.5 约束如何保留 |
 |---|---|
 | F-1 fleet view | 云端 `internal/manager/` 新增 API；不引入 Pi 依赖 |
-| F-2 incident dedup | 云端 eino ReAct 跑；Pi 只上行 raw anomaly 数据 |
+| F-2 incident dedup | 云端纯确定性 read model（无 LLM、无 Pi 依赖）；Pi 只上行 raw anomaly 数据 |
 | F-3 cross-host RCA | 云端 reviewer + investigator worker；Pi 只提供 per-host 事实源 |
 | A-1 swarm | Pi sidecar 加 swarm 包；云端不变 |
 | A-2 fleet role | edge `internal/edgeagent/biz/pi_config.go` 加 role 字段；云端不变 |
@@ -182,15 +182,16 @@ plan1.0 §六.5 列了 7 条强制约束（云端零 Pi 依赖、HTTP loopback�
 
 ## 7. 成功标准（plan1.1 自身）
 
-- ✅ Phase F 全部 3 轮在 devbox 内交付 + 单测通过（受限于 Go 1.25 / 目标机环境约束，但 spec + 接口 + 单测可达）
-- ✅ Phase A A-1 ADR 写完（`docs/adr/0001-swarm-extension-integration.md`）
+- ✅ **Phase F-1** 在 devbox 内交付并通过 targeted 单测 / vet（fleet read model + `/v1/fleet/hosts`）。
+- ✅ **Phase F-2** 在 devbox 内交付并通过 targeted 单测 / vet（cluster-wide incident 聚合 read model + `/v1/fleet/cluster-incidents`，20 个 case）；F-3 仍待后续轮次。
+- ⛔ Phase A A-1 ADR 仍未交付，需先完成 swarm-extension spike。
 - ✅ 每轮 commit 符合 plan1.0 附录 D commit 模板
 - ⛔ Phase S 全部待 P-5 tunnel proto + 真机 e2e
 
 ## 8. 失败条件 / 已知风险
 
 1. **swarm-extension 与 opskeeper 现有架构兼容性**：plan1.0 v1.3 误判 swarm-extension 不需要；plan1.1 重审前应先做 spike（A-1 ADR 第一阶段）
-2. **cross-host RCA 性能**：5 个 fact source × 10 host = 50 个并发 fetch，云端 reviewer worker 需要并发控制
+2. **cross-host RCA 性能**：5 个 fact source × 10 host = 50 个并发 fetch，云端 reviewer worker 需要并发控制（F-2 本身为单次 `alert_incidents` 扫描，上限 2000 行，无并发放大）
 3. **postmortem 召回语义**：fastembed-go 算相似度的阈值 / schema 版本兼容性 / postmortem 长度上限需 spec
 4. **白名单误用风险**：S-1 显式白名单可能漏判；需配套 review 抽检（云端 reviewer 周期性 audit 白名单执行）
 5. **fleet rollout 风险**：新 Pi version 上线时 N host 同时升级可能雪崩；需分批（10% → 50% → 100%）canary 策略（plan1.0 §五.5 G-5 升级管线已含 tag 校验 + rebase，缺分批）

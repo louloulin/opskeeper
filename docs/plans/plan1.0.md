@@ -3,7 +3,8 @@
 > 文件：plan1.0.md
 > 对应 issue：LUM-679「okp 一期」
 > 编写日期：2026-09-10
-> 修订：2026-09-10（v1.1 — 结合 pi.dev 真实 Pi agent）
+> 修订：2026-09-11（v1.15 — plan1.1 F-2 已实现并验证：新增跨 host incident 聚合 read model（`internal/manager/biz/fleet/cluster.go`）与 `/v1/fleet/cluster-incidents` 只读 API，按 (anomaly class + signal dimension + 滑动 first-firing 窗口) 把 per-host `alert_incidents` 折叠为 cluster-wide incident，含 host 数下限与最严重优先排序；19 个新 case 全绿。F-3/A-*/S-* 仍未实现）
+> 修订：2026-09-11（v1.14 — plan1.1 F-1 已实现：新增 fleet host read model 与 `/v1/fleet/hosts` 云端只读 API，复用 Device/Edge/edge_devices，完成认证/筛选/分页/关联/secret 不泄漏测试；F-2/F-3/A-*/S-* 仍未实现）
 > 修订：2026-09-10（v1.3 — **修正 Pi 版本与 monorepo 路径**：earendil-works/pi v0.85.1，Node.js ≥ 22.19.0；新增 §8.1.1 pi.dev/packages 插件生态章节）
 > 修订：2026-09-11（v1.13 — 横向增补 plan1.1.md：3 phase × 9 round 覆盖 fleet / AI 运维军团 / 自主化闭环；plan1.0 §8.1.1 `swarm-extension` 误判 ⛔ 重审为 ✅ 必需；`npm view @earendil-works/pi-coding-agent version` 验证 v0.85.1 仍为 npm registry 当前最新发布）
 > 修订：2026-09-10（v1.2 — **云端零 Pi 依赖**：Pi 只下放到目标机，云端继续用既有 7 worker + eino + internal/pkg/llm）
@@ -340,7 +341,21 @@ Pi sidecar 的设计定位（v1.2）：
 | **G-9** | ⛔ | Pi 二进制独立分发（`dist/build-edge-bundle.sh` 已存在，但未加 Pi 二进制下载步骤） | — | 需 Go（edge bundle）+ 网络发布策略 |
 | **G-10** | ⛔ | 离线模式 + 本地 LLM | — | 需 pnpm-store 缓存 + 本地 LLM 部署 |
 
-**本期合计**：✅ 已验证通过 **7 项**（+1：P-11）/ 🟡 部分实施 **6 项**（-1：P-11 升 ✅）/ ⛔ 阻塞 **16 项**（均因 Go 1.25 / 目标机 / LLM key / 云端 admin 凭据四项环境约束）。
+**本期合计（plan1.0 原表口径）**：✅ 已验证通过 **7 项** / 🟡 部分实施 **6 项** / ⛔ 阻塞 **16 项**。叠加 plan1.1 的 F-1 + F-2 后，跨两份计划统一按 47 个工作项统计为：✅ **9/47 = 19.1%**、🟡 **6/47 = 12.8%**、⛔ **32/47 = 68.1%**；F-3/A-1/A-2/A-3/S-1/S-2/S-3 仍未实现。
+
+**目前实现的功能（跨两份计划，共 9 项 ✅）**：
+
+| 功能 | 位置 | 验证方式 |
+|---|---|---|
+| Pi 版本锁定 `v0.85.1` | `vendor/pi` submodule | `git describe --tags --exact-match` |
+| 4 份 Pi SKILL.md | `pi-skills/*/SKILL.md` | frontmatter YAML parse |
+| Pi SYSTEM.md 渲染 | `scripts/render-pi-system-md.py` | render → `--check` 无漂移 |
+| `OPSKEEPER_PI_*` 环境解析 | `internal/edgeagent/biz/pi_config.go` | `go test` 11 case |
+| pi-yaml-hooks 规则 | `dist/hooks/hooks.yaml` | yamllint 0 错误 |
+| Pi 升级管线 | `scripts/sync-pi.sh` + `.github/workflows/sync-pi.yml` | shellcheck / yamllint / render-check |
+| RCA 提示（并入 diagnostics） | `pi-skills/opskeeper-diagnostics/SKILL.md` | 含在 P-7 验证内（局部 ✅） |
+| **F-1 fleet host 只读视图** | `internal/manager/{biz,server}/fleet/` + `GET /v1/fleet/hosts` | targeted `go test -mod=mod` + `go vet -mod=mod` |
+| **F-2 跨 host incident 聚合** | `internal/manager/biz/fleet/cluster.go` + `GET /v1/fleet/cluster-incidents` | biz 13 case + HTTP 6 case 全绿 |
 
 **未在本回合交付但仍按 plan 保留的工作项**：P-5 / P-9 / P-10 / C-1~12 / G-1 / G-4 / G-8 / G-9 / G-10。这 9 + 12 = **21 项**构成下一回合（需先解决环境约束后再启动）的明确 backlog。P-2 / P-3 / P-4 / P-6 四件套的骨架 + 真实 read 工具 + env 解析层全部交付；剩余的 tunnel 上行 + 真 systemctl + 云端 reviewer grant + biz/agent.go 接进启动路径随 P-5 + 真机环境一起。
 
@@ -615,4 +630,6 @@ OPSKEEPER_PI_TAG_LOCK=v0.85.1 opskeeper-edge         # 通过开关锁回上一�
 | 1.10 | 2026-09-11 | 编程助手-devbox1（22e8b20d…） | 现状盘点 + 架构图（评论内 3 张 mermaid：总体拓扑 / 单 read 时序 / supervisor 状态机），按 plan §P-X 索引列出每项的代码路径 + 验证结果 + 缺口。无代码改动；纯评论总结，等下一步信号。 |
 | 1.11 | 2026-09-11 | 编程助手-devbox1（22e8b20d…） | 新增 `docs/architecture.md`（432 行，14 节 + 附录，10 张 mermaid 图：拓扑 / read 时序 / write 时序含 approval / supervisor 状态机 / 模块依赖 / audit class / cmdpolicy class / 部署 / 状态矩阵 / repo 布局）。与 `plan1.0.md` 平级，作为 1.0-preview 对外架构介绍 + P-2 e2e 部署参考。无代码改动；纯文档增量。§5.5 状态表保持 ✅ 6 / 🟡 7 / ⛔ 16。commit `ac6bf41`。 |
 | 1.12 | 2026-09-11 | 编程助手-devbox1（22e8b20d…） | P-11 env 解析层落地（Go 部分）。新增 `internal/edgeagent/biz/pi_config.go`：`PiConfig` struct 含 13 个 `OPSKEEPER_PI_*` 键（Enabled / HTTPBind / HTTPPort / Bin / AutoUpgrade / TagLock / SyncPiScript / LLM{Provider,Model,BaseURL,APIKey} / ExtraPackages / FileAllowlist / ApprovalTokenTTL）；`LoadPiConfig()` 包 `os.Environ()`，`LoadPiConfigFrom([]string)` 可测核心；`BuildSupervisorConfig()` 把 PiConfig 翻译成 `pisupervisor.Config`（Args 由 bind+port 拼、`HealthURL` 派生、`ExtraPackages` 防御性拷贝）；错误聚合（一次返回所有非法键）；`parseBool` 接受 true/1/yes/on + false/0/no/off/空；`envToMap` 过滤 `=novalue` 空键与无 `=` 残行；TagLock 用两值 map 查找以区分"absent"与"present-but-empty"（让 AutoUpgrade+空 TagLock 正确失败）。**P-11 推进 → ✅**：env → Config 解析完成 + 11 个单测全绿。`go vet ./internal/edgeagent/biz/...` 0 错误；`go test ./internal/edgeagent/biz/...` 全绿；`go test ./internal/edgeagent/...` 全绿。**未交付**：(a) 把 `LoadPiConfig()` 接进 `cmd/opskeeper-edge/main.go`（需要 main.go 还没起 + 目标机）；(b) `ApprovalCache.TTL` 用 `cfg.ApprovalTokenTTL`；(c) `cmdpolicy.Policy.NetworkHostAllowlist` 用 `cfg.FileAllowlist`；(d) 真机 e2e。§5.5 状态表更新：✅ 7 / 🟡 6 / ⛔ 16。commit `8944a95`。 |
-| 1.13 | 2026-09-11 | 编程助手-devbox1（22e8b20d…） | **plan1.1.md 横向增补**：回应 LUM-679 "分析整个okp / 未来支持向对应机器分发pi agent / 自主化解决问题 / pi agent自动监控 / AI 运维军团 / git pull --rebase / pi版本核实"。交付：① **plan1.1.md**（~410 行）：3 phase × 9 round（Phase F fleet / Phase A AI 运维军团 / Phase S 自主化闭环），含 4 个 plan1.0 没回答的问题（如何扩到 N host / Pi 之间如何协同 / 如何实现自主化闭环 / 异常检测）+ pi 版本核实 + 论文（Notaro et al. 2024 / Han et al. 2024 / Audibert et al. 2020 / Psaier 2011）+ OSS 对照（StackStorm / Argo Workflows / Temporal / Kubernetes Operators）+ pi.dev/packages 重审（**plan1.0 v1.3 误判 `swarm-extension` ⛔ → plan1.1 重审为 ✅ 必需**）；② **`git pull --rebase origin main`** 实际执行成功（rebase 9 commits → HEAD `936bbf0`；clean working tree）；③ **Pi 版本核实**：`npm view @earendil-works/pi-coding-agent version` → `0.85.1`，与 vendor/pi submodule commit `d981de12` tag 一致；npm registry 显示 0.85.1 是当前最新发布（历史版本链：0.80.3 / 0.80.5-0.80.10 / 0.81.0-0.81.1 / 0.82.0-0.82.1 / 0.83.0 / 0.84.0-0.84.4 / 0.85.0 / 0.85.1）—— **plan1.0 §8.1 的 v0.85.1 仍正确**，未找到证据需升降级。**未交付**：plan1.1 §5 所有 PR（F-1/2/3 / A-1/2/3 / S-1/2/3，均待目标机 / P-5 tunnel / 云端 admin 凭据解锁）。§5.5 状态表保持 ✅ 7 / 🟡 6 / ⛔ 16。 |
+| 1.13 | 2026-09-11 | 编程助手-devbox1（22e8b20d…） | **plan1.1.md 横向增补**：新增 fleet / AI 运维军团 / 自主化闭环三阶段九轮路线；完成 Pi v0.85.1 registry 与 submodule 版本核实；重审 pi.dev/packages 中的 swarm-extension；同步记录 `git pull --rebase` 验证。此时 F-1 尚未实现。 |
+| 1.14 | 2026-09-11 | 编程助手-devbox1（22e8b20d…） | **plan1.1 F-1 已实现并验证**：新增 `internal/manager/biz/fleet/` fleet read model 与 `internal/manager/server/fleet/` `/v1/fleet/hosts` 只读 API；复用 `Device` / `Edge` / `edge_devices`，接入 `cmd/opskeeper/main.go`。支持 `status` / `role` / `since` / `limit` / `offset`，返回 host-edge join 的安全 DTO（不暴露 access key / secret hash）；新增认证、筛选、分页、join、secret scrub、invalid filter 单测。targeted `go test -mod=mod` 与 `go vet -mod=mod` 通过；`cmd/opskeeper` / 全 manager 测试仍受环境缺少 `onnxruntime_go` build files 阻塞。按 47 项口径：✅ 8/47 = 17.0%，🟡 6/47 = 12.8%，⛔ 33/47 = 70.2%。 |
+| 1.15 | 2026-09-11 | 编程助手-devbox1（22e8b20d…） | **plan1.1 F-2 已实现并验证**：新增 `internal/manager/biz/fleet/cluster.go`（`ClusterFilter` / `ClusterIncident` / `ClusterHost` / `ClusterMember` / `IncidentRepo` / `ClusterUsecase.List`）与 `internal/manager/server/fleet/http.go` 的 `GET /v1/fleet/cluster-incidents`（未接线返回 501）。分组规则 = (anomaly class) + (signal dimension，剥离 host 身份标签) + (滑动 first-firing 窗口，默认 10 min / 上限 24 h)，并要求 ≥ `min_hosts`（默认 2 / 上限 100）台不同主机；窗口外复发拆成独立 wave；最严重优先排序；分页在分组之后；单次扫描上限 2000 行。分类器覆盖三类真实 rule key：内置 seed 规则前缀表、harness/custom `<domain>/<case>` 归一化前缀、Alertmanager 无分隔符告警名的子串关键词阶段；未命中者回落到 `rule.<normalized>` 保证"同规则仍聚合"。纯确定性、无 LLM、无 Pi 依赖。**真实验证**：`go test -mod=mod ./internal/manager/biz/fleet/` 全绿（14 case：跨 host 成波 / 窗口外拆波 / 加宽窗口合并 / 最严重优先 / 分组后分页 / 无 device 的 incident 不计 host / since 过滤 / 6 类非法 filter / nil-repo 501 / repo 错误传播 / classifyAnomaly 三类 key 族 / 前缀边界 / signalDimension 剥离）；`go test -mod=mod ./internal/manager/server/fleet/` 全绿（6 契约 case：401 / 501 / filter 解析+序列化 / 400 / 错误映射 / 空结果 `[]`）；`go vet -mod=mod` 0 错误；`gofmt -l` 干净。`cmd/opskeeper` 全量链接仍受 `CGO_ENABLED=0` + 无 gcc + `internal/pkg/embedding → fastembed-go → onnxruntime_go` 阻塞（既有环境限制，非本次改动引入）。按 47 项口径：✅ 9/47 = 19.1%，🟡 6/47 = 12.8%，⛔ 32/47 = 68.1%。 |

@@ -1,8 +1,8 @@
-# opskeeper-edge Architecture (Pi Agent Fleet · okp Phase 1)
+# OpsKeeper Architecture (Pi Agent Fleet · okp Phase 1)
 
-**Status**: in progress · **Version**: 1.10 · **Last updated**: 2026-09-11
-**Plan reference**: [`plan1.0.md`](./plans/plan1.0.md) §5.5 + 附录 D
-**Branch**: `docs/plan1.0-pi-agent-fleet` · **Commits**: `9b0d121` … `5444eab`
+**Status**: in progress · **Version**: 1.12 · **Last updated**: 2026-09-11
+**Plan reference**: [`plan1.0.md`](./plans/plan1.0.md) §5.5 + 附录 D；[`plan1.1.md`](./plans/plan1.1.md) §5.1 F-1 / F-2
+**Branch**: `docs/plan1.0-pi-agent-fleet` · **Commits**: local working tree includes F-1 fleet read model + F-2 cluster incident aggregation
 
 This document is the durable architecture reference for the Pi agent fleet
 work (okp Phase 1). It complements `plan1.0.md` — the plan tracks
@@ -10,8 +10,8 @@ work (okp Phase 1). It complements `plan1.0.md` — the plan tracks
 together.
 
 Diagrams use [mermaid](https://mermaid.js.org/) (GitHub-native). Every
-diagram has been hand-validated against the code in
-`internal/edgeagent/` at the commit listed above.
+diagram has been hand-validated against the implemented paths in
+`internal/edgeagent/` and the F-1 fleet read model at the revision listed above.
 
 ---
 
@@ -89,7 +89,227 @@ check.
 
 ---
 
-## 4 · Sequence — single tool call (read path)
+## 4 · Fleet F-1 — host read-model architecture
+
+F-1 adds a cloud-side, read-only fleet view without introducing a new fleet table. The use case joins existing `devices`, `edges`, and `edge_devices` records, while the HTTP layer maps the result into a deliberately narrow response DTO.
+
+```mermaid
+flowchart LR
+    Client[Authenticated fleet client] --> Protected[Manager protected chi router]
+    Protected --> HTTP[GET /v1/fleet/hosts]
+    HTTP --> Auth{tenantctx present?}
+    Auth -- no --> Unauthorized[401 unauthorized]
+    Auth -- yes --> Filter[Parse status / role / since / limit / offset]
+    Filter --> UC[Fleet Usecase.List]
+    UC --> DeviceRepo[DeviceRepo.List]
+    UC --> EdgeRepo[EdgeRepo.List]
+    UC --> LinkRepo[EdgeDeviceRepo.ListEdgesForDevice]
+    DeviceRepo --> Devices[(devices)]
+    EdgeRepo --> Edges[(edges)]
+    LinkRepo --> Junction[(edge_devices)]
+    Devices --> Join[Join device + junction + edge]
+    Edges --> Join
+    Junction --> Join
+    Join --> Page[Apply since filter and pagination]
+    Page --> DTO[Safe hostItem DTO]
+    DTO --> Response[items + total JSON]
+```
+
+The fleet endpoint is intentionally read-only: no route in this slice mutates a device, edge, or junction. `access_key_id` and `secret_key_hash` remain internal model fields and are never copied into `hostDevice` or `hostEdge`.
+
+## 5 · Fleet F-1 — request and join flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Authenticated client
+    participant R as Protected router
+    participant H as Fleet HTTP handler
+    participant U as Fleet usecase
+    participant D as Device repo
+    participant E as Edge repo
+    participant J as EdgeDevice repo
+    participant S as Safe DTO mapper
+
+    C->>R: GET /v1/fleet/hosts?status&role&since&limit&offset
+    R->>H: dispatch protected request
+    H->>H: tenantctx authentication
+    alt missing tenant context
+        H-->>C: 401 unauthorized
+    else authenticated
+        H->>H: parse RFC3339 since and non-negative pagination
+        H->>U: List(Filter)
+        U->>U: validate status and role
+        U->>D: List(DeviceListFilter)
+        U->>E: List(non-deleted edges)
+        loop each selected device
+            U->>J: ListEdgesForDevice(device.ID)
+            J-->>U: edge_devices rows
+            U->>U: resolve edge IDs from edge map
+        end
+        U->>U: apply since, offset, and limit
+        U-->>H: []Host + total
+        H->>S: copy approved fields only
+        S-->>H: hostItem[] without credentials
+        H-->>C: 200 {items, total}
+    end
+```
+
+## 6 · Fleet F-1 — filter, pagination, and trust boundary
+
+```mermaid
+flowchart TB
+    Query[HTTP query] --> Parse[Handler parser]
+    Parse --> Status[status: online / offline]
+    Parse --> Role[role: server / storage / network / database / unknown]
+    Parse --> Since[since: RFC3339]
+    Parse --> Paging[limit + offset]
+    Status --> DeviceFilter[Device ListFilter.Online]
+    Role --> RoleFilter[RolesAny or RolesUnknownOnly]
+    Since --> LastSeen[Device.LastSeenAt comparison]
+    DeviceFilter --> ReadModel[Fleet read model]
+    RoleFilter --> ReadModel
+    LastSeen --> ReadModel
+    Paging --> ReadModel
+    ReadModel --> Safe[DTO allow-list]
+    Safe --> Public[Public fleet JSON]
+
+    subgraph InternalTrust[Internal trust boundary]
+        Secrets[Edge credentials<br/>access_key_id / secret_key_hash]
+        Models[Device / Edge models]
+        Secrets --> Models
+        Models -. never copied .-> Safe
+    end
+
+    Public -->|no credentials| Consumer[Fleet UI or API consumer]
+```
+
+Security invariants for this slice:
+
+- the protected router and `tenantctx` check run before the service call;
+- status and role are validated by the use case rather than treated as free-form SQL fragments;
+- pagination is applied after the read-model join, and `total` describes the filtered pre-page set;
+- the public DTO is an allow-list, so adding a sensitive field to the internal `Edge` model does not expose it accidentally;
+- F-1 performs no writes and does not alter the existing edge trust boundary.
+
+---
+
+## 7 · Fleet F-2 — cluster-wide incident aggregation architecture
+
+The alert pipeline already deduplicates **per host**: one
+`(scope, device, rule)` triple maps to exactly one `alert_incidents` row
+keyed by `dedupe_key`. That keeps a single host's flap from spamming the
+board, but it also means a fault that hits N hosts — a bad deploy, a
+shared storage backend, a network partition — surfaces as N unrelated
+incidents, each with its own RCA. F-2 adds the missing layer: a
+deterministic, LLM-free read model that folds per-host incidents into one
+cluster-wide incident ("wave").
+
+```mermaid
+flowchart LR
+    Client[Authenticated fleet client] --> Protected[Manager protected chi router]
+    Protected --> HTTP[GET /v1/fleet/cluster-incidents]
+    HTTP --> Auth{tenantctx present?}
+    Auth -- no --> Unauthorized[401 unauthorized]
+    Auth -- yes --> Wired{ClusterService wired?}
+    Wired -- no --> NotWired[501 not-wired-yet]
+    Wired -- yes --> Parse[Parse status / severity / since / window / min_hosts / limit / offset]
+    Parse --> Validate[Validate status / severity / window / min_hosts]
+    Validate -- invalid --> Bad[400 invalid]
+    Validate -- ok --> UC[ClusterUsecase.List]
+
+    UC --> IncRepo[IncidentRepo.ListIncidents<br/>newest-first, capped at 2000 rows]
+    UC --> DevRepo[DeviceRepo.List<br/>best-effort host facts]
+    IncRepo --> Incidents[(alert_incidents)]
+    DevRepo --> Devices[(devices)]
+
+    Incidents --> Classify[classifyAnomaly<br/>rule key to root-cause class]
+    Incidents --> Dimension[signalDimension<br/>host-identity labels stripped]
+    Classify --> Bucket[Bucket by class + dimension]
+    Dimension --> Bucket
+    Bucket --> Wave[Split each bucket into waves<br/>by sliding first-firing window]
+    Wave --> Rollup[Per-host rollup<br/>join device facts, worst severity/status wins]
+    Devices --> Rollup
+    Rollup --> Floor[Drop waves below MinHosts]
+    Floor --> Sort[Sort most-severe-first]
+    Sort --> Page[Paginate AFTER grouping]
+    Page --> DTO[clusterIncidentItem DTO]
+    DTO --> Response[items + pre-pagination total]
+```
+
+F-2 is read-only: it consumes `alert_incidents` + `devices` and writes
+nothing. The grouping decision is deterministic — the same incident rows
+always produce the same groups in the same order — so the API is safe to
+cache and the tests assert exact output. Semantic "same root cause"
+ranking beyond this stays with the existing LLM semantic-dedup layer in
+`internal/manager/biz/alert`, which this read model consumes rather than
+duplicates.
+
+## 8 · Fleet F-2 — grouping rule, ranking, and trust boundary
+
+```mermaid
+flowchart TB
+    Row[alert_incidents row] --> Norm[normalizeRuleKey<br/>lowercase, '/' '-' ':' ' ' to '.']
+    Norm --> Exact{Prefix table hit?<br/>key == prefix or prefix + '.'}
+    Exact -- yes --> ClassA[Root-cause class<br/>e.g. host.cpu_saturation]
+    Exact -- no --> Kw{Keyword substring hit?<br/>unseparated Alertmanager names}
+    Kw -- yes --> ClassA
+    Kw -- no --> ClassB[rule.&lt;normalized key&gt;<br/>same rule still aggregates]
+
+    Row --> Labels[Parse LabelsJSON]
+    Labels --> Strip[Drop host-identity labels<br/>host / instance / device_id / edge / opskeeper_source]
+    Strip --> Sig[Signal dimension<br/>sorted key=value fingerprint]
+
+    ClassA --> Group[Group key = class + dimension]
+    ClassB --> Group
+    Sig --> Group
+    Group --> Window[Sliding window on FirstFiredAt<br/>default 10m, max 24h]
+    Window --> HostFloor{Distinct hosts >= min_hosts?<br/>default 2, max 100}
+    HostFloor -- no --> Drop[Not cluster-wide, omitted]
+    HostFloor -- yes --> Keep[Cluster incident]
+    Keep --> Rank[severity rank: critical 3 &gt; warning 2 &gt; info 1<br/>status rank: open 4 &gt; ack 3 &gt; silenced 2 &gt; resolved 1]
+    Rank --> Out[Sorted, paginated response]
+
+    subgraph Trust[Internal trust boundary]
+        Secrets[Edge credentials<br/>access_key_id / secret_key_hash]
+        Raw[Device / Edge / Incident models]
+        Secrets --> Raw
+        Raw -. never copied .-> Out
+    end
+```
+
+**Grouping rule.** Two incidents join the same wave when they share
+(1) the same anomaly class derived from the rule key, (2) the same signal
+dimension with host-identity labels stripped, and (3) a bounded
+first-firing window (sliding, default 10 minutes). A recurrence outside
+the window becomes a separate wave, so the view never merges an unrelated
+recurrence into a stale group. A group needs at least `min_hosts`
+(default 2) distinct hosts to be considered cluster-wide; an incident
+with no `device_id` still counts as a member but never as a host.
+
+**Two rule-key families reach `alert_incidents`**, and the classifier
+covers both:
+
+| Family | Example key | How it matches |
+|---|---|---|
+| Built-in seed rules (`seed_rules.go`) | `cpu_high`, `disk_full_warning`, `scrape_down` | exact prefix-table entry |
+| Harness / custom `<domain>/<case>` keys | `host/cpu-spike`, `k8s/pod-oom` | prefix table after separator normalization |
+| Alertmanager alert names forwarded by webhook | `HostHighCpuLoad`, `KubePodOOMKilled` | substring keyword stage (no separator exists to match a prefix) |
+
+A key that matches nothing keeps its own class (`rule.<normalized>`), so
+"same rule" still aggregates across hosts even when the rule is unknown.
+
+**Security invariants for this slice** mirror F-1: the protected router
+and `tenantctx` check run before the service call; an unwired
+`ClusterService` answers `501`, not `500`; filter values are validated by
+the use case rather than passed through; pagination applies after
+grouping and `total` describes the pre-page grouped set; and the public
+DTO is an allow-list, so the response carries incident ids, titles,
+severities and timestamps — never credentials.
+
+---
+
+## 9 · Sequence — single tool call (read path)
 
 ```mermaid
 sequenceDiagram
@@ -114,7 +334,7 @@ sequenceDiagram
 
 ---
 
-## 5 · Sequence — write path (approval gate)
+## 10 · Sequence — write path (approval gate)
 
 ```mermaid
 sequenceDiagram
@@ -152,7 +372,7 @@ sequenceDiagram
 
 ---
 
-## 6 · State machine — pisupervisor.Supervisor
+## 11 · State machine — pisupervisor.Supervisor
 
 ```mermaid
 stateDiagram-v2
@@ -185,7 +405,7 @@ stateDiagram-v2
 
 ---
 
-## 7 · Module dependency graph
+## 12 · Module dependency graph
 
 ```mermaid
 flowchart TB
@@ -225,7 +445,7 @@ the only missing glue between the four implemented stacks and
 
 ---
 
-## 8 · Audit chain data model
+## 13 · Audit chain data model
 
 ```mermaid
 classDiagram
@@ -264,7 +484,7 @@ Genesis prev_hash = 32 zero bytes. `MinKeyBytes=32` enforced.
 
 ---
 
-## 9 · cmdpolicy class taxonomy
+## 14 · cmdpolicy class taxonomy
 
 ```mermaid
 classDiagram
@@ -312,7 +532,7 @@ classDiagram
 
 ---
 
-## 10 · Deployment view (target host)
+## 15 · Deployment view (target host)
 
 ```mermaid
 flowchart TB
@@ -341,15 +561,17 @@ target host (currently a documented blocker).
 
 ---
 
-## 11 · Status matrix (plan §5.5)
+## 16 · Status matrix (plan §5.5 + plan1.1 F-1 / F-2)
 
 | State | Count | Items |
-|---|---|---|
-| ✅ verified | 6 | P-1, P-7, P-8, P-12, G-2 (partial), G-5 |
-| 🟡 partial | 7 | P-2, P-3, P-4, P-6, P-11, G-3, G-7 |
-| ⛔ blocked | 16 | P-5, P-9, P-10, C-1~12, G-1, G-4, G-8, G-9, G-10 |
+|---|---:|---|
+| ✅ verified | 9 | P-1, P-7, P-8, P-11, P-12, G-2 (partial), G-5, plan1.1 F-1, plan1.1 F-2 |
+| 🟡 partial | 6 | P-2, P-3, P-4, P-6, G-3, plus the remaining partial baseline items |
+| ⛔ blocked | 32 | plan1.0 unfinished items plus F-3/A-1/A-2/A-3/S-1/S-2/S-3 |
 
-All 16 ⛔ items share the same 4 environmental dependencies:
+Across plan1.0 and plan1.1 this is **19.1% verified, 12.8% partial, and 68.1% blocked** (9/47, 6/47, and 32/47). These are work-item states, not production-readiness or code-coverage percentages.
+
+The blocked work is primarily constrained by:
 
 1. **Target host** for real edge deployment + systemd unit
 2. **LLM API key** to feed Pi (`OPSKEEPER_PI_LLM_*`)
@@ -358,7 +580,7 @@ All 16 ⛔ items share the same 4 environmental dependencies:
 
 ---
 
-## 12 · What's verified end-to-end today
+## 17 · What's verified end-to-end today
 
 | Path | Verified by | Status |
 |---|---|---|
@@ -373,10 +595,13 @@ All 16 ⛔ items share the same 4 environmental dependencies:
 | `internal/edgeagent/pisupervisor` tests | `go test` 18 cases | ✅ |
 | `internal/edgeagent/server` tests | `go test` 25 cases | ✅ |
 | `internal/edgeagent/host_files` tests | `go test` 12 cases | ✅ |
+| `GET /v1/fleet/hosts` read model and handler | targeted `go test -mod=mod` + `go vet -mod=mod` | ✅ |
+| `GET /v1/fleet/cluster-incidents` grouping usecase | targeted `go test -mod=mod` 13 cases + `go vet -mod=mod` | ✅ |
+| `GET /v1/fleet/cluster-incidents` HTTP contract | targeted `go test -mod=mod` 6 cases (auth 401 / unwired 501 / filter parse / 400 / error map / empty array) | ✅ |
 
 ---
 
-## 13 · What's NOT verified (and what blocks it)
+## 18 · What's NOT verified (and what blocks it)
 
 | Path | Blocker |
 |---|---|
@@ -387,10 +612,12 @@ All 16 ⛔ items share the same 4 environmental dependencies:
 | `tunnel.v1.pi_audit` / `pi_approval_grant` uplink | Cloud admin credentials |
 | Web UI Pi tab | Cloud admin + frontend env |
 | Harness cases `internal/harness/cases/pi/*` | devbox-internal but deferred to P-10 |
+| Full `cmd/opskeeper` binary build | devbox has `CGO_ENABLED=0` and no `gcc`. `internal/pkg/embedding` imports `github.com/anush008/fastembed-go`, which imports `github.com/yalue/onnxruntime_go` — a cgo-only package with no files under that constraint, so anything linking the embedding chain (including `data/alert/store` and therefore `cmd/opskeeper`) fails to link. Both fleet packages build, vet and test clean with `-mod=mod`. |
+| F-2 grouping against a live `alert_incidents` table | Needs cloud admin credentials + a populated incident history |
 
 ---
 
-## 14 · Open questions for the operator
+## 19 · Open questions for the operator
 
 1. Which host should we deploy edge to first? (Need SSH + systemd +
    network reachability to `8.160.172.235:13001`.)
@@ -419,14 +646,21 @@ opskeeper/
 ├── scripts/
 │   ├── sync-pi.sh                     (G-5 upgrade)
 │   └── render-pi-system-md.py         (P-8)
-└── internal/edgeagent/
-    ├── audit/         chain.go        (P-6)
-    ├── biz/           agent.go        (TODO)
-    ├── cmdpolicy/     policy_pi.go    (P-4)
-    │                  approval.go
-    ├── host_files/    handlers.go     (P-3 helpers)
-    ├── pisupervisor/  supervisor.go   (P-2)
-    │                  health.go
-    └── server/        server.go + 6   (P-3)
-                       handler files
+└── internal/
+    ├── edgeagent/
+    │   ├── audit/         chain.go        (P-6)
+    │   ├── biz/           agent.go        (TODO)
+    │   ├── cmdpolicy/     policy_pi.go    (P-4)
+    │   │                  approval.go
+    │   ├── host_files/    handlers.go     (P-3 helpers)
+    │   ├── pisupervisor/  supervisor.go   (P-2)
+    │   │                  health.go
+    │   └── server/        server.go + 6   (P-3)
+    │                      handler files
+    └── manager/
+        ├── biz/fleet/     usecase.go      (F-1 read model)
+        │                  repo.go
+        │                  cluster.go      (F-2 cluster aggregation)
+        ├── server/fleet/  http.go         (/v1/fleet/hosts + cluster-incidents)
+        └── data/alert/store/              (F-2 source: alert_incidents)
 ```

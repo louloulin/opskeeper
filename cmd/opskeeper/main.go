@@ -90,6 +90,7 @@ import (
 	managerbizdevice "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
 	managerbizedge "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
 	changeeventbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge/changeevent"
+	managerbizfleet "github.com/vincent-wuhan/opskeeper/internal/manager/biz/fleet"
 	managerbizmetric "github.com/vincent-wuhan/opskeeper/internal/manager/biz/metric"
 	managerbizpromwrite "github.com/vincent-wuhan/opskeeper/internal/manager/biz/promwrite"
 	managerbiztopology "github.com/vincent-wuhan/opskeeper/internal/manager/biz/topology"
@@ -176,6 +177,7 @@ import (
 	managerserverdevice "github.com/vincent-wuhan/opskeeper/internal/manager/server/device"
 	managerserveredge "github.com/vincent-wuhan/opskeeper/internal/manager/server/edge"
 	managerserveredgeauth "github.com/vincent-wuhan/opskeeper/internal/manager/server/edgeauth"
+	managerserverfleet "github.com/vincent-wuhan/opskeeper/internal/manager/server/fleet"
 	managerserverflow "github.com/vincent-wuhan/opskeeper/internal/manager/server/flow"
 	managerserverhitl "github.com/vincent-wuhan/opskeeper/internal/manager/server/hitl"
 	managerserverincident "github.com/vincent-wuhan/opskeeper/internal/manager/server/incident"
@@ -935,6 +937,8 @@ func main() {
 			slog.String("dir", edgeBundleDir), slog.Any("err", err))
 	}
 	deviceHandler := managerserverdevice.NewHandler(deviceUC)
+	fleetUC := managerbizfleet.NewUsecase(deviceRepo, edgeRepo, edgeDeviceRepo)
+	fleetHandler := managerserverfleet.NewHandler(fleetUC)
 
 	// topology layer: nodes / relations / relation types. PR-1
 	// stands up CRUD + 6 built-in relation type seeds; later PRs hook
@@ -984,6 +988,11 @@ func main() {
 	// pipeline-health rules on the same usecase.
 	alertRepo := manageralertdata.NewRepo(db)
 	alertUC := managerbizalert.NewUsecase(alertRepo, log.With(slog.String("comp", "alert")))
+	// F-2: the cluster-wide incident read model folds the per-host incidents
+	// written by the firing path above into cross-host waves. It reads
+	// alert_incidents + devices only and never writes, so it is safe to wire
+	// before the evaluators start.
+	fleetHandler.SetClusterService(managerbizfleet.NewClusterUsecase(alertRepo, deviceRepo))
 	if err := manageralertdata.SeedChannelsFromConfig(rootCtx, alertRepo, cfg.Notification); err != nil {
 		log.Warn("seed notification channels", slog.Any("err", err))
 	}
@@ -2889,6 +2898,7 @@ func main() {
 			edgeHandler.Register(protected)
 			webshellHandler.Register(protected)
 			deviceHandler.Register(protected)
+			fleetHandler.Register(protected)
 			topologyHandler.Register(protected)
 			metricHandler.Register(protected)
 			monitorHandler.Register(protected)
