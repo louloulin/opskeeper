@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -351,5 +352,170 @@ func TestEnforceLoopback(t *testing.T) {
 	}
 	if err := s.enforceLoopback(":9101"); err == nil {
 		t.Errorf("empty host should be rejected")
+	}
+}
+
+// TestHostFilesRead_SandboxReject verifies all three read endpoints
+// return 200 + Allowed=false when the sandbox rejects the path
+// (not 4xx — the LLM contract is "I tried, the answer is no").
+// Audit chain must record one deny event per call.
+func TestHostFilesRead_SandboxReject(t *testing.T) {
+	s := newServerClean(t)
+	// newServerClean wires allowAllValidator, so flip to deny-everything
+	// by setting an explicit allowlist that does NOT include /var/log.
+	// The sandbox rejects paths outside the allowlist when AllowedReadPaths
+	// is non-empty.
+	s.HostFiles = &host_files.SandboxConfig{
+		AllowedReadPaths: []string{"/srv"},
+		AllowedBinaries:  s.HostFiles.AllowedBinaries,
+	}
+	endpoints := []struct {
+		path string
+		body string
+	}{
+		{"/v1/edge/tools/host_files/find_large_files", `{"path":"/var/log"}`},
+		{"/v1/edge/tools/host_files/du_summary", `{"path":"/var/log"}`},
+		{"/v1/edge/tools/host_files/stat_file", `{"path":"/var/log"}`},
+	}
+	for _, ep := range endpoints {
+		body := bytes.NewReader([]byte(ep.body))
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, ep.path, body))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status=%d body=%s", ep.path, w.Code, w.Body.String())
+		}
+		var resp hostFilesReadResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("%s: decode: %v", ep.path, err)
+		}
+		if resp.Allowed {
+			t.Errorf("%s: Allowed=true for denied path", ep.path)
+		}
+		if resp.Reason == "" {
+			t.Errorf("%s: missing reason", ep.path)
+		}
+		if resp.AuditSeq == 0 {
+			t.Errorf("%s: AuditSeq=0; expected chain.Append to have run", ep.path)
+		}
+	}
+}
+
+// TestHostFilesRead_EmptyPathReturns400 verifies all three read
+// endpoints reject empty path with 400 (consistent with /check).
+func TestHostFilesRead_EmptyPathReturns400(t *testing.T) {
+	s := newServerClean(t)
+	for _, path := range []string{
+		"/v1/edge/tools/host_files/find_large_files",
+		"/v1/edge/tools/host_files/du_summary",
+		"/v1/edge/tools/host_files/stat_file",
+	} {
+		body := bytes.NewReader([]byte(`{"path":""}`))
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, body))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status=%d want 400", path, w.Code)
+		}
+	}
+}
+
+// TestHostFilesRead_RejectsGet verifies all three read endpoints
+// return 405 on GET (consistent with other tool endpoints in this
+// package).
+func TestHostFilesRead_RejectsGet(t *testing.T) {
+	s := newServerClean(t)
+	for _, path := range []string{
+		"/v1/edge/tools/host_files/find_large_files",
+		"/v1/edge/tools/host_files/du_summary",
+		"/v1/edge/tools/host_files/stat_file",
+	} {
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s GET: status=%d want 405", path, w.Code)
+		}
+	}
+}
+
+// TestHostFilesRead_HostFilesNotConfigured verifies all three read
+// endpoints return 503 when HostFiles is nil (fail-closed: no
+// accidental bypass via empty sandbox).
+func TestHostFilesRead_HostFilesNotConfigured(t *testing.T) {
+	s := newServerClean(t)
+	s.HostFiles = nil
+	for _, path := range []string{
+		"/v1/edge/tools/host_files/find_large_files",
+		"/v1/edge/tools/host_files/du_summary",
+		"/v1/edge/tools/host_files/stat_file",
+	} {
+		body := bytes.NewReader([]byte(`{"path":"/tmp"}`))
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, body))
+		if w.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s: status=%d want 503", path, w.Code)
+		}
+	}
+}
+
+// TestHostFilesStatFile_AllowedPath exercises the pure-Go stat_file
+// handler end-to-end against a real temp file (no subprocess). It
+// must return Allowed=true with the result JSON populated and an
+// audit sequence assigned.
+func TestHostFilesStatFile_AllowedPath(t *testing.T) {
+	s := newServerClean(t)
+	tmp := t.TempDir()
+	target := tmp + "/probe.txt"
+	if err := os.WriteFile(target, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewReader([]byte(`{"path":"` + target + `"}`))
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/edge/tools/host_files/stat_file", body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var resp hostFilesReadResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Allowed {
+		t.Errorf("Allowed=false: %s", resp.Reason)
+	}
+	if resp.AuditSeq == 0 {
+		t.Errorf("AuditSeq=0")
+	}
+	if len(resp.Result) == 0 {
+		t.Errorf("Result empty; expected stat entry JSON")
+	}
+	// Result is a tunnel.StatFileResultEntry; spot-check the type.
+	var entry struct {
+		Type      string `json:"type"`
+		SizeBytes int64  `json:"size_bytes"`
+	}
+	if err := json.Unmarshal(resp.Result, &entry); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if entry.Type != "file" {
+		t.Errorf("type=%q want file", entry.Type)
+	}
+	if entry.SizeBytes != 5 {
+		t.Errorf("size=%d want 5", entry.SizeBytes)
+	}
+}
+
+// TestHostFilesRead_InvalidJSONReturns400 verifies all three read
+// endpoints reject malformed JSON.
+func TestHostFilesRead_InvalidJSONReturns400(t *testing.T) {
+	s := newServerClean(t)
+	for _, path := range []string{
+		"/v1/edge/tools/host_files/find_large_files",
+		"/v1/edge/tools/host_files/du_summary",
+		"/v1/edge/tools/host_files/stat_file",
+	} {
+		body := bytes.NewReader([]byte(`{not-json`))
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, body))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status=%d want 400", path, w.Code)
+		}
 	}
 }

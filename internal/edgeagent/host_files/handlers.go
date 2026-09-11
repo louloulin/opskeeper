@@ -183,18 +183,20 @@ func makeFindLargeFilesHandler(sb *SandboxConfig, log *slog.Logger) tunnel.Handl
 
 		results := make([]tunnel.FindLargeFilesResultEntry, len(req.Paths))
 		_ = runBatch(ctx, req.Paths, results, func(gctx context.Context, idx int, path string) {
-			results[idx] = runFindOnePath(gctx, sb, findBin, path, req)
+			results[idx] = RunFindOne(gctx, sb, findBin, path, req)
 		})
 
 		return json.Marshal(tunnel.FindLargeFilesResponse{Results: results})
 	}
 }
 
-// runFindOnePath validates + runs find for a single path, returning a
+// RunFindOne validates + runs find for a single path, returning a
 // fully-populated entry (success or error). Splitting this out of the
 // handler keeps the concurrency loop tiny and lets us unit-test the
-// per-path branch without spinning up the batch machinery.
-func runFindOnePath(ctx context.Context, sb *SandboxConfig, findBin, path string, req tunnel.FindLargeFilesRequest) tunnel.FindLargeFilesResultEntry {
+// per-path branch without spinning up the batch machinery. Exported
+// so the HTTP edge layer (internal/edgeagent/server) can reuse the
+// same per-path primitive instead of forking its own runner.
+func RunFindOne(ctx context.Context, sb *SandboxConfig, findBin, path string, req tunnel.FindLargeFilesRequest) tunnel.FindLargeFilesResultEntry {
 	entry := tunnel.FindLargeFilesResultEntry{Path: path}
 	if err := sb.ValidatePath(path); err != nil {
 		entry.Error = err.Error()
@@ -221,6 +223,20 @@ func runFindOnePath(ctx context.Context, sb *SandboxConfig, findBin, path string
 	entry.ScannedPath = path
 	entry.Files = files
 	return entry
+}
+
+// RunFindOneSimple is the flat-argument cousin of RunFindOne. The
+// HTTP edge layer wants a JSON envelope with top_n / min_bytes /
+// exclude_paths as scalar fields, so it passes them in directly
+// instead of constructing a tunnel.FindLargeFilesRequest. Same
+// behavior, friendlier signature for the single-path HTTP case.
+func RunFindOneSimple(ctx context.Context, sb *SandboxConfig, findBin, path string, topN int, minBytes int64, exclude []string) tunnel.FindLargeFilesResultEntry {
+	return RunFindOne(ctx, sb, findBin, path, tunnel.FindLargeFilesRequest{
+		Paths:        []string{path},
+		TopN:         topN,
+		MinSizeBytes: minBytes,
+		ExcludePaths: exclude,
+	})
 }
 
 // runFindLargeFiles dispatches to the per-OS find implementation for a
@@ -418,7 +434,7 @@ func makeDuSummaryHandler(sb *SandboxConfig, log *slog.Logger) tunnel.Handler {
 
 		results := make([]tunnel.DuSummaryResultEntry, len(req.Paths))
 		_ = runBatch(ctx, req.Paths, results, func(gctx context.Context, idx int, path string) {
-			results[idx] = runDuOnePath(gctx, sb, duBin, path, req.Depth)
+			results[idx] = RunDuOne(gctx, sb, duBin, path, req.Depth)
 		})
 
 		// Best-effort df snapshot. We always include "/" plus any
@@ -531,8 +547,9 @@ func runDfOne(ctx context.Context, dfBin, path string) (tunnel.HostFilesystem, b
 	}, true
 }
 
-// runDuOnePath validates + runs du for a single path.
-func runDuOnePath(ctx context.Context, sb *SandboxConfig, duBin, path string, depth int) tunnel.DuSummaryResultEntry {
+// RunDuOne validates + runs du for a single path. Exported so the
+// HTTP edge layer can reuse the same per-path primitive.
+func RunDuOne(ctx context.Context, sb *SandboxConfig, duBin, path string, depth int) tunnel.DuSummaryResultEntry {
 	entry := tunnel.DuSummaryResultEntry{Path: path}
 	if err := sb.ValidatePath(path); err != nil {
 		entry.Error = err.Error()
@@ -654,16 +671,17 @@ func makeStatFileHandler(sb *SandboxConfig, log *slog.Logger) tunnel.Handler {
 
 		results := make([]tunnel.StatFileResultEntry, len(req.Paths))
 		_ = runBatch(ctx, req.Paths, results, func(gctx context.Context, idx int, path string) {
-			results[idx] = runStatOnePath(gctx, sb, path)
+			results[idx] = RunStatOne(gctx, sb, path)
 		})
 
 		return json.Marshal(tunnel.StatFileResponse{Results: results})
 	}
 }
 
-// runStatOnePath does the Lstat + owner/group lookup for a single path.
+// RunStatOne does the Lstat + owner/group lookup for a single path.
 // Per-path errors (sandbox reject, missing file) become Entry.Error.
-func runStatOnePath(_ context.Context, sb *SandboxConfig, path string) tunnel.StatFileResultEntry {
+// Exported so the HTTP edge layer can reuse the same per-path primitive.
+func RunStatOne(_ context.Context, sb *SandboxConfig, path string) tunnel.StatFileResultEntry {
 	entry := tunnel.StatFileResultEntry{Path: path}
 	if err := sb.ValidatePath(path); err != nil {
 		entry.Error = err.Error()

@@ -27,12 +27,24 @@
 //                                         host_files allow-list?" —
 //                                         no I/O, used by Pi to
 //                                         pre-validate before reading.
+//   POST   /v1/edge/tools/host_files/find_large_files
+//                                         run `find` over one allowed
+//                                         path; returns top-N by
+//                                         size (default top_n=20,
+//                                         min_bytes=1MiB).
+//   POST   /v1/edge/tools/host_files/du_summary
+//                                         run `du` over one allowed
+//                                         path; returns per-subpath
+//                                         sizes + total (default
+//                                         depth=1).
+//   POST   /v1/edge/tools/host_files/stat_file
+//                                         os.Lstat one allowed path;
+//                                         pure Go, no subprocess.
 //
-// Stubs (deferred to later rounds): host_files / du / find_large /
-// stat_file — they need the existing host_files.HandlerFunc shape
-// adapted to HTTP; doing it generically is a refactor in its own
-// right. We expose the path-check primitive only for now so the Pi
-// side has at least one read-only host_files affordance.
+// Stubs (deferred to later rounds): multi-path batches for the three
+// read tools (the underlying RunFindOne / RunDuOne / RunStatOne
+// already work per-path, so multi-path is a one-line wire-shape
+// extension).
 //
 // Auth posture: bind to loopback only (no listen on 0.0.0.0). The
 // Pi sidecar runs on the same host so loopback is the right trust
@@ -126,6 +138,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/edge/tools/bash", s.handleBash)
 	mux.HandleFunc("/v1/edge/tools/host_restart_service", s.handleRestart)
 	mux.HandleFunc("/v1/edge/tools/host_files/check", s.handleHostFilesCheck)
+	mux.HandleFunc("/v1/edge/tools/host_files/find_large_files", s.handleHostFilesFindLargeFiles)
+	mux.HandleFunc("/v1/edge/tools/host_files/du_summary", s.handleHostFilesDuSummary)
+	mux.HandleFunc("/v1/edge/tools/host_files/stat_file", s.handleHostFilesStatFile)
 	return mux
 }
 
