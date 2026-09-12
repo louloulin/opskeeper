@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/pirpc"
 	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/pisupervisor"
 )
 
@@ -33,19 +34,55 @@ type PiConfig struct {
 	// Pi (supervisor is not started). Default false.
 	Enabled bool
 
-	// HTTPBind is the address Pi binds its HTTP server to. Per plan
-	// §6.5 this MUST be loopback. We do NOT enforce here — the
-	// supervisor passes it straight to Pi's argv; the loopback
-	// invariant is enforced at the edge layer when constructing
-	// the args (see BuildPiArgs).
+	// HTTPBind and HTTPPort are retained only so an existing
+	// /etc/opskeeper/edge.env does not fail to parse.
+	//
+	// Deprecated: Pi has no HTTP server. Its headless surface is
+	// `--mode rpc` over the child's stdin/stdout (verified against
+	// @earendil-works/pi-coding-agent@0.85.1). Nothing reads these
+	// two fields; the loopback invariant of plan1.0.md §6.5 is
+	// satisfied more strongly by stdio, which is not reachable
+	// off-host at all.
 	HTTPBind string
-
-	// HTTPPort is the port Pi binds to. Default 19000.
 	HTTPPort int
 
-	// Bin is the path to the Pi executable (or a shim that invokes
-	// node + the JS bundle). Default points to vendor/pi's CLI.
+	// Node is the interpreter used to run Script. Default "node".
+	Node string
+
+	// Script is the path to Pi's CLI bundle. Default points at the
+	// vendored submodule's built entry point. The package's own
+	// package.json declares bin.pi = "dist/bundle/cli.js", so the
+	// path inside the monorepo is
+	// packages/coding-agent/dist/bundle/cli.js.
+	Script string
+
+	// Bin runs an installed `pi` shim directly instead of
+	// Node + Script. Empty → use Node + Script.
 	Bin string
+
+	// Tools is Pi's own tool allowlist (--tools). Empty → Pi's full
+	// built-in set. cmdpolicy still gates every write regardless;
+	// this narrows what Pi will even attempt.
+	Tools []string
+
+	// ExcludeTools is Pi's tool denylist (--exclude-tools).
+	ExcludeTools []string
+
+	// SkillDirs are explicit skill roots (--skill). opskeeper keeps
+	// its skills outside the submodule, so they must be passed.
+	SkillDirs []string
+
+	// SystemPromptFile is appended to Pi's system prompt
+	// (--append-system-prompt). This is the rendered SYSTEM.md from
+	// scripts/render-pi-system-md.py.
+	SystemPromptFile string
+
+	// SessionDir persists Pi session transcripts (--session-dir).
+	// Empty → Pi's default location.
+	SessionDir string
+
+	// Offline passes --offline so Pi skips startup network calls.
+	Offline bool
 
 	// AutoUpgrade, when true, calls scripts/sync-pi.sh before the
 	// first spawn. Requires TagLock + SyncPiScript to be set.
@@ -114,10 +151,9 @@ func LoadPiConfigFrom(env []string) (*PiConfig, error) {
 		}
 	}
 
-	// HTTPBind (default 127.0.0.1 — loopback per plan §6.5).
+	// HTTPBind / HTTPPort: parsed for backwards compatibility only,
+	// then ignored. Pi never opens a socket.
 	cfg.HTTPBind = envOr(m, "OPSKEEPER_PI_HTTP_BIND", "127.0.0.1")
-
-	// HTTPPort (default 19000).
 	if v, ok := m["OPSKEEPER_PI_HTTP_PORT"]; ok && v != "" {
 		p, err := strconv.Atoi(v)
 		if err != nil {
@@ -132,9 +168,45 @@ func LoadPiConfigFrom(env []string) (*PiConfig, error) {
 		cfg.HTTPPort = 19000
 	}
 
-	// Bin (default points to vendor/pi's CLI bundle).
-	cfg.Bin = envOr(m, "OPSKEEPER_PI_BIN",
-		"node vendor/pi/packages/coding-agent/dist/cli.js")
+	// Node + Script (default: the vendored submodule's built entry).
+	cfg.Node = envOr(m, "OPSKEEPER_PI_NODE", "node")
+	cfg.Script = envOr(m, "OPSKEEPER_PI_SCRIPT",
+		"vendor/pi/packages/coding-agent/dist/bundle/cli.js")
+
+	// Bin: an installed `pi` shim. No default — Node + Script is the
+	// vendored path. A value containing whitespace is rejected: the
+	// previous default was the string "node vendor/.../cli.js",
+	// which can never be exec'd and silently made Pi unstartable.
+	if v, ok := m["OPSKEEPER_PI_BIN"]; ok && strings.TrimSpace(v) != "" {
+		if strings.ContainsAny(v, " \t") {
+			errs = append(errs, fmt.Sprintf(
+				"OPSKEEPER_PI_BIN=%q: must be a single executable path; "+
+					"use OPSKEEPER_PI_NODE + OPSKEEPER_PI_SCRIPT to run a .js entry point", v))
+		} else {
+			cfg.Bin = v
+		}
+	}
+
+	// Pi-native least privilege (comma-separated).
+	if v, ok := m["OPSKEEPER_PI_TOOLS"]; ok && v != "" {
+		cfg.Tools = splitTrimmed(v, ",")
+	}
+	if v, ok := m["OPSKEEPER_PI_EXCLUDE_TOOLS"]; ok && v != "" {
+		cfg.ExcludeTools = splitTrimmed(v, ",")
+	}
+	if v, ok := m["OPSKEEPER_PI_SKILL_DIRS"]; ok && v != "" {
+		cfg.SkillDirs = splitTrimmed(v, ",")
+	}
+	cfg.SystemPromptFile = m["OPSKEEPER_PI_SYSTEM_PROMPT_FILE"]
+	cfg.SessionDir = m["OPSKEEPER_PI_SESSION_DIR"]
+	if v, ok := m["OPSKEEPER_PI_OFFLINE"]; ok {
+		b, err := parseBool(v)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("OPSKEEPER_PI_OFFLINE=%q: %v", v, err))
+		} else {
+			cfg.Offline = b
+		}
+	}
 
 	// AutoUpgrade (default false).
 	if v, ok := m["OPSKEEPER_PI_AUTO_UPGRADE"]; ok {
@@ -206,34 +278,70 @@ func LoadPiConfigFrom(env []string) (*PiConfig, error) {
 	return cfg, nil
 }
 
+// BuildLaunchOptions translates a PiConfig into the argv description
+// pirpc understands.
+//
+// The hardening switches are on by default and not operator-tunable
+// here on purpose: an edge sidecar must not inherit whatever the host
+// user installed under ~/.pi. Discovered extensions, skills, prompt
+// templates and AGENTS.md files would otherwise join the ops session
+// and change its behaviour without ever appearing in the audit
+// chain. opskeeper's own skills come in explicitly via SkillDirs.
+func (c *PiConfig) BuildLaunchOptions() pirpc.LaunchOptions {
+	// An explicit OPSKEEPER_PI_BIN wins over Node + Script: Script
+	// always carries its vendored default, so passing both would be
+	// ambiguous and pirpc rejects it.
+	node, script := c.Node, c.Script
+	if c.Bin != "" {
+		node, script = "", ""
+	}
+	return pirpc.LaunchOptions{
+		Node:              node,
+		Script:            script,
+		Bin:               c.Bin,
+		Provider:          c.LLM.Provider,
+		Model:             c.LLM.Model,
+		SystemPromptFile:  c.SystemPromptFile,
+		SkillDirs:         append([]string(nil), c.SkillDirs...),
+		Tools:             append([]string(nil), c.Tools...),
+		ExcludeTools:      append([]string(nil), c.ExcludeTools...),
+		SessionDir:        c.SessionDir,
+		NoExtensions:      true,
+		NoSkills:          true,
+		NoPromptTemplates: true,
+		NoContextFiles:    true,
+		Offline:           c.Offline,
+	}
+}
+
 // BuildSupervisorConfig translates a PiConfig into a
 // pisupervisor.Config. The supervisor is the only consumer today;
 // when other packages grow their own env-driven configs, add a
 // similar builder rather than reshaping PiConfig to fit everyone.
 //
 // Notes:
-//   - Args is constructed from HTTPBind + HTTPPort so the upstream
-//     Pi process binds the right interface (loopback enforcement is
-//     the operator's responsibility at env-write time; we just
-//     forward what they wrote).
-//   - HealthURL is computed from HTTPBind + HTTPPort.
+//   - Bin / Args come from BuildLaunchOptions, i.e. `pi --mode rpc`
+//     with the flags the pinned release actually accepts. The
+//     supervisor's liveness probe is wired by the caller via
+//     pisupervisor.RPCAttach; HealthURL is left empty because Pi
+//     serves no HTTP.
 //   - ExtraPackages is plumbed through; the supervisor's New()
 //     fail-closes if any package fails to install.
-//   - Logger / NowFn / CmdFactory stay nil — production callers
-//     inject them after BuildSupervisorConfig returns. Tests can
-//     override on the returned Config directly.
-func (c *PiConfig) BuildSupervisorConfig() pisupervisor.Config {
-	args := []string{"--mode", "http", "--bind", c.HTTPBind, "--port", strconv.Itoa(c.HTTPPort)}
-	healthURL := fmt.Sprintf("http://%s:%d/health", c.HTTPBind, c.HTTPPort)
-	return pisupervisor.Config{
-		Bin:            c.Bin,
-		Args:           args,
-		HealthURL:      healthURL,
-		AutoUpgrade:    c.AutoUpgrade,
-		TagLock:        c.TagLock,
-		SyncPiScript:   c.SyncPiScript,
-		ExtraPackages:  append([]string(nil), c.ExtraPackages...),
+//   - Attach / Logger / NowFn / CmdFactory stay nil — production
+//     callers inject them after BuildSupervisorConfig returns.
+func (c *PiConfig) BuildSupervisorConfig() (pisupervisor.Config, error) {
+	bin, args, err := c.BuildLaunchOptions().Command()
+	if err != nil {
+		return pisupervisor.Config{}, fmt.Errorf("biz: pi launch config: %w", err)
 	}
+	return pisupervisor.Config{
+		Bin:           bin,
+		Args:          args,
+		AutoUpgrade:   c.AutoUpgrade,
+		TagLock:       c.TagLock,
+		SyncPiScript:  c.SyncPiScript,
+		ExtraPackages: append([]string(nil), c.ExtraPackages...),
+	}, nil
 }
 
 // envToMap turns a KEY=VALUE slice into a map. Empty KEY lines are

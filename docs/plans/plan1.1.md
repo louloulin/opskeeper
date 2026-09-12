@@ -1,7 +1,7 @@
 # OpsKeeper 1.1 规划 — Pi Agent Fleet / AI 运维军团（plan1.1）
 
-> 文件：plan1.1.md · 日期：2026-09-11 · 适用代码库：`louloulin/opskeeper`
-> 上游：`plan1.0.md`（v1.12） + `docs/architecture.md`（v1.10）
+> 文件：plan1.1.md · 日期：2026-09-11（2026-09-12 同步 plan1.0 v1.16） · 适用代码库：`louloulin/opskeeper`
+> 上游：`plan1.0.md`（**v1.16**） + `docs/architecture.md`（**v1.13**）
 > 状态：**plan1.0 的横向增补，不取代 plan1.0 任何 P-/G-/E- 行**；聚焦「**plan1.0 路线之外、生产级 AI 运维军团还差什么**」
 
 ## 0. 与 plan1.0 的关系
@@ -24,15 +24,23 @@ plan1.1 不重写 plan1.0；它是「plan1.0 + 实施前 audit + pi.dev/OSS 资�
 
 | 度量 | 值 |
 |---|---|
-| plan1.0 已交付项 | ✅ 7（P-1 / P-7 / P-8 / P-11 / P-12 / G-2 部分 / G-5） |
-| 部分交付项 | 🟡 6（P-2 supervisor / P-3 HTTP / P-4 cmdpolicy / P-6 audit chain / G-3 自愈闭环） |
+| plan1.0 已交付项 | ✅ 9（P-1 / **P-2R Pi RPC 通道** / P-7 / P-8 / P-11 / P-12 / **P-13 edge 接线** / G-2 部分 / G-5） |
+| 部分交付项 | 🟡 5（P-3 HTTP 工具层 / P-4 cmdpolicy / P-6 audit chain / G-3 自愈闭环 / 其余基线部分项） |
 | 阻塞项 | ⛔ 16（P-5 tunnel proto / P-9 web / P-10 harness / G-1 probe / G-4 knowledge / G-6 audit 上行 / G-8 eval / G-9 bundle / G-10 offline 等） |
-| Pi 真身版本 | `@earendil-works/pi-coding-agent` **v0.85.1**（npm registry `npm view ... version` 2026-09-11 验证 = `0.85.1`，已 pin 在 vendor/pi submodule commit `d981de12`） |
+| Pi 真身版本 | `@earendil-works/pi-coding-agent` **v0.85.1**（`npm view ... dist-tags` 2026-09-12 复核 `latest = 0.85.1`，已 pin 在 vendor/pi submodule commit `d981de12`） |
+| Pi 集成模式 | **`pi --mode rpc`（stdio JSONL）** —— plan1.0 v1.16 实测更正：`--mode http` 不存在，Pi 不监听端口。传输层实现在 `internal/edgeagent/pirpc`，探活为 `get_state` 往返 |
 | 关键约束 | **云端零 Pi 依赖**（plan1.0 v1.2 硬约束）—— `cmd/opskeeper` 不引入 `@earendil-works/*`，云端 `internal/pkg/llm` 原样保留 |
-| 已实现 Pi sidecar 能力 | spawn / health probe / 退避重启 / crash-loop gate / 5 个工具 HTTP 端点 / HMAC 本地审计 / 14 条 pi-yaml-hooks deny-list |
-| 单 host 部署形态 | opskeeper-edge (Go 1.25) + Pi sidecar (TypeScript/Node 22.19) + geminio tunnel 上行 |
+| 已实现 Pi sidecar 能力 | spawn / **RPC `get_state` 探活** / 退避重启 / crash-loop gate / edge 启动接线 / 5 个工具 HTTP 端点 / HMAC 本地审计 / 14 条 pi-yaml-hooks deny-list |
+| 单 host 部署形态 | opskeeper-edge (Go 1.25) + Pi sidecar (TypeScript/Node 22.19，stdio JSONL 子进程) + geminio tunnel 上行 |
 
-> ⚠️ **重要事实**：以上状态来自 plan1.0 v1.12（commit `8944a95`，rebase 后 `936bbf0`）。每次结构性变更后**必须重新审** §5.5 状态表。
+> ⚠️ **重要事实**：以上状态同步自 plan1.0 **v1.16**。每次结构性变更后**必须重新审** plan1.0 §5.5 状态表。
+>
+> v1.16 也影响 plan1.1 的两处前提：**A-1 引入 `swarm-extension`** 必须先按上游
+> `docs/packages.md` 的安全警告读源码（"包以完整系统权限运行，extension 执行任意代码，
+> skill 能指示模型执行任意命令"），并用带版本的 `npm:pkg@x.y.z` spec 以便被 pin；
+> **A-2 按角色派发 skill** 现在有原生落点 —— `--skill <dir>` 与 `--tools` /
+> `--exclude-tools` 已在 `pirpc.LaunchOptions` 里，按 host role 生成不同 argv
+> 即可，不需要新造分发机制。
 
 ## 2. 现状问题清单（plan1.0 路线之外的差距）
 
@@ -55,6 +63,7 @@ plan1.1 不重写 plan1.0；它是「plan1.0 + 实施前 audit + pi.dev/OSS 资�
 **证据**：
 - `vendor/pi/.pi/skills/opskeeper-*/SKILL.md` 是 per-host 视角（"this host's journal / this host's processes"）
 - `pi.dev/packages` 上有 `swarm-extension` / `agent-teams` 包，但 plan1.0 v1.3 §8.1.1 标注"WorkBuddy 不需要；放弃"（那是 OpenBuddy 上下文，**opskeeper 应该重新评估**）
+- v1.16 补充：真实 Pi 的多 agent 能力都在 host 内（一个 Pi 进程 + swarm extension 起子 agent），**跨 host 协同上游不提供** —— 跨机的"军团"仍必须由 opskeeper 云端编排（F-3 / A-3 的分组与召回），Pi 侧只贡献 per-host 事实。这一点让 §6 的"云端零 Pi 依赖"约束天然成立
 
 **对自主化的影响**：自主化 = "同 incident 在 N host 上同时解决 + 经验共享"，不是"每 host 独立 RCA"
 
@@ -184,7 +193,8 @@ plan1.0 §六.5 列了 7 条强制约束（云端零 Pi 依赖、HTTP loopback�
 
 - ✅ **Phase F-1** 在 devbox 内交付并通过 targeted 单测 / vet（fleet read model + `/v1/fleet/hosts`）。
 - ✅ **Phase F-2** 在 devbox 内交付并通过 targeted 单测 / vet（cluster-wide incident 聚合 read model + `/v1/fleet/cluster-incidents`，20 个 case）；F-3 仍待后续轮次。
-- ⛔ Phase A A-1 ADR 仍未交付，需先完成 swarm-extension spike。
+- ✅ **前置依赖已解锁（plan1.0 v1.16）**：A-2 与 S-* 都要求"能真的驱动目标机上的 Pi"。在 v1.16 之前这条通道是按不存在的 HTTP 模式设计的，因此 A/S 两阶段实际上建立在错误前提上；现在 `pirpc` + `RPCAttach` + edge 接线已对真实 Pi 验证，A-2 / S-1 / S-2 可以按真实 argv 与真实命令集（`prompt` / `bash` / `abort` / `get_last_assistant_text`）落地。
+- ⛔ Phase A A-1 ADR 仍未交付，需先完成 swarm-extension spike（且按上游安全警告先读源码）。
 - ✅ 每轮 commit 符合 plan1.0 附录 D commit 模板
 - ⛔ Phase S 全部待 P-5 tunnel proto + 真机 e2e
 

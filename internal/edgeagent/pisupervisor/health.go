@@ -14,18 +14,13 @@ import (
 // parses cleanly. Non-2xx, body-parse failure, or network error
 // are all "unhealthy".
 //
-// Pi-coding-agent's /health contract (per plan §P-2 / §6.4) is:
-//
-//   { "status": "ok"|"degraded",
-//     "edge_id": "<id>",
-//     "uptime_s": <int>,
-//     "skills_loaded": <int>,
-//     "tokens_in_session": <int> }
-//
-// We only require status=="ok"; a "degraded" state is allowed to
-// keep running (degraded means e.g. LLM key missing → won't help,
-// but the process is still reachable and the supervisor shouldn't
-// thrash it).
+// Deprecated for real Pi. Earlier revisions of plan1.0.md (§P-2 /
+// §6.4) described a `/health` JSON contract served by
+// `pi --mode http`. Neither exists: verified against
+// @earendil-works/pi-coding-agent@0.85.1, whose only modes are text,
+// json and rpc, none of which opens a socket. Use Config.Attach with
+// RPCAttach instead; this probe is retained only for a local
+// HTTP shim and for the lifecycle tests below.
 func HTTPHealthProbe(timeout time.Duration) func(ctx context.Context, url string) error {
 	client := &http.Client{Timeout: timeout}
 	return func(ctx context.Context, url string) error {

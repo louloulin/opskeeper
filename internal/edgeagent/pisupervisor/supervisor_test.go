@@ -319,7 +319,7 @@ func TestSpawn_BinMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd, err := s.spawn(context.Background())
+	cmd, _, err := s.spawn(context.Background())
 	if err == nil {
 		t.Errorf("spawn of missing bin should fail")
 	}

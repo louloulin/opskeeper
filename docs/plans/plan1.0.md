@@ -3,6 +3,7 @@
 > 文件：plan1.0.md
 > 对应 issue：LUM-679「okp 一期」
 > 编写日期：2026-09-10
+> 修订：2026-09-12（v1.16 — **对真实 Pi 实测后的架构更正 + P-2R / P-13 交付**：`pi --mode http` 与 `--mode acp` **不存在**（`pi --help` on `@earendil-works/pi-coding-agent@0.85.1` 只接受 text / json / rpc），原 §6.2 的集成模式选择、§P-2 的 `/health` 探活、`--bind`/`--port` argv 全部作废；新增 `internal/edgeagent/pirpc` 实现真实 JSONL-over-stdio 协议（36 单测 + `-race` + 对真实 Pi 的 E2E），`pisupervisor.RPCAttach` 用 `get_state` 往返做探活，`cmd/opskeeper-edge` 接线完成；CLI 入口更正为 `dist/bundle/cli.js`；provider 凭据改走环境变量不进 argv。版本号 `v0.85.1` 经第三次核实**无误**，"pi 版本不对"的真实指向是模式与入口路径。进度 ✅ 11/48 = 22.9%）
 > 修订：2026-09-11（v1.15 — plan1.1 F-2 已实现并验证：新增跨 host incident 聚合 read model（`internal/manager/biz/fleet/cluster.go`）与 `/v1/fleet/cluster-incidents` 只读 API，按 (anomaly class + signal dimension + 滑动 first-firing 窗口) 把 per-host `alert_incidents` 折叠为 cluster-wide incident，含 host 数下限与最严重优先排序；19 个新 case 全绿。F-3/A-*/S-* 仍未实现）
 > 修订：2026-09-11（v1.14 — plan1.1 F-1 已实现：新增 fleet host read model 与 `/v1/fleet/hosts` 云端只读 API，复用 Device/Edge/edge_devices，完成认证/筛选/分页/关联/secret 不泄漏测试；F-2/F-3/A-*/S-* 仍未实现）
 > 修订：2026-09-10（v1.3 — **修正 Pi 版本与 monorepo 路径**：earendil-works/pi v0.85.1，Node.js ≥ 22.19.0；新增 §8.1.1 pi.dev/packages 插件生态章节）
@@ -318,6 +319,7 @@ Pi sidecar 的设计定位（v1.2）：
 | ID | 状态 | 实施摘要（本期 devbox 单 agent 可交付范围） | 真实验证手段 | 阻塞原因（如有） |
 |---|---|---|---|---|
 | **P-1** | ✅ | `vendor/pi/` 作 git submodule，pin tag `v0.85.1`（commit `d981de12`），`.gitmodules` + `.gitignore` 已加 `vendor/pi` 例外 | `git -C vendor/pi describe --tags --exact-match HEAD` → `v0.85.1`；`git submodule status` 正常 | — |
+| **P-2R** | ✅ | **v1.16 新增：真实 Pi RPC 通道**。`internal/edgeagent/pirpc/`（6 文件）实现上游 `docs/rpc.md` 定义的协议：`lineReader` 只按 `\n` 切分并剥一个尾随 `\r`（U+2028/U+2029 在 JSON 字符串里合法，不是分隔符）、单记录上限 8 MiB（实测未加固主机的 `get_commands` 响应 > 64 KiB）、命令按客户端生成的 `id` 关联（响应与事件交错、响应之间可乱序）、`extension_ui_request` 的 dialog 类**必答且 fail-closed**（select/input/editor → `cancelled:true`，confirm → `confirmed:false`；插件对话框不是审批通道）、非 JSON 的 stdout 行只 warn 不断链、子进程退出时所有 pending 命令立即返回 `ErrSessionClosed` 而非挂住。`LaunchOptions` 只生成 `pi --help` 里真实存在的 flag（`--mode rpc` / `--provider` / `--model` / `--append-system-prompt` / `--skill` / `--tools` / `--exclude-tools` / `--no-session` / `--session-dir` / `--name` / `--no-extensions` / `--no-skills` / `--no-prompt-templates` / `--no-context-files` / `--offline`），并拒绝把 `"node x.js"` 这类命令行当成可执行路径。`BuildEnv` 按上游 `providers.md` 的 provider→env 映射把 API key 放进子进程环境，**不进 argv**（argv 在 `/proc/<pid>/cmdline` 里全局可读且会进审计链）。`pisupervisor.RPCAttach` 把 session 接到 supervisor 探活回路：探活是 `get_state` 往返，不是 HTTP | `go test ./internal/edgeagent/pirpc` **36 case 全绿**，`-race` 干净，Windows + Linux(WSL Ubuntu 24.04, go1.25.11) 双平台；`go vet` 0 错误。**对真实 Pi 的 E2E**：`TestE2EAgainstRealPi` 拉起真的 `@earendil-works/pi-coding-agent@0.85.1`，`get_state` 返回真实 sessionId + model、`get_commands` 往返、直连 `bash` 执行 `echo` 得到 `exitCode=0` + 真实 stdout、`abort` 往返 —— **全程不需要 LLM key，不花 token**（这几个命令不触发模型调用）。`attach_test.go` 里的假 Pi「活着但不回话」被 RPC 探活判为不健康并触发重启（PID 检查会误判为健康） | 真机 systemd 单元 + 完整 prompt→工具→`agent_settled` 一轮（需 provider key）仍未做 |
 | **P-2** | 🟡 | `internal/edgeagent/pisupervisor/{supervisor,health}.go`：spawn + health 探针 + 退避重启 + crash-loop gate + Stop 强杀 + Upgrade/Install 钩子。`Supervisor{Config, Status, State}` 线程安全；`State{New,Starting,Running,Unhealthy,Restarting,CrashLoop,Stopped}`；`Config{Bin, Args, Env, HealthURL, HealthInterval, HealthTimeout, UnhealthyThreshold, RestartBackoffMin/Max, RestartMaxBurst, RestartWindow, AutoUpgrade, TagLock, ExtraPackages, SyncPiScript}`；exponential backoff 上限封顶；`isCrashLoop` 滚动窗口剪枝；`runLoop` 把 `child.Wait()` 放侧 goroutine 让 `stopCh` 能立即强杀；`HTTPHealthProbe` 接 2xx + status==ok（degraded 拒；non-JSON body 透传接受便于早期 Pi 版本）；`killProcessGroup` 用负 PID SIGKILL 杀整组；`Upgrade()` 拒绝无 TagLock 拒绝上游 tag-flipping；`installExtraPackages` 用 `pi install` 子命令 pre-flight 失败 fail-closed | `go vet ./internal/edgeagent/pisupervisor/...` 0 错误；`go test ./internal/edgeagent/pisupervisor/...` 全绿（17 个 case 覆盖：New 必填校验 / AutoUpgrade 缺 TagLock/SyncPiScript / 默认值填充 / 双 Start 拒绝 / Stop 幂等 / 新建 Status / backoff 增长到封顶 / crash-loop 边界 / 窗口剪枝 / Upgrade 拒无 TagLock/SyncPiScript / HTTP probe 5 种变体（ok / degraded 拒 / 503 拒 / non-JSON 透传 / 连接拒绝）/ recordRestart / 0 重启 backoff / spawn 缺 bin / Start+Stop 后状态 stopped）；`go test ./internal/edgeagent/...` 全绿 | 仍缺：(a) 真机 Pi 二进制 + systemd unit 集成；(b) `internal/edgeagent/biz/agent.go` 把 Supervisor 接进 edge 启动路径；(c) `OPSKEEPER_PI_*` 环境变量 → Config 的解析层（已在 P-11 范围） |
 | **P-3** | 🟡 | `internal/edgeagent/server/` 路由全套落地：`/health` + `/v1/edge/{audit,propose}` + `/v1/edge/tools/{bash,host_restart_service,host_files/{check,find_large_files,du_summary,stat_file}}`。`bash` handler 串 `cmdpolicy.Sandbox.Exec` + `audit.Chain.Append`（每调用一次审计，含 allow/deny 两态）+ write 模式 `X-Opskeeper-Pi-Approval-Token` 头校验（缺失返 401 / cache 未配置 fail-closed / token 一次性消耗）。`host_restart_service` 串 `restart_service.SandboxConfig.AllowedUnits` + approval 必填 + Mocked=true 短路成功 / Mocked=false 返 501 待真 systemctl shell-out。`host_files/{find_large_files,du_summary,stat_file}` 复用 `host_files.RunFindOneSimple` / `RunDuOne` / `RunStatOne`（v1.9 把原 `runXxxOnePath` 导出 + 加平铺参数版），每次入审计 `tool.call.host_files.*`，deny 也入审计。`host_files/check` 走 `host_files.SandboxConfig.ValidatePath` 轻量预检。`propose` 仅入审计。`enforceLoopback` 拒绝 0.0.0.0 / 192.0.2.1 / `[2001:db8::1]` / 错格式 / 空 host。 | `go vet ./internal/edgeagent/server/...` 0 错误；`go test ./internal/edgeagent/server/...` 全绿（25 个 case = 原 18 + host_files 7：sandbox reject 传 `Allowed=false`+`Reason`+`AuditSeq` / 空 path 400 / GET 405 / `HostFiles=nil` 503 / 真 stat_file 端到端跑 tmp 文件验 `result.type="file"`+`size_bytes=5` / 非法 JSON 400）；`go test ./internal/edgeagent/...` 全绿 | 仍缺：(a) 多 path batch (`paths []string` 1..16，底层 `RunXxxOne` 已支持)；(b) 真 systemctl shell-out；(c) `biz/agent.go` 把 server+supervisor 接进启动路径；(d) P-5 tunnel 上行 + reviewer grant；(e) e2e 需目标机 |
 | **P-4** | 🟡 | `cmdpolicy.DefaultPiCapable()` + `ApprovalCache` + `Sandbox.ApprovalChecker` 字段 + `CacheApprovalChecker()` 适配器 | `internal/edgeagent/cmdpolicy/{policy_pi,approval}.go` + 同名 `_test.go` 已写；`go vet` 0 错误；`go test ./internal/edgeagent/cmdpolicy/...` 全绿（13 个新 case 覆盖：DefaultPiCapable 继承 / PathAllowlist 加宽 / loopback 网络 / `kill -l` vs `kill 12345` / `pgrep`/`pidof` / `pkill` 双签；ApprovalCache put/consume/expired/mismatch/single-use/eviction） | HTTP 头 `X-Opskeeper-Pi-Approval-Token` 注入与 handler 集成需 P-3 HTTP 路由；缺目标机无法 e2e |
@@ -328,6 +330,7 @@ Pi sidecar 的设计定位（v1.2）：
 | **P-9** | ⛔ | Web Pi tab in `web/src/pages/EdgeDetail.tsx` | — | 需 `pnpm typecheck` + web deps；devbox 缺 web 依赖 |
 | **P-10** | ⛔ | harness cases `internal/harness/cases/pi/bash_safety` 等 | — | 需 Go 1.25；依赖 P-2/P-3/P-4 |
 | **P-11** | ✅ | `internal/edgeagent/biz/pi_config.go`：`PiConfig` struct 含 13 个 `OPSKEEPER_PI_*` 键（Enabled / HTTPBind / HTTPPort / Bin / AutoUpgrade / TagLock / SyncPiScript / LLM{Provider,Model,BaseURL,APIKey} / ExtraPackages / FileAllowlist / ApprovalTokenTTL）；`LoadPiConfig()` 包 `os.Environ()`，`LoadPiConfigFrom([]string)` 是可测核心；`BuildSupervisorConfig()` 把 PiConfig 翻译成 `pisupervisor.Config`（Args 由 bind+port 拼，`HealthURL` 派生，`ExtraPackages` 防御性拷贝）；错误聚合（一次返回所有非法键）；`parseBool` 接受 true/1/yes/on + false/0/no/off/空；`envToMap` 过滤 `=novalue` 空键与无 `=` 残行；TagLock 用两值 map 查找以区分"absent"与"present-but-empty"（让 AutoUpgrade+空 TagLock 正确失败） | `go vet ./internal/edgeagent/biz/...` 0 错误；`go test ./internal/edgeagent/biz/...` 全绿（11 个新 case：默认值 / 覆盖 / parseBool 10 变体 / 非法值 7 变体 / AutoUpgrade × TagLock × SyncPiScript 三段交叉验证 / 错误聚合 / BuildSupervisorConfig 翻译 / ExtraPackages 防御性拷贝 / envToMap 过滤）；`go test ./internal/edgeagent/...` 全绿（含既有 audit / bash / biz / changewatcher / cmdpolicy / collector / host_files / pisupervisor / plugins / restart_service / server） | 仍缺：(a) 把 `LoadPiConfig()` 接进 `cmd/opskeeper-edge/main.go`；(b) `ApprovalCache.TTL` 用 `cfg.ApprovalTokenTTL`；(c) `cmdpolicy.Policy.NetworkHostAllowlist` 用 `cfg.FileAllowlist`；(d) 真机 e2e |
+| **P-13** | ✅ | **v1.16 新增：edge 启动路径接线**（这是 P-2/P-11 的「仍缺 (a)」）。`cmd/opskeeper-edge/main.go` 新增 `startPiSidecar()`：读 `OPSKEEPER_PI_*` → `BuildSupervisorConfig()` 得到 `pi --mode rpc` 的 argv → `BuildEnv` 注入 provider 凭据 → `RPCAttach` 起探活 → `Supervisor.Start`。`piSessionHolder` 持有当前子进程的 session，重启时整体换新并 clear（旧引用拿到 `ErrSessionClosed`，不会静默挂住）。`OPSKEEPER_PI_ENABLED=false` 时整段是 no-op；任何失败只记 warn，metrics / 工具层 / tunnel 继续跑 | `GOOS=linux go build ./cmd/opskeeper-edge` 通过；`GOOS=linux go vet ./cmd/opskeeper-edge ./internal/edgeagent/...` 0 错误；`go test ./internal/edgeagent/...` 在 WSL Ubuntu 24.04 上**全包全绿**（audit / bash / biz / changewatcher / cmdpolicy / collector / host_files / pirpc / pisupervisor / plugins / restart_service / server） | 尚无调用方消费 `piSessions`（那是 F-3 / G-3 的 RCA driver） |
 | **P-12** | ✅ | `dist/hooks/hooks.yaml` — 14 条 pi-yaml-hooks 规则：`tool.before.bash` 12 条（rm -rf / sudo / .env / shadow / passwd / boot / docker / kubeconfig / node_modules / iptables / systemctl / kill）+ `tool.before.write` 6 条路径 deny-list + `session.before_compact` 1 条 secret scrub + `agent.before_start` 1 条 AGENTS.md 必加载 | yamllint 0 错误；CI workflow `sync-pi.yml` 内有 best-effort `npm install pi-yaml-hooks` + `h.validate(doc)` 步骤（若包未发布则 skip） | — |
 | **C-1 ~ C-12** | ⛔ | 云端 12 项 housekeeping | — | 全部需 Go 1.25；多数需联调环境 |
 | **G-1** | ⛔ | Proactive probe (`pisupervisor/scheduler.go`) | — | 需 Go；依赖 P-2 |
@@ -341,23 +344,31 @@ Pi sidecar 的设计定位（v1.2）：
 | **G-9** | ⛔ | Pi 二进制独立分发（`dist/build-edge-bundle.sh` 已存在，但未加 Pi 二进制下载步骤） | — | 需 Go（edge bundle）+ 网络发布策略 |
 | **G-10** | ⛔ | 离线模式 + 本地 LLM | — | 需 pnpm-store 缓存 + 本地 LLM 部署 |
 
-**本期合计（plan1.0 原表口径）**：✅ 已验证通过 **7 项** / 🟡 部分实施 **6 项** / ⛔ 阻塞 **16 项**。叠加 plan1.1 的 F-1 + F-2 后，跨两份计划统一按 47 个工作项统计为：✅ **9/47 = 19.1%**、🟡 **6/47 = 12.8%**、⛔ **32/47 = 68.1%**；F-3/A-1/A-2/A-3/S-1/S-2/S-3 仍未实现。
+**合计（v1.16 口径）**：plan1.0 新增 P-2R 与 P-13 两项后共 40 项，叠加 plan1.1 的 9 轮 = **48 个工作项**：✅ **11/48 = 22.9%**、🟡 **5/48 = 10.4%**、⛔ **32/48 = 66.7%**。这是工作项状态，不是代码覆盖率也不是生产就绪度。F-3 / A-1 / A-2 / A-3 / S-1 / S-2 / S-3 仍未实现。
 
-**目前实现的功能（跨两份计划，共 9 项 ✅）**：
+> **口径变化说明（诚实记账）**：上一版是 ✅ 9/47。本版 +2 项、总数 +1：
+> P-2R（真实 RPC 通道）与 P-13（edge 启动接线）是本回合新交付的两项，
+> P-2 从 🟡 收敛进 P-2R 的 ✅（它原来的「health 探针」建立在不存在的
+> HTTP 端点上，现在换成真协议并对真实 Pi 验证过）。**分母增加了，所以
+> 百分比涨幅比"多做了两项"看起来要小** —— 这是有意的，不做分母缩水。
+
+**目前实现的功能（跨两份计划，共 11 项 ✅）**：
 
 | 功能 | 位置 | 验证方式 |
 |---|---|---|
-| Pi 版本锁定 `v0.85.1` | `vendor/pi` submodule | `git describe --tags --exact-match` |
+| Pi 版本锁定 `v0.85.1` | `vendor/pi` submodule | `git describe --tags --exact-match`；npm registry `latest` 仍是 `0.85.1`（2026-09-12 实跑） |
+| **真实 Pi RPC 通道** | `internal/edgeagent/pirpc/` + `pisupervisor.RPCAttach` | 36 单测 + `-race` + **对真实 pi 0.85.1 的 E2E**（get_state / get_commands / bash / abort） |
+| **edge 启动接线** | `cmd/opskeeper-edge/main.go` `startPiSidecar()` | `GOOS=linux go build` + 全 edgeagent 包在 Linux 上全绿 |
 | 4 份 Pi SKILL.md | `pi-skills/*/SKILL.md` | frontmatter YAML parse |
 | Pi SYSTEM.md 渲染 | `scripts/render-pi-system-md.py` | render → `--check` 无漂移 |
-| `OPSKEEPER_PI_*` 环境解析 | `internal/edgeagent/biz/pi_config.go` | `go test` 11 case |
+| `OPSKEEPER_PI_*` 环境解析 | `internal/edgeagent/biz/pi_config.go` | `go test`（原 11 case + 本轮新增 RPC/最小权限/凭据不进 argv 用例） |
 | pi-yaml-hooks 规则 | `dist/hooks/hooks.yaml` | yamllint 0 错误 |
 | Pi 升级管线 | `scripts/sync-pi.sh` + `.github/workflows/sync-pi.yml` | shellcheck / yamllint / render-check |
 | RCA 提示（并入 diagnostics） | `pi-skills/opskeeper-diagnostics/SKILL.md` | 含在 P-7 验证内（局部 ✅） |
 | **F-1 fleet host 只读视图** | `internal/manager/{biz,server}/fleet/` + `GET /v1/fleet/hosts` | targeted `go test -mod=mod` + `go vet -mod=mod` |
 | **F-2 跨 host incident 聚合** | `internal/manager/biz/fleet/cluster.go` + `GET /v1/fleet/cluster-incidents` | biz 13 case + HTTP 6 case 全绿 |
 
-**未在本回合交付但仍按 plan 保留的工作项**：P-5 / P-9 / P-10 / C-1~12 / G-1 / G-4 / G-8 / G-9 / G-10。这 9 + 12 = **21 项**构成下一回合（需先解决环境约束后再启动）的明确 backlog。P-2 / P-3 / P-4 / P-6 四件套的骨架 + 真实 read 工具 + env 解析层全部交付；剩余的 tunnel 上行 + 真 systemctl + 云端 reviewer grant + biz/agent.go 接进启动路径随 P-5 + 真机环境一起。
+**未在本回合交付但仍按 plan 保留的工作项**：P-5 / P-9 / P-10 / C-1~12 / G-1 / G-4 / G-8 / G-9 / G-10 —— 共 **21 项** backlog。P-3 / P-4 / P-6 的骨架 + 真实 read 工具已交付；剩余的 tunnel 上行 + 真 systemctl + 云端 reviewer grant 随 P-5 + 真机环境一起。
 
 ### 5.6 本期偏差记录
 
@@ -380,20 +391,38 @@ Pi sidecar 的设计定位（v1.2）：
 
 ### 6.2 集成模式选择
 
+> **v1.16 更正（实测推翻原选择）**：下表原来选了 `pi --mode http --bind
+> 127.0.0.1 --port 19000`。**这个模式不存在**。对已发布产物
+> `@earendil-works/pi-coding-agent@0.85.1` 实跑 `pi --help`：
+>
+> ```text
+> --mode <mode>   Output mode: text (default), json, or rpc
+> ```
+>
+> 没有 `http`，没有 `acp`，也没有任何一种模式会监听端口 —— 因此原方案的
+> `GET /health` 探活、`--bind` / `--port` argv、以及"多 session 通过 HTTP
+> keepalive + SSE 并发"的论证全部不成立。唯一的无头双向通道是
+> `--mode rpc`（stdin/stdout 上的 JSONL），另有 `--mode json`（只出不进的
+> 事件流）。原表里被标为"备选"的那一行，才是唯一可行项。
+
 | 集成模式 | 评估 | 选择理由 |
 |---|---|---|
 | **进程内嵌 SDK**（TypeScript Node 子运行时） | 否 | 拖入 Node 运行时到 Go 二进制；增加 ~150 MB；跨语言 FFI 维护成本高 |
-| **sidecar + stdio JSONL**（`pi --mode rpc --no-session`） | 备选 | 简单但 stdout 解析在 Go 里要严格按 LF 处理；并发与多 session 难 |
-| **sidecar + HTTP+SSE**（`pi --mode http --bind 127.0.0.1 --port 19000`） | **采用** | 容器化部署友好；多 session 通过 HTTP keepalive + SSE 自然并发；本地 HTTP 不暴露公网 |
-| **sidecar + ACP**（`pi --mode acp`） | 否 | ACP 是为编辑器设计的；opskeeper 不是编辑器 |
+| **sidecar + stdio JSONL**（`pi --mode rpc`） | **v1.16 采用** | Pi 唯一的无头双向通道。stdio 不监听端口，比"HTTP 只绑 loopback"更强的隔离；帧规则由上游 `docs/rpc.md` 明确定义（只按 LF 切分、可乱序、按 `id` 关联），已在 `internal/edgeagent/pirpc` 实现并对真实 Pi 验证 |
+| ~~**sidecar + HTTP+SSE**（`pi --mode http`）~~ | **不存在** | v1.16 实测：`--mode` 只接受 text / json / rpc |
+| ~~**sidecar + ACP**（`pi --mode acp`）~~ | **不存在** | 同上 |
+| **sidecar + `--mode json`** | 否 | 单向事件流，无法下发命令；适合一次性 `pi -p "..."` 批处理，不适合长驻会话 |
 
-> **结论**：1.0 锁定 sidecar + HTTP 模式（`--mode http --bind 127.0.0.1 --port 19000`）。当 Pi 上游推出更友好的 mode 时再评估切换。
+> **结论（v1.16）**：锁定 sidecar + `--mode rpc`。并发不靠 HTTP keepalive，
+> 靠协议自带的 `id` 关联：命令与响应可乱序交错，`pirpc.Session` 用 waiter
+> map 而不是 FIFO 假设来配对。多 session 需要时起多个子进程，每个一条 stdio。
 
 ### 6.3 协议
 
 | 协议 | 用法 | 一期目标 |
 |---|---|---|
-| **HTTP + SSE** | Pi ↔ opskeeper-edge（同主机，localhost） | 立即采用（`pi --mode http`） |
+| **JSONL over stdio**（Pi RPC） | Pi ↔ opskeeper-edge（同进程树，stdin/stdout） | **v1.16 已采用**（`pi --mode rpc`，`internal/edgeagent/pirpc`） |
+| **HTTP（loopback）** | Pi 内置工具 → opskeeper-edge 工具层 `127.0.0.1:9101` | 保留（这一侧是 edge 自己的 HTTP server，不是 Pi 的） |
 | **MCP** (Anthropic → Linux Foundation, 2025-12) | Pi ↔ 外部工具（可挂 Pi 上） | v1.5 在 Pi 之上挂 MCP server |
 | **A2A** (Google → Linux Foundation, 2026) | Pi ↔ OpsKeeper Manager ↔ 外部 Agent | v1.5 上线 A2A delegation |
 | **W3C traceparent** | 审计 + 跨服务追踪 | 立即沿用，零成本 |
@@ -459,13 +488,24 @@ Pi 1.0 在 edge 侧必须复用以下已有组件，不允许平行实现：
 > v1.2 硬约束再次强调：以下全部条目**只适用于每台目标机器上的 `cmd/opskeeper-edge` 进程**；云端 `cmd/opskeeper` 不引入 Pi、不读本节内容、不引本节任何 npm 包。
 
 - **pi.dev 官方** —— <https://pi.dev/> —— pi-coding-agent 官方网站（含 docs / guides / packages 三个子站）。
+- **版本核实（2026-09-12 第三次复核）** —— `npm view @earendil-works/pi-coding-agent dist-tags` → `latest = 0.85.1`（另有 `legacy-node20 = 0.74.2`）；`0.85.1` 发布于 2026-09-05，是当前最新。**版本号本身没有错**；用户反馈的「pi 版本不对」经实测定位到的真实问题不在版本号，而在**运行模式**（原方案写的 `--mode http` 不存在）与 **CLI 入口路径**（少了 `bundle/`），两者已在 §6.2 / §8.1 更正。
 - **pi 仓库（canonical）** —— <https://github.com/earendil-works/pi>（v0.85.1，2026-09-05 发布）。历史仓库名 `badlogic/pi-mono` → `earendil-works/pi-mono` → `earendil-works/pi`；2026-05 由个人仓库迁到 Earendil Works 组织，v0.74.0 是首个 `@earendil-works/*` npm scope 的 release。
 - **运行时要求** —— Node.js ≥ **22.19.0**（自 v0.75.0 起强制；target machine 上 edge bundle 必须自带 Node 或在 image 内置）。
 - **npm 包** —— `@earendil-works/pi-coding-agent`、`@earendil-works/pi-agent-core`、`@earendil-works/pi-ai`、`@earendil-works/pi-tui`（MIT，作者 Mario Zechner / @badlogic + mitsuhiko + rwachtler）。
 - **4 个核心工具** —— `read / write / edit / bash`（v0.85.x）；通过 `pi.registerTool(...)` + TypeBox schema 注册自定义工具；自动发现路径 `~/.pi/agent/tools/*/index.ts` 与 `.pi/tools/*/index.ts`。
 - **扩展生命周期钩子（v0.85.x）** —— `session_start / session_before_switch / session_compact / session_shutdown / before_agent_start / agent_start / agent_end / turn_start / turn_end / tool_call / tool_result / auto_compaction_start / auto_compaction_end`；可通过 `pi.on(...)` 订阅；可通过返回 `{ block: true, reason }` 在 `tool_call` 阶段拦截。
 - **两种 hook 机制不可混用** —— TypeScript 扩展（内置）**与** pi-yaml-hooks（独立 npm 包，事件命名 `tool.before.bash` dot-notation）；前者安装即用，后者走 `pi install npm:pi-yaml-hooks`。
-- **七种运行模式** —— Interactive（默认 TUI）/ Print（`pi -p "query"`）/ JSON（`--mode json`）/ RPC（`--mode rpc --no-session`，LF-delimited JSONL）/ HTTP（`--mode http --port 19000 --bind 0.0.0.0`，HTTP + SSE）**【1.0 选用】** / ACP（`--mode acp`，给编辑器）/ SDK（in-process TS 嵌入）。
+- **运行模式（v1.16 按 `pi --help` 实测更正）** —— `--mode` 只接受 **text（默认）/ json / rpc** 三个值，另有独立开关 `--print, -p`（非交互，跑完退出）。
+  - Interactive TUI —— 默认，无 `--mode`。
+  - Print —— `pi -p "query"`，一次性。
+  - JSON —— `--mode json`，只出不进的事件流（`JsonAgentSessionEvent` JSONL）。
+  - **RPC —— `--mode rpc`，stdin/stdout 上的 JSONL 双向协议【1.0 选用】**。命令带客户端生成的 `id`，响应回显同一个 `id`；事件与响应交错；帧只按 LF 切分。
+  - SDK —— in-process TypeScript 嵌入（`AgentSession`），与 CLI 无关。
+  - ~~HTTP（`--mode http`）~~ / ~~ACP（`--mode acp`）~~ —— **不存在**。原 v1.3 记的"七种运行模式"里这两项是错的，`--mode http` 是本计划此前所有 supervisor / 探活 / argv 设计的基础，因此 v1.16 一并更正（详见 §6.2）。
+- **对外没有端口** —— Pi 不监听任何 TCP 端口。所谓"本地 HTTP 不暴露公网"的论证不适用；实际隔离性更好：stdio 通道在 off-host 根本不可达。
+- **凭据注入** —— 每个 provider 有固定的环境变量名（`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `DEEPSEEK_API_KEY` / `ZAI_API_KEY` / …，见上游 `docs/providers.md`），或写 `~/.pi/agent/auth.json`。**没有 `--api-key` 之外的 argv 需求，opskeeper 一律走环境变量**（argv 会进 `/proc/<pid>/cmdline` 和审计链）。
+- **原生最小权限开关** —— `--tools <allowlist>` / `--exclude-tools <denylist>` / `--no-builtin-tools`，以及 `--no-extensions` / `--no-skills` / `--no-prompt-templates` / `--no-context-files` 四个「不继承主机上任何本地资源」开关。opskeeper 默认打开后四个：否则运维会话会静默继承目标机 `~/.pi` 下装的任何东西，且不进审计链。
+- **CLI 入口路径** —— `package.json` 声明 `bin.pi = "dist/bundle/cli.js"`（**不是** `dist/cli.js`）。vendored monorepo 里对应 `vendor/pi/packages/coding-agent/dist/bundle/cli.js`。原 P-11 的 `OPSKEEPER_PI_BIN` 默认值既缺 `bundle/`，又把 `node <script>` 塞进一个可执行路径字段 —— 两个都在 v1.16 修掉。
 - **上下文工程** —— cascading `AGENTS.md` / `CLAUDE.md`，`SYSTEM.md`（替换）/ `APPEND_SYSTEM.md`（追加），on-demand Skills（`~/.pi/agent/skills/<name>/SKILL.md`），prompts（`~/.pi/agent/prompts/*.md`），sessions JSONL 树（`/tree` / `/fork` / `pi --export session.jsonl output.html`）。
 - **多 provider** —— `@earendil-works/pi-ai` 统一 OpenAI / Anthropic / Google / Together AI / Windows ARM64 provider 等。
 - **GitHub stars 生态** —— repo（earendil-works/pi）+ 派生 OpenClaw（~145k stars）合计生态规模显著。
@@ -490,6 +530,17 @@ Pi 1.0 在 edge 侧必须复用以下已有组件，不允许平行实现：
 | **`pi-crew`**（package） | Crew-style 多 agent 编排 | 1.5 备选 |
 | **MCP 系列扩展** | 通过 MCP 接外部工具 | v1.5 把 Steampipe MCP / Higress MCP 接进 Pi 工具袋 |
 | **官方 `@codex-infinity/pi-infinity`** 等 | 社区维护的长期支持包 | 评估中，暂不锁依赖 |
+
+**v1.16 按上游 `docs/packages.md` 实测补充的机制细节**（影响上表怎么用）：
+
+| 事实 | 出处 | 对 opskeeper 的影响 |
+|---|---|---|
+| 包源有三类：`npm:<pkg>@<ver>`、`git:<host>/<user>/<repo>@<ref>`、本地绝对/相对路径 | `pi install` 语义 | `OPSKEEPER_PI_EXTRA_PACKAGES` 应写**带版本的** `npm:pkg@x.y.z`：带版本的 spec 会被 pin 且 `pi update --extensions` 不会移动它 |
+| `-l` 写项目级 `.pi/settings.json`，默认写用户级 `~/.pi/agent/settings.json` | 同上 | edge 应用项目级（随 bundle 分发、可审查），不污染目标机的用户配置 |
+| `pi -e <src>` 只为本次运行装到临时目录 | 同上 | 灰度一个新 hook 包时用它，不落盘 |
+| **包以完整系统权限运行**：extension 执行任意代码，skill 能指示模型执行任意命令 | `packages.md` 顶部安全警告（上游原文） | 供应链白名单不是可选项。上表里的社区包（`@oh-my-pi/*`、`@tmustier/*`、`@agentoom/*`、`pi-crew` 等）**在装进生产 edge 前必须读源码**，这一条从"建议"提升为硬门槛 |
+| `pi config` 可按资源粒度启用/禁用已装包里的 extension / skill / prompt / theme | 同上 | 比"装/不装"更细的 fleet rollout 手段（对应 plan1.1 A-1 的 canary 需求） |
+| 包过滤支持 `{"source":..., "extensions":[...], "skills":[]}` 与 `!排除` / `+强制包含` | 同上 | 可以只取一个包里的部分资源，避免为了一个 hook 引入它全部的 skill |
 
 **1.0 集成原则**：
 
@@ -633,3 +684,4 @@ OPSKEEPER_PI_TAG_LOCK=v0.85.1 opskeeper-edge         # 通过开关锁回上一�
 | 1.13 | 2026-09-11 | 编程助手-devbox1（22e8b20d…） | **plan1.1.md 横向增补**：新增 fleet / AI 运维军团 / 自主化闭环三阶段九轮路线；完成 Pi v0.85.1 registry 与 submodule 版本核实；重审 pi.dev/packages 中的 swarm-extension；同步记录 `git pull --rebase` 验证。此时 F-1 尚未实现。 |
 | 1.14 | 2026-09-11 | 编程助手-devbox1（22e8b20d…） | **plan1.1 F-1 已实现并验证**：新增 `internal/manager/biz/fleet/` fleet read model 与 `internal/manager/server/fleet/` `/v1/fleet/hosts` 只读 API；复用 `Device` / `Edge` / `edge_devices`，接入 `cmd/opskeeper/main.go`。支持 `status` / `role` / `since` / `limit` / `offset`，返回 host-edge join 的安全 DTO（不暴露 access key / secret hash）；新增认证、筛选、分页、join、secret scrub、invalid filter 单测。targeted `go test -mod=mod` 与 `go vet -mod=mod` 通过；`cmd/opskeeper` / 全 manager 测试仍受环境缺少 `onnxruntime_go` build files 阻塞。按 47 项口径：✅ 8/47 = 17.0%，🟡 6/47 = 12.8%，⛔ 33/47 = 70.2%。 |
 | 1.15 | 2026-09-11 | 编程助手-devbox1（22e8b20d…） | **plan1.1 F-2 已实现并验证**：新增 `internal/manager/biz/fleet/cluster.go`（`ClusterFilter` / `ClusterIncident` / `ClusterHost` / `ClusterMember` / `IncidentRepo` / `ClusterUsecase.List`）与 `internal/manager/server/fleet/http.go` 的 `GET /v1/fleet/cluster-incidents`（未接线返回 501）。分组规则 = (anomaly class) + (signal dimension，剥离 host 身份标签) + (滑动 first-firing 窗口，默认 10 min / 上限 24 h)，并要求 ≥ `min_hosts`（默认 2 / 上限 100）台不同主机；窗口外复发拆成独立 wave；最严重优先排序；分页在分组之后；单次扫描上限 2000 行。分类器覆盖三类真实 rule key：内置 seed 规则前缀表、harness/custom `<domain>/<case>` 归一化前缀、Alertmanager 无分隔符告警名的子串关键词阶段；未命中者回落到 `rule.<normalized>` 保证"同规则仍聚合"。纯确定性、无 LLM、无 Pi 依赖。**真实验证**：`go test -mod=mod ./internal/manager/biz/fleet/` 全绿（14 case：跨 host 成波 / 窗口外拆波 / 加宽窗口合并 / 最严重优先 / 分组后分页 / 无 device 的 incident 不计 host / since 过滤 / 6 类非法 filter / nil-repo 501 / repo 错误传播 / classifyAnomaly 三类 key 族 / 前缀边界 / signalDimension 剥离）；`go test -mod=mod ./internal/manager/server/fleet/` 全绿（6 契约 case：401 / 501 / filter 解析+序列化 / 400 / 错误映射 / 空结果 `[]`）；`go vet -mod=mod` 0 错误；`gofmt -l` 干净。`cmd/opskeeper` 全量链接仍受 `CGO_ENABLED=0` + 无 gcc + `internal/pkg/embedding → fastembed-go → onnxruntime_go` 阻塞（既有环境限制，非本次改动引入）。按 47 项口径：✅ 9/47 = 19.1%，🟡 6/47 = 12.8%，⛔ 32/47 = 68.1%。 |
+| 1.16 | 2026-09-12 | 编程助手-window（ca3d7cba…） | **对真实 Pi 实测 → 架构更正 + P-2R / P-13 交付**。① 事实更正：安装并运行 `@earendil-works/pi-coding-agent@0.85.1`，`pi --help` 显示 `--mode` 只接受 **text / json / rpc**；`--mode http`、`--mode acp`、`--bind`、`--port`、`GET /health` **全部不存在**。原 §6.2 集成模式选择、§P-2 探活契约、§8.1「七种运行模式」据此更正；`bin.pi = dist/bundle/cli.js`（原 `OPSKEEPER_PI_BIN` 默认值既缺 `bundle/` 又把 `node <script>` 当可执行路径）。版本号 `v0.85.1` 第三次核实无误（`dist-tags.latest`），「pi 版本不对」的真实指向是模式与入口路径而非版本号。② 新增 `internal/edgeagent/pirpc/`（doc/frame/session/readloop/commands/launch/spawn/env）：LF-only 帧解析（U+2028/U+2029 不切分）、8 MiB 单记录上限、按 `id` 乱序关联、dialog 类 extension UI 请求 fail-closed 必答（cancelled / confirmed:false）、非 JSON stdout 不断链、子进程退出时 pending 命令即时失败；`LaunchOptions` 只生成实测存在的 flag；`BuildEnv` 按上游 provider→env 映射注入凭据，argv 不含密钥。③ `pisupervisor`：新增 `Config.Attach` + `RPCAttach`，探活从 HTTP 换成 `get_state` 往返，`HTTPHealthProbe` 标记 deprecated；spawn 在 Attach 模式下接管 stdio。④ `biz/pi_config.go`：新增 `OPSKEEPER_PI_{NODE,SCRIPT,TOOLS,EXCLUDE_TOOLS,SKILL_DIRS,SYSTEM_PROMPT_FILE,SESSION_DIR,OFFLINE}`，`HTTP_BIND/HTTP_PORT` 降级为兼容解析后忽略，`BuildLaunchOptions()` 默认关闭四个 host-local 发现开关，`BuildSupervisorConfig()` 改为返回 error。⑤ `cmd/opskeeper-edge/main.go`：`startPiSidecar()` 接线 + `piSessionHolder`，`OPSKEEPER_PI_ENABLED=false` 时 no-op，失败只 warn。⑥ `.env.example` 与 `docs/architecture.md`（v1.13，新增 §4 RPC 通道图 + §5 帧协议不变量图，修正拓扑图 / 状态机 / 依赖图）同步。**真实验证**：`go test ./internal/edgeagent/pirpc` 36 case 全绿 + `-race` 干净（Windows & Linux 双平台）；`TestE2EAgainstRealPi` 对真实 Pi 完成 `get_state`（真 sessionId + model）/ `get_commands` / 直连 `bash`（`exitCode=0` + 真 stdout）/ `abort` 往返，**不需 LLM key**；`go test ./internal/edgeagent/...` 在 WSL Ubuntu 24.04 + go1.25.11 上**全包全绿**；`GOOS=linux go build ./cmd/opskeeper-edge` 通过；`GOOS=linux go vet ./cmd/opskeeper-edge ./internal/edgeagent/...` 0 错误；fleet F-1/F-2 两包回归全绿。**进度**：工作项总数 47→48（新增 P-2R / P-13），✅ 9→**11 = 22.9%**，🟡 6→5，⛔ 32。**未交付**：真机 systemd e2e、完整 prompt→工具→`agent_settled` 一轮（需 provider key）、`piSessions` 的消费方（F-3 / G-3）。 |

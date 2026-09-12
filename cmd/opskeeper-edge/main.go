@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/sync/errgroup"
@@ -33,6 +35,8 @@ import (
 	edgepluginmetrics "github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins/metrics"
 	edgepluginprocmetrics "github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins/procmetrics"
 	edgeplugintraces "github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins/traces"
+	edgepirpc "github.com/vincent-wuhan/opskeeper/internal/edgeagent/pirpc"
+	edgepisupervisor "github.com/vincent-wuhan/opskeeper/internal/edgeagent/pisupervisor"
 	edgerestartservice "github.com/vincent-wuhan/opskeeper/internal/edgeagent/restart_service"
 	edgesvc "github.com/vincent-wuhan/opskeeper/internal/edgeagent/service"
 	edgewebshell "github.com/vincent-wuhan/opskeeper/internal/edgeagent/webshell"
@@ -291,6 +295,21 @@ func main() {
 	})
 	eg.Go(func() error { return supervisor.Run(egCtx) })
 
+	// Pi sidecar. OFF unless OPSKEEPER_PI_ENABLED=true. A
+	// misconfigured Pi block must not take the edge down: metrics,
+	// tools and the tunnel keep working without it, so every failure
+	// here is a warning and the capability stays disabled.
+	piSup, err := startPiSidecar(egCtx, log)
+	if err != nil {
+		log.Warn("pi sidecar disabled", slog.Any("err", err))
+	} else if piSup != nil {
+		defer func() {
+			if err := piSup.Stop(10 * time.Second); err != nil {
+				log.Warn("pi sidecar stop", slog.Any("err", err))
+			}
+		}()
+	}
+
 	err = eg.Wait()
 
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -298,6 +317,85 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("opskeeper-edge shutdown complete")
+}
+
+// piSessionHolder keeps the RPC session of the currently-running Pi
+// child. A restart replaces it wholesale; readers take whatever is
+// live at call time and treat nil as "Pi not available right now".
+type piSessionHolder struct {
+	mu      sync.RWMutex
+	session *edgepirpc.Session
+}
+
+func (h *piSessionHolder) SetPiSession(s *edgepirpc.Session) {
+	h.mu.Lock()
+	h.session = s
+	h.mu.Unlock()
+}
+
+func (h *piSessionHolder) ClearPiSession() {
+	h.mu.Lock()
+	h.session = nil
+	h.mu.Unlock()
+}
+
+// Session returns the live session, or nil when no Pi child is up.
+func (h *piSessionHolder) Session() *edgepirpc.Session {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.session
+}
+
+// piSessions is the process-wide holder the RCA/skill layer reads once
+// it is wired to Pi. Nil session means "no Pi right now", which every
+// caller must handle: the sidecar is optional and restarts.
+var piSessions = &piSessionHolder{}
+
+// startPiSidecar boots the Pi sidecar when OPSKEEPER_PI_ENABLED=true.
+// Returns (nil, nil) when Pi is disabled, which is the default.
+//
+// Pi is spawned as `pi --mode rpc` and supervised over its stdio: the
+// liveness probe is a real get_state round-trip, not an HTTP endpoint
+// (Pi ships none — see internal/edgeagent/pirpc). Credentials go into
+// the child's environment, never argv.
+func startPiSidecar(ctx context.Context, log *slog.Logger) (*edgepisupervisor.Supervisor, error) {
+	piCfg, err := edgebiz.LoadPiConfig()
+	if err != nil {
+		return nil, err
+	}
+	if !piCfg.Enabled {
+		log.Info("pi sidecar disabled (OPSKEEPER_PI_ENABLED=false)")
+		return nil, nil
+	}
+
+	supCfg, err := piCfg.BuildSupervisorConfig()
+	if err != nil {
+		return nil, err
+	}
+	piLog := log.With(slog.String("comp", "pi"))
+	supCfg.Logger = piLog
+	supCfg.Env = edgepirpc.BuildEnv(os.Environ(), piCfg.LLM.Provider, piCfg.LLM.APIKey, piCfg.Offline)
+	supCfg.Attach = edgepisupervisor.RPCAttach(piSessions, func(e edgepirpc.Event) {
+		// Event volume is high during a diagnosis; only the terminal
+		// markers are worth a log line until the audit uplink (P-6)
+		// consumes the stream.
+		switch e.Type {
+		case "agent_settled", "extension_error":
+			piLog.Info("pi event", slog.String("type", e.Type))
+		}
+	}, 10*time.Second)
+
+	sup, err := edgepisupervisor.New(supCfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := sup.Start(ctx); err != nil {
+		return nil, err
+	}
+	log.Info("pi sidecar started",
+		slog.String("bin", supCfg.Bin),
+		slog.String("tag_lock", piCfg.TagLock))
+	return sup, nil
 }
 
 // buildCollector constructs the collector matching cfg.Edge.CollectorMode.

@@ -2,6 +2,7 @@ package biz
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -36,8 +37,63 @@ func TestLoadPiConfig_DefaultsWhenEmpty(t *testing.T) {
 	if cfg.ApprovalTokenTTL != 60*time.Second {
 		t.Errorf("ApprovalTokenTTL=%v; want 60s", cfg.ApprovalTokenTTL)
 	}
-	if cfg.Bin == "" {
-		t.Errorf("Bin should default to vendor/pi path")
+	// Bin has no default: the vendored path is a .js entry point, so
+	// it runs as Node + Script. A "node <script>" string in Bin can
+	// never be exec'd, which is what the old default did.
+	if cfg.Bin != "" {
+		t.Errorf("Bin=%q; want empty so Node+Script is used", cfg.Bin)
+	}
+	if cfg.Node != "node" {
+		t.Errorf("Node=%q; want node", cfg.Node)
+	}
+	if cfg.Script != "vendor/pi/packages/coding-agent/dist/bundle/cli.js" {
+		t.Errorf("Script=%q; want the package's declared bin path", cfg.Script)
+	}
+}
+
+func TestLoadPiConfig_RejectsCommandLineInBin(t *testing.T) {
+	// Regression: the previous default was the two-token string
+	// "node vendor/pi/packages/coding-agent/dist/cli.js".
+	_, err := LoadPiConfigFrom(envKV(
+		"OPSKEEPER_PI_BIN=node vendor/pi/packages/coding-agent/dist/cli.js",
+	))
+	if err == nil {
+		t.Fatal("want error for a command line in OPSKEEPER_PI_BIN")
+	}
+	if !strings.Contains(err.Error(), "OPSKEEPER_PI_SCRIPT") {
+		t.Errorf("error should point at the fix: %v", err)
+	}
+}
+
+func TestLoadPiConfig_PiNativeLeastPrivilege(t *testing.T) {
+	cfg, err := LoadPiConfigFrom(envKV(
+		"OPSKEEPER_PI_TOOLS=read, grep ,find,ls",
+		"OPSKEEPER_PI_EXCLUDE_TOOLS=ask_question",
+		"OPSKEEPER_PI_SKILL_DIRS=/opt/opskeeper/pi-skills",
+		"OPSKEEPER_PI_SYSTEM_PROMPT_FILE=/etc/opskeeper/pi/SYSTEM.md",
+		"OPSKEEPER_PI_SESSION_DIR=/var/lib/opskeeper/pi-sessions",
+		"OPSKEEPER_PI_OFFLINE=true",
+	))
+	if err != nil {
+		t.Fatalf("least-privilege env: %v", err)
+	}
+	if !reflect.DeepEqual(cfg.Tools, []string{"read", "grep", "find", "ls"}) {
+		t.Errorf("Tools=%v", cfg.Tools)
+	}
+	if !reflect.DeepEqual(cfg.ExcludeTools, []string{"ask_question"}) {
+		t.Errorf("ExcludeTools=%v", cfg.ExcludeTools)
+	}
+	if !reflect.DeepEqual(cfg.SkillDirs, []string{"/opt/opskeeper/pi-skills"}) {
+		t.Errorf("SkillDirs=%v", cfg.SkillDirs)
+	}
+	if cfg.SystemPromptFile != "/etc/opskeeper/pi/SYSTEM.md" {
+		t.Errorf("SystemPromptFile=%q", cfg.SystemPromptFile)
+	}
+	if cfg.SessionDir != "/var/lib/opskeeper/pi-sessions" {
+		t.Errorf("SessionDir=%q", cfg.SessionDir)
+	}
+	if !cfg.Offline {
+		t.Errorf("Offline=false; want true")
 	}
 }
 
@@ -192,16 +248,32 @@ func TestBuildSupervisorConfig_DefaultsFlowThrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sc := cfg.BuildSupervisorConfig()
+	sc, err := cfg.BuildSupervisorConfig()
+	if err != nil {
+		t.Fatalf("BuildSupervisorConfig: %v", err)
+	}
 	if sc.Bin != "/usr/local/bin/pi" {
 		t.Errorf("Bin=%q", sc.Bin)
 	}
-	wantArgs := []string{"--mode", "http", "--bind", "127.0.0.1", "--port", "19000"}
-	if !reflect.DeepEqual(sc.Args, wantArgs) {
-		t.Errorf("Args=%v; want %v", sc.Args, wantArgs)
+	joined := strings.Join(sc.Args, " ")
+	if !strings.HasPrefix(joined, "--mode rpc") {
+		t.Errorf("Args must start with --mode rpc; got %q", joined)
 	}
-	if sc.HealthURL != "http://127.0.0.1:19000/health" {
-		t.Errorf("HealthURL=%q", sc.HealthURL)
+	for _, forbidden := range []string{"--mode http", "--bind", "--port"} {
+		if strings.Contains(joined, forbidden) {
+			t.Errorf("Args contain unsupported flag %q: %q", forbidden, joined)
+		}
+	}
+	// Host-local discovery must be off so the sidecar cannot inherit
+	// whatever the operator installed under ~/.pi.
+	for _, want := range []string{"--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("Args missing %q: %q", want, joined)
+		}
+	}
+	// Pi serves no HTTP, so there is nothing to probe over HTTP.
+	if sc.HealthURL != "" {
+		t.Errorf("HealthURL=%q; want empty (RPC probe is wired via Attach)", sc.HealthURL)
 	}
 	if !reflect.DeepEqual(sc.ExtraPackages, []string{"pi-yaml-hooks"}) {
 		t.Errorf("ExtraPackages=%v", sc.ExtraPackages)
@@ -218,9 +290,53 @@ func TestBuildSupervisorConfig_DefaultsFlowThrough(t *testing.T) {
 	}
 }
 
+func TestBuildSupervisorConfig_UsesNodeAndScriptWhenBinUnset(t *testing.T) {
+	cfg, err := LoadPiConfigFrom(envKV(
+		"OPSKEEPER_PI_ENABLED=true",
+		"OPSKEEPER_PI_NODE=/usr/bin/node",
+		"OPSKEEPER_PI_SKILL_DIRS=/opt/opskeeper/pi-skills",
+		"OPSKEEPER_PI_TOOLS=read,grep",
+		"OPSKEEPER_PI_LLM_PROVIDER=anthropic",
+		"OPSKEEPER_PI_LLM_MODEL=claude-haiku-4-5",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := cfg.BuildSupervisorConfig()
+	if err != nil {
+		t.Fatalf("BuildSupervisorConfig: %v", err)
+	}
+	if sc.Bin != "/usr/bin/node" {
+		t.Errorf("Bin=%q; want the interpreter", sc.Bin)
+	}
+	if sc.Args[0] != "vendor/pi/packages/coding-agent/dist/bundle/cli.js" {
+		t.Errorf("Args[0]=%q; want the script path", sc.Args[0])
+	}
+	joined := strings.Join(sc.Args, " ")
+	for _, want := range []string{
+		"--mode rpc",
+		"--provider anthropic",
+		"--model claude-haiku-4-5",
+		"--skill /opt/opskeeper/pi-skills",
+		"--tools read,grep",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("Args missing %q: %q", want, joined)
+		}
+	}
+	// The API key must never reach argv — it goes through the
+	// process env instead, where it does not show up in `ps`.
+	if strings.Contains(joined, "--api-key") {
+		t.Errorf("api key must not be passed on the command line: %q", joined)
+	}
+}
+
 func TestBuildSupervisorConfig_ExtraPackagesDefensiveCopy(t *testing.T) {
 	cfg, _ := LoadPiConfigFrom(envKV("OPSKEEPER_PI_EXTRA_PACKAGES=a,b"))
-	sc := cfg.BuildSupervisorConfig()
+	sc, err := cfg.BuildSupervisorConfig()
+	if err != nil {
+		t.Fatalf("BuildSupervisorConfig: %v", err)
+	}
 	sc.ExtraPackages[0] = "MUTATED"
 	if cfg.ExtraPackages[0] != "a" {
 		t.Errorf("BuildSupervisorConfig should not share backing array; cfg.ExtraPackages=%v", cfg.ExtraPackages)

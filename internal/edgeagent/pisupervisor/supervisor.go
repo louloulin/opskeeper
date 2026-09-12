@@ -1,11 +1,14 @@
 // Package pisupervisor is the edge-side lifecycle controller for
 // the Pi-coding-agent sidecar process. It owns:
 //
-//   - Spawn — launch `pi --mode http --bind 127.0.0.1 --port 19000`
-//     as a child process with the configured env (LLM keys, edge
-//     endpoint, skill roots).
-//   - Health — probe `http://127.0.0.1:<port>/health` on a steady
-//     interval; on missing / unhealthy, declare the process down.
+//   - Spawn — launch `pi --mode rpc` as a child process with the
+//     configured env (LLM keys, edge endpoint, skill roots) and
+//     argv built by pirpc.LaunchOptions.
+//   - Health — round-trip a `get_state` RPC command over the child's
+//     stdio on a steady interval; on missing / unhealthy, declare the
+//     process down. (Earlier revisions probed
+//     `http://127.0.0.1:<port>/health`. Pi ships no HTTP mode and no
+//     health endpoint — see Config.Attach and pirpc's package doc.)
 //   - Restart — when the process exits or stays unhealthy past a
 //     threshold, kill (if alive) and respawn with exponential
 //     backoff. Restart count is bounded per rolling window so a
@@ -38,15 +41,16 @@
 //   4. All public methods are safe for concurrent use. Status()
 //      returns a snapshot without taking the long-held lock.
 //   5. The package never imports Pi's runtime types. The supervisor
-//      treats Pi as a black box with a /health JSON endpoint and
-//      structured logs on stderr. This keeps the upgrade path
-//      decoupled from Pi version bumps.
+//      treats Pi as a black box that speaks the documented JSONL RPC
+//      protocol on stdio and writes structured logs to stderr. This
+//      keeps the upgrade path decoupled from Pi version bumps.
 package pisupervisor
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -63,9 +67,10 @@ type Config struct {
 	// binary for tests). Required.
 	Bin string
 
-	// Args is the argv passed to Bin (excluding argv[0]). For real
-	// Pi: ["--mode", "http", "--bind", "127.0.0.1",
-	// "--port", "19000", "--skills-root", "<path>"].
+	// Args is the argv passed to Bin (excluding argv[0]). Build it
+	// with pirpc.LaunchOptions.Command so the flags match what the
+	// pinned Pi release actually accepts; for the vendored bundle
+	// that is ["<cli.js>", "--mode", "rpc", ...].
 	Args []string
 
 	// Env is the environment block passed to Bin. Use os.Environ()
@@ -73,7 +78,23 @@ type Config struct {
 	// traceparent context.
 	Env []string
 
-	// HealthURL is the probe target. Defaults to
+	// Attach, when set, makes the supervisor own the child's stdio
+	// and hand it to a protocol client after every successful spawn.
+	// It returns the liveness probe for that child plus a teardown
+	// func run when the child exits.
+	//
+	// This is the production path: the returned probe round-trips a
+	// real RPC command, which proves Pi is reading stdin, parsing
+	// JSONL and answering — something neither a PID check nor the
+	// HTTP endpoint Pi does not have could show. Use
+	// RPCAttach to build one.
+	//
+	// When nil, the supervisor falls back to HealthURL + the legacy
+	// HTTP probe, which only fits a local shim (see health.go).
+	Attach func(ctx context.Context, stdin io.WriteCloser, stdout io.Reader) (probe func(context.Context) error, teardown func(), err error)
+
+	// HealthURL is the legacy HTTP probe target, used only when
+	// Attach is nil. Defaults to
 	// "http://127.0.0.1:19000/health" when empty.
 	HealthURL string
 
@@ -144,6 +165,11 @@ type Supervisor struct {
 	doneCh   chan struct{} // closed when the run loop exits
 	crashLog []time.Time   // restart timestamps within the rolling window
 	startedAt time.Time
+
+	// attachProbe is the per-child liveness probe returned by
+	// Config.Attach. Non-nil only while an attached child is alive;
+	// it takes precedence over healthProbe.
+	attachProbe func(context.Context) error
 
 	// hooks for tests
 	healthProbe func(ctx context.Context, url string) error
@@ -358,7 +384,7 @@ func (s *Supervisor) runLoop(ctx context.Context) {
 
 		// Spawn.
 		s.setState(StateStarting)
-		child, err := s.spawn(ctx)
+		child, teardown, err := s.spawn(ctx)
 		if err != nil {
 			s.recordError(err)
 			if !s.sleepBackoff(ctx) {
@@ -396,6 +422,10 @@ func (s *Supervisor) runLoop(ctx context.Context) {
 			waitErr = <-childExited
 		}
 		close(probeDone)
+		teardown()
+		s.mu.Lock()
+		s.attachProbe = nil
+		s.mu.Unlock()
 
 		if waitErr != nil {
 			s.log().Warn("pisupervisor: child exited with error",
@@ -423,34 +453,69 @@ func (s *Supervisor) runLoop(ctx context.Context) {
 	}
 }
 
-// spawn launches the configured binary. Returns the *exec.Cmd on
-// success. On failure (binary missing, fork error) returns an
-// error.
-func (s *Supervisor) spawn(ctx context.Context) (*exec.Cmd, error) {
+// spawn launches the configured binary. Returns the *exec.Cmd and a
+// teardown func for whatever Attach set up. On failure (binary
+// missing, fork error) returns an error.
+func (s *Supervisor) spawn(ctx context.Context) (*exec.Cmd, func(), error) {
 	if _, err := exec.LookPath(s.cfg.Bin); err != nil {
 		// Bin may be a relative path or a script — LookPath
 		// rejects those. Fall back to a direct path probe.
 		if _, statErr := os.Stat(s.cfg.Bin); statErr != nil {
-			return nil, fmt.Errorf("pisupervisor: bin %q not resolvable: %w", s.cfg.Bin, err)
+			return nil, nil, fmt.Errorf("pisupervisor: bin %q not resolvable: %w", s.cfg.Bin, err)
 		}
 	}
 	cmd := s.cfg.CmdFactory(s.cfg.Bin, s.cfg.Args, s.cfg.Env)
 	// Force the child into its own process group so we can kill
 	// the whole tree on shutdown.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stdout = os.Stdout // pass through; opskeeper-edge already routes to the audit log
 	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("pisupervisor: start %q: %w", s.cfg.Bin, err)
+
+	// Pi's stdio IS the RPC channel, so it can only be piped when
+	// Attach owns it. Without Attach, stdout is passed through as
+	// before (opskeeper-edge already routes it to the audit log).
+	var stdin io.WriteCloser
+	var stdout io.Reader
+	if s.cfg.Attach != nil {
+		var err error
+		if stdin, err = cmd.StdinPipe(); err != nil {
+			return nil, nil, fmt.Errorf("pisupervisor: stdin pipe: %w", err)
+		}
+		if stdout, err = cmd.StdoutPipe(); err != nil {
+			return nil, nil, fmt.Errorf("pisupervisor: stdout pipe: %w", err)
+		}
+	} else {
+		cmd.Stdout = os.Stdout
 	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, nil, fmt.Errorf("pisupervisor: start %q: %w", s.cfg.Bin, err)
+	}
+
+	teardown := func() {}
+	if s.cfg.Attach != nil {
+		probe, tdown, err := s.cfg.Attach(ctx, stdin, stdout)
+		if err != nil {
+			_ = killProcessGroup(cmd.Process.Pid)
+			_ = cmd.Wait()
+			return nil, nil, fmt.Errorf("pisupervisor: attach: %w", err)
+		}
+		if tdown != nil {
+			teardown = tdown
+		}
+		s.mu.Lock()
+		s.attachProbe = probe
+		s.mu.Unlock()
+	}
+
 	s.mu.Lock()
 	s.child = cmd
 	s.status.PID = cmd.Process.Pid
 	s.mu.Unlock()
 	s.log().Info("pisupervisor: spawned child",
 		slog.Int("pid", cmd.Process.Pid),
-		slog.String("bin", s.cfg.Bin))
-	return cmd, nil
+		slog.String("bin", s.cfg.Bin),
+		slog.Bool("rpc_attached", s.cfg.Attach != nil))
+	return cmd, teardown, nil
 }
 
 // isCrashLoop returns true if the rolling-window restart count
@@ -534,7 +599,12 @@ func (s *Supervisor) probeLoop(ctx context.Context, child *exec.Cmd, done chan s
 		case <-ticker.C:
 		}
 		pctx, cancel := context.WithTimeout(ctx, s.cfg.HealthTimeout)
-		err := s.healthProbe(pctx, s.cfg.HealthURL)
+		var err error
+		if probe := s.currentProbe(); probe != nil {
+			err = probe(pctx)
+		} else {
+			err = s.healthProbe(pctx, s.cfg.HealthURL)
+		}
 		cancel()
 		if err == nil {
 			consecutiveFailures = 0
@@ -614,6 +684,14 @@ func (s *Supervisor) Upgrade(ctx context.Context) error {
 	s.mu.Unlock()
 	go s.runLoop(ctx)
 	return nil
+}
+
+// currentProbe returns the attached child's liveness probe, or nil
+// when no Attach is configured or the child is gone.
+func (s *Supervisor) currentProbe() func(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.attachProbe
 }
 
 func (s *Supervisor) setState(st State) {
