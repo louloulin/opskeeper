@@ -44,6 +44,7 @@ services:
       dockerfile: deploy/Dockerfile.opskeeper
       args:
         VERSION: ${VERSION:-dev}
+        ONNXRUNTIME_ARCH: ${ONNXRUNTIME_ARCH:-arm64}
     image: opskeeper:${VERSION:-dev}
     container_name: opskeeper
     restart: unless-stopped
