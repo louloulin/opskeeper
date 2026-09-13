@@ -23,7 +23,9 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
+	tc "github.com/testcontainers/testcontainers-go"
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // Env is one running manager + its surrounding fakes for a single test.
@@ -372,6 +374,10 @@ func sharedMySQL(t *testing.T) string {
 			tcmysql.WithDatabase("opskeeper"),
 			tcmysql.WithUsername("opskeeper"),
 			tcmysql.WithPassword("opskeeper"),
+			tc.WithWaitStrategy(
+				wait.ForLog("port: 3306  MySQL Community Server").
+					WithStartupTimeout(3*time.Minute),
+			),
 		)
 		if err != nil {
 			mysqlErr = fmt.Errorf("mysql container: %w", err)
