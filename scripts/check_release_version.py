@@ -55,13 +55,14 @@ def main() -> int:
         (ROOT / "plugins/agentteams-plugin-installer/dashboard/public/plugin.json").read_text(encoding="utf-8")
     )
 
-    expected_version = "2026.09.13-rc1"
-    expected_tag = "v2026.09.13-rc1"
+    expected_version = "2026.09.14-rc2"
+    expected_tag = "v2026.09.14-rc2"
     require(manifest["version"] == expected_version, "manifest version drifted")
     require(manifest["release_tag"] == expected_tag, "manifest release tag drifted")
     require(manifest["release_candidate"] is True, "manifest release candidate flag drifted")
     require(
-        manifest["release_baseline_ref"] == "main@47f57f77bf5217b6546fb0fd92c86b52d33a8e1c",
+        manifest["release_baseline_ref"]
+        == "release/20260922@182bead41bc6e13ee1c21d1282b7e194dbc9a630",
         "manifest main baseline drifted",
     )
     require(
@@ -70,7 +71,7 @@ def main() -> int:
     )
     require(root_version == expected_tag, "VERSION drifted from the release tag")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    require(f"## {expected_version} — 2026-09-13" in changelog, "release changelog entry is missing")
+    require(f"## {expected_version} — 2026-09-14" in changelog, "release changelog entry is missing")
     require(manifest["backend_commit"] in changelog, "release changelog backend binding is missing")
     require(manifest["teamharness_version"] in changelog, "release changelog plugin binding is missing")
     require(re.fullmatch(r"[0-9a-f]{40}", manifest["backend_commit"]) is not None, "backend commit is invalid")

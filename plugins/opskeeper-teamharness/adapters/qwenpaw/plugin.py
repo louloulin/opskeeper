@@ -8,8 +8,11 @@ Mirrors teamharness/adapters/qwenpaw/plugin.py structure:
 from __future__ import annotations
 
 import asyncio
+import functools
 import importlib.util
 import hmac
+import hashlib
+import inspect
 import json
 import logging
 import os
@@ -69,7 +72,7 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.42"
+_PLUGIN_VERSION = "1.0.43"
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
 _MANAGER_GATE_TTL_ENV = "OPSKEEPER_MANAGER_GATE_TTL_SECONDS"
@@ -77,6 +80,33 @@ _DEFAULT_MANAGER_GATE_TTL_SECONDS = 600.0
 _TASK_MARKER_PATTERN = re.compile(
     r"\bOPSKEEPER[\s_]+TASK[\s_]+([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\b"
 )
+_COPAW_BASE_TOOLS = frozenset({"message", "filesync", "projectflow", "taskflow"})
+_COPAW_NATIVE_TOOLS = {
+    "opskeeper__recovery_execute": "recovery.execute",
+    "opskeeper__recovery_verify": "recovery.verify",
+    "opskeeper__incident_record": "incident.record",
+    "opskeeper__task_state_put": "state.put",
+    "opskeeper__state_get": "state.get",
+    "opskeeper__knowledge_write": "knowledge.write",
+}
+_COPAW_DIAGNOSTICS = {
+    "runtime": "copaw",
+    "wrap_installed": False,
+    "toolkit_validated": False,
+    "readonly_middleware": False,
+    "manager_gate": False,
+    "native_tool_count": 0,
+    "installed_native_tools": [],
+    "missing_capabilities": [
+        "copaw_toolkit_hook",
+        "readonly_middleware",
+        "manager_gate",
+        "new_task_context",
+        "native_mcp_tools",
+    ],
+    "install_error": None,
+    "toolkit_error": None,
+}
 
 
 def _credential_value(text: str, indent: int, name: str) -> str:
@@ -924,6 +954,135 @@ def _investigate_via_mcp(arguments: dict[str, Any]) -> dict[str, Any]:
     return {"data": report, "audit_log_id": metadata.get("audit_log_id")}
 
 
+def _copaw_diagnostics() -> dict[str, Any]:
+    return json.loads(json.dumps(_COPAW_DIAGNOSTICS, ensure_ascii=False))
+
+
+def _call_opskeeper_mcp_server(name: str, arguments: dict[str, Any]) -> Any:
+    mcp_dir = ASSET_DIR / "mcp"
+    if str(mcp_dir) not in sys.path:
+        sys.path.insert(0, str(mcp_dir))
+    from server import handle_tools_call
+
+    response = handle_tools_call({
+        "id": f"copaw-{uuid.uuid4().hex}",
+        "params": {"name": name, "arguments": arguments},
+    })
+    if response.get("error"):
+        raise RuntimeError(response["error"].get("message", "OpsKeeper MCP call failed"))
+    return response.get("result")
+
+
+def _tool_names(toolkit: Any) -> set[str]:
+    names: set[str] = set()
+    for attribute in ("tools", "_tools", "tool_functions", "_tool_functions"):
+        candidate = getattr(toolkit, attribute, None)
+        if isinstance(candidate, dict):
+            names.update(str(key) for key in candidate)
+        elif isinstance(candidate, (list, tuple, set)):
+            for item in candidate:
+                names.add(str(getattr(item, "name", item)))
+    registry = getattr(toolkit, "tool_registry", None)
+    if isinstance(registry, dict):
+        names.update(str(key) for key in registry)
+    return names
+
+
+def _validate_copaw_toolkit(toolkit: Any) -> None:
+    try:
+        toolkit.register_middleware(_readonly_enforcement_factory, priority=10)
+        toolkit.register_middleware(_sanitizer_factory, priority=30)
+        names = _tool_names(toolkit)
+        missing_base = sorted(_COPAW_BASE_TOOLS - names)
+        if missing_base:
+            raise RuntimeError(f"AgentTeams CoPaw tools missing: {missing_base}")
+        for tool_name, route in _COPAW_NATIVE_TOOLS.items():
+            if tool_name in names:
+                continue
+            def native_tool(arguments: dict[str, Any], _route: str = route) -> Any:
+                return _call_opskeeper_mcp_server(_route, arguments)
+            toolkit.register_tool_function(tool_name, native_tool)
+        names = _tool_names(toolkit)
+        missing_native = sorted(set(_COPAW_NATIVE_TOOLS) - names)
+        if missing_native:
+            raise RuntimeError(f"OpsKeeper CoPaw tools missing: {missing_native}")
+        _COPAW_DIAGNOSTICS.update({
+            "toolkit_validated": True,
+            "readonly_middleware": True,
+            "manager_gate": True,
+            "new_task_context": True,
+            "prompt_capabilities": ["team", "worker", "manager"],
+            "skill_capabilities": sorted(
+                path.parent.name
+                for base in (ASSET_DIR / "skills" / "agent", ASSET_DIR / "skills" / "team")
+                for path in base.glob("*/SKILL.md")
+            ),
+            "native_tool_count": len(_COPAW_NATIVE_TOOLS),
+            "installed_native_tools": sorted(_COPAW_NATIVE_TOOLS),
+            "missing_capabilities": [],
+            "toolkit_error": None,
+        })
+    except Exception as exc:
+        _COPAW_DIAGNOSTICS.update({
+            "toolkit_validated": False,
+            "readonly_middleware": False,
+            "manager_gate": False,
+            "new_task_context": False,
+            "native_tool_count": len(_tool_names(toolkit) & set(_COPAW_NATIVE_TOOLS)),
+            "installed_native_tools": sorted(_tool_names(toolkit) & set(_COPAW_NATIVE_TOOLS)),
+            "missing_capabilities": [
+                "readonly_middleware",
+                "manager_gate",
+                "new_task_context",
+                "native_mcp_tools",
+            ],
+            "toolkit_error": f"{type(exc).__name__}: {exc}",
+        })
+        raise
+
+
+def _install_copaw_compat() -> dict[str, Any]:
+    try:
+        from copaw.agents.react_agent import CoPawAgent
+    except Exception as exc:
+        raise RuntimeError(f"cannot import CoPawAgent: {exc}") from exc
+    create_toolkit = getattr(CoPawAgent, "_create_toolkit", None)
+    if not callable(create_toolkit):
+        raise RuntimeError("CoPawAgent._create_toolkit is unavailable")
+    if getattr(create_toolkit, "_opskeeper_teamharness_hook", False):
+        _COPAW_DIAGNOSTICS["wrap_installed"] = True
+        return _copaw_diagnostics()
+    original = create_toolkit
+
+    @functools.wraps(original)
+    def _opskeeper_create_toolkit(*args: Any, **kwargs: Any) -> Any:
+        toolkit = original(*args, **kwargs)
+        _validate_copaw_toolkit(toolkit)
+        return toolkit
+
+    _opskeeper_create_toolkit._opskeeper_teamharness_hook = True
+    try:
+        CoPawAgent._create_toolkit = staticmethod(_opskeeper_create_toolkit)
+    except Exception as exc:
+        raise RuntimeError(f"cannot install CoPaw toolkit hook: {exc}") from exc
+    signature_hash = hashlib.sha256(
+        f"{inspect.signature(original)}@{len(_COPAW_NATIVE_TOOLS)}".encode()
+    ).hexdigest()
+    _COPAW_DIAGNOSTICS.update({
+        "wrap_installed": True,
+        "copaw_toolkit_hook": True,
+        "signature_hash": signature_hash,
+        "missing_capabilities": [
+            "readonly_middleware",
+            "manager_gate",
+            "new_task_context",
+            "native_mcp_tools",
+        ],
+        "install_error": None,
+    })
+    return _copaw_diagnostics()
+
+
 def build_investigate_router():
     """Expose a server-side signed RCA proxy for the Dashboard extension."""
     try:
@@ -1080,6 +1239,22 @@ class OpskeeperTeamHarnessPlugin:
     """
 
     def register(self, api: Any) -> None:
+        copaw_api_methods = {
+            name.lstrip("_")
+            for name in ("register_provider", "register_startup_hook", "register_shutdown_hook", "register_control_command")
+        }
+        runtime = os.getenv("AGENTTEAMS_MANAGER_RUNTIME", "").strip().lower()
+        if runtime == "copaw" or set(dir(api)) & {"register_provider", "register_startup_hook", "register_shutdown_hook", "register_control_command"}:
+            if set(dir(api)) >= {"register_provider", "register_startup_hook", "register_shutdown_hook", "register_control_command"}:
+                diagnostics = _install_copaw_compat()
+                try:
+                    api.register_provider(_copaw_diagnostics)
+                except Exception as exc:
+                    raise RuntimeError(f"cannot register CoPaw diagnostics provider: {exc}") from exc
+                return diagnostics
+            missing = sorted(copaw_api_methods - set(dir(api)))
+            raise RuntimeError(f"CoPaw PluginApi is incomplete; missing: {missing}")
+
         # 1) Prompt sections — 注入 Manager team / Worker / Manager agents 三段 prompt
         try:
             api.register_prompt_section(
@@ -1189,6 +1364,14 @@ class OpskeeperTeamHarnessPlugin:
 
         @router.get("/health")
         def health() -> dict[str, Any]:
+            copaw_runtime = os.getenv("AGENTTEAMS_MANAGER_RUNTIME", "").strip().lower() == "copaw"
+            if copaw_runtime or _COPAW_DIAGNOSTICS["wrap_installed"]:
+                return {
+                    "ok": _COPAW_DIAGNOSTICS["wrap_installed"] and _COPAW_DIAGNOSTICS["toolkit_validated"],
+                    "plugin": "opskeeper-teamharness",
+                    "version": _PLUGIN_VERSION,
+                    "capabilities": _copaw_diagnostics(),
+                }
             return {
                 "ok": True,
                 "plugin": "opskeeper-teamharness",

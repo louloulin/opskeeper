@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.43 — 2026-09-14
+
+- Add a CoPaw Plugin API compatibility lifecycle that idempotently wraps `CoPawAgent._create_toolkit`, preserves AgentTeams collaboration tools, and appends the six required OpsKeeper native tool proxies.
+- Enforce readonly middleware, Manager gate state, marker handling, and toolkit registration at the correct install/toolkit-creation lifecycle stages, with loud health diagnostics for installed and missing capabilities.
+- Hard-fail when the CoPaw runtime, toolkit hook, middleware/tool registration, AgentTeams base tools, or OpsKeeper tools are unavailable instead of silently loading without safety guards.
+
 ## 1.0.42 — 2026-09-12
 
 - Allow reporter-only knowledge persistence and incident closure through the Worker boundary while retaining backend role enforcement.
