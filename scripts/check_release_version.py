@@ -55,14 +55,14 @@ def main() -> int:
         (ROOT / "plugins/agentteams-plugin-installer/dashboard/public/plugin.json").read_text(encoding="utf-8")
     )
 
-    expected_version = "2026.09.14-rc2"
-    expected_tag = "v2026.09.14-rc2"
+    expected_version = "2026.09.14-rc3"
+    expected_tag = "v2026.09.14-rc3"
     require(manifest["version"] == expected_version, "manifest version drifted")
     require(manifest["release_tag"] == expected_tag, "manifest release tag drifted")
     require(manifest["release_candidate"] is True, "manifest release candidate flag drifted")
     require(
         manifest["release_baseline_ref"]
-        == "release/20260922@182bead41bc6e13ee1c21d1282b7e194dbc9a630",
+        == "release/20260922@92846525071c6083088280e1fc402be1cf2bfb0a",
         "manifest main baseline drifted",
     )
     require(

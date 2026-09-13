@@ -72,7 +72,8 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.43"
+_PLUGIN_VERSION = "1.0.44"
+_COPAW_DIAGNOSTICS_LOGGER = logging.getLogger("opskeeper-teamharness.copaw-diagnostics")
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
 _MANAGER_GATE_TTL_ENV = "OPSKEEPER_MANAGER_GATE_TTL_SECONDS"
@@ -958,6 +959,15 @@ def _copaw_diagnostics() -> dict[str, Any]:
     return json.loads(json.dumps(_COPAW_DIAGNOSTICS, ensure_ascii=False))
 
 
+def _copaw_diagnostics_startup_hook() -> dict[str, Any]:
+    diagnostics = _copaw_diagnostics()
+    _COPAW_DIAGNOSTICS_LOGGER.info(
+        "OpsKeeper TeamHarness capabilities %s",
+        json.dumps(diagnostics, ensure_ascii=False, sort_keys=True),
+    )
+    return diagnostics
+
+
 def _call_opskeeper_mcp_server(name: str, arguments: dict[str, Any]) -> Any:
     mcp_dir = ASSET_DIR / "mcp"
     if str(mcp_dir) not in sys.path:
@@ -990,8 +1000,8 @@ def _tool_names(toolkit: Any) -> set[str]:
 
 def _validate_copaw_toolkit(toolkit: Any) -> None:
     try:
-        toolkit.register_middleware(_readonly_enforcement_factory, priority=10)
-        toolkit.register_middleware(_sanitizer_factory, priority=30)
+        toolkit.register_middleware(_readonly_enforcement_factory)
+        toolkit.register_middleware(_sanitizer_factory)
         names = _tool_names(toolkit)
         missing_base = sorted(_COPAW_BASE_TOOLS - names)
         if missing_base:
@@ -1001,7 +1011,31 @@ def _validate_copaw_toolkit(toolkit: Any) -> None:
                 continue
             def native_tool(arguments: dict[str, Any], _route: str = route) -> Any:
                 return _call_opskeeper_mcp_server(_route, arguments)
-            toolkit.register_tool_function(tool_name, native_tool)
+            toolkit.register_tool_function(
+                native_tool,
+                "basic",
+                func_name=tool_name,
+                func_description=f"Invoke OpsKeeper MCP tool {route}.",
+                json_schema={
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "description": f"Invoke OpsKeeper MCP tool {route}.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "arguments": {
+                                    "type": "object",
+                                    "description": "MCP tool arguments",
+                                }
+                            },
+                            "required": ["arguments"],
+                            "additionalProperties": True,
+                        },
+                    },
+                },
+                namesake_strategy="override",
+            )
         names = _tool_names(toolkit)
         missing_native = sorted(set(_COPAW_NATIVE_TOOLS) - names)
         if missing_native:
@@ -1022,6 +1056,10 @@ def _validate_copaw_toolkit(toolkit: Any) -> None:
             "missing_capabilities": [],
             "toolkit_error": None,
         })
+        _COPAW_DIAGNOSTICS_LOGGER.info(
+            "OpsKeeper TeamHarness capabilities %s",
+            json.dumps(_copaw_diagnostics(), ensure_ascii=False, sort_keys=True),
+        )
     except Exception as exc:
         _COPAW_DIAGNOSTICS.update({
             "toolkit_validated": False,
@@ -1248,9 +1286,13 @@ class OpskeeperTeamHarnessPlugin:
             if set(dir(api)) >= {"register_provider", "register_startup_hook", "register_shutdown_hook", "register_control_command"}:
                 diagnostics = _install_copaw_compat()
                 try:
-                    api.register_provider(_copaw_diagnostics)
+                    api.register_startup_hook(
+                        "opskeeper_teamharness_diagnostics",
+                        _copaw_diagnostics_startup_hook,
+                        priority=0,
+                    )
                 except Exception as exc:
-                    raise RuntimeError(f"cannot register CoPaw diagnostics provider: {exc}") from exc
+                    raise RuntimeError(f"cannot register CoPaw diagnostics startup hook: {exc}") from exc
                 return diagnostics
             missing = sorted(copaw_api_methods - set(dir(api)))
             raise RuntimeError(f"CoPaw PluginApi is incomplete; missing: {missing}")

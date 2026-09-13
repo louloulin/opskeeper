@@ -2,6 +2,11 @@
 
 本文件记录 opskeeper 各版本的主要变更。最新在上。
 
+## 2026.09.14-rc3 — 2026-09-14
+
+- Rebind the release candidate to backend source `92846525071c6083088280e1fc402be1cf2bfb0a`, TeamHarness `1.0.44`, installer plugin `1.4.2`, and the web source tree recorded in `RELEASE_VERSION.json`.
+- Fix real CoPaw runtime compatibility by using the supported startup-hook, middleware, and native-tool registration APIs while preserving all six OpsKeeper MCP proxies and safety gates.
+
 ## 2026.09.14-rc2 — 2026-09-14
 
 - Rebind the release candidate to backend source `182bead41bc6e13ee1c21d1282b7e194dbc9a630`, TeamHarness `1.0.43`, installer plugin `1.4.2`, and the web source tree recorded in `RELEASE_VERSION.json`.

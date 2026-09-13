@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.44 — 2026-09-14
+
+- Register CoPaw capability diagnostics through the supported startup-hook API instead of misusing the LLM provider registration surface.
+- Align toolkit middleware and native-tool registration with the real AgentScope CoPaw signatures, including explicit function schemas for the six OpsKeeper MCP proxies.
+- Emit an assertion-friendly capability JSON log when the first real CoPaw toolkit passes readonly, gate, marker, and native-tool validation.
+
 ## 1.0.43 — 2026-09-14
 
 - Add a CoPaw Plugin API compatibility lifecycle that idempotently wraps `CoPawAgent._create_toolkit`, preserves AgentTeams collaboration tools, and appends the six required OpsKeeper native tool proxies.
