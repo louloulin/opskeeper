@@ -2,6 +2,11 @@
 
 本文件记录 opskeeper 各版本的主要变更。最新在上。
 
+## 2026.09.14-rc4 — 2026-09-14
+
+- Rebind the release candidate to backend source `d2920895363edca87e34ee00fcb33eb1c6090723`, TeamHarness `1.0.45`, installer plugin `1.4.2`, and the web source tree recorded in `RELEASE_VERSION.json`.
+- Bound read-only Worker reporting and adapted the Manager gate to the real CoPaw Toolkit middleware chain to prevent file-artifact dispatches, synthetic-room messages, and repeated denied calls.
+
 ## 2026.09.14-rc3 — 2026-09-14
 
 - Rebind the release candidate to backend source `92846525071c6083088280e1fc402be1cf2bfb0a`, TeamHarness `1.0.44`, installer plugin `1.4.2`, and the web source tree recorded in `RELEASE_VERSION.json`.
