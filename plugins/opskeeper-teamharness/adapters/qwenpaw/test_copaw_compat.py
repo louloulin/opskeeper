@@ -80,11 +80,11 @@ class CoPawCompatTest(unittest.TestCase):
                 self.tools = {name: object() for name in ("message", "filesync", "projectflow", "taskflow")}
                 self.middlewares = []
 
-            def register_middleware(self, factory, priority=0):
-                self.middlewares.append((factory, priority))
+            def register_middleware(self, factory):
+                self.middlewares.append(factory)
 
-            def register_tool_function(self, name, function):
-                self.tools[name] = function
+            def register_tool_function(self, tool_func, group_name="basic", **kwargs):
+                self.tools[kwargs["func_name"]] = tool_func
 
         class CoPawAgent:
             _create_toolkit = staticmethod(lambda agent: test.toolkit_class())
@@ -95,15 +95,17 @@ class CoPawCompatTest(unittest.TestCase):
     def _api(self, **methods):
         class API:
             def __init__(self):
-                self.providers = []
+                self.startup_hooks = []
                 for name, value in methods.items():
                     setattr(self, name, value)
 
-            def register_provider(self, provider):
-                self.providers.append(provider)
+            def register_provider(self, provider_id, provider_class, *args, **kwargs):
+                raise AssertionError("diagnostics must not be registered as an LLM provider")
+
+            def register_startup_hook(self, hook_name, callback, priority=100):
+                self.startup_hooks.append((hook_name, callback, priority))
 
         defaults = {
-            "register_startup_hook": lambda *args, **kwargs: None,
             "register_shutdown_hook": lambda *args, **kwargs: None,
             "register_control_command": lambda *args, **kwargs: None,
         }
@@ -112,20 +114,18 @@ class CoPawCompatTest(unittest.TestCase):
         return API()
 
     def test_full_copaw_api_installs_idempotent_toolkit_hook(self):
-        api = self._api(
-            register_startup_hook=lambda *args, **kwargs: None,
-            register_shutdown_hook=lambda *args, **kwargs: None,
-            register_control_command=lambda *args, **kwargs: None,
-        )
+        api = self._api()
         diagnostics = self.module.plugin.register(api)
         self.assertTrue(diagnostics["wrap_installed"])
         self.assertFalse(diagnostics["toolkit_validated"])
         toolkit = sys.modules["copaw.agents.react_agent"].CoPawAgent._create_toolkit(object())
-        self.assertEqual(toolkit.middlewares[0][0], self.module._readonly_enforcement_factory)
-        self.assertEqual(toolkit.middlewares[1][0], self.module._sanitizer_factory)
+        self.assertEqual(toolkit.middlewares[0], self.module._readonly_enforcement_factory)
+        self.assertEqual(toolkit.middlewares[1], self.module._sanitizer_factory)
         self.assertIn("opskeeper__state_get", toolkit.tools)
         self.assertIn("message", toolkit.tools)
-        self.assertEqual(len(api.providers), 1)
+        self.assertEqual(len(api.startup_hooks), 1)
+        self.assertEqual(api.startup_hooks[0][0], "opskeeper_teamharness_diagnostics")
+        self.assertEqual(api.startup_hooks[0][2], 0)
 
         second = self.module.plugin.register(api)
         self.assertTrue(second["wrap_installed"])
@@ -133,6 +133,7 @@ class CoPawCompatTest(unittest.TestCase):
         self.assertEqual(second["native_tool_count"], 6)
         self.assertEqual(second["missing_capabilities"], [])
         self.assertIn("signature_hash", second)
+        self.assertEqual(api.startup_hooks[0][1](), second)
 
     def test_partial_copaw_api_hard_fails(self):
         api = self._api(register_startup_hook=lambda *args, **kwargs: None)
@@ -151,7 +152,7 @@ class CoPawCompatTest(unittest.TestCase):
         self.module.plugin.register(api)
         original_method = self.toolkit_class.register_middleware
 
-        def register_middleware(_self, factory, priority=0):
+        def register_middleware(_self, factory):
             raise RuntimeError("registration rejected")
 
         self.toolkit_class.register_middleware = register_middleware
