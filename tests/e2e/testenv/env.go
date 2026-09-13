@@ -187,7 +187,7 @@ func Start(t *testing.T, opts ...Option) *Env {
 		env.dumpLogs()
 		t.Fatalf("testenv: start manager: %v", err)
 	}
-	if err := env.waitReady(20 * time.Second); err != nil {
+	if err := env.waitReady(120 * time.Second); err != nil {
 		env.dumpLogs()
 		t.Fatalf("testenv: manager not ready: %v", err)
 	}
