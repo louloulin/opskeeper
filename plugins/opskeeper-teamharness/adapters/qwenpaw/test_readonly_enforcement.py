@@ -86,8 +86,10 @@ class ReadOnlyEnforcementTest(unittest.TestCase):
         tool_name: str,
         permission_mode: str | None = None,
         arguments: dict | None = None,
+        context: Any | None = None,
+        environment: dict[str, str] | None = None,
     ):
-        middleware = self.module._readonly_enforcement_factory(None, None)
+        middleware = self.module._readonly_enforcement_factory(context, None)
         executed = False
 
         async def next_handler(**_kwargs):
@@ -95,8 +97,12 @@ class ReadOnlyEnforcementTest(unittest.TestCase):
             executed = True
             yield "allowed"
 
-        environment = {} if permission_mode is None else {
+        permission_environment = {} if permission_mode is None else {
             self.module._PERMISSION_MODE_ENV: permission_mode,
+        }
+        environment = {
+            **(environment or {}),
+            **permission_environment,
         }
         input_kwargs = {
             "tool_call": SimpleNamespace(
@@ -128,6 +134,89 @@ class ReadOnlyEnforcementTest(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].state, _ToolResultState.DENIED)
         self.assertIn("write_file", events[0].content[0].text)
+
+    def test_worker_message_to_synthetic_manager_room_is_denied_before_execution(self):
+        context = SimpleNamespace(session_id="matrix:!project-room:matrix.local")
+        arguments = {
+            "action": "send",
+            "channel": "matrix",
+            "target": "room:!manager:matrix.local",
+            "message": "@manager:matrix.local OPSKEEPER_RESULT task-001 {}",
+        }
+        events, executed = self._invoke(
+            "teamharness__message",
+            arguments=arguments,
+            context=context,
+            environment={"AGENTTEAMS_AGENT_NAME": "investigator"},
+        )
+        self.assertFalse(executed)
+        self.assertEqual(events[0].state, _ToolResultState.DENIED)
+        self.assertIn("current project room", events[0].content[0].text)
+
+    def test_manager_dispatch_requiring_file_artifacts_is_denied(self):
+        context = SimpleNamespace(session_id="matrix:!manager-room:matrix.local")
+        arguments = {
+            "action": "send",
+            "channel": "matrix",
+            "target": "room:!project-room:matrix.local",
+            "message": (
+                "@investigator:matrix.local OPSKEEPER TASK task-001\n"
+                "请创建 plan.md 与 result.md。"
+            ),
+        }
+        events, executed = self._invoke(
+            "teamharness__message",
+            arguments=arguments,
+            context=context,
+            environment={"AGENTTEAMS_AGENT_NAME": "manager"},
+        )
+        self.assertFalse(executed)
+        self.assertEqual(events[0].state, _ToolResultState.DENIED)
+        self.assertIn("must not require plan.md or result.md", events[0].content[0].text)
+
+    def test_negated_file_artifact_instruction_is_allowed(self):
+        context = SimpleNamespace(session_id="matrix:!manager-room:matrix.local")
+        arguments = {
+            "action": "send",
+            "channel": "matrix",
+            "target": "room:!project-room:matrix.local",
+            "message": (
+                "@investigator:matrix.local OPSKEEPER TASK task-001\n"
+                "不要创建 plan.md / result.md；直接在当前项目房间回报。"
+            ),
+        }
+        events, executed = self._invoke(
+            "teamharness__message",
+            arguments=arguments,
+            context=context,
+            environment={"AGENTTEAMS_AGENT_NAME": "manager"},
+        )
+        self.assertTrue(executed)
+        self.assertEqual(events, ["allowed"])
+
+    def test_repeated_denied_tool_terminates_after_boundary(self):
+        context = SimpleNamespace(session_id="matrix:!project-room:matrix.local")
+        middleware = self.module._readonly_enforcement_factory(context, None)
+        input_kwargs = {
+            "tool_call": SimpleNamespace(name="write_file", input=json.dumps({"path": "result.md"})),
+        }
+
+        async def next_handler(**_kwargs):
+            yield "allowed"
+
+        async def invoke():
+            return [
+                event
+                async for event in middleware.on_acting(
+                    agent=None,
+                    input_kwargs=input_kwargs,
+                    next_handler=next_handler,
+                )
+            ]
+
+        with self.assertRaisesRegex(RuntimeError, "repeated read-only denials"):
+            for _ in range(3):
+                asyncio.run(invoke())
 
     def test_prefixed_mutating_opskeeper_tool_is_denied(self):
         events, executed = self._invoke("opskeeper__state_put")
