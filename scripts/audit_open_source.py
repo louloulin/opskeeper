@@ -88,6 +88,8 @@ def text_files() -> list[Path]:
 def check_paths() -> None:
     for path in ROOT.rglob("*"):
         relative = path.relative_to(ROOT)
+        if not auditable(path):
+            continue
         if FORBIDDEN_PATH_PARTS.intersection(relative.parts):
             fail(f"private path admitted: {relative}")
         lower_name = relative.name.lower()
