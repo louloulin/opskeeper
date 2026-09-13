@@ -14,7 +14,8 @@ import (
 func newStateTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dir := t.TempDir()
-	dsn := filepath.Join(dir, "test.db") + "?_pragma=foreign_keys(1)"
+	dsn := filepath.Join(dir, "test.db") +
+		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(30000)&_pragma=foreign_keys(1)"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
