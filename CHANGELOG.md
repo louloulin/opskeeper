@@ -10,7 +10,7 @@
 - Fix E2E regression drop accounting and isolate the hosted-pages directory between runs.
 - Add an opt-in live AgentTeams E2E validation runner for endpoint-backed validation.
 - Harden public Docker quickstart reproducibility with versioned local images and current repository naming.
-- Select the staged ONNX Runtime cache with BuildKit `TARGETARCH` for reproducible amd64 and arm64 builds.
+- Select or fetch ONNX Runtime by BuildKit `TARGETARCH`, with staged-cache-first and upstream-fallback paths for reproducible amd64 and arm64 builds.
 - Add a dedicated open-source gate workflow for pull requests, `main`, and `release/20260922`.
 - Complete the TeamHarness 1.0.39–1.0.42 hardening path: proposal-bound recovery, incident evidence recording, safe Tempo business attributes, unified read-only allowlists, reporter knowledge persistence, and reporter incident closure.
 - Remove public-site legacy naming, private demo identifiers, and environment-specific screenshot helper paths from the open-source release.

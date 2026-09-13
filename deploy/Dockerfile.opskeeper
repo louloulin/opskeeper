@@ -58,6 +58,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # registry-routing headache.
 ARG GO_VERSION=1.25.0
 ARG GO_MIRROR=https://mirrors.aliyun.com/golang
+ARG ONNXRUNTIME_VERSION=1.20.1
+ARG ONNXRUNTIME_MIRROR=https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}
 RUN set -eux; \
     arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
     case "${arch}" in \
@@ -90,6 +92,31 @@ RUN go mod download
 
 # Copy the rest of the repo (build context = repo root).
 COPY . .
+
+# Select the ONNX Runtime archive by the requested image platform. A locally
+# staged cache avoids external downloads in restricted networks; a clean
+# checkout falls back to the upstream release. Both paths use the same
+# architecture mapping, so cross-builds never inherit the builder host arch.
+RUN set -eux; \
+    arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    case "${arch}" in \
+        amd64|x86_64) package_arch=x64; runtime_arch=x64 ;; \
+        arm64|aarch64) package_arch=aarch64; runtime_arch=aarch64 ;; \
+        *) echo "unsupported architecture ${arch}" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /out; \
+    cache="builder-cache/onnxruntime-linux-${arch}-${ONNXRUNTIME_VERSION}.tgz"; \
+    if [ -f "${cache}" ]; then \
+        echo "using staged ONNX Runtime cache ${cache}"; \
+        cp "${cache}" /out/ort.tgz; \
+    else \
+        echo "staged ONNX Runtime cache missing; downloading linux/${arch}"; \
+        curl -fsSL -o /out/ort.tgz \
+          "${ONNXRUNTIME_MIRROR}/onnxruntime-linux-${package_arch}-${ONNXRUNTIME_VERSION}.tgz"; \
+    fi; \
+    gzip -t /out/ort.tgz; \
+    expected="onnxruntime-linux-${runtime_arch}-${ONNXRUNTIME_VERSION}/lib/libonnxruntime.so.${ONNXRUNTIME_VERSION}"; \
+    tar -tzf /out/ort.tgz | grep -qx "${expected}"
 
 # CGO_ENABLED=1 because of the local embedder (see top of stage 1).
 # Two cache mounts:
@@ -161,14 +188,10 @@ RUN set -eux; \
 # fastembed-go's yalue/onnxruntime_go@v1.7.0 was tested against.
 ARG ONNXRUNTIME_VERSION=1.20.1
 ARG TARGETARCH
-# Pre-staged onnxruntime tgz — see builder-cache/ for how to populate.
-# Cache names follow BuildKit TARGETARCH so cross-builds select the requested
-# platform rather than the builder host architecture.
-# The COPY happens before apt install so the cache file is in the layer.
-COPY builder-cache/onnxruntime-linux-${TARGETARCH}-${ONNXRUNTIME_VERSION}.tgz /tmp/ort.tgz
-# Without this pre-stage, the runtime stage can't reach github.com /
-# nuget.org from CN networks (SSL_ERROR_SYSCALL on
-# release-assets.githubusercontent.com) and the build fails.
+# The builder selected or fetched this archive for TARGETARCH. Keeping the
+# download in the builder stage lets the final image contain only the selected
+# archive bytes in its resulting runtime layer.
+COPY --from=builder /out/ort.tgz /tmp/ort.tgz
 RUN set -eux; \
     apt-get update && apt-get install -y --no-install-recommends unzip; \
     arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
