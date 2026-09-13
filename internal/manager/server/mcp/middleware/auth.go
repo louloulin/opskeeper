@@ -502,6 +502,13 @@ func checkTenantConsistency(consumerName, tenantID string) (string, error) {
 		return "default", nil
 	}
 
+	// AgentTeams provisions legacy Higress consumers as worker-<role>. These
+	// names belong to the default tenant; do not interpret the leading worker
+	// segment as a tenant name before checking the generic role prefix below.
+	if strings.HasPrefix(consumerName, "worker-") && tenantID == "default" {
+		return "default", nil
+	}
+
 	parts := strings.Split(consumerName, "-")
 	for _, p := range auth.AgentTeamsWorkerPermissions() {
 		if len(parts) > 1 && parts[len(parts)-1] == p.Role {

@@ -196,6 +196,20 @@ func TestResolve_RequireSignature_TenantMismatch(t *testing.T) {
 	}
 }
 
+func TestTenantConsistencyAgentTeamsWorkerRoleUsesDefaultTenant(t *testing.T) {
+	for _, role := range []string{"alerter", "investigator", "critic", "reviewer", "repairer", "verifier", "reporter"} {
+		t.Run(role, func(t *testing.T) {
+			tenantID, err := checkTenantConsistency("worker-"+role, "default")
+			if err != nil {
+				t.Fatalf("expected AgentTeams legacy worker consumer to pass: %v", err)
+			}
+			if tenantID != "default" {
+				t.Fatalf("expected default tenant, got %q", tenantID)
+			}
+		})
+	}
+}
+
 func TestResolve_RequireSignature_CanonicalWorkerCannotOverrideTenant(t *testing.T) {
 	a := NewAuthenticator(signatureMock(), nopLogger{})
 	a.RequireSignature = true
