@@ -136,6 +136,8 @@ pnpm test
 pnpm run build
 
 # AgentTeams 插件
+python3 -m venv .venv
+.venv/bin/python -m pip install -r scripts/requirements-test.txt
 make build-plugins
 make test-plugins
 make verify-plugins

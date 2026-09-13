@@ -57,6 +57,8 @@ pnpm run build
 AgentTeams Plugin Installer:
 
 ```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r scripts/requirements-test.txt
 make build-plugins
 make test-plugins
 make verify-plugins
