@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.45 — 2026-09-14
+
+- Route prefixed `teamharness__message` calls through the Manager dispatch gate and marker recording path.
+- Reject Manager dispatches that require Workers to create `plan.md` or `result.md`, and restrict Worker reporting to the current project room.
+- Terminate repeated read-only denials after three identical invalid calls so Workers cannot loop indefinitely.
+- Adapt QwenPaw middleware to the real CoPaw Toolkit async-generator and response APIs so the Manager gate executes in the Manager runtime.
+
 ## 1.0.44 — 2026-09-14
 
 - Register CoPaw capability diagnostics through the supported startup-hook API instead of misusing the LLM provider registration surface.

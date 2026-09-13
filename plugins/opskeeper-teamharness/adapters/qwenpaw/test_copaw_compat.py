@@ -119,8 +119,8 @@ class CoPawCompatTest(unittest.TestCase):
         self.assertTrue(diagnostics["wrap_installed"])
         self.assertFalse(diagnostics["toolkit_validated"])
         toolkit = sys.modules["copaw.agents.react_agent"].CoPawAgent._create_toolkit(object())
-        self.assertEqual(toolkit.middlewares[0], self.module._readonly_enforcement_factory)
-        self.assertEqual(toolkit.middlewares[1], self.module._sanitizer_factory)
+        self.assertNotEqual(toolkit.middlewares[0], self.module._readonly_enforcement_factory)
+        self.assertNotEqual(toolkit.middlewares[1], self.module._sanitizer_factory)
         self.assertIn("opskeeper__state_get", toolkit.tools)
         self.assertIn("message", toolkit.tools)
         self.assertEqual(len(api.startup_hooks), 1)
@@ -134,6 +134,34 @@ class CoPawCompatTest(unittest.TestCase):
         self.assertEqual(second["missing_capabilities"], [])
         self.assertIn("signature_hash", second)
         self.assertEqual(api.startup_hooks[0][1](), second)
+
+    def test_copaw_direct_middleware_intercepts_before_tool_execution(self):
+        self.module.plugin.register(self._api())
+        toolkit = sys.modules["copaw.agents.react_agent"].CoPawAgent._create_toolkit(object())
+        readonly_middleware = toolkit.middlewares[0]
+        input_kwargs = {
+            "tool_call": type("ToolCall", (), {
+                "name": "write_file",
+                "input": "{\"path\":\"result.md\"}",
+            })(),
+        }
+        executed = []
+
+        async def next_handler(**kwargs):
+            async def events():
+                executed.append(kwargs)
+                yield {"continued": True}
+
+            return events()
+
+        async def invoke():
+            stream = readonly_middleware(input_kwargs, next_handler)
+            return [event async for event in stream]
+
+        events = asyncio.run(invoke())
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].state, "denied")
+        self.assertEqual(executed, [])
 
     def test_partial_copaw_api_hard_fails(self):
         api = self._api(register_startup_hook=lambda *args, **kwargs: None)

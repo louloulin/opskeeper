@@ -72,7 +72,7 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.44"
+_PLUGIN_VERSION = "1.0.45"
 _COPAW_DIAGNOSTICS_LOGGER = logging.getLogger("opskeeper-teamharness.copaw-diagnostics")
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
@@ -185,6 +185,10 @@ _TASK_RESULT_PATTERN = re.compile(
 )
 _TASK_ID_PATTERN = re.compile(r"\bOPSKEEPER-[A-Za-z0-9][A-Za-z0-9._:-]{2,127}\b")
 _TASK_COMPLETE_PATTERN = re.compile(r"\bOPSKEEPER_COMPLETE\s+[A-Za-z0-9][A-Za-z0-9._:-]{2,127}\b")
+_WORKER_FILE_ARTIFACT_PATTERN = re.compile(
+    r"(?:创建|写入?|creat(?:e|ing)|writ(?:e|ing))[\s\S]{0,160}?(?:plan|result)\.md",
+    re.IGNORECASE,
+)
 _READ_ONLY_ALLOWED_TOOLS = frozenset({
     "message",
     "teamharness.message",
@@ -451,13 +455,7 @@ def _sanitize_value(value: Any, rules: list[str]) -> None:
 
 
 def _sanitizer_factory(_ctx: Any, _agent_config: Any):
-    """Return a qwenpaw MiddlewareBase instance, or None if unavailable."""
-    try:
-        from agentscope.middleware import MiddlewareBase
-    except ImportError:
-        return None
-
-    class OpskeeperSanitizer(MiddlewareBase):
+    class OpskeeperSanitizer:
         async def on_acting(
             self,
             agent: Any,
@@ -688,20 +686,64 @@ def _normalize_tool_name(name: str) -> str:
     return normalized
 
 
+def _is_message_tool(normalized_name: str) -> bool:
+    return normalized_name in {"message", "teamharness.message"}
+
+
 def _permission_mode() -> str:
     mode = os.getenv(_PERMISSION_MODE_ENV, "read_only").strip().lower()
     return "standard" if mode == "standard" else "read_only"
 
 
-def _denied_tool_response(tool_name: str) -> Any:
-    from agentscope.message import TextBlock, ToolResultState
+def _denied_tool_response(tool_name: str, reason: str = "") -> Any:
+    from agentscope.message import TextBlock
     from agentscope.tool import ToolResponse
 
+    denial = f"[DENIED] {tool_name} is not allowed in read-only mode."
+    if reason:
+        denial = f"{denial} {reason}"
+    try:
+        text_block = TextBlock(type="text", text=denial)
+    except TypeError:
+        text_block = TextBlock(text=denial)
+    metadata = {"opskeeper.permission_mode": "read_only"}
+    try:
+        from agentscope.message import ToolResultState
+    except ImportError:
+        return ToolResponse(
+            content=[text_block],
+            metadata={**metadata, "opskeeper.tool_result_state": "denied"},
+            is_interrupted=True,
+        )
     return ToolResponse(
-        content=[TextBlock(text=f"[DENIED] {tool_name} is not allowed in read-only mode.")],
+        content=[text_block],
         state=ToolResultState.DENIED,
-        metadata={"opskeeper.permission_mode": "read_only"},
+        metadata=metadata,
     )
+
+
+def _as_copaw_toolkit_middleware(middleware: Any) -> Callable[..., Any]:
+    async def copaw_middleware(
+        input_kwargs: dict[str, Any],
+        next_handler: Callable[..., Any],
+    ) -> AsyncGenerator[Any, None]:
+        def legacy_next_handler(**kwargs: Any) -> Any:
+            source = kwargs or input_kwargs
+
+            async def events() -> AsyncGenerator[Any, None]:
+                async for event in await next_handler(**source):
+                    yield event
+
+            return events()
+
+        async for event in middleware.on_acting(
+            None,
+            input_kwargs,
+            legacy_next_handler,
+        ):
+            yield event
+
+    return copaw_middleware
 
 
 def _has_failed_tool_result(events: list[Any]) -> bool:
@@ -729,17 +771,50 @@ def _queue_manager_stop_after_dispatch(agent: Any) -> None:
     )
 
 
-def _readonly_enforcement_factory(context: Any, _agent_config: Any):
-    try:
-        from agentscope.middleware import MiddlewareBase
-    except ImportError:
-        return None
+def _requires_worker_file_artifacts(message_text: str) -> bool:
+    for match in _WORKER_FILE_ARTIFACT_PATTERN.finditer(message_text):
+        prefix = message_text[max(0, match.start() - 24) : match.start()].lower()
+        if any(
+            negation in prefix
+            for negation in ("不要", "禁止", "不得", "不需要", "do not", "don't")
+        ):
+            continue
+        return True
+    return False
 
+
+def _readonly_enforcement_factory(context: Any, _agent_config: Any):
     factory_session_id = _extract_session_id(context)
 
-    class OpskeeperReadOnlyMiddleware(MiddlewareBase):
+    class OpskeeperReadOnlyMiddleware:
         def __init__(self) -> None:
             self._task_message_sent = False
+            self._denial_counts: dict[tuple[str, str], int] = {}
+
+        def _denied(
+            self,
+            tool_name: str,
+            arguments: dict[str, Any],
+            reason: str = "",
+        ) -> Any:
+            result = _denied_tool_response(tool_name, reason)
+            _audit_tool_call(tool_name, arguments, result)
+            signature = (
+                _normalize_tool_name(tool_name),
+                json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str),
+            )
+            self._denial_counts[signature] = self._denial_counts.get(signature, 0) + 1
+            if self._denial_counts[signature] >= 3:
+                _READ_ONLY_LOGGER.error(
+                    "OpsKeeper repeated read-only denials tool=%s attempts=%s",
+                    tool_name,
+                    self._denial_counts[signature],
+                )
+                raise RuntimeError(
+                    f"OpsKeeper repeated read-only denials for {tool_name}; "
+                    "stop and report the boundary error"
+                )
+            return result
 
         async def on_acting(
             self,
@@ -755,27 +830,63 @@ def _readonly_enforcement_factory(context: Any, _agent_config: Any):
                 and normalized_name not in _ROLE_GATED_MUTATING_TOOLS
                 and not _is_proposal_bound_recovery_execute(normalized_name, arguments)
             ):
-                result = _denied_tool_response(tool_name)
                 _READ_ONLY_LOGGER.warning(
                     "read-only boundary denied tool=%s normalized=%s",
                     tool_name,
                     normalized_name,
                 )
-                _audit_tool_call(tool_name, arguments, result)
-                yield result
+                yield self._denied(tool_name, arguments)
                 return
 
             events: list[Any] = []
-            message_text = _message_text(arguments) if normalized_name == "message" else ""
+            message_text = (
+                _message_text(arguments) if _is_message_tool(normalized_name) else ""
+            )
             task_markers = _extract_task_markers(message_text)
+            if (
+                _is_manager_agent(agent)
+                and _is_message_tool(normalized_name)
+                and task_markers
+                and _requires_worker_file_artifacts(message_text)
+            ):
+                _READ_ONLY_LOGGER.warning(
+                    "Manager dispatch denied because it requires file artifacts markers=%s",
+                    list(task_markers),
+                )
+                yield self._denied(
+                    tool_name,
+                    arguments,
+                    "OpsKeeper dispatches must not require plan.md or result.md; use direct room reply, state.put, and incident.record.",
+                )
+                return
+            if (
+                not _is_manager_agent(agent)
+                and _is_message_tool(normalized_name)
+                and factory_session_id.startswith("matrix:!")
+            ):
+                target_sessions = _message_target_sessions(arguments)
+                if target_sessions and factory_session_id not in target_sessions:
+                    _READ_ONLY_LOGGER.warning(
+                        "Worker message target denied current=%s targets=%s",
+                        factory_session_id,
+                        list(target_sessions),
+                    )
+                    yield self._denied(
+                        tool_name,
+                        arguments,
+                        f"Message target must be the current project room ({factory_session_id}).",
+                    )
+                    return
             if self._task_message_sent and task_markers:
-                result = _denied_tool_response("message")
                 _READ_ONLY_LOGGER.warning(
                     "Manager one-dispatch boundary denied a second task message markers=%s",
                     list(task_markers),
                 )
-                _audit_tool_call(tool_name, arguments, result)
-                yield result
+                yield self._denied(
+                    "message",
+                    arguments,
+                    "Only one OpsKeeper task dispatch is allowed per Manager turn.",
+                )
                 return
             gate_sessions = _dispatch_gate_sessions(factory_session_id, arguments)
             if any(
@@ -783,13 +894,15 @@ def _readonly_enforcement_factory(context: Any, _agent_config: Any):
                 for session_id in gate_sessions
                 for marker in task_markers
             ):
-                result = _denied_tool_response("message")
                 _READ_ONLY_LOGGER.warning(
                     "Manager dispatch gate denied duplicate task markers=%s",
                     list(task_markers),
                 )
-                _audit_tool_call(tool_name, arguments, result)
-                yield result
+                yield self._denied(
+                    "message",
+                    arguments,
+                    "A matching OpsKeeper task is already pending its Worker result.",
+                )
                 return
 
             async for event in next_handler():
@@ -797,7 +910,7 @@ def _readonly_enforcement_factory(context: Any, _agent_config: Any):
                 yield event
 
             if (
-                normalized_name == "message"
+                _is_message_tool(normalized_name)
                 and task_markers
                 and not _has_failed_tool_result(events)
             ):
@@ -1000,8 +1113,12 @@ def _tool_names(toolkit: Any) -> set[str]:
 
 def _validate_copaw_toolkit(toolkit: Any) -> None:
     try:
-        toolkit.register_middleware(_readonly_enforcement_factory)
-        toolkit.register_middleware(_sanitizer_factory)
+        readonly_middleware = _readonly_enforcement_factory(None, None)
+        sanitizer_middleware = _sanitizer_factory(None, None)
+        if readonly_middleware is None or sanitizer_middleware is None:
+            raise RuntimeError("OpsKeeper middleware constructors are unavailable")
+        toolkit.register_middleware(_as_copaw_toolkit_middleware(readonly_middleware))
+        toolkit.register_middleware(_as_copaw_toolkit_middleware(sanitizer_middleware))
         names = _tool_names(toolkit)
         missing_base = sorted(_COPAW_BASE_TOOLS - names)
         if missing_base:
