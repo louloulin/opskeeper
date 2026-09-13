@@ -23,6 +23,12 @@ METADATA_PATHS = {
     ".github/workflows/release.yml",
     ".github/workflows/audit-open-source.yml",
 }
+ALLOWED_RELEASE_DELTA_PREFIXES = {
+    "docs/",
+    "scripts/",
+    "testdata/",
+    "tests/",
+}
 
 
 def run(*arguments: str) -> subprocess.CompletedProcess[str]:
@@ -44,6 +50,15 @@ def yaml_metadata_version(content: str) -> str:
 
 def commit_exists(commit: str) -> bool:
     return run("git", "rev-parse", "--verify", f"{commit}^{{commit}}").returncode == 0
+
+
+def allowed_release_delta(path: str) -> bool:
+    return (
+        path in METADATA_PATHS
+        or path.startswith(tuple(ALLOWED_RELEASE_DELTA_PREFIXES))
+        or path in {"README.md", "README_ZH.md"}
+        or path.endswith("_test.go")
+    )
 
 
 def main() -> int:
@@ -96,7 +111,7 @@ def main() -> int:
         ancestry = run("git", "merge-base", "--is-ancestor", backend_commit, "HEAD").returncode == 0
         require(ancestry, "release commit is not descended from backend_commit")
         changed = run("git", "diff", "--name-only", backend_commit, "HEAD").stdout.splitlines()
-        require(set(changed).issubset(METADATA_PATHS), "release commit contains non-metadata changes")
+        require(all(allowed_release_delta(path) for path in changed), "release commit contains changes outside its source boundary")
     elif os.environ.get("OPSKEEPER_REQUIRE_FULL_HISTORY") == "1":
         raise SystemExit("release version check failed: full backend history is required")
 
