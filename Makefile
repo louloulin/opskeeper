@@ -31,6 +31,8 @@ PACKAGE_CLEAN ?= 1
 
 DB_DSN     ?= root:root@tcp(127.0.0.1:3306)/opskeeper?charset=utf8mb4&parseTime=true&loc=Local
 MIGRATIONS := db/migrations
+ONNXRUNTIME_VERSION ?= 1.20.1
+ONNXRUNTIME_MIRROR ?= https://github.com/microsoft/onnxruntime/releases/download/v$(ONNXRUNTIME_VERSION)
 
 .DEFAULT_GOAL := help
 
@@ -235,11 +237,16 @@ build-edge-darwin-arm64: ## [release] edge darwin/arm64
 		go build -trimpath -ldflags "-s -w $(LDFLAGS)" \
 		-o $(BIN_DIR)/darwin-arm64/opskeeper-edge ./cmd/opskeeper-edge
 
-.PHONY: docker-build
-docker-build: ## [release] 构建 opskeeper:$(VERSION) 镜像（默认 linux/amd64，可用 PLATFORM 覆盖）
+.PHONY: fetch-onnxruntime docker-build
+fetch-onnxruntime: ## [release] 按 TARGET_ARCH 准备并校验 ONNX Runtime 离线缓存
+	bash scripts/fetch_onnxruntime.sh "$(ONNXRUNTIME_VERSION)" "$(TARGET_ARCH)" "$(ONNXRUNTIME_MIRROR)"
+
+docker-build: fetch-onnxruntime ## [release] 构建 opskeeper:$(VERSION) 镜像（默认 linux/amd64，可用 PLATFORM 覆盖）
 	docker buildx build \
 		--platform $(PLATFORM) \
 		--build-arg VERSION=$(VERSION) \
+		--build-arg ONNXRUNTIME_VERSION=$(ONNXRUNTIME_VERSION) \
+		--build-arg ONNXRUNTIME_MIRROR=$(ONNXRUNTIME_MIRROR) \
 		-t opskeeper:$(VERSION) \
 		-f deploy/Dockerfile.opskeeper \
 		$(DOCKER_BUILD_CACHE_ARGS) \
