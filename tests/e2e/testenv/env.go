@@ -374,7 +374,8 @@ func sharedMySQL(t *testing.T) string {
 			tcmysql.WithDatabase("opskeeper"),
 			tcmysql.WithUsername("opskeeper"),
 			tcmysql.WithPassword("opskeeper"),
-			tc.WithWaitStrategy(
+			tc.WithWaitStrategyAndDeadline(
+				3*time.Minute,
 				wait.ForLog("port: 3306  MySQL Community Server").
 					WithStartupTimeout(3*time.Minute),
 			),
