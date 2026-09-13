@@ -2,6 +2,11 @@
 
 本文件记录 opskeeper 各版本的主要变更。最新在上。
 
+## 2026.09.14-rc2 — 2026-09-14
+
+- Rebind the release candidate to backend source `182bead41bc6e13ee1c21d1282b7e194dbc9a630`, TeamHarness `1.0.43`, installer plugin `1.4.2`, and the web source tree recorded in `RELEASE_VERSION.json`.
+- Add a CoPaw-compatible TeamHarness lifecycle that preserves AgentTeams collaboration tools, appends OpsKeeper native tools, enforces readonly and Manager dispatch gates, and hard-fails when safety-critical capabilities are unavailable.
+
 ## 2026.09.13-rc1 — 2026-09-13
 
 - Bind the release candidate to backend source `45a447e64e33de7c7b08fedf4c0bbee774b6c1e4`, TeamHarness `1.0.42`, installer plugin `1.4.2`, and the web source tree recorded in `RELEASE_VERSION.json`.
