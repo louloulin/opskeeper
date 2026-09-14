@@ -38,8 +38,8 @@ validate_archive() {
     actual_sha256="$(shasum -a 256 "${archive}" | awk '{print $1}')"
   fi
   if [[ "${actual_sha256}" != "${expected_sha256}" ]]; then
-    echo "ONNX Runtime checksum mismatch for ${archive}" >&2
-    exit 1
+    echo "ONNX Runtime checksum mismatch for ${archive}; refetching" >&2
+    return 1
   fi
   tar -tzf "${archive}" | grep -qx "${expected_member}"
 }
