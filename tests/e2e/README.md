@@ -23,6 +23,9 @@ and `make test` — those stay fast unit-only.
   Docker Desktop install routinely takes longer than the container-start
   API deadline. Bump Docker Desktop's memory ("Settings → Resources →
   Memory") if you see `start container: context deadline exceeded`.
+- Slow runners may override the MySQL readiness deadline with
+  `OPSKEEPER_E2E_MYSQL_WAIT` (a Go duration; default `5m`). `make test-e2e`
+  uses a 30-minute Go test timeout to leave room for cold storage.
 - The harness sets `TESTCONTAINERS_RYUK_DISABLED=true` by default — the
   reaper sidecar is the #1 source of mac-side slowness, and each test's
   `t.Cleanup(env.Stop)` already tears the container down. Override with
