@@ -332,6 +332,23 @@ var (
 	startMu sync.Mutex // serializes Start so two parallel tests don't race the schema
 )
 
+const defaultMySQLWaitTimeout = 5 * time.Minute
+
+func mysqlWaitTimeout() (time.Duration, error) {
+	value := os.Getenv("OPSKEEPER_E2E_MYSQL_WAIT")
+	if value == "" {
+		return defaultMySQLWaitTimeout, nil
+	}
+	timeout, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("parse OPSKEEPER_E2E_MYSQL_WAIT %q: %w", value, err)
+	}
+	if timeout <= 0 {
+		return 0, fmt.Errorf("OPSKEEPER_E2E_MYSQL_WAIT must be positive, got %q", value)
+	}
+	return timeout, nil
+}
+
 // TerminateSharedMySQL kills the testcontainers MySQL container. Called
 // from TestMain on process exit so we don't leak ~500 MB per `go test`
 // invocation — the 3.6 GiB test box was exhausted by ~10 leftover
@@ -367,7 +384,12 @@ func sharedMySQL(t *testing.T) string {
 			// the #1 source of slowness/flakes on mac.
 			_ = os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		waitTimeout, err := mysqlWaitTimeout()
+		if err != nil {
+			mysqlErr = err
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), waitTimeout+time.Minute)
 		defer cancel()
 		container, err := tcmysql.Run(ctx,
 			"mysql:8.0",
@@ -375,9 +397,9 @@ func sharedMySQL(t *testing.T) string {
 			tcmysql.WithUsername("opskeeper"),
 			tcmysql.WithPassword("opskeeper"),
 			tc.WithWaitStrategyAndDeadline(
-				3*time.Minute,
+				waitTimeout,
 				wait.ForLog("port: 3306  MySQL Community Server").
-					WithStartupTimeout(3*time.Minute),
+					WithStartupTimeout(waitTimeout),
 			),
 		)
 		if err != nil {
