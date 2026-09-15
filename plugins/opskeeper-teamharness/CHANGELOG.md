@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.46 — 2026-09-15
+
+- Allow read-only Workers to report task coordination state and results through the dedicated OpsKeeper state tool.
+- Build Manager TAR, Dashboard ZIP, QwenPaw ZIP, and installer ZIP artifacts deterministically.
+
 ## 1.0.45 — 2026-09-14
 
 - Route prefixed `teamharness__message` calls through the Manager dispatch gate and marker recording path.
