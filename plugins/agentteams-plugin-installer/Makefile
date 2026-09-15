@@ -10,11 +10,11 @@ build:
 plugin-zip: build
 	@mkdir -p $(DIST_DIR)
 	@cd dashboard && [ -f dist/main.js ] || (echo "ERROR: dashboard/dist/main.js missing — run make build first" && exit 1)
-	zip -j $(DIST_DIR)/$(PLUGIN_NAME).zip \
-	    dashboard/public/plugin.json \
-	    dashboard/dist/main.js \
-	    ../../LICENSE \
-	    ../../NOTICE.md
+	python3 ../../scripts/deterministic_archive.py zip $(DIST_DIR)/$(PLUGIN_NAME).zip \
+	    --source dashboard/public/plugin.json=plugin.json \
+	    --source dashboard/dist/main.js=main.js \
+	    --source ../../LICENSE=LICENSE \
+	    --source ../../NOTICE.md=NOTICE.md
 	@echo "Built: $(DIST_DIR)/$(PLUGIN_NAME).zip"
 	@ls -la $(DIST_DIR)/
 
