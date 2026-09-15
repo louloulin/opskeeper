@@ -4,7 +4,7 @@
 
 ## 2026.09.14-rc4 — 2026-09-14
 
-- Rebind the release candidate to backend source `7c48045df57dc8e204deaa3729a84dbf55b1aabb`, TeamHarness `1.0.46`, installer plugin `1.4.2`, and the web source tree recorded in `RELEASE_VERSION.json`.
+- Rebind the release candidate to backend source `0e667eecbd65aa66fdba54b8b8bf3535bcbf8631`, TeamHarness `1.0.46`, installer plugin `1.4.2`, and the web source tree recorded in `RELEASE_VERSION.json`.
 - Respect an explicit QwenPaw runtime even when CoPaw-compatible APIs are present, and make source-tree task tracing load its signing helper from both source and installed layouts.
 - Bound read-only Worker reporting and adapted the Manager gate to the real CoPaw Toolkit middleware chain to prevent file-artifact dispatches, synthetic-room messages, and repeated denied calls.
 - Prefetch and validate ONNX Runtime archives by `TARGETARCH` so amd64 and arm64 builds do not depend on builder-host architecture.
