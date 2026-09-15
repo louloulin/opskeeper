@@ -49,27 +49,15 @@ end
 
 def zip_dir(root, package_name, out_path)
   FileUtils.rm_f(out_path)
-  if system("zip", "-v", out: File::NULL, err: File::NULL)
-    Dir.chdir(root) do
-      system("zip", "-qry", out_path.to_s, package_name) || abort("zip failed")
-    end
-    return
-  end
-  python = <<~PY
-    import os, zipfile
-    root = #{root.to_s.dump}
-    package = #{package_name.dump}
-    out = #{out_path.to_s.dump}
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-        base = os.path.join(root, package)
-        for dirpath, _, files in os.walk(base):
-            for filename in files:
-                path = os.path.join(dirpath, filename)
-                rel = os.path.relpath(path, root)
-                zf.write(path, rel)
-  PY
-  stdout, stderr, status = Open3.capture3("python3", "-c", python)
-  abort("python zip failed: #{stderr}#{stdout}") unless status.success?
+  archive_helper = Pathname.new(__FILE__).realpath.dirname.join("../../../../../scripts/deterministic_archive.py")
+  system(
+    "python3",
+    archive_helper.to_s,
+    "zip",
+    out_path.to_s,
+    "--source",
+    "#{root}/#{package_name}=#{package_name}"
+  ) || abort("deterministic zip failed")
 end
 
 out_dir.mkpath

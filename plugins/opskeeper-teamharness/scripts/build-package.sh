@@ -18,26 +18,28 @@ mkdir -p dist
 OUT_DIR="$PLUGIN_DIR/dist" ruby adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugin.yaml
 rm -f "$BASE_PACKAGE"
 rm -f "$DASHBOARD_PACKAGE"
-TAR_OWNER_ARGS=()
-if tar --version 2>/dev/null | grep -q '^tar (GNU'; then
-  TAR_OWNER_ARGS=(--owner=0 --group=0 --numeric-owner)
-else
-  TAR_OWNER_ARGS=(--uname 0 --gname 0 --numeric-owner)
-fi
-tar \
-  "${TAR_OWNER_ARGS[@]}" \
-  --exclude '.DS_Store' \
-  --exclude '__pycache__' \
-  --exclude '*.pyc' \
-  --exclude 'dashboard/node_modules' \
-  -czf "$BASE_PACKAGE" \
-  -C "$PLUGIN_DIR" plugin.yaml prompts skills mcp adapters scripts loongsuite examples README.md CHANGELOG.md dashboard \
-  -C "$ROOT_DIR" LICENSE NOTICE.md
+ARCHIVE_HELPER="$ROOT_DIR/scripts/deterministic_archive.py"
+python3 "$ARCHIVE_HELPER" tar-gz "$BASE_PACKAGE" \
+    --source "$PLUGIN_DIR/plugin.yaml"=plugin.yaml \
+    --source "$PLUGIN_DIR/prompts"=prompts \
+    --source "$PLUGIN_DIR/skills"=skills \
+    --source "$PLUGIN_DIR/mcp"=mcp \
+    --source "$PLUGIN_DIR/adapters"=adapters \
+    --source "$PLUGIN_DIR/scripts"=scripts \
+    --source "$PLUGIN_DIR/loongsuite"=loongsuite \
+    --source "$PLUGIN_DIR/examples"=examples \
+    --source "$PLUGIN_DIR/README.md"=README.md \
+    --source "$PLUGIN_DIR/CHANGELOG.md"=CHANGELOG.md \
+    --source "$PLUGIN_DIR/dashboard"=dashboard \
+    --source "$ROOT_DIR/LICENSE"=LICENSE \
+    --source "$ROOT_DIR/NOTICE.md"=NOTICE.md
 
-(
-  cd dashboard
-  zip -X -r "../${DASHBOARD_PACKAGE}" plugin.json dist/main.js dist/main.js.map "dist/main-${VERSION}.js" "dist/main-${VERSION}.js.map"
-)
+python3 "$ARCHIVE_HELPER" zip "$DASHBOARD_PACKAGE" \
+    --source "$PLUGIN_DIR/dashboard/plugin.json"=plugin.json \
+    --source "$PLUGIN_DIR/dashboard/dist/main.js"=dist/main.js \
+    --source "$PLUGIN_DIR/dashboard/dist/main.js.map"=dist/main.js.map \
+    --source "$PLUGIN_DIR/dashboard/dist/main-${VERSION}.js"="dist/main-${VERSION}.js" \
+    --source "$PLUGIN_DIR/dashboard/dist/main-${VERSION}.js.map"="dist/main-${VERSION}.js.map"
 
 printf '\nTeamHarness base package:\n'
 ls -lh "$BASE_PACKAGE"
