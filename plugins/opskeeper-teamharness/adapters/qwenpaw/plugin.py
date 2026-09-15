@@ -72,7 +72,7 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.46"
+_PLUGIN_VERSION = "1.0.47"
 _COPAW_DIAGNOSTICS_LOGGER = logging.getLogger("opskeeper-teamharness.copaw-diagnostics")
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
@@ -412,6 +412,20 @@ class ManagerDispatchGate:
 _MANAGER_DISPATCH_GATE = ManagerDispatchGate()
 
 
+class _FallbackMiddlewareBase:
+    @staticmethod
+    def is_implemented(hook_name: str) -> bool:
+        return hook_name == "on_acting"
+
+
+def _middleware_base() -> type[Any]:
+    try:
+        from agentscope.middleware import MiddlewareBase
+    except ImportError:
+        return _FallbackMiddlewareBase
+    return MiddlewareBase
+
+
 def _sanitizer_rules() -> list[str]:
     raw = os.getenv(_SANITIZER_KEYWORDS_ENV, "")
     return [v.strip() for v in raw.split(",") if v.strip()]
@@ -456,7 +470,7 @@ def _sanitize_value(value: Any, rules: list[str]) -> None:
 
 
 def _sanitizer_factory(_ctx: Any, _agent_config: Any):
-    class OpskeeperSanitizer:
+    class OpskeeperSanitizer(_middleware_base()):
         async def on_acting(
             self,
             agent: Any,
@@ -787,7 +801,7 @@ def _requires_worker_file_artifacts(message_text: str) -> bool:
 def _readonly_enforcement_factory(context: Any, _agent_config: Any):
     factory_session_id = _extract_session_id(context)
 
-    class OpskeeperReadOnlyMiddleware:
+    class OpskeeperReadOnlyMiddleware(_middleware_base()):
         def __init__(self) -> None:
             self._task_message_sent = False
             self._denial_counts: dict[tuple[str, str], int] = {}

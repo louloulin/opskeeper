@@ -27,7 +27,9 @@ class _ToolResponse:
 
 
 class _MiddlewareBase:
-    pass
+    @staticmethod
+    def is_implemented(hook_name: str):
+        return hook_name == "on_acting"
 
 
 def _install_agentscope_stubs() -> dict[str, Any]:
@@ -127,6 +129,13 @@ class ReadOnlyEnforcementTest(unittest.TestCase):
 
     def test_default_mode_is_read_only(self):
         self.assertEqual(self.module._permission_mode(), "read_only")
+
+    def test_registered_middlewares_implement_the_agentscope_protocol(self):
+        readonly = self.module._readonly_enforcement_factory(None, None)
+        sanitizer = self.module._sanitizer_factory(None, None)
+        for middleware in (readonly, sanitizer):
+            self.assertTrue(middleware.is_implemented("on_acting"))
+            self.assertFalse(middleware.is_implemented("on_reply"))
 
     def test_write_file_is_denied_without_execution(self):
         events, executed = self._invoke("write_file")
