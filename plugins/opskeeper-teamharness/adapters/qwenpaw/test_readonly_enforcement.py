@@ -223,6 +223,14 @@ class ReadOnlyEnforcementTest(unittest.TestCase):
         self.assertFalse(executed)
         self.assertEqual(events[0].state, _ToolResultState.DENIED)
 
+    def test_task_coordination_state_put_is_allowed_in_read_only_mode(self):
+        events, executed = self._invoke(
+            "opskeeper__task_state_put",
+            arguments={"task_id": "task-001", "state": "acknowledged"},
+        )
+        self.assertTrue(executed)
+        self.assertEqual(events, ["allowed"])
+
     def test_recovery_execute_requires_a_complete_proposal_binding(self):
         arguments = {
             "incident_id": "incident-live-pool",

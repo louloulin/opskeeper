@@ -72,7 +72,7 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.45"
+_PLUGIN_VERSION = "1.0.46"
 _COPAW_DIAGNOSTICS_LOGGER = logging.getLogger("opskeeper-teamharness.copaw-diagnostics")
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
@@ -212,6 +212,7 @@ _READ_ONLY_ALLOWED_TOOLS = frozenset({
     "opskeeper.knowledge.query",
     "opskeeper.query.knowledge",
     "opskeeper.state.get",
+    "opskeeper.task.state.put",
     "opskeeper.recovery.verify",
     "opskeeper.incident.record",
     "opskeeper.loop.correlate",
