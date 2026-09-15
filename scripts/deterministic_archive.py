@@ -99,7 +99,7 @@ def write_zip(output: Path, sources: list[str]) -> None:
             if source_path.is_symlink():
                 raise ValueError(f"ZIP source contains a symlink: {source_path}")
             info = zipfile.ZipInfo(
-                archive_path.as_posix(),
+                archive_path.as_posix() + "/" if is_directory else archive_path.as_posix(),
                 date_time=(1980, 1, 1, 0, 0, 0),
             )
             info.compress_type = zipfile.ZIP_DEFLATED
