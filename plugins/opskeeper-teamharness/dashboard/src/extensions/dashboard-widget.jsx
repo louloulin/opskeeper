@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { opskeeperApi } from './api.js';
 import { buildRuntimeSnapshot, normalizeIncidentList } from './runtime.js';
+import { getPluginThemeStyle, usePluginTheme } from './theme.js';
 
 // Dashboard overview widget — 概览卡：active / open / closed / avg-RCA / 阶段通过率。
 //
@@ -10,6 +11,7 @@ import { buildRuntimeSnapshot, normalizeIncidentList } from './runtime.js';
 //   - closed = status = resolved
 //   - avg_rca_seconds = resolved 事故的 RCA 耗时平均值（started_at → resolved_at）
 export default function OpskeeperStatsWidget({ api }) {
+  const theme = usePluginTheme();
   const [stats, setStats] = React.useState({
     active: 0, open: 0, closed: 0, total: 0, avgRcaSeconds: null,
     overallStatus: 'unknown', checkedAt: null, meanLocalizationSeconds: null,
@@ -85,8 +87,9 @@ export default function OpskeeperStatsWidget({ api }) {
   return (
     <div
       style={{
-        padding: 16, border: '1px solid var(--border)', borderRadius: 8,
-        background: 'var(--card)', color: 'var(--card-foreground)', cursor: 'pointer',
+        ...getPluginThemeStyle(theme),
+        padding: 16, border: '1px solid var(--ok-border)', borderRadius: 8,
+        background: 'var(--ok-card)', color: 'var(--ok-card-foreground)', cursor: 'pointer',
       }}
       onClick={() => api.dashboard.navigate('plugin-route:opskeeper-teamharness/home')}
       title="跳转到 Opskeeper 诊断"
@@ -99,41 +102,41 @@ export default function OpskeeperStatsWidget({ api }) {
         }} />
         <span style={{
           marginLeft: 'auto', padding: '1px 6px', borderRadius: 4, fontSize: 10,
-          background: 'var(--muted)', color: 'var(--muted-foreground)',
+          background: 'var(--ok-muted)', color: 'var(--ok-muted-foreground)',
         }}>
           7 阶段 RCA
         </span>
       </div>
       {loading ? (
-        <div style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>加载中…</div>
+        <div style={{ fontSize: 12, color: 'var(--ok-muted-foreground)' }}>加载中…</div>
       ) : (
         <div style={{ display: 'flex', gap: 14, fontSize: 12 }}>
           <div>
             <div style={{
               fontSize: 22, fontWeight: 600,
-              color: stats.active > 0 ? '#ef4444' : 'var(--card-foreground)',
+              color: stats.active > 0 ? '#ef4444' : 'var(--ok-card-foreground)',
             }}>{stats.active}</div>
-            <div style={{ color: 'var(--muted-foreground)', fontSize: 11 }}>进行中</div>
+            <div style={{ color: 'var(--ok-muted-foreground)', fontSize: 11 }}>进行中</div>
           </div>
           <div>
             <div style={{ fontSize: 22, fontWeight: 600 }}>{stats.open}</div>
-            <div style={{ color: 'var(--muted-foreground)', fontSize: 11 }}>待处理</div>
+            <div style={{ color: 'var(--ok-muted-foreground)', fontSize: 11 }}>待处理</div>
           </div>
           <div>
             <div style={{ fontSize: 22, fontWeight: 600, color: '#10b981' }}>{stats.closed}</div>
-            <div style={{ color: 'var(--muted-foreground)', fontSize: 11 }}>已闭环</div>
+            <div style={{ color: 'var(--ok-muted-foreground)', fontSize: 11 }}>已闭环</div>
           </div>
           <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
             <div style={{ fontSize: 14, fontWeight: 500 }}>
               {fmtDuration(stats.avgRcaSeconds)}
             </div>
-            <div style={{ color: 'var(--muted-foreground)', fontSize: 11 }}>平均 RCA</div>
+            <div style={{ color: 'var(--ok-muted-foreground)', fontSize: 11 }}>平均 RCA</div>
           </div>
         </div>
       )}
       <div style={{
-        marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--border)',
-        fontSize: 10, color: 'var(--muted-foreground)',
+        marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--ok-border)',
+        fontSize: 10, color: 'var(--ok-muted-foreground)',
         display: 'flex', justifyContent: 'space-between',
       }}>
         <span>定位 {fmtDuration(stats.meanLocalizationSeconds)} · 审计 {fmtPercent(stats.auditEvidenceCompleteness)}</span>

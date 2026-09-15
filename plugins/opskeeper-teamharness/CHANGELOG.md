@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.48 — 2026-09-15
+
+- Isolate Dashboard plugin colors from host theme variables and keep text readable in both light and dark themes.
+
 ## 1.0.47 — 2026-09-15
 
 - Derive readonly and sanitizer middleware from the AgentScope middleware protocol so real QwenPaw agents initialize.

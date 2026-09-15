@@ -3,12 +3,14 @@ import OpskeeperRoute from './route.jsx';
 import OpskeeperRuntimeRoute from './runtime-route.jsx';
 import OpskeeperInstallView from './install-view.jsx';
 import { OPSKEEPER_TABS, normalizeOpskeeperTab } from './tabs.js';
+import { getPluginThemeStyle, usePluginTheme } from './theme.js';
 
 export default function OpskeeperUnifiedRoute({ api, initialTab = 'diagnostics' }) {
   const [tab, setTab] = React.useState(() => normalizeOpskeeperTab(initialTab));
+  const theme = usePluginTheme();
 
   return (
-    <div>
+    <div style={getPluginThemeStyle(theme)}>
       <header style={{
         display: 'flex',
         alignItems: 'center',
@@ -18,7 +20,7 @@ export default function OpskeeperUnifiedRoute({ api, initialTab = 'diagnostics' 
         <span style={{ fontSize: 24 }}>🛡️</span>
         <div>
           <h1 style={{ margin: 0, fontSize: 20 }}>OpsKeeper</h1>
-          <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--muted-foreground)' }}>
+          <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--ok-muted-foreground)' }}>
             AgentTeams 协同入口：诊断闭环、运行时读back 与插件安装统一管理。
           </p>
         </div>
@@ -27,7 +29,7 @@ export default function OpskeeperUnifiedRoute({ api, initialTab = 'diagnostics' 
         display: 'flex',
         gap: 6,
         padding: '14px 24px 18px',
-        borderBottom: '1px solid var(--border)',
+        borderBottom: '1px solid var(--ok-border)',
       }}>
         {OPSKEEPER_TABS.map((item) => {
           const active = item.id === tab;
@@ -42,9 +44,9 @@ export default function OpskeeperUnifiedRoute({ api, initialTab = 'diagnostics' 
                 borderRadius: 999,
                 fontSize: 12,
                 fontWeight: active ? 600 : 400,
-                border: `1px solid ${active ? 'var(--primary)' : 'var(--border)'}`,
-                background: active ? 'var(--primary)' : 'transparent',
-                color: active ? 'var(--primary-foreground)' : 'var(--card-foreground)',
+                border: `1px solid ${active ? 'var(--ok-primary)' : 'var(--ok-border)'}`,
+                background: active ? 'var(--ok-primary)' : 'transparent',
+                color: active ? 'var(--ok-primary-foreground)' : 'var(--ok-card-foreground)',
                 cursor: 'pointer',
               }}
             >

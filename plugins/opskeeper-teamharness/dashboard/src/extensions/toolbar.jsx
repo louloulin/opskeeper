@@ -1,7 +1,9 @@
 import * as React from 'react';
+import { getPluginThemeStyle, usePluginTheme } from './theme.js';
 
 // Toolbar button — 一键跳转到 Opskeeper 诊断 + 健康检查提示。
 export default function OneClickRcaButton({ api }) {
+  const theme = usePluginTheme();
   const [busy, setBusy] = React.useState(false);
 
   async function onClick() {
@@ -24,9 +26,10 @@ export default function OneClickRcaButton({ api }) {
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 6,
         padding: '6px 12px', borderRadius: 4, fontSize: 12,
-        border: '1px solid var(--border)',
-        background: 'var(--primary)',
-        color: 'var(--primary-foreground)',
+        ...getPluginThemeStyle(theme),
+        border: '1px solid var(--ok-border)',
+        background: 'var(--ok-primary)',
+        color: 'var(--ok-primary-foreground)',
         cursor: busy ? 'wait' : 'pointer',
       }}
     >
