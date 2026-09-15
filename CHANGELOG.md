@@ -4,7 +4,7 @@
 
 ## 2026.09.14-rc4 — 2026-09-14
 
-- Rebind the release candidate to backend source `d2920895363edca87e34ee00fcb33eb1c6090723`, TeamHarness `1.0.45`, installer plugin `1.4.2`, and the web source tree recorded in `RELEASE_VERSION.json`.
+- Rebind the release candidate to backend source `c4e46631b3e99bd4e7b8c24acce1c2191b871609`, TeamHarness `1.0.45`, installer plugin `1.4.2`, and the web source tree recorded in `RELEASE_VERSION.json`.
 - Bound read-only Worker reporting and adapted the Manager gate to the real CoPaw Toolkit middleware chain to prevent file-artifact dispatches, synthetic-room messages, and repeated denied calls.
 - Prefetch and validate ONNX Runtime archives by `TARGETARCH` so amd64 and arm64 builds do not depend on builder-host architecture.
 
