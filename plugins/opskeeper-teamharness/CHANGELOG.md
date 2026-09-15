@@ -4,6 +4,7 @@
 
 - Allow read-only Workers to report task coordination state and results through the dedicated OpsKeeper state tool.
 - Build Manager TAR, Dashboard ZIP, QwenPaw ZIP, and installer ZIP artifacts deterministically.
+- Respect an explicit QwenPaw runtime when CoPaw-compatible plugin APIs are present, and resolve the task-trace signing helper in both source and installed layouts.
 
 ## 1.0.45 — 2026-09-14
 

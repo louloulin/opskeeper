@@ -16,6 +16,7 @@ METADATA_PATHS = {
     "Makefile",
     "scripts/audit_open_source.py",
     "scripts/check_release_version.py",
+    "scripts/deterministic_archive.py",
     "scripts/fetch_onnxruntime.sh",
     "docs/OPEN_SOURCE_GATE.md",
     "docs/PROVENANCE.md",
