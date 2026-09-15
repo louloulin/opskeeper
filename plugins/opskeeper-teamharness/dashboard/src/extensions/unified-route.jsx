@@ -18,7 +18,7 @@ export default function OpskeeperUnifiedRoute({ api, initialTab = 'diagnostics' 
         <span style={{ fontSize: 24 }}>🛡️</span>
         <div>
           <h1 style={{ margin: 0, fontSize: 20 }}>OpsKeeper</h1>
-          <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--muted)' }}>
+          <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--muted-foreground)' }}>
             AgentTeams 协同入口：诊断闭环、运行时读back 与插件安装统一管理。
           </p>
         </div>

@@ -61,7 +61,7 @@ export default function OpskeeperRuntimeRoute({ api }) {
       <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 18 }}>OpsKeeper 运行时</h2>
-          <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--muted)' }}>
+          <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--muted-foreground)' }}>
             AgentTeams 保留协同任务事实源；OpsKeeper 保留执行与证据事实源。
           </p>
         </div>
@@ -102,7 +102,7 @@ export default function OpskeeperRuntimeRoute({ api }) {
         <Panel title="依赖检查">
           {Object.entries(groupedChecks).map(([group, checks]) => (
             <div key={group} style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6 }}>{group}</div>
+              <div style={{ fontSize: 11, color: 'var(--muted-foreground)', marginBottom: 6 }}>{group}</div>
               {checks.map((check) => (
                 <div
                   key={check.id || check.label}
@@ -113,7 +113,7 @@ export default function OpskeeperRuntimeRoute({ api }) {
                 >
                   <span style={{ width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto', background: STATUS_COLORS[check.status] || STATUS_COLORS.unknown }} />
                   <span>{check.label}</span>
-                  <span style={{ marginLeft: 'auto', color: 'var(--muted)', fontSize: 11 }}>
+                  <span style={{ marginLeft: 'auto', color: 'var(--muted-foreground)', fontSize: 11 }}>
                     {check.durationMs == null ? '' : `${check.durationMs}ms`}
                   </span>
                 </div>
@@ -148,7 +148,7 @@ export default function OpskeeperRuntimeRoute({ api }) {
                 }}
               >
                 <span>{incident.summary || incident.id || '未命名事故'}</span>
-                <span style={{ float: 'right', color: 'var(--muted)', fontSize: 11 }}>{incident.status || '—'}</span>
+                <span style={{ float: 'right', color: 'var(--muted-foreground)', fontSize: 11 }}>{incident.status || '—'}</span>
               </button>
             ))}
             {snapshot?.latestIncidents?.length === 0 && <EmptyState text="暂无事故" />}
@@ -163,9 +163,9 @@ export default function OpskeeperRuntimeRoute({ api }) {
 function SummaryCard({ label, value, hint, color }) {
   return (
     <div style={{ padding: 14, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)' }}>
-      <div style={{ fontSize: 11, color: 'var(--muted)' }}>{label}</div>
+      <div style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 600, marginTop: 6, color: color || 'inherit' }}>{value}</div>
-      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>{hint}</div>
+      <div style={{ fontSize: 11, color: 'var(--muted-foreground)', marginTop: 4 }}>{hint}</div>
     </div>
   );
 }
@@ -173,7 +173,7 @@ function SummaryCard({ label, value, hint, color }) {
 function Panel({ title, children }) {
   return (
     <div style={{ padding: 14, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', minWidth: 0 }}>
-      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>{title}</div>
+      <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 8 }}>{title}</div>
       {children}
     </div>
   );
@@ -184,13 +184,13 @@ function MetricRow({ label, value, hint }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
       <span>{label}</span>
       <span style={{ marginLeft: 'auto', fontWeight: 600 }}>{value}</span>
-      {hint && <span style={{ color: 'var(--muted)', fontSize: 11 }}>{hint}</span>}
+      {hint && <span style={{ color: 'var(--muted-foreground)', fontSize: 11 }}>{hint}</span>}
     </div>
   );
 }
 
 function EmptyState({ text }) {
-  return <div style={{ padding: 16, textAlign: 'center', fontSize: 12, color: 'var(--muted)' }}>{text}</div>;
+  return <div style={{ padding: 16, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>{text}</div>;
 }
 
 function valueOf(result) {
