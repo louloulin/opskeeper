@@ -212,6 +212,7 @@ _READ_ONLY_ALLOWED_TOOLS = frozenset({
     "opskeeper.knowledge.query",
     "opskeeper.query.knowledge",
     "opskeeper.state.get",
+    "opskeeper.task.state.put",
     "opskeeper.recovery.verify",
     "opskeeper.incident.record",
     "opskeeper.loop.correlate",
