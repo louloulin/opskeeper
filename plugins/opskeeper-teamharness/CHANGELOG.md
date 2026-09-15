@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.47 — 2026-09-15
+
+- Derive readonly and sanitizer middleware from the AgentScope middleware protocol so real QwenPaw agents initialize.
+
 ## 1.0.46 — 2026-09-15
 
 - Allow read-only Workers to report task coordination state and results through the dedicated OpsKeeper state tool.
