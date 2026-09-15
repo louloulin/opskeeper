@@ -7,7 +7,7 @@ const PLUGIN_THEMES = {
     card: '#ffffff',
     cardForeground: '#172033',
     muted: '#e7ecf4',
-    mutedForeground: '#5b6779',
+    mutedForeground: '#46536b',
     border: '#d5deeb',
     primary: '#1d4ed8',
     primaryForeground: '#ffffff',
@@ -18,7 +18,7 @@ const PLUGIN_THEMES = {
     card: '#111a2b',
     cardForeground: '#f8fafc',
     muted: '#1f2b41',
-    mutedForeground: '#a8b1c1',
+    mutedForeground: '#c3cddb',
     border: '#2c3b52',
     primary: '#60a5fa',
     primaryForeground: '#0b1220',
@@ -45,6 +45,7 @@ export function getPluginThemeStyle(themeName) {
     '--ok-border': theme.border,
     '--ok-primary': theme.primary,
     '--ok-primary-foreground': theme.primaryForeground,
+    background: theme.background,
     color: theme.foreground,
   };
 }

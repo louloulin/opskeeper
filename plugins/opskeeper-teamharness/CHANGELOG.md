@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.50 — 2026-09-15
+
+- Give the unified plugin root its own theme background so dark mode cannot inherit a white host surface.
+
+## 1.0.49 — 2026-09-15
+
+- Increase Runtime secondary-text contrast and use theme-aware WCAG AA status colors.
+
 ## 1.0.48 — 2026-09-15
 
 - Isolate Dashboard plugin colors from host theme variables and keep text readable in both light and dark themes.

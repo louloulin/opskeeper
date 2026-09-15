@@ -240,8 +240,10 @@ test('resolves light and dark plugin themes independently from host tokens', () 
 
   assert.equal(resolvePluginTheme(documentLike('light')), 'light');
   assert.equal(resolvePluginTheme(documentLike('dark')), 'dark');
-  assert.equal(getPluginThemeStyle('light')['--ok-muted-foreground'], '#5b6779');
-  assert.equal(getPluginThemeStyle('dark')['--ok-muted-foreground'], '#a8b1c1');
+  assert.equal(getPluginThemeStyle('light')['--ok-muted-foreground'], '#46536b');
+  assert.equal(getPluginThemeStyle('dark')['--ok-muted-foreground'], '#c3cddb');
+  assert.equal(getPluginThemeStyle('light').background, '#f6f8fc');
+  assert.equal(getPluginThemeStyle('dark').background, '#0b1220');
 });
 
 test('keeps plugin text tokens readable in both themes', () => {
