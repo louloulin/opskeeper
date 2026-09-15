@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite --port 5174 --strictPort",
     "build": "vite build",
+    "test": "node --test src/extensions/runtime.test.js",
     "preview": "vite preview --port 5174"
   },
   "peerDependencies": {
