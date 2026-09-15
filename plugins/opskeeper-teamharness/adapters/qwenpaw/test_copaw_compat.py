@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import os
 import sys
 import types
 import unittest
@@ -44,6 +45,8 @@ class CoPawCompatTest(unittest.TestCase):
         }
         self.saved_modules = {name: sys.modules.get(name) for name in installed}
         sys.modules.update(installed)
+        self.saved_runtime = os.environ.get("AGENTTEAMS_MANAGER_RUNTIME")
+        os.environ["AGENTTEAMS_MANAGER_RUNTIME"] = "copaw"
         path = Path(__file__).with_name("plugin.py")
         spec = importlib.util.spec_from_file_location("opskeeper_copaw_plugin_under_test", path)
         self.module = importlib.util.module_from_spec(spec)
@@ -61,6 +64,10 @@ class CoPawCompatTest(unittest.TestCase):
         sys.modules.update({"copaw": copaw, "copaw.agents": agents_module, "copaw.agents.react_agent": react_agent})
 
     def tearDown(self):
+        if self.saved_runtime is None:
+            os.environ.pop("AGENTTEAMS_MANAGER_RUNTIME", None)
+        else:
+            os.environ["AGENTTEAMS_MANAGER_RUNTIME"] = self.saved_runtime
         for name, module in zip(("copaw", "copaw.agents", "copaw.agents.react_agent"), self.saved_copaw):
             if module is None:
                 sys.modules.pop(name, None)
@@ -169,11 +176,20 @@ class CoPawCompatTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "missing.*register_control_command"):
             self.module.plugin.register(api)
 
-    def test_import_failure_hard_fails(self):
+    def test_explicit_qwenpaw_runtime_falls_back_when_copaw_is_unavailable(self):
         sys.modules["copaw.agents.react_agent"] = None
         api = self._api()
-        with self.assertRaisesRegex(RuntimeError, "cannot import CoPawAgent"):
-            self.module.plugin.register(api)
+        saved_runtime = os.environ.get("AGENTTEAMS_MANAGER_RUNTIME")
+        os.environ["AGENTTEAMS_MANAGER_RUNTIME"] = "qwenpaw"
+        try:
+            result = self.module.plugin.register(api)
+        finally:
+            if saved_runtime is None:
+                os.environ.pop("AGENTTEAMS_MANAGER_RUNTIME", None)
+            else:
+                os.environ["AGENTTEAMS_MANAGER_RUNTIME"] = saved_runtime
+        self.assertIsNone(result)
+        self.assertEqual(api.startup_hooks, [])
 
     def test_first_toolkit_registration_failure_hard_fails(self):
         api = self._api()

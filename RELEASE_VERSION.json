@@ -9,7 +9,7 @@
   "backend_commit": "7c48045df57dc8e204deaa3729a84dbf55b1aabb",
   "release_branch_head_at_signing": "7c48045df57dc8e204deaa3729a84dbf55b1aabb",
   "teamharness_version": "1.0.46",
-  "teamharness_source_tree": "5f5aa0178ffe86a6766517ca656e7cc2db2e9c85",
+  "teamharness_source_tree": "730b23cfa604354bf038a55273950ea4fc3e6ca7",
   "installer_version": "1.4.2",
   "web_hash": "fdf7d7332162fe240c608087d63eb1b4ac9b0e4a",
   "web_hash_kind": "git-tree",

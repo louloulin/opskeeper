@@ -1400,7 +1400,13 @@ class OpskeeperTeamHarnessPlugin:
             for name in ("register_provider", "register_startup_hook", "register_shutdown_hook", "register_control_command")
         }
         runtime = os.getenv("AGENTTEAMS_MANAGER_RUNTIME", "").strip().lower()
-        if runtime == "copaw" or set(dir(api)) & {"register_provider", "register_startup_hook", "register_shutdown_hook", "register_control_command"}:
+        copaw_requested = runtime == "copaw"
+        if not copaw_requested and runtime != "qwenpaw":
+            try:
+                copaw_requested = importlib.util.find_spec("copaw") is not None
+            except (ImportError, ValueError):
+                copaw_requested = False
+        if copaw_requested:
             if set(dir(api)) >= {"register_provider", "register_startup_hook", "register_shutdown_hook", "register_control_command"}:
                 diagnostics = _install_copaw_compat()
                 try:

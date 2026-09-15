@@ -18,12 +18,15 @@ import time
 import urllib.error
 import urllib.request
 
-# 把 plugin mcp/ 加入 sys.path 以复用 sign_request
+# 把 plugin mcp/ 加入 sys.path 以复用 sign_request。兼容安装包布局和源码测试布局。
 _HERE = os.path.dirname(os.path.abspath(__file__))
-# task_trace.py 与 plugin.py 同级放在 install root;asset_dir = install_root/<plugin-name>
-_MCP_DIR = os.path.normpath(os.path.join(_HERE, "opskeeper-teamharness", "mcp"))
-if _MCP_DIR not in sys.path:
-    sys.path.insert(0, _MCP_DIR)
+_MCP_DIRS = (
+    os.path.normpath(os.path.join(_HERE, "opskeeper-teamharness", "mcp")),
+    os.path.normpath(os.path.join(_HERE, "..", "..", "mcp")),
+)
+for _mcp_dir in _MCP_DIRS:
+    if os.path.isdir(_mcp_dir) and _mcp_dir not in sys.path:
+        sys.path.insert(0, _mcp_dir)
 
 from auth import sign_request  # noqa: E402
 
