@@ -5,6 +5,7 @@ import sys
 import unittest
 from enum import Enum
 from pathlib import Path
+import tempfile
 from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -133,10 +134,23 @@ def _load_plugin():
 class ManagerGateTest(unittest.TestCase):
     def setUp(self):
         self.saved_modules = _install_runtime_stubs()
+        self.state_directory = tempfile.TemporaryDirectory()
+        self.state_patch = patch.dict(
+            "os.environ",
+            {
+                "OPSKEEPER_MANAGER_GATE_STATE_FILE": str(
+                    Path(self.state_directory.name) / "manager-gate.json"
+                )
+            },
+            clear=False,
+        )
+        self.state_patch.start()
         self.module = _load_plugin()
         self.gate = self.module.ManagerDispatchGate()
 
     def tearDown(self):
+        self.state_patch.stop()
+        self.state_directory.cleanup()
         _restore_runtime_stubs(self.saved_modules)
 
     def test_marker_lifecycle_records_pending_and_consumes_result(self):
@@ -234,6 +248,31 @@ class ManagerGateTest(unittest.TestCase):
             ),
             {"OPSKEEPER-GATE-001": "matrix:entry-room"},
         )
+
+    def test_request_origin_survives_gate_reload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(
+                "os.environ",
+                {
+                    "OPSKEEPER_MANAGER_GATE_STATE_FILE": str(
+                        Path(directory) / "manager-gate.json"
+                    )
+                },
+                clear=False,
+            ):
+                first_gate = self.module.ManagerDispatchGate()
+                first_gate.record_request_origin(
+                    "matrix:entry-room",
+                    "OPSKEEPER TASK OPSKEEPER-GATE-RELOAD-001",
+                )
+                reloaded_gate = self.module.ManagerDispatchGate()
+                self.assertEqual(
+                    reloaded_gate.consume_result_with_origins(
+                        "matrix:execution-room",
+                        "manager OPSKEEPER_RESULT OPSKEEPER-GATE-RELOAD-001 {}",
+                    ),
+                    {"OPSKEEPER-GATE-RELOAD-001": "matrix:entry-room"},
+                )
 
     def test_task_contract_with_result_instruction_is_new_task(self):
         message = (
@@ -620,10 +659,66 @@ class ManagerGateTest(unittest.TestCase):
             return_value="$relay-event",
         ) as relay:
             result = asyncio.run(self._registered_hook().run(context))
-        self.assertEqual(result.action.value, "continue")
+        self.assertEqual(result.action.value, "skip_agent")
         relay.assert_called_once()
         self.assertEqual(relay.call_args.args[0], "task-001")
         self.assertEqual(relay.call_args.args[1], source_session)
+        self.module._MANAGER_DISPATCH_GATE.clear(source_session)
+        self.module._MANAGER_DISPATCH_GATE.clear(worker_session)
+
+    def test_hook_skips_manager_after_successful_live_result_relay(self):
+        source_session = "matrix:manager-room"
+        worker_session = "matrix:!worker-room:hs"
+        self.module._MANAGER_DISPATCH_GATE.clear(source_session)
+        self.module._MANAGER_DISPATCH_GATE.clear(worker_session)
+        self.module._MANAGER_DISPATCH_GATE.record_request_origin(
+            source_session,
+            "OPSKEEPER_TASK OPSKEEPER-LIVE-RESULT-001",
+        )
+        context = self._hook_context(
+            "<think>worker audit</think>\n"
+            "manager OPSKEEPER_RESULT OPSKEEPER-LIVE-RESULT-001 "
+            '{"incident_get_ok":true}\n'
+            "Worker audit completed."
+        )
+        context.session_id = worker_session
+        with patch.object(
+            self.module,
+            "_relay_matrix_completion",
+            return_value="$relay-event",
+        ) as relay:
+            result = asyncio.run(self._registered_hook().run(context))
+        self.assertEqual(result.action.value, "skip_agent")
+        relay.assert_called_once()
+        self.assertEqual(relay.call_args.args[0], "OPSKEEPER-LIVE-RESULT-001")
+        self.assertEqual(relay.call_args.args[1], source_session)
+        self.module._MANAGER_DISPATCH_GATE.clear(source_session)
+        self.module._MANAGER_DISPATCH_GATE.clear(worker_session)
+
+    def test_hook_falls_back_to_manager_prompt_when_direct_relay_fails(self):
+        source_session = "matrix:manager-room"
+        worker_session = "matrix:!worker-room:hs"
+        self.module._MANAGER_DISPATCH_GATE.clear(source_session)
+        self.module._MANAGER_DISPATCH_GATE.clear(worker_session)
+        self.module._MANAGER_DISPATCH_GATE.record_request_origin(
+            source_session,
+            "OPSKEEPER TASK OPSKEEPER-FALLBACK-001",
+        )
+        context = self._hook_context(
+            "manager OPSKEEPER_RESULT OPSKEEPER-FALLBACK-001 {}"
+        )
+        context.session_id = worker_session
+        injected = []
+        context.inject_context = lambda message, **_kwargs: injected.append(message)
+        with patch.object(
+            self.module,
+            "_relay_matrix_completion",
+            side_effect=RuntimeError("matrix unavailable"),
+        ):
+            result = asyncio.run(self._registered_hook().run(context))
+        self.assertEqual(result.action.value, "continue")
+        self.assertEqual(len(injected), 1)
+        self.assertIn("OPSKEEPER_COMPLETE OPSKEEPER-FALLBACK-001", injected[0])
         self.module._MANAGER_DISPATCH_GATE.clear(source_session)
         self.module._MANAGER_DISPATCH_GATE.clear(worker_session)
 
