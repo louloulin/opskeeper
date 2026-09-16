@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.50 — 2026-09-17
+
+- Keep the QwenPaw runtime health version constant synchronized with package metadata.
+
 ## 1.0.49 — 2026-09-16
 
 - Bind the finals PG pool workflow to the six deployed Worker actors. Reviewer now performs the evidence-chain audit before HITL, and reporter executes the postmortem skill after verifier passes.
