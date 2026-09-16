@@ -72,11 +72,12 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.47"
+_PLUGIN_VERSION = "1.0.48"
 _COPAW_DIAGNOSTICS_LOGGER = logging.getLogger("opskeeper-teamharness.copaw-diagnostics")
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
 _MANAGER_GATE_TTL_ENV = "OPSKEEPER_MANAGER_GATE_TTL_SECONDS"
+_MANAGER_GATE_STATE_FILE_ENV = "OPSKEEPER_MANAGER_GATE_STATE_FILE"
 _DEFAULT_MANAGER_GATE_TTL_SECONDS = 600.0
 _TASK_MARKER_PATTERN = re.compile(
     r"\bOPSKEEPER[\s_]+TASK[\s_]+([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\b"
@@ -292,8 +293,83 @@ class ManagerDispatchGate:
     def __init__(self) -> None:
         self._pending: dict[tuple[str, str], float] = {}
         self._origins: dict[tuple[str, str], str] = {}
-        self._request_origins: dict[str, str] = {}
+        self._request_origins = self._load_request_origins()
         self._lock = threading.RLock()
+
+    @staticmethod
+    def _state_path() -> Path:
+        configured = os.getenv(_MANAGER_GATE_STATE_FILE_ENV, "").strip()
+        if configured:
+            return Path(configured).expanduser()
+        return ASSET_DIR / ".manager-request-origins.json"
+
+    @classmethod
+    def _load_request_origins(cls) -> dict[str, str]:
+        path = cls._state_path()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            _MANAGER_GATE_LOGGER.warning(
+                "Manager request-origin state ignored path=%s",
+                path,
+                exc_info=True,
+            )
+            return {}
+        if not isinstance(payload, dict) or payload.get("version") != 1:
+            return {}
+        raw_origins = payload.get("origins")
+        if not isinstance(raw_origins, dict):
+            return {}
+        now = time.time()
+        return {
+            marker: entry["origin"]
+            for marker, entry in raw_origins.items()
+            if isinstance(marker, str)
+            and isinstance(entry, dict)
+            and isinstance(entry.get("origin"), str)
+            and isinstance(entry.get("expires_at"), (int, float))
+            and float(entry["expires_at"]) > now
+        }
+
+    def _persist_request_origins(self) -> None:
+        path = self._state_path()
+        expires_at = time.time() + self.ttl_seconds()
+        payload = {
+            "version": 1,
+            "origins": {
+                marker: {"origin": origin, "expires_at": expires_at}
+                for marker, origin in self._request_origins.items()
+            },
+        }
+        temporary_name = ""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{path.name}.",
+                dir=path.parent,
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary_name, 0o600)
+            os.replace(temporary_name, path)
+            temporary_name = ""
+        except OSError:
+            _MANAGER_GATE_LOGGER.warning(
+                "Manager request-origin state persist failed path=%s",
+                path,
+                exc_info=True,
+            )
+        finally:
+            if temporary_name:
+                try:
+                    os.unlink(temporary_name)
+                except OSError:
+                    pass
 
     def record_request_origin(self, session_id: str, message: str) -> tuple[str, ...]:
         markers = _extract_task_markers(message)
@@ -302,6 +378,7 @@ class ManagerDispatchGate:
         with self._lock:
             for marker in markers:
                 self._request_origins[marker] = session_id
+            self._persist_request_origins()
         _MANAGER_GATE_LOGGER.info(
             "Manager request origin recorded markers=%s origin=%s",
             list(markers),
@@ -372,6 +449,7 @@ class ManagerDispatchGate:
                     consumed[marker] = origin
                 elif request_origin:
                     consumed[marker] = request_origin
+            self._persist_request_origins()
         _MANAGER_GATE_LOGGER.info(
             "Manager worker results consumed session=%s markers=%s consumed=%s",
             session_id,
@@ -392,11 +470,12 @@ class ManagerDispatchGate:
                 marker for marker, origin in self._request_origins.items()
                 if origin == session_id
             ]
-            for marker in stale_request_origins:
-                del self._request_origins[marker]
+        for marker in stale_request_origins:
+            del self._request_origins[marker]
             self._pending = {
                 key: created_at for key, created_at in self._pending.items() if key[0] != session_id
             }
+            self._persist_request_origins()
 
     @staticmethod
     def ttl_seconds() -> float:
@@ -1350,6 +1429,9 @@ def _register_manager_gate_hook(api: Any) -> None:
                         priority=0,
                         source="opskeeper-manager-result-relay",
                     )
+                    return HookResult()
+                if relays:
+                    return HookResult(action=HookAction.SKIP_AGENT)
                 return HookResult()
             if _has_new_task(message):
                 _MANAGER_DISPATCH_GATE.record_request_origin(session_id, message)

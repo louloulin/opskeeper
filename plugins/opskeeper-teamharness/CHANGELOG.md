@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.48 — 2026-09-16
+
+- Persist Manager request origins across runtime reloads with atomic TTL-scoped state.
+- Relay matched Worker results deterministically and terminate the Manager turn after a successful completion send; retain prompt fallback when Matrix delivery fails.
+
 ## 1.0.47 — 2026-09-15
 
 - Derive readonly and sanitizer middleware from the AgentScope middleware protocol so real QwenPaw agents initialize.

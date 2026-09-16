@@ -53,6 +53,7 @@ go.work.sum
 .idea/
 .vscode/
 .DS_Store
+.manager-request-origins.json
 
 # Claude Code transient files
 .claude/

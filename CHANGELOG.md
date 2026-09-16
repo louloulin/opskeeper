@@ -4,7 +4,8 @@
 
 ## 2026.09.14-rc4 — 2026-09-14
 
-- Rebind the release candidate to backend source `ff5f02932318042af05f4de61e97de558204dc65`, TeamHarness `1.0.47`, installer plugin `1.4.2`, and the web source tree recorded in `RELEASE_VERSION.json`; the previous binding to `607b8b29eb2455aa8042fa299704be805a81a351` is superseded.
+- Make TeamHarness Manager completion relays durable across runtime reloads and deterministic after Matrix rewrites a Worker result prefix.
+- Rebind the release candidate to backend source `b4d6c18a45fecd73a6749426f22cc1f25b65ef0f`, TeamHarness `1.0.48`, installer plugin `1.4.2`, and the web source tree recorded in `RELEASE_VERSION.json`; the previous binding to `ff5f02932318042af05f4de61e97de558204dc65` is superseded.
 - Close the PostgreSQL connection-pool recovery evidence loop with timeline aggregation, deployment/version visibility, weighted recovery sampling, bounded approval targets, and sanitized health summaries.
 - Respect an explicit QwenPaw runtime even when CoPaw-compatible APIs are present, and make source-tree task tracing load its signing helper from both source and installed layouts.
 - Derive QwenPaw readonly and sanitizer middleware from the AgentScope middleware protocol so real Manager and Worker agents initialize successfully.
