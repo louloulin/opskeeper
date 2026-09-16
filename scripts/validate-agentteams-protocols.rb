@@ -46,6 +46,7 @@ expected_tools = %w[
   knowledge.write
   hitl.decide
   incident.record
+  incident.timeline
 ]
 server = document.fetch("mcp").fetch("servers").find { |candidate| candidate.fetch("id") == "opskeeper" }
 raise "OpsKeeper MCP server is missing" if server.nil?

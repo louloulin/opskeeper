@@ -69,7 +69,7 @@ Worker 直接在当前项目房间回报结果。需要留痕时，Manager 指�
    容量不足，并给出 `pool_manifest_id`、active/capacity、waiters、probe 延迟、
    `pg_stat_activity` 证据。禁止直接修改 incident 状态。
 3. **reviewer**：先审查证据链是否覆盖容量、等待者、probe 失败与数据库侧
-   反证；置信度低于 0.6 时回派 investigator。修复提案只允许
+   反证；使用 `incident.timeline` 校验业务事故阶段事实，置信度低于 0.6 时回派 investigator。修复提案只允许
    `command=resize_pool`、`target=pg:pool-fixture`、`resource_type=pg`，且
    `pool_manifest_id` 必须属于该 incident。
 4. **HITL**：向用户展示动作、目标 pool、容量变化、blast radius、回滚方式和证据。

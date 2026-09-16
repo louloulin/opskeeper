@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.53 — 2026-09-17
+
+- Add a reviewer-only `incident.timeline` MCP tool backed by the durable business-incident event API, so string incident IDs no longer require numeric `incident.get` conversion.
+
 ## 1.0.52 — 2026-09-17
 
 - Treat the matching in-room `OPSKEEPER_RESULT` as the authoritative Worker phase signal. Missing optional `state.put` support no longer blocks Manager progression.

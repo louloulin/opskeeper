@@ -137,7 +137,7 @@ class CoPawCompatTest(unittest.TestCase):
         second = self.module.plugin.register(api)
         self.assertTrue(second["wrap_installed"])
         self.assertTrue(second["toolkit_validated"])
-        self.assertEqual(second["native_tool_count"], 6)
+        self.assertEqual(second["native_tool_count"], 7)
         self.assertEqual(second["missing_capabilities"], [])
         self.assertIn("signature_hash", second)
         self.assertEqual(api.startup_hooks[0][1](), second)

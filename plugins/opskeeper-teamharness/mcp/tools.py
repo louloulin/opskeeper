@@ -296,6 +296,17 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["incident_id", "evidence_ref"],
         },
     },
+    {
+        "name": "incident.timeline",
+        "description": "按业务事故 ID 读取持久化时间线，用于审查 alert、root cause、审批、修复、恢复与闭环证据的先后关系。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "incident_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            },
+            "required": ["incident_id"],
+        },
+    },
 ]
 
 

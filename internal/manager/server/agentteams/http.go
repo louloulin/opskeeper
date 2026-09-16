@@ -5,6 +5,7 @@
 //	GET    /v1/state/{task_id}        — 读 MinIO state.json
 //	PUT    /v1/state/{task_id}        — 写 MinIO state.json（CAS version）
 //	POST   /v1/hitl/decide            — 上报 HITL 决策
+//	GET    /v1/incidents/{incident_id}/events — 读取事故持久时间线
 //	GET    /v1/skills/{name}          — 提供 opskeeper SKILL.md 文件给 AgentTeams worker-sync
 //
 // 认证：依赖 middleware/auth.go 的 Bearer GatewayKey 中间件；ctx 里有 ResolvedIdentity。
@@ -93,6 +94,7 @@ func (h *Handler) Register(r chi.Router) {
 	r.Post("/v1/hitl/decide", h.hitlDecide)
 	r.Post("/v1/knowledge/docs", h.createKnowledgeDoc)
 	r.Post("/v1/incidents/events", h.recordIncidentEvent)
+	r.Get("/v1/incidents/{incident_id}/events", h.listIncidentEvents)
 	r.Get("/v1/skills/{name}", h.getSkill)
 }
 

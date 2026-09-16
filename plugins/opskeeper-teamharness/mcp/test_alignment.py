@@ -60,11 +60,11 @@ class NameResolutionTests(unittest.TestCase):
 
     def test_resolve_backend_name_plugin_native_returns_none(self):
         """plugin native tool → None (表示不走 /v1/mcp)。"""
-        for n in ("hitl.decide", "state.put", "state.get", "incident.record"):
+        for n in ("hitl.decide", "state.put", "state.get", "incident.record", "incident.timeline"):
             self.assertIsNone(resolve_backend_name(n))
 
     def test_is_plugin_native(self):
-        for n in ("hitl.decide", "state.put", "state.get", "incident.record"):
+        for n in ("hitl.decide", "state.put", "state.get", "incident.record", "incident.timeline"):
             self.assertTrue(is_plugin_native(n))
         for n in ("loop.investigate", "metric.query"):
             self.assertFalse(is_plugin_native(n))
@@ -86,6 +86,13 @@ class NameResolutionTests(unittest.TestCase):
         self.assertEqual(route["method"], "POST")
         self.assertEqual(route["path_template"], "/api/v1/incidents/events")
         self.assertTrue(route.get("body_from_args"))
+
+    def test_incident_timeline_native_route(self):
+        route = native_route("incident.timeline")
+        self.assertIsNotNone(route)
+        self.assertEqual(route["method"], "GET")
+        self.assertEqual(route["path_template"], "/api/v1/incidents/{incident_id}/events")
+        self.assertEqual(route.get("path_param"), "incident_id")
 
     def test_no_overlap_between_native_and_remap(self):
         """plugin native 不应在 NAME_REMAP 中（避免歧义）。"""
@@ -319,6 +326,17 @@ class StdioMCPEndToEndTests(unittest.TestCase):
         request_body = FakeBackend.received_json[0]
         self.assertEqual(request_body["params"]["name"], "get_incident_detail")
         self.assertEqual(request_body["params"]["arguments"], {"incident_ids": [7]})
+
+    def test_incident_timeline_routes_business_id_to_rest(self):
+        self._send([{
+            "jsonrpc": "2.0", "method": "tools/call", "id": 1,
+            "params": {"name": "incident.timeline", "arguments": {"incident_id": "incident-live-001"}},
+        }])
+        get_calls = [(method, path) for method, path, _ in FakeBackend.received
+                     if method == "GET" and not path.startswith("/healthz")]
+        post_calls = [(method, path) for method, path, _ in FakeBackend.received if method == "POST"]
+        self.assertEqual(get_calls, [("GET", "/api/v1/incidents/incident-live-001/events")])
+        self.assertEqual(post_calls, [])
 
     def test_state_get_routes_to_rest(self):
         """state.get 不走 /v1/mcp，应走 GET /v1/state/{task_id}。"""
