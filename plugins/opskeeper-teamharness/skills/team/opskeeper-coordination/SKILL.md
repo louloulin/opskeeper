@@ -39,7 +39,7 @@ Worker 房间的结果唤醒 Manager 后，Manager 必须向原始请求房间�
 `@admin:<server> OPSKEEPER_COMPLETE <task_id>`；完成通知不触发新派发。
 
 OpsKeeper Worker 任务协议优先于 AgentTeams 通用 task lifecycle。Manager 派发文案
-禁止要求 Worker 创建 plan.md / result.md，也禁止要求调用 `write_file`/`edit_file`；
+禁止要求 Worker 创建 plan.md / result.md / spec.md，也禁止要求调用 `write_file`/`edit_file`；
 Worker 直接在当前项目房间回报结果。需要留痕时，Manager 指定 `incident.record` 与
 `state.put`，不得把文件系统任务产物作为完成条件。
 

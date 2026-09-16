@@ -181,7 +181,28 @@ class ReadOnlyEnforcementTest(unittest.TestCase):
         )
         self.assertFalse(executed)
         self.assertEqual(events[0].state, _ToolResultState.DENIED)
-        self.assertIn("must not require plan.md or result.md", events[0].content[0].text)
+        self.assertIn("must not require plan.md, result.md, or spec.md", events[0].content[0].text)
+
+    def test_manager_dispatch_requiring_spec_artifact_is_denied(self):
+        context = SimpleNamespace(session_id="matrix:!manager-room:matrix.local")
+        arguments = {
+            "action": "send",
+            "channel": "matrix",
+            "target": "room:!project-room:matrix.local",
+            "message": (
+                "@alerter:matrix.local OPSKEEPER TASK task-001\n"
+                "完成后写入 shared/tasks/incident-1/spec.md。"
+            ),
+        }
+        events, executed = self._invoke(
+            "teamharness__message",
+            arguments=arguments,
+            context=context,
+            environment={"AGENTTEAMS_AGENT_NAME": "manager"},
+        )
+        self.assertFalse(executed)
+        self.assertEqual(events[0].state, _ToolResultState.DENIED)
+        self.assertIn("must not require plan.md, result.md, or spec.md", events[0].content[0].text)
 
     def test_negated_file_artifact_instruction_is_allowed(self):
         context = SimpleNamespace(session_id="matrix:!manager-room:matrix.local")
@@ -191,7 +212,7 @@ class ReadOnlyEnforcementTest(unittest.TestCase):
             "target": "room:!project-room:matrix.local",
             "message": (
                 "@investigator:matrix.local OPSKEEPER TASK task-001\n"
-                "不要创建 plan.md / result.md；直接在当前项目房间回报。"
+                "不要创建 plan.md / result.md / spec.md；直接在当前项目房间回报。"
             ),
         }
         events, executed = self._invoke(

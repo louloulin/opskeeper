@@ -23,9 +23,8 @@ L3 情况下 Worker 只产出 plan（Postmortem / Planner 类 Worker 接管）�
 
 ## 运行时
 
-## 运行时
-
-- 监听 alerter 写 `shared/tasks/incident-{id}/spec.md` → 启动派活决策树
+- 监听 alerter 的 `OPSKEEPER_RESULT <task_id>` 直接回报 → 启动派活决策树；禁止等待或要求
+  `spec.md` 文件产物
 - 监听 investigator / reviewer / repairer / verifier / reporter 上报 → 推进 state.json
 - 监听 verifier.pass=true → 触发 postmortem + knowledge vault 写入
 - Manager 每个回合最多派发一次任务；消息发送成功后立即输出派发确认并结束本回合，
