@@ -204,6 +204,10 @@ func (s *Service) TransitionAgentTeams(ctx context.Context, in AgentTeamsTransit
 }
 
 func validateAgentTeamsEnvelope(in AgentTeamsCreateInput, now time.Time) error {
+	if in.SessionID == "" || len(in.SessionID) > 64 ||
+		in.MessageID == "" || len(in.MessageID) > 64 {
+		return errs.ErrInvalid
+	}
 	payload := in.Payload
 	if payload.RequestID == "" || payload.IncidentID == "" || payload.Action == "" ||
 		payload.BlastRadius == "" || payload.Resource == "" || payload.RoomID == "" ||

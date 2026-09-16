@@ -26,6 +26,7 @@ type recordIncidentEventReq struct {
 	ActionFingerprint string     `json:"action_fingerprint,omitempty"`
 	EvidenceRef       string     `json:"evidence_ref"`
 	RecoverySignal    bool       `json:"recovery_signal,omitempty"`
+	EventType         string     `json:"event_type,omitempty"`
 }
 
 type recordIncidentEventResp struct {
@@ -93,6 +94,7 @@ func (h *Handler) recordIncidentEvent(w http.ResponseWriter, r *http.Request) {
 	req.IncidentID = strings.TrimSpace(req.IncidentID)
 	req.EvidenceRef = strings.TrimSpace(req.EvidenceRef)
 	req.ActionFingerprint = strings.TrimSpace(req.ActionFingerprint)
+	req.EventType = strings.TrimSpace(req.EventType)
 	if req.IncidentID == "" || len(req.IncidentID) > 128 {
 		writeJSONError(w, http.StatusBadRequest, "incident_id is required and must be at most 128 bytes")
 		return
@@ -100,6 +102,17 @@ func (h *Handler) recordIncidentEvent(w http.ResponseWriter, r *http.Request) {
 	if req.EvidenceRef == "" || len(req.EvidenceRef) > 512 {
 		writeJSONError(w, http.StatusBadRequest, "evidence_ref is required and must be at most 512 bytes")
 		return
+	}
+	if req.EventType != "" && (identity.Role != "investigator" || req.EventType != incidentcontrol.EventEvidenceRefreshed) {
+		writeJSONError(w, http.StatusBadRequest, "event_type is not allowed for this role")
+		return
+	}
+	if req.EventType != "" {
+		spec = incidentEventSpec{
+			Phase:     spec.Phase,
+			EventType: req.EventType,
+			Previous:  incidentcontrol.EventRootCause,
+		}
 	}
 	if spec.EventType == incidentcontrol.EventAction && (req.ActionFingerprint == "" || len(req.ActionFingerprint) > 256) {
 		writeJSONError(w, http.StatusBadRequest, "action_fingerprint is required for action.executed and must be at most 256 bytes")

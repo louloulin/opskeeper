@@ -76,6 +76,18 @@ func TestAuthenticator_Middleware_RequiresIncidentEventAuth(t *testing.T) {
 	}
 }
 
+func TestAuthenticator_Middleware_RequiresIncidentTimelineAuth(t *testing.T) {
+	handler := NewAuthenticator(&mockHigress{}, nopLogger{}).Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/incidents/incident-live-001/events", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
 func TestAuthenticator_ResolveAndCache(t *testing.T) {
 	h := &mockHigress{
 		resolved: map[string]struct {

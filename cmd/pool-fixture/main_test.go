@@ -20,12 +20,13 @@ const testPoolToken = "0123456789abcdef0123456789abcdef"
 type fakeConnection struct {
 	backendPID int
 	released   bool
+	releaseErr error
 }
 
 func (c *fakeConnection) BackendPID() int { return c.backendPID }
 func (c *fakeConnection) Release() error {
 	c.released = true
-	return nil
+	return c.releaseErr
 }
 
 type fakeRuntime struct {
@@ -144,6 +145,22 @@ func TestControllerRequiresFailedProbeThenRecovers(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(string(manifestData)), "pid") {
 		t.Fatalf("manifest must not expose a backend PID: %s", manifestData)
+	}
+}
+
+func TestReleaseConnectionsContinuesAfterStaleConnection(t *testing.T) {
+	connections := []PoolConnection{
+		&fakeConnection{releaseErr: errors.New("driver: bad connection")},
+		&fakeConnection{},
+	}
+
+	releaseConnections(connections)
+
+	for index, connection := range connections {
+		fake, ok := connection.(*fakeConnection)
+		if !ok || !fake.released {
+			t.Fatalf("connection %d was not recycled: %+v", index, connection)
+		}
 	}
 }
 

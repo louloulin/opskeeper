@@ -2,6 +2,7 @@ package hitl
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,6 +66,12 @@ func TestValidateAgentTeamsEnvelopeBindsKillProcessManifest(t *testing.T) {
 	}
 	if err := validateAgentTeamsEnvelope(base, now); err != nil {
 		t.Fatalf("valid envelope: %v", err)
+	}
+	tooLong := base
+	tooLong.MessageID = strings.Repeat("m", 65)
+	tooLong.Payload.RequestID = tooLong.MessageID
+	if err := validateAgentTeamsEnvelope(tooLong, now); err == nil {
+		t.Fatal("oversized message id unexpectedly succeeded")
 	}
 	mismatch := base
 	mismatch.Payload.Parameters.IncidentID = "other-incident"

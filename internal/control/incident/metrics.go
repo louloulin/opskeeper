@@ -10,22 +10,24 @@ import (
 )
 
 const (
-	EventAlertReceived = "alert.received"
-	EventRootCause     = "root_cause.confirmed"
-	EventApproved      = "recommendation.approved"
-	EventAction        = "action.executed"
-	EventRecovery      = "recovery_signal.observed"
-	EventClosed        = "incident.closed"
-	EventReopened      = "incident.reopened"
+	EventAlertReceived     = "alert.received"
+	EventRootCause         = "root_cause.confirmed"
+	EventEvidenceRefreshed = "evidence.refreshed"
+	EventApproved          = "recommendation.approved"
+	EventAction            = "action.executed"
+	EventRecovery          = "recovery_signal.observed"
+	EventClosed            = "incident.closed"
+	EventReopened          = "incident.reopened"
 )
 
 var auditRequiredEvents = map[string]bool{
-	EventAlertReceived: true,
-	EventRootCause:     true,
-	EventApproved:      true,
-	EventAction:        true,
-	EventRecovery:      true,
-	EventClosed:        true,
+	EventAlertReceived:     true,
+	EventRootCause:         true,
+	EventEvidenceRefreshed: true,
+	EventApproved:          true,
+	EventAction:            true,
+	EventRecovery:          true,
+	EventClosed:            true,
 }
 
 type Event struct {

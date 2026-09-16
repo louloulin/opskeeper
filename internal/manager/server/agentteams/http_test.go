@@ -281,6 +281,56 @@ func TestRecordIncidentEventRejectsMissingTraceAndOutOfOrderStage(t *testing.T) 
 	}
 }
 
+func TestRecordIncidentEventAllowsInvestigatorEvidenceRefresh(t *testing.T) {
+	recorder := &memIncidentRecorder{}
+	handler := NewHandler(nil, nil, "")
+	handler.SetIncidentRecorder(recorder)
+	router := newRouter(handler)
+	base := time.Now().UTC().Truncate(time.Second)
+	stages := []struct {
+		role     string
+		event    string
+		body     string
+		seconds  int
+		expected int
+	}{
+		{role: "alerter", event: incidentcontrol.EventAlertReceived, body: `{"evidence_ref":"alert:1"}`, seconds: 0, expected: 201},
+		{role: "investigator", event: incidentcontrol.EventRootCause, body: `{"evidence_ref":"diagnosis:1"}`, seconds: 30, expected: 201},
+		{role: "investigator", event: incidentcontrol.EventEvidenceRefreshed, body: `{"evidence_ref":"promql:active=4/capacity=4","event_type":"evidence.refreshed"}`, seconds: 60, expected: 201},
+		{role: "reviewer", event: incidentcontrol.EventApproved, body: `{"evidence_ref":"hitl:1","event_type":"evidence.refreshed"}`, seconds: 90, expected: 400},
+	}
+	incidentID := "OPSKEEPER-EVIDENCE-REFRESH"
+	for index, stage := range stages {
+		requestBody := `{"incident_id":"` + incidentID + `","occurred_at":"` + base.Add(time.Duration(stage.seconds)*time.Second).Format(time.RFC3339Nano) + `",` + stage.body[1:]
+		request := httptest.NewRequest(http.MethodPost, "/v1/incidents/events", bytes.NewReader([]byte(requestBody)))
+		context := mcpauth.WithTraceContext(
+			mcpauth.WithIdentity(request.Context(), mcpauth.ResolvedIdentity{
+				TenantID: "tenant-a", ConsumerName: "opskeeper-" + stage.role, Role: stage.role,
+			}),
+			mcpauth.TraceContext{TraceID: "33333333333333333333333333333333"},
+		)
+		request = request.WithContext(context)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != stage.expected {
+			t.Fatalf("stage %d: expected %d, got %d body=%s", index, stage.expected, response.Code, response.Body.String())
+		}
+		if response.Code != http.StatusCreated {
+			continue
+		}
+		var event incidentcontrol.Event
+		if err := json.Unmarshal(response.Body.Bytes(), &event); err != nil {
+			t.Fatalf("stage %d: unmarshal response: %v", index, err)
+		}
+		if event.EventType != stage.event || (stage.event == incidentcontrol.EventEvidenceRefreshed && event.Phase != "diagnose") {
+			t.Fatalf("stage %d: event mismatch: %+v", index, event)
+		}
+	}
+	if len(recorder.events[incidentID]) != 3 {
+		t.Fatalf("stored %d events, want alert, root cause, and refreshed evidence", len(recorder.events[incidentID]))
+	}
+}
+
 func TestRecordIncidentEventEnforcesRecoverySignalBoundary(t *testing.T) {
 	recorder := &memIncidentRecorder{}
 	handler := NewHandler(nil, nil, "")

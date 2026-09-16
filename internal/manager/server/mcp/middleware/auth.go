@@ -574,11 +574,16 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		// 式。不能用 r.URL.Path 直接比对。
 		path := r.URL.Path
 		stripped := strings.TrimPrefix(path, "/api")
+		isIncidentTimeline := func(candidate string) bool {
+			return strings.HasPrefix(candidate, "/v1/incidents/") &&
+				strings.HasSuffix(candidate, "/events")
+		}
 		requiresAuth := path == "/v1/mcp" || stripped == "/v1/mcp" ||
 			strings.HasPrefix(path, "/v1/state/") || strings.HasPrefix(stripped, "/v1/state/") ||
 			strings.HasPrefix(path, "/v1/hitl/") || strings.HasPrefix(stripped, "/v1/hitl/") ||
 			path == "/v1/knowledge/docs" || stripped == "/v1/knowledge/docs" ||
-			path == "/v1/incidents/events" || stripped == "/v1/incidents/events"
+			path == "/v1/incidents/events" || stripped == "/v1/incidents/events" ||
+			isIncidentTimeline(path) || isIncidentTimeline(stripped)
 		if !requiresAuth {
 			next.ServeHTTP(w, r)
 			return
