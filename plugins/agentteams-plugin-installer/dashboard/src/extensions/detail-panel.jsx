@@ -56,7 +56,7 @@ export default function PluginDetailPanel({ entity, api }) {
       React.createElement('strong', { style: { fontSize: 13 } }, 'Loaded AgentTeams Plugins'),
       React.createElement(
         'span',
-        { style: { marginLeft: 8, fontSize: 11, color: 'var(--muted-foreground)' } },
+        { style: { marginLeft: 8, fontSize: 11, color: 'var(--muted)' } },
         workerName ? `worker: ${workerName}` : 'worker: -'
       ),
       React.createElement(
@@ -70,7 +70,7 @@ export default function PluginDetailPanel({ entity, api }) {
             borderRadius: 4,
             border: '1px solid var(--border)',
             background: 'transparent',
-            color: 'var(--muted-foreground)',
+            color: 'var(--muted)',
             cursor: 'pointer',
           },
         },
@@ -78,11 +78,11 @@ export default function PluginDetailPanel({ entity, api }) {
       )
     ),
     loading
-      ? React.createElement('div', { style: { fontSize: 12, color: 'var(--muted-foreground)' } }, '加载中…')
+      ? React.createElement('div', { style: { fontSize: 12, color: 'var(--muted)' } }, '加载中…')
       : plugins.length === 0
         ? React.createElement(
             'div',
-            { style: { fontSize: 12, color: 'var(--muted-foreground)' } },
+            { style: { fontSize: 12, color: 'var(--muted)' } },
             '集群暂无 AgentTeams plugin — 到 Plugin 管理页面上传 zip'
           )
         : React.createElement(
@@ -104,7 +104,7 @@ export default function PluginDetailPanel({ entity, api }) {
                   },
                 },
                 React.createElement('span', null, p.name || p.id),
-                React.createElement('span', { style: { color: 'var(--muted-foreground)' } }, 'v' + p.version),
+                React.createElement('span', { style: { color: 'var(--muted)' } }, 'v' + p.version),
                 React.createElement(
                   'span',
                   {
@@ -130,7 +130,7 @@ export default function PluginDetailPanel({ entity, api }) {
                       borderRadius: 3,
                       border: '1px solid var(--border)',
                       background: 'transparent',
-                      color: 'var(--muted-foreground)',
+                      color: 'var(--muted)',
                       cursor: busy === p.id ? 'wait' : 'pointer',
                     },
                   },

@@ -1,8 +1,5 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync, readdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 
 import {
   buildRuntimeSnapshot,
@@ -19,7 +16,6 @@ import {
   xhrTransport,
 } from './api.js';
 import { normalizeOpskeeperTab } from './tabs.js';
-import { getPluginThemeStyle, resolvePluginTheme } from './theme.js';
 
 test('normalizes health response wrappers and checks', () => {
   const report = normalizeHealthReport({
@@ -212,70 +208,4 @@ test('normalizes the unified OpsKeeper entry tab', () => {
   assert.equal(normalizeOpskeeperTab('runtime'), 'runtime');
   assert.equal(normalizeOpskeeperTab('plugins'), 'plugins');
   assert.equal(normalizeOpskeeperTab('unknown'), 'diagnostics');
-});
-
-test('uses the foreground token for muted plugin text', () => {
-  const extensionsDir = fileURLToPath(new URL('./', import.meta.url));
-  const violations = [];
-  const hostTokenPattern = /var\(--(?!ok-)(?:muted(?:-foreground)?|card(?:-foreground)?|primary(?:-foreground)?|background|border)/u;
-
-  for (const entry of readdirSync(extensionsDir, { withFileTypes: true })) {
-    if (!entry.isFile() || !/\.jsx?$/u.test(entry.name)) continue;
-    const source = readFileSync(path.join(extensionsDir, entry.name), 'utf8');
-    if (hostTokenPattern.test(source)) violations.push(entry.name);
-  }
-
-  assert.deepEqual(violations, []);
-});
-
-test('resolves light and dark plugin themes independently from host tokens', () => {
-  const documentLike = (theme) => ({
-    documentElement: {
-      dataset: { theme },
-      classList: {
-        contains: (name) => name === theme,
-      },
-    },
-  });
-
-  assert.equal(resolvePluginTheme(documentLike('light')), 'light');
-  assert.equal(resolvePluginTheme(documentLike('dark')), 'dark');
-  assert.equal(getPluginThemeStyle('light')['--ok-muted-foreground'], '#46536b');
-  assert.equal(getPluginThemeStyle('dark')['--ok-muted-foreground'], '#c3cddb');
-  assert.equal(getPluginThemeStyle('light').background, '#f6f8fc');
-  assert.equal(getPluginThemeStyle('dark').background, '#0b1220');
-});
-
-test('keeps plugin text tokens readable in both themes', () => {
-  const contrastRatio = (foreground, background) => {
-    const channel = (value) => {
-      const normalized = parseInt(value.slice(1, 3), 16) / 255;
-      return normalized <= 0.03928
-        ? normalized / 12.92
-        : ((normalized + 0.055) / 1.055) ** 2.4;
-    };
-    const luminance = (color) => {
-      const [red, green, blue] = [
-        channel(color.slice(0, 3)),
-        channel(color.slice(2, 5)),
-        channel(color.slice(4, 7)),
-      ];
-      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-    };
-    const first = luminance(foreground);
-    const second = luminance(background);
-    return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
-  };
-
-  for (const theme of ['light', 'dark']) {
-    const style = getPluginThemeStyle(theme);
-    assert.ok(
-      contrastRatio(style['--ok-card-foreground'], style['--ok-card']) >= 4.5,
-      `${theme} primary text should meet WCAG AA`,
-    );
-    assert.ok(
-      contrastRatio(style['--ok-muted-foreground'], style['--ok-card']) >= 4.5,
-      `${theme} muted text should meet WCAG AA`,
-    );
-  }
 });

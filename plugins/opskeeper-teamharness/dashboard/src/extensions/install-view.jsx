@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { opskeeperApi } from './api.js';
-import { getPluginThemeStyle, usePluginTheme } from './theme.js';
 
 // OpskeeperInstallView — Dashboard surface that lists currently-installed
 // opskeeper plugins and lets the operator upload a new plugin package.
@@ -13,7 +12,6 @@ import { getPluginThemeStyle, usePluginTheme } from './theme.js';
 // /api/opskeeper-teamharness/install-plugin → qwenpaw plugin install. The
 // whole chain can take 30s+, so we surface progress + a busy state.
 export default function OpskeeperInstallView({ api }) {
-  const theme = usePluginTheme();
   const [plugins, setPlugins] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
@@ -71,7 +69,7 @@ export default function OpskeeperInstallView({ api }) {
   }
 
   return (
-    <div style={{ ...getPluginThemeStyle(theme), padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <h2 style={{ margin: 0, fontSize: 18 }}>opskeeper 插件管理</h2>
         <button
@@ -79,8 +77,8 @@ export default function OpskeeperInstallView({ api }) {
           disabled={loading}
           style={{
             padding: '4px 10px', fontSize: 12, borderRadius: 4,
-            border: '1px solid var(--ok-border)', background: 'var(--ok-card)',
-            color: 'var(--ok-card-foreground)', cursor: loading ? 'wait' : 'pointer',
+            border: '1px solid var(--border)', background: 'var(--card)',
+            color: 'var(--card-foreground)', cursor: loading ? 'wait' : 'pointer',
           }}
         >
           {loading ? '…' : '刷新'}
@@ -89,10 +87,10 @@ export default function OpskeeperInstallView({ api }) {
 
       {/* Installed plugin list */}
       <div style={{
-        padding: 14, borderRadius: 8, border: '1px solid var(--ok-border)',
-        background: 'var(--ok-card)',
+        padding: 14, borderRadius: 8, border: '1px solid var(--border)',
+        background: 'var(--card)',
       }}>
-        <div style={{ fontSize: 12, color: 'var(--ok-muted-foreground)', marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
           已安装插件
         </div>
         {error && (
@@ -105,7 +103,7 @@ export default function OpskeeperInstallView({ api }) {
           </div>
         )}
         {!loading && plugins.length === 0 && (
-          <div style={{ fontSize: 12, color: 'var(--ok-muted-foreground)' }}>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
             暂无已安装插件
           </div>
         )}
@@ -114,7 +112,7 @@ export default function OpskeeperInstallView({ api }) {
             key={p.id}
             style={{
               padding: 10, borderRadius: 6, marginBottom: 6,
-              border: '1px solid var(--ok-border)', background: 'var(--ok-background)',
+              border: '1px solid var(--border)', background: 'var(--background)',
               display: 'flex', flexDirection: 'column', gap: 4,
             }}
           >
@@ -122,18 +120,18 @@ export default function OpskeeperInstallView({ api }) {
               <strong style={{ fontSize: 13 }}>{p.id}</strong>
               <span style={{
                 fontSize: 10, padding: '1px 6px', borderRadius: 3,
-                background: 'var(--ok-muted)', color: 'var(--ok-muted-foreground)',
+                background: 'var(--muted)', color: 'var(--muted-foreground)',
               }}>
                 v{p.version}
               </span>
-              <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--ok-muted-foreground)' }}>
+              <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--muted)' }}>
                 {p.status}
               </span>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--ok-muted-foreground)' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)' }}>
               {p.description?.split('\n')[0].slice(0, 200)}
             </div>
-            <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--ok-muted-foreground)' }}>
+            <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--muted)' }}>
               <span>skills: {p.skill_count ?? '—'}</span>
               <span>tools: {p.tool_count ?? '—'}</span>
               <span>prompts: {p.prompt_count ?? '—'}</span>
@@ -145,10 +143,10 @@ export default function OpskeeperInstallView({ api }) {
 
       {/* Upload + install */}
       <div style={{
-        padding: 14, borderRadius: 8, border: '1px solid var(--ok-border)',
-        background: 'var(--ok-card)',
+        padding: 14, borderRadius: 8, border: '1px solid var(--border)',
+        background: 'var(--card)',
       }}>
-        <div style={{ fontSize: 12, color: 'var(--ok-muted-foreground)', marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
           上传并安装新插件
         </div>
         <input
@@ -159,13 +157,13 @@ export default function OpskeeperInstallView({ api }) {
           style={{
             display: 'block', width: '100%', padding: 8,
             fontSize: 12, borderRadius: 4,
-            border: '1px solid var(--ok-border)', background: 'var(--ok-background)',
-            color: 'var(--ok-card-foreground)',
+            border: '1px solid var(--border)', background: 'var(--background)',
+            color: 'var(--card-foreground)',
             marginBottom: 8,
           }}
         />
         {selectedFile && (
-          <div style={{ fontSize: 11, color: 'var(--ok-muted-foreground)', marginBottom: 8 }}>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8 }}>
             已选：<code>{selectedFile.name}</code>
             {' '}({(selectedFile.size / 1024).toFixed(1)} KiB)
           </div>
@@ -176,8 +174,8 @@ export default function OpskeeperInstallView({ api }) {
           style={{
             padding: '6px 14px', fontSize: 12, borderRadius: 4,
             border: 'none',
-            background: !selectedFile || installing ? 'var(--ok-muted)' : 'var(--ok-primary)',
-            color: 'var(--ok-primary-foreground)',
+            background: !selectedFile || installing ? 'var(--muted)' : 'var(--primary)',
+            color: 'var(--primary-foreground)',
             cursor: !selectedFile || installing ? 'not-allowed' : 'pointer',
           }}
         >
@@ -187,11 +185,11 @@ export default function OpskeeperInstallView({ api }) {
         {installing && (
           <div style={{
             marginTop: 10, height: 6, borderRadius: 3,
-            background: 'var(--ok-muted)', overflow: 'hidden',
+            background: 'var(--muted)', overflow: 'hidden',
           }}>
             <div style={{
               width: `${installProgress}%`, height: '100%',
-              background: 'var(--ok-primary)',
+              background: 'var(--primary)',
               transition: 'width 0.2s ease',
             }} />
           </div>
