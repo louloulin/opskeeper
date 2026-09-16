@@ -25,6 +25,8 @@ package version
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +41,46 @@ import (
 
 	"github.com/go-chi/chi/v5"
 )
+
+// hashError returns a short, stable fingerprint of err.Error() so
+// version-page consumers can correlate health-summary notes with the
+// real error in server logs without leaking the raw message (which
+// can carry DSNs, hostnames, file paths, or stack traces). Pair the
+// fingerprint with a coarse classification so the SPA can still
+// colour the badge without seeing the payload.
+func hashError(err error) string {
+	if err == nil {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(err.Error()))
+	return hex.EncodeToString(sum[:6])
+}
+
+// classifyHealthError maps an error to a safe coarse-grained label
+// the version page can render. We deliberately avoid surfacing the
+// raw message: DSN strings, host names, and stack frames would all
+// land in the public /v1/version/deployment payload otherwise.
+func classifyHealthError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "not wired"):
+		return "seam_not_wired"
+	case strings.Contains(msg, "context deadline"):
+		return "timeout"
+	case strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "no such host"),
+		strings.Contains(msg, "dial"):
+		return "unreachable"
+	case strings.Contains(msg, "permission denied"),
+		strings.Contains(msg, "unauthorized"),
+		strings.Contains(msg, "forbidden"):
+		return "auth_or_perm"
+	}
+	return "degraded"
+}
 
 // ManagerVersion is the build-time-stamped version of the opskeeper
 // binary. cmd/opskeeper/main.go passes the same `version` variable
@@ -219,7 +261,10 @@ func (h *Handler) deployment(w http.ResponseWriter, r *http.Request) {
 			Name:    "Opskeeper TeamHarness",
 			Version: "(manifest unreadable)",
 		}
-		manifest.Description = err.Error()
+		// Never leak the raw error message into the public
+		// /v1/version/deployment payload. Surface a stable
+		// fingerprint the operator can match against server logs.
+		manifest.Description = fmt.Sprintf("read_failed:%s", hashError(err))
 	}
 	resp.Plugin = manifest
 
@@ -228,16 +273,22 @@ func (h *Handler) deployment(w http.ResponseWriter, r *http.Request) {
 
 	// Health summary — use the seam if wired, otherwise render a
 	// "not yet wired" placeholder so the version page can still
-	// load on dev / first-boot environments.
+	// load on dev / first-boot environments. The Note field
+	// surfaces only a coarse classification + stable fingerprint,
+	// never the raw error string (which can carry DSNs / hostnames
+	// / file paths).
 	if h.source.HealthService != nil {
 		hs, herr := h.source.HealthService.Health(r.Context())
 		if herr == nil {
 			resp.Health = hs
 		} else {
-			resp.Health = HealthSummary{Overall: "unknown", Note: herr.Error()}
+			resp.Health = HealthSummary{
+				Overall: "unknown",
+				Note:    fmt.Sprintf("seam_error:%s:%s", classifyHealthError(herr), hashError(herr)),
+			}
 		}
 	} else {
-		resp.Health = HealthSummary{Overall: "unknown", Note: "systemhealth seam not wired"}
+		resp.Health = HealthSummary{Overall: "unknown", Note: "seam_not_wired"}
 	}
 
 	// Deploy dependencies — derived from the env vars the cmd/opskeeper
@@ -398,9 +449,15 @@ func envPresent(key string) bool {
 // DB access). The IncidentDetail page renders the live event log
 // instead; the version page is the "at a glance" view for ops
 // reviewers.
+//
+// The incident id uses the EXAMPLE- prefix so reviewers can tell
+// the row is a static demo placeholder rather than a live
+// production incident. The PG-pool scenario remains the canonical
+// worked example; the prefix change is a docs/naming clarity
+// fix requested by the 337 review (no semantic change).
 func pgPoolRecoveryExample() RecoveryOperation {
 	return RecoveryOperation{
-		IncidentID:     "INC-PG-POOL-001",
+		IncidentID:     "EXAMPLE-PG-POOL",
 		Title:          "Application pool waits exhaust PostgreSQL connection budget",
 		FaultFamily:    "capacity/connection_pool",
 		PhasesObserved: 7,
@@ -410,12 +467,12 @@ func pgPoolRecoveryExample() RecoveryOperation {
 		DurationSec:    360,
 		AuditKinds:     []string{"dispatch", "approval", "execution", "verification", "close"},
 		Evidence: map[string]string{
-			"alert":      "evidence/incidents/INC-PG-POOL-001/alert.json",
-			"diagnosis":  "evidence/incidents/INC-PG-POOL-001/diagnosis.json",
-			"approval":   "evidence/incidents/INC-PG-POOL-001/approval.json",
-			"recovery":   "evidence/incidents/INC-PG-POOL-001/recovery-check.json",
-			"postmortem": "evidence/incidents/INC-PG-POOL-001/postmortem.md",
-			"timeline":   "evidence/incidents/INC-PG-POOL-001/timeline.jsonl",
+			"alert":      "evidence/incidents/EXAMPLE-PG-POOL/alert.json",
+			"diagnosis":  "evidence/incidents/EXAMPLE-PG-POOL/diagnosis.json",
+			"approval":   "evidence/incidents/EXAMPLE-PG-POOL/approval.json",
+			"recovery":   "evidence/incidents/EXAMPLE-PG-POOL/recovery-check.json",
+			"postmortem": "evidence/incidents/EXAMPLE-PG-POOL/postmortem.md",
+			"timeline":   "evidence/incidents/EXAMPLE-PG-POOL/timeline.jsonl",
 		},
 		Phases: []TimelinePhaseLite{
 			{Phase: "detected", PhaseLabel: "detect", Status: "success", WorkerRole: "opskeeper-alerter", SkillVer: "1.0.0", Duration: "8s", Summary: "alert dedup: 71 waiters, pg connections 116/120"},
@@ -468,7 +525,8 @@ func (h *Handler) build(ctx context.Context) (DeploymentResponse, error) {
 	manifest, err := readPluginManifest(h.source.PluginPath)
 	if err != nil {
 		manifest = PluginManifest{ID: "opskeeper-teamharness", Name: "Opskeeper TeamHarness", Version: "(manifest unreadable)"}
-		manifest.Description = err.Error()
+		// Same redacted-summary contract as deployment() above.
+		manifest.Description = fmt.Sprintf("read_failed:%s", hashError(err))
 	}
 	resp.Plugin = manifest
 	resp.Skills = readSkillVersions(h.source.SkillsDir)
@@ -479,10 +537,13 @@ func (h *Handler) build(ctx context.Context) (DeploymentResponse, error) {
 		if herr == nil {
 			resp.Health = hs
 		} else {
-			resp.Health = HealthSummary{Overall: "unknown", Note: herr.Error()}
+			resp.Health = HealthSummary{
+				Overall: "unknown",
+				Note:    fmt.Sprintf("seam_error:%s:%s", classifyHealthError(herr), hashError(herr)),
+			}
 		}
 	} else {
-		resp.Health = HealthSummary{Overall: "unknown", Note: "systemhealth seam not wired"}
+		resp.Health = HealthSummary{Overall: "unknown", Note: "seam_not_wired"}
 	}
 	return resp, nil
 }

@@ -429,11 +429,70 @@ func parseToolCall(raw, role string) (TimelineToolCall, bool) {
 	}, true
 }
 
+// approvedBoundTargetPrefixes is the whitelist of allowed
+// `bound_target` prefixes for approval-kind audit rows. Anything
+// that does not match this set is flagged as a reject so the
+// Element timeline surfaces "wrong target" rather than silently
+// rendering an out-of-policy approval. The set is intentionally
+// narrow — only resource / scope identifiers the review pipeline
+// knows how to bind. Adding a new prefix is an explicit policy
+// decision; do not relax without the docs team's review.
+var approvedBoundTargetPrefixes = []string{
+	"pg:",
+	"incident:",
+	"opskeeper:",
+	"app:",
+	"host:",
+}
+
+// approvedBoundTargetAllowed returns true when target matches one
+// of the approved prefixes. Empty / blank targets are NOT
+// considered allowed — the audit row must carry an explicit
+// target so the reviewer can verify the binding.
+func approvedBoundTargetAllowed(target string) bool {
+	t := strings.TrimSpace(target)
+	if t == "" {
+		return false
+	}
+	for _, p := range approvedBoundTargetPrefixes {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// auditKindRejectsBoundTarget reports whether the audit kind is
+// the kind that must be bound to a whitelisted target. Dispatch /
+// execution rows carry their own bound targets but the on-error
+// reason is the same: surface a reject annotation when the target
+// is out of policy.
+func auditKindRejectsBoundTarget(kind string) bool {
+	switch kind {
+	case "approval", "execution", "dispatch":
+		return true
+	}
+	return false
+}
+
 // parseAuditRow converts an event payload into one TimelineAuditRow
 // when the event represents a decision point (dispatch / approval /
 // execution / verification). The function is conservative: it
 // returns ok=false when the payload doesn't carry an audit
 // discriminator, so empty payloads never produce empty audit rows.
+//
+// The bound_target / fallback / fallback_cause fields are validated
+// here so the timeline view can show "wrong target" / "missing
+// fallback cause" instead of a silently bad audit row:
+//
+//   - On approval / execution / dispatch, an empty or off-whitelist
+//     bound_target is rewritten to "<original>:REJECTED:<reason>"
+//     and the FallbackCause slot carries the reason. The original
+//     target stays visible for audit replay.
+//   - On any row, when fallback is set to a non-empty value
+//     fallback_cause must also be non-empty (and vice versa);
+//     the missing slot is filled with "<unset>:<kind>" so the
+//     reviewer can see the inconsistency.
 func parseAuditRow(raw, phaseName string, ev loopmodel.Event) (TimelineAuditRow, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -470,19 +529,19 @@ func parseAuditRow(raw, phaseName string, ev loopmodel.Event) (TimelineAuditRow,
 		return TimelineAuditRow{}, false
 	}
 	row := TimelineAuditRow{
-		Kind:        kind,
-		BoundTarget: stringOr(detail, "bound_target"),
-		BoundParams: stringOr(detail, "bound_params"),
-		BoundScope:  stringOr(detail, "bound_scope"),
-		Action:      stringOr(detail, "action"),
-		Fallback:    stringOr(detail, "fallback"),
+		Kind:          kind,
+		BoundTarget:   stringOr(detail, "bound_target"),
+		BoundParams:   stringOr(detail, "bound_params"),
+		BoundScope:    stringOr(detail, "bound_scope"),
+		Action:        stringOr(detail, "action"),
+		Fallback:      stringOr(detail, "fallback"),
 		FallbackCause: stringOr(detail, "fallback_cause"),
-		Actor:       stringOr(detail, "actor"),
-		ActorRole:   stringOr(detail, "actor_role"),
-		EvidenceRef: stringOr(detail, "evidence_ref"),
-		Note:        stringOr(detail, "note"),
-		TraceID:     ev.TraceID,
-		At:          ev.CreatedAt.UTC().Format(time.RFC3339Nano),
+		Actor:         stringOr(detail, "actor"),
+		ActorRole:     stringOr(detail, "actor_role"),
+		EvidenceRef:   stringOr(detail, "evidence_ref"),
+		Note:          stringOr(detail, "note"),
+		TraceID:       ev.TraceID,
+		At:            ev.CreatedAt.UTC().Format(time.RFC3339Nano),
 	}
 	if row.ActorRole == "" {
 		row.ActorRole = agentRolesByPhase[phaseName]
@@ -490,6 +549,41 @@ func parseAuditRow(raw, phaseName string, ev loopmodel.Event) (TimelineAuditRow,
 	if row.Actor == "" {
 		row.Actor = row.ActorRole
 	}
+
+	// bound_target whitelist enforcement for the kinds that must
+	// bind to a known resource. Empty target → reject with
+	// "missing" reason; off-whitelist → reject with "wrong_target"
+	// reason. The original target is preserved verbatim so the
+	// audit replay can show what was proposed vs what was accepted.
+	if auditKindRejectsBoundTarget(kind) && !approvedBoundTargetAllowed(row.BoundTarget) {
+		original := row.BoundTarget
+		reason := "wrong_target"
+		if strings.TrimSpace(original) == "" {
+			reason = "missing"
+		}
+		row.BoundTarget = original + ":REJECTED:" + reason
+		if strings.TrimSpace(row.FallbackCause) == "" {
+			row.FallbackCause = "bound_target_rejected:" + reason
+		} else {
+			row.FallbackCause = row.FallbackCause + ";bound_target_rejected:" + reason
+		}
+	}
+
+	// fallback / fallback_cause pair validation. The contract
+	// requires both halves to be present together (you cannot
+	// name a fallback without naming the cause, and vice versa).
+	// An unset half is filled with an "<unset>:<kind>" marker so
+	// the reviewer can see the inconsistency instead of the row
+	// silently looking well-formed.
+	fallback := strings.TrimSpace(row.Fallback)
+	cause := strings.TrimSpace(row.FallbackCause)
+	if fallback != "" && cause == "" {
+		row.FallbackCause = "<unset>:fallback_without_cause"
+	}
+	if cause != "" && fallback == "" {
+		row.Fallback = "<unset>:cause_without_fallback"
+	}
+
 	return row, true
 }
 
@@ -635,22 +729,32 @@ func BuildRubric(events []loopmodel.Event) TimelineRubric {
 		rubric.ApprovalRate = float64(approvalSuccesses) / float64(approvalAttempts)
 	}
 
-	// recovery_pass_rate: ratio of recovery attempts whose
-	// VerifiedDelta.passed=true to total recovery attempts. Each
-	// phase_contract_written on the recovered phase is one attempt;
-	// phase_entered is just the start of the phase and does not
-	// count as a separate attempt.
+	// recovery_pass_rate: weighted by VerifiedDelta.sample_size so a
+	// 60s observation window that produced 60 observations
+	// contributes 60 samples to the denominator instead of just 1.
+// The VerifyRecovery worker emits one contract per observation
+// window (typically sample_size >= 3 per design §D5), and the
+// rubric must reflect the multi-sample reality rather than
+// counting each contract as a single +/-1 boolean. When a
+// contract omits sample_size we fall back to counting it as one
+// attempt so the metric stays defined for legacy/partial event
+// logs.
 	recoveryAttempts := 0
 	recoveryPasses := 0
 	for _, ev := range events {
 		if ev.Phase != string(loopbiz.PhaseRecovered) {
 			continue
 		}
-		if ev.EventType == loopmodel.EventPhaseContractWritten {
-			recoveryAttempts++
-			if verifiedPassed(ev.Payload) {
-				recoveryPasses++
-			}
+		if ev.EventType != loopmodel.EventPhaseContractWritten {
+			continue
+		}
+		weight, hasWeight := verifiedSampleSize(ev.Payload)
+		if !hasWeight || weight <= 0 {
+			weight = 1
+		}
+		recoveryAttempts += weight
+		if verifiedPassed(ev.Payload) {
+			recoveryPasses += weight
 		}
 	}
 	if recoveryAttempts > 0 {
@@ -696,6 +800,40 @@ func verifiedPassed(raw string) bool {
 		return v
 	}
 	return false
+}
+
+// verifiedSampleSize extracts the VerifiedDelta.sample_size value
+// from a contract payload. The function returns hasWeight=false
+// when the field is missing, zero, or negative so the caller can
+// fall back to counting the contract as a single attempt. A
+// successful multi-sample observation window (e.g. 60s × 1Hz → 60
+// samples) propagates to the rubric as 60 sample-weight.
+func verifiedSampleSize(raw string) (int, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	var detail map[string]any
+	if err := json.Unmarshal([]byte(raw), &detail); err != nil {
+		return 0, false
+	}
+	v, ok := detail["sample_size"]
+	if !ok {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case float64:
+		if n <= 0 {
+			return 0, false
+		}
+		return int(n), true
+	case int64:
+		if n <= 0 {
+			return 0, false
+		}
+		return int(n), true
+	}
+	return 0, false
 }
 
 // formatDuration renders a duration in a compact "1m23s" / "1h05m"

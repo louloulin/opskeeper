@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -127,8 +128,8 @@ func TestDeployment_FullPayload(t *testing.T) {
 	if len(resp.Dependencies) < 5 {
 		t.Errorf("dependencies = %d, want >= 5", len(resp.Dependencies))
 	}
-	if resp.Recovery.IncidentID != "INC-PG-POOL-001" {
-		t.Errorf("recovery.incident_id = %q, want INC-PG-POOL-001", resp.Recovery.IncidentID)
+	if resp.Recovery.IncidentID != "EXAMPLE-PG-POOL" {
+		t.Errorf("recovery.incident_id = %q, want EXAMPLE-PG-POOL", resp.Recovery.IncidentID)
 	}
 	if len(resp.Recovery.Phases) != 7 {
 		t.Errorf("recovery.phases = %d, want 7", len(resp.Recovery.Phases))
@@ -216,3 +217,98 @@ func TestDeriveDependencies_DoesNotLeakURLs(t *testing.T) {
 		}
 	}
 }
+
+// TestHealthSummary_NoteRedactsRawError covers P0-1 from the 337
+// review: HealthSummary.Note must NOT pass through the raw err.Error()
+// string. When the systemhealth seam fails the handler must surface
+// a coarse classification + a stable short hash so the SPA can
+// colour the badge and operators can match against server logs
+// without leaking DSN / hostname / stack frames in the public
+// /v1/version/deployment payload.
+func TestHealthSummary_NoteRedactsRawError(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	pluginPath := filepath.Join(dir, "dashboard", "plugin.json")
+	writePluginManifest(t, pluginPath)
+	skillsDir := filepath.Join(dir, "skills", "agent")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatalf("mkdir skills: %v", err)
+	}
+	secrets := "postgres://u:p@internal-pg:5432/db dial tcp: connection refused"
+	h, err := NewHandler("v1", Source{
+		PluginPath: pluginPath,
+		SkillsDir:  skillsDir,
+		HealthService: stubHealth{
+			err: &dsnError{msg: secrets},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	r := chi.NewRouter()
+	h.Register(r)
+	req := httptest.NewRequest(http.MethodGet, "/v1/version/deployment", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp DeploymentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Health.Note == secrets {
+		t.Errorf("Health.Note leaked raw error message: %q", resp.Health.Note)
+	}
+	if !strings.Contains(resp.Health.Note, "seam_error:") {
+		t.Errorf("Health.Note missing seam_error prefix; got %q", resp.Health.Note)
+	}
+	if strings.Contains(resp.Health.Note, "internal-pg") ||
+		strings.Contains(resp.Health.Note, "postgres://") ||
+		strings.Contains(resp.Health.Note, "connection refused") {
+		t.Errorf("Health.Note still contains leak fragment: %q", resp.Health.Note)
+	}
+	if resp.Plugin.Description == secrets {
+		t.Errorf("Plugin.Description leaked raw error: %q", resp.Plugin.Description)
+	}
+}
+
+// TestHealthSummary_NotWiredSeamIsSafe covers the no-wire path:
+// the placeholder note must still be a static label, not an
+// err.Error() pass-through.
+func TestHealthSummary_NotWiredSeamIsSafe(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	pluginPath := filepath.Join(dir, "dashboard", "plugin.json")
+	writePluginManifest(t, pluginPath)
+	skillsDir := filepath.Join(dir, "skills", "agent")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatalf("mkdir skills: %v", err)
+	}
+	h, err := NewHandler("v1", Source{
+		PluginPath: pluginPath,
+		SkillsDir:  skillsDir,
+	})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	r := chi.NewRouter()
+	h.Register(r)
+	req := httptest.NewRequest(http.MethodGet, "/v1/version/deployment", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	var resp DeploymentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Health.Note != "seam_not_wired" {
+		t.Errorf("Health.Note = %q, want seam_not_wired", resp.Health.Note)
+	}
+}
+
+// dsnError is a tiny error type that exposes the DSN-bearing
+// message used by the redact test. We define it here rather than
+// inline so the test source stays readable.
+type dsnError struct{ msg string }
+
+func (e *dsnError) Error() string { return e.msg }

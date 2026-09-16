@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -386,5 +387,203 @@ func TestTimelineResponse_PhasesFieldIsPopulated(t *testing.T) {
 	}
 	if resp.Chain.PhasesExpected != 7 {
 		t.Errorf("resp.Chain.PhasesExpected = %d, want 7", resp.Chain.PhasesExpected)
+	}
+}
+
+// TestBuildRubric_RecoveryPassRateWeightedBySampleSize covers
+// P0-2 from the 337 review: the rubric.RecoveryPassRate must
+// reflect a 60s multi-sample observation window, not collapse each
+// contract into a single +/-1 boolean. The PG-pool fixture carries
+// sample_size=10; the synthetic below swaps it for sample_size=60
+// and adds a second failure (sample_size=20) so the metric must
+// reach 60/(60+20) = 0.75 instead of the 1/2 = 0.5 you'd get from
+// counting contracts only.
+func TestBuildRubric_RecoveryPassRateWeightedBySampleSize(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	events := []loopmodel.Event{
+		{ID: 1, Phase: "recovered", EventType: loopmodel.EventPhaseContractWritten,
+			CreatedAt: now,
+			Payload: `{"schema_version":"v1","passed":true,"recovery_signal":true,"sample_size":60,"tolerance":0.15}`},
+		{ID: 2, Phase: "recovered", EventType: loopmodel.EventPhaseContractWritten,
+			CreatedAt: now.Add(time.Minute),
+			Payload: `{"schema_version":"v1","passed":false,"recovery_signal":false,"sample_size":20,"tolerance":0.15}`},
+	}
+	rubric := BuildRubric(events)
+	want := 60.0 / 80.0
+	if rubric.RecoveryPassRate < want-0.01 || rubric.RecoveryPassRate > want+0.01 {
+		t.Errorf("RecoveryPassRate = %f, want ~%f", rubric.RecoveryPassRate, want)
+	}
+}
+
+// TestBuildRubric_RecoveryPassRateFallsBackToOneWhenSampleMissing
+// covers the backwards-compat path: a recovered contract that does
+// not carry sample_size must still count as one attempt, otherwise
+// historical event logs (pre-D11) would render RecoveryPassRate=0
+// and trip a false-negative in the rubric.
+func TestBuildRubric_RecoveryPassRateFallsBackToOneWhenSampleMissing(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	events := []loopmodel.Event{
+		{ID: 1, Phase: "recovered", EventType: loopmodel.EventPhaseContractWritten,
+			CreatedAt: now,
+			Payload: `{"schema_version":"v1","passed":true,"recovery_signal":true,"tolerance":0.15}`},
+	}
+	rubric := BuildRubric(events)
+	if rubric.RecoveryPassRate < 0.99 {
+		t.Errorf("RecoveryPassRate = %f, want ~1.0 when no sample_size", rubric.RecoveryPassRate)
+	}
+}
+
+// TestBuildChainMeta_TerminalStateOverridesClosed covers P0-3
+// from the 337 review: a terminal-state event (failed / aborted)
+// must override the postmortem-driven Closed=true signal so the
+// timeline never advertises a closed-by-failure loop as a healthy
+// close. The FinalPhase / CurrentPhase must also flip to the
+// terminal name.
+func TestBuildChainMeta_TerminalStateOverridesClosed(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	events := []loopmodel.Event{
+		{ID: 1, Phase: "detected", EventType: loopmodel.EventTypePhaseEntered, CreatedAt: now},
+		{ID: 2, Phase: "postmortem", EventType: loopmodel.EventPhaseContractWritten, CreatedAt: now.Add(time.Minute)},
+		// A failed event arrives AFTER the postmortem (race /
+		// late retry). The terminal state must still win.
+		{ID: 3, Phase: "failed", EventType: loopmodel.EventPhaseFailed, CreatedAt: now.Add(2 * time.Minute)},
+	}
+	chain := BuildChainMeta(events, "INC-X")
+	if chain.Closed {
+		t.Errorf("chain.Closed = true, want false (terminal state wins)")
+	}
+	if chain.FinalPhase != "failed" {
+		t.Errorf("chain.FinalPhase = %q, want failed", chain.FinalPhase)
+	}
+	if chain.CurrentPhase != "failed" {
+		t.Errorf("chain.CurrentPhase = %q, want failed", chain.CurrentPhase)
+	}
+}
+
+// TestBuildChainMeta_ClosedOnlyWhenPostmortemClean covers the
+// positive path: a fully-walked loop without any terminal-state
+// event must keep Closed=true (no false negatives from the new
+// terminal-priority logic).
+func TestBuildChainMeta_ClosedOnlyWhenPostmortemClean(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	events := []loopmodel.Event{
+		{ID: 1, Phase: "detected", EventType: loopmodel.EventTypePhaseEntered, CreatedAt: now},
+		{ID: 2, Phase: "postmortem", EventType: loopmodel.EventPhaseContractWritten, CreatedAt: now.Add(time.Minute)},
+	}
+	chain := BuildChainMeta(events, "INC-Y")
+	if !chain.Closed {
+		t.Errorf("chain.Closed = false, want true (clean postmortem)")
+	}
+	if chain.FinalPhase != "postmortem" {
+		t.Errorf("chain.FinalPhase = %q, want postmortem", chain.FinalPhase)
+	}
+}
+
+// TestParseAuditRow_BoundTargetRejectsOffWhitelist covers P0-4
+// from the 337 review: an approval audit row whose bound_target
+// does not match the approved prefix set must be flagged as
+// REJECTED in the rendered row, and the FallbackCause slot must
+// carry the reason. The original target stays visible for audit
+// replay.
+func TestParseAuditRow_BoundTargetRejectsOffWhitelist(t *testing.T) {
+	t.Parallel()
+	ev := loopmodel.Event{
+		Phase:     string(loopbiz.PhaseApproved),
+		EventType: loopmodel.EventPhaseContractWritten,
+		Payload:   `{"decision":"approve","audit_kind":"approval","actor":"opskeeper-reviewer","actor_role":"opskeeper-reviewer","bound_target":"unknown-host:secret","fallback":"none","fallback_cause":""}`,
+	}
+	got, ok := parseAuditRow(ev.Payload, ev.Phase, ev)
+	if !ok {
+		t.Fatalf("parseAuditRow returned ok=false, want true")
+	}
+	if !strings.Contains(got.BoundTarget, "REJECTED:wrong_target") {
+		t.Errorf("BoundTarget = %q, want substring REJECTED:wrong_target", got.BoundTarget)
+	}
+	if !strings.Contains(got.BoundTarget, "unknown-host:secret") {
+		t.Errorf("BoundTarget must preserve original target for audit replay; got %q", got.BoundTarget)
+	}
+	if !strings.Contains(got.FallbackCause, "bound_target_rejected:wrong_target") {
+		t.Errorf("FallbackCause = %q, want substring bound_target_rejected:wrong_target", got.FallbackCause)
+	}
+}
+
+// TestParseAuditRow_BoundTargetRejectsEmpty covers the missing
+// target path: an approval row with no bound_target must be
+// flagged as REJECTED:missing so the reviewer can see the binding
+// is incomplete.
+func TestParseAuditRow_BoundTargetRejectsEmpty(t *testing.T) {
+	t.Parallel()
+	ev := loopmodel.Event{
+		Phase:     string(loopbiz.PhaseApproved),
+		EventType: loopmodel.EventPhaseContractWritten,
+		Payload:   `{"decision":"approve","audit_kind":"approval","actor":"opskeeper-reviewer","actor_role":"opskeeper-reviewer","bound_target":"","fallback":"none","fallback_cause":""}`,
+	}
+	got, ok := parseAuditRow(ev.Payload, ev.Phase, ev)
+	if !ok {
+		t.Fatalf("parseAuditRow returned ok=false, want true")
+	}
+	if !strings.Contains(got.BoundTarget, "REJECTED:missing") {
+		t.Errorf("BoundTarget = %q, want substring REJECTED:missing", got.BoundTarget)
+	}
+	if !strings.Contains(got.FallbackCause, "bound_target_rejected:missing") {
+		t.Errorf("FallbackCause = %q, want substring bound_target_rejected:missing", got.FallbackCause)
+	}
+}
+
+// TestParseAuditRow_BoundTargetAllowsWhitelistedPrefix covers the
+// happy path: a target that matches one of the approved prefixes
+// passes through unmodified and the fallback_cause slot is left
+// untouched. This is the regression test that protects the
+// existing PG-pool / incident / opskeeper targets from the new
+// reject logic.
+func TestParseAuditRow_BoundTargetAllowsWhitelistedPrefix(t *testing.T) {
+	t.Parallel()
+	for _, target := range []string{
+		"pg:pool-fixture",
+		"incident:INC-1",
+		"opskeeper:audit",
+		"app:checkout",
+		"host:node-7",
+	} {
+		ev := loopmodel.Event{
+			Phase:     string(loopbiz.PhaseApproved),
+			EventType: loopmodel.EventPhaseContractWritten,
+			Payload:   `{"decision":"approve","audit_kind":"approval","actor":"opskeeper-reviewer","actor_role":"opskeeper-reviewer","bound_target":"` + target + `","fallback":"none","fallback_cause":""}`,
+		}
+		got, ok := parseAuditRow(ev.Payload, ev.Phase, ev)
+		if !ok {
+			t.Fatalf("parseAuditRow returned ok=false for %s", target)
+		}
+		if strings.Contains(got.BoundTarget, "REJECTED") {
+			t.Errorf("target %q should pass whitelist but BoundTarget = %q", target, got.BoundTarget)
+		}
+		if got.BoundTarget != target {
+			t.Errorf("BoundTarget = %q, want %q", got.BoundTarget, target)
+		}
+	}
+}
+
+// TestParseAuditRow_FallbackWithoutCause covers P1 from the 337
+// review: when fallback is set but fallback_cause is empty (or
+// vice versa), the parser must surface the inconsistency with an
+// explicit "<unset>:<reason>" marker instead of letting the row
+// look well-formed.
+func TestParseAuditRow_FallbackWithoutCause(t *testing.T) {
+	t.Parallel()
+	ev := loopmodel.Event{
+		Phase:     string(loopbiz.PhaseApproved),
+		EventType: loopmodel.EventPhaseContractWritten,
+		Payload:   `{"decision":"approve","audit_kind":"approval","actor":"opskeeper-reviewer","actor_role":"opskeeper-reviewer","bound_target":"pg:pool-fixture","fallback":"manual_review","fallback_cause":""}`,
+	}
+	got, ok := parseAuditRow(ev.Payload, ev.Phase, ev)
+	if !ok {
+		t.Fatalf("parseAuditRow returned ok=false, want true")
+	}
+	if !strings.Contains(got.FallbackCause, "<unset>:fallback_without_cause") {
+		t.Errorf("FallbackCause = %q, want substring <unset>:fallback_without_cause", got.FallbackCause)
 	}
 }

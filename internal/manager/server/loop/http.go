@@ -369,6 +369,24 @@ func BuildChainMeta(events []loopmodel.Event, incidentID string) TimelineChainMe
 			break
 		}
 	}
+	// Terminal states (failed / aborted) win over postmortem: a
+	// loop that ended in failure must NOT be advertised as
+	// `closed=true` even if it had a stale postmortem entry
+	// beforehand. The Closed flag reflects a healthy terminal
+	// transition through Postmortem, not just any Postmortem
+	// event.
+	terminal := false
+	for _, ev := range events {
+		if terminalPhases[ev.Phase] {
+			terminal = true
+			chain.FinalPhase = ev.Phase
+			chain.CurrentPhase = ev.Phase
+			break
+		}
+	}
+	if terminal {
+		chain.Closed = false
+	}
 	for _, ev := range events {
 		if ev.Payload == "" {
 			continue
