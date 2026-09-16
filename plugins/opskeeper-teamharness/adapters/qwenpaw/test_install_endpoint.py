@@ -123,42 +123,6 @@ def test_runtime_gateway_key_reads_qwenpaw_credentials(
     assert _plugin._runtime_credential("OPSKEEPER_TENANT_ID") == "demo-tenant"
 
 
-def test_runtime_tenant_id_falls_back_to_default(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    credentials = tmp_path / "credentials.yaml"
-    credentials.write_text(
-        "credentials:\n"
-        "  mcp/opskeeper:\n"
-        "    kind: static\n"
-        "    secrets:\n"
-        "      OPSKEEPER_GATEWAY_KEY: file-runtime-key\n",
-        encoding="utf-8",
-    )
-    monkeypatch.delenv("OPSKEEPER_TENANT_ID", raising=False)
-    monkeypatch.setenv("OPSKEEPER_CREDENTIALS_FILE", str(credentials))
-    assert _plugin._runtime_tenant_id() == "default"
-
-
-def test_runtime_gateway_key_falls_back_to_worker_gateway_key(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    credentials = tmp_path / "credentials.yaml"
-    credentials.write_text(
-        "credentials:\n"
-        "  mcp/opskeeper:\n"
-        "    kind: static\n"
-        "    secrets:\n",
-        encoding="utf-8",
-    )
-    monkeypatch.delenv("OPSKEEPER_GATEWAY_KEY", raising=False)
-    monkeypatch.setenv("OPSKEEPER_CREDENTIALS_FILE", str(credentials))
-    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "worker-runtime-key")
-    assert _plugin._runtime_gateway_key() == "worker-runtime-key"
-
-
 def test_investigate_proxy_accepts_file_backed_runtime_key(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

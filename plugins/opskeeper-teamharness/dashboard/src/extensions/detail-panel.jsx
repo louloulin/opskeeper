@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { normalizeIncidentList } from './runtime.js';
 import { buildInvestigationRequest, opskeeperApi } from './api.js';
-import { getPluginThemeStyle, usePluginTheme } from './theme.js';
 
 // Worker 详情页嵌入区块 — 列出该 worker 最近 5 次 RCA 报告 + 单 worker re-trigger 按钮。
 //
@@ -33,7 +32,6 @@ function StatusDot({ status }) {
 }
 
 export default function WorkerOpsBlock({ entity, api }) {
-  const theme = usePluginTheme();
   const workerName = entity && (entity.name || entity.id);
   const [incidents, setIncidents] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
@@ -75,20 +73,19 @@ export default function WorkerOpsBlock({ entity, api }) {
 
   return (
     <div style={{
-      ...getPluginThemeStyle(theme),
-      padding: 12, border: '1px solid var(--ok-border)', borderRadius: 8,
-      background: 'var(--ok-card)', color: 'var(--ok-card-foreground)',
+      padding: 12, border: '1px solid var(--border)', borderRadius: 8,
+      background: 'var(--card)', color: 'var(--card-foreground)',
     }}>
       <div style={{
         display: 'flex', alignItems: 'center', marginBottom: 8, gap: 8,
       }}>
         <strong style={{ fontSize: 13 }}>Opskeeper 历史</strong>
-        <span style={{ fontSize: 11, color: 'var(--ok-muted-foreground)' }}>
+        <span style={{ fontSize: 11, color: 'var(--muted)' }}>
           {workerName ? `worker: ${workerName}` : 'worker: -'}
         </span>
         <span style={{
           marginLeft: 'auto', padding: '1px 6px', borderRadius: 3, fontSize: 10,
-          background: 'var(--ok-muted)', color: 'var(--ok-muted-foreground)',
+          background: 'var(--muted)', color: 'var(--muted-foreground)',
         }}>
           最近 {incidents.length} 条
         </span>
@@ -96,8 +93,8 @@ export default function WorkerOpsBlock({ entity, api }) {
           onClick={refresh}
           style={{
             padding: '2px 8px', fontSize: 11, borderRadius: 4,
-            border: '1px solid var(--ok-border)', background: 'transparent',
-            color: 'var(--ok-muted-foreground)', cursor: 'pointer',
+            border: '1px solid var(--border)', background: 'transparent',
+            color: 'var(--muted)', cursor: 'pointer',
           }}
         >
           刷新
@@ -114,9 +111,9 @@ export default function WorkerOpsBlock({ entity, api }) {
       )}
 
       {loading ? (
-        <div style={{ fontSize: 12, color: 'var(--ok-muted-foreground)' }}>加载中…</div>
+        <div style={{ fontSize: 12, color: 'var(--muted)' }}>加载中…</div>
       ) : incidents.length === 0 ? (
-        <div style={{ fontSize: 12, color: 'var(--ok-muted-foreground)', padding: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--muted)', padding: 8 }}>
           暂无该 worker 的 RCA 历史
         </div>
       ) : (
@@ -135,15 +132,15 @@ export default function WorkerOpsBlock({ entity, api }) {
               <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {i.summary || '(no summary)'}
               </span>
-              <span style={{ fontSize: 10, color: 'var(--ok-muted-foreground)' }}>{i.severity || '—'}</span>
+              <span style={{ fontSize: 10, color: 'var(--muted)' }}>{i.severity || '—'}</span>
               <button
                 onClick={() => reTrigger(i)}
                 disabled={busy === i.id}
                 title="重新触发 RCA"
                 style={{
                   padding: '1px 8px', fontSize: 10, borderRadius: 3,
-                  border: '1px solid var(--ok-border)', background: 'transparent',
-                  color: 'var(--ok-muted-foreground)', cursor: busy === i.id ? 'wait' : 'pointer',
+                  border: '1px solid var(--border)', background: 'transparent',
+                  color: 'var(--muted)', cursor: busy === i.id ? 'wait' : 'pointer',
                 }}
               >
                 {busy === i.id ? '…' : 're-RCA'}
@@ -154,15 +151,15 @@ export default function WorkerOpsBlock({ entity, api }) {
       )}
 
       <div style={{
-        marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--ok-border)',
-        display: 'flex', gap: 6, fontSize: 10, color: 'var(--ok-muted-foreground)',
+        marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--border)',
+        display: 'flex', gap: 6, fontSize: 10, color: 'var(--muted)',
       }}>
         <button
           onClick={() => api.dashboard.navigate('plugin-route:opskeeper-teamharness/home')}
           style={{
             padding: '3px 10px', fontSize: 10, borderRadius: 3,
-            border: '1px solid var(--ok-border)', background: 'transparent',
-            color: 'var(--ok-muted-foreground)', cursor: 'pointer',
+            border: '1px solid var(--border)', background: 'transparent',
+            color: 'var(--muted)', cursor: 'pointer',
           }}
         >
           打开完整诊断 →

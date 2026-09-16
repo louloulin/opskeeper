@@ -9,7 +9,7 @@ const TONE = {
   border: 'var(--border, rgba(15,23,42,0.18))',
   card: 'var(--card, #ffffff)',
   cardFg: 'var(--card-foreground, #0f172a)',
-  muted: 'var(--muted-foreground, #64748b)',
+  muted: 'var(--muted, #475569)',
   mutedBg: 'var(--muted-bg, rgba(15,23,42,0.06))',
   destructive: 'var(--destructive, #dc2626)',
   destructiveBg: 'var(--destructive-bg, rgba(220,38,38,0.14))',

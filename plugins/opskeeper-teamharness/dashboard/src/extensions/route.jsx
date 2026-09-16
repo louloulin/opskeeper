@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { normalizeIncidentList } from './runtime.js';
 import { buildInvestigationRequest, opskeeperApi } from './api.js';
-import { getPluginThemeStyle, usePluginTheme } from './theme.js';
 
 // 7 阶段 RCA orchestrator 阶段定义（来自 opskeeper 7 阶段 RCA loop）
 const STAGES = [
@@ -92,15 +91,15 @@ function ReportViewer({ report }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* Root cause */}
       <div style={{
-        padding: 14, borderRadius: 8, border: '1px solid var(--ok-border)',
+        padding: 14, borderRadius: 8, border: '1px solid var(--border)',
         background: '#111827', color: '#f9fafb',
       }}>
-        <div style={{ fontSize: 12, color: 'var(--ok-muted-foreground)', marginBottom: 4 }}>根因</div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>根因</div>
         <div style={{ fontSize: 14, fontWeight: 600 }}>
           {root.summary || root.description || report.summary || '—'}
         </div>
         {root.entity && (
-          <div style={{ fontSize: 12, color: 'var(--ok-muted-foreground)', marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
             实体：{root.entity.type} = {root.entity.id}
           </div>
         )}
@@ -117,7 +116,7 @@ function ReportViewer({ report }) {
           </div>
         )}
         {confidence !== null && (
-          <div style={{ fontSize: 12, color: 'var(--ok-muted-foreground)', marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
             置信度：<strong style={{ color: confidence >= 0.7 ? '#10b981' : '#f59e0b' }}>
               {(confidence * 100).toFixed(0)}%
             </strong>
@@ -128,27 +127,27 @@ function ReportViewer({ report }) {
       {/* Causal chain */}
       {chain.length > 0 && (
         <div style={{
-          padding: 14, borderRadius: 8, border: '1px solid var(--ok-border)',
+          padding: 14, borderRadius: 8, border: '1px solid var(--border)',
           background: '#111827',
         }}>
-          <div style={{ fontSize: 12, color: 'var(--ok-muted-foreground)', marginBottom: 8 }}>因果链</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>因果链</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {chain.map((step, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
                 <span style={{
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                   width: 22, height: 22, borderRadius: '50%',
-                  background: 'var(--ok-muted)', color: 'var(--ok-muted-foreground)',
+                  background: 'var(--muted)', color: 'var(--muted-foreground)',
                   fontSize: 11, fontWeight: 600,
                 }}>{i + 1}</span>
                 <span style={{ flex: 1 }}>{step.event || step.description}</span>
                 {step.entity && (
-                  <span style={{ fontSize: 10, color: 'var(--ok-muted-foreground)' }}>
+                  <span style={{ fontSize: 10, color: 'var(--muted)' }}>
                     {step.entity.type}:{step.entity.id}
                   </span>
                 )}
                 {i < chain.length - 1 && (
-                  <span style={{ color: 'var(--ok-muted-foreground)', marginLeft: 4 }}>↓</span>
+                  <span style={{ color: 'var(--muted)', marginLeft: 4 }}>↓</span>
                 )}
               </div>
             ))}
@@ -159,10 +158,10 @@ function ReportViewer({ report }) {
       {/* Evidence */}
       {evidence.length > 0 && (
         <div style={{
-          padding: 14, borderRadius: 8, border: '1px solid var(--ok-border)',
+          padding: 14, borderRadius: 8, border: '1px solid var(--border)',
           background: '#111827',
         }}>
-          <div style={{ fontSize: 12, color: 'var(--ok-muted-foreground)', marginBottom: 8 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
             证据 ({evidence.length} 条)
           </div>
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
@@ -185,10 +184,10 @@ function ReportViewer({ report }) {
       {/* Phase progress */}
       {report.phase && (
         <div style={{
-          padding: 14, borderRadius: 8, border: '1px solid var(--ok-border)',
+          padding: 14, borderRadius: 8, border: '1px solid var(--border)',
           background: '#111827',
         }}>
-          <div style={{ fontSize: 12, color: 'var(--ok-muted-foreground)', marginBottom: 4 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>
             7 阶段进度 — 当前阶段：<strong>{report.phase}</strong>
           </div>
           <PhaseProgress phase={report.phase} />
@@ -196,7 +195,7 @@ function ReportViewer({ report }) {
       )}
 
       {/* Raw JSON fallback */}
-      <details style={{ fontSize: 11, color: 'var(--ok-muted-foreground)' }}>
+      <details style={{ fontSize: 11, color: 'var(--muted)' }}>
         <summary style={{ cursor: 'pointer' }}>原始 JSON</summary>
         <pre style={{
           marginTop: 8, padding: 12, background: '#0a0a0a', color: '#eee',
@@ -210,7 +209,6 @@ function ReportViewer({ report }) {
 }
 
 export default function OpskeeperRoute({ api }) {
-  const theme = usePluginTheme();
   const [incidents, setIncidents] = React.useState([]);
   const [loadingIncidents, setLoadingIncidents] = React.useState(true);
   const [incidentsError, setIncidentsError] = React.useState(null);
@@ -264,7 +262,7 @@ export default function OpskeeperRoute({ api }) {
   );
 
   return (
-    <div style={{ ...getPluginThemeStyle(theme), padding: 24, display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+    <div style={{ padding: 24, display: 'flex', gap: 16, alignItems: 'flex-start' }}>
       {/* Left: incident list */}
       <div style={{ flex: '0 0 360px', display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{
@@ -276,8 +274,8 @@ export default function OpskeeperRoute({ api }) {
             disabled={loadingIncidents}
             style={{
               padding: '4px 10px', fontSize: 12, borderRadius: 4,
-              border: '1px solid var(--ok-border)', background: 'var(--ok-card)',
-              color: 'var(--ok-card-foreground)', cursor: loadingIncidents ? 'wait' : 'pointer',
+              border: '1px solid var(--border)', background: 'var(--card)',
+              color: 'var(--card-foreground)', cursor: loadingIncidents ? 'wait' : 'pointer',
             }}
           >
             {loadingIncidents ? '…' : '刷新'}
@@ -291,8 +289,8 @@ export default function OpskeeperRoute({ api }) {
           onChange={(e) => setFilter(e.target.value)}
           style={{
             padding: '6px 10px', borderRadius: 6, fontSize: 12,
-            border: '1px solid var(--ok-border)', background: 'var(--ok-card)',
-            color: 'var(--ok-card-foreground)',
+            border: '1px solid var(--border)', background: 'var(--card)',
+            color: 'var(--card-foreground)',
           }}
         />
 
@@ -308,8 +306,8 @@ export default function OpskeeperRoute({ api }) {
 
         {!loadingIncidents && filtered.length === 0 && (
           <div style={{
-            padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--ok-muted-foreground)',
-            border: '1px dashed var(--ok-border)', borderRadius: 6,
+            padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--muted)',
+            border: '1px dashed var(--border)', borderRadius: 6,
           }}>
             {incidents.length === 0
               ? '暂无事故 — 等待 alerter 派发'
@@ -327,9 +325,9 @@ export default function OpskeeperRoute({ api }) {
               padding: 12, borderRadius: 6, fontSize: 12,
               cursor: running ? 'wait' : 'pointer',
               opacity: running ? 0.6 : 1,
-              border: '1px solid var(--ok-border)',
-              background: selected?.id === i.id ? 'var(--ok-primary)' : 'var(--ok-card)',
-              color: selected?.id === i.id ? 'var(--ok-primary-foreground)' : 'var(--ok-card-foreground)',
+              border: '1px solid var(--border)',
+              background: selected?.id === i.id ? 'var(--primary)' : 'var(--card)',
+              color: selected?.id === i.id ? 'var(--primary-foreground)' : 'var(--card-foreground)',
               display: 'flex', flexDirection: 'column', gap: 4,
             }}
           >
@@ -360,8 +358,8 @@ export default function OpskeeperRoute({ api }) {
 
         {!selected && (
           <div style={{
-            padding: 32, textAlign: 'center', fontSize: 13, color: 'var(--ok-muted-foreground)',
-            border: '1px dashed var(--ok-border)', borderRadius: 8,
+            padding: 32, textAlign: 'center', fontSize: 13, color: 'var(--muted)',
+            border: '1px dashed var(--border)', borderRadius: 8,
           }}>
             ← 选择左侧事故触发 7 阶段 RCA
           </div>
@@ -369,12 +367,12 @@ export default function OpskeeperRoute({ api }) {
 
         {selected && running && (
           <div style={{
-            padding: 24, fontSize: 13, color: 'var(--ok-muted-foreground)',
+            padding: 24, fontSize: 13, color: 'var(--muted)',
             display: 'flex', alignItems: 'center', gap: 8,
           }}>
             <span style={{
               display: 'inline-block', width: 14, height: 14,
-              border: '2px solid var(--ok-muted)', borderTopColor: 'transparent',
+              border: '2px solid var(--muted)', borderTopColor: 'transparent',
               borderRadius: '50%', animation: 'spin 0.8s linear infinite',
             }} />
             正在为 <code style={{ marginLeft: 4 }}>{selected.id}</code> 执行 7 阶段 RCA…
