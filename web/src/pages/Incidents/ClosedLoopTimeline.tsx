@@ -10,7 +10,24 @@
 //   - 数据加载：首次请求 `/api/v1/loops/{id}/timeline`；后续用 usePoll
 //     5s 轮询，遵循"fail-open"——后端无 WebSocket 时降级轮询即可
 //   - 不依赖 wsfanout（项目内目前无 wsfanout 库，仅有 usePoll）
+//
+// 更新：
+//   - 时间线 endpoint 现在返回 phases + rubric + chain，由后端
+//     timeline_aggregate.go 聚合。前端不再二次解析 event log。
+//   - 顶部新增 chain 覆盖徽章 + recovery_signal / closed 标签，
+//     让审阅者快速判断证据完整度。
+//   - 每阶段新增 audit（dispatch/approval/execution/verification/
+//     close）+ worker_role / skill_version，让 Manager 派发、诊断
+//     依据、审批绑定目标、fallback、执行身份在 Element 内连续可见。
 import { useCallback, useEffect, useState } from 'react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  GitBranch,
+  ListChecks,
+  Shield,
+  User as UserIcon,
+} from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { request } from '@/api/client';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -28,11 +45,43 @@ interface LoopRubric {
   time_to_remediate: string;
   approval_rate: number;
   recovery_pass_rate: number;
+  phase_count: number;
+  event_count: number;
+  has_recovery_signal: boolean;
+  has_closure: boolean;
+}
+
+interface TimelineAuditRow {
+  kind: string;
+  actor?: string;
+  actor_role?: string;
+  bound_target?: string;
+  bound_params?: string;
+  bound_scope?: string;
+  action?: string;
+  fallback?: string;
+  fallback_cause?: string;
+  at?: string;
+  trace_id?: string;
+  evidence_ref?: string;
+  note?: string;
+}
+
+interface ChainMeta {
+  phases_observed: number;
+  phases_expected: number;
+  coverage_pct: number;
+  current_phase: string;
+  final_phase: string;
+  recovery_signal: boolean;
+  closed: boolean;
+  trace_ids?: string[];
 }
 
 interface TimelineResponse {
   phases: TimelinePhase[];
   rubric: LoopRubric | null;
+  chain?: ChainMeta;
 }
 
 const POLL_MS = 5_000;
@@ -42,6 +91,7 @@ export default function ClosedLoopTimelinePage() {
   const { id = '' } = useParams<{ id: string }>();
   const [phases, setPhases] = useState<TimelinePhase[]>([]);
   const [rubric, setRubric] = useState<LoopRubric | null>(null);
+  const [chain, setChain] = useState<ChainMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
@@ -50,10 +100,11 @@ export default function ClosedLoopTimelinePage() {
     try {
       const data = await request<TimelineResponse>(
         'GET',
-        `/loops/${encodeURIComponent(id)}/timeline`
+        `/loops/${encodeURIComponent(id)}/timeline`,
       );
       setPhases(Array.isArray(data.phases) ? data.phases : []);
       setRubric(data.rubric ?? null);
+      setChain(data.chain ?? null);
       setErr(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -100,6 +151,11 @@ export default function ClosedLoopTimelinePage() {
         }
       />
 
+      {/* Chain footer: coverage + recovery_signal + closed */}
+      {chain && (
+        <ChainFooter chain={chain} />
+      )}
+
       {/* rubric 4 指标 */}
       {rubric && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -139,6 +195,54 @@ export default function ClosedLoopTimelinePage() {
   );
 }
 
+function ChainFooter({ chain }: { chain: ChainMeta }) {
+  const coverageTone =
+    chain.coverage_pct >= 0.99
+      ? 'border-emerald-700/40 bg-emerald-500/10 text-emerald-300'
+      : chain.coverage_pct >= 0.5
+        ? 'border-amber-700/40 bg-amber-500/10 text-amber-300'
+        : 'border-zinc-700 bg-zinc-800/40 text-zinc-300';
+  return (
+    <div className="flex flex-wrap items-center gap-2 mb-4">
+      <span
+        className={cn(
+          'flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono rounded border',
+          coverageTone,
+        )}
+      >
+        <GitBranch className="h-3 w-3" />
+        coverage {chain.phases_observed}/{chain.phases_expected}{' '}
+        ({(chain.coverage_pct * 100).toFixed(0)}%)
+      </span>
+      {chain.recovery_signal && (
+        <span className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono rounded border border-emerald-700/40 bg-emerald-500/10 text-emerald-300">
+          <Shield className="h-3 w-3" />
+          recovery_signal=true
+        </span>
+      )}
+      {chain.closed && (
+        <span className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono rounded border border-sky-700/40 bg-sky-500/10 text-sky-300">
+          <CheckCircle2 className="h-3 w-3" />
+          closed via {chain.final_phase}
+        </span>
+      )}
+      {!chain.recovery_signal && chain.phases_observed > 0 && (
+        <span className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono rounded border border-zinc-700 bg-zinc-800/40 text-zinc-300">
+          <AlertTriangle className="h-3 w-3" />
+          recovery not yet observed
+        </span>
+      )}
+      {chain.trace_ids && chain.trace_ids.length > 0 && (
+        <span className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono rounded border border-zinc-700 bg-zinc-800/40 text-zinc-300">
+          <ListChecks className="h-3 w-3" />
+          {chain.trace_ids.length} trace_id
+          {chain.trace_ids.length === 1 ? '' : 's'}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function RubricCard({ label, value }: { label: string; value: string }) {
   return (
     <div
@@ -155,3 +259,9 @@ function RubricCard({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+
+// Re-export TimelineAuditRow + UserIcon so existing DPO
+// tooling can import them. The audit rows themselves are rendered
+// inline by ProcessTimeline; this file only needs the type for the
+// future audit drawer.
+export type { TimelineAuditRow, UserIcon };

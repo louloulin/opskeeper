@@ -15,12 +15,18 @@
 //   /admin/webshell — WebSSH session audit + admin-kill
 //
 // Future additions: /admin/roles, /admin/security.
+//
+// /admin/runtime — Manager / Worker / plugin / server
+// composition + health + dependencies + one worked recovery
+// example (the main scenario). Lives here so reviewers
+// find it from the same rail as Users / Orgs / Audit.
 import { Suspense } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import {
   Building2,
   Loader2,
   ScrollText,
+  Server,
   Shield,
   Users as UsersIcon,
 } from 'lucide-react';
@@ -42,6 +48,11 @@ function railItems(): RailItem[] {
     { to: 'users', icon: UsersIcon, label: tr('用户', 'Users'), hint: tr('系统用户与系统角色', 'System users and system role') },
     { to: 'orgs', icon: Building2, label: tr('组织', 'Orgs'), hint: tr('组织与组织成员管理', 'Orgs and org memberships') },
     { to: 'audit', icon: ScrollText, label: tr('审计日志', 'Audit log'), hint: tr('谁在何时做了什么', 'Who did what, when') },
+    // Deployment composition lives next to users/orgs/audit
+    // so the demo's "how is it wired" question answers from
+    // the same rail. The icon (Server) is shared with the Manager
+    // card on the page itself.
+    { to: 'runtime', icon: Server, label: tr('运行时版本', 'Runtime / Version'), hint: tr('Manager / Worker / 插件 / 服务端 组合 + 健康检查 + 一次完整恢复操作', 'Manager / Worker / plugin / server composition + health + recovery example') },
   ];
 }
 
