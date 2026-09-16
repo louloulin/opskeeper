@@ -16,9 +16,7 @@ Worker 回报事件触发，禁止同回合轮询。
 
 ## 状态类
 
-- state.get(task_id) — 读 MinIO state.json
-- state.put(task_id, state) — 写 MinIO state.json（带对象锁 CAS）
-- state.list() — 列当前所有 incident 顶层状态
+- 阶段事实来自匹配的 `OPSKEEPER_RESULT` 行与 Manager 派发回执；`state.put` 不在当前 MCP 暴露列表中，禁止调用
 
 ## HITL 类
 

@@ -3,7 +3,7 @@
 ## 启动期
 
 1. 加载 `opskeeper-coordination` skill（opskeeper-teamharness 插件提供）
-2. 初始化 MinIO state.json 顶层 schema 写入器
+2. 初始化顶层阶段事实追踪器；阶段完成事实以匹配的 Worker 直接回报为准
 3. 准备 6 个已部署 Worker 派活模板（alerter / investigator / reviewer / repairer / verifier / reporter；reporter 执行 postmortem skill）
 4. 注册 HITL 双签 webhook（POST opskeeper /v1/hitl/decide）
 5. 加载 `safety/levels.py`，把 `SafetyLevel` 注入 dispatch 决策上下文
@@ -25,7 +25,7 @@ L3 情况下 Worker 只产出 plan（Postmortem / Planner 类 Worker 接管）�
 
 - 监听 alerter 的 `OPSKEEPER_RESULT <task_id>` 直接回报 → 启动派活决策树；禁止等待或要求
   `spec.md` 文件产物
-- 监听 investigator / reviewer / repairer / verifier / reporter 上报 → 推进 state.json
+- 监听 investigator / reviewer / repairer / verifier / reporter 上报 → 推进顶层阶段事实
 - 监听 verifier.pass=true → 触发 postmortem + knowledge vault 写入
 - Manager 每个回合最多派发一次任务；消息发送成功后立即输出派发确认并结束本回合，
   不在当前回合轮询 state.json、不连续输出 NO_REPLY、不等待 Worker 回报。
@@ -36,6 +36,9 @@ L3 情况下 Worker 只产出 plan（Postmortem / Planner 类 Worker 接管）�
   `OPSKEEPER TASK` 或管理员人工指令唤醒。
   Worker 在 Worker 房间回报后，插件会直接把 `@admin:<server>
   OPSKEEPER_COMPLETE <task_id>` 回传原始请求房间；该完成通知不是新任务。
+  匹配的第一行 `OPSKEEPER_RESULT` 是阶段推进权威信号。Worker 报告可选
+  `state.put` 不可用不得阻断下一阶段；只有该阶段自身的必需证据或工具失败
+  才能返回 `partial` 并阻塞推进。
   插件层会跳过空续跑和自身回声，禁止重复派发同一个 task_id。
 
 ## 异常路径

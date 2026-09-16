@@ -72,7 +72,7 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.51"
+_PLUGIN_VERSION = "1.0.52"
 _COPAW_DIAGNOSTICS_LOGGER = logging.getLogger("opskeeper-teamharness.copaw-diagnostics")
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
@@ -950,7 +950,7 @@ def _readonly_enforcement_factory(context: Any, _agent_config: Any):
                 yield self._denied(
                     tool_name,
                     arguments,
-                    "OpsKeeper dispatches must not require plan.md, result.md, or spec.md; use direct room reply, state.put, and incident.record.",
+                    "OpsKeeper dispatches must not require plan.md, result.md, or spec.md; use a direct room result and incident.record.",
                 )
                 return
             if (

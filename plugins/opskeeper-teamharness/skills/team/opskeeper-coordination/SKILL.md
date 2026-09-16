@@ -40,10 +40,10 @@ Worker 房间的结果唤醒 Manager 后，Manager 必须向原始请求房间�
 
 OpsKeeper Worker 任务协议优先于 AgentTeams 通用 task lifecycle。Manager 派发文案
 禁止要求 Worker 创建 plan.md / result.md / spec.md，也禁止要求调用 `write_file`/`edit_file`；
-Worker 直接在当前项目房间回报结果。需要留痕时，Manager 指定 `incident.record` 与
-`state.put`，不得把文件系统任务产物作为完成条件。
+Worker 直接在当前项目房间回报结果。需要留痕时，Manager 指定 `incident.record`；
+不得要求 `state.put`，也不得把文件系统任务产物作为完成条件。
 
-每次派活决策后必须 `state.put`：
+每次派活决策后，Manager 在派发消息中携带阶段事实；Worker 在最终 JSON 中回显阶段：
 
 ```json
 {

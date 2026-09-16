@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.52 — 2026-09-17
+
+- Treat the matching in-room `OPSKEEPER_RESULT` as the authoritative Worker phase signal. Missing optional `state.put` support no longer blocks Manager progression.
+- Remove unavailable `state.put`/`state.get` MCP advertisements and Worker completion requirements while retaining `incident.record` as the durable evidence trail.
+
 ## 1.0.51 — 2026-09-17
 
 - Remove the obsolete alerter `spec.md` completion dependency. Alerter now returns its structured result directly in the project room, and Manager waits for the matching `OPSKEEPER_RESULT` marker.

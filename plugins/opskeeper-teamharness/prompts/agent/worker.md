@@ -16,7 +16,7 @@
   `<server>` 使用运行时 Matrix server，不能省略。
 - Manager 在插件层等待该匹配结果；中间过程说明不能替代这一行结果。
 - OpsKeeper 任务协议优先于 AgentTeams 通用 task lifecycle：不要创建 plan.md / result.md / spec.md，
-  不要调用 write_file/edit_file 生成任务产物；证据用 `incident.record`，阶段用 `state.put`。
+  不要调用 write_file/edit_file 生成任务产物；证据用 `incident.record`，阶段直接写入最终 JSON。
 - 直接在当前项目房间输出最终回报；不要把消息发到合成 Manager 房间。若必须调用消息工具，
   target 只能是当前项目房间。
 
@@ -30,7 +30,7 @@
 
 - `disallowed_tools` 是硬边界，**绝不调用**
 - 任何 mutating 操作前确认：要么 reviewer 已 approve，要么 blast_radius ∈ {host}
-- 所有写操作必须 `state.put` 推进阶段
+- 不要调用 `state.put`；该工具不在当前 Worker MCP 暴露列表中，阶段事实由最终 JSON 直接携带
 
 ## 失败处理
 
