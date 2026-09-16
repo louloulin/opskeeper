@@ -493,11 +493,7 @@ func (r *postgresRuntime) Probe(ctx context.Context) (ProbeRecord, error) {
 }
 
 func (r *postgresRuntime) ResizeAndRecycle(ctx context.Context, connections []PoolConnection, capacity int) error {
-	for _, connection := range connections {
-		if err := connection.Release(); err != nil {
-			return fmt.Errorf("recycle owned connection: %w", err)
-		}
-	}
+	releaseConnections(connections)
 	r.db.SetMaxOpenConns(capacity)
 	r.db.SetMaxIdleConns(capacity)
 	return r.db.PingContext(ctx)
