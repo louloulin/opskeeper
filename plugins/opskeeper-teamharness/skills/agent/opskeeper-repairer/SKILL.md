@@ -53,7 +53,7 @@ stdio MCP server 内部自动注入：
   - 每次 mutating 操作必须依赖 OpsKeeper approved proposal / audit；不得用提示词自授权
   - `recovery.execute` 成功后必须调用 `incident.record`，且 `action_fingerprint`
     使用 `proposal_id:command:target:pool_manifest_id`；不携带 `recovery_signal`
-  - 修复完成后必须调 state.put 推进 state.json 到 phase=repair.completed
+  - 修复完成后在最终 JSON 携带 `phase=repair.completed`；禁止调用 state.put
 
 ## Decision Logic
 

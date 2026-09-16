@@ -169,7 +169,7 @@ mcporter call opskeeper.loop.investigate --args '{"incident_id":"inc-123"}'
 
 ## 工具命名空间对齐（plugin ↔ backend）
 
-plugin 端给 Worker LLM 暴露的 14 个工具名（type.method 命名空间友好），通过 `mcp/names.py`
+plugin 端给 Worker LLM 暴露的 15 个工具名（type.method 命名空间友好），通过 `mcp/names.py`
 NAME_REMAP 改写到 backend `/v1/mcp` 实际工具名（TaskNameXxx 形式）：
 
 | plugin name | backend name | route |
@@ -181,7 +181,10 @@ NAME_REMAP 改写到 backend `/v1/mcp` 实际工具名（TaskNameXxx 形式）�
 | `host.get_load` / `host.get_processes` | `get_host_load` / `get_host_processes` | /v1/mcp |
 | `knowledge.query` | `query_knowledge` | /v1/mcp |
 | `loop.investigate` / `loop.correlate` / `recovery.verify` / `host.restart_service` | (透传) | /v1/mcp |
-| `hitl.decide` / `state.put` / `state.get` | (plugin native) | POST `/v1/hitl/decide` / PUT,GET `/v1/state/{task_id}` |
+| `hitl.decide` | (plugin native) | POST `/v1/hitl/decide` |
+
+`state.put` / `state.get` 的 REST 适配实现保留用于兼容部署，但不再向 Worker LLM 广播；
+阶段推进使用同房间 `OPSKEEPER_RESULT` 作为权威信号，证据留痕使用 `incident.record`。
 
 11 个被删除的 plugin 工具（如 `metric.query_range` / `k8s.*` / `audit.{list,search}` / `incident.update_status`）不在 backend 暴露，
 Worker 改用 backend 既有 REST 端点。详见 Worker SKILL.md 的「Tools Removed in This Revision」章节。

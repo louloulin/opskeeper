@@ -45,8 +45,6 @@ expected_tools = %w[
   knowledge.query
   knowledge.write
   hitl.decide
-  state.put
-  state.get
   incident.record
 ]
 server = document.fetch("mcp").fetch("servers").find { |candidate| candidate.fetch("id") == "opskeeper" }
