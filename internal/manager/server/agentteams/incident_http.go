@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
@@ -31,6 +32,11 @@ type recordIncidentEventResp struct {
 	incidentcontrol.Event
 	AlertResolved        bool   `json:"alert_resolved"`
 	AlertResolutionError string `json:"alert_resolution_error,omitempty"`
+}
+
+type listIncidentEventsResp struct {
+	IncidentID string                  `json:"incident_id"`
+	Events     []incidentcontrol.Event `json:"events"`
 }
 
 type incidentEventSpec struct {
@@ -167,6 +173,48 @@ func (h *Handler) recordIncidentEvent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(response)
+}
+
+func (h *Handler) listIncidentEvents(w http.ResponseWriter, r *http.Request) {
+	identity, ok := mcpauth.FromContext(r.Context())
+	if !ok {
+		writeJSONError(w, http.StatusUnauthorized, "no resolved identity")
+		return
+	}
+	if !auth.AgentTeamsRoleAllows(identity.Role, "incident.timeline") {
+		writeJSONError(w, http.StatusForbidden, "role not allowed to read this incident timeline")
+		return
+	}
+	incidentID := strings.TrimSpace(chi.URLParam(r, "incident_id"))
+	if incidentID == "" || len(incidentID) > 128 {
+		writeJSONError(w, http.StatusBadRequest, "incident_id is required and must be at most 128 bytes")
+		return
+	}
+	tenantID := identity.TenantID
+	if tenantID == "default" {
+		if configured := os.Getenv("OPSKEEPER_DEFAULT_INCIDENT_TENANT_ID"); configured != "" {
+			tenantID = configured
+		}
+	}
+	if tenantID == "" {
+		writeJSONError(w, http.StatusForbidden, "tenant could not be derived")
+		return
+	}
+	if h.incident == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "incident recorder unavailable")
+		return
+	}
+	events, err := h.incident.ListIncident(r.Context(), tenantID, incidentID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "load incident timeline failed")
+		return
+	}
+	if events == nil {
+		events = []incidentcontrol.Event{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(listIncidentEventsResp{IncidentID: incidentID, Events: events})
 }
 
 func (h *Handler) resolveLinkedAlertIncident(

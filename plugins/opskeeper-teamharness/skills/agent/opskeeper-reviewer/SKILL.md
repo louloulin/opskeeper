@@ -11,6 +11,7 @@ description: SOP 二审 reviewer worker。对 mutating / destructive 提案做�
 
   - incident.get
   - metric.query
+  - incident.timeline
   - incident.record
 
 

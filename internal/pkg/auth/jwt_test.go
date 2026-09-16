@@ -126,7 +126,7 @@ func TestAgentTeamsWorkerPermissionsMatrixIsCanonical(t *testing.T) {
 			t.Errorf("investigator denied read-only diagnostic tool %q", tool)
 		}
 	}
-	for _, tool := range []string{"query_knowledge", "query_incidents", "get_incident_detail"} {
+	for _, tool := range []string{"query_knowledge", "query_incidents", "get_incident_detail", "incident.timeline"} {
 		if !AgentTeamsRoleAllows("reviewer", tool) {
 			t.Errorf("reviewer denied read-only approval-evidence tool %q", tool)
 		}

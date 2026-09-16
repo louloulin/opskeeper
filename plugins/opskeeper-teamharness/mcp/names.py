@@ -36,6 +36,7 @@ get_backend_url() 与 path 直接拼接，因此 path_template 必须自带 /api
   - state.get        ->  GET   /api/v1/state/{task_id}
   - knowledge.write  ->  POST  /api/v1/knowledge/docs   (v1.0.2: postmortem 落盘知识库)
   - incident.record  ->  POST  /api/v1/incidents/events (OPSKEEPER-113: 角色阶段事件审计)
+  - incident.timeline -> GET  /api/v1/incidents/{incident_id}/events
   - skills.get       ->  GET   /api/v1/skills/{name}    (用于 Manager 把 Worker 需要的 SKILL.md 拉给 runtime)
 
 不做 name remap 的工具直接透传（plugin name == backend name）。
@@ -113,6 +114,12 @@ PLUGIN_NATIVE: dict[str, dict[str, Any]] = {
         "method": "POST",
         "path_template": "/api/v1/incidents/events",
         "body_from_args": True,
+    },
+    "incident.timeline": {
+        "kind": "incident_timeline",
+        "method": "GET",
+        "path_template": "/api/v1/incidents/{incident_id}/events",
+        "path_param": "incident_id",
     },
 }
 
