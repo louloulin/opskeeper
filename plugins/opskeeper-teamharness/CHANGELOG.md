@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.49 — 2026-09-16
+
+- Bind the finals PG pool workflow to the six deployed Worker actors. Reviewer now performs the evidence-chain audit before HITL, and reporter executes the postmortem skill after verifier passes.
+
 ## 1.0.48 — 2026-09-16
 
 - Persist Manager request origins across runtime reloads with atomic TTL-scoped state.

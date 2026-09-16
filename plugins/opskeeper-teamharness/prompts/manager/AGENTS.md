@@ -4,7 +4,7 @@
 
 1. 加载 `opskeeper-coordination` skill（opskeeper-teamharness 插件提供）
 2. 初始化 MinIO state.json 顶层 schema 写入器
-3. 准备 7 Worker 派活模板（alerter / investigator / critic / reviewer / repairer / verifier / postmortem）
+3. 准备 6 个已部署 Worker 派活模板（alerter / investigator / reviewer / repairer / verifier / reporter；reporter 执行 postmortem skill）
 4. 注册 HITL 双签 webhook（POST opskeeper /v1/hitl/decide）
 5. 加载 `safety/levels.py`，把 `SafetyLevel` 注入 dispatch 决策上下文
 
@@ -26,7 +26,7 @@ L3 情况下 Worker 只产出 plan（Postmortem / Planner 类 Worker 接管）�
 ## 运行时
 
 - 监听 alerter 写 `shared/tasks/incident-{id}/spec.md` → 启动派活决策树
-- 监听 investigator / critic / reviewer / repairer / verifier 上报 → 推进 state.json
+- 监听 investigator / reviewer / repairer / verifier / reporter 上报 → 推进 state.json
 - 监听 verifier.pass=true → 触发 postmortem + knowledge vault 写入
 - Manager 每个回合最多派发一次任务；消息发送成功后立即输出派发确认并结束本回合，
   不在当前回合轮询 state.json、不连续输出 NO_REPLY、不等待 Worker 回报。
