@@ -2,10 +2,10 @@ apiVersion: agentteams.agentteam/v1alpha1
 kind: AgentTeamPlugin
 metadata:
   name: opskeeper-teamharness
-  version: 1.0.48
+  version: 1.0.49
   description: |
     Opskeeper TeamHarness plugin — provides 7 ops Worker skills
-    (alerter/investigator/critic/reviewer/repairer/verifier/postmortem)
+    (alerter/investigator/reviewer/repairer/verifier/reporter)
     + Manager dispatch decision tree + stdio MCP proxy to opskeeper
     backend /v1/mcp.
 

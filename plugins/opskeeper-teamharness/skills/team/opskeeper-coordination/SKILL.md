@@ -5,7 +5,7 @@ description: "Manager 派活决策树。基于 incident severity / blast_radius 
 
 # opskeeper Coordination — 派活决策树
 
-Manager 在收到 opskeeper 告警或 investigator 输出时，按以下决策树硬编码派发到 7 个 Worker。不依赖 LLM 推断（避免幻觉派活）。
+Manager 在收到 opskeeper 告警或 investigator 输出时，按以下决策树硬编码派发到 6 个已部署 Worker。不依赖 LLM 推断（避免幻觉派活）。
 
 ## 决策表
 
@@ -13,16 +13,15 @@ Manager 在收到 opskeeper 告警或 investigator 输出时，按以下决策�
 |---|---|---|---|
 | `incident.severity ∈ {warning, critical}` AND `phase=detected` | `opskeeper-alerter` | L0 | 先聚合 dedup，再写 incident |
 | `alerter.completed` AND `rca 未启动` | `opskeeper-investigator` | L0 | 调 `loop.investigate` |
-| `investigator.completed` AND `confidence < 0.6` | `opskeeper-critic` | L0 | 后置审计 |
-| `critic.audit.completed` AND `needs_correction=true` | `opskeeper-investigator`（重派，携 critic issues） | L0 | 重派计数 +1，超 2 次升级 HITL |
-| `repair_plan.proposed` AND `blast_radius ∈ {cluster, tenant_wide}` OR `destructive=true` | `opskeeper-reviewer`（异步 background=true） | L2 | 等 reviewer.approve |
-| `repair_plan.approved` AND `blast_radius ∈ {cluster, tenant_wide}` | **HITL** → `POST opskeeper /v1/hitl/decide`（含 `safety_level=L2`） | L2 | 等 Matrix Room @admin 双签 |
+| `investigator.completed` | `opskeeper-reviewer` | L0 | 先做证据链审计；置信度低于 0.6 或证据冲突时回派 investigator |
+| `reviewer.audit.completed` AND `needs_correction=true` | `opskeeper-investigator`（重派，携 reviewer issues） | L0 | 重派计数 +1，超 2 次升级 HITL |
+| `reviewer.audit.completed` AND `needs_correction=false` AND (`blast_radius ∈ {cluster, tenant_wide}` OR `destructive=true`) | **HITL** → `POST opskeeper /v1/hitl/decide`（含 `safety_level=L2`） | L2 | 等 Matrix Room @admin 双签 |
 | `hitl.approved` OR `blast_radius ∈ {host}` | `opskeeper-repairer` | L1 / L2 | 调 mutating 工具 |
 | `repairer.completed` | `opskeeper-verifier` | L0 | 调 `recovery.verify` |
-| `verifier.pass=true` | `opskeeper-postmortem`（v1.0.2 新增 Worker） | L0 | Manager 写 state.json 推进 phase=postmortem |
+| `verifier.pass=true` | `opskeeper-reporter`（执行 postmortem skill） | L0 | Manager 写 state.json 推进 phase=postmortem |
 
 > Level 解析统一调用 `safety/levels.py::resolve_safety_level(blast_radius, confidence, destructive)`。
-> L3（blast_radius ∈ {region, account} 或 confidence < 0.6）→ Manager 直接派 postmortem，不走修复链。
+> L3（blast_radius ∈ {region, account} 或 confidence < 0.6）→ Manager 直接派 reporter 执行 postmortem skill，不走修复链。
 
 ## 状态推进
 
@@ -69,7 +68,7 @@ Worker 直接在当前项目房间回报结果。需要留痕时，Manager 指�
    与 `loop.investigate`。RootCauseJSON 必须区分应用连接池耗尽与共享 PostgreSQL
    容量不足，并给出 `pool_manifest_id`、active/capacity、waiters、probe 延迟、
    `pg_stat_activity` 证据。禁止直接修改 incident 状态。
-3. **critic / reviewer**：审查证据链是否覆盖容量、等待者、probe 失败与数据库侧
+3. **reviewer**：先审查证据链是否覆盖容量、等待者、probe 失败与数据库侧
    反证；置信度低于 0.6 时回派 investigator。修复提案只允许
    `command=resize_pool`、`target=pg:pool-fixture`、`resource_type=pg`，且
    `pool_manifest_id` 必须属于该 incident。
@@ -88,8 +87,8 @@ Worker 直接在当前项目房间回报结果。需要留痕时，Manager 指�
 alerter 写 `alert.received`，investigator 写 `root_cause.confirmed`，
 reviewer 写 `recommendation.approved`，repairer 写带 `action_fingerprint` 的
 `action.executed`，verifier 写 `recovery_signal=true` 的
-`recovery_signal.observed`，reporter/postmortem 写 `incident.closed`。critic
-只做推理审计，不写阶段事件。
+`recovery_signal.observed`，reporter 写 `incident.closed`。reviewer 在推理审计
+通过后才进入修复提案，两个动作必须在同一阶段输出中明确区分。
 
 该分支的初始故障可以通过 `pool-fixture` 注入，但所有阶段推进必须由 Manager
 调度 Worker 并通过 MCP 工具完成；不得用脚本直接改状态或代替 Worker 回报。
@@ -101,6 +100,6 @@ reviewer 写 `recommendation.approved`，repairer 写带 `action_fingerprint` �
 ## 异常路径
 
 - investigator 重派 > 2 次 → 自动升级到 opskeeper-reviewer + Matrix Room @admin
-- critic / reviewer 拒绝 → 回派 investigator 或取消修复
+- reviewer 拒绝 → 回派 investigator 或取消修复
 - verifier.fail → 回派 repairer
 - 所有失败均写 audit + 触发 postmortem
