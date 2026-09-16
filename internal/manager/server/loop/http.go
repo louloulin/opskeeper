@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -125,9 +126,43 @@ type TriggerResponse struct {
 }
 
 // TimelineResponse is the GET /v1/loops/{incident_id}/timeline body.
+//
+// Day 11 — the response is now backwards-compatible:
+// the existing `events` field is preserved, and we add `phases`,
+// `rubric`, and `chain` so the ClosedLoopTimeline SPA can render the
+// closed loop without re-computing the contract/rubric client-side.
+//
+// `phases` is the 7-stage phase list (detected → postmortem) with
+// per-phase tool calls, audit rows (dispatch/approval/execution/
+// verification), skill versions, and knowledge references.
+//
+// `rubric` is the four-metric summary (rca_accuracy,
+// time_to_remediate, approval_rate, recovery_pass_rate) plus
+// presence flags for recovery_signal and incident closure.
+//
+// `chain` is a small footer block summarising coverage of the
+// forward phases and the trace IDs that link the events together.
 type TimelineResponse struct {
 	IncidentID string            `json:"incident_id"`
 	Events     []loopmodel.Event `json:"events"`
+	Phases     []TimelinePhase   `json:"phases"`
+	Rubric     *TimelineRubric   `json:"rubric,omitempty"`
+	Chain      TimelineChainMeta `json:"chain"`
+}
+
+// TimelineChainMeta is a small footer block that lets the SPA show
+// the chain's coverage (how many forward phases had real events)
+// and the "next action" hint for the operator.
+type TimelineChainMeta struct {
+	PhasesObserved  int      `json:"phases_observed"`
+	PhasesExpected  int      `json:"phases_expected"`
+	CoveragePct     float64  `json:"coverage_pct"`
+	CurrentPhase    string   `json:"current_phase"`
+	FinalPhase      string   `json:"final_phase"`
+	RecoverySignal  bool     `json:"recovery_signal"`
+	Closed          bool     `json:"closed"`
+	TraceIDs        []string `json:"trace_ids,omitempty"`
+	IncidentIDAlias string   `json:"incident_id_alias,omitempty"`
 }
 
 // StateResponse is the GET /v1/loops/{incident_id}/state body.
@@ -238,7 +273,7 @@ func (h *Handler) trigger(w http.ResponseWriter, r *http.Request) {
 
 // timeline godoc
 // @Summary List loop timeline events
-// @Description Returns the chronological loop_event_log entries for an incident. Used by the Day 8 ClosedLoopTimeline web view.
+// @Description Returns the chronological loop_event_log entries for an incident, plus the aggregated per-phase trace (phases, rubric, chain metadata) used by the Day 8 ClosedLoopTimeline web view.
 // @Router /v1/loops/{incident_id}/timeline [get]
 // @Success 200 {object} loop.TimelineResponse
 func (h *Handler) timeline(w http.ResponseWriter, r *http.Request) {
@@ -262,10 +297,115 @@ func (h *Handler) timeline(w http.ResponseWriter, r *http.Request) {
 	if events == nil {
 		events = []loopmodel.Event{}
 	}
+
+	// Aggregate the raw event log into the 7-stage phase
+	// view the SPA renders (process timeline + rubric cards + chain
+	// footer). The aggregation is pure; see timeline_aggregate.go.
+	phases := BuildTimelinePhases(events)
+	rubric := BuildRubric(events)
+	chain := BuildChainMeta(events, incidentID)
 	writeJSON(w, http.StatusOK, TimelineResponse{
 		IncidentID: incidentID,
 		Events:     events,
+		Phases:     phases,
+		Rubric:     &rubric,
+		Chain:      chain,
 	})
+}
+
+// BuildChainMeta derives the small footer block from the raw event
+// slice. It is exposed at package scope so the deployment handler
+// can compose the same shape when a custom recovery action is
+// referenced from the version page.
+func BuildChainMeta(events []loopmodel.Event, incidentID string) TimelineChainMeta {
+	chain := TimelineChainMeta{
+		PhasesExpected: len(forwardPhaseOrder),
+		FinalPhase:     "detected",
+	}
+	if len(events) == 0 {
+		chain.CurrentPhase = "detected"
+		return chain
+	}
+	// Use the same forward-phase list the phase renderer does so the
+	// coverage counter matches what the user sees.
+	seen := make(map[string]bool, len(forwardPhaseOrder))
+	for _, ev := range events {
+		for _, name := range forwardPhaseOrder {
+			if ev.Phase == name {
+				seen[name] = true
+			}
+		}
+	}
+	for _, ev := range events {
+		if ev.TraceID != "" {
+			chain.TraceIDs = append(chain.TraceIDs, ev.TraceID)
+		}
+	}
+	chain.PhasesObserved = len(seen)
+	if chain.PhasesExpected > 0 {
+		chain.CoveragePct = float64(chain.PhasesObserved) / float64(chain.PhasesExpected)
+	}
+
+	// Final phase: prefer the last phase_contract_written; fall back
+	// to the last event's phase. Skip correction events.
+	final := ""
+	for i := len(events) - 1; i >= 0; i-- {
+		ev := events[i]
+		if ev.EventType == loopmodel.EventCorrection {
+			continue
+		}
+		final = ev.Phase
+		break
+	}
+	if final == "" {
+		final = "detected"
+	}
+	chain.FinalPhase = final
+	chain.CurrentPhase = final
+
+	for _, ev := range events {
+		if ev.Phase == string(loopbiz.PhasePostmortem) {
+			chain.Closed = true
+			break
+		}
+	}
+	// Terminal states (failed / aborted) win over postmortem: a
+	// loop that ended in failure must NOT be advertised as
+	// `closed=true` even if it had a stale postmortem entry
+	// beforehand. The Closed flag reflects a healthy terminal
+	// transition through Postmortem, not just any Postmortem
+	// event.
+	terminal := false
+	for _, ev := range events {
+		if terminalPhases[ev.Phase] {
+			terminal = true
+			chain.FinalPhase = ev.Phase
+			chain.CurrentPhase = ev.Phase
+			break
+		}
+	}
+	if terminal {
+		chain.Closed = false
+	}
+	for _, ev := range events {
+		if ev.Payload == "" {
+			continue
+		}
+		if containsRecoverySignal(ev.Payload) {
+			chain.RecoverySignal = true
+			break
+		}
+	}
+	chain.IncidentIDAlias = incidentID
+	return chain
+}
+
+// containsRecoverySignal is a small string-search helper kept here
+// (vs. imported from BuildRubric) so both helpers can be used
+// independently by the deployment handler.
+func containsRecoverySignal(payload string) bool {
+	return strings.Contains(payload, `"recovery_signal":true`) ||
+		strings.Contains(payload, `"recovery_signal": true`)
 }
 
 // state godoc

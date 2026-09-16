@@ -185,6 +185,7 @@ import (
 	managerservermarketplace "github.com/vincent-wuhan/opskeeper/internal/manager/server/marketplace"
 	managerservermcp "github.com/vincent-wuhan/opskeeper/internal/manager/server/mcp"
 	managerservermetric "github.com/vincent-wuhan/opskeeper/internal/manager/server/metric"
+	managerserverversion "github.com/vincent-wuhan/opskeeper/internal/manager/server/version"
 	managermiddleware "github.com/vincent-wuhan/opskeeper/internal/manager/server/middleware"
 	managerservermonitor "github.com/vincent-wuhan/opskeeper/internal/manager/server/monitor"
 	managerserverprom "github.com/vincent-wuhan/opskeeper/internal/manager/server/prometheus"
@@ -2835,6 +2836,24 @@ func main() {
 				w.Header().Set("content-type", "application/json")
 				_, _ = w.Write([]byte(`{"manager_version":"` + version + `"}`))
 			})
+			// /v1/version/deployment — rich deployment view
+			// (Manager, Worker, plugin, server composition + health
+			// + dependencies + one worked recovery example). Auth
+			// gated because health DB pings run on each poll. The
+			// response is deliberately secret-free (no DSNs / URLs).
+			deploymentHandler, err := managerserverversion.NewHandler(
+				managerserverversion.ManagerVersion(version),
+				managerserverversion.Source{
+					PluginPath:  "plugins/opskeeper-teamharness/dashboard/plugin.json",
+					SkillsDir:   "plugins/opskeeper-teamharness/skills/agent",
+					HealthService: deploymentHealthAdapter{svc: systemHealthSvc},
+				},
+			)
+			if err != nil {
+				log.Error("version: deployment handler init", slog.Any("err", err))
+			} else {
+				deploymentHandler.Register(protected)
+			}
 			// Hosted-page management (serve_page artifacts) for the operations
 			// UI. The page CONTENT is served publicly by token at
 			// /api/pages/{id}; these authed routes list + delete them.
@@ -5605,4 +5624,53 @@ func parsePluginMaxZipBytes(s string) int64 {
 		return 0
 	}
 	return n * mult
+}
+
+// deploymentHealthAdapter bridges systemHealthSvc to the
+// version.HealthSource seam. The adapter is intentionally narrow
+// (one method) so the version package does not need to import
+// systemhealth.
+type deploymentHealthAdapter struct {
+	svc *managersvcsystemhealth.Service
+}
+
+func (a deploymentHealthAdapter) Health(ctx context.Context) (managerserverversion.HealthSummary, error) {
+	if a.svc == nil {
+		return managerserverversion.HealthSummary{Overall: "unknown", Note: "systemhealth not wired"}, nil
+	}
+	// systemhealth.Check takes a Caller; we pass zero-value because
+	// the Check method's caller usage is limited to optional admin
+	// gating paths we don't exercise from the deployment probe.
+	report, err := a.svc.Check(ctx, managersvcalert.Caller{})
+	if err != nil {
+		return managerserverversion.HealthSummary{Overall: "unknown", Note: err.Error()}, nil
+	}
+	// Roll up per-component statuses from the report's checks. The
+	// panel renders these as small chips ("DB ✓ · Prom ✓ · LLM ✗"),
+	// so we derive the component-level rollup rather than copying
+	// the whole report (the report includes per-rule detail the
+	// version page doesn't need).
+	summary := managerserverversion.HealthSummary{
+		Overall: string(report.Status),
+	}
+	if report.Summary.Failed > 0 {
+		summary.Overall = "failed"
+	} else if report.Summary.Degraded > 0 {
+		summary.Overall = "degraded"
+	}
+	for _, c := range report.Checks {
+		switch c.Group {
+		case "db", "postgres":
+			summary.DB = string(c.Status)
+		case "prom", "prometheus":
+			summary.Prom = string(c.Status)
+		case "logs", "loki":
+			summary.Logs = string(c.Status)
+		case "traces", "tempo", "otel":
+			summary.Traces = string(c.Status)
+		case "llm":
+			summary.LLM = string(c.Status)
+		}
+	}
+	return managerserverversion.HealthSummary(summary), nil
 }

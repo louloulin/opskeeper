@@ -57,6 +57,8 @@ const AdminUsers = lazy(() => import('@/pages/settings/Users'));
 const AdminOrgs = lazy(() => import('@/pages/settings/Orgs'));
 const AdminAuditLog = lazy(() => import('@/pages/settings/AuditLog'));
 const AdminWebshell = lazy(() => import('@/pages/settings/Webshell'));
+// Deployment / runtime / version composition page.
+const RuntimePage = lazy(() => import('@/pages/admin/Runtime'));
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const token = useAuth((s) => s.token);
@@ -180,6 +182,11 @@ export default function App() {
           <Route path="users" element={<AdminUsers />} />
           <Route path="orgs" element={<AdminOrgs />} />
           <Route path="audit" element={<AdminAuditLog />} />
+          {/* Deployment / runtime / version page sits
+              under Admin so incident views can route reviewers
+              from any incident detail screen straight to the
+              Manager / Worker / plugin composition view. */}
+          <Route path="runtime" element={<RuntimePage />} />
         </Route>
         {/* Audit log lives under the Admin (Users & Orgs) section — it's
             platform governance ("who did what"), grouped with users/orgs,
