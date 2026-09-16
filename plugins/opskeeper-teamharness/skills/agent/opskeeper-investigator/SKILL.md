@@ -54,7 +54,7 @@ stdio MCP server 内部自动注入：
     RootCauseJSON / 诊断工具证据，不携带 `recovery_signal`
   - 溯源要往源头深挖，但死分支立刻砍：同一工具失败 / 空 ≥2 次必须换工具或换方向
   - RootCauseJSON 必须包含：根因（点名源头）/ 因果链（源头→症状，每段带证据）/ 现象 / 置信度与验证
-  - 低置信度 (<0.6) 自动派回 critic 审计
+  - 低置信度 (<0.6) 上报 Manager，由 reviewer 审计并决定是否回派
   - `fault_family=capacity/connection_pool` 时必须采集 pool 容量、active、waiters、
     probe 失败与 PostgreSQL 侧 `pg_stat_activity` 反证；RootCauseJSON 必须绑定
     `incident_id` 与 `pool_manifest_id`，并区分应用池耗尽与共享数据库容量不足

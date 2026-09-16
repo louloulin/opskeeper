@@ -72,7 +72,7 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.50"
+_PLUGIN_VERSION = "1.0.51"
 _COPAW_DIAGNOSTICS_LOGGER = logging.getLogger("opskeeper-teamharness.copaw-diagnostics")
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
@@ -187,7 +187,7 @@ _TASK_RESULT_PATTERN = re.compile(
 _TASK_ID_PATTERN = re.compile(r"\bOPSKEEPER-[A-Za-z0-9][A-Za-z0-9._:-]{2,127}\b")
 _TASK_COMPLETE_PATTERN = re.compile(r"\bOPSKEEPER_COMPLETE\s+[A-Za-z0-9][A-Za-z0-9._:-]{2,127}\b")
 _WORKER_FILE_ARTIFACT_PATTERN = re.compile(
-    r"(?:创建|写入?|creat(?:e|ing)|writ(?:e|ing))[\s\S]{0,160}?(?:plan|result)\.md",
+    r"(?:创建|写入?|creat(?:e|ing)|writ(?:e|ing))[\s\S]{0,160}?(?:plan|result|spec)\.md",
     re.IGNORECASE,
 )
 _READ_ONLY_ALLOWED_TOOLS = frozenset({
@@ -950,7 +950,7 @@ def _readonly_enforcement_factory(context: Any, _agent_config: Any):
                 yield self._denied(
                     tool_name,
                     arguments,
-                    "OpsKeeper dispatches must not require plan.md or result.md; use direct room reply, state.put, and incident.record.",
+                    "OpsKeeper dispatches must not require plan.md, result.md, or spec.md; use direct room reply, state.put, and incident.record.",
                 )
                 return
             if (

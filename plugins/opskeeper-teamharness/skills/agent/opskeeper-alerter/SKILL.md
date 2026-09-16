@@ -46,7 +46,8 @@ stdio MCP server 内部自动注入：
   - 只读 + 0 业务写入；唯一写入是 append-only `incident.record` 审计事件
   - 聚合完成后必须调用 `incident.record`：`incident_id` 使用告警标签内的业务事故 ID，
     `evidence_ref` 指向聚合证据，不携带 `recovery_signal`
-  - 每次聚合后必须写 shared/tasks/incident-{id}/spec.md 并 @manager
+  - 每次聚合后必须在当前项目房间直接回报，首行使用
+    `@manager:<server> OPSKEEPER_RESULT <task_id> {json}`；禁止创建 spec.md
   - blast_radius 评估结果写入 incident.labels
 
 ## Decision Logic

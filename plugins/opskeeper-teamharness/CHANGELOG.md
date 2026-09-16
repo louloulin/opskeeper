@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.51 — 2026-09-17
+
+- Remove the obsolete alerter `spec.md` completion dependency. Alerter now returns its structured result directly in the project room, and Manager waits for the matching `OPSKEEPER_RESULT` marker.
+- Extend the Manager dispatch guard to reject any task requiring `spec.md` in addition to `plan.md` and `result.md`.
+- Align Manager/team role wording with the six deployed actors; reporter executes the postmortem skill.
+
 ## 1.0.50 — 2026-09-17
 
 - Keep the QwenPaw runtime health version constant synchronized with package metadata.

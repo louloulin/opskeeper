@@ -15,7 +15,7 @@
   `@manager:<server> OPSKEEPER_RESULT <task_id> {json}` 开头；
   `<server>` 使用运行时 Matrix server，不能省略。
 - Manager 在插件层等待该匹配结果；中间过程说明不能替代这一行结果。
-- OpsKeeper 任务协议优先于 AgentTeams 通用 task lifecycle：不要创建 plan.md / result.md，
+- OpsKeeper 任务协议优先于 AgentTeams 通用 task lifecycle：不要创建 plan.md / result.md / spec.md，
   不要调用 write_file/edit_file 生成任务产物；证据用 `incident.record`，阶段用 `state.put`。
 - 直接在当前项目房间输出最终回报；不要把消息发到合成 Manager 房间。若必须调用消息工具，
   target 只能是当前项目房间。

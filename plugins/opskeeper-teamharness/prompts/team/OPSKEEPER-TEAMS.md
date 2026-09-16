@@ -2,7 +2,7 @@
 
 本规约适用于使用 opskeeper-teamharness 插件的所有 AgentTeams 团队。
 
-## 7 职能 Worker + Manager 拓扑
+## 6 参演 Worker + Manager 拓扑
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -15,16 +15,14 @@
         │  spawn（按 opskeeper-coordination 决策表）
         ▼
 ┌────────────────────────────────────────────────────────────┐
-│ 7 Worker（每 Worker 一个 qwenpaw 实例 + opskeeper 插件）    │
-│ alerter → investigator → critic ↺ investigator             │
-│                       ↓                                   │
-│                     reviewer（异步 background=true）        │
+│ 6 Worker（每 Worker 一个 qwenpaw 实例 + opskeeper 插件）    │
+│ alerter → investigator → reviewer ↺ investigator           │
 │                       ↓                                   │
 │                  [HITL L2] cluster / tenant_wide          │
 │                       ↓                                   │
 │                    repairer（L1/L2）                       │
 │                       ↓                                   │
-│                    verifier → postmortem（v1.0.2 新增）    │
+│                    verifier → reporter（执行 postmortem） │
 └────────────────────────────────────────────────────────────┘
 ```
 
