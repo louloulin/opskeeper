@@ -43,8 +43,7 @@ export default function TrademarkPage() {
         <h2 className="mt-10 text-xl font-semibold text-white">Questions</h2>
         <p className="mt-3 text-ink-300">
           For commercial use or co-branding questions, please open an issue on GitHub tagged{' '}
-          <code className="text-accent-300">trademark</code> or email{' '}
-          <span className="text-white">trademark@opskeeper.dev</span>.
+          <code className="text-accent-300">trademark</code>.
         </p>
       </div>
     </Section>

@@ -109,7 +109,7 @@ const safetyItems = [
 ];
 
 const codeSnippet = `# 克隆仓库，用根目录 compose 拉起整套本地环境
-git clone https://github.com/vincent-wuhan/opskeeper.git
+git clone https://github.com/louloulin/opskeeper.git
 cd opskeeper
 cp deploy/demo.env.example .env
 docker compose up -d --build
@@ -176,7 +176,7 @@ export default function HomeZhPage() {
               <Button href="/zh/demo" variant="ghost">
                 体验在线演示
               </Button>
-              <Button href="https://github.com/vincent-wuhan/opskeeper" variant="ghost" external>
+              <Button href="https://github.com/louloulin/opskeeper" variant="ghost" external>
                 在 GitHub 上加星
               </Button>
             </div>
@@ -421,7 +421,7 @@ export default function HomeZhPage() {
             <div className="mt-6 flex flex-wrap gap-3">
               <Button href="/zh/docs/getting-started">快速开始</Button>
               <Button href="/zh/use-cases" variant="secondary">查看应用场景</Button>
-              <Button href="https://github.com/vincent-wuhan/opskeeper" variant="ghost" external>
+              <Button href="https://github.com/louloulin/opskeeper" variant="ghost" external>
                 在 GitHub 上查看
               </Button>
             </div>

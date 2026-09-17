@@ -131,7 +131,7 @@ export default function SecurityZhPage() {
               <CheckCircle2 className="h-4 w-4 text-accent-400" /> 上报漏洞
             </div>
             <p className="mt-3 text-sm text-ink-300">
-              请发邮件到 <span className="text-white">security@opskeeper.dev</span> 或在 GitHub 开一个私密安全公告。披露时间表见 <code className="text-accent-300">SECURITY.md</code>。
+              请通过仓库的 <span className="text-white">Private vulnerability reporting</span>（GitHub 私密安全公告）上报。披露时间表见 <code className="text-accent-300">SECURITY.md</code>。
             </p>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">

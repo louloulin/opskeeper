@@ -5,10 +5,10 @@ export const SITE = {
   description:
     'OpsKeeper connects alert intake, evidence collection, root-cause analysis, human approval, narrowly authorized recovery, independent verification, and post-incident learning in one closed loop.',
   url: 'https://opskeeper.dev',
-  repo: 'https://github.com/vincent-wuhan/opskeeper',
-  repoShort: 'vincent-wuhan/opskeeper',
+  repo: 'https://github.com/louloulin/opskeeper',
+  repoShort: 'louloulin/opskeeper',
   license: 'Apache-2.0',
-  version: '0.6.0',
+  version: 'v2026.09.03',
 } as const;
 
 export type NavLink = { label: string; href: string };
