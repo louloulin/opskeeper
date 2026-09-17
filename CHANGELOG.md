@@ -4,6 +4,8 @@
 
 ## 2026.09.14-rc4 — 2026-09-14
 
+- Rebind the release candidate to TeamHarness `1.0.57` and installer plugin `1.4.3`, improving installed-plugin secondary text contrast in light and dark themes; the `1.0.56` plugin binding is superseded.
+- Rebind the release candidate source boundary to backend/plugin source `a8503ccd314fb4e9fa6baa117f05135c01296016` for the `1.0.57` TeamHarness tree recorded in `RELEASE_VERSION.json`.
 - Rebind the release candidate to TeamHarness `1.0.56` and installer plugin `1.4.3`, adding a read-only room-to-plugin integration preflight; the `1.0.55` plugin binding is superseded.
 - Rebind the release candidate source boundary to backend/plugin source `cb750d6480a230b2ded68ea1c35acfb71fcb271a` for the `1.0.56` TeamHarness tree recorded in `RELEASE_VERSION.json`.
 - Rebind the release candidate to TeamHarness `1.0.55` and installer plugin `1.4.3`, restoring readable muted plugin text in light and dark Dashboard themes; the `1.0.54` plugin binding is superseded.
