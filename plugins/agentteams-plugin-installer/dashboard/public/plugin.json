@@ -3,7 +3,7 @@
   "kind": "DashboardPlugin",
   "id": "agentteams-plugin-installer",
   "name": "AgentTeams Plugin Installer",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "opskeeper 控制台扩展：通过 Dashboard UI 浏览 / 安装 / 卸载 / 启用 / 同步 AgentTeams v1alpha1 plugin，让 opskeeper 成为 AgentTeams plugin 的运维控制台。",
   "author": "opskeeper",
   "entry": {

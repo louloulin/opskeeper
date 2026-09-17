@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.55 — 2026-09-17
+
+- Use the Dashboard foreground token for muted plugin text so descriptions remain readable in light and dark themes.
+- Add a regression check that rejects using the muted background token as text color.
+
 ## 1.0.54 — 2026-09-17
 
 - Add the Dashboard Archive tab for read-only incident evidence-chain, completeness, timing, trace, similar-incident, and postmortem readback.

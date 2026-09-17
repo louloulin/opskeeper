@@ -80,7 +80,7 @@ export default function WorkerOpsBlock({ entity, api }) {
         display: 'flex', alignItems: 'center', marginBottom: 8, gap: 8,
       }}>
         <strong style={{ fontSize: 13 }}>Opskeeper 历史</strong>
-        <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+        <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
           {workerName ? `worker: ${workerName}` : 'worker: -'}
         </span>
         <span style={{
@@ -94,7 +94,7 @@ export default function WorkerOpsBlock({ entity, api }) {
           style={{
             padding: '2px 8px', fontSize: 11, borderRadius: 4,
             border: '1px solid var(--border)', background: 'transparent',
-            color: 'var(--muted)', cursor: 'pointer',
+            color: 'var(--muted-foreground)', cursor: 'pointer',
           }}
         >
           刷新
@@ -111,9 +111,9 @@ export default function WorkerOpsBlock({ entity, api }) {
       )}
 
       {loading ? (
-        <div style={{ fontSize: 12, color: 'var(--muted)' }}>加载中…</div>
+        <div style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>加载中…</div>
       ) : incidents.length === 0 ? (
-        <div style={{ fontSize: 12, color: 'var(--muted)', padding: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--muted-foreground)', padding: 8 }}>
           暂无该 worker 的 RCA 历史
         </div>
       ) : (
@@ -132,7 +132,7 @@ export default function WorkerOpsBlock({ entity, api }) {
               <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {i.summary || '(no summary)'}
               </span>
-              <span style={{ fontSize: 10, color: 'var(--muted)' }}>{i.severity || '—'}</span>
+              <span style={{ fontSize: 10, color: 'var(--muted-foreground)' }}>{i.severity || '—'}</span>
               <button
                 onClick={() => reTrigger(i)}
                 disabled={busy === i.id}
@@ -140,7 +140,7 @@ export default function WorkerOpsBlock({ entity, api }) {
                 style={{
                   padding: '1px 8px', fontSize: 10, borderRadius: 3,
                   border: '1px solid var(--border)', background: 'transparent',
-                  color: 'var(--muted)', cursor: busy === i.id ? 'wait' : 'pointer',
+                  color: 'var(--muted-foreground)', cursor: busy === i.id ? 'wait' : 'pointer',
                 }}
               >
                 {busy === i.id ? '…' : 're-RCA'}
@@ -152,14 +152,14 @@ export default function WorkerOpsBlock({ entity, api }) {
 
       <div style={{
         marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--border)',
-        display: 'flex', gap: 6, fontSize: 10, color: 'var(--muted)',
+        display: 'flex', gap: 6, fontSize: 10, color: 'var(--muted-foreground)',
       }}>
         <button
           onClick={() => api.dashboard.navigate('plugin-route:opskeeper-teamharness/home')}
           style={{
             padding: '3px 10px', fontSize: 10, borderRadius: 3,
             border: '1px solid var(--border)', background: 'transparent',
-            color: 'var(--muted)', cursor: 'pointer',
+            color: 'var(--muted-foreground)', cursor: 'pointer',
           }}
         >
           打开完整诊断 →

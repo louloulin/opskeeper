@@ -2,6 +2,12 @@
 
 All notable changes to `agentteams-plugin-installer` are documented here.
 
+## [1.4.3] - 2026-09-17
+
+### Fixed
+- Use `--muted-foreground` for secondary text so plugin names, descriptions, and actions stay readable in light and dark Dashboard themes.
+- Add a source regression test that rejects `color: var(--muted)`.
+
 ## [1.0.0] - 2026-08-25
 
 ### Added

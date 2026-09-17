@@ -8,7 +8,7 @@ import * as React from 'react';
 export default function SidebarMenu({ api }) {
   return React.createElement(
     'div',
-    { style: { padding: '8px 12px', fontSize: 12, color: 'var(--muted)' } },
+    { style: { padding: '8px 12px', fontSize: 12, color: 'var(--muted-foreground)' } },
     'AgentTeams Plugin 管理 — opskeeper 是 AgentTeams plugin 的运维控制台。'
   );
 }
