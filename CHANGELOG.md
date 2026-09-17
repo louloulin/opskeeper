@@ -5,7 +5,7 @@
 ## 2026.09.14-rc4 — 2026-09-14
 
 - Rebind the release candidate to TeamHarness `1.0.59`, projecting stable OpsKeeper stages into Matrix `agentteams.workflow` events for synchronized Element notices and AgentTeams Dashboard task-board progression; the `1.0.58` binding is superseded.
-- Rebind the release candidate source boundary to backend/plugin source `df23373ef89b290e45814bdd70e87580bff1edb7` for the `1.0.59` TeamHarness tree recorded in `RELEASE_VERSION.json`.
+- Rebind the release candidate source boundary to backend/plugin source `305bec8417ef25234f3fa10734ddd8761e25c398` for the `1.0.59` TeamHarness tree recorded in `RELEASE_VERSION.json`.
 - Rebind the release candidate to TeamHarness `1.0.58`, scoping high-contrast text across every TeamHarness Dashboard entry point and restoring safe runtime credential fallbacks for the signed RCA proxy; the `1.0.57` binding is superseded.
 - Rebind the release candidate source boundary to backend/plugin source `9806560ab7a80c8c2ac2c828c3df4fc05b9a60da` for the `1.0.58` TeamHarness tree recorded in `RELEASE_VERSION.json`.
 
