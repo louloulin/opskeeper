@@ -23,6 +23,51 @@ type fakeConnection struct {
 	releaseErr error
 }
 
+func TestAggregatePrometheusMetricsLabelEveryManifest(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	first, err := controller.Start(context.Background(), StartRequest{
+		CaseID:          "pg-pool-exhaustion",
+		IncidentID:      "incident-live-001",
+		InitialCapacity: 2,
+		TargetCapacity:  4,
+		TTLSeconds:      60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := controller.Start(context.Background(), StartRequest{
+		CaseID:          "pg-pool-exhaustion",
+		IncidentID:      "incident-live-002",
+		InitialCapacity: 3,
+		TargetCapacity:  6,
+		TTLSeconds:      60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	addPoolAuth(request)
+	recorder := httptest.NewRecorder()
+	NewHandler(controller).ServeHTTP(recorder, request)
+
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("aggregate metrics status = %d", recorder.Code)
+	}
+	expectedSeries := []string{
+		`opskeeper_pool_fixture_active_connections{target="pg:pool-fixture",pool_manifest_id="` + first.ManifestID + `"} 2`,
+		`opskeeper_pool_fixture_capacity{target="pg:pool-fixture",pool_manifest_id="` + first.ManifestID + `"} 2`,
+		`opskeeper_pool_fixture_active_connections{target="pg:pool-fixture",pool_manifest_id="` + second.ManifestID + `"} 3`,
+		`opskeeper_pool_fixture_capacity{target="pg:pool-fixture",pool_manifest_id="` + second.ManifestID + `"} 3`,
+	}
+	for _, expected := range expectedSeries {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("missing %s in:\n%s", expected, body)
+		}
+	}
+}
+
 func (c *fakeConnection) BackendPID() int { return c.backendPID }
 func (c *fakeConnection) Release() error {
 	c.released = true
