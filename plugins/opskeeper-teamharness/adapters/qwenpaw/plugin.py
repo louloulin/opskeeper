@@ -73,12 +73,16 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.58"
+_PLUGIN_VERSION = "1.0.59"
 _COPAW_DIAGNOSTICS_LOGGER = logging.getLogger("opskeeper-teamharness.copaw-diagnostics")
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
+_WORKFLOW_PROJECTOR_LOGGER = logging.getLogger(
+    "opskeeper-teamharness.workflow-projector"
+)
 _MANAGER_GATE_TTL_ENV = "OPSKEEPER_MANAGER_GATE_TTL_SECONDS"
 _MANAGER_GATE_STATE_FILE_ENV = "OPSKEEPER_MANAGER_GATE_STATE_FILE"
+_WORKFLOW_PROJECTOR_STATE_FILE_ENV = "OPSKEEPER_WORKFLOW_PROJECTOR_STATE_FILE"
 _OUTBOUND_LIMIT_ENV = "OPSKEEPER_OUTBOUND_LIMIT"
 _OUTBOUND_WINDOW_SECONDS_ENV = "OPSKEEPER_OUTBOUND_WINDOW_SECONDS"
 _DEFAULT_OUTBOUND_LIMIT = 12
@@ -101,6 +105,48 @@ _ADMIN_STOP_PATTERN = re.compile(
 _TASK_MARKER_PATTERN = re.compile(
     r"\bOPSKEEPER[\s_]+TASK[\s_]+([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\b"
 )
+_WORKFLOW_INCIDENT_EXPLICIT_PATTERN = re.compile(
+    r"(?:incident[_ -]?id|事故\s*(?:id|编号))\s*[:=]?\s*"
+    r"([A-Za-z0-9][A-Za-z0-9._:-]{5,127})",
+    re.IGNORECASE,
+)
+_WORKFLOW_INCIDENT_LOOSE_PATTERN = re.compile(
+    r"\b(opskeeper(?:-[A-Za-z0-9_]+){2,})\b",
+    re.IGNORECASE,
+)
+_WORKFLOW_ROLE_PATTERN = re.compile(
+    r"@?opskeeper-(alerter|investigator|reviewer|repairer|verifier|reporter)"
+    r"(?::[A-Za-z0-9_.:-]+)?",
+    re.IGNORECASE,
+)
+_WORKFLOW_ADMIN_APPROVAL_PATTERN = re.compile(
+    r"(?:^|\n)\s*(?:@manager(?::[A-Za-z0-9_.:-]+)?[,: ]+\s*)?"
+    r"(?:批准|同意|approve(?:d)?)\b",
+    re.IGNORECASE,
+)
+_WORKFLOW_ADMIN_REJECTION_PATTERN = re.compile(
+    r"(?:^|\n)\s*(?:@manager(?::[A-Za-z0-9_.:-]+)?[,: ]+\s*)?"
+    r"(?:拒绝|不同意|reject(?:ed)?)\b",
+    re.IGNORECASE,
+)
+_WORKFLOW_STEPS: tuple[tuple[str, str], ...] = (
+    ("alert", "告警确认"),
+    ("investigate", "根因诊断"),
+    ("review", "方案评审"),
+    ("approval", "人工审批"),
+    ("repair", "修复执行"),
+    ("verify", "独立验证"),
+    ("report", "复盘归档"),
+)
+_WORKFLOW_STEP_BY_ROLE = {
+    "alerter": "alert",
+    "investigator": "investigate",
+    "reviewer": "review",
+    "repairer": "repair",
+    "verifier": "verify",
+    "reporter": "report",
+}
+_WORKFLOW_MAX_RUNS = 32
 _OPSKEEPER_ROLE_MENTION_PATTERN = re.compile(
     r"@(?P<role>opskeeper-[a-z0-9_.-]+)(?::[a-z0-9_.-]+)?",
     re.IGNORECASE,
@@ -522,6 +568,359 @@ class ManagerDispatchGate:
 
 _MANAGER_DISPATCH_GATE = ManagerDispatchGate()
 _STOPPED_INCIDENT_IDS: set[str] = set()
+
+
+def _workflow_incident_id(message: str) -> str:
+    match = _WORKFLOW_INCIDENT_EXPLICIT_PATTERN.search(message)
+    if match:
+        return match.group(1).rstrip("。，,；;）)]】】")
+    match = _WORKFLOW_INCIDENT_LOOSE_PATTERN.search(message)
+    if match:
+        candidate = match.group(1)
+        if _TASK_MARKER_PATTERN.search(message) and candidate.isupper():
+            return ""
+        return candidate
+    return ""
+
+
+def _workflow_role(message: str) -> str:
+    match = _WORKFLOW_ROLE_PATTERN.search(message)
+    return match.group(1).lower() if match else ""
+
+
+class WorkflowProjector:
+    """Build full AgentTeams workflow snapshots from authoritative transitions."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._runs, self._marker_runs = self._load()
+
+    @staticmethod
+    def _state_path() -> Path:
+        configured = os.getenv(_WORKFLOW_PROJECTOR_STATE_FILE_ENV, "").strip()
+        if configured:
+            return Path(configured).expanduser()
+        return ASSET_DIR / ".workflow-projector.json"
+
+    @classmethod
+    def _load(cls) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+        path = cls._state_path()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}, {}
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            _WORKFLOW_PROJECTOR_LOGGER.warning(
+                "Workflow projector state ignored path=%s",
+                path,
+                exc_info=True,
+            )
+            return {}, {}
+        if not isinstance(payload, dict) or payload.get("version") != 1:
+            return {}, {}
+        raw_runs = payload.get("runs")
+        raw_markers = payload.get("markers")
+        if not isinstance(raw_runs, dict) or not isinstance(raw_markers, dict):
+            return {}, {}
+        runs = {
+            run_id: cls._sanitize_run(run_id, run)
+            for run_id, run in raw_runs.items()
+            if isinstance(run_id, str) and isinstance(run, dict)
+        }
+        markers = {
+            marker: run_id
+            for marker, run_id in raw_markers.items()
+            if isinstance(marker, str) and isinstance(run_id, str) and run_id in runs
+        }
+        return runs, markers
+
+    @staticmethod
+    def _sanitize_run(run_id: str, raw: dict[str, Any]) -> dict[str, Any]:
+        steps = {step_id: "pending" for step_id, _ in _WORKFLOW_STEPS}
+        raw_steps = raw.get("steps") if isinstance(raw.get("steps"), dict) else {}
+        for step_id, status in raw_steps.items():
+            if step_id in steps and isinstance(status, str):
+                steps[step_id] = status
+        roles = {role: "pending" for role in _WORKFLOW_STEP_BY_ROLE}
+        raw_roles = raw.get("workers") if isinstance(raw.get("workers"), dict) else {}
+        for role, status in raw_roles.items():
+            if role in roles and isinstance(status, str):
+                roles[role] = status
+        return {
+            "run_id": run_id,
+            "origin": str(raw.get("origin") or ""),
+            "status": str(raw.get("status") or "pending"),
+            "summary": str(raw.get("summary") or "OpsKeeper workflow accepted"),
+            "steps": steps,
+            "workers": roles,
+            "created_at": float(raw.get("created_at") or time.time()),
+            "updated_at": float(raw.get("updated_at") or time.time()),
+            "signature": str(raw.get("signature") or ""),
+        }
+
+    def _persist(self) -> None:
+        path = self._state_path()
+        ordered_runs = sorted(
+            self._runs.items(), key=lambda item: item[1]["updated_at"], reverse=True
+        )[:_WORKFLOW_MAX_RUNS]
+        kept_runs = dict(ordered_runs)
+        kept_markers = {
+            marker: run_id
+            for marker, run_id in self._marker_runs.items()
+            if run_id in kept_runs
+        }
+        payload = {"version": 1, "runs": kept_runs, "markers": kept_markers}
+        temporary_name = ""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{path.name}.", dir=path.parent
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+                handle.write("\n")
+            os.chmod(temporary_name, 0o600)
+            os.replace(temporary_name, path)
+            temporary_name = ""
+        except OSError:
+            _WORKFLOW_PROJECTOR_LOGGER.warning(
+                "Workflow projector state persist failed path=%s",
+                path,
+                exc_info=True,
+            )
+        finally:
+            if temporary_name:
+                try:
+                    os.unlink(temporary_name)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _new_run(run_id: str, origin: str) -> dict[str, Any]:
+        now = time.time()
+        return {
+            "run_id": run_id,
+            "origin": origin,
+            "status": "assigned",
+            "summary": "Incident accepted; waiting for Manager dispatch",
+            "steps": {step_id: "pending" for step_id, _ in _WORKFLOW_STEPS},
+            "workers": {role: "pending" for role in _WORKFLOW_STEP_BY_ROLE},
+            "created_at": now,
+            "updated_at": now,
+            "signature": "",
+        }
+
+    @staticmethod
+    def _signature(run: dict[str, Any]) -> str:
+        material = {
+            "status": run["status"],
+            "steps": run["steps"],
+            "workers": run["workers"],
+        }
+        return hashlib.sha256(
+            json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    def _run_for_message(
+        self, origin: str, message: str, marker: str = ""
+    ) -> tuple[str, dict[str, Any]] | None:
+        run_id = _workflow_incident_id(message) or self._marker_runs.get(marker, "")
+        if not run_id:
+            candidates = [
+                run for run in self._runs.values() if run["origin"] == origin
+            ]
+            if candidates:
+                run_id = max(candidates, key=lambda run: run["updated_at"])["run_id"]
+        run = self._runs.get(run_id)
+        if run is None:
+            return None
+        return run_id, run
+
+    def _finish_mutation(self, run: dict[str, Any]) -> dict[str, Any] | None:
+        run["updated_at"] = time.time()
+        signature = self._signature(run)
+        if signature == run["signature"]:
+            return None
+        run["signature"] = signature
+        return self.payload(run["run_id"])
+
+    def record_request(self, origin: str, message: str) -> dict[str, Any] | None:
+        if _TASK_RESULT_PATTERN.search(message) or _TASK_COMPLETE_PATTERN.search(message):
+            return None
+        run_id = _workflow_incident_id(message)
+        if not run_id:
+            markers = _extract_task_markers(message)
+            run_id = markers[0] if markers else ""
+        if not run_id or not origin.startswith("matrix:!"):
+            return None
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None or run["status"] in {"completed", "failed", "blocked"}:
+                run = self._new_run(run_id, origin)
+                self._runs[run_id] = run
+            run["origin"] = origin
+            run["status"] = "assigned"
+            run["summary"] = "Incident accepted; waiting for Manager dispatch"
+            run["steps"]["alert"] = "pending"
+            run["workers"]["alerter"] = "pending"
+            payload = self._finish_mutation(run)
+            self._persist()
+            return payload
+
+    def record_dispatch(
+        self, origin: str, message: str, fallback_run_id: str = ""
+    ) -> dict[str, Any] | None:
+        markers = _extract_task_markers(message)
+        if not markers:
+            return None
+        role = _workflow_role(message)
+        step_id = _WORKFLOW_STEP_BY_ROLE.get(role, "")
+        if not step_id:
+            return None
+        with self._lock:
+            selected = self._run_for_message(origin, message, markers[0])
+            if selected is None and fallback_run_id:
+                self._runs.setdefault(
+                    fallback_run_id, self._new_run(fallback_run_id, origin)
+                )
+                selected = fallback_run_id, self._runs[fallback_run_id]
+            if selected is None:
+                return None
+            _, run = selected
+            run["origin"] = origin
+            run["status"] = "in_progress"
+            run["summary"] = f"Dispatched {role}: {step_id}"
+            for candidate_id, _ in _WORKFLOW_STEPS:
+                if candidate_id == step_id:
+                    break
+                if run["steps"][candidate_id] not in {"completed", "failed"}:
+                    run["steps"][candidate_id] = "completed"
+            run["steps"][step_id] = "in_progress"
+            run["workers"][role] = "in_progress"
+            self._marker_runs[markers[0]] = run["run_id"]
+            payload = self._finish_mutation(run)
+            self._persist()
+            return payload
+
+    def record_result(self, marker: str, message: str) -> dict[str, Any] | None:
+        run_id = self._marker_runs.get(marker, "")
+        run = self._runs.get(run_id)
+        if run is None:
+            return None
+        role = _workflow_role(message)
+        if not role:
+            matching = [
+                candidate_role
+                for candidate_role, status in run["workers"].items()
+                if status == "in_progress"
+            ]
+            role = matching[0] if matching else ""
+        step_id = _WORKFLOW_STEP_BY_ROLE.get(role, "")
+        if not step_id:
+            return None
+        lowered = message.lower()
+        if any(word in lowered for word in ("failed", "error", "timeout", "失败")):
+            result_status = "failed"
+            overall_status = "failed"
+            summary = f"{role} failed"
+        elif any(word in lowered for word in ("partial", "revision", "部分完成")):
+            result_status = "revision"
+            overall_status = "revision"
+            summary = f"{role} requires revision"
+        else:
+            result_status = "completed"
+            overall_status = "in_progress"
+            summary = f"{role} completed"
+        with self._lock:
+            run["steps"][step_id] = result_status
+            run["workers"][role] = result_status
+            run["status"] = overall_status
+            run["summary"] = summary
+            if result_status == "completed" and role == "reviewer":
+                run["steps"]["approval"] = "in_progress"
+                run["summary"] = "Waiting for human approval"
+            if result_status == "completed" and role == "reporter":
+                run["status"] = "completed"
+                run["summary"] = "Incident workflow completed"
+            payload = self._finish_mutation(run)
+            self._persist()
+            return payload
+
+    def record_admin_decision(
+        self, origin: str, message: str, approved: bool
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            selected = self._run_for_message(origin, message)
+            if selected is None:
+                return None
+            _, run = selected
+            if run["steps"]["approval"] not in {"pending", "in_progress"}:
+                return None
+            if approved:
+                run["steps"]["approval"] = "completed"
+                run["status"] = "in_progress"
+                run["summary"] = "Human approval granted"
+            else:
+                run["steps"]["approval"] = "failed"
+                run["status"] = "blocked"
+                run["summary"] = "Human approval rejected"
+            payload = self._finish_mutation(run)
+            self._persist()
+            return payload
+
+    def record_stop(self, origin: str, message: str) -> dict[str, Any] | None:
+        with self._lock:
+            selected = self._run_for_message(origin, message)
+            if selected is None:
+                return None
+            _, run = selected
+            run["status"] = "failed"
+            run["summary"] = "Incident stopped by administrator"
+            payload = self._finish_mutation(run)
+            self._persist()
+            return payload
+
+    def payload(self, run_id: str) -> dict[str, Any]:
+        run = self._runs[run_id]
+        domain = os.environ.get("AGENTTEAMS_MATRIX_DOMAIN", "").strip()
+        coordinator = f"@manager:{domain}" if domain else "manager"
+        return {
+            "type": "opskeeper-workflow",
+            "runId": run_id,
+            "status": run["status"],
+            "title": f"OpsKeeper 事故处理 {run_id}",
+            "summary": run["summary"],
+            "ownerRole": "manager",
+            "ownerAgentId": "opskeeper-manager",
+            "coordinator": coordinator,
+            "sharedPath": "",
+            "subagents": [
+                {
+                    "id": f"opskeeper-{role}",
+                    "name": name,
+                    "status": run["workers"][role],
+                }
+                for role, name in (
+                    ("alerter", "告警确认"),
+                    ("investigator", "根因诊断"),
+                    ("reviewer", "方案评审"),
+                    ("repairer", "修复执行"),
+                    ("verifier", "独立验证"),
+                    ("reporter", "复盘归档"),
+                )
+            ],
+            "steps": [
+                {
+                    "id": step_id,
+                    "name": name,
+                    "status": run["steps"][step_id],
+                }
+                for step_id, name in _WORKFLOW_STEPS
+            ],
+        }
+
+
+_WORKFLOW_PROJECTOR = WorkflowProjector()
 
 
 class _FallbackMiddlewareBase:
@@ -984,6 +1383,85 @@ def _relay_matrix_completion(marker: str, origin_session_id: str, result_body: s
     return event_id
 
 
+def _send_matrix_workflow(
+    origin_session_id: str,
+    workflow: dict[str, Any],
+) -> str:
+    base_url = os.environ.get("AGENTTEAMS_MATRIX_URL", "").rstrip("/")
+    token = os.environ.get("AGENTTEAMS_MANAGER_MATRIX_TOKEN", "").strip()
+    room_id = origin_session_id
+    if room_id.startswith("matrix:"):
+        room_id = room_id[len("matrix:"):]
+    if not base_url or not token or not room_id.startswith("!"):
+        raise RuntimeError("Matrix workflow projection is not configured")
+
+    steps = workflow.get("steps")
+    step_lines = "\n".join(
+        f"- {step.get('name', step.get('id', 'stage'))}: {step.get('status', 'pending')}"
+        for step in steps
+        if isinstance(step, dict)
+    )
+    body = (
+        f"[OpsKeeper Workflow] {workflow.get('title', 'OpsKeeper workflow')}\n"
+        f"runId: {workflow.get('runId', '')}\n"
+        f"Status: {workflow.get('status', '')}\n"
+        f"Summary: {workflow.get('summary', '')}\n"
+        "Stages:\n"
+        f"{step_lines}"
+    )
+    content = {
+        "msgtype": "m.notice",
+        "body": body,
+        "agentteams.workflow": workflow,
+    }
+    request = urllib.request.Request(
+        f"{base_url}/_matrix/client/v3/rooms/"
+        f"{urllib.parse.quote(room_id, safe='')}/send/m.room.message/"
+        f"{uuid.uuid4()}",
+        data=json.dumps(content, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="PUT",
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        payload = json.loads(response.read().decode())
+    event_id = str(payload.get("event_id", ""))
+    if not event_id:
+        raise RuntimeError("Matrix workflow projection returned no event_id")
+    return event_id
+
+
+async def _emit_workflow_projection(
+    origin_session_id: str,
+    workflow: dict[str, Any] | None,
+) -> str:
+    if not workflow:
+        return ""
+    try:
+        event_id = await asyncio.to_thread(
+            _send_matrix_workflow,
+            origin_session_id,
+            workflow,
+        )
+        _WORKFLOW_PROJECTOR_LOGGER.info(
+            "Workflow projected run=%s origin=%s event=%s",
+            workflow.get("runId", ""),
+            origin_session_id,
+            event_id,
+        )
+        return event_id
+    except Exception:
+        _WORKFLOW_PROJECTOR_LOGGER.warning(
+            "Workflow projection failed run=%s origin=%s",
+            workflow.get("runId", ""),
+            origin_session_id,
+            exc_info=True,
+        )
+        return ""
+
+
 def _extract_session_id(context: Any) -> str:
     session_id = getattr(context, "session_id", "")
     if session_id:
@@ -1346,6 +1824,12 @@ def _readonly_enforcement_factory(context: Any, _agent_config: Any):
                         message_text,
                         factory_session_id,
                     )
+                if _is_manager_agent(agent):
+                    workflow = _WORKFLOW_PROJECTOR.record_dispatch(
+                        factory_session_id,
+                        message_text,
+                    )
+                    await _emit_workflow_projection(factory_session_id, workflow)
                 _queue_manager_stop_after_dispatch(agent)
                 _MANAGER_GATE_LOGGER.info(
                     "Manager dispatch registered sessions=%s markers=%s origin=%s",
@@ -1722,6 +2206,11 @@ def _register_incident_stop_hook(api: Any) -> None:
             stop_match = _ADMIN_STOP_PATTERN.match(message)
             if stop_match and _is_admin_sender(sender):
                 _STOPPED_INCIDENT_IDS.add(stop_match.group(1))
+                workflow = _WORKFLOW_PROJECTOR.record_stop(
+                    _extract_session_id(ctx),
+                    message,
+                )
+                await _emit_workflow_projection(_extract_session_id(ctx), workflow)
                 return HookResult(action=HookAction.SKIP_AGENT)
             if not _is_admin_sender(sender) and any(
                 incident_id in message for incident_id in _STOPPED_INCIDENT_IDS
@@ -1759,6 +2248,12 @@ def _register_manager_gate_hook(api: Any) -> None:
                 message,
             )
             if consumed_results:
+                for marker in consumed_results:
+                    workflow = _WORKFLOW_PROJECTOR.record_result(marker, message)
+                    await _emit_workflow_projection(
+                        consumed_results[marker],
+                        workflow,
+                    )
                 relays = [
                     (marker, origin)
                     for marker, origin in consumed_results.items()
@@ -1802,6 +2297,20 @@ def _register_manager_gate_hook(api: Any) -> None:
                 if relays:
                     return HookResult(action=HookAction.SKIP_AGENT)
                 return HookResult()
+            sender = _request_sender(ctx.request)
+            if _is_admin_sender(sender):
+                approved = bool(_WORKFLOW_ADMIN_APPROVAL_PATTERN.search(message))
+                rejected = bool(_WORKFLOW_ADMIN_REJECTION_PATTERN.search(message))
+                if approved or rejected:
+                    workflow = _WORKFLOW_PROJECTOR.record_admin_decision(
+                        session_id,
+                        message,
+                        approved and not rejected,
+                    )
+                    await _emit_workflow_projection(session_id, workflow)
+            if _workflow_incident_id(message):
+                workflow = _WORKFLOW_PROJECTOR.record_request(session_id, message)
+                await _emit_workflow_projection(session_id, workflow)
             if _has_new_task(message):
                 _MANAGER_DISPATCH_GATE.record_request_origin(session_id, message)
                 return HookResult()

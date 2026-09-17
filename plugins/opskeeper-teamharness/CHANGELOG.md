@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.59 — 2026-09-18
+
+- Project stable OpsKeeper workflow stages into Matrix as `agentteams.workflow` events.
+- Synchronize Element notices with AgentTeams Dashboard task-board progression by `runId`, without requiring host-application changes.
+
 ## 1.0.58 — 2026-09-18
 
 - Scope high-contrast text tokens across the unified route, diagnostics, Runtime, Archive, plugin list, Overview widget, and Worker detail panel.

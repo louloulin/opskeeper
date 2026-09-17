@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 from types import ModuleType, SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 class _ToolResultState(str, Enum):
@@ -417,6 +417,40 @@ class ManagerGateTest(unittest.TestCase):
             {"task-001": source_session},
         )
 
+    def test_dispatch_projects_workflow_after_successful_message(self):
+        source_session = "matrix:!entry-room:hs"
+        target_session = "matrix:!worker-room:hs"
+        self.module._MANAGER_DISPATCH_GATE.clear(source_session)
+        self.module._MANAGER_DISPATCH_GATE.clear(target_session)
+        middleware = self.module._readonly_enforcement_factory(
+            SimpleNamespace(session_id=source_session),
+            None,
+        )
+        dispatch = "@opskeeper-alerter:hs OPSKEEPER TASK OPSKEEPER-PROJECTOR-DISPATCH"
+        workflow = {"runId": "opskeeper-projector-dispatch"}
+        with patch.object(
+            self.module._WORKFLOW_PROJECTOR,
+            "record_dispatch",
+            return_value=workflow,
+        ) as record_dispatch, patch.object(
+            self.module,
+            "_emit_workflow_projection",
+            new_callable=AsyncMock,
+        ) as emit:
+            self.assertEqual(
+                self._dispatch_middleware(
+                    middleware,
+                    dispatch,
+                    target="room:!worker-room:hs",
+                    agent=SimpleNamespace(name="manager", _gate_pending_stop=None),
+                ),
+                ["sent"],
+            )
+        record_dispatch.assert_called_once_with(source_session, dispatch)
+        emit.assert_awaited_once_with(source_session, workflow)
+        self.module._MANAGER_DISPATCH_GATE.clear(source_session)
+        self.module._MANAGER_DISPATCH_GATE.clear(target_session)
+
     def test_dispatch_queues_react_pending_stop(self):
         source_session = "matrix:manager-room"
         agent = SimpleNamespace(name="manager", _gate_pending_stop=None)
@@ -496,6 +530,63 @@ class ManagerGateTest(unittest.TestCase):
         self.assertEqual(hook.phase.value, "pre_execute")
         self.assertEqual(hook.priority, 0)
         return hook
+
+    def test_hook_projects_accepted_incident_request(self):
+        workflow = {"runId": "opskeeper-projector-request"}
+        context = self._hook_context(
+            "@manager:hs incident_id=opskeeper-projector-request",
+            sender="@admin:hs",
+        )
+        with patch.object(
+            self.module._WORKFLOW_PROJECTOR,
+            "record_request",
+            return_value=workflow,
+        ), patch.object(
+            self.module,
+            "_emit_workflow_projection",
+            new_callable=AsyncMock,
+        ) as emit:
+            result = asyncio.run(self._registered_hook().run(context))
+        self.assertEqual(result.action.value, "continue")
+        emit.assert_awaited_once_with("matrix:room-1", workflow)
+
+    def test_hook_projects_consumed_worker_result_before_relay(self):
+        source_session = "matrix:!entry-room:hs"
+        worker_session = "matrix:!worker-room:hs"
+        self.module._MANAGER_DISPATCH_GATE.clear(source_session)
+        self.module._MANAGER_DISPATCH_GATE.clear(worker_session)
+        self.module._MANAGER_DISPATCH_GATE.record(
+            worker_session,
+            "OPSKEEPER TASK OPSKEEPER-PROJECTOR-RESULT",
+            source_session,
+        )
+        context = self._hook_context(
+            "@manager:hs OPSKEEPER_RESULT OPSKEEPER-PROJECTOR-RESULT {}",
+            sender="@opskeeper-alerter:hs",
+        )
+        context.session_id = worker_session
+        workflow = {"runId": "opskeeper-projector-result"}
+        with patch.object(
+            self.module._WORKFLOW_PROJECTOR,
+            "record_result",
+            return_value=workflow,
+        ) as record_result, patch.object(
+            self.module,
+            "_emit_workflow_projection",
+            new_callable=AsyncMock,
+        ) as emit, patch.object(
+            self.module,
+            "_relay_matrix_completion",
+            return_value="$relay-event",
+        ):
+            result = asyncio.run(self._registered_hook().run(context))
+        self.assertEqual(result.action.value, "skip_agent")
+        record_result.assert_called_once_with(
+            "OPSKEEPER-PROJECTOR-RESULT",
+            context.request.input[0].content[0].text,
+        )
+        emit.assert_awaited_once_with(source_session, workflow)
+        self.module._MANAGER_DISPATCH_GATE.clear(worker_session)
 
     def test_standalone_worker_is_not_manager_even_with_manager_runtime(self):
         agent = SimpleNamespace(name="opskeeper-repairer")
