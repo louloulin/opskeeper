@@ -7,8 +7,8 @@ export const SITE_ZH = {
   description:
     'OpsKeeper 把告警接入、证据采集、根因分析、人工审批、窄域授权恢复、独立验证、事后复盘七个环节，串成同一条闭环。',
   url: 'https://opskeeper.dev',
-  repo: 'https://github.com/louloulin/opskeeper',
-  repoShort: 'louloulin/opskeeper',
+  repo: 'https://github.com/vincent-wuhan/opskeeper',
+  repoShort: 'vincent-wuhan/opskeeper',
   license: 'Apache-2.0',
   version: 'v2026.09.03',
 } as const;
@@ -62,8 +62,8 @@ export const FOOTER_COLS_ZH: { title: string; links: NavLink[] }[] = [
       { label: '品牌资产', href: '/zh/brand' },
       { label: '安全策略', href: '/zh/security' },
       { label: '商标政策', href: '/zh/trademark' },
-      { label: '许可证', href: 'https://github.com/louloulin/opskeeper/blob/main/LICENSE' },
-      { label: '行为准则', href: 'https://github.com/louloulin/opskeeper/blob/main/CODE_OF_CONDUCT.md' },
+      { label: '许可证', href: 'https://github.com/vincent-wuhan/opskeeper/blob/main/LICENSE' },
+      { label: '行为准则', href: 'https://github.com/vincent-wuhan/opskeeper/blob/main/CODE_OF_CONDUCT.md' },
     ],
   },
 ];
