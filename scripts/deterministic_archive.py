@@ -45,7 +45,7 @@ def collect_entries(sources: list[str]) -> list[tuple[Path, Path, bool]]:
                 entries.append((child, archive_path / child.relative_to(source_path), False))
             elif child.is_dir():
                 entries.append((child, archive_path / child.relative_to(source_path), True))
-    return sorted(entries, key=lambda item: item[1].as_posix())
+    return entries
 
 
 def file_mode(path: Path) -> int:
