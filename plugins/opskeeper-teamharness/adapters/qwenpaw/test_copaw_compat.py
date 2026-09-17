@@ -103,6 +103,7 @@ class CoPawCompatTest(unittest.TestCase):
         class API:
             def __init__(self):
                 self.startup_hooks = []
+                self.middlewares = []
                 for name, value in methods.items():
                     setattr(self, name, value)
 
@@ -111,6 +112,9 @@ class CoPawCompatTest(unittest.TestCase):
 
             def register_startup_hook(self, hook_name, callback, priority=100):
                 self.startup_hooks.append((hook_name, callback, priority))
+
+            def register_middleware(self, factory, priority=100):
+                self.middlewares.append((factory, priority))
 
         defaults = {
             "register_shutdown_hook": lambda *args, **kwargs: None,

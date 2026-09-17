@@ -28,6 +28,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+from collections import deque
 from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Optional
 
@@ -72,15 +73,87 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.58"
+_PLUGIN_VERSION = "1.0.59"
 _COPAW_DIAGNOSTICS_LOGGER = logging.getLogger("opskeeper-teamharness.copaw-diagnostics")
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
+_WORKFLOW_PROJECTOR_LOGGER = logging.getLogger(
+    "opskeeper-teamharness.workflow-projector"
+)
 _MANAGER_GATE_TTL_ENV = "OPSKEEPER_MANAGER_GATE_TTL_SECONDS"
 _MANAGER_GATE_STATE_FILE_ENV = "OPSKEEPER_MANAGER_GATE_STATE_FILE"
+_WORKFLOW_PROJECTOR_STATE_FILE_ENV = "OPSKEEPER_WORKFLOW_PROJECTOR_STATE_FILE"
+_OUTBOUND_LIMIT_ENV = "OPSKEEPER_OUTBOUND_LIMIT"
+_OUTBOUND_WINDOW_SECONDS_ENV = "OPSKEEPER_OUTBOUND_WINDOW_SECONDS"
+_DEFAULT_OUTBOUND_LIMIT = 12
+_DEFAULT_OUTBOUND_WINDOW_SECONDS = 10.0
 _DEFAULT_MANAGER_GATE_TTL_SECONDS = 600.0
+_THINKING_SPAN_PATTERN = re.compile(
+    r"<\s*think\s*>.*?<\s*/\s*think\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+_THINKING_OPEN_PATTERN = re.compile(r"<\s*think\s*>", re.IGNORECASE)
+_THINKING_CLOSE_PATTERN = re.compile(r"<\s*/\s*think\s*>", re.IGNORECASE)
+_LEADING_PARTIAL_THINKING_PATTERN = re.compile(
+    r"^\s*<\s*think\s*>.*\Z",
+    re.DOTALL | re.IGNORECASE,
+)
+_ADMIN_STOP_PATTERN = re.compile(
+    r"^\s*ADMIN\s+STOP\s+([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\s*$",
+    re.IGNORECASE,
+)
 _TASK_MARKER_PATTERN = re.compile(
     r"\bOPSKEEPER[\s_]+TASK[\s_]+([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\b"
+)
+_WORKFLOW_INCIDENT_EXPLICIT_PATTERN = re.compile(
+    r"(?:incident[_ -]?id|事故\s*(?:id|编号))\s*[:=]?\s*"
+    r"([A-Za-z0-9][A-Za-z0-9._:-]{5,127})",
+    re.IGNORECASE,
+)
+_WORKFLOW_INCIDENT_LOOSE_PATTERN = re.compile(
+    r"\b(opskeeper(?:-[A-Za-z0-9_]+){2,})\b",
+    re.IGNORECASE,
+)
+_WORKFLOW_ROLE_PATTERN = re.compile(
+    r"@?opskeeper-(alerter|investigator|reviewer|repairer|verifier|reporter)"
+    r"(?::[A-Za-z0-9_.:-]+)?",
+    re.IGNORECASE,
+)
+_WORKFLOW_ADMIN_APPROVAL_PATTERN = re.compile(
+    r"(?:^|\n)\s*(?:@manager(?::[A-Za-z0-9_.:-]+)?[,: ]+\s*)?"
+    r"(?:批准|同意|approve(?:d)?)\b",
+    re.IGNORECASE,
+)
+_WORKFLOW_ADMIN_REJECTION_PATTERN = re.compile(
+    r"(?:^|\n)\s*(?:@manager(?::[A-Za-z0-9_.:-]+)?[,: ]+\s*)?"
+    r"(?:拒绝|不同意|reject(?:ed)?)\b",
+    re.IGNORECASE,
+)
+_WORKFLOW_STEPS: tuple[tuple[str, str], ...] = (
+    ("alert", "告警确认"),
+    ("investigate", "根因诊断"),
+    ("review", "方案评审"),
+    ("approval", "人工审批"),
+    ("repair", "修复执行"),
+    ("verify", "独立验证"),
+    ("report", "复盘归档"),
+)
+_WORKFLOW_STEP_BY_ROLE = {
+    "alerter": "alert",
+    "investigator": "investigate",
+    "reviewer": "review",
+    "repairer": "repair",
+    "verifier": "verify",
+    "reporter": "report",
+}
+_WORKFLOW_MAX_RUNS = 32
+_OPSKEEPER_ROLE_MENTION_PATTERN = re.compile(
+    r"@(?P<role>opskeeper-[a-z0-9_.-]+)(?::[a-z0-9_.-]+)?",
+    re.IGNORECASE,
+)
+_MANAGER_ROLE_MENTION_PATTERN = re.compile(
+    r"@manager(?::[a-z0-9_.:-]+)?(?![a-z0-9_.-])",
+    re.IGNORECASE,
 )
 _COPAW_BASE_TOOLS = frozenset({"message", "filesync", "projectflow", "taskflow"})
 _COPAW_NATIVE_TOOLS = {
@@ -494,12 +567,365 @@ class ManagerDispatchGate:
 
 
 _MANAGER_DISPATCH_GATE = ManagerDispatchGate()
+_STOPPED_INCIDENT_IDS: set[str] = set()
+
+
+def _workflow_incident_id(message: str) -> str:
+    match = _WORKFLOW_INCIDENT_EXPLICIT_PATTERN.search(message)
+    if match:
+        return match.group(1).rstrip("。，,；;）)]】】")
+    match = _WORKFLOW_INCIDENT_LOOSE_PATTERN.search(message)
+    if match:
+        candidate = match.group(1)
+        if _TASK_MARKER_PATTERN.search(message) and candidate.isupper():
+            return ""
+        return candidate
+    return ""
+
+
+def _workflow_role(message: str) -> str:
+    match = _WORKFLOW_ROLE_PATTERN.search(message)
+    return match.group(1).lower() if match else ""
+
+
+class WorkflowProjector:
+    """Build full AgentTeams workflow snapshots from authoritative transitions."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._runs, self._marker_runs = self._load()
+
+    @staticmethod
+    def _state_path() -> Path:
+        configured = os.getenv(_WORKFLOW_PROJECTOR_STATE_FILE_ENV, "").strip()
+        if configured:
+            return Path(configured).expanduser()
+        return ASSET_DIR / ".workflow-projector.json"
+
+    @classmethod
+    def _load(cls) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+        path = cls._state_path()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}, {}
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            _WORKFLOW_PROJECTOR_LOGGER.warning(
+                "Workflow projector state ignored path=%s",
+                path,
+                exc_info=True,
+            )
+            return {}, {}
+        if not isinstance(payload, dict) or payload.get("version") != 1:
+            return {}, {}
+        raw_runs = payload.get("runs")
+        raw_markers = payload.get("markers")
+        if not isinstance(raw_runs, dict) or not isinstance(raw_markers, dict):
+            return {}, {}
+        runs = {
+            run_id: cls._sanitize_run(run_id, run)
+            for run_id, run in raw_runs.items()
+            if isinstance(run_id, str) and isinstance(run, dict)
+        }
+        markers = {
+            marker: run_id
+            for marker, run_id in raw_markers.items()
+            if isinstance(marker, str) and isinstance(run_id, str) and run_id in runs
+        }
+        return runs, markers
+
+    @staticmethod
+    def _sanitize_run(run_id: str, raw: dict[str, Any]) -> dict[str, Any]:
+        steps = {step_id: "pending" for step_id, _ in _WORKFLOW_STEPS}
+        raw_steps = raw.get("steps") if isinstance(raw.get("steps"), dict) else {}
+        for step_id, status in raw_steps.items():
+            if step_id in steps and isinstance(status, str):
+                steps[step_id] = status
+        roles = {role: "pending" for role in _WORKFLOW_STEP_BY_ROLE}
+        raw_roles = raw.get("workers") if isinstance(raw.get("workers"), dict) else {}
+        for role, status in raw_roles.items():
+            if role in roles and isinstance(status, str):
+                roles[role] = status
+        return {
+            "run_id": run_id,
+            "origin": str(raw.get("origin") or ""),
+            "status": str(raw.get("status") or "pending"),
+            "summary": str(raw.get("summary") or "OpsKeeper workflow accepted"),
+            "steps": steps,
+            "workers": roles,
+            "created_at": float(raw.get("created_at") or time.time()),
+            "updated_at": float(raw.get("updated_at") or time.time()),
+            "signature": str(raw.get("signature") or ""),
+        }
+
+    def _persist(self) -> None:
+        path = self._state_path()
+        ordered_runs = sorted(
+            self._runs.items(), key=lambda item: item[1]["updated_at"], reverse=True
+        )[:_WORKFLOW_MAX_RUNS]
+        kept_runs = dict(ordered_runs)
+        kept_markers = {
+            marker: run_id
+            for marker, run_id in self._marker_runs.items()
+            if run_id in kept_runs
+        }
+        payload = {"version": 1, "runs": kept_runs, "markers": kept_markers}
+        temporary_name = ""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{path.name}.", dir=path.parent
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+                handle.write("\n")
+            os.chmod(temporary_name, 0o600)
+            os.replace(temporary_name, path)
+            temporary_name = ""
+        except OSError:
+            _WORKFLOW_PROJECTOR_LOGGER.warning(
+                "Workflow projector state persist failed path=%s",
+                path,
+                exc_info=True,
+            )
+        finally:
+            if temporary_name:
+                try:
+                    os.unlink(temporary_name)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _new_run(run_id: str, origin: str) -> dict[str, Any]:
+        now = time.time()
+        return {
+            "run_id": run_id,
+            "origin": origin,
+            "status": "assigned",
+            "summary": "Incident accepted; waiting for Manager dispatch",
+            "steps": {step_id: "pending" for step_id, _ in _WORKFLOW_STEPS},
+            "workers": {role: "pending" for role in _WORKFLOW_STEP_BY_ROLE},
+            "created_at": now,
+            "updated_at": now,
+            "signature": "",
+        }
+
+    @staticmethod
+    def _signature(run: dict[str, Any]) -> str:
+        material = {
+            "status": run["status"],
+            "steps": run["steps"],
+            "workers": run["workers"],
+        }
+        return hashlib.sha256(
+            json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    def _run_for_message(
+        self, origin: str, message: str, marker: str = ""
+    ) -> tuple[str, dict[str, Any]] | None:
+        run_id = _workflow_incident_id(message) or self._marker_runs.get(marker, "")
+        if not run_id:
+            candidates = [
+                run for run in self._runs.values() if run["origin"] == origin
+            ]
+            if candidates:
+                run_id = max(candidates, key=lambda run: run["updated_at"])["run_id"]
+        run = self._runs.get(run_id)
+        if run is None:
+            return None
+        return run_id, run
+
+    def _finish_mutation(self, run: dict[str, Any]) -> dict[str, Any] | None:
+        run["updated_at"] = time.time()
+        signature = self._signature(run)
+        if signature == run["signature"]:
+            return None
+        run["signature"] = signature
+        return self.payload(run["run_id"])
+
+    def record_request(self, origin: str, message: str) -> dict[str, Any] | None:
+        if _TASK_RESULT_PATTERN.search(message) or _TASK_COMPLETE_PATTERN.search(message):
+            return None
+        run_id = _workflow_incident_id(message)
+        if not run_id:
+            markers = _extract_task_markers(message)
+            run_id = markers[0] if markers else ""
+        if not run_id or not origin.startswith("matrix:!"):
+            return None
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None or run["status"] in {"completed", "failed", "blocked"}:
+                run = self._new_run(run_id, origin)
+                self._runs[run_id] = run
+            run["origin"] = origin
+            run["status"] = "assigned"
+            run["summary"] = "Incident accepted; waiting for Manager dispatch"
+            run["steps"]["alert"] = "pending"
+            run["workers"]["alerter"] = "pending"
+            payload = self._finish_mutation(run)
+            self._persist()
+            return payload
+
+    def record_dispatch(
+        self, origin: str, message: str, fallback_run_id: str = ""
+    ) -> dict[str, Any] | None:
+        markers = _extract_task_markers(message)
+        if not markers:
+            return None
+        role = _workflow_role(message)
+        step_id = _WORKFLOW_STEP_BY_ROLE.get(role, "")
+        if not step_id:
+            return None
+        with self._lock:
+            selected = self._run_for_message(origin, message, markers[0])
+            if selected is None and fallback_run_id:
+                self._runs.setdefault(
+                    fallback_run_id, self._new_run(fallback_run_id, origin)
+                )
+                selected = fallback_run_id, self._runs[fallback_run_id]
+            if selected is None:
+                return None
+            _, run = selected
+            run["origin"] = origin
+            run["status"] = "in_progress"
+            run["summary"] = f"Dispatched {role}: {step_id}"
+            for candidate_id, _ in _WORKFLOW_STEPS:
+                if candidate_id == step_id:
+                    break
+                if run["steps"][candidate_id] not in {"completed", "failed"}:
+                    run["steps"][candidate_id] = "completed"
+            run["steps"][step_id] = "in_progress"
+            run["workers"][role] = "in_progress"
+            self._marker_runs[markers[0]] = run["run_id"]
+            payload = self._finish_mutation(run)
+            self._persist()
+            return payload
+
+    def record_result(self, marker: str, message: str) -> dict[str, Any] | None:
+        run_id = self._marker_runs.get(marker, "")
+        run = self._runs.get(run_id)
+        if run is None:
+            return None
+        role = _workflow_role(message)
+        if not role:
+            matching = [
+                candidate_role
+                for candidate_role, status in run["workers"].items()
+                if status == "in_progress"
+            ]
+            role = matching[0] if matching else ""
+        step_id = _WORKFLOW_STEP_BY_ROLE.get(role, "")
+        if not step_id:
+            return None
+        lowered = message.lower()
+        if any(word in lowered for word in ("failed", "error", "timeout", "失败")):
+            result_status = "failed"
+            overall_status = "failed"
+            summary = f"{role} failed"
+        elif any(word in lowered for word in ("partial", "revision", "部分完成")):
+            result_status = "revision"
+            overall_status = "revision"
+            summary = f"{role} requires revision"
+        else:
+            result_status = "completed"
+            overall_status = "in_progress"
+            summary = f"{role} completed"
+        with self._lock:
+            run["steps"][step_id] = result_status
+            run["workers"][role] = result_status
+            run["status"] = overall_status
+            run["summary"] = summary
+            if result_status == "completed" and role == "reviewer":
+                run["steps"]["approval"] = "in_progress"
+                run["summary"] = "Waiting for human approval"
+            if result_status == "completed" and role == "reporter":
+                run["status"] = "completed"
+                run["summary"] = "Incident workflow completed"
+            payload = self._finish_mutation(run)
+            self._persist()
+            return payload
+
+    def record_admin_decision(
+        self, origin: str, message: str, approved: bool
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            selected = self._run_for_message(origin, message)
+            if selected is None:
+                return None
+            _, run = selected
+            if run["steps"]["approval"] not in {"pending", "in_progress"}:
+                return None
+            if approved:
+                run["steps"]["approval"] = "completed"
+                run["status"] = "in_progress"
+                run["summary"] = "Human approval granted"
+            else:
+                run["steps"]["approval"] = "failed"
+                run["status"] = "blocked"
+                run["summary"] = "Human approval rejected"
+            payload = self._finish_mutation(run)
+            self._persist()
+            return payload
+
+    def record_stop(self, origin: str, message: str) -> dict[str, Any] | None:
+        with self._lock:
+            selected = self._run_for_message(origin, message)
+            if selected is None:
+                return None
+            _, run = selected
+            run["status"] = "failed"
+            run["summary"] = "Incident stopped by administrator"
+            payload = self._finish_mutation(run)
+            self._persist()
+            return payload
+
+    def payload(self, run_id: str) -> dict[str, Any]:
+        run = self._runs[run_id]
+        domain = os.environ.get("AGENTTEAMS_MATRIX_DOMAIN", "").strip()
+        coordinator = f"@manager:{domain}" if domain else "manager"
+        return {
+            "type": "opskeeper-workflow",
+            "runId": run_id,
+            "status": run["status"],
+            "title": f"OpsKeeper 事故处理 {run_id}",
+            "summary": run["summary"],
+            "ownerRole": "manager",
+            "ownerAgentId": "opskeeper-manager",
+            "coordinator": coordinator,
+            "sharedPath": "",
+            "subagents": [
+                {
+                    "id": f"opskeeper-{role}",
+                    "name": name,
+                    "status": run["workers"][role],
+                }
+                for role, name in (
+                    ("alerter", "告警确认"),
+                    ("investigator", "根因诊断"),
+                    ("reviewer", "方案评审"),
+                    ("repairer", "修复执行"),
+                    ("verifier", "独立验证"),
+                    ("reporter", "复盘归档"),
+                )
+            ],
+            "steps": [
+                {
+                    "id": step_id,
+                    "name": name,
+                    "status": run["steps"][step_id],
+                }
+                for step_id, name in _WORKFLOW_STEPS
+            ],
+        }
+
+
+_WORKFLOW_PROJECTOR = WorkflowProjector()
 
 
 class _FallbackMiddlewareBase:
-    @staticmethod
-    def is_implemented(hook_name: str) -> bool:
-        return hook_name == "on_acting"
+    def is_implemented(self, hook_name: str) -> bool:
+        return callable(getattr(self, hook_name, None))
 
 
 def _middleware_base() -> type[Any]:
@@ -567,6 +993,233 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 yield event
 
     return OpskeeperSanitizer()
+
+
+def _strip_thinking(text: str) -> str:
+    result = _THINKING_SPAN_PATTERN.sub("", text)
+    leading_partial = _LEADING_PARTIAL_THINKING_PATTERN.match(result)
+    if leading_partial is not None:
+        result = result[:leading_partial.start()] + result[leading_partial.end():]
+    changed = result != text
+    return result.lstrip("\r\n") if changed else result
+
+
+def _sanitize_reply_value(value: Any) -> None:
+    if isinstance(value, str):
+        return
+    if isinstance(value, list):
+        for item in value:
+            _sanitize_reply_value(item)
+        return
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key == "text" and isinstance(nested, str):
+                value[key] = _strip_thinking(nested)
+            else:
+                _sanitize_reply_value(nested)
+        return
+    text = getattr(value, "text", None)
+    if isinstance(text, str):
+        value.text = _strip_thinking(text)
+    content = getattr(value, "content", None)
+    if content is not None:
+        if isinstance(content, str):
+            value.content = _strip_thinking(content)
+        else:
+            _sanitize_reply_value(content)
+
+
+def _sanitize_reply_event(event: Any) -> Any:
+    _sanitize_reply_value(event)
+    return event
+
+
+def _could_start_thinking_opening(candidate: str) -> bool:
+    if not candidate.startswith("<"):
+        return False
+    index = 1
+    while index < len(candidate) and candidate[index].isspace():
+        index += 1
+    for expected in "think":
+        if index >= len(candidate):
+            return True
+        if candidate[index].lower() != expected:
+            return False
+        index += 1
+    while index < len(candidate) and candidate[index].isspace():
+        index += 1
+    return index == len(candidate)
+
+
+class _ReplyThinkingStream:
+    def __init__(self) -> None:
+        self._states: dict[str, tuple[str, bool]] = {}
+
+    def _state(self, key: str) -> tuple[str, bool]:
+        return self._states.get(key, ("", False))
+
+    def push(self, key: str, text: str) -> str:
+        pending, inside_thinking = self._state(key)
+        pending += text
+        output = ""
+        while pending:
+            if not inside_thinking:
+                opening = _THINKING_OPEN_PATTERN.search(pending)
+                if opening is not None:
+                    output += pending[:opening.start()]
+                    pending = pending[opening.end():]
+                    inside_thinking = True
+                    continue
+                suffix_length = 0
+                for index in range(len(pending) - 1, -1, -1):
+                    if pending[index] != "<":
+                        continue
+                    if _could_start_thinking_opening(pending[index:]):
+                        suffix_length = len(pending) - index
+                    break
+                output += pending[:len(pending) - suffix_length]
+                pending = pending[len(pending) - suffix_length:] if suffix_length else ""
+                break
+
+            closing = _THINKING_CLOSE_PATTERN.search(pending)
+            if closing is None:
+                pending = ""
+                break
+            pending = pending[closing.end():]
+            inside_thinking = False
+
+        self._states[key] = (pending, inside_thinking)
+        return output
+
+def _sanitize_reply_stream_value(
+    value: Any,
+    stream: _ReplyThinkingStream,
+    path: str = "",
+) -> None:
+    if isinstance(value, str):
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _sanitize_reply_stream_value(item, stream, f"{path}[{index}]")
+        return
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            nested_path = f"{path}.{key}"
+            if key == "text" and isinstance(nested, str):
+                value[key] = stream.push(nested_path, nested)
+            else:
+                _sanitize_reply_stream_value(nested, stream, nested_path)
+        return
+    text = getattr(value, "text", None)
+    if isinstance(text, str):
+        value.text = stream.push(f"{path}.text", text)
+    content = getattr(value, "content", None)
+    if content is not None:
+        if isinstance(content, str):
+            value.content = stream.push(f"{path}.content", content)
+        else:
+            _sanitize_reply_stream_value(content, stream, f"{path}.content")
+
+
+def _sanitize_reply_stream_event(event: Any, stream: _ReplyThinkingStream) -> Any:
+    _sanitize_reply_stream_value(event, stream)
+    return event
+
+
+def _outbound_environment_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if minimum <= value <= maximum else default
+
+
+class OutboundSafetyMiddleware(_middleware_base()):
+    def __init__(self, monotonic: Callable[[], float] = time.monotonic) -> None:
+        self._monotonic = monotonic
+        self._limit = _outbound_environment_int(
+            _OUTBOUND_LIMIT_ENV,
+            _DEFAULT_OUTBOUND_LIMIT,
+            1,
+            1000,
+        )
+        self._window_seconds = float(
+            _outbound_environment_int(
+                _OUTBOUND_WINDOW_SECONDS_ENV,
+                int(_DEFAULT_OUTBOUND_WINDOW_SECONDS),
+                1,
+                3600,
+            )
+        )
+        self._reservations: deque[tuple[int, float]] = deque()
+        self._next_reservation_token = 0
+        self._lock = threading.Lock()
+
+    def _reserve(self) -> int:
+        with self._lock:
+            now = self._monotonic()
+            cutoff = now - self._window_seconds
+            while self._reservations and self._reservations[0][1] <= cutoff:
+                self._reservations.popleft()
+            if len(self._reservations) >= self._limit:
+                raise RuntimeError(
+                    "OpsKeeper outbound rate limit exceeded; stopping this turn"
+                )
+            token = self._next_reservation_token
+            self._next_reservation_token += 1
+            self._reservations.append((token, now))
+            return token
+
+    def _release(self, token: int) -> None:
+        with self._lock:
+            self._reservations = deque(
+                reservation
+                for reservation in self._reservations
+                if reservation[0] != token
+            )
+
+    async def on_reply(
+        self,
+        agent: Any,
+        input_kwargs: dict[str, Any],
+        next_handler: Callable[..., AsyncGenerator[Any, None]],
+    ) -> AsyncGenerator[Any, None]:
+        stream_sanitizer = _ReplyThinkingStream()
+        self._reserve()
+        async for event in next_handler(**input_kwargs):
+            yield _sanitize_reply_stream_event(event, stream_sanitizer)
+
+    async def on_acting(
+        self,
+        agent: Any,
+        input_kwargs: dict[str, Any],
+        next_handler: Callable[..., AsyncGenerator[Any, None]],
+    ) -> AsyncGenerator[Any, None]:
+        tool_name, _arguments = _extract_tool_call(input_kwargs)
+        is_message_attempt = _is_message_tool(_normalize_tool_name(tool_name))
+        reservation = self._reserve() if is_message_attempt else None
+        terminal_success = False
+        try:
+            async for event in next_handler(**input_kwargs):
+                if hasattr(event, "content") and hasattr(event, "state"):
+                    terminal_success = _is_successful_tool_response(event)
+                yield event
+        except BaseException:
+            if reservation is not None:
+                self._release(reservation)
+            raise
+        if reservation is not None and not terminal_success:
+            self._release(reservation)
+
+
+def _is_successful_tool_response(event: Any) -> bool:
+    if not hasattr(event, "content") or not hasattr(event, "state"):
+        return False
+    return not _has_failed_tool_result([event])
+
+
+def _outbound_safety_factory(_context: Any, _agent_config: Any):
+    return OutboundSafetyMiddleware()
 
 
 def _extract_tool_call(input_kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -730,6 +1383,85 @@ def _relay_matrix_completion(marker: str, origin_session_id: str, result_body: s
     return event_id
 
 
+def _send_matrix_workflow(
+    origin_session_id: str,
+    workflow: dict[str, Any],
+) -> str:
+    base_url = os.environ.get("AGENTTEAMS_MATRIX_URL", "").rstrip("/")
+    token = os.environ.get("AGENTTEAMS_MANAGER_MATRIX_TOKEN", "").strip()
+    room_id = origin_session_id
+    if room_id.startswith("matrix:"):
+        room_id = room_id[len("matrix:"):]
+    if not base_url or not token or not room_id.startswith("!"):
+        raise RuntimeError("Matrix workflow projection is not configured")
+
+    steps = workflow.get("steps")
+    step_lines = "\n".join(
+        f"- {step.get('name', step.get('id', 'stage'))}: {step.get('status', 'pending')}"
+        for step in steps
+        if isinstance(step, dict)
+    )
+    body = (
+        f"[OpsKeeper Workflow] {workflow.get('title', 'OpsKeeper workflow')}\n"
+        f"runId: {workflow.get('runId', '')}\n"
+        f"Status: {workflow.get('status', '')}\n"
+        f"Summary: {workflow.get('summary', '')}\n"
+        "Stages:\n"
+        f"{step_lines}"
+    )
+    content = {
+        "msgtype": "m.notice",
+        "body": body,
+        "agentteams.workflow": workflow,
+    }
+    request = urllib.request.Request(
+        f"{base_url}/_matrix/client/v3/rooms/"
+        f"{urllib.parse.quote(room_id, safe='')}/send/m.room.message/"
+        f"{uuid.uuid4()}",
+        data=json.dumps(content, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="PUT",
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        payload = json.loads(response.read().decode())
+    event_id = str(payload.get("event_id", ""))
+    if not event_id:
+        raise RuntimeError("Matrix workflow projection returned no event_id")
+    return event_id
+
+
+async def _emit_workflow_projection(
+    origin_session_id: str,
+    workflow: dict[str, Any] | None,
+) -> str:
+    if not workflow:
+        return ""
+    try:
+        event_id = await asyncio.to_thread(
+            _send_matrix_workflow,
+            origin_session_id,
+            workflow,
+        )
+        _WORKFLOW_PROJECTOR_LOGGER.info(
+            "Workflow projected run=%s origin=%s event=%s",
+            workflow.get("runId", ""),
+            origin_session_id,
+            event_id,
+        )
+        return event_id
+    except Exception:
+        _WORKFLOW_PROJECTOR_LOGGER.warning(
+            "Workflow projection failed run=%s origin=%s",
+            workflow.get("runId", ""),
+            origin_session_id,
+            exc_info=True,
+        )
+        return ""
+
+
 def _extract_session_id(context: Any) -> str:
     session_id = getattr(context, "session_id", "")
     if session_id:
@@ -756,12 +1488,81 @@ def _manager_identity(agent: Any) -> tuple[str, str]:
 
 def _is_manager_agent(agent: Any) -> bool:
     agent_name, role = _manager_identity(agent)
+    worker_name = os.getenv("AGENTTEAMS_WORKER_NAME", "").strip().lower()
     manager_runtime = os.getenv("AGENTTEAMS_MANAGER_RUNTIME", "").strip().lower()
-    return (
-        role in {"manager", "leader", "team_leader"}
-        or manager_runtime in {"qwenpaw", "copaw"}
-        or "manager" in agent_name
+    if role in {"worker", "standalone"} or worker_name:
+        return False
+    if role in {"manager", "leader", "team_leader"} or "manager" in agent_name:
+        return True
+    return manager_runtime in {"qwenpaw", "copaw"}
+
+
+def _is_message_for_agent(message: str, agent: Any) -> bool:
+    mentions = [
+        match.group("role").lower()
+        for match in _OPSKEEPER_ROLE_MENTION_PATTERN.finditer(message)
+    ]
+    manager_mention = bool(_MANAGER_ROLE_MENTION_PATTERN.search(message))
+    if not mentions and not manager_mention:
+        return True
+    agent_name, agent_role = _manager_identity(agent)
+    current_identities = {agent_name}
+    if agent_role in {"manager", "leader", "team_leader"} or "manager" in agent_name:
+        current_identities.add("manager")
+    return agent_name in mentions or (
+        manager_mention and "manager" in current_identities
     )
+
+
+def _gated_prompt(
+    provider: Callable[[Any], str],
+    condition: Callable[[Any], bool],
+) -> Callable[[Any], str]:
+    def gated_provider(agent: Any) -> str:
+        return provider(agent) if condition(agent) else ""
+
+    return gated_provider
+
+
+def _register_prompt_sections(api: Any) -> None:
+    sections = (
+        (
+            "opskeeper_team_context",
+            team_prompt,
+            lambda agent: _is_manager_agent(agent),
+            40,
+        ),
+        (
+            "opskeeper_worker_context",
+            worker_prompt,
+            lambda agent: not _is_manager_agent(agent),
+            30,
+        ),
+        (
+            "opskeeper_manager_context",
+            manager_prompt,
+            lambda agent: _is_manager_agent(agent),
+            30,
+        ),
+    )
+    for name, provider, condition, priority in sections:
+        try:
+            api.register_prompt_section(
+                name,
+                after="workspace",
+                provider=provider,
+                condition=condition,
+                priority=priority,
+            )
+        except TypeError:
+            api.register_prompt_section(
+                name,
+                after="workspace",
+                provider=_gated_prompt(provider, condition),
+                priority=priority,
+            )
+        except Exception:
+            pass
 
 
 def _is_admin_sender(sender: str) -> bool:
@@ -847,7 +1648,8 @@ def _as_copaw_toolkit_middleware(middleware: Any) -> Callable[..., Any]:
 
 def _has_failed_tool_result(events: list[Any]) -> bool:
     for event in events:
-        state = str(getattr(event, "state", "")).lower()
+        raw_state = getattr(event, "state", "")
+        state = str(getattr(raw_state, "value", raw_state)).lower()
         if state in {"error", "denied", "interrupted"}:
             return True
     return False
@@ -1022,6 +1824,12 @@ def _readonly_enforcement_factory(context: Any, _agent_config: Any):
                         message_text,
                         factory_session_id,
                     )
+                if _is_manager_agent(agent):
+                    workflow = _WORKFLOW_PROJECTOR.record_dispatch(
+                        factory_session_id,
+                        message_text,
+                    )
+                    await _emit_workflow_projection(factory_session_id, workflow)
                 _queue_manager_stop_after_dispatch(agent)
                 _MANAGER_GATE_LOGGER.info(
                     "Manager dispatch registered sessions=%s markers=%s origin=%s",
@@ -1213,10 +2021,16 @@ def _tool_names(toolkit: Any) -> set[str]:
 def _validate_copaw_toolkit(toolkit: Any) -> None:
     try:
         readonly_middleware = _readonly_enforcement_factory(None, None)
+        outbound_middleware = _outbound_safety_factory(None, None)
         sanitizer_middleware = _sanitizer_factory(None, None)
-        if readonly_middleware is None or sanitizer_middleware is None:
+        if (
+            readonly_middleware is None
+            or outbound_middleware is None
+            or sanitizer_middleware is None
+        ):
             raise RuntimeError("OpsKeeper middleware constructors are unavailable")
         toolkit.register_middleware(_as_copaw_toolkit_middleware(readonly_middleware))
+        toolkit.register_middleware(_as_copaw_toolkit_middleware(outbound_middleware))
         toolkit.register_middleware(_as_copaw_toolkit_middleware(sanitizer_middleware))
         names = _tool_names(toolkit)
         missing_base = sorted(_COPAW_BASE_TOOLS - names)
@@ -1373,6 +2187,40 @@ def build_investigate_router():
     return router
 
 
+def _register_incident_stop_hook(api: Any) -> None:
+    try:
+        from qwenpaw.runtime.hooks import HookAction, HookBase, HookResult
+        from qwenpaw.runtime.phases import Phase
+    except ImportError:
+        _MANAGER_GATE_LOGGER.debug("QwenPaw runtime hooks unavailable", exc_info=True)
+        return
+
+    class IncidentStopHook(HookBase):
+        phase = Phase.PRE_EXECUTE
+        name = "opskeeper_incident_stop"
+        priority = 0
+
+        async def run(self, ctx: Any) -> Any:
+            message = _request_text(getattr(ctx, "request", None))
+            sender = _request_sender(getattr(ctx, "request", None))
+            stop_match = _ADMIN_STOP_PATTERN.match(message)
+            if stop_match and _is_admin_sender(sender):
+                _STOPPED_INCIDENT_IDS.add(stop_match.group(1))
+                workflow = _WORKFLOW_PROJECTOR.record_stop(
+                    _extract_session_id(ctx),
+                    message,
+                )
+                await _emit_workflow_projection(_extract_session_id(ctx), workflow)
+                return HookResult(action=HookAction.SKIP_AGENT)
+            if not _is_admin_sender(sender) and any(
+                incident_id in message for incident_id in _STOPPED_INCIDENT_IDS
+            ):
+                return HookResult(action=HookAction.SKIP_AGENT)
+            return HookResult()
+
+    api.register_runtime_hook(IncidentStopHook())
+
+
 def _register_manager_gate_hook(api: Any) -> None:
     """Register the plugin-native Manager continuation gate when QwenPaw is present."""
     try:
@@ -1388,13 +2236,24 @@ def _register_manager_gate_hook(api: Any) -> None:
         priority = 5
 
         async def run(self, ctx: Any) -> Any:
+            agent = getattr(ctx, "agent", None)
+            if not _is_manager_agent(agent):
+                return HookResult()
             session_id = _extract_session_id(ctx)
             message = _request_text(ctx.request)
+            if not _is_message_for_agent(message, agent) and "@opskeeper-" in message.lower():
+                return HookResult(action=HookAction.SKIP_AGENT)
             consumed_results = _MANAGER_DISPATCH_GATE.consume_result_with_origins(
                 session_id,
                 message,
             )
             if consumed_results:
+                for marker in consumed_results:
+                    workflow = _WORKFLOW_PROJECTOR.record_result(marker, message)
+                    await _emit_workflow_projection(
+                        consumed_results[marker],
+                        workflow,
+                    )
                 relays = [
                     (marker, origin)
                     for marker, origin in consumed_results.items()
@@ -1438,6 +2297,20 @@ def _register_manager_gate_hook(api: Any) -> None:
                 if relays:
                     return HookResult(action=HookAction.SKIP_AGENT)
                 return HookResult()
+            sender = _request_sender(ctx.request)
+            if _is_admin_sender(sender):
+                approved = bool(_WORKFLOW_ADMIN_APPROVAL_PATTERN.search(message))
+                rejected = bool(_WORKFLOW_ADMIN_REJECTION_PATTERN.search(message))
+                if approved or rejected:
+                    workflow = _WORKFLOW_PROJECTOR.record_admin_decision(
+                        session_id,
+                        message,
+                        approved and not rejected,
+                    )
+                    await _emit_workflow_projection(session_id, workflow)
+            if _workflow_incident_id(message):
+                workflow = _WORKFLOW_PROJECTOR.record_request(session_id, message)
+                await _emit_workflow_projection(session_id, workflow)
             if _has_new_task(message):
                 _MANAGER_DISPATCH_GATE.record_request_origin(session_id, message)
                 return HookResult()
@@ -1522,34 +2395,8 @@ class OpskeeperTeamHarnessPlugin:
             missing = sorted(copaw_api_methods - set(dir(api)))
             raise RuntimeError(f"CoPaw PluginApi is incomplete; missing: {missing}")
 
-        # 1) Prompt sections — 注入 Manager team / Worker / Manager agents 三段 prompt
-        try:
-            api.register_prompt_section(
-                "opskeeper_team_context",
-                after="workspace",
-                provider=team_prompt,
-                priority=40,
-            )
-        except Exception:
-            pass
-        try:
-            api.register_prompt_section(
-                "opskeeper_worker_context",
-                after="workspace",
-                provider=worker_prompt,
-                priority=30,
-            )
-        except Exception:
-            pass
-        try:
-            api.register_prompt_section(
-                "opskeeper_manager_context",
-                after="workspace",
-                provider=manager_prompt,
-                priority=30,
-            )
-        except Exception:
-            pass
+        # 1) Prompt sections — role-gated Manager team / Worker / Manager agents prompts
+        _register_prompt_sections(api)
 
         # 2) Skill provider — qwenpaw 2 runtime 期望 flat 布局（每个 skill 子目录里直接放 SKILL.md），
         # 优先注册 ASSET_DIR/qwenpaw-skills/<name>/SKILL.md；如缺则回退嵌套布局 skills/agent/<name>/。
@@ -1587,11 +2434,13 @@ class OpskeeperTeamHarnessPlugin:
                 except Exception:
                     pass
 
-        # 3) Middleware — read-only enforcement (10) + sanitizer (30) + audit (20)
+        # 3) Middleware — read-only enforcement (10) + outbound safety (20)
+        #    + sanitizer (30) + audit (20)
         try:
             api.register_middleware(_readonly_enforcement_factory, priority=10)
         except Exception:
             pass
+        api.register_middleware(_outbound_safety_factory, priority=20)
         try:
             api.register_middleware(_sanitizer_factory, priority=30)
         except Exception:
@@ -1603,6 +2452,7 @@ class OpskeeperTeamHarnessPlugin:
 
         # 4) Runtime hooks — task_trace TraceEnter / TraceExit
         _register_manager_stop_handler(api)
+        _register_incident_stop_hook(api)
         _register_manager_gate_hook(api)
         trace = _load_task_trace_module()
         if trace is not None:

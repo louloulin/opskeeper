@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 from types import ModuleType, SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 class _ToolResultState(str, Enum):
@@ -135,6 +135,17 @@ class ManagerGateTest(unittest.TestCase):
     def setUp(self):
         self.saved_modules = _install_runtime_stubs()
         self.state_directory = tempfile.TemporaryDirectory()
+        self.identity_patch = patch.dict(
+            "os.environ",
+            {
+                "AGENTTEAMS_WORKER_NAME": "",
+                "AGENTTEAMS_AGENT_NAME": "",
+                "AGENTTEAMS_WORKER_ROLE": "",
+                "AGENTTEAMS_AGENT_ROLE": "",
+                "AGENTTEAMS_MANAGER_RUNTIME": "",
+            },
+            clear=False,
+        )
         self.state_patch = patch.dict(
             "os.environ",
             {
@@ -144,12 +155,14 @@ class ManagerGateTest(unittest.TestCase):
             },
             clear=False,
         )
+        self.identity_patch.start()
         self.state_patch.start()
         self.module = _load_plugin()
         self.gate = self.module.ManagerDispatchGate()
 
     def tearDown(self):
         self.state_patch.stop()
+        self.identity_patch.stop()
         self.state_directory.cleanup()
         _restore_runtime_stubs(self.saved_modules)
 
@@ -404,6 +417,40 @@ class ManagerGateTest(unittest.TestCase):
             {"task-001": source_session},
         )
 
+    def test_dispatch_projects_workflow_after_successful_message(self):
+        source_session = "matrix:!entry-room:hs"
+        target_session = "matrix:!worker-room:hs"
+        self.module._MANAGER_DISPATCH_GATE.clear(source_session)
+        self.module._MANAGER_DISPATCH_GATE.clear(target_session)
+        middleware = self.module._readonly_enforcement_factory(
+            SimpleNamespace(session_id=source_session),
+            None,
+        )
+        dispatch = "@opskeeper-alerter:hs OPSKEEPER TASK OPSKEEPER-PROJECTOR-DISPATCH"
+        workflow = {"runId": "opskeeper-projector-dispatch"}
+        with patch.object(
+            self.module._WORKFLOW_PROJECTOR,
+            "record_dispatch",
+            return_value=workflow,
+        ) as record_dispatch, patch.object(
+            self.module,
+            "_emit_workflow_projection",
+            new_callable=AsyncMock,
+        ) as emit:
+            self.assertEqual(
+                self._dispatch_middleware(
+                    middleware,
+                    dispatch,
+                    target="room:!worker-room:hs",
+                    agent=SimpleNamespace(name="manager", _gate_pending_stop=None),
+                ),
+                ["sent"],
+            )
+        record_dispatch.assert_called_once_with(source_session, dispatch)
+        emit.assert_awaited_once_with(source_session, workflow)
+        self.module._MANAGER_DISPATCH_GATE.clear(source_session)
+        self.module._MANAGER_DISPATCH_GATE.clear(target_session)
+
     def test_dispatch_queues_react_pending_stop(self):
         source_session = "matrix:manager-room"
         agent = SimpleNamespace(name="manager", _gate_pending_stop=None)
@@ -470,6 +517,226 @@ class ManagerGateTest(unittest.TestCase):
         self.assertEqual(len(registered), 1)
         return registered[0]
 
+    def _registered_stop_hook(self):
+        registered = []
+
+        class FakeApi:
+            def register_runtime_hook(self, hook):
+                registered.append(hook)
+
+        self.module._register_incident_stop_hook(FakeApi())
+        self.assertEqual(len(registered), 1)
+        hook = registered[0]
+        self.assertEqual(hook.phase.value, "pre_execute")
+        self.assertEqual(hook.priority, 0)
+        return hook
+
+    def test_hook_projects_accepted_incident_request(self):
+        workflow = {"runId": "opskeeper-projector-request"}
+        context = self._hook_context(
+            "@manager:hs incident_id=opskeeper-projector-request",
+            sender="@admin:hs",
+        )
+        with patch.object(
+            self.module._WORKFLOW_PROJECTOR,
+            "record_request",
+            return_value=workflow,
+        ), patch.object(
+            self.module,
+            "_emit_workflow_projection",
+            new_callable=AsyncMock,
+        ) as emit:
+            result = asyncio.run(self._registered_hook().run(context))
+        self.assertEqual(result.action.value, "continue")
+        emit.assert_awaited_once_with("matrix:room-1", workflow)
+
+    def test_hook_projects_consumed_worker_result_before_relay(self):
+        source_session = "matrix:!entry-room:hs"
+        worker_session = "matrix:!worker-room:hs"
+        self.module._MANAGER_DISPATCH_GATE.clear(source_session)
+        self.module._MANAGER_DISPATCH_GATE.clear(worker_session)
+        self.module._MANAGER_DISPATCH_GATE.record(
+            worker_session,
+            "OPSKEEPER TASK OPSKEEPER-PROJECTOR-RESULT",
+            source_session,
+        )
+        context = self._hook_context(
+            "@manager:hs OPSKEEPER_RESULT OPSKEEPER-PROJECTOR-RESULT {}",
+            sender="@opskeeper-alerter:hs",
+        )
+        context.session_id = worker_session
+        workflow = {"runId": "opskeeper-projector-result"}
+        with patch.object(
+            self.module._WORKFLOW_PROJECTOR,
+            "record_result",
+            return_value=workflow,
+        ) as record_result, patch.object(
+            self.module,
+            "_emit_workflow_projection",
+            new_callable=AsyncMock,
+        ) as emit, patch.object(
+            self.module,
+            "_relay_matrix_completion",
+            return_value="$relay-event",
+        ):
+            result = asyncio.run(self._registered_hook().run(context))
+        self.assertEqual(result.action.value, "skip_agent")
+        record_result.assert_called_once_with(
+            "OPSKEEPER-PROJECTOR-RESULT",
+            context.request.input[0].content[0].text,
+        )
+        emit.assert_awaited_once_with(source_session, workflow)
+        self.module._MANAGER_DISPATCH_GATE.clear(worker_session)
+
+    def test_standalone_worker_is_not_manager_even_with_manager_runtime(self):
+        agent = SimpleNamespace(name="opskeeper-repairer")
+        environment = {
+            "AGENTTEAMS_WORKER_NAME": "opskeeper-repairer",
+            "AGENTTEAMS_WORKER_ROLE": "standalone",
+            "AGENTTEAMS_MANAGER_RUNTIME": "qwenpaw",
+        }
+        with patch.dict("os.environ", environment, clear=False):
+            self.assertFalse(self.module._is_manager_agent(agent))
+
+    def test_worker_hook_does_not_consume_manager_marker(self):
+        worker_session = "matrix:!worker-room:hs"
+        self.module._MANAGER_DISPATCH_GATE.record(worker_session, "OPSKEEPER TASK task-001")
+        context = self._hook_context("OPSKEEPER_RESULT task-001 {}", sender="@worker:hs")
+        context.agent = SimpleNamespace(name="opskeeper-repairer")
+        with patch.dict("os.environ", {"AGENTTEAMS_WORKER_ROLE": "standalone"}, clear=False):
+            result = asyncio.run(self._registered_hook().run(context))
+        self.assertEqual(result.action.value, "continue")
+        self.assertEqual(
+            self.module._MANAGER_DISPATCH_GATE.pending_markers(worker_session),
+            ("task-001",),
+        )
+        self.module._MANAGER_DISPATCH_GATE.clear(worker_session)
+
+    def test_hook_skips_message_addressed_to_another_opskeeper_role(self):
+        session_id = "matrix:room-1"
+        self.module._MANAGER_DISPATCH_GATE.clear(session_id)
+        context = self._hook_context("@opskeeper-verifier:hs status")
+        result = asyncio.run(self._registered_hook().run(context))
+        self.assertEqual(result.action.value, "skip_agent")
+        self.assertEqual(
+            self.module._MANAGER_DISPATCH_GATE.pending_markers(session_id),
+            (),
+        )
+
+    def test_message_targeting_current_opskeeper_role_is_allowed(self):
+        worker = SimpleNamespace(name="opskeeper-repairer")
+        environment = {
+            "AGENTTEAMS_WORKER_NAME": "opskeeper-repairer",
+            "AGENTTEAMS_WORKER_ROLE": "standalone",
+            "AGENTTEAMS_MANAGER_RUNTIME": "qwenpaw",
+        }
+        with patch.dict("os.environ", environment, clear=False):
+            self.assertTrue(
+                self.module._is_message_for_agent("@opskeeper-repairer:hs status", worker)
+            )
+            self.assertFalse(
+                self.module._is_message_for_agent("@opskeeper-verifier:hs status", worker)
+            )
+
+    def test_current_role_mention_wins_over_other_opskeeper_mentions(self):
+        manager = SimpleNamespace(name="manager")
+        worker = SimpleNamespace(name="opskeeper-repairer")
+        manager_environment = {
+            "AGENTTEAMS_AGENT_NAME": "manager",
+            "AGENTTEAMS_MANAGER_RUNTIME": "qwenpaw",
+        }
+        worker_environment = {
+            "AGENTTEAMS_WORKER_NAME": "opskeeper-repairer",
+            "AGENTTEAMS_WORKER_ROLE": "standalone",
+            "AGENTTEAMS_MANAGER_RUNTIME": "qwenpaw",
+        }
+        with patch.dict("os.environ", manager_environment, clear=False):
+            self.assertTrue(
+                self.module._is_message_for_agent(
+                    "@manager:hs ask @opskeeper-verifier to check.",
+                    manager,
+                )
+            )
+        with patch.dict("os.environ", worker_environment, clear=False):
+            self.assertTrue(
+                self.module._is_message_for_agent(
+                    "@opskeeper-repairer, coordinate with @opskeeper-verifier.",
+                    worker,
+                )
+            )
+            self.assertFalse(
+                self.module._is_message_for_agent(
+                    "@opskeeper-verifier, report status.",
+                    worker,
+                )
+            )
+
+    def test_prompt_registration_passes_role_conditions(self):
+        registrations = []
+
+        class FakeApi:
+            def register_prompt_section(self, name, **kwargs):
+                kwargs["name"] = name
+                registrations.append(kwargs)
+
+        self.module._register_prompt_sections(FakeApi())
+        self.assertEqual(
+            [registration["name"] for registration in registrations],
+            [
+                "opskeeper_team_context",
+                "opskeeper_worker_context",
+                "opskeeper_manager_context",
+            ],
+        )
+        manager = SimpleNamespace(name="manager")
+        worker = SimpleNamespace(name="opskeeper-repairer")
+        self.assertTrue(registrations[0]["condition"](manager))
+        self.assertFalse(registrations[0]["condition"](worker))
+        self.assertFalse(registrations[1]["condition"](manager))
+        self.assertTrue(registrations[1]["condition"](worker))
+        self.assertTrue(registrations[2]["condition"](manager))
+        self.assertFalse(registrations[2]["condition"](worker))
+
+    def test_prompt_registration_gates_fallback_for_installed_api(self):
+        registrations = []
+
+        class LegacyApi:
+            def register_prompt_section(self, name, **kwargs):
+                kwargs["name"] = name
+                if "condition" in kwargs:
+                    raise TypeError("condition is unsupported")
+                registrations.append(kwargs)
+
+        with patch.object(self.module, "team_prompt", lambda _agent: "team"), patch.object(
+            self.module,
+            "worker_prompt",
+            lambda _agent: "worker",
+        ), patch.object(self.module, "manager_prompt", lambda _agent: "manager"):
+            self.module._register_prompt_sections(LegacyApi())
+
+        manager = SimpleNamespace(name="manager")
+        worker = SimpleNamespace(name="opskeeper-repairer")
+        manager_environment = {
+            "AGENTTEAMS_MANAGER_RUNTIME": "qwenpaw",
+            "AGENTTEAMS_WORKER_ROLE": "",
+            "AGENTTEAMS_AGENT_ROLE": "",
+        }
+        worker_environment = {
+            "AGENTTEAMS_WORKER_NAME": "opskeeper-repairer",
+            "AGENTTEAMS_WORKER_ROLE": "standalone",
+            "AGENTTEAMS_MANAGER_RUNTIME": "qwenpaw",
+        }
+        with patch.dict("os.environ", manager_environment, clear=False):
+            self.assertEqual(
+                [registration["provider"](manager) for registration in registrations],
+                ["team", "", "manager"],
+            )
+        with patch.dict("os.environ", worker_environment, clear=False):
+            self.assertEqual(
+                [registration["provider"](worker) for registration in registrations],
+                ["", "worker", ""],
+            )
+
     def test_stop_handler_terminates_manager_turn_while_pending(self):
         registered = []
 
@@ -500,7 +767,7 @@ class ManagerGateTest(unittest.TestCase):
             channel_meta={"sender_id": sender},
         )
         return SimpleNamespace(
-            agent=SimpleNamespace(name="unknown-runtime-agent"),
+            agent=SimpleNamespace(name="manager"),
             request=request,
             session_id="matrix:room-1",
             context_injections=[],
@@ -749,6 +1016,97 @@ class ManagerGateTest(unittest.TestCase):
         self.assertEqual(admin_result.action.value, "continue")
         self.assertEqual(new_task_result.action.value, "continue")
         self.module._MANAGER_DISPATCH_GATE.clear("matrix:room-1")
+
+    def test_admin_stop_skips_later_non_admin_incident_input(self):
+        self.module._STOPPED_INCIDENT_IDS.clear()
+        hook = self._registered_stop_hook()
+        admin_context = self._hook_context(
+            "ADMIN STOP opskeeper-final-fresh-001", sender="@admin:hs"
+        )
+        worker_context = self._hook_context(
+            "@opskeeper-alerter:hs retry opskeeper-final-fresh-001",
+            sender="@worker:hs",
+        )
+        with patch.dict(
+            "os.environ",
+            {"AGENTTEAMS_ADMIN_MATRIX_ID": "@admin:hs"},
+            clear=False,
+        ):
+            self.assertEqual(
+                asyncio.run(hook.run(admin_context)).action.value,
+                "skip_agent",
+            )
+        self.assertIn(
+            "opskeeper-final-fresh-001", self.module._STOPPED_INCIDENT_IDS
+        )
+        self.assertEqual(
+            asyncio.run(hook.run(worker_context)).action.value,
+            "skip_agent",
+        )
+        self.module._STOPPED_INCIDENT_IDS.clear()
+
+    def test_incident_stop_is_recorded_before_model_and_admin_remains_allowed(self):
+        self.module._STOPPED_INCIDENT_IDS.clear()
+        hook = self._registered_stop_hook()
+        observed = []
+
+        def probe_context(message: str, sender: str):
+            context = self._hook_context(message, sender=sender)
+            original_run = hook.run
+
+            async def probing_run(ctx):
+                observed.append(
+                    (
+                        "opskeeper-final-admin-001"
+                        in self.module._STOPPED_INCIDENT_IDS,
+                        ctx is context,
+                    )
+                )
+                return await original_run(ctx)
+
+            hook.run = probing_run
+            try:
+                return asyncio.run(hook.run(context))
+            finally:
+                hook.run = original_run
+
+        with patch.dict(
+            "os.environ",
+            {"AGENTTEAMS_ADMIN_MATRIX_ID": "@admin:hs"},
+            clear=False,
+        ):
+            stop_result = probe_context(
+                "ADMIN STOP opskeeper-final-admin-001", "@admin:hs"
+            )
+            self.assertEqual(stop_result.action.value, "skip_agent")
+            self.assertEqual(observed[0], (False, True))
+
+            continued_admin = probe_context(
+                "restart opskeeper-final-admin-001", "@admin:hs"
+            )
+            self.assertEqual(continued_admin.action.value, "continue")
+
+    def test_non_admin_admin_stop_is_not_recorded(self):
+        self.module._STOPPED_INCIDENT_IDS.clear()
+        hook = self._registered_stop_hook()
+        with patch.dict(
+            "os.environ",
+            {"AGENTTEAMS_ADMIN_MATRIX_ID": "@admin:hs"},
+            clear=False,
+        ):
+            result = asyncio.run(
+                hook.run(
+                    self._hook_context(
+                        "ADMIN STOP opskeeper-final-worker-001",
+                        sender="@worker:hs",
+                    )
+                )
+            )
+        self.assertEqual(result.action.value, "continue")
+        self.assertNotIn(
+            "opskeeper-final-worker-001", self.module._STOPPED_INCIDENT_IDS
+        )
+        self.module._STOPPED_INCIDENT_IDS.clear()
 
 
 if __name__ == "__main__":

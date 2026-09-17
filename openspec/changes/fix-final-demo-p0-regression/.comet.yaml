@@ -1,0 +1,17 @@
+workflow: full
+phase: build
+build_mode: subagent-driven-development
+build_pause: null
+isolation: branch
+verify_mode: null
+base_ref: 2a94e6df8acf18ea8a132e932e3c3bacc2d049c0
+design_doc: docs/superpowers/specs/2026-09-17-fix-final-demo-p0-regression-design.md
+plan: docs/superpowers/plans/2026-09-17-fix-final-demo-p0-regression.md
+verify_result: pending
+verification_report: null
+branch_status: pending
+created_at: 2026-09-17
+verified_at: null
+archived: false
+handoff_context: openspec/changes/fix-final-demo-p0-regression/.comet/handoff/design-context.json
+handoff_hash: af184a55d48c13cfffa5bf1bb10a10dec66c9733eaf2aeb69b37472dcc8e979f

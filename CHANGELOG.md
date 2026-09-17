@@ -4,6 +4,8 @@
 
 ## 2026.09.14-rc4 — 2026-09-14
 
+- Rebind the release candidate to TeamHarness `1.0.59`, projecting stable OpsKeeper stages into Matrix `agentteams.workflow` events for synchronized Element notices and AgentTeams Dashboard task-board progression; the `1.0.58` binding is superseded.
+- Rebind the release candidate source boundary to backend/plugin source `305bec8417ef25234f3fa10734ddd8761e25c398` for the `1.0.59` TeamHarness tree recorded in `RELEASE_VERSION.json`.
 - Rebind the release candidate to TeamHarness `1.0.58`, scoping high-contrast text across every TeamHarness Dashboard entry point and restoring safe runtime credential fallbacks for the signed RCA proxy; the `1.0.57` binding is superseded.
 - Rebind the release candidate source boundary to backend/plugin source `9806560ab7a80c8c2ac2c828c3df4fc05b9a60da` for the `1.0.58` TeamHarness tree recorded in `RELEASE_VERSION.json`.
 
@@ -19,6 +21,7 @@
 - Rebind the release candidate to backend source `cfde43ebaf9406b2e19f9b33476c5f6cddab3f0e` and TeamHarness `1.0.52`; the `1.0.51` binding is superseded.
 - Rebind the release candidate to backend source `0942a5e132c795e4a4a9401f053d17af799da8e6` and TeamHarness `1.0.53`; the `1.0.52` binding is superseded.
 - Rebind the release candidate to backend source `7ef38649bdeb3d0f52f599ce16530e0912a6a74d` and TeamHarness `1.0.54`; the `1.0.53` binding is superseded.
+- Rebind the release candidate to backend source `c39e9ccc067eb45b09fd3a0356674b3fd6e9776e` and TeamHarness `1.0.55`; the `1.0.54` binding is superseded.
 - Close the PostgreSQL connection-pool recovery evidence loop with timeline aggregation, deployment/version visibility, weighted recovery sampling, bounded approval targets, and sanitized health summaries.
 - Respect an explicit QwenPaw runtime even when CoPaw-compatible APIs are present, and make source-tree task tracing load its signing helper from both source and installed layouts.
 - Derive QwenPaw readonly and sanitizer middleware from the AgentScope middleware protocol so real Manager and Worker agents initialize successfully.

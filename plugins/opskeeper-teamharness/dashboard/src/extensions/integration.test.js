@@ -38,12 +38,12 @@ const healthyResults = {
   pluginHealth: fulfilled({
     synced: true,
     diff: [],
-    worker: { version: '1.0.58', loaded: true, enabled: true },
+    worker: { version: '1.0.59', loaded: true, enabled: true },
   }),
   manifest: fulfilled({
     id: 'opskeeper-teamharness',
-    version: '1.0.58',
-    entry: { dashboard: 'dist/main-1.0.58.js' },
+    version: '1.0.59',
+    entry: { dashboard: 'dist/main-1.0.59.js' },
   }),
 };
 
@@ -57,7 +57,7 @@ test('extracts and matches Matrix rooms by id or canonical alias', () => {
 test('builds a passing room-to-plugin integration report', () => {
   const report = buildIntegrationPreflight(healthyResults, {
     targetRoomId: '#ops:example.com',
-    expectedPluginVersion: '1.0.58',
+    expectedPluginVersion: '1.0.59',
   });
 
   assert.equal(report.status, 'pass');
@@ -69,7 +69,7 @@ test('builds a passing room-to-plugin integration report', () => {
 
 test('warns when no target room is provided', () => {
   const report = buildIntegrationPreflight(healthyResults, {
-    expectedPluginVersion: '1.0.58',
+    expectedPluginVersion: '1.0.59',
   });
 
   assert.equal(report.status, 'warn');
@@ -83,7 +83,7 @@ test('reports Matrix and worker failures as blocking checks', () => {
     pluginHealth: fulfilled({ synced: false, diff: ['absent_on_worker'], worker: null }),
   }, {
     targetRoomId: '#ops:example.com',
-    expectedPluginVersion: '1.0.58',
+    expectedPluginVersion: '1.0.59',
   });
 
   assert.equal(report.status, 'fail');
