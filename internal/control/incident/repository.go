@@ -22,6 +22,7 @@ type Repository interface {
 	ListTenant(ctx context.Context, tenantID string) ([]Event, error)
 	SaveRunbook(ctx context.Context, postmortem Postmortem) error
 	ListRunbooks(ctx context.Context, tenantID, databaseType, faultFingerprint string) ([]Postmortem, error)
+	ListIncidentRunbooks(ctx context.Context, tenantID, incidentID string) ([]Postmortem, error)
 	AppendRecallLogs(ctx context.Context, logs []RecallLog) error
 	ListRecallLogs(ctx context.Context, tenantID, incidentID string) ([]RecallLog, error)
 }
@@ -145,6 +146,29 @@ func (repository *SQLRepository) ListRunbooks(ctx context.Context, tenantID, dat
 	var rows []runbookRow
 	if err := query.Order("confirmed_at DESC").Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("list runbook memory: %w", err)
+	}
+	postmortems := make([]Postmortem, 0, len(rows))
+	for _, row := range rows {
+		postmortem, err := row.toPostmortem()
+		if err != nil {
+			return nil, err
+		}
+		postmortems = append(postmortems, postmortem)
+	}
+	return postmortems, nil
+}
+
+func (repository *SQLRepository) ListIncidentRunbooks(ctx context.Context, tenantID, incidentID string) ([]Postmortem, error) {
+	if tenantID == "" || incidentID == "" {
+		return nil, errors.New("incident: tenant and incident ids are required")
+	}
+	var rows []runbookRow
+	err := repository.db.WithContext(ctx).
+		Where("tenant_id = ? AND incident_id = ?", tenantID, incidentID).
+		Order("confirmed_at DESC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("list incident runbook memory: %w", err)
 	}
 	postmortems := make([]Postmortem, 0, len(rows))
 	for _, row := range rows {

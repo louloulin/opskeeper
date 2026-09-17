@@ -206,6 +206,42 @@ test('deduplicates concurrent investigations for one incident', async () => {
 
 test('normalizes the unified OpsKeeper entry tab', () => {
   assert.equal(normalizeOpskeeperTab('runtime'), 'runtime');
+  assert.equal(normalizeOpskeeperTab('archive'), 'archive');
   assert.equal(normalizeOpskeeperTab('plugins'), 'plugins');
   assert.equal(normalizeOpskeeperTab('unknown'), 'diagnostics');
+});
+
+test('archive readback uses the Manager proxy endpoint', async () => {
+  const originalCreateRequest = xhrTransport.createRequest;
+  const requests = [];
+  globalThis.XMLHttpRequest = function StubXMLHttpRequest() {
+    const request = {
+      status: 200,
+      responseText: JSON.stringify({ data: { incident_id: 'inc-archive-1' } }),
+      open(method, url) {
+        requests.push({ method, url });
+      },
+      setRequestHeader() {},
+      getResponseHeader() {
+        return 'application/json';
+      },
+      send() {
+        request.onload();
+      },
+    };
+    return request;
+  };
+
+  try {
+    xhrTransport.createRequest = () => new globalThis.XMLHttpRequest();
+    const response = await opskeeperApi.getIncidentArchive('inc archive/1');
+    assert.equal(response.data.incident_id, 'inc-archive-1');
+    assert.deepEqual(requests, [{
+      method: 'GET',
+      url: '/api/opskeeper/incidents/inc%20archive%2F1/archive',
+    }]);
+    await assert.rejects(opskeeperApi.getIncidentArchive(''), /incident_id is required/);
+  } finally {
+    xhrTransport.createRequest = originalCreateRequest;
+  }
 });

@@ -145,6 +145,15 @@ export const opskeeperApi = {
     return jsonFetch('/incidents/' + encodeURIComponent(incident_id));
   },
 
+  // GET /v1/incidents/{incident_id}/archive → sanitized control-plane evidence archive
+  getIncidentArchive(incident_id) {
+    const normalizedIncidentId = String(incident_id ?? '').trim();
+    if (!normalizedIncidentId) {
+      return Promise.reject(new Error('incident_id is required'));
+    }
+    return jsonFetch('/incidents/' + encodeURIComponent(normalizedIncidentId) + '/archive');
+  },
+
   // ── State (MinIO state.json) ───────────────────────────────────────────
   // GET /v1/state/{task_id}
   getState(task_id) {

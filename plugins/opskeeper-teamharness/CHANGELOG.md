@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.54 — 2026-09-17
+
+- Add the Dashboard Archive tab for read-only incident evidence-chain, completeness, timing, trace, similar-incident, and postmortem readback.
+- Keep Manager as the tenant-isolated authority for archive data and expose only sanitized control-plane evidence references.
+
 ## 1.0.53 — 2026-09-17
 
 - Add a reviewer-only `incident.timeline` MCP tool backed by the durable business-incident event API, so string incident IDs no longer require numeric `incident.get` conversion.

@@ -37,6 +37,12 @@ export function activate(api) {
   });
 
   api.registerRoute({
+    id: 'archive',
+    title: 'OpsKeeper · 档案',
+    component: () => React.createElement(OpskeeperUnifiedRoute, { api, initialTab: 'archive' }),
+  });
+
+  api.registerRoute({
     id: 'runtime',
     title: 'OpsKeeper · Runtime',
     component: () => React.createElement(OpskeeperUnifiedRoute, { api, initialTab: 'runtime' }),
