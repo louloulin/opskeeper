@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.57 — 2026-09-17
+
+- Increase installed-plugin secondary text contrast with the adaptive foreground token and bounded opacity.
+
+## 1.0.56 — 2026-09-17
 ## 1.0.56 — 2026-09-17
 
 - Add a read-only Dashboard integration preflight that verifies the target Matrix room, session, AgentTeams, OpsKeeper, Worker plugin, and Dashboard manifest chain.

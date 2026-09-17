@@ -34,6 +34,12 @@ test('uses the foreground token for muted plugin text', () => {
   assert.deepEqual(violations, []);
 });
 
+test('keeps installed-plugin descriptions readable in both themes', () => {
+  const extensionsDir = fileURLToPath(new URL('./', import.meta.url));
+  const source = readFileSync(path.join(extensionsDir, 'install-view.jsx'), 'utf8');
+  assert.match(source, /fontSize:\s*11,\s*color:\s*['`]var\(--foreground\)['`],\s*opacity:\s*0\.76/u);
+});
+
 test('normalizes health response wrappers and checks', () => {
   const report = normalizeHealthReport({
     data: {
