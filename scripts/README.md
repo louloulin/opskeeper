@@ -10,6 +10,22 @@
 | `validate-agentteams-protocols.rb` | 用 JSON Schema 校验 `openspec/.../protocols/*.yaml` 与 examples |
 | `i18n-lint.mjs` | 扫描 `web/src` 里 `tr()` 的中英完整性 |
 | `opskeeper-hitl-monitor.sh` | 长驻守护进程：循环拉 `expire-hitl --loop`，超时 HITL 升级通知（详见下文） |
+| `demo_preflight.sh` | 演示前只读预检公网路由、证书、核心容器、插件同步与关键健康端点 |
+
+## demo_preflight.sh
+
+该脚本只做读检查，不重启、不部署、不改数据，适合作为演示前的 Go/No-Go
+闸门。至少配置 `DEMO_SSH_HOST`、`TEAMS_URL`、`ROOMS_URL`、
+`OPSKEEPER_PUBLIC_URL`，也可以用 `DEMO_PREFLIGHT_ENV` 指向私有 env 文件：
+
+```bash
+DEMO_PREFLIGHT_ENV=/secure/path/demo-preflight.env \
+  scripts/demo_preflight.sh
+```
+
+脚本会输出 `PASS`、`WARN`、`FAIL`；出现 `FAIL` 时退出码为 `1`。通过后可用
+浏览器完成一次人工登录和目标房间可视化确认，弥补只读预检不能覆盖的最终
+人机交互体验。
 
 ## opskeeper-hitl-monitor.sh
 
