@@ -63,6 +63,43 @@ async function pluginManagerFetch(path, init = {}) {
   return data;
 }
 
+async function dashboardFetch(path, init = {}) {
+  const res = await fetch(path, {
+    credentials: 'same-origin',
+    ...init,
+    headers: {
+      ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
+      ...(init.headers || {}),
+    },
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = new Error(data?.error || data?.message || `Dashboard HTTP ${res.status}`);
+    err.status = res.status;
+    err.body = data;
+    throw err;
+  }
+  return data;
+}
+
+export function readMatrixAuth(storage = globalThis.localStorage) {
+  if (!storage) return null;
+  const raw = storage.getItem('matrix-store');
+  if (!raw) return null;
+  try {
+    const persisted = JSON.parse(raw);
+    const state = persisted?.state || {};
+    if (!state.isLoggedIn || !state.accessToken || !state.homeserver) return null;
+    return {
+      homeserver: state.homeserver,
+      userId: state.userId || '',
+      accessToken: state.accessToken,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export const xhrTransport = {
   createRequest() {
     return new XMLHttpRequest();
@@ -198,6 +235,26 @@ export const opskeeperApi = {
     return jsonFetch('/version');
   },
 
+  getDashboardSession() {
+    return dashboardFetch('/api/auth/session');
+  },
+
+  getMatrixSync() {
+    const auth = readMatrixAuth();
+    if (!auth) return Promise.reject(new Error('Matrix 登录态不可用，请重新登录 Dashboard'));
+    const query = new URLSearchParams({
+      homeserver: auth.homeserver,
+      timeout: '0',
+    });
+    return dashboardFetch(`/api/matrix/sync?${query}`, {
+      headers: { Authorization: `Bearer ${auth.accessToken}` },
+    });
+  },
+
+  getAgentTeamsHealth() {
+    return dashboardFetch('/api/agentteams/healthz');
+  },
+
   getIncidentMetrics() {
     return jsonFetch('/incidents/metrics');
   },
@@ -206,6 +263,14 @@ export const opskeeperApi = {
   // GET /api/v1/plugins — list installed opskeeper plugins
   listPlugins() {
     return pluginManagerFetch('');
+  },
+
+  getPluginHealth(pluginId) {
+    return pluginManagerFetch('/' + encodeURIComponent(pluginId) + '/health');
+  },
+
+  getDashboardPluginManifest(pluginId) {
+    return dashboardFetch(`/plugins/${encodeURIComponent(pluginId)}/plugin.json?preflight=${Date.now()}`);
   },
 
   // POST /api/v1/plugins/install — upload a plugin package; Manager stores it,

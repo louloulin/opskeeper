@@ -225,6 +225,7 @@ test('normalizes the unified OpsKeeper entry tab', () => {
   assert.equal(normalizeOpskeeperTab('runtime'), 'runtime');
   assert.equal(normalizeOpskeeperTab('archive'), 'archive');
   assert.equal(normalizeOpskeeperTab('plugins'), 'plugins');
+  assert.equal(normalizeOpskeeperTab('integration'), 'integration');
   assert.equal(normalizeOpskeeperTab('unknown'), 'diagnostics');
 });
 

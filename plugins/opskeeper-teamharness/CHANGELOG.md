@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.56 — 2026-09-17
+
+- Add a read-only Dashboard integration preflight that verifies the target Matrix room, session, AgentTeams, OpsKeeper, Worker plugin, and Dashboard manifest chain.
+- Keep the check side-effect free so it is safe to run before a live demonstration.
+
+## 1.0.55 — 2026-09-17
 ## 1.0.55 — 2026-09-17
 
 - Use the Dashboard foreground token for muted plugin text so descriptions remain readable in light and dark themes.

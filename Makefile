@@ -70,6 +70,7 @@ build-plugins: ## 构建 AgentTeams 插件发布包
 test-plugins: ## 运行插件测试
 	bash -n scripts/demo_preflight.sh
 	scripts/demo_preflight.sh --help >/dev/null
+	npm test --prefix plugins/opskeeper-teamharness/dashboard
 	$(MAKE) -C plugins/agentteams-plugin-installer self-check
 	$(PYTHON) -m pytest tests/test_deterministic_archive.py plugins/opskeeper-teamharness
 

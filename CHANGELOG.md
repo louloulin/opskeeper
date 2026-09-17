@@ -4,6 +4,8 @@
 
 ## 2026.09.14-rc4 — 2026-09-14
 
+- Rebind the release candidate to TeamHarness `1.0.56` and installer plugin `1.4.3`, adding a read-only room-to-plugin integration preflight; the `1.0.55` plugin binding is superseded.
+- Rebind the release candidate source boundary to backend/plugin source `cb750d6480a230b2ded68ea1c35acfb71fcb271a` for the `1.0.56` TeamHarness tree recorded in `RELEASE_VERSION.json`.
 - Rebind the release candidate to TeamHarness `1.0.55` and installer plugin `1.4.3`, restoring readable muted plugin text in light and dark Dashboard themes; the `1.0.54` plugin binding is superseded.
 - Rebind the release candidate source boundary to backend/plugin source `27b985e8240b075d9d27ba3841bf056085537f0e` for the `1.0.55` TeamHarness tree recorded in `RELEASE_VERSION.json`.
 - Make TeamHarness Manager completion relays durable across runtime reloads and deterministic after Matrix rewrites a Worker result prefix.

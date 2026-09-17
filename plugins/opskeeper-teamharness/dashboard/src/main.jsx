@@ -31,6 +31,12 @@ export function activate(api) {
   });
 
   api.registerRoute({
+    id: 'integration',
+    title: 'OpsKeeper · 链路自检',
+    component: () => React.createElement(OpskeeperUnifiedRoute, { api, initialTab: 'integration' }),
+  });
+
+  api.registerRoute({
     id: 'install',
     title: 'OpsKeeper · 插件',
     component: () => React.createElement(OpskeeperUnifiedRoute, { api, initialTab: 'plugins' }),
