@@ -27,9 +27,8 @@ class _ToolResponse:
 
 
 class _MiddlewareBase:
-    @staticmethod
-    def is_implemented(hook_name: str):
-        return hook_name == "on_acting"
+    def is_implemented(self, hook_name: str):
+        return callable(getattr(self, hook_name, None))
 
 
 def _install_agentscope_stubs() -> dict[str, Any]:
@@ -133,9 +132,175 @@ class ReadOnlyEnforcementTest(unittest.TestCase):
     def test_registered_middlewares_implement_the_agentscope_protocol(self):
         readonly = self.module._readonly_enforcement_factory(None, None)
         sanitizer = self.module._sanitizer_factory(None, None)
+        outbound = self.module._outbound_safety_factory(None, None)
         for middleware in (readonly, sanitizer):
             self.assertTrue(middleware.is_implemented("on_acting"))
             self.assertFalse(middleware.is_implemented("on_reply"))
+        self.assertTrue(outbound.is_implemented("on_acting"))
+        self.assertTrue(outbound.is_implemented("on_reply"))
+
+    def test_strip_thinking_removes_multiline_and_leading_partial_spans(self):
+        self.assertEqual(
+            self.module._strip_thinking(
+                "<think>line one\nline two</think>\npublic result"
+            ),
+            "public result",
+        )
+        self.assertEqual(
+            self.module._strip_thinking("<think>unfinished private reasoning"),
+            "",
+        )
+
+    def test_sanitize_reply_event_handles_content_blocks_and_text_deltas(self):
+        final_message = SimpleNamespace(
+            content=[_TextBlock("<think>private</think>\npublic result")]
+        )
+        dict_content = SimpleNamespace(
+            content=[{"type": "text", "text": "<think>private</think>public dict"}]
+        )
+        text_block = _TextBlock("<think>private</think>public block")
+        delta = SimpleNamespace(text="<think>private</think>public delta")
+
+        for event in (final_message, dict_content, text_block, delta):
+            with self.subTest(event=event):
+                self.assertIs(self.module._sanitize_reply_event(event), event)
+
+        self.assertEqual(final_message.content[0].text, "public result")
+        self.assertEqual(dict_content.content[0]["text"], "public dict")
+        self.assertEqual(text_block.text, "public block")
+        self.assertEqual(delta.text, "public delta")
+
+    def test_outbound_reply_is_sanitized_and_bounded_without_another_event(self):
+        async def next_handler(**_kwargs):
+            yield SimpleNamespace(text="<think>private</think>public result")
+
+        async def invoke():
+            return [
+                event
+                async for event in middleware.on_reply(
+                    agent=None,
+                    input_kwargs={},
+                    next_handler=next_handler,
+                )
+            ]
+
+        with patch.dict(
+            "os.environ", {"OPSKEEPER_OUTBOUND_LIMIT": "1"}, clear=False
+        ):
+            middleware = self.module._outbound_safety_factory(None, None)
+            events = asyncio.run(invoke())
+            self.assertEqual(events[0].text, "public result")
+            with self.assertRaisesRegex(
+                RuntimeError, "OpsKeeper outbound rate limit exceeded"
+            ):
+                asyncio.run(invoke())
+
+    def test_outbound_window_slides_and_invalid_settings_fall_back(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "OPSKEEPER_OUTBOUND_LIMIT": "1001",
+                "OPSKEEPER_OUTBOUND_WINDOW_SECONDS": "0",
+            },
+            clear=False,
+        ):
+            middleware = self.module._outbound_safety_factory(None, None)
+        self.assertEqual(middleware._limit, 12)
+        self.assertEqual(middleware._window_seconds, 10.0)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "OPSKEEPER_OUTBOUND_LIMIT": "1",
+                "OPSKEEPER_OUTBOUND_WINDOW_SECONDS": "1",
+            },
+            clear=False,
+        ):
+            middleware = self.module._outbound_safety_factory(None, None)
+
+        async def next_handler(**_kwargs):
+            yield "reply"
+
+        async def invoke():
+            async for _event in middleware.on_reply(
+                agent=None,
+                input_kwargs={},
+                next_handler=next_handler,
+            ):
+                pass
+
+        with patch.object(middleware, "_monotonic", side_effect=[0.0, 2.0]):
+            asyncio.run(invoke())
+            asyncio.run(invoke())
+
+    def test_successful_message_attempts_share_outbound_boundary(self):
+        with patch.dict(
+            "os.environ", {"OPSKEEPER_OUTBOUND_LIMIT": "1"}, clear=False
+        ):
+            middleware = self.module._outbound_safety_factory(None, None)
+        input_kwargs = {
+            "tool_call": SimpleNamespace(
+                name="teamharness__message",
+                input=json.dumps({"message": "sent"}),
+            ),
+        }
+
+        async def next_handler(**_kwargs):
+            yield "sent"
+
+        async def invoke(tool_name="teamharness__message"):
+            kwargs = {
+                **input_kwargs,
+                "tool_call": SimpleNamespace(
+                    name=tool_name,
+                    input=json.dumps({"message": "sent"}),
+                ),
+            }
+            async for _event in middleware.on_acting(
+                agent=None,
+                input_kwargs=kwargs,
+                next_handler=next_handler,
+            ):
+                pass
+
+        asyncio.run(invoke())
+        with self.assertRaisesRegex(
+            RuntimeError, "OpsKeeper outbound rate limit exceeded"
+        ):
+            asyncio.run(invoke())
+
+    def test_failed_message_attempt_does_not_consume_outbound_boundary(self):
+        with patch.dict(
+            "os.environ", {"OPSKEEPER_OUTBOUND_LIMIT": "1"}, clear=False
+        ):
+            middleware = self.module._outbound_safety_factory(None, None)
+        input_kwargs = {
+            "tool_call": SimpleNamespace(
+                name="teamharness__message",
+                input=json.dumps({"message": "not sent"}),
+            ),
+        }
+
+        async def failed_handler(**_kwargs):
+            yield _ToolResponse(
+                content=[],
+                state=_ToolResultState.DENIED,
+                metadata={},
+            )
+
+        async def successful_handler(**_kwargs):
+            yield "sent"
+
+        async def invoke(next_handler):
+            async for _event in middleware.on_acting(
+                agent=None,
+                input_kwargs=input_kwargs,
+                next_handler=next_handler,
+            ):
+                pass
+
+        asyncio.run(invoke(failed_handler))
+        asyncio.run(invoke(successful_handler))
 
     def test_write_file_is_denied_without_execution(self):
         events, executed = self._invoke("write_file")
@@ -388,6 +553,10 @@ class ReadOnlyEnforcementTest(unittest.TestCase):
         )
         self.assertLess(
             priorities[self.module._readonly_enforcement_factory],
+            priorities[self.module._outbound_safety_factory],
+        )
+        self.assertLess(
+            priorities[self.module._outbound_safety_factory],
             priorities[self.module._sanitizer_factory],
         )
 

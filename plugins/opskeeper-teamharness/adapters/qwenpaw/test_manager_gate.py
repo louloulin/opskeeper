@@ -483,6 +483,20 @@ class ManagerGateTest(unittest.TestCase):
         self.assertEqual(len(registered), 1)
         return registered[0]
 
+    def _registered_stop_hook(self):
+        registered = []
+
+        class FakeApi:
+            def register_runtime_hook(self, hook):
+                registered.append(hook)
+
+        self.module._register_incident_stop_hook(FakeApi())
+        self.assertEqual(len(registered), 1)
+        hook = registered[0]
+        self.assertEqual(hook.phase.value, "pre_execute")
+        self.assertEqual(hook.priority, 0)
+        return hook
+
     def test_standalone_worker_is_not_manager_even_with_manager_runtime(self):
         agent = SimpleNamespace(name="opskeeper-repairer")
         environment = {
@@ -911,6 +925,97 @@ class ManagerGateTest(unittest.TestCase):
         self.assertEqual(admin_result.action.value, "continue")
         self.assertEqual(new_task_result.action.value, "continue")
         self.module._MANAGER_DISPATCH_GATE.clear("matrix:room-1")
+
+    def test_admin_stop_skips_later_non_admin_incident_input(self):
+        self.module._STOPPED_INCIDENT_IDS.clear()
+        hook = self._registered_stop_hook()
+        admin_context = self._hook_context(
+            "ADMIN STOP opskeeper-final-fresh-001", sender="@admin:hs"
+        )
+        worker_context = self._hook_context(
+            "@opskeeper-alerter:hs retry opskeeper-final-fresh-001",
+            sender="@worker:hs",
+        )
+        with patch.dict(
+            "os.environ",
+            {"AGENTTEAMS_ADMIN_MATRIX_ID": "@admin:hs"},
+            clear=False,
+        ):
+            self.assertEqual(
+                asyncio.run(hook.run(admin_context)).action.value,
+                "skip_agent",
+            )
+        self.assertIn(
+            "opskeeper-final-fresh-001", self.module._STOPPED_INCIDENT_IDS
+        )
+        self.assertEqual(
+            asyncio.run(hook.run(worker_context)).action.value,
+            "skip_agent",
+        )
+        self.module._STOPPED_INCIDENT_IDS.clear()
+
+    def test_incident_stop_is_recorded_before_model_and_admin_remains_allowed(self):
+        self.module._STOPPED_INCIDENT_IDS.clear()
+        hook = self._registered_stop_hook()
+        observed = []
+
+        def probe_context(message: str, sender: str):
+            context = self._hook_context(message, sender=sender)
+            original_run = hook.run
+
+            async def probing_run(ctx):
+                observed.append(
+                    (
+                        "opskeeper-final-admin-001"
+                        in self.module._STOPPED_INCIDENT_IDS,
+                        ctx is context,
+                    )
+                )
+                return await original_run(ctx)
+
+            hook.run = probing_run
+            try:
+                return asyncio.run(hook.run(context))
+            finally:
+                hook.run = original_run
+
+        with patch.dict(
+            "os.environ",
+            {"AGENTTEAMS_ADMIN_MATRIX_ID": "@admin:hs"},
+            clear=False,
+        ):
+            stop_result = probe_context(
+                "ADMIN STOP opskeeper-final-admin-001", "@admin:hs"
+            )
+            self.assertEqual(stop_result.action.value, "skip_agent")
+            self.assertEqual(observed[0], (False, True))
+
+            continued_admin = probe_context(
+                "restart opskeeper-final-admin-001", "@admin:hs"
+            )
+            self.assertEqual(continued_admin.action.value, "continue")
+
+    def test_non_admin_admin_stop_is_not_recorded(self):
+        self.module._STOPPED_INCIDENT_IDS.clear()
+        hook = self._registered_stop_hook()
+        with patch.dict(
+            "os.environ",
+            {"AGENTTEAMS_ADMIN_MATRIX_ID": "@admin:hs"},
+            clear=False,
+        ):
+            result = asyncio.run(
+                hook.run(
+                    self._hook_context(
+                        "ADMIN STOP opskeeper-final-worker-001",
+                        sender="@worker:hs",
+                    )
+                )
+            )
+        self.assertEqual(result.action.value, "continue")
+        self.assertNotIn(
+            "opskeeper-final-worker-001", self.module._STOPPED_INCIDENT_IDS
+        )
+        self.module._STOPPED_INCIDENT_IDS.clear()
 
 
 if __name__ == "__main__":

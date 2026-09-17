@@ -28,6 +28,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+from collections import deque
 from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Optional
 
@@ -78,7 +79,23 @@ _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
 _MANAGER_GATE_TTL_ENV = "OPSKEEPER_MANAGER_GATE_TTL_SECONDS"
 _MANAGER_GATE_STATE_FILE_ENV = "OPSKEEPER_MANAGER_GATE_STATE_FILE"
+_OUTBOUND_LIMIT_ENV = "OPSKEEPER_OUTBOUND_LIMIT"
+_OUTBOUND_WINDOW_SECONDS_ENV = "OPSKEEPER_OUTBOUND_WINDOW_SECONDS"
+_DEFAULT_OUTBOUND_LIMIT = 12
+_DEFAULT_OUTBOUND_WINDOW_SECONDS = 10.0
 _DEFAULT_MANAGER_GATE_TTL_SECONDS = 600.0
+_THINKING_SPAN_PATTERN = re.compile(
+    r"<\s*think\s*>.*?<\s*/\s*think\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+_LEADING_PARTIAL_THINKING_PATTERN = re.compile(
+    r"^\s*<\s*think\s*>.*\Z",
+    re.DOTALL | re.IGNORECASE,
+)
+_ADMIN_STOP_PATTERN = re.compile(
+    r"^\s*ADMIN\s+STOP\s+([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\s*$",
+    re.IGNORECASE,
+)
 _TASK_MARKER_PATTERN = re.compile(
     r"\bOPSKEEPER[\s_]+TASK[\s_]+([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\b"
 )
@@ -502,12 +519,12 @@ class ManagerDispatchGate:
 
 
 _MANAGER_DISPATCH_GATE = ManagerDispatchGate()
+_STOPPED_INCIDENT_IDS: set[str] = set()
 
 
 class _FallbackMiddlewareBase:
-    @staticmethod
-    def is_implemented(hook_name: str) -> bool:
-        return hook_name == "on_acting"
+    def is_implemented(self, hook_name: str) -> bool:
+        return callable(getattr(self, hook_name, None))
 
 
 def _middleware_base() -> type[Any]:
@@ -575,6 +592,126 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 yield event
 
     return OpskeeperSanitizer()
+
+
+def _strip_thinking(text: str) -> str:
+    result = _THINKING_SPAN_PATTERN.sub("", text)
+    changed = result != text
+    if not changed:
+        result = _LEADING_PARTIAL_THINKING_PATTERN.sub("", text)
+        changed = result != text
+    return result.lstrip("\r\n") if changed else result
+
+
+def _sanitize_reply_value(value: Any) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _sanitize_reply_value(item)
+        return
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key == "text" and isinstance(nested, str):
+                value[key] = _strip_thinking(nested)
+            else:
+                _sanitize_reply_value(nested)
+        return
+    text = getattr(value, "text", None)
+    if isinstance(text, str):
+        value.text = _strip_thinking(text)
+    content = getattr(value, "content", None)
+    if content is not None:
+        _sanitize_reply_value(content)
+
+
+def _sanitize_reply_event(event: Any) -> Any:
+    _sanitize_reply_value(event)
+    return event
+
+
+def _outbound_environment_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if minimum <= value <= maximum else default
+
+
+class OutboundSafetyMiddleware(_middleware_base()):
+    def __init__(self, monotonic: Callable[[], float] = time.monotonic) -> None:
+        self._monotonic = monotonic
+        self._limit = _outbound_environment_int(
+            _OUTBOUND_LIMIT_ENV,
+            _DEFAULT_OUTBOUND_LIMIT,
+            1,
+            1000,
+        )
+        self._window_seconds = float(
+            _outbound_environment_int(
+                _OUTBOUND_WINDOW_SECONDS_ENV,
+                int(_DEFAULT_OUTBOUND_WINDOW_SECONDS),
+                1,
+                3600,
+            )
+        )
+        self._timestamps: deque[float] = deque()
+        self._lock = threading.Lock()
+
+    def _reserve(self) -> float:
+        now = self._monotonic()
+        with self._lock:
+            cutoff = now - self._window_seconds
+            while self._timestamps and self._timestamps[0] <= cutoff:
+                self._timestamps.popleft()
+            if len(self._timestamps) >= self._limit:
+                raise RuntimeError(
+                    "OpsKeeper outbound rate limit exceeded; stopping this turn"
+                )
+            self._timestamps.append(now)
+            return now
+
+    def _release(self, timestamp: float) -> None:
+        with self._lock:
+            try:
+                self._timestamps.remove(timestamp)
+            except ValueError:
+                pass
+
+    async def on_reply(
+        self,
+        agent: Any,
+        input_kwargs: dict[str, Any],
+        next_handler: Callable[..., AsyncGenerator[Any, None]],
+    ) -> AsyncGenerator[Any, None]:
+        self._reserve()
+        async for event in next_handler(**input_kwargs):
+            yield _sanitize_reply_event(event)
+
+    async def on_acting(
+        self,
+        agent: Any,
+        input_kwargs: dict[str, Any],
+        next_handler: Callable[..., AsyncGenerator[Any, None]],
+    ) -> AsyncGenerator[Any, None]:
+        tool_name, _arguments = _extract_tool_call(input_kwargs)
+        is_message_attempt = _is_message_tool(_normalize_tool_name(tool_name))
+        timestamp = self._reserve() if is_message_attempt else None
+        events: list[Any] = []
+        yielded = False
+        try:
+            async for event in next_handler(**input_kwargs):
+                yielded = True
+                events.append(event)
+                yield event
+        except BaseException:
+            if timestamp is not None and not yielded:
+                self._release(timestamp)
+            raise
+        if timestamp is not None and _has_failed_tool_result(events):
+            self._release(timestamp)
+
+
+def _outbound_safety_factory(_context: Any, _agent_config: Any):
+    return OutboundSafetyMiddleware()
 
 
 def _extract_tool_call(input_kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -924,7 +1061,8 @@ def _as_copaw_toolkit_middleware(middleware: Any) -> Callable[..., Any]:
 
 def _has_failed_tool_result(events: list[Any]) -> bool:
     for event in events:
-        state = str(getattr(event, "state", "")).lower()
+        raw_state = getattr(event, "state", "")
+        state = str(getattr(raw_state, "value", raw_state)).lower()
         if state in {"error", "denied", "interrupted"}:
             return True
     return False
@@ -1450,6 +1588,35 @@ def build_investigate_router():
     return router
 
 
+def _register_incident_stop_hook(api: Any) -> None:
+    try:
+        from qwenpaw.runtime.hooks import HookAction, HookBase, HookResult
+        from qwenpaw.runtime.phases import Phase
+    except ImportError:
+        _MANAGER_GATE_LOGGER.debug("QwenPaw runtime hooks unavailable", exc_info=True)
+        return
+
+    class IncidentStopHook(HookBase):
+        phase = Phase.PRE_EXECUTE
+        name = "opskeeper_incident_stop"
+        priority = 0
+
+        async def run(self, ctx: Any) -> Any:
+            message = _request_text(getattr(ctx, "request", None))
+            sender = _request_sender(getattr(ctx, "request", None))
+            stop_match = _ADMIN_STOP_PATTERN.match(message)
+            if stop_match and _is_admin_sender(sender):
+                _STOPPED_INCIDENT_IDS.add(stop_match.group(1))
+                return HookResult(action=HookAction.SKIP_AGENT)
+            if not _is_admin_sender(sender) and any(
+                incident_id in message for incident_id in _STOPPED_INCIDENT_IDS
+            ):
+                return HookResult(action=HookAction.SKIP_AGENT)
+            return HookResult()
+
+    api.register_runtime_hook(IncidentStopHook())
+
+
 def _register_manager_gate_hook(api: Any) -> None:
     """Register the plugin-native Manager continuation gate when QwenPaw is present."""
     try:
@@ -1643,9 +1810,14 @@ class OpskeeperTeamHarnessPlugin:
                 except Exception:
                     pass
 
-        # 3) Middleware — read-only enforcement (10) + sanitizer (30) + audit (20)
+        # 3) Middleware — read-only enforcement (10) + outbound safety (20)
+        #    + sanitizer (30) + audit (20)
         try:
             api.register_middleware(_readonly_enforcement_factory, priority=10)
+        except Exception:
+            pass
+        try:
+            api.register_middleware(_outbound_safety_factory, priority=20)
         except Exception:
             pass
         try:
@@ -1659,6 +1831,7 @@ class OpskeeperTeamHarnessPlugin:
 
         # 4) Runtime hooks — task_trace TraceEnter / TraceExit
         _register_manager_stop_handler(api)
+        _register_incident_stop_hook(api)
         _register_manager_gate_hook(api)
         trace = _load_task_trace_module()
         if trace is not None:

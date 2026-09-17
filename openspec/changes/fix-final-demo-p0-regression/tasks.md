@@ -8,9 +8,9 @@
 
 - [x] 2.1 Make Manager identity reject explicit Worker/standalone roles and isolate Manager continuation state.
 - [x] 2.2 Register Manager, Worker, and Team prompt sections only for their valid runtime roles.
-- [ ] 2.3 Add outbound reply sanitization for thinking blocks and literal thinking spans.
-- [ ] 2.4 Add configurable outbound burst limits and admin incident STOP circuit breaking.
-- [ ] 2.5 Add Python tests for role identity, prompt gating, continuation isolation, sanitization, rate limits, and STOP.
+- [x] 2.3 Add outbound reply sanitization for thinking blocks and literal thinking spans.
+- [x] 2.4 Add configurable outbound burst limits and admin incident STOP circuit breaking.
+- [x] 2.5 Add Python tests for role identity, prompt gating, continuation isolation, sanitization, rate limits, and STOP.
 
 ## 3. Verification and Packaging
 
