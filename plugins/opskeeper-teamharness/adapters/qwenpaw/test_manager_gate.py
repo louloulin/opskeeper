@@ -470,6 +470,122 @@ class ManagerGateTest(unittest.TestCase):
         self.assertEqual(len(registered), 1)
         return registered[0]
 
+    def test_standalone_worker_is_not_manager_even_with_manager_runtime(self):
+        agent = SimpleNamespace(name="opskeeper-repairer")
+        environment = {
+            "AGENTTEAMS_WORKER_NAME": "opskeeper-repairer",
+            "AGENTTEAMS_WORKER_ROLE": "standalone",
+            "AGENTTEAMS_MANAGER_RUNTIME": "qwenpaw",
+        }
+        with patch.dict("os.environ", environment, clear=False):
+            self.assertFalse(self.module._is_manager_agent(agent))
+
+    def test_worker_hook_does_not_consume_manager_marker(self):
+        worker_session = "matrix:!worker-room:hs"
+        self.module._MANAGER_DISPATCH_GATE.record(worker_session, "OPSKEEPER TASK task-001")
+        context = self._hook_context("OPSKEEPER_RESULT task-001 {}", sender="@worker:hs")
+        context.agent = SimpleNamespace(name="opskeeper-repairer")
+        with patch.dict("os.environ", {"AGENTTEAMS_WORKER_ROLE": "standalone"}, clear=False):
+            result = asyncio.run(self._registered_hook().run(context))
+        self.assertEqual(result.action.value, "continue")
+        self.assertEqual(
+            self.module._MANAGER_DISPATCH_GATE.pending_markers(worker_session),
+            ("task-001",),
+        )
+        self.module._MANAGER_DISPATCH_GATE.clear(worker_session)
+
+    def test_hook_skips_message_addressed_to_another_opskeeper_role(self):
+        session_id = "matrix:room-1"
+        self.module._MANAGER_DISPATCH_GATE.clear(session_id)
+        context = self._hook_context("@opskeeper-verifier:hs status")
+        result = asyncio.run(self._registered_hook().run(context))
+        self.assertEqual(result.action.value, "skip_agent")
+        self.assertEqual(
+            self.module._MANAGER_DISPATCH_GATE.pending_markers(session_id),
+            (),
+        )
+
+    def test_message_targeting_current_opskeeper_role_is_allowed(self):
+        worker = SimpleNamespace(name="opskeeper-repairer")
+        environment = {
+            "AGENTTEAMS_WORKER_NAME": "opskeeper-repairer",
+            "AGENTTEAMS_WORKER_ROLE": "standalone",
+            "AGENTTEAMS_MANAGER_RUNTIME": "qwenpaw",
+        }
+        with patch.dict("os.environ", environment, clear=False):
+            self.assertTrue(
+                self.module._is_message_for_agent("@opskeeper-repairer:hs status", worker)
+            )
+            self.assertFalse(
+                self.module._is_message_for_agent("@opskeeper-verifier:hs status", worker)
+            )
+
+    def test_prompt_registration_passes_role_conditions(self):
+        registrations = []
+
+        class FakeApi:
+            def register_prompt_section(self, name, **kwargs):
+                kwargs["name"] = name
+                registrations.append(kwargs)
+
+        self.module._register_prompt_sections(FakeApi())
+        self.assertEqual(
+            [registration["name"] for registration in registrations],
+            [
+                "opskeeper_team_context",
+                "opskeeper_worker_context",
+                "opskeeper_manager_context",
+            ],
+        )
+        manager = SimpleNamespace(name="manager")
+        worker = SimpleNamespace(name="opskeeper-repairer")
+        self.assertTrue(registrations[0]["condition"](manager))
+        self.assertFalse(registrations[0]["condition"](worker))
+        self.assertFalse(registrations[1]["condition"](manager))
+        self.assertTrue(registrations[1]["condition"](worker))
+        self.assertTrue(registrations[2]["condition"](manager))
+        self.assertFalse(registrations[2]["condition"](worker))
+
+    def test_prompt_registration_gates_fallback_for_installed_api(self):
+        registrations = []
+
+        class LegacyApi:
+            def register_prompt_section(self, name, **kwargs):
+                kwargs["name"] = name
+                if "condition" in kwargs:
+                    raise TypeError("condition is unsupported")
+                registrations.append(kwargs)
+
+        with patch.object(self.module, "team_prompt", lambda _agent: "team"), patch.object(
+            self.module,
+            "worker_prompt",
+            lambda _agent: "worker",
+        ), patch.object(self.module, "manager_prompt", lambda _agent: "manager"):
+            self.module._register_prompt_sections(LegacyApi())
+
+        manager = SimpleNamespace(name="manager")
+        worker = SimpleNamespace(name="opskeeper-repairer")
+        manager_environment = {
+            "AGENTTEAMS_MANAGER_RUNTIME": "qwenpaw",
+            "AGENTTEAMS_WORKER_ROLE": "",
+            "AGENTTEAMS_AGENT_ROLE": "",
+        }
+        worker_environment = {
+            "AGENTTEAMS_WORKER_NAME": "opskeeper-repairer",
+            "AGENTTEAMS_WORKER_ROLE": "standalone",
+            "AGENTTEAMS_MANAGER_RUNTIME": "qwenpaw",
+        }
+        with patch.dict("os.environ", manager_environment, clear=False):
+            self.assertEqual(
+                [registration["provider"](manager) for registration in registrations],
+                ["team", "", "manager"],
+            )
+        with patch.dict("os.environ", worker_environment, clear=False):
+            self.assertEqual(
+                [registration["provider"](worker) for registration in registrations],
+                ["", "worker", ""],
+            )
+
     def test_stop_handler_terminates_manager_turn_while_pending(self):
         registered = []
 
@@ -500,7 +616,7 @@ class ManagerGateTest(unittest.TestCase):
             channel_meta={"sender_id": sender},
         )
         return SimpleNamespace(
-            agent=SimpleNamespace(name="unknown-runtime-agent"),
+            agent=SimpleNamespace(name="manager"),
             request=request,
             session_id="matrix:room-1",
             context_injections=[],

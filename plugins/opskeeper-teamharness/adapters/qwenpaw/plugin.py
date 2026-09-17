@@ -82,6 +82,10 @@ _DEFAULT_MANAGER_GATE_TTL_SECONDS = 600.0
 _TASK_MARKER_PATTERN = re.compile(
     r"\bOPSKEEPER[\s_]+TASK[\s_]+([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\b"
 )
+_OPSKEEPER_ROLE_MENTION_PATTERN = re.compile(
+    r"@(?P<role>opskeeper-[a-z0-9_.-]+)(?::[a-z0-9_.-]+)?",
+    re.IGNORECASE,
+)
 _COPAW_BASE_TOOLS = frozenset({"message", "filesync", "projectflow", "taskflow"})
 _COPAW_NATIVE_TOOLS = {
     "opskeeper__recovery_execute": "recovery.execute",
@@ -756,12 +760,75 @@ def _manager_identity(agent: Any) -> tuple[str, str]:
 
 def _is_manager_agent(agent: Any) -> bool:
     agent_name, role = _manager_identity(agent)
+    worker_name = os.getenv("AGENTTEAMS_WORKER_NAME", "").strip().lower()
     manager_runtime = os.getenv("AGENTTEAMS_MANAGER_RUNTIME", "").strip().lower()
-    return (
-        role in {"manager", "leader", "team_leader"}
-        or manager_runtime in {"qwenpaw", "copaw"}
-        or "manager" in agent_name
+    if role in {"worker", "standalone"} or worker_name:
+        return False
+    if role in {"manager", "leader", "team_leader"} or "manager" in agent_name:
+        return True
+    return manager_runtime in {"qwenpaw", "copaw"}
+
+
+def _is_message_for_agent(message: str, agent: Any) -> bool:
+    mentions = [
+        match.group("role").lower()
+        for match in _OPSKEEPER_ROLE_MENTION_PATTERN.finditer(message)
+    ]
+    if not mentions:
+        return True
+    agent_name = str(getattr(agent, "name", "")).strip().lower()
+    return agent_name in mentions
+
+
+def _gated_prompt(
+    provider: Callable[[Any], str],
+    condition: Callable[[Any], bool],
+) -> Callable[[Any], str]:
+    def gated_provider(agent: Any) -> str:
+        return provider(agent) if condition(agent) else ""
+
+    return gated_provider
+
+
+def _register_prompt_sections(api: Any) -> None:
+    sections = (
+        (
+            "opskeeper_team_context",
+            team_prompt,
+            lambda agent: _is_manager_agent(agent),
+            40,
+        ),
+        (
+            "opskeeper_worker_context",
+            worker_prompt,
+            lambda agent: not _is_manager_agent(agent),
+            30,
+        ),
+        (
+            "opskeeper_manager_context",
+            manager_prompt,
+            lambda agent: _is_manager_agent(agent),
+            30,
+        ),
     )
+    for name, provider, condition, priority in sections:
+        try:
+            api.register_prompt_section(
+                name,
+                after="workspace",
+                provider=provider,
+                condition=condition,
+                priority=priority,
+            )
+        except TypeError:
+            api.register_prompt_section(
+                name,
+                after="workspace",
+                provider=_gated_prompt(provider, condition),
+                priority=priority,
+            )
+        except Exception:
+            pass
 
 
 def _is_admin_sender(sender: str) -> bool:
@@ -1388,8 +1455,13 @@ def _register_manager_gate_hook(api: Any) -> None:
         priority = 5
 
         async def run(self, ctx: Any) -> Any:
+            agent = getattr(ctx, "agent", None)
+            if not _is_manager_agent(agent):
+                return HookResult()
             session_id = _extract_session_id(ctx)
             message = _request_text(ctx.request)
+            if not _is_message_for_agent(message, agent) and "@opskeeper-" in message.lower():
+                return HookResult(action=HookAction.SKIP_AGENT)
             consumed_results = _MANAGER_DISPATCH_GATE.consume_result_with_origins(
                 session_id,
                 message,
@@ -1522,34 +1594,8 @@ class OpskeeperTeamHarnessPlugin:
             missing = sorted(copaw_api_methods - set(dir(api)))
             raise RuntimeError(f"CoPaw PluginApi is incomplete; missing: {missing}")
 
-        # 1) Prompt sections — 注入 Manager team / Worker / Manager agents 三段 prompt
-        try:
-            api.register_prompt_section(
-                "opskeeper_team_context",
-                after="workspace",
-                provider=team_prompt,
-                priority=40,
-            )
-        except Exception:
-            pass
-        try:
-            api.register_prompt_section(
-                "opskeeper_worker_context",
-                after="workspace",
-                provider=worker_prompt,
-                priority=30,
-            )
-        except Exception:
-            pass
-        try:
-            api.register_prompt_section(
-                "opskeeper_manager_context",
-                after="workspace",
-                provider=manager_prompt,
-                priority=30,
-            )
-        except Exception:
-            pass
+        # 1) Prompt sections — role-gated Manager team / Worker / Manager agents prompts
+        _register_prompt_sections(api)
 
         # 2) Skill provider — qwenpaw 2 runtime 期望 flat 布局（每个 skill 子目录里直接放 SKILL.md），
         # 优先注册 ASSET_DIR/qwenpaw-skills/<name>/SKILL.md；如缺则回退嵌套布局 skills/agent/<name>/。
