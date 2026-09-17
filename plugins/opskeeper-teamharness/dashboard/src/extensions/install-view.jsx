@@ -124,14 +124,14 @@ export default function OpskeeperInstallView({ api }) {
               }}>
                 v{p.version}
               </span>
-              <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--muted-foreground)' }}>
+              <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--foreground)', opacity: 0.72 }}>
                 {p.status}
               </span>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
+            <div style={{ fontSize: 11, color: 'var(--foreground)', opacity: 0.76, lineHeight: 1.5 }}>
               {p.description?.split('\n')[0].slice(0, 200)}
             </div>
-            <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--muted-foreground)' }}>
+            <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--foreground)', opacity: 0.72 }}>
               <span>skills: {p.skill_count ?? '—'}</span>
               <span>tools: {p.tool_count ?? '—'}</span>
               <span>prompts: {p.prompt_count ?? '—'}</span>

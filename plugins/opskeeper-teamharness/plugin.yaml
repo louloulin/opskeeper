@@ -2,7 +2,7 @@ apiVersion: agentteams.agentteam/v1alpha1
 kind: AgentTeamPlugin
 metadata:
   name: opskeeper-teamharness
-  version: 1.0.56
+  version: 1.0.57
   description: |
     Opskeeper TeamHarness plugin — provides six deployed ops actors
     (alerter/investigator/reviewer/repairer/verifier/reporter)
@@ -133,6 +133,9 @@ metadata:
     Dashboard session state, Matrix room membership, AgentTeams and OpsKeeper
     health, TeamHarness Worker loading, and Dashboard manifest consistency
     without sending messages or changing runtime state.
+
+    v1.0.57 increases plugin-list secondary text contrast with the adaptive
+    foreground token and a bounded opacity instead of low-contrast muted gray.
 
     v1.0.7 adds a plugin-native Manager continuation gate: dispatched task markers
     wait for matching Worker results, while empty/self continuations are skipped.
