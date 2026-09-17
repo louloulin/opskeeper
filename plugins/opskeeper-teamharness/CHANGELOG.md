@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.58 — 2026-09-18
+
+- Scope high-contrast text tokens across the unified route, diagnostics, Runtime, Archive, plugin list, Overview widget, and Worker detail panel.
+- Restore the Worker gateway-key fallback and safe default tenant so the signed Dashboard RCA proxy does not fail with an undefined tenant resolver.
+
 ## 1.0.57 — 2026-09-17
 
 - Increase installed-plugin secondary text contrast with the adaptive foreground token and bounded opacity.

@@ -123,6 +123,15 @@ def test_runtime_gateway_key_reads_qwenpaw_credentials(
     assert _plugin._runtime_credential("OPSKEEPER_TENANT_ID") == "demo-tenant"
 
 
+def test_runtime_credentials_use_safe_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPSKEEPER_GATEWAY_KEY", raising=False)
+    monkeypatch.delenv("OPSKEEPER_TENANT_ID", raising=False)
+    monkeypatch.delenv("OPSKEEPER_CREDENTIALS_FILE", raising=False)
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "worker-runtime-key")
+    assert _plugin._runtime_gateway_key() == "worker-runtime-key"
+    assert _plugin._runtime_tenant_id() == "default"
+
+
 def test_investigate_proxy_accepts_file_backed_runtime_key(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

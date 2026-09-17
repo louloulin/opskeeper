@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { opskeeperApi } from './api.js';
+import { opskeeperPluginThemeStyle } from './plugin-theme.js';
 import { buildRuntimeSnapshot, normalizeIncidentList } from './runtime.js';
 
 // Dashboard overview widget — 概览卡：active / open / closed / avg-RCA / 阶段通过率。
@@ -85,6 +86,7 @@ export default function OpskeeperStatsWidget({ api }) {
   return (
     <div
       style={{
+        ...opskeeperPluginThemeStyle,
         padding: 16, border: '1px solid var(--border)', borderRadius: 8,
         background: 'var(--card)', color: 'var(--card-foreground)', cursor: 'pointer',
       }}

@@ -4,13 +4,14 @@ import OpskeeperArchiveRoute from './archive-route.jsx';
 import OpskeeperRuntimeRoute from './runtime-route.jsx';
 import OpskeeperInstallView from './install-view.jsx';
 import OpskeeperIntegrationRoute from './integration-route.jsx';
+import { opskeeperPluginThemeStyle } from './plugin-theme.js';
 import { OPSKEEPER_TABS, normalizeOpskeeperTab } from './tabs.js';
 
 export default function OpskeeperUnifiedRoute({ api, initialTab = 'diagnostics' }) {
   const [tab, setTab] = React.useState(() => normalizeOpskeeperTab(initialTab));
 
   return (
-    <div>
+    <div style={opskeeperPluginThemeStyle}>
       <header style={{
         display: 'flex',
         alignItems: 'center',
