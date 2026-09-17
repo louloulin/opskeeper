@@ -105,3 +105,59 @@ body {
 }
 .prose-doc th { color: #f7f7f8; font-weight: 600; background: rgba(255,255,255,0.03); }
 .prose-doc hr { border: 0; border-top: 1px solid rgba(255,255,255,0.08); margin: 2rem 0; }
+
+/* ===== React Bits: ShinyText ===== */
+.shiny-text {
+  color: #8e8ea0;
+  background: linear-gradient(
+    120deg,
+    rgba(142, 142, 160, 0) 40%,
+    rgba(255, 255, 255, 0.9) 50%,
+    rgba(142, 142, 160, 0) 60%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  display: inline-block;
+  animation: shiny-sweep var(--shiny-duration, 4s) linear infinite;
+}
+
+.shiny-text-disabled {
+  animation: none;
+}
+
+@keyframes shiny-sweep {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ===== React Bits: SpotlightCard ===== */
+.spotlight-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
+  background: radial-gradient(
+    420px circle at var(--spot-x, 50%) var(--spot-y, 50%),
+    var(--spot-color, rgba(16, 163, 127, 0.14)),
+    transparent 65%
+  );
+}
+
+.spotlight-card:hover::before {
+  opacity: 1;
+}
+
+/* ===== Reduced motion: stop all decorative animation ===== */
+@media (prefers-reduced-motion: reduce) {
+  .shiny-text {
+    animation: none;
+  }
+}

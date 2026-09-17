@@ -19,6 +19,12 @@ import { Button } from '@/components/button';
 import { Section, SectionHeader } from '@/components/section';
 import { CodeBlock } from '@/components/code-block';
 import { TechMarquee } from '@/components/tech-marquee';
+import Aurora from '@/components/react-bits/aurora';
+import BlurText from '@/components/react-bits/blur-text';
+import ShinyText from '@/components/react-bits/shiny-text';
+import CountUp from '@/components/react-bits/count-up';
+import SpotlightCard from '@/components/react-bits/spotlight-card';
+import AnimatedContent from '@/components/react-bits/animated-content';
 
 export const metadata = {
   title: 'OpsKeeper：授权可控、全程可审计的多智能体运维事件响应平台',
@@ -136,6 +142,8 @@ export default function HomeZhPage() {
     <>
       {/* Hero */}
       <Section className="relative pt-20 pb-24 md:pt-28 md:pb-32">
+        {/* React Bits Aurora — 动态 WebGL 背景 */}
+        <Aurora className="absolute inset-x-0 -top-24 -z-10 h-[640px] opacity-60" />
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0 -z-10 opacity-[0.035] mix-blend-overlay"
@@ -149,12 +157,12 @@ export default function HomeZhPage() {
           <div className="lg:col-span-7">
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-ink-200">
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent-400 animate-pulse" />
-              v2026.09.03 · Apache-2.0 · 开源
+              <ShinyText speed={5}>v2026.09.03 · Apache-2.0 · 开源</ShinyText>
             </div>
             <h1 className="text-balance text-4xl font-semibold tracking-tight text-white sm:text-5xl md:text-6xl">
-              授权可控、全程可审计的{' '}
+              <BlurText text="授权可控、全程可审计的" />{' '}
               <span className="bg-gradient-to-br from-white to-accent-300 bg-clip-text text-transparent">
-                多智能体运维事件响应平台
+                <BlurText text="多智能体运维事件响应平台" delay={220} />
               </span>
             </h1>
             <p className="mt-6 max-w-2xl text-pretty text-lg leading-relaxed text-ink-300">
@@ -199,16 +207,18 @@ export default function HomeZhPage() {
       <Section className="py-10">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           {[
-            { k: '7', l: 'Operational Worker 角色' },
-            { k: '8', l: '闭环阶段' },
-            { k: '4', l: '可复现事件场景' },
-            { k: '100%', l: '审计重放覆盖' },
+            { k: 7, l: 'Operational Worker 角色' },
+            { k: 8, l: '闭环阶段' },
+            { k: 4, l: '可复现事件场景' },
+            { k: 100, suffix: '%', l: '审计重放覆盖' },
           ].map((s) => (
             <div
               key={s.l}
               className="rounded-xl border border-white/10 bg-white/[0.03] p-5"
             >
-              <div className="text-3xl font-semibold text-white">{s.k}</div>
+              <div className="text-3xl font-semibold text-white">
+                <CountUp to={s.k} suffix={s.suffix} />
+              </div>
               <div className="mt-1 text-sm text-ink-300">{s.l}</div>
             </div>
           ))}
@@ -224,9 +234,9 @@ export default function HomeZhPage() {
         />
         <div className="mt-12 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {phases.map((p, i) => (
-            <div
+            <SpotlightCard
               key={p.key}
-              className="group relative overflow-hidden rounded-xl border border-white/10 bg-white/[0.02] p-5 transition-colors hover:border-accent-500/40 hover:bg-white/[0.04]"
+              className="rounded-xl border border-white/10 bg-white/[0.02] p-5 transition-colors hover:border-accent-500/40 hover:bg-white/[0.04]"
             >
               <div className="flex items-center justify-between">
                 <span className="font-mono text-xs text-ink-400">phase 0{i + 1}</span>
@@ -234,7 +244,7 @@ export default function HomeZhPage() {
               </div>
               <div className="mt-3 text-lg font-semibold text-white">{p.label}</div>
               <div className="mt-1 text-sm text-ink-300">{p.desc}</div>
-            </div>
+            </SpotlightCard>
           ))}
         </div>
       </Section>
@@ -328,7 +338,7 @@ export default function HomeZhPage() {
         />
         <div className="mt-12 grid gap-4 md:grid-cols-3">
           {pillars.map((p) => (
-            <div
+            <SpotlightCard
               key={p.title}
               className="rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.04] to-transparent p-6"
             >
@@ -337,7 +347,7 @@ export default function HomeZhPage() {
               </span>
               <h3 className="mt-4 text-lg font-semibold text-white">{p.title}</h3>
               <p className="mt-2 text-sm leading-relaxed text-ink-300">{p.desc}</p>
-            </div>
+            </SpotlightCard>
           ))}
         </div>
       </Section>
@@ -405,6 +415,7 @@ export default function HomeZhPage() {
 
       {/* CTA */}
       <Section className="py-20 md:py-28">
+        <AnimatedContent>
         <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-accent-500/20 via-ink-900 to-ink-950 p-10 md:p-14">
           <div className="pointer-events-none absolute -right-32 -top-32 h-80 w-80 rounded-full bg-accent-500/30 blur-3xl" />
           <div className="relative">
@@ -427,6 +438,7 @@ export default function HomeZhPage() {
             </div>
           </div>
         </div>
+        </AnimatedContent>
       </Section>
     </>
   );
