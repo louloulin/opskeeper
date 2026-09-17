@@ -105,7 +105,7 @@ export default function OpskeeperStatsWidget({ api }) {
         </span>
       </div>
       {loading ? (
-        <div style={{ fontSize: 12, color: 'var(--muted)' }}>加载中…</div>
+        <div style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>加载中…</div>
       ) : (
         <div style={{ display: 'flex', gap: 14, fontSize: 12 }}>
           <div>
@@ -113,27 +113,27 @@ export default function OpskeeperStatsWidget({ api }) {
               fontSize: 22, fontWeight: 600,
               color: stats.active > 0 ? '#ef4444' : 'var(--card-foreground)',
             }}>{stats.active}</div>
-            <div style={{ color: 'var(--muted)', fontSize: 11 }}>进行中</div>
+            <div style={{ color: 'var(--muted-foreground)', fontSize: 11 }}>进行中</div>
           </div>
           <div>
             <div style={{ fontSize: 22, fontWeight: 600 }}>{stats.open}</div>
-            <div style={{ color: 'var(--muted)', fontSize: 11 }}>待处理</div>
+            <div style={{ color: 'var(--muted-foreground)', fontSize: 11 }}>待处理</div>
           </div>
           <div>
             <div style={{ fontSize: 22, fontWeight: 600, color: '#10b981' }}>{stats.closed}</div>
-            <div style={{ color: 'var(--muted)', fontSize: 11 }}>已闭环</div>
+            <div style={{ color: 'var(--muted-foreground)', fontSize: 11 }}>已闭环</div>
           </div>
           <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
             <div style={{ fontSize: 14, fontWeight: 500 }}>
               {fmtDuration(stats.avgRcaSeconds)}
             </div>
-            <div style={{ color: 'var(--muted)', fontSize: 11 }}>平均 RCA</div>
+            <div style={{ color: 'var(--muted-foreground)', fontSize: 11 }}>平均 RCA</div>
           </div>
         </div>
       )}
       <div style={{
         marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--border)',
-        fontSize: 10, color: 'var(--muted)',
+        fontSize: 10, color: 'var(--muted-foreground)',
         display: 'flex', justifyContent: 'space-between',
       }}>
         <span>定位 {fmtDuration(stats.meanLocalizationSeconds)} · 审计 {fmtPercent(stats.auditEvidenceCompleteness)}</span>

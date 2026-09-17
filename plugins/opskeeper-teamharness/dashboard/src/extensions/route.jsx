@@ -94,12 +94,12 @@ function ReportViewer({ report }) {
         padding: 14, borderRadius: 8, border: '1px solid var(--border)',
         background: '#111827', color: '#f9fafb',
       }}>
-        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>根因</div>
+        <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 4 }}>根因</div>
         <div style={{ fontSize: 14, fontWeight: 600 }}>
           {root.summary || root.description || report.summary || '—'}
         </div>
         {root.entity && (
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginTop: 4 }}>
             实体：{root.entity.type} = {root.entity.id}
           </div>
         )}
@@ -116,7 +116,7 @@ function ReportViewer({ report }) {
           </div>
         )}
         {confidence !== null && (
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginTop: 4 }}>
             置信度：<strong style={{ color: confidence >= 0.7 ? '#10b981' : '#f59e0b' }}>
               {(confidence * 100).toFixed(0)}%
             </strong>
@@ -130,7 +130,7 @@ function ReportViewer({ report }) {
           padding: 14, borderRadius: 8, border: '1px solid var(--border)',
           background: '#111827',
         }}>
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>因果链</div>
+          <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 8 }}>因果链</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {chain.map((step, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
@@ -142,12 +142,12 @@ function ReportViewer({ report }) {
                 }}>{i + 1}</span>
                 <span style={{ flex: 1 }}>{step.event || step.description}</span>
                 {step.entity && (
-                  <span style={{ fontSize: 10, color: 'var(--muted)' }}>
+                  <span style={{ fontSize: 10, color: 'var(--muted-foreground)' }}>
                     {step.entity.type}:{step.entity.id}
                   </span>
                 )}
                 {i < chain.length - 1 && (
-                  <span style={{ color: 'var(--muted)', marginLeft: 4 }}>↓</span>
+                  <span style={{ color: 'var(--muted-foreground)', marginLeft: 4 }}>↓</span>
                 )}
               </div>
             ))}
@@ -161,7 +161,7 @@ function ReportViewer({ report }) {
           padding: 14, borderRadius: 8, border: '1px solid var(--border)',
           background: '#111827',
         }}>
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 8 }}>
             证据 ({evidence.length} 条)
           </div>
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
@@ -187,7 +187,7 @@ function ReportViewer({ report }) {
           padding: 14, borderRadius: 8, border: '1px solid var(--border)',
           background: '#111827',
         }}>
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 4 }}>
             7 阶段进度 — 当前阶段：<strong>{report.phase}</strong>
           </div>
           <PhaseProgress phase={report.phase} />
@@ -195,7 +195,7 @@ function ReportViewer({ report }) {
       )}
 
       {/* Raw JSON fallback */}
-      <details style={{ fontSize: 11, color: 'var(--muted)' }}>
+      <details style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
         <summary style={{ cursor: 'pointer' }}>原始 JSON</summary>
         <pre style={{
           marginTop: 8, padding: 12, background: '#0a0a0a', color: '#eee',
@@ -306,7 +306,7 @@ export default function OpskeeperRoute({ api }) {
 
         {!loadingIncidents && filtered.length === 0 && (
           <div style={{
-            padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--muted)',
+            padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)',
             border: '1px dashed var(--border)', borderRadius: 6,
           }}>
             {incidents.length === 0
@@ -358,7 +358,7 @@ export default function OpskeeperRoute({ api }) {
 
         {!selected && (
           <div style={{
-            padding: 32, textAlign: 'center', fontSize: 13, color: 'var(--muted)',
+            padding: 32, textAlign: 'center', fontSize: 13, color: 'var(--muted-foreground)',
             border: '1px dashed var(--border)', borderRadius: 8,
           }}>
             ← 选择左侧事故触发 7 阶段 RCA
@@ -367,7 +367,7 @@ export default function OpskeeperRoute({ api }) {
 
         {selected && running && (
           <div style={{
-            padding: 24, fontSize: 13, color: 'var(--muted)',
+            padding: 24, fontSize: 13, color: 'var(--muted-foreground)',
             display: 'flex', alignItems: 'center', gap: 8,
           }}>
             <span style={{

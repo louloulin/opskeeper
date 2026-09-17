@@ -90,7 +90,7 @@ export default function OpskeeperInstallView({ api }) {
         padding: 14, borderRadius: 8, border: '1px solid var(--border)',
         background: 'var(--card)',
       }}>
-        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 8 }}>
           已安装插件
         </div>
         {error && (
@@ -103,7 +103,7 @@ export default function OpskeeperInstallView({ api }) {
           </div>
         )}
         {!loading && plugins.length === 0 && (
-          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+          <div style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>
             暂无已安装插件
           </div>
         )}
@@ -124,14 +124,14 @@ export default function OpskeeperInstallView({ api }) {
               }}>
                 v{p.version}
               </span>
-              <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--muted)' }}>
+              <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--muted-foreground)' }}>
                 {p.status}
               </span>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
               {p.description?.split('\n')[0].slice(0, 200)}
             </div>
-            <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--muted)' }}>
+            <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--muted-foreground)' }}>
               <span>skills: {p.skill_count ?? '—'}</span>
               <span>tools: {p.tool_count ?? '—'}</span>
               <span>prompts: {p.prompt_count ?? '—'}</span>
@@ -146,7 +146,7 @@ export default function OpskeeperInstallView({ api }) {
         padding: 14, borderRadius: 8, border: '1px solid var(--border)',
         background: 'var(--card)',
       }}>
-        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 8 }}>
           上传并安装新插件
         </div>
         <input
@@ -163,7 +163,7 @@ export default function OpskeeperInstallView({ api }) {
           }}
         />
         {selectedFile && (
-          <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8 }}>
+          <div style={{ fontSize: 11, color: 'var(--muted-foreground)', marginBottom: 8 }}>
             已选：<code>{selectedFile.name}</code>
             {' '}({(selectedFile.size / 1024).toFixed(1)} KiB)
           </div>

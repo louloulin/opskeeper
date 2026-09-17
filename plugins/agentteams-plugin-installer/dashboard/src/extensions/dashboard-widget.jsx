@@ -61,7 +61,7 @@ export default function PluginStatsWidget({ api }) {
       )
     ),
     loading
-      ? React.createElement('div', { style: { fontSize: 12, color: 'var(--muted)' } }, '加载中…')
+      ? React.createElement('div', { style: { fontSize: 12, color: 'var(--muted-foreground)' } }, '加载中…')
       : React.createElement(
           'div',
           { style: { display: 'flex', gap: 12, fontSize: 12 } },
@@ -69,19 +69,19 @@ export default function PluginStatsWidget({ api }) {
             'div',
             null,
             React.createElement('div', { style: { fontSize: 18, fontWeight: 600 } }, String(stats.total)),
-            React.createElement('div', { style: { color: 'var(--muted)' } }, '已装')
+            React.createElement('div', { style: { color: 'var(--muted-foreground)' } }, '已装')
           ),
           React.createElement(
             'div',
             null,
             React.createElement('div', { style: { fontSize: 18, fontWeight: 600, color: 'var(--success, #10b981)' } }, String(stats.enabled)),
-            React.createElement('div', { style: { color: 'var(--muted)' } }, '启用')
+            React.createElement('div', { style: { color: 'var(--muted-foreground)' } }, '启用')
           ),
           React.createElement(
             'div',
             null,
             React.createElement('div', { style: { fontSize: 18, fontWeight: 600 } }, String(stats.tools)),
-            React.createElement('div', { style: { color: 'var(--muted)' } }, 'tools')
+            React.createElement('div', { style: { color: 'var(--muted-foreground)' } }, 'tools')
           )
         )
   );

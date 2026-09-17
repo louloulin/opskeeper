@@ -62,7 +62,7 @@ export default function OpskeeperArchiveRoute({ api }) {
       <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 18 }}>OpsKeeper 事故档案</h2>
-          <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--muted)' }}>
+          <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--muted-foreground)' }}>
             Manager 保留权威证据与权限；插件仅做只读回看，不复制控制面事实源。
           </p>
         </div>
@@ -130,11 +130,11 @@ export default function OpskeeperArchiveRoute({ api }) {
                 <div key={event.id || `${event.event_type}-${event.occurred_at}`} style={eventRowStyle()}>
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 600 }}>{event.event_type}</div>
-                    <div style={{ marginTop: 3, fontSize: 11, color: 'var(--muted)' }}>
+                    <div style={{ marginTop: 3, fontSize: 11, color: 'var(--muted-foreground)' }}>
                       {event.phase || '未记录阶段'} · {event.actor_type || 'unknown'} / {event.actor || 'unknown'} · {event.status || 'unknown'}
                     </div>
                   </div>
-                  <div style={{ textAlign: 'right', fontSize: 11, color: 'var(--muted)', minWidth: 190 }}>
+                  <div style={{ textAlign: 'right', fontSize: 11, color: 'var(--muted-foreground)', minWidth: 190 }}>
                     <div>{formatTime(event.occurred_at)}</div>
                     {event.evidence_ref && <div style={{ marginTop: 3 }}>{event.evidence_ref}</div>}
                     {event.trace_id && <div style={{ marginTop: 3 }}>trace: {event.trace_id}</div>}
@@ -166,7 +166,7 @@ export default function OpskeeperArchiveRoute({ api }) {
                 {archive.postmortem_refs?.map((reference) => (
                   <div key={reference.id || reference.incident_id} style={{ padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
                     <div>{reference.root_cause || '未记录根因'}</div>
-                    <div style={{ marginTop: 3, fontSize: 11, color: 'var(--muted)' }}>
+                    <div style={{ marginTop: 3, fontSize: 11, color: 'var(--muted-foreground)' }}>
                       {reference.confirmed_by || 'unknown'} · {formatTime(reference.confirmed_at)}
                     </div>
                   </div>
@@ -175,7 +175,7 @@ export default function OpskeeperArchiveRoute({ api }) {
                 <a href={PREVIEW_URL} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 10, fontSize: 12 }}>
                   打开 preview-pg 修复对比 →
                 </a>
-                <div style={{ marginTop: 5, fontSize: 11, color: 'var(--muted)' }}>
+                <div style={{ marginTop: 5, fontSize: 11, color: 'var(--muted-foreground)' }}>
                   对比数据留在独立预演环境，不写入本事故权威档案。
                 </div>
               </Panel>
@@ -196,7 +196,7 @@ export default function OpskeeperArchiveRoute({ api }) {
 function Panel({ title, children }) {
   return (
     <div style={{ padding: 14, marginBottom: 12, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)' }}>
-      {title && <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>{title}</div>}
+      {title && <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 8 }}>{title}</div>}
       {children}
     </div>
   );
@@ -205,9 +205,9 @@ function Panel({ title, children }) {
 function SummaryCard({ label, value, hint, color }) {
   return (
     <div style={{ padding: 14, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)' }}>
-      <div style={{ fontSize: 11, color: 'var(--muted)' }}>{label}</div>
+      <div style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{label}</div>
       <div style={{ marginTop: 6, fontSize: 19, fontWeight: 600, color: color || 'inherit' }}>{value}</div>
-      {hint && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--muted)' }}>{hint}</div>}
+      {hint && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--muted-foreground)' }}>{hint}</div>}
     </div>
   );
 }
@@ -226,7 +226,7 @@ function ErrorState({ text }) {
 }
 
 function EmptyState({ text }) {
-  return <div style={{ padding: 16, textAlign: 'center', fontSize: 12, color: 'var(--muted)' }}>{text}</div>;
+  return <div style={{ padding: 16, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>{text}</div>;
 }
 
 function inputStyle() {
