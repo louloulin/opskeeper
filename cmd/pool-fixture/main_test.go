@@ -68,6 +68,70 @@ func TestAggregatePrometheusMetricsLabelEveryManifest(t *testing.T) {
 	}
 }
 
+func TestAggregateMetricsExposeNewManifestWithoutRestart(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	server := httptest.NewServer(NewHandler(controller))
+	t.Cleanup(server.Close)
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	initialRequest, _ := http.NewRequest(http.MethodGet, server.URL+"/metrics", nil)
+	addPoolAuth(initialRequest)
+	initialResponse, err := client.Do(initialRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialBody, err := io.ReadAll(initialResponse.Body)
+	_ = initialResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initialResponse.StatusCode != http.StatusOK || len(initialBody) != 0 {
+		t.Fatalf("initial metrics response = %d %q", initialResponse.StatusCode, initialBody)
+	}
+
+	createRequest, _ := http.NewRequest(
+		http.MethodPost,
+		server.URL+"/v1/pool-fixtures",
+		strings.NewReader(`{"case_id":"pg-pool-exhaustion","incident_id":"incident-live-new","initial_capacity":2,"target_capacity":4,"ttl_seconds":60}`),
+	)
+	addPoolAuth(createRequest)
+	createResponse, err := client.Do(createRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created apiResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	_ = createResponse.Body.Close()
+	if createResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("create response = %d", createResponse.StatusCode)
+	}
+	var manifest PoolManifest
+	if err := json.Unmarshal(created.Data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	metricsRequest, _ := http.NewRequest(http.MethodGet, server.URL+"/metrics", nil)
+	addPoolAuth(metricsRequest)
+	metricsResponse, err := client.Do(metricsRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metricsBody, err := io.ReadAll(metricsResponse.Body)
+	_ = metricsResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metricsResponse.StatusCode != http.StatusOK {
+		t.Fatalf("metrics response = %d", metricsResponse.StatusCode)
+	}
+	expected := `opskeeper_pool_fixture_active_connections{target="pg:pool-fixture",pool_manifest_id="` + manifest.ManifestID + `"} 2`
+	if !strings.Contains(string(metricsBody), expected) {
+		t.Fatalf("missing %s in:\n%s", expected, metricsBody)
+	}
+}
+
 func (c *fakeConnection) BackendPID() int { return c.backendPID }
 func (c *fakeConnection) Release() error {
 	c.released = true

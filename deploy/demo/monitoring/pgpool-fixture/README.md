@@ -32,20 +32,27 @@ Do not deploy the public demo with `-e POOL_MANIFEST_ID=...`. A new incident
 manifest must appear on the next scrape without recreating this proxy.
 
 Add the metrics endpoint to Prometheus, replacing `opskeeper-demo-node-metrics`
-with the actual DNS name reachable from Prometheus:
+and `opskeeper-pool-metrics` with the actual DNS names reachable from Prometheus.
+The pool proxy must be a separate scrape job because it exposes different
+health and metrics paths from the logical node fixture:
 
 ```yaml
 scrape_configs:
   - job_name: opskeeper-demo-node-logical
     static_configs:
       - targets: ["opskeeper-demo-node-metrics:8095"]
+  - job_name: opskeeper-pool-metrics
+    static_configs:
+      - targets: ["opskeeper-pool-metrics:8094"]
 ```
 
-Verify the two health paths before using the fixture in a rehearsal:
+Verify both fixtures' health and metrics paths before a rehearsal:
 
 ```bash
 curl http://localhost:8095/healthz
 curl http://localhost:8095/metrics | head
+curl http://localhost:8094/healthz
+curl http://localhost:8094/metrics | head
 ```
 
 The public fixture currently binds these series to device `900001`. Any

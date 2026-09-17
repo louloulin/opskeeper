@@ -2,6 +2,7 @@
 """Authenticated Prometheus proxy for all authoritative pool fixture metrics."""
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import http.client
 import os
 from pathlib import Path
 import urllib.error
@@ -9,6 +10,8 @@ import urllib.request
 
 
 class PoolMetricsProxy(BaseHTTPRequestHandler):
+    MAX_UPSTREAM_BYTES = 1024 * 1024
+
     def do_GET(self):
         if self.path == "/healthz":
             self._write(200, b"ok\n", "text/plain; charset=utf-8")
@@ -24,13 +27,18 @@ class PoolMetricsProxy(BaseHTTPRequestHandler):
             upstream_url = os.environ.get("POOL_FIXTURE_URL", "http://pool-fixture:8092").rstrip("/")
             request = urllib.request.Request(
                 upstream_url + "/metrics",
-                headers={"Authorization": f"Bearer {token}"},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Opskeeper-Version": "v1",
+                },
             )
             with urllib.request.urlopen(request, timeout=3) as response:
-                body = response.read()
+                body = response.read(self.MAX_UPSTREAM_BYTES + 1)
+                if len(body) > self.MAX_UPSTREAM_BYTES:
+                    raise RuntimeError("pool fixture metrics response exceeds 1 MiB")
                 content_type = response.headers.get("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
                 self._write(response.status, body, content_type)
-        except (OSError, UnicodeError, urllib.error.URLError, RuntimeError):
+        except (OSError, UnicodeError, http.client.HTTPException, urllib.error.URLError, RuntimeError):
             self._write(503, b"pool fixture unavailable\n", "text/plain; charset=utf-8")
 
     def _write(self, status, body, content_type):
