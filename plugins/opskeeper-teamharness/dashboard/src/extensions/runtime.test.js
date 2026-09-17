@@ -40,6 +40,25 @@ test('keeps installed-plugin descriptions readable in both themes', () => {
   assert.match(source, /fontSize:\s*11,\s*color:\s*['`]var\(--foreground\)['`],\s*opacity:\s*0\.76/u);
 });
 
+test('scopes adaptive text contrast to every extension entry point', () => {
+  const extensionsDir = fileURLToPath(new URL('./', import.meta.url));
+  const entryPoints = [
+    'dashboard-widget.jsx',
+    'detail-panel.jsx',
+    'route.jsx',
+    'unified-route.jsx',
+  ];
+
+  for (const entryPoint of entryPoints) {
+    const source = readFileSync(path.join(extensionsDir, entryPoint), 'utf8');
+    assert.match(
+      source,
+      /opskeeperPluginThemeStyle/u,
+      `${entryPoint} must apply the plugin text contrast scope`,
+    );
+  }
+});
+
 test('normalizes health response wrappers and checks', () => {
   const report = normalizeHealthReport({
     data: {

@@ -72,7 +72,7 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.57"
+_PLUGIN_VERSION = "1.0.58"
 _COPAW_DIAGNOSTICS_LOGGER = logging.getLogger("opskeeper-teamharness.copaw-diagnostics")
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
@@ -170,7 +170,10 @@ def _decode_runtime_credential(value: str) -> str:
 
 def _runtime_gateway_key() -> str:
     """Get the injected MCP key, falling back to QwenPaw's credential store."""
-    return _runtime_credential("OPSKEEPER_GATEWAY_KEY")
+    return (
+        _runtime_credential("OPSKEEPER_GATEWAY_KEY")
+        or os.environ.get("AGENTTEAMS_WORKER_GATEWAY_KEY", "")
+    )
 
 
 def _runtime_backend_url() -> str:
@@ -178,7 +181,7 @@ def _runtime_backend_url() -> str:
 
 
 def _runtime_tenant_id() -> str:
-    return _runtime_credential("OPSKEEPER_TENANT_ID") or get_tenant_id()
+    return _runtime_credential("OPSKEEPER_TENANT_ID") or "default"
 
 _TASK_RESULT_PATTERN = re.compile(
     r"(?m)^(?:[`*_]*(?:@[A-Za-z0-9._=-]+(?::[A-Za-z0-9._=-]+)+|manager)[`*_]*[ \t]+)?"

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { opskeeperDarkPanelStyle, opskeeperPluginThemeStyle } from './plugin-theme.js';
 import { normalizeIncidentList } from './runtime.js';
 import { buildInvestigationRequest, opskeeperApi } from './api.js';
 
@@ -91,8 +92,8 @@ function ReportViewer({ report }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* Root cause */}
       <div style={{
+        ...opskeeperDarkPanelStyle,
         padding: 14, borderRadius: 8, border: '1px solid var(--border)',
-        background: '#111827', color: '#f9fafb',
       }}>
         <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 4 }}>根因</div>
         <div style={{ fontSize: 14, fontWeight: 600 }}>
@@ -104,14 +105,14 @@ function ReportViewer({ report }) {
           </div>
         )}
         {root.kind && (
-          <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginTop: 4 }}>
             类型：<code>{root.kind}</code>
           </div>
         )}
         {root.detail && typeof root.detail === 'object' && (
-          <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginTop: 4 }}>
             {Object.entries(root.detail).map(([k, v]) => (
-              <div key={k}><span style={{ color: '#6b7280' }}>{k}:</span> {String(v)}</div>
+              <div key={k}><span style={{ color: 'var(--muted-foreground)' }}>{k}:</span> {String(v)}</div>
             ))}
           </div>
         )}
@@ -127,8 +128,8 @@ function ReportViewer({ report }) {
       {/* Causal chain */}
       {chain.length > 0 && (
         <div style={{
+          ...opskeeperDarkPanelStyle,
           padding: 14, borderRadius: 8, border: '1px solid var(--border)',
-          background: '#111827',
         }}>
           <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 8 }}>因果链</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -158,8 +159,8 @@ function ReportViewer({ report }) {
       {/* Evidence */}
       {evidence.length > 0 && (
         <div style={{
+          ...opskeeperDarkPanelStyle,
           padding: 14, borderRadius: 8, border: '1px solid var(--border)',
-          background: '#111827',
         }}>
           <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 8 }}>
             证据 ({evidence.length} 条)
@@ -171,9 +172,9 @@ function ReportViewer({ report }) {
               const at = e.timestamp || e.observed_at;
               return (
                 <li key={i} style={{ marginBottom: 6, color: '#e5e7eb' }}>
-                  <code style={{ fontSize: 11, color: '#9ca3af' }}>{source}</code>
+                  <code style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{source}</code>
                   {detail && <span> — <span style={{ color: '#e5e7eb' }}>{String(detail).slice(0, 240)}</span></span>}
-                  {at && <span style={{ color: '#6b7280' }}> @ {at}</span>}
+                  {at && <span style={{ color: 'var(--muted-foreground)' }}> @ {at}</span>}
                 </li>
               );
             })}
@@ -184,8 +185,8 @@ function ReportViewer({ report }) {
       {/* Phase progress */}
       {report.phase && (
         <div style={{
+          ...opskeeperDarkPanelStyle,
           padding: 14, borderRadius: 8, border: '1px solid var(--border)',
-          background: '#111827',
         }}>
           <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 4 }}>
             7 阶段进度 — 当前阶段：<strong>{report.phase}</strong>
@@ -262,7 +263,7 @@ export default function OpskeeperRoute({ api }) {
   );
 
   return (
-    <div style={{ padding: 24, display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+    <div style={{ ...opskeeperPluginThemeStyle, padding: 24, display: 'flex', gap: 16, alignItems: 'flex-start' }}>
       {/* Left: incident list */}
       <div style={{ flex: '0 0 360px', display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{

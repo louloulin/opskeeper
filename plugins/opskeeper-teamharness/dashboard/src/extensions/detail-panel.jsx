@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { opskeeperPluginThemeStyle } from './plugin-theme.js';
 import { normalizeIncidentList } from './runtime.js';
 import { buildInvestigationRequest, opskeeperApi } from './api.js';
 
@@ -73,6 +74,7 @@ export default function WorkerOpsBlock({ entity, api }) {
 
   return (
     <div style={{
+      ...opskeeperPluginThemeStyle,
       padding: 12, border: '1px solid var(--border)', borderRadius: 8,
       background: 'var(--card)', color: 'var(--card-foreground)',
     }}>
