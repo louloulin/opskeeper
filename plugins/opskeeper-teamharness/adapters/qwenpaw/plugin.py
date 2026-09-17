@@ -88,6 +88,8 @@ _THINKING_SPAN_PATTERN = re.compile(
     r"<\s*think\s*>.*?<\s*/\s*think\s*>",
     re.DOTALL | re.IGNORECASE,
 )
+_THINKING_OPEN_PATTERN = re.compile(r"<\s*think\s*>", re.IGNORECASE)
+_THINKING_CLOSE_PATTERN = re.compile(r"<\s*/\s*think\s*>", re.IGNORECASE)
 _LEADING_PARTIAL_THINKING_PATTERN = re.compile(
     r"^\s*<\s*think\s*>.*\Z",
     re.DOTALL | re.IGNORECASE,
@@ -596,14 +598,16 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
 
 def _strip_thinking(text: str) -> str:
     result = _THINKING_SPAN_PATTERN.sub("", text)
+    leading_partial = _LEADING_PARTIAL_THINKING_PATTERN.match(result)
+    if leading_partial is not None:
+        result = result[:leading_partial.start()] + result[leading_partial.end():]
     changed = result != text
-    if not changed:
-        result = _LEADING_PARTIAL_THINKING_PATTERN.sub("", text)
-        changed = result != text
     return result.lstrip("\r\n") if changed else result
 
 
 def _sanitize_reply_value(value: Any) -> None:
+    if isinstance(value, str):
+        return
     if isinstance(value, list):
         for item in value:
             _sanitize_reply_value(item)
@@ -620,11 +624,106 @@ def _sanitize_reply_value(value: Any) -> None:
         value.text = _strip_thinking(text)
     content = getattr(value, "content", None)
     if content is not None:
-        _sanitize_reply_value(content)
+        if isinstance(content, str):
+            value.content = _strip_thinking(content)
+        else:
+            _sanitize_reply_value(content)
 
 
 def _sanitize_reply_event(event: Any) -> Any:
     _sanitize_reply_value(event)
+    return event
+
+
+def _could_start_thinking_opening(candidate: str) -> bool:
+    if not candidate.startswith("<"):
+        return False
+    index = 1
+    while index < len(candidate) and candidate[index].isspace():
+        index += 1
+    for expected in "think":
+        if index >= len(candidate):
+            return True
+        if candidate[index].lower() != expected:
+            return False
+        index += 1
+    while index < len(candidate) and candidate[index].isspace():
+        index += 1
+    return index == len(candidate)
+
+
+class _ReplyThinkingStream:
+    def __init__(self) -> None:
+        self._states: dict[str, tuple[str, bool]] = {}
+
+    def _state(self, key: str) -> tuple[str, bool]:
+        return self._states.get(key, ("", False))
+
+    def push(self, key: str, text: str) -> str:
+        pending, inside_thinking = self._state(key)
+        pending += text
+        output = ""
+        while pending:
+            if not inside_thinking:
+                opening = _THINKING_OPEN_PATTERN.search(pending)
+                if opening is not None:
+                    output += pending[:opening.start()]
+                    pending = pending[opening.end():]
+                    inside_thinking = True
+                    continue
+                suffix_length = 0
+                for index in range(len(pending) - 1, -1, -1):
+                    if pending[index] != "<":
+                        continue
+                    if _could_start_thinking_opening(pending[index:]):
+                        suffix_length = len(pending) - index
+                    break
+                output += pending[:len(pending) - suffix_length]
+                pending = pending[len(pending) - suffix_length:] if suffix_length else ""
+                break
+
+            closing = _THINKING_CLOSE_PATTERN.search(pending)
+            if closing is None:
+                pending = ""
+                break
+            pending = pending[closing.end():]
+            inside_thinking = False
+
+        self._states[key] = (pending, inside_thinking)
+        return output
+
+def _sanitize_reply_stream_value(
+    value: Any,
+    stream: _ReplyThinkingStream,
+    path: str = "",
+) -> None:
+    if isinstance(value, str):
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _sanitize_reply_stream_value(item, stream, f"{path}[{index}]")
+        return
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            nested_path = f"{path}.{key}"
+            if key == "text" and isinstance(nested, str):
+                value[key] = stream.push(nested_path, nested)
+            else:
+                _sanitize_reply_stream_value(nested, stream, nested_path)
+        return
+    text = getattr(value, "text", None)
+    if isinstance(text, str):
+        value.text = stream.push(f"{path}.text", text)
+    content = getattr(value, "content", None)
+    if content is not None:
+        if isinstance(content, str):
+            value.content = stream.push(f"{path}.content", content)
+        else:
+            _sanitize_reply_stream_value(content, stream, f"{path}.content")
+
+
+def _sanitize_reply_stream_event(event: Any, stream: _ReplyThinkingStream) -> Any:
+    _sanitize_reply_stream_value(event, stream)
     return event
 
 
@@ -653,28 +752,32 @@ class OutboundSafetyMiddleware(_middleware_base()):
                 3600,
             )
         )
-        self._timestamps: deque[float] = deque()
+        self._reservations: deque[tuple[int, float]] = deque()
+        self._next_reservation_token = 0
         self._lock = threading.Lock()
 
-    def _reserve(self) -> float:
-        now = self._monotonic()
+    def _reserve(self) -> int:
         with self._lock:
+            now = self._monotonic()
             cutoff = now - self._window_seconds
-            while self._timestamps and self._timestamps[0] <= cutoff:
-                self._timestamps.popleft()
-            if len(self._timestamps) >= self._limit:
+            while self._reservations and self._reservations[0][1] <= cutoff:
+                self._reservations.popleft()
+            if len(self._reservations) >= self._limit:
                 raise RuntimeError(
                     "OpsKeeper outbound rate limit exceeded; stopping this turn"
                 )
-            self._timestamps.append(now)
-            return now
+            token = self._next_reservation_token
+            self._next_reservation_token += 1
+            self._reservations.append((token, now))
+            return token
 
-    def _release(self, timestamp: float) -> None:
+    def _release(self, token: int) -> None:
         with self._lock:
-            try:
-                self._timestamps.remove(timestamp)
-            except ValueError:
-                pass
+            self._reservations = deque(
+                reservation
+                for reservation in self._reservations
+                if reservation[0] != token
+            )
 
     async def on_reply(
         self,
@@ -682,9 +785,10 @@ class OutboundSafetyMiddleware(_middleware_base()):
         input_kwargs: dict[str, Any],
         next_handler: Callable[..., AsyncGenerator[Any, None]],
     ) -> AsyncGenerator[Any, None]:
+        stream_sanitizer = _ReplyThinkingStream()
         self._reserve()
         async for event in next_handler(**input_kwargs):
-            yield _sanitize_reply_event(event)
+            yield _sanitize_reply_stream_event(event, stream_sanitizer)
 
     async def on_acting(
         self,
@@ -694,20 +798,25 @@ class OutboundSafetyMiddleware(_middleware_base()):
     ) -> AsyncGenerator[Any, None]:
         tool_name, _arguments = _extract_tool_call(input_kwargs)
         is_message_attempt = _is_message_tool(_normalize_tool_name(tool_name))
-        timestamp = self._reserve() if is_message_attempt else None
-        events: list[Any] = []
-        yielded = False
+        reservation = self._reserve() if is_message_attempt else None
+        terminal_success = False
         try:
             async for event in next_handler(**input_kwargs):
-                yielded = True
-                events.append(event)
+                if hasattr(event, "content") and hasattr(event, "state"):
+                    terminal_success = _is_successful_tool_response(event)
                 yield event
         except BaseException:
-            if timestamp is not None and not yielded:
-                self._release(timestamp)
+            if reservation is not None:
+                self._release(reservation)
             raise
-        if timestamp is not None and _has_failed_tool_result(events):
-            self._release(timestamp)
+        if reservation is not None and not terminal_success:
+            self._release(reservation)
+
+
+def _is_successful_tool_response(event: Any) -> bool:
+    if not hasattr(event, "content") or not hasattr(event, "state"):
+        return False
+    return not _has_failed_tool_result([event])
 
 
 def _outbound_safety_factory(_context: Any, _agent_config: Any):
@@ -1428,10 +1537,16 @@ def _tool_names(toolkit: Any) -> set[str]:
 def _validate_copaw_toolkit(toolkit: Any) -> None:
     try:
         readonly_middleware = _readonly_enforcement_factory(None, None)
+        outbound_middleware = _outbound_safety_factory(None, None)
         sanitizer_middleware = _sanitizer_factory(None, None)
-        if readonly_middleware is None or sanitizer_middleware is None:
+        if (
+            readonly_middleware is None
+            or outbound_middleware is None
+            or sanitizer_middleware is None
+        ):
             raise RuntimeError("OpsKeeper middleware constructors are unavailable")
         toolkit.register_middleware(_as_copaw_toolkit_middleware(readonly_middleware))
+        toolkit.register_middleware(_as_copaw_toolkit_middleware(outbound_middleware))
         toolkit.register_middleware(_as_copaw_toolkit_middleware(sanitizer_middleware))
         names = _tool_names(toolkit)
         missing_base = sorted(_COPAW_BASE_TOOLS - names)
@@ -1816,10 +1931,7 @@ class OpskeeperTeamHarnessPlugin:
             api.register_middleware(_readonly_enforcement_factory, priority=10)
         except Exception:
             pass
-        try:
-            api.register_middleware(_outbound_safety_factory, priority=20)
-        except Exception:
-            pass
+        api.register_middleware(_outbound_safety_factory, priority=20)
         try:
             api.register_middleware(_sanitizer_factory, priority=30)
         except Exception:
