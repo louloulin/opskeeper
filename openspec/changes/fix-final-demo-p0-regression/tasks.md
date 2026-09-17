@@ -1,7 +1,7 @@
 ## 1. Pool Metrics Fix
 
 - [x] 1.1 Add `pool_manifest_id` labels to aggregate pool-fixture Prometheus series.
-- [ ] 1.2 Add a versioned, manifest-agnostic public-demo pool metrics proxy script.
+- [x] 1.2 Add a versioned, manifest-agnostic public-demo pool metrics proxy script.
 - [x] 1.3 Add Go tests proving multi-fixture metrics are distinct and dynamically exposed.
 
 ## 2. AgentTeams Isolation Fix

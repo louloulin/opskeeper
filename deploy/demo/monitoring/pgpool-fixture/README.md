@@ -18,6 +18,19 @@ python3 node_metrics_server.py
 LOKI_URL=http://loki:3100 python3 log_source.py
 ```
 
+Start the authoritative pool metrics proxy separately. It must not receive a
+manifest ID; it authenticates to `pool-fixture:8092/metrics` and passes every
+current manifest-labeled series through to Prometheus:
+
+```bash
+POOL_FIXTURE_URL=http://pool-fixture:8092 \
+POOL_FIXTURE_TOKEN_FILE=/var/run/secrets/pool-token \
+python3 pool_metrics_proxy.py
+```
+
+Do not deploy the public demo with `-e POOL_MANIFEST_ID=...`. A new incident
+manifest must appear on the next scrape without recreating this proxy.
+
 Add the metrics endpoint to Prometheus, replacing `opskeeper-demo-node-metrics`
 with the actual DNS name reachable from Prometheus:
 
