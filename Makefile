@@ -69,7 +69,7 @@ build-plugins: ## 构建 AgentTeams 插件发布包
 
 test-plugins: ## 运行插件测试
 	$(MAKE) -C plugins/agentteams-plugin-installer self-check
-	$(PYTHON) -m pytest plugins/opskeeper-teamharness
+	$(PYTHON) -m pytest tests/test_deterministic_archive.py plugins/opskeeper-teamharness
 
 verify-plugins: build-plugins test-plugins ## 构建、测试并校验插件发布包
 	$(MAKE) version-check

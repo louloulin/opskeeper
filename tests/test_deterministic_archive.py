@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def load_archive_helper():
-    path = Path(__file__).parents[2] / "scripts" / "deterministic_archive.py"
+    path = Path(__file__).parents[1] / "scripts" / "deterministic_archive.py"
     spec = importlib.util.spec_from_file_location("deterministic_archive", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
