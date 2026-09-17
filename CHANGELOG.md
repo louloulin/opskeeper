@@ -4,6 +4,9 @@
 
 ## 2026.09.14-rc4 — 2026-09-14
 
+- Rebind the release candidate to TeamHarness `1.0.58`, scoping high-contrast text across every TeamHarness Dashboard entry point and restoring safe runtime credential fallbacks for the signed RCA proxy; the `1.0.57` binding is superseded.
+- Rebind the release candidate source boundary to backend/plugin source `9806560ab7a80c8c2ac2c828c3df4fc05b9a60da` for the `1.0.58` TeamHarness tree recorded in `RELEASE_VERSION.json`.
+
 - Rebind the release candidate to TeamHarness `1.0.57` and installer plugin `1.4.3`, improving installed-plugin secondary text contrast in light and dark themes; the `1.0.56` plugin binding is superseded.
 - Rebind the release candidate source boundary to backend/plugin source `a8503ccd314fb4e9fa6baa117f05135c01296016` for the `1.0.57` TeamHarness tree recorded in `RELEASE_VERSION.json`.
 - Rebind the release candidate to TeamHarness `1.0.56` and installer plugin `1.4.3`, adding a read-only room-to-plugin integration preflight; the `1.0.55` plugin binding is superseded.
