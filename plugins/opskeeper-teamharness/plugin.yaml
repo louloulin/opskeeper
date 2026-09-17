@@ -2,7 +2,7 @@ apiVersion: agentteams.agentteam/v1alpha1
 kind: AgentTeamPlugin
 metadata:
   name: opskeeper-teamharness
-  version: 1.0.53
+  version: 1.0.54
   description: |
     Opskeeper TeamHarness plugin — provides six deployed ops actors
     (alerter/investigator/reviewer/repairer/verifier/reporter)
@@ -121,6 +121,10 @@ metadata:
 
     v1.0.53 adds the reviewer-only `incident.timeline` plugin-native tool for
     reading the durable business-incident event trail by string incident ID.
+
+    v1.0.54 adds the Dashboard Archive tab. Manager remains the authoritative,
+    tenant-isolated source for the sanitized incident evidence chain, while the
+    plugin provides read-only integration observability.
 
     v1.0.7 adds a plugin-native Manager continuation gate: dispatched task markers
     wait for matching Worker results, while empty/self continuations are skipped.

@@ -52,6 +52,26 @@ func TestSQLRepository_AppendAndReplayTimeline(t *testing.T) {
 	require.Len(t, tenantEvents, 3)
 }
 
+func TestSQLRepository_ListIncidentRunbooks_IsTenantAndIncidentScoped(t *testing.T) {
+	repository, _ := setupRepository(t)
+	postmortem := testPostmortem("INC-SQL-RUNBOOK-001", "pool_capacity_exhausted")
+	postmortem.TenantID = "opskeeper-demo"
+	require.NoError(t, repository.SaveRunbook(context.Background(), postmortem))
+
+	runbooks, err := repository.ListIncidentRunbooks(context.Background(), "opskeeper-demo", "INC-SQL-RUNBOOK-001")
+	require.NoError(t, err)
+	require.Len(t, runbooks, 1)
+	require.Equal(t, postmortem.IncidentID, runbooks[0].IncidentID)
+
+	otherTenant, err := repository.ListIncidentRunbooks(context.Background(), "other-tenant", "INC-SQL-RUNBOOK-001")
+	require.NoError(t, err)
+	require.Empty(t, otherTenant)
+
+	otherIncident, err := repository.ListIncidentRunbooks(context.Background(), "opskeeper-demo", "INC-SQL-RUNBOOK-002")
+	require.NoError(t, err)
+	require.Empty(t, otherIncident)
+}
+
 func TestSQLRepository_DuplicateEvent_IsRejected(t *testing.T) {
 	repository, _ := setupRepository(t)
 	event := Event{

@@ -1,5 +1,6 @@
 import * as React from 'react';
 import OpskeeperRoute from './route.jsx';
+import OpskeeperArchiveRoute from './archive-route.jsx';
 import OpskeeperRuntimeRoute from './runtime-route.jsx';
 import OpskeeperInstallView from './install-view.jsx';
 import { OPSKEEPER_TABS, normalizeOpskeeperTab } from './tabs.js';
@@ -54,6 +55,7 @@ export default function OpskeeperUnifiedRoute({ api, initialTab = 'diagnostics' 
         })}
       </nav>
       {tab === 'diagnostics' && <OpskeeperRoute api={api} />}
+      {tab === 'archive' && <OpskeeperArchiveRoute api={api} />}
       {tab === 'runtime' && <OpskeeperRuntimeRoute api={api} />}
       {tab === 'plugins' && <OpskeeperInstallView api={api} />}
     </div>

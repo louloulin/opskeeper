@@ -9,6 +9,7 @@
 - Rebind the release candidate to backend source `6ce31f20a07abd91653ec454f0df126dca8bcd99` and TeamHarness `1.0.51`; the `1.0.50` binding is superseded.
 - Rebind the release candidate to backend source `cfde43ebaf9406b2e19f9b33476c5f6cddab3f0e` and TeamHarness `1.0.52`; the `1.0.51` binding is superseded.
 - Rebind the release candidate to backend source `0942a5e132c795e4a4a9401f053d17af799da8e6` and TeamHarness `1.0.53`; the `1.0.52` binding is superseded.
+- Rebind the release candidate to backend source `7ef38649bdeb3d0f52f599ce16530e0912a6a74d` and TeamHarness `1.0.54`; the `1.0.53` binding is superseded.
 - Close the PostgreSQL connection-pool recovery evidence loop with timeline aggregation, deployment/version visibility, weighted recovery sampling, bounded approval targets, and sanitized health summaries.
 - Respect an explicit QwenPaw runtime even when CoPaw-compatible APIs are present, and make source-tree task tracing load its signing helper from both source and installed layouts.
 - Derive QwenPaw readonly and sanitizer middleware from the AgentScope middleware protocol so real Manager and Worker agents initialize successfully.
