@@ -10,16 +10,16 @@
 - Increase installed-plugin secondary text contrast with the adaptive foreground token and bounded opacity.
 
 ## 1.0.56 — 2026-09-17
-## 1.0.56 — 2026-09-17
 
 - Add a read-only Dashboard integration preflight that verifies the target Matrix room, session, AgentTeams, OpsKeeper, Worker plugin, and Dashboard manifest chain.
 - Keep the check side-effect free so it is safe to run before a live demonstration.
 
 ## 1.0.55 — 2026-09-17
-## 1.0.55 — 2026-09-17
 
 - Use the Dashboard foreground token for muted plugin text so descriptions remain readable in light and dark themes.
 - Add a regression check that rejects using the muted background token as text color.
+- Isolate Manager identity, prompt injection, and continuation state from Worker and standalone runtimes.
+- Sanitize outbound thinking content, bound successful reply/message bursts, reject cross-role targets, and add an admin incident STOP circuit breaker.
 
 ## 1.0.54 — 2026-09-17
 

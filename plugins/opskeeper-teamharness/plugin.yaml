@@ -128,6 +128,10 @@ metadata:
 
     v1.0.55 restores readable muted text in light and dark Dashboard themes and
     prevents the background muted token from being reused as a foreground color.
+    It also isolates Manager identity, prompt injection, and continuation state
+    from Worker and standalone runtimes, sanitizes outbound thinking, bounds
+    reply/message bursts, rejects cross-role targets, and adds an admin incident
+    STOP circuit breaker.
 
     v1.0.56 adds a read-only room-to-plugin integration preflight. It checks
     Dashboard session state, Matrix room membership, AgentTeams and OpsKeeper
