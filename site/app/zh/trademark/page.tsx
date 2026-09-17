@@ -36,8 +36,7 @@ export default function TrademarkZhPage() {
 
         <h2 className="mt-10 text-xl font-semibold text-white">有问题？</h2>
         <p className="mt-3 text-ink-300">
-          商业使用或联合品牌相关问题，请在 GitHub 上开一个带 <code className="text-accent-300">trademark</code> 标签的 issue，或发邮件到{' '}
-          <span className="text-white">trademark@opskeeper.dev</span>。
+          商业使用或联合品牌相关问题，请在 GitHub 上开一个带 <code className="text-accent-300">trademark</code> 标签的 issue。
         </p>
       </div>
     </Section>

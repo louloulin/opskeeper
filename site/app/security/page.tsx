@@ -133,8 +133,8 @@ export default function SecurityPage() {
               <CheckCircle2 className="h-4 w-4 text-accent-400" /> Reporting a vulnerability
             </div>
             <p className="mt-3 text-sm text-ink-300">
-              Please email <span className="text-white">security@opskeeper.dev</span> or open a
-              private security advisory on GitHub. See <code className="text-accent-300">SECURITY.md</code> for
+              Open a private security advisory via GitHub&apos;s <span className="text-white">Private vulnerability reporting</span> on the
+              repository. See <code className="text-accent-300">SECURITY.md</code> for
               disclosure timelines.
             </p>
           </div>

@@ -8,7 +8,7 @@ export const SITE = {
   repo: 'https://github.com/vincent-wuhan/opskeeper',
   repoShort: 'vincent-wuhan/opskeeper',
   license: 'Apache-2.0',
-  version: '0.6.0',
+  version: 'v2026.09.03',
 } as const;
 
 export type NavLink = { label: string; href: string };

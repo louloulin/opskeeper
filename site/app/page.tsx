@@ -19,6 +19,12 @@ import { Button } from '@/components/button';
 import { Section, SectionHeader } from '@/components/section';
 import { CodeBlock } from '@/components/code-block';
 import { TechMarquee } from '@/components/tech-marquee';
+import Aurora from '@/components/react-bits/aurora';
+import BlurText from '@/components/react-bits/blur-text';
+import ShinyText from '@/components/react-bits/shiny-text';
+import CountUp from '@/components/react-bits/count-up';
+import SpotlightCard from '@/components/react-bits/spotlight-card';
+import AnimatedContent from '@/components/react-bits/animated-content';
 
 export const metadata = {
   title: 'Auditable operations for multi-agent incident response',
@@ -136,6 +142,8 @@ export default function HomePage() {
     <>
       {/* Hero */}
       <Section className="relative pt-20 pb-24 md:pt-28 md:pb-32">
+        {/* React Bits Aurora — animated WebGL background */}
+        <Aurora className="absolute inset-x-0 -top-24 -z-10 h-[640px] opacity-60" />
         {/* grain overlay */}
         <div
           aria-hidden
@@ -150,12 +158,12 @@ export default function HomePage() {
           <div className="lg:col-span-7">
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-ink-200">
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent-400 animate-pulse" />
-              v2026.09.03 · Apache-2.0 · open source
+              <ShinyText speed={5}>v2026.09.03 · Apache-2.0 · open source</ShinyText>
             </div>
             <h1 className="text-balance text-4xl font-semibold tracking-tight text-white sm:text-5xl md:text-6xl">
-              Auditable operations for{' '}
+              <BlurText text="Auditable operations for" />{' '}
               <span className="bg-gradient-to-br from-white to-accent-300 bg-clip-text text-transparent">
-                multi-agent incident response
+                <BlurText text="multi-agent incident response" delay={200} />
               </span>
             </h1>
             <p className="mt-6 max-w-2xl text-pretty text-lg leading-relaxed text-ink-300">
@@ -200,16 +208,18 @@ export default function HomePage() {
       <Section className="py-10">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           {[
-            { k: '7', l: 'Operational worker roles' },
-            { k: '8', l: 'Closed-loop phases' },
-            { k: '4', l: 'Reproducible incident scenarios' },
-            { k: '100%', l: 'Audit replay coverage' },
+            { k: 7, l: 'Operational worker roles' },
+            { k: 8, l: 'Closed-loop phases' },
+            { k: 4, l: 'Reproducible incident scenarios' },
+            { k: 100, suffix: '%', l: 'Audit replay coverage' },
           ].map((s) => (
             <div
               key={s.l}
               className="rounded-xl border border-white/10 bg-white/[0.03] p-5"
             >
-              <div className="text-3xl font-semibold text-white">{s.k}</div>
+              <div className="text-3xl font-semibold text-white">
+                <CountUp to={s.k} suffix={s.suffix} />
+              </div>
               <div className="mt-1 text-sm text-ink-300">{s.l}</div>
             </div>
           ))}
@@ -226,9 +236,9 @@ export default function HomePage() {
         />
         <div className="mt-12 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {phases.map((p, i) => (
-            <div
+            <SpotlightCard
               key={p.key}
-              className="group relative overflow-hidden rounded-xl border border-white/10 bg-white/[0.02] p-5 transition-colors hover:border-accent-500/40 hover:bg-white/[0.04]"
+              className="rounded-xl border border-white/10 bg-white/[0.02] p-5 transition-colors hover:border-accent-500/40 hover:bg-white/[0.04]"
             >
               <div className="flex items-center justify-between">
                 <span className="font-mono text-xs text-ink-400">phase 0{i + 1}</span>
@@ -236,7 +246,7 @@ export default function HomePage() {
               </div>
               <div className="mt-3 text-lg font-semibold text-white">{p.label}</div>
               <div className="mt-1 text-sm text-ink-300">{p.desc}</div>
-            </div>
+            </SpotlightCard>
           ))}
         </div>
       </Section>
@@ -329,8 +339,8 @@ export default function HomePage() {
           description="OpsKeeper is one platform, three tightly integrated subsystems. Each one is independently useful and observable."
         />
         <div className="mt-12 grid gap-4 md:grid-cols-3">
-          {pillars.map((p) => (
-            <div
+          {pillars.map((p, i) => (
+            <SpotlightCard
               key={p.title}
               className="rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.04] to-transparent p-6"
             >
@@ -339,7 +349,7 @@ export default function HomePage() {
               </span>
               <h3 className="mt-4 text-lg font-semibold text-white">{p.title}</h3>
               <p className="mt-2 text-sm leading-relaxed text-ink-300">{p.desc}</p>
-            </div>
+            </SpotlightCard>
           ))}
         </div>
       </Section>
@@ -407,6 +417,7 @@ export default function HomePage() {
 
       {/* CTA */}
       <Section className="py-20 md:py-28">
+        <AnimatedContent>
         <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-accent-500/20 via-ink-900 to-ink-950 p-10 md:p-14">
           <div className="pointer-events-none absolute -right-32 -top-32 h-80 w-80 rounded-full bg-accent-500/30 blur-3xl" />
           <div className="relative">
@@ -430,6 +441,7 @@ export default function HomePage() {
             </div>
           </div>
         </div>
+        </AnimatedContent>
       </Section>
     </>
   );

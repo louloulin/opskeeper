@@ -10,7 +10,7 @@ export const SITE_ZH = {
   repo: 'https://github.com/vincent-wuhan/opskeeper',
   repoShort: 'vincent-wuhan/opskeeper',
   license: 'Apache-2.0',
-  version: '0.6.0',
+  version: 'v2026.09.03',
 } as const;
 
 export const PRIMARY_NAV_ZH: NavLink[] = [
