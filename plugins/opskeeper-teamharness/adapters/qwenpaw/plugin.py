@@ -86,6 +86,10 @@ _OPSKEEPER_ROLE_MENTION_PATTERN = re.compile(
     r"@(?P<role>opskeeper-[a-z0-9_.-]+)(?::[a-z0-9_.-]+)?",
     re.IGNORECASE,
 )
+_MANAGER_ROLE_MENTION_PATTERN = re.compile(
+    r"@manager(?::[a-z0-9_.:-]+)?(?![a-z0-9_.-])",
+    re.IGNORECASE,
+)
 _COPAW_BASE_TOOLS = frozenset({"message", "filesync", "projectflow", "taskflow"})
 _COPAW_NATIVE_TOOLS = {
     "opskeeper__recovery_execute": "recovery.execute",
@@ -774,10 +778,16 @@ def _is_message_for_agent(message: str, agent: Any) -> bool:
         match.group("role").lower()
         for match in _OPSKEEPER_ROLE_MENTION_PATTERN.finditer(message)
     ]
-    if not mentions:
+    manager_mention = bool(_MANAGER_ROLE_MENTION_PATTERN.search(message))
+    if not mentions and not manager_mention:
         return True
-    agent_name = str(getattr(agent, "name", "")).strip().lower()
-    return agent_name in mentions
+    agent_name, agent_role = _manager_identity(agent)
+    current_identities = {agent_name}
+    if agent_role in {"manager", "leader", "team_leader"} or "manager" in agent_name:
+        current_identities.add("manager")
+    return agent_name in mentions or (
+        manager_mention and "manager" in current_identities
+    )
 
 
 def _gated_prompt(

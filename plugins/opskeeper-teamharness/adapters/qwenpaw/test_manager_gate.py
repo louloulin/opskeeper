@@ -135,6 +135,17 @@ class ManagerGateTest(unittest.TestCase):
     def setUp(self):
         self.saved_modules = _install_runtime_stubs()
         self.state_directory = tempfile.TemporaryDirectory()
+        self.identity_patch = patch.dict(
+            "os.environ",
+            {
+                "AGENTTEAMS_WORKER_NAME": "",
+                "AGENTTEAMS_AGENT_NAME": "",
+                "AGENTTEAMS_WORKER_ROLE": "",
+                "AGENTTEAMS_AGENT_ROLE": "",
+                "AGENTTEAMS_MANAGER_RUNTIME": "",
+            },
+            clear=False,
+        )
         self.state_patch = patch.dict(
             "os.environ",
             {
@@ -144,12 +155,14 @@ class ManagerGateTest(unittest.TestCase):
             },
             clear=False,
         )
+        self.identity_patch.start()
         self.state_patch.start()
         self.module = _load_plugin()
         self.gate = self.module.ManagerDispatchGate()
 
     def tearDown(self):
         self.state_patch.stop()
+        self.identity_patch.stop()
         self.state_directory.cleanup()
         _restore_runtime_stubs(self.saved_modules)
 
@@ -518,6 +531,39 @@ class ManagerGateTest(unittest.TestCase):
             )
             self.assertFalse(
                 self.module._is_message_for_agent("@opskeeper-verifier:hs status", worker)
+            )
+
+    def test_current_role_mention_wins_over_other_opskeeper_mentions(self):
+        manager = SimpleNamespace(name="manager")
+        worker = SimpleNamespace(name="opskeeper-repairer")
+        manager_environment = {
+            "AGENTTEAMS_AGENT_NAME": "manager",
+            "AGENTTEAMS_MANAGER_RUNTIME": "qwenpaw",
+        }
+        worker_environment = {
+            "AGENTTEAMS_WORKER_NAME": "opskeeper-repairer",
+            "AGENTTEAMS_WORKER_ROLE": "standalone",
+            "AGENTTEAMS_MANAGER_RUNTIME": "qwenpaw",
+        }
+        with patch.dict("os.environ", manager_environment, clear=False):
+            self.assertTrue(
+                self.module._is_message_for_agent(
+                    "@manager:hs ask @opskeeper-verifier to check.",
+                    manager,
+                )
+            )
+        with patch.dict("os.environ", worker_environment, clear=False):
+            self.assertTrue(
+                self.module._is_message_for_agent(
+                    "@opskeeper-repairer, coordinate with @opskeeper-verifier.",
+                    worker,
+                )
+            )
+            self.assertFalse(
+                self.module._is_message_for_agent(
+                    "@opskeeper-verifier, report status.",
+                    worker,
+                )
             )
 
     def test_prompt_registration_passes_role_conditions(self):
