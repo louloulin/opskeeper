@@ -80,6 +80,11 @@ func TestDeployedWorkloadAndSeedMatchRunner(t *testing.T) {
 	spec, err := LoadWorkload(workloadData)
 	require.NoError(t, err)
 	require.Equal(t, "workload-v1", spec.Revision)
+	require.Equal(
+		t,
+		"sha256:db905b8f98c631212336b736f92d80b2a3040a75a44554687cfc782d39c31cc4",
+		spec.WorkloadFingerprint(),
+	)
 	require.Equal(t, "resize_pool", spec.Candidates[0].Action)
 	require.Equal(t, "reset_pool", spec.Candidates[1].Action)
 

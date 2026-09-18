@@ -65,7 +65,7 @@ func TestDeployedTargetIdentitySeedAndMigrationAgree(t *testing.T) {
 	for _, value := range []string{
 		"pg-pool-exhaustion",
 		"0123456789abcdef0123456789abcdef",
-		"sha256:db905b8f98c631212336b736f92d80b2a3040a75a44554687ffc782d39c31cc4",
+		"sha256:db905b8f98c631212336b736f92d80b2a3040a75a44554687cfc782d39c31cc4",
 	} {
 		if !strings.Contains(string(seedData), value) || !strings.Contains(string(migrationData), value) {
 			t.Fatalf("target identity value %s is absent from seed or migration", value)
