@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
 	"log/slog"
 
 	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
@@ -114,6 +115,7 @@ type Registry struct {
 	// satisfy the narrow MutatingProposalAuditRepo seam; tests inject an
 	// in-memory fake.
 	recoveryAuditRepo MutatingProposalAuditRepo
+	repairPreviewGate repairpreview.Gate
 	// hostFixtureTerminator is the narrow case-owned kill_process seam.
 	// nil keeps restart_service usable and makes kill_process fail closed.
 	hostFixtureTerminator HostProcessTerminator
@@ -208,6 +210,8 @@ func (r *Registry) SetEdgeChangeLister(e EdgeChangeLister) { r.edgeChangeLister 
 // the gate is the whole point of the tool, so production wiring should
 // always supply a real repo.
 func (r *Registry) SetRecoveryAuditRepo(repo MutatingProposalAuditRepo) { r.recoveryAuditRepo = repo }
+
+func (r *Registry) SetRepairPreviewGate(gate repairpreview.Gate) { r.repairPreviewGate = gate }
 
 func (r *Registry) SetHostFixtureTerminator(terminator HostProcessTerminator) {
 	r.hostFixtureTerminator = terminator

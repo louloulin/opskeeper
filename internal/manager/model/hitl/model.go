@@ -96,13 +96,15 @@ type AgentTeamsPayload struct {
 }
 
 type RecoveryExecutionParameters struct {
-	Command           string `json:"command"`
-	DeviceID          uint64 `json:"device_id,omitempty"`
-	Service           string `json:"service,omitempty"`
-	Reason            string `json:"reason"`
-	IncidentID        string `json:"incident_id,omitempty"`
-	FixtureManifestID string `json:"fixture_manifest_id,omitempty"`
-	PoolManifestID    string `json:"pool_manifest_id,omitempty"`
+	Command            string `json:"command"`
+	DeviceID           uint64 `json:"device_id,omitempty"`
+	Service            string `json:"service,omitempty"`
+	Reason             string `json:"reason"`
+	IncidentID         string `json:"incident_id,omitempty"`
+	FixtureManifestID  string `json:"fixture_manifest_id,omitempty"`
+	PoolManifestID     string `json:"pool_manifest_id,omitempty"`
+	PreviewRunID       string `json:"preview_run_id,omitempty"`
+	PreviewCandidateID string `json:"preview_candidate_id,omitempty"`
 }
 
 const RecoveryActionRestartService = "restart_service"

@@ -1285,10 +1285,15 @@ func main() {
 		traceQuerier = pkgtracequery.New(cfg.Traces.URL, log.With(slog.String("comp", "aiops-tracequery")))
 	}
 	toolsReg := aiopstools.NewRegistry(fbClient, edgeUC, deviceUC, promQuerier, logQuerier, traceQuerier, alertUC, log)
+	repairPreviewRepository := repairpreviewcontrol.NewSQLRepository(db)
 	hitlProposalRepo := managerdatahitlstore.NewRepo(db)
 	hitlProposalSvc := managerbizhitl.NewService(hitlProposalRepo)
 	hitlProposalHandler := managerserverhitl.NewHandler(hitlProposalSvc)
 	toolsReg.SetRecoveryAuditRepo(hitlRecoveryAuditRepo{repo: hitlProposalRepo})
+	toolsReg.SetRepairPreviewGate(repairpreviewcontrol.NewGate(
+		repairPreviewRepository,
+		strings.TrimSpace(os.Getenv("OPSKEEPER_REPAIR_PREVIEW_WORKLOAD_FINGERPRINT")),
+	))
 	hostFixtureURL := strings.TrimSpace(os.Getenv("OPSKEEPER_HOST_FIXTURE_URL"))
 	hostFixtureToken := strings.TrimSpace(os.Getenv("OPSKEEPER_HOST_FIXTURE_TOKEN"))
 	if hostFixtureURL != "" || hostFixtureToken != "" {
@@ -2730,7 +2735,7 @@ func main() {
 		promProxyQuerier = promQueryClient
 	}
 	promProxyHandler := managerserverprom.NewHandlerWithProm(promProxySvc, promProxyQuerier)
-	incidentHandler := managerserverincident.NewHandler(incidentcontrol.NewSQLRepository(db))
+	incidentHandler := managerserverincident.NewHandler(incidentcontrol.NewSQLRepository(db), repairPreviewRepository)
 
 	// otelhttpmw is the OTel HTTP middleware factory. Each request gets
 	// a span named after its method + matched chi route. Built once and

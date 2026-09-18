@@ -21,6 +21,17 @@ Manager 在每次 dispatch 前调用 `safety.levels.resolve_safety_level()`：
 
 L3 情况下 Worker 只产出 plan（Postmortem / Planner 类 Worker 接管），禁止任何 mutating。
 
+## Repair Preview Gate
+
+- AgentTeams 的 `resize_pool`、`kill_process`、`restart_service` 恢复参数必须同时携带
+  `preview_run_id` 和 `preview_candidate_id`。
+- Manager 提案前读取 OpsKeeper `repair-preview-summary`，向审批人展示
+  baseline / Candidate A / Candidate B 的紧凑对比卡：一致性、延迟、吞吐、写入影响、
+  业务探针与决策。
+- 只有 `PASS` 候选可以进入 HITL；`REJECTED_BY_PREVIEW` 或 `FAIL` 候选禁止再次提案。
+  特别是 preview 拒绝后的 `reset_pool` 不得作为正式恢复方案。
+- 预演证据仅来自 disposable preview-pg 的受控固定负载重建，不代表原实例活动会话的完整复制。
+
 ## 运行时
 
 - 监听 alerter 的 `OPSKEEPER_RESULT <task_id>` 直接回报 → 启动派活决策树；禁止等待或要求

@@ -34,6 +34,7 @@ import (
 	"log/slog"
 	"time"
 
+	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
 	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
 	hitlmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
@@ -87,6 +88,8 @@ var RecoveryExecuteSchema = json.RawMessage(`{
         "incident_id":        {"type": "string", "minLength": 1, "maxLength": 64},
         "fixture_manifest_id":{"type": "string", "minLength": 8, "maxLength": 128},
         "pool_manifest_id":   {"type": "string", "minLength": 8, "maxLength": 128},
+        "preview_run_id":     {"type": "string", "minLength": 8, "maxLength": 128},
+        "preview_candidate_id": {"type": "string", "minLength": 3, "maxLength": 128},
         "reason":         {"type": "string", "minLength": 1, "maxLength": 512},
         "skip_audit":  {"type": "boolean", "default": false}
       }
@@ -116,14 +119,16 @@ type RecoveryExecuteArgs struct {
 // Command is the dispatcher switch; the remaining fields are
 // forwarded to host_restart_service when command=="restart_service".
 type recoveryExecuteParameters struct {
-	Command           string `json:"command"`
-	DeviceID          uint64 `json:"device_id,omitempty"`
-	Service           string `json:"service,omitempty"`
-	Reason            string `json:"reason,omitempty"`
-	IncidentID        string `json:"incident_id,omitempty"`
-	FixtureManifestID string `json:"fixture_manifest_id,omitempty"`
-	PoolManifestID    string `json:"pool_manifest_id,omitempty"`
-	SkipAudit         bool   `json:"skip_audit,omitempty"`
+	Command            string `json:"command"`
+	DeviceID           uint64 `json:"device_id,omitempty"`
+	Service            string `json:"service,omitempty"`
+	Reason             string `json:"reason,omitempty"`
+	IncidentID         string `json:"incident_id,omitempty"`
+	FixtureManifestID  string `json:"fixture_manifest_id,omitempty"`
+	PoolManifestID     string `json:"pool_manifest_id,omitempty"`
+	PreviewRunID       string `json:"preview_run_id,omitempty"`
+	PreviewCandidateID string `json:"preview_candidate_id,omitempty"`
+	SkipAudit          bool   `json:"skip_audit,omitempty"`
 }
 
 var errRecoveryProposalRequired = fmt.Errorf("%s: approved proposal_id required", ToolNameRecoveryExecute)
@@ -198,6 +203,7 @@ type RecoveryExecuteTool struct {
 	terminator    HostProcessTerminator
 	poolRecoverer PoolRecoveryExecutor
 	auditRepo     MutatingProposalAuditRepo
+	previewGate   repairpreview.Gate
 	log           *slog.Logger
 }
 
@@ -221,6 +227,10 @@ func NewRecoveryExecuteTool(dispatcher basetool.BaseTool, terminator HostProcess
 
 func (t *RecoveryExecuteTool) SetPoolRecoveryExecutor(recoverer PoolRecoveryExecutor) {
 	t.poolRecoverer = recoverer
+}
+
+func (t *RecoveryExecuteTool) SetRepairPreviewGate(gate repairpreview.Gate) {
+	t.previewGate = gate
 }
 
 // Info returns the tool metadata. Class="write" — the call mutates
@@ -286,6 +296,12 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 	}
 	caller, hasCaller := tenantctx.From(ctx)
 	agentTeamsCaller := hasCaller && caller.AgentTeams != nil
+	if agentTeamsCaller && (params.Command == hitlmodel.RecoveryActionRestartService ||
+		params.Command == hitlmodel.RecoveryActionKillProcess ||
+		params.Command == hitlmodel.RecoveryActionResizePool) &&
+		(params.PreviewRunID == "" || params.PreviewCandidateID == "") {
+		return "", fmt.Errorf("%s: preview_run_id and preview_candidate_id are required for this AgentTeams command", ToolNameRecoveryExecute)
+	}
 	if params.SkipAudit && (agentTeamsCaller ||
 		params.Command == hitlmodel.RecoveryActionKillProcess ||
 		params.Command == hitlmodel.RecoveryActionResizePool) {
@@ -372,6 +388,15 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 				return "", fmt.Errorf("%s: recovery target does not exactly match an exhausted incident-owned pool", ToolNameRecoveryExecute)
 			}
 		}
+		if agentTeamsCaller {
+			if t.previewGate == nil {
+				return "", fmt.Errorf("%s: repair preview gate required for agentteams callers", ToolNameRecoveryExecute)
+			}
+			if err := t.previewGate.Eligible(ctx, caller.AgentTeams.TenantID, in.IncidentID,
+				params.PreviewRunID, params.PreviewCandidateID, params.Command); err != nil {
+				return "", fmt.Errorf("%s: repair preview eligibility: %w", ToolNameRecoveryExecute, err)
+			}
+		}
 		err := t.auditRepo.ReserveApprovedProposal(ctx, RecoveryProposalRequest{
 			ProposalID: in.ProposalID,
 			SessionID:  in.IncidentID,
@@ -379,13 +404,15 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 			Action:     params.Command,
 			Resource:   in.Target,
 			Execution: hitlmodel.RecoveryExecutionParameters{
-				Command:           params.Command,
-				DeviceID:          params.DeviceID,
-				Service:           params.Service,
-				Reason:            params.Reason,
-				IncidentID:        params.IncidentID,
-				FixtureManifestID: params.FixtureManifestID,
-				PoolManifestID:    params.PoolManifestID,
+				Command:            params.Command,
+				DeviceID:           params.DeviceID,
+				Service:            params.Service,
+				Reason:             params.Reason,
+				IncidentID:         params.IncidentID,
+				FixtureManifestID:  params.FixtureManifestID,
+				PoolManifestID:     params.PoolManifestID,
+				PreviewRunID:       params.PreviewRunID,
+				PreviewCandidateID: params.PreviewCandidateID,
 			},
 		})
 		if err != nil {
