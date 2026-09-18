@@ -34,6 +34,7 @@ const (
 	poolStateExpired      = "expired"
 	poolStateStale        = "stale"
 	maxRequestBodyBytes   = 16 << 10
+	businessQueryTimeout  = 2 * time.Second
 )
 
 var identifierPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
@@ -76,7 +77,24 @@ type PoolRuntime interface {
 	Saturate(ctx context.Context, capacity int) ([]PoolConnection, error)
 	Probe(ctx context.Context) (ProbeRecord, error)
 	ResizeAndRecycle(ctx context.Context, connections []PoolConnection, capacity int) error
+	BusinessSnapshot(ctx context.Context, section BusinessSection) (BusinessSnapshot, error)
 	Close() error
+}
+
+type BusinessSection string
+
+const (
+	BusinessSectionOrders    BusinessSection = "orders"
+	BusinessSectionInventory BusinessSection = "inventory"
+	BusinessSectionAudit     BusinessSection = "audit"
+)
+
+type BusinessSnapshot struct {
+	Section     string    `json:"section"`
+	Value       string    `json:"value"`
+	Detail      string    `json:"detail"`
+	LatencyMS   int64     `json:"latency_ms"`
+	GeneratedAt time.Time `json:"generated_at"`
 }
 
 type RuntimeFactory func(ctx context.Context, dsn string) (PoolRuntime, error)
@@ -232,6 +250,49 @@ func (c *Controller) Statuses() []PoolManifest {
 		statuses = append(statuses, c.snapshotLocked(pool))
 	}
 	return statuses
+}
+
+func (c *Controller) BusinessSnapshot(ctx context.Context, manifestID string, section BusinessSection) (BusinessSnapshot, error) {
+	if !validBusinessSection(section) || !targetPattern.MatchString(manifestID) {
+		return BusinessSnapshot{}, errInvalid
+	}
+	c.mu.Lock()
+	pool, ok := c.pools[manifestID]
+	if !ok {
+		c.mu.Unlock()
+		return BusinessSnapshot{}, errNotFound
+	}
+	if err := c.expireIfDueLocked(pool, time.Now().UTC()); err != nil {
+		c.mu.Unlock()
+		return BusinessSnapshot{}, err
+	}
+	if pool.runtime == nil || pool.manifest.Status == poolStateExpired || pool.manifest.Status == poolStateStale {
+		c.mu.Unlock()
+		return BusinessSnapshot{}, errNotFound
+	}
+	runtime := pool.runtime
+	c.mu.Unlock()
+	return runtime.BusinessSnapshot(ctx, section)
+}
+
+func (c *Controller) activePoolManifestID() (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now().UTC()
+	var selected *ownedPool
+	for _, pool := range c.pools {
+		if err := c.expireIfDueLocked(pool, now); err != nil {
+			return "", err
+		}
+		if pool.runtime != nil && pool.manifest.Status != poolStateExpired && pool.manifest.Status != poolStateStale &&
+			(selected == nil || pool.manifest.StartedAt.After(selected.manifest.StartedAt)) {
+			selected = pool
+		}
+	}
+	if selected == nil {
+		return "", errNotFound
+	}
+	return selected.manifest.ManifestID, nil
 }
 
 type ProbeRequest struct {
@@ -442,7 +503,57 @@ func newPostgresRuntime(ctx context.Context, dsn string) (PoolRuntime, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping PostgreSQL: %w", err)
 	}
-	return &postgresRuntime{db: db}, nil
+	runtime := &postgresRuntime{db: db}
+	if err := runtime.initializeBusinessTables(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return runtime, nil
+}
+
+func (r *postgresRuntime) initializeBusinessTables(ctx context.Context) error {
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire business snapshot initializer connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", int64(8092)); err != nil {
+		return fmt.Errorf("lock business snapshot initializer: %w", err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", int64(8092))
+	}()
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS demo_business_orders (
+			id bigint PRIMARY KEY,
+			status text NOT NULL,
+			amount_cents bigint NOT NULL,
+			created_at timestamptz NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS demo_business_inventory (
+			warehouse text PRIMARY KEY,
+			available integer NOT NULL,
+			total integer NOT NULL,
+			updated_at timestamptz NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS demo_business_audit_events (
+			id bigserial PRIMARY KEY,
+			event_type text NOT NULL,
+			created_at timestamptz NOT NULL
+		)`,
+		`INSERT INTO demo_business_orders (id, status, amount_cents, created_at)
+		SELECT 1001, 'paid', 12500, now() WHERE NOT EXISTS (SELECT 1 FROM demo_business_orders)`,
+		`INSERT INTO demo_business_inventory (warehouse, available, total, updated_at)
+		SELECT 'shanghai-1', 38, 42, now() WHERE NOT EXISTS (SELECT 1 FROM demo_business_inventory)`,
+		`INSERT INTO demo_business_audit_events (event_type, created_at)
+		SELECT 'order.paid', now() WHERE NOT EXISTS (SELECT 1 FROM demo_business_audit_events)`,
+	}
+	for _, statement := range statements {
+		if _, err := conn.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("initialize business snapshot data: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *postgresRuntime) Saturate(ctx context.Context, capacity int) ([]PoolConnection, error) {
@@ -492,6 +603,44 @@ func (r *postgresRuntime) Probe(ctx context.Context) (ProbeRecord, error) {
 	return record, nil
 }
 
+func (r *postgresRuntime) BusinessSnapshot(ctx context.Context, section BusinessSection) (BusinessSnapshot, error) {
+	if !validBusinessSection(section) {
+		return BusinessSnapshot{}, errInvalid
+	}
+	startedAt := time.Now().UTC()
+	snapshot := BusinessSnapshot{Section: string(section)}
+	var err error
+	switch section {
+	case BusinessSectionOrders:
+		err = r.db.QueryRowContext(ctx,
+			"SELECT count(*)::text, coalesce(sum(amount_cents), 0)::text FROM demo_business_orders WHERE status = 'paid'",
+		).Scan(&snapshot.Value, &snapshot.Detail)
+	case BusinessSectionInventory:
+		var available, total int
+		if err = r.db.QueryRowContext(ctx,
+			"SELECT warehouse, available, total FROM demo_business_inventory ORDER BY updated_at DESC LIMIT 1",
+		).Scan(&snapshot.Value, &available, &total); err == nil {
+			snapshot.Detail = fmt.Sprintf("%d available of %d units", available, total)
+		} else if errors.Is(err, sql.ErrNoRows) {
+			err = nil
+		}
+	case BusinessSectionAudit:
+		var latest sql.NullTime
+		if err = r.db.QueryRowContext(ctx,
+			"SELECT count(*)::text, max(created_at) FROM demo_business_audit_events",
+		).Scan(&snapshot.Value, &latest); err == nil && latest.Valid {
+			snapshot.Detail = latest.Time.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	if err != nil {
+		return BusinessSnapshot{}, err
+	}
+	finishedAt := time.Now().UTC()
+	snapshot.GeneratedAt = finishedAt
+	snapshot.LatencyMS = finishedAt.Sub(startedAt).Milliseconds()
+	return snapshot, nil
+}
+
 func (r *postgresRuntime) ResizeAndRecycle(ctx context.Context, connections []PoolConnection, capacity int) error {
 	releaseConnections(connections)
 	r.db.SetMaxOpenConns(capacity)
@@ -539,9 +688,10 @@ var (
 )
 
 type apiResponse struct {
-	Code    int             `json:"code"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data"`
+	Code      int             `json:"code"`
+	Message   string          `json:"message"`
+	Data      json.RawMessage `json:"data"`
+	ErrorCode string          `json:"error_code,omitempty"`
 }
 
 type Handler struct {
@@ -556,6 +706,10 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if authorized(request, h.controller.token) {
+		if request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/business-snapshots/") {
+			h.businessSnapshot(writer, request)
+			return
+		}
 		h.dispatch(writer, request)
 		return
 	}
@@ -690,6 +844,36 @@ func (h *Handler) metrics(writer http.ResponseWriter, request *http.Request) {
 	writeJSON(writer, http.StatusOK, "success", data)
 }
 
+func (h *Handler) businessSnapshot(writer http.ResponseWriter, request *http.Request) {
+	section, ok := parseBusinessSection(request.URL.Path)
+	if !ok {
+		writeBusinessError(writer, http.StatusBadRequest, "invalid request", "invalid_section")
+		return
+	}
+	manifestID, err := h.controller.activePoolManifestID()
+	if err != nil {
+		writeDomainError(writer, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), businessQueryTimeout)
+	defer cancel()
+	snapshot, err := h.controller.BusinessSnapshot(ctx, manifestID, section)
+	if err != nil {
+		if isPoolExhausted(ctx, err) {
+			writeBusinessError(writer, http.StatusServiceUnavailable, "business query unavailable", "pool_exhausted")
+			return
+		}
+		writeDomainError(writer, err)
+		return
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		writeBusinessError(writer, http.StatusInternalServerError, "encode failed", "encode_failed")
+		return
+	}
+	writeJSONNoStore(writer, http.StatusOK, "success", data)
+}
+
 func (h *Handler) prometheusMetrics(writer http.ResponseWriter) {
 	statuses := h.controller.Statuses()
 	writer.Header().Set("Content-Type", `text/plain; version=0.0.4; charset=utf-8`)
@@ -731,6 +915,37 @@ func parseManifestPath(path, action string) (string, bool) {
 		return parts[2], len(parts) == 3
 	}
 	return parts[2], len(parts) == 4 && parts[3] == strings.TrimPrefix(action, "/")
+}
+
+func parseBusinessSection(path string) (BusinessSection, bool) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 3 || parts[0] != "v1" || parts[1] != "business-snapshots" || parts[2] == "" {
+		return "", false
+	}
+	section := BusinessSection(parts[2])
+	return section, validBusinessSection(section)
+}
+
+func validBusinessSection(section BusinessSection) bool {
+	switch section {
+	case BusinessSectionOrders, BusinessSectionInventory, BusinessSectionAudit:
+		return true
+	default:
+		return false
+	}
+}
+
+func isPoolExhausted(ctx context.Context, err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "pool exhausted") ||
+		strings.Contains(message, "conn pool exhausted") ||
+		strings.Contains(message, "timeout waiting for connection")
 }
 
 func authorized(request *http.Request, token string) bool {
@@ -777,6 +992,18 @@ func writeJSON(writer http.ResponseWriter, status int, message string, data json
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(apiResponse{Code: status, Message: message, Data: data})
+}
+
+func writeJSONNoStore(writer http.ResponseWriter, status int, message string, data json.RawMessage) {
+	writer.Header().Set("Cache-Control", "no-store")
+	writeJSON(writer, status, message, data)
+}
+
+func writeBusinessError(writer http.ResponseWriter, status int, message string, errorCode string) {
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(apiResponse{Code: status, Message: message, ErrorCode: errorCode})
 }
 
 func writeError(writer http.ResponseWriter, status int, message string) {

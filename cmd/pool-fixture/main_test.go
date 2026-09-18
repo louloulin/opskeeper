@@ -139,11 +139,13 @@ func (c *fakeConnection) Release() error {
 }
 
 type fakeRuntime struct {
-	connections []*fakeConnection
-	probeCount  int
-	failFirst   int
-	resizedTo   int
-	closed      bool
+	connections     []*fakeConnection
+	probeCount      int
+	failFirst       int
+	resizedTo       int
+	closed          bool
+	businessSection BusinessSection
+	businessErr     error
 }
 
 func (r *fakeRuntime) Saturate(_ context.Context, capacity int) ([]PoolConnection, error) {
@@ -187,6 +189,20 @@ func (r *fakeRuntime) ResizeAndRecycle(_ context.Context, connections []PoolConn
 func (r *fakeRuntime) Close() error {
 	r.closed = true
 	return nil
+}
+
+func (r *fakeRuntime) BusinessSnapshot(_ context.Context, section BusinessSection) (BusinessSnapshot, error) {
+	r.businessSection = section
+	if r.businessErr != nil {
+		return BusinessSnapshot{}, r.businessErr
+	}
+	return BusinessSnapshot{
+		Section:     string(section),
+		Value:       "fixture",
+		Detail:      "deterministic fixture snapshot",
+		LatencyMS:   1,
+		GeneratedAt: time.Unix(0, 0).UTC(),
+	}, nil
 }
 
 func newTestController(t *testing.T) (*Controller, *fakeRuntime, string) {
@@ -270,6 +286,102 @@ func TestReleaseConnectionsContinuesAfterStaleConnection(t *testing.T) {
 		if !ok || !fake.released {
 			t.Fatalf("connection %d was not recycled: %+v", index, connection)
 		}
+	}
+}
+
+func TestBusinessSnapshotUsesSharedSaturatedPool(t *testing.T) {
+	controller, runtime, _ := newTestController(t)
+	runtime.businessErr = context.DeadlineExceeded
+	manifest, err := controller.Start(context.Background(), StartRequest{
+		CaseID: "pg-pool-exhaustion", IncidentID: "incident-business",
+		InitialCapacity: 2, TargetCapacity: 4, TTLSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Status != poolStateRunning {
+		t.Fatalf("business snapshot fixture status = %s", manifest.Status)
+	}
+	if _, err := controller.BusinessSnapshot(context.Background(), manifest.ManifestID, BusinessSectionOrders); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected saturated-pool error, got %v", err)
+	}
+	if runtime.businessSection != BusinessSectionOrders {
+		t.Fatalf("unexpected section %q", runtime.businessSection)
+	}
+}
+
+func TestBusinessSnapshotHandlerCoversAllSections(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	manifest, err := controller.Start(context.Background(), StartRequest{
+		CaseID: "pg-pool-exhaustion", IncidentID: "incident-business-http",
+		InitialCapacity: 2, TargetCapacity: 4, TTLSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Status != poolStateRunning {
+		t.Fatalf("business snapshot fixture status = %s", manifest.Status)
+	}
+	server := httptest.NewServer(NewHandler(controller))
+	defer server.Close()
+	for _, section := range []string{"orders", "inventory", "audit"} {
+		request, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/business-snapshots/"+section, nil)
+		addPoolAuth(request)
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		responseBody, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("%s status = %d body = %s", section, response.StatusCode, responseBody)
+		}
+		if cacheControl := response.Header.Get("Cache-Control"); cacheControl != "no-store" {
+			t.Fatalf("%s cache-control = %q", section, cacheControl)
+		}
+	}
+}
+
+func TestBusinessSnapshotHandlerBoundsErrors(t *testing.T) {
+	controller, runtime, _ := newTestController(t)
+	_, err := controller.Start(context.Background(), StartRequest{
+		CaseID: "pg-pool-exhaustion", IncidentID: "incident-business-errors",
+		InitialCapacity: 2, TargetCapacity: 4, TTLSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(NewHandler(controller))
+	defer server.Close()
+
+	runtime.businessErr = context.DeadlineExceeded
+	timeoutRequest, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/business-snapshots/orders", nil)
+	addPoolAuth(timeoutRequest)
+	timeoutResponse, err := server.Client().Do(timeoutRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeoutBody, _ := io.ReadAll(timeoutResponse.Body)
+	_ = timeoutResponse.Body.Close()
+	if timeoutResponse.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(timeoutBody), `"error_code":"pool_exhausted"`) {
+		t.Fatalf("timeout response = %d %s", timeoutResponse.StatusCode, timeoutBody)
+	}
+	if len(timeoutBody) > 1024 {
+		t.Fatalf("timeout response is unbounded: %d bytes", len(timeoutBody))
+	}
+
+	invalidRequest, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/business-snapshots/unknown", nil)
+	addPoolAuth(invalidRequest)
+	invalidResponse, err := server.Client().Do(invalidRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = invalidResponse.Body.Close()
+	if invalidResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid section status = %d", invalidResponse.StatusCode)
 	}
 }
 
