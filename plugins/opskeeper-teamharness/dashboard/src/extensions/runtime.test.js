@@ -288,3 +288,34 @@ test('archive readback uses the Manager proxy endpoint', async () => {
     xhrTransport.createRequest = originalCreateRequest;
   }
 });
+
+test('archive index readback uses the Manager proxy endpoint', async () => {
+  const originalCreateRequest = xhrTransport.createRequest;
+  const requests = [];
+  globalThis.XMLHttpRequest = function StubXMLHttpRequest() {
+    const request = {
+      status: 200,
+      responseText: JSON.stringify({ items: [{ incident_id: 'inc-archive-index' }] }),
+      open(method, url) {
+        requests.push({ method, url });
+      },
+      setRequestHeader() {},
+      getResponseHeader() {
+        return 'application/json';
+      },
+      send() {
+        request.onload();
+      },
+    };
+    return request;
+  };
+
+  try {
+    xhrTransport.createRequest = () => new globalThis.XMLHttpRequest();
+    const response = await opskeeperApi.listArchiveIncidents();
+    assert.equal(response.items[0].incident_id, 'inc-archive-index');
+    assert.deepEqual(requests, [{ method: 'GET', url: '/api/opskeeper/incidents/archive-index' }]);
+  } finally {
+    xhrTransport.createRequest = originalCreateRequest;
+  }
+});

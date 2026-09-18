@@ -16,7 +16,7 @@ export default function OpskeeperArchiveRoute({ api }) {
   const loadIncidents = React.useCallback(async () => {
     setLoadingIncidents(true);
     try {
-      const items = normalizeArchiveIncidentList(await opskeeperApi.listIncidents({ limit: 20 }));
+      const items = normalizeArchiveIncidentList(await opskeeperApi.listArchiveIncidents());
       setIncidents(items);
       setIncidentError('');
       setIncidentId((current) => current || items[0]?.id || '');
@@ -40,7 +40,9 @@ export default function OpskeeperArchiveRoute({ api }) {
       setArchiveError('');
     } catch (error) {
       setArchive(null);
-      setArchiveError(error?.message || '事故档案读取失败');
+      setArchiveError(error?.status === 404
+        ? '该事故没有闭环档案；请选择档案索引中的闭环事故 ID。'
+        : error?.message || '事故档案读取失败');
     } finally {
       setLoadingArchive(false);
     }
@@ -87,10 +89,10 @@ export default function OpskeeperArchiveRoute({ api }) {
             disabled={loadingIncidents || incidents.length === 0}
             style={inputStyle()}
           >
-            <option value="">{loadingIncidents ? '加载事故中…' : incidents.length ? '选择最近事故' : '暂无最近事故'}</option>
+            <option value="">{loadingIncidents ? '加载档案中…' : incidents.length ? '选择闭环事故' : '暂无可回看档案'}</option>
             {incidents.map((incident) => (
               <option key={incident.id} value={incident.id}>
-                {incident.summary ? `${incident.summary} (${incident.id})` : incident.id}
+                {`${incident.summary} · ${incident.eventCount}事件${incident.evidenceComplete ? ' · 证据完整' : ' · 证据缺失'}`}
               </option>
             ))}
           </select>

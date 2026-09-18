@@ -19,11 +19,16 @@ export function normalizeArchiveResponse(response) {
 }
 
 export function normalizeArchiveIncidentList(response) {
-  return normalizeIncidentList(response)
+  const incidents = Array.isArray(response?.items)
+    ? response.items
+    : normalizeIncidentList(response);
+  return incidents
     .map((incident) => ({
-      id: String(incident.id ?? incident.incident_id ?? '').trim(),
-      summary: incident.summary || incident.title || incident.rule_key || incident.alertname || '',
-      status: incident.status || '',
+      id: String(incident.incident_id ?? incident.id ?? '').trim(),
+      summary: incident.summary || incident.title || incident.rule_key || incident.incident_id || '',
+      status: incident.closed ? 'closed' : (incident.status || 'open'),
+      evidenceComplete: Boolean(incident.evidence_complete),
+      eventCount: Number(incident.event_count ?? 0),
     }))
     .filter((incident) => incident.id);
 }

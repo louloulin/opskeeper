@@ -81,14 +81,14 @@ func (c *LoggingSyncClient) InstallPlugin(_ context.Context, pluginID string, zi
 // WorkerEndpoint 描述一个 worker 上的 plugin sync 端点。
 type WorkerEndpoint struct {
 	// WorkerName 用于日志与审计,可空
-	WorkerName string
+	WorkerName string `json:"worker_name"`
 	// BaseURL 例如 http://worker-qwenpaw-headless:8088
-	BaseURL string
+	BaseURL string `json:"base_url"`
 	// PluginPath 例如 /api/opskeeper-teamharness/sync
 	// （默认 <pluginID>-sync；opskeeper-teamharness 约定前缀 /opskeeper-teamharness）
-	PluginPath string
+	PluginPath string `json:"plugin_path"`
 	// HTTPClient 复用现有 client，可空（默认 5s timeout）
-	HTTPClient *http.Client
+	HTTPClient *http.Client `json:"-"`
 }
 
 // WorkerHTTPClient 是 PluginSyncClient 的生产实现：通过 HTTP 触发每个 worker

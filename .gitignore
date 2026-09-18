@@ -106,3 +106,7 @@ plugins/opskeeper-teamharness/eval/reports/
 *.db
 *.db-shm
 *.db-wal
+
+# Local build/cache output (not for source control)
+.dist/
+.docker-gocache/

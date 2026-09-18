@@ -27,15 +27,19 @@ test('rejects an invalid archive response', () => {
 
 test('normalizes archive incident options', () => {
   const incidents = normalizeArchiveIncidentList({
-    incidents: [
-      { id: 35, summary: 'PG 连接池耗尽', status: 'resolved' },
-      { incident_id: 'inc-custom', rule_key: 'pool', status: 'firing' },
-      { title: 'missing id' },
+    items: [
+      { incident_id: 'inc-closed', event_count: 7, evidence_complete: true, closed: true },
+      { incident_id: '', event_count: 1 },
     ],
   });
 
   assert.deepEqual(incidents, [
-    { id: '35', summary: 'PG 连接池耗尽', status: 'resolved' },
-    { id: 'inc-custom', summary: 'pool', status: 'firing' },
+    {
+      id: 'inc-closed',
+      summary: 'inc-closed',
+      status: 'closed',
+      evidenceComplete: true,
+      eventCount: 7,
+    },
   ]);
 });

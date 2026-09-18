@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.60 — 2026-09-18
+
+- Add a read-only Manager archive index and make the Dashboard Archive selector use actual closed-loop incident IDs.
+- Keep numeric alert-only records out of the archive selector and explain when an incident has no archived evidence chain.
+
 ## 1.0.59 — 2026-09-18
 
 - Project stable OpsKeeper workflow stages into Matrix as `agentteams.workflow` events.
