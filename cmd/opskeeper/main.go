@@ -1320,10 +1320,16 @@ func main() {
 	}
 	demoAPIToken := strings.TrimSpace(os.Getenv("OPSKEEPER_DEMO_API_TOKEN"))
 	if poolFixtureURL != "" && poolFixtureToken != "" && demoAPIToken != "" {
-		demoScenarioUsecase := managerbizdemo.NewUsecaseWithPreviews(
+		workflowPublisher, err := managerbizdemo.WorkflowPublisherFromEnv()
+		if err != nil {
+			log.Error("demo workflow authority publisher config invalid", slog.Any("err", err))
+			os.Exit(1)
+		}
+		demoScenarioUsecase := managerbizdemo.NewUsecaseWithPreviewWorkflow(
 			managerdemodata.NewRepo(db), alertRepo, managerbizdemo.NewPoolFixtureClient(poolFixtureURL, poolFixtureToken),
 			repairPreviewRepository,
 			strings.TrimSpace(os.Getenv("OPSKEEPER_REPAIR_PREVIEW_WORKLOAD_FINGERPRINT")),
+			workflowPublisher,
 		)
 		demoScenarioHandler = managerserverdemo.NewHandler(managersvcdemo.NewService(demoScenarioUsecase), demoAPIToken)
 	} else if demoAPIToken != "" {

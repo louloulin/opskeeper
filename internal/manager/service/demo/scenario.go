@@ -25,6 +25,12 @@ func (s *Service) Get(ctx context.Context, tenantID uint64, scenarioID, key stri
 	return s.usecase.Get(ctx, tenantID, scenarioID, key)
 }
 
+func (s *Service) AdvanceWorkflow(
+	ctx context.Context, tenantID uint64, scenarioID, key, stage string,
+) (*ScenarioStatus, error) {
+	return s.usecase.AdvanceWorkflow(ctx, tenantID, scenarioID, key, stage)
+}
+
 func (s *Service) BusinessSnapshot(ctx context.Context, tenantID uint64, scenarioID, key, section string) (json.RawMessage, error) {
 	return s.usecase.BusinessSnapshot(ctx, tenantID, scenarioID, key, section)
 }

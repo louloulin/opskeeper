@@ -75,6 +75,7 @@ type ScenarioRepository interface {
 	CreateOrUpdate(ctx context.Context, run *demomodel.ScenarioRun) error
 	GetByIdempotencyKey(ctx context.Context, tenantID uint64, scenarioID, key string) (*demomodel.ScenarioRun, error)
 	UpdateStatus(ctx context.Context, id uint64, status string, mutation func(*demomodel.ScenarioRun) error) error
+	UpdateStatusWithEvent(ctx context.Context, id uint64, status string, event *alertmodel.Event, allowedCurrent ...string) error
 }
 
 type PoolFixtureRepository interface {
@@ -86,6 +87,10 @@ type PoolFixtureRepository interface {
 type PreviewRepository interface {
 	ListByIncident(ctx context.Context, tenantID, incidentID string, limit int) ([]repairpreview.Run, error)
 	FindEligible(ctx context.Context, tenantID, incidentID, runID, candidateID, action string) (repairpreview.Candidate, error)
+}
+
+type WorkflowPublisher interface {
+	PublishWorkflow(ctx context.Context, run *demomodel.ScenarioRun, stage string, decision *PreviewDecisionSummary) error
 }
 
 type Clock interface{ Now() time.Time }
@@ -100,6 +105,7 @@ type Usecase struct {
 	fixtures              PoolFixtureRepository
 	previews              PreviewRepository
 	expectedReplayProfile string
+	workflowPublisher     WorkflowPublisher
 	clock                 Clock
 }
 
@@ -118,6 +124,19 @@ func NewUsecaseWithPreviews(
 		scenarios: scenarios, incidents: incidents, fixtures: fixtures, previews: previews,
 		expectedReplayProfile: expectedReplayProfile, clock: realClock{},
 	}
+}
+
+func NewUsecaseWithPreviewWorkflow(
+	scenarios ScenarioRepository,
+	incidents IncidentRepository,
+	fixtures PoolFixtureRepository,
+	previews PreviewRepository,
+	expectedReplayProfile string,
+	workflowPublisher WorkflowPublisher,
+) *Usecase {
+	usecase := NewUsecaseWithPreviews(scenarios, incidents, fixtures, previews, expectedReplayProfile)
+	usecase.workflowPublisher = workflowPublisher
+	return usecase
 }
 
 func (u *Usecase) Start(ctx context.Context, tenantID uint64, input StartScenarioInput) (*ScenarioStatus, error) {
@@ -212,10 +231,14 @@ func (u *Usecase) Get(ctx context.Context, tenantID uint64, scenarioID, key stri
 				aggregateStatus = demomodel.ScenarioStatusClosed
 			}
 			if aggregateStatus != run.Status {
-				if err := u.scenarios.UpdateStatus(ctx, run.ID, aggregateStatus, nil); err != nil {
+				if aggregateStatus == demomodel.ScenarioStatusRecovered {
+					decision := u.previewDecision(ctx, tenantID, run)
+					if err := u.advanceLoadedWorkflow(ctx, run, aggregateStatus, decision); err != nil {
+						return nil, err
+					}
+				} else if err := u.scenarios.UpdateStatus(ctx, run.ID, aggregateStatus, nil); err != nil {
 					return nil, err
 				}
-				run.Status = aggregateStatus
 			}
 		}
 	}
@@ -306,8 +329,10 @@ func (u *Usecase) previewDecision(ctx context.Context, tenantID uint64, scenario
 		return nil
 	}
 
-	profileMatches := u.expectedReplayProfile == "" ||
+	profileMatches := u.expectedReplayProfile != "" &&
 		selected.WorkloadFingerprint == u.expectedReplayProfile
+	gateStageReady := scenario.Status == demomodel.ScenarioStatusDiagnosisSent ||
+		scenario.Status == demomodel.ScenarioStatusPreviewReady
 	summary := &PreviewDecisionSummary{
 		ReplayProfileID: selected.WorkloadFingerprint,
 		BoundaryText:    selected.IsolationBoundary,
@@ -319,7 +344,7 @@ func (u *Usecase) previewDecision(ctx context.Context, tenantID uint64, scenario
 			selected.WorkloadFingerprint, u.expectedReplayProfile, selected.IsolationBoundary,
 		)
 	}
-	if profileMatches && selected.ControlledLoad && completePreviewMetrics(baseline) &&
+	if gateStageReady && profileMatches && selected.ControlledLoad && completePreviewMetrics(baseline) &&
 		passing.CandidateID != "" &&
 		passing.Decision == repairpreview.DecisionPass && passing.Validate() == nil {
 		eligible, err := u.previews.FindEligible(
@@ -343,8 +368,7 @@ func completePreviewMetrics(candidate repairpreview.Candidate) bool {
 func (u *Usecase) applyPreviewTransition(
 	ctx context.Context, run *demomodel.ScenarioRun, decision *PreviewDecisionSummary,
 ) error {
-	if decision == nil || (run.Status != demomodel.ScenarioStatusAlertCorrelated &&
-		run.Status != demomodel.ScenarioStatusDiagnosisSent &&
+	if decision == nil || (run.Status != demomodel.ScenarioStatusDiagnosisSent &&
 		run.Status != demomodel.ScenarioStatusPreviewReady) {
 		return nil
 	}
@@ -369,34 +393,123 @@ func (u *Usecase) applyPreviewTransition(
 func (u *Usecase) transitionPreview(
 	ctx context.Context, run *demomodel.ScenarioRun, decision *PreviewDecisionSummary, target string,
 ) error {
-	if err := u.scenarios.UpdateStatus(ctx, run.ID, target, nil); err != nil {
+	allowedCurrent := demomodel.ScenarioStatusDiagnosisSent
+	if target == demomodel.ScenarioStatusAwaitingApproval {
+		allowedCurrent = demomodel.ScenarioStatusPreviewReady
+	}
+	event := u.previewEvent(run, decision, target)
+	if err := u.scenarios.UpdateStatusWithEvent(ctx, run.ID, target, event, allowedCurrent); err != nil {
 		return err
 	}
 	run.Status = target
-	return u.appendPreviewEvent(ctx, run, decision, target)
+	u.publishWorkflow(ctx, run, target, decision)
+	return nil
 }
 
-func (u *Usecase) appendPreviewEvent(
-	ctx context.Context, run *demomodel.ScenarioRun, decision *PreviewDecisionSummary, status string,
-) error {
+func (u *Usecase) previewEvent(
+	run *demomodel.ScenarioRun, decision *PreviewDecisionSummary, status string,
+) *alertmodel.Event {
 	snapshot, err := json.Marshal(map[string]any{
 		"replay_profile_id": decision.ReplayProfileID, "candidate_a": decision.CandidateA,
 		"candidate_b": decision.CandidateB, "eligible_for_hitl": decision.EligibleForHITL,
 		"boundary": decision.BoundaryText,
 	})
 	if err != nil {
-		return err
+		return &alertmodel.Event{IncidentID: run.IncidentID, EventType: status}
 	}
 	message := "Repair preview evidence is ready."
 	if status == demomodel.ScenarioStatusAwaitingApproval {
 		message = "Repair preview passed; human approval is required before execution."
 	}
-	return u.incidents.CreateEvent(ctx, &alertmodel.Event{
+	return &alertmodel.Event{
 		IncidentID: run.IncidentID, EventType: status, StatusAfter: alertmodel.IncidentStatusOpen,
 		Severity: "critical", Title: "Repair preview gate", Message: &message,
 		ActorType: alertmodel.ActorTypeSystem, SnapshotJSON: string(snapshot),
 		Reason: "Preview evidence creates HITL eligibility only", OccurredAt: u.clock.Now(),
+	}
+}
+
+func (u *Usecase) AdvanceWorkflow(
+	ctx context.Context, tenantID uint64, scenarioID, key, stage string,
+) (*ScenarioStatus, error) {
+	if !idempotencyPattern.MatchString(key) {
+		return nil, errs.ErrInvalid
+	}
+	run, err := u.scenarios.GetByIdempotencyKey(ctx, tenantID, scenarioID, key)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := u.incidents.GetIncidentByID(ctx, run.IncidentID); err != nil {
+		return nil, err
+	}
+	switch stage {
+	case demomodel.ScenarioStatusRepairDispatched,
+		demomodel.ScenarioStatusVerifying,
+		demomodel.ScenarioStatusRecovered:
+	default:
+		return nil, errs.ErrInvalid
+	}
+	if run.Status == stage {
+		return statusFromRun(run), nil
+	}
+	decision := u.previewDecision(ctx, tenantID, run)
+	if err := u.advanceLoadedWorkflow(ctx, run, stage, decision); err != nil {
+		return nil, err
+	}
+	status := statusFromRun(run)
+	status.PreviewDecision = decision
+	return status, nil
+}
+
+func (u *Usecase) advanceLoadedWorkflow(
+	ctx context.Context, run *demomodel.ScenarioRun, stage string, decision *PreviewDecisionSummary,
+) error {
+	allowedCurrent := ""
+	switch stage {
+	case demomodel.ScenarioStatusPreviewReady:
+		allowedCurrent = demomodel.ScenarioStatusDiagnosisSent
+	case demomodel.ScenarioStatusAwaitingApproval:
+		allowedCurrent = demomodel.ScenarioStatusPreviewReady
+	case demomodel.ScenarioStatusRepairDispatched:
+		allowedCurrent = demomodel.ScenarioStatusAwaitingApproval
+	case demomodel.ScenarioStatusVerifying:
+		allowedCurrent = demomodel.ScenarioStatusRepairDispatched
+	case demomodel.ScenarioStatusRecovered:
+		allowedCurrent = demomodel.ScenarioStatusVerifying
+	default:
+		return errs.ErrInvalid
+	}
+	event := u.workflowEvent(run, stage)
+	if err := u.scenarios.UpdateStatusWithEvent(ctx, run.ID, stage, event, allowedCurrent); err != nil {
+		return err
+	}
+	run.Status = stage
+	u.publishWorkflow(ctx, run, stage, decision)
+	return nil
+}
+
+func (u *Usecase) workflowEvent(run *demomodel.ScenarioRun, stage string) *alertmodel.Event {
+	message := "Manager recorded authoritative demo workflow stage " + stage + "."
+	snapshot, _ := json.Marshal(map[string]any{
+		"scenario_id": run.ScenarioID, "idempotency_key": run.IdempotencyKey,
+		"incident_id": run.IncidentID, "target_fingerprint": run.TargetFingerprint,
+		"pool_manifest_id": run.PoolManifestID, "stage": stage,
 	})
+	return &alertmodel.Event{
+		IncidentID: run.IncidentID, EventType: stage, StatusAfter: alertmodel.IncidentStatusOpen,
+		Severity: "critical", Title: "Final demo workflow", Message: &message,
+		ActorType: alertmodel.ActorTypeSystem, SnapshotJSON: string(snapshot),
+		Reason: "OpsKeeper Manager authoritative transition", OccurredAt: u.clock.Now(),
+	}
+}
+
+func (u *Usecase) publishWorkflow(
+	ctx context.Context, run *demomodel.ScenarioRun, stage string, decision *PreviewDecisionSummary,
+) {
+	if u.workflowPublisher == nil {
+		return
+	}
+	_ = u.workflowPublisher.PublishWorkflow(ctx, run, stage, decision)
 }
 
 func ValidateStart(input StartScenarioInput) error {

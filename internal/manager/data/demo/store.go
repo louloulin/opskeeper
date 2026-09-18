@@ -6,12 +6,48 @@ import (
 
 	"gorm.io/gorm"
 
+	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
 	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
 )
 
 type Repo struct {
 	db *gorm.DB
+}
+
+func (r *Repo) UpdateStatusWithEvent(
+	ctx context.Context, id uint64, status string, event *alertmodel.Event, allowedCurrent ...string,
+) error {
+	if !model.IsKnownStatus(status) || event == nil {
+		return errs.ErrInvalid
+	}
+	allowed := make(map[string]struct{}, len(allowedCurrent))
+	for _, current := range allowedCurrent {
+		allowed[current] = struct{}{}
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var run model.ScenarioRun
+		if err := tx.First(&run, id).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errs.ErrNotFound
+			}
+			return err
+		}
+		if _, ok := allowed[run.Status]; !ok {
+			return errs.ErrConflict
+		}
+		before := run.TargetFingerprint
+		run.Status = status
+		if run.TargetFingerprint != before || !model.IsKnownStatus(run.Status) {
+			return errs.ErrConflict
+		}
+		if err := tx.Save(&run).Error; err != nil {
+			return err
+		}
+		event.ID = 0
+		event.IncidentID = run.IncidentID
+		return tx.Create(event).Error
+	})
 }
 
 func NewRepo(db *gorm.DB) *Repo { return &Repo{db: db} }

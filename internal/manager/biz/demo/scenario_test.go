@@ -61,8 +61,10 @@ func (f *fakeIncidents) CreateEvent(_ context.Context, event *alertmodel.Event) 
 }
 
 type fakeScenarios struct {
-	nextID uint64
-	rows   map[string]*demomodel.ScenarioRun
+	nextID         uint64
+	rows           map[string]*demomodel.ScenarioRun
+	events         []*alertmodel.Event
+	failEventWrite bool
 }
 
 func newFakeScenarios() *fakeScenarios {
@@ -112,6 +114,38 @@ func (f *fakeScenarios) UpdateStatus(_ context.Context, id uint64, status string
 	return errs.ErrNotFound
 }
 
+func (f *fakeScenarios) UpdateStatusWithEvent(
+	_ context.Context, id uint64, status string, event *alertmodel.Event, allowedCurrent ...string,
+) error {
+	for _, row := range f.rows {
+		if row.ID != id {
+			continue
+		}
+		allowed := len(allowedCurrent) == 0
+		for _, current := range allowedCurrent {
+			if current == row.Status {
+				allowed = true
+			}
+		}
+		if !allowed {
+			return errs.ErrConflict
+		}
+		if f.failEventWrite {
+			return errors.New("event write failed")
+		}
+		previous := row.Status
+		row.Status = status
+		if event != nil {
+			event.StatusAfter = alertmodel.IncidentStatusOpen
+			f.events = append(f.events, event)
+		}
+		_ = previous
+		row.UpdatedAt = time.Now().UTC()
+		return nil
+	}
+	return errs.ErrNotFound
+}
+
 type fakeFixtures struct {
 	starts   int
 	business int
@@ -122,6 +156,19 @@ type fakeFixtures struct {
 type fakePreviewRepository struct {
 	runs          []repairpreview.Run
 	eligibleCalls int
+}
+
+type fakeWorkflowPublisher struct {
+	stages []string
+	fails  bool
+}
+
+func (f *fakeWorkflowPublisher) PublishWorkflow(_ context.Context, _ *demomodel.ScenarioRun, stage string, _ *PreviewDecisionSummary) error {
+	f.stages = append(f.stages, stage)
+	if f.fails {
+		return errors.New("matrix unavailable")
+	}
+	return nil
 }
 
 func (f *fakePreviewRepository) ListByIncident(
@@ -306,9 +353,9 @@ func previewRun(candidates ...repairpreview.Candidate) repairpreview.Run {
 	}
 }
 
-func scenarioWithPreview(
+func scenarioPartsWithPreview(
 	t *testing.T, previews *fakePreviewRepository, expectedProfile string,
-) (*Usecase, StartScenarioInput, *fakeIncidents) {
+) (*Usecase, StartScenarioInput, *fakeIncidents, *fakeScenarios) {
 	t.Helper()
 	input := validInput()
 	scenarios := newFakeScenarios()
@@ -329,7 +376,14 @@ func scenarioWithPreview(
 	}
 	return NewUsecaseWithPreviews(
 		scenarios, incidents, &fakeFixtures{}, previews, expectedProfile,
-	), input, incidents
+	), input, incidents, scenarios
+}
+
+func scenarioWithPreview(
+	t *testing.T, previews *fakePreviewRepository, expectedProfile string,
+) (*Usecase, StartScenarioInput, *fakeIncidents) {
+	usecase, input, incidents, _ := scenarioPartsWithPreview(t, previews, expectedProfile)
+	return usecase, input, incidents
 }
 
 func TestPreviewPASSCreatesOnlyHITLEligibility(t *testing.T) {
@@ -340,7 +394,7 @@ func TestPreviewPASSCreatesOnlyHITLEligibility(t *testing.T) {
 	previews := &fakePreviewRepository{runs: []repairpreview.Run{
 		previewRun(baseline, passing, rejected),
 	}}
-	usecase, input, incidents := scenarioWithPreview(t, previews, "sha256:workload-v1")
+	usecase, input, _, scenarios := scenarioPartsWithPreview(t, previews, "sha256:workload-v1")
 
 	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
 	if err != nil {
@@ -358,15 +412,16 @@ func TestPreviewPASSCreatesOnlyHITLEligibility(t *testing.T) {
 	if previews.eligibleCalls != 1 {
 		t.Fatalf("eligible calls = %d", previews.eligibleCalls)
 	}
-	if len(incidents.events) != 2 || incidents.events[0].EventType != demomodel.ScenarioStatusPreviewReady ||
-		incidents.events[1].EventType != demomodel.ScenarioStatusAwaitingApproval {
-		t.Fatalf("preview events = %+v", incidents.events)
+	if len(scenarios.events) != 2 ||
+		scenarios.events[0].EventType != demomodel.ScenarioStatusPreviewReady ||
+		scenarios.events[1].EventType != demomodel.ScenarioStatusAwaitingApproval {
+		t.Fatalf("preview events = %+v", scenarios.events)
 	}
 	if _, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey); err != nil {
 		t.Fatal(err)
 	}
-	if len(incidents.events) != 2 || previews.eligibleCalls != 2 {
-		t.Fatalf("repeat events = %+v calls = %d", incidents.events, previews.eligibleCalls)
+	if previews.eligibleCalls != 1 {
+		t.Fatalf("repeat calls = %d", previews.eligibleCalls)
 	}
 }
 
@@ -374,7 +429,7 @@ func TestPreviewFAILCannotReachApproval(t *testing.T) {
 	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
 	baseline.Kind = "baseline"
 	rejected := previewCandidate("candidate-b", "reset_pool", repairpreview.DecisionReject)
-	usecase, input, incidents := scenarioWithPreview(
+	usecase, input, _ := scenarioWithPreview(
 		t, &fakePreviewRepository{runs: []repairpreview.Run{previewRun(baseline, rejected)}}, "",
 	)
 
@@ -388,9 +443,6 @@ func TestPreviewFAILCannotReachApproval(t *testing.T) {
 	if decision := status.PreviewDecision; decision == nil || decision.EligibleForHITL ||
 		decision.CandidateA != "" || decision.CandidateB != "candidate-b" {
 		t.Fatalf("decision = %+v", status.PreviewDecision)
-	}
-	if len(incidents.events) != 1 || incidents.events[0].EventType != demomodel.ScenarioStatusPreviewReady {
-		t.Fatalf("preview events = %+v", incidents.events)
 	}
 }
 
@@ -441,5 +493,112 @@ func TestIncompleteBaselineMetricsCannotReachApproval(t *testing.T) {
 	}
 	if previews.eligibleCalls != 0 {
 		t.Fatalf("incomplete baseline queried eligibility calls = %d", previews.eligibleCalls)
+	}
+}
+
+func TestEmptyExpectedReplayProfileIsNotComparable(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{previewRun(baseline, passing)}}
+	usecase, input, _ := scenarioWithPreview(t, previews, "")
+
+	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusPreviewReady ||
+		status.PreviewDecision == nil || status.PreviewDecision.EligibleForHITL ||
+		!strings.Contains(status.PreviewDecision.BoundaryText, "NOT COMPARABLE") {
+		t.Fatalf("status = %+v decision = %+v", status, status.PreviewDecision)
+	}
+	if previews.eligibleCalls != 0 {
+		t.Fatalf("empty profile queried eligibility calls = %d", previews.eligibleCalls)
+	}
+}
+
+func TestAlertCorrelatedCannotSkipDiagnosis(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{previewRun(baseline, passing)}}
+	usecase, input, incidents := scenarioWithPreview(t, previews, "sha256:workload-v1")
+	run, err := usecase.scenarios.GetByIdempotencyKey(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Status = demomodel.ScenarioStatusAlertCorrelated
+
+	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusAlertCorrelated || previews.eligibleCalls != 0 {
+		t.Fatalf("status = %+v calls = %d", status, previews.eligibleCalls)
+	}
+	if len(incidents.events) != 0 {
+		t.Fatalf("unexpected events = %+v", incidents.events)
+	}
+}
+
+func TestPreviewEventFailureRollsBackStatusAndDoesNotPublish(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{previewRun(baseline, passing)}}
+	usecase, input, incidents, scenarios := scenarioPartsWithPreview(t, previews, "sha256:workload-v1")
+	scenarios.failEventWrite = true
+	publisher := &fakeWorkflowPublisher{}
+	usecase.workflowPublisher = publisher
+
+	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err == nil {
+		t.Fatalf("expected atomic transition failure, status = %+v", status)
+	}
+	run, getErr := scenarios.GetByIdempotencyKey(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if getErr != nil || run.Status != demomodel.ScenarioStatusDiagnosisSent {
+		t.Fatalf("run = %+v err = %v", run, getErr)
+	}
+	if len(scenarios.events) != 0 || len(incidents.events) != 0 || len(publisher.stages) != 0 {
+		t.Fatalf("events = %+v incident events = %+v stages = %v", scenarios.events, incidents.events, publisher.stages)
+	}
+}
+
+func TestWorkflowAdvancePublishesManagerAuthorityStages(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	rejected := previewCandidate("candidate-b", "reset_pool", repairpreview.DecisionReject)
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{
+		previewRun(baseline, passing, rejected),
+	}}
+	usecase, input, _, scenarios := scenarioPartsWithPreview(t, previews, "sha256:workload-v1")
+	publisher := &fakeWorkflowPublisher{}
+	usecase.workflowPublisher = publisher
+
+	if _, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []string{
+		demomodel.ScenarioStatusRepairDispatched,
+		demomodel.ScenarioStatusVerifying,
+		demomodel.ScenarioStatusRecovered,
+	} {
+		if _, err := usecase.AdvanceWorkflow(context.Background(), 1, ScenarioID, input.IdempotencyKey, stage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{
+		demomodel.ScenarioStatusPreviewReady,
+		demomodel.ScenarioStatusAwaitingApproval,
+		demomodel.ScenarioStatusRepairDispatched,
+		demomodel.ScenarioStatusVerifying,
+		demomodel.ScenarioStatusRecovered,
+	}
+	if strings.Join(publisher.stages, ",") != strings.Join(want, ",") {
+		t.Fatalf("stages = %v want = %v", publisher.stages, want)
+	}
+	if len(scenarios.events) != len(want) {
+		t.Fatalf("event count = %d want = %d", len(scenarios.events), len(want))
 	}
 }

@@ -19,8 +19,20 @@ type fakeService struct {
 	gets       int
 	business   map[string]int
 	baseline   map[string]int
+	advances   map[string]string
 	lastInput  servicedemo.StartScenarioInput
 	lastTenant uint64
+}
+
+func (f *fakeService) AdvanceWorkflow(_ context.Context, _ uint64, _, key, stage string) (*servicedemo.ScenarioStatus, error) {
+	if f.advances == nil {
+		f.advances = map[string]string{}
+	}
+	f.advances[key] = stage
+	return &servicedemo.ScenarioStatus{
+		IncidentID: 1001, ScenarioID: bizdemo.ScenarioID, Status: stage,
+		TargetFingerprint: "0123456789abcdef", UpdatedAt: "2026-09-18T00:00:00Z",
+	}, nil
 }
 
 func (f *fakeService) Start(_ context.Context, tenantID uint64, input servicedemo.StartScenarioInput) (*servicedemo.ScenarioStatus, error) {
@@ -80,6 +92,25 @@ func TestDemoHandlerRejectsBearer(t *testing.T) {
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), `"error_code":"unauthorized"`) {
 		t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestDemoHandlerAdvancesAuthoritativeWorkflow(t *testing.T) {
+	service := &fakeService{}
+	router := newRouter(service)
+	request := authorized(httptest.NewRequest(
+		http.MethodPost,
+		"/v1/demo/scenarios/final-demo-key/workflow/repair_dispatched",
+		nil,
+	))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("response = %d headers = %v", recorder.Code, recorder.Header())
+	}
+	if service.advances["final-demo-key"] != "repair_dispatched" ||
+		!strings.Contains(recorder.Body.String(), `"status":"repair_dispatched"`) {
+		t.Fatalf("advances = %v body = %s", service.advances, recorder.Body.String())
 	}
 }
 

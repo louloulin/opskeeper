@@ -18,6 +18,7 @@ const maxRequestBodyBytes = 16 << 10
 type Service interface {
 	Start(ctx context.Context, tenantID uint64, input servicedemo.StartScenarioInput) (*servicedemo.ScenarioStatus, error)
 	Get(ctx context.Context, tenantID uint64, scenarioID, key string) (*servicedemo.ScenarioStatus, error)
+	AdvanceWorkflow(ctx context.Context, tenantID uint64, scenarioID, key, stage string) (*servicedemo.ScenarioStatus, error)
 	BusinessSnapshot(ctx context.Context, tenantID uint64, scenarioID, key, section string) (json.RawMessage, error)
 	BusinessSnapshotBaseline(ctx context.Context, section string) (json.RawMessage, error)
 }
@@ -36,6 +37,7 @@ func (h *Handler) Register(router chi.Router) {
 		versioned.Use(h.authMiddleware)
 		versioned.Post("/v1/demo/scenarios/"+bizdemo.ScenarioID+"/start", h.start)
 		versioned.Get("/v1/demo/scenarios/{idempotency_key}", h.status)
+		versioned.Post("/v1/demo/scenarios/{idempotency_key}/workflow/{stage}", h.advanceWorkflow)
 		versioned.Get("/v1/demo/scenarios/{idempotency_key}/business/{section}", h.business)
 		versioned.Get("/v1/demo/business/{section}", h.businessBaseline)
 	})
@@ -79,6 +81,18 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, "success", status)
+}
+
+func (h *Handler) advanceWorkflow(w http.ResponseWriter, r *http.Request) {
+	status, err := h.service.AdvanceWorkflow(
+		r.Context(), demoTenantID, bizdemo.ScenarioID,
+		chi.URLParam(r, "idempotency_key"), chi.URLParam(r, "stage"),
+	)
+	if err != nil {
+		writeMappedError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, "workflow stage recorded", status)
 }
 
 func (h *Handler) business(w http.ResponseWriter, r *http.Request) {

@@ -8,10 +8,12 @@ Mirrors teamharness/adapters/qwenpaw/plugin.py structure:
 from __future__ import annotations
 
 import asyncio
+import base64
+import datetime as dt
+import hashlib
+import hmac
 import functools
 import importlib.util
-import hmac
-import hashlib
 import inspect
 import json
 import logging
@@ -129,11 +131,18 @@ _WORKFLOW_ADMIN_REJECTION_PATTERN = re.compile(
     r"(?:拒绝|不同意|reject(?:ed)?)\b",
     re.IGNORECASE,
 )
-_WORKFLOW_AUTHORITY_STAGE_PATTERN = re.compile(
-    r"\bworkflow_stage\s*[:=]\s*"
-    r"(preview_ready|awaiting_approval|repair_dispatched|verifying|recovered)\b",
+_WORKFLOW_AUTHORITY_TOKEN_PATTERN = re.compile(
+    r"(?m)^OPSKEEPER_AUTHORITY_V1\s+"
+    r"([A-Za-z0-9_-]+\.[0-9a-f]{64})$",
     re.IGNORECASE,
 )
+_WORKFLOW_PLAIN_STAGE_PATTERN = re.compile(
+    r"\bworkflow_stage\s*[:=]", re.IGNORECASE
+)
+_WORKFLOW_AUTHORITY_MAX_AGE_SECONDS = 120
+_WORKFLOW_AUTHORITY_CLOCK_SKEW_SECONDS = 5
+_WORKFLOW_AUTHORITY_NONCES: dict[str, float] = {}
+_WORKFLOW_AUTHORITY_NONCE_LOCK = threading.RLock()
 _WORKFLOW_AUTHORITY_STEPS = {
     "preview_ready": ("review", "in_progress"),
     "awaiting_approval": ("approval", "in_progress"),
@@ -600,6 +609,80 @@ def _workflow_role(message: str) -> str:
     return match.group(1).lower() if match else ""
 
 
+def _verify_workflow_authority(
+    sender: str, message: str, origin: str
+) -> tuple[str, str] | None:
+    global _WORKFLOW_AUTHORITY_NONCES
+    match = _WORKFLOW_AUTHORITY_TOKEN_PATTERN.search(message)
+    if not match:
+        return None
+    secret = os.environ.get("OPSKEEPER_WORKFLOW_AUTHORITY_SECRET", "").strip()
+    expected_manager = os.environ.get(
+        "OPSKEEPER_WORKFLOW_AUTHORITY_MANAGER_ID", ""
+    ).strip()
+    if len(secret) < 16 or not sender or not expected_manager or sender != expected_manager:
+        return None
+    encoded_claims, signature = match.group(1).split(".", 1)
+    try:
+        padding = "=" * (-len(encoded_claims) % 4)
+        claims_bytes = base64.urlsafe_b64decode(encoded_claims + padding)
+        expected_signature = hmac.new(
+            secret.encode(), claims_bytes, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected_signature):
+            return None
+        claims = json.loads(claims_bytes)
+        issued_at = dt.datetime.fromisoformat(
+            str(claims.get("issued_at", "")).replace("Z", "+00:00")
+        )
+        expires_at = dt.datetime.fromisoformat(
+            str(claims.get("expires_at", "")).replace("Z", "+00:00")
+        )
+        now = dt.datetime.now(dt.timezone.utc)
+        lifetime = (expires_at - issued_at).total_seconds()
+        if (
+            issued_at.tzinfo is None
+            or expires_at.tzinfo is None
+            or issued_at > now + dt.timedelta(seconds=_WORKFLOW_AUTHORITY_CLOCK_SKEW_SECONDS)
+            or expires_at <= now
+            or lifetime <= 0
+            or lifetime > _WORKFLOW_AUTHORITY_MAX_AGE_SECONDS
+        ):
+            return None
+        incident_id = str(claims.get("incident_id", ""))
+        stage = str(claims.get("stage", ""))
+        manager_id = str(claims.get("manager_id", ""))
+        room_id = str(claims.get("room_id", ""))
+        nonce = str(claims.get("nonce", ""))
+        if (
+            not incident_id
+            or manager_id != expected_manager
+            or stage not in _WORKFLOW_AUTHORITY_STEPS
+            or not room_id
+            or not origin.startswith("matrix:")
+            or origin != f"matrix:{room_id}"
+            or len(nonce) < 32
+        ):
+            return None
+        with _WORKFLOW_AUTHORITY_NONCE_LOCK:
+            expired_at = _WORKFLOW_AUTHORITY_NONCES.get(nonce)
+            if expired_at is not None:
+                return None
+            stale_nonces = [
+                value for value in _WORKFLOW_AUTHORITY_NONCES.values() if value <= now.timestamp()
+            ]
+            if stale_nonces:
+                _WORKFLOW_AUTHORITY_NONCES = {
+                    key: value
+                    for key, value in _WORKFLOW_AUTHORITY_NONCES.items()
+                    if value > now.timestamp()
+                }
+            _WORKFLOW_AUTHORITY_NONCES[nonce] = expires_at.timestamp()
+        return incident_id, stage
+    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+
 class WorkflowProjector:
     """Build full AgentTeams workflow snapshots from authoritative transitions."""
 
@@ -760,7 +843,8 @@ class WorkflowProjector:
         if (
             _TASK_RESULT_PATTERN.search(message)
             or _TASK_COMPLETE_PATTERN.search(message)
-            or _WORKFLOW_AUTHORITY_STAGE_PATTERN.search(message)
+            or _WORKFLOW_AUTHORITY_TOKEN_PATTERN.search(message)
+            or _WORKFLOW_PLAIN_STAGE_PATTERN.search(message)
         ):
             return None
         run_id = _workflow_incident_id(message)
@@ -2362,13 +2446,13 @@ def _register_manager_gate_hook(api: Any) -> None:
                         approved and not rejected,
                     )
                     await _emit_workflow_projection(session_id, workflow)
-            authority_stage = _WORKFLOW_AUTHORITY_STAGE_PATTERN.search(message)
-            incident_id = _workflow_incident_id(message)
-            if _is_manager_agent(agent) and authority_stage and incident_id:
+            authority = _verify_workflow_authority(sender, message, session_id)
+            if _is_manager_agent(agent) and authority:
+                incident_id, authority_stage = authority
                 workflow = _WORKFLOW_PROJECTOR.record_authority_stage(
                     session_id,
                     incident_id,
-                    authority_stage.group(1).lower(),
+                    authority_stage,
                 )
                 await _emit_workflow_projection(session_id, workflow)
                 return HookResult(action=HookAction.SKIP_AGENT)

@@ -9,6 +9,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
+	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
 	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
 )
@@ -91,6 +92,54 @@ func TestScenarioStoreRejectsFingerprintMismatch(t *testing.T) {
 		return nil
 	}); !errorsIsConflict(err) {
 		t.Fatalf("mutation mismatch err = %v", err)
+	}
+}
+
+func TestScenarioStatusAndEventUpdateIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	if err := db.AutoMigrate(&alertmodel.Event{}); err != nil {
+		t.Fatalf("migrate events: %v", err)
+	}
+	repo := NewRepo(db)
+	created := run("aaaaaaaaaaaaaaaa")
+	if err := repo.CreateOrUpdate(ctx, created); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(
+		`CREATE TRIGGER fail_event_insert BEFORE INSERT ON alert_events ` +
+			`BEGIN SELECT RAISE(ABORT, 'event insert failed'); END`,
+	).Error; err != nil {
+		t.Fatal(err)
+	}
+	event := &alertmodel.Event{
+		IncidentID: created.IncidentID, EventType: model.ScenarioStatusAwaitingAlert,
+		StatusAfter: "open", Severity: "critical", SnapshotJSON: "{}", Reason: "test",
+	}
+	if err := repo.UpdateStatusWithEvent(
+		ctx, created.ID, model.ScenarioStatusAwaitingAlert, event, model.ScenarioStatusStarting,
+	); err == nil {
+		t.Fatal("expected event insertion failure")
+	}
+	got, err := repo.GetByIdempotencyKey(ctx, 1, created.ScenarioID, created.IdempotencyKey)
+	if err != nil || got.Status != model.ScenarioStatusStarting {
+		t.Fatalf("rolled-back run = %+v err = %v", got, err)
+	}
+	var count int64
+	if err := db.Model(&alertmodel.Event{}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("event count = %d err = %v", count, err)
+	}
+
+	if err := db.Exec(`DROP TRIGGER fail_event_insert`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatusWithEvent(
+		ctx, created.ID, model.ScenarioStatusAwaitingAlert, event, model.ScenarioStatusStarting,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&alertmodel.Event{}).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("successful event count = %d err = %v", count, err)
 	}
 }
 
