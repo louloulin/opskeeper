@@ -171,6 +171,10 @@ function KnowledgePanel({ report, incidentId, embeddedHits = [], embeddedWrites 
       })
       .catch((e) => {
         if (cancelled) return;
+        if (e?.status === 404) {
+          setWrites([]);
+          return;
+        }
         setWritesError(e?.message || '输出知识库查询失败');
       })
       .finally(() => {
