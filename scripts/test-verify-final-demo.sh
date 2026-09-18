@@ -46,6 +46,14 @@ assert_bad_threshold() {
     fail_test "$variable_name=$value did not produce the threshold failure"
 }
 
+missing_manager_auth_output_file="$work_directory/missing-manager-auth-output.txt"
+if env "$(for item in "${base_environment[@]}"; do [[ "$item" != MANAGER_AUTH_COOKIE=* ]] && printf '%s\n' "$item"; done)" \
+  "$script_under_test" --dry-run >"$missing_manager_auth_output_file" 2>&1; then
+  fail_test 'missing Manager cookie and token was accepted'
+fi
+grep -F 'MANAGER_AUTH_COOKIE or MANAGER_AUTH_TOKEN is required' "$missing_manager_auth_output_file" >/dev/null ||
+  fail_test 'missing Manager authentication did not produce the expected failure'
+
 for malformed_threshold in NaN Inf -Inf abc 1.01 -0.1 ''; do
   assert_bad_threshold MIN_STRESSED_UTILIZATION "$malformed_threshold"
   assert_bad_threshold MAX_RECOVERED_UTILIZATION "$malformed_threshold"
@@ -66,10 +74,47 @@ mkdir -p "$fake_bin_directory"
 fake_curl="$fake_bin_directory/curl"
 cat > "$fake_curl" <<'FAKE_CURL'
 #!/usr/bin/env bash
+manager_auth_request=false
+for argument in "$@"; do
+  if [[ "$argument" == */api/v1/version/deployment ]]; then
+    manager_auth_request=true
+  fi
+done
+if [[ -n "${CAPTURE_MANAGER_AUTH_ARGS:-}" ]]; then
+  printf '%s\n' "$@" >"$CAPTURE_MANAGER_AUTH_ARGS"
+  if [[ "$manager_auth_request" == true ]]; then
+    printf '%s\n' '{"error_code":"pool_exhausted","message":"response-body-secret-value","Authorization":"Bearer response-body-secret-value"}'
+    printf '503\n'
+    exit 0
+  fi
+  printf '%s\n' '{"ready":true,"checks":[]}'
+  printf '200\n'
+  exit 0
+fi
 printf '%s\n' '{"error_code":"pool_exhausted","message":"response-body-secret-value","Authorization":"Bearer response-body-secret-value"}'
 printf '503\n'
 FAKE_CURL
 chmod +x "$fake_curl"
+
+manager_token_capture_file="$work_directory/manager-token-capture.txt"
+manager_token_output_file="$work_directory/manager-token-output.txt"
+manager_token_evidence_file="$work_directory/manager-token-evidence.json"
+if PATH="$fake_bin_directory:$PATH" env "${base_environment[@]}" \
+  MANAGER_AUTH_COOKIE='' \
+  MANAGER_AUTH_TOKEN=manager-token-secret \
+  CAPTURE_MANAGER_AUTH_ARGS="$manager_token_capture_file" \
+  EVIDENCE_OUTPUT="$manager_token_evidence_file" \
+  "$script_under_test" >"$manager_token_output_file" 2>&1; then
+  fail_test 'Manager token request test unexpectedly passed a failed readiness request'
+fi
+grep -F 'Authorization: Bearer manager-token-secret' "$manager_token_capture_file" >/dev/null ||
+  fail_test 'Manager token mode did not send the Bearer authorization header'
+if grep -F 'Cookie: manager-cookie-secret' "$manager_token_capture_file" >/dev/null; then
+  fail_test 'Manager token mode unexpectedly sent the disabled cookie header'
+fi
+if grep -F 'manager-token-secret' "$manager_token_output_file" "$manager_token_evidence_file" >/dev/null; then
+  fail_test 'Manager token diagnostics leaked the bearer token'
+fi
 
 failure_output_file="$work_directory/failure-output.txt"
 failure_evidence_file="$work_directory/failure-evidence.json"

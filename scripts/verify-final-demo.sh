@@ -31,7 +31,7 @@ Usage: scripts/verify-final-demo.sh [--dry-run]
 Required environment:
   MANAGER_URL, HOME_URL, TEAMS_URL, ROOMS_URL, OPSKEEPER_URL
   EXPECTED_MANAGER_VERSION, EXPECTED_PLUGIN_VERSION
-  MANAGER_AUTH_COOKIE, DEMO_API_TOKEN
+  MANAGER_AUTH_COOKIE or MANAGER_AUTH_TOKEN, DEMO_API_TOKEN
   SCENARIO_IDEMPOTENCY_KEY, TARGET_FINGERPRINT, ALERT_FINGERPRINT
   SCENARIO_DURATION_SECONDS, PROMETHEUS_URL, PLUGIN_HEALTH_URL
 
@@ -63,7 +63,6 @@ required_environment=(
   OPSKEEPER_URL
   EXPECTED_MANAGER_VERSION
   EXPECTED_PLUGIN_VERSION
-  MANAGER_AUTH_COOKIE
   DEMO_API_TOKEN
   SCENARIO_IDEMPOTENCY_KEY
   TARGET_FINGERPRINT
@@ -72,6 +71,11 @@ required_environment=(
   PROMETHEUS_URL
   PLUGIN_HEALTH_URL
 )
+
+if [[ -z "${MANAGER_AUTH_COOKIE:-}" && -z "${MANAGER_AUTH_TOKEN:-}" ]]; then
+  printf 'verify-final-demo: MANAGER_AUTH_COOKIE or MANAGER_AUTH_TOKEN is required\n' >&2
+  exit 1
+fi
 
 for variable_name in "${required_environment[@]}"; do
   if [[ -z "${!variable_name:-}" ]]; then
@@ -276,7 +280,12 @@ request() {
   fi
   case "$authentication" in
     cookie)
-      curl_arguments+=('-H' "Cookie: $MANAGER_AUTH_COOKIE")
+      if [[ -n "${MANAGER_AUTH_COOKIE:-}" ]]; then
+        curl_arguments+=('-H' "Cookie: $MANAGER_AUTH_COOKIE")
+      fi
+      if [[ -n "${MANAGER_AUTH_TOKEN:-}" ]]; then
+        curl_arguments+=('-H' "Authorization: Bearer $MANAGER_AUTH_TOKEN")
+      fi
       ;;
     demo)
       curl_arguments+=('-H' "Authorization: Bearer $DEMO_API_TOKEN" '-H' 'X-Opskeeper-Version: v1')
