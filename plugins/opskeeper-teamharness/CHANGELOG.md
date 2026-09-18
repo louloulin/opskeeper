@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.64 — 2026-09-18
+
+- Make the Archive page responsive at half-screen widths so long rules, timestamps, metrics, evidence references, trace IDs, and incident summaries wrap within their cards.
+- Keep selector inputs, timeline rows, panels, and summary cards aligned without horizontal overflow.
+
 ## 1.0.63 — 2026-09-18
 
 - Extract knowledge references directly from RCA evidence chains when structured `kb_hits` are unavailable.

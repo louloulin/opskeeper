@@ -7,6 +7,22 @@ import {
 } from './archive.js';
 
 const PREVIEW_URL = 'https://opskeeper.yueming.xin/preview/';
+const summaryGridStyle = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))',
+  gap: 12,
+  marginBottom: 12,
+};
+const contentGridStyle = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))',
+  gap: 12,
+};
+const wrapAnywhereStyle = {
+  minWidth: 0,
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+};
 
 export default function OpskeeperArchiveRoute({ api }) {
   const [incidents, setIncidents] = React.useState([]);
@@ -81,9 +97,9 @@ export default function OpskeeperArchiveRoute({ api }) {
   );
 
   return (
-    <div style={{ padding: 24, color: 'var(--card-foreground)' }}>
-      <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
-        <div>
+    <div style={{ padding: 24, minWidth: 0, color: 'var(--card-foreground)' }}>
+      <header style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+        <div style={{ minWidth: 0, flex: '1 1 280px' }}>
           <h2 style={{ margin: 0, fontSize: 18 }}>OpsKeeper 事故档案</h2>
           <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--muted-foreground)' }}>
             Manager 保留权威证据与权限；插件仅做只读回看，不复制控制面事实源。
@@ -102,7 +118,7 @@ export default function OpskeeperArchiveRoute({ api }) {
       <Panel>
         <form
           onSubmit={(event) => { event.preventDefault(); loadArchive(incidentId); }}
-          style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}
+          style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', minWidth: 0 }}
         >
           <select
             value={incidents.some((incident) => incident.id === incidentId) ? incidentId : ''}
@@ -133,14 +149,14 @@ export default function OpskeeperArchiveRoute({ api }) {
 
       {archive && (
         <>
-          <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
+          <section style={summaryGridStyle}>
             <SummaryCard label="证据完整性" value={archive.evidence_complete ? '完整' : '缺失'} hint={`${archive.event_count || 0} 条事件`} color={archive.evidence_complete ? '#16a34a' : '#dc2626'} />
             <SummaryCard label="恢复确认" value={archive.recovery_observed ? '已观测' : '未观测'} color={archive.recovery_observed ? '#16a34a' : '#f59e0b'} />
             <SummaryCard label="定位耗时" value={formatSeconds(archive.localization_seconds)} hint="告警 → 根因" />
             <SummaryCard label="恢复耗时" value={formatSeconds(archive.recovery_seconds)} hint="执行 → 恢复" />
           </section>
 
-          <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(300px, 1fr)', gap: 12 }}>
+          <section style={contentGridStyle}>
             <Panel title="反向证据链">
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
                 {requiredEventTypes.map((eventType) => (
@@ -151,13 +167,13 @@ export default function OpskeeperArchiveRoute({ api }) {
               </div>
               {timeline.map((event) => (
                 <div key={event.id || `${event.event_type}-${event.occurred_at}`} style={eventRowStyle()}>
-                  <div>
+                  <div style={{ flex: '1 1 220px', ...wrapAnywhereStyle }}>
                     <div style={{ fontSize: 12, fontWeight: 600 }}>{event.event_type}</div>
                     <div style={{ marginTop: 3, fontSize: 11, color: 'var(--muted-foreground)' }}>
                       {event.phase || '未记录阶段'} · {event.actor_type || 'unknown'} / {event.actor || 'unknown'} · {event.status || 'unknown'}
                     </div>
                   </div>
-                  <div style={{ textAlign: 'right', fontSize: 11, color: 'var(--muted-foreground)', minWidth: 190 }}>
+                  <div style={{ flex: '1 1 180px', textAlign: 'right', fontSize: 11, color: 'var(--muted-foreground)', ...wrapAnywhereStyle }}>
                     <div>{formatTime(event.occurred_at)}</div>
                     {event.evidence_ref && <div style={{ marginTop: 3 }}>{event.evidence_ref}</div>}
                     {event.trace_id && <div style={{ marginTop: 3 }}>trace: {event.trace_id}</div>}
@@ -167,7 +183,7 @@ export default function OpskeeperArchiveRoute({ api }) {
               {timeline.length === 0 && <EmptyState text="暂无事件" />}
             </Panel>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
               <Panel title="闭环状态">
                 <MetricRow label="事故已关闭" value={archive.closed ? '是' : '否'} />
                 <MetricRow label="Trace" value={archive.trace_ids?.length || 0} />
@@ -215,14 +231,14 @@ export default function OpskeeperArchiveRoute({ api }) {
 
       {!archive && incidentSummary && (
         <>
-          <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
+          <section style={summaryGridStyle}>
             <SummaryCard label="告警状态" value={incidentSummary.status} color={incidentSummary.status === 'resolved' ? '#16a34a' : '#f59e0b'} />
             <SummaryCard label="事件数量" value={String(incidentSummary.eventCount)} hint="已落库" />
             <SummaryCard label="规则" value={incidentSummary.ruleKey || '—'} hint={incidentSummary.ruleName} />
             <SummaryCard label="触发时间" value={formatTime(incidentSummary.firedAt)} hint={formatTime(incidentSummary.resolvedAt) !== '未采集' ? `恢复：${formatTime(incidentSummary.resolvedAt)}` : '尚未恢复'} />
           </section>
 
-          <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(280px, 1fr)', gap: 12 }}>
+          <section style={contentGridStyle}>
             <Panel title="告警事实快照">
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{incidentSummary.summary || '未提供 summary'}</div>
               <MetricRow label="严重级别" value={incidentSummary.severity || '—'} />
@@ -258,7 +274,7 @@ export default function OpskeeperArchiveRoute({ api }) {
 
 function Panel({ title, children }) {
   return (
-    <div style={{ padding: 14, marginBottom: 12, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)' }}>
+    <div style={{ padding: 14, marginBottom: 12, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', minWidth: 0 }}>
       {title && <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 8 }}>{title}</div>}
       {children}
     </div>
@@ -267,19 +283,19 @@ function Panel({ title, children }) {
 
 function SummaryCard({ label, value, hint, color }) {
   return (
-    <div style={{ padding: 14, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)' }}>
+    <div style={{ padding: 14, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', minWidth: 0 }}>
       <div style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{label}</div>
-      <div style={{ marginTop: 6, fontSize: 19, fontWeight: 600, color: color || 'inherit' }}>{value}</div>
-      {hint && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--muted-foreground)' }}>{hint}</div>}
+      <div style={{ marginTop: 6, fontSize: 16, lineHeight: 1.35, fontWeight: 600, color: color || 'inherit', ...wrapAnywhereStyle }}>{value}</div>
+      {hint && <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.35, color: 'var(--muted-foreground)', ...wrapAnywhereStyle }}>{hint}</div>}
     </div>
   );
 }
 
 function MetricRow({ label, value }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
-      <span>{label}</span>
-      <span style={{ marginLeft: 'auto', fontWeight: 600 }}>{value}</span>
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 12, minWidth: 0 }}>
+      <span style={{ flex: '0 0 auto' }}>{label}</span>
+      <span style={{ marginLeft: 'auto', textAlign: 'right', fontWeight: 600, ...wrapAnywhereStyle }}>{value}</span>
     </div>
   );
 }
@@ -294,7 +310,7 @@ function EmptyState({ text }) {
 
 function inputStyle() {
   return {
-    padding: '6px 9px', borderRadius: 6, fontSize: 12, minWidth: 220,
+    padding: '6px 9px', borderRadius: 6, fontSize: 12, flex: '1 1 220px', minWidth: 'min(100%, 220px)',
     border: '1px solid var(--border)', background: 'var(--background)', color: 'inherit',
   };
 }
@@ -310,6 +326,7 @@ function buttonStyle(disabled) {
 function stageChipStyle(missing) {
   return {
     padding: '3px 8px', borderRadius: 999, fontSize: 11,
+    maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word',
     border: `1px solid ${missing ? '#dc2626' : 'var(--border)'}`,
     color: missing ? '#dc2626' : 'inherit',
     background: missing ? 'rgba(220,38,38,.1)' : 'transparent',
@@ -318,14 +335,14 @@ function stageChipStyle(missing) {
 
 function eventRowStyle() {
   return {
-    display: 'flex', justifyContent: 'space-between', gap: 12,
+    display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 12, minWidth: 0,
     padding: '9px 0', borderBottom: '1px solid var(--border)',
   };
 }
 
 function linkRowStyle() {
   return {
-    display: 'flex', justifyContent: 'space-between', width: '100%', textAlign: 'left',
+    display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 8, width: '100%', textAlign: 'left', minWidth: 0,
     padding: '7px 0', border: 0, borderBottom: '1px solid var(--border)',
     background: 'transparent', color: 'inherit', fontSize: 12, cursor: 'pointer',
   };

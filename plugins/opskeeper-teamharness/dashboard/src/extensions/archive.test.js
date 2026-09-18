@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -110,4 +111,14 @@ test('normalizes an incident summary response with labels and timeline', () => {
 test('rejects an invalid incident summary response', () => {
   assert.equal(normalizeIncidentSummary({ code: 0 }), null);
   assert.equal(normalizeIncidentSummary(null), null);
+});
+
+test('keeps the archive layout responsive and safely wraps long values', () => {
+  const source = readFileSync(new URL('./archive-route.jsx', import.meta.url), 'utf8');
+
+  assert.match(source, /minmax\(min\(100%,\s*180px\),\s*1fr\)/u);
+  assert.match(source, /minmax\(min\(100%,\s*360px\),\s*1fr\)/u);
+  assert.match(source, /overflowWrap:\s*['`]anywhere['`]/u);
+  assert.doesNotMatch(source, /repeat\(4,\s*minmax\(160px,\s*1fr\)\)/u);
+  assert.doesNotMatch(source, /minWidth:\s*190/u);
 });
