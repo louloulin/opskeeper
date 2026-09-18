@@ -1325,12 +1325,24 @@ func main() {
 			log.Error("demo workflow authority publisher config invalid", slog.Any("err", err))
 			os.Exit(1)
 		}
+		expectedReplayProfile := strings.TrimSpace(os.Getenv("OPSKEEPER_REPAIR_PREVIEW_WORKLOAD_FINGERPRINT"))
+		previewExecutor, err := managerbizdemo.NewRepairPreviewExecutor(
+			strings.TrimSpace(os.Getenv("OPSKEEPER_REPAIR_PREVIEW_DSN")),
+			strings.TrimSpace(os.Getenv("OPSKEEPER_REPAIR_PREVIEW_WORKLOAD_PATH")),
+			expectedReplayProfile,
+			repairPreviewRepository,
+		)
+		if err != nil {
+			log.Error("demo repair preview executor config invalid", slog.Any("err", err))
+			os.Exit(1)
+		}
 		demoScenarioUsecase := managerbizdemo.NewUsecaseWithPreviewWorkflow(
 			managerdemodata.NewRepo(db), alertRepo, managerbizdemo.NewPoolFixtureClient(poolFixtureURL, poolFixtureToken),
 			repairPreviewRepository,
-			strings.TrimSpace(os.Getenv("OPSKEEPER_REPAIR_PREVIEW_WORKLOAD_FINGERPRINT")),
+			expectedReplayProfile,
 			workflowPublisher,
 		)
+		demoScenarioUsecase.SetPreviewExecutor(previewExecutor)
 		demoScenarioHandler = managerserverdemo.NewHandler(managersvcdemo.NewService(demoScenarioUsecase), demoAPIToken)
 	} else if demoAPIToken != "" {
 		log.Warn("demo scenario API disabled: pool fixture URL/token is required")

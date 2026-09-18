@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
@@ -69,6 +70,7 @@ type IncidentRepository interface {
 	GetIncidentByID(ctx context.Context, id uint64) (*alertmodel.Incident, error)
 	CreateIncident(ctx context.Context, incident *alertmodel.Incident) error
 	CreateEvent(ctx context.Context, event *alertmodel.Event) error
+	ListEventsByIncident(ctx context.Context, incidentID uint64, limit int) ([]*alertmodel.Event, error)
 }
 
 type ScenarioRepository interface {
@@ -93,6 +95,19 @@ type WorkflowPublisher interface {
 	PublishWorkflow(ctx context.Context, run *demomodel.ScenarioRun, stage string, decision *PreviewDecisionSummary) error
 }
 
+type PreviewExecutor interface {
+	Execute(ctx context.Context, input PreviewExecutionInput) error
+}
+
+type PreviewExecutionInput struct {
+	RunID             string
+	TenantID          string
+	IncidentID        string
+	ScenarioID        string
+	IdempotencyKey    string
+	TargetFingerprint string
+}
+
 type Clock interface{ Now() time.Time }
 
 type realClock struct{}
@@ -104,13 +119,19 @@ type Usecase struct {
 	incidents             IncidentRepository
 	fixtures              PoolFixtureRepository
 	previews              PreviewRepository
+	previewExecutor       PreviewExecutor
 	expectedReplayProfile string
 	workflowPublisher     WorkflowPublisher
 	clock                 Clock
+	executionLocks        map[string]*sync.Mutex
+	executionLocksGuard   sync.Mutex
 }
 
 func NewUsecase(scenarios ScenarioRepository, incidents IncidentRepository, fixtures PoolFixtureRepository) *Usecase {
-	return &Usecase{scenarios: scenarios, incidents: incidents, fixtures: fixtures, clock: realClock{}}
+	return &Usecase{
+		scenarios: scenarios, incidents: incidents, fixtures: fixtures,
+		clock: realClock{}, executionLocks: map[string]*sync.Mutex{},
+	}
 }
 
 func NewUsecaseWithPreviews(
@@ -123,6 +144,7 @@ func NewUsecaseWithPreviews(
 	return &Usecase{
 		scenarios: scenarios, incidents: incidents, fixtures: fixtures, previews: previews,
 		expectedReplayProfile: expectedReplayProfile, clock: realClock{},
+		executionLocks: map[string]*sync.Mutex{},
 	}
 }
 
@@ -137,6 +159,10 @@ func NewUsecaseWithPreviewWorkflow(
 	usecase := NewUsecaseWithPreviews(scenarios, incidents, fixtures, previews, expectedReplayProfile)
 	usecase.workflowPublisher = workflowPublisher
 	return usecase
+}
+
+func (u *Usecase) SetPreviewExecutor(executor PreviewExecutor) {
+	u.previewExecutor = executor
 }
 
 func (u *Usecase) Start(ctx context.Context, tenantID uint64, input StartScenarioInput) (*ScenarioStatus, error) {
@@ -222,6 +248,14 @@ func (u *Usecase) Get(ctx context.Context, tenantID uint64, scenarioID, key stri
 	if _, err := u.incidents.GetIncidentByID(ctx, run.IncidentID); err != nil {
 		return nil, err
 	}
+	orchestratedDecision, err := u.orchestrateDiagnosisAndPreview(ctx, tenantID, scenarioID, key)
+	if err != nil {
+		return nil, err
+	}
+	run, err = u.scenarios.GetByIdempotencyKey(ctx, tenantID, scenarioID, key)
+	if err != nil {
+		return nil, err
+	}
 	if run.PoolManifestID != "" {
 		fixture, fixtureErr := u.fixtures.Status(ctx, run.PoolManifestID)
 		if fixtureErr == nil {
@@ -231,6 +265,9 @@ func (u *Usecase) Get(ctx context.Context, tenantID uint64, scenarioID, key stri
 				aggregateStatus = demomodel.ScenarioStatusRecovered
 			case "expired":
 				aggregateStatus = demomodel.ScenarioStatusClosed
+			}
+			if fixture.State == "expired" && run.Status == demomodel.ScenarioStatusDiagnosisSent {
+				aggregateStatus = run.Status
 			}
 			if aggregateStatus != run.Status {
 				if aggregateStatus == demomodel.ScenarioStatusRecovered {
@@ -245,14 +282,129 @@ func (u *Usecase) Get(ctx context.Context, tenantID uint64, scenarioID, key stri
 		}
 	}
 	status := statusFromRun(run)
-	status.PreviewDecision = u.previewDecision(ctx, tenantID, run)
-	if err := u.applyPreviewTransition(ctx, run, status.PreviewDecision); err != nil {
-		return nil, err
+	if orchestratedDecision == nil {
+		status.PreviewDecision = u.previewDecision(ctx, tenantID, run)
+		if err := u.applyPreviewTransition(ctx, run, status.PreviewDecision); err != nil {
+			return nil, err
+		}
+	} else {
+		status.PreviewDecision = orchestratedDecision
 	}
 	if run.Status != status.Status {
 		status.Status = run.Status
 	}
 	return status, nil
+}
+
+func (u *Usecase) orchestrateDiagnosisAndPreview(
+	ctx context.Context, tenantID uint64, scenarioID, key string,
+) (*PreviewDecisionSummary, error) {
+	initial, err := u.scenarios.GetByIdempotencyKey(ctx, tenantID, scenarioID, key)
+	if err != nil {
+		return nil, err
+	}
+	if initial.Status != demomodel.ScenarioStatusAlertCorrelated &&
+		initial.Status != demomodel.ScenarioStatusDiagnosisSent &&
+		initial.Status != demomodel.ScenarioStatusPreviewReady {
+		return nil, nil
+	}
+
+	lock := u.executionLock(initial.ID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	run, err := u.scenarios.GetByIdempotencyKey(ctx, tenantID, scenarioID, key)
+	if err != nil {
+		return nil, err
+	}
+	if run.Status == demomodel.ScenarioStatusAlertCorrelated {
+		found, err := u.hasInitialDiagnosis(ctx, run.IncidentID)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, nil
+		}
+		if err := u.scenarios.UpdateStatusWithEvent(
+			ctx, run.ID, demomodel.ScenarioStatusDiagnosisSent, u.diagnosisEvent(run),
+			demomodel.ScenarioStatusAlertCorrelated,
+		); err != nil {
+			return nil, err
+		}
+		run.Status = demomodel.ScenarioStatusDiagnosisSent
+	}
+	if run.Status != demomodel.ScenarioStatusDiagnosisSent &&
+		run.Status != demomodel.ScenarioStatusPreviewReady {
+		return nil, nil
+	}
+
+	decision := u.previewDecision(ctx, tenantID, run)
+	if decision == nil && run.Status == demomodel.ScenarioStatusDiagnosisSent && u.previewExecutor != nil {
+		executionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		err := u.previewExecutor.Execute(executionCtx, PreviewExecutionInput{
+			RunID:             DeterministicPreviewRunID(tenantID, scenarioID, key, run.IncidentID),
+			TenantID:          strconv.FormatUint(tenantID, 10),
+			IncidentID:        strconv.FormatUint(run.IncidentID, 10),
+			ScenarioID:        run.ScenarioID,
+			IdempotencyKey:    run.IdempotencyKey,
+			TargetFingerprint: run.TargetFingerprint,
+		})
+		cancel()
+		if err != nil {
+			if u.clock.Now().After(run.ExpiresAt) {
+				return nil, u.scenarios.UpdateStatusWithEvent(
+					ctx, run.ID, demomodel.ScenarioStatusClosed, u.expiryEvent(run),
+					demomodel.ScenarioStatusDiagnosisSent,
+				)
+			}
+			return nil, err
+		}
+		decision = u.previewDecision(ctx, tenantID, run)
+	}
+	if u.clock.Now().After(run.ExpiresAt) && decision == nil {
+		return nil, u.scenarios.UpdateStatusWithEvent(
+			ctx, run.ID, demomodel.ScenarioStatusClosed, u.expiryEvent(run),
+			demomodel.ScenarioStatusDiagnosisSent,
+		)
+	}
+	if decision == nil {
+		return nil, nil
+	}
+	if u.clock.Now().After(run.ExpiresAt) {
+		closedDecision := *decision
+		closedDecision.EligibleForHITL = false
+		closedDecision.BoundaryText = "Scenario expired before approval. " + closedDecision.BoundaryText
+		return &closedDecision, u.scenarios.UpdateStatusWithEvent(
+			ctx, run.ID, demomodel.ScenarioStatusClosed, u.expiryEvent(run),
+			demomodel.ScenarioStatusDiagnosisSent, demomodel.ScenarioStatusPreviewReady,
+		)
+	}
+	return decision, u.applyPreviewTransition(ctx, run, decision)
+}
+
+func (u *Usecase) hasInitialDiagnosis(ctx context.Context, incidentID uint64) (bool, error) {
+	events, err := u.incidents.ListEventsByIncident(ctx, incidentID, 100)
+	if err != nil {
+		return false, err
+	}
+	for _, event := range events {
+		if event != nil && event.EventType == alertmodel.EventTypeAIInitialDiagnosis {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (u *Usecase) executionLock(id uint64) *sync.Mutex {
+	u.executionLocksGuard.Lock()
+	defer u.executionLocksGuard.Unlock()
+	key := strconv.FormatUint(id, 10)
+	lock, ok := u.executionLocks[key]
+	if !ok {
+		lock = &sync.Mutex{}
+		u.executionLocks[key] = lock
+	}
+	return lock
 }
 
 func (u *Usecase) BusinessSnapshot(ctx context.Context, tenantID uint64, scenarioID, key, section string) (json.RawMessage, error) {
@@ -503,6 +655,36 @@ func (u *Usecase) workflowEvent(run *demomodel.ScenarioRun, stage string) *alert
 		Severity: "critical", Title: "Final demo workflow", Message: &message,
 		ActorType: alertmodel.ActorTypeSystem, SnapshotJSON: string(snapshot),
 		Reason: "OpsKeeper Manager authoritative transition", OccurredAt: u.clock.Now(),
+	}
+}
+
+func (u *Usecase) diagnosisEvent(run *demomodel.ScenarioRun) *alertmodel.Event {
+	snapshot, _ := json.Marshal(map[string]any{
+		"scenario_id": run.ScenarioID, "idempotency_key": run.IdempotencyKey,
+		"incident_id": run.IncidentID, "target_fingerprint": run.TargetFingerprint,
+		"source_event_type": alertmodel.EventTypeAIInitialDiagnosis,
+		"preview_run_id":    DeterministicPreviewRunID(run.TenantID, run.ScenarioID, run.IdempotencyKey, run.IncidentID),
+	})
+	message := "Initial diagnosis evidence was accepted; controlled repair preview dispatch follows."
+	return &alertmodel.Event{
+		IncidentID: run.IncidentID, EventType: demomodel.ScenarioStatusDiagnosisSent,
+		StatusAfter: alertmodel.IncidentStatusOpen, Severity: "critical", Title: "Diagnosis dispatched",
+		Message: &message, ActorType: alertmodel.ActorTypeSystem, SnapshotJSON: string(snapshot),
+		Reason: "Manager-authoritative diagnosis progression", OccurredAt: u.clock.Now(),
+	}
+}
+
+func (u *Usecase) expiryEvent(run *demomodel.ScenarioRun) *alertmodel.Event {
+	snapshot, _ := json.Marshal(map[string]any{
+		"scenario_id": run.ScenarioID, "idempotency_key": run.IdempotencyKey,
+		"incident_id": run.IncidentID, "expired_at": run.ExpiresAt,
+	})
+	message := "Scenario expired before human approval; no approval or repair was fabricated."
+	return &alertmodel.Event{
+		IncidentID: run.IncidentID, EventType: demomodel.ScenarioStatusClosed,
+		StatusAfter: alertmodel.IncidentStatusOpen, Severity: "critical", Title: "Scenario expired",
+		Message: &message, ActorType: alertmodel.ActorTypeSystem, SnapshotJSON: string(snapshot),
+		Reason: "Honest TTL boundary before HITL", OccurredAt: u.clock.Now(),
 	}
 }
 

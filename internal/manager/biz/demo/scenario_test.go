@@ -60,6 +60,19 @@ func (f *fakeIncidents) CreateEvent(_ context.Context, event *alertmodel.Event) 
 	return nil
 }
 
+func (f *fakeIncidents) ListEventsByIncident(_ context.Context, incidentID uint64, limit int) ([]*alertmodel.Event, error) {
+	if limit <= 0 || incidentID == 0 {
+		return nil, nil
+	}
+	events := make([]*alertmodel.Event, 0, len(f.events))
+	for _, event := range f.events {
+		if event.IncidentID == incidentID {
+			events = append(events, event)
+		}
+	}
+	return events, nil
+}
+
 type fakeScenarios struct {
 	nextID         uint64
 	rows           map[string]*demomodel.ScenarioRun
@@ -159,6 +172,12 @@ type fakePreviewRepository struct {
 	eligibleCalls int
 }
 
+type fakePreviewExecutor struct {
+	calls     int
+	previews  *fakePreviewRepository
+	lastInput PreviewExecutionInput
+}
+
 type fakeWorkflowPublisher struct {
 	stages []string
 	fails  bool
@@ -191,6 +210,26 @@ func (f *fakePreviewRepository) FindEligible(
 		}
 	}
 	return repairpreview.Candidate{}, repairpreview.ErrCandidateNotFound
+}
+
+func (f *fakePreviewRepository) Save(_ context.Context, run repairpreview.Run) error {
+	f.runs = append(f.runs, run)
+	return nil
+}
+
+func (f *fakePreviewExecutor) Execute(_ context.Context, input PreviewExecutionInput) error {
+	f.calls++
+	f.lastInput = input
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	passing.RunID = input.RunID
+	rejected := previewCandidate("candidate-b", "reset_pool", repairpreview.DecisionReject)
+	rejected.RunID = input.RunID
+	run := previewRun(baseline, passing, rejected)
+	run.ID = input.RunID
+	f.previews.runs = append(f.previews.runs, run)
+	return nil
 }
 
 func (f *fakeFixtures) Start(_ context.Context, input FixtureStartInput) (FixtureStartResult, error) {
@@ -617,5 +656,122 @@ func TestWorkflowAdvancePublishesManagerAuthorityStages(t *testing.T) {
 	}
 	if len(scenarios.events) != len(want) {
 		t.Fatalf("event count = %d want = %d", len(scenarios.events), len(want))
+	}
+}
+
+func TestInitialDiagnosisAdvancesAndTriggersPreviewOnce(t *testing.T) {
+	previews := &fakePreviewRepository{}
+	usecase, input, incidents, scenarios := scenarioPartsWithPreview(t, previews, "sha256:workload-v1")
+	run, err := scenarios.GetByIdempotencyKey(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Status = demomodel.ScenarioStatusAlertCorrelated
+	incidents.events = append(incidents.events, &alertmodel.Event{
+		IncidentID: run.IncidentID, EventType: alertmodel.EventTypeAIInitialDiagnosis,
+	})
+	executor := &fakePreviewExecutor{previews: previews}
+	publisher := &fakeWorkflowPublisher{}
+	usecase.SetPreviewExecutor(executor)
+	usecase.workflowPublisher = publisher
+
+	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusAwaitingApproval ||
+		second.Status != demomodel.ScenarioStatusAwaitingApproval || executor.calls != 1 {
+		t.Fatalf("status = %+v/%+v executor calls = %d", status, second, executor.calls)
+	}
+	if executor.lastInput.RunID != DeterministicPreviewRunID(1, ScenarioID, input.IdempotencyKey, run.IncidentID) {
+		t.Fatalf("preview binding = %+v", executor.lastInput)
+	}
+	if len(scenarios.events) != 3 {
+		t.Fatalf("scenario events = %+v", scenarios.events)
+	}
+	if scenarios.events[0].EventType != demomodel.ScenarioStatusDiagnosisSent ||
+		scenarios.events[1].EventType != demomodel.ScenarioStatusPreviewReady ||
+		scenarios.events[2].EventType != demomodel.ScenarioStatusAwaitingApproval {
+		t.Fatalf("unexpected event order = %+v", scenarios.events)
+	}
+	if strings.Join(publisher.stages, ",") != strings.Join([]string{
+		demomodel.ScenarioStatusPreviewReady, demomodel.ScenarioStatusAwaitingApproval,
+	}, ",") {
+		t.Fatalf("publisher stages = %v", publisher.stages)
+	}
+}
+
+func TestDiagnosisOrchestrationSurvivesUsecaseRestart(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	rejected := previewCandidate("candidate-b", "reset_pool", repairpreview.DecisionReject)
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{
+		previewRun(baseline, passing, rejected),
+	}}
+	usecase, input, _, scenarios := scenarioPartsWithPreview(t, previews, "sha256:workload-v1")
+	executor := &fakePreviewExecutor{previews: previews}
+	usecase.SetPreviewExecutor(executor)
+
+	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusAwaitingApproval || executor.calls != 0 ||
+		len(scenarios.events) != 2 {
+		t.Fatalf("status = %+v calls = %d events = %+v", status, executor.calls, scenarios.events)
+	}
+}
+
+func TestDiagnosisTransitionRollsBackWhenEvidenceWriteFails(t *testing.T) {
+	previews := &fakePreviewRepository{}
+	usecase, input, incidents, scenarios := scenarioPartsWithPreview(t, previews, "sha256:workload-v1")
+	run, err := scenarios.GetByIdempotencyKey(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Status = demomodel.ScenarioStatusAlertCorrelated
+	incidents.events = append(incidents.events, &alertmodel.Event{
+		IncidentID: run.IncidentID, EventType: alertmodel.EventTypeAIInitialDiagnosis,
+	})
+	scenarios.failEventWrite = true
+	usecase.SetPreviewExecutor(&fakePreviewExecutor{previews: previews})
+
+	if _, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey); err == nil {
+		t.Fatal("expected diagnosis transition failure")
+	}
+	if run.Status != demomodel.ScenarioStatusAlertCorrelated || len(scenarios.events) != 0 {
+		t.Fatalf("run = %+v events = %+v", run, scenarios.events)
+	}
+}
+
+func TestExpiredScenarioClosesBeforeApprovalWithoutFabricatingHITL(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{previewRun(baseline, passing)}}
+	usecase, input, _, scenarios := scenarioPartsWithPreview(t, previews, "sha256:workload-v1")
+	run, err := scenarios.GetByIdempotencyKey(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.ExpiresAt = time.Now().Add(-time.Second)
+	publisher := &fakeWorkflowPublisher{}
+	usecase.workflowPublisher = publisher
+
+	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusClosed || status.PreviewDecision == nil ||
+		status.PreviewDecision.EligibleForHITL || len(publisher.stages) != 0 {
+		t.Fatalf("status = %+v decision = %+v stages = %v", status, status.PreviewDecision, publisher.stages)
+	}
+	if len(scenarios.events) != 1 || scenarios.events[0].EventType != demomodel.ScenarioStatusClosed {
+		t.Fatalf("events = %+v", scenarios.events)
 	}
 }
