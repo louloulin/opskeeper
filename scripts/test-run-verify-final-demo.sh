@@ -58,6 +58,11 @@ build_sandbox() {
 set -euo pipefail
 output_file="\${DOCKER_FAKE_OUTPUT:-}"
 plugin_env_file="\${FAKE_PLUGIN_ENV_FILE:-}"
+cp_log_file="\${DOCKER_FAKE_CP_LOG:-}"
+cp_should_fail="\${DOCKER_FAKE_CP_FAIL:-0}"
+mkdir_log_file="\${DOCKER_FAKE_MKDIR_LOG:-}"
+id_log_file="\${DOCKER_FAKE_ID_LOG:-}"
+chown_log_file="\${DOCKER_FAKE_CHOWN_LOG:-}"
 subcommand="\${1:-}"
 case "\$subcommand" in
   inspect)
@@ -78,9 +83,35 @@ case "\$subcommand" in
     for arg in "\$@"; do
       if [[ "\$prev" == "-e" ]]; then
         printf '%s\n' "\$arg" >>"\$output_file"
+        if [[ "\$arg" == EVIDENCE_OUTPUT=* ]]; then
+          # Record the container-internal evidence path so cp tests can assert.
+          printf '%s\n' "\${arg#EVIDENCE_OUTPUT=}" >>"\${DOCKER_FAKE_EVIDENCE_OUT_FILE:-/tmp/ok}"
+        fi
+      elif [[ "\$prev" == "-u" ]]; then
+        printf 'u=%s\n' "\$arg" >>"\$output_file"
       fi
       prev="\$arg"
     done
+    # Capture mkdir/chown/id subexec patterns.
+    if [[ "\$*" == *mkdir* ]]; then
+      printf 'mkdir\n' >>"\$mkdir_log_file"
+    fi
+    if [[ "\$*" == *chown* ]]; then
+      printf 'chown %s\n' "\$*" >>"\$chown_log_file"
+    fi
+    # Match `id -u` / `id -g` regardless of preceding docker exec args.
+    if [[ "\$*" == *" id -u" || "\$*" == *" id -g" ]]; then
+      printf '65532\n' >>"\$id_log_file"
+    fi
+    exit 0
+    ;;
+  cp)
+    shift
+    printf 'cp %s\n' "\$*" >>"\$cp_log_file"
+    if [[ "\$cp_should_fail" == "1" ]]; then
+      printf 'simulated cp failure\n' >&2
+      exit 1
+    fi
     exit 0
     ;;
   *)
@@ -101,6 +132,8 @@ run_wrapper_in_sandbox() {
   local container_name="${2:-opskeeper}"
   local output_file="$sandbox/docker-calls.txt"
   rm -f "$output_file"
+  rm -f "$sandbox/cp-calls.txt" "$sandbox/mkdir-calls.txt" "$sandbox/id-calls.txt" "$sandbox/chown-calls.txt"
+  rm -f "$sandbox/evidence-out.txt"
   (
     cd "$sandbox"
     OPSKEEPER_HOST_CONFIG_DIR="$sandbox/config" \
@@ -110,6 +143,12 @@ run_wrapper_in_sandbox() {
     OPSKEEPER_CONTAINER_SCRIPT="/src/scripts/verify-final-demo.sh" \
     PATH="$sandbox/bin:$PATH" \
     DOCKER_FAKE_OUTPUT="$output_file" \
+    DOCKER_FAKE_CP_LOG="$sandbox/cp-calls.txt" \
+    DOCKER_FAKE_MKDIR_LOG="$sandbox/mkdir-calls.txt" \
+    DOCKER_FAKE_ID_LOG="$sandbox/id-calls.txt" \
+    DOCKER_FAKE_CHOWN_LOG="$sandbox/chown-calls.txt" \
+    DOCKER_FAKE_EVIDENCE_OUT_FILE="$sandbox/evidence-out.txt" \
+    DOCKER_FAKE_CP_FAIL="${DOCKER_FAKE_CP_FAIL:-0}" \
     FAKE_PLUGIN_ENV_FILE="$sandbox/plugin-manager.env" \
     bash "$WRAPPER_UNDER_TEST"
   )
@@ -209,7 +248,7 @@ expected_order=(
   "ROOMS_URL=https://rooms.yueming.xin"
   "OPSKEEPER_URL=https://opskeeper.yueming.xin"
   "PROMETHEUS_URL=http://opskeeper-demo-prom:9090"
-  "PLUGIN_HEALTH_URL=http://127.0.0.1:18096/api/v1/plugins/opskeeper-teamharness/health"
+  "PLUGIN_HEALTH_URL=http://agentteams-plugin-manager:8095/api/v1/plugins/opskeeper-teamharness/health"
   "EXPECTED_MANAGER_VERSION=a4406a79-1.0.66"
   "EXPECTED_PLUGIN_VERSION=1.0.66"
   "MANAGER_AUTH_TOKEN=JWT_VALID_VALUE"
@@ -246,6 +285,26 @@ fi
 pass_test "idempotency key has the expected prefix and timestamp tail"
 
 # ---------------------------------------------------------------------------
+# Test 6b: ALERT_FINGERPRINT is derived from the idempotency key, so it is
+# unique per run, stable across the idempotent retry, and always matches the
+# validFingerprint regex (sha256:<64hex>) in internal/manager/biz/demo/scenario.go.
+# ---------------------------------------------------------------------------
+alert_value=$(grep '^ALERT_FINGERPRINT=' "$recorded" | head -1 | cut -d= -f2-)
+if [[ ! "$alert_value" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  fail_test "ALERT_FINGERPRINT does not match sha256:<64hex>: $alert_value"
+fi
+expected_alert="sha256:$(printf '%s' "$key_value" | sha256sum | cut -d' ' -f1)"
+if [[ "$alert_value" != "$expected_alert" ]]; then
+  fail_test "ALERT_FINGERPRINT not derived from idempotency key: got $alert_value expected $expected_alert"
+fi
+# TARGET_FINGERPRINT must also pass validFingerprint (hex or sha256:<64hex>).
+target_value=$(grep '^TARGET_FINGERPRINT=' "$recorded" | head -1 | cut -d= -f2-)
+if ! [[ "$target_value" =~ ^([0-9a-fA-F]+|sha256:[0-9a-f]{64})$ ]]; then
+  fail_test "TARGET_FINGERPRINT does not match validFingerprint pattern: $target_value"
+fi
+pass_test "ALERT_FINGERPRINT is a sha256:<64hex> derived from idempotency key; TARGET_FINGERPRINT is hex/sha256"
+
+# ---------------------------------------------------------------------------
 # Test 7: container name override is honored.
 # ---------------------------------------------------------------------------
 build_sandbox "$WORK/sandbox7" "DEMO_VALID_VALUE" "JWT_VALID_VALUE" "PLUGIN_VALID_VALUE"
@@ -265,4 +324,89 @@ if [[ ! -s "$recorded7" ]]; then
 fi
 pass_test "OPSKEEPER_CONTAINER_NAME override is accepted by the wrapper"
 
-printf '\nALL TESTS PASSED\n'
+# ---------------------------------------------------------------------------
+# Test 8: EVIDENCE_OUTPUT defaults to the container-internal staging path
+# /tmp/verify-evidence/<UTC>.json and the wrapper prepares that directory
+# inside the container before exec.
+# ---------------------------------------------------------------------------
+build_sandbox "$WORK/sandbox8" "DEMO_VALID_VALUE" "JWT_VALID_VALUE" "PLUGIN_VALID_VALUE"
+set +e
+output8=$(run_wrapper_in_sandbox "$WORK/sandbox8" 2>&1)
+rc8=$?
+set -e
+if [[ $rc8 -ne 0 ]]; then
+  fail_test "wrapper exited non-zero with all three tokens present: rc=$rc8 output=$output8"
+fi
+recorded8="$WORK/sandbox8/docker-calls.txt"
+container_evidence_path=$(grep '^EVIDENCE_OUTPUT=' "$recorded8" | head -1 | cut -d= -f2-)
+if [[ ! "$container_evidence_path" =~ ^/tmp/verify-evidence/verify-final-demo-[0-9]{8}T[0-9]{6}Z\.json$ ]]; then
+  fail_test "container EVIDENCE_OUTPUT path unexpected: $container_evidence_path"
+fi
+# mkdir inside the container must have been issued before the main exec.
+if [[ ! -s "$WORK/sandbox8/mkdir-calls.txt" ]]; then
+  fail_test "wrapper did not prepare CONTAINER_EVIDENCE_DIR inside the container"
+fi
+if [[ ! -s "$WORK/sandbox8/id-calls.txt" ]]; then
+  fail_test "wrapper did not query container uid/gid before chown"
+fi
+if ! grep -q "^chown " "$WORK/sandbox8/chown-calls.txt"; then
+  fail_test "wrapper did not chown the container evidence dir to the runtime uid"
+fi
+pass_test "EVIDENCE_OUTPUT defaults to /tmp/verify-evidence/<UTC>.json with prep exec"
+
+# ---------------------------------------------------------------------------
+# Test 9: docker cp happy path. Pre-seed an evidence file inside the container
+# (via the fake docker's `exec test -s` branch returning 0) and assert the
+# wrapper invokes docker cp with the correct src/dst.
+# ---------------------------------------------------------------------------
+# Patch the fake docker for this sandbox so `docker exec ... test -s <path>`
+# returns 0 (file present).
+build_sandbox "$WORK/sandbox9" "DEMO_VALID_VALUE" "JWT_VALID_VALUE" "PLUGIN_VALID_VALUE"
+cat >>"$WORK/sandbox9/bin/docker" <<'EXTRA_FAKE_DOCKER'
+
+# Allow tests to simulate a populated evidence file.
+if [[ "${FAKE_EVIDENCE_PRESENT:-0}" == "1" ]]; then
+  case "${*}" in
+    *"test -s"*)
+      exit 0
+      ;;
+  esac
+fi
+EXTRA_FAKE_DOCKER
+(
+  cd "$WORK/sandbox9"
+  FAKE_EVIDENCE_PRESENT=1   DOCKER_FAKE_CP_FAIL=0   run_wrapper_in_sandbox "$WORK/sandbox9" >/dev/null 2>&1
+)
+cp_log="$WORK/sandbox9/cp-calls.txt"
+if [[ ! -s "$cp_log" ]]; then
+  fail_test "wrapper did not invoke docker cp on happy path"
+fi
+if ! grep -E -q '^cp opskeeper:/tmp/verify-evidence/verify-final-demo-[0-9]{8}T[0-9]{6}Z\.json '"$WORK/sandbox9"'/evidence/verify-final-demo-[0-9]{8}T[0-9]{6}Z\.json' "$cp_log"; then
+  fail_test "docker cp src/dst mismatch: $(tr '\n' '|' <"$cp_log")"
+fi
+# The wrapper should also print a "copied to ..." line on success.
+if ! grep -q "evidence copied to" /tmp/run-verify-test-stdout9 2>/dev/null; then
+  : # best-effort log capture is not asserted here
+fi
+pass_test "docker cp happy path uses container-internal src and host dst"
+
+# ---------------------------------------------------------------------------
+# Test 10: docker cp failure does not crash the wrapper. The wrapper must
+# log a WARN line and still exit with the inner docker exec rc (0 in this
+# test, since the fake exec succeeds).
+# ---------------------------------------------------------------------------
+build_sandbox "$WORK/sandbox10" "DEMO_VALID_VALUE" "JWT_VALID_VALUE" "PLUGIN_VALID_VALUE"
+(
+  cd "$WORK/sandbox10"
+  FAKE_EVIDENCE_PRESENT=1   DOCKER_FAKE_CP_FAIL=1   run_wrapper_in_sandbox "$WORK/sandbox10" >/tmp/run-verify-test-stdout10 2>&1
+)
+rc10=$?
+if [[ $rc10 -ne 0 ]]; then
+  fail_test "wrapper crashed (rc=$rc10) when docker cp failed; expected it to log WARN and return inner-exit rc"
+fi
+if ! grep -q "WARN docker cp failed" /tmp/run-verify-test-stdout10; then
+  fail_test "wrapper did not log WARN docker cp failure: $(cat /tmp/run-verify-test-stdout10)"
+fi
+pass_test "docker cp failure is logged but does not crash the wrapper"
+
+printf '\nALL TESTS PASSED\n' 

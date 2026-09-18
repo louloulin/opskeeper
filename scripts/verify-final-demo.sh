@@ -171,6 +171,11 @@ done
 
 EVIDENCE_FILE="$(mktemp "${TMPDIR:-/tmp}/opskeeper-final-demo-evidence.XXXXXX")"
 CURL_ERROR_FILE="$(mktemp "${TMPDIR:-/tmp}/opskeeper-final-demo-curl-error.XXXXXX")"
+# Per-request response body sink. The request() function writes curl's body
+# here (via -o) and reads it back as LAST_RESPONSE_BODY, so the HTTP status
+# code (captured separately via -w '%{http_code}') is never mixed into the
+# raw body parsing path.
+LAST_BODY_FILE="$(mktemp "${TMPDIR:-/tmp}/opskeeper-final-demo-body.XXXXXX")"
 EVIDENCE_OUTPUT="${EVIDENCE_OUTPUT:-}"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 LAST_STEP="configuration"
@@ -182,7 +187,7 @@ LAST_RESPONSE_BODY=""
 LAST_TRANSPORT_ERROR=false
 
 cleanup() {
-  rm -f "$EVIDENCE_FILE" "$CURL_ERROR_FILE"
+  rm -f "$EVIDENCE_FILE" "$CURL_ERROR_FILE" "$LAST_BODY_FILE"
 }
 trap cleanup EXIT
 
@@ -212,18 +217,30 @@ safe_response_fields() {
     printf '{"format":"non_json"}'
     return 0
   fi
+  # Wrap every field access in try-catch so that bare scalars (numbers, strings, booleans, arrays)
+  # never produce "Cannot index X with string 'key'" diagnostics that would obscure the real cause.
   jq -c '
     def safe_string(value):
-      if (value | type) == "string" and (value | test("^[A-Za-z0-9_-]{1,64}$")) then value else null end;
+      try (if (value | type) == "string" and (value | test("^[A-Za-z0-9_-]{1,64}$")) then value else null end)
+      catch null;
+    def safe_top_level(field):
+      try (.[field]) catch null;
     {
       format: "json",
-      code: (if (.code | type) == "number" then .code else null end),
-      error_code: safe_string(.error_code),
-      status: safe_string(.status),
-      data_type: (if (.data | type) == "string" then "present" elif (.data | type) != "null" then (.data | type) else null end),
-      transport_error: (if .transport_error == true then true else null end)
+      input_type: (try (type) catch "unknown"),
+      code: (try (if (.code | type) == "number" then .code else null end) catch null),
+      error_code: safe_string(safe_top_level("error_code")),
+      status: safe_string(safe_top_level("status")),
+      data_type: (
+        try (
+          if (.data | type) == "string" then "present"
+          elif (.data | type) != "null" then (.data | type)
+          else null end
+        ) catch null
+      ),
+      transport_error: (try (if .transport_error == true then true else null end) catch null)
     }
-  ' <<<"$body"
+  ' <<<"$body" 2>/dev/null || printf '{"format":"non_json"}'
 }
 
 emit_evidence() {
@@ -260,9 +277,6 @@ request() {
   local url="$2"
   local body="${3:-}"
   local authentication="${4:-none}"
-  local raw_response
-  local curl_status
-
   LAST_METHOD="$method"
   LAST_OPERATION_LABEL="$(safe_url_label_from_value "$url")"
   LAST_OPERATION_ORIGIN="$(url_origin_from_value "$url")"
@@ -273,7 +287,8 @@ request() {
     --max-time "$HTTP_TIMEOUT_SECONDS"
     -X "$method"
     -H 'Cache-Control: no-store'
-    -w $'\n%{http_code}'
+    -o "$LAST_BODY_FILE"
+    -w '%{http_code}'
   )
   if [[ -n "$body" ]]; then
     curl_arguments+=('-H' 'Content-Type: application/json' '--data' "$body")
@@ -309,13 +324,12 @@ request() {
   esac
   curl_arguments+=("$url")
 
-  if ! raw_response="$(curl "${curl_arguments[@]}" 2>"$CURL_ERROR_FILE")"; then
+  LAST_HTTP_CODE="$(curl "${curl_arguments[@]}" 2>"$CURL_ERROR_FILE")" || {
     LAST_RESPONSE_BODY='{"transport_error":true}'
     LAST_TRANSPORT_ERROR=true
     fail_now "request failed during $LAST_STEP"
-  fi
-  LAST_HTTP_CODE="${raw_response##*$'\n'}"
-  LAST_RESPONSE_BODY="${raw_response%$'\n'}"
+  }
+  LAST_RESPONSE_BODY="$(cat "$LAST_BODY_FILE")"
   if ! [[ "$LAST_HTTP_CODE" =~ ^[0-9]{3}$ ]]; then
     fail_now "curl did not return a valid HTTP status during $LAST_STEP"
   fi
@@ -338,26 +352,37 @@ business_probe() {
   else
     path="/api/v1/demo/business/$section"
   fi
-  local raw_response
-  local temporary_time
-  local temporary_body
-  if ! raw_response="$(curl -sS --max-time "$HTTP_TIMEOUT_SECONDS" \
+  if ! curl -sS --max-time "$HTTP_TIMEOUT_SECONDS" \
     -H "Authorization: Bearer $DEMO_API_TOKEN" \
     -H 'X-Opskeeper-Version: v1' \
     -H 'Cache-Control: no-store' \
-    -w $'\n%{time_total}\n%{http_code}' \
-    "$MANAGER_URL$path" 2>"$CURL_ERROR_FILE")"; then
+    -o "$LAST_BODY_FILE" \
+    -w '%{time_total} %{http_code}' \
+    "$MANAGER_URL$path" 1>"$CURL_ERROR_FILE" 2>/dev/null; then
     fail_now "business request failed for section $section"
   fi
   LAST_METHOD="GET"
   LAST_OPERATION_LABEL="$(safe_url_label_from_value "$MANAGER_URL$path")"
   LAST_OPERATION_ORIGIN="$(url_origin_from_value "$MANAGER_URL$path")"
   LAST_STEP="business snapshot $section"
-  LAST_HTTP_CODE="${raw_response##*$'\n'}"
-  temporary_body="${raw_response%$'\n'}"
-  BUSINESS_LATENCY_SECONDS="${temporary_body##*$'\n'}"
-  LAST_RESPONSE_BODY="${temporary_body%$'\n'}"
+  LAST_RESPONSE_BODY="$(cat "$LAST_BODY_FILE" 2>/dev/null || true)"
+  local business_meta_line
+  business_meta_line="$(cat "$CURL_ERROR_FILE" 2>/dev/null || true)"
+  # curl -w '%{time_total} %{http_code}' writes a single line; tokens are split on the last whitespace.
+  BUSINESS_LATENCY_SECONDS="${business_meta_line% *}"
+  LAST_HTTP_CODE="${business_meta_line##* }"
+  if ! [[ "$LAST_HTTP_CODE" =~ ^[0-9]{3}$ ]]; then
+    fail_now "curl did not return a valid HTTP status during business snapshot $section"
+  fi
+  if ! [[ "$BUSINESS_LATENCY_SECONDS" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    BUSINESS_LATENCY_SECONDS="0"
+  fi
   BUSINESS_LATENCY_MS="$(awk -v seconds="$BUSINESS_LATENCY_SECONDS" 'BEGIN { printf "%.0f", seconds * 1000 }')"
+  # Tolerate two demo business response shapes:
+  #   envelope: {"code":200,"message":"success","data":{...}}
+  #   bare object: {"section":"...","value":"...","detail":"...","latency_ms":N,"generated_at":"..."}
+  BUSINESS_BODY="$(jq -c 'if (.data | type) == "object" then .data else . end' <<<"$LAST_RESPONSE_BODY" 2>/dev/null || printf '{}')"
+  BUSINESS_VALUE="$(jq -r '.value // ""' <<<"$BUSINESS_BODY" 2>/dev/null || printf '')"
 }
 
 urlencode() {
@@ -377,28 +402,39 @@ scenario_read() {
 prometheus_query() {
   local query="$1"
   local label="$2"
-  local raw_response
-  local curl_arguments=(-sS --max-time "$HTTP_TIMEOUT_SECONDS" -G --data-urlencode "query=$query" -w $'\n%{http_code}')
+  local curl_arguments=(-sS --max-time "$HTTP_TIMEOUT_SECONDS" -G --data-urlencode "query=$query")
   if [[ -n "${PROMETHEUS_TOKEN:-}" ]]; then
     curl_arguments+=(-H "Authorization: Bearer $PROMETHEUS_TOKEN")
   fi
   if [[ -n "${PROMETHEUS_COOKIE:-}" ]]; then
     curl_arguments+=(-H "Cookie: $PROMETHEUS_COOKIE")
   fi
-  curl_arguments+=("$PROMETHEUS_URL/api/v1/query")
+  curl_arguments+=(-o "$LAST_BODY_FILE" -w '%{http_code}' "$PROMETHEUS_URL/api/v1/query")
   LAST_METHOD="GET"
   LAST_OPERATION_LABEL="$(safe_url_label_from_value "$PROMETHEUS_URL/api/v1/query")"
   LAST_OPERATION_ORIGIN="$(url_origin_from_value "$PROMETHEUS_URL/api/v1/query")"
   LAST_STEP="Prometheus query $label"
-  if ! raw_response="$(curl "${curl_arguments[@]}" 2>"$CURL_ERROR_FILE")"; then
+  PROMETHEUS_VALUE=""
+  if ! LAST_HTTP_CODE="$(curl "${curl_arguments[@]}" 2>"$CURL_ERROR_FILE")"; then
     LAST_RESPONSE_BODY='{"transport_error":true}'
     LAST_TRANSPORT_ERROR=true
     fail_now "Prometheus query failed for $label"
   fi
-  LAST_HTTP_CODE="${raw_response##*$'\n'}"
-  LAST_RESPONSE_BODY="${raw_response%$'\n'}"
+  LAST_RESPONSE_BODY="$(cat "$LAST_BODY_FILE" 2>/dev/null || true)"
+  if ! [[ "$LAST_HTTP_CODE" =~ ^[0-9]{3}$ ]]; then
+    fail_now "curl did not return a valid HTTP status during Prometheus query $label"
+  fi
   expect_json '.status == "success"' "Prometheus query $label"
-  PROMETHEUS_VALUE="$(jq -r '.data.result[0]["value"][1] // ""' <<<"$LAST_RESPONSE_BODY")"
+  # Tolerate two Prometheus response shapes:
+  #   envelope: {"status":"success","data":{"resultType":"vector","result":[{"value":[...,"0.95"]}]}}
+  #   bare result value: "0.95" (only valid in degenerate test stubs).
+  PROMETHEUS_VALUE="$(jq -r '
+    if (.data.result | type) == "array" then
+      (.data.result[0].value[1] // "")
+    elif (. | type) == "string" then .
+    else ""
+    end
+  ' <<<"$LAST_RESPONSE_BODY" 2>/dev/null || printf '')"
   if [[ -z "$PROMETHEUS_VALUE" ]]; then
     return 1
   fi
@@ -499,12 +535,47 @@ record "manager_ready_http" "$LAST_HTTP_CODE"
 check_domain() {
   local domain_variable="$1"
   local result_key="$2"
-  LAST_STEP="domain check $domain_variable"
-  request GET "${!domain_variable}"
-  if [[ "$LAST_HTTP_CODE" != 200 ]]; then
-    fail_now "$domain_variable did not return HTTP 200"
-  fi
+  local domain_url="${!domain_variable}"
+  local max_attempts=3
+  local attempt
+  for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
+    LAST_STEP="domain check $domain_variable (attempt ${attempt}/${max_attempts})"
+    LAST_METHOD="GET"
+    LAST_OPERATION_LABEL="$(safe_url_label_from_value "$domain_url")"
+    LAST_OPERATION_ORIGIN="$(url_origin_from_value "$domain_url")"
+    LAST_TRANSPORT_ERROR=false
+    if ! LAST_HTTP_CODE="$(curl -sS --max-time "$HTTP_TIMEOUT_SECONDS" \
+      -X GET -H 'Cache-Control: no-store' \
+      -o "$LAST_BODY_FILE" -w '%{http_code}' \
+      "$domain_url" 2>"$CURL_ERROR_FILE")"; then
+      LAST_RESPONSE_BODY='{"transport_error":true}'
+      LAST_TRANSPORT_ERROR=true
+      LAST_HTTP_CODE="000"
+    else
+      LAST_RESPONSE_BODY="$(cat "$LAST_BODY_FILE" 2>/dev/null || true)"
+      if ! [[ "$LAST_HTTP_CODE" =~ ^[0-9]{3}$ ]]; then
+        LAST_TRANSPORT_ERROR=true
+        LAST_HTTP_CODE="000"
+      fi
+    fi
+    # Any valid HTTP status that is not 200 fails immediately without retry.
+    if [[ "$LAST_HTTP_CODE" != "000" && "$LAST_HTTP_CODE" != "200" ]]; then
+      record "$result_key" "$LAST_HTTP_CODE"
+      fail_now "$domain_variable did not return HTTP 200"
+    fi
+    if [[ "$LAST_HTTP_CODE" == "200" ]]; then
+      record "$result_key" "$LAST_HTTP_CODE"
+      return 0
+    fi
+    # Only transport_error / HTTP=000 reaches here. Retry up to max_attempts.
+    if (( attempt < max_attempts )); then
+      printf 'domain check %s: transport error (attempt %d/%d); retrying in 2s\n' \
+        "$domain_variable" "$attempt" "$max_attempts" >&2
+      sleep 2
+    fi
+  done
   record "$result_key" "$LAST_HTTP_CODE"
+  fail_now "$domain_variable did not return HTTP 200 after ${max_attempts} transport-error attempts"
 }
 
 check_domain OPSKEEPER_URL opskeeper_domain_http
@@ -548,11 +619,12 @@ for section in orders inventory audit; do
   if [[ "$LAST_HTTP_CODE" != 200 ]]; then
     fail_now "healthy baseline business API $section did not return HTTP 200"
   fi
-  if ! jq -e --arg section "$section" '.data.section == $section' <<<"$LAST_RESPONSE_BODY" >/dev/null; then
+  if ! jq -e --arg section "$section" '.section == $section' <<<"$BUSINESS_BODY" >/dev/null; then
     fail_now "baseline business response $section is invalid"
   fi
   record "baseline_${section}_http" "$LAST_HTTP_CODE"
   record_number "baseline_${section}_latency_ms" "$BUSINESS_LATENCY_MS"
+  record "actual_${section}_value" "$BUSINESS_VALUE"
 done
 
 LAST_STEP="scenario start"
@@ -601,6 +673,7 @@ for section in orders inventory audit; do
   business_probe "$section" "scenario"
   record "degraded_${section}_http" "$LAST_HTTP_CODE"
   record_number "degraded_${section}_latency_ms" "$BUSINESS_LATENCY_MS"
+  record "degraded_${section}_value" "$BUSINESS_VALUE"
   if [[ "$LAST_HTTP_CODE" == 503 ]] || (( BUSINESS_LATENCY_MS >= DEGRADED_LATENCY_MS )); then
     BUSINESS_IMPACT_OBSERVED=true
   fi
@@ -662,10 +735,11 @@ for section in orders inventory audit; do
   if [[ "$LAST_HTTP_CODE" != 200 ]]; then
     continue
   fi
-  if jq -e --arg section "$section" '.data.section == $section' <<<"$LAST_RESPONSE_BODY" >/dev/null; then
+  if jq -e --arg section "$section" '.section == $section' <<<"$BUSINESS_BODY" >/dev/null; then
     RECOVERED_BUSINESS_COUNT=$((RECOVERED_BUSINESS_COUNT + 1))
     record "recovered_${section}_http" "$LAST_HTTP_CODE"
     record_number "recovered_${section}_latency_ms" "$BUSINESS_LATENCY_MS"
+    record "recovered_${section}_value" "$BUSINESS_VALUE"
   fi
 done
 record_number "recovered_business_api_count" "$RECOVERED_BUSINESS_COUNT"

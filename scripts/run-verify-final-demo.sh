@@ -22,6 +22,11 @@ HOST_OPSKEEPER_ENV="${OPSKEEPER_HOST_OPSKEEPER_ENV:-${HOST_CONFIG_DIR}/final-dem
 HOST_MANAGER_JWT="${HOST_CONFIG_DIR}/opskeeper-final-demo-e2e.jwt"
 CONTAINER_NAME="${OPSKEEPER_CONTAINER_NAME:-opskeeper}"
 CONTAINER_SCRIPT="${OPSKEEPER_CONTAINER_SCRIPT:-/src/scripts/verify-final-demo.sh}"
+# Container-internal staging directory for EVIDENCE_OUTPUT. The inner script
+# writes the JSON file here (as `nonroot`, this is always writable). After
+# `docker exec` returns, the wrapper copies the file to HOST_EVIDENCE_DIR via
+# `docker cp`, preserving the host directory's existing permissions.
+CONTAINER_EVIDENCE_DIR="${OPSKEEPER_CONTAINER_EVIDENCE_DIR:-/tmp/verify-evidence}"
 EXPECTED_MANAGER_VERSION="${EXPECTED_MANAGER_VERSION:-a4406a79-1.0.66}"
 EXPECTED_PLUGIN_VERSION="${EXPECTED_PLUGIN_VERSION:-1.0.66}"
 WORKLOAD_FINGERPRINT="${OPSKEEPER_REPAIR_PREVIEW_WORKLOAD_FINGERPRINT:-sha256:db905b8f98c631212336b736f92d80b2a3040a75a44554687ffc782d39c31cc4}"
@@ -73,17 +78,36 @@ DEMO_TOKEN="$(read_demo_token)"
 MANAGER_JWT="$(read_manager_jwt)"
 PLUGIN_TOKEN="$(read_plugin_token)"
 
-EVIDENCE_OUT="${HOST_EVIDENCE_DIR}/verify-final-demo-$(date -u +%Y%m%dT%H%M%SZ).json"
+# Final host-side path: the file the user can read after the wrapper finishes.
+# The container-internal path (EVIDENCE_OUT) is what we pass to the inner
+# script. The host-side path is where `docker cp` lands it.
+UTC_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+HOST_EVIDENCE_OUT="${HOST_EVIDENCE_DIR}/verify-final-demo-${UTC_STAMP}.json"
+EVIDENCE_OUT="${CONTAINER_EVIDENCE_DIR}/verify-final-demo-${UTC_STAMP}.json"
 mkdir -p "$HOST_EVIDENCE_DIR"
 
 SCENARIO_IDEMPOTENCY_KEY="final-demo-a4406a79-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-ALERT_FINGERPRINT="pg-pool-waiters-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+# validFingerprint (internal/manager/biz/demo/scenario.go) accepts only hex or
+# sha256:<64hex>. The previous "pg-pool-waiters-<utc>-<pid>" string failed that
+# check and Manager responded with HTTP 400 invalid_request. Derive the alert
+# fingerprint from the idempotency key so it is unique per run, stable across
+# the idempotent retry, and always passes validFingerprint.
+ALERT_FINGERPRINT="sha256:$(printf '%s' "${SCENARIO_IDEMPOTENCY_KEY}" | sha256sum | cut -d' ' -f1)"
 
 printf '%s: launching verify-final-demo.sh inside %s\n' "$WRAPPER_NAME" "$CONTAINER_NAME" >&2
-printf '%s: EVIDENCE_OUTPUT=%s\n' "$WRAPPER_NAME" "$EVIDENCE_OUT" >&2
+printf '%s: EVIDENCE_OUTPUT(container)=%s\n' "$WRAPPER_NAME" "$EVIDENCE_OUT" >&2
+printf '%s: EVIDENCE_OUTPUT(host)=%s\n' "$WRAPPER_NAME" "$HOST_EVIDENCE_OUT" >&2
 printf '%s: SCENARIO_IDEMPOTENCY_KEY=%s\n' "$WRAPPER_NAME" "$SCENARIO_IDEMPOTENCY_KEY" >&2
 printf '%s: token lengths: manager=%d demo=%d plugin=%d\n' \
   "$WRAPPER_NAME" "${#MANAGER_JWT}" "${#DEMO_TOKEN}" "${#PLUGIN_TOKEN}" >&2
+
+# Ensure the container-internal staging dir exists and is owned by the
+# script's runtime uid (the container runs as `nonroot`, but we prepare as
+# root for predictability). /tmp itself is always writable.
+docker exec -u root "$CONTAINER_NAME" mkdir -p "$CONTAINER_EVIDENCE_DIR" >/dev/null
+CONTAINER_UID="$(docker exec "$CONTAINER_NAME" id -u)"
+CONTAINER_GID="$(docker exec "$CONTAINER_NAME" id -g)"
+docker exec -u root "$CONTAINER_NAME" chown "$CONTAINER_UID:$CONTAINER_GID" "$CONTAINER_EVIDENCE_DIR" >/dev/null
 
 # IMPORTANT: every -e line must end with a single backslash and a newline so the
 # shell performs line continuation. No trailing whitespace after the backslash.
@@ -96,7 +120,7 @@ docker exec -i \
   -e ROOMS_URL="https://rooms.yueming.xin" \
   -e OPSKEEPER_URL="https://opskeeper.yueming.xin" \
   -e PROMETHEUS_URL="http://opskeeper-demo-prom:9090" \
-  -e PLUGIN_HEALTH_URL="http://127.0.0.1:18096/api/v1/plugins/opskeeper-teamharness/health" \
+  -e PLUGIN_HEALTH_URL="http://agentteams-plugin-manager:8095/api/v1/plugins/opskeeper-teamharness/health" \
   -e EXPECTED_MANAGER_VERSION="$EXPECTED_MANAGER_VERSION" \
   -e EXPECTED_PLUGIN_VERSION="$EXPECTED_PLUGIN_VERSION" \
   -e MANAGER_AUTH_TOKEN="$MANAGER_JWT" \
@@ -115,3 +139,26 @@ docker exec -i \
   -e SCENARIO_DURATION_SECONDS=120 \
   -e EVIDENCE_OUTPUT="$EVIDENCE_OUT" \
   "$CONTAINER_NAME" bash -lc "$CONTAINER_SCRIPT"
+exec_rc=$?
+
+# Pull the evidence JSON back to the host. We tolerate a missing file (the
+# inner script may have failed before producing one) but log it loudly. We do
+# NOT relax /root/evidence permissions; if the cp target dir is missing or
+# unwritable we keep going rather than failing the verify run.
+if [[ ! -d "$HOST_EVIDENCE_DIR" ]]; then
+  printf '%s: host evidence dir missing: %s (skipping docker cp)\n' \
+    "$WRAPPER_NAME" "$HOST_EVIDENCE_DIR" >&2
+elif docker exec -u root "$CONTAINER_NAME" test -s "$EVIDENCE_OUT" 2>/dev/null; then
+  if docker cp "${CONTAINER_NAME}:${EVIDENCE_OUT}" "$HOST_EVIDENCE_OUT" 2>"${HOST_EVIDENCE_DIR}/.cp-error.log"; then
+    printf '%s: evidence copied to %s\n' "$WRAPPER_NAME" "$HOST_EVIDENCE_OUT" >&2
+  else
+    printf '%s: WARN docker cp failed; evidence remains inside container at %s\n' \
+      "$WRAPPER_NAME" "$EVIDENCE_OUT" >&2
+    printf '%s: see %s/.cp-error.log\n' "$WRAPPER_NAME" "$HOST_EVIDENCE_DIR" >&2
+  fi
+else
+  printf '%s: no evidence file produced inside container at %s\n' \
+    "$WRAPPER_NAME" "$EVIDENCE_OUT" >&2
+fi
+
+exit $exec_rc
