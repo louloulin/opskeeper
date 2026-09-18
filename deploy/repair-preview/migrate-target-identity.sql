@@ -10,7 +10,7 @@ VALUES
     (
         TRUE,
         'pg-pool-exhaustion',
-        '0123456789abcdef0123456789abcdef',
+        'sha256:db905b8f98c631212336b736f92d80b2a3040a75a44554687ffc782d39c31cc4',
         'sha256:db905b8f98c631212336b736f92d80b2a3040a75a44554687ffc782d39c31cc4'
     )
 ON CONFLICT (singleton) DO NOTHING;
