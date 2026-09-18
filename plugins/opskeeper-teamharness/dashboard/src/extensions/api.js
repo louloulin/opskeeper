@@ -191,6 +191,14 @@ export const opskeeperApi = {
     return jsonFetch('/incidents/' + encodeURIComponent(normalizedIncidentId) + '/archive');
   },
 
+  getIncidentRepairPreviewSummary(incident_id) {
+    const normalizedIncidentId = String(incident_id ?? '').trim();
+    if (!normalizedIncidentId) {
+      return Promise.reject(new Error('incident_id is required'));
+    }
+    return jsonFetch('/incidents/' + encodeURIComponent(normalizedIncidentId) + '/repair-preview-summary');
+  },
+
   // ── State (MinIO state.json) ───────────────────────────────────────────
   // GET /v1/state/{task_id}
   getState(task_id) {

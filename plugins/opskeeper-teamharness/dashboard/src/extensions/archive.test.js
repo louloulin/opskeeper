@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
   normalizeArchiveIncidentList,
   normalizeArchiveResponse,
   normalizeIncidentSummary,
+  normalizeRepairPreviews,
+  normalizeRepairPreviewSummary,
 } from './archive.js';
 
 test('normalizes archive response wrappers and arrays', () => {
@@ -22,6 +26,81 @@ test('normalizes archive response wrappers and arrays', () => {
   assert.deepEqual(archive.trace_ids, []);
   assert.deepEqual(archive.similar_incidents, []);
   assert.deepEqual(archive.postmortem_refs, []);
+  assert.deepEqual(archive.repair_previews, []);
+});
+
+test('projects authoritative repair previews responsively without replacing them with the preview link', () => {
+  const source = readFileSync(fileURLToPath(new URL('./archive-route.jsx', import.meta.url)), 'utf8');
+
+  assert.match(source, /RepairPreviewArchive runs=\{archive\.repair_previews\}/u);
+  assert.match(source, /Manager Archive 权威数据 · 只读投影/u);
+  assert.match(source, /辅助深链：preview-pg/u);
+  assert.match(source, /暂无修复预演记录/u);
+  assert.match(source, /overflowX:\s*'auto'/u);
+  assert.match(source, /tableLayout:\s*'fixed'/u);
+  assert.match(source, /overflowWrap:\s*'anywhere'/u);
+  assert.match(source, /normalized === 'PASS' \? '#16a34a'/u);
+  assert.match(source, /normalized === 'REJECTED_BY_PREVIEW' \? '#dc2626'/u);
+  assert.match(source, /normalized === 'FAIL' \? '#d97706'/u);
+});
+
+test('projects the compact approval gate after RCA and preserves the controlled-load boundary', () => {
+  const source = readFileSync(fileURLToPath(new URL('./route.jsx', import.meta.url)), 'utf8');
+  const knowledgeIndex = source.indexOf('<KnowledgePanel');
+  const gateIndex = source.indexOf('<RepairPreviewGate');
+  const rawJsonIndex = source.indexOf('{/* Raw JSON fallback */}');
+
+  assert.ok(knowledgeIndex >= 0);
+  assert.ok(gateIndex > knowledgeIndex);
+  assert.ok(rawJsonIndex > gateIndex);
+  assert.match(source, /opskeeperApi\.getIncidentRepairPreviewSummary\(incidentId\)/u);
+  assert.match(source, /Controlled fixed-workload reconstruction in disposable preview-pg; original active sessions are not copied\./u);
+  assert.match(source, /PASS \/ eligible for human approval/u);
+  assert.match(source, /blocked before human approval/u);
+  assert.match(source, /PASS 仅代表预演资格通过，人工审批前不改变生产数据。/u);
+});
+
+test('normalizes repair preview wrappers and candidate arrays without mutation', () => {
+  const response = {
+    data: {
+      repair_previews: [
+        { id: 'run-1', candidates: [{ candidate_id: 'candidate-a' }] },
+        { run_id: 'run-2', candidates: null },
+      ],
+    },
+  };
+
+  const previews = normalizeRepairPreviews(response);
+
+  assert.deepEqual(previews, [
+    { id: 'run-1', candidates: [{ candidate_id: 'candidate-a' }] },
+    { run_id: 'run-2', candidates: [] },
+  ]);
+  assert.equal(response.data.repair_previews[1].candidates, null);
+  assert.deepEqual(normalizeRepairPreviews({ data: { repair_previews: [{ candidates: [] }] } }), []);
+});
+
+test('normalizes compact repair preview summary and keeps the legacy empty state', () => {
+  const summary = normalizeRepairPreviewSummary({
+    data: {
+      incident_id: 'inc-1',
+      run_id: 'run-1',
+      controlled_load: true,
+      isolation_boundary: 'Controlled fixed-workload reconstruction in disposable preview-pg; original active sessions are not copied.',
+      baseline: { candidate_id: 'baseline' },
+      passing: { candidate_id: 'candidate-a', decision: 'PASS' },
+      rejected: { candidate_id: 'candidate-b', decision: 'REJECTED_BY_PREVIEW' },
+    },
+  });
+
+  assert.equal(summary.runId, 'run-1');
+  assert.equal(summary.passing.decision, 'PASS');
+  assert.equal(summary.rejected.decision, 'REJECTED_BY_PREVIEW');
+  assert.match(summary.isolationBoundary, /original active sessions are not copied/);
+  assert.deepEqual(normalizeRepairPreviewSummary(null), {
+    incidentId: '', runId: '', seedFingerprint: '', workloadFingerprint: '',
+    controlledLoad: false, isolationBoundary: '', baseline: null, passing: null, rejected: null,
+  });
 });
 
 test('rejects an invalid archive response', () => {

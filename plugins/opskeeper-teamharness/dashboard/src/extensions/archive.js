@@ -15,6 +15,45 @@ export function normalizeArchiveResponse(response) {
     missing_event_types: Array.isArray(archive.missing_event_types) ? archive.missing_event_types : [],
     similar_incidents: Array.isArray(archive.similar_incidents) ? archive.similar_incidents : [],
     postmortem_refs: Array.isArray(archive.postmortem_refs) ? archive.postmortem_refs : [],
+    repair_previews: normalizeRepairPreviews(archive.repair_previews),
+  };
+}
+
+export function normalizeRepairPreviews(value) {
+  const source = value?.data && typeof value.data === 'object'
+    ? value.data.repair_previews
+    : value?.repair_previews || value;
+  if (!Array.isArray(source)) return [];
+  return source
+    .filter((run) => run && typeof run === 'object' && (run.run_id || run.id))
+    .map((run) => ({
+      ...run,
+      candidates: Array.isArray(run.candidates) ? run.candidates : [],
+    }));
+}
+
+export function normalizeRepairPreviewSummary(response) {
+  const summary = response?.data && typeof response.data === 'object'
+    ? response.data
+    : response?.run_id || response?.incident_id
+      ? response
+      : null;
+  if (!summary) {
+    return {
+      incidentId: '', runId: '', seedFingerprint: '', workloadFingerprint: '',
+      controlledLoad: false, isolationBoundary: '', baseline: null, passing: null, rejected: null,
+    };
+  }
+  return {
+    incidentId: summary.incident_id || summary.incidentId || '',
+    runId: summary.run_id || summary.runId || '',
+    seedFingerprint: summary.seed_fingerprint || summary.seedFingerprint || '',
+    workloadFingerprint: summary.workload_fingerprint || summary.workloadFingerprint || '',
+    controlledLoad: Boolean(summary.controlled_load ?? summary.controlledLoad),
+    isolationBoundary: summary.isolation_boundary || summary.isolationBoundary || '',
+    baseline: summary.baseline || null,
+    passing: summary.passing || null,
+    rejected: summary.rejected || null,
   };
 }
 

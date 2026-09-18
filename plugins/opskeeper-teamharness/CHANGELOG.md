@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.61 — 2026-09-18
+
+- Project the complete candidate-repair comparison table from the authoritative Manager Archive, with bounded readback and responsive table behavior.
+- Show the compact controlled fixed-workload approval gate after RCA, including baseline/A/B decisions, workload fingerprint, and the disposable preview boundary.
+
 ## 1.0.60 — 2026-09-18
 
 - Add a read-only Manager archive index and make the Dashboard Archive selector use actual closed-loop incident IDs.

@@ -2,6 +2,7 @@ import * as React from 'react';
 import { opskeeperDarkPanelStyle, opskeeperPluginThemeStyle } from './plugin-theme.js';
 import { normalizeIncidentList } from './runtime.js';
 import { buildInvestigationRequest, opskeeperApi } from './api.js';
+import { normalizeRepairPreviewSummary } from './archive.js';
 import {
   extractKnowledgeFromReport,
   formatSimilarity,
@@ -315,6 +316,120 @@ function KnowledgePanel({ report, incidentId, embeddedHits = [], embeddedWrites 
   );
 }
 
+function RepairPreviewGate({ incidentId }) {
+  const [summary, setSummary] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setSummary(null);
+    opskeeperApi.getIncidentRepairPreviewSummary(incidentId)
+      .then((response) => {
+        if (!cancelled) setSummary(normalizeRepairPreviewSummary(response));
+      })
+      .catch((requestError) => {
+        if (!cancelled) setError(requestError?.message || '修复预演摘要读取失败');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [incidentId]);
+
+  const boundary = summary?.isolationBoundary
+    || 'Controlled fixed-workload reconstruction in disposable preview-pg; original active sessions are not copied.';
+
+  return (
+    <section
+      aria-label="修复预演审批门禁"
+      style={{
+        ...opskeeperDarkPanelStyle,
+        padding: 14, borderRadius: 8, border: '1px solid var(--border)', minWidth: 0,
+      }}
+    >
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>修复预演审批门禁</div>
+        {loading && <span style={{ fontSize: 11 }}>读取中…</span>}
+        {!loading && summary?.runId && (
+          <span style={{ fontSize: 11, color: 'var(--muted-foreground)', overflowWrap: 'anywhere' }}>
+            Run：{summary.runId}
+          </span>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ padding: 10, fontSize: 11, color: '#f59e0b', background: 'rgba(245,158,11,.1)', borderRadius: 6, overflowWrap: 'anywhere' }}>
+          修复预演摘要暂不可用：{error}
+        </div>
+      )}
+      {!error && !loading && !summary?.runId && (
+        <div style={{ padding: 10, fontSize: 12, color: 'var(--muted-foreground)', border: '1px dashed var(--border)', borderRadius: 6 }}>
+          暂无修复预演摘要；需要先完成候选修复实测，才可进入人工审批。
+        </div>
+      )}
+
+      {summary?.runId && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 8 }}>
+            <PreviewMetricCard
+              title="Baseline 重放"
+              decision={summary.baseline?.decision || 'PASS'}
+              primary={formatPreviewLatency(summary.baseline?.average_latency_ms ?? summary.baseline?.averageLatencyMs)}
+              secondary={summary.controlledLoad ? '受控固定负载' : '负载标记缺失'}
+            />
+            <PreviewMetricCard
+              title="Candidate A"
+              decision={summary.passing?.decision || 'PASS'}
+              primary={formatPreviewLatency(summary.passing?.average_latency_ms ?? summary.passing?.averageLatencyMs)}
+              secondary="PASS / eligible for human approval"
+              pass
+            />
+            <PreviewMetricCard
+              title="Candidate B"
+              decision={summary.rejected?.decision || 'FAIL'}
+              primary={formatPreviewLatency(summary.rejected?.average_latency_ms ?? summary.rejected?.averageLatencyMs)}
+              secondary={summary.rejected?.rejection_reason || summary.rejected?.rejectionReason || 'blocked before human approval'}
+              fail
+            />
+          </div>
+          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted-foreground)', overflowWrap: 'anywhere' }}>
+            Workload fingerprint：<span style={{ color: 'var(--foreground)' }}>{summary.workloadFingerprint || '未记录'}</span>
+          </div>
+          <div style={{ marginTop: 4, fontSize: 11, color: 'var(--muted-foreground)', overflowWrap: 'anywhere' }}>{boundary}</div>
+          <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted-foreground)' }}>
+            PASS 仅代表预演资格通过，人工审批前不改变生产数据。
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function PreviewMetricCard({ title, decision, primary, secondary, pass = false, fail = false }) {
+  const color = pass ? '#10b981' : fail ? '#ef4444' : 'var(--foreground)';
+  return (
+    <div style={{
+      minWidth: 0, padding: 10, borderRadius: 6,
+      border: `1px solid ${pass ? 'rgba(16,185,129,.45)' : fail ? 'rgba(239,68,68,.45)' : 'var(--border)'}`,
+      background: pass ? 'rgba(16,185,129,.08)' : fail ? 'rgba(239,68,68,.08)' : 'rgba(31,41,55,.28)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+        <strong style={{ fontSize: 11 }}>{title}</strong>
+        <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 700, color, whiteSpace: 'nowrap' }}>{decision}</span>
+      </div>
+      <div style={{ marginTop: 6, fontSize: 16, fontWeight: 700 }}>{primary}</div>
+      <div style={{ marginTop: 3, fontSize: 10, color: 'var(--muted-foreground)', overflowWrap: 'anywhere' }}>{secondary}</div>
+    </div>
+  );
+}
+
+function formatPreviewLatency(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)} ms` : '—';
+}
+
 function ReportViewer({ report, incidentId }) {
   if (!report) return null;
   const normalized = normalizeRootReport(report);
@@ -435,6 +550,9 @@ function ReportViewer({ report, incidentId }) {
         embeddedWrites={embeddedWrites}
         rootSummary={root.summary || report.summary || ''}
       />
+
+      {/* Controlled repair preview gate: after RCA, before human repair approval. */}
+      <RepairPreviewGate incidentId={incidentId} />
 
       {/* Raw JSON fallback */}
       <details style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
