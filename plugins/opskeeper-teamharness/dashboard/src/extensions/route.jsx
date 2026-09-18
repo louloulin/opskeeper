@@ -2,6 +2,12 @@ import * as React from 'react';
 import { opskeeperDarkPanelStyle, opskeeperPluginThemeStyle } from './plugin-theme.js';
 import { normalizeIncidentList } from './runtime.js';
 import { buildInvestigationRequest, opskeeperApi } from './api.js';
+import {
+  extractKnowledgeFromReport,
+  formatSimilarity,
+  normalizeKBHitList,
+  normalizePostmortemRefList,
+} from './knowledge.js';
 
 // 7 阶段 RCA orchestrator 阶段定义（来自 opskeeper 7 阶段 RCA loop）
 const STAGES = [
@@ -70,7 +76,7 @@ function PhaseProgress({ phase }) {
 
 function normalizeRootReport(report) {
   if (!report || typeof report !== 'object') {
-    return { root: {}, chain: [], evidence: [], confidence: null };
+    return { root: {}, chain: [], evidence: [], confidence: null, embeddedHits: [], embeddedWrites: [] };
   }
   const obj = report.root_cause_object && typeof report.root_cause_object === 'object'
     ? report.root_cause_object
@@ -80,13 +86,239 @@ function normalizeRootReport(report) {
   const evidence = report.evidence_chain || report.evidence || (obj && Array.isArray(obj.evidence_chain) ? obj.evidence_chain : []);
   const confidence = report.confidence ?? report.confidence_score
     ?? (obj && typeof obj.confidence === 'number' ? obj.confidence : null);
-  return { root, chain, evidence, confidence };
+  const knowledge = extractKnowledgeFromReport(report);
+  return {
+    root,
+    chain,
+    evidence,
+    confidence,
+    embeddedHits: knowledge.hits,
+    embeddedWrites: knowledge.writes,
+  };
 }
 
-function ReportViewer({ report }) {
+function KnowledgePanel({ report, incidentId, embeddedHits = [], embeddedWrites = [], rootSummary = '' }) {
+  // 引用知识库：优先用 report 自带的 kb_hits / knowledge_refs，回退到独立查询。
+  // 输出知识库：优先用 report 自带的 knowledge_writes / postmortem_refs，回退到 archive 端点。
+  const [hits, setHits] = React.useState(() => (embeddedHits.length ? embeddedHits : null));
+  const [writes, setWrites] = React.useState(() => (embeddedWrites.length ? embeddedWrites : null));
+  const [hitsError, setHitsError] = React.useState(null);
+  const [writesError, setWritesError] = React.useState(null);
+  const [hitsLoading, setHitsLoading] = React.useState(embeddedHits.length === 0);
+  const [writesLoading, setWritesLoading] = React.useState(Boolean(incidentId) && embeddedWrites.length === 0);
+
+  React.useEffect(() => {
+    setHits(embeddedHits.length ? embeddedHits : null);
+    setHitsError(null);
+    setHitsLoading(embeddedHits.length === 0);
+  }, [report, embeddedHits]);
+
+  React.useEffect(() => {
+    setWrites(embeddedWrites.length ? embeddedWrites : null);
+    setWritesError(null);
+    setWritesLoading(Boolean(incidentId) && embeddedWrites.length === 0);
+  }, [incidentId, embeddedWrites]);
+
+  React.useEffect(() => {
+    if (embeddedHits.length > 0) return undefined;
+    if (!rootSummary) {
+      setHitsLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setHitsLoading(true);
+    setHitsError(null);
+    opskeeperApi.queryKnowledge({ query: rootSummary, top_k: 5 })
+      .then((res) => {
+        if (cancelled) return;
+        const list = normalizeKBHitList(res);
+        setHits(list);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setHitsError(e?.message || '引用知识库查询失败');
+      })
+      .finally(() => {
+        if (!cancelled) setHitsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rootSummary, embeddedHits]);
+
+  React.useEffect(() => {
+    if (embeddedWrites.length > 0) return undefined;
+    if (!incidentId) {
+      setWritesLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setWritesLoading(true);
+    setWritesError(null);
+    opskeeperApi.getIncidentArchive(incidentId)
+      .then((res) => {
+        if (cancelled) return;
+        const list = normalizePostmortemRefList(res);
+        setWrites(list);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setWritesError(e?.message || '输出知识库查询失败');
+      })
+      .finally(() => {
+        if (!cancelled) setWritesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [incidentId, embeddedWrites]);
+
+  const hitList = hits || [];
+  const writeList = writes || [];
+
+  return (
+    <div style={{
+      ...opskeeperDarkPanelStyle,
+      padding: 14, borderRadius: 8, border: '1px solid var(--border)',
+      display: 'flex', flexDirection: 'column', gap: 12,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>📚 知识库贡献</span>
+        <span style={{
+          fontSize: 10, padding: '2px 8px', borderRadius: 999,
+          background: 'rgba(99,102,241,0.18)', color: '#a5b4fc',
+        }}>
+          引用 {hitList.length} · 输出 {writeList.length}
+        </span>
+      </div>
+      <div style={{
+        fontSize: 11, color: 'var(--muted-foreground)',
+        borderLeft: '3px solid #6366f1', padding: '4px 8px',
+        background: 'rgba(99,102,241,0.06)', borderRadius: 4,
+      }}>
+        OpsKeeper 知识库（pgvector + BM25 双索引）记录每次调查命中的 incident_pattern，
+        闭环后由 postmortem 阶段写入 vault。下方面板展示本次 RCA 的引用 / 输出。
+      </div>
+
+      {/* 引用知识库 */}
+      <section>
+        <div style={{
+          fontSize: 12, color: 'var(--muted-foreground)',
+          display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6,
+        }}>
+          <span>🔗 引用知识库</span>
+          {hitsLoading && <span style={{ fontSize: 10 }}>查询中…</span>}
+        </div>
+        {hitsError && (
+          <div style={{
+            padding: 8, fontSize: 11, color: '#f59e0b',
+            background: 'rgba(245,158,11,0.08)', borderRadius: 4,
+          }}>
+            查询失败：{hitsError}
+          </div>
+        )}
+        {!hitsLoading && !hitsError && hitList.length === 0 && (
+          <div style={{
+            padding: 10, fontSize: 12, color: 'var(--muted-foreground)',
+            border: '1px dashed var(--border)', borderRadius: 4,
+          }}>
+            暂未命中既有 incident_pattern；本次 RCA 将作为新样本由 postmortem 阶段回填。
+          </div>
+        )}
+        {hitList.length > 0 && (
+          <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {hitList.map((hit) => (
+              <li key={hit.id} style={{
+                padding: 8, borderRadius: 4, fontSize: 12,
+                border: '1px solid var(--border)',
+                background: 'rgba(99,102,241,0.06)',
+                display: 'flex', flexDirection: 'column', gap: 4,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <code style={{ fontSize: 10, color: '#a5b4fc' }}>{hit.source}</code>
+                  <strong style={{ flex: 1 }}>{hit.summary}</strong>
+                  <span style={{
+                    fontSize: 10, padding: '2px 6px', borderRadius: 999,
+                    background: 'rgba(99,102,241,0.18)', color: '#a5b4fc',
+                  }}>
+                    相似度 {formatSimilarity(hit.similarity)}
+                  </span>
+                </div>
+                {(hit.symptom || hit.rootCause) && (
+                  <div style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
+                    {hit.symptom && <span>症状：{hit.symptom}</span>}
+                    {hit.symptom && hit.rootCause && <span> · </span>}
+                    {hit.rootCause && <span>根因：{hit.rootCause}</span>}
+                  </div>
+                )}
+                {(hit.hitCount > 0 || hit.postmortemId) && (
+                  <div style={{ fontSize: 10, color: 'var(--muted-foreground)' }}>
+                    历史命中 {hit.hitCount} 次
+                    {hit.postmortemId && <span> · 关联复盘 {hit.postmortemId}</span>}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* 输出知识库 */}
+      <section>
+        <div style={{
+          fontSize: 12, color: 'var(--muted-foreground)',
+          display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6,
+        }}>
+          <span>📤 输出知识库</span>
+          {writesLoading && <span style={{ fontSize: 10 }}>查询中…</span>}
+        </div>
+        {writesError && (
+          <div style={{
+            padding: 8, fontSize: 11, color: '#f59e0b',
+            background: 'rgba(245,158,11,0.08)', borderRadius: 4,
+          }}>
+            查询失败：{writesError}
+          </div>
+        )}
+        {!writesLoading && !writesError && writeList.length === 0 && (
+          <div style={{
+            padding: 10, fontSize: 12, color: 'var(--muted-foreground)',
+            border: '1px dashed var(--border)', borderRadius: 4,
+          }}>
+            尚无知识库输出。等待修复验证 → postmortem 阶段会自动写入本次事故的复盘文档。
+          </div>
+        )}
+        {writeList.length > 0 && (
+          <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {writeList.map((ref) => (
+              <li key={ref.id} style={{
+                padding: 8, borderRadius: 4, fontSize: 12,
+                border: '1px solid var(--border)',
+                background: 'rgba(16,185,129,0.06)',
+                display: 'flex', flexDirection: 'column', gap: 4,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <code style={{ fontSize: 10, color: '#10b981' }}>vault:postmortem</code>
+                  <strong style={{ flex: 1 }}>{ref.rootCause}</strong>
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--muted-foreground)' }}>
+                  {ref.confirmedBy && <span>由 {ref.confirmedBy} 写入</span>}
+                  {ref.confirmedBy && ref.confirmedAt && <span> · </span>}
+                  {ref.confirmedAt && <span>{ref.confirmedAt}</span>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ReportViewer({ report, incidentId }) {
   if (!report) return null;
   const normalized = normalizeRootReport(report);
-  const { root, chain, evidence, confidence } = normalized;
+  const { root, chain, evidence, confidence, embeddedHits, embeddedWrites } = normalized;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -194,6 +426,15 @@ function ReportViewer({ report }) {
           <PhaseProgress phase={report.phase} />
         </div>
       )}
+
+      {/* Knowledge base contributions */}
+      <KnowledgePanel
+        report={report}
+        incidentId={incidentId}
+        embeddedHits={embeddedHits}
+        embeddedWrites={embeddedWrites}
+        rootSummary={root.summary || report.summary || ''}
+      />
 
       {/* Raw JSON fallback */}
       <details style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
@@ -401,7 +642,9 @@ export default function OpskeeperRoute({ api }) {
           </div>
         )}
 
-        {selected && !running && report && <ReportViewer report={report} />}
+        {selected && !running && report && (
+          <ReportViewer report={report} incidentId={selected.id} />
+        )}
       </div>
     </div>
   );

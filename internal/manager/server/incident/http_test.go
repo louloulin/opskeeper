@@ -165,6 +165,35 @@ func TestArchiveReturnsCompleteEvidenceChain(t *testing.T) {
 	}
 }
 
+func TestArchiveIndexListsClosedEvidenceIncidents(t *testing.T) {
+	events := completeArchiveEvents("opskeeper-demo", "INC-ARCHIVE-FULL")
+	repository := &stubMetricsRepository{tenantEvents: events}
+	router := routerWithHandler(NewHandler(repository))
+	request := httptest.NewRequest(http.MethodGet, "/v1/incidents/archive-index?tenant_id=opskeeper-demo", nil)
+	request = request.WithContext(tenantctx.With(request.Context(), tenantctx.Tenant{UserID: 1, Role: "admin"}))
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Items []archiveIndexItem `json:"items"`
+		Total int                `json:"total"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Total != 1 || len(response.Items) != 1 {
+		t.Fatalf("archive index = %+v", response)
+	}
+	item := response.Items[0]
+	if item.IncidentID != "INC-ARCHIVE-FULL" || item.EventCount != 7 || !item.EvidenceComplete || !item.Closed {
+		t.Fatalf("archive index item = %+v", item)
+	}
+}
+
 func TestArchiveReportsMissingEvidence(t *testing.T) {
 	events := completeArchiveEvents("opskeeper-demo", "INC-ARCHIVE-MISSING")[:2]
 	repository := &stubMetricsRepository{

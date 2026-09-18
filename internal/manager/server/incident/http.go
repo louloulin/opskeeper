@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -34,6 +35,7 @@ func NewHandler(repository Repository) *Handler {
 
 func (h *Handler) Register(router chi.Router) {
 	router.Get("/v1/incidents/metrics", h.metrics)
+	router.Get("/v1/incidents/archive-index", h.archiveIndex)
 	router.Get("/v1/incidents/runbooks", h.runbooks)
 	router.Get("/v1/incidents/{incident_id}/archive", h.archive)
 	router.Get("/v1/incidents/{incident_id}/recall-logs", h.recallLogs)
@@ -209,6 +211,90 @@ func (h *Handler) tenantID(w http.ResponseWriter, r *http.Request) (string, bool
 		}
 	}
 	return tenantID, true
+}
+
+type archiveIndexResponse struct {
+	Code    string             `json:"code"`
+	Message string             `json:"message"`
+	Items   []archiveIndexItem `json:"items"`
+	Total   int                `json:"total"`
+}
+
+type archiveIndexItem struct {
+	IncidentID       string    `json:"incident_id"`
+	EventCount       int       `json:"event_count"`
+	FirstEventAt     time.Time `json:"first_event_at"`
+	LastEventAt      time.Time `json:"last_event_at"`
+	EvidenceComplete bool      `json:"evidence_complete"`
+	Closed           bool      `json:"closed"`
+}
+
+func (h *Handler) archiveIndex(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := h.tenantID(w, r)
+	if !ok {
+		return
+	}
+	if tenantID == "" {
+		writeError(w, http.StatusForbidden, "forbidden", "tenant could not be derived")
+		return
+	}
+	if h.repository == nil {
+		writeError(w, http.StatusServiceUnavailable, "not_wired", "incident repository is not wired")
+		return
+	}
+	events, err := h.repository.ListTenant(r.Context(), tenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "repository_error", err.Error())
+		return
+	}
+	items := archiveIndexFromEvents(events)
+	writeJSON(w, http.StatusOK, archiveIndexResponse{Code: "0", Message: "ok", Items: items, Total: len(items)})
+}
+
+func archiveIndexFromEvents(events []incidentcontrol.Event) []archiveIndexItem {
+	grouped := make(map[string][]incidentcontrol.Event)
+	for _, event := range events {
+		if event.IncidentID == "" {
+			continue
+		}
+		grouped[event.IncidentID] = append(grouped[event.IncidentID], event)
+	}
+	items := make([]archiveIndexItem, 0, len(grouped))
+	for incidentID, incidentEvents := range grouped {
+		item := archiveIndexItem{IncidentID: incidentID, EventCount: len(incidentEvents)}
+		found := make(map[string]bool)
+		for index, event := range incidentEvents {
+			if index == 0 || event.OccurredAt.Before(item.FirstEventAt) {
+				item.FirstEventAt = event.OccurredAt
+			}
+			if index == 0 || event.OccurredAt.After(item.LastEventAt) {
+				item.LastEventAt = event.OccurredAt
+			}
+			found[event.EventType] = true
+		}
+		required := []string{
+			incidentcontrol.EventAlertReceived,
+			incidentcontrol.EventRootCause,
+			incidentcontrol.EventEvidenceRefreshed,
+			incidentcontrol.EventApproved,
+			incidentcontrol.EventAction,
+			incidentcontrol.EventRecovery,
+			incidentcontrol.EventClosed,
+		}
+		item.EvidenceComplete = true
+		for _, eventType := range required {
+			if !found[eventType] {
+				item.EvidenceComplete = false
+				break
+			}
+		}
+		item.Closed = found[incidentcontrol.EventClosed]
+		items = append(items, item)
+	}
+	sort.Slice(items, func(left, right int) bool {
+		return items[left].LastEventAt.After(items[right].LastEventAt)
+	})
+	return items
 }
 
 type metricsResponse struct {

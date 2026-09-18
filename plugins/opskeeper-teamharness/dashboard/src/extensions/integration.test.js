@@ -38,12 +38,12 @@ const healthyResults = {
   pluginHealth: fulfilled({
     synced: true,
     diff: [],
-    worker: { version: '1.0.59', loaded: true, enabled: true },
+    worker: { version: '1.0.60', loaded: true, enabled: true },
   }),
   manifest: fulfilled({
     id: 'opskeeper-teamharness',
-    version: '1.0.59',
-    entry: { dashboard: 'dist/main-1.0.59.js' },
+    version: '1.0.60',
+    entry: { dashboard: 'dist/main-1.0.60.js' },
   }),
 };
 
@@ -57,7 +57,7 @@ test('extracts and matches Matrix rooms by id or canonical alias', () => {
 test('builds a passing room-to-plugin integration report', () => {
   const report = buildIntegrationPreflight(healthyResults, {
     targetRoomId: '#ops:example.com',
-    expectedPluginVersion: '1.0.59',
+    expectedPluginVersion: '1.0.60',
   });
 
   assert.equal(report.status, 'pass');
@@ -69,7 +69,7 @@ test('builds a passing room-to-plugin integration report', () => {
 
 test('warns when no target room is provided', () => {
   const report = buildIntegrationPreflight(healthyResults, {
-    expectedPluginVersion: '1.0.59',
+    expectedPluginVersion: '1.0.60',
   });
 
   assert.equal(report.status, 'warn');
@@ -83,10 +83,22 @@ test('reports Matrix and worker failures as blocking checks', () => {
     pluginHealth: fulfilled({ synced: false, diff: ['absent_on_worker'], worker: null }),
   }, {
     targetRoomId: '#ops:example.com',
-    expectedPluginVersion: '1.0.59',
+    expectedPluginVersion: '1.0.60',
   });
 
   assert.equal(report.status, 'fail');
   assert.equal(report.checks.find((item) => item.name === '房间会话与 Matrix 同步').status, 'fail');
   assert.equal(report.checks.find((item) => item.name === 'TeamHarness Worker 插件').status, 'fail');
+});
+
+test('warns when the target room is owned by an OpsKeeper Matrix account', () => {
+  const report = buildIntegrationPreflight(healthyResults, {
+    targetRoomId: '#benyue-lumos-ops:matrix-local.agentteams.io',
+    expectedPluginVersion: '1.0.60',
+  });
+
+  assert.equal(report.status, 'warn');
+  const roomCheck = report.checks.find((item) => item.name === '目标房间');
+  assert.equal(roomCheck.status, 'warn');
+  assert.match(roomCheck.detail, /OpsKeeper Manager/);
 });

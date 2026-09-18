@@ -224,7 +224,7 @@ export const opskeeperApi = {
   // POST /api/opskeeper-teamharness/install-plugin — Manager calls this when pushing zip to worker
   // (Dashboard does not normally call this; it is invoked by Manager)
   health() {
-    return jsonFetch('/health');
+    return jsonFetch('/system/health');
   },
 
   getSystemHealth() {
@@ -257,6 +257,10 @@ export const opskeeperApi = {
 
   getIncidentMetrics() {
     return jsonFetch('/incidents/metrics');
+  },
+
+  listArchiveIncidents() {
+    return jsonFetch('/incidents/archive-index');
   },
 
   // ── Plugin registry (Manager) ─────────────────────────────────────────

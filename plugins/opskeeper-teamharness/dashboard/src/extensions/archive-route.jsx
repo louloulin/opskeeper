@@ -1,6 +1,10 @@
 import * as React from 'react';
 import { opskeeperApi } from './api.js';
-import { normalizeArchiveIncidentList, normalizeArchiveResponse } from './archive.js';
+import {
+  normalizeArchiveIncidentList,
+  normalizeArchiveResponse,
+  normalizeIncidentSummary,
+} from './archive.js';
 
 const PREVIEW_URL = 'https://opskeeper.yueming.xin/preview/';
 
@@ -8,6 +12,7 @@ export default function OpskeeperArchiveRoute({ api }) {
   const [incidents, setIncidents] = React.useState([]);
   const [incidentId, setIncidentId] = React.useState('');
   const [archive, setArchive] = React.useState(null);
+  const [incidentSummary, setIncidentSummary] = React.useState(null);
   const [loadingIncidents, setLoadingIncidents] = React.useState(true);
   const [loadingArchive, setLoadingArchive] = React.useState(false);
   const [incidentError, setIncidentError] = React.useState('');
@@ -16,7 +21,9 @@ export default function OpskeeperArchiveRoute({ api }) {
   const loadIncidents = React.useCallback(async () => {
     setLoadingIncidents(true);
     try {
-      const items = normalizeArchiveIncidentList(await opskeeperApi.listIncidents({ limit: 20 }));
+      // 演示/决赛场景需要看到最近触发的事故（含尚未走完 RCA 闭环的），
+      // 所以从 /v1/incidents 拉取全量；闭环档案由 /incidents/<id>/archive 二次拉取。
+      const items = normalizeArchiveIncidentList(await opskeeperApi.listIncidents({ limit: 100 }));
       setIncidents(items);
       setIncidentError('');
       setIncidentId((current) => current || items[0]?.id || '');
@@ -32,15 +39,31 @@ export default function OpskeeperArchiveRoute({ api }) {
     const targetIncidentId = String(selectedIncidentId ?? incidentId ?? '').trim();
     if (!targetIncidentId) {
       setArchiveError('请输入或选择事故 ID');
+      setIncidentSummary(null);
       return;
     }
     setLoadingArchive(true);
+    setIncidentSummary(null);
     try {
       setArchive(normalizeArchiveResponse(await opskeeperApi.getIncidentArchive(targetIncidentId)));
       setArchiveError('');
     } catch (error) {
       setArchive(null);
-      setArchiveError(error?.message || '事故档案读取失败');
+      if (error?.status === 404) {
+        // 闭环档案还没生成（告警刚触发或 RCA 未走到闭环），回退到 incident 详情
+        // 让页面至少能展示 alert/rule/label，避免 demo 时一片空白。
+        try {
+          const summary = normalizeIncidentSummary(
+            await opskeeperApi.getIncident(targetIncidentId),
+          );
+          setIncidentSummary(summary);
+          setArchiveError('该事故尚未生成闭环档案；以下为告警触发时刻的事实快照，RCA 闭环后会写入档案。');
+        } catch (innerError) {
+          setArchiveError(innerError?.message || error?.message || '事故档案读取失败');
+        }
+      } else {
+        setArchiveError(error?.message || '事故档案读取失败');
+      }
     } finally {
       setLoadingArchive(false);
     }
@@ -87,10 +110,10 @@ export default function OpskeeperArchiveRoute({ api }) {
             disabled={loadingIncidents || incidents.length === 0}
             style={inputStyle()}
           >
-            <option value="">{loadingIncidents ? '加载事故中…' : incidents.length ? '选择最近事故' : '暂无最近事故'}</option>
+            <option value="">{loadingIncidents ? '加载事故中…' : incidents.length ? '选择事故（闭环优先）' : '暂无可回看事故'}</option>
             {incidents.map((incident) => (
               <option key={incident.id} value={incident.id}>
-                {incident.summary ? `${incident.summary} (${incident.id})` : incident.id}
+                {`${incident.summary} · ${incident.eventCount}事件 · ${incident.status}${incident.evidenceComplete ? ' · 档案完整' : ''}`}
               </option>
             ))}
           </select>
@@ -184,10 +207,50 @@ export default function OpskeeperArchiveRoute({ api }) {
         </>
       )}
 
-      {!archive && !archiveError && !loadingArchive && (
+      {!archive && !incidentSummary && !archiveError && !loadingArchive && (
         <Panel>
           <EmptyState text="选择或输入事故 ID 后查询证据档案" />
         </Panel>
+      )}
+
+      {!archive && incidentSummary && (
+        <>
+          <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
+            <SummaryCard label="告警状态" value={incidentSummary.status} color={incidentSummary.status === 'resolved' ? '#16a34a' : '#f59e0b'} />
+            <SummaryCard label="事件数量" value={String(incidentSummary.eventCount)} hint="已落库" />
+            <SummaryCard label="规则" value={incidentSummary.ruleKey || '—'} hint={incidentSummary.ruleName} />
+            <SummaryCard label="触发时间" value={formatTime(incidentSummary.firedAt)} hint={formatTime(incidentSummary.resolvedAt) !== '未采集' ? `恢复：${formatTime(incidentSummary.resolvedAt)}` : '尚未恢复'} />
+          </section>
+
+          <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(280px, 1fr)', gap: 12 }}>
+            <Panel title="告警事实快照">
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{incidentSummary.summary || '未提供 summary'}</div>
+              <MetricRow label="严重级别" value={incidentSummary.severity || '—'} />
+              <MetricRow label="Dedupe Key" value={incidentSummary.dedupeKey || '—'} />
+              <MetricRow label="Target Type" value={incidentSummary.targetType || '—'} />
+              <MetricRow label="指标值" value={incidentSummary.value ?? '—'} />
+              {Object.keys(incidentSummary.labels || {}).length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 11, color: 'var(--muted-foreground)', marginBottom: 4 }}>Labels</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {Object.entries(incidentSummary.labels).map(([key, value]) => (
+                      <span key={key} style={stageChipStyle(false)}>{key}={String(value)}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </Panel>
+
+            <Panel title="后续动作">
+              <div style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>
+                闭环档案（包含 alert/根因/修复/恢复 7 阶段事件）由 Manager 在 RCA 闭环后写入；当前展示的是告警事实快照，不复制控制面数据。
+              </div>
+              <a href={PREVIEW_URL} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 10, fontSize: 12 }}>
+                打开 preview-pg 修复对比 →
+              </a>
+            </Panel>
+          </section>
+        </>
       )}
     </div>
   );

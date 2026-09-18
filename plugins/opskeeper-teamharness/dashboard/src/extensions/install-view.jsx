@@ -1,6 +1,51 @@
 import * as React from 'react';
 import { opskeeperApi } from './api.js';
 
+// Plugin source/status color codes. Aligned with agentteams-plugin-installer
+// (`installed/enabled/disabled/system/dashboard`) so the OpsKeeper
+// 插件管理 tab and the upstream plugin-installer surface read identically.
+const STATUS_META = {
+  installed: { tone: 'zinc',   label: '已安装' },
+  enabled:   { tone: 'success', label: '已启用' },
+  disabled:  { tone: 'warning', label: '已停用' },
+  system:    { tone: 'info',    label: '内置' },
+  dashboard: { tone: 'info',    label: '仅面板' },
+  error:     { tone: 'danger',  label: '异常' },
+};
+
+const TONE_COLORS = {
+  success: { fg: '#10b981', bg: 'rgba(16,185,129,0.12)', border: 'rgba(16,185,129,0.4)' },
+  warning: { fg: '#d97706', bg: 'rgba(217,119,6,0.12)',  border: 'rgba(217,119,6,0.4)' },
+  info:    { fg: '#0891b2', bg: 'rgba(8,145,178,0.12)',   border: 'rgba(8,145,178,0.4)' },
+  zinc:    { fg: '#475569', bg: 'rgba(71,85,105,0.12)',  border: 'rgba(71,85,105,0.4)' },
+  danger:  { fg: '#dc2626', bg: 'rgba(220,38,38,0.12)',  border: 'rgba(220,38,38,0.4)' },
+};
+
+function StatusBadge({ status }) {
+  const raw = String(status || '').trim().toLowerCase();
+  const meta = STATUS_META[raw] || { tone: 'zinc', label: status || 'unknown' };
+  const colors = TONE_COLORS[meta.tone] || TONE_COLORS.zinc;
+  return (
+    <span
+      title={`状态：${meta.label}`}
+      style={{
+        marginLeft: 'auto',
+        padding: '1px 8px',
+        borderRadius: 999,
+        fontSize: 10,
+        fontWeight: 600,
+        letterSpacing: 0.2,
+        color: colors.fg,
+        background: colors.bg,
+        border: `1px solid ${colors.border}`,
+        textTransform: 'lowercase',
+      }}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
 // OpskeeperInstallView — Dashboard surface that lists currently-installed
 // opskeeper plugins and lets the operator upload a new plugin package.
 //
@@ -124,9 +169,7 @@ export default function OpskeeperInstallView({ api }) {
               }}>
                 v{p.version}
               </span>
-              <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--foreground)', opacity: 0.72 }}>
-                {p.status}
-              </span>
+              <StatusBadge status={p.status} />
             </div>
             <div style={{ fontSize: 11, color: 'var(--foreground)', opacity: 0.76, lineHeight: 1.5 }}>
               {p.description?.split('\n')[0].slice(0, 200)}

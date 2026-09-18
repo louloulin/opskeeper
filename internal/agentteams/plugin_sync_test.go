@@ -116,6 +116,18 @@ func TestMarshalUnmarshalWorkerEndpoints(t *testing.T) {
 	if len(out) != 2 || out[0].WorkerName != "a" || out[1].BaseURL != "http://b:8088" {
 		t.Errorf("roundtrip mismatch: %+v", out)
 	}
+	if !bytes.Contains(data, []byte(`"base_url":"http://a:8088"`)) {
+		t.Errorf("expected snake_case base_url field, got %s", data)
+	}
+	snake, err := UnmarshalWorkerEndpoints([]byte(
+		`[{"worker_name":"a","base_url":"http://a:8088","plugin_path":"/api/foo/sync"}]`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snake) != 1 || snake[0].WorkerName != "a" || snake[0].BaseURL != "http://a:8088" || snake[0].PluginPath != "/api/foo/sync" {
+		t.Errorf("snake_case endpoint mismatch: %+v", snake)
+	}
 }
 
 func TestLoggingSyncClient_StubOK(t *testing.T) {

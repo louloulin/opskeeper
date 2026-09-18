@@ -67,7 +67,10 @@ export function buildIntegrationPreflight(results, { targetRoomId = '', expected
     } else if (roomMatchesTarget(matrixSync, normalizedTarget)) {
       checks.push(check('pass', '目标房间', `${normalizedTarget} 已加入，可接收协同消息`));
     } else {
-      checks.push(check('fail', '目标房间', `${normalizedTarget} 未在当前 Matrix 登录态的 ${rooms.length} 个已加入房间中`));
+      // OpsKeeper 自检的房间 (例如 #benyue-lumos-ops:matrix-local.agentteams.io) 由 OpsKeeper Manager
+      // 矩阵账号持有，而不是当前 Dashboard 登录账号；这里只能确认 Dashboard 侧同步可用。
+      // 标记为 warn，避免在房间属于 OpsKeeper Manager 矩阵账号时把自检判为失败。
+      checks.push(check('warn', '目标房间', `${normalizedTarget} 未在 Dashboard 登录态的 ${rooms.length} 个已加入房间中（OpsKeeper Manager 矩阵账号可能仍持有该房间）`));
     }
   }
 
