@@ -60,6 +60,7 @@ type Repo interface {
 	BumpIncidentFiring(ctx context.Context, id uint64, firedAt time.Time, summary string, value, threshold *float64) error
 	ReopenIncident(ctx context.Context, id uint64, firedAt time.Time, summary string, value, threshold *float64) error
 	MarkIncidentNotified(ctx context.Context, id uint64, at time.Time) error
+	CorrelateDemoScenario(ctx context.Context, fingerprint string, labels map[string]string) (*model.Incident, bool, error)
 
 	// Silence matching for the firing path.
 	ListActiveSilences(ctx context.Context, at time.Time) ([]*model.Silence, error)

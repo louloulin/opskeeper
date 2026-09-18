@@ -188,6 +188,13 @@ func (u *Usecase) GetIncident(ctx context.Context, id uint64) (*model.Incident, 
 	return u.repo.GetIncidentByID(ctx, id)
 }
 
+func (u *Usecase) CorrelateDemoScenario(ctx context.Context, fingerprint string, labels map[string]string) (*model.Incident, bool, error) {
+	if u == nil || u.repo == nil {
+		return nil, false, errs.ErrNotWiredYet
+	}
+	return u.repo.CorrelateDemoScenario(ctx, fingerprint, labels)
+}
+
 func (u *Usecase) AckIncident(ctx context.Context, id, operatorUserID uint64, note string) error {
 	return u.transition(ctx, id, model.EventTypeAcknowledged, model.IncidentStatusAcknowledged, operatorUserID, note)
 }

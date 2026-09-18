@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
 
 	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
 	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	demomodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
 )
 
@@ -17,6 +19,12 @@ import (
 type Repo struct {
 	db *gorm.DB
 }
+
+const (
+	demoAlertName     = "PGConnectionPoolSaturation"
+	demoAlertInstance = "opskeeper-demo-node-metrics:8095"
+	demoAlertJob      = "opsk"
+)
 
 func NewRepo(db *gorm.DB) *Repo { return &Repo{db: db} }
 
@@ -197,6 +205,83 @@ func (r *Repo) BumpIncidentFiring(ctx context.Context, id uint64, firedAt time.T
 		return errs.ErrNotFound
 	}
 	return nil
+}
+
+func (r *Repo) CorrelateDemoScenario(ctx context.Context, fingerprint string, labels map[string]string) (*model.Incident, bool, error) {
+	fingerprint = strings.TrimSpace(fingerprint)
+	var incident *model.Incident
+	var run demomodel.ScenarioRun
+	matched := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		activeScenario := func() *gorm.DB {
+			return tx.Where("expires_at > ?", time.Now().UTC()).Where("status IN ?", []string{
+				demomodel.ScenarioStatusStarting,
+				demomodel.ScenarioStatusAwaitingAlert,
+				demomodel.ScenarioStatusAlertCorrelated,
+				demomodel.ScenarioStatusDiagnosisSent,
+				demomodel.ScenarioStatusPreviewReady,
+				demomodel.ScenarioStatusAwaitingApproval,
+				demomodel.ScenarioStatusRepairDispatched,
+				demomodel.ScenarioStatusVerifying,
+			}).Where("scenario_id = ?", "pg-pool-exhaustion")
+		}
+
+		if fingerprint != "" {
+			err := activeScenario().Where("alert_fingerprint = ?", fingerprint).
+				Order("expires_at DESC").Order("updated_at DESC").First(&run).Error
+			if err == nil {
+				matched = true
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+
+		if !matched && isExactDemoAlertLabels(labels) {
+			err := activeScenario().Where("pool_manifest_id = ?", labels["pool_manifest_id"]).
+				Order("expires_at DESC").Order("updated_at DESC").First(&run).Error
+			if err == nil {
+				matched = true
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+		if !matched {
+			return nil
+		}
+		if err := tx.First(&incident, run.IncidentID).Error; err != nil {
+			return err
+		}
+		updates := map[string]any{
+			"status": gorm.Expr(
+				"CASE WHEN status IN (?, ?) THEN ? ELSE status END",
+				demomodel.ScenarioStatusStarting,
+				demomodel.ScenarioStatusAwaitingAlert,
+				demomodel.ScenarioStatusAlertCorrelated,
+			),
+		}
+		if fingerprint != "" && run.AlertFingerprint != fingerprint {
+			updates["alert_fingerprint"] = fingerprint
+		}
+		return tx.Model(&demomodel.ScenarioRun{}).Where("id = ?", run.ID).Updates(updates).Error
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if !matched {
+		return nil, false, nil
+	}
+	if incident == nil {
+		return nil, false, errs.ErrNotFound
+	}
+	return incident, true, nil
+}
+
+func isExactDemoAlertLabels(labels map[string]string) bool {
+	return labels != nil &&
+		labels["alertname"] == demoAlertName &&
+		labels["instance"] == demoAlertInstance &&
+		labels["job"] == demoAlertJob &&
+		strings.TrimSpace(labels["pool_manifest_id"]) != ""
 }
 
 // ReopenIncident transitions a resolved incident back to open and clears the

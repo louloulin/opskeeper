@@ -54,18 +54,28 @@ func (f *fakeNotifier) SendVia(_ context.Context, msg notify.Message, sender not
 type fakeRepo struct {
 	now func() time.Time
 
-	incidents     map[uint64]*model.Incident
-	byDedupe      map[string]*model.Incident
-	nextID        uint64
-	silences      []*model.Silence
-	channels      map[string]*model.Channel
-	rules         map[string]*model.Rule
-	deliveries    []*model.Delivery
-	events        []*model.Event
-	createIncErr  error
-	bumpCalls     int
-	reopenCalls   int
-	notifiedCalls map[uint64]time.Time
+	incidents      map[uint64]*model.Incident
+	byDedupe       map[string]*model.Incident
+	nextID         uint64
+	silences       []*model.Silence
+	channels       map[string]*model.Channel
+	rules          map[string]*model.Rule
+	deliveries     []*model.Delivery
+	events         []*model.Event
+	scenarios      map[string]*fakeDemoScenario
+	correlateCalls int
+	createIncErr   error
+	bumpCalls      int
+	reopenCalls    int
+	notifiedCalls  map[uint64]time.Time
+}
+
+type fakeDemoScenario struct {
+	incidentID     uint64
+	fingerprint    string
+	poolManifest   string
+	status         string
+	idempotencyKey string
 }
 
 func newFakeRepo() *fakeRepo {
@@ -75,6 +85,7 @@ func newFakeRepo() *fakeRepo {
 		channels:      map[string]*model.Channel{},
 		rules:         map[string]*model.Rule{},
 		notifiedCalls: map[uint64]time.Time{},
+		scenarios:     map[string]*fakeDemoScenario{},
 	}
 }
 
@@ -307,6 +318,28 @@ func (r *fakeRepo) BumpIncidentFiring(_ context.Context, id uint64, firedAt time
 	i.Value = value
 	i.Threshold = threshold
 	return nil
+}
+
+func (r *fakeRepo) CorrelateDemoScenario(_ context.Context, fingerprint string, labels map[string]string) (*model.Incident, bool, error) {
+	r.correlateCalls++
+	for _, scenario := range r.scenarios {
+		fingerprintMatch := fingerprint != "" && scenario.fingerprint == fingerprint
+		labelMatch := labels != nil &&
+			labels["alertname"] == "PGConnectionPoolSaturation" &&
+			labels["instance"] == "opskeeper-demo-node-metrics:8095" &&
+			labels["job"] == "opsk" &&
+			labels["pool_manifest_id"] == scenario.poolManifest
+		if !fingerprintMatch && !labelMatch {
+			continue
+		}
+		if fingerprint != "" {
+			scenario.fingerprint = fingerprint
+		}
+		scenario.status = "alert_correlated"
+		incident := r.incidents[scenario.incidentID]
+		return incident, incident != nil, nil
+	}
+	return nil, false, nil
 }
 
 func (r *fakeRepo) ReopenIncident(_ context.Context, id uint64, firedAt time.Time, summary string, value, threshold *float64) error {

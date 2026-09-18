@@ -57,6 +57,17 @@ func (u *Usecase) IngestAlertmanager(ctx context.Context, in AlertmanagerWebhook
 		if summary == "" {
 			summary = fmt.Sprintf("Alertmanager alert %s is firing", name)
 		}
+		dedupeKey := alertmanagerDedupeKey(name, alert.Fingerprint, alert.Labels)
+		correlatedIncident, isDemoScenario, err := u.CorrelateDemoScenario(ctx, alert.Fingerprint, alert.Labels)
+		if err != nil {
+			return nil, err
+		}
+		if isDemoScenario {
+			if correlatedIncident == nil || strings.TrimSpace(correlatedIncident.DedupeKey) == "" {
+				return nil, fmt.Errorf("%w: demo scenario incident has no dedupe key", errs.ErrConflict)
+			}
+			dedupeKey = correlatedIncident.DedupeKey
+		}
 		firing, err := u.RecordFiring(ctx, FiringInput{
 			ScopeType:   model.RuleScopeMonitoringPipeline,
 			Scope:       "alertmanager",
@@ -64,7 +75,7 @@ func (u *Usecase) IngestAlertmanager(ctx context.Context, in AlertmanagerWebhook
 			RuleName:    name,
 			Severity:    severity,
 			OccurredAt:  alert.StartsAt,
-			DedupeKey:   alertmanagerDedupeKey(name, alert.Fingerprint, alert.Labels),
+			DedupeKey:   dedupeKey,
 			SourceType:  model.RuleSourcePrometheus,
 			Title:       name,
 			Summary:     summary,
@@ -78,6 +89,9 @@ func (u *Usecase) IngestAlertmanager(ctx context.Context, in AlertmanagerWebhook
 		}
 		if err := u.recordWebhookReceipt(ctx, firing.Incident, alert); err != nil {
 			return nil, err
+		}
+		if isDemoScenario && u.investigator != nil {
+			u.investigator.InvestigateAsync(firing.Incident)
 		}
 		result.Accepted++
 	}

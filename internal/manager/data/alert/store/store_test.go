@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	demomodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
 )
 
@@ -114,6 +116,91 @@ func TestIncidentEventRoundTrip(t *testing.T) {
 	}
 	if len(list) != 1 {
 		t.Fatalf("events len = %d", len(list))
+	}
+}
+
+func TestDemoScenarioCorrelationSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "alert-demo-restart.db")
+	db := openSQLiteDB(t, path)
+	migrateAlertAndDemo(t, db)
+	repo := NewRepo(db)
+	incident := &model.Incident{
+		Title: "Final demo pool exhaustion", Rule: "PGConnectionPoolSaturation", RuleName: "PGConnectionPoolSaturation",
+		Severity: "critical", Status: model.IncidentStatusOpen, Summary: "pool saturated",
+		DedupeKey: "demo-scenario:restart-demo", EventCount: 1,
+		FirstFiredAt: time.Date(2026, 9, 18, 8, 0, 0, 0, time.UTC),
+		LastFiredAt:  time.Date(2026, 9, 18, 8, 0, 0, 0, time.UTC),
+		SourceType:   model.RuleSourcePrometheus,
+	}
+	if err := repo.CreateAlertIncident(ctx, incident); err != nil {
+		t.Fatalf("CreateAlertIncident: %v", err)
+	}
+	run := &demomodel.ScenarioRun{
+		TenantID: 1, ScenarioID: "pg-pool-exhaustion", IdempotencyKey: "restart-demo",
+		IncidentID: incident.ID, PoolManifestID: "manifest-restart", Target: "pg:pool-fixture",
+		TargetFingerprint: "0123456789abcdef", AlertFingerprint: "cccccccccccccccc",
+		Status: demomodel.ScenarioStatusAwaitingAlert, ExpiresAt: time.Now().UTC().Add(10 * time.Minute),
+	}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("create scenario: %v", err)
+	}
+	closeDB(t, db)
+
+	db = openSQLiteDB(t, path)
+	migrateAlertAndDemo(t, db)
+	repo = NewRepo(db)
+	got, matched, err := repo.CorrelateDemoScenario(ctx, "cccccccccccccccc", map[string]string{
+		"alertname": "PGConnectionPoolSaturation", "instance": "opskeeper-demo-node-metrics:8095",
+		"job": "opsk", "pool_manifest_id": "manifest-restart",
+	})
+	if err != nil {
+		t.Fatalf("CorrelateDemoScenario fingerprint: %v", err)
+	}
+	if !matched || got == nil || got.ID != incident.ID {
+		t.Fatalf("fingerprint correlation = (%p, %t); want incident %d", got, matched, incident.ID)
+	}
+	var persisted, labelPersisted demomodel.ScenarioRun
+	if err := db.Where("idempotency_key = ?", "restart-demo").First(&persisted).Error; err != nil {
+		t.Fatalf("reload scenario by idempotency key: %v", err)
+	}
+	if persisted.Status != demomodel.ScenarioStatusAlertCorrelated {
+		t.Fatalf("scenario status = %q; want %q", persisted.Status, demomodel.ScenarioStatusAlertCorrelated)
+	}
+
+	labelIncident := &model.Incident{
+		Title: "Final demo pool exhaustion by labels", Rule: "PGConnectionPoolSaturation",
+		RuleName: "PGConnectionPoolSaturation", Severity: "critical", Status: model.IncidentStatusOpen,
+		Summary: "pool saturated", DedupeKey: "demo-scenario:label-demo", EventCount: 1,
+		SourceType: model.RuleSourcePrometheus,
+	}
+	if err := repo.CreateAlertIncident(ctx, labelIncident); err != nil {
+		t.Fatalf("CreateAlertIncident label fallback: %v", err)
+	}
+	labelRun := &demomodel.ScenarioRun{
+		TenantID: 1, ScenarioID: "pg-pool-exhaustion", IdempotencyKey: "label-demo",
+		IncidentID: labelIncident.ID, PoolManifestID: "manifest-labels", Target: "pg:pool-fixture",
+		TargetFingerprint: "0123456789abcdef", Status: demomodel.ScenarioStatusAwaitingAlert,
+		ExpiresAt: time.Now().UTC().Add(10 * time.Minute),
+	}
+	if err := db.Create(labelRun).Error; err != nil {
+		t.Fatalf("create label scenario: %v", err)
+	}
+	got, matched, err = repo.CorrelateDemoScenario(ctx, "dddddddddddddddd", map[string]string{
+		"alertname": "PGConnectionPoolSaturation", "instance": "opskeeper-demo-node-metrics:8095",
+		"job": "opsk", "pool_manifest_id": "manifest-labels",
+	})
+	if err != nil {
+		t.Fatalf("CorrelateDemoScenario labels: %v", err)
+	}
+	if !matched || got == nil || got.ID != labelIncident.ID {
+		t.Fatalf("label correlation = (%p, %t); want incident %d", got, matched, labelIncident.ID)
+	}
+	if err := db.Where("idempotency_key = ?", "label-demo").First(&labelPersisted).Error; err != nil {
+		t.Fatalf("reload label scenario by idempotency key: %v", err)
+	}
+	if labelPersisted.AlertFingerprint != "dddddddddddddddd" || labelPersisted.Status != demomodel.ScenarioStatusAlertCorrelated {
+		t.Fatalf("label scenario = fingerprint %q status %q; want rebound fingerprint and alert_correlated", labelPersisted.AlertFingerprint, labelPersisted.Status)
 	}
 }
 
@@ -406,3 +493,33 @@ func TestPurgeLegacyLogChannels(t *testing.T) {
 func ptrUint64(v uint64) *uint64 { return &v }
 
 func ptrString(v string) *string { return &v }
+
+func openSQLiteDB(t *testing.T, path string) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("gorm.Open sqlite %s: %v", path, err)
+	}
+	return db
+}
+
+func migrateAlertAndDemo(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	if err := Migrate(db); err != nil {
+		t.Fatalf("Migrate alert: %v", err)
+	}
+	if err := db.AutoMigrate(&demomodel.ScenarioRun{}); err != nil {
+		t.Fatalf("Migrate demo: %v", err)
+	}
+}
+
+func closeDB(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db.DB: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+}
