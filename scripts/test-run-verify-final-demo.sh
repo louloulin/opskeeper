@@ -261,7 +261,7 @@ expected_order=(
   "DEGRADED_LATENCY_MS=1500"
   "MIN_STRESSED_UTILIZATION=0.90"
   "MAX_RECOVERED_UTILIZATION=0.25"
-  "TARGET_FINGERPRINT=sha256:db905b8f98c631212336b736f92d80b2a3040a75a44554687ffc782d39c31cc4"
+  "TARGET_FINGERPRINT=0123456789abcdef0123456789abcdef"
   "SCENARIO_DURATION_SECONDS=120"
 )
 recorded_lines=$(wc -l <"$recorded" | tr -d ' ')
@@ -302,7 +302,7 @@ target_value=$(grep '^TARGET_FINGERPRINT=' "$recorded" | head -1 | cut -d= -f2-)
 if ! [[ "$target_value" =~ ^([0-9a-fA-F]+|sha256:[0-9a-f]{64})$ ]]; then
   fail_test "TARGET_FINGERPRINT does not match validFingerprint pattern: $target_value"
 fi
-pass_test "ALERT_FINGERPRINT is a sha256:<64hex> derived from idempotency key; TARGET_FINGERPRINT is hex/sha256"
+pass_test "ALERT_FINGERPRINT is a sha256:<64hex> derived from idempotency key; TARGET_FINGERPRINT is independent"
 
 # ---------------------------------------------------------------------------
 # Test 7: container name override is honored.

@@ -49,7 +49,10 @@ func NewRepairPreviewExecutor(
 		return nil, err
 	}
 	if spec.WorkloadFingerprint() != expectedProfile {
-		return nil, errors.New("repair preview workload fingerprint does not match configured profile")
+		return nil, fmt.Errorf(
+			"repair preview workload fingerprint does not match configured profile: actual=%s expected=%s",
+			spec.WorkloadFingerprint(), expectedProfile,
+		)
 	}
 	return &RepairPreviewExecutor{
 		dsn: dsn, spec: spec, expectedProfile: expectedProfile, store: store,
