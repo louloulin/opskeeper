@@ -19,6 +19,7 @@ type Service interface {
 	Start(ctx context.Context, tenantID uint64, input servicedemo.StartScenarioInput) (*servicedemo.ScenarioStatus, error)
 	Get(ctx context.Context, tenantID uint64, scenarioID, key string) (*servicedemo.ScenarioStatus, error)
 	BusinessSnapshot(ctx context.Context, tenantID uint64, scenarioID, key, section string) (json.RawMessage, error)
+	BusinessSnapshotBaseline(ctx context.Context, section string) (json.RawMessage, error)
 }
 
 type Handler struct {
@@ -36,6 +37,7 @@ func (h *Handler) Register(router chi.Router) {
 		versioned.Post("/v1/demo/scenarios/"+bizdemo.ScenarioID+"/start", h.start)
 		versioned.Get("/v1/demo/scenarios/{idempotency_key}", h.status)
 		versioned.Get("/v1/demo/scenarios/{idempotency_key}/business/{section}", h.business)
+		versioned.Get("/v1/demo/business/{section}", h.businessBaseline)
 	})
 }
 
@@ -84,6 +86,16 @@ func (h *Handler) business(w http.ResponseWriter, r *http.Request) {
 		r.Context(), demoTenantID, bizdemo.ScenarioID,
 		chi.URLParam(r, "idempotency_key"), chi.URLParam(r, "section"),
 	)
+	if err != nil {
+		writeMappedError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeData(w, http.StatusOK, "success", data)
+}
+
+func (h *Handler) businessBaseline(w http.ResponseWriter, r *http.Request) {
+	data, err := h.service.BusinessSnapshotBaseline(r.Context(), chi.URLParam(r, "section"))
 	if err != nil {
 		writeMappedError(w, err)
 		return

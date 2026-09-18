@@ -178,7 +178,10 @@ export default function LiveIncidentPage() {
     try {
       const status = await fetchJson<ScenarioStatus>('/api/demo/scenario', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Opskeeper-Demo-Action': 'start',
+        },
         body: JSON.stringify({}),
       });
       setScenario(status);

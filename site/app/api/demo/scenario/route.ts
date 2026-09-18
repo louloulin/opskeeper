@@ -10,6 +10,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 const scenarioCookieName = 'opskeeper_demo_scenario';
+const demoActionHeader = 'x-opskeeper-demo-action';
 
 function idempotencyKey() {
   const now = new Date();
@@ -34,6 +35,36 @@ function errorResponse(error: unknown) {
   );
 }
 
+function isSameOriginPost(request: NextRequest) {
+  const originHeader = request.headers.get('origin');
+  if (!originHeader || originHeader === 'null') return false;
+
+  let origin: URL;
+  try {
+    origin = new URL(originHeader);
+  } catch {
+    return false;
+  }
+
+  const forwardedProtocol = request.headers
+    .get('x-forwarded-proto')
+    ?.split(',')[0]
+    ?.trim();
+  const protocol = forwardedProtocol === 'https' || forwardedProtocol === 'http'
+    ? forwardedProtocol
+    : request.nextUrl.protocol.replace(':', '');
+  const host = request.headers.get('host') ?? request.nextUrl.host;
+  const fetchSite = request.headers.get('sec-fetch-site');
+
+  try {
+    return origin.origin === new URL(`${protocol}://${host}`).origin &&
+      (!fetchSite || fetchSite === 'same-origin') &&
+      request.headers.get(demoActionHeader) === 'start';
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(request: NextRequest) {
   const key = request.cookies.get(scenarioCookieName)?.value;
   if (!key) {
@@ -52,7 +83,13 @@ export async function GET(request: NextRequest) {
   }
 }
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  if (!isSameOriginPost(request)) {
+    return NextResponse.json(
+      { error_code: 'cross_site_blocked', message: 'Cross-site scenario start rejected' },
+      { status: 403, headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
   const key = idempotencyKey();
   try {
     const status = await startFinalDemoScenario(key);

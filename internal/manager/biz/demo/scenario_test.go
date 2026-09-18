@@ -112,9 +112,10 @@ func (f *fakeScenarios) UpdateStatus(_ context.Context, id uint64, status string
 }
 
 type fakeFixtures struct {
-	starts int
-	fails  bool
-	order  *[]string
+	starts   int
+	business int
+	fails    bool
+	order    *[]string
 }
 
 func (f *fakeFixtures) Start(context.Context, FixtureStartInput) (FixtureStartResult, error) {
@@ -132,11 +133,27 @@ func (f *fakeFixtures) Status(context.Context, string) (FixtureStatus, error) {
 	return FixtureStatus{State: "running"}, nil
 }
 
-func (f *fakeFixtures) BusinessSnapshot(context.Context, string) (json.RawMessage, error) {
+func (f *fakeFixtures) BusinessSnapshot(_ context.Context, _ string) (json.RawMessage, error) {
+	f.business++
 	if f.fails {
 		return nil, &FixtureError{HTTPStatus: http.StatusServiceUnavailable, Code: "pool_exhausted"}
 	}
 	return json.RawMessage(`{"section":"orders"}`), nil
+}
+
+func TestBaselineBusinessSnapshotDoesNotRequireScenario(t *testing.T) {
+	fixtures := &fakeFixtures{}
+	usecase := NewUsecase(newFakeScenarios(), newFakeIncidents(), fixtures)
+	data, err := usecase.BusinessSnapshotBaseline(context.Background(), "orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"section":"orders"}` || fixtures.business != 1 || fixtures.starts != 0 {
+		t.Fatalf("data = %s business = %d starts = %d", data, fixtures.business, fixtures.starts)
+	}
+	if _, err := usecase.BusinessSnapshotBaseline(context.Background(), "unknown"); err == nil {
+		t.Fatal("expected invalid section")
+	}
 }
 
 func validInput() StartScenarioInput {

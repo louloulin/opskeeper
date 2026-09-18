@@ -192,7 +192,7 @@ func (u *Usecase) Get(ctx context.Context, tenantID uint64, scenarioID, key stri
 }
 
 func (u *Usecase) BusinessSnapshot(ctx context.Context, tenantID uint64, scenarioID, key, section string) (json.RawMessage, error) {
-	if section != "orders" && section != "inventory" && section != "audit" {
+	if !validBusinessSection(section) {
 		return nil, errs.ErrInvalid
 	}
 	run, err := u.scenarios.GetByIdempotencyKey(ctx, tenantID, scenarioID, key)
@@ -201,6 +201,13 @@ func (u *Usecase) BusinessSnapshot(ctx context.Context, tenantID uint64, scenari
 	}
 	if run.PoolManifestID == "" {
 		return nil, errs.ErrNotWiredYet
+	}
+	return u.fixtures.BusinessSnapshot(ctx, section)
+}
+
+func (u *Usecase) BusinessSnapshotBaseline(ctx context.Context, section string) (json.RawMessage, error) {
+	if !validBusinessSection(section) {
+		return nil, errs.ErrInvalid
 	}
 	return u.fixtures.BusinessSnapshot(ctx, section)
 }
@@ -239,6 +246,10 @@ func ValidateStart(input StartScenarioInput) error {
 
 func validFingerprint(value string) bool {
 	return hexPattern.MatchString(value) || sha256Pattern.MatchString(value)
+}
+
+func validBusinessSection(section string) bool {
+	return section == "orders" || section == "inventory" || section == "audit"
 }
 
 func statusFromRun(run *demomodel.ScenarioRun) *ScenarioStatus {

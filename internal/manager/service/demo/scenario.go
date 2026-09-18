@@ -28,6 +28,10 @@ func (s *Service) BusinessSnapshot(ctx context.Context, tenantID uint64, scenari
 	return s.usecase.BusinessSnapshot(ctx, tenantID, scenarioID, key, section)
 }
 
+func (s *Service) BusinessSnapshotBaseline(ctx context.Context, section string) (json.RawMessage, error) {
+	return s.usecase.BusinessSnapshotBaseline(ctx, section)
+}
+
 func MapError(err error) (int, string, string) {
 	var fixtureErr *bizdemo.FixtureError
 	if errors.As(err, &fixtureErr) {

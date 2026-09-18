@@ -107,14 +107,15 @@ type ownedPool struct {
 }
 
 type Controller struct {
-	mu         sync.Mutex
-	token      string
-	stateDir   string
-	dsn        string
-	newRuntime RuntimeFactory
-	pools      map[string]*ownedPool
-	poolKeys   map[string]string
-	log        *slog.Logger
+	mu              sync.Mutex
+	token           string
+	stateDir        string
+	dsn             string
+	newRuntime      RuntimeFactory
+	baselineRuntime PoolRuntime
+	pools           map[string]*ownedPool
+	poolKeys        map[string]string
+	log             *slog.Logger
 }
 
 func NewController(token, stateDir, dsn string, newRuntime RuntimeFactory, log *slog.Logger) (*Controller, error) {
@@ -295,6 +296,25 @@ func (c *Controller) activePoolManifestID() (string, error) {
 	return selected.manifest.ManifestID, nil
 }
 
+func (c *Controller) BaselineBusinessSnapshot(ctx context.Context, section BusinessSection) (BusinessSnapshot, error) {
+	if !validBusinessSection(section) {
+		return BusinessSnapshot{}, errInvalid
+	}
+	c.mu.Lock()
+	runtime := c.baselineRuntime
+	if runtime == nil {
+		created, err := c.newRuntime(ctx, c.dsn)
+		if err != nil {
+			c.mu.Unlock()
+			return BusinessSnapshot{}, fmt.Errorf("open baseline PostgreSQL pool: %w", err)
+		}
+		c.baselineRuntime = created
+		runtime = created
+	}
+	c.mu.Unlock()
+	return runtime.BusinessSnapshot(ctx, section)
+}
+
 type ProbeRequest struct {
 	TimeoutMilliseconds int `json:"timeout_milliseconds"`
 }
@@ -395,6 +415,11 @@ func (c *Controller) Shutdown() error {
 	var combined error
 	for _, pool := range c.pools {
 		if err := c.closePoolLocked(pool); err != nil {
+			combined = errors.Join(combined, err)
+		}
+	}
+	if c.baselineRuntime != nil {
+		if err := c.baselineRuntime.Close(); err != nil {
 			combined = errors.Join(combined, err)
 		}
 	}
@@ -851,6 +876,15 @@ func (h *Handler) businessSnapshot(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	manifestID, err := h.controller.activePoolManifestID()
+	if errors.Is(err, errNotFound) {
+		snapshot, baselineErr := h.controller.BaselineBusinessSnapshot(request.Context(), section)
+		if baselineErr != nil {
+			writeDomainError(writer, baselineErr)
+			return
+		}
+		writeBusinessSnapshot(writer, snapshot)
+		return
+	}
 	if err != nil {
 		writeDomainError(writer, err)
 		return
@@ -866,6 +900,10 @@ func (h *Handler) businessSnapshot(writer http.ResponseWriter, request *http.Req
 		writeDomainError(writer, err)
 		return
 	}
+	writeBusinessSnapshot(writer, snapshot)
+}
+
+func writeBusinessSnapshot(writer http.ResponseWriter, snapshot BusinessSnapshot) {
 	data, err := json.Marshal(snapshot)
 	if err != nil {
 		writeBusinessError(writer, http.StatusInternalServerError, "encode failed", "encode_failed")

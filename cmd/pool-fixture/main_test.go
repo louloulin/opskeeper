@@ -345,6 +345,31 @@ func TestBusinessSnapshotHandlerCoversAllSections(t *testing.T) {
 	}
 }
 
+func TestBusinessSnapshotHandlerUsesBaselineWithoutActiveManifest(t *testing.T) {
+	controller, runtime, _ := newTestController(t)
+	server := httptest.NewServer(NewHandler(controller))
+	defer server.Close()
+
+	request, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/business-snapshots/orders", nil)
+	addPoolAuth(request)
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseBody, readErr := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(responseBody), `"section":"orders"`) ||
+		response.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("baseline response = %d %s", response.StatusCode, responseBody)
+	}
+	if runtime.businessSection != BusinessSectionOrders {
+		t.Fatalf("baseline section = %q", runtime.businessSection)
+	}
+}
+
 func TestBusinessSnapshotHandlerBoundsErrors(t *testing.T) {
 	controller, runtime, _ := newTestController(t)
 	_, err := controller.Start(context.Background(), StartRequest{

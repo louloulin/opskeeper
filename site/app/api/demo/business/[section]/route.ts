@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { DemoManagerError, getBusinessSnapshot } from '@/lib/demo-manager';
+import {
+  DemoManagerError,
+  getBusinessBaselineSnapshot,
+  getBusinessSnapshot,
+} from '@/lib/demo-manager';
 import { BUSINESS_SECTIONS, type BusinessSection } from '@/lib/demo-types';
 
 export const dynamic = 'force-dynamic';
@@ -23,15 +27,11 @@ export async function GET(
   }
 
   const key = request.cookies.get(scenarioCookieName)?.value;
-  if (!key) {
-    return NextResponse.json(
-      { error_code: 'demo_scenario_not_started', message: 'No current demo scenario' },
-      { status: 503, headers: { 'Cache-Control': 'no-store' } },
-    );
-  }
 
   try {
-    const snapshot = await getBusinessSnapshot(key, params.section);
+    const snapshot = key
+      ? await getBusinessSnapshot(key, params.section)
+      : await getBusinessBaselineSnapshot(params.section);
     return NextResponse.json(snapshot, {
       headers: { 'Cache-Control': 'no-store' },
     });

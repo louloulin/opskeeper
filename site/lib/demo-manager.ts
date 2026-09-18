@@ -146,3 +146,9 @@ export function getBusinessSnapshot(
     `/api/v1/demo/scenarios/${encodeURIComponent(idempotencyKey)}/business/${section}`,
   );
 }
+
+export function getBusinessBaselineSnapshot(section: BusinessSection) {
+  return requestManager<BusinessSnapshot>(
+    `/api/v1/demo/business/${section}`,
+  );
+}

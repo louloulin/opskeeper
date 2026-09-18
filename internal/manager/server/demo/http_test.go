@@ -18,6 +18,7 @@ type fakeService struct {
 	starts     int
 	gets       int
 	business   map[string]int
+	baseline   map[string]int
 	lastInput  servicedemo.StartScenarioInput
 	lastTenant uint64
 }
@@ -48,6 +49,14 @@ func (f *fakeService) BusinessSnapshot(_ context.Context, _ uint64, _, _, sectio
 	}
 	f.business[section]++
 	return json.RawMessage(`{"section":"` + section + `","ok":true}`), nil
+}
+
+func (f *fakeService) BusinessSnapshotBaseline(_ context.Context, section string) (json.RawMessage, error) {
+	if f.baseline == nil {
+		f.baseline = map[string]int{}
+	}
+	f.baseline[section]++
+	return json.RawMessage(`{"section":"` + section + `","baseline":true}`), nil
 }
 
 func newRouter(service Service) http.Handler {
@@ -130,5 +139,24 @@ func TestDemoHandlerProxiesThreeBusinessSections(t *testing.T) {
 	}
 	if service.business["orders"] != 1 || service.business["inventory"] != 1 || service.business["audit"] != 1 {
 		t.Fatalf("business calls = %+v", service.business)
+	}
+}
+
+func TestDemoHandlerProxiesBaselineBusinessSections(t *testing.T) {
+	service := &fakeService{}
+	router := newRouter(service)
+	for _, section := range []string{"orders", "inventory", "audit"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, authorized(httptest.NewRequest(http.MethodGet, "/v1/demo/business/"+section, nil)))
+		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), section) ||
+			recorder.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("%s response = %d %s", section, recorder.Code, recorder.Body.String())
+		}
+	}
+	if service.baseline["orders"] != 1 || service.baseline["inventory"] != 1 || service.baseline["audit"] != 1 {
+		t.Fatalf("baseline calls = %+v", service.baseline)
+	}
+	if len(service.business) != 0 || service.starts != 0 || service.gets != 0 {
+		t.Fatalf("unexpected scenario calls: %+v", service)
 	}
 }
