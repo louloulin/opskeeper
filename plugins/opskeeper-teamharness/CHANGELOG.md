@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.66 — 2026-09-18
+
+- Combine authoritative final-demo workflow projection, preview evidence, business impact, and public HITL validation.
+- Enforce the final PostgreSQL pool demonstration contract: `4/4` saturation and recovery to capacity `8`.
+
 ## 1.0.65 — 2026-09-18
 
 - Align the authoritative Manager wire contract with real baseline/A/B candidate readback and deterministic fingerprints.

@@ -2,7 +2,7 @@ apiVersion: agentteams.agentteam/v1alpha1
 kind: AgentTeamPlugin
 metadata:
   name: opskeeper-teamharness
-  version: 1.0.65
+  version: 1.0.66
   description: |
     Opskeeper TeamHarness plugin — provides six deployed ops actors
     (alerter/investigator/reviewer/repairer/verifier/reporter)
@@ -147,6 +147,10 @@ metadata:
     v1.0.65 aligns the Manager wire contract, persists a real baseline row,
     and projects candidate-repair comparison readback from the Manager archive
     with the controlled fixed-workload approval gate in RCA.
+
+    v1.0.66 validates the combined final-demo chain, including authoritative
+    Matrix workflow events, business impact, proposal-bound repair, Archive
+    evidence, and the 4/4-to-8 PostgreSQL pool capacity contract.
 
     v1.0.60 adds a Manager archive index so the Dashboard Archive tab lists
     actual closed-loop incident IDs instead of numeric alert IDs, and clarifies
