@@ -52,17 +52,7 @@ func Execute(ctx context.Context, database *sql.DB, spec WorkloadSpec) (Run, err
 		return Run{}, err
 	}
 	candidates := make([]Candidate, 0, len(spec.Candidates)+1)
-	candidates = append(candidates, Candidate{
-		ID: deterministicCandidateID(binding.RunID, BaselineCandidateID), RunID: binding.RunID,
-		TenantID: binding.TenantID, IncidentID: binding.IncidentID, CandidateID: BaselineCandidateID,
-		Name: "Baseline replay", Kind: BaselineKind, Action: BaselineAction,
-		ChangeSummary: "Controlled fixed-workload baseline", Branch: baseline.schemaName,
-		ResultChecksum: baseline.checksum, Consistent: true,
-		AverageLatencyMS: average(baseline.latencies), MedianLatencyMS: percentile(baseline.latencies, 50),
-		P95LatencyMS: percentile(baseline.latencies, 95), SampleCount: len(baseline.latencies),
-		TPS: baseline.tps, ErrorCount: baseline.errorCount, WriteImpact: "none",
-		StorageDeltaBytes: 0, BusinessProbePass: baseline.businessProbePass,
-	})
+	candidates = append(candidates, newBaselineCandidate(binding, baseline))
 	for _, candidateSpec := range spec.Candidates {
 		result, err := executeBranch(ctx, database, spec, candidateSpec.CandidateID, candidateSpec)
 		if err != nil {
@@ -91,6 +81,33 @@ func Execute(ctx context.Context, database *sql.DB, spec WorkloadSpec) (Run, err
 		WorkloadRevision: spec.Revision, ControlledLoad: true, IsolationBoundary: isolationBoundary,
 		Status: "finished", StartedAt: started, FinishedAt: finished, Candidates: candidates,
 	}, nil
+}
+
+func newBaselineCandidate(binding WorkloadBinding, baseline branchResult) Candidate {
+	candidate := Candidate{
+		ID:                deterministicCandidateID(binding.RunID, BaselineCandidateID),
+		RunID:             binding.RunID,
+		TenantID:          binding.TenantID,
+		IncidentID:        binding.IncidentID,
+		CandidateID:       BaselineCandidateID,
+		Name:              "Baseline replay",
+		Kind:              BaselineKind,
+		Action:            BaselineAction,
+		ChangeSummary:     "Controlled fixed-workload baseline",
+		Branch:            baseline.schemaName,
+		ResultChecksum:    baseline.checksum,
+		Consistent:        true,
+		AverageLatencyMS:  average(baseline.latencies),
+		MedianLatencyMS:   percentile(baseline.latencies, 50),
+		P95LatencyMS:      percentile(baseline.latencies, 95),
+		SampleCount:       len(baseline.latencies),
+		TPS:               baseline.tps,
+		ErrorCount:        baseline.errorCount,
+		WriteImpact:       "none",
+		BusinessProbePass: baseline.businessProbePass,
+	}
+	candidate.Decision, candidate.RejectionReason = Evaluate(candidate)
+	return candidate
 }
 
 type branchResult struct {
