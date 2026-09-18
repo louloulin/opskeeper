@@ -102,3 +102,31 @@ test('warns when the target room is owned by an OpsKeeper Matrix account', () =>
   assert.equal(roomCheck.status, 'warn');
   assert.match(roomCheck.detail, /OpsKeeper Manager/);
 });
+
+test('warns but does not fail when worker/manifest are behind the expected version', () => {
+  const report = buildIntegrationPreflight({
+    ...healthyResults,
+    pluginHealth: fulfilled({
+      synced: true,
+      diff: [],
+      worker: { version: '1.0.64', loaded: true, enabled: true },
+    }),
+    manifest: fulfilled({
+      id: 'opskeeper-teamharness',
+      version: '1.0.64',
+      entry: { dashboard: 'dist/main-1.0.64.js' },
+    }),
+  }, {
+    targetRoomId: '#ops:example.com',
+    expectedPluginVersion: '1.0.66',
+  });
+
+  assert.equal(report.status, 'warn', `expected warn (not blocking), got ${report.status}`);
+  const workerCheck = report.checks.find((item) => item.name === 'TeamHarness Worker 插件');
+  const manifestCheck = report.checks.find((item) => item.name === 'Dashboard 插件清单');
+  assert.equal(workerCheck.status, 'warn');
+  assert.equal(manifestCheck.status, 'warn');
+  assert.match(workerCheck.detail, /低于期望 1\.0\.66/);
+  assert.match(manifestCheck.detail, /低于期望 1\.0\.66/);
+});
+

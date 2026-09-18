@@ -41,6 +41,24 @@ function healthStatus(value) {
   return status ? String(status).toLowerCase() : 'ok';
 }
 
+function parseSemver(value) {
+  const match = String(value || '').trim().match(/^v?(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function compareSemver(left, right) {
+  const leftParts = parseSemver(left);
+  const rightParts = parseSemver(right);
+  if (!leftParts || !rightParts) return null;
+  for (let index = 0; index < 3; index += 1) {
+    if (leftParts[index] !== rightParts[index]) {
+      return leftParts[index] < rightParts[index] ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
 export function buildIntegrationPreflight(results, { targetRoomId = '', expectedPluginVersion = '' } = {}) {
   const session = valueOf(results.session);
   const matrixSync = valueOf(results.matrixSync);
@@ -93,16 +111,20 @@ export function buildIntegrationPreflight(results, { targetRoomId = '', expected
     checks.push(check('fail', 'TeamHarness Worker 插件', errorOf(results.pluginHealth)));
   } else if (!pluginHealth?.synced || Array.isArray(pluginHealth?.diff) && pluginHealth.diff.length > 0 || !worker?.loaded || !worker?.enabled) {
     checks.push(check('fail', 'TeamHarness Worker 插件', `同步状态：${pluginHealth?.synced ? 'synced' : 'not synced'}；worker loaded=${worker?.loaded}, enabled=${worker?.enabled}`));
-  } else if (expectedPluginVersion && worker?.version !== expectedPluginVersion) {
-    checks.push(check('fail', 'TeamHarness Worker 插件', `worker 版本 ${worker?.version || '未知'}，期望 ${expectedPluginVersion}`));
+  } else if (expectedPluginVersion && worker?.version && compareSemver(worker.version, expectedPluginVersion) < 0) {
+    checks.push(check('warn', 'TeamHarness Worker 插件', `worker 版本 ${worker.version}，低于期望 ${expectedPluginVersion}；插件已 loaded/enabled/in_sync，可继续使用`));
+  } else if (expectedPluginVersion && worker?.version && compareSemver(worker.version, expectedPluginVersion) > 0) {
+    checks.push(check('warn', 'TeamHarness Worker 插件', `worker 版本 ${worker.version}，高于期望 ${expectedPluginVersion}（测试/预发环境）`));
   } else {
     checks.push(check('pass', 'TeamHarness Worker 插件', `v${worker?.version || expectedPluginVersion} loaded/enabled/in_sync`));
   }
 
   if (errorOf(results.manifest)) {
     checks.push(check('fail', 'Dashboard 插件清单', errorOf(results.manifest)));
-  } else if (manifest?.id !== 'opskeeper-teamharness' || (expectedPluginVersion && manifest?.version !== expectedPluginVersion)) {
-    checks.push(check('fail', 'Dashboard 插件清单', `manifest=${manifest?.id || '未知'}@${manifest?.version || '未知'}，期望 opskeeper-teamharness@${expectedPluginVersion}`));
+  } else if (manifest?.id !== 'opskeeper-teamharness') {
+    checks.push(check('fail', 'Dashboard 插件清单', `manifest=${manifest?.id || '未知'}@${manifest?.version || '未知'}，期望 opskeeper-teamharness`));
+  } else if (expectedPluginVersion && manifest?.version && compareSemver(manifest.version, expectedPluginVersion) < 0) {
+    checks.push(check('warn', 'Dashboard 插件清单', `manifest=${manifest.id}@${manifest.version}，低于期望 ${expectedPluginVersion}；插件入口 ${manifest?.entry?.dashboard || '未知'} 已加载，可继续使用`));
   } else {
     checks.push(check('pass', 'Dashboard 插件清单', `v${manifest.version} 入口 ${manifest?.entry?.dashboard || '未知'}`));
   }
