@@ -34,6 +34,21 @@ const principles = [
   'Plugins (agentteams-plugin-installer, opskeeper-teamharness) are first-party open source, not vendored binaries.',
 ];
 
+const acknowledgedProjects = [
+  {
+    name: 'OpenBuddy',
+    href: 'https://github.com/louloulin/OpenBuddy',
+    description:
+      'Practical help with expression and structure while the final presentation was being prepared. Thank you for keeping this work open.',
+  },
+  {
+    name: 'upup',
+    href: 'https://github.com/louloulin/upup',
+    description:
+      'An interesting open-source project recommended for engineers who care about automation and productivity.',
+  },
+];
+
 const contributingTracks = [
   {
     icon: Code2,
@@ -160,6 +175,39 @@ export default function OpenSourcePage() {
                 SRE / DevOps backgrounds. CODEOWNERS, a public roadmap, and a quarterly
                 release cadence keep the project honest.
               </p>
+              <div className="mt-6 rounded-xl border border-white/10 bg-white/[0.03] p-5">
+                <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-white">
+                  <Heart className="h-4 w-4 text-accent-300" />
+                  Special thanks to
+                  <a
+                    href="https://github.com/louloulin"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-accent-200 transition hover:border-accent-300/40 hover:text-accent-100"
+                  >
+                    <Github className="h-3.5 w-3.5" />
+                    louloulin
+                  </a>
+                  <span className="text-ink-300">for open-source contributions and support for OpsKeeper.</span>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  {acknowledgedProjects.map((project) => (
+                    <a
+                      key={project.name}
+                      href={project.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="group rounded-lg border border-white/10 bg-ink-950/40 p-4 transition hover:border-accent-300/40"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-white">{project.name}</span>
+                        <Github className="h-4 w-4 text-ink-400 transition group-hover:text-accent-200" />
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-ink-300">{project.description}</p>
+                    </a>
+                  ))}
+                </div>
+              </div>
             </div>
             <div className="md:col-span-4">
               <div className="grid gap-3">

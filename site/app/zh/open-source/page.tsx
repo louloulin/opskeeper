@@ -34,6 +34,19 @@ const principles = [
   '插件（agentteams-plugin-installer、opskeeper-teamharness）是一方开源代码，不是 vendored 二进制。',
 ];
 
+const acknowledgedProjects = [
+  {
+    name: 'OpenBuddy',
+    href: 'https://github.com/louloulin/OpenBuddy',
+    description: '决赛 PPT 准备阶段的表达与结构打磨带来了实际帮助，感谢作者开放这份工作。',
+  },
+  {
+    name: 'upup',
+    href: 'https://github.com/louloulin/upup',
+    description: '一个很有意思的开源项目，推荐给关注工程效率与自动化的朋友。',
+  },
+];
+
 const contributingTracks = [
   {
     icon: Code2,
@@ -156,6 +169,39 @@ export default function OpenSourceZhPage() {
               <p className="mt-3 max-w-xl text-ink-200">
                 OpsKeeper 由核心团队和来自 SRE / DevOps 背景的众多贡献者共同维护。CODEOWNERS、公开路线图、季度发版节奏让项目保持诚实。
               </p>
+              <div className="mt-6 rounded-xl border border-white/10 bg-white/[0.03] p-5">
+                <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-white">
+                  <Heart className="h-4 w-4 text-accent-300" />
+                  特别感谢
+                  <a
+                    href="https://github.com/louloulin"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-accent-200 transition hover:border-accent-300/40 hover:text-accent-100"
+                  >
+                    <Github className="h-3.5 w-3.5" />
+                    louloulin
+                  </a>
+                  <span className="text-ink-300">对 OpsKeeper 的开源贡献与支持。</span>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  {acknowledgedProjects.map((project) => (
+                    <a
+                      key={project.name}
+                      href={project.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="group rounded-lg border border-white/10 bg-ink-950/40 p-4 transition hover:border-accent-300/40"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-white">{project.name}</span>
+                        <Github className="h-4 w-4 text-ink-400 transition group-hover:text-accent-200" />
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-ink-300">{project.description}</p>
+                    </a>
+                  ))}
+                </div>
+              </div>
             </div>
             <div className="md:col-span-4">
               <div className="grid gap-3">
