@@ -211,15 +211,14 @@ export default function OpskeeperArchiveRoute({ api }) {
                   </div>
                 ))}
                 {archive.postmortem_refs?.length === 0 && <EmptyState text="暂无复盘引用" />}
-                <a href={PREVIEW_URL} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 10, fontSize: 12 }}>
-                  打开 preview-pg 修复对比 →
-                </a>
-                <div style={{ marginTop: 5, fontSize: 11, color: 'var(--muted-foreground)' }}>
-                  对比数据留在独立预演环境，不写入本事故权威档案。
+                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted-foreground)' }}>
+                  完整候选修复对比见下方 Manager 权威档案投影。
                 </div>
               </Panel>
             </div>
           </section>
+
+          <RepairPreviewArchive runs={archive.repair_previews} incidentId={archive.incident_id} />
         </>
       )}
 
@@ -269,6 +268,102 @@ export default function OpskeeperArchiveRoute({ api }) {
         </>
       )}
     </div>
+  );
+}
+
+function RepairPreviewArchive({ runs, incidentId }) {
+  const previews = runs || [];
+
+  return (
+    <section
+      aria-label="候选修复完整对比"
+      style={{
+        padding: 14, marginBottom: 12, borderRadius: 8,
+        border: '1px solid var(--border)', background: 'var(--card)',
+        minWidth: 0, overflow: 'hidden',
+      }}
+    >
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>候选修复完整对比</div>
+        <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
+          Manager Archive 权威数据 · 只读投影
+        </span>
+        <a
+          href={PREVIEW_URL}
+          target="_blank"
+          rel="noreferrer"
+          style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--primary)', overflowWrap: 'anywhere' }}
+        >
+          辅助深链：preview-pg →
+        </a>
+      </div>
+      {previews.length === 0 && (
+        <EmptyState text={`事故 ${incidentId || '未知'} 暂无修复预演记录（历史事故可能未启用候选修复预演）`} />
+      )}
+      {previews.map((run) => (
+        <div
+          key={run.run_id || run.id}
+          style={{
+            minWidth: 0, padding: 12, marginBottom: 12,
+            border: '1px solid var(--border)', borderRadius: 8, background: 'var(--background)',
+          }}
+        >
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8, fontSize: 11 }}>
+            <span style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>Run：{run.run_id || run.id}</span>
+            <span style={{ color: 'var(--muted-foreground)', overflowWrap: 'anywhere' }}>
+              Workload fingerprint：{run.workload_fingerprint || run.workloadFingerprint || '未记录'}
+            </span>
+            <span style={{ color: 'var(--muted-foreground)', overflowWrap: 'anywhere' }}>
+              Seed：{run.seed_fingerprint || run.seedFingerprint || '未记录'}
+            </span>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--muted-foreground)', marginBottom: 8, overflowWrap: 'anywhere' }}>
+            {run.isolation_boundary || run.isolationBoundary || 'Controlled fixed-workload reconstruction in disposable preview-pg; original active sessions are not copied.'}
+          </div>
+          <div style={{ minWidth: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+            <table style={{ width: '100%', minWidth: 1160, tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 11 }}>
+              <thead>
+                <tr>
+                  {['候选 / 动作', '一致性', '平均延迟', 'P95 延迟', '吞吐 TPS', '写入影响', '存储增量', '业务探针', '决策 / 原因'].map((label) => (
+                    <th key={label} style={previewHeaderCellStyle()}>{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {run.candidates.map((candidate, candidateIndex) => (
+                  <tr key={candidate.id || candidate.candidate_id || candidateIndex}>
+                    <td style={previewCellStyle('left')}>
+                      <div style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
+                        {candidate.name || candidate.candidate_id || '未知候选'}
+                      </div>
+                      <div style={{ marginTop: 3, overflowWrap: 'anywhere' }}>
+                        {candidate.action || candidate.change_summary || '未记录动作'}
+                      </div>
+                    </td>
+                    <td style={previewCellStyle()}>{formatBoolean(candidate.consistent)}</td>
+                    <td style={previewCellStyle()}>{formatMilliseconds(candidate.average_latency_ms)}</td>
+                    <td style={previewCellStyle()}>{formatMilliseconds(candidate.p95_latency_ms)}</td>
+                    <td style={previewCellStyle()}>{formatNumber(candidate.tps)}</td>
+                    <td style={previewCellStyle()}>{candidate.write_impact || '—'}</td>
+                    <td style={previewCellStyle()}>{formatBytes(candidate.storage_delta_bytes)}</td>
+                    <td style={previewCellStyle()}>{formatBoolean(candidate.business_probe_pass)}</td>
+                    <td style={previewCellStyle('left')}>
+                      <span style={previewDecisionStyle(candidate.decision)}>{candidate.decision || 'UNKNOWN'}</span>
+                      {candidate.rejection_reason && (
+                        <div style={{ marginTop: 4, color: 'var(--muted-foreground)', overflowWrap: 'anywhere' }}>
+                          {candidate.rejection_reason}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {run.candidates.length === 0 && <EmptyState text="该预演 Run 未返回候选数据" />}
+        </div>
+      ))}
+    </section>
   );
 }
 
@@ -346,6 +441,54 @@ function linkRowStyle() {
     padding: '7px 0', border: 0, borderBottom: '1px solid var(--border)',
     background: 'transparent', color: 'inherit', fontSize: 12, cursor: 'pointer',
   };
+}
+
+function previewHeaderCellStyle() {
+  return {
+    padding: '8px 7px', textAlign: 'left', fontWeight: 600, whiteSpace: 'nowrap',
+    borderBottom: '1px solid var(--border)', background: 'var(--card)',
+  };
+}
+
+function previewCellStyle(alignment = 'right') {
+  return {
+    padding: '8px 7px', textAlign: alignment, verticalAlign: 'top',
+    overflowWrap: 'anywhere', minWidth: 88, maxWidth: 180,
+    borderBottom: '1px solid var(--border)',
+  };
+}
+
+function previewDecisionStyle(decision) {
+  const normalized = String(decision || '').toUpperCase();
+  const color = normalized === 'PASS' ? '#16a34a'
+    : normalized === 'REJECTED_BY_PREVIEW' ? '#dc2626'
+      : normalized === 'FAIL' ? '#d97706' : 'inherit';
+  return {
+    display: 'inline-block', padding: '2px 7px', borderRadius: 999,
+    fontSize: 10, fontWeight: 700, color,
+    border: `1px solid ${color === 'inherit' ? 'var(--border)' : color}`,
+    whiteSpace: 'nowrap',
+  };
+}
+
+function formatBoolean(value) {
+  if (typeof value !== 'boolean') return '—';
+  return value ? 'PASS' : 'FAIL';
+}
+
+function formatMilliseconds(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)} ms` : '—';
+}
+
+function formatNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : '—';
+}
+
+function formatBytes(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function formatTime(value) {

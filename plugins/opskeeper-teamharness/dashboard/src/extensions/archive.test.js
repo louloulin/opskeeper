@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
   normalizeArchiveIncidentList,
   normalizeArchiveResponse,
   normalizeIncidentSummary,
+  normalizeRepairPreviews,
+  normalizeRepairPreviewSummary,
 } from './archive.js';
 
 test('normalizes archive response wrappers and arrays', () => {
@@ -23,6 +26,113 @@ test('normalizes archive response wrappers and arrays', () => {
   assert.deepEqual(archive.trace_ids, []);
   assert.deepEqual(archive.similar_incidents, []);
   assert.deepEqual(archive.postmortem_refs, []);
+  assert.deepEqual(archive.repair_previews, []);
+});
+
+test('projects authoritative repair previews responsively without replacing them with the preview link', () => {
+  const source = readFileSync(fileURLToPath(new URL('./archive-route.jsx', import.meta.url)), 'utf8');
+
+  assert.match(source, /RepairPreviewArchive runs=\{archive\.repair_previews\}/u);
+  assert.match(source, /Manager Archive 权威数据 · 只读投影/u);
+  assert.match(source, /辅助深链：preview-pg/u);
+  assert.match(source, /暂无修复预演记录/u);
+  assert.match(source, /overflowX:\s*'auto'/u);
+  assert.match(source, /tableLayout:\s*'fixed'/u);
+  assert.match(source, /overflowWrap:\s*'anywhere'/u);
+  assert.match(source, /normalized === 'PASS' \? '#16a34a'/u);
+  assert.match(source, /normalized === 'REJECTED_BY_PREVIEW' \? '#dc2626'/u);
+  assert.match(source, /normalized === 'FAIL' \? '#d97706'/u);
+});
+
+test('projects the compact approval gate after RCA and preserves the controlled-load boundary', () => {
+  const source = readFileSync(fileURLToPath(new URL('./route.jsx', import.meta.url)), 'utf8');
+  const knowledgeIndex = source.indexOf('<KnowledgePanel');
+  const gateIndex = source.indexOf('<RepairPreviewGate');
+  const rawJsonIndex = source.indexOf('{/* Raw JSON fallback */}');
+
+  assert.ok(knowledgeIndex >= 0);
+  assert.ok(gateIndex > knowledgeIndex);
+  assert.ok(rawJsonIndex > gateIndex);
+  assert.match(source, /opskeeperApi\.getIncidentRepairPreviewSummary\(incidentId\)/u);
+  assert.match(source, /Controlled fixed-workload reconstruction in disposable preview-pg; original active sessions are not copied\./u);
+  assert.match(source, /PASS \/ eligible for human approval/u);
+  assert.match(source, /blocked before human approval/u);
+  assert.match(source, /PASS 仅代表预演资格通过，人工审批前不改变生产数据。/u);
+});
+
+test('normalizes repair preview wrappers and candidate arrays without mutation', () => {
+  const response = {
+    data: {
+      repair_previews: [
+        {
+          run_id: 'run-1',
+          workload_fingerprint: 'sha256:workload-v1',
+          seed_fingerprint: 'sha256:seed-v1',
+          isolation_boundary: 'Controlled fixed-workload reconstruction in disposable preview-pg; original active sessions are not copied.',
+          candidates: [{
+            candidate_id: 'baseline', name: 'Baseline replay', consistent: true,
+            average_latency_ms: 18, p95_latency_ms: 29, tps: 120, write_impact: 'none',
+            storage_delta_bytes: 0, business_probe_pass: true, decision: 'PASS',
+          }],
+        },
+        { run_id: 'run-2', candidates: null },
+      ],
+    },
+  };
+
+  const previews = normalizeRepairPreviews(response);
+
+  assert.equal(previews[0].workloadFingerprint, undefined);
+  assert.equal(previews[0].candidates[0].candidate_id, 'baseline');
+  assert.equal(previews[0].candidates[0].average_latency_ms, 18);
+  assert.equal(previews[0].candidates[0].p95_latency_ms, 29);
+  assert.equal(previews[0].candidates[0].write_impact, 'none');
+  assert.equal(previews[0].candidates[0].storage_delta_bytes, 0);
+  assert.equal(previews[0].candidates[0].business_probe_pass, true);
+  assert.deepEqual(previews[1].candidates, []);
+  assert.equal(response.data.repair_previews[1].candidates, null);
+  assert.deepEqual(normalizeRepairPreviews({ data: { repair_previews: [{ candidates: [] }] } }), []);
+});
+
+test('normalizes compact repair preview summary and keeps the legacy empty state', () => {
+  const summary = normalizeRepairPreviewSummary({
+    data: {
+      incident_id: 'inc-1',
+      run_id: 'run-1',
+      seed_fingerprint: 'sha256:seed-v1',
+      workload_fingerprint: 'sha256:workload-v1',
+      controlled_load: true,
+      isolation_boundary: 'Controlled fixed-workload reconstruction in disposable preview-pg; original active sessions are not copied.',
+      baseline: {
+        candidate_id: 'baseline', average_latency_ms: 18, write_impact: 'none',
+        storage_delta_bytes: 0, business_probe_pass: true, decision: 'PASS',
+      },
+      passing: {
+        candidate_id: 'candidate-a', average_latency_ms: 12, p95_latency_ms: 20,
+        write_impact: 'preview_only', storage_delta_bytes: 1024, business_probe_pass: true,
+        decision: 'PASS',
+      },
+      rejected: {
+        candidate_id: 'candidate-b', average_latency_ms: 25, p95_latency_ms: 42,
+        business_probe_pass: false, decision: 'REJECTED_BY_PREVIEW', rejection_reason: 'business probe failed',
+      },
+    },
+  });
+
+  assert.equal(summary.runId, 'run-1');
+  assert.equal(summary.seedFingerprint, 'sha256:seed-v1');
+  assert.equal(summary.workloadFingerprint, 'sha256:workload-v1');
+  assert.equal(summary.baseline.average_latency_ms, 18);
+  assert.equal(summary.baseline.write_impact, 'none');
+  assert.notEqual(summary.baseline.candidate_id, summary.passing.candidate_id);
+  assert.equal(summary.passing.decision, 'PASS');
+  assert.equal(summary.rejected.decision, 'REJECTED_BY_PREVIEW');
+  assert.equal(summary.rejected.rejection_reason, 'business probe failed');
+  assert.match(summary.isolationBoundary, /original active sessions are not copied/);
+  assert.deepEqual(normalizeRepairPreviewSummary(null), {
+    incidentId: '', runId: '', seedFingerprint: '', workloadFingerprint: '',
+    controlledLoad: false, isolationBoundary: '', baseline: null, passing: null, rejected: null,
+  });
 });
 
 test('rejects an invalid archive response', () => {

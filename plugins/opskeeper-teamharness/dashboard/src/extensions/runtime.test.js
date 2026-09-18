@@ -319,3 +319,32 @@ test('archive index readback uses the Manager proxy endpoint', async () => {
     xhrTransport.createRequest = originalCreateRequest;
   }
 });
+
+test('repair preview summary uses the Manager compact endpoint', async () => {
+  const originalCreateRequest = xhrTransport.createRequest;
+  const requests = [];
+  globalThis.XMLHttpRequest = function StubXMLHttpRequest() {
+    const request = {
+      status: 200,
+      responseText: JSON.stringify({ data: { run_id: 'run-preview-1' } }),
+      open(method, url) { requests.push({ method, url }); },
+      setRequestHeader() {},
+      getResponseHeader() { return 'application/json'; },
+      send() { request.onload(); },
+    };
+    return request;
+  };
+
+  try {
+    xhrTransport.createRequest = () => new globalThis.XMLHttpRequest();
+    const response = await opskeeperApi.getIncidentRepairPreviewSummary('inc preview/1');
+    assert.equal(response.data.run_id, 'run-preview-1');
+    assert.deepEqual(requests, [{
+      method: 'GET',
+      url: '/api/opskeeper/incidents/inc%20preview%2F1/repair-preview-summary',
+    }]);
+    await assert.rejects(opskeeperApi.getIncidentRepairPreviewSummary(''), /incident_id is required/);
+  } finally {
+    xhrTransport.createRequest = originalCreateRequest;
+  }
+});

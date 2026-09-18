@@ -156,6 +156,7 @@ import (
 
 	internalagentteams "github.com/vincent-wuhan/opskeeper/internal/agentteams"
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
+	repairpreviewcontrol "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
 	internaldataguard "github.com/vincent-wuhan/opskeeper/internal/dataguard"
 	internaldataguardheuristic "github.com/vincent-wuhan/opskeeper/internal/dataguard/heuristic"
 	internaldataguardlabel "github.com/vincent-wuhan/opskeeper/internal/dataguard/label"
@@ -302,6 +303,7 @@ func main() {
 		managerreportdata.Migrate,
 		managerflowdata.Migrate,
 		incidentcontrol.Migrate,
+		repairpreviewcontrol.Migrate,
 	); err != nil {
 		log.Error("run migrations", slog.Any("err", err))
 		os.Exit(1)
@@ -1288,10 +1290,15 @@ func main() {
 		traceQuerier = pkgtracequery.New(cfg.Traces.URL, log.With(slog.String("comp", "aiops-tracequery")))
 	}
 	toolsReg := aiopstools.NewRegistry(fbClient, edgeUC, deviceUC, promQuerier, logQuerier, traceQuerier, alertUC, log)
+	repairPreviewRepository := repairpreviewcontrol.NewSQLRepository(db)
 	hitlProposalRepo := managerdatahitlstore.NewRepo(db)
 	hitlProposalSvc := managerbizhitl.NewService(hitlProposalRepo)
 	hitlProposalHandler := managerserverhitl.NewHandler(hitlProposalSvc)
 	toolsReg.SetRecoveryAuditRepo(hitlRecoveryAuditRepo{repo: hitlProposalRepo})
+	toolsReg.SetRepairPreviewGate(repairpreviewcontrol.NewGate(
+		repairPreviewRepository,
+		strings.TrimSpace(os.Getenv("OPSKEEPER_REPAIR_PREVIEW_WORKLOAD_FINGERPRINT")),
+	))
 	hostFixtureURL := strings.TrimSpace(os.Getenv("OPSKEEPER_HOST_FIXTURE_URL"))
 	hostFixtureToken := strings.TrimSpace(os.Getenv("OPSKEEPER_HOST_FIXTURE_TOKEN"))
 	if hostFixtureURL != "" || hostFixtureToken != "" {
@@ -2743,7 +2750,7 @@ func main() {
 		promProxyQuerier = promQueryClient
 	}
 	promProxyHandler := managerserverprom.NewHandlerWithProm(promProxySvc, promProxyQuerier)
-	incidentHandler := managerserverincident.NewHandler(incidentcontrol.NewSQLRepository(db))
+	incidentHandler := managerserverincident.NewHandler(incidentcontrol.NewSQLRepository(db), repairPreviewRepository)
 
 	// otelhttpmw is the OTel HTTP middleware factory. Each request gets
 	// a span named after its method + matched chi route. Built once and

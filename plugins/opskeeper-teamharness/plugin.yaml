@@ -2,7 +2,7 @@ apiVersion: agentteams.agentteam/v1alpha1
 kind: AgentTeamPlugin
 metadata:
   name: opskeeper-teamharness
-  version: 1.0.64
+  version: 1.0.65
   description: |
     Opskeeper TeamHarness plugin — provides six deployed ops actors
     (alerter/investigator/reviewer/repairer/verifier/reporter)
@@ -143,6 +143,9 @@ metadata:
 
     v1.0.58 scopes high-contrast text to all TeamHarness Dashboard surfaces and
     restores safe runtime credential fallbacks for the signed RCA proxy.
+
+    v1.0.61 projects candidate-repair comparison readback from the Manager
+    archive and shows the controlled fixed-workload approval gate in RCA.
 
     v1.0.60 adds a Manager archive index so the Dashboard Archive tab lists
     actual closed-loop incident IDs instead of numeric alert IDs, and clarifies

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.65 — 2026-09-18
+
+- Integrate authoritative repair-preview readback with the final-demo scenario, compact approval gate, and workflow projections.
+- Preserve the full A/B comparison table and controlled fixed-workload boundary in Archive.
+
 ## 1.0.64 — 2026-09-18
 
 - Make the Archive page responsive at half-screen widths so long rules, timestamps, metrics, evidence references, trace IDs, and incident summaries wrap within their cards.

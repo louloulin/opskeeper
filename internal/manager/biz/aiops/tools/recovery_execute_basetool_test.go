@@ -97,7 +97,15 @@ func (f *fakeDispatcher) InvokableRun(_ context.Context, argsJSON string, _ ...b
 // fake audit repo. Mirrors newRestartServiceToolFor so the two
 // share their test fixtures.
 func newRecoveryExecuteToolFor(dispatcher basetool.BaseTool, audit MutatingProposalAuditRepo) *RecoveryExecuteTool {
-	return NewRecoveryExecuteTool(dispatcher, nil, audit, nil)
+	tool := NewRecoveryExecuteTool(dispatcher, nil, audit, nil)
+	tool.SetRepairPreviewGate(fakePreviewGate{})
+	return tool
+}
+
+type fakePreviewGate struct{ err error }
+
+func (gate fakePreviewGate) Eligible(context.Context, string, string, string, string, string) error {
+	return gate.err
 }
 
 func TestRecoveryExecuteTool_Info(t *testing.T) {
@@ -359,6 +367,7 @@ func TestRecoveryExecuteTool_ReservesExactProposalAndCompletesExecuted(t *testin
 		Action: "restart_service", Resource: "host:worker-1",
 		Execution: hitlmodel.RecoveryExecutionParameters{
 			Command: "restart_service", DeviceID: 7, Service: "nginx", Reason: "exact restart",
+			PreviewRunID: "run-preview-1", PreviewCandidateID: "candidate-a",
 		},
 	}
 	dispatcher := &fakeDispatcher{name: ToolNameRestartService}
@@ -377,7 +386,7 @@ func TestRecoveryExecuteTool_ReservesExactProposalAndCompletesExecuted(t *testin
 		"skill_id":"restart",
 		"target":"host:worker-1",
 		"resource_type":"host",
-		"parameters":{"command":"restart_service","device_id":7,"service":"nginx","reason":"exact restart"}
+		"parameters":{"command":"restart_service","device_id":7,"service":"nginx","reason":"exact restart","preview_run_id":"run-preview-1","preview_candidate_id":"candidate-a"}
 	}`
 	if _, err := tool.InvokableRun(ctx, args); err != nil {
 		t.Fatalf("InvokableRun: %v", err)
@@ -391,6 +400,7 @@ func TestRecoveryExecuteTool_ReservesExactProposalAndCompletesExecuted(t *testin
 		check.Action != "restart_service" || check.Resource != "host:worker-1" ||
 		check.Execution != (hitlmodel.RecoveryExecutionParameters{
 			Command: "restart_service", DeviceID: 7, Service: "nginx", Reason: "exact restart",
+			PreviewRunID: "run-preview-1", PreviewCandidateID: "candidate-a",
 		}) {
 		t.Fatalf("exact request mismatch: %+v", check)
 	}
@@ -444,7 +454,7 @@ func TestRecoveryExecuteTool_AgentTeamsRequiresApprovedProposal(t *testing.T) {
 		"skill_id":"x",
 		"target":"host-3",
 		"resource_type":"host",
-		"parameters":{"command":"restart_service","device_id":3,"service":"nginx","reason":"restart after RCA"}
+		"parameters":{"command":"restart_service","device_id":3,"service":"nginx","reason":"restart after RCA","preview_run_id":"run-preview-1","preview_candidate_id":"candidate-a"}
 	}`
 	_, err := tool.InvokableRun(ctx, args)
 	if err == nil {
@@ -455,6 +465,56 @@ func TestRecoveryExecuteTool_AgentTeamsRequiresApprovedProposal(t *testing.T) {
 	}
 	if len(audit.checks) != 0 || dispatcher.calls != 0 {
 		t.Fatalf("audit.checks = %v, dispatcher.calls = %d; want no lookup and no dispatch", audit.checks, dispatcher.calls)
+	}
+}
+
+func TestRecoveryExecuteTool_AgentTeamsRequiresPreviewBindings(t *testing.T) {
+	audit := newFakeAuditRepo()
+	dispatcher := &fakeDispatcher{name: ToolNameRestartService}
+	tool := newRecoveryExecuteToolFor(dispatcher, audit)
+	ctx := tenantctx.With(context.Background(), tenantctx.Tenant{
+		AgentTeams: &tenantctx.AgentTeamsIdentity{TenantID: "tenant-a", Service: "agentteams", Role: "repairer"},
+	})
+
+	args := `{
+		"incident_id":"inc-agentteams",
+		"proposal_id":"11111111-1111-4111-8111-111111111111",
+		"skill_id":"x","target":"host-3","resource_type":"host",
+		"parameters":{"command":"restart_service","device_id":3,"service":"nginx","reason":"x","preview_run_id":"run-preview-1"}
+	}`
+	_, err := tool.InvokableRun(ctx, args)
+
+	if err == nil || !strings.Contains(err.Error(), "preview_candidate_id") {
+		t.Fatalf("err = %v, want missing preview candidate", err)
+	}
+	if len(audit.checks) != 0 || dispatcher.calls != 0 {
+		t.Fatalf("audit.checks = %+v dispatcher.calls = %d; want no reservation or dispatch", audit.checks, dispatcher.calls)
+	}
+}
+
+func TestRecoveryExecuteTool_AgentTeamsPreviewGateRunsBeforeReservation(t *testing.T) {
+	audit := newFakeAuditRepo()
+	audit.approve["inc-agentteams"] = true
+	dispatcher := &fakeDispatcher{name: ToolNameRestartService}
+	tool := NewRecoveryExecuteTool(dispatcher, nil, audit, nil)
+	tool.SetRepairPreviewGate(fakePreviewGate{err: errors.New("candidate rejected")})
+	ctx := tenantctx.With(context.Background(), tenantctx.Tenant{
+		AgentTeams: &tenantctx.AgentTeamsIdentity{TenantID: "tenant-a", Service: "agentteams", Role: "repairer"},
+	})
+
+	args := `{
+		"incident_id":"inc-agentteams",
+		"proposal_id":"22222222-2222-4222-8222-222222222222",
+		"skill_id":"x","target":"host-3","resource_type":"host",
+		"parameters":{"command":"restart_service","device_id":3,"service":"nginx","reason":"x","preview_run_id":"run-preview-1","preview_candidate_id":"candidate-a"}
+	}`
+	_, err := tool.InvokableRun(ctx, args)
+
+	if err == nil || !strings.Contains(err.Error(), "repair preview eligibility") {
+		t.Fatalf("err = %v, want preview eligibility failure", err)
+	}
+	if len(audit.checks) != 0 || dispatcher.calls != 0 {
+		t.Fatalf("audit.checks = %+v dispatcher.calls = %d; want gate before reservation", audit.checks, dispatcher.calls)
 	}
 }
 
@@ -626,7 +686,8 @@ func TestRecoveryExecuteTool_KillProcessUsesExactApprovedTarget(t *testing.T) {
 	audit.approve["host-cpu"] = true
 	approvedExecution := hitlmodel.RecoveryExecutionParameters{
 		Command: "kill_process", IncidentID: "host-cpu", FixtureManifestID: "f4b1c0a19d3e5f7a",
-		Reason: "terminate top CPU fixture",
+		Reason:       "terminate top CPU fixture",
+		PreviewRunID: "run-preview-1", PreviewCandidateID: "candidate-a",
 	}
 	audit.strict["host-cpu"] = RecoveryProposalRequest{
 		ProposalID: "88888888-8888-4888-8888-888888888888",
@@ -642,6 +703,7 @@ func TestRecoveryExecuteTool_KillProcessUsesExactApprovedTarget(t *testing.T) {
 		},
 	}
 	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: ToolNameRestartService}, terminator, audit, nil)
+	tool.SetRepairPreviewGate(fakePreviewGate{})
 	ctx := tenantctx.With(context.Background(), tenantctx.Tenant{
 		AgentTeams: &tenantctx.AgentTeamsIdentity{
 			TenantID: "tenant-a", Service: "agentteams", Worker: "opskeeper-repairer",
@@ -654,7 +716,7 @@ func TestRecoveryExecuteTool_KillProcessUsesExactApprovedTarget(t *testing.T) {
 		"skill_id":"host-kill-fixture",
 		"target":"host:fixture",
 		"resource_type":"host",
-		"parameters":{"command":"kill_process","incident_id":"host-cpu","fixture_manifest_id":"f4b1c0a19d3e5f7a","reason":"terminate top CPU fixture"}
+		"parameters":{"command":"kill_process","incident_id":"host-cpu","fixture_manifest_id":"f4b1c0a19d3e5f7a","reason":"terminate top CPU fixture","preview_run_id":"run-preview-1","preview_candidate_id":"candidate-a"}
 	}`
 	out, err := tool.InvokableRun(ctx, args)
 	if err != nil {

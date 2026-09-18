@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
+	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
 )
 
@@ -220,6 +221,134 @@ func TestArchiveReportsMissingEvidence(t *testing.T) {
 	}
 }
 
+func TestArchiveIncludesBoundedRepairPreviews(t *testing.T) {
+	events := completeArchiveEvents("opskeeper-demo", "INC-ARCHIVE-FULL")
+	run := previewRun("opskeeper-demo", "INC-ARCHIVE-FULL")
+	repository := &stubMetricsRepository{
+		incidentEvents: map[string][]incidentcontrol.Event{
+			"opskeeper-demo/INC-ARCHIVE-FULL": events,
+			"2/INC-ARCHIVE-FULL":              events,
+		},
+		previewRuns: []repairpreview.Run{run},
+	}
+	router := routerWithHandler(NewHandler(repository, &stubPreviewRepository{runs: []repairpreview.Run{run}}))
+	request := httptest.NewRequest(http.MethodGet, "/v1/incidents/INC-ARCHIVE-FULL/archive?tenant_id=opskeeper-demo", nil)
+	request = request.WithContext(tenantctx.With(request.Context(), tenantctx.Tenant{UserID: 1, Role: "admin"}))
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Data archiveSummary `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Data.RepairPreviews) != 1 || len(response.Data.RepairPreviews[0].Candidates) != 3 {
+		t.Fatalf("repair previews = %+v", response.Data.RepairPreviews)
+	}
+	if response.Data.RepairPreviews[0].Candidates[0].CandidateID != "baseline" {
+		t.Fatalf("first repair preview row is not baseline: %+v", response.Data.RepairPreviews[0].Candidates[0])
+	}
+	body := recorder.Body.String()
+	for _, wireField := range []string{
+		`"workload_fingerprint":"sha256:workload-v1"`, `"seed_fingerprint":"sha256:seed-v1"`,
+		`"isolation_boundary":"preview-pg"`, `"average_latency_ms":18`, `"p95_latency_ms":29`,
+		`"write_impact":"none"`, `"storage_delta_bytes":0`, `"business_probe_pass":true`,
+	} {
+		if !strings.Contains(body, wireField) {
+			t.Fatalf("repair preview wire field %s missing: %s", wireField, body)
+		}
+	}
+	if !response.Data.EvidenceComplete {
+		t.Fatalf("legacy evidence completeness changed: %+v", response.Data)
+	}
+}
+
+func TestRepairPreviewSummaryReturnsEmptyForLegacyIncident(t *testing.T) {
+	events := completeArchiveEvents("opskeeper-demo", "INC-ARCHIVE-FULL")
+	repository := &stubMetricsRepository{
+		incidentEvents: map[string][]incidentcontrol.Event{"opskeeper-demo/INC-ARCHIVE-FULL": events},
+		tenantEvents:   events,
+	}
+	router := routerWithHandler(NewHandler(repository, &stubPreviewRepository{}))
+	request := httptest.NewRequest(http.MethodGet, "/v1/incidents/INC-ARCHIVE-FULL/repair-preview-summary?tenant_id=opskeeper-demo", nil)
+	request = request.WithContext(tenantctx.With(request.Context(), tenantctx.Tenant{UserID: 1, Role: "admin"}))
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, `"run_id":""`) {
+		t.Fatalf("empty summary missing empty run id: %s", body)
+	}
+}
+
+func TestRepairPreviewSummaryProjectsPersistedBaselineAndWireFields(t *testing.T) {
+	events := completeArchiveEvents("opskeeper-demo", "INC-ARCHIVE-FULL")
+	run := previewRun("opskeeper-demo", "INC-ARCHIVE-FULL")
+	repository := &stubMetricsRepository{
+		incidentEvents: map[string][]incidentcontrol.Event{"opskeeper-demo/INC-ARCHIVE-FULL": events},
+		tenantEvents:   events,
+	}
+	router := routerWithHandler(NewHandler(repository, &stubPreviewRepository{runs: []repairpreview.Run{run}}))
+	request := httptest.NewRequest(http.MethodGet, "/v1/incidents/INC-ARCHIVE-FULL/repair-preview-summary?tenant_id=opskeeper-demo", nil)
+	request = request.WithContext(tenantctx.With(request.Context(), tenantctx.Tenant{UserID: 1, Role: "admin"}))
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	for _, wireField := range []string{
+		`"baseline":{"id":"017f2b01-6000-4000-8000-000000000000"`,
+		`"candidate_id":"baseline"`, `"average_latency_ms":18`, `"write_impact":"none"`,
+		`"storage_delta_bytes":0`, `"passing":{"id":"017f2b01-6001-4000-8000-000000000001"`,
+		`"workload_fingerprint":"sha256:workload-v1"`, `"seed_fingerprint":"sha256:seed-v1"`,
+		`"isolation_boundary":"preview-pg"`,
+	} {
+		if !strings.Contains(body, wireField) {
+			t.Fatalf("compact wire field %s missing: %s", wireField, body)
+		}
+	}
+}
+
+func TestRepairPreviewSummaryIsTenantIsolatedAndDoesNotLeakRepositoryErrors(t *testing.T) {
+	events := completeArchiveEvents("opskeeper-demo", "INC-ARCHIVE-FULL")
+	repository := &stubMetricsRepository{
+		incidentEvents: map[string][]incidentcontrol.Event{
+			"opskeeper-demo/INC-ARCHIVE-FULL": events,
+			"2/INC-ARCHIVE-FULL":              events,
+		},
+	}
+	previews := &stubPreviewRepository{}
+	router := routerWithHandler(NewHandler(repository, previews))
+	request := httptest.NewRequest(http.MethodGet, "/v1/incidents/INC-ARCHIVE-FULL/repair-preview-summary?tenant_id=opskeeper-demo", nil)
+	request = request.WithContext(tenantctx.With(request.Context(), tenantctx.Tenant{UserID: 2, Role: "user"}))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || previews.lastTenantID != "2" {
+		t.Fatalf("tenant isolation status=%d tenant=%q", recorder.Code, previews.lastTenantID)
+	}
+
+	previews.err = errors.New("SQLSTATE=42P01 secret")
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if body := recorder.Body.String(); strings.Contains(body, "SQLSTATE") || strings.Contains(body, "secret") {
+		t.Fatalf("repository detail leaked: %s", body)
+	}
+}
+
 func TestArchiveIsTenantIsolated(t *testing.T) {
 	events := completeArchiveEvents("opskeeper-demo", "INC-ARCHIVE-FULL")
 	repository := &stubMetricsRepository{
@@ -284,6 +413,61 @@ type stubMetricsRepository struct {
 	incidentEvents       map[string][]incidentcontrol.Event
 	tenantEvents         []incidentcontrol.Event
 	runbooks             []incidentcontrol.Postmortem
+	previewRuns          []repairpreview.Run
+}
+
+type stubPreviewRepository struct {
+	runs           []repairpreview.Run
+	err            error
+	lastTenantID   string
+	lastIncidentID string
+}
+
+func (repository *stubPreviewRepository) Save(context.Context, repairpreview.Run) error { return nil }
+
+func (repository *stubPreviewRepository) ListByIncident(_ context.Context, tenantID, incidentID string, _ int) ([]repairpreview.Run, error) {
+	repository.lastTenantID = tenantID
+	repository.lastIncidentID = incidentID
+	return repository.runs, repository.err
+}
+
+func (repository *stubPreviewRepository) FindEligible(_ context.Context, _, _, _, _, _ string) (repairpreview.Candidate, error) {
+	return repairpreview.Candidate{}, repairpreview.ErrNotFound
+}
+
+func previewRun(tenantID, incidentID string) repairpreview.Run {
+	baseline := repairpreview.Candidate{
+		ID: "017f2b01-6000-4000-8000-000000000000", RunID: "017f2b01-6000-4000-8000-000000000000",
+		TenantID: tenantID, IncidentID: incidentID, CandidateID: "baseline", Name: "Baseline replay",
+		Kind: "baseline", Action: "baseline", ChangeSummary: "Controlled fixed-workload baseline",
+		Branch: "preview/baseline", ResultChecksum: "sha256:baseline", Consistent: true,
+		AverageLatencyMS: 18, MedianLatencyMS: 17, P95LatencyMS: 29, SampleCount: 10,
+		TPS: 120, WriteImpact: "none", StorageDeltaBytes: 0, BusinessProbePass: true,
+		Decision: repairpreview.DecisionPass,
+	}
+	passing := repairpreview.Candidate{
+		ID: "017f2b01-6001-4000-8000-000000000001", RunID: "017f2b01-6000-4000-8000-000000000000",
+		TenantID: tenantID, IncidentID: incidentID, CandidateID: "candidate-a", Name: "bounded resize",
+		Kind: "postgresql", Action: "resize_pool", ChangeSummary: "bounded capacity change",
+		Branch: "preview/candidate-a", ResultChecksum: "sha256:baseline", Consistent: true,
+		AverageLatencyMS: 12, MedianLatencyMS: 11, P95LatencyMS: 20, SampleCount: 10,
+		TPS: 100, WriteImpact: "preview_only", StorageDeltaBytes: 1024, BusinessProbePass: true,
+		Decision: repairpreview.DecisionPass,
+	}
+	rejected := passing
+	rejected.ID = "017f2b01-6002-4000-8000-000000000002"
+	rejected.CandidateID = "candidate-b"
+	rejected.Action = "reset_pool"
+	rejected.BusinessProbePass = false
+	rejected.Decision = repairpreview.DecisionReject
+	rejected.RejectionReason = "business probe failed"
+	return repairpreview.Run{
+		ID: passing.RunID, TenantID: tenantID, IncidentID: incidentID, BranchPrefix: "preview/incident",
+		SeedFingerprint: "sha256:seed-v1", WorkloadFingerprint: "sha256:workload-v1", WorkloadRevision: "workload-v1",
+		ControlledLoad: true, IsolationBoundary: "preview-pg", Status: "finished",
+		StartedAt:  time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC),
+		FinishedAt: time.Date(2026, 9, 18, 10, 1, 0, 0, time.UTC), Candidates: []repairpreview.Candidate{baseline, passing, rejected},
+	}
 }
 
 func (repository *stubMetricsRepository) ListTenant(_ context.Context, tenantID string) ([]incidentcontrol.Event, error) {

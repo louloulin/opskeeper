@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
+	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
 )
 
@@ -27,10 +28,19 @@ type Repository interface {
 
 type Handler struct {
 	repository Repository
+	previews   PreviewReadRepository
 }
 
-func NewHandler(repository Repository) *Handler {
-	return &Handler{repository: repository}
+type PreviewReadRepository interface {
+	ListByIncident(ctx context.Context, tenantID, incidentID string, limit int) ([]repairpreview.Run, error)
+}
+
+func NewHandler(repository Repository, previews ...PreviewReadRepository) *Handler {
+	handler := &Handler{repository: repository}
+	if len(previews) > 0 {
+		handler.previews = previews[0]
+	}
+	return handler
 }
 
 func (h *Handler) Register(router chi.Router) {
@@ -38,6 +48,7 @@ func (h *Handler) Register(router chi.Router) {
 	router.Get("/v1/incidents/archive-index", h.archiveIndex)
 	router.Get("/v1/incidents/runbooks", h.runbooks)
 	router.Get("/v1/incidents/{incident_id}/archive", h.archive)
+	router.Get("/v1/incidents/{incident_id}/repair-preview-summary", h.repairPreviewSummary)
 	router.Get("/v1/incidents/{incident_id}/recall-logs", h.recallLogs)
 }
 
@@ -183,10 +194,59 @@ func (h *Handler) archive(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "repository_error", "incident archive lookup failed")
 		return
 	}
+	repairPreviews := []repairpreview.Run{}
+	if h.previews != nil {
+		previewRuns, err := h.previews.ListByIncident(r.Context(), tenantID, incidentID, 3)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "repository_error", "repair preview archive lookup failed")
+			return
+		}
+		repairPreviews = repairpreview.BoundArchiveRuns(previewRuns)
+	}
 
 	archive := buildArchive(tenantID, incidentID, events, tenantEvents)
 	archive.PostmortemRefs = postmortemRefs(runbooks, incidentID)
+	archive.RepairPreviews = repairPreviews
 	writeJSON(w, http.StatusOK, archiveResponse{Code: 0, Message: "ok", Data: archive})
+}
+
+func (h *Handler) repairPreviewSummary(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := h.tenantID(w, r)
+	if !ok {
+		return
+	}
+	incidentID := chi.URLParam(r, "incident_id")
+	if incidentID == "" {
+		writeError(w, http.StatusBadRequest, "invalid", "incident_id is required")
+		return
+	}
+	if h.repository == nil {
+		writeError(w, http.StatusServiceUnavailable, "not_wired", "incident repository is not wired")
+		return
+	}
+	events, err := h.repository.ListIncident(r.Context(), tenantID, incidentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "repository_error", "incident archive lookup failed")
+		return
+	}
+	if len(events) == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "incident archive is empty")
+		return
+	}
+	summary := repairpreview.CompactSummary{}
+	if h.previews != nil {
+		runs, err := h.previews.ListByIncident(r.Context(), tenantID, incidentID, 3)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "repository_error", "repair preview lookup failed")
+			return
+		}
+		summary, err = repairpreview.BuildCompactSummary(repairpreview.BoundArchiveRuns(runs))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "repository_error", "repair preview lookup failed")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, repairPreviewSummaryResponse{Code: 0, Message: "ok", Data: summary})
 }
 
 func (h *Handler) tenantID(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -340,6 +400,13 @@ type archiveSummary struct {
 	Timeline            []incidentcontrol.Event `json:"timeline"`
 	SimilarIncidents    []similarIncident       `json:"similar_incidents"`
 	PostmortemRefs      []postmortemRef         `json:"postmortem_refs"`
+	RepairPreviews      []repairpreview.Run     `json:"repair_previews"`
+}
+
+type repairPreviewSummaryResponse struct {
+	Code    int                          `json:"code"`
+	Message string                       `json:"message"`
+	Data    repairpreview.CompactSummary `json:"data"`
 }
 
 type similarIncident struct {

@@ -203,6 +203,7 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 		dispatcher := NewRestartServiceTool(r.caller, r.edges, r.devices, r.log)
 		recoveryTool := NewRecoveryExecuteTool(dispatcher, r.hostFixtureTerminator, r.recoveryAuditRepo, r.log)
 		recoveryTool.SetPoolRecoveryExecutor(r.poolRecoveryExecutor)
+		recoveryTool.SetRepairPreviewGate(r.repairPreviewGate)
 		out = append(out, recoveryTool)
 	}
 
