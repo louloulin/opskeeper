@@ -107,12 +107,17 @@ func TestSQLRepository_ListByIncident_IsScopedAndBounded(t *testing.T) {
 func TestSQLRepository_FindEligible_RequiresExactBindingsAndPass(t *testing.T) {
 	repository, _ := setupRepository(t)
 	run := validRun()
-	run.Candidates = []Candidate{validCandidate("candidate-a", "resize_pool")}
+	baseline := validCandidate("baseline", "baseline")
+	baseline.Kind = "baseline"
+	baseline.ID = "017f2b01-3199-4000-8000-000000000098"
+	run.Candidates = []Candidate{baseline, validCandidate("candidate-a", "resize_pool")}
 	require.NoError(t, repository.Save(context.Background(), run))
 
 	candidate, err := repository.FindEligible(context.Background(), run.TenantID, run.IncidentID, run.ID, "candidate-a", "resize_pool")
 	require.NoError(t, err)
 	require.Equal(t, "candidate-a", candidate.CandidateID)
+	_, err = repository.FindEligible(context.Background(), run.TenantID, run.IncidentID, run.ID, "baseline", "baseline")
+	require.True(t, errors.Is(err, ErrCandidateNotFound), err)
 
 	_, err = repository.FindEligible(context.Background(), "other-tenant", run.IncidentID, run.ID, "candidate-a", "resize_pool")
 	require.True(t, errors.Is(err, ErrCandidateNotFound), err)

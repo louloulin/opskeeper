@@ -318,24 +318,24 @@ function RepairPreviewArchive({ runs, incidentId }) {
                   <tr key={candidate.id || candidate.candidate_id || candidateIndex}>
                     <td style={previewCellStyle('left')}>
                       <div style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
-                        {candidate.name || candidate.candidate_id || candidate.candidateId || '未知候选'}
+                        {candidate.name || candidate.candidate_id || '未知候选'}
                       </div>
                       <div style={{ marginTop: 3, overflowWrap: 'anywhere' }}>
-                        {candidate.action || candidate.change_summary || candidate.changeSummary || '未记录动作'}
+                        {candidate.action || candidate.change_summary || '未记录动作'}
                       </div>
                     </td>
-                    <td style={previewCellStyle()}>{formatBoolean(candidate.consistent ?? candidate.Consistent)}</td>
-                    <td style={previewCellStyle()}>{formatMilliseconds(candidate.average_latency_ms ?? candidate.averageLatencyMs)}</td>
-                    <td style={previewCellStyle()}>{formatMilliseconds(candidate.p95_latency_ms ?? candidate.p95LatencyMs)}</td>
-                    <td style={previewCellStyle()}>{formatNumber(candidate.tps ?? candidate.TPS)}</td>
-                    <td style={previewCellStyle()}>{candidate.write_impact || candidate.writeImpact || '—'}</td>
-                    <td style={previewCellStyle()}>{formatBytes(candidate.storage_delta_bytes ?? candidate.storageDeltaBytes)}</td>
-                    <td style={previewCellStyle()}>{formatBoolean(candidate.business_probe_pass ?? candidate.businessProbePass)}</td>
+                    <td style={previewCellStyle()}>{formatBoolean(candidate.consistent)}</td>
+                    <td style={previewCellStyle()}>{formatMilliseconds(candidate.average_latency_ms)}</td>
+                    <td style={previewCellStyle()}>{formatMilliseconds(candidate.p95_latency_ms)}</td>
+                    <td style={previewCellStyle()}>{formatNumber(candidate.tps)}</td>
+                    <td style={previewCellStyle()}>{candidate.write_impact || '—'}</td>
+                    <td style={previewCellStyle()}>{formatBytes(candidate.storage_delta_bytes)}</td>
+                    <td style={previewCellStyle()}>{formatBoolean(candidate.business_probe_pass)}</td>
                     <td style={previewCellStyle('left')}>
                       <span style={previewDecisionStyle(candidate.decision)}>{candidate.decision || 'UNKNOWN'}</span>
-                      {(candidate.rejection_reason || candidate.rejectionReason) && (
+                      {candidate.rejection_reason && (
                         <div style={{ marginTop: 4, color: 'var(--muted-foreground)', overflowWrap: 'anywhere' }}>
-                          {candidate.rejection_reason || candidate.rejectionReason}
+                          {candidate.rejection_reason}
                         </div>
                       )}
                     </td>

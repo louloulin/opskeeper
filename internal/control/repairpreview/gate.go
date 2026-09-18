@@ -31,6 +31,9 @@ func (gate *repositoryGate) Eligible(ctx context.Context, tenantID, incidentID, 
 	if gate.repository == nil {
 		return ErrNotFound
 	}
+	if candidateID == BaselineCandidateID || action == BaselineAction {
+		return ErrNotEligible
+	}
 	runs, err := gate.repository.ListByIncident(ctx, tenantID, incidentID, 50)
 	if err != nil {
 		return errors.New("read repair preview eligibility failed")

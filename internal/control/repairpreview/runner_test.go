@@ -27,16 +27,22 @@ func TestExecute_ProducesDeterministicCandidateEvidence(t *testing.T) {
 	first, err := Execute(context.Background(), database, spec)
 	require.NoError(t, err)
 	require.NoError(t, first.Validate())
-	require.Len(t, first.Candidates, 2)
+	require.Len(t, first.Candidates, 3)
+	require.Equal(t, "baseline", first.Candidates[0].CandidateID)
+	require.Equal(t, "baseline", first.Candidates[0].Kind)
 	require.Equal(t, DecisionPass, first.Candidates[0].Decision)
-	require.True(t, first.Candidates[0].Consistent)
+	require.Equal(t, "none", first.Candidates[0].WriteImpact)
+	require.Zero(t, first.Candidates[0].StorageDeltaBytes)
 	require.Greater(t, first.Candidates[0].AverageLatencyMS, 0.0)
-	require.Greater(t, first.Candidates[0].MedianLatencyMS, 0.0)
-	require.Greater(t, first.Candidates[0].P95LatencyMS, 0.0)
-	require.Equal(t, 12, first.Candidates[0].SampleCount)
-	require.Equal(t, DecisionReject, first.Candidates[1].Decision)
-	require.False(t, first.Candidates[1].BusinessProbePass)
-	require.Contains(t, first.Candidates[1].RejectionReason, "business probe")
+	require.Equal(t, DecisionPass, first.Candidates[1].Decision)
+	require.True(t, first.Candidates[1].Consistent)
+	require.Greater(t, first.Candidates[1].AverageLatencyMS, 0.0)
+	require.Greater(t, first.Candidates[1].MedianLatencyMS, 0.0)
+	require.Greater(t, first.Candidates[1].P95LatencyMS, 0.0)
+	require.Equal(t, 12, first.Candidates[1].SampleCount)
+	require.Equal(t, DecisionReject, first.Candidates[2].Decision)
+	require.False(t, first.Candidates[2].BusinessProbePass)
+	require.Contains(t, first.Candidates[2].RejectionReason, "business probe")
 	require.Equal(
 		t,
 		"Controlled fixed-workload reconstruction in disposable preview-pg; original active sessions are not copied.",
@@ -46,7 +52,7 @@ func TestExecute_ProducesDeterministicCandidateEvidence(t *testing.T) {
 	spec.RuntimeBinding.RunID = "017f2b01-4002-4000-8000-000000000002"
 	second, err := Execute(context.Background(), database, spec)
 	require.NoError(t, err)
-	require.Equal(t, first.Candidates[0].ResultChecksum, second.Candidates[0].ResultChecksum)
+	require.Equal(t, first.Candidates[1].ResultChecksum, second.Candidates[1].ResultChecksum)
 
 	var schemas int
 	prefix := repairPreviewSchemaPrefix(first.ID)[:12]

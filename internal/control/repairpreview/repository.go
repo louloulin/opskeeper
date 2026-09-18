@@ -126,6 +126,9 @@ func (repository *SQLRepository) FindEligible(ctx context.Context, tenantID, inc
 	if tenantID == "" || incidentID == "" || runID == "" || candidateID == "" || action == "" {
 		return Candidate{}, ErrCandidateNotFound
 	}
+	if candidateID == BaselineCandidateID || action == BaselineAction {
+		return Candidate{}, ErrCandidateNotFound
+	}
 	var row candidateRow
 	err := repository.db.WithContext(ctx).
 		Where(

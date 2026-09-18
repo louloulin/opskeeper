@@ -247,8 +247,21 @@ func TestArchiveIncludesBoundedRepairPreviews(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Data.RepairPreviews) != 1 || len(response.Data.RepairPreviews[0].Candidates) != 2 {
+	if len(response.Data.RepairPreviews) != 1 || len(response.Data.RepairPreviews[0].Candidates) != 3 {
 		t.Fatalf("repair previews = %+v", response.Data.RepairPreviews)
+	}
+	if response.Data.RepairPreviews[0].Candidates[0].CandidateID != "baseline" {
+		t.Fatalf("first repair preview row is not baseline: %+v", response.Data.RepairPreviews[0].Candidates[0])
+	}
+	body := recorder.Body.String()
+	for _, wireField := range []string{
+		`"workload_fingerprint":"sha256:workload-v1"`, `"seed_fingerprint":"sha256:seed-v1"`,
+		`"isolation_boundary":"preview-pg"`, `"average_latency_ms":18`, `"p95_latency_ms":29`,
+		`"write_impact":"none"`, `"storage_delta_bytes":0`, `"business_probe_pass":true`,
+	} {
+		if !strings.Contains(body, wireField) {
+			t.Fatalf("repair preview wire field %s missing: %s", wireField, body)
+		}
 	}
 	if !response.Data.EvidenceComplete {
 		t.Fatalf("legacy evidence completeness changed: %+v", response.Data)
@@ -273,6 +286,37 @@ func TestRepairPreviewSummaryReturnsEmptyForLegacyIncident(t *testing.T) {
 	}
 	if body := recorder.Body.String(); !strings.Contains(body, `"run_id":""`) {
 		t.Fatalf("empty summary missing empty run id: %s", body)
+	}
+}
+
+func TestRepairPreviewSummaryProjectsPersistedBaselineAndWireFields(t *testing.T) {
+	events := completeArchiveEvents("opskeeper-demo", "INC-ARCHIVE-FULL")
+	run := previewRun("opskeeper-demo", "INC-ARCHIVE-FULL")
+	repository := &stubMetricsRepository{
+		incidentEvents: map[string][]incidentcontrol.Event{"opskeeper-demo/INC-ARCHIVE-FULL": events},
+		tenantEvents:   events,
+	}
+	router := routerWithHandler(NewHandler(repository, &stubPreviewRepository{runs: []repairpreview.Run{run}}))
+	request := httptest.NewRequest(http.MethodGet, "/v1/incidents/INC-ARCHIVE-FULL/repair-preview-summary?tenant_id=opskeeper-demo", nil)
+	request = request.WithContext(tenantctx.With(request.Context(), tenantctx.Tenant{UserID: 1, Role: "admin"}))
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	for _, wireField := range []string{
+		`"baseline":{"id":"017f2b01-6000-4000-8000-000000000000"`,
+		`"candidate_id":"baseline"`, `"average_latency_ms":18`, `"write_impact":"none"`,
+		`"storage_delta_bytes":0`, `"passing":{"id":"017f2b01-6001-4000-8000-000000000001"`,
+		`"workload_fingerprint":"sha256:workload-v1"`, `"seed_fingerprint":"sha256:seed-v1"`,
+		`"isolation_boundary":"preview-pg"`,
+	} {
+		if !strings.Contains(body, wireField) {
+			t.Fatalf("compact wire field %s missing: %s", wireField, body)
+		}
 	}
 }
 
@@ -392,6 +436,15 @@ func (repository *stubPreviewRepository) FindEligible(_ context.Context, _, _, _
 }
 
 func previewRun(tenantID, incidentID string) repairpreview.Run {
+	baseline := repairpreview.Candidate{
+		ID: "017f2b01-6000-4000-8000-000000000000", RunID: "017f2b01-6000-4000-8000-000000000000",
+		TenantID: tenantID, IncidentID: incidentID, CandidateID: "baseline", Name: "Baseline replay",
+		Kind: "baseline", Action: "baseline", ChangeSummary: "Controlled fixed-workload baseline",
+		Branch: "preview/baseline", ResultChecksum: "sha256:baseline", Consistent: true,
+		AverageLatencyMS: 18, MedianLatencyMS: 17, P95LatencyMS: 29, SampleCount: 10,
+		TPS: 120, WriteImpact: "none", StorageDeltaBytes: 0, BusinessProbePass: true,
+		Decision: repairpreview.DecisionPass,
+	}
 	passing := repairpreview.Candidate{
 		ID: "017f2b01-6001-4000-8000-000000000001", RunID: "017f2b01-6000-4000-8000-000000000000",
 		TenantID: tenantID, IncidentID: incidentID, CandidateID: "candidate-a", Name: "bounded resize",
@@ -413,7 +466,7 @@ func previewRun(tenantID, incidentID string) repairpreview.Run {
 		SeedFingerprint: "sha256:seed-v1", WorkloadFingerprint: "sha256:workload-v1", WorkloadRevision: "workload-v1",
 		ControlledLoad: true, IsolationBoundary: "preview-pg", Status: "finished",
 		StartedAt:  time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC),
-		FinishedAt: time.Date(2026, 9, 18, 10, 1, 0, 0, time.UTC), Candidates: []repairpreview.Candidate{passing, rejected},
+		FinishedAt: time.Date(2026, 9, 18, 10, 1, 0, 0, time.UTC), Candidates: []repairpreview.Candidate{baseline, passing, rejected},
 	}
 }
 

@@ -377,13 +377,13 @@ function RepairPreviewGate({ incidentId }) {
             <PreviewMetricCard
               title="Baseline 重放"
               decision={summary.baseline?.decision || 'PASS'}
-              primary={formatPreviewLatency(summary.baseline?.average_latency_ms ?? summary.baseline?.averageLatencyMs)}
+              primary={formatPreviewLatency(summary.baseline?.average_latency_ms)}
               secondary={summary.controlledLoad ? '受控固定负载' : '负载标记缺失'}
             />
             <PreviewMetricCard
               title="Candidate A"
               decision={summary.passing?.decision || 'PASS'}
-              primary={formatPreviewLatency(summary.passing?.average_latency_ms ?? summary.passing?.averageLatencyMs)}
+              primary={formatPreviewLatency(summary.passing?.average_latency_ms)}
               secondary="PASS / eligible for human approval"
               pass
             />
@@ -391,7 +391,7 @@ function RepairPreviewGate({ incidentId }) {
               title="Candidate B"
               decision={summary.rejected?.decision || 'FAIL'}
               primary={formatPreviewLatency(summary.rejected?.average_latency_ms ?? summary.rejected?.averageLatencyMs)}
-              secondary={summary.rejected?.rejection_reason || summary.rejected?.rejectionReason || 'blocked before human approval'}
+              secondary={summary.rejected?.rejection_reason || 'blocked before human approval'}
               fail
             />
           </div>

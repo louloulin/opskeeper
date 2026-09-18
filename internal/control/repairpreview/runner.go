@@ -51,7 +51,18 @@ func Execute(ctx context.Context, database *sql.DB, spec WorkloadSpec) (Run, err
 	if err != nil {
 		return Run{}, err
 	}
-	candidates := make([]Candidate, 0, len(spec.Candidates))
+	candidates := make([]Candidate, 0, len(spec.Candidates)+1)
+	candidates = append(candidates, Candidate{
+		ID: deterministicCandidateID(binding.RunID, BaselineCandidateID), RunID: binding.RunID,
+		TenantID: binding.TenantID, IncidentID: binding.IncidentID, CandidateID: BaselineCandidateID,
+		Name: "Baseline replay", Kind: BaselineKind, Action: BaselineAction,
+		ChangeSummary: "Controlled fixed-workload baseline", Branch: baseline.schemaName,
+		ResultChecksum: baseline.checksum, Consistent: true,
+		AverageLatencyMS: average(baseline.latencies), MedianLatencyMS: percentile(baseline.latencies, 50),
+		P95LatencyMS: percentile(baseline.latencies, 95), SampleCount: len(baseline.latencies),
+		TPS: baseline.tps, ErrorCount: baseline.errorCount, WriteImpact: "none",
+		StorageDeltaBytes: 0, BusinessProbePass: baseline.businessProbePass,
+	})
 	for _, candidateSpec := range spec.Candidates {
 		result, err := executeBranch(ctx, database, spec, candidateSpec.CandidateID, candidateSpec)
 		if err != nil {

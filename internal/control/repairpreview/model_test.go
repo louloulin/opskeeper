@@ -1,6 +1,7 @@
 package repairpreview
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +90,25 @@ func TestSanitizeErrorSummary(t *testing.T) {
 		"postgresql://[redacted]@preview-pg:5432/opskeeper",
 		SanitizeErrorSummary("postgresql://user:secret@preview-pg:5432/opskeeper"),
 	)
+}
+
+func TestRepairPreviewWireContractUsesSnakeCaseJSON(t *testing.T) {
+	run := validRun()
+	run.Candidates = []Candidate{validCandidate("candidate-a", "resize_pool")}
+
+	encoded, err := json.Marshal(run)
+
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"tenant_id":"opskeeper-demo"`)
+	require.Contains(t, string(encoded), `"workload_fingerprint":"sha256:workload-v1"`)
+	require.Contains(t, string(encoded), `"isolation_boundary":"preview-pg"`)
+	require.Contains(t, string(encoded), `"average_latency_ms":12`)
+	require.Contains(t, string(encoded), `"p95_latency_ms":20`)
+	require.Contains(t, string(encoded), `"write_impact":"preview_only"`)
+	require.Contains(t, string(encoded), `"storage_delta_bytes":1024`)
+	require.Contains(t, string(encoded), `"business_probe_pass":true`)
+	require.NotContains(t, string(encoded), `"WorkloadFingerprint"`)
+	require.NotContains(t, string(encoded), `"AverageLatencyMS"`)
 }
 
 func validRun() Run {

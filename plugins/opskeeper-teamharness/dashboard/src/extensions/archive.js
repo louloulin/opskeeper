@@ -28,8 +28,34 @@ export function normalizeRepairPreviews(value) {
     .filter((run) => run && typeof run === 'object' && (run.run_id || run.id))
     .map((run) => ({
       ...run,
-      candidates: Array.isArray(run.candidates) ? run.candidates : [],
+      id: run.run_id || run.id,
+      candidates: Array.isArray(run.candidates)
+        ? run.candidates.filter((candidate) => candidate && typeof candidate === 'object').map(normalizeRepairPreviewCandidate)
+        : [],
     }));
+}
+
+function normalizeRepairPreviewCandidate(candidate) {
+  return {
+    ...candidate,
+    id: candidate.id || '',
+    candidate_id: candidate.candidate_id || '',
+    name: candidate.name || '',
+    action: candidate.action || '',
+    change_summary: candidate.change_summary || '',
+    consistent: Boolean(candidate.consistent),
+    average_latency_ms: candidate.average_latency_ms ?? null,
+    median_latency_ms: candidate.median_latency_ms ?? null,
+    p95_latency_ms: candidate.p95_latency_ms ?? null,
+    sample_count: candidate.sample_count ?? 0,
+    tps: candidate.tps ?? null,
+    error_count: candidate.error_count ?? 0,
+    write_impact: candidate.write_impact || '',
+    storage_delta_bytes: candidate.storage_delta_bytes ?? null,
+    business_probe_pass: Boolean(candidate.business_probe_pass),
+    decision: candidate.decision || 'UNKNOWN',
+    rejection_reason: candidate.rejection_reason || '',
+  };
 }
 
 export function normalizeRepairPreviewSummary(response) {
@@ -51,9 +77,15 @@ export function normalizeRepairPreviewSummary(response) {
     workloadFingerprint: summary.workload_fingerprint || summary.workloadFingerprint || '',
     controlledLoad: Boolean(summary.controlled_load ?? summary.controlledLoad),
     isolationBoundary: summary.isolation_boundary || summary.isolationBoundary || '',
-    baseline: summary.baseline || null,
-    passing: summary.passing || null,
-    rejected: summary.rejected || null,
+    baseline: summary.baseline && typeof summary.baseline === 'object'
+      ? normalizeRepairPreviewCandidate(summary.baseline)
+      : null,
+    passing: summary.passing && typeof summary.passing === 'object'
+      ? normalizeRepairPreviewCandidate(summary.passing)
+      : null,
+    rejected: summary.rejected && typeof summary.rejected === 'object'
+      ? normalizeRepairPreviewCandidate(summary.rejected)
+      : null,
   };
 }
 

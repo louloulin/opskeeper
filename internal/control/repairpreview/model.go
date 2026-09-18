@@ -17,49 +17,59 @@ const (
 )
 
 type Run struct {
-	ID                  string
-	TenantID            string
-	IncidentID          string
-	BranchPrefix        string
-	SeedFingerprint     string
-	WorkloadFingerprint string
-	WorkloadRevision    string
-	ControlledLoad      bool
-	IsolationBoundary   string
-	Status              string
-	StartedAt           time.Time
-	FinishedAt          time.Time
-	ErrorSummary        string
-	ArtifactRef         string
-	Candidates          []Candidate
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                  string      `json:"id"`
+	TenantID            string      `json:"tenant_id"`
+	IncidentID          string      `json:"incident_id"`
+	BranchPrefix        string      `json:"branch_prefix"`
+	SeedFingerprint     string      `json:"seed_fingerprint"`
+	WorkloadFingerprint string      `json:"workload_fingerprint"`
+	WorkloadRevision    string      `json:"workload_revision"`
+	ControlledLoad      bool        `json:"controlled_load"`
+	IsolationBoundary   string      `json:"isolation_boundary"`
+	Status              string      `json:"status"`
+	StartedAt           time.Time   `json:"started_at"`
+	FinishedAt          time.Time   `json:"finished_at"`
+	ErrorSummary        string      `json:"error_summary"`
+	ArtifactRef         string      `json:"artifact_ref"`
+	Candidates          []Candidate `json:"candidates"`
+	CreatedAt           time.Time   `json:"created_at"`
+	UpdatedAt           time.Time   `json:"updated_at"`
 }
 
 type Candidate struct {
-	ID                string
-	RunID             string
-	TenantID          string
-	IncidentID        string
-	CandidateID       string
-	Name              string
-	Kind              string
-	Action            string
-	ChangeSummary     string
-	Branch            string
-	ResultChecksum    string
-	Consistent        bool
-	AverageLatencyMS  float64
-	MedianLatencyMS   float64
-	P95LatencyMS      float64
-	SampleCount       int
-	TPS               float64
-	ErrorCount        int
-	WriteImpact       string
-	StorageDeltaBytes int64
-	BusinessProbePass bool
-	Decision          Decision
-	RejectionReason   string
+	ID                string   `json:"id"`
+	RunID             string   `json:"run_id"`
+	TenantID          string   `json:"tenant_id"`
+	IncidentID        string   `json:"incident_id"`
+	CandidateID       string   `json:"candidate_id"`
+	Name              string   `json:"name"`
+	Kind              string   `json:"kind"`
+	Action            string   `json:"action"`
+	ChangeSummary     string   `json:"change_summary"`
+	Branch            string   `json:"branch"`
+	ResultChecksum    string   `json:"result_checksum"`
+	Consistent        bool     `json:"consistent"`
+	AverageLatencyMS  float64  `json:"average_latency_ms"`
+	MedianLatencyMS   float64  `json:"median_latency_ms"`
+	P95LatencyMS      float64  `json:"p95_latency_ms"`
+	SampleCount       int      `json:"sample_count"`
+	TPS               float64  `json:"tps"`
+	ErrorCount        int      `json:"error_count"`
+	WriteImpact       string   `json:"write_impact"`
+	StorageDeltaBytes int64    `json:"storage_delta_bytes"`
+	BusinessProbePass bool     `json:"business_probe_pass"`
+	Decision          Decision `json:"decision"`
+	RejectionReason   string   `json:"rejection_reason"`
+}
+
+const (
+	BaselineCandidateID = "baseline"
+	BaselineKind        = "baseline"
+	BaselineAction      = "baseline"
+)
+
+func (candidate Candidate) IsBaseline() bool {
+	return candidate.CandidateID == BaselineCandidateID || candidate.Kind == BaselineKind
 }
 
 func (run Run) Validate() error {
@@ -138,6 +148,9 @@ func (candidate Candidate) Validate() error {
 func Evaluate(candidate Candidate) (Decision, string) {
 	if err := candidate.Validate(); err != nil {
 		return DecisionFail, err.Error()
+	}
+	if candidate.IsBaseline() {
+		return DecisionPass, ""
 	}
 	if !candidate.BusinessProbePass {
 		return DecisionReject, "business probe failed"

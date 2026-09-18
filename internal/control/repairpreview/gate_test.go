@@ -36,6 +36,19 @@ func TestGateEligible_RejectsStaleWorkload(t *testing.T) {
 	require.ErrorIs(t, err, ErrStaleWorkload)
 }
 
+func TestGateEligible_RejectsBaseline(t *testing.T) {
+	run := validRun()
+	baseline := validCandidate("baseline", "baseline")
+	baseline.Kind = "baseline"
+	baseline.Decision = DecisionPass
+	run.Candidates = []Candidate{baseline}
+	gate := NewGate(&stubReadRepository{runs: []Run{run}}, run.WorkloadFingerprint)
+
+	err := gate.Eligible(context.Background(), run.TenantID, run.IncidentID, run.ID, "baseline", "baseline")
+
+	require.ErrorIs(t, err, ErrNotEligible)
+}
+
 func TestGateEligible_RejectsNonPassCandidate(t *testing.T) {
 	run := validRun()
 	rejected := validCandidate("candidate-b", "reset_pool")

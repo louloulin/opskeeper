@@ -64,7 +64,17 @@ test('normalizes repair preview wrappers and candidate arrays without mutation',
   const response = {
     data: {
       repair_previews: [
-        { id: 'run-1', candidates: [{ candidate_id: 'candidate-a' }] },
+        {
+          run_id: 'run-1',
+          workload_fingerprint: 'sha256:workload-v1',
+          seed_fingerprint: 'sha256:seed-v1',
+          isolation_boundary: 'Controlled fixed-workload reconstruction in disposable preview-pg; original active sessions are not copied.',
+          candidates: [{
+            candidate_id: 'baseline', name: 'Baseline replay', consistent: true,
+            average_latency_ms: 18, p95_latency_ms: 29, tps: 120, write_impact: 'none',
+            storage_delta_bytes: 0, business_probe_pass: true, decision: 'PASS',
+          }],
+        },
         { run_id: 'run-2', candidates: null },
       ],
     },
@@ -72,10 +82,14 @@ test('normalizes repair preview wrappers and candidate arrays without mutation',
 
   const previews = normalizeRepairPreviews(response);
 
-  assert.deepEqual(previews, [
-    { id: 'run-1', candidates: [{ candidate_id: 'candidate-a' }] },
-    { run_id: 'run-2', candidates: [] },
-  ]);
+  assert.equal(previews[0].workloadFingerprint, undefined);
+  assert.equal(previews[0].candidates[0].candidate_id, 'baseline');
+  assert.equal(previews[0].candidates[0].average_latency_ms, 18);
+  assert.equal(previews[0].candidates[0].p95_latency_ms, 29);
+  assert.equal(previews[0].candidates[0].write_impact, 'none');
+  assert.equal(previews[0].candidates[0].storage_delta_bytes, 0);
+  assert.equal(previews[0].candidates[0].business_probe_pass, true);
+  assert.deepEqual(previews[1].candidates, []);
   assert.equal(response.data.repair_previews[1].candidates, null);
   assert.deepEqual(normalizeRepairPreviews({ data: { repair_previews: [{ candidates: [] }] } }), []);
 });
@@ -85,17 +99,35 @@ test('normalizes compact repair preview summary and keeps the legacy empty state
     data: {
       incident_id: 'inc-1',
       run_id: 'run-1',
+      seed_fingerprint: 'sha256:seed-v1',
+      workload_fingerprint: 'sha256:workload-v1',
       controlled_load: true,
       isolation_boundary: 'Controlled fixed-workload reconstruction in disposable preview-pg; original active sessions are not copied.',
-      baseline: { candidate_id: 'baseline' },
-      passing: { candidate_id: 'candidate-a', decision: 'PASS' },
-      rejected: { candidate_id: 'candidate-b', decision: 'REJECTED_BY_PREVIEW' },
+      baseline: {
+        candidate_id: 'baseline', average_latency_ms: 18, write_impact: 'none',
+        storage_delta_bytes: 0, business_probe_pass: true, decision: 'PASS',
+      },
+      passing: {
+        candidate_id: 'candidate-a', average_latency_ms: 12, p95_latency_ms: 20,
+        write_impact: 'preview_only', storage_delta_bytes: 1024, business_probe_pass: true,
+        decision: 'PASS',
+      },
+      rejected: {
+        candidate_id: 'candidate-b', average_latency_ms: 25, p95_latency_ms: 42,
+        business_probe_pass: false, decision: 'REJECTED_BY_PREVIEW', rejection_reason: 'business probe failed',
+      },
     },
   });
 
   assert.equal(summary.runId, 'run-1');
+  assert.equal(summary.seedFingerprint, 'sha256:seed-v1');
+  assert.equal(summary.workloadFingerprint, 'sha256:workload-v1');
+  assert.equal(summary.baseline.average_latency_ms, 18);
+  assert.equal(summary.baseline.write_impact, 'none');
+  assert.notEqual(summary.baseline.candidate_id, summary.passing.candidate_id);
   assert.equal(summary.passing.decision, 'PASS');
   assert.equal(summary.rejected.decision, 'REJECTED_BY_PREVIEW');
+  assert.equal(summary.rejected.rejection_reason, 'business probe failed');
   assert.match(summary.isolationBoundary, /original active sessions are not copied/);
   assert.deepEqual(normalizeRepairPreviewSummary(null), {
     incidentId: '', runId: '', seedFingerprint: '', workloadFingerprint: '',
