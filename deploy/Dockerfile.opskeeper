@@ -215,6 +215,7 @@ COPY --from=builder /out/opskeeper /opskeeper
 COPY --from=builder /app/scripts /src/scripts
 COPY --from=builder /app/deploy/repair-preview /src/deploy/repair-preview
 COPY --from=builder /app/plugins/opskeeper-teamharness /src/plugins/opskeeper-teamharness
+COPY --from=builder /app/plugins/opskeeper-teamharness/dashboard/plugin.json /plugins/opskeeper-teamharness/dashboard/plugin.json
 
 # chatruntime.LoadAll reads from `./skills` and `./agents` relative to
 # the binary's working directory. Ship the in-tree persona / SKILL.md
