@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.65 — 2026-09-18
+
+- Align the authoritative Manager wire contract with real baseline/A/B candidate readback and deterministic fingerprints.
+- Publish the compact approval gate and full archive comparison for the controlled fixed-workload preview flow.
+
 ## 1.0.61 — 2026-09-18
 
 - Project the complete candidate-repair comparison table from the authoritative Manager Archive, with bounded readback and responsive table behavior.
