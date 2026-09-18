@@ -342,7 +342,9 @@ func (u *Usecase) orchestrateDiagnosisAndPreview(
 	if decision == nil && run.Status == demomodel.ScenarioStatusDiagnosisSent && u.previewExecutor != nil {
 		executionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		err := u.previewExecutor.Execute(executionCtx, PreviewExecutionInput{
-			RunID:             DeterministicPreviewRunID(tenantID, scenarioID, key, run.IncidentID),
+			RunID: DeterministicPreviewRunID(
+				tenantID, scenarioID, key, run.TargetFingerprint, run.IncidentID,
+			),
 			TenantID:          strconv.FormatUint(tenantID, 10),
 			IncidentID:        strconv.FormatUint(run.IncidentID, 10),
 			ScenarioID:        run.ScenarioID,
@@ -484,6 +486,9 @@ func (u *Usecase) previewDecision(ctx context.Context, tenantID uint64, scenario
 		return nil
 	}
 
+	resultBindingMatches := repairpreview.RunBindingMatches(
+		selected, scenario.ScenarioID, scenario.IdempotencyKey, scenario.TargetFingerprint,
+	)
 	profileMatches := u.expectedReplayProfile != "" &&
 		selected.WorkloadFingerprint == u.expectedReplayProfile
 	gateStageReady := scenario.Status == demomodel.ScenarioStatusDiagnosisSent ||
@@ -499,7 +504,11 @@ func (u *Usecase) previewDecision(ctx context.Context, tenantID uint64, scenario
 			selected.WorkloadFingerprint, u.expectedReplayProfile, selected.IsolationBoundary,
 		)
 	}
-	if gateStageReady && profileMatches && selected.ControlledLoad && completePreviewMetrics(baseline) &&
+	if !resultBindingMatches {
+		summary.BoundaryText = "RESULT BINDING MISMATCH: preview run is not bound to this scenario, idempotency key, and target."
+	}
+	if gateStageReady && profileMatches && resultBindingMatches && selected.ControlledLoad &&
+		completePreviewMetrics(baseline) &&
 		passing.CandidateID != "" &&
 		passing.Decision == repairpreview.DecisionPass && passing.Validate() == nil {
 		eligible, err := u.previews.FindEligible(
@@ -663,7 +672,9 @@ func (u *Usecase) diagnosisEvent(run *demomodel.ScenarioRun) *alertmodel.Event {
 		"scenario_id": run.ScenarioID, "idempotency_key": run.IdempotencyKey,
 		"incident_id": run.IncidentID, "target_fingerprint": run.TargetFingerprint,
 		"source_event_type": alertmodel.EventTypeAIInitialDiagnosis,
-		"preview_run_id":    DeterministicPreviewRunID(run.TenantID, run.ScenarioID, run.IdempotencyKey, run.IncidentID),
+		"preview_run_id": DeterministicPreviewRunID(
+			run.TenantID, run.ScenarioID, run.IdempotencyKey, run.TargetFingerprint, run.IncidentID,
+		),
 	})
 	message := "Initial diagnosis evidence was accepted; controlled repair preview dispatch follows."
 	return &alertmodel.Event{

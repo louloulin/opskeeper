@@ -14,18 +14,20 @@ func Migrate(db *gorm.DB) error {
 	switch db.Dialector.Name() {
 	case "postgres":
 		if db.Migrator().HasTable(&runRow{}) && db.Migrator().HasTable(&candidateRow{}) {
-			return nil
+			return ensureRunBindingTable(db)
 		}
 		if err := db.Exec(postgresSchema).Error; err != nil {
 			return fmt.Errorf("repair preview migration: create schema: %w", err)
 		}
+		return ensureRunBindingTable(db)
 	case "sqlite":
 		if db.Migrator().HasTable(&runRow{}) && db.Migrator().HasTable(&candidateRow{}) {
-			return nil
+			return ensureRunBindingTable(db)
 		}
 		if err := db.Exec(sqliteSchema).Error; err != nil {
 			return fmt.Errorf("repair preview migration: create schema: %w", err)
 		}
+		return ensureRunBindingTable(db)
 	case "mysql":
 		for _, statement := range mysqlSchema {
 			if err := db.Exec(statement).Error; err != nil {
@@ -35,8 +37,31 @@ func Migrate(db *gorm.DB) error {
 		if err := ensureMySQLIndexes(db); err != nil {
 			return err
 		}
+		return ensureRunBindingTable(db)
 	default:
 		return fmt.Errorf("repair preview migration: unsupported dialect %q", db.Dialector.Name())
+	}
+}
+
+func ensureRunBindingTable(db *gorm.DB) error {
+	schema := `CREATE TABLE IF NOT EXISTS repair_preview_run_bindings (
+		run_id TEXT PRIMARY KEY,
+		binding_fingerprint TEXT NOT NULL,
+		scenario_id TEXT NOT NULL,
+		idempotency_key TEXT NOT NULL,
+		target_fingerprint TEXT NOT NULL
+	)`
+	if db.Dialector.Name() == "mysql" {
+		schema = `CREATE TABLE IF NOT EXISTS repair_preview_run_bindings (
+			run_id VARCHAR(191) PRIMARY KEY,
+			binding_fingerprint VARCHAR(191) NOT NULL,
+			scenario_id VARCHAR(191) NOT NULL,
+			idempotency_key VARCHAR(191) NOT NULL,
+			target_fingerprint VARCHAR(191) NOT NULL
+		)`
+	}
+	if err := db.Exec(schema).Error; err != nil {
+		return fmt.Errorf("repair preview migration: create run bindings: %w", err)
 	}
 	return nil
 }

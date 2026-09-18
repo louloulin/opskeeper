@@ -27,9 +27,12 @@ type WorkloadSpec struct {
 }
 
 type WorkloadBinding struct {
-	RunID      string
-	TenantID   string
-	IncidentID string
+	RunID             string
+	TenantID          string
+	IncidentID        string
+	ScenarioID        string
+	IdempotencyKey    string
+	TargetFingerprint string
 }
 
 type QuerySpec struct {

@@ -33,6 +33,35 @@ func TestSQLRepository_SavePersistsRunAndCandidates(t *testing.T) {
 	require.Contains(t, stored[0].Candidates[1].RejectionReason, "business probe")
 }
 
+func TestSQLRepository_SavePersistsExactRunBinding(t *testing.T) {
+	repository, _ := setupRepository(t)
+	run := boundPreviewRun("pg-pool-exhaustion", "final-demo-key", "0123456789abcdef")
+	run.Candidates = []Candidate{validCandidate("candidate-a", "resize_pool")}
+	require.NoError(t, repository.Save(context.Background(), run))
+
+	stored, err := repository.ListByIncident(context.Background(), run.TenantID, run.IncidentID, 10)
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	require.True(t, RunBindingMatches(
+		stored[0], "pg-pool-exhaustion", "final-demo-key", "0123456789abcdef",
+	))
+}
+
+func TestSQLRepository_SaveRejectsIncompleteAndMismatchedRunBindings(t *testing.T) {
+	repository, _ := setupRepository(t)
+	incomplete := boundPreviewRun("pg-pool-exhaustion", "final-demo-key", "0123456789abcdef")
+	incomplete.TargetFingerprint = ""
+	require.ErrorContains(
+		t, repository.Save(context.Background(), incomplete), "incomplete run binding",
+	)
+
+	mismatched := boundPreviewRun("pg-pool-exhaustion", "final-demo-key", "0123456789abcdef")
+	mismatched.IdempotencyKey = "other-key"
+	require.ErrorContains(
+		t, repository.Save(context.Background(), mismatched), "binding fingerprint mismatch",
+	)
+}
+
 func TestSQLRepository_DuplicatesAreRejected(t *testing.T) {
 	repository, db := setupRepository(t)
 	run := validRun()
@@ -136,6 +165,16 @@ func TestMigrate_CreatesSQLiteSchema(t *testing.T) {
 	require.NoError(t, Migrate(db))
 	require.True(t, db.Migrator().HasTable("repair_preview_runs"))
 	require.True(t, db.Migrator().HasTable("repair_preview_candidates"))
+	require.True(t, db.Migrator().HasTable("repair_preview_run_bindings"))
+}
+
+func TestMigrateAddsBindingTableToExistingSchema(t *testing.T) {
+	repository, db := setupRepository(t)
+	require.NoError(t, db.Migrator().DropTable("repair_preview_run_bindings"))
+	require.NoError(t, Migrate(db))
+	require.True(t, db.Migrator().HasTable("repair_preview_run_bindings"))
+	run := boundPreviewRun("pg-pool-exhaustion", "final-demo-key", "0123456789abcdef")
+	require.NoError(t, repository.Save(context.Background(), run))
 }
 
 func setupRepository(t *testing.T) (Repository, *gorm.DB) {
@@ -159,6 +198,23 @@ func setupRepository(t *testing.T) (Repository, *gorm.DB) {
 		error_count integer NOT NULL, write_impact text NOT NULL, storage_delta_bytes integer NOT NULL,
 		business_probe_pass numeric NOT NULL, decision text NOT NULL, rejection_reason text NOT NULL DEFAULT '',
 		created_at datetime NOT NULL, UNIQUE(run_id, candidate_id)
+		)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE repair_preview_run_bindings (
+		run_id text PRIMARY KEY, binding_fingerprint text NOT NULL, scenario_id text NOT NULL,
+		idempotency_key text NOT NULL, target_fingerprint text NOT NULL
 	)`).Error)
 	return NewSQLRepository(db), db
+}
+
+func boundPreviewRun(scenarioID, idempotencyKey, targetFingerprint string) Run {
+	run := validRun()
+	run.ScenarioID = scenarioID
+	run.IdempotencyKey = idempotencyKey
+	run.TargetFingerprint = targetFingerprint
+	run.BindingFingerprint = WorkloadBinding{
+		RunID: run.ID, TenantID: run.TenantID, IncidentID: run.IncidentID,
+		ScenarioID: scenarioID, IdempotencyKey: idempotencyKey,
+		TargetFingerprint: targetFingerprint,
+	}.Fingerprint()
+	return run
 }

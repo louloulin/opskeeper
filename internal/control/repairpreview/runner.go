@@ -34,8 +34,11 @@ func Execute(ctx context.Context, database *sql.DB, spec WorkloadSpec) (Run, err
 		return Run{}, err
 	}
 	binding := spec.RuntimeBinding
-	if binding.RunID == "" || binding.TenantID == "" || binding.IncidentID == "" {
-		return Run{}, errors.New("repair preview: run, tenant, and incident ids are required")
+	if binding.RunID == "" || binding.TenantID == "" || binding.IncidentID == "" ||
+		binding.ScenarioID == "" || binding.IdempotencyKey == "" || binding.TargetFingerprint == "" {
+		return Run{}, errors.New(
+			"repair preview: run, tenant, incident, scenario, idempotency key, and target fingerprint are required",
+		)
 	}
 	if _, err := uuid.Parse(binding.RunID); err != nil {
 		return Run{}, fmt.Errorf("repair preview: run id must be a UUID: %w", err)
@@ -76,6 +79,8 @@ func Execute(ctx context.Context, database *sql.DB, spec WorkloadSpec) (Run, err
 	finished := time.Now().UTC()
 	return Run{
 		ID: binding.RunID, TenantID: binding.TenantID, IncidentID: binding.IncidentID,
+		ScenarioID: binding.ScenarioID, IdempotencyKey: binding.IdempotencyKey,
+		TargetFingerprint: binding.TargetFingerprint, BindingFingerprint: binding.Fingerprint(),
 		BranchPrefix:    "preview/" + binding.IncidentID + "/" + shortHash(binding.RunID),
 		SeedFingerprint: spec.SeedFingerprint(), WorkloadFingerprint: spec.WorkloadFingerprint(),
 		WorkloadRevision: spec.Revision, ControlledLoad: true, IsolationBoundary: isolationBoundary,

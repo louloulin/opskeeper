@@ -20,13 +20,17 @@ func main() {
 	controlDSN := flag.String("control-dsn", "", "Manager control-plane PostgreSQL DSN (defaults to --dsn)")
 	tenantID := flag.String("tenant-id", "", "tenant ID (required)")
 	incidentID := flag.String("incident-id", "", "incident ID (required)")
+	scenarioID := flag.String("scenario-id", "", "scenario ID (required)")
+	idempotencyKey := flag.String("idempotency-key", "", "scenario idempotency key (required)")
+	targetFingerprint := flag.String("target-fingerprint", "", "target fingerprint (required)")
 	workloadPath := flag.String("workload", "deploy/repair-preview/pg-pool-workload.yaml", "workload YAML path")
 	runID := flag.String("run-id", "", "preview run UUID (required)")
 	dryRun := flag.Bool("dry-run", false, "execute and print the run without saving")
 	flag.Parse()
 
-	if *dsn == "" || *tenantID == "" || *incidentID == "" || *runID == "" {
-		fmt.Fprintln(os.Stderr, "repair-preview-runner: --dsn, --tenant-id, --incident-id, and --run-id are required")
+	if *dsn == "" || *tenantID == "" || *incidentID == "" || *runID == "" ||
+		*scenarioID == "" || *idempotencyKey == "" || *targetFingerprint == "" {
+		fmt.Fprintln(os.Stderr, "repair-preview-runner: --dsn, --tenant-id, --incident-id, --run-id, --scenario-id, --idempotency-key, and --target-fingerprint are required")
 		os.Exit(2)
 	}
 	workloadData, err := os.ReadFile(*workloadPath)
@@ -37,12 +41,30 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	spec.RuntimeBinding = repairpreview.WorkloadBinding{
-		RunID: *runID, TenantID: *tenantID, IncidentID: *incidentID,
-	}
 	database, err := sqlOpen(*dsn)
 	if err != nil {
 		fail(err)
+	}
+	identity, err := repairpreview.ReadTargetIdentity(context.Background(), database)
+	if err != nil {
+		closeErr := database.Close()
+		if err != nil {
+			fail(err)
+		}
+		fail(closeErr)
+	}
+	if identity.ScenarioID != *scenarioID || identity.TargetFingerprint != *targetFingerprint ||
+		identity.WorkloadFingerprint != spec.WorkloadFingerprint() {
+		closeErr := database.Close()
+		if closeErr != nil {
+			fail(closeErr)
+		}
+		fail(fmt.Errorf("repair preview target identity mismatch"))
+	}
+	spec.RuntimeBinding = repairpreview.WorkloadBinding{
+		RunID: *runID, TenantID: *tenantID, IncidentID: *incidentID,
+		ScenarioID: *scenarioID, IdempotencyKey: *idempotencyKey,
+		TargetFingerprint: *targetFingerprint,
 	}
 	run, err := repairpreview.Execute(context.Background(), database, spec)
 	closeErr := database.Close()

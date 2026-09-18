@@ -53,8 +53,12 @@ func (repository *SQLRepository) Save(ctx context.Context, run Run) error {
 		candidateRows = append(candidateRows, row)
 	}
 	runRow.Candidates = candidateRows
+	bindingRow, hasBinding, err := runBindingRowFromRun(run)
+	if err != nil {
+		return err
+	}
 
-	err := repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Create(&runRow)
 		if result.Error != nil {
 			if isUniqueConstraintError(result.Error) {
@@ -69,6 +73,14 @@ func (repository *SQLRepository) Save(ctx context.Context, run Run) error {
 					return ErrDuplicateRun
 				}
 				return fmt.Errorf("save repair preview candidate %d: %w", index, result.Error)
+			}
+		}
+		if hasBinding {
+			if err := tx.Create(&bindingRow).Error; err != nil {
+				if isUniqueConstraintError(err) {
+					return ErrDuplicateRun
+				}
+				return fmt.Errorf("save repair preview run binding: %w", err)
 			}
 		}
 		return nil
@@ -110,9 +122,23 @@ func (repository *SQLRepository) ListByIncident(ctx context.Context, tenantID, i
 	for _, row := range candidateRows {
 		candidatesByRun[row.RunID] = append(candidatesByRun[row.RunID], candidateFromRow(row))
 	}
+	var bindingRows []runBindingRow
+	if err := repository.db.WithContext(ctx).Where("run_id IN ?", runIDs).Find(&bindingRows).Error; err != nil {
+		return nil, fmt.Errorf("list repair preview run bindings: %w", err)
+	}
+	bindingByRun := make(map[string]runBindingRow, len(bindingRows))
+	for _, row := range bindingRows {
+		bindingByRun[row.RunID] = row
+	}
 	runs := make([]Run, 0, len(rows))
 	for _, row := range rows {
 		run := runFromRow(row)
+		if binding, ok := bindingByRun[row.ID]; ok {
+			run.ScenarioID = binding.ScenarioID
+			run.IdempotencyKey = binding.IdempotencyKey
+			run.TargetFingerprint = binding.TargetFingerprint
+			run.BindingFingerprint = binding.BindingFingerprint
+		}
 		run.Candidates = candidatesByRun[row.ID]
 		if run.Candidates == nil {
 			run.Candidates = []Candidate{}
@@ -178,6 +204,16 @@ type runRow struct {
 
 func (runRow) TableName() string { return "repair_preview_runs" }
 
+type runBindingRow struct {
+	RunID              string `gorm:"column:run_id;primaryKey"`
+	BindingFingerprint string `gorm:"column:binding_fingerprint"`
+	ScenarioID         string `gorm:"column:scenario_id"`
+	IdempotencyKey     string `gorm:"column:idempotency_key"`
+	TargetFingerprint  string `gorm:"column:target_fingerprint"`
+}
+
+func (runBindingRow) TableName() string { return "repair_preview_run_bindings" }
+
 type candidateRow struct {
 	ID                string    `gorm:"column:id;primaryKey"`
 	RunID             string    `gorm:"column:run_id"`
@@ -230,6 +266,29 @@ func runFromRow(row runRow) Run {
 		FinishedAt: finishedAtFromRow(row), ErrorSummary: row.ErrorSummary,
 		ArtifactRef: row.ArtifactRef, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC(),
 	}
+}
+
+func runBindingRowFromRun(run Run) (runBindingRow, bool, error) {
+	hasBinding := run.ScenarioID != "" || run.IdempotencyKey != "" ||
+		run.TargetFingerprint != "" || run.BindingFingerprint != ""
+	if !hasBinding {
+		return runBindingRow{}, false, nil
+	}
+	if run.ScenarioID == "" || run.IdempotencyKey == "" || run.TargetFingerprint == "" {
+		return runBindingRow{}, false, errors.New("repair preview: incomplete run binding")
+	}
+	binding := WorkloadBinding{
+		RunID: run.ID, TenantID: run.TenantID, IncidentID: run.IncidentID,
+		ScenarioID: run.ScenarioID, IdempotencyKey: run.IdempotencyKey,
+		TargetFingerprint: run.TargetFingerprint,
+	}
+	if binding.Fingerprint() != run.BindingFingerprint {
+		return runBindingRow{}, false, errors.New("repair preview: run binding fingerprint mismatch")
+	}
+	return runBindingRow{
+		RunID: run.ID, BindingFingerprint: run.BindingFingerprint, ScenarioID: run.ScenarioID,
+		IdempotencyKey: run.IdempotencyKey, TargetFingerprint: run.TargetFingerprint,
+	}, true, nil
 }
 
 func finishedAtFromRow(row runRow) time.Time {

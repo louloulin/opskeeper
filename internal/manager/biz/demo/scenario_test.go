@@ -228,6 +228,14 @@ func (f *fakePreviewExecutor) Execute(_ context.Context, input PreviewExecutionI
 	rejected.RunID = input.RunID
 	run := previewRun(baseline, passing, rejected)
 	run.ID = input.RunID
+	run.ScenarioID = input.ScenarioID
+	run.IdempotencyKey = input.IdempotencyKey
+	run.TargetFingerprint = input.TargetFingerprint
+	run.BindingFingerprint = repairpreview.WorkloadBinding{
+		RunID: input.RunID, TenantID: input.TenantID, IncidentID: input.IncidentID,
+		ScenarioID: input.ScenarioID, IdempotencyKey: input.IdempotencyKey,
+		TargetFingerprint: input.TargetFingerprint,
+	}.Fingerprint()
 	f.previews.runs = append(f.previews.runs, run)
 	return nil
 }
@@ -430,6 +438,16 @@ func scenarioPartsWithPreview(
 	if err := scenarios.CreateOrUpdate(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
+	for index := range previews.runs {
+		previews.runs[index].ScenarioID = run.ScenarioID
+		previews.runs[index].IdempotencyKey = run.IdempotencyKey
+		previews.runs[index].TargetFingerprint = run.TargetFingerprint
+		previews.runs[index].BindingFingerprint = repairpreview.WorkloadBinding{
+			RunID: previews.runs[index].ID, TenantID: previews.runs[index].TenantID,
+			IncidentID: previews.runs[index].IncidentID, ScenarioID: run.ScenarioID,
+			IdempotencyKey: run.IdempotencyKey, TargetFingerprint: run.TargetFingerprint,
+		}.Fingerprint()
+	}
 	return NewUsecaseWithPreviews(
 		scenarios, incidents, &fakeFixtures{}, previews, expectedProfile,
 	), input, incidents, scenarios
@@ -526,6 +544,59 @@ func TestMismatchedReplayProfileIsNotComparable(t *testing.T) {
 	}
 	if previews.eligibleCalls != 0 {
 		t.Fatalf("mismatched profile queried eligibility calls = %d", previews.eligibleCalls)
+	}
+}
+
+func TestMismatchedPreviewRunBindingCannotReachApproval(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{previewRun(baseline, passing)}}
+	usecase, input, _, _ := scenarioPartsWithPreview(t, previews, "sha256:workload-v1")
+	previews.runs[0].IdempotencyKey = "other-demo-key"
+	previews.runs[0].BindingFingerprint = repairpreview.WorkloadBinding{
+		RunID: previews.runs[0].ID, TenantID: previews.runs[0].TenantID,
+		IncidentID: previews.runs[0].IncidentID, ScenarioID: previews.runs[0].ScenarioID,
+		IdempotencyKey:    previews.runs[0].IdempotencyKey,
+		TargetFingerprint: previews.runs[0].TargetFingerprint,
+	}.Fingerprint()
+
+	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusPreviewReady ||
+		status.PreviewDecision == nil || status.PreviewDecision.EligibleForHITL ||
+		!strings.Contains(status.PreviewDecision.BoundaryText, "RESULT BINDING MISMATCH") {
+		t.Fatalf("status = %+v decision = %+v", status, status.PreviewDecision)
+	}
+	if previews.eligibleCalls != 0 {
+		t.Fatalf("mismatched binding queried eligibility calls = %d", previews.eligibleCalls)
+	}
+}
+
+func TestMissingPreviewRunBindingCannotReachApproval(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{previewRun(baseline, passing)}}
+	usecase, input, _, _ := scenarioPartsWithPreview(t, previews, "sha256:workload-v1")
+	previews.runs[0].ScenarioID = ""
+	previews.runs[0].IdempotencyKey = ""
+	previews.runs[0].TargetFingerprint = ""
+	previews.runs[0].BindingFingerprint = ""
+
+	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusPreviewReady ||
+		status.PreviewDecision == nil || status.PreviewDecision.EligibleForHITL ||
+		!strings.Contains(status.PreviewDecision.BoundaryText, "RESULT BINDING MISMATCH") {
+		t.Fatalf("status = %+v decision = %+v", status, status.PreviewDecision)
+	}
+	if previews.eligibleCalls != 0 {
+		t.Fatalf("missing binding queried eligibility calls = %d", previews.eligibleCalls)
 	}
 }
 
@@ -687,7 +758,9 @@ func TestInitialDiagnosisAdvancesAndTriggersPreviewOnce(t *testing.T) {
 		second.Status != demomodel.ScenarioStatusAwaitingApproval || executor.calls != 1 {
 		t.Fatalf("status = %+v/%+v executor calls = %d", status, second, executor.calls)
 	}
-	if executor.lastInput.RunID != DeterministicPreviewRunID(1, ScenarioID, input.IdempotencyKey, run.IncidentID) {
+	if executor.lastInput.RunID != DeterministicPreviewRunID(
+		1, ScenarioID, input.IdempotencyKey, run.TargetFingerprint, run.IncidentID,
+	) {
 		t.Fatalf("preview binding = %+v", executor.lastInput)
 	}
 	if len(scenarios.events) != 3 {

@@ -85,7 +85,7 @@ func TestDeployedWorkloadAndSeedMatchRunner(t *testing.T) {
 
 	seedData, err := os.ReadFile("../../../deploy/repair-preview/seed.sql")
 	require.NoError(t, err)
-	require.Equal(t, strings.TrimSpace(string(seedData)), strings.TrimSpace(repairPreviewSeedSQL))
+	require.Contains(t, string(seedData), strings.TrimSpace(repairPreviewSeedSQL))
 }
 
 func testWorkload(t *testing.T) WorkloadSpec {

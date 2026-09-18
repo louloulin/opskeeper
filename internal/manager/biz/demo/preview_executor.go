@@ -21,10 +21,11 @@ type PreviewExecutionStore interface {
 }
 
 type RepairPreviewExecutor struct {
-	dsn             string
-	spec            repairpreview.WorkloadSpec
-	expectedProfile string
-	store           PreviewExecutionStore
+	dsn                 string
+	spec                repairpreview.WorkloadSpec
+	expectedProfile     string
+	store               PreviewExecutionStore
+	openPreviewDatabase func() (*sql.DB, error)
 }
 
 func NewRepairPreviewExecutor(
@@ -50,26 +51,47 @@ func NewRepairPreviewExecutor(
 	if spec.WorkloadFingerprint() != expectedProfile {
 		return nil, errors.New("repair preview workload fingerprint does not match configured profile")
 	}
-	return &RepairPreviewExecutor{dsn: dsn, spec: spec, expectedProfile: expectedProfile, store: store}, nil
+	return &RepairPreviewExecutor{
+		dsn: dsn, spec: spec, expectedProfile: expectedProfile, store: store,
+		openPreviewDatabase: func() (*sql.DB, error) { return sql.Open("pgx", dsn) },
+	}, nil
 }
 
 func (executor *RepairPreviewExecutor) Execute(ctx context.Context, input PreviewExecutionInput) error {
 	if executor == nil || executor.store == nil {
 		return errors.New("repair preview executor is not configured")
 	}
-	if input.RunID == "" || input.TenantID == "" || input.IncidentID == "" {
+	if input.RunID == "" || input.TenantID == "" || input.IncidentID == "" ||
+		input.ScenarioID == "" || input.IdempotencyKey == "" || input.TargetFingerprint == "" {
 		return errors.New("repair preview execution binding is incomplete")
+	}
+	if input.ScenarioID != ScenarioID {
+		return errors.New("repair preview scenario binding mismatch")
 	}
 	spec := executor.spec
 	spec.RuntimeBinding = repairpreview.WorkloadBinding{
 		RunID: input.RunID, TenantID: input.TenantID, IncidentID: input.IncidentID,
+		ScenarioID: input.ScenarioID, IdempotencyKey: input.IdempotencyKey,
+		TargetFingerprint: input.TargetFingerprint,
 	}
 
-	database, err := sql.Open("pgx", executor.dsn)
+	database, err := executor.openPreviewDatabase()
 	if err != nil {
 		return sanitizePreviewError(err)
 	}
 	defer database.Close()
+	if err := database.PingContext(ctx); err != nil {
+		return sanitizePreviewError(err)
+	}
+	identity, err := repairpreview.ReadTargetIdentity(ctx, database)
+	if err != nil {
+		return sanitizePreviewError(err)
+	}
+	if identity.ScenarioID != input.ScenarioID ||
+		identity.TargetFingerprint != input.TargetFingerprint ||
+		identity.WorkloadFingerprint != executor.expectedProfile {
+		return errors.New("repair preview target identity mismatch")
+	}
 	run, err := repairpreview.Execute(ctx, database, spec)
 	if err != nil {
 		return sanitizePreviewError(err)
@@ -94,16 +116,22 @@ func (executor *RepairPreviewExecutor) confirmDuplicate(
 		if persisted.ID == run.ID &&
 			persisted.TenantID == run.TenantID &&
 			persisted.IncidentID == run.IncidentID &&
-			persisted.WorkloadFingerprint == executor.expectedProfile {
+			persisted.WorkloadFingerprint == executor.expectedProfile &&
+			repairpreview.RunBindingMatches(
+				persisted, run.ScenarioID, run.IdempotencyKey, run.TargetFingerprint,
+			) {
 			return nil
 		}
 	}
 	return repairpreview.ErrDuplicateRun
 }
 
-func DeterministicPreviewRunID(tenantID uint64, scenarioID, idempotencyKey string, incidentID uint64) string {
+func DeterministicPreviewRunID(
+	tenantID uint64, scenarioID, idempotencyKey, targetFingerprint string, incidentID uint64,
+) string {
 	material := fmt.Sprintf(
-		"opskeeper-final-demo:%d:%s:%s:%d", tenantID, scenarioID, idempotencyKey, incidentID,
+		"opskeeper-final-demo:%d:%s:%s:%s:%d",
+		tenantID, scenarioID, idempotencyKey, targetFingerprint, incidentID,
 	)
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(material)).String()
 }

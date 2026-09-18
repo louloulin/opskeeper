@@ -1,6 +1,9 @@
 package repairpreview
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -20,6 +23,10 @@ type Run struct {
 	ID                  string      `json:"id"`
 	TenantID            string      `json:"tenant_id"`
 	IncidentID          string      `json:"incident_id"`
+	ScenarioID          string      `json:"scenario_id,omitempty"`
+	IdempotencyKey      string      `json:"idempotency_key,omitempty"`
+	TargetFingerprint   string      `json:"target_fingerprint,omitempty"`
+	BindingFingerprint  string      `json:"binding_fingerprint,omitempty"`
 	BranchPrefix        string      `json:"branch_prefix"`
 	SeedFingerprint     string      `json:"seed_fingerprint"`
 	WorkloadFingerprint string      `json:"workload_fingerprint"`
@@ -34,6 +41,40 @@ type Run struct {
 	Candidates          []Candidate `json:"candidates"`
 	CreatedAt           time.Time   `json:"created_at"`
 	UpdatedAt           time.Time   `json:"updated_at"`
+}
+
+type runBindingFingerprintMaterial struct {
+	RunID             string `json:"run_id"`
+	TenantID          string `json:"tenant_id"`
+	IncidentID        string `json:"incident_id"`
+	ScenarioID        string `json:"scenario_id"`
+	IdempotencyKey    string `json:"idempotency_key"`
+	TargetFingerprint string `json:"target_fingerprint"`
+}
+
+func (binding WorkloadBinding) Fingerprint() string {
+	material, err := json.Marshal(runBindingFingerprintMaterial{
+		RunID: binding.RunID, TenantID: binding.TenantID, IncidentID: binding.IncidentID,
+		ScenarioID: binding.ScenarioID, IdempotencyKey: binding.IdempotencyKey,
+		TargetFingerprint: binding.TargetFingerprint,
+	})
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(material)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func RunBindingMatches(run Run, scenarioID, idempotencyKey, targetFingerprint string) bool {
+	binding := WorkloadBinding{
+		RunID: run.ID, TenantID: run.TenantID, IncidentID: run.IncidentID,
+		ScenarioID: scenarioID, IdempotencyKey: idempotencyKey,
+		TargetFingerprint: targetFingerprint,
+	}
+	return run.ScenarioID == scenarioID &&
+		run.IdempotencyKey == idempotencyKey &&
+		run.TargetFingerprint == targetFingerprint &&
+		run.BindingFingerprint == binding.Fingerprint()
 }
 
 type Candidate struct {
