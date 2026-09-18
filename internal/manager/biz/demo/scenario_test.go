@@ -147,10 +147,11 @@ func (f *fakeScenarios) UpdateStatusWithEvent(
 }
 
 type fakeFixtures struct {
-	starts   int
-	business int
-	fails    bool
-	order    *[]string
+	starts    int
+	business  int
+	fails     bool
+	order     *[]string
+	lastStart FixtureStartInput
 }
 
 type fakePreviewRepository struct {
@@ -192,8 +193,9 @@ func (f *fakePreviewRepository) FindEligible(
 	return repairpreview.Candidate{}, repairpreview.ErrCandidateNotFound
 }
 
-func (f *fakeFixtures) Start(context.Context, FixtureStartInput) (FixtureStartResult, error) {
+func (f *fakeFixtures) Start(_ context.Context, input FixtureStartInput) (FixtureStartResult, error) {
 	f.starts++
+	f.lastStart = input
 	if f.order != nil {
 		*f.order = append(*f.order, "fixture")
 	}
@@ -253,6 +255,21 @@ func TestStartCreatesIncidentBeforeFixture(t *testing.T) {
 	}
 	if len(incidents.events) != 1 || strings.Contains(incidents.events[0].SnapshotJSON, "token") {
 		t.Fatalf("event = %+v", incidents.events[0])
+	}
+}
+
+func TestStartUsesFinalDemoPoolCapacity(t *testing.T) {
+	fixtures := &fakeFixtures{}
+	usecase := NewUsecase(newFakeScenarios(), newFakeIncidents(), fixtures)
+	if _, err := usecase.Start(context.Background(), 1, validInput()); err != nil {
+		t.Fatal(err)
+	}
+	if fixtures.lastStart.InitialCapacity != 4 || fixtures.lastStart.TargetCapacity != 8 {
+		t.Fatalf(
+			"capacity = %d/%d, want initial 4 and recovered 8",
+			fixtures.lastStart.InitialCapacity,
+			fixtures.lastStart.TargetCapacity,
+		)
 	}
 }
 

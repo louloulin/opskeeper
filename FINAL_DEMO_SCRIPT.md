@@ -33,7 +33,7 @@
 - Archive `evidence_complete=true`
 - Candidate A `PASS` 与 Candidate B `FAIL/REJECTED_BY_PREVIEW`
 
-当前代码内 live fixture 初始容量为 `2/2`；设计文案写 `4/4`。若决赛要求必须显示 `4/4`，需要在公网部署任务中统一配置并更新 readback。不要临时把 `2/2` 说成 `4/4`。
+当前最终演示契约固定为注入后 `4/4` 满载，Candidate A 修复后容量调整为 `8`。公网 readback 必须同时确认 active=4、capacity=4、恢复 capacity=8；任何版本不一致时停止演示。
 
 ## 0:00–0:30 开场：业务正常与运维痛点
 
@@ -65,7 +65,7 @@
    ```
 4. 说：“应用连接池满载，业务查询在等待连接；这是受控负载，不是无边界压测。”
 
-预期值：满载比例为 100%。当前实现显示 `2/2`；若部署已调整为 `4/4`，以监控实际 readback 为准。
+预期值：满载比例为 100%，且 active/capacity readback 为 `4/4`。不要把其他满载比例解释成同一契约。
 
 操作警告：注入 key 必须唯一；重复点击同一 key 应返回同一 incident/scenario，而不是新事故。若卡片全部仍 200，停止演示并走回滚/TTL。
 

@@ -21,13 +21,13 @@ import (
 )
 
 const (
-	ScenarioID       = "pg-pool-exhaustion"
-	ScenarioTarget   = "pg:pool-fixture"
-	maxFixtureBytes  = 1 << 20
-	requestTimeout   = 5 * time.Second
-	businessTimeout  = 3 * time.Second
-	fixtureCapacity  = 2
-	fixtureTargetCap = 4
+	ScenarioID                     = "pg-pool-exhaustion"
+	ScenarioTarget                 = "pg:pool-fixture"
+	maxFixtureBytes                = 1 << 20
+	requestTimeout                 = 5 * time.Second
+	businessTimeout                = 3 * time.Second
+	finalDemoInitialPoolCapacity   = 4
+	finalDemoRecoveredPoolCapacity = 8
 )
 
 var (
@@ -192,7 +192,9 @@ func (u *Usecase) Start(ctx context.Context, tenantID uint64, input StartScenari
 
 	result, err := u.fixtures.Start(ctx, FixtureStartInput{
 		CaseID: input.ScenarioID, IncidentID: strconv.FormatUint(incident.ID, 10),
-		InitialCapacity: fixtureCapacity, TargetCapacity: fixtureTargetCap, TTLSeconds: input.DurationSeconds,
+		InitialCapacity: finalDemoInitialPoolCapacity,
+		TargetCapacity:  finalDemoRecoveredPoolCapacity,
+		TTLSeconds:      input.DurationSeconds,
 	})
 	if err != nil {
 		_ = u.scenarios.UpdateStatus(ctx, run.ID, demomodel.ScenarioStatusStartFailed, nil)
@@ -279,7 +281,8 @@ func (u *Usecase) appendStartEvent(ctx context.Context, incidentID uint64, input
 		"scenario_id": input.ScenarioID, "idempotency_key": input.IdempotencyKey, "target": input.Target,
 		"target_fingerprint": input.TargetFingerprint, "alert_fingerprint": input.AlertFingerprint,
 		"duration_seconds": input.DurationSeconds, "pool_manifest_id": manifestID,
-		"initial_capacity": fixtureCapacity, "target_capacity": fixtureTargetCap,
+		"initial_capacity": finalDemoInitialPoolCapacity,
+		"target_capacity":  finalDemoRecoveredPoolCapacity,
 	})
 	if err != nil {
 		return err

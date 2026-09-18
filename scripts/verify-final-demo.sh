@@ -413,6 +413,16 @@ wait_for_prometheus_ratio() {
   return 1
 }
 
+prometheus_expected_value() {
+  local metric="$1"
+  local query="$2"
+  local expected="$3"
+  if ! prometheus_query "$query" "$metric"; then
+    return 1
+  fi
+  awk -v value="$PROMETHEUS_VALUE" -v expected="$expected" 'BEGIN { exit !(value == expected) }'
+}
+
 wait_for_scenario_status() {
   local expected_status="$1"
   local timeout_seconds="$2"
@@ -595,6 +605,16 @@ if ! wait_for_prometheus_ratio minimum "$MIN_STRESSED_UTILIZATION" "$RECOVERY_TI
   fail_now "monitoring did not confirm pool saturation"
 fi
 record_number "monitor_stressed_utilization" "$PROMETHEUS_VALUE"
+if ! prometheus_expected_value "pool active connections" \
+  "max(opskeeper_pool_fixture_active_connections{pool_manifest_id=\"$MANIFEST_ID\"})" 4; then
+  fail_now "monitoring did not confirm 4/4 pool saturation"
+fi
+record_number "monitor_stressed_active_connections" "$PROMETHEUS_VALUE"
+if ! prometheus_expected_value "pool capacity" \
+  "max(opskeeper_pool_fixture_capacity{pool_manifest_id=\"$MANIFEST_ID\"})" 4; then
+  fail_now "monitoring did not confirm initial pool capacity 4"
+fi
+record_number "monitor_stressed_capacity" "$PROMETHEUS_VALUE"
 
 if ! wait_for_scenario_status awaiting_approval "$WORKFLOW_TIMEOUT_SECONDS"; then
   fail_now "scenario did not reach awaiting_approval"
@@ -621,6 +641,11 @@ if ! wait_for_prometheus_ratio maximum "$MAX_RECOVERED_UTILIZATION" "$RECOVERY_T
   fail_now "monitoring did not confirm active/capacity recovery"
 fi
 record_number "monitor_recovered_utilization" "$PROMETHEUS_VALUE"
+if ! prometheus_expected_value "pool capacity" \
+  "max(opskeeper_pool_fixture_capacity{pool_manifest_id=\"$MANIFEST_ID\"})" 8; then
+  fail_now "monitoring did not confirm recovered pool capacity 8"
+fi
+record_number "monitor_recovered_capacity" "$PROMETHEUS_VALUE"
 
 RECOVERED_BUSINESS_COUNT=0
 for section in orders inventory audit; do

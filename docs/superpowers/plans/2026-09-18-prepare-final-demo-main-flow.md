@@ -57,7 +57,7 @@ func TestBusinessSnapshotUsesSharedSaturatedPool(t *testing.T) {
 	runtime.businessErr = context.DeadlineExceeded
 	manifest, err := controller.Start(context.Background(), StartRequest{
 		CaseID: "pg-pool-exhaustion", IncidentID: "incident-business",
-		InitialCapacity: 2, TargetCapacity: 4, TTLSeconds: 60,
+		InitialCapacity: 4, TargetCapacity: 8, TTLSeconds: 60,
 	})
 	if err != nil { t.Fatal(err) }
 	if _, err := controller.BusinessSnapshot(context.Background(), manifest.ManifestID, BusinessSectionOrders); !errors.Is(err, context.DeadlineExceeded) {
