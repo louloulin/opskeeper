@@ -67,6 +67,24 @@ func TestPercentile(t *testing.T) {
 	require.InDelta(t, 10.0, percentile([]float64{10}, 95), 0.001)
 }
 
+func TestNewBaselineCandidate_MarksPreviewEligibility(t *testing.T) {
+	candidate := newBaselineCandidate(WorkloadBinding{
+		RunID:      "017f2b01-4001-4000-8000-000000000001",
+		TenantID:   "opskeeper-demo",
+		IncidentID: "INC-REPAIR-RUNNER",
+	}, branchResult{
+		schemaName:        "rp_test_baseline",
+		checksum:          "checksum",
+		latencies:         []float64{10, 20, 30},
+		tps:               3,
+		businessProbePass: true,
+	})
+
+	require.Equal(t, DecisionPass, candidate.Decision)
+	require.Empty(t, candidate.RejectionReason)
+	require.NoError(t, candidate.Validate())
+}
+
 func TestRepairPreviewSchemaPrefix(t *testing.T) {
 	value := repairPreviewSchemaPrefix("run-value")
 	require.Contains(t, value, "rp_")
