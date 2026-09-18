@@ -1,0 +1,14 @@
+{
+  "change": "prepare-final-demo-main-flow",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "e67cb343ee45b851e51ff93afebd3673eba90c6eb34916015fa1366aacd55870",
+  "files": [
+    { "path": "openspec/changes/prepare-final-demo-main-flow/proposal.md", "sha256": "10eaeb8d65fe6c23ec96e1ed8ffb5a9bc4eaa2d24f7e675250c101a855a859c6" },
+    { "path": "openspec/changes/prepare-final-demo-main-flow/design.md", "sha256": "cd7a24ed821e66a624e8648b876d738549b1d3bb036b5efe760563aa533310de" },
+    { "path": "openspec/changes/prepare-final-demo-main-flow/tasks.md", "sha256": "e6151813860286001be43b9e5bd6d877281243339ddaf8dd2c19c27485bcdfff" },
+    { "path": "openspec/changes/prepare-final-demo-main-flow/specs/final-demo-reliability/spec.md", "sha256": "fd19891e07da972d800dd9facfae48e3b53f9cb6ae82cc72b73605aaf4f881f3" }
+  ]
+}

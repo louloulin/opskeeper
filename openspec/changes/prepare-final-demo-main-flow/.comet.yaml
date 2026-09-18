@@ -1,0 +1,17 @@
+workflow: full
+phase: build
+build_mode: subagent-driven-development
+build_pause: null
+isolation: branch
+verify_mode: null
+base_ref: 7a5bd54f2bf237ba6a585cf34e5434198594a5a7
+design_doc: docs/superpowers/specs/2026-09-18-prepare-final-demo-main-flow-design.md
+plan: docs/superpowers/plans/2026-09-18-prepare-final-demo-main-flow.md
+verify_result: pending
+verification_report: null
+branch_status: pending
+created_at: 2026-09-18
+verified_at: null
+archived: false
+handoff_context: openspec/changes/prepare-final-demo-main-flow/.comet/handoff/design-context.json
+handoff_hash: e67cb343ee45b851e51ff93afebd3673eba90c6eb34916015fa1366aacd55870
