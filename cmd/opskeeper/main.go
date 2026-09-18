@@ -154,6 +154,7 @@ import (
 
 	internalagentteams "github.com/vincent-wuhan/opskeeper/internal/agentteams"
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
+	repairpreviewcontrol "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
 	internaldataguard "github.com/vincent-wuhan/opskeeper/internal/dataguard"
 	internaldataguardheuristic "github.com/vincent-wuhan/opskeeper/internal/dataguard/heuristic"
 	internaldataguardlabel "github.com/vincent-wuhan/opskeeper/internal/dataguard/label"
@@ -297,6 +298,7 @@ func main() {
 		managerreportdata.Migrate,
 		managerflowdata.Migrate,
 		incidentcontrol.Migrate,
+		repairpreviewcontrol.Migrate,
 	); err != nil {
 		log.Error("run migrations", slog.Any("err", err))
 		os.Exit(1)
