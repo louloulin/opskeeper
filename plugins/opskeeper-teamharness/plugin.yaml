@@ -2,7 +2,7 @@ apiVersion: agentteams.agentteam/v1alpha1
 kind: AgentTeamPlugin
 metadata:
   name: opskeeper-teamharness
-  version: 1.0.61
+  version: 1.0.63
   description: |
     Opskeeper TeamHarness plugin — provides six deployed ops actors
     (alerter/investigator/reviewer/repairer/verifier/reporter)
@@ -243,3 +243,4 @@ package:
 # 同一插件包同时携带 plugin.yaml (AgentTeams) + dashboard/plugin.json (Dashboard)
 # AgentTeams runtime 只读 plugin.yaml；Dashboard runtime 只读 dashboard/plugin.json
 # 两者互不 import，共享 opskeeper backend HTTP API
+# opskeeper-install: replace

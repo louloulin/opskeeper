@@ -103,6 +103,7 @@ function KnowledgePanel({ report, incidentId, embeddedHits = [], embeddedWrites 
   const [hits, setHits] = React.useState(() => (embeddedHits.length ? embeddedHits : null));
   const [writes, setWrites] = React.useState(() => (embeddedWrites.length ? embeddedWrites : null));
   const [hitsError, setHitsError] = React.useState(null);
+  const [hitsNotice, setHitsNotice] = React.useState(null);
   const [writesError, setWritesError] = React.useState(null);
   const [hitsLoading, setHitsLoading] = React.useState(embeddedHits.length === 0);
   const [writesLoading, setWritesLoading] = React.useState(Boolean(incidentId) && embeddedWrites.length === 0);
@@ -110,6 +111,7 @@ function KnowledgePanel({ report, incidentId, embeddedHits = [], embeddedWrites 
   React.useEffect(() => {
     setHits(embeddedHits.length ? embeddedHits : null);
     setHitsError(null);
+    setHitsNotice(null);
     setHitsLoading(embeddedHits.length === 0);
   }, [report, embeddedHits]);
 
@@ -128,6 +130,7 @@ function KnowledgePanel({ report, incidentId, embeddedHits = [], embeddedWrites 
     let cancelled = false;
     setHitsLoading(true);
     setHitsError(null);
+    setHitsNotice(null);
     opskeeperApi.queryKnowledge({ query: rootSummary, top_k: 5 })
       .then((res) => {
         if (cancelled) return;
@@ -136,6 +139,11 @@ function KnowledgePanel({ report, incidentId, embeddedHits = [], embeddedWrites 
       })
       .catch((e) => {
         if (cancelled) return;
+        if (e?.status === 404) {
+          setHits([]);
+          setHitsNotice('知识库查询接口暂未开放；当前展示 RCA 证据链中的引用记录。');
+          return;
+        }
         setHitsError(e?.message || '引用知识库查询失败');
       })
       .finally(() => {
@@ -215,6 +223,14 @@ function KnowledgePanel({ report, incidentId, embeddedHits = [], embeddedWrites 
             background: 'rgba(245,158,11,0.08)', borderRadius: 4,
           }}>
             查询失败：{hitsError}
+          </div>
+        )}
+        {hitsNotice && (
+          <div style={{
+            padding: 8, fontSize: 11, color: 'var(--muted-foreground)',
+            background: 'rgba(99,102,241,0.06)', borderRadius: 4, marginBottom: 6,
+          }}>
+            {hitsNotice}
           </div>
         )}
         {!hitsLoading && !hitsError && hitList.length === 0 && (
@@ -387,7 +403,6 @@ function ReportViewer({ report, incidentId }) {
           </div>
         </div>
       )}
-
       {/* Evidence */}
       {evidence.length > 0 && (
         <div style={{
@@ -643,7 +658,10 @@ export default function OpskeeperRoute({ api }) {
         )}
 
         {selected && !running && report && (
-          <ReportViewer report={report} incidentId={selected.id} />
+          <ReportViewer
+            report={report}
+            incidentId={selected.labels?.incident_id || selected.id}
+          />
         )}
       </div>
     </div>

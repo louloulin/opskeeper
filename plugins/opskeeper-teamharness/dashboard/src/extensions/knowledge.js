@@ -46,15 +46,19 @@ function pickNumber(source, keys) {
 export function normalizeKBHit(raw) {
   const hit = asObject(raw);
   if (!hit) return null;
-  const id = pickString(hit, ['id', 'pattern_id', 'PatternID', 'doc_id']);
-  const summary = pickString(hit, ['summary', 'Summary', 'title', 'root_cause', 'RootCause']);
-  const resourceType = pickString(hit, ['resource_type', 'ResourceType', 'resourceType']);
-  const symptom = pickString(hit, ['symptom', 'Symptom']);
-  const rootCause = pickString(hit, ['root_cause', 'RootCause', 'rootCause']);
-  const similarity = pickNumber(hit, ['similarity', 'Similarity', 'score']);
-  const hitCount = pickNumber(hit, ['hit_count', 'HitCount', 'hitCount']);
-  const postmortemId = pickString(hit, ['postmortem_id', 'PostmortemID', 'postmortemId']);
-  const source = pickString(hit, ['source', 'origin']) || (resourceType ? `pattern:${resourceType}` : 'pattern');
+  const doc = asObject(hit.doc) || hit;
+  const id = pickString(doc, ['id', 'pattern_id', 'PatternID', 'doc_id']);
+  const summary = pickString(doc, ['summary', 'Summary', 'title', 'root_cause', 'RootCause']);
+  const resourceType = pickString(doc, ['resource_type', 'ResourceType', 'resourceType']);
+  const symptom = pickString(doc, ['symptom', 'Symptom']);
+  const rootCause = pickString(doc, ['root_cause', 'RootCause', 'rootCause']);
+  const similarity = pickNumber(hit, ['similarity', 'Similarity', 'score'])
+    ?? pickNumber(doc, ['similarity', 'Similarity', 'score']);
+  const hitCount = pickNumber(doc, ['hit_count', 'HitCount', 'hitCount']);
+  const postmortemId = pickString(doc, ['postmortem_id', 'PostmortemID', 'postmortemId']);
+  const sourceType = pickString(doc, ['source_type', 'SourceType', 'sourceType']);
+  const source = pickString(doc, ['source', 'origin'])
+    || (resourceType ? `pattern:${resourceType}` : `knowledge:${sourceType || 'search'}`);
   if (!id && !summary && !rootCause && !symptom) return null;
   return {
     id: id || summary || rootCause || symptom,
@@ -83,6 +87,7 @@ export function normalizeKBHitList(response) {
     root.results,
     root.kb_hits,
     root.data,
+    root.items,
     root,
   ];
   for (const candidate of candidates) {
@@ -125,13 +130,54 @@ export function normalizePostmortemRefList(response) {
   return [];
 }
 
+export function extractKnowledgeFromEvidence(evidence) {
+  return asArray(evidence).flatMap((raw) => {
+    const item = asObject(raw);
+    if (!item) return [];
+    const domain = pickString(item, ['domain', 'Domain']).toLowerCase();
+    const tool = pickString(item, ['tool', 'Tool']).toLowerCase();
+    if (domain !== 'knowledge' && tool !== 'query_knowledge') return [];
+
+    const summary = pickString(item, ['summary', 'title', 'snippet', 'ref', 'query']);
+    const explicitId = pickString(item, ['id', 'pattern_id', 'PatternID', 'doc_id']);
+    const step = item.step === undefined || item.step === null ? '' : String(item.step);
+    const hit = normalizeKBHit({
+      id: explicitId || (step && `evidence-${step}`) || summary,
+      summary,
+      symptom: pickString(item, ['symptom', 'Symptom']),
+      root_cause: pickString(item, ['root_cause', 'RootCause', 'rootCause']),
+      similarity: pickNumber(item, ['confidence', 'similarity', 'score']),
+      hit_count: pickNumber(item, ['hit_count', 'HitCount', 'hitCount', 'count']),
+      postmortem_id: pickString(item, ['postmortem_id', 'PostmortemID', 'postmortemId']),
+      source: pickString(item, ['source', 'origin']) || (tool ? `rca-evidence:${tool}` : 'rca-evidence:knowledge'),
+    });
+    return hit ? [hit] : [];
+  });
+}
+
 // 直接从 RCA 报告 payload（若后端已塞进 kb_hits / knowledge_writes）抽取。
 export function extractKnowledgeFromReport(report) {
   const root = asObject(report);
   if (!root) return { hits: [], writes: [] };
   const data = asObject(root.data) || root;
+  const rootObject = asObject(data.root_cause_object) || asObject(data.rootCauseObject);
+  const evidence = [
+    ...asArray(data.evidence_chain),
+    ...asArray(data.evidence),
+    ...asArray(rootObject?.evidence_chain),
+    ...asArray(rootObject?.evidence),
+  ];
+  const directHits = normalizeKBHitList(data.kb_hits ?? data.knowledge_refs ?? data.knowledgeRefs);
+  const evidenceHits = extractKnowledgeFromEvidence(evidence);
+  const seen = new Set();
+  const hits = [...directHits, ...evidenceHits].filter((hit) => {
+    const key = hit.summary;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   return {
-    hits: normalizeKBHitList(data.kb_hits ?? data.knowledge_refs ?? data.knowledgeRefs),
+    hits,
     writes: normalizePostmortemRefList(data.knowledge_writes ?? data.knowledgeWrites ?? data.postmortem_refs),
   };
 }

@@ -214,10 +214,10 @@ export const opskeeperApi = {
     });
   },
 
-  // GET /v1/mcp/query_knowledge (pgvector + BM25 dual-index)
+  // GET /v1/knowledge/search (qdrant + BM25 hybrid retrieval)
   queryKnowledge({ query, top_k = 5 } = {}) {
-    const q = new URLSearchParams({ query, top_k: String(top_k) });
-    return jsonFetch('/knowledge/query?' + q.toString());
+    const q = new URLSearchParams({ q: query, limit: String(top_k) });
+    return jsonFetch('/knowledge/search?' + q.toString());
   },
 
   // ── opskeeper plugin install (opskeeper-teamharness-only endpoint) ────

@@ -53,7 +53,7 @@ export default function OpskeeperIntegrationRoute() {
         manifest,
       }, {
         targetRoomId: normalizedRoomId,
-        expectedPluginVersion: '1.0.60',
+        expectedPluginVersion: manifest?.value?.version || '',
       }));
     } finally {
       setChecking(false);

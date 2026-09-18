@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  extractKnowledgeFromEvidence,
   extractKnowledgeFromReport,
   formatSimilarity,
   normalizeKBHit,
@@ -53,6 +54,11 @@ test('normalizeKBHitList unwraps common envelopes', () => {
   assert.equal(nested.length, 1);
   assert.equal(nested[0].summary, 'rc');
 
+  const searched = normalizeKBHitList({ items: [{ doc: { id: '9', title: 'runbook' }, score: 0.73 }] });
+  assert.equal(searched.length, 1);
+  assert.equal(searched[0].summary, 'runbook');
+  assert.equal(searched[0].similarity, 0.73);
+
   assert.deepEqual(normalizeKBHitList(null), []);
 });
 
@@ -101,6 +107,34 @@ test('extractKnowledgeFromReport prefers embedded kb_hits and knowledge_writes',
   assert.equal(out.hits[0].id, 'k1');
   assert.equal(out.writes.length, 1);
   assert.equal(out.writes[0].id, 'w1');
+});
+
+test('extractKnowledgeFromEvidence maps RCA knowledge evidence to KB hits', () => {
+  const hits = extractKnowledgeFromEvidence([
+    { step: 4, domain: 'knowledge', tool: 'query_knowledge', summary: 'known regression runbook', confidence: 0.82 },
+    { step: 5, domain: 'middleware', tool: 'pg.query', summary: 'active transaction' },
+    { step: 6, tool: 'query_knowledge', summary: 'pool exhaustion postmortem', confidence: 0.71 },
+  ]);
+
+  assert.equal(hits.length, 2);
+  assert.equal(hits[0].id, 'evidence-4');
+  assert.equal(hits[0].summary, 'known regression runbook');
+  assert.equal(hits[0].similarity, 0.82);
+  assert.equal(hits[0].source, 'rca-evidence:query_knowledge');
+  assert.equal(hits[1].id, 'evidence-6');
+});
+
+test('extractKnowledgeFromReport merges direct and evidence hits without duplicates', () => {
+  const out = extractKnowledgeFromReport({
+    kb_hits: [{ id: 'k1', summary: 'kb-1' }],
+    evidence_chain: [
+      { step: 1, domain: 'knowledge', summary: 'kb-1' },
+      { step: 2, tool: 'query_knowledge', summary: 'kb-2', confidence: 0.64 },
+    ],
+  });
+
+  assert.deepEqual(out.hits.map((hit) => hit.summary), ['kb-1', 'kb-2']);
+  assert.equal(out.hits[1].source, 'rca-evidence:query_knowledge');
 });
 
 test('extractKnowledgeFromReport returns empty arrays for legacy payloads', () => {

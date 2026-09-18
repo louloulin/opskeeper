@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.63 — 2026-09-18
+
+- Extract knowledge references directly from RCA evidence chains when structured `kb_hits` are unavailable.
+- Use the Manager `/knowledge/search` contract, normalize nested `items[].doc` results, and pass the business incident ID to archive readback.
+- Gracefully degrade when the Manager knowledge search API is not deployed, while still showing evidence-backed references and postmortem outputs.
+- Derive the unified integration preflight version expectation from the active Dashboard manifest.
+
 ## 1.0.60 — 2026-09-18
 
 - Add a read-only Manager archive index and make the Dashboard Archive selector use actual closed-loop incident IDs.
