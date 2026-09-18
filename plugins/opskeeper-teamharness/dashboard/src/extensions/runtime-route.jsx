@@ -79,7 +79,7 @@ export default function OpskeeperRuntimeRoute({ api }) {
         </button>
       </header>
 
-      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 12 }}>
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 12, alignItems: 'stretch' }}>
         <SummaryCard
           label="服务状态"
           value={STATUS_LABELS[health?.status] || '未知'}
@@ -163,10 +163,14 @@ export default function OpskeeperRuntimeRoute({ api }) {
 
 function SummaryCard({ label, value, hint, color }) {
   return (
-    <div style={{ padding: 14, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)' }}>
-      <div style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 600, marginTop: 6, color: color || 'inherit' }}>{value}</div>
-      <div style={{ fontSize: 11, color: 'var(--muted-foreground)', marginTop: 4 }}>{hint}</div>
+    <div style={{
+      padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)',
+      display: 'flex', flexDirection: 'column', gap: 4,
+      minHeight: 96, minWidth: 0, overflow: 'hidden',
+    }}>
+      <div style={{ fontSize: 11, color: 'var(--muted-foreground)', minHeight: 14 }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 600, color: color || 'inherit', lineHeight: 1.2, minHeight: 24 }}>{value}</div>
+      <div style={{ fontSize: 11, color: 'var(--muted-foreground)', marginTop: 'auto', minHeight: 14 }}>{hint}</div>
     </div>
   );
 }
