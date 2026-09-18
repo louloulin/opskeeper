@@ -83,8 +83,49 @@ done
 validate_url() {
   local variable_name="$1"
   local value="${!variable_name}"
-  if [[ "$value" != http://* && "$value" != https://* ]] || [[ "$value" =~ [[:space:]] ]]; then
-    printf 'verify-final-demo: %s must be an http(s) URL without whitespace: %s\n' "$variable_name" "$value" >&2
+  local scheme="${value%%://*}"
+  local remainder="${value#*://}"
+  local authority="${remainder%%[/?#]*}"
+  if [[ "$value" != http://* && "$value" != https://* ]] || [[ "$value" =~ [[:space:]] ]] ||
+     [[ "$value" == *\?* ]] || [[ "$value" == *\#* ]] || [[ "$authority" == *@* ]]; then
+    printf 'verify-final-demo: %s must be an http(s) base URL without whitespace, query, fragment, or user info\n' "$variable_name" >&2
+    exit 1
+  fi
+}
+
+url_origin_from_value() {
+  local value="$1"
+  local scheme="${value%%://*}"
+  local remainder="${value#*://}"
+  local authority="${remainder%%[/?#]*}"
+  printf '%s://%s' "$scheme" "$authority"
+}
+
+safe_url_label_from_value() {
+  local value="$1"
+  local scheme="${value%%://*}"
+  local remainder="${value#*://}"
+  local authority="${remainder%%[/?#]*}"
+  local path_source="${remainder%%\?*}"
+  path_source="${path_source%%\#*}"
+  local path="/"
+  if [[ "$path_source" == */* ]]; then
+    path="/${path_source#*/}"
+  fi
+  path="$(printf '%s' "$path" | LC_ALL=C tr -Cd '[:alnum:]._/:-' | cut -c1-200)"
+  printf '%s://%s%s' "$scheme" "$authority" "$path"
+}
+
+configured_url_origin() {
+  url_origin_from_value "${!1}"
+}
+
+validate_unit_interval() {
+  local variable_name="$1"
+  local value="${!variable_name}"
+  if ! [[ "$value" =~ ^(0|1)(\.[0-9]+)?$ ]] ||
+     ! awk -v value="$value" 'BEGIN { exit !(value >= 0 && value <= 1) }'; then
+    printf 'verify-final-demo: %s must be a finite decimal number from 0 through 1\n' "$variable_name" >&2
     exit 1
   fi
 }
@@ -108,8 +149,10 @@ POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
 WORKFLOW_TIMEOUT_SECONDS="${WORKFLOW_TIMEOUT_SECONDS:-900}"
 RECOVERY_TIMEOUT_SECONDS="${RECOVERY_TIMEOUT_SECONDS:-180}"
 DEGRADED_LATENCY_MS="${DEGRADED_LATENCY_MS:-1500}"
-MIN_STRESSED_UTILIZATION="${MIN_STRESSED_UTILIZATION:-0.90}"
-MAX_RECOVERED_UTILIZATION="${MAX_RECOVERED_UTILIZATION:-0.25}"
+MIN_STRESSED_UTILIZATION="${MIN_STRESSED_UTILIZATION-0.90}"
+MAX_RECOVERED_UTILIZATION="${MAX_RECOVERED_UTILIZATION-0.25}"
+validate_unit_interval MIN_STRESSED_UTILIZATION
+validate_unit_interval MAX_RECOVERED_UTILIZATION
 HTTP_TIMEOUT_SECONDS="${HTTP_TIMEOUT_SECONDS%%.*}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS%%.*}"
 WORKFLOW_TIMEOUT_SECONDS="${WORKFLOW_TIMEOUT_SECONDS%%.*}"
@@ -127,10 +170,12 @@ CURL_ERROR_FILE="$(mktemp "${TMPDIR:-/tmp}/opskeeper-final-demo-curl-error.XXXXX
 EVIDENCE_OUTPUT="${EVIDENCE_OUTPUT:-}"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 LAST_STEP="configuration"
-LAST_URL=""
+LAST_OPERATION_LABEL=""
+LAST_OPERATION_ORIGIN=""
 LAST_METHOD=""
 LAST_HTTP_CODE=""
 LAST_RESPONSE_BODY=""
+LAST_TRANSPORT_ERROR=false
 
 cleanup() {
   rm -f "$EVIDENCE_FILE" "$CURL_ERROR_FILE"
@@ -157,13 +202,24 @@ record_number() {
   mv "$temporary_file" "$EVIDENCE_FILE"
 }
 
-sanitize_body() {
+safe_response_fields() {
   local body="${1:-}"
-  body="${body//\"Authorization\"\:\"\[redacted\]\"/\"Authorization\":\"[redacted]\"}"
-  if [[ "${#body}" -gt 4000 ]]; then
-    body="${body:0:4000}...[truncated]"
+  if ! jq -e . >/dev/null 2>&1 <<<"$body"; then
+    printf '{"format":"non_json"}'
+    return 0
   fi
-  printf '%s' "$body"
+  jq -c '
+    def safe_string(value):
+      if (value | type) == "string" and (value | test("^[A-Za-z0-9_-]{1,64}$")) then value else null end;
+    {
+      format: "json",
+      code: (if (.code | type) == "number" then .code else null end),
+      error_code: safe_string(.error_code),
+      status: safe_string(.status),
+      data_type: (if (.data | type) == "string" then "present" elif (.data | type) != "null" then (.data | type) else null end),
+      transport_error: (if .transport_error == true then true else null end)
+    }
+  ' <<<"$body"
 }
 
 emit_evidence() {
@@ -184,9 +240,10 @@ fail_now() {
   local message="$1"
   trap - ERR
   printf '\nverify-final-demo: FAIL: %s\n' "$message" >&2
-  if [[ -n "$LAST_URL" ]]; then
-    printf 'Last operation: %s %s; HTTP=%s\n' "$LAST_METHOD" "$LAST_URL" "${LAST_HTTP_CODE:-n/a}" >&2
-    printf 'Response context: %s\n' "$(sanitize_body "$LAST_RESPONSE_BODY")" >&2
+  if [[ -n "$LAST_OPERATION_LABEL" ]]; then
+    printf 'Last operation: %s %s; HTTP=%s\n' "$LAST_METHOD" "$LAST_OPERATION_LABEL" "${LAST_HTTP_CODE:-n/a}" >&2
+    printf 'Safe response context: %s\n' "$(safe_response_fields "$LAST_RESPONSE_BODY")" >&2
+    record "last_operation_origin" "$LAST_OPERATION_ORIGIN"
   fi
   emit_evidence "failed" "$message" >&2
   exit 1
@@ -203,8 +260,10 @@ request() {
   local curl_status
 
   LAST_METHOD="$method"
-  LAST_URL="$url"
-  LAST_STEP="request $method $url"
+  LAST_OPERATION_LABEL="$(safe_url_label_from_value "$url")"
+  LAST_OPERATION_ORIGIN="$(url_origin_from_value "$url")"
+  LAST_STEP="request $method $LAST_OPERATION_LABEL"
+  LAST_TRANSPORT_ERROR=false
   local curl_arguments=(
     -sS
     --max-time "$HTTP_TIMEOUT_SECONDS"
@@ -242,14 +301,14 @@ request() {
   curl_arguments+=("$url")
 
   if ! raw_response="$(curl "${curl_arguments[@]}" 2>"$CURL_ERROR_FILE")"; then
-    curl_status="transport_error: $(tr '\n' ' ' < "$CURL_ERROR_FILE")"
-    LAST_RESPONSE_BODY="$curl_status"
-    fail_now "request failed: $method $url"
+    LAST_RESPONSE_BODY='{"transport_error":true}'
+    LAST_TRANSPORT_ERROR=true
+    fail_now "request failed during $LAST_STEP"
   fi
   LAST_HTTP_CODE="${raw_response##*$'\n'}"
   LAST_RESPONSE_BODY="${raw_response%$'\n'}"
   if ! [[ "$LAST_HTTP_CODE" =~ ^[0-9]{3}$ ]]; then
-    fail_now "curl did not return a valid HTTP status for $url"
+    fail_now "curl did not return a valid HTTP status during $LAST_STEP"
   fi
 }
 
@@ -279,10 +338,12 @@ business_probe() {
     -H 'Cache-Control: no-store' \
     -w $'\n%{time_total}\n%{http_code}' \
     "$MANAGER_URL$path" 2>"$CURL_ERROR_FILE")"; then
-    fail_now "business request failed: $section"
+    fail_now "business request failed for section $section"
   fi
   LAST_METHOD="GET"
-  LAST_URL="$MANAGER_URL$path"
+  LAST_OPERATION_LABEL="$(safe_url_label_from_value "$MANAGER_URL$path")"
+  LAST_OPERATION_ORIGIN="$(url_origin_from_value "$MANAGER_URL$path")"
+  LAST_STEP="business snapshot $section"
   LAST_HTTP_CODE="${raw_response##*$'\n'}"
   temporary_body="${raw_response%$'\n'}"
   BUSINESS_LATENCY_SECONDS="${temporary_body##*$'\n'}"
@@ -317,11 +378,13 @@ prometheus_query() {
   fi
   curl_arguments+=("$PROMETHEUS_URL/api/v1/query")
   LAST_METHOD="GET"
-  LAST_URL="$PROMETHEUS_URL/api/v1/query"
+  LAST_OPERATION_LABEL="$(safe_url_label_from_value "$PROMETHEUS_URL/api/v1/query")"
+  LAST_OPERATION_ORIGIN="$(url_origin_from_value "$PROMETHEUS_URL/api/v1/query")"
   LAST_STEP="Prometheus query $label"
   if ! raw_response="$(curl "${curl_arguments[@]}" 2>"$CURL_ERROR_FILE")"; then
-    LAST_RESPONSE_BODY="$(tr '\n' ' ' < "$CURL_ERROR_FILE")"
-    fail_now "Prometheus query failed: $label"
+    LAST_RESPONSE_BODY='{"transport_error":true}'
+    LAST_TRANSPORT_ERROR=true
+    fail_now "Prometheus query failed for $label"
   fi
   LAST_HTTP_CODE="${raw_response##*$'\n'}"
   LAST_RESPONSE_BODY="${raw_response%$'\n'}"
@@ -368,15 +431,36 @@ wait_for_scenario_status() {
   return 1
 }
 
+wait_for_proposal_bound_recovery() {
+  local timeout_seconds="$1"
+  local deadline=$((SECONDS + timeout_seconds))
+  local repair_dispatched_observed=false
+  while (( SECONDS < deadline )); do
+    scenario_read "$SCENARIO_IDEMPOTENCY_KEY"
+    printf 'scenario status: %s; repair_dispatched_observed=%s\n' "$SCENARIO_READ_STATUS" "$repair_dispatched_observed"
+    if [[ "$SCENARIO_READ_STATUS" == "repair_dispatched" ]]; then
+      repair_dispatched_observed=true
+      record "repair_dispatched_observed" "true"
+    elif [[ "$SCENARIO_READ_STATUS" == "recovered" ]]; then
+      if [[ "$repair_dispatched_observed" != true ]]; then
+        fail_now "recovered was observed without an explicit repair_dispatched transition; TTL or unbound recovery is not accepted"
+      fi
+      return 0
+    fi
+    sleep "$POLL_INTERVAL_SECONDS"
+  done
+  return 1
+}
+
 record "mode" "$MODE"
-record "manager_url" "$MANAGER_URL"
-record "home_url" "$HOME_URL"
-record "teams_url" "$TEAMS_URL"
-record "rooms_url" "$ROOMS_URL"
-record "opskeeper_url" "$OPSKEEPER_URL"
+record "manager_origin" "$(configured_url_origin MANAGER_URL)"
+record "home_origin" "$(configured_url_origin HOME_URL)"
+record "teams_origin" "$(configured_url_origin TEAMS_URL)"
+record "rooms_origin" "$(configured_url_origin ROOMS_URL)"
+record "opskeeper_origin" "$(configured_url_origin OPSKEEPER_URL)"
 record "expected_manager_version" "$EXPECTED_MANAGER_VERSION"
 record "expected_plugin_version" "$EXPECTED_PLUGIN_VERSION"
-record "plugin_health_url" "$PLUGIN_HEALTH_URL"
+record "plugin_health_origin" "$(configured_url_origin PLUGIN_HEALTH_URL)"
 record "scenario_idempotency_key" "$SCENARIO_IDEMPOTENCY_KEY"
 record_number "scenario_duration_seconds" "$SCENARIO_DURATION_SECONDS"
 
@@ -521,7 +605,7 @@ fi
 PREVIEW_DECISION="$(jq -c '.data.preview_decision' <<<"$LAST_RESPONSE_BODY")"
 record "preview_decision" "$PREVIEW_DECISION"
 
-printf '\nACTION REQUIRED: approve only Candidate A in %s using the existing AgentTeams HITL approval surface.\n' "$ROOMS_URL"
+printf '\nACTION REQUIRED: approve only Candidate A at %s using the existing AgentTeams HITL approval surface.\n' "$(safe_url_label_from_value "$ROOMS_URL")"
 printf 'The preview PASS is eligibility only. The approved repair must run through recovery.execute with the exact proposal, incident, candidate, execution, target, and fingerprint bindings.\n'
 printf 'Type approve-candidate-a to confirm that the real approval and repair have been initiated: '
 read -r human_confirmation
@@ -530,7 +614,7 @@ if [[ "$human_confirmation" != "approve-candidate-a" ]]; then
 fi
 record "human_hitl_confirmed" "true"
 
-if ! wait_for_scenario_status recovered "$WORKFLOW_TIMEOUT_SECONDS"; then
+if ! wait_for_proposal_bound_recovery "$WORKFLOW_TIMEOUT_SECONDS"; then
   fail_now "scenario did not recover after HITL approval and repair"
 fi
 if ! wait_for_prometheus_ratio maximum "$MAX_RECOVERED_UTILIZATION" "$RECOVERY_TIMEOUT_SECONDS" "$MANIFEST_ID"; then
