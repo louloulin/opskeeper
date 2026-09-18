@@ -87,6 +87,7 @@ import (
 	iamserver "github.com/vincent-wuhan/opskeeper/internal/iam/server"
 	iamservice "github.com/vincent-wuhan/opskeeper/internal/iam/service"
 
+	managerbizdemo "github.com/vincent-wuhan/opskeeper/internal/manager/biz/demo"
 	managerbizdevice "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
 	managerbizedge "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
 	changeeventbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge/changeevent"
@@ -94,6 +95,7 @@ import (
 	managerbizpromwrite "github.com/vincent-wuhan/opskeeper/internal/manager/biz/promwrite"
 	managerbiztopology "github.com/vincent-wuhan/opskeeper/internal/manager/biz/topology"
 	manageralertdata "github.com/vincent-wuhan/opskeeper/internal/manager/data/alert/store"
+	managerdemodata "github.com/vincent-wuhan/opskeeper/internal/manager/data/demo"
 	managerdevicedata "github.com/vincent-wuhan/opskeeper/internal/manager/data/device/store"
 	manageredgedata "github.com/vincent-wuhan/opskeeper/internal/manager/data/edge/store"
 	managermetricdata "github.com/vincent-wuhan/opskeeper/internal/manager/data/metric/store"
@@ -173,6 +175,7 @@ import (
 	managerserverchatdiagnose "github.com/vincent-wuhan/opskeeper/internal/manager/server/chatdiagnose"
 	managerservercluster "github.com/vincent-wuhan/opskeeper/internal/manager/server/cluster"
 	managerserverdataguard "github.com/vincent-wuhan/opskeeper/internal/manager/server/dataguard"
+	managerserverdemo "github.com/vincent-wuhan/opskeeper/internal/manager/server/demo"
 	managerserverdevice "github.com/vincent-wuhan/opskeeper/internal/manager/server/device"
 	managerserveredge "github.com/vincent-wuhan/opskeeper/internal/manager/server/edge"
 	managerserveredgeauth "github.com/vincent-wuhan/opskeeper/internal/manager/server/edgeauth"
@@ -185,7 +188,6 @@ import (
 	managerservermarketplace "github.com/vincent-wuhan/opskeeper/internal/manager/server/marketplace"
 	managerservermcp "github.com/vincent-wuhan/opskeeper/internal/manager/server/mcp"
 	managerservermetric "github.com/vincent-wuhan/opskeeper/internal/manager/server/metric"
-	managerserverversion "github.com/vincent-wuhan/opskeeper/internal/manager/server/version"
 	managermiddleware "github.com/vincent-wuhan/opskeeper/internal/manager/server/middleware"
 	managerservermonitor "github.com/vincent-wuhan/opskeeper/internal/manager/server/monitor"
 	managerserverprom "github.com/vincent-wuhan/opskeeper/internal/manager/server/prometheus"
@@ -197,10 +199,12 @@ import (
 	managerserversystemupgrade "github.com/vincent-wuhan/opskeeper/internal/manager/server/systemupgrade"
 	managerservertopology "github.com/vincent-wuhan/opskeeper/internal/manager/server/topology"
 	managerservertraces "github.com/vincent-wuhan/opskeeper/internal/manager/server/traces"
+	managerserverversion "github.com/vincent-wuhan/opskeeper/internal/manager/server/version"
 
 	managersvcaiops "github.com/vincent-wuhan/opskeeper/internal/manager/service/aiops"
 	manageraiopsconfig "github.com/vincent-wuhan/opskeeper/internal/manager/service/aiopsconfig"
 	managersvcalert "github.com/vincent-wuhan/opskeeper/internal/manager/service/alert"
+	managersvcdemo "github.com/vincent-wuhan/opskeeper/internal/manager/service/demo"
 	managersvcedge "github.com/vincent-wuhan/opskeeper/internal/manager/service/edge"
 	managersvcfb "github.com/vincent-wuhan/opskeeper/internal/manager/service/frontierbound"
 	managersvcmetric "github.com/vincent-wuhan/opskeeper/internal/manager/service/metric"
@@ -279,6 +283,7 @@ func main() {
 		iamdataorg.Migrate,
 		iamdatamembership.Migrate,
 		manageralertdata.Migrate,
+		managerdemodata.Migrate,
 		managerdevicedata.Migrate,
 		manageredgedata.Migrate,
 		managertopologydata.Migrate,
@@ -1298,12 +1303,22 @@ func main() {
 	}
 	poolFixtureURL := strings.TrimSpace(os.Getenv("OPSKEEPER_POOL_FIXTURE_URL"))
 	poolFixtureToken := strings.TrimSpace(os.Getenv("OPSKEEPER_POOL_FIXTURE_TOKEN"))
+	var demoScenarioHandler *managerserverdemo.Handler
 	if poolFixtureURL != "" || poolFixtureToken != "" {
 		if poolFixtureURL == "" || poolFixtureToken == "" {
 			log.Error("pool fixture client config requires both URL and token")
 			os.Exit(1)
 		}
 		toolsReg.SetPoolRecoveryExecutor(aiopstools.NewPoolFixtureClient(poolFixtureURL, poolFixtureToken))
+	}
+	demoAPIToken := strings.TrimSpace(os.Getenv("OPSKEEPER_DEMO_API_TOKEN"))
+	if poolFixtureURL != "" && poolFixtureToken != "" && demoAPIToken != "" {
+		demoScenarioUsecase := managerbizdemo.NewUsecase(
+			managerdemodata.NewRepo(db), alertRepo, managerbizdemo.NewPoolFixtureClient(poolFixtureURL, poolFixtureToken),
+		)
+		demoScenarioHandler = managerserverdemo.NewHandler(managersvcdemo.NewService(demoScenarioUsecase), demoAPIToken)
+	} else if demoAPIToken != "" {
+		log.Warn("demo scenario API disabled: pool fixture URL/token is required")
 	}
 	toolsReg.SetPluginConfigLister(pluginConfigUC)
 	gitArtifacts, err := newGitArtifactRuntime(os.Getenv("OPSKEEPER_GIT_ARTIFACT_STORE_PATH"), log)
@@ -2844,8 +2859,8 @@ func main() {
 			deploymentHandler, err := managerserverversion.NewHandler(
 				managerserverversion.ManagerVersion(version),
 				managerserverversion.Source{
-					PluginPath:  "plugins/opskeeper-teamharness/dashboard/plugin.json",
-					SkillsDir:   "plugins/opskeeper-teamharness/skills/agent",
+					PluginPath:    "plugins/opskeeper-teamharness/dashboard/plugin.json",
+					SkillsDir:     "plugins/opskeeper-teamharness/skills/agent",
 					HealthService: deploymentHealthAdapter{svc: systemHealthSvc},
 				},
 			)
@@ -2988,6 +3003,12 @@ func main() {
 			agentteamsHandler.Register(agentteamsRouter)
 			agentteamsPluginHandler.Register(agentteamsRouter)
 		})
+
+		if demoScenarioHandler != nil {
+			api.Group(func(demoRouter chi.Router) {
+				demoScenarioHandler.Register(demoRouter)
+			})
+		}
 	})
 
 	// Public (unauthenticated) report share route: /r/{token}. Mounted
