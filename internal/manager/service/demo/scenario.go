@@ -11,6 +11,7 @@ import (
 
 type StartScenarioInput = bizdemo.StartScenarioInput
 type ScenarioStatus = bizdemo.ScenarioStatus
+type PreviewDecisionSummary = bizdemo.PreviewDecisionSummary
 
 type Service struct{ usecase *bizdemo.Usecase }
 

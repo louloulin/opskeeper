@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
 	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
 	demomodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
@@ -116,6 +117,32 @@ type fakeFixtures struct {
 	business int
 	fails    bool
 	order    *[]string
+}
+
+type fakePreviewRepository struct {
+	runs          []repairpreview.Run
+	eligibleCalls int
+}
+
+func (f *fakePreviewRepository) ListByIncident(
+	_ context.Context, _, _ string, _ int,
+) ([]repairpreview.Run, error) {
+	return f.runs, nil
+}
+
+func (f *fakePreviewRepository) FindEligible(
+	_ context.Context, _, _, runID, candidateID, action string,
+) (repairpreview.Candidate, error) {
+	f.eligibleCalls++
+	for _, run := range f.runs {
+		for _, candidate := range run.Candidates {
+			if candidate.RunID == runID && candidate.CandidateID == candidateID &&
+				candidate.Action == action && candidate.Decision == repairpreview.DecisionPass {
+				return candidate, nil
+			}
+		}
+	}
+	return repairpreview.Candidate{}, repairpreview.ErrCandidateNotFound
 }
 
 func (f *fakeFixtures) Start(context.Context, FixtureStartInput) (FixtureStartResult, error) {
@@ -255,5 +282,164 @@ func TestBusinessSnapshotReturnsPoolExhausted(t *testing.T) {
 	var fixtureErr *FixtureError
 	if !errors.As(err, &fixtureErr) || fixtureErr.Code != "pool_exhausted" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func previewCandidate(id, action string, decision repairpreview.Decision) repairpreview.Candidate {
+	return repairpreview.Candidate{
+		ID: "row-" + id, RunID: "preview-run", TenantID: "1", IncidentID: "100",
+		CandidateID: id, Name: id, Kind: "candidate", Action: action,
+		ChangeSummary: action, Branch: "preview/" + id, ResultChecksum: "sha256:" + id,
+		Consistent: decision == repairpreview.DecisionPass, AverageLatencyMS: 18,
+		MedianLatencyMS: 17, P95LatencyMS: 29, SampleCount: 20, TPS: 120,
+		WriteImpact: "bounded", BusinessProbePass: decision == repairpreview.DecisionPass,
+		Decision: decision,
+	}
+}
+
+func previewRun(candidates ...repairpreview.Candidate) repairpreview.Run {
+	return repairpreview.Run{
+		ID: "preview-run", TenantID: "1", IncidentID: "100", BranchPrefix: "preview",
+		SeedFingerprint: "sha256:seed-v1", WorkloadFingerprint: "sha256:workload-v1",
+		WorkloadRevision: "workload-v1", ControlledLoad: true,
+		IsolationBoundary: "preview-pg", Status: "finished", Candidates: candidates,
+	}
+}
+
+func scenarioWithPreview(
+	t *testing.T, previews *fakePreviewRepository, expectedProfile string,
+) (*Usecase, StartScenarioInput, *fakeIncidents) {
+	t.Helper()
+	input := validInput()
+	scenarios := newFakeScenarios()
+	incidents := newFakeIncidents()
+	incident := &alertmodel.Incident{
+		ID: 100, Title: "PostgreSQL connection pool exhaustion rehearsal",
+		DedupeKey: "demo-scenario:" + input.IdempotencyKey, Status: alertmodel.IncidentStatusOpen,
+	}
+	incidents.rows[incident.DedupeKey] = incident
+	incidents.byID[incident.ID] = incident
+	run := &demomodel.ScenarioRun{
+		TenantID: 1, ScenarioID: ScenarioID, IdempotencyKey: input.IdempotencyKey,
+		IncidentID: 100, PoolManifestID: "manifest", TargetFingerprint: input.TargetFingerprint,
+		Status: demomodel.ScenarioStatusDiagnosisSent, ExpiresAt: time.Now().Add(time.Minute),
+	}
+	if err := scenarios.CreateOrUpdate(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	return NewUsecaseWithPreviews(
+		scenarios, incidents, &fakeFixtures{}, previews, expectedProfile,
+	), input, incidents
+}
+
+func TestPreviewPASSCreatesOnlyHITLEligibility(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	rejected := previewCandidate("candidate-b", "reset_pool", repairpreview.DecisionReject)
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{
+		previewRun(baseline, passing, rejected),
+	}}
+	usecase, input, incidents := scenarioWithPreview(t, previews, "sha256:workload-v1")
+
+	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusAwaitingApproval {
+		t.Fatalf("status = %s, want awaiting_approval", status.Status)
+	}
+	decision := status.PreviewDecision
+	if decision == nil || !decision.EligibleForHITL ||
+		decision.ReplayProfileID != "sha256:workload-v1" ||
+		decision.CandidateA != "candidate-a" || decision.CandidateB != "candidate-b" {
+		t.Fatalf("decision = %+v", decision)
+	}
+	if previews.eligibleCalls != 1 {
+		t.Fatalf("eligible calls = %d", previews.eligibleCalls)
+	}
+	if len(incidents.events) != 2 || incidents.events[0].EventType != demomodel.ScenarioStatusPreviewReady ||
+		incidents.events[1].EventType != demomodel.ScenarioStatusAwaitingApproval {
+		t.Fatalf("preview events = %+v", incidents.events)
+	}
+	if _, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey); err != nil {
+		t.Fatal(err)
+	}
+	if len(incidents.events) != 2 || previews.eligibleCalls != 2 {
+		t.Fatalf("repeat events = %+v calls = %d", incidents.events, previews.eligibleCalls)
+	}
+}
+
+func TestPreviewFAILCannotReachApproval(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	rejected := previewCandidate("candidate-b", "reset_pool", repairpreview.DecisionReject)
+	usecase, input, incidents := scenarioWithPreview(
+		t, &fakePreviewRepository{runs: []repairpreview.Run{previewRun(baseline, rejected)}}, "",
+	)
+
+	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusPreviewReady {
+		t.Fatalf("status = %s, want preview_ready", status.Status)
+	}
+	if decision := status.PreviewDecision; decision == nil || decision.EligibleForHITL ||
+		decision.CandidateA != "" || decision.CandidateB != "candidate-b" {
+		t.Fatalf("decision = %+v", status.PreviewDecision)
+	}
+	if len(incidents.events) != 1 || incidents.events[0].EventType != demomodel.ScenarioStatusPreviewReady {
+		t.Fatalf("preview events = %+v", incidents.events)
+	}
+}
+
+func TestMismatchedReplayProfileIsNotComparable(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	run := previewRun(baseline, passing)
+	run.WorkloadFingerprint = "sha256:workload-v2"
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{run}}
+	usecase, input, _ := scenarioWithPreview(t, previews, "sha256:workload-v1")
+
+	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusPreviewReady {
+		t.Fatalf("status = %s, want preview_ready", status.Status)
+	}
+	decision := status.PreviewDecision
+	if decision == nil || decision.EligibleForHITL ||
+		decision.ReplayProfileID != "sha256:workload-v2" ||
+		!strings.Contains(decision.BoundaryText, "NOT COMPARABLE") {
+		t.Fatalf("decision = %+v", decision)
+	}
+	if previews.eligibleCalls != 0 {
+		t.Fatalf("mismatched profile queried eligibility calls = %d", previews.eligibleCalls)
+	}
+}
+
+func TestIncompleteBaselineMetricsCannotReachApproval(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	baseline.SampleCount = 0
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{
+		previewRun(baseline, passing),
+	}}
+	usecase, input, _ := scenarioWithPreview(t, previews, "sha256:workload-v1")
+
+	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusPreviewReady ||
+		status.PreviewDecision == nil || status.PreviewDecision.EligibleForHITL {
+		t.Fatalf("status = %+v decision = %+v", status, status.PreviewDecision)
+	}
+	if previews.eligibleCalls != 0 {
+		t.Fatalf("incomplete baseline queried eligibility calls = %d", previews.eligibleCalls)
 	}
 }

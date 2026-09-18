@@ -321,7 +321,7 @@ export default function LiveIncidentPage() {
 
       <div className="mt-8 grid gap-6 xl:grid-cols-[1.15fr_1fr]">
         <StageRail status={scenario?.status} />
-        <PreviewDecisionCard decision={null} />
+        <PreviewDecisionCard decision={scenario?.preview_decision ?? null} />
       </div>
 
       <section className="mt-8" aria-labelledby="links-title">

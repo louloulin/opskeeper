@@ -9,10 +9,12 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
 	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
 	demomodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
@@ -44,13 +46,22 @@ type StartScenarioInput struct {
 }
 
 type ScenarioStatus struct {
-	IncidentID        uint64 `json:"incident_id"`
-	ScenarioID        string `json:"scenario_id"`
-	Status            string `json:"status"`
-	PoolManifestID    string `json:"pool_manifest_id"`
-	TargetFingerprint string `json:"target_fingerprint"`
-	AlertFingerprint  string `json:"alert_fingerprint"`
-	UpdatedAt         string `json:"updated_at"`
+	IncidentID        uint64                  `json:"incident_id"`
+	ScenarioID        string                  `json:"scenario_id"`
+	Status            string                  `json:"status"`
+	PoolManifestID    string                  `json:"pool_manifest_id"`
+	TargetFingerprint string                  `json:"target_fingerprint"`
+	AlertFingerprint  string                  `json:"alert_fingerprint"`
+	UpdatedAt         string                  `json:"updated_at"`
+	PreviewDecision   *PreviewDecisionSummary `json:"preview_decision,omitempty"`
+}
+
+type PreviewDecisionSummary struct {
+	ReplayProfileID string `json:"replay_profile_id"`
+	BoundaryText    string `json:"boundary_text"`
+	CandidateA      string `json:"candidate_a"`
+	CandidateB      string `json:"candidate_b"`
+	EligibleForHITL bool   `json:"eligible_for_hitl"`
 }
 
 type IncidentRepository interface {
@@ -72,6 +83,11 @@ type PoolFixtureRepository interface {
 	BusinessSnapshot(ctx context.Context, section string) (json.RawMessage, error)
 }
 
+type PreviewRepository interface {
+	ListByIncident(ctx context.Context, tenantID, incidentID string, limit int) ([]repairpreview.Run, error)
+	FindEligible(ctx context.Context, tenantID, incidentID, runID, candidateID, action string) (repairpreview.Candidate, error)
+}
+
 type Clock interface{ Now() time.Time }
 
 type realClock struct{}
@@ -79,14 +95,29 @@ type realClock struct{}
 func (realClock) Now() time.Time { return time.Now().UTC() }
 
 type Usecase struct {
-	scenarios ScenarioRepository
-	incidents IncidentRepository
-	fixtures  PoolFixtureRepository
-	clock     Clock
+	scenarios             ScenarioRepository
+	incidents             IncidentRepository
+	fixtures              PoolFixtureRepository
+	previews              PreviewRepository
+	expectedReplayProfile string
+	clock                 Clock
 }
 
 func NewUsecase(scenarios ScenarioRepository, incidents IncidentRepository, fixtures PoolFixtureRepository) *Usecase {
 	return &Usecase{scenarios: scenarios, incidents: incidents, fixtures: fixtures, clock: realClock{}}
+}
+
+func NewUsecaseWithPreviews(
+	scenarios ScenarioRepository,
+	incidents IncidentRepository,
+	fixtures PoolFixtureRepository,
+	previews PreviewRepository,
+	expectedReplayProfile string,
+) *Usecase {
+	return &Usecase{
+		scenarios: scenarios, incidents: incidents, fixtures: fixtures, previews: previews,
+		expectedReplayProfile: expectedReplayProfile, clock: realClock{},
+	}
 }
 
 func (u *Usecase) Start(ctx context.Context, tenantID uint64, input StartScenarioInput) (*ScenarioStatus, error) {
@@ -188,7 +219,15 @@ func (u *Usecase) Get(ctx context.Context, tenantID uint64, scenarioID, key stri
 			}
 		}
 	}
-	return statusFromRun(run), nil
+	status := statusFromRun(run)
+	status.PreviewDecision = u.previewDecision(ctx, tenantID, run)
+	if err := u.applyPreviewTransition(ctx, run, status.PreviewDecision); err != nil {
+		return nil, err
+	}
+	if run.Status != status.Status {
+		status.Status = run.Status
+	}
+	return status, nil
 }
 
 func (u *Usecase) BusinessSnapshot(ctx context.Context, tenantID uint64, scenarioID, key, section string) (json.RawMessage, error) {
@@ -227,6 +266,136 @@ func (u *Usecase) appendStartEvent(ctx context.Context, incidentID uint64, input
 		IncidentID: incidentID, EventType: "scenario_start", StatusAfter: alertmodel.IncidentStatusOpen,
 		Severity: "critical", Title: "Scenario started", Message: &message, ActorType: alertmodel.ActorTypeSystem,
 		SnapshotJSON: string(snapshot), Reason: "Manager-controlled final demo injection", OccurredAt: now,
+	})
+}
+
+func (u *Usecase) previewDecision(ctx context.Context, tenantID uint64, scenario *demomodel.ScenarioRun) *PreviewDecisionSummary {
+	if u.previews == nil || scenario.IncidentID == 0 {
+		return nil
+	}
+	runs, err := u.previews.ListByIncident(
+		ctx, strconv.FormatUint(tenantID, 10), strconv.FormatUint(scenario.IncidentID, 10), 20,
+	)
+	if err != nil || len(runs) == 0 {
+		return nil
+	}
+	sort.SliceStable(runs, func(left, right int) bool {
+		return runs[left].UpdatedAt.After(runs[right].UpdatedAt)
+	})
+	selected := runs[0]
+	if selected.TenantID != strconv.FormatUint(tenantID, 10) ||
+		selected.IncidentID != strconv.FormatUint(scenario.IncidentID, 10) {
+		return nil
+	}
+
+	var baseline, passing, rejected repairpreview.Candidate
+	for _, candidate := range selected.Candidates {
+		if candidate.IsBaseline() && baseline.CandidateID == "" {
+			baseline = candidate
+			continue
+		}
+		if candidate.Decision == repairpreview.DecisionPass && passing.CandidateID == "" {
+			passing = candidate
+			continue
+		}
+		if candidate.Decision != repairpreview.DecisionPass && rejected.CandidateID == "" {
+			rejected = candidate
+		}
+	}
+	if baseline.CandidateID == "" {
+		return nil
+	}
+
+	profileMatches := u.expectedReplayProfile == "" ||
+		selected.WorkloadFingerprint == u.expectedReplayProfile
+	summary := &PreviewDecisionSummary{
+		ReplayProfileID: selected.WorkloadFingerprint,
+		BoundaryText:    selected.IsolationBoundary,
+		CandidateB:      rejected.CandidateID,
+	}
+	if !profileMatches {
+		summary.BoundaryText = fmt.Sprintf(
+			"NOT COMPARABLE: replay profile %s does not match expected %s. %s",
+			selected.WorkloadFingerprint, u.expectedReplayProfile, selected.IsolationBoundary,
+		)
+	}
+	if profileMatches && selected.ControlledLoad && completePreviewMetrics(baseline) &&
+		passing.CandidateID != "" &&
+		passing.Decision == repairpreview.DecisionPass && passing.Validate() == nil {
+		eligible, err := u.previews.FindEligible(
+			ctx, strconv.FormatUint(tenantID, 10), strconv.FormatUint(scenario.IncidentID, 10),
+			selected.ID, passing.CandidateID, passing.Action,
+		)
+		if err == nil && eligible.ID == passing.ID && eligible.Decision == repairpreview.DecisionPass {
+			summary.CandidateA = passing.CandidateID
+			summary.EligibleForHITL = true
+		}
+	}
+	return summary
+}
+
+func completePreviewMetrics(candidate repairpreview.Candidate) bool {
+	return candidate.ResultChecksum != "" && candidate.WriteImpact != "" &&
+		candidate.SampleCount > 0 && candidate.AverageLatencyMS > 0 &&
+		candidate.MedianLatencyMS > 0 && candidate.P95LatencyMS > 0 && candidate.TPS > 0
+}
+
+func (u *Usecase) applyPreviewTransition(
+	ctx context.Context, run *demomodel.ScenarioRun, decision *PreviewDecisionSummary,
+) error {
+	if decision == nil || (run.Status != demomodel.ScenarioStatusAlertCorrelated &&
+		run.Status != demomodel.ScenarioStatusDiagnosisSent &&
+		run.Status != demomodel.ScenarioStatusPreviewReady) {
+		return nil
+	}
+	target := demomodel.ScenarioStatusPreviewReady
+	if decision.EligibleForHITL {
+		target = demomodel.ScenarioStatusAwaitingApproval
+	}
+	if run.Status == target {
+		return nil
+	}
+	if run.Status != demomodel.ScenarioStatusPreviewReady {
+		if err := u.transitionPreview(ctx, run, decision, demomodel.ScenarioStatusPreviewReady); err != nil {
+			return err
+		}
+	}
+	if target == demomodel.ScenarioStatusPreviewReady {
+		return nil
+	}
+	return u.transitionPreview(ctx, run, decision, target)
+}
+
+func (u *Usecase) transitionPreview(
+	ctx context.Context, run *demomodel.ScenarioRun, decision *PreviewDecisionSummary, target string,
+) error {
+	if err := u.scenarios.UpdateStatus(ctx, run.ID, target, nil); err != nil {
+		return err
+	}
+	run.Status = target
+	return u.appendPreviewEvent(ctx, run, decision, target)
+}
+
+func (u *Usecase) appendPreviewEvent(
+	ctx context.Context, run *demomodel.ScenarioRun, decision *PreviewDecisionSummary, status string,
+) error {
+	snapshot, err := json.Marshal(map[string]any{
+		"replay_profile_id": decision.ReplayProfileID, "candidate_a": decision.CandidateA,
+		"candidate_b": decision.CandidateB, "eligible_for_hitl": decision.EligibleForHITL,
+		"boundary": decision.BoundaryText,
+	})
+	if err != nil {
+		return err
+	}
+	message := "Repair preview evidence is ready."
+	if status == demomodel.ScenarioStatusAwaitingApproval {
+		message = "Repair preview passed; human approval is required before execution."
+	}
+	return u.incidents.CreateEvent(ctx, &alertmodel.Event{
+		IncidentID: run.IncidentID, EventType: status, StatusAfter: alertmodel.IncidentStatusOpen,
+		Severity: "critical", Title: "Repair preview gate", Message: &message,
+		ActorType: alertmodel.ActorTypeSystem, SnapshotJSON: string(snapshot),
+		Reason: "Preview evidence creates HITL eligibility only", OccurredAt: u.clock.Now(),
 	})
 }
 

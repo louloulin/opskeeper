@@ -129,6 +129,18 @@ _WORKFLOW_ADMIN_REJECTION_PATTERN = re.compile(
     r"(?:拒绝|不同意|reject(?:ed)?)\b",
     re.IGNORECASE,
 )
+_WORKFLOW_AUTHORITY_STAGE_PATTERN = re.compile(
+    r"\bworkflow_stage\s*[:=]\s*"
+    r"(preview_ready|awaiting_approval|repair_dispatched|verifying|recovered)\b",
+    re.IGNORECASE,
+)
+_WORKFLOW_AUTHORITY_STEPS = {
+    "preview_ready": ("review", "in_progress"),
+    "awaiting_approval": ("approval", "in_progress"),
+    "repair_dispatched": ("repair", "in_progress"),
+    "verifying": ("verify", "in_progress"),
+    "recovered": ("verify", "completed"),
+}
 _WORKFLOW_STEPS: tuple[tuple[str, str], ...] = (
     ("alert", "告警确认"),
     ("investigate", "根因诊断"),
@@ -745,7 +757,11 @@ class WorkflowProjector:
         return self.payload(run["run_id"])
 
     def record_request(self, origin: str, message: str) -> dict[str, Any] | None:
-        if _TASK_RESULT_PATTERN.search(message) or _TASK_COMPLETE_PATTERN.search(message):
+        if (
+            _TASK_RESULT_PATTERN.search(message)
+            or _TASK_COMPLETE_PATTERN.search(message)
+            or _WORKFLOW_AUTHORITY_STAGE_PATTERN.search(message)
+        ):
             return None
         run_id = _workflow_incident_id(message)
         if not run_id:
@@ -763,6 +779,45 @@ class WorkflowProjector:
             run["summary"] = "Incident accepted; waiting for Manager dispatch"
             run["steps"]["alert"] = "pending"
             run["workers"]["alerter"] = "pending"
+            payload = self._finish_mutation(run)
+            self._persist()
+            return payload
+
+    def record_authority_stage(
+        self, origin: str, run_id: str, stage: str
+    ) -> dict[str, Any] | None:
+        selected_step, selected_status = _WORKFLOW_AUTHORITY_STEPS.get(stage, ("", ""))
+        if not selected_step or not run_id or not origin.startswith("matrix:!"):
+            return None
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                run = self._new_run(run_id, origin)
+                self._runs[run_id] = run
+            run["origin"] = origin
+            run["status"] = "in_progress"
+            run["summary"] = f"Manager authority stage: {stage}"
+            reached_stage = False
+            for step_id, _ in _WORKFLOW_STEPS:
+                if step_id == selected_step:
+                    reached_stage = True
+                    run["steps"][step_id] = selected_status
+                    continue
+                if not reached_stage and run["steps"][step_id] not in {"completed", "failed"}:
+                    run["steps"][step_id] = "completed"
+                elif reached_stage and step_id not in {"approval", "report"}:
+                    run["steps"][step_id] = "pending"
+            if selected_step == "awaiting_approval":
+                run["workers"]["reviewer"] = "completed"
+            elif selected_step == "repair_dispatched":
+                run["workers"]["reviewer"] = "completed"
+                run["workers"]["repairer"] = "in_progress"
+            elif selected_step == "verifying":
+                run["workers"]["repairer"] = "completed"
+                run["workers"]["verifier"] = "in_progress"
+            elif selected_step == "recovered":
+                run["workers"]["repairer"] = "completed"
+                run["workers"]["verifier"] = "completed"
             payload = self._finish_mutation(run)
             self._persist()
             return payload
@@ -837,8 +892,7 @@ class WorkflowProjector:
             run["status"] = overall_status
             run["summary"] = summary
             if result_status == "completed" and role == "reviewer":
-                run["steps"]["approval"] = "in_progress"
-                run["summary"] = "Waiting for human approval"
+                run["summary"] = "Repair preview evidence required before approval"
             if result_status == "completed" and role == "reporter":
                 run["status"] = "completed"
                 run["summary"] = "Incident workflow completed"
@@ -2308,6 +2362,16 @@ def _register_manager_gate_hook(api: Any) -> None:
                         approved and not rejected,
                     )
                     await _emit_workflow_projection(session_id, workflow)
+            authority_stage = _WORKFLOW_AUTHORITY_STAGE_PATTERN.search(message)
+            incident_id = _workflow_incident_id(message)
+            if _is_manager_agent(agent) and authority_stage and incident_id:
+                workflow = _WORKFLOW_PROJECTOR.record_authority_stage(
+                    session_id,
+                    incident_id,
+                    authority_stage.group(1).lower(),
+                )
+                await _emit_workflow_projection(session_id, workflow)
+                return HookResult(action=HookAction.SKIP_AGENT)
             if _workflow_incident_id(message):
                 workflow = _WORKFLOW_PROJECTOR.record_request(session_id, message)
                 await _emit_workflow_projection(session_id, workflow)

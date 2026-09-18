@@ -35,6 +35,15 @@ export type ScenarioStatus = {
   target_fingerprint: string;
   alert_fingerprint: string;
   updated_at: string;
+  preview_decision?: PreviewDecisionSummary;
+};
+
+export type PreviewDecisionSummary = {
+  replay_profile_id: string;
+  boundary_text: string;
+  candidate_a: string;
+  candidate_b: string;
+  eligible_for_hitl: boolean;
 };
 
 export type PreviewMetrics = {

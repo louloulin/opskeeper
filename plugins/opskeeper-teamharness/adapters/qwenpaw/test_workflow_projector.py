@@ -84,7 +84,20 @@ class WorkflowProjectorTest(unittest.TestCase):
             )
             self.assertEqual(result["steps"][step_index]["status"], "completed")
 
-        self.assertEqual(result["steps"][3]["status"], "in_progress")
+        self.assertEqual(result["steps"][3]["status"], "pending")
+        self.assertIn(
+            "Repair preview evidence required",
+            result["summary"],
+        )
+        self.projector.record_authority_stage(
+            origin,
+            "opskeeper-stage-demo",
+            "awaiting_approval",
+        )
+        self.assertEqual(
+            self.projector.payload("opskeeper-stage-demo")["steps"][3]["status"],
+            "in_progress",
+        )
         approved = self.projector.record_admin_decision(
             origin,
             "@manager:hs incident_id=opskeeper-stage-demo 批准",
@@ -92,6 +105,26 @@ class WorkflowProjectorTest(unittest.TestCase):
         )
         self.assertEqual(approved["steps"][3]["status"], "completed")
         self.assertEqual(approved["status"], "in_progress")
+
+    def test_authority_stages_project_final_demo_progression(self):
+        origin = "matrix:!room:hs"
+        self.projector.record_request(origin, "incident_id=opskeeper-authority-demo")
+
+        expectations = (
+            ("preview_ready", 2, "in_progress"),
+            ("awaiting_approval", 3, "in_progress"),
+            ("repair_dispatched", 4, "in_progress"),
+            ("verifying", 5, "in_progress"),
+            ("recovered", 5, "completed"),
+        )
+        for stage, step_index, step_status in expectations:
+            payload = self.projector.record_authority_stage(
+                origin,
+                "opskeeper-authority-demo",
+                stage,
+            )
+            self.assertEqual(payload["steps"][step_index]["status"], step_status)
+            self.assertEqual(payload["status"], "in_progress")
 
     def test_matrix_content_contains_element_body_and_workflow_object(self):
         self.projector.record_request(

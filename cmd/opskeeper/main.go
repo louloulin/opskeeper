@@ -1320,8 +1320,10 @@ func main() {
 	}
 	demoAPIToken := strings.TrimSpace(os.Getenv("OPSKEEPER_DEMO_API_TOKEN"))
 	if poolFixtureURL != "" && poolFixtureToken != "" && demoAPIToken != "" {
-		demoScenarioUsecase := managerbizdemo.NewUsecase(
+		demoScenarioUsecase := managerbizdemo.NewUsecaseWithPreviews(
 			managerdemodata.NewRepo(db), alertRepo, managerbizdemo.NewPoolFixtureClient(poolFixtureURL, poolFixtureToken),
+			repairPreviewRepository,
+			strings.TrimSpace(os.Getenv("OPSKEEPER_REPAIR_PREVIEW_WORKLOAD_FINGERPRINT")),
 		)
 		demoScenarioHandler = managerserverdemo.NewHandler(managersvcdemo.NewService(demoScenarioUsecase), demoAPIToken)
 	} else if demoAPIToken != "" {
