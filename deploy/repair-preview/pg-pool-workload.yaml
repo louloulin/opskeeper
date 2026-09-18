@@ -1,0 +1,27 @@
+revision: workload-v1
+seed: sha256:seed-v1
+warmup_queries: 2
+samples: 100
+concurrency: 8
+query_timeout_ms: 500
+labels:
+  environment: preview
+  scenario: pg-pool
+queries:
+  - name: ordered-accounts
+    sql: SELECT customer_id, balance FROM repair_preview_accounts ORDER BY customer_id
+business_probe:
+  name: active-session-retained
+  query: SELECT COUNT(*) FROM repair_preview_sessions WHERE customer_id = 'customer-a'
+  expected_minimum: 1
+candidates:
+  - candidate_id: candidate-a
+    name: bounded pool resize
+    kind: postgresql
+    action: resize_pool
+    change_summary: Increase preview pool capacity
+  - candidate_id: candidate-b
+    name: risky pool reset
+    kind: postgresql
+    action: reset_pool
+    change_summary: Clear preview sessions and reset pool
