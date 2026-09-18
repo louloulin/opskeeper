@@ -35,12 +35,12 @@
 
 ## P1 — 演示剧本
 
-- [ ] 22. 输出 `FINAL_DEMO_SCRIPT.md`：按评委建议一编排的手工演示步骤
+- [x] 22. 输出 `FINAL_DEMO_SCRIPT.md`：按评委建议一编排的手工演示步骤
   - 开场：home.yueming.xin 正常页面 + 运维协作成本痛点（≤30s）
   - 触发：home 控制台一键注入 → Manager 编排 pool-fixture → home 页面变慢（≤30s）
   - 主线：告警 → 诊断 → 预演对比 → 审批 → 转折（错误目标拒绝）→ 修复 → 验证 → 关闭（≤3min）
   - 收尾：归档回看 + 版本展示 + preview-pg 对比表（≤30s）
-- [ ] 23. 标注剧本中每步对应的应用入口（home / teams / rooms / preview）与预期指标
+- [x] 23. 标注剧本中每步对应的应用入口（home / teams / rooms / preview）与预期指标
 
 ## P2 — 答辩备选
 
