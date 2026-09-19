@@ -1,0 +1,17 @@
+workflow: full
+phase: build
+build_mode: subagent-driven-development
+build_pause: null
+isolation: branch
+verify_mode: null
+base_ref: 11814dbcdb746b6de63ade6435a8f1359ac51034
+design_doc: docs/superpowers/specs/2026-09-19-modelscope-final-showcase-hosting-design.md
+plan: docs/superpowers/plans/2026-09-19-modelscope-final-showcase-hosting.md
+verify_result: pending
+verification_report: null
+branch_status: pending
+created_at: 2026-09-19
+verified_at: null
+archived: false
+handoff_context: openspec/changes/modelscope-final-showcase-hosting/.comet/handoff/design-context.json
+handoff_hash: 87d3f5562c898bc081057fb1360cdf292f524b9ad1f37388f2857a8c2e9edc4d

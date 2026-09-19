@@ -1,0 +1,14 @@
+{
+  "change": "modelscope-final-showcase-hosting",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "87d3f5562c898bc081057fb1360cdf292f524b9ad1f37388f2857a8c2e9edc4d",
+  "files": [
+    { "path": "openspec/changes/modelscope-final-showcase-hosting/proposal.md", "sha256": "8b1e6b215ea1b5fea3a4d6e3bde4a42c3df6ca118283e237e2903959a8781b31" },
+    { "path": "openspec/changes/modelscope-final-showcase-hosting/design.md", "sha256": "698bcd1a7436fedf874da528f46f5657cf68f0b93796153dc8b301852604d1de" },
+    { "path": "openspec/changes/modelscope-final-showcase-hosting/tasks.md", "sha256": "ce392321139e2b7011665b55f2c257af5521703eff42dbe055e02d6f3c28781f" },
+    { "path": "openspec/changes/modelscope-final-showcase-hosting/specs/modelscope-showcase-hosting/spec.md", "sha256": "fbd5a39a94d9efcb476089b68d413dc728b0ed77e2676661194a2ded3cd87d75" }
+  ]
+}
