@@ -4,7 +4,7 @@ export const SITE = {
   tagline: 'Auditable operations for multi-agent incident response.',
   description:
     'OpsKeeper connects alert intake, evidence collection, root-cause analysis, human approval, narrowly authorized recovery, independent verification, and post-incident learning in one closed loop.',
-  url: 'https://opskeeper.dev',
+  url: 'https://opskeeper.yueming.xin',
   repo: 'https://github.com/vincent-wuhan/opskeeper',
   repoShort: 'vincent-wuhan/opskeeper',
   license: 'Apache-2.0',
