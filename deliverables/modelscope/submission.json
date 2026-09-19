@@ -3,7 +3,7 @@
   "state": {
     "package_status": "draft",
     "visibility": "private",
-    "generated_at_utc": null,
+    "generated_at_utc": "2026-09-19T06:15:14Z",
     "operator": "yueming"
   },
   "source": {
@@ -59,9 +59,10 @@
   ],
   "submissions": {
     "creative_space": {
-      "url": null,
-      "status": "not_created",
-      "visibility": "private"
+      "url": "https://www.modelscope.cn/studios/glorius/opskeeper-final-showcase",
+      "status": "deployed_private",
+      "visibility": "private",
+      "remote_head": "60d7568b"
     },
     "code_repository": {
       "url": null,

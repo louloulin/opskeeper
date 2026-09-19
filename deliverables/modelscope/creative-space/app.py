@@ -3,8 +3,16 @@ from pathlib import Path
 import gradio as gr
 
 ROOT = Path(__file__).resolve().parent
-CONTENT = (ROOT / "content" / "zh.md").read_text(encoding="utf-8")
-ASSETS = ROOT.parent / "assets" / "evidence"
+CONTENT = next(
+    path for path in (ROOT / "content" / "zh.md", ROOT / "zh.md") if path.exists()
+).read_text(encoding="utf-8")
+ASSET_CANDIDATES = [
+    ROOT / "assets" / "evidence",
+    ROOT / "evidence",
+    ROOT,
+    ROOT.parent / "assets" / "evidence",
+]
+ASSETS = next(path for path in ASSET_CANDIDATES if (path / "monitor.png").exists())
 
 EXTERNAL_LINKS = """
 <div class="entry-grid">

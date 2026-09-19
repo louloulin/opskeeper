@@ -1,6 +1,18 @@
+---
+title: OpsKeeper · Agent 原生运维工作台
+emoji: 🛡️
+colorFrom: blue
+colorTo: indigo
+sdk: gradio
+sdk_version: 6.17.3
+app_file: app.py
+pinned: false
+license: Apache License 2.0
+---
+
 # OpsKeeper ModelScope Creative Space
 
-This read-only Gradio showcase presents the OpsKeeper product journey, architecture, safety boundary, and public-safe evidence assets. The app consumes only local Markdown and files under `../assets/evidence`; it does not connect to Manager, PostgreSQL, Matrix, AgentTeams, or any server-side write API.
+This read-only Gradio showcase presents the OpsKeeper product journey, architecture, safety boundary, and public-safe evidence assets. The app looks for its local Markdown and evidence assets in the repository layout created by ModelScope and does not connect to Manager, PostgreSQL, Matrix, AgentTeams, or any server-side write API.
 
 ## Safety claims
 
