@@ -33,6 +33,10 @@ export default function Aurora({
     const container = containerRef.current;
     if (!container) return;
 
+    const probe = document.createElement('canvas');
+    const probeContext = probe.getContext('webgl2') || probe.getContext('webgl');
+    if (!probeContext) return;
+
     let renderer: Renderer;
     try {
       renderer = new Renderer({
