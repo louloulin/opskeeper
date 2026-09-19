@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { opskeeperApi } from './api.js';
 import { buildRuntimeSnapshot, normalizeIncidentList } from './runtime.js';
+import { formatBeijingTime } from './time-format.js';
 
 const STATUS_COLORS = {
   ok: '#10b981',
@@ -209,13 +210,6 @@ function groupBy(items, keyFn) {
     return groups;
   }, {});
 }
-
-function formatTime(value) {
-  if (!value) return '未采集';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
 function formatSeconds(value) {
   if (value == null) return '—';
   if (value < 60) return `${value.toFixed(0)}s`;

@@ -2,6 +2,7 @@ import * as React from 'react';
 import { opskeeperApi } from './api.js';
 import { opskeeperPluginThemeStyle } from './plugin-theme.js';
 import { buildRuntimeSnapshot, normalizeIncidentList } from './runtime.js';
+import { formatBeijingClock } from './time-format.js';
 
 // Dashboard overview widget — 概览卡：active / open / closed / avg-RCA / 阶段通过率。
 //
@@ -139,7 +140,7 @@ export default function OpskeeperStatsWidget({ api }) {
         display: 'flex', justifyContent: 'space-between',
       }}>
         <span>定位 {fmtDuration(stats.meanLocalizationSeconds)} · 审计 {fmtPercent(stats.auditEvidenceCompleteness)}</span>
-        <span>{stats.checkedAt ? new Date(stats.checkedAt).toLocaleTimeString() : '30s 自动刷新'}</span>
+        <span>{stats.checkedAt ? formatBeijingClock(stats.checkedAt) : '30s 自动刷新'}</span>
       </div>
     </div>
   );

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
 	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
 	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
 	demomodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
@@ -65,6 +66,10 @@ type PreviewDecisionSummary struct {
 	EligibleForHITL bool   `json:"eligible_for_hitl"`
 }
 
+type ApproveScenarioInput struct {
+	ApproverID string `json:"approver_id"`
+}
+
 type IncidentRepository interface {
 	GetIncidentByDedupeKey(ctx context.Context, dedupeKey string) (*alertmodel.Incident, error)
 	GetIncidentByID(ctx context.Context, id uint64) (*alertmodel.Incident, error)
@@ -76,6 +81,7 @@ type IncidentRepository interface {
 type ScenarioRepository interface {
 	CreateOrUpdate(ctx context.Context, run *demomodel.ScenarioRun) error
 	GetByIdempotencyKey(ctx context.Context, tenantID uint64, scenarioID, key string) (*demomodel.ScenarioRun, error)
+	GetByIncident(ctx context.Context, tenantID uint64, scenarioID string, incidentID uint64) (*demomodel.ScenarioRun, error)
 	UpdateStatus(ctx context.Context, id uint64, status string, mutation func(*demomodel.ScenarioRun) error) error
 	UpdateStatusWithEvent(ctx context.Context, id uint64, status string, event *alertmodel.Event, allowedCurrent ...string) error
 }
@@ -83,6 +89,7 @@ type ScenarioRepository interface {
 type PoolFixtureRepository interface {
 	Start(ctx context.Context, input FixtureStartInput) (FixtureStartResult, error)
 	Status(ctx context.Context, manifestID string) (FixtureStatus, error)
+	Recover(ctx context.Context, manifestID, reason string) error
 	BusinessSnapshot(ctx context.Context, section string) (json.RawMessage, error)
 }
 
@@ -97,6 +104,10 @@ type WorkflowPublisher interface {
 
 type PreviewExecutor interface {
 	Execute(ctx context.Context, input PreviewExecutionInput) error
+}
+
+type ArchiveEventWriter interface {
+	Append(ctx context.Context, event incidentcontrol.Event) error
 }
 
 type PreviewExecutionInput struct {
@@ -122,6 +133,8 @@ type Usecase struct {
 	previewExecutor       PreviewExecutor
 	expectedReplayProfile string
 	workflowPublisher     WorkflowPublisher
+	archiveWriter         ArchiveEventWriter
+	archiveTenantID       string
 	clock                 Clock
 	executionLocks        map[string]*sync.Mutex
 	executionLocksGuard   sync.Mutex
@@ -163,6 +176,11 @@ func NewUsecaseWithPreviewWorkflow(
 
 func (u *Usecase) SetPreviewExecutor(executor PreviewExecutor) {
 	u.previewExecutor = executor
+}
+
+func (u *Usecase) SetArchiveWriter(writer ArchiveEventWriter, tenantID string) {
+	u.archiveWriter = writer
+	u.archiveTenantID = strings.TrimSpace(tenantID)
 }
 
 func (u *Usecase) Start(ctx context.Context, tenantID uint64, input StartScenarioInput) (*ScenarioStatus, error) {
@@ -232,6 +250,18 @@ func (u *Usecase) Start(ctx context.Context, tenantID uint64, input StartScenari
 		return nil, err
 	}
 	if err := u.appendStartEvent(ctx, incident.ID, input, result.ManifestID, now); err != nil {
+		return nil, err
+	}
+	if err := u.appendArchiveEvent(
+		ctx, run, incidentcontrol.EventAlertReceived, "detection", "system", "opskeeper-demo",
+		"firing", "opskeeper://incidents/"+strconv.FormatUint(incident.ID, 10)+"/alert", "", false,
+	); err != nil {
+		return nil, err
+	}
+	if err := u.appendArchiveEvent(
+		ctx, run, incidentcontrol.EventEvidenceRefreshed, "diagnosis", "system", "opskeeper-manager",
+		"success", "opskeeper://incidents/"+strconv.FormatUint(incident.ID, 10)+"/timeline", "", false,
+	); err != nil {
 		return nil, err
 	}
 	return statusFromRun(run), nil
@@ -430,6 +460,88 @@ func (u *Usecase) BusinessSnapshotBaseline(ctx context.Context, section string) 
 	return u.fixtures.BusinessSnapshot(ctx, section)
 }
 
+func (u *Usecase) Approve(
+	ctx context.Context, tenantID uint64, incidentID uint64, approverID string,
+) (*ScenarioStatus, error) {
+	approverID = strings.TrimSpace(approverID)
+	if incidentID == 0 || approverID == "" || len(approverID) > 256 {
+		return nil, errs.ErrInvalid
+	}
+
+	lock := u.executionLock(incidentID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	run, err := u.scenarios.GetByIncident(ctx, tenantID, ScenarioID, incidentID)
+	if err != nil {
+		return nil, err
+	}
+	if run.TenantID != tenantID || run.ScenarioID != ScenarioID || run.IncidentID != incidentID {
+		return nil, errs.ErrNotFound
+	}
+	if run.Status != demomodel.ScenarioStatusAwaitingApproval {
+		return nil, errs.ErrConflict
+	}
+	if !u.clock.Now().Before(run.ExpiresAt) {
+		return nil, errs.ErrConflict
+	}
+
+	decision := u.previewDecision(ctx, tenantID, run)
+	if decision == nil || !decision.EligibleForHITL || decision.CandidateA == "" {
+		return nil, errs.ErrConflict
+	}
+	if err := u.appendArchiveEvent(
+		ctx, run, incidentcontrol.EventApproved, "approval", "human", approverID,
+		"approved", "opskeeper://repair-preview/"+run.IdempotencyKey+"/"+decision.CandidateA,
+		run.TargetFingerprint+":"+decision.CandidateA, false,
+	); err != nil {
+		return nil, err
+	}
+	if err := u.advanceLoadedWorkflow(ctx, run, demomodel.ScenarioStatusRepairDispatched, decision); err != nil {
+		return nil, err
+	}
+	if err := u.fixtures.Recover(ctx, run.PoolManifestID, "Human approved "+decision.CandidateA); err != nil {
+		return nil, err
+	}
+	if err := u.appendArchiveEvent(
+		ctx, run, incidentcontrol.EventAction, "recovery", "agent", "opskeeper-repairer",
+		"executed", "opskeeper://pool-fixtures/"+run.PoolManifestID+"/recovery",
+		run.TargetFingerprint+":"+decision.CandidateA, false,
+	); err != nil {
+		return nil, err
+	}
+	if err := u.appendArchiveEvent(
+		ctx, run, incidentcontrol.EventRecovery, "recovery", "agent", "opskeeper-verifier",
+		"success", "opskeeper://pool-fixtures/"+run.PoolManifestID+"/metrics",
+		run.TargetFingerprint+":"+decision.CandidateA, true,
+	); err != nil {
+		return nil, err
+	}
+	if err := u.advanceLoadedWorkflow(ctx, run, demomodel.ScenarioStatusVerifying, decision); err != nil {
+		return nil, err
+	}
+	for _, section := range []string{"orders", "inventory", "audit"} {
+		snapshot, snapshotErr := u.fixtures.BusinessSnapshot(ctx, section)
+		if snapshotErr != nil || len(snapshot) == 0 {
+			return nil, errs.ErrConflict
+		}
+	}
+	if err := u.advanceLoadedWorkflow(ctx, run, demomodel.ScenarioStatusRecovered, decision); err != nil {
+		return nil, err
+	}
+	if err := u.appendArchiveEvent(
+		ctx, run, incidentcontrol.EventClosed, "closure", "agent", "opskeeper-manager",
+		"closed", "opskeeper://incidents/"+strconv.FormatUint(run.IncidentID, 10)+"/archive",
+		run.TargetFingerprint+":"+decision.CandidateA, false,
+	); err != nil {
+		return nil, err
+	}
+
+	status := statusFromRun(run)
+	status.PreviewDecision = decision
+	return status, nil
+}
+
 func (u *Usecase) appendStartEvent(ctx context.Context, incidentID uint64, input StartScenarioInput, manifestID string, now time.Time) error {
 	snapshot, err := json.Marshal(map[string]any{
 		"scenario_id": input.ScenarioID, "idempotency_key": input.IdempotencyKey, "target": input.Target,
@@ -493,6 +605,7 @@ func (u *Usecase) previewDecision(ctx context.Context, tenantID uint64, scenario
 		selected.WorkloadFingerprint == u.expectedReplayProfile
 	gateStageReady := scenario.Status == demomodel.ScenarioStatusDiagnosisSent ||
 		scenario.Status == demomodel.ScenarioStatusPreviewReady
+	eligibilityAlreadyGranted := scenario.Status == demomodel.ScenarioStatusAwaitingApproval
 	summary := &PreviewDecisionSummary{
 		ReplayProfileID: selected.WorkloadFingerprint,
 		BoundaryText:    selected.IsolationBoundary,
@@ -507,20 +620,54 @@ func (u *Usecase) previewDecision(ctx context.Context, tenantID uint64, scenario
 	if !resultBindingMatches {
 		summary.BoundaryText = "RESULT BINDING MISMATCH: preview run is not bound to this scenario, idempotency key, and target."
 	}
-	if gateStageReady && profileMatches && resultBindingMatches && selected.ControlledLoad &&
+	if (gateStageReady || eligibilityAlreadyGranted) && profileMatches && resultBindingMatches && selected.ControlledLoad &&
 		completePreviewMetrics(baseline) &&
 		passing.CandidateID != "" &&
 		passing.Decision == repairpreview.DecisionPass && passing.Validate() == nil {
-		eligible, err := u.previews.FindEligible(
-			ctx, strconv.FormatUint(tenantID, 10), strconv.FormatUint(scenario.IncidentID, 10),
-			selected.ID, passing.CandidateID, passing.Action,
-		)
-		if err == nil && eligible.ID == passing.ID && eligible.Decision == repairpreview.DecisionPass {
+		eligible := passing
+		if gateStageReady {
+			queried, err := u.previews.FindEligible(
+				ctx, strconv.FormatUint(tenantID, 10), strconv.FormatUint(scenario.IncidentID, 10),
+				selected.ID, passing.CandidateID, passing.Action,
+			)
+			eligible = queried
+			if err != nil {
+				eligible = repairpreview.Candidate{}
+			}
+		}
+		if eligible.ID == passing.ID && eligible.Decision == repairpreview.DecisionPass {
 			summary.CandidateA = passing.CandidateID
 			summary.EligibleForHITL = true
 		}
 	}
 	return summary
+}
+
+func (u *Usecase) appendArchiveEvent(
+	ctx context.Context,
+	run *demomodel.ScenarioRun,
+	eventType, phase, actorType, actor, status, evidenceRef, actionFingerprint string,
+	recoverySignal bool,
+) error {
+	if u.archiveWriter == nil {
+		return nil
+	}
+	tenantID := strings.TrimSpace(u.archiveTenantID)
+	if tenantID == "" {
+		tenantID = strconv.FormatUint(run.TenantID, 10)
+	}
+	event := incidentcontrol.Event{
+		ID:       "demo-" + run.IdempotencyKey + "-" + eventType,
+		TenantID: tenantID, IncidentID: strconv.FormatUint(run.IncidentID, 10),
+		OccurredAt: u.clock.Now(), Phase: phase, EventType: eventType,
+		ActorType: actorType, Actor: actor, Status: status,
+		ActionFingerprint: actionFingerprint, EvidenceRef: evidenceRef,
+		TraceID: "demo:" + run.IdempotencyKey, RecoverySignal: recoverySignal,
+	}
+	if err := u.archiveWriter.Append(ctx, event); err != nil && !errors.Is(err, incidentcontrol.ErrDuplicateEvent) {
+		return err
+	}
+	return nil
 }
 
 func completePreviewMetrics(candidate repairpreview.Candidate) bool {
@@ -566,6 +713,14 @@ func (u *Usecase) transitionPreview(
 		return err
 	}
 	run.Status = target
+	if target == demomodel.ScenarioStatusAwaitingApproval {
+		if err := u.appendArchiveEvent(
+			ctx, run, incidentcontrol.EventRootCause, "diagnosis", "agent", "opskeeper-manager",
+			"confirmed", "opskeeper://repair-preview/"+run.IdempotencyKey, "", false,
+		); err != nil {
+			return err
+		}
+	}
 	u.publishWorkflow(ctx, run, target, decision)
 	return nil
 }
@@ -790,6 +945,26 @@ func (c *PoolFixtureClient) Status(ctx context.Context, manifestID string) (Fixt
 		return FixtureStatus{}, err
 	}
 	return FixtureStatus{State: output.Status}, nil
+}
+
+func (c *PoolFixtureClient) Recover(ctx context.Context, manifestID, reason string) error {
+	var probeOutput struct {
+		ErrorCode string `json:"error_code"`
+	}
+	if err := c.do(
+		ctx, http.MethodPost, "/v1/pool-fixtures/"+manifestID+"/probe",
+		map[string]any{"timeout_milliseconds": 250}, &probeOutput, requestTimeout,
+	); err != nil {
+		var fixtureErr *FixtureError
+		if !errors.As(err, &fixtureErr) || fixtureErr.Code != "pool_exhausted" {
+			return err
+		}
+	}
+	var recoveryOutput json.RawMessage
+	return c.do(
+		ctx, http.MethodPost, "/v1/pool-fixtures/"+manifestID+"/recover",
+		map[string]any{"reason": reason}, &recoveryOutput, requestTimeout,
+	)
 }
 
 func (c *PoolFixtureClient) BusinessSnapshot(ctx context.Context, section string) (json.RawMessage, error) {

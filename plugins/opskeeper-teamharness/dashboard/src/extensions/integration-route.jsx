@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { opskeeperApi } from './api.js';
 import { buildIntegrationPreflight } from './integration.js';
+import { formatBeijingTime } from './time-format.js';
 
 const STATUS_STYLES = {
   pass: { label: '通过', color: '#16a34a' },
@@ -114,7 +115,7 @@ export default function OpskeeperIntegrationRoute() {
         </div>
         {summary && (
           <div style={{ fontSize: 12, color: summary.color, fontWeight: 600 }}>
-            {summary.label} · 已加入房间 {report.joinedRoomCount} 个 · {new Date(report.checkedAt).toLocaleString()}
+            {summary.label} · 已加入房间 {report.joinedRoomCount} 个 · {formatBeijingTime(report.checkedAt)}
           </div>
         )}
       </div>

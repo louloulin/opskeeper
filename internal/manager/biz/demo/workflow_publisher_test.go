@@ -68,6 +68,14 @@ func TestMatrixWorkflowPublisherSignsAndSendsAuthorityEvent(t *testing.T) {
 	if workflow["runId"] != "100" || workflow["authorityStage"] != "awaiting_approval" {
 		t.Fatalf("workflow = %+v", workflow)
 	}
+	utcTime := authority["time_utc"].(string)
+	beijingTime := authority["time_bjt"].(string)
+	if !strings.HasSuffix(utcTime, "Z") || !strings.HasSuffix(beijingTime, "+08:00") {
+		t.Fatalf("authority timestamps must be labelled UTC and UTC+8: utc=%q bjt=%q", utcTime, beijingTime)
+	}
+	if message := body["body"].(string); !strings.Contains(message, "time_utc=") || !strings.Contains(message, "time_bjt=") {
+		t.Fatalf("authority message must expose both timezones: %q", message)
+	}
 }
 
 func TestMatrixWorkflowPublisherRequiresCompleteConfiguration(t *testing.T) {

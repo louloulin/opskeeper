@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
 	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
 	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
 	demomodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
@@ -110,6 +111,25 @@ func (f *fakeScenarios) GetByIdempotencyKey(_ context.Context, tenantID uint64, 
 	return row, nil
 }
 
+func (f *fakeScenarios) GetByIncident(_ context.Context, tenantID uint64, scenarioID string, incidentID uint64) (*demomodel.ScenarioRun, error) {
+	for _, row := range f.rows {
+		if row.TenantID == tenantID && row.ScenarioID == scenarioID && row.IncidentID == incidentID {
+			return row, nil
+		}
+	}
+	return nil, errs.ErrNotFound
+}
+
+func (f *fakeFixtures) Recover(_ context.Context, manifestID, reason string) error {
+	f.recoverCalls++
+	f.lastManifest = manifestID
+	f.lastReason = reason
+	if manifestID == "" || reason == "" {
+		return errs.ErrInvalid
+	}
+	return nil
+}
+
 func (f *fakeScenarios) UpdateStatus(_ context.Context, id uint64, status string, mutation func(*demomodel.ScenarioRun) error) error {
 	for _, row := range f.rows {
 		if row.ID != id {
@@ -160,11 +180,14 @@ func (f *fakeScenarios) UpdateStatusWithEvent(
 }
 
 type fakeFixtures struct {
-	starts    int
-	business  int
-	fails     bool
-	order     *[]string
-	lastStart FixtureStartInput
+	starts       int
+	business     int
+	fails        bool
+	order        *[]string
+	lastStart    FixtureStartInput
+	recoverCalls int
+	lastManifest string
+	lastReason   string
 }
 
 type fakePreviewRepository struct {
@@ -181,6 +204,15 @@ type fakePreviewExecutor struct {
 type fakeWorkflowPublisher struct {
 	stages []string
 	fails  bool
+}
+
+type fakeArchiveWriter struct {
+	events []incidentcontrol.Event
+}
+
+func (writer *fakeArchiveWriter) Append(_ context.Context, event incidentcontrol.Event) error {
+	writer.events = append(writer.events, event)
+	return nil
 }
 
 func (f *fakeWorkflowPublisher) PublishWorkflow(_ context.Context, _ *demomodel.ScenarioRun, stage string, _ *PreviewDecisionSummary) error {
@@ -497,6 +529,61 @@ func TestPreviewPASSCreatesOnlyHITLEligibility(t *testing.T) {
 	if previews.eligibleCalls != 1 {
 		t.Fatalf("repeat calls = %d", previews.eligibleCalls)
 	}
+}
+
+func TestApproveExecutesVerifiedRecoveryAndWritesArchive(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{
+		previewRun(baseline, passing),
+	}}
+	usecase, input, _, scenarios := scenarioPartsWithPreview(t, previews, "sha256:workload-v1")
+	fixtures := &fakeFixtures{}
+	usecase.fixtures = fixtures
+	publisher := &fakeWorkflowPublisher{}
+	usecase.workflowPublisher = publisher
+	archive := &fakeArchiveWriter{}
+	usecase.SetArchiveWriter(archive, "goai-demo")
+
+	if _, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey); err != nil {
+		t.Fatal(err)
+	}
+	publisher.stages = nil
+	status, err := usecase.Approve(context.Background(), 1, 100, "@admin:matrix-local.agentteams.io:18080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusRecovered {
+		t.Fatalf("status = %s, want recovered", status.Status)
+	}
+	if fixtures.recoverCalls != 1 || fixtures.lastManifest != "manifest" {
+		t.Fatalf("recovery calls = %d manifest = %q", fixtures.recoverCalls, fixtures.lastManifest)
+	}
+	if fixtures.business != len([]string{"orders", "inventory", "audit"}) {
+		t.Fatalf("business verification calls = %d", fixtures.business)
+	}
+	if strings.Join(publisher.stages, ",") != "repair_dispatched,verifying,recovered" {
+		t.Fatalf("published stages = %v", publisher.stages)
+	}
+	got := make([]string, 0, len(archive.events))
+	for _, event := range archive.events {
+		if event.TenantID != "goai-demo" || event.IncidentID != "100" {
+			t.Fatalf("unexpected archive event = %+v", event)
+		}
+		got = append(got, event.EventType)
+	}
+	want := []string{
+		incidentcontrol.EventRootCause,
+		incidentcontrol.EventApproved,
+		incidentcontrol.EventAction,
+		incidentcontrol.EventRecovery,
+		incidentcontrol.EventClosed,
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("archive events = %v, want %v", got, want)
+	}
+	_ = scenarios
 }
 
 func TestPreviewFAILCannotReachApproval(t *testing.T) {

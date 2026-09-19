@@ -1343,6 +1343,11 @@ func main() {
 			workflowPublisher,
 		)
 		demoScenarioUsecase.SetPreviewExecutor(previewExecutor)
+		archiveTenantID := strings.TrimSpace(os.Getenv("OPSKEEPER_DEFAULT_INCIDENT_TENANT_ID"))
+		if archiveTenantID == "" {
+			archiveTenantID = "1"
+		}
+		demoScenarioUsecase.SetArchiveWriter(incidentcontrol.NewSQLRepository(db), archiveTenantID)
 		demoScenarioHandler = managerserverdemo.NewHandler(managersvcdemo.NewService(demoScenarioUsecase), demoAPIToken)
 	} else if demoAPIToken != "" {
 		log.Warn("demo scenario API disabled: pool fixture URL/token is required")

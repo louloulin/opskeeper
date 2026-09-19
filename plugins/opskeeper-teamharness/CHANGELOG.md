@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.67 — 2026-09-19
+
+- Keep final-demo approval authoritative in Matrix while routing the approved incident directly to the Manager recovery API, avoiding quota-sensitive LLM retries after human approval.
+- Extend the scenario approval window to 180 seconds and persist the complete closed-loop evidence chain for Archive readback.
+
 ## 1.0.66 — 2026-09-18
 
 - Combine authoritative final-demo workflow projection, preview evidence, business impact, and public HITL validation.

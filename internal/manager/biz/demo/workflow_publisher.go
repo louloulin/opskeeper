@@ -106,11 +106,13 @@ func (publisher *MatrixWorkflowPublisher) PublishWorkflow(
 	_, _ = mac.Write(encodedClaims)
 	token := base64.RawURLEncoding.EncodeToString(encodedClaims) + "." + hex.EncodeToString(mac.Sum(nil))
 	incidentID := claims.IncidentID
+	utcTime := now.Format("2006-01-02T15:04:05Z")
+	beijingTime := now.In(time.FixedZone("UTC+8", 8*60*60)).Format("2006-01-02T15:04:05+08:00")
 	content := map[string]any{
 		"msgtype": "m.notice",
 		"body": fmt.Sprintf(
-			"[OpsKeeper Authority] incident=%s stage=%s\nOPSKEEPER_AUTHORITY_V1 %s",
-			incidentID, stage, token,
+			"[OpsKeeper Authority] incident=%s stage=%s time_utc=%s time_bjt=%s\nOPSKEEPER_AUTHORITY_V1 %s",
+			incidentID, stage, utcTime, beijingTime, token,
 		),
 		"agentteams.workflow": map[string]any{
 			"type": "opskeeper-workflow", "runId": incidentID, "authorityStage": stage,
@@ -119,6 +121,7 @@ func (publisher *MatrixWorkflowPublisher) PublishWorkflow(
 		"opskeeper.authority": map[string]any{
 			"version": 1, "manager_id": publisher.managerID, "incident_id": incidentID,
 			"stage": stage, "token": token,
+			"time_utc": utcTime, "time_bjt": beijingTime,
 		},
 	}
 	encodedContent, err := json.Marshal(content)

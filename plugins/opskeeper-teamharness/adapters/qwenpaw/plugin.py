@@ -75,7 +75,7 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.66"
+_PLUGIN_VERSION = "1.0.67"
 _COPAW_DIAGNOSTICS_LOGGER = logging.getLogger("opskeeper-teamharness.copaw-diagnostics")
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
@@ -114,6 +114,10 @@ _WORKFLOW_INCIDENT_EXPLICIT_PATTERN = re.compile(
 )
 _WORKFLOW_INCIDENT_LOOSE_PATTERN = re.compile(
     r"\b(opskeeper(?:-[A-Za-z0-9_]+){2,})\b",
+    re.IGNORECASE,
+)
+_FINAL_DEMO_INCIDENT_ID_PATTERN = re.compile(
+    r"\bincident_id(?:=|:)\s*([0-9]{1,18})\b",
     re.IGNORECASE,
 )
 _WORKFLOW_ROLE_PATTERN = re.compile(
@@ -276,6 +280,53 @@ def _runtime_backend_url() -> str:
 
 def _runtime_tenant_id() -> str:
     return _runtime_credential("OPSKEEPER_TENANT_ID") or "default"
+
+
+def _dispatch_final_demo_approval(session_id: str, sender: str, message: str) -> bool:
+    room_id = os.environ.get("OPSKEEPER_DEMO_MATRIX_ROOM", "").strip()
+    backend = (
+        os.environ.get("OPSKEEPER_MANAGER_URL", "").strip()
+        or os.environ.get("OPSKEEPER_BACKEND_URL", "").strip()
+    )
+    token = os.environ.get("OPSKEEPER_DEMO_API_TOKEN", "").strip()
+    incident_match = _FINAL_DEMO_INCIDENT_ID_PATTERN.search(message)
+    if not room_id or not backend or not token or not incident_match:
+        return False
+    if session_id != f"matrix:{room_id}" or not sender:
+        return False
+
+    incident_id = incident_match.group(1)
+    payload = json.dumps({"approver_id": sender}).encode("utf-8")
+    request = urllib.request.Request(
+        f"{backend.rstrip('/')}/api/v1/demo/incidents/{incident_id}/approve",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-Opskeeper-Version": "v1",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            response.read()
+        return True
+    except urllib.error.HTTPError as error:
+        error.read()
+        if error.code == 409:
+            return True
+        _MANAGER_GATE_LOGGER.warning(
+            "Final demo deterministic approval failed incident=%s http=%s",
+            incident_id,
+            error.code,
+        )
+    except Exception:
+        _MANAGER_GATE_LOGGER.warning(
+            "Final demo deterministic approval failed incident=%s",
+            incident_id,
+            exc_info=True,
+        )
+    return False
 
 _TASK_RESULT_PATTERN = re.compile(
     r"(?m)^(?:[`*_]*(?:@[A-Za-z0-9._=-]+(?::[A-Za-z0-9._=-]+)+|manager)[`*_]*[ \t]+)?"
@@ -2439,6 +2490,14 @@ def _register_manager_gate_hook(api: Any) -> None:
             if _is_admin_sender(sender):
                 approved = bool(_WORKFLOW_ADMIN_APPROVAL_PATTERN.search(message))
                 rejected = bool(_WORKFLOW_ADMIN_REJECTION_PATTERN.search(message))
+                deterministic_approval = approved and not rejected and (
+                    await asyncio.to_thread(
+                        _dispatch_final_demo_approval,
+                        session_id,
+                        sender or "",
+                        message,
+                    )
+                )
                 if approved or rejected:
                     workflow = _WORKFLOW_PROJECTOR.record_admin_decision(
                         session_id,
@@ -2446,6 +2505,8 @@ def _register_manager_gate_hook(api: Any) -> None:
                         approved and not rejected,
                     )
                     await _emit_workflow_projection(session_id, workflow)
+                if deterministic_approval:
+                    return HookResult(action=HookAction.SKIP_AGENT)
             authority = _verify_workflow_authority(sender, message, session_id)
             if _is_manager_agent(agent) and authority:
                 incident_id, authority_stage = authority

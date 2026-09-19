@@ -20,6 +20,7 @@ type fakeService struct {
 	business   map[string]int
 	baseline   map[string]int
 	advances   map[string]string
+	approvals  map[uint64]string
 	lastInput  servicedemo.StartScenarioInput
 	lastTenant uint64
 }
@@ -31,6 +32,17 @@ func (f *fakeService) AdvanceWorkflow(_ context.Context, _ uint64, _, key, stage
 	f.advances[key] = stage
 	return &servicedemo.ScenarioStatus{
 		IncidentID: 1001, ScenarioID: bizdemo.ScenarioID, Status: stage,
+		TargetFingerprint: "0123456789abcdef", UpdatedAt: "2026-09-18T00:00:00Z",
+	}, nil
+}
+
+func (f *fakeService) Approve(_ context.Context, _ uint64, incidentID uint64, input servicedemo.ApproveScenarioInput) (*servicedemo.ScenarioStatus, error) {
+	if f.approvals == nil {
+		f.approvals = map[uint64]string{}
+	}
+	f.approvals[incidentID] = input.ApproverID
+	return &servicedemo.ScenarioStatus{
+		IncidentID: incidentID, ScenarioID: bizdemo.ScenarioID, Status: "recovered",
 		TargetFingerprint: "0123456789abcdef", UpdatedAt: "2026-09-18T00:00:00Z",
 	}, nil
 }
@@ -111,6 +123,25 @@ func TestDemoHandlerAdvancesAuthoritativeWorkflow(t *testing.T) {
 	if service.advances["final-demo-key"] != "repair_dispatched" ||
 		!strings.Contains(recorder.Body.String(), `"status":"repair_dispatched"`) {
 		t.Fatalf("advances = %v body = %s", service.advances, recorder.Body.String())
+	}
+}
+
+func TestDemoHandlerApprovesDeterministicScenario(t *testing.T) {
+	service := &fakeService{}
+	router := newRouter(service)
+	request := authorized(httptest.NewRequest(
+		http.MethodPost,
+		"/v1/demo/incidents/1001/approve",
+		strings.NewReader(`{"approver_id":"@admin:matrix-local.agentteams.io:18080"}`),
+	))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if service.approvals[1001] != "@admin:matrix-local.agentteams.io:18080" ||
+		!strings.Contains(recorder.Body.String(), `"status":"recovered"`) {
+		t.Fatalf("approvals = %v body = %s", service.approvals, recorder.Body.String())
 	}
 }
 

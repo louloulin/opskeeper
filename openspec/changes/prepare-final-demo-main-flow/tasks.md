@@ -16,6 +16,16 @@
 - [ ] 9. 回读公网版本矩阵并记录：Manager / Worker plugin / Dashboard plugin / plugin-manager / pool-fixture / preview-pg
 - [ ] 10. 确认 `home.yueming.xin` / `teams.yueming.xin` / `rooms.yueming.xin` / `opskeeper.yueming.xin` 四个域名全部 HTTP 200
 
+## P0 — 审批可靠性修复
+
+- [x] 27. Manager 增加确定性 demo 审批 API：校验 `awaiting_approval`、TTL、候选 A HITL 资格后执行受控恢复并发布权威阶段
+- [x] 28. TeamHarness 仅在目标 demo 房间识别管理员真实批准，转发 Manager 审批 API 并跳过配额敏感的 Manager LLM 重试
+- [x] 29. 将 demo 场景过渡映射到默认事故租户，补齐 7 类 Archive 事件与稳定 trace_id
+- [x] 30. 将默认审批窗口延长到 180 秒，并在 Matrix、Dashboard、home 中统一 UTC/北京时间展示
+- [x] 31. 完成 Go / Dashboard / Site 回归并生成 TeamHarness 1.0.67 本地发布包
+- [ ] 32. 部署 Manager 修复版与 TeamHarness 1.0.67，回读公网版本与房间成员状态
+- [ ] 33. 从 home 发起真实 E2E，在 `benyue-lumos-ops` 人工批准并验证恢复、业务卡片、Element/Dashboard 投影与 Archive 证据链
+
 ## P0 — 三层对比框架（不用 PolarDB HA 满足建议二）
 
 - [ ] 11. **层1 业务体感对比**：在 `home.yueming.xin` 增加"故障前后对比面板"（请求延迟 / 成功率 / 连接池占用 / 页面状态），修复后持续采集 ≥30s

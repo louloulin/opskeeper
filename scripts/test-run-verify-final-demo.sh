@@ -228,7 +228,7 @@ for required_pair in \
   "PLUGIN_HEALTH_TOKEN=PLUGIN_VALID_VALUE" \
   "MANAGER_URL=https://opskeeper.yueming.xin" \
   "EXPECTED_MANAGER_VERSION=a4406a79-1.0.66" \
-  "EXPECTED_PLUGIN_VERSION=1.0.66"; do
+  "EXPECTED_PLUGIN_VERSION=1.0.67"; do
     if ! grep -Fxq "$required_pair" "$recorded"; then
       fail_test "wrapper did not pass '$required_pair' to docker exec; recorded: $(tr '\n' '|' <"$recorded")"
     fi
@@ -250,7 +250,7 @@ expected_order=(
   "PROMETHEUS_URL=http://opskeeper-demo-prom:9090"
   "PLUGIN_HEALTH_URL=http://agentteams-plugin-manager:8095/api/v1/plugins/opskeeper-teamharness/health"
   "EXPECTED_MANAGER_VERSION=a4406a79-1.0.66"
-  "EXPECTED_PLUGIN_VERSION=1.0.66"
+  "EXPECTED_PLUGIN_VERSION=1.0.67"
   "MANAGER_AUTH_TOKEN=JWT_VALID_VALUE"
   "DEMO_API_TOKEN=DEMO_VALID_VALUE"
   "PLUGIN_HEALTH_TOKEN=PLUGIN_VALID_VALUE"
@@ -262,7 +262,7 @@ expected_order=(
   "MIN_STRESSED_UTILIZATION=0.90"
   "MAX_RECOVERED_UTILIZATION=0.25"
   "TARGET_FINGERPRINT=0123456789abcdef0123456789abcdef"
-  "SCENARIO_DURATION_SECONDS=120"
+  "SCENARIO_DURATION_SECONDS=180"
 )
 recorded_lines=$(wc -l <"$recorded" | tr -d ' ')
 if [[ "$recorded_lines" -lt 20 ]]; then

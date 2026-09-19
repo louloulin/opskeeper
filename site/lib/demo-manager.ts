@@ -39,12 +39,20 @@ type StartScenarioInput = {
   duration_seconds: number;
 };
 
+function configuredDurationSeconds() {
+  const configured = Number(process.env.SCENARIO_DURATION_SECONDS ?? '');
+  if (Number.isFinite(configured) && configured >= 60 && configured <= 600) {
+    return Math.floor(configured);
+  }
+  return 180;
+}
+
 export const FINAL_DEMO_CONFIG = {
   scenarioId: 'pg-pool-exhaustion',
   target: 'pg:pool-fixture',
   targetFingerprint: '0123456789abcdef0123456789abcdef',
   alertFingerprint: 'fedcba9876543210fedcba9876543210',
-  durationSeconds: 90,
+  durationSeconds: configuredDurationSeconds(),
 } as const;
 
 function configuration() {

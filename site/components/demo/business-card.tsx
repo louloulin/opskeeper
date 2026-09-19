@@ -1,4 +1,5 @@
 import type { BusinessSection, BusinessSnapshot } from '@/lib/demo-types';
+import { formatBeijingClock } from '@/lib/time-format';
 import { cn } from '@/lib/utils';
 
 type BusinessCardProps = {
@@ -107,7 +108,7 @@ export function BusinessCard({
           {snapshot ? `延迟 ${snapshot.latency_ms} ms` : '延迟待测'}
         </span>
         <time className="tabular-nums" dateTime={snapshot?.generated_at}>
-          {snapshot ? new Date(snapshot.generated_at).toLocaleTimeString('zh-CN') : '--:--:--'}
+          {snapshot ? formatBeijingClock(snapshot.generated_at) : '--:--:-- 北京时间'}
         </time>
       </footer>
     </article>

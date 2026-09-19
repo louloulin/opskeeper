@@ -5,6 +5,7 @@ import {
   normalizeArchiveResponse,
   normalizeIncidentSummary,
 } from './archive.js';
+import { formatBeijingTime } from './time-format.js';
 
 const PREVIEW_URL = 'https://opskeeper.yueming.xin/preview/';
 const summaryGridStyle = {
@@ -490,13 +491,6 @@ function formatBytes(value) {
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }
-
-function formatTime(value) {
-  if (!value) return '未采集';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
 function formatSeconds(value) {
   if (value == null) return '—';
   if (value < 60) return `${value.toFixed(0)}s`;

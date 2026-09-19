@@ -12,6 +12,7 @@ import (
 type StartScenarioInput = bizdemo.StartScenarioInput
 type ScenarioStatus = bizdemo.ScenarioStatus
 type PreviewDecisionSummary = bizdemo.PreviewDecisionSummary
+type ApproveScenarioInput = bizdemo.ApproveScenarioInput
 
 type Service struct{ usecase *bizdemo.Usecase }
 
@@ -29,6 +30,10 @@ func (s *Service) AdvanceWorkflow(
 	ctx context.Context, tenantID uint64, scenarioID, key, stage string,
 ) (*ScenarioStatus, error) {
 	return s.usecase.AdvanceWorkflow(ctx, tenantID, scenarioID, key, stage)
+}
+
+func (s *Service) Approve(ctx context.Context, tenantID, incidentID uint64, input ApproveScenarioInput) (*ScenarioStatus, error) {
+	return s.usecase.Approve(ctx, tenantID, incidentID, input.ApproverID)
 }
 
 func (s *Service) BusinessSnapshot(ctx context.Context, tenantID uint64, scenarioID, key, section string) (json.RawMessage, error) {

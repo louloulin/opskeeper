@@ -99,6 +99,21 @@ func (r *Repo) GetByIdempotencyKey(ctx context.Context, tenantID uint64, scenari
 	return &run, nil
 }
 
+func (r *Repo) GetByIncident(ctx context.Context, tenantID uint64, scenarioID string, incidentID uint64) (*model.ScenarioRun, error) {
+	var run model.ScenarioRun
+	err := r.db.WithContext(ctx).Where(
+		"tenant_id = ? AND scenario_id = ? AND incident_id = ?",
+		tenantID, scenarioID, incidentID,
+	).Order("created_at DESC, id DESC").First(&run).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, errs.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
 func (r *Repo) UpdateStatus(ctx context.Context, id uint64, status string, mutation func(*model.ScenarioRun) error) error {
 	if !model.IsKnownStatus(status) {
 		return errs.ErrInvalid

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -21,6 +22,7 @@ type Service interface {
 	AdvanceWorkflow(ctx context.Context, tenantID uint64, scenarioID, key, stage string) (*servicedemo.ScenarioStatus, error)
 	BusinessSnapshot(ctx context.Context, tenantID uint64, scenarioID, key, section string) (json.RawMessage, error)
 	BusinessSnapshotBaseline(ctx context.Context, section string) (json.RawMessage, error)
+	Approve(ctx context.Context, tenantID, incidentID uint64, input servicedemo.ApproveScenarioInput) (*servicedemo.ScenarioStatus, error)
 }
 
 type Handler struct {
@@ -38,6 +40,7 @@ func (h *Handler) Register(router chi.Router) {
 		versioned.Post("/v1/demo/scenarios/"+bizdemo.ScenarioID+"/start", h.start)
 		versioned.Get("/v1/demo/scenarios/{idempotency_key}", h.status)
 		versioned.Post("/v1/demo/scenarios/{idempotency_key}/workflow/{stage}", h.advanceWorkflow)
+		versioned.Post("/v1/demo/incidents/{incident_id}/approve", h.approveScenario)
 		versioned.Get("/v1/demo/scenarios/{idempotency_key}/business/{section}", h.business)
 		versioned.Get("/v1/demo/business/{section}", h.businessBaseline)
 	})
@@ -93,6 +96,24 @@ func (h *Handler) advanceWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, "workflow stage recorded", status)
+}
+
+func (h *Handler) approveScenario(w http.ResponseWriter, r *http.Request) {
+	incidentID, err := strconv.ParseUint(chi.URLParam(r, "incident_id"), 10, 64)
+	if err != nil || incidentID == 0 {
+		writeError(w, http.StatusBadRequest, "invalid incident id", "invalid_request")
+		return
+	}
+	var input servicedemo.ApproveScenarioInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	status, err := h.service.Approve(r.Context(), demoTenantID, incidentID, input)
+	if err != nil {
+		writeMappedError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, "scenario approval recorded", status)
 }
 
 func (h *Handler) business(w http.ResponseWriter, r *http.Request) {
