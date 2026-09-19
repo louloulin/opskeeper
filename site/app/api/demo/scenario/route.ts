@@ -38,28 +38,27 @@ function errorResponse(error: unknown) {
 function isSameOriginPost(request: NextRequest) {
   if (request.headers.get(demoActionHeader) !== 'start') return false;
 
-  const forwardedProtocol = request.headers
-    .get('x-forwarded-proto')
-    ?.split(',')[0]
-    ?.trim();
-  const protocol = forwardedProtocol === 'https' || forwardedProtocol === 'http'
-    ? forwardedProtocol
-    : request.nextUrl.protocol.replace(':', '');
   const host = request.headers.get('host') ?? request.nextUrl.host;
+  const forwardedHost = request.headers
+    .get('x-forwarded-host')
+    ?.split(',')[0]
+    ?.trim() || host;
   const fetchSite = request.headers.get('sec-fetch-site');
   const originHeader = request.headers.get('origin');
 
   try {
-    const requestOrigin = new URL(`${protocol}://${host}`).origin;
     if (originHeader) {
       if (originHeader === 'null') return false;
-      return new URL(originHeader).origin === requestOrigin &&
+      const origin = new URL(originHeader);
+      return (origin.host === host || origin.host === forwardedHost) &&
         (!fetchSite || fetchSite === 'same-origin');
     }
     if (fetchSite) return fetchSite === 'same-origin';
 
     const referer = request.headers.get('referer');
-    return referer ? new URL(referer).origin === requestOrigin : false;
+    if (!referer) return false;
+    const refererOrigin = new URL(referer);
+    return refererOrigin.host === host || refererOrigin.host === forwardedHost;
   } catch {
     return false;
   }
