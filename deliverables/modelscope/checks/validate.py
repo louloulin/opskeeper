@@ -317,6 +317,8 @@ def main():
                 "path",
                 "title",
                 "source",
+                "type",
+                "purpose",
                 "sha256",
                 "public_safe",
                 "approval",
@@ -338,10 +340,12 @@ def main():
             fail(errors, f"asset missing: {relative}")
             continue
         listed.add(relative)
-        if not is_nonempty_string(asset.get("title")):
-            fail(errors, f"asset title must be a non-empty string: {relative}")
-        if not is_nonempty_string(asset.get("source")):
-            fail(errors, f"asset source must be a non-empty string: {relative}")
+        for field in ("title", "source", "type", "purpose"):
+            if not is_nonempty_string(asset.get(field)):
+                fail(
+                    errors,
+                    f"asset {field} must be a non-empty string: {relative}",
+                )
         if not isinstance(asset.get("sha256"), str) or not SHA256_PATTERN.fullmatch(
             asset["sha256"]
         ):
