@@ -5,7 +5,7 @@
 # script in a controlled environment.
 #
 # Required host layout:
-#   /root/config/final-demo-a4406a79-1.0.66/opskeeper.env    contains OPSKEEPER_DEMO_API_TOKEN
+#   /root/config/final-demo-e82d97d1-1.0.67/opskeeper.env    contains OPSKEEPER_DEMO_API_TOKEN
 #   /root/config/opskeeper-final-demo-e2e.jwt               Manager JWT for the public Manager
 #   agentteams-plugin-manager container env                 has PLUGIN_MANAGER_SA_TOKEN
 #
@@ -18,7 +18,7 @@ set -euo pipefail
 WRAPPER_NAME="run-verify-final-demo"
 HOST_CONFIG_DIR="${OPSKEEPER_HOST_CONFIG_DIR:-/root/config}"
 HOST_EVIDENCE_DIR="${OPSKEEPER_HOST_EVIDENCE_DIR:-/root/evidence}"
-HOST_OPSKEEPER_ENV="${OPSKEEPER_HOST_OPSKEEPER_ENV:-${HOST_CONFIG_DIR}/final-demo-a4406a79-1.0.66/opskeeper.env}"
+HOST_OPSKEEPER_ENV="${OPSKEEPER_HOST_OPSKEEPER_ENV:-${HOST_CONFIG_DIR}/final-demo-e82d97d1-1.0.67/opskeeper.env}"
 HOST_MANAGER_JWT="${HOST_CONFIG_DIR}/opskeeper-final-demo-e2e.jwt"
 CONTAINER_NAME="${OPSKEEPER_CONTAINER_NAME:-opskeeper}"
 CONTAINER_SCRIPT="${OPSKEEPER_CONTAINER_SCRIPT:-/src/scripts/verify-final-demo.sh}"
@@ -27,7 +27,7 @@ CONTAINER_SCRIPT="${OPSKEEPER_CONTAINER_SCRIPT:-/src/scripts/verify-final-demo.s
 # `docker exec` returns, the wrapper copies the file to HOST_EVIDENCE_DIR via
 # `docker cp`, preserving the host directory's existing permissions.
 CONTAINER_EVIDENCE_DIR="${OPSKEEPER_CONTAINER_EVIDENCE_DIR:-/tmp/verify-evidence}"
-EXPECTED_MANAGER_VERSION="${EXPECTED_MANAGER_VERSION:-a4406a79-1.0.66}"
+EXPECTED_MANAGER_VERSION="${EXPECTED_MANAGER_VERSION:-e82d97d1-1.0.67}"
 EXPECTED_PLUGIN_VERSION="${EXPECTED_PLUGIN_VERSION:-1.0.67}"
 WORKLOAD_FINGERPRINT="${OPSKEEPER_REPAIR_PREVIEW_WORKLOAD_FINGERPRINT:-sha256:db905b8f98c631212336b736f92d80b2a3040a75a44554687cfc782d39c31cc4}"
 TARGET_FINGERPRINT="${OPSKEEPER_REPAIR_PREVIEW_TARGET_FINGERPRINT:-0123456789abcdef0123456789abcdef}"
@@ -88,7 +88,7 @@ HOST_EVIDENCE_OUT="${HOST_EVIDENCE_DIR}/verify-final-demo-${UTC_STAMP}.json"
 EVIDENCE_OUT="${CONTAINER_EVIDENCE_DIR}/verify-final-demo-${UTC_STAMP}.json"
 mkdir -p "$HOST_EVIDENCE_DIR"
 
-SCENARIO_IDEMPOTENCY_KEY="final-demo-a4406a79-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+SCENARIO_IDEMPOTENCY_KEY="final-demo-e82d97d1-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 # validFingerprint (internal/manager/biz/demo/scenario.go) accepts only hex or
 # sha256:<64hex>. The previous "pg-pool-waiters-<utc>-<pid>" string failed that
 # check and Manager responded with HTTP 400 invalid_request. Derive the alert

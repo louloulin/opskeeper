@@ -40,12 +40,12 @@ build_sandbox() {
   local plugin_value="$4"
 
   rm -rf "$sandbox"
-  mkdir -p "$sandbox/config/final-demo-a4406a79-1.0.66"
+  mkdir -p "$sandbox/config/final-demo-e82d97d1-1.0.67"
   mkdir -p "$sandbox/evidence"
   mkdir -p "$sandbox/bin"
 
   printf 'OPSKEEPER_DEMO_API_TOKEN=%s\n' "$demo_value" \
-    >"$sandbox/config/final-demo-a4406a79-1.0.66/opskeeper.env"
+    >"$sandbox/config/final-demo-e82d97d1-1.0.67/opskeeper.env"
   printf '%s' "$manager_value" \
     >"$sandbox/config/opskeeper-final-demo-e2e.jwt"
 
@@ -138,7 +138,7 @@ run_wrapper_in_sandbox() {
     cd "$sandbox"
     OPSKEEPER_HOST_CONFIG_DIR="$sandbox/config" \
     OPSKEEPER_HOST_EVIDENCE_DIR="$sandbox/evidence" \
-    OPSKEEPER_HOST_OPSKEEPER_ENV="$sandbox/config/final-demo-a4406a79-1.0.66/opskeeper.env" \
+  OPSKEEPER_HOST_OPSKEEPER_ENV="$sandbox/config/final-demo-e82d97d1-1.0.67/opskeeper.env" \
     OPSKEEPER_CONTAINER_NAME="$container_name" \
     OPSKEEPER_CONTAINER_SCRIPT="/src/scripts/verify-final-demo.sh" \
     PATH="$sandbox/bin:$PATH" \
@@ -227,7 +227,7 @@ for required_pair in \
   "DEMO_API_TOKEN=DEMO_VALID_VALUE" \
   "PLUGIN_HEALTH_TOKEN=PLUGIN_VALID_VALUE" \
   "MANAGER_URL=https://opskeeper.yueming.xin" \
-  "EXPECTED_MANAGER_VERSION=a4406a79-1.0.66" \
+  "EXPECTED_MANAGER_VERSION=e82d97d1-1.0.67" \
   "EXPECTED_PLUGIN_VERSION=1.0.67"; do
     if ! grep -Fxq "$required_pair" "$recorded"; then
       fail_test "wrapper did not pass '$required_pair' to docker exec; recorded: $(tr '\n' '|' <"$recorded")"
@@ -249,7 +249,7 @@ expected_order=(
   "OPSKEEPER_URL=https://opskeeper.yueming.xin"
   "PROMETHEUS_URL=http://opskeeper-demo-prom:9090"
   "PLUGIN_HEALTH_URL=http://agentteams-plugin-manager:8095/api/v1/plugins/opskeeper-teamharness/health"
-  "EXPECTED_MANAGER_VERSION=a4406a79-1.0.66"
+  "EXPECTED_MANAGER_VERSION=e82d97d1-1.0.67"
   "EXPECTED_PLUGIN_VERSION=1.0.67"
   "MANAGER_AUTH_TOKEN=JWT_VALID_VALUE"
   "DEMO_API_TOKEN=DEMO_VALID_VALUE"
@@ -279,7 +279,7 @@ pass_test "newline-continuation preserves every -e argument end-to-end"
 # Test 6: idempotency key uses the configured prefix and a timestamp/pid tail.
 # ---------------------------------------------------------------------------
 key_value=$(grep '^SCENARIO_IDEMPOTENCY_KEY=' "$recorded" | head -1 | cut -d= -f2-)
-if [[ ! "$key_value" =~ ^final-demo-a4406a79-[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]]; then
+if [[ ! "$key_value" =~ ^final-demo-e82d97d1-[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]]; then
   fail_test "idempotency key format unexpected: $key_value"
 fi
 pass_test "idempotency key has the expected prefix and timestamp tail"

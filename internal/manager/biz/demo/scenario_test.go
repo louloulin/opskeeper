@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
 	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
 	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
@@ -584,6 +585,37 @@ func TestApproveExecutesVerifiedRecoveryAndWritesArchive(t *testing.T) {
 		t.Fatalf("archive events = %v, want %v", got, want)
 	}
 	_ = scenarios
+}
+
+func TestAppendArchiveEventUsesStableUUID(t *testing.T) {
+	usecase := &Usecase{clock: realClock{}}
+	archive := &fakeArchiveWriter{}
+	usecase.SetArchiveWriter(archive, "goai-demo")
+	run := &demomodel.ScenarioRun{TenantID: 1, IncidentID: 83, IdempotencyKey: "final-demo-e82d97d1-20260919T014144Z-3886582"}
+
+	if err := usecase.appendArchiveEvent(
+		context.Background(), run, incidentcontrol.EventAlertReceived,
+		"detection", "system", "opskeeper-demo", "firing", "opskeeper://incidents/83/alert", "", false,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := usecase.appendArchiveEvent(
+		context.Background(), run, incidentcontrol.EventAlertReceived,
+		"detection", "system", "opskeeper-demo", "firing", "opskeeper://incidents/83/alert", "", false,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(archive.events) != 2 {
+		t.Fatalf("archive event count = %d, want 2", len(archive.events))
+	}
+	_, err := uuid.Parse(archive.events[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archive.events[0].ID != archive.events[1].ID {
+		t.Fatalf("archive event IDs differ: %q != %q", archive.events[0].ID, archive.events[1].ID)
+	}
 }
 
 func TestPreviewFAILCannotReachApproval(t *testing.T) {

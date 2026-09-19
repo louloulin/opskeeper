@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
 	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
 	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
@@ -657,7 +658,7 @@ func (u *Usecase) appendArchiveEvent(
 		tenantID = strconv.FormatUint(run.TenantID, 10)
 	}
 	event := incidentcontrol.Event{
-		ID:       "demo-" + run.IdempotencyKey + "-" + eventType,
+		ID:       demoArchiveEventID(run.IdempotencyKey, eventType),
 		TenantID: tenantID, IncidentID: strconv.FormatUint(run.IncidentID, 10),
 		OccurredAt: u.clock.Now(), Phase: phase, EventType: eventType,
 		ActorType: actorType, Actor: actor, Status: status,
@@ -668,6 +669,11 @@ func (u *Usecase) appendArchiveEvent(
 		return err
 	}
 	return nil
+}
+
+func demoArchiveEventID(idempotencyKey, eventType string) string {
+	namespace := uuid.NewSHA1(uuid.NameSpaceURL, []byte("opskeeper:demo-timeline"))
+	return uuid.NewSHA1(namespace, []byte(idempotencyKey+"/"+eventType)).String()
 }
 
 func completePreviewMetrics(candidate repairpreview.Candidate) bool {
