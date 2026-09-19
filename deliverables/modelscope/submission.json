@@ -78,7 +78,96 @@
       "reason": "OpsKeeper publishes no model weights"
     }
   },
-  "assets": [],
+  "assets": [
+    {
+      "id": "opskeeper-overview",
+      "title": "OpsKeeper overview animation",
+      "path": "evidence/opskeeper-overview.gif",
+      "type": "image/gif",
+      "source": "docs/assets/demo.gif",
+      "authorization": "Apache-2.0 project documentation asset",
+      "public_safe": true,
+      "approval": "human",
+      "sha256": "daa7bcf738db5d606c86da20ea65f610063517cb2b958cd4a0241390aac458d1"
+    },
+    {
+      "id": "monitor",
+      "title": "OpsKeeper monitoring view",
+      "path": "evidence/monitor.png",
+      "type": "image/png",
+      "source": "docs/assets/readme-tour/user-20260707-monitor.png",
+      "authorization": "Apache-2.0 project documentation asset",
+      "public_safe": true,
+      "approval": "human",
+      "sha256": "0ac18c31c975fdb94d9e5546ef579d34e2e98a28dbcb9e818622b2ef75335311"
+    },
+    {
+      "id": "rca-session",
+      "title": "Root-cause analysis session",
+      "path": "evidence/rca-session.png",
+      "type": "image/png",
+      "source": "docs/assets/readme-tour/user-20260707-rca-session.png",
+      "authorization": "Apache-2.0 project documentation asset",
+      "public_safe": true,
+      "approval": "human",
+      "sha256": "08b1855c05c46f8367a5d91aeca49b7b59b202b191693386123c7fa65bf722a8"
+    },
+    {
+      "id": "workflow-editor",
+      "title": "Workflow editor",
+      "path": "evidence/workflow-editor.png",
+      "type": "image/png",
+      "source": "docs/assets/readme-tour/user-20260707-workflow-editor.png",
+      "authorization": "Apache-2.0 project documentation asset",
+      "public_safe": true,
+      "approval": "human",
+      "sha256": "65274cd9781c3e7851d5a1c772c760e1422223a32ff2a314bed17d35819ae5ee"
+    },
+    {
+      "id": "topology-map",
+      "title": "Topology map",
+      "path": "evidence/topology-map.png",
+      "type": "image/png",
+      "source": "docs/assets/readme-tour/user-20260707-topology-map.png",
+      "authorization": "Apache-2.0 project documentation asset",
+      "public_safe": true,
+      "approval": "human",
+      "sha256": "c0b8bef83965b07d71cf618b89cb0cc2eb3e15aca11e138aef0990afdd6ab113"
+    },
+    {
+      "id": "artifacts",
+      "title": "Artifact pages",
+      "path": "evidence/artifacts.png",
+      "type": "image/png",
+      "source": "docs/assets/readme-tour/user-20260707-artifacts-pages.png",
+      "authorization": "Apache-2.0 project documentation asset",
+      "public_safe": true,
+      "approval": "human",
+      "sha256": "d535f708e7dc94f2b63482f63db0b91cc1f0ebc035922e616e77d5df13f0ccaf"
+    },
+    {
+      "id": "write-gate",
+      "title": "Agent write gate",
+      "path": "evidence/write-gate.png",
+      "type": "image/png",
+      "source": "docs/assets/readme-tour/user-20260707-agent-write-gate.png",
+      "authorization": "Apache-2.0 project documentation asset",
+      "public_safe": true,
+      "approval": "human",
+      "sha256": "c4e2962a15a12a94ee9330591d7f21090ff72df5b3fec48e979d655cd142061f"
+    },
+    {
+      "id": "knowledge-vault",
+      "title": "Knowledge vault",
+      "path": "evidence/knowledge-vault.png",
+      "type": "image/png",
+      "source": "docs/assets/readme-tour/user-20260707-knowledge-vault.png",
+      "authorization": "Apache-2.0 project documentation asset",
+      "public_safe": true,
+      "approval": "human",
+      "sha256": "58b54fc94a6756478b8c9a78bf0764a11342d0884ab299c3c18db93687b38c90"
+    }
+  ],
   "verification": {
     "private_readback": null,
     "public_readback": null,
