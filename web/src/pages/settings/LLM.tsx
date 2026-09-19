@@ -5,12 +5,11 @@
 // integrations 里以 LLMCard 形式存在。这次拆出来，让 /settings/llm
 // 直接进多 provider 配置（更对应它的菜单名字）。
 import { useCallback, useEffect, useState } from 'react';
-import { Check, Eye, EyeOff, Loader2, Plus, Save, Sparkles, Star, Trash2 } from 'lucide-react';
+import { Check, Loader2, Plus, Save, Sparkles, Star, Trash2 } from 'lucide-react';
 import { ApiError } from '@/api/client';
 import {
   invalidateLLMRouter,
   listSettings,
-  revealSetting,
   setSetting,
   type SystemSetting,
 } from '@/api/settings';
@@ -211,7 +210,7 @@ function LLMProviderCard({ meta }: { meta: LLMProviderMeta }) {
   const { tr } = useI18n();
   const [server, setServer] = useState<LLMProviderForm>(emptyLLMForm);
   const [draft, setDraft] = useState<LLMProviderForm>(emptyLLMForm);
-  const [revealed, setRevealed] = useState(false);
+  const [keyConfigured, setKeyConfigured] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
@@ -239,17 +238,10 @@ function LLMProviderCard({ meta }: { meta: LLMProviderMeta }) {
         }
       }
       const apiRow = (r.items as SystemSetting[]).find((it) => it.key === meta.keyAPIKey);
-      if (apiRow && (apiRow.value ?? '') !== '') {
-        try {
-          const real = await revealSetting('llm', meta.keyAPIKey);
-          next.api_key = real.value ?? '';
-        } catch {
-          /* leave empty so user can paste a fresh key */
-        }
-      }
+      const hasAPIKey = !!apiRow && (apiRow.value ?? '') !== '';
       setServer(next);
       setDraft(next);
-      setRevealed(false);
+      setKeyConfigured(hasAPIKey);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
@@ -262,7 +254,7 @@ function LLMProviderCard({ meta }: { meta: LLMProviderMeta }) {
   }, [refresh]);
 
   const dirty =
-    draft.api_key !== server.api_key ||
+    draft.api_key !== '' ||
     draft.base_url !== server.base_url ||
     draft.default_model !== server.default_model ||
     JSON.stringify(draft.models) !== JSON.stringify(server.models);
@@ -308,7 +300,7 @@ function LLMProviderCard({ meta }: { meta: LLMProviderMeta }) {
     setSaving(true);
     setErr(null);
     try {
-      if (draft.api_key !== server.api_key) {
+      if (draft.api_key !== '') {
         await setSetting('llm', meta.keyAPIKey, draft.api_key, true);
       }
       if (draft.base_url !== server.base_url) {
@@ -336,7 +328,7 @@ function LLMProviderCard({ meta }: { meta: LLMProviderMeta }) {
 
   // A custom provider also needs a base URL to be reachable; the named
   // providers have a working default endpoint, so a key alone suffices.
-  const configured = server.api_key.trim() !== '' && (!meta.custom || server.base_url.trim() !== '');
+  const configured = keyConfigured && (!meta.custom || server.base_url.trim() !== '');
 
   return (
     <Card className="p-5">
@@ -358,15 +350,15 @@ function LLMProviderCard({ meta }: { meta: LLMProviderMeta }) {
               label="API Key"
               hint={
                 meta.custom
-                  ? tr('无需鉴权的本地服务填任意占位值', 'For keyless local servers, any placeholder works')
-                  : tr('留空 = 该提供商不出现在聊天页下拉里', 'Leave empty to hide this provider from the chat dropdown')
+                  ? tr('无需鉴权的本地服务填任意占位值；已保存的 Key 不会回显', 'For keyless local servers, any placeholder works; saved keys are never read back')
+                  : keyConfigured
+                    ? tr('已配置；输入新值即轮换，明文不会回显', 'Configured; enter a new value to rotate. Cleartext is never read back')
+                    : tr('留空 = 该提供商不出现在聊天页下拉里', 'Leave empty to hide this provider from the chat dropdown')
               }
               sensitive
-              revealed={revealed}
-              onToggleReveal={() => setRevealed((v) => !v)}
               value={draft.api_key}
               onChange={(v) => update('api_key', v)}
-              placeholder="sk-... / tvly-... / glsa-..."
+              placeholder={keyConfigured ? tr('输入新 Key 以轮换…', 'Enter a new key to rotate…') : 'sk-... / tvly-... / glsa-...'}
             />
             {meta.custom && (
               <FieldRow
@@ -499,8 +491,6 @@ function FieldRow({
   onChange,
   placeholder,
   sensitive,
-  revealed,
-  onToggleReveal,
 }: {
   label: string;
   hint?: string;
@@ -508,10 +498,8 @@ function FieldRow({
   onChange(v: string): void;
   placeholder?: string;
   sensitive?: boolean;
-  revealed?: boolean;
-  onToggleReveal?: () => void;
 }) {
-  const inputType = sensitive ? (revealed ? 'text' : 'password') : 'text';
+  const inputType = sensitive ? 'password' : 'text';
   return (
     <label className="block">
       <span className="mb-1 flex items-center gap-1.5 text-xs text-zinc-400">
@@ -534,17 +522,6 @@ function FieldRow({
           )}
           autoComplete="off"
         />
-        {sensitive && onToggleReveal && (
-          <button
-            type="button"
-            onClick={onToggleReveal}
-            tabIndex={-1}
-            aria-label={revealed ? 'Hide' : 'Show'}
-            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
-          >
-            {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
-          </button>
-        )}
       </div>
       {hint && <span className="mt-1 block text-[11px] text-zinc-500">{hint}</span>}
     </label>
