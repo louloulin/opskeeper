@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "generated_at": {
+    "utc": "2026-09-19T05:24:59Z",
+    "asia_shanghai": "2026-09-19T13:24:59+08:00"
+  },
+  "source": {
+    "github_repository": "https://github.com/vincent-wuhan/opskeeper",
+    "default_branch": "main",
+    "head_commit": "0af4ffa3bb32c5898b67234866549b31e96111dd",
+    "origin_main": "be44e36c7f1dd987e863a8732965db25aea1db28",
+    "origin_main_available": true
+  },
+  "probe": {
+    "timeout_seconds": 15,
+    "user_agent": "OpsKeeper-ModelScope-Preflight/1.0",
+    "strategy": "HEAD with GET fallback",
+    "redirects_followed": false
+  },
+  "entries": [
+    {
+      "id": "official_website",
+      "url": "https://opskeeper.yueming.xin/home",
+      "role": "Product official website",
+      "required_for_public": true,
+      "auth_expected": false,
+      "result": "pass",
+      "reachable": true,
+      "effective_method": "HEAD",
+      "attempts": [
+        {
+          "method": "HEAD",
+          "status": 200,
+          "error": null,
+          "outcome": "pass",
+          "reachable": true
+        }
+      ]
+    },
+    {
+      "id": "opskeeper_service",
+      "url": "https://opskeeper.yueming.xin",
+      "role": "OpsKeeper service",
+      "required_for_public": true,
+      "auth_expected": true,
+      "result": "pass",
+      "reachable": true,
+      "effective_method": "HEAD",
+      "attempts": [
+        {
+          "method": "HEAD",
+          "status": 200,
+          "error": null,
+          "outcome": "pass",
+          "reachable": true
+        }
+      ]
+    },
+    {
+      "id": "agentteams_rooms",
+      "url": "https://rooms.yueming.xin",
+      "role": "AgentTeams Element rooms",
+      "required_for_public": true,
+      "auth_expected": true,
+      "result": "pass",
+      "reachable": true,
+      "effective_method": "HEAD",
+      "attempts": [
+        {
+          "method": "HEAD",
+          "status": 200,
+          "error": null,
+          "outcome": "pass",
+          "reachable": true
+        }
+      ]
+    },
+    {
+      "id": "agentteams_dashboard",
+      "url": "https://teams.yueming.xin",
+      "role": "AgentTeams Dashboard",
+      "required_for_public": true,
+      "auth_expected": true,
+      "result": "pass",
+      "reachable": true,
+      "effective_method": "HEAD",
+      "attempts": [
+        {
+          "method": "HEAD",
+          "status": 200,
+          "error": null,
+          "outcome": "pass",
+          "reachable": true
+        }
+      ]
+    },
+    {
+      "id": "roadshow_console",
+      "url": "https://home.yueming.xin",
+      "role": "Full-flow roadshow console",
+      "required_for_public": true,
+      "auth_expected": true,
+      "result": "pass",
+      "reachable": true,
+      "effective_method": "HEAD",
+      "attempts": [
+        {
+          "method": "HEAD",
+          "status": 302,
+          "error": null,
+          "outcome": "pass",
+          "reachable": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total": 5,
+    "pass": 5,
+    "auth_protected": 0,
+    "fail": 0,
+    "required_public_unreachable": 0,
+    "exit_code": 0
+  }
+}
