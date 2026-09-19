@@ -70,9 +70,23 @@
       "visibility": "private"
     },
     "project_practice": {
-      "url": null,
-      "status": "not_created",
-      "visibility": "private"
+      "url": "https://www.modelscope.cn/learn/edit/436819",
+      "edit_url": "https://www.modelscope.cn/learn/edit/436819",
+      "content_path": "project-practice/zh.md",
+      "public_url": null,
+      "status": "draft_saved",
+      "visibility": "private",
+      "saved_at_utc": "2026-09-19T06:20:20Z",
+      "readback": {
+        "content_saved": true,
+        "publish_action_taken": false,
+        "covers_plugin_integration": true,
+        "covers_role_separation": true,
+        "covers_human_approval": true,
+        "covers_repair_preview": true,
+        "covers_incident_archive": true,
+        "covers_reuse_entries": true
+      }
     },
     "model_repository": {
       "created": false,
