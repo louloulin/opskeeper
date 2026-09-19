@@ -57,13 +57,6 @@ export const metadata: Metadata = {
     title: 'OpsKeeper — Auditable multi-agent incident response',
     description: 'Closed-loop incident response with a safety boundary.',
   },
-  alternates: {
-    canonical: '/',
-    languages: {
-      en: '/',
-      'zh-CN': '/zh',
-    },
-  },
   category: 'technology',
 };
 

@@ -30,6 +30,13 @@ export const metadata = {
   title: 'Auditable operations for multi-agent incident response',
   description:
     'OpsKeeper is the auditable operations platform for multi-agent incident response. Closed-loop alert → evidence → RCA → approval → recovery → verification → learning.',
+  alternates: {
+    canonical: '/',
+    languages: {
+      en: '/',
+      'zh-CN': '/zh',
+    },
+  },
 };
 
 const phases = [

@@ -33,6 +33,19 @@ export default function sitemap(): MetadataRoute.Sitemap {
   const now = new Date();
   const base = SITE.url;
 
+  const liveIncidentEntries: MetadataRoute.Sitemap = ['/live-incident', '/en/live-incident'].map((path) => ({
+    url: `${base}${path}`,
+    lastModified: now,
+    changeFrequency: 'weekly',
+    priority: 0.9,
+    alternates: {
+      languages: {
+        en: `${base}/en/live-incident`,
+        'zh-CN': `${base}/live-incident`,
+      },
+    },
+  }));
+
   const enEntries: MetadataRoute.Sitemap = EN_PATHS.map((p) => ({
     url: `${base}${p}`,
     lastModified: now,
@@ -59,5 +72,5 @@ export default function sitemap(): MetadataRoute.Sitemap {
     },
   }));
 
-  return [...enEntries, ...zhEntries];
+  return [...enEntries, ...zhEntries, ...liveIncidentEntries];
 }
