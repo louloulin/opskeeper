@@ -36,15 +36,7 @@ function errorResponse(error: unknown) {
 }
 
 function isSameOriginPost(request: NextRequest) {
-  const originHeader = request.headers.get('origin');
-  if (!originHeader || originHeader === 'null') return false;
-
-  let origin: URL;
-  try {
-    origin = new URL(originHeader);
-  } catch {
-    return false;
-  }
+  if (request.headers.get(demoActionHeader) !== 'start') return false;
 
   const forwardedProtocol = request.headers
     .get('x-forwarded-proto')
@@ -55,11 +47,19 @@ function isSameOriginPost(request: NextRequest) {
     : request.nextUrl.protocol.replace(':', '');
   const host = request.headers.get('host') ?? request.nextUrl.host;
   const fetchSite = request.headers.get('sec-fetch-site');
+  const originHeader = request.headers.get('origin');
 
   try {
-    return origin.origin === new URL(`${protocol}://${host}`).origin &&
-      (!fetchSite || fetchSite === 'same-origin') &&
-      request.headers.get(demoActionHeader) === 'start';
+    const requestOrigin = new URL(`${protocol}://${host}`).origin;
+    if (originHeader) {
+      if (originHeader === 'null') return false;
+      return new URL(originHeader).origin === requestOrigin &&
+        (!fetchSite || fetchSite === 'same-origin');
+    }
+    if (fetchSite) return fetchSite === 'same-origin';
+
+    const referer = request.headers.get('referer');
+    return referer ? new URL(referer).origin === requestOrigin : false;
   } catch {
     return false;
   }
