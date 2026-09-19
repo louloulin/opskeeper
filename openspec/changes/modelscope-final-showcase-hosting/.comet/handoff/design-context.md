@@ -1,5 +1,4 @@
 # Comet Design Handoff
-
 - Change: modelscope-final-showcase-hosting
 - Phase: design
 - Mode: compact
@@ -289,4 +288,3 @@ The submission process SHALL verify the package while private, then re-verify re
 - **THEN** the package either deploys the website under `/home` without breaking the OpsKeeper root service or omits the website entry until it is available
 - **AND** a 404 response is never presented as the official website entry
 ```
-
