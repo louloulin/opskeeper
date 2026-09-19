@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "state": {
+    "package_status": "draft",
+    "visibility": "private",
+    "generated_at_utc": null,
+    "operator": "yueming"
+  },
+  "source": {
+    "github_repository": "https://github.com/vincent-wuhan/opskeeper",
+    "default_branch": "main",
+    "authoritative_commit": null,
+    "release_tag": null,
+    "teamharness_version": null,
+    "modelscope_code_url": null,
+    "mirror_status": "not_created"
+  },
+  "entries": [
+    {
+      "id": "official_website",
+      "url": "https://opskeeper.yueming.xin/home",
+      "role": "Product official website",
+      "required_for_public": true,
+      "auth_expected": false,
+      "health": "unknown"
+    },
+    {
+      "id": "opskeeper_service",
+      "url": "https://opskeeper.yueming.xin",
+      "role": "OpsKeeper service",
+      "required_for_public": true,
+      "auth_expected": true,
+      "health": "unknown"
+    },
+    {
+      "id": "agentteams_rooms",
+      "url": "https://rooms.yueming.xin",
+      "role": "AgentTeams Element rooms",
+      "required_for_public": true,
+      "auth_expected": true,
+      "health": "unknown"
+    },
+    {
+      "id": "agentteams_dashboard",
+      "url": "https://teams.yueming.xin",
+      "role": "AgentTeams Dashboard",
+      "required_for_public": true,
+      "auth_expected": true,
+      "health": "unknown"
+    },
+    {
+      "id": "roadshow_console",
+      "url": "https://home.yueming.xin",
+      "role": "Full-flow roadshow console",
+      "required_for_public": true,
+      "auth_expected": true,
+      "health": "unknown"
+    }
+  ],
+  "submissions": {
+    "creative_space": {
+      "url": null,
+      "status": "not_created",
+      "visibility": "private"
+    },
+    "code_repository": {
+      "url": null,
+      "status": "not_created",
+      "visibility": "private"
+    },
+    "project_practice": {
+      "url": null,
+      "status": "not_created",
+      "visibility": "private"
+    },
+    "model_repository": {
+      "created": false,
+      "reason": "OpsKeeper publishes no model weights"
+    }
+  },
+  "assets": [],
+  "verification": {
+    "private_readback": null,
+    "public_readback": null,
+    "safety_scan": null,
+    "current_result": "pending"
+  },
+  "rollback": {
+    "trigger": "Any required public link, media, code view, or safety check fails",
+    "actions": [
+      "Switch all three ModelScope submissions back to private",
+      "Remove or hide the website ModelScope entry",
+      "Record failure time UTC and observed symptoms in submission.json"
+    ]
+  }
+}
