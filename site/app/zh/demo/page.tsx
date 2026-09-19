@@ -1,4 +1,4 @@
-import { Activity, LayoutDashboard, MessagesSquare, ShieldCheck } from 'lucide-react';
+import { Activity, LayoutDashboard, MessagesSquare, ShieldCheck, Sparkles } from 'lucide-react';
 import { Button } from '@/components/button';
 import { Section, SectionHeader } from '@/components/section';
 import { DEMO_URLS } from '@/lib/demos';
@@ -17,6 +17,7 @@ const demos = [
     description:
       '查看事件、证据、根因分析、处置提案、人工审批、审计记录与恢复验证的完整链路。',
     icon: ShieldCheck,
+    badge: undefined,
   },
   {
     title: 'AgentTeams Dashboard',
@@ -25,6 +26,7 @@ const demos = [
     description:
       '观察智能体团队状态、任务协同、插件安装，以及 OpsKeeper Runtime 观测看板。',
     icon: LayoutDashboard,
+    badge: undefined,
   },
   {
     title: 'AgentTeams Element',
@@ -33,6 +35,16 @@ const demos = [
     description:
       '从房间对话查看 Manager 调度、Worker 响应、Skills/MCP 调用证据、人工审批和异常处理。',
     icon: MessagesSquare,
+    badge: undefined,
+  },
+  {
+    title: '魔搭创空间展示',
+    url: DEMO_URLS.modelscopeShowcase,
+    role: '项目展示与备用入口',
+    description:
+      '查看产品叙事、架构、安全边界与公开安全证据素材；该入口不运行特权运维环境。',
+    icon: Sparkles,
+    badge: '魔搭创空间',
   },
 ];
 
@@ -44,7 +56,7 @@ export default function DemoZhPage() {
         title="一个事件，三个联通视角。"
         description="这组公网环境支持完整演练，演练期间数据可能被重置。"
       />
-      <div className="mt-12 grid gap-4 md:grid-cols-3">
+      <div className="mt-12 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {demos.map((demo) => (
           <article
             key={demo.title}
@@ -54,6 +66,11 @@ export default function DemoZhPage() {
               <demo.icon className="h-5 w-5" />
             </span>
             <h2 className="mt-4 text-lg font-semibold text-white">{demo.title}</h2>
+            {demo.badge ? (
+              <span className="mt-3 inline-flex w-fit rounded-full border border-accent-500/30 bg-accent-500/10 px-2.5 py-1 text-xs font-medium text-accent-300">
+                {demo.badge}
+              </span>
+            ) : null}
             <div className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium text-accent-300">
               <Activity className="h-3.5 w-3.5" />
               {demo.role}
@@ -73,6 +90,7 @@ export default function DemoZhPage() {
       <p className="mt-8 rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm leading-relaxed text-ink-300">
         推荐路径：先在 AgentTeams Element 发起运维事件，再到 AgentTeams Dashboard
         查看团队与 Runtime 状态，最后进入 OpsKeeper 控制台核对权威时间线、审批、审计链和恢复验证。
+        魔搭创空间是只读项目展示与备用入口，不是特权实时演练环境。
       </p>
     </Section>
   );

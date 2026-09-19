@@ -1,4 +1,4 @@
-import { Activity, LayoutDashboard, MessagesSquare, ShieldCheck } from 'lucide-react';
+import { Activity, LayoutDashboard, MessagesSquare, ShieldCheck, Sparkles } from 'lucide-react';
 import { Button } from '@/components/button';
 import { Section, SectionHeader } from '@/components/section';
 import { DEMO_URLS } from '@/lib/demos';
@@ -17,6 +17,7 @@ const demos = [
     description:
       'Inspect incidents, evidence, root-cause analysis, proposals, approvals, audit records, and recovery verification.',
     icon: ShieldCheck,
+    badge: undefined,
   },
   {
     title: 'AgentTeams Dashboard',
@@ -25,6 +26,7 @@ const demos = [
     description:
       'Follow agent-team state, task coordination, plugin installation, and the OpsKeeper runtime observation widget.',
     icon: LayoutDashboard,
+    badge: undefined,
   },
   {
     title: 'AgentTeams Element',
@@ -33,6 +35,16 @@ const demos = [
     description:
       'See manager dispatch, worker replies, skills/MCP evidence, human approval, and exception handling in the team conversation.',
     icon: MessagesSquare,
+    badge: undefined,
+  },
+  {
+    title: 'ModelSpace Showcase',
+    url: DEMO_URLS.modelscopeShowcase,
+    role: 'Project showcase and backup',
+    description:
+      'Review the product story, architecture, safety boundary, and public-safe evidence assets hosted on ModelScope.',
+    icon: Sparkles,
+    badge: '魔搭创空间',
   },
 ];
 
@@ -44,7 +56,7 @@ export default function DemoPage() {
         title="One incident, three connected views."
         description="These hosted environments support guided operational rehearsals. Data may be reset between runs."
       />
-      <div className="mt-12 grid gap-4 md:grid-cols-3">
+      <div className="mt-12 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {demos.map((demo) => (
           <article
             key={demo.title}
@@ -54,6 +66,11 @@ export default function DemoPage() {
               <demo.icon className="h-5 w-5" />
             </span>
             <h2 className="mt-4 text-lg font-semibold text-white">{demo.title}</h2>
+            {demo.badge ? (
+              <span className="mt-3 inline-flex w-fit rounded-full border border-accent-500/30 bg-accent-500/10 px-2.5 py-1 text-xs font-medium text-accent-300">
+                {demo.badge}
+              </span>
+            ) : null}
             <div className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium text-accent-300">
               <Activity className="h-3.5 w-3.5" />
               {demo.role}
@@ -74,6 +91,7 @@ export default function DemoPage() {
         Recommended path: start in AgentTeams Element to trigger the operational incident,
         use AgentTeams Dashboard to inspect team and runtime state, then open OpsKeeper Console
         for the authoritative incident timeline, approvals, audit chain, and recovery verification.
+        The ModelSpace card is a read-only showcase and backup entry, not a privileged live environment.
       </p>
     </Section>
   );
