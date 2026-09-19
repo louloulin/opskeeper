@@ -80,6 +80,12 @@ class FinalDemoApprovalTest(unittest.TestCase):
             )
         self.assertFalse(accepted)
 
+    def test_approval_pattern_accepts_matrix_display_prefix(self):
+        message = "Mmanager: @manager:matrix-local.agentteams.io:18080 已批准\nincident_id=82"
+
+        self.assertIsNotNone(self.module._WORKFLOW_ADMIN_APPROVAL_PATTERN.search(message))
+        self.assertIsNone(self.module._WORKFLOW_ADMIN_REJECTION_PATTERN.search(message))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.68 — 2026-09-19
+
+- Accept Matrix display-name prefixes on human approval and rejection commands.
+- Log ignored non-admin decisions and successfully consumed final-demo approvals.
+
 ## 1.0.67 — 2026-09-19
 
 - Keep final-demo approval authoritative in Matrix while routing the approved incident directly to the Manager recovery API, avoiding quota-sensitive LLM retries after human approval.

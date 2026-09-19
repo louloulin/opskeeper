@@ -75,7 +75,7 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.67"
+_PLUGIN_VERSION = "1.0.68"
 _COPAW_DIAGNOSTICS_LOGGER = logging.getLogger("opskeeper-teamharness.copaw-diagnostics")
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
@@ -126,12 +126,12 @@ _WORKFLOW_ROLE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _WORKFLOW_ADMIN_APPROVAL_PATTERN = re.compile(
-    r"(?:^|\n)\s*(?:@manager(?::[A-Za-z0-9_.:-]+)?[,: ]+\s*)?"
+    r"(?m)^\s*[^\r\n]{0,200}?"
     r"(?:批准|同意|approve(?:d)?)\b",
     re.IGNORECASE,
 )
 _WORKFLOW_ADMIN_REJECTION_PATTERN = re.compile(
-    r"(?:^|\n)\s*(?:@manager(?::[A-Za-z0-9_.:-]+)?[,: ]+\s*)?"
+    r"(?m)^\s*[^\r\n]{0,200}?"
     r"(?:拒绝|不同意|reject(?:ed)?)\b",
     re.IGNORECASE,
 )
@@ -2487,9 +2487,15 @@ def _register_manager_gate_hook(api: Any) -> None:
                     return HookResult(action=HookAction.SKIP_AGENT)
                 return HookResult()
             sender = _request_sender(ctx.request)
-            if _is_admin_sender(sender):
-                approved = bool(_WORKFLOW_ADMIN_APPROVAL_PATTERN.search(message))
-                rejected = bool(_WORKFLOW_ADMIN_REJECTION_PATTERN.search(message))
+            approved = bool(_WORKFLOW_ADMIN_APPROVAL_PATTERN.search(message))
+            rejected = bool(_WORKFLOW_ADMIN_REJECTION_PATTERN.search(message))
+            admin_sender = _is_admin_sender(sender)
+            if (approved or rejected) and not admin_sender:
+                _MANAGER_GATE_LOGGER.warning(
+                    "Ignored non-admin workflow decision sender=%s",
+                    sender,
+                )
+            if admin_sender:
                 deterministic_approval = approved and not rejected and (
                     await asyncio.to_thread(
                         _dispatch_final_demo_approval,
@@ -2506,6 +2512,10 @@ def _register_manager_gate_hook(api: Any) -> None:
                     )
                     await _emit_workflow_projection(session_id, workflow)
                 if deterministic_approval:
+                    _MANAGER_GATE_LOGGER.info(
+                        "Consumed final-demo admin approval sender=%s",
+                        sender,
+                    )
                     return HookResult(action=HookAction.SKIP_AGENT)
             authority = _verify_workflow_authority(sender, message, session_id)
             if _is_manager_agent(agent) and authority:

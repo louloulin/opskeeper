@@ -2,7 +2,7 @@ apiVersion: agentteams.agentteam/v1alpha1
 kind: AgentTeamPlugin
 metadata:
   name: opskeeper-teamharness
-  version: 1.0.67
+  version: 1.0.68
   description: |
     Opskeeper TeamHarness plugin — provides six deployed ops actors
     (alerter/investigator/reviewer/repairer/verifier/reporter)
@@ -152,7 +152,7 @@ metadata:
     Matrix workflow events, business impact, proposal-bound repair, Archive
     evidence, and the 4/4-to-8 PostgreSQL pool capacity contract.
 
-    v1.0.67 preserves the human Matrix approval boundary and forwards approved
+    v1.0.68 preserves the human Matrix approval boundary and forwards approved
     final-demo incidents to a deterministic Manager recovery API, avoiding
     quota-sensitive LLM retries after the operator has already approved. It
     extends the scenario window and archives the complete evidence chain.
