@@ -182,7 +182,7 @@ export default function HomePage() {
               <Button href="/platform" variant="secondary">
                 How the closed loop works
               </Button>
-              <Button href="/demo" variant="ghost">
+              <Button href="/live-incident" variant="ghost">
                 Try the live demo
               </Button>
               <Button href="https://github.com/vincent-wuhan/opskeeper" variant="ghost" external>
@@ -370,7 +370,7 @@ export default function HomePage() {
               <li className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-accent-400" /> pg-replica-replay-lag</li>
             </ul>
             <div className="mt-8">
-              <Button href="/docs/getting-started" variant="secondary">
+              <Button href="/live-incident" variant="secondary">
                 Run the demos
               </Button>
               <Button href="/demo" variant="ghost">
