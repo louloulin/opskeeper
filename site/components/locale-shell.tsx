@@ -17,7 +17,7 @@ export function LocaleShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || '/';
   const route = pathname;
   const isChineseLiveIncidentConsole = route === '/live-incident' || route === '/zh/live-incident';
-  const isZh = route === '/zh' || route.startsWith('/zh/') || isChineseLiveIncidentConsole;
+  const isZh = route === '/' || route === '/zh' || route.startsWith('/zh/') || isChineseLiveIncidentConsole;
 
   useEffect(() => {
     if (typeof document !== 'undefined') {

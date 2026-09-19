@@ -30,12 +30,16 @@ export function LanguageSwitcher({ className }: { className?: string }) {
   const liveConsole = isLiveIncidentConsole(route);
   const isZh = liveConsole
     ? route !== '/en/live-incident'
-    : route === '/zh' || route.startsWith('/zh/');
+    : route === '/' || route === '/zh' || route.startsWith('/zh/');
   const target = liveConsole
     ? liveIncidentTarget(route)
-    : isZh
-      ? stripLocale(route)
-      : `/zh${stripLocale(route)}`;
+    : route === '/' || route === '/zh'
+      ? '/en'
+      : route === '/en'
+        ? '/'
+          : isZh
+            ? stripLocale(route)
+            : `/zh${stripLocale(route)}`;
   const label = isZh ? 'EN' : '中文';
 
   return (
