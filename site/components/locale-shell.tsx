@@ -15,7 +15,8 @@ import { SiteFooterZh } from '@/components/site-footer-zh';
  */
 export function LocaleShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || '/';
-  const isZh = pathname === '/zh' || pathname.startsWith('/zh/');
+  const isLiveIncidentConsole = pathname === '/live-incident' || pathname === '/home/live-incident';
+  const isZh = pathname === '/zh' || pathname.startsWith('/zh/') || isLiveIncidentConsole;
 
   useEffect(() => {
     if (typeof document !== 'undefined') {

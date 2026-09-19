@@ -53,7 +53,7 @@ export function BusinessCard({
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="font-mono text-xs uppercase tracking-wider text-ink-400">
-            {section}
+            {sectionCopy[section].label}
           </p>
           <h3 className="mt-2 text-lg font-semibold text-white">
             {sectionCopy[section].title}

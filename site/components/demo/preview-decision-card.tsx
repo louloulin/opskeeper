@@ -16,7 +16,7 @@ export function PreviewDecisionCard({ decision }: { decision: PreviewDecisionSum
             修复预演决策
           </h3>
           <p className="mt-1 text-sm text-ink-300">
-            只展示进入 HITL 前的紧凑证据；完整对比表在事故关闭后由 Archive 回看。
+            只展示进入人工审批前的紧凑证据；完整对比表在事故关闭后由档案页回看。
           </p>
         </div>
         {decision && (
@@ -28,7 +28,7 @@ export function PreviewDecisionCard({ decision }: { decision: PreviewDecisionSum
                 : 'border-amber-400/30 bg-amber-400/10 text-amber-200',
             )}
           >
-            {comparable ? 'COMPARABLE' : 'NOT COMPARABLE'}
+            {comparable ? '可对比' : '不可对比'}
           </span>
         )}
       </div>

@@ -21,6 +21,13 @@ type SnapshotState = {
   loading: boolean;
 };
 
+type DemoLink = {
+  label: string;
+  description: string;
+  href: string;
+  emphasis?: 'primary' | 'secondary';
+};
+
 const activeStages: WorkflowStage[] = [
   'starting',
   'awaiting_alert',
@@ -47,11 +54,18 @@ const stageCopy: Partial<Record<WorkflowStage, string>> = {
   start_failed: '场景启动失败，可重试',
 };
 
-const demoLinks = [
+const demoLinks: DemoLink[] = [
   {
     label: '监控看板',
-    description: '确认连接池 4/4、等待队列与查询错误率',
-    href: 'https://teams.yueming.xin/#plugin-route:monitor-panel/monitor',
+    description: '主看板：确认连接池 4/4、等待队列与查询错误率',
+    href: 'https://teams.yueming.xin/grafana/d/opskeeper-pgpool-live/?orgId=1&from=now-15m&to=now&refresh=5s',
+    emphasis: 'primary',
+  },
+  {
+    label: 'Manager 状态',
+    description: '次看板：查看 Manager 健康、HTTP 延迟与内部资源',
+    href: 'https://teams.yueming.xin/grafana/d/opskeeper-manager-internals/opskeeper-manager-internals?orgId=1&from=now-1h&to=now&refresh=30s',
+    emphasis: 'secondary',
   },
   {
     label: 'Element 房间',
@@ -64,7 +78,7 @@ const demoLinks = [
     href: 'https://teams.yueming.xin/#plugin-route:opskeeper-teamharness/home',
   },
   {
-    label: '事故 Archive',
+    label: '事故档案',
     description: '关闭后回看完整证据链与 A/B 对比表',
     href: 'https://teams.yueming.xin/#plugin-route:opskeeper-teamharness/archive',
   },
@@ -73,7 +87,7 @@ const demoLinks = [
     description: '打开 preview-pg 深链核对完整指标',
     href: 'https://opskeeper.yueming.xin/preview/',
   },
-] as const;
+];
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
@@ -221,7 +235,7 @@ export default function LiveIncidentPage() {
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-2xl">
             <p className="font-mono text-xs uppercase tracking-wider text-accent-300">
-              Final Demo · PostgreSQL pool exhaustion
+              决赛演示 · PostgreSQL 连接池耗尽
             </p>
             <h1 className="mt-3 text-balance text-3xl font-semibold tracking-tight text-white sm:text-4xl">
               业务体感与事故闭环控制台
@@ -333,7 +347,14 @@ export default function LiveIncidentPage() {
               href={link.href}
               target="_blank"
               rel="noreferrer noopener"
-              className="group rounded-xl border border-white/10 bg-white/[0.03] p-5 transition-colors hover:border-accent-500/40 hover:bg-white/[0.05]"
+              className={cn(
+                'group rounded-xl border p-5 transition-colors',
+                link.emphasis === 'primary'
+                  ? 'border-accent-500/50 bg-accent-500/10 hover:border-accent-500/70 hover:bg-accent-500/15'
+                  : link.emphasis === 'secondary'
+                    ? 'border-white/20 bg-white/[0.05] hover:border-white/30 hover:bg-white/[0.07]'
+                    : 'border-white/10 bg-white/[0.03] hover:border-accent-500/40 hover:bg-white/[0.05]',
+              )}
             >
               <p className="text-base font-semibold text-white">{link.label}</p>
               <p className="mt-2 text-sm text-ink-300">{link.description}</p>

@@ -29,7 +29,7 @@ export function StageRail({ status }: { status?: WorkflowStage }) {
           </p>
         </div>
         <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 font-mono text-xs text-ink-200">
-          {status ?? 'not_started'}
+          {status ?? '未开始'}
         </span>
       </div>
 
