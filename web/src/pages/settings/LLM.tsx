@@ -17,6 +17,7 @@ import { Button, Card, Chip } from '@/components/ui';
 import { ProviderIcon } from '@/components/icons/Provider';
 import { cn } from '@/lib/cn';
 import { useI18n } from '@/i18n/locale';
+import { usePermissions } from '@/store/me';
 
 type LLMProviderID = 'openai' | 'anthropic' | 'zhipu' | 'gemini' | 'deepseek' | 'kimi' | 'custom';
 
@@ -208,6 +209,7 @@ export default function SettingsLLM() {
 
 function LLMProviderCard({ meta }: { meta: LLMProviderMeta }) {
   const { tr } = useI18n();
+  const { isAdmin } = usePermissions();
   const [server, setServer] = useState<LLMProviderForm>(emptyLLMForm);
   const [draft, setDraft] = useState<LLMProviderForm>(emptyLLMForm);
   const [keyConfigured, setKeyConfigured] = useState(false);
@@ -358,6 +360,7 @@ function LLMProviderCard({ meta }: { meta: LLMProviderMeta }) {
               sensitive
               value={draft.api_key}
               onChange={(v) => update('api_key', v)}
+              disabled={!isAdmin}
               placeholder={keyConfigured ? tr('输入新 Key 以轮换…', 'Enter a new key to rotate…') : 'sk-... / tvly-... / glsa-...'}
             />
             {meta.custom && (
@@ -366,6 +369,7 @@ function LLMProviderCard({ meta }: { meta: LLMProviderMeta }) {
                 hint={tr('你的 OpenAI 兼容端点', 'Your OpenAI-compatible endpoint')}
                 value={draft.base_url}
                 onChange={(v) => update('base_url', v)}
+                disabled={!isAdmin}
                 placeholder={tr(meta.baseURLPlaceholderZh, meta.baseURLPlaceholderEn)}
               />
             )}
@@ -385,6 +389,7 @@ function LLMProviderCard({ meta }: { meta: LLMProviderMeta }) {
                   hint={tr('留空 = 用厂商官方端点；仅在走代理 / 网关时填', 'Leave empty for the vendor endpoint; set only when routing through a proxy / gateway')}
                   value={draft.base_url}
                   onChange={(v) => update('base_url', v)}
+                  disabled={!isAdmin}
                   placeholder={tr(meta.baseURLPlaceholderZh, meta.baseURLPlaceholderEn)}
                 />
               </div>
@@ -413,7 +418,7 @@ function LLMProviderCard({ meta }: { meta: LLMProviderMeta }) {
                         </span>
                       )}
                       <span className="ml-auto flex items-center gap-1">
-                        {!isDefault && (
+                        {isAdmin && !isDefault && (
                           <button
                             type="button"
                             onClick={() => setDefault(m)}
@@ -422,21 +427,21 @@ function LLMProviderCard({ meta }: { meta: LLMProviderMeta }) {
                             {tr('设为默认', 'Set default')}
                           </button>
                         )}
-                        <button
+                        {isAdmin && <button
                           type="button"
                           onClick={() => removeModel(m)}
                           aria-label={tr(`移除 ${m}`, `Remove ${m}`)}
                           className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-red-300"
                         >
                           <Trash2 size={11} />
-                        </button>
+                        </button>}
                       </span>
                     </li>
                   );
                 })}
               </ul>
             )}
-            <div className="mt-2 flex items-center gap-2">
+            {isAdmin && <div className="mt-2 flex items-center gap-2">
               <input
                 type="text"
                 value={newModel}
@@ -459,16 +464,16 @@ function LLMProviderCard({ meta }: { meta: LLMProviderMeta }) {
                 <Plus size={12} />
                 {tr('添加', 'Add')}
               </button>
-            </div>
+            </div>}
           </div>
         </div>
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button onClick={submit} disabled={!dirty || saving} variant="subtle">
+        {isAdmin && <Button onClick={submit} disabled={!dirty || saving} variant="subtle">
           {savedOk && !dirty ? <Check size={14} /> : <Save size={14} />}
           <span>{saving ? tr('保存中…', 'Saving…') : savedOk && !dirty ? tr('已保存', 'Saved') : tr('保存', 'Save')}</span>
-        </Button>
+        </Button>}
         <span className="text-xs text-zinc-500">
           {dirty
             ? tr('有未保存修改', 'Unsaved changes')
@@ -491,6 +496,7 @@ function FieldRow({
   onChange,
   placeholder,
   sensitive,
+  disabled,
 }: {
   label: string;
   hint?: string;
@@ -498,6 +504,7 @@ function FieldRow({
   onChange(v: string): void;
   placeholder?: string;
   sensitive?: boolean;
+  disabled?: boolean;
 }) {
   const inputType = sensitive ? 'password' : 'text';
   return (
@@ -516,9 +523,11 @@ function FieldRow({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
+          disabled={disabled}
           className={cn(
             'w-full rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none',
             sensitive && 'pr-9',
+            disabled && 'cursor-not-allowed opacity-70',
           )}
           autoComplete="off"
         />

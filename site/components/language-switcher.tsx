@@ -14,10 +14,28 @@ function stripLocale(pathname: string): string {
   return pathname;
 }
 
+function isLiveIncidentConsole(route: string): boolean {
+  return route === '/live-incident' || route === '/zh/live-incident' || route === '/en/live-incident';
+}
+
+function liveIncidentTarget(route: string) {
+  return route === '/en/live-incident'
+    ? '/live-incident'
+    : '/en/live-incident';
+}
+
 export function LanguageSwitcher({ className }: { className?: string }) {
   const pathname = usePathname() || '/';
-  const isZh = pathname.startsWith('/zh');
-  const target = isZh ? stripLocale(pathname) : `/zh${stripLocale(pathname)}`;
+  const route = pathname;
+  const liveConsole = isLiveIncidentConsole(route);
+  const isZh = liveConsole
+    ? route !== '/en/live-incident'
+    : route === '/zh' || route.startsWith('/zh/');
+  const target = liveConsole
+    ? liveIncidentTarget(route)
+    : isZh
+      ? stripLocale(route)
+      : `/zh${stripLocale(route)}`;
   const label = isZh ? 'EN' : '中文';
 
   return (
