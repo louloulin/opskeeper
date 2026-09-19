@@ -68,6 +68,20 @@ func TestMatrixWorkflowPublisherSignsAndSendsAuthorityEvent(t *testing.T) {
 	if workflow["runId"] != "100" || workflow["authorityStage"] != "awaiting_approval" {
 		t.Fatalf("workflow = %+v", workflow)
 	}
+	if workflow["title"] != "OpsKeeper 事故恢复 100" || workflow["status"] != "in_progress" {
+		t.Fatalf("workflow display fields = %+v", workflow)
+	}
+	rawSteps := workflow["steps"].([]any)
+	if len(rawSteps) != 4 {
+		t.Fatalf("workflow steps = %+v", rawSteps)
+	}
+	steps := make([]map[string]any, 0, len(rawSteps))
+	for _, rawStep := range rawSteps {
+		steps = append(steps, rawStep.(map[string]any))
+	}
+	if steps[0]["status"] != "completed" || steps[1]["status"] != "in_progress" {
+		t.Fatalf("workflow steps = %+v", steps)
+	}
 	utcTime := authority["time_utc"].(string)
 	beijingTime := authority["time_bjt"].(string)
 	if !strings.HasSuffix(utcTime, "Z") || !strings.HasSuffix(beijingTime, "+08:00") {
