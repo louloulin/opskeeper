@@ -28,13 +28,14 @@ import (
 )
 
 const (
-	manifestSchemaVersion = "v1"
-	poolStateRunning      = "running"
-	poolStateRecovered    = "recovered"
-	poolStateExpired      = "expired"
-	poolStateStale        = "stale"
-	maxRequestBodyBytes   = 16 << 10
-	businessQueryTimeout  = 2 * time.Second
+	manifestSchemaVersion    = "v1"
+	poolStateRunning         = "running"
+	poolStateRecovered       = "recovered"
+	poolStateExpired         = "expired"
+	poolStateStale           = "stale"
+	maxRequestBodyBytes      = 16 << 10
+	businessQueryTimeout     = 2 * time.Second
+	connectionReleaseTimeout = 3 * time.Second
 )
 
 var identifierPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
@@ -70,7 +71,7 @@ type PoolManifest struct {
 
 type PoolConnection interface {
 	BackendPID() int
-	Release() error
+	Release(ctx context.Context) error
 }
 
 type PoolRuntime interface {
@@ -429,7 +430,7 @@ func (c *Controller) Shutdown() error {
 func (c *Controller) closePoolLocked(pool *ownedPool) error {
 	var combined error
 	for _, connection := range pool.connections {
-		if err := connection.Release(); err != nil {
+		if err := connection.Release(context.Background()); err != nil {
 			combined = errors.Join(combined, err)
 		}
 	}
@@ -588,18 +589,18 @@ func (r *postgresRuntime) Saturate(ctx context.Context, capacity int) ([]PoolCon
 	for index := 0; index < capacity; index++ {
 		conn, err := r.db.Conn(ctx)
 		if err != nil {
-			releaseConnections(connections)
+			_ = releaseConnections(context.Background(), connections)
 			return nil, fmt.Errorf("acquire connection %d: %w", index, err)
 		}
 		if _, err := conn.ExecContext(ctx, "BEGIN"); err != nil {
 			_ = conn.Close()
-			releaseConnections(connections)
+			_ = releaseConnections(context.Background(), connections)
 			return nil, fmt.Errorf("begin held transaction %d: %w", index, err)
 		}
 		var backendPID int
 		if err := conn.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&backendPID); err != nil {
 			_ = conn.Close()
-			releaseConnections(connections)
+			_ = releaseConnections(context.Background(), connections)
 			return nil, fmt.Errorf("inspect held connection %d: %w", index, err)
 		}
 		connections = append(connections, &postgresConnection{conn: conn, backendPID: backendPID})
@@ -667,7 +668,9 @@ func (r *postgresRuntime) BusinessSnapshot(ctx context.Context, section Business
 }
 
 func (r *postgresRuntime) ResizeAndRecycle(ctx context.Context, connections []PoolConnection, capacity int) error {
-	releaseConnections(connections)
+	if err := releaseConnections(ctx, connections); err != nil {
+		return err
+	}
 	r.db.SetMaxOpenConns(capacity)
 	r.db.SetMaxIdleConns(capacity)
 	return r.db.PingContext(ctx)
@@ -675,10 +678,14 @@ func (r *postgresRuntime) ResizeAndRecycle(ctx context.Context, connections []Po
 
 func (r *postgresRuntime) Close() error { return r.db.Close() }
 
-func releaseConnections(connections []PoolConnection) {
+func releaseConnections(ctx context.Context, connections []PoolConnection) error {
+	var combined error
 	for _, connection := range connections {
-		_ = connection.Release()
+		if err := connection.Release(ctx); err != nil {
+			combined = errors.Join(combined, err)
+		}
 	}
+	return combined
 }
 
 type postgresConnection struct {
@@ -687,8 +694,14 @@ type postgresConnection struct {
 }
 
 func (c *postgresConnection) BackendPID() int { return c.backendPID }
-func (c *postgresConnection) Release() error {
-	if _, err := c.conn.ExecContext(context.Background(), "ROLLBACK"); err != nil {
+func (c *postgresConnection) Release(ctx context.Context) error {
+	releaseBase := context.Background()
+	if ctx != nil && ctx.Err() == nil {
+		releaseBase = ctx
+	}
+	releaseCtx, cancel := context.WithTimeout(releaseBase, connectionReleaseTimeout)
+	defer cancel()
+	if _, err := c.conn.ExecContext(releaseCtx, "ROLLBACK"); err != nil {
 		_ = c.conn.Close()
 		return fmt.Errorf("rollback owned transaction: %w", err)
 	}

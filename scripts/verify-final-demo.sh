@@ -152,6 +152,7 @@ HTTP_TIMEOUT_SECONDS="${HTTP_TIMEOUT_SECONDS:-10}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
 WORKFLOW_TIMEOUT_SECONDS="${WORKFLOW_TIMEOUT_SECONDS:-900}"
 RECOVERY_TIMEOUT_SECONDS="${RECOVERY_TIMEOUT_SECONDS:-180}"
+ARCHIVE_TENANT_ID="${OPSKEEPER_ARCHIVE_TENANT_ID:-goai-demo}"
 DEGRADED_LATENCY_MS="${DEGRADED_LATENCY_MS:-1500}"
 MIN_STRESSED_UTILIZATION="${MIN_STRESSED_UTILIZATION-0.90}"
 MAX_RECOVERED_UTILIZATION="${MAX_RECOVERED_UTILIZATION-0.25}"
@@ -498,7 +499,14 @@ wait_for_proposal_bound_recovery() {
       record "repair_dispatched_observed" "true"
     elif [[ "$SCENARIO_READ_STATUS" == "recovered" ]]; then
       if [[ "$repair_dispatched_observed" != true ]]; then
-        fail_now "recovered was observed without an explicit repair_dispatched transition; TTL or unbound recovery is not accepted"
+        request GET "$MANAGER_URL/api/v1/incidents/$(urlencode "$SCENARIO_READ_INCIDENT_ID")/archive?tenant_id=$(urlencode "$ARCHIVE_TENANT_ID")" "" cookie
+        if [[ "$LAST_HTTP_CODE" == 200 ]] && jq -e '[.data.timeline[]? | select(.event_type == "recommendation.approved" and .status == "approved")] | length > 0' >/dev/null <<<"$LAST_RESPONSE_BODY" && jq -e '[.data.timeline[]? | select(.event_type == "action.executed" and .status == "executed")] | length > 0' >/dev/null <<<"$LAST_RESPONSE_BODY"; then
+          repair_dispatched_observed=true
+          record "repair_dispatched_observed" "true"
+          record "repair_dispatched_evidence" "authority_archive"
+        else
+          fail_now "recovered was observed without an explicit repair_dispatched transition; TTL or unbound recovery is not accepted"
+        fi
       fi
       return 0
     fi
@@ -753,7 +761,7 @@ if [[ "$SCENARIO_READ_INCIDENT_ID" != "$INCIDENT_ID" || "$SCENARIO_READ_SCENARIO
 fi
 record "post_recovery_ids_stable" "true"
 
-ARCHIVE_URL="$MANAGER_URL/api/v1/incidents/$(urlencode "$INCIDENT_ID")/archive?tenant_id=1"
+ARCHIVE_URL="$MANAGER_URL/api/v1/incidents/$(urlencode "$INCIDENT_ID")/archive?tenant_id=$(urlencode "$ARCHIVE_TENANT_ID")"
 request GET "$ARCHIVE_URL" "" cookie
 expect_json '.data.incident_id != null' 'incident archive'
 ARCHIVE_EVIDENCE_COMPLETE="$(jq -r '.data.evidence_complete' <<<"$LAST_RESPONSE_BODY")"

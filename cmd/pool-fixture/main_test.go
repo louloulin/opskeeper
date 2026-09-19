@@ -133,7 +133,7 @@ func TestAggregateMetricsExposeNewManifestWithoutRestart(t *testing.T) {
 }
 
 func (c *fakeConnection) BackendPID() int { return c.backendPID }
-func (c *fakeConnection) Release() error {
+func (c *fakeConnection) Release(context.Context) error {
 	c.released = true
 	return c.releaseErr
 }
@@ -179,7 +179,7 @@ func (r *fakeRuntime) Probe(_ context.Context) (ProbeRecord, error) {
 func (r *fakeRuntime) ResizeAndRecycle(_ context.Context, connections []PoolConnection, capacity int) error {
 	r.resizedTo = capacity
 	for _, connection := range connections {
-		if err := connection.Release(); err != nil {
+		if err := connection.Release(context.Background()); err != nil {
 			return err
 		}
 	}
@@ -279,7 +279,9 @@ func TestReleaseConnectionsContinuesAfterStaleConnection(t *testing.T) {
 		&fakeConnection{},
 	}
 
-	releaseConnections(connections)
+	if err := releaseConnections(context.Background(), connections); err == nil {
+		t.Fatal("expected stale connection release error")
+	}
 
 	for index, connection := range connections {
 		fake, ok := connection.(*fakeConnection)

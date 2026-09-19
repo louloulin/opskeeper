@@ -29,6 +29,7 @@ const (
 	ScenarioTarget                 = "pg:pool-fixture"
 	maxFixtureBytes                = 1 << 20
 	requestTimeout                 = 5 * time.Second
+	recoveryRequestTimeout         = 20 * time.Second
 	businessTimeout                = 3 * time.Second
 	finalDemoInitialPoolCapacity   = 4
 	finalDemoRecoveredPoolCapacity = 8
@@ -386,7 +387,7 @@ func (u *Usecase) orchestrateDiagnosisAndPreview(
 		executionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		err := u.previewExecutor.Execute(executionCtx, PreviewExecutionInput{
 			RunID:             previewRunID,
-			TenantID:          strconv.FormatUint(tenantID, 10),
+			TenantID:          u.primaryPreviewTenantID(tenantID),
 			IncidentID:        strconv.FormatUint(run.IncidentID, 10),
 			ScenarioID:        run.ScenarioID,
 			IdempotencyKey:    run.IdempotencyKey,
@@ -507,7 +508,14 @@ func (u *Usecase) Approve(
 	if run.TenantID != tenantID || run.ScenarioID != ScenarioID || run.IncidentID != incidentID {
 		return nil, errs.ErrNotFound
 	}
-	if run.Status != demomodel.ScenarioStatusAwaitingApproval {
+	if run.Status == demomodel.ScenarioStatusRecovered {
+		status := statusFromRun(run)
+		status.PreviewDecision = u.previewDecision(ctx, tenantID, run)
+		return status, nil
+	}
+	if run.Status != demomodel.ScenarioStatusAwaitingApproval &&
+		run.Status != demomodel.ScenarioStatusRepairDispatched &&
+		run.Status != demomodel.ScenarioStatusVerifying {
 		return nil, errs.ErrConflict
 	}
 	if !u.clock.Now().Before(run.ExpiresAt) {
@@ -518,35 +526,45 @@ func (u *Usecase) Approve(
 	if decision == nil || !decision.EligibleForHITL || decision.CandidateA == "" {
 		return nil, errs.ErrConflict
 	}
-	if err := u.appendArchiveEvent(
-		ctx, run, incidentcontrol.EventApproved, "approval", "human", approverID,
-		"approved", "opskeeper://repair-preview/"+run.IdempotencyKey+"/"+decision.CandidateA,
-		run.TargetFingerprint+":"+decision.CandidateA, false,
-	); err != nil {
-		return nil, err
+	if run.Status == demomodel.ScenarioStatusAwaitingApproval {
+		if err := u.appendArchiveEvent(
+			ctx, run, incidentcontrol.EventApproved, "approval", "human", approverID,
+			"approved", "opskeeper://repair-preview/"+run.IdempotencyKey+"/"+decision.CandidateA,
+			run.TargetFingerprint+":"+decision.CandidateA, false,
+		); err != nil {
+			return nil, err
+		}
+		if err := u.advanceLoadedWorkflow(ctx, run, demomodel.ScenarioStatusRepairDispatched, decision); err != nil {
+			return nil, err
+		}
 	}
-	if err := u.advanceLoadedWorkflow(ctx, run, demomodel.ScenarioStatusRepairDispatched, decision); err != nil {
-		return nil, err
-	}
-	if err := u.fixtures.Recover(ctx, run.PoolManifestID, "Human approved "+decision.CandidateA); err != nil {
-		return nil, err
-	}
-	if err := u.appendArchiveEvent(
-		ctx, run, incidentcontrol.EventAction, "recovery", "agent", "opskeeper-repairer",
-		"executed", "opskeeper://pool-fixtures/"+run.PoolManifestID+"/recovery",
-		run.TargetFingerprint+":"+decision.CandidateA, false,
-	); err != nil {
-		return nil, err
-	}
-	if err := u.appendArchiveEvent(
-		ctx, run, incidentcontrol.EventRecovery, "recovery", "agent", "opskeeper-verifier",
-		"success", "opskeeper://pool-fixtures/"+run.PoolManifestID+"/metrics",
-		run.TargetFingerprint+":"+decision.CandidateA, true,
-	); err != nil {
-		return nil, err
-	}
-	if err := u.advanceLoadedWorkflow(ctx, run, demomodel.ScenarioStatusVerifying, decision); err != nil {
-		return nil, err
+	if run.Status == demomodel.ScenarioStatusRepairDispatched {
+		fixtureStatus, err := u.fixtures.Status(ctx, run.PoolManifestID)
+		if err != nil {
+			return nil, err
+		}
+		if fixtureStatus.State != "recovered" {
+			if err := u.fixtures.Recover(ctx, run.PoolManifestID, "Human approved "+decision.CandidateA); err != nil {
+				return nil, err
+			}
+		}
+		if err := u.appendArchiveEvent(
+			ctx, run, incidentcontrol.EventAction, "recovery", "agent", "opskeeper-repairer",
+			"executed", "opskeeper://pool-fixtures/"+run.PoolManifestID+"/recovery",
+			run.TargetFingerprint+":"+decision.CandidateA, false,
+		); err != nil {
+			return nil, err
+		}
+		if err := u.appendArchiveEvent(
+			ctx, run, incidentcontrol.EventRecovery, "recovery", "agent", "opskeeper-verifier",
+			"success", "opskeeper://pool-fixtures/"+run.PoolManifestID+"/metrics",
+			run.TargetFingerprint+":"+decision.CandidateA, true,
+		); err != nil {
+			return nil, err
+		}
+		if err := u.advanceLoadedWorkflow(ctx, run, demomodel.ScenarioStatusVerifying, decision); err != nil {
+			return nil, err
+		}
 	}
 	for _, section := range []string{"orders", "inventory", "audit"} {
 		snapshot, snapshotErr := u.fixtures.BusinessSnapshot(ctx, section)
@@ -593,17 +611,38 @@ func (u *Usecase) previewDecision(ctx context.Context, tenantID uint64, scenario
 	if u.previews == nil || scenario.IncidentID == 0 {
 		return nil
 	}
-	runs, err := u.previews.ListByIncident(
-		ctx, strconv.FormatUint(tenantID, 10), strconv.FormatUint(scenario.IncidentID, 10), 20,
-	)
-	if err != nil || len(runs) == 0 {
+	var runs []repairpreview.Run
+	queriedTenantID := ""
+	for _, candidateTenantID := range u.previewTenantIDs(tenantID) {
+		queriedRuns, err := u.previews.ListByIncident(
+			ctx, candidateTenantID, strconv.FormatUint(scenario.IncidentID, 10), 20,
+		)
+		if err != nil || len(queriedRuns) == 0 {
+			continue
+		}
+		boundRunExists := false
+		for _, queriedRun := range queriedRuns {
+			if queriedRun.TenantID == candidateTenantID &&
+				queriedRun.IncidentID == strconv.FormatUint(scenario.IncidentID, 10) {
+				boundRunExists = true
+				break
+			}
+		}
+		if !boundRunExists {
+			continue
+		}
+		runs = queriedRuns
+		queriedTenantID = candidateTenantID
+		break
+	}
+	if queriedTenantID == "" {
 		return nil
 	}
 	sort.SliceStable(runs, func(left, right int) bool {
 		return runs[left].UpdatedAt.After(runs[right].UpdatedAt)
 	})
 	selected := runs[0]
-	if selected.TenantID != strconv.FormatUint(tenantID, 10) ||
+	if selected.TenantID != queriedTenantID ||
 		selected.IncidentID != strconv.FormatUint(scenario.IncidentID, 10) {
 		return nil
 	}
@@ -633,7 +672,9 @@ func (u *Usecase) previewDecision(ctx context.Context, tenantID uint64, scenario
 		selected.WorkloadFingerprint == u.expectedReplayProfile
 	gateStageReady := scenario.Status == demomodel.ScenarioStatusDiagnosisSent ||
 		scenario.Status == demomodel.ScenarioStatusPreviewReady
-	eligibilityAlreadyGranted := scenario.Status == demomodel.ScenarioStatusAwaitingApproval
+	eligibilityAlreadyGranted := scenario.Status == demomodel.ScenarioStatusAwaitingApproval ||
+		scenario.Status == demomodel.ScenarioStatusRepairDispatched ||
+		scenario.Status == demomodel.ScenarioStatusVerifying
 	summary := &PreviewDecisionSummary{
 		ReplayProfileID: selected.WorkloadFingerprint,
 		BoundaryText:    selected.IsolationBoundary,
@@ -655,7 +696,7 @@ func (u *Usecase) previewDecision(ctx context.Context, tenantID uint64, scenario
 		eligible := passing
 		if gateStageReady {
 			queried, err := u.previews.FindEligible(
-				ctx, strconv.FormatUint(tenantID, 10), strconv.FormatUint(scenario.IncidentID, 10),
+				ctx, selected.TenantID, strconv.FormatUint(scenario.IncidentID, 10),
 				selected.ID, passing.CandidateID, passing.Action,
 			)
 			eligible = queried
@@ -779,6 +820,18 @@ func (u *Usecase) previewEvent(
 		ActorType: alertmodel.ActorTypeSystem, SnapshotJSON: string(snapshot),
 		Reason: "Preview evidence creates HITL eligibility only", OccurredAt: u.clock.Now(),
 	}
+}
+
+func (u *Usecase) previewTenantIDs(tenantID uint64) []string {
+	numericTenantID := strconv.FormatUint(tenantID, 10)
+	if u.archiveTenantID == "" || u.archiveTenantID == numericTenantID {
+		return []string{numericTenantID}
+	}
+	return []string{u.archiveTenantID, numericTenantID}
+}
+
+func (u *Usecase) primaryPreviewTenantID(tenantID uint64) string {
+	return u.previewTenantIDs(tenantID)[0]
 }
 
 func (u *Usecase) AdvanceWorkflow(
@@ -953,7 +1006,7 @@ type PoolFixtureClient struct {
 func NewPoolFixtureClient(endpoint, token string) *PoolFixtureClient {
 	return &PoolFixtureClient{
 		endpoint: strings.TrimRight(endpoint, "/"), token: token,
-		client: &http.Client{Timeout: requestTimeout},
+		client: &http.Client{},
 	}
 }
 
@@ -989,14 +1042,14 @@ func (c *PoolFixtureClient) Recover(ctx context.Context, manifestID, reason stri
 		map[string]any{"timeout_milliseconds": 250}, &probeOutput, requestTimeout,
 	); err != nil {
 		var fixtureErr *FixtureError
-		if !errors.As(err, &fixtureErr) || fixtureErr.Code != "pool_exhausted" {
+		if !errors.As(err, &fixtureErr) || (fixtureErr.Code != "pool_exhausted" && probeOutput.ErrorCode != "pool_exhausted") {
 			return err
 		}
 	}
 	var recoveryOutput json.RawMessage
 	return c.do(
 		ctx, http.MethodPost, "/v1/pool-fixtures/"+manifestID+"/recover",
-		map[string]any{"reason": reason}, &recoveryOutput, requestTimeout,
+		map[string]any{"reason": reason}, &recoveryOutput, recoveryRequestTimeout,
 	)
 }
 
@@ -1047,6 +1100,9 @@ func (c *PoolFixtureClient) do(ctx context.Context, method, path string, input a
 		return &FixtureError{HTTPStatus: http.StatusBadGateway}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		if len(envelope.Data) > 0 {
+			_ = json.Unmarshal(envelope.Data, output)
+		}
 		return &FixtureError{HTTPStatus: response.StatusCode, Code: envelope.ErrorCode}
 	}
 	if len(envelope.Data) == 0 {

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.70 — 2026-09-19
+
+- Retry transient OpsKeeper 5xx responses after a real Matrix approval, keeping recovery deterministic when model quota is unavailable.
+
+## 1.0.69 — 2026-09-19
+
+- Bind final-demo approvals to the current Matrix message so accumulated room history cannot redirect or suppress a new incident approval.
+- Enable manager-gate INFO readback for consumed approvals.
+
 ## 1.0.68 — 2026-09-19
 
 - Accept Matrix display-name prefixes on human approval and rejection commands.

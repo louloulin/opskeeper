@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -128,6 +129,9 @@ func (f *fakeFixtures) Recover(_ context.Context, manifestID, reason string) err
 	if manifestID == "" || reason == "" {
 		return errs.ErrInvalid
 	}
+	if f.recoverErr != nil {
+		return f.recoverErr
+	}
 	return nil
 }
 
@@ -184,6 +188,8 @@ type fakeFixtures struct {
 	starts       int
 	business     int
 	fails        bool
+	recoverErr   error
+	state        string
 	order        *[]string
 	lastStart    FixtureStartInput
 	recoverCalls int
@@ -261,6 +267,8 @@ func (f *fakePreviewExecutor) Execute(_ context.Context, input PreviewExecutionI
 	rejected.RunID = input.RunID
 	run := previewRun(baseline, passing, rejected)
 	run.ID = input.RunID
+	run.TenantID = input.TenantID
+	run.IncidentID = input.IncidentID
 	run.ScenarioID = input.ScenarioID
 	run.IdempotencyKey = input.IdempotencyKey
 	run.TargetFingerprint = input.TargetFingerprint
@@ -271,6 +279,32 @@ func (f *fakePreviewExecutor) Execute(_ context.Context, input PreviewExecutionI
 	}.Fingerprint()
 	f.previews.runs = append(f.previews.runs, run)
 	return nil
+}
+
+func TestPreviewExecutionUsesArchiveTenant(t *testing.T) {
+	previews := &fakePreviewRepository{}
+	usecase, input, incidents, scenarios := scenarioPartsWithPreview(t, previews, "sha256:workload-v1")
+	run, err := scenarios.GetByIdempotencyKey(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Status = demomodel.ScenarioStatusAlertCorrelated
+	incidents.events = append(incidents.events, &alertmodel.Event{
+		IncidentID: run.IncidentID, EventType: alertmodel.EventTypeAIInitialDiagnosis,
+	})
+	executor := &fakePreviewExecutor{previews: previews}
+	usecase.SetPreviewExecutor(executor)
+	usecase.SetArchiveWriter(&fakeArchiveWriter{}, "goai-demo")
+
+	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusAwaitingApproval ||
+		executor.lastInput.TenantID != "goai-demo" ||
+		previews.runs[len(previews.runs)-1].TenantID != "goai-demo" {
+		t.Fatalf("status = %+v input = %+v", status, executor.lastInput)
+	}
 }
 
 func (f *fakeFixtures) Start(_ context.Context, input FixtureStartInput) (FixtureStartResult, error) {
@@ -286,7 +320,11 @@ func (f *fakeFixtures) Start(_ context.Context, input FixtureStartInput) (Fixtur
 }
 
 func (f *fakeFixtures) Status(context.Context, string) (FixtureStatus, error) {
-	return FixtureStatus{State: "running"}, nil
+	state := f.state
+	if state == "" {
+		state = "running"
+	}
+	return FixtureStatus{State: state}, nil
 }
 
 func (f *fakeFixtures) BusinessSnapshot(_ context.Context, _ string) (json.RawMessage, error) {
@@ -426,6 +464,33 @@ func TestBusinessSnapshotReturnsPoolExhausted(t *testing.T) {
 	var fixtureErr *FixtureError
 	if !errors.As(err, &fixtureErr) || fixtureErr.Code != "pool_exhausted" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPoolFixtureClientContinuesAfterExpectedPoolExhaustionProbe(t *testing.T) {
+	var recoverCalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/pool-fixtures/manifest/probe":
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = writer.Write([]byte(`{"code":503,"message":"pool probe failed","data":{"status":"failed","error_code":"pool_exhausted"}}`))
+		case "/v1/pool-fixtures/manifest/recover":
+			recoverCalled = true
+			writer.WriteHeader(http.StatusOK)
+			_, _ = writer.Write([]byte(`{"code":200,"message":"success","data":{"status":"recovered"}}`))
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewPoolFixtureClient(server.URL, "runtime-token")
+	if err := client.Recover(context.Background(), "manifest", "approved repair"); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	if !recoverCalled {
+		t.Fatal("expected recover request after expected pool-exhaustion probe")
 	}
 }
 
@@ -585,6 +650,108 @@ func TestApproveExecutesVerifiedRecoveryAndWritesArchive(t *testing.T) {
 		t.Fatalf("archive events = %v, want %v", got, want)
 	}
 	_ = scenarios
+}
+
+func TestApproveResumesAfterPartialRecoveryFailure(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{
+		previewRun(baseline, passing),
+	}}
+	usecase, input, _, scenarios := scenarioPartsWithPreview(t, previews, "sha256:workload-v1")
+	fixtures := &fakeFixtures{}
+	usecase.fixtures = fixtures
+	archive := &fakeArchiveWriter{}
+	usecase.SetArchiveWriter(archive, "goai-demo")
+
+	if _, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey); err != nil {
+		t.Fatal(err)
+	}
+	fixtures.recoverErr = errors.New("pool fixture unavailable")
+	if _, err := usecase.Approve(context.Background(), 1, 100, "@admin:matrix-local.agentteams.io:18080"); err == nil {
+		t.Fatal("first approval unexpectedly succeeded")
+	}
+	run, err := scenarios.GetByIncident(context.Background(), 1, ScenarioID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != demomodel.ScenarioStatusRepairDispatched {
+		t.Fatalf("partial-failure status = %s, want repair_dispatched", run.Status)
+	}
+
+	fixtures.recoverErr = nil
+	status, err := usecase.Approve(context.Background(), 1, 100, "@admin:matrix-local.agentteams.io:18080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusRecovered {
+		t.Fatalf("retry status = %s, want recovered", status.Status)
+	}
+	if fixtures.recoverCalls != 2 {
+		t.Fatalf("recovery calls = %d, want failed attempt plus retry", fixtures.recoverCalls)
+	}
+	approved := 0
+	for _, event := range archive.events {
+		if event.EventType == incidentcontrol.EventApproved {
+			approved++
+		}
+	}
+	if approved != 1 {
+		t.Fatalf("approved archive events = %d, want 1", approved)
+	}
+}
+
+func TestApproveDoesNotRepeatRecoveredFixtureOperation(t *testing.T) {
+	baseline := previewCandidate("baseline", "baseline", repairpreview.DecisionPass)
+	baseline.Kind = "baseline"
+	passing := previewCandidate("candidate-a", "resize_pool", repairpreview.DecisionPass)
+	previews := &fakePreviewRepository{runs: []repairpreview.Run{
+		previewRun(baseline, passing),
+	}}
+	usecase, _, _, scenarios := scenarioPartsWithPreview(t, previews, "sha256:workload-v1")
+	fixtures := &fakeFixtures{state: "recovered", recoverErr: errors.New("fixture already recovered")}
+	usecase.fixtures = fixtures
+	archive := &fakeArchiveWriter{}
+	usecase.SetArchiveWriter(archive, "goai-demo")
+
+	run, err := scenarios.GetByIncident(context.Background(), 1, ScenarioID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scenarios.UpdateStatus(
+		context.Background(), run.ID, demomodel.ScenarioStatusRepairDispatched,
+		func(*demomodel.ScenarioRun) error { return nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := usecase.Approve(context.Background(), 1, 100, "@admin:matrix-local.agentteams.io:18080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != demomodel.ScenarioStatusRecovered {
+		t.Fatalf("status = %s, want recovered", status.Status)
+	}
+	if fixtures.recoverCalls != 0 {
+		t.Fatalf("recovery calls = %d, want 0 when fixture is already recovered", fixtures.recoverCalls)
+	}
+	eventTypes := make([]string, 0, len(archive.events))
+	for _, event := range archive.events {
+		eventTypes = append(eventTypes, event.EventType)
+	}
+	for _, required := range []string{incidentcontrol.EventAction, incidentcontrol.EventRecovery, incidentcontrol.EventClosed} {
+		found := false
+		for _, eventType := range eventTypes {
+			if eventType == required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("archive events %v lack %s", eventTypes, required)
+		}
+	}
 }
 
 func TestAppendArchiveEventUsesStableUUID(t *testing.T) {

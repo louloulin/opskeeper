@@ -22,6 +22,7 @@ HOST_OPSKEEPER_ENV="${OPSKEEPER_HOST_OPSKEEPER_ENV:-${HOST_CONFIG_DIR}/final-dem
 HOST_MANAGER_JWT="${HOST_CONFIG_DIR}/opskeeper-final-demo-e2e.jwt"
 CONTAINER_NAME="${OPSKEEPER_CONTAINER_NAME:-opskeeper}"
 CONTAINER_SCRIPT="${OPSKEEPER_CONTAINER_SCRIPT:-/src/scripts/verify-final-demo.sh}"
+HOME_URL="${OPSKEEPER_HOME_URL:-https://home.yueming.xin/live-incident}"
 # Container-internal staging directory for EVIDENCE_OUTPUT. The inner script
 # writes the JSON file here (as `nonroot`, this is always writable). After
 # `docker exec` returns, the wrapper copies the file to HOST_EVIDENCE_DIR via
@@ -117,7 +118,7 @@ docker exec -u root "$CONTAINER_NAME" chown "$CONTAINER_UID:$CONTAINER_GID" "$CO
 # could swallow newlines.
 docker exec -i \
   -e MANAGER_URL="https://opskeeper.yueming.xin" \
-  -e HOME_URL="https://home.yueming.xin" \
+  -e HOME_URL="$HOME_URL" \
   -e TEAMS_URL="https://teams.yueming.xin" \
   -e ROOMS_URL="https://rooms.yueming.xin" \
   -e OPSKEEPER_URL="https://opskeeper.yueming.xin" \

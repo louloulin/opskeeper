@@ -9,6 +9,7 @@ tmp/
 bin/
 dist/stage/
 dist/out/
+dist/manual-build/
 
 web/node_modules/
 web/dist/

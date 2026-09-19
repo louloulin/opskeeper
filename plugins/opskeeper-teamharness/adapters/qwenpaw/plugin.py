@@ -75,10 +75,11 @@ def manager_prompt(_agent: Any) -> str:
 
 _SANITIZER_KEYWORDS_ENV = "AGENTTEAMS_OUTPUT_SANITIZE_KEYWORDS"
 _PERMISSION_MODE_ENV = "OPSKEEPER_PERMISSION_MODE"
-_PLUGIN_VERSION = "1.0.68"
+_PLUGIN_VERSION = "1.0.70"
 _COPAW_DIAGNOSTICS_LOGGER = logging.getLogger("opskeeper-teamharness.copaw-diagnostics")
 _READ_ONLY_LOGGER = logging.getLogger("opskeeper-teamharness.readonly")
 _MANAGER_GATE_LOGGER = logging.getLogger("opskeeper-teamharness.manager-gate")
+_MANAGER_GATE_LOGGER.setLevel(logging.INFO)
 _WORKFLOW_PROJECTOR_LOGGER = logging.getLogger(
     "opskeeper-teamharness.workflow-projector"
 )
@@ -120,6 +121,7 @@ _FINAL_DEMO_INCIDENT_ID_PATTERN = re.compile(
     r"\bincident_id(?:=|:)\s*([0-9]{1,18})\b",
     re.IGNORECASE,
 )
+_MATRIX_CURRENT_MESSAGE_MARKER = "[Current message - respond to this]"
 _WORKFLOW_ROLE_PATTERN = re.compile(
     r"@?opskeeper-(alerter|investigator|reviewer|repairer|verifier|reporter)"
     r"(?::[A-Za-z0-9_.:-]+)?",
@@ -282,6 +284,18 @@ def _runtime_tenant_id() -> str:
     return _runtime_credential("OPSKEEPER_TENANT_ID") or "default"
 
 
+def _current_matrix_message(message: str) -> str:
+    if _MATRIX_CURRENT_MESSAGE_MARKER in message:
+        return message.rsplit(_MATRIX_CURRENT_MESSAGE_MARKER, 1)[-1]
+    return message
+
+
+def _final_demo_incident_id(message: str) -> str:
+    current_message = _current_matrix_message(message)
+    matches = _FINAL_DEMO_INCIDENT_ID_PATTERN.findall(current_message)
+    return matches[-1] if matches else ""
+
+
 def _dispatch_final_demo_approval(session_id: str, sender: str, message: str) -> bool:
     room_id = os.environ.get("OPSKEEPER_DEMO_MATRIX_ROOM", "").strip()
     backend = (
@@ -289,13 +303,12 @@ def _dispatch_final_demo_approval(session_id: str, sender: str, message: str) ->
         or os.environ.get("OPSKEEPER_BACKEND_URL", "").strip()
     )
     token = os.environ.get("OPSKEEPER_DEMO_API_TOKEN", "").strip()
-    incident_match = _FINAL_DEMO_INCIDENT_ID_PATTERN.search(message)
-    if not room_id or not backend or not token or not incident_match:
+    incident_id = _final_demo_incident_id(message)
+    if not room_id or not backend or not token or not incident_id:
         return False
     if session_id != f"matrix:{room_id}" or not sender:
         return False
 
-    incident_id = incident_match.group(1)
     payload = json.dumps({"approver_id": sender}).encode("utf-8")
     request = urllib.request.Request(
         f"{backend.rstrip('/')}/api/v1/demo/incidents/{incident_id}/approve",
@@ -307,25 +320,31 @@ def _dispatch_final_demo_approval(session_id: str, sender: str, message: str) ->
         },
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            response.read()
-        return True
-    except urllib.error.HTTPError as error:
-        error.read()
-        if error.code == 409:
+    retryable_statuses = {502, 503, 504}
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                response.read()
             return True
-        _MANAGER_GATE_LOGGER.warning(
-            "Final demo deterministic approval failed incident=%s http=%s",
-            incident_id,
-            error.code,
-        )
-    except Exception:
-        _MANAGER_GATE_LOGGER.warning(
-            "Final demo deterministic approval failed incident=%s",
-            incident_id,
-            exc_info=True,
-        )
+        except urllib.error.HTTPError as error:
+            error.read()
+            if error.code == 409:
+                return True
+            if error.code in retryable_statuses and attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            _MANAGER_GATE_LOGGER.warning(
+                "Final demo deterministic approval failed incident=%s http=%s",
+                incident_id,
+                error.code,
+            )
+        except Exception:
+            _MANAGER_GATE_LOGGER.warning(
+                "Final demo deterministic approval failed incident=%s",
+                incident_id,
+                exc_info=True,
+            )
+        break
     return False
 
 _TASK_RESULT_PATTERN = re.compile(
@@ -2430,6 +2449,7 @@ def _register_manager_gate_hook(api: Any) -> None:
                 return HookResult()
             session_id = _extract_session_id(ctx)
             message = _request_text(ctx.request)
+            current_message = _current_matrix_message(message)
             if not _is_message_for_agent(message, agent) and "@opskeeper-" in message.lower():
                 return HookResult(action=HookAction.SKIP_AGENT)
             consumed_results = _MANAGER_DISPATCH_GATE.consume_result_with_origins(
@@ -2487,8 +2507,8 @@ def _register_manager_gate_hook(api: Any) -> None:
                     return HookResult(action=HookAction.SKIP_AGENT)
                 return HookResult()
             sender = _request_sender(ctx.request)
-            approved = bool(_WORKFLOW_ADMIN_APPROVAL_PATTERN.search(message))
-            rejected = bool(_WORKFLOW_ADMIN_REJECTION_PATTERN.search(message))
+            approved = bool(_WORKFLOW_ADMIN_APPROVAL_PATTERN.search(current_message))
+            rejected = bool(_WORKFLOW_ADMIN_REJECTION_PATTERN.search(current_message))
             admin_sender = _is_admin_sender(sender)
             if (approved or rejected) and not admin_sender:
                 _MANAGER_GATE_LOGGER.warning(
