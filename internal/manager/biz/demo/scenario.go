@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"sort"
@@ -371,11 +372,20 @@ func (u *Usecase) orchestrateDiagnosisAndPreview(
 
 	decision := u.previewDecision(ctx, tenantID, run)
 	if decision == nil && run.Status == demomodel.ScenarioStatusDiagnosisSent && u.previewExecutor != nil {
+		previewRunID := DeterministicPreviewRunID(
+			tenantID, scenarioID, key, run.TargetFingerprint, run.IncidentID,
+		)
+		previewStartedAt := u.clock.Now()
+		slog.Info(
+			"demo repair preview execution started",
+			slog.String("run_id", previewRunID),
+			slog.Uint64("incident_id", run.IncidentID),
+			slog.String("scenario_id", scenarioID),
+			slog.String("idempotency_key", key),
+		)
 		executionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		err := u.previewExecutor.Execute(executionCtx, PreviewExecutionInput{
-			RunID: DeterministicPreviewRunID(
-				tenantID, scenarioID, key, run.TargetFingerprint, run.IncidentID,
-			),
+			RunID:             previewRunID,
 			TenantID:          strconv.FormatUint(tenantID, 10),
 			IncidentID:        strconv.FormatUint(run.IncidentID, 10),
 			ScenarioID:        run.ScenarioID,
@@ -384,6 +394,15 @@ func (u *Usecase) orchestrateDiagnosisAndPreview(
 		})
 		cancel()
 		if err != nil {
+			slog.Error(
+				"demo repair preview execution failed",
+				slog.String("run_id", previewRunID),
+				slog.Uint64("incident_id", run.IncidentID),
+				slog.String("scenario_id", scenarioID),
+				slog.String("idempotency_key", key),
+				slog.Duration("elapsed", u.clock.Now().Sub(previewStartedAt)),
+				slog.Any("error", err),
+			)
 			if u.clock.Now().After(run.ExpiresAt) {
 				return nil, u.scenarios.UpdateStatusWithEvent(
 					ctx, run.ID, demomodel.ScenarioStatusClosed, u.expiryEvent(run),
@@ -392,6 +411,14 @@ func (u *Usecase) orchestrateDiagnosisAndPreview(
 			}
 			return nil, err
 		}
+		slog.Info(
+			"demo repair preview execution finished",
+			slog.String("run_id", previewRunID),
+			slog.Uint64("incident_id", run.IncidentID),
+			slog.String("scenario_id", scenarioID),
+			slog.String("idempotency_key", key),
+			slog.Duration("elapsed", u.clock.Now().Sub(previewStartedAt)),
+		)
 		decision = u.previewDecision(ctx, tenantID, run)
 	}
 	if u.clock.Now().After(run.ExpiresAt) && decision == nil {
