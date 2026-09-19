@@ -17,7 +17,7 @@ export const PRIMARY_NAV_ZH: NavLink[] = [
   { label: '平台', href: '/zh/platform' },
   { label: '工作流', href: '/zh/workers' },
   { label: '应用场景', href: '/zh/use-cases' },
-  { label: '在线演示', href: '/zh/demo' },
+  { label: '在线演示', href: '/live-incident' },
   { label: '集成', href: '/zh/integrations' },
   { label: '文档', href: '/zh/docs' },
   { label: '开源', href: '/zh/open-source' },
