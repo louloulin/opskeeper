@@ -23,13 +23,13 @@
 
 ## 3. P1 Command Timeline and Decision Evidence
 
-- [ ] 3.1 Implement the seven-stage timeline with status, substate, owner, duration, outcome, blocking reason, and source reference.
-- [ ] 3.2 Implement the grouped evidence drawer with focus trapping, `Escape` dismissal, and keyboard-operable disclosures.
-- [ ] 3.3 Project A/B candidate comparison, controlled workload boundary, target/workload identity, and preview eligibility.
-- [ ] 3.4 Project rollback plan, verification criteria, approval record, execution identity, and audit trail.
-- [ ] 3.5 Implement the precise-approval checklist, exact approval instruction/channel, and missing-context warning.
-- [ ] 3.6 Ensure the UI cannot execute repair, bypass approval, imply granted authority, or mutate safety state.
-- [ ] 3.7 Add keyboard, focus, responsive, loading, retry, stale, empty, and failure-state tests.
+- [x] 3.1 Implement the seven-stage timeline with status, substate, owner, duration, outcome, blocking reason, and source reference.
+- [x] 3.2 Implement the grouped evidence drawer with focus trapping, `Escape` dismissal, and keyboard-operable disclosures.
+- [x] 3.3 Project A/B candidate comparison, controlled workload boundary, target/workload identity, and preview eligibility.
+- [x] 3.4 Project rollback plan, verification criteria, approval record, execution identity, and audit trail.
+- [x] 3.5 Implement the precise-approval checklist, exact approval instruction/channel, and missing-context warning.
+- [x] 3.6 Ensure the UI cannot execute repair, bypass approval, imply granted authority, or mutate safety state.
+- [x] 3.7 Add keyboard, focus, responsive, loading, retry, stale, empty, and failure-state tests.
 
 ## 4. P1.5 Shared Projection
 
