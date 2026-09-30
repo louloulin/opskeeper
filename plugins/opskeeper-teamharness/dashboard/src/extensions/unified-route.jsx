@@ -4,17 +4,14 @@ import OpskeeperArchiveRoute from './archive-route.jsx';
 import OpskeeperRuntimeRoute from './runtime-route.jsx';
 import OpskeeperInstallView from './install-view.jsx';
 import OpskeeperIntegrationRoute from './integration-route.jsx';
+import IncidentCommandRoute from './incident-command/IncidentCommandRoute.jsx';
+import DiagnosticsMenu from './incident-command/DiagnosticsMenu.jsx';
 import { opskeeperCommandThemeStyle, opskeeperPluginThemeStyle } from './plugin-theme.js';
 import { OPSKEEPER_TABS, normalizeOpskeeperTab } from './tabs.js';
-
-const OPSKEEPER_SECONDARY_DIAGNOSTICS = [
-  { id: 'diagnostics', label: '诊断' },
-  { id: 'integration', label: '链路自检' },
-  { id: 'plugins', label: '插件' },
-];
+import { opskeeperApi } from './api.js';
 
 function resolveSecondaryDiagnostics(value) {
-  return OPSKEEPER_SECONDARY_DIAGNOSTICS.some((item) => item.id === value)
+  return ['diagnostics', 'integration', 'plugins'].includes(value)
     ? value
     : 'diagnostics';
 }
@@ -53,6 +50,7 @@ export default function OpskeeperUnifiedRoute({ api, initialTab = 'incident-comm
             <button
               key={item.id}
               type="button"
+              aria-current={active ? 'page' : undefined}
               title={item.description}
               onClick={() => setTab(item.id)}
               style={{
@@ -73,38 +71,17 @@ export default function OpskeeperUnifiedRoute({ api, initialTab = 'incident-comm
         })}
       </nav>
       {tab === 'incident-command' && (
-        <section aria-label="事故诊断工具">
-          <nav style={{
-            display: 'flex',
-            gap: 6,
-            padding: '14px 24px 0',
-          }}>
-            {OPSKEEPER_SECONDARY_DIAGNOSTICS.map((item) => {
-              const active = item.id === diagnosticsView;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setDiagnosticsView(item.id)}
-                  style={{
-                    padding: '4px 10px',
-                    borderRadius: 999,
-                    fontSize: 11,
-                    fontWeight: active ? 600 : 400,
-                    border: `1px solid ${active ? 'var(--ops-surface-border)' : 'var(--border)'}`,
-                    background: active ? 'var(--ops-surface)' : 'transparent',
-                    color: 'var(--ops-surface-foreground)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {item.label}
-                </button>
-              );
-            })}
-          </nav>
-          {diagnosticsView === 'diagnostics' && <OpskeeperRoute api={api} />}
-          {diagnosticsView === 'integration' && <OpskeeperIntegrationRoute api={api} />}
-          {diagnosticsView === 'plugins' && <OpskeeperInstallView api={api} />}
+        <section aria-label="事故指挥与诊断">
+          <IncidentCommandRoute
+            api={opskeeperApi}
+            onOpenDiagnostics={setDiagnosticsView}
+          />
+          <section aria-label="事故诊断工具" style={{ padding: '14px 24px 24px', display: 'grid', gap: 10 }}>
+            <DiagnosticsMenu view={diagnosticsView} onSelect={setDiagnosticsView} />
+            {diagnosticsView === 'diagnostics' && <OpskeeperRoute api={api} />}
+            {diagnosticsView === 'integration' && <OpskeeperIntegrationRoute api={api} />}
+            {diagnosticsView === 'plugins' && <OpskeeperInstallView api={api} />}
+          </section>
         </section>
       )}
       {tab === 'evidence-approval' && <OpskeeperRoute api={api} />}
