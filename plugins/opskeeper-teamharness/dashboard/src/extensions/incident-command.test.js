@@ -298,12 +298,21 @@ test('unified route statically integrates incident command and diagnostics', asy
     resolve(dashboardRoot, 'src/extensions/unified-route.jsx'),
     'utf8',
   );
-  assert.match(unifiedSource, /<IncidentCommandRoute\s+api=\{api\}/);
+  assert.match(unifiedSource, /import \{ opskeeperApi \} from '\.\/api\.js';/);
+  assert.match(unifiedSource, /<IncidentCommandRoute\s+api=\{opskeeperApi\}/);
+  assert.match(unifiedSource, /\{diagnosticsView === 'diagnostics' && <OpskeeperRoute api=\{api\} \/>}/);
+  assert.match(unifiedSource, /\{diagnosticsView === 'integration' && <OpskeeperIntegrationRoute api=\{api\} \/>}/);
+  assert.match(unifiedSource, /\{diagnosticsView === 'plugins' && <OpskeeperInstallView api=\{api\} \/>}/);
+  assert.match(unifiedSource, /\{tab === 'evidence-approval' && <OpskeeperRoute api=\{api\} \/>}/);
+  assert.match(unifiedSource, /\{tab === 'archive-replay' && <OpskeeperArchiveRoute api=\{api\} \/>}/);
+  assert.match(unifiedSource, /\{tab === 'system-status' && <OpskeeperRuntimeRoute api=\{api\} \/>}/);
   const packageJson = JSON.parse(readFileSync(resolve(dashboardRoot, 'package.json'), 'utf8'));
   assert.match(packageJson.scripts.test, /src\/extensions\/incident-command\.test\.js/);
 
+  const hostApi = { getDashboardRegistration: () => {} };
+  assert.equal(hostApi.listIncidents, undefined);
   const markup = renderToStaticMarkup(React.createElement(OpskeeperUnifiedRoute, {
-    api: {},
+    api: hostApi,
     initialTab: 'incident-command',
   }));
   assert.match(markup, /aria-label="事故指挥与诊断"/);

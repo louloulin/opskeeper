@@ -6,6 +6,7 @@ import OpskeeperInstallView from './install-view.jsx';
 import OpskeeperIntegrationRoute from './integration-route.jsx';
 import IncidentCommandRoute from './incident-command/IncidentCommandRoute.jsx';
 import DiagnosticsMenu from './incident-command/DiagnosticsMenu.jsx';
+import { opskeeperApi } from './api.js';
 import { opskeeperCommandThemeStyle, opskeeperPluginThemeStyle } from './plugin-theme.js';
 import { OPSKEEPER_TABS, normalizeOpskeeperTab } from './tabs.js';
 
@@ -72,7 +73,7 @@ export default function OpskeeperUnifiedRoute({ api, initialTab = 'incident-comm
       {tab === 'incident-command' && (
         <section aria-label="事故指挥与诊断">
           <IncidentCommandRoute
-            api={api}
+            api={opskeeperApi}
             onOpenDiagnostics={setDiagnosticsView}
           />
           <section aria-label="事故诊断工具" style={{ padding: '14px 24px 24px', display: 'grid', gap: 10 }}>
