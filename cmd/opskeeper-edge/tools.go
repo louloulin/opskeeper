@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/edge/toolbroker"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
 	"github.com/vincent-wuhan/opskeeper/internal/skill"
@@ -13,15 +14,26 @@ import (
 
 // The node's tool invoker: what the broker dispatches to.
 //
-// A node's read-only toolset is two kinds of tool wearing one name. The
-// host_* probes are the node's own business — it can read its own kernel
-// ring buffer without asking anyone. The topology and alert queries are
-// the control plane's business: the graph and the rule table live in the
+// A node's toolset is two kinds of tool wearing one name. The host_*
+// probes are the node's own business — it can read its own kernel ring
+// buffer without asking anyone. The topology and alert queries are the
+// control plane's business: the graph and the rule table live in the
 // manager, and the only honest way to reach them is to ask. So resolution
 // is local first, then upcall, and the order is not a preference — a tool
 // the node can answer itself should not spend a tunnel round trip, and a
 // node that shadowed a control-plane tool with a local one would be a node
 // answering questions about the fleet from its own machine.
+//
+// "Local" is narrowed to reads, and that narrowing is the whole reason
+// this file has a class check in it. A mutating skill is registered in the
+// node's registry too — that is how the catalog knows to draw it — but its
+// approval authority is not the node's. The control plane's BaseTool
+// wrapper carries the reviewer that asks a human, and the dispatcher that
+// finally reaches the edge is a different tunnel method from the broker's.
+// So a mutating call goes up the tunnel, where the approval lives, and
+// comes back down the path a human already agreed to. Dispatching it from
+// here would be running the change with the one gate in the system that
+// cannot produce consent.
 //
 // This is what makes the read-only profile real. The PiG extension inside
 // the agent process holds no implementation at all; it routes. Every
@@ -47,14 +59,35 @@ type agentToolInvoker struct {
 
 // Invoke runs one permitted call.
 //
-// Local first, then upcall. A name that is neither is not a tool this
-// node has, and saying so is more useful than an empty result the model
-// would then have to interpret.
+// Reads run here, where the evidence is. Everything else is the control
+// plane's, either because the node has no executor for it or because a
+// human has to be asked somewhere the human can see the queue. A name that
+// is neither is not a tool this node has, and saying so is more useful than
+// an empty result the model would then have to interpret.
 func (t *agentToolInvoker) Invoke(ctx context.Context, c toolbroker.Call) (json.RawMessage, error) {
-	if exec, ok := skill.Get(c.ToolName); ok {
-		return t.runLocal(ctx, exec, c)
+	exec, registered := skill.Get(c.ToolName)
+	if !registered || !runsOnThisNode(exec) {
+		return t.upcall(ctx, c)
 	}
-	return t.upcall(ctx, c)
+	return t.runLocal(ctx, exec, c)
+}
+
+// runsOnThisNode reports whether the node may dispatch a skill by itself.
+//
+// The test is the skill's own class rather than its name or its scope,
+// because class is the property the rest of the policy path is already
+// built on: it is what the allow-list admits, what the role ceiling is
+// compared against, and what decides whether a receipt is demanded. A
+// second, independent notion of "where this runs" would be free to disagree
+// with all three.
+//
+// Read-only is the positive case, so the failure mode is the safe one. A
+// skill whose class this function has not heard of is sent to the control
+// plane, where a reviewer exists, rather than run by a node that would not
+// ask. Sending an unknown tool uphill costs a round trip and is answered;
+// running an unknown tool here is not.
+func runsOnThisNode(exec skill.Executor) bool {
+	return classOfSkill(exec.Metadata().EffectiveClass()) == domain.ClassRead
 }
 
 // runLocal executes a skill that lives on this node.

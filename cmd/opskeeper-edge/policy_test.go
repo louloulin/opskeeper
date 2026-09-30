@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/edge/policygate"
+	"github.com/vincent-wuhan/opskeeper/core/edge/toolbroker"
 	"github.com/vincent-wuhan/opskeeper/internal/skill"
 	// The executors have to be registered for skill.Get to find them.
 	_ "github.com/vincent-wuhan/opskeeper/internal/skill/builtin"
@@ -21,6 +23,47 @@ func manifestOf(plugin string, tools ...domain.ToolDecl) []domain.PluginManifest
 	}}
 }
 
+// fakeReceipts stands in for the gate's grant store, so the authoriser
+// can be tested without a real approval queue.
+type fakeReceipts struct {
+	granted map[string]bool
+	claims  int
+}
+
+func (f *fakeReceipts) ClaimReceipt(c policygate.Call) bool {
+	f.claims++
+	if f.granted == nil {
+		return false
+	}
+	// Consumed on use, exactly as the real one is: a grant that could be
+	// read twice would authorise the same action over and over.
+	key := c.SessionID + "/" + c.ToolName + "/" + string(c.Arguments)
+	if !f.granted[key] {
+		return false
+	}
+	delete(f.granted, key)
+	return true
+}
+
+// grant marks one exact call as approved.
+func (f *fakeReceipts) grant(sessionID, tool string, args []byte) *fakeReceipts {
+	if f.granted == nil {
+		f.granted = map[string]bool{}
+	}
+	f.granted[sessionID+"/"+tool+"/"+string(args)] = true
+	return f
+}
+
+// permit calls the authoriser the way the broker does.
+func permit(auth toolbroker.Authorizer, role, session, tool string, args []byte) (bool, string) {
+	return auth(context.Background(), toolbroker.Call{
+		SessionID: session,
+		ToolName:  tool,
+		Arguments: args,
+		Actor:     role,
+	})
+}
+
 func registryOf(t *testing.T, manifests ...domain.PluginManifest) *policygate.Registry {
 	t.Helper()
 	r, err := policygate.RegistryFromManifests(manifests)
@@ -32,10 +75,10 @@ func registryOf(t *testing.T, manifests ...domain.PluginManifest) *policygate.Re
 
 func TestTheBrokerPermitsAToolTheManifestDeclaresAsRead(t *testing.T) {
 	auth := toolAuthorizer(registryOf(t,
-		manifestOf("p", domain.ToolDecl{Name: "host_dmesg", Class: domain.ClassRead})...))
+		manifestOf("p", domain.ToolDecl{Name: "host_dmesg", Class: domain.ClassRead})...), &fakeReceipts{})
 
 	for _, role := range []string{RoleAdmin, RoleOperator, RoleViewer, "", "nonsense"} {
-		permitted, reason := auth(role, "host_dmesg")
+		permitted, reason := permit(auth, role, "s", "host_dmesg", []byte(`{}`))
 		if !permitted {
 			t.Errorf("role %q: %s", role, reason)
 		}
@@ -47,9 +90,9 @@ func TestTheBrokerRefusesAToolNoManifestDeclares(t *testing.T) {
 	// undeclared tool: the model can be told it exists, and it is still
 	// refused at the only place that matters.
 	auth := toolAuthorizer(registryOf(t,
-		manifestOf("p", domain.ToolDecl{Name: "host_dmesg", Class: domain.ClassRead})...))
+		manifestOf("p", domain.ToolDecl{Name: "host_dmesg", Class: domain.ClassRead})...), &fakeReceipts{})
 
-	permitted, reason := auth(RoleAdmin, "host_reboot")
+	permitted, reason := permit(auth, RoleAdmin, "s", "host_reboot", []byte(`{}`))
 	if permitted {
 		t.Fatal("a tool no manifest declares was permitted")
 	}
@@ -67,10 +110,10 @@ func TestTheBrokerRefusesAToolWhoseRealClassIsWorseThanTheManifestClaims(t *test
 		t.Skip("host_restart_service is not registered in this build")
 	}
 	auth := toolAuthorizer(registryOf(t,
-		manifestOf("liar", domain.ToolDecl{Name: "host_restart_service", Class: domain.ClassRead})...))
+		manifestOf("liar", domain.ToolDecl{Name: "host_restart_service", Class: domain.ClassRead})...), &fakeReceipts{})
 
 	for _, role := range []string{RoleAdmin, RoleOperator, RoleViewer} {
-		permitted, reason := auth(role, "host_restart_service")
+		permitted, reason := permit(auth, role, "s", "host_restart_service", []byte(`{}`))
 		if permitted {
 			t.Errorf("role %q ran a tool its package under-declared", role)
 			continue
@@ -90,19 +133,91 @@ func TestTheBrokerAppliesTheRoleCeilingToToolsItCannotCrossCheck(t *testing.T) {
 		manifestOf("p",
 			domain.ToolDecl{Name: "get_topology", Class: domain.ClassRead},
 			domain.ToolDecl{Name: "draft_config_change", Class: domain.ClassWrite},
-		)...))
+		)...), &fakeReceipts{})
 
-	if permitted, reason := auth(RoleViewer, "get_topology"); !permitted {
+	if permitted, reason := permit(auth, RoleViewer, "s", "get_topology", []byte(`{}`)); !permitted {
 		t.Errorf("a viewer was refused a read tool: %s", reason)
 	}
-	if permitted, _ := auth(RoleViewer, "draft_config_change"); permitted {
+	if permitted, _ := permit(auth, RoleViewer, "s", "draft_config_change", []byte(`{}`)); permitted {
 		t.Error("a viewer ran a write tool")
 	}
-	if permitted, reason := auth(RoleOperator, "draft_config_change"); !permitted {
-		t.Errorf("an operator was refused a write tool: %s", reason)
+
+	// The write tool reaches the receipt check for the two roles allowed to
+	// run it at all. That is the point: the ceiling and the approval are
+	// different questions, and passing the first must not settle the
+	// second.
+	receipts := &fakeReceipts{}
+	auth = toolAuthorizer(registryOf(t,
+		manifestOf("p", domain.ToolDecl{Name: "draft_config_change", Class: domain.ClassWrite})...), receipts)
+
+	if permitted, reason := permit(auth, RoleOperator, "s", "draft_config_change", []byte(`{}`)); permitted {
+		t.Error("a write tool ran with no approval behind it")
+	} else if !strings.Contains(reason, "approval") {
+		t.Errorf("reason = %q, want it to name the missing approval", reason)
 	}
-	if permitted, _ := auth(RoleAdmin, "draft_config_change"); !permitted {
-		t.Error("an admin was refused a write tool")
+	if permitted, reason := permit(auth, RoleAdmin, "s", "draft_config_change", []byte(`{}`)); permitted {
+		t.Error("a write tool ran for an admin with no approval behind it")
+	} else if !strings.Contains(reason, "approval") {
+		t.Errorf("reason = %q, want it to name the missing approval", reason)
+	}
+}
+
+// The hole this closes: a package that replaced the courier extension
+// would silence the gate entirely, and a mutating tool would then reach
+// the broker with nobody asked. The broker demands the gate's receipt, so
+// the only way a write tool runs is a human having actually granted it.
+func TestAWriteToolRunsOnlyOnceAHumanHasGrantedThatExactCall(t *testing.T) {
+	auth := toolAuthorizer(registryOf(t,
+		manifestOf("repair", domain.ToolDecl{Name: "host_restart_service", Class: domain.ClassWrite})...),
+		&fakeReceipts{})
+
+	// Nobody has been asked, so there is nothing to claim.
+	if permitted, reason := permit(auth, RoleAdmin, "sess-1", "host_restart_service", []byte(`{"service":"orders-api"}`)); permitted {
+		t.Fatal("a mutating tool ran with no approval behind it")
+	} else if !strings.Contains(reason, "approval") {
+		t.Errorf("reason = %q, want it to name the missing approval", reason)
+	}
+
+	// A human answers yes to that exact call.
+	receipts := &fakeReceipts{}
+	auth = toolAuthorizer(registryOf(t,
+		manifestOf("repair", domain.ToolDecl{Name: "host_restart_service", Class: domain.ClassWrite})...),
+		receipts)
+	receipts.grant("sess-1", "host_restart_service", []byte(`{"service":"orders-api"}`))
+
+	if permitted, reason := permit(auth, RoleAdmin, "sess-1", "host_restart_service", []byte(`{"service":"orders-api"}`)); !permitted {
+		t.Errorf("a granted call was refused: %s", reason)
+	}
+	// And the grant is spent: a second identical call has no approval
+	// behind it, because one click is one execution.
+	if permitted, _ := permit(auth, RoleAdmin, "sess-1", "host_restart_service", []byte(`{"service":"orders-api"}`)); permitted {
+		t.Error("one approval executed the same call twice")
+	}
+	// A different call, in the same conversation, is still unapproved.
+	if permitted, _ := permit(auth, RoleAdmin, "sess-1", "host_restart_service", []byte(`{"service":"payments"}`)); permitted {
+		t.Error("an approval for one service restarted another")
+	}
+}
+
+func TestANodeWithWriteToolsAndNoGateRefusesThemAll(t *testing.T) {
+	// A gate is where a human's consent comes from. A node that has write
+	// tools and no gate has no way to obtain one, so running them would be
+	// running them with nobody asked — which is the one answer that is
+	// certainly wrong.
+	auth := toolAuthorizer(registryOf(t,
+		manifestOf("repair", domain.ToolDecl{Name: "host_restart_service", Class: domain.ClassWrite})...),
+		nil)
+
+	for _, role := range []string{RoleAdmin, RoleOperator, RoleViewer} {
+		if permitted, _ := permit(auth, role, "s", "host_restart_service", []byte(`{}`)); permitted {
+			t.Errorf("role %q ran a write tool on a node with no gate", role)
+		}
+	}
+	// A read is unaffected: nobody needs to be asked about a read.
+	readAuth := toolAuthorizer(registryOf(t,
+		manifestOf("p", domain.ToolDecl{Name: "host_dmesg", Class: domain.ClassRead})...), nil)
+	if permitted, reason := permit(readAuth, RoleViewer, "s", "host_dmesg", []byte(`{}`)); !permitted {
+		t.Errorf("a read was refused on a node with no gate: %s", reason)
 	}
 }
 
@@ -111,10 +226,10 @@ func TestAnUnrecognisedRoleGetsTheBottomOfTheLadder(t *testing.T) {
 	// read has to land at the bottom, or a typo in a role name hands out
 	// the top of the ladder to whoever typed it.
 	auth := toolAuthorizer(registryOf(t,
-		manifestOf("p", domain.ToolDecl{Name: "draft_config_change", Class: domain.ClassWrite})...))
+		manifestOf("p", domain.ToolDecl{Name: "draft_config_change", Class: domain.ClassWrite})...), &fakeReceipts{})
 
 	for _, role := range []string{"", "root", "Admin", "ADMIN", "superuser", "system"} {
-		if permitted, _ := auth(role, "draft_config_change"); permitted {
+		if permitted, _ := permit(auth, role, "s", "draft_config_change", []byte(`{}`)); permitted {
 			t.Errorf("role %q was treated as privileged", role)
 		}
 	}

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/edge/policygate"
 	"github.com/vincent-wuhan/opskeeper/core/edge/toolbroker"
@@ -63,29 +65,70 @@ func manifestsOf(plugins []pluginmanifest.Plugin) []domain.PluginManifest {
 	return out
 }
 
-// toolAuthorizer builds the broker's second allow-list check.
+// toolAuthorizer builds the broker's second check.
 //
-// It reads the same registry the gate reads, narrowed to the same role
-// ceiling, so the two cannot disagree about what is deployed. What it adds
-// is the class: where the node holds the real executor, it knows the tool's
-// actual permission class rather than the one a manifest claimed for it,
-// and it hands that to the gate's under-declaring rule.
+// It is the gate's whole job done again, in host code, over a call the
+// agent cannot see. Three things are re-established here, and each closes
+// a way the first check could have been skipped:
 //
-// That is the check that makes the manifest mean something. A package that
-// declares host_restart_service as read is caught at the moment the model
-// calls it, by the host, with an executor in hand — not reviewed into
-// compliance by a human reading YAML, and not discovered after the
-// restart. The gate reaches the same conclusion a moment earlier from the
-// manifest alone; this one is what survives a package that replaced the
-// courier extension to get past the first.
-func toolAuthorizer(registry *policygate.Registry) toolbroker.Authorizer {
-	return func(actor, toolName string) (bool, string) {
-		call := policygate.Call{ToolName: toolName, Class: domain.ClassUnknown}
-		if exec, ok := skill.Get(toolName); ok {
+//   - The tool is deployed and this role may run it, from the same registry
+//     the gate reads. A package that ships an undeclared tool is refused.
+//   - Where the node holds the real executor, it knows the tool's actual
+//     permission class rather than the one a manifest claimed for it. That
+//     is what catches a package that understates a tool, and it catches it
+//     at the moment the model calls it, with the executor in hand — not
+//     reviewed into compliance by a human reading YAML.
+//   - A call that needed a human carries the gate's receipt. This is the
+//     one the allow-list check cannot cover: a mutating tool that a package
+//     got past the courier with would otherwise run with nobody asked. The
+//     receipt is consumed, so one grant is one execution.
+//
+// The first two are properties of the deployment and could in principle be
+// cached; the third is a fact about one call, and caching it would be the
+// bug.
+func toolAuthorizer(registry *policygate.Registry, gate ReceiptClaimer) toolbroker.Authorizer {
+	return func(ctx context.Context, c toolbroker.Call) (bool, string) {
+		call := policygate.Call{
+			SessionID: c.SessionID,
+			ToolName:  c.ToolName,
+			Arguments: c.Arguments,
+			Actor:     c.Actor,
+			// The arguments are the host's re-encoding, so the class this
+			// assessment produces is a judgement about what will actually
+			// run, not about what the agent said it would run.
+			Class: domain.ClassUnknown,
+		}
+		if exec, ok := skill.Get(c.ToolName); ok {
 			call.Class = classOfSkill(exec.Metadata().EffectiveClass())
 		}
-		return registry.Policy(roleCeiling(actor)).Permitted(call)
+
+		policy := registry.Policy(roleCeiling(c.Actor))
+		if permitted, reason := policy.Permitted(call); !permitted {
+			return false, reason
+		}
+		if !policy.NeedsApproval(call) {
+			return true, ""
+		}
+		if gate == nil {
+			// A node with tools that need approval and no gate to ask has
+			// no way to obtain a human's consent, so it must not run them.
+			// Allowing here is the one answer that is certainly wrong.
+			return false, c.ToolName + " needs an operator's approval, and this node has no approval gate to ask"
+		}
+		if !gate.ClaimReceipt(call) {
+			return false, c.ToolName + " needs an operator's approval, and no approval for this exact call was given"
+		}
+		return true, ""
 	}
+}
+
+// ReceiptClaimer is the gate's evidence that a human agreed to one call.
+//
+// It is an interface so the authoriser can be tested without a gate, and
+// so this file — which is otherwise pure policy — carries no opinion about
+// how approvals are stored.
+type ReceiptClaimer interface {
+	ClaimReceipt(policygate.Call) bool
 }
 
 // classOfSkill maps a skill's permission class onto the tool classes the

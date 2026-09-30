@@ -50,20 +50,20 @@ func (f *fakeInvoker) seen() []Call {
 	return out
 }
 
-// allowAll is the permissive authoriser: every named tool may run.
-func allowAll(string, string) (bool, string) { return true, "" }
+// allowAll is the permissive authoriser: every call may run.
+func allowAll(context.Context, Call) (bool, string) { return true, "" }
 
-// only permits a fixed set, refusing anything else with a reason.
+// only permits a fixed set of tools, refusing anything else with a reason.
 func only(permitted ...string) Authorizer {
 	set := map[string]bool{}
 	for _, name := range permitted {
 		set[name] = true
 	}
-	return func(_ string, tool string) (bool, string) {
-		if set[tool] {
+	return func(_ context.Context, c Call) (bool, string) {
+		if set[c.ToolName] {
 			return true, ""
 		}
-		return false, tool + " is not in this node's tool set"
+		return false, c.ToolName + " is not in this node's tool set"
 	}
 }
 
@@ -165,8 +165,8 @@ func TestTheHostResolvesTheActorAndTheAgentCannotNameIt(t *testing.T) {
 	conn, _ := serve(t, Options{
 		Invoke: inv,
 		Actor:  func(sessionID string) string { return "operator:" + sessionID },
-		Authorize: func(actor, tool string) (bool, string) {
-			seenActor = actor
+		Authorize: func(_ context.Context, c Call) (bool, string) {
+			seenActor = c.Actor
 			return true, ""
 		},
 	})

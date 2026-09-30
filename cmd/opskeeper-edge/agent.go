@@ -257,7 +257,10 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 	// the agent process: a package that replaced that extension would
 	// silence the check, and this is the one it cannot silence.
 	broker, err := toolbroker.Listen(toolbroker.Options{
-		Authorize: toolAuthorizer(registry),
+		// The gate is passed in so the broker can demand the receipt for
+		// any call that needed a human. Without it a package that replaced
+		// the courier would find its mutating tools running unapproved.
+		Authorize: toolAuthorizer(registry, gate),
 		Invoke:    &agentToolInvoker{client: client, log: log},
 		Actor:     bridge.ActorFor,
 		Log:       log,

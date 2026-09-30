@@ -82,11 +82,16 @@ type Invoker interface {
 
 // Authorizer is the second check, run by host code the agent cannot reach.
 //
-// It returns whether the tool is permitted for this actor and, when it is
-// not, a reason written for the model to read back into its transcript. It
-// is satisfied by the same policygate registry the gate reads, narrowed to
-// the caller's role.
-type Authorizer func(actor, toolName string) (bool, string)
+// It answers for the whole call, not just the name, because the two
+// questions the gate asks are not the same question. "Is this tool
+// deployed and may this role run it" is about the tool. "Did a human agree
+// to this one" is about the call — the same tool with the same arguments is
+// a different call the second time, and a different call with different
+// arguments is one the operator was never shown.
+//
+// It returns whether the call may run and, when it may not, a reason
+// written for the model to read back into its transcript.
+type Authorizer func(ctx context.Context, c Call) (bool, string)
 
 // ActorResolver answers "who is this conversation acting for".
 //
@@ -314,20 +319,22 @@ func (s *Server) dispatch(line []byte) wire.ToolReply {
 		actor = s.actor(req.SessionID)
 	}
 
-	permitted, reason := s.authorize(actor, req.ToolName)
-	if !permitted {
-		return failed(reason)
+	call := Call{
+		SessionID: req.SessionID,
+		ToolName:  req.ToolName,
+		Arguments: args,
+		Actor:     actor,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.within)
 	defer cancel()
 
-	out, err := s.invoke.Invoke(ctx, Call{
-		SessionID: req.SessionID,
-		ToolName:  req.ToolName,
-		Arguments: args,
-		Actor:     actor,
-	})
+	permitted, reason := s.authorize(ctx, call)
+	if !permitted {
+		return failed(reason)
+	}
+
+	out, err := s.invoke.Invoke(ctx, call)
 	if err != nil {
 		// A tool that failed is reported to the model as a failure it can
 		// read and reason about, not as a transport fault it would retry.

@@ -110,10 +110,11 @@ func (c *client) attempt(req wire.ToolRequest, body []byte) (wire.ToolReply, err
 		// The request was delivered. Whether the host ran it is now
 		// unknowable from here, and a blind resend would be a second
 		// execution of a call whose first execution may have succeeded.
-		// For every tool in this package that is merely wasteful; for the
-		// write tools this broker will carry once B3 lands, it is a
-		// second action. The honest answer is that the outcome is
-		// unknown, and the model is told so rather than sent round again.
+		// For a read that is merely wasteful; for a write — a restart, an
+		// applied config change — it is a second action taken on a live
+		// system, which is the failure this broker exists to make
+		// impossible. The honest answer is that the outcome is unknown,
+		// and the model is told so rather than sent round again.
 		return wire.ToolReply{}, fmt.Errorf(
 			"the host stopped answering after %s was sent, so whether it ran is unknown: %w", req.ToolName, err)
 	}

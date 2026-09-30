@@ -161,6 +161,12 @@ type Options struct {
 	// DefaultApprovalTTL. It is a fail-closed bound: past it the call is
 	// denied, not left running.
 	TTL time.Duration
+	// ReceiptTTL bounds how long a granted approval stays collectable by
+	// the broker. Default DefaultReceiptTTL. Past it the grant is treated
+	// as if it had never happened, which is the fail-closed direction:
+	// a tool that needed a human runs without one rather than with a stale
+	// one.
+	ReceiptTTL time.Duration
 }
 
 // maxRequestIDAttempts bounds the retries when a minted id collides with a
@@ -176,18 +182,38 @@ const maxRequestIDAttempts = 3
 // may no longer be the one the operator was shown.
 const DefaultApprovalTTL = 15 * time.Minute
 
+// DefaultReceiptTTL is how long a granted approval stays collectable.
+//
+// It exists because the grant and the execution are two events in two
+// places. A human grants a call at the gate; the gate answers the agent;
+// the agent then runs the tool, and that is the broker — host code, the
+// only place the call can be refused a second time. The broker needs
+// evidence the grant happened, and that evidence is worthless once it is
+// old enough that the situation it was granted for may have changed.
+//
+// The value is therefore minutes, not the approval TTL's quarter of an
+// hour. It has to cover one turn's worth of agent latency between the
+// gate answering and the tool running, and nothing more: a grant that sat
+// unclaimed for longer is an operator's answer to a question that is no
+// longer being asked.
+const DefaultReceiptTTL = 2 * time.Minute
+
 // Gate adjudicates tool calls.
 type Gate struct {
-	policy  Policy
-	byActor ActorPolicy
-	audit   ports.AuditSink
-	emit    FrameSink
-	now     func() time.Time
-	newID   func() string
-	ttl     time.Duration
+	policy     Policy
+	byActor    ActorPolicy
+	audit      ports.AuditSink
+	emit       FrameSink
+	now        func() time.Time
+	newID      func() string
+	ttl        time.Duration
+	receiptTTL time.Duration
 
 	mu      sync.Mutex
 	pending map[string]*request
+	// receipts are the grants a human made that the broker still has to
+	// collect. See [Gate.ClaimReceipt].
+	receipts map[string]time.Time
 	// expired and denied are running counters, reported on the node's
 	// health. An approval queue that is quietly failing closed looks
 	// exactly like a queue nobody is using.
@@ -228,15 +254,20 @@ func New(opts Options) (*Gate, error) {
 	if opts.TTL <= 0 {
 		opts.TTL = DefaultApprovalTTL
 	}
+	if opts.ReceiptTTL <= 0 {
+		opts.ReceiptTTL = DefaultReceiptTTL
+	}
 	return &Gate{
-		policy:  opts.Policy,
-		byActor: opts.ByActor,
-		audit:   opts.Audit,
-		emit:    opts.Emit,
-		now:     opts.Now,
-		newID:   opts.NewID,
-		ttl:     opts.TTL,
-		pending: make(map[string]*request),
+		policy:     opts.Policy,
+		byActor:    opts.ByActor,
+		audit:      opts.Audit,
+		emit:       opts.Emit,
+		now:        opts.Now,
+		newID:      opts.NewID,
+		ttl:        opts.TTL,
+		receiptTTL: opts.ReceiptTTL,
+		pending:    make(map[string]*request),
+		receipts:   make(map[string]time.Time),
 	}, nil
 }
 
@@ -257,6 +288,11 @@ func (g *Gate) Admit(ctx context.Context, c Call) (Outcome, string, error) {
 
 	// A read needs no human. It still gets a ledger row: the record that a
 	// read happened is what makes the write rows believable.
+	//
+	// It also mints no receipt. A receipt exists to answer "did a human
+	// agree to this?", and nobody was asked, so there is nothing to prove
+	// and nothing to keep. Minting one per read would turn the gate into a
+	// short-lived capability store for calls that never needed a capability.
 	if !policy.NeedsApproval(c) {
 		g.countAllowed()
 		g.record(ctx, ports.ActionToolCall, c, "allowed", "", nil)
@@ -330,6 +366,14 @@ func (g *Gate) Admit(ctx context.Context, c Call) (Outcome, string, error) {
 		g.mu.Lock()
 		g.granted++
 		g.mu.Unlock()
+		// A human said yes to this exact call. The broker is about to be
+		// asked to run it, and the broker is host code the agent cannot
+		// reach — so this receipt is what lets it tell a granted call from
+		// one that simply never got asked. Without it, a package that
+		// replaced the courier would find mutating tools running with no
+		// human in the loop, which is the exact failure the second check
+		// exists to prevent.
+		g.grant(c)
 		g.record(ctx, ports.ActionApprovalGrant, c, "allowed", pending.decision.DecidedBy, map[string]any{
 			"request_id": req.ID,
 			"decided_by": pending.decision.DecidedBy,
@@ -553,6 +597,15 @@ func (g *Gate) DropSession(sessionID string) int {
 			delete(g.pending, id)
 		}
 	}
+	// A closed conversation takes its uncollected grants with it, for the
+	// same reason it takes its queue: the operator's answer was given about
+	// a turn that no longer exists, so there is nothing left for it to
+	// authorise.
+	for key := range g.receipts {
+		if strings.HasPrefix(key, sessionID+"\x00") {
+			delete(g.receipts, key)
+		}
+	}
 	g.mu.Unlock()
 	for _, p := range doomed {
 		p.decision = ports.Decision{RequestID: p.req.ID, Decision: ports.ApprovalDenied, Note: "the conversation was closed"}
@@ -650,6 +703,89 @@ func Digest(c Call) string {
 	h.Write([]byte{0})
 	h.Write(c.Arguments)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// ClaimReceipt reports whether a human granted this exact call, and
+// consumes the grant if so.
+//
+// It is the second half of the approval, and it exists because the grant
+// and the execution happen in different places. The gate answers the
+// agent; the agent then runs the tool; the run reaches the broker, which
+// is host code. The broker cannot ask the agent whether the gate said yes —
+// the agent is the thing that might be lying — so the gate leaves evidence
+// here instead, keyed by the session and the argument digest.
+//
+// Consuming rather than reading is what makes one approval mean one
+// execution. A receipt that could be read twice would authorise a model to
+// call an approved mutating tool a hundred times with the same arguments
+// on the strength of a single human clicking once, which is not what the
+// operator agreed to.
+//
+// An ungranted call, a call from another session, and a call whose
+// arguments differ by so much as a reordered key are all a false. The
+// caller treats that as a refusal, which is the only safe reading of "I
+// cannot find evidence that anyone approved this".
+func (g *Gate) ClaimReceipt(c Call) bool {
+	key := receiptKey(c)
+	now := g.now()
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.pruneReceiptsLocked(now)
+	grantedAt, ok := g.receipts[key]
+	if !ok {
+		return false
+	}
+	// Belt and braces: prune already dropped anything past the window, but
+	// a caller whose clock and ours disagree should still fail closed.
+	if now.Sub(grantedAt) > g.receiptTTL {
+		delete(g.receipts, key)
+		return false
+	}
+	delete(g.receipts, key)
+	return true
+}
+
+// grant records that a human approved one call.
+//
+// The key deliberately includes the session even though the digest does
+// not. The digest is what the operator was shown — the tool and its
+// arguments — and two conversations can legitimately produce the same one.
+// Without the session in the key, an approval one operator gave in one
+// conversation would authorise the identical call in another operator's.
+func (g *Gate) grant(c Call) {
+	now := g.now()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.pruneReceiptsLocked(now)
+	g.receipts[receiptKey(c)] = now
+}
+
+// pruneReceiptsLocked drops grants past their window. The caller holds the
+// lock.
+func (g *Gate) pruneReceiptsLocked(now time.Time) {
+	for key, at := range g.receipts {
+		if now.Sub(at) > g.receiptTTL {
+			delete(g.receipts, key)
+		}
+	}
+}
+
+// ReceiptCount reports how many grants are uncollected. It is a health
+// signal: a gate that is granting and never having its receipts claimed
+// means something is answering the gate and not running the tool, which is
+// worth an operator's attention.
+func (g *Gate) ReceiptCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.pruneReceiptsLocked(g.now())
+	return len(g.receipts)
+}
+
+// receiptKey is the identity of one grant: the conversation, the tool, and
+// the exact arguments the operator saw.
+func receiptKey(c Call) string {
+	return c.SessionID + "\x00" + c.ToolName + "\x00" + Digest(c)
 }
 
 // BlastOf assesses the call's reach for the operator.
