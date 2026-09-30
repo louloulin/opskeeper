@@ -17,8 +17,8 @@
 - [x] 2.2 Move plugin management and integration self-check into secondary diagnostics without removing capability.
 - [x] 2.3 Implement the Incident Command Bar with incident identity, impact, stage, owner, elapsed time, freshness, and expiry boundary.
 - [x] 2.4 Implement the prioritized next-action card for wait, inspect, approve, reject, verify, archive, and retry states.
-- [ ] 2.5 Add the same command summary to the public live page after successful injection.
-- [ ] 2.6 Preserve contextual external links and make them secondary to the incident summary.
+- [x] 2.5 Add the same command summary to the public live page after successful injection.
+- [x] 2.6 Preserve contextual external links and make them secondary to the incident summary.
 - [x] 2.7 Add focused tests for tab aliases, projection, command summary, next-action copy, empty/stale state, and legacy input.
 
 ## 3. P1 Command Timeline and Decision Evidence
