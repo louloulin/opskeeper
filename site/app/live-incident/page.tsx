@@ -324,7 +324,6 @@ export default function LiveIncidentPage() {
       ? projectDemoScenario({
           scenario,
           snapshots,
-          serverNow: scenario.updated_at,
         })
       : null,
     [scenario, snapshots],

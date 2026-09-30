@@ -3,7 +3,7 @@ import type { DemoLocale } from '@/lib/demo-locale';
 import { IncidentNextAction } from '@/components/demo/incident-next-action';
 import { cn } from '@/lib/utils';
 
-const expiryBoundaryMs = 90_000;
+const expiryBoundaryMs = 60_000;
 
 function formatDuration(ms: number, locale: DemoLocale) {
   const totalSeconds = Math.max(0, Math.round(ms / 1000));
@@ -24,10 +24,15 @@ function formatDuration(ms: number, locale: DemoLocale) {
 }
 
 function elapsedMs(view: IncidentCommandView) {
-  if (view.elapsedMs !== undefined) return view.elapsedMs;
-  if (!view.observedAt || !view.serverNow) return undefined;
-  const elapsed = Date.parse(view.serverNow) - Date.parse(view.observedAt);
-  return Number.isNaN(elapsed) ? undefined : elapsed;
+  return view.elapsedMs;
+}
+
+function observedAt(value?: string) {
+  if (!value) return undefined;
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return { label: 'unknown', valid: false };
+  const isoTimestamp = new Date(timestamp).toISOString();
+  return { label: isoTimestamp, isoTimestamp, valid: true };
 }
 
 function ownerLabel(view: IncidentCommandView, locale: DemoLocale) {
@@ -98,6 +103,7 @@ export function IncidentCommandBar({
   const stage = view.stage ? stageCopy[view.stage][locale] : zh ? '未知阶段' : 'Unknown stage';
   const stageStatus = statusCopy[view.stageStatus][locale];
   const freshness = freshnessCopy[view.freshness][locale];
+  const observedTimestamp = observedAt(view.observedAt);
 
   const facts = [
     { label: zh ? '当前阶段' : 'Current stage', value: `${stage} · ${stageStatus}` },
@@ -198,12 +204,16 @@ export function IncidentCommandBar({
         </div>
       </div>
 
-      {view.observedAt && (
+      {observedTimestamp && (
         <p className="mt-4 text-xs text-ink-500">
           {zh ? '观测时间：' : 'Observed at: '}
-          <time className="tabular-nums" dateTime={view.observedAt}>
-            {new Date(view.observedAt).toISOString()}
-          </time>
+          {observedTimestamp.valid
+            ? (
+                <time className="tabular-nums" dateTime={observedTimestamp.isoTimestamp}>
+                  {observedTimestamp.label}
+                </time>
+              )
+            : (zh ? '未知' : 'Unknown')}
         </p>
       )}
 
