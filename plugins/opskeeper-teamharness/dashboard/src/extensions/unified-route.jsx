@@ -4,14 +4,29 @@ import OpskeeperArchiveRoute from './archive-route.jsx';
 import OpskeeperRuntimeRoute from './runtime-route.jsx';
 import OpskeeperInstallView from './install-view.jsx';
 import OpskeeperIntegrationRoute from './integration-route.jsx';
-import { opskeeperPluginThemeStyle } from './plugin-theme.js';
+import { opskeeperCommandThemeStyle, opskeeperPluginThemeStyle } from './plugin-theme.js';
 import { OPSKEEPER_TABS, normalizeOpskeeperTab } from './tabs.js';
 
-export default function OpskeeperUnifiedRoute({ api, initialTab = 'diagnostics' }) {
+const OPSKEEPER_SECONDARY_DIAGNOSTICS = [
+  { id: 'diagnostics', label: '诊断' },
+  { id: 'integration', label: '链路自检' },
+  { id: 'plugins', label: '插件' },
+];
+
+function resolveSecondaryDiagnostics(value) {
+  return OPSKEEPER_SECONDARY_DIAGNOSTICS.some((item) => item.id === value)
+    ? value
+    : 'diagnostics';
+}
+
+export default function OpskeeperUnifiedRoute({ api, initialTab = 'incident-command' }) {
   const [tab, setTab] = React.useState(() => normalizeOpskeeperTab(initialTab));
+  const [diagnosticsView, setDiagnosticsView] = React.useState(
+    () => resolveSecondaryDiagnostics(initialTab),
+  );
 
   return (
-    <div style={opskeeperPluginThemeStyle}>
+    <div style={{ ...opskeeperPluginThemeStyle, ...opskeeperCommandThemeStyle }}>
       <header style={{
         display: 'flex',
         alignItems: 'center',
@@ -22,7 +37,7 @@ export default function OpskeeperUnifiedRoute({ api, initialTab = 'diagnostics' 
         <div>
           <h1 style={{ margin: 0, fontSize: 20 }}>OpsKeeper</h1>
           <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--muted-foreground)' }}>
-            AgentTeams 协同入口：诊断闭环、运行时读back 与插件安装统一管理。
+            AgentTeams 协同入口：事故指挥、证据审批、复盘与系统状态统一读back。
           </p>
         </div>
       </header>
@@ -48,6 +63,7 @@ export default function OpskeeperUnifiedRoute({ api, initialTab = 'diagnostics' 
                 border: `1px solid ${active ? 'var(--primary)' : 'var(--border)'}`,
                 background: active ? 'var(--primary)' : 'transparent',
                 color: active ? 'var(--primary-foreground)' : 'var(--card-foreground)',
+                boxShadow: active ? '0 0 0 2px var(--ops-focus-ring)' : 'none',
                 cursor: 'pointer',
               }}
             >
@@ -56,11 +72,44 @@ export default function OpskeeperUnifiedRoute({ api, initialTab = 'diagnostics' 
           );
         })}
       </nav>
-      {tab === 'diagnostics' && <OpskeeperRoute api={api} />}
-      {tab === 'integration' && <OpskeeperIntegrationRoute api={api} />}
-      {tab === 'archive' && <OpskeeperArchiveRoute api={api} />}
-      {tab === 'runtime' && <OpskeeperRuntimeRoute api={api} />}
-      {tab === 'plugins' && <OpskeeperInstallView api={api} />}
+      {tab === 'incident-command' && (
+        <section aria-label="事故诊断工具">
+          <nav style={{
+            display: 'flex',
+            gap: 6,
+            padding: '14px 24px 0',
+          }}>
+            {OPSKEEPER_SECONDARY_DIAGNOSTICS.map((item) => {
+              const active = item.id === diagnosticsView;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setDiagnosticsView(item.id)}
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: 999,
+                    fontSize: 11,
+                    fontWeight: active ? 600 : 400,
+                    border: `1px solid ${active ? 'var(--ops-surface-border)' : 'var(--border)'}`,
+                    background: active ? 'var(--ops-surface)' : 'transparent',
+                    color: 'var(--ops-surface-foreground)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
+          {diagnosticsView === 'diagnostics' && <OpskeeperRoute api={api} />}
+          {diagnosticsView === 'integration' && <OpskeeperIntegrationRoute api={api} />}
+          {diagnosticsView === 'plugins' && <OpskeeperInstallView api={api} />}
+        </section>
+      )}
+      {tab === 'evidence-approval' && <OpskeeperRoute api={api} />}
+      {tab === 'archive-replay' && <OpskeeperArchiveRoute api={api} />}
+      {tab === 'system-status' && <OpskeeperRuntimeRoute api={api} />}
     </div>
   );
 }
