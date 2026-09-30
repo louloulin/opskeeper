@@ -1,8 +1,8 @@
 workflow: full
 phase: build
-build_mode: null
-build_pause: plan-ready
-isolation: null
+build_mode: subagent-driven-development
+build_pause: null
+isolation: worktree
 verify_mode: null
 base_ref: 8774f7b3576bbde9f41a4dab3941f76ca51f1b9e
 design_doc: docs/superpowers/specs/2026-10-01-opskeeper-incident-command-ui-design.md
