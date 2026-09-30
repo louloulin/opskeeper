@@ -73,6 +73,10 @@ export default function StageTimeline({ stages = [], locale = 'zh-CN', onOpenEvi
           grid-template-columns: repeat(7, minmax(132px, 1fr));
           gap: 6px;
         }
+        .opskeeper-incident-stage-item {
+          display: grid;
+          min-width: 0;
+        }
         .opskeeper-incident-stage-row {
           display: grid;
           gap: 4px;
@@ -83,10 +87,10 @@ export default function StageTimeline({ stages = [], locale = 'zh-CN', onOpenEvi
           background: var(--ops-incident-surface);
           color: var(--ops-incident-foreground);
         }
-        .opskeeper-incident-stage-grid[data-status="completed"] .opskeeper-incident-stage-row { border-left: 3px solid var(--ops-status-success, #15803d); }
-        .opskeeper-incident-stage-grid[data-status="running"] .opskeeper-incident-stage-row { border-left: 3px solid var(--ops-status-active, #0369a1); }
-        .opskeeper-incident-stage-grid[data-status="blocked"] .opskeeper-incident-stage-row { border-left: 3px solid var(--ops-status-waiting, #b45309); }
-        .opskeeper-incident-stage-grid[data-status="failed"] .opskeeper-incident-stage-row { border-left: 3px solid var(--ops-status-failure, #b91c1c); }
+        .opskeeper-incident-stage-item[data-status="completed"] .opskeeper-incident-stage-row { border-left: 3px solid var(--ops-status-success, #15803d); }
+        .opskeeper-incident-stage-item[data-status="running"] .opskeeper-incident-stage-row { border-left: 3px solid var(--ops-status-active, #0369a1); }
+        .opskeeper-incident-stage-item[data-status="blocked"] .opskeeper-incident-stage-row { border-left: 3px solid var(--ops-status-waiting, #b45309); }
+        .opskeeper-incident-stage-item[data-status="failed"] .opskeeper-incident-stage-row { border-left: 3px solid var(--ops-status-failure, #b91c1c); }
         @media (max-width: 960px) {
           .opskeeper-incident-stage-grid { grid-template-columns: 1fr; }
         }
@@ -102,7 +106,7 @@ export default function StageTimeline({ stages = [], locale = 'zh-CN', onOpenEvi
           return (
             <li
               key={stage?.stage || index}
-              className="opskeeper-incident-stage-grid"
+              className="opskeeper-incident-stage-item"
               data-stage={stage?.stage}
               data-status={status}
               aria-current={index === activeIndex && activeIndex >= 0 ? 'step' : undefined}

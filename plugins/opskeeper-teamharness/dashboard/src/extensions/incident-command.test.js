@@ -37,7 +37,7 @@ function useJsonXhr(responses) {
     const request = {
       status: 200,
       responseText: '',
-      headers: {},
+      headers: { 'content-type': 'application/json' },
       open(method, url) {
         opened.push({ method, url });
       },
@@ -380,29 +380,44 @@ test('stage timeline renders authoritative stage distinctions and source referen
   assert.match(markup, /未开始/);
   assert.match(markup, /查看证据/);
   assert.match(markup, /opskeeper-incident-stage-grid/);
+  assert.match(markup, /<ol[^>]*class="opskeeper-incident-stage-grid"/);
+  assert.match(markup, /<li[^>]*class="opskeeper-incident-stage-item"/);
+  assert.doesNotMatch(markup, /<li[^>]*class="opskeeper-incident-stage-grid"/);
 });
 
 test('evidence projection preserves five decisions, source IDs, and legacy semantics', async () => {
-  const { projectIncidentEvidence } = await loadModule('/src/extensions/archive.js');
+  const {
+    INCIDENT_EVENT_TYPES,
+    projectIncidentEvidence,
+  } = await loadModule('/src/extensions/archive.js');
+  assert.deepEqual(INCIDENT_EVENT_TYPES, {
+    alertReceived: 'alert.received',
+    rootCauseConfirmed: 'root_cause.confirmed',
+    evidenceRefreshed: 'evidence.refreshed',
+    recommendationApproved: 'recommendation.approved',
+    actionExecuted: 'action.executed',
+    recoverySignalObserved: 'recovery_signal.observed',
+    incidentClosed: 'incident.closed',
+    incidentReopened: 'incident.reopened',
+  });
   const archive = {
     incident_id: 'inc-evidence',
     closed: true,
+    impact_scope: 'pg:pool-fixture',
+    rollback_plan: '保留旧连接池配置并支持一键回滚',
+    verification_criteria: '业务探针通过且延迟恢复基线',
+    approval_expires_at: '2026-10-01T12:30:00Z',
+    trace_ids: ['trace-root-cause'],
     timeline: [
-      { id: 'event-alert', event_type: 'alert_received', evidence_ref: 'evidence/alert.json' },
-      { id: 'event-cause', event_type: 'root_cause', evidence_ref: 'evidence/cause.json', actor: 'investigator' },
-      { id: 'event-approved', event_type: 'approved', evidence_ref: 'evidence/approval.json', actor: 'reviewer' },
-      { id: 'event-action', event_type: 'action', evidence_ref: 'evidence/execution.json', actor: 'repairer' },
-      { id: 'event-recovery', event_type: 'recovery', evidence_ref: 'evidence/verification.json', actor: 'verifier' },
+      { id: 'event-alert', event_type: 'alert.received', evidence_ref: 'evidence/alert.json' },
+      { id: 'event-refresh', event_type: 'evidence.refreshed', evidence_ref: 'evidence/corroboration.json' },
+      { id: 'event-cause', event_type: 'root_cause.confirmed', evidence_ref: 'evidence/cause.json', actor: 'investigator', status: 'confirmed' },
+      { id: 'event-approved', event_type: 'recommendation.approved', evidence_ref: 'evidence/approval.json', actor: 'reviewer', status: 'approved' },
+      { id: 'event-action', event_type: 'action.executed', evidence_ref: 'evidence/execution.json', actor: 'repairer', status: 'executed', action_fingerprint: 'sha256:action-v1' },
+      { id: 'event-recovery', event_type: 'recovery_signal.observed', evidence_ref: 'evidence/verification.json', actor: 'verifier', status: 'observed', recovery_signal: true },
+      { id: 'event-closed', event_type: 'incident.closed', evidence_ref: 'evidence/closure.json', actor: 'reporter', status: 'closed' },
     ],
-    repair_previews: [{
-      id: 'run-legacy',
-      run_id: 'run-legacy',
-      candidates: [
-        { id: 'candidate-baseline', candidate_id: 'baseline', decision: 'PASS' },
-        { id: 'candidate-a', candidate_id: 'candidate-a', decision: 'PASS', name: '扩容连接池' },
-        { id: 'candidate-b', candidate_id: 'candidate-b', decision: 'REJECTED_BY_PREVIEW', rejection_reason: '写入影响超界' },
-      ],
-    }],
+    repair_previews: [],
     postmortem_refs: [{ id: 'postmortem-1', root_cause: '连接池耗尽' }],
   };
   const preview = {
@@ -413,24 +428,79 @@ test('evidence projection preserves five decisions, source IDs, and legacy seman
     isolation_boundary: 'preview-pg',
     target_fingerprint: 'sha256:target-v1',
     status: 'completed',
-    passing: { id: 'candidate-a', candidate_id: 'candidate-a', name: '扩容连接池' },
+    baseline: {
+      id: 'candidate-baseline',
+      candidate_id: 'baseline',
+      name: '基线',
+      decision: 'PASS',
+      average_latency_ms: 25,
+      write_impact: 'none',
+    },
+    passing: {
+      id: 'candidate-a',
+      candidate_id: 'candidate-a',
+      name: '扩容连接池',
+      decision: 'PASS',
+      average_latency_ms: 18,
+      write_impact: 'none',
+    },
+    rejected: {
+      id: 'candidate-b',
+      candidate_id: 'candidate-b',
+      name: '重写连接池',
+      decision: 'REJECTED_BY_PREVIEW',
+      rejection_reason: '写入影响超界',
+    },
   };
 
   const groups = projectIncidentEvidence({ archive, preview });
   assert.deepEqual(groups.map((group) => group.id), ['incident', 'cause', 'repair', 'safety', 'verification']);
+  assert.ok(groups.every((group) => group.completeness === 'complete'));
   assert.equal(groups.find((group) => group.id === 'incident').facts.find((fact) => fact.id === 'alert').sourceIds[0], 'event-alert');
   assert.equal(groups.find((group) => group.id === 'cause').facts.find((fact) => fact.id === 'rootCause').value, '连接池耗尽');
   const repair = groups.find((group) => group.id === 'repair');
-  assert.equal(repair.facts.find((fact) => fact.id === 'comparison').value.includes('candidate-a'), true);
+  assert.equal(repair.facts.find((fact) => fact.id === 'comparison').value.includes('candidate-a 18ms'), true);
+  assert.equal(repair.facts.find((fact) => fact.id === 'provenance').sourceIds.join(','), 'run-1,candidate-baseline,candidate-a,candidate-b');
   assert.equal(repair.facts.find((fact) => fact.id === 'eligibility').value, '预览已完成');
   const safety = groups.find((group) => group.id === 'safety');
   assert.equal(safety.facts.find((fact) => fact.id === 'targetFingerprint').value, 'sha256:target-v1');
   assert.equal(safety.facts.find((fact) => fact.id === 'workloadFingerprint').value, 'sha256:workload-v1');
+  assert.equal(safety.facts.find((fact) => fact.id === 'expiry').value, '2026-10-01T12:30:00Z');
   assert.equal(safety.facts.find((fact) => fact.id === 'approval').sourceIds[0], 'event-approved');
   assert.equal(groups.find((group) => group.id === 'verification').facts.find((fact) => fact.id === 'result').sourceIds[0], 'event-recovery');
 
+  const partial = projectIncidentEvidence({
+    archive: { incident_id: 'inc-partial', timeline: [archive.timeline[0]] },
+    preview: null,
+  });
+  assert.equal(partial.find((group) => group.id === 'incident').completeness, 'partial');
+  assert.equal(partial.find((group) => group.id === 'cause').completeness, 'missing');
+
+  const legacyArchive = {
+    incident_id: 'inc-legacy',
+    timeline: [
+      { id: 'legacy-alert', event_type: 'alert_received', evidence_ref: 'evidence/alert.json' },
+      { id: 'legacy-cause', event_type: 'root_cause', evidence_ref: 'evidence/cause.json' },
+      { id: 'legacy-approved', event_type: 'approved', evidence_ref: 'evidence/approval.json' },
+      { id: 'legacy-action', event_type: 'action', evidence_ref: 'evidence/execution.json' },
+      { id: 'legacy-recovery', event_type: 'recovery', evidence_ref: 'evidence/verification.json' },
+    ],
+    repair_previews: [],
+    legacy_preview_not_applicable: true,
+  };
+  const legacyGroups = projectIncidentEvidence({ archive: legacyArchive, preview: null });
+  assert.equal(legacyGroups.find((group) => group.id === 'incident').facts.find((fact) => fact.id === 'alert').sourceIds[0], 'legacy-alert');
+  assert.equal(legacyGroups.find((group) => group.id === 'cause').facts.find((fact) => fact.id === 'rootCause').sourceIds[0], 'legacy-cause');
+  assert.equal(legacyGroups.find((group) => group.id === 'safety').facts.find((fact) => fact.id === 'approval').sourceIds[0], 'legacy-approved');
+  assert.equal(legacyGroups.find((group) => group.id === 'verification').facts.find((fact) => fact.id === 'result').sourceIds[0], 'legacy-recovery');
+  assert.equal(legacyGroups.find((group) => group.id === 'repair').completeness, 'legacy_not_applicable');
+
   const legacy = projectIncidentEvidence({
-    archive: { ...archive, repair_previews: [], legacy_preview_not_applicable: true },
+    archive: { ...legacyArchive, repair_previews: [{
+      id: 'run-legacy',
+      run_id: 'run-legacy',
+      candidates: [{ id: 'candidate-legacy', candidate_id: 'candidate-legacy', decision: 'PASS' }],
+    }] },
     preview: null,
   });
   assert.equal(legacy.find((group) => group.id === 'repair').completeness, 'legacy_not_applicable');
@@ -440,6 +510,8 @@ test('evidence drawer is a semantic modal with nested raw disclosures and focus 
   const drawerModule = await loadModule('/src/extensions/incident-command/EvidenceDrawer.jsx');
   const {
     default: EvidenceDrawer,
+    attachEvidenceDrawerDocumentListener,
+    handleEvidenceDrawerPointerDown,
     handleEvidenceDrawerKeyDown,
     initializeEvidenceDrawerFocus,
   } = drawerModule;
@@ -468,6 +540,9 @@ test('evidence drawer is a semantic modal with nested raw disclosures and focus 
     { disabled: false, focus: () => focused.push('first') },
     { disabled: false, focus: () => focused.push('close') },
     { disabled: false, focus: () => focused.push('raw') },
+    { disabled: true, focus: () => focused.push('disabled') },
+    { hidden: true, focus: () => focused.push('hidden') },
+    { disabled: false, focus: () => focused.push('aria-hidden'), getAttribute: () => 'true' },
   ];
   const prevented = [];
   const closeCalls = [];
@@ -478,15 +553,56 @@ test('evidence drawer is a semantic modal with nested raw disclosures and focus 
     preventDefault: () => prevented.push('wrap'),
   }, { container, activeElement: targets[0], onClose: () => closeCalls.push('close') });
   handleEvidenceDrawerKeyDown({
+    key: 'Tab',
+    preventDefault: () => prevented.push('outside'),
+  }, { container, activeElement: {}, onClose: () => closeCalls.push('outside') });
+  handleEvidenceDrawerKeyDown({
     key: 'Escape',
     preventDefault: () => prevented.push('escape'),
   }, { container, activeElement: targets[1], onClose: () => closeCalls.push('close') });
 
-  assert.deepEqual(focused, ['raw']);
-  assert.deepEqual(prevented, ['wrap', 'escape']);
+  assert.deepEqual(focused, ['raw', 'first']);
+  assert.deepEqual(prevented, ['wrap', 'outside', 'escape']);
   assert.deepEqual(closeCalls, ['close']);
 
+  const documentEvents = [];
+  const documentListeners = {};
   const originalDocument = globalThis.document;
+  globalThis.document = {
+    addEventListener(type, listener, options) {
+      documentEvents.push(['add', type, options]);
+      documentListeners[type] = listener;
+    },
+    removeEventListener(type) {
+      documentEvents.push(['remove', type]);
+    },
+  };
+  const detach = attachEvidenceDrawerDocumentListener({ current: container }, () => closeCalls.push('document'));
+  documentListeners.keydown({
+    key: 'Tab',
+    preventDefault: () => prevented.push('document-tab'),
+  });
+  detach();
+  assert.deepEqual(documentEvents, [
+    ['add', 'keydown', { capture: true }],
+    ['remove', 'keydown'],
+  ]);
+  assert.deepEqual(prevented.slice(-1), ['document-tab']);
+
+  handleEvidenceDrawerPointerDown({
+    target: { id: 'dialog' },
+    currentTarget: { id: 'overlay' },
+    preventDefault: () => prevented.push('inside-pointer'),
+  }, () => closeCalls.push('inside'));
+  const overlay = { id: 'overlay' };
+  handleEvidenceDrawerPointerDown({
+    target: overlay,
+    currentTarget: overlay,
+    preventDefault: () => prevented.push('outside-pointer'),
+  }, () => closeCalls.push('outside-overlay'));
+  assert.deepEqual(prevented.slice(-2), ['document-tab', 'outside-pointer']);
+  assert.deepEqual(closeCalls.slice(-1), ['outside-overlay']);
+
   const originalActiveElement = {
     focused: [],
     focus() { this.focused.push('original'); },
@@ -499,6 +615,15 @@ test('evidence drawer is a semantic modal with nested raw disclosures and focus 
   restoreFocus();
   assert.deepEqual(originalActiveElement.focused, ['original']);
   globalThis.document = originalDocument;
+
+  const empty = renderToStaticMarkup(React.createElement(EvidenceDrawer, {
+    open: true,
+    groups: [],
+    onClose: () => {},
+  }));
+  assert.match(empty, /暂无可展示的决策证据/);
+  assert.match(empty, /class="opskeeper-evidence-overlay"/);
+  assert.match(empty, /class="opskeeper-evidence-panel"/);
 });
 
 test('approval checklist presents facts and warns on missing precise context without mutation', async () => {
@@ -529,38 +654,105 @@ test('approval checklist presents facts and warns on missing precise context wit
   assert.doesNotMatch(markup, /批准|拒绝|提交|执行修复/);
 
   const missing = renderToStaticMarkup(React.createElement(ApprovalChecklist, {
-    facts: { approvalStatus: 'awaiting_human', channel: 'Manager 人工审批中心' },
+    facts: { approvalStatus: 'awaiting_human' },
   }));
   assert.match(missing, /缺少 incident 精确上下文/);
   assert.match(missing, /缺少 candidate 精确上下文/);
   assert.match(missing, /无法生成精确审批指令/);
+  assert.match(missing, /缺少审批有效期/);
+  assert.match(missing, /缺少权威审批指令/);
+  assert.match(missing, /缺少权威审批渠道/);
   assert.doesNotMatch(missing, /已授权|已批准/);
 
-  const componentSource = readFileSync(
+  const noClock = renderToStaticMarkup(React.createElement(ApprovalChecklist, {
+    facts: { ...complete, serverNow: '' },
+  }));
+  assert.match(noClock, /缺少权威服务器时间，无法校验有效期/);
+
+  const expired = renderToStaticMarkup(React.createElement(ApprovalChecklist, {
+    facts: { ...complete, serverNow: '2026-10-01T12:30:01Z' },
+  }));
+  assert.match(expired, /审批窗口已过期/);
+
+  const approvalSource = readFileSync(
     resolve(dashboardRoot, 'src/extensions/incident-command/ApprovalChecklist.jsx'),
     'utf8',
   );
-  assert.doesNotMatch(componentSource, /fetch\(|method:\s*['"](POST|PUT|PATCH|DELETE)/);
+  assert.doesNotMatch(approvalSource, /fetch\(|method:\s*['"](POST|PUT|PATCH|DELETE)/);
+  assert.match(approvalSource, /approvalFactsSignature/);
+  assert.match(approvalSource, /setCopyState\('idle'\)/);
+});
+
+test('approval projection uses authoritative event names and never invents wire fields', async () => {
+  const { projectApprovalFacts } = await loadModule('/src/extensions/archive.js');
+  const authoritative = {
+    archive: {
+      incident_id: 'inc-authoritative',
+      timeline: [
+        { id: 'approval-1', event_type: 'recommendation.approved', status: 'approved' },
+        { id: 'action-1', event_type: 'action.executed', action_fingerprint: 'sha256:action-v1' },
+        { id: 'recovery-1', event_type: 'recovery_signal.observed' },
+      ],
+    },
+    preview: {
+      incident_id: 'inc-authoritative',
+      run_id: 'run-1',
+      workload_fingerprint: 'sha256:workload-v1',
+      passing: { candidate_id: 'candidate-a' },
+    },
+    serverNow: '2026-10-01T12:00:00Z',
+  };
+  const facts = projectApprovalFacts(authoritative);
+  assert.equal(facts.incidentId, 'inc-authoritative');
+  assert.equal(facts.candidateId, 'candidate-a');
+  assert.equal(facts.executionId, 'action-1');
+  assert.equal(facts.serverNow, '2026-10-01T12:00:00Z');
+  assert.deepEqual(facts.sourceIds, ['approval-1', 'action-1', 'recovery-1']);
+
+  const sparseFacts = projectApprovalFacts({
+    archive: authoritative.archive,
+    preview: authoritative.preview,
+    serverNow: undefined,
+  });
+  assert.equal(sparseFacts.instruction, '');
+  assert.equal(sparseFacts.channel, '');
+  assert.equal(sparseFacts.serverNow, '');
+
+  const legacyFacts = projectApprovalFacts({
+    archive: {
+      incident_id: 'inc-legacy',
+      timeline: [
+        { id: 'legacy-approval', event_type: 'approved' },
+        { id: 'legacy-action', event_type: 'action' },
+        { id: 'legacy-recovery', event_type: 'recovery' },
+      ],
+    },
+    preview: null,
+  });
+  assert.deepEqual(legacyFacts.sourceIds, ['legacy-approval', 'legacy-action', 'legacy-recovery']);
 });
 
 test('incident command reads evidence readback and integrates presentation-only surfaces', async () => {
   const { fetchIncidentCommand } = await loadModule('/src/extensions/incident-command/IncidentCommandRoute.jsx');
   const calls = [];
   const api = {
-    async getIncidentLoopState(id) { calls.push(['state', id]); return { incident_id: id, current_phase: 'approved' }; },
-    async getIncidentLoopTimeline(id) { calls.push(['timeline', id]); return { phases: [], events: [] }; },
-    async getIncidentArchive(id) { calls.push(['archive', id]); return { incident_id: id, timeline: [] }; },
-    async getIncidentRepairPreviewSummary(id) { calls.push(['preview', id]); return { incident_id: id, run_id: 'run-1' }; },
+    async getIncidentLoopState(id) { calls.push(['GET', 'state', id]); return { incident_id: id, current_phase: 'approved', server_now: '2026-10-01T12:00:00Z' }; },
+    async getIncidentLoopTimeline(id) { calls.push(['GET', 'timeline', id]); return { phases: [], events: [] }; },
+    async getIncidentArchive(id) { calls.push(['GET', 'archive', id]); return { incident_id: id, timeline: [{ id: 'event-approved', event_type: 'recommendation.approved' }] }; },
+    async getIncidentRepairPreviewSummary(id) { calls.push(['GET', 'preview', id]); return { incident_id: id, run_id: 'run-1', passing: { candidate_id: 'candidate-a' } }; },
   };
   const result = await fetchIncidentCommand(api, 'inc-readback');
   assert.deepEqual(calls, [
-    ['state', 'inc-readback'],
-    ['timeline', 'inc-readback'],
-    ['archive', 'inc-readback'],
-    ['preview', 'inc-readback'],
+    ['GET', 'state', 'inc-readback'],
+    ['GET', 'timeline', 'inc-readback'],
+    ['GET', 'archive', 'inc-readback'],
+    ['GET', 'preview', 'inc-readback'],
   ]);
+  assert.ok(calls.every(([method]) => method === 'GET'));
   assert.equal(result.evidenceGroups.length, 5);
   assert.equal(result.approvalFacts.incidentId, 'inc-readback');
+  assert.equal(result.approvalFacts.candidateId, 'candidate-a');
+  assert.equal(result.approvalFacts.serverNow, '2026-10-01T12:00:00Z');
 
   const apiSource = readFileSync(resolve(dashboardRoot, 'src/extensions/api.js'), 'utf8');
   assert.doesNotMatch(apiSource, /(?:approve|reject|submit)Incident|approval.*(?:POST|PUT|PATCH|DELETE)/i);

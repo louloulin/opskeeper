@@ -32,6 +32,10 @@ function approvalStatusLabel(value) {
 
 export default function ApprovalChecklist({ facts = {}, locale = 'zh-CN' }) {
   const [copyState, setCopyState] = React.useState('idle');
+  const approvalFactsSignature = React.useMemo(() => JSON.stringify(facts ?? {}), [facts]);
+  React.useEffect(() => {
+    setCopyState('idle');
+  }, [approvalFactsSignature]);
   const missingContext = [
     ...(!facts.incidentId ? ['缺少 incident 精确上下文'] : []),
     ...(!facts.candidateId ? ['缺少 candidate 精确上下文'] : []),
@@ -40,7 +44,19 @@ export default function ApprovalChecklist({ facts = {}, locale = 'zh-CN' }) {
     ...(!facts.workloadFingerprint ? ['缺少负载指纹'] : []),
     ...(!facts.rollbackPlan ? ['缺少回滚计划'] : []),
     ...(!facts.verificationCriteria ? ['缺少验证标准'] : []),
+    ...(!facts.instruction ? ['缺少权威审批指令'] : []),
+    ...(!facts.channel ? ['缺少权威审批渠道'] : []),
   ];
+  const expiryWarning = (() => {
+    if (!facts.expiresAt) return '缺少审批有效期';
+    if (!facts.serverNow) return '缺少权威服务器时间，无法校验有效期';
+    const expiresAt = Date.parse(facts.expiresAt);
+    const serverNow = Date.parse(facts.serverNow);
+    if (!Number.isFinite(expiresAt) || !Number.isFinite(serverNow)) {
+      return '权威有效期或服务器时间无效，无法校验审批窗口';
+    }
+    return serverNow >= expiresAt ? '审批窗口已过期' : null;
+  })();
 
   const copyInstruction = async () => {
     if (!facts.instruction) return;
@@ -88,6 +104,18 @@ export default function ApprovalChecklist({ facts = {}, locale = 'zh-CN' }) {
             {missingContext.map((warning) => <li key={warning}>{warning}</li>)}
           </ul>
         </div>
+      )}
+      {expiryWarning && (
+        <p role="alert" style={{
+          margin: 0,
+          border: '1px solid var(--ops-status-waiting, #b45309)',
+          borderRadius: 4,
+          padding: 6,
+          color: 'var(--ops-status-waiting, #b45309)',
+          fontSize: 11,
+        }}>
+          {expiryWarning}
+        </p>
       )}
       <dl style={{ margin: 0, display: 'grid', gap: 5, fontSize: 11 }}>
         {FACT_LABELS.map(([key, label]) => (

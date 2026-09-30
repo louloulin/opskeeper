@@ -1,5 +1,26 @@
 import { normalizeIncidentList } from './runtime.js';
 
+export const INCIDENT_EVENT_TYPES = Object.freeze({
+  alertReceived: 'alert.received',
+  rootCauseConfirmed: 'root_cause.confirmed',
+  evidenceRefreshed: 'evidence.refreshed',
+  recommendationApproved: 'recommendation.approved',
+  actionExecuted: 'action.executed',
+  recoverySignalObserved: 'recovery_signal.observed',
+  incidentClosed: 'incident.closed',
+  incidentReopened: 'incident.reopened',
+});
+
+const LEGACY_EVENT_TYPE_ALIASES = new Map([
+  ['alert_received', INCIDENT_EVENT_TYPES.alertReceived],
+  ['root_cause', INCIDENT_EVENT_TYPES.rootCauseConfirmed],
+  ['approved', INCIDENT_EVENT_TYPES.recommendationApproved],
+  ['action', INCIDENT_EVENT_TYPES.actionExecuted],
+  ['recovery', INCIDENT_EVENT_TYPES.recoverySignalObserved],
+  ['closed', INCIDENT_EVENT_TYPES.incidentClosed],
+  ['reopened', INCIDENT_EVENT_TYPES.incidentReopened],
+]);
+
 export function normalizeArchiveResponse(response) {
   const archive = response?.data && typeof response.data === 'object'
     ? response.data
@@ -115,7 +136,10 @@ function eventsByType(archive) {
   const groups = new Map();
   for (const event of Array.isArray(archive.timeline) ? archive.timeline : []) {
     const source = projectionObject(event);
-    const eventType = projectionText(source.event_type ?? source.eventType);
+    const rawEventType = projectionText(source.event_type ?? source.eventType);
+    const eventType = INCIDENT_EVENT_TYPES[rawEventType]
+      ?? LEGACY_EVENT_TYPE_ALIASES.get(rawEventType)
+      ?? rawEventType;
     if (!eventType) continue;
     if (!groups.has(eventType)) groups.set(eventType, []);
     groups.get(eventType).push(source);
@@ -140,28 +164,56 @@ function firstPreviewRun(archive) {
   return projectionObject((Array.isArray(archive.repair_previews) ? archive.repair_previews : [])[0]);
 }
 
-function candidateText(run) {
-  return (Array.isArray(run.candidates) ? run.candidates : [])
-    .map(projectionObject)
-    .map((candidate) => {
-      const id = projectionText(candidate.candidate_id ?? candidate.candidateId ?? candidate.id);
-      const name = projectionText(candidate.name);
-      const decision = projectionText(candidate.decision).toLowerCase();
-      const rejection = projectionText(candidate.rejection_reason ?? candidate.rejectionReason);
-      const identity = [id, name].filter(Boolean).join(' · ');
-      const outcome = decision === 'pass'
-        ? '通过'
-        : decision
-          ? `${decision}${rejection ? `：${rejection}` : ''}`
-          : '结果未知';
-      return identity ? `${identity} → ${outcome}` : '';
-    })
+function compactSummaryCandidates(preview) {
+  return [preview.baseline, preview.passing, preview.rejected]
     .filter(Boolean)
-    .join('；');
+    .map(projectionObject);
 }
 
-function completenessFor(facts, fallback = 'missing') {
-  return facts.some((item) => item.value !== '' && item.value !== false && item.value != null) ? 'complete' : fallback;
+function mergedPreviewCandidates(preview, run) {
+  const candidates = [...compactSummaryCandidates(preview)];
+  const existing = new Set(candidates.map((candidate) => projectionText(
+    candidate.candidate_id ?? candidate.candidateId ?? candidate.id,
+  )));
+  for (const candidate of Array.isArray(run.candidates) ? run.candidates : []) {
+    const source = projectionObject(candidate);
+    const identity = projectionText(source.candidate_id ?? source.candidateId ?? source.id);
+    if (identity && existing.has(identity)) continue;
+    if (identity) existing.add(identity);
+    candidates.push(source);
+  }
+  return candidates;
+}
+
+function candidateComparison(candidates) {
+  return candidates.map((candidate) => {
+    const id = projectionText(candidate.candidate_id ?? candidate.candidateId ?? candidate.id);
+    const name = projectionText(candidate.name);
+    const decision = projectionText(candidate.decision).toLowerCase();
+    const rejection = projectionText(candidate.rejection_reason ?? candidate.rejectionReason);
+    const latency = Number(candidate.average_latency_ms ?? candidate.averageLatencyMs);
+    const identity = [
+      id,
+      Number.isFinite(latency) ? `${Math.round(latency)}ms` : '',
+      name,
+    ].filter(Boolean).join(' ');
+    const outcome = decision === 'pass'
+      ? '通过'
+      : decision
+        ? `${decision}${rejection ? `：${rejection}` : ''}`
+        : '结果未知';
+    return identity ? `${identity} → ${outcome}` : '';
+  }).filter(Boolean).join('；');
+}
+
+function completenessFor(facts, requiredFactIds = [], fallback = 'missing') {
+  const required = requiredFactIds.length
+    ? facts.filter((item) => requiredFactIds.includes(item.id))
+    : facts;
+  if (!required.length) return fallback;
+  const populated = (item) => item.value !== '' && item.value !== false && item.value != null;
+  if (required.every(populated)) return 'complete';
+  return required.some(populated) ? 'partial' : fallback;
 }
 
 export function projectIncidentEvidence(input = {}) {
@@ -175,12 +227,13 @@ export function projectIncidentEvidence(input = {}) {
   const previewSummary = normalizeRepairPreviewSummary(source.preview);
   const previewRun = firstPreviewRun(archive);
   const groups = eventsByType(archive);
-  const alert = eventOfType(groups, 'alert_received');
-  const cause = eventOfType(groups, 'root_cause');
+  const alert = eventOfType(groups, INCIDENT_EVENT_TYPES.alertReceived);
+  const evidenceRefreshed = eventOfType(groups, INCIDENT_EVENT_TYPES.evidenceRefreshed);
+  const cause = eventOfType(groups, INCIDENT_EVENT_TYPES.rootCauseConfirmed);
   const postmortem = projectionObject((Array.isArray(archive.postmortem_refs) ? archive.postmortem_refs : [])[0]);
-  const approval = eventOfType(groups, 'approved');
-  const action = eventOfType(groups, 'action');
-  const recovery = eventOfType(groups, 'recovery');
+  const approval = eventOfType(groups, INCIDENT_EVENT_TYPES.recommendationApproved);
+  const action = eventOfType(groups, INCIDENT_EVENT_TYPES.actionExecuted);
+  const recovery = eventOfType(groups, INCIDENT_EVENT_TYPES.recoverySignalObserved);
   const previewCandidate = previewSummary.passing || previewRun.candidates?.find?.((candidate) => (
     candidate.candidate_id !== 'baseline' && candidate.decision === 'PASS'
   ));
@@ -194,9 +247,18 @@ export function projectIncidentEvidence(input = {}) {
     previewSummary.isolationBoundary || previewRun.isolation_boundary || previewRun.isolationBoundary,
   );
   const controlledLoad = Boolean(previewSummary.controlledLoad ?? previewRun.controlled_load ?? previewRun.controlledLoad);
+  const previewPresent = Boolean(previewSummary.runId || previewRun.id);
+  const candidates = mergedPreviewCandidates(previewSummary, previewRun);
   const previewReady = Boolean((previewSummary.runId || previewRun.id) && previewCandidate);
+  const provenanceSourceIds = [
+    previewSummary.runId || projectionText(previewRun.id),
+    ...candidates.map((candidate) => projectionText(candidate.id ?? candidate.candidate_id ?? candidate.candidateId)).filter(Boolean),
+  ];
+  const expiry = projectionText(previewSummary.expiresAt || archive.approval_expires_at || archive.approvalExpiresAt);
   const legacyPreview = archive.legacy_preview_not_applicable === true
-    || (archive.closed === true && !(Array.isArray(archive.repair_previews) ? archive.repair_previews : []).length);
+    || (archive.closed === true
+      && !(Array.isArray(archive.repair_previews) ? archive.repair_previews : []).length
+      && !previewReady);
 
   const incidentFacts = [
     fact('incidentId', '事故标识', projectionText(archive.incident_id ?? archive.incidentId), [archive.incident_id]),
@@ -207,24 +269,32 @@ export function projectIncidentEvidence(input = {}) {
     fact('rootCause', '根因', projectionText(postmortem.root_cause || cause?.evidence_ref || cause?.evidenceRef), [
       projectionText(postmortem.id), projectionEventId(cause),
     ]),
-    fact('corroboration', '佐证链路', (Array.isArray(archive.trace_ids) ? archive.trace_ids : []).join('，'), []),
+    fact('corroboration', '佐证链路', [
+      projectionText(evidenceRefreshed?.evidence_ref ?? evidenceRefreshed?.evidenceRef),
+      ...(Array.isArray(archive.trace_ids) ? archive.trace_ids : []),
+    ].filter(Boolean).join('，'), [projectionEventId(evidenceRefreshed)]),
   ];
   const repairFacts = [
-    fact('comparison', 'A/B 候选对比', candidateText(previewRun), [projectionText(previewRun.id)]),
-    fact('boundary', '受控工作负载边界', [
+    fact('comparison', 'A/B 候选对比', candidateComparison(candidates), provenanceSourceIds),
+    fact('boundary', '受控工作负载边界', previewPresent ? [
       controlledLoad ? '受控负载：是' : '受控负载：未知',
       isolationBoundary ? `隔离边界：${isolationBoundary}` : '',
-    ].filter(Boolean).join('；'), [projectionText(previewRun.id)]),
+    ].filter(Boolean).join('；') : '', [projectionText(previewRun.id)]),
     fact('identity', '目标与负载身份', [
       targetFingerprint ? `目标：${targetFingerprint}` : '',
       workloadFingerprint ? `负载：${workloadFingerprint}` : '',
     ].filter(Boolean).join('；'), [projectionText(previewRun.id)]),
-    fact('eligibility', '预览资格', previewReady ? '预览已完成' : '预览结果缺失'),
+    fact('provenance', '预览来源', [
+      previewSummary.runId ? `运行：${previewSummary.runId}` : projectionText(previewRun.id),
+      previewSummary.seedFingerprint ? `种子：${previewSummary.seedFingerprint}` : '',
+    ].filter(Boolean).join('；'), provenanceSourceIds),
+    fact('eligibility', '预览资格', previewReady ? '预览已完成' : ''),
   ];
   const safetyFacts = [
     fact('targetFingerprint', '目标指纹', targetFingerprint, [projectionText(previewRun.id)]),
     fact('workloadFingerprint', '负载指纹', workloadFingerprint, [projectionText(previewRun.id)]),
     fact('rollbackPlan', '回滚计划', projectionText(previewSummary.rollbackPlan || archive.rollback_plan || archive.rollbackPlan), [projectionEventId(action)]),
+    fact('expiry', '审批有效期', expiry, [previewSummary.runId || projectionText(previewRun.id)]),
     fact('approval', '审批记录', projectionText(approval?.status || approval?.actor), [projectionEventId(approval)]),
     fact('executionIdentity', '执行身份', projectionText(action?.actor || action?.action_fingerprint || action?.actionFingerprint), [projectionEventId(action)]),
     fact('auditTrail', '审计轨迹', (Array.isArray(archive.timeline) ? archive.timeline : []).map(projectionEventId).filter(Boolean).join('，'), []),
@@ -236,17 +306,45 @@ export function projectIncidentEvidence(input = {}) {
   ];
 
   return [
-    { id: 'incident', title: '为什么是这起事故', completeness: completenessFor(incidentFacts), facts: incidentFacts, rawPayload: { archive: archive.incident_id, alert } },
-    { id: 'cause', title: '为什么是这个根因', completeness: completenessFor(causeFacts), facts: causeFacts, rawPayload: { postmortem, cause } },
+    {
+      id: 'incident',
+      title: '为什么是这起事故',
+      completeness: completenessFor(incidentFacts, ['incidentId', 'alert', 'scope']),
+      facts: incidentFacts,
+      rawPayload: { archive: archive.incident_id, alert },
+    },
+    {
+      id: 'cause',
+      title: '为什么是这个根因',
+      completeness: completenessFor(causeFacts, ['rootCause', 'corroboration']),
+      facts: causeFacts,
+      rawPayload: { postmortem, cause },
+    },
     {
       id: 'repair',
       title: '为什么选择这个修复',
-      completeness: legacyPreview ? 'legacy_not_applicable' : (previewReady ? 'complete' : 'missing'),
+      completeness: legacyPreview
+        ? 'legacy_not_applicable'
+        : completenessFor(repairFacts, ['comparison', 'boundary', 'identity', 'provenance', 'eligibility']),
       facts: repairFacts,
       rawPayload: previewRun,
     },
-    { id: 'safety', title: '为什么它是安全的', completeness: completenessFor(safetyFacts), facts: safetyFacts, rawPayload: { approval, action } },
-    { id: 'verification', title: '为什么确认有效', completeness: completenessFor(verificationFacts), facts: verificationFacts, rawPayload: recovery },
+    {
+      id: 'safety',
+      title: '为什么它是安全的',
+      completeness: completenessFor(safetyFacts, [
+        'targetFingerprint', 'workloadFingerprint', 'expiry', 'rollbackPlan', 'approval', 'executionIdentity', 'auditTrail',
+      ]),
+      facts: safetyFacts,
+      rawPayload: { approval, action },
+    },
+    {
+      id: 'verification',
+      title: '为什么确认有效',
+      completeness: completenessFor(verificationFacts, ['result', 'criteria', 'metrics']),
+      facts: verificationFacts,
+      rawPayload: recovery,
+    },
   ];
 }
 
@@ -256,9 +354,9 @@ export function projectApprovalFacts(input = {}) {
   const preview = normalizeRepairPreviewSummary(source.preview);
   const previewRun = firstPreviewRun(archive);
   const groups = eventsByType(archive);
-  const approval = eventOfType(groups, 'approved');
-  const action = eventOfType(groups, 'action');
-  const recovery = eventOfType(groups, 'recovery');
+  const approval = eventOfType(groups, INCIDENT_EVENT_TYPES.recommendationApproved);
+  const action = eventOfType(groups, INCIDENT_EVENT_TYPES.actionExecuted);
+  const recovery = eventOfType(groups, INCIDENT_EVENT_TYPES.recoverySignalObserved);
   const candidate = projectionObject(preview.passing || previewRun.candidates?.find?.((item) => (
     projectionObject(item).candidate_id !== 'baseline' && projectionObject(item).decision === 'PASS'
   )));
@@ -284,10 +382,8 @@ export function projectApprovalFacts(input = {}) {
     previewEligibility: previewReady ? '预览已完成' : '预览结果缺失',
     verificationCriteria,
     approvalStatus,
-    instruction: instructionSource || (incidentId && candidateId
-      ? `审批 incident=${incidentId} candidate=${candidateId}`
-      : ''),
-    channel: projectionText(preview.approvalChannel || archive.approval_channel || archive.approvalChannel) || 'Manager 人工审批中心',
+    instruction: instructionSource,
+    channel: projectionText(preview.approvalChannel || archive.approval_channel || archive.approvalChannel),
     sourceIds: [projectionEventId(approval), projectionEventId(action), projectionEventId(recovery)].filter(Boolean),
   };
 }
