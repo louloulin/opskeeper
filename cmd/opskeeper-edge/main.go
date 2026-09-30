@@ -159,6 +159,24 @@ func main() {
 		UpgradeStageDir: stageDir,
 	}, log)
 
+	// Node agent: a PiG process under this node's supervision, serving the
+	// manager's agent.* commands. A failure here is logged and the edge
+	// boots without it - the node still collects metrics and still serves
+	// its own skill RPCs. An edge that refused to start because the AI
+	// was down would take the telemetry with it, and telemetry is the one
+	// thing a node cannot be redeployed to get back quickly.
+	agentLog := log.With(slog.String("comp", "node-agent"))
+	agentBridge, stopNodeAgent, err := startNodeAgent(egCtx, client, loadNodeAgentConfig(), version, agentLog)
+	if err != nil {
+		log.Warn("node agent unavailable; the node runs without an AI agent", slog.Any("err", err))
+	} else {
+		agent.SetAgentBridge(agentBridge)
+		// The bridge's events are relayed on goroutines that outlive the
+		// agent supervisor's own loop, so the process is stopped on the
+		// way out rather than left orphaned holding node credentials.
+		defer stopNodeAgent()
+	}
+
 	// Local /metrics listener for debugging.
 	metricsMux := chi.NewRouter()
 	metricsMux.Handle("/metrics", prom.Handler(reg))

@@ -35,6 +35,26 @@ components:
   api:        { in: api/** }
   cmd:        { in: cmd/** }
 
+  # ---------------- OpsKeeper 2.0 modules ----------------
+  # These are separate go modules, not just subtrees. The Go module
+  # system already prevents cross-module import cycles; these rules
+  # document and enforce the intended direction so a violation is caught
+  # at review time rather than by a build failure that names the wrong
+  # thing.
+  #
+  #   core        the contract layer. Depends on nothing.
+  #   pig         the PiG adapter. The ONLY component permitted to
+  #               import github.com/MichaelKinsy/PiG.
+  #   plugin_sdk  the third-party plugin surface. Depends on core only.
+  oxcore_domain: { in: core/domain/** }
+  oxcore_ports:  { in: core/ports/** }
+  oxcore_wire:   { in: core/wire/** }
+  oxpig_model:   { in: core/pig/pigmodel/** }
+  oxpig_agent:   { in: core/pig/pigagent/** }
+  oxpig_rpc:     { in: core/pig/pigrpc/** }
+  oxedge_pigsup: { in: core/edge/pigsupervisor/** }
+  oxplugin_sdk:  { in: sdk/** }
+
 # 允许依赖的正向清单（未列出 = 禁止）
 deps:
   # ---------------- iam BC ----------------
@@ -72,6 +92,43 @@ deps:
   edgeagent_model:
     mayDependOn: [shared_pkg]
 
+  # ---------------- OpsKeeper 2.0 module direction ----------------
+  # core is the root of the new graph: it may not depend on anything, not
+  # even on shared_pkg. A contract that reaches into infrastructure forces
+  # every plugin to resolve that infrastructure.
+  oxcore_domain:
+    mayDependOn: []
+  oxcore_ports:
+    mayDependOn: [oxcore_domain, oxcore_wire]
+  oxcore_wire:
+    mayDependOn: []
+
+  # pig adapts the contracts onto PiG. It may not be depended upon by
+  # anything except the cmd assembly layer, which is what keeps PiG
+  # reachable from exactly one place.
+  oxpig_model:
+    mayDependOn: [oxcore_domain, oxcore_wire, oxpig_agent]
+  oxpig_agent:
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxpig_model]
+  # pigrpc adapts the node agent's RPC client. It is the only place a
+  # supervisor-adjacent component is allowed to learn that a node agent is
+  # a `pig --mode rpc` subprocess.
+  oxpig_rpc:
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire]
+
+  # edge is the node plane. It depends on core's contracts and nothing else
+  # internal: a node that reached the control plane could grow a second
+  # source of truth for identity and approval, which is exactly the split
+  # the module graph exists to keep.
+  oxedge_pigsup:
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire]
+
+  # sdk is what third-party plugins compile against. It may not reach any
+  # internal implementation, or a plugin would inherit OpsKeeper's whole
+  # dependency graph.
+  oxplugin_sdk:
+    mayDependOn: [oxcore_domain, oxcore_wire]
+
   # ---------------- 共享 ----------------
   shared_pkg:
     # 不得依赖任何 BC（业务无关）
@@ -101,6 +158,13 @@ deps:
       - edgeagent_model
       - shared_pkg
       - api
+      # The 2.0 modules assemble from cmd; only cmd may reach pig.
+      - oxcore_domain
+      - oxcore_ports
+      - oxcore_wire
+      - oxpig_model
+      - oxpig_agent
+      - oxplugin_sdk
 
 # 注：go-arch-lint 的 schema 字段（version / components / deps）按 v3
 # 主流文档书写；若 CI 报 schema 错，按实际版本微调字段名即可。

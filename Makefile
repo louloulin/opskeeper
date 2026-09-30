@@ -118,6 +118,24 @@ arch-lint: ## 运行 go-arch-lint（校验 BC 边界）
 	@command -v go-arch-lint >/dev/null 2>&1 || { echo "go-arch-lint not installed; skipping"; exit 0; }
 	go-arch-lint check
 
+module-check: ## 校验 OpsKeeper 2.0 模块边界（唯一 PiG 导入点 / core 无基础设施依赖）
+	go run ./scripts/modulecheck .
+
+module-test: ## 运行新模块（core / pig / edge / sdk）的测试
+	cd core && go test ./... -count=1
+	cd core/pig && go test ./... -count=1
+	cd core/edge && go test ./... -count=1
+	cd sdk && go test ./... -count=1
+	cd core && go build ./...
+	cd core/pig && go build ./...
+	cd core/edge && go build ./...
+	cd sdk && go build ./...
+
+module-race: ## 对新模块跑竞态检测（supervisor 重启循环是并发热点）
+	cd core && go test ./... -count=1 -race
+	cd core/pig && go test ./... -count=1 -race
+	cd core/edge && go test ./... -count=1 -race
+
 # ----------------------------------------------------------------------------
 # proto
 # ----------------------------------------------------------------------------

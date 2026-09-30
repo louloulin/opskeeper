@@ -130,6 +130,8 @@ import (
 	managerbizmarketplace "github.com/vincent-wuhan/opskeeper/internal/manager/biz/marketplace"
 	managerbizmcp "github.com/vincent-wuhan/opskeeper/internal/manager/biz/mcp"
 	managerbizmonitor "github.com/vincent-wuhan/opskeeper/internal/manager/biz/monitor"
+	managerbiznodeagent "github.com/vincent-wuhan/opskeeper/internal/manager/biz/nodeagent"
+	managerbiznodefleet "github.com/vincent-wuhan/opskeeper/internal/manager/biz/nodefleet"
 	managerbizsecret "github.com/vincent-wuhan/opskeeper/internal/manager/biz/secret"
 	managerbizsetting "github.com/vincent-wuhan/opskeeper/internal/manager/biz/setting"
 	managerbizskill "github.com/vincent-wuhan/opskeeper/internal/manager/biz/skill"
@@ -191,6 +193,7 @@ import (
 	managerservermetric "github.com/vincent-wuhan/opskeeper/internal/manager/server/metric"
 	managermiddleware "github.com/vincent-wuhan/opskeeper/internal/manager/server/middleware"
 	managerservermonitor "github.com/vincent-wuhan/opskeeper/internal/manager/server/monitor"
+	managerservernodeagent "github.com/vincent-wuhan/opskeeper/internal/manager/server/nodeagent"
 	managerserverprom "github.com/vincent-wuhan/opskeeper/internal/manager/server/prometheus"
 	managerserverreport "github.com/vincent-wuhan/opskeeper/internal/manager/server/report"
 	managerserversecret "github.com/vincent-wuhan/opskeeper/internal/manager/server/secret"
@@ -1193,6 +1196,31 @@ func main() {
 	})
 	webshellAuditRepo := managerwebshelldata.NewRepo(db)
 
+	// Node AI agents: the control plane's view of one PiG agent per node.
+	//
+	// Built before frontierbound.Install so the agent.event handler can
+	// route a node's pushed frames into the fleet. The fleet is the
+	// Dialer - its Call is the frontierbound client's Call - so nothing
+	// here knows the agent is a subprocess speaking a foreign RPC dialect.
+	nodeFleet, ferr := managerbiznodefleet.New(managerbiznodefleet.Options{Dial: fbClient})
+	if ferr != nil {
+		// Only a nil dial can do this, and fbClient is never nil. Logging
+		// rather than returning keeps a wiring mistake from taking down
+		// telemetry collection, which does not depend on any of this.
+		log.Error("node agent fleet unavailable; the console cannot reach node agents", slog.Any("err", ferr))
+	}
+	nodeAgentSvc, err := managerbiznodeagent.New(managerbiznodeagent.Options{Fleet: nodeFleet})
+	var nodeAgentHandler *managerservernodeagent.Handler
+	if err != nil {
+		// The console then simply has no node-agent routes. Nodes keep
+		// running their agents and keep answering their skill RPCs; what
+		// is lost is the console's ability to talk to them, which is a
+		// feature rather than the platform.
+		log.Error("node agent console surface unavailable", slog.Any("err", err))
+	} else {
+		nodeAgentHandler = managerservernodeagent.NewHandler(nodeAgentSvc)
+	}
+
 	// Edge change event usecase (A.3 follow-up). Receives batches of
 	// journald / dockerd / packagemgr events over the tunnel and
 	// persists into edge_change_events. The cleanup goroutine trims
@@ -1210,6 +1238,11 @@ func main() {
 		PluginConfigUC: pluginConfigUC,
 		WebshellRouter: webshellRouter,
 		ChangeEventUC:  changeEventUC,
+		// AgentEvents routes a node's pushed agent frames to the console
+		// that asked for them. Nil-safe: with it unset the node agents
+		// still run and still take commands, they just cannot deliver a
+		// turn, which the console shows as a conversation with no output.
+		AgentEvents: nodeFleet,
 		// DeviceResolver wires the post-split edge_id → device_id
 		// resolution path (push pipeline). The biz junction repo is the
 		// source of truth.
@@ -2964,6 +2997,9 @@ func main() {
 			logsHandler.Register(protected)
 			tracesHandler.Register(protected)
 			aiopsHandler.Register(protected)
+			if nodeAgentHandler != nil {
+				nodeAgentHandler.Register(protected)
+			}
 			alertHandler.Register(protected)
 			loopHTTPHandler.Register(protected)
 			managerserverloop.RegisterAdminRoutes(protected, managerserverloop.AdminRouteDeps{

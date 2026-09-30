@@ -94,6 +94,14 @@ type Agent struct {
 	// because the plugin supervisor is built after the Agent in main; guarded
 	// by mu so the heartbeat goroutine reads it race-free.
 	pluginHealthFn func() []tunnel.PluginHealthWire
+
+	// agentBridge serves the manager's agent.* commands against this node's
+	// PiG process. Optional and wired post-construction (SetAgentBridge)
+	// for the same reason as pluginHealthFn: the supervisor is built in main
+	// after the Agent. A node with no bridge has no agent, and says so by
+	// not registering the methods - which the manager can tell apart from
+	// an agent that is registered and refusing.
+	agentBridge *AgentBridge
 }
 
 // SetPluginHealthFn wires the plugin-health provider used by the heartbeat
@@ -103,6 +111,27 @@ func (a *Agent) SetPluginHealthFn(fn func() []tunnel.PluginHealthWire) {
 	a.mu.Lock()
 	a.pluginHealthFn = fn
 	a.mu.Unlock()
+}
+
+// SetAgentBridge wires the node's agent command surface.
+//
+// Safe to call after Run has started, though calling it before is better:
+// handlers are installed by registerHandlers, so a bridge attached after
+// that point serves agent.state and agent.health but not agent.prompt
+// until the agent reconnects. A nil bridge disables the surface entirely,
+// which is how a node opts out of running an agent.
+func (a *Agent) SetAgentBridge(b *AgentBridge) {
+	a.mu.Lock()
+	a.agentBridge = b
+	a.mu.Unlock()
+}
+
+// agentBridgeLocked returns the bridge, or nil. Callers already holding mu
+// use this; the rest take the read lock themselves.
+func (a *Agent) bridge() *AgentBridge {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.agentBridge
 }
 
 // NewAgent builds an Agent; applies defaults for zero-valued Config
@@ -199,6 +228,14 @@ func (a *Agent) Run(ctx context.Context) error {
 	eg.Go(func() error { return a.heartbeatLoop(egCtx) })
 	eg.Go(func() error { return a.metricsLoop(egCtx) })
 
+	// Relay the agent's output to the manager. This returns immediately;
+	// the relay is on its own goroutine inside the bridge. A node whose
+	// agent is not up yet still serves agent.state and agent.health, so
+	// there is nothing to report as an error here.
+	if b := a.bridge(); b != nil {
+		b.StartEvents(egCtx)
+	}
+
 	// 5. 边缘 changewatcher (journald / dockerd / packagemgr) → TunnelSink → manager.
 	// 启动失败仅 log warn, 不阻塞 agent (fail-soft: changewatcher 是 opt-in 能力).
 	tunSink := changewatcher.NewTunnelSink(a.client, a.log, changewatcher.TunnelSinkSinkConfig{})
@@ -276,6 +313,9 @@ func (a *Agent) writeHealthMarker() {
 // MethodExecuteSkill dispatcher (skill framework) — adding a new skill
 // only requires writing one Executor file and registering it in init().
 func (a *Agent) registerHandlers() {
+	if b := a.bridge(); b != nil {
+		b.Register(a.client)
+	}
 	a.client.RegisterHandler(tunnel.MethodGetHostLoad,
 		func(ctx context.Context, _ tunnel.Session, _ string, _ []byte) ([]byte, error) {
 			return jsonEncode(a.collector.GetHostLoad(ctx))
@@ -372,7 +412,14 @@ func (a *Agent) registerEdge(ctx context.Context) error {
 	}
 	a.mu.Lock()
 	a.edgeID = resp.EdgeID
+	bridge := a.agentBridge
 	a.mu.Unlock()
+	// The manager assigns the id, and a reconnect can assign a different
+	// one. Frames stamped with the previous id would land on a conversation
+	// the manager believes belongs to some other node.
+	if bridge != nil {
+		bridge.SetEdgeID(resp.EdgeID)
+	}
 	a.log.Info("agent: registered with cloud",
 		slog.Uint64("edge_id", resp.EdgeID),
 		slog.Int64("server_time", resp.ServerTime),

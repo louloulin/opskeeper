@@ -10,6 +10,8 @@ import (
 
 	"github.com/singchia/geminio"
 
+	"github.com/vincent-wuhan/opskeeper/core/wire"
+
 	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
 )
@@ -243,5 +245,149 @@ func TestInstall_PushPromSamples_BadBody(t *testing.T) {
 	}
 	if pi.pushCnt != 0 {
 		t.Errorf("ingester should not be called, got pushCnt=%d", pi.pushCnt)
+	}
+}
+
+// --- agent.event --------------------------------------------------------
+
+// fakeAgentEvents records the frames the agent.event push routed.
+type fakeAgentEvents struct {
+	mu     sync.Mutex
+	frames []tunnel.AgentEventFrame
+	// delivered is what DeliverInbound answers, so a test can script a
+	// conversation that has since closed.
+	delivered bool
+}
+
+func (f *fakeAgentEvents) DeliverInbound(frame tunnel.AgentEventFrame) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.frames = append(f.frames, frame)
+	return f.delivered
+}
+
+func (f *fakeAgentEvents) last() (tunnel.AgentEventFrame, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.frames) == 0 {
+		return tunnel.AgentEventFrame{}, false
+	}
+	return f.frames[len(f.frames)-1], true
+}
+
+func installAgentEvent(t *testing.T, router AgentEventRouter) *fakeService {
+	t.Helper()
+	fs := newFakeService()
+	c := newWithService(fs, slog.Default())
+	err := Install(context.Background(), c, Wiring{
+		EdgeAuthn:      &edgebiz.AccessKeyAuthenticator{},
+		EdgeUC:         &edgebiz.Usecase{},
+		MetricIngester: &fakeMetricIngester{},
+		AgentEvents:    router,
+		Log:            slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	return fs
+}
+
+func TestInstall_AgentEvent_ReachesTheRouter(t *testing.T) {
+	router := &fakeAgentEvents{delivered: true}
+	fs := installAgentEvent(t, router)
+	rpc, ok := fs.rpcs[tunnel.MethodAgentEvent]
+	if !ok {
+		t.Fatal("agent.event was not registered")
+	}
+
+	frame := wire.StreamEvent{Type: wire.StreamAssistantDelta, SessionID: "s-1", Seq: 3}
+	body, _ := json.Marshal(tunnel.AgentEventFrame{EdgeID: 42, SessionID: "s-1", Frame: &frame})
+	rsp := &fakeResp{}
+	rpc(context.Background(), &fakeReq{data: body, clientID: 42}, rsp)
+	if rsp.err != nil {
+		t.Fatalf("agent.event returned an error: %v", rsp.err)
+	}
+
+	got, ok := router.last()
+	if !ok {
+		t.Fatal("nothing was routed")
+	}
+	if got.SessionID != "s-1" {
+		t.Errorf("routed session = %q, want s-1", got.SessionID)
+	}
+}
+
+func TestInstall_AgentEvent_TrustsTheTransportEdgeID(t *testing.T) {
+	// One node must not be able to write into another node's
+	// conversation. The body carries the node's own stamp, and a node is
+	// free to put any number in it; what authenticated is the connection,
+	// so the transport's edge id is the one that counts.
+	router := &fakeAgentEvents{delivered: true}
+	fs := installAgentEvent(t, router)
+	rpc := fs.rpcs[tunnel.MethodAgentEvent]
+
+	frame := wire.StreamEvent{Type: wire.StreamAssistantDelta, SessionID: "s-1"}
+	body, _ := json.Marshal(tunnel.AgentEventFrame{EdgeID: 7, SessionID: "s-1", Frame: &frame})
+	rpc(context.Background(), &fakeReq{data: body, clientID: 42}, &fakeResp{})
+
+	got, _ := router.last()
+	if got.EdgeID != 42 {
+		t.Errorf("routed to edge %d, want the authenticated 42", got.EdgeID)
+	}
+}
+
+func TestInstall_AgentEvent_AnUnplaceableFrameIsStillSuccess(t *testing.T) {
+	// A frame for a conversation that closed between the node sending it
+	// and the manager receiving it is ordinary. Answering with an error
+	// would make the edge treat a finished turn as a transport fault and
+	// count it as a drop.
+	router := &fakeAgentEvents{delivered: false}
+	fs := installAgentEvent(t, router)
+	rpc := fs.rpcs[tunnel.MethodAgentEvent]
+
+	frame := wire.StreamEvent{Type: wire.StreamDone, SessionID: "s-1"}
+	body, _ := json.Marshal(tunnel.AgentEventFrame{EdgeID: 42, SessionID: "s-1", Frame: &frame})
+	rsp := &fakeResp{}
+	rpc(context.Background(), &fakeReq{data: body, clientID: 42}, rsp)
+	if rsp.err != nil {
+		t.Errorf("an unplaceable frame was reported as an error: %v", rsp.err)
+	}
+}
+
+func TestInstall_AgentEvent_AMalformedFrameDoesNotFailThePush(t *testing.T) {
+	// A frame the manager cannot parse is the node's bug and there is
+	// nothing for the edge to retry. Answering cleanly keeps a bad build
+	// on one node from looking like a broken tunnel.
+	router := &fakeAgentEvents{delivered: true}
+	fs := installAgentEvent(t, router)
+	rpc := fs.rpcs[tunnel.MethodAgentEvent]
+
+	rsp := &fakeResp{}
+	rpc(context.Background(), &fakeReq{data: []byte("not json"), clientID: 42}, rsp)
+	if rsp.err != nil {
+		t.Errorf("a malformed frame was reported as an error: %v", rsp.err)
+	}
+	if _, ok := router.last(); ok {
+		t.Error("a malformed frame was routed as if it parsed")
+	}
+}
+
+func TestInstall_WithoutAgentEvents_NoAgentEventHandler(t *testing.T) {
+	// Nodes running an agent with no way to deliver a turn is a degraded
+	// conversation, not a broken node. Installing a handler that answers
+	// agent_unavailable would instead look like the node has no agent.
+	fs := newFakeService()
+	c := newWithService(fs, slog.Default())
+	err := Install(context.Background(), c, Wiring{
+		EdgeAuthn:      &edgebiz.AccessKeyAuthenticator{},
+		EdgeUC:         &edgebiz.Usecase{},
+		MetricIngester: &fakeMetricIngester{},
+		Log:            slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if _, ok := fs.rpcs[tunnel.MethodAgentEvent]; ok {
+		t.Error("agent.event was registered with no router behind it")
 	}
 }

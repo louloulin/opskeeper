@@ -66,7 +66,25 @@ type Wiring struct {
 	// (correct for pre-launch data; explicitly resolving here is the
 	// future-proof path for multi-agent hosts).
 	DeviceResolver DeviceResolver
-	Log            *slog.Logger
+	// AgentEvents routes the frames a node's agent pushes back to the
+	// console that asked for them. Optional - when nil, agent.event does
+	// not install and node agents run, they simply have no way to deliver
+	// a turn. Their commands (prompt/steer/abort) still work, so this is
+	// a degraded conversation rather than a broken node.
+	AgentEvents AgentEventRouter
+	Log         *slog.Logger
+}
+
+// AgentEventRouter is the narrow surface the agent.event push needs.
+// Declared here so frontierbound does not import the fleet: the transport
+// layer hands a frame to whatever owns conversation routing, and the two
+// are free to move apart without a cycle.
+type AgentEventRouter interface {
+	// DeliverInbound routes one pushed frame to the conversation it names
+	// and reports whether a conversation took it. A false is the ordinary
+	// outcome of a frame for a conversation that has since closed, and is
+	// never an error - see nodefleet.Fleet.DeliverInbound.
+	DeliverInbound(tunnel.AgentEventFrame) bool
 }
 
 // PluginConfigFetcher is the narrow surface frontierbound needs from
@@ -471,6 +489,34 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 			return json.Marshal(out)
 		}); err != nil {
 			return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodGetPluginConfigs, err)
+		}
+	}
+
+	// agent.event: a node's agent pushing a turn's output back to the
+	// console that asked for it. The reply is always success. The node
+	// relays on a bounded deadline and counts a failed push as a drop, so
+	// a refusal here costs nothing on its side - but an error would make
+	// the edge treat a normal end-of-conversation as a transport fault.
+	if w.AgentEvents != nil {
+		if err := c.Register(ctx, tunnel.MethodAgentEvent, func(rpcCtx context.Context, edgeID uint64, body []byte) ([]byte, error) {
+			var in tunnel.AgentEventFrame
+			if err := json.Unmarshal(body, &in); err != nil {
+				// A frame the manager cannot parse is the node's bug, not
+				// this conversation's. Answering with an error makes the
+				// edge log it and carry on; there is nothing to retry.
+				log.Warn("frontierbound: agent.event decode failed",
+					slog.Uint64("edge_id", edgeID), slog.Any("err", err))
+				return []byte(`{}`), nil
+			}
+			// The transport's edge id is authoritative over the node's own
+			// stamp: it is what the connection authenticated as, and a
+			// frame claiming a different node would otherwise let one node
+			// write into another node's conversation.
+			in.EdgeID = edgeID
+			w.AgentEvents.DeliverInbound(in)
+			return []byte(`{}`), nil
+		}); err != nil {
+			return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodAgentEvent, err)
 		}
 	}
 

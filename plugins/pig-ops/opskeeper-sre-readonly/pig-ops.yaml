@@ -1,0 +1,52 @@
+# pig-ops.yaml — OpsKeeper governance manifest.
+#
+# The Pi package manifest shipped alongside this file stays Pi-compatible
+# and is what the agent runtime actually mounts. This file adds only the
+# governance fields Pi has no vocabulary for. Both are read on install; the
+# host validates this one with the sdk module's admission rules.
+apiVersion: opskeeper.io/v1
+kind: Plugin
+metadata:
+  name: opskeeper-sre-readonly
+  version: 0.1.0
+  vendor: opskeeper
+  homepage: https://github.com/vincent-wuhan/opskeeper
+spec:
+  # edge: installed into the per-node pig process.
+  # manager: the control-plane half. This plugin is node-side only.
+  targets: [edge]
+
+  # L1 = read-only plus local evidence collection, no approval required.
+  # This is the first plugin tier every node runs. Anything that mutates
+  # ships as a separate, explicitly approved package.
+  safety_level: L1
+
+  # Declared ceiling, not a wish list. The host refuses a tool whose class
+  # exceeds this, so declaring a destructive tool here is a load error
+  # rather than a runtime surprise.
+  capabilities: [read]
+
+  # The host injects credentials for exactly these scopes. A scope not
+  # listed here is never handed to the plugin, so it cannot reach a
+  # credential it did not ask for.
+  required_scopes:
+    - host.read
+    - topology.read
+    - alert.read
+    - observability.read
+
+  audit:
+    # The plugin reports tool activity; the host derives each ledger entry
+    # from its own gate events. A plugin can neither forge nor suppress a
+    # record, and `mutates` is always false — audit-ledger writes are
+    # host-only and a manifest requesting them is refused outright.
+    emits: true
+    mutates: false
+
+  approval:
+    # Read-only plugins never enter the approval queue.
+    required: false
+
+  install:
+    strategy: rolling
+    min_edge_version: 0.7.0
