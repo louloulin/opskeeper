@@ -11,41 +11,14 @@ function errorFrom(result) {
   return result.status === 'rejected' ? (result.reason || new Error('读取失败')) : null;
 }
 
-function fallbackState(state, timeline) {
-  if (state && (state.current_phase || state.currentPhase)) return state;
-  const phases = Array.isArray(timeline?.phases) ? timeline.phases : [];
-  const phase = phases.map((item) => item?.phase).find(Boolean);
-  return phase ? { ...state, current_phase: phase } : state;
-}
-
-function fallbackTimeline(timeline, state) {
-  if (Array.isArray(timeline?.phases)) return timeline;
-  const phase = state?.current_phase || state?.currentPhase;
-  return phase
-    ? {
-      ...timeline,
-      phases: [{ phase, status: state?.status || 'running' }],
-      events: [{ phase, event_type: 'phase_entered' }],
-    }
-    : timeline;
-}
-
 export async function fetchIncidentCommand(api, incidentId, serverNow, incident) {
   const [stateResult, timelineResult] = await Promise.allSettled([
     api.getIncidentLoopState(incidentId),
     api.getIncidentLoopTimeline(incidentId),
   ]);
-  const state = fallbackState(
-    stateResult.status === 'fulfilled' ? stateResult.value : {},
-    timelineResult.status === 'fulfilled' ? timelineResult.value : {},
-  );
-  const timeline = fallbackTimeline(
-    timelineResult.status === 'fulfilled' ? timelineResult.value : {},
-    state,
-  );
-  const authoritativeNow = serverNow
-    || (state && (state.server_now || state.serverNow))
-    || new Date().toISOString();
+  const state = stateResult.status === 'fulfilled' ? stateResult.value : null;
+  const timeline = timelineResult.status === 'fulfilled' ? timelineResult.value : null;
+  const authoritativeNow = serverNow || state?.server_now;
 
   return {
     state: stateResult.status === 'fulfilled' ? state : null,
@@ -84,6 +57,15 @@ export function startIncidentCommandPolling({
     active = false;
     clearTimeout(timer);
   };
+}
+
+export function selectIncidentCommandIncident(event, {
+  setSelectedIncidentId,
+  setCommand,
+}) {
+  const incidentId = event?.target?.value ?? '';
+  setSelectedIncidentId(incidentId);
+  setCommand(null);
 }
 
 export default function IncidentCommandRoute({
@@ -137,7 +119,10 @@ export default function IncidentCommandRoute({
         <select
           id="opskeeper-incident-command-id"
           value={selectedIncidentId}
-          onChange={(event) => setSelectedIncidentId(event.target.value)}
+          onChange={(event) => selectIncidentCommandIncident(event, {
+            setSelectedIncidentId,
+            setCommand,
+          })}
           style={{
             border: '1px solid var(--ops-surface-border)',
             background: 'var(--ops-surface)',

@@ -5,6 +5,7 @@ import test from 'node:test';
 import { createServer } from 'vite';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 
 import { opskeeperApi, xhrTransport } from './api.js';
 import { fromManagerLoop, selectNextAction } from '../../../../../shared/incident-command/index.js';
@@ -99,8 +100,9 @@ test('command polling follows the selected incident and keeps read errors indepe
 
   const partial = await fetchIncidentCommand(api(false, true), 'inc-a', '2026-10-01T12:00:30Z');
   assert.equal(partial.view.incidentId, 'inc-a');
-  assert.equal(partial.view.stage, 'approved');
-  assert.equal(partial.view.nextAction.kind, 'wait');
+  assert.equal(partial.view.stage, undefined);
+  assert.equal(partial.view.stageStatus, 'unknown');
+  assert.equal(partial.view.nextAction.kind, 'inspect-evidence');
   assert.equal(partial.stateError, null);
   assert.equal(partial.timelineError.message, 'timeline unavailable');
 
@@ -132,6 +134,98 @@ test('command polling follows the selected incident and keeps read errors indepe
   assert(calls.slice(pollingCallStart).every(([, id]) => id === 'inc-a'));
 });
 
+test('partial incident-command reads never fabricate state or timeline data', async () => {
+  const { fetchIncidentCommand } = await loadModule(
+    '/src/extensions/incident-command/IncidentCommandRoute.jsx',
+  );
+  const timeline = {
+    chain: { current_phase: 'recovered' },
+    phases: [{ phase: 'recovered', status: 'running' }],
+    events: [{ phase: 'recovered', event_type: 'phase_entered', created_at: '2026-10-01T12:00:00Z' }],
+  };
+  const state = {
+    incident_id: 'inc-partial',
+    current_phase: 'approved',
+    updated_at: '2026-10-01T12:00:00Z',
+    server_now: '2026-10-01T12:00:30Z',
+  };
+  const api = (stateError, timelineError) => ({
+    getIncidentLoopState: async () => {
+      if (stateError) throw new Error('state unavailable');
+      return state;
+    },
+    getIncidentLoopTimeline: async () => {
+      if (timelineError) throw new Error('timeline unavailable');
+      return timeline;
+    },
+  });
+
+  const stateOnly = await fetchIncidentCommand(api(false, true), 'inc-partial');
+  assert.deepEqual(stateOnly.state, state);
+  assert.equal(stateOnly.timeline, null);
+  assert.equal(stateOnly.timelineError.message, 'timeline unavailable');
+  assert.equal(stateOnly.view.stage, undefined);
+  assert.equal(stateOnly.view.stageStatus, 'unknown');
+  assert.ok(stateOnly.view.stageTimeline.every((stage) => stage.status === 'unknown'));
+
+  const timelineOnly = await fetchIncidentCommand(api(true, false), 'inc-partial');
+  assert.equal(timelineOnly.state, null);
+  assert.equal(timelineOnly.stateError.message, 'state unavailable');
+  assert.deepEqual(timelineOnly.timeline, timeline);
+  assert.equal(timelineOnly.view.stage, 'recovered');
+  assert.equal(timelineOnly.view.stageStatus, 'running');
+});
+
+test('freshness requires an explicit or state-provided server clock', async () => {
+  const { fetchIncidentCommand } = await loadModule(
+    '/src/extensions/incident-command/IncidentCommandRoute.jsx',
+  );
+  const api = (serverNow) => ({
+    getIncidentLoopState: async () => ({
+      incident_id: 'inc-clock',
+      current_phase: 'approved',
+      updated_at: '2000-01-01T00:00:00Z',
+      ...(serverNow ? { server_now: serverNow } : {}),
+    }),
+    getIncidentLoopTimeline: async () => ({}),
+  });
+
+  const unknown = await fetchIncidentCommand(api(), 'inc-clock');
+  assert.equal(unknown.view.freshness, 'unknown');
+  assert.equal(unknown.view.serverNow, undefined);
+
+  const fromState = await fetchIncidentCommand(api('2026-10-01T12:00:30Z'), 'inc-clock');
+  assert.equal(fromState.view.freshness, 'stale');
+  assert.equal(fromState.view.serverNow, '2026-10-01T12:00:30Z');
+
+  const explicit = await fetchIncidentCommand(
+    api('2026-10-01T00:00:30Z'),
+    'inc-clock',
+    '2000-01-01T00:00:30Z',
+  );
+  assert.equal(explicit.view.freshness, 'fresh');
+  assert.equal(explicit.view.serverNow, '2000-01-01T00:00:30Z');
+});
+
+test('changing the selected incident clears the previous command projection', async () => {
+  const { selectIncidentCommandIncident } = await loadModule(
+    '/src/extensions/incident-command/IncidentCommandRoute.jsx',
+  );
+  const updates = [];
+  selectIncidentCommandIncident(
+    { target: { value: 'inc-b' } },
+    {
+      setSelectedIncidentId: (value) => updates.push(['incidentId', value]),
+      setCommand: (value) => updates.push(['command', value]),
+    },
+  );
+
+  assert.deepEqual(updates, [
+    ['incidentId', 'inc-b'],
+    ['command', null],
+  ]);
+});
+
 test('command bar renders textual stale and unknown freshness with semantic time', async () => {
   const { default: CommandBar } = await loadModule('/src/extensions/incident-command/CommandBar.jsx');
   const view = fromManagerLoop({
@@ -148,6 +242,17 @@ test('command bar renders textual stale and unknown freshness with semantic time
   }));
   assert.match(unknown, /数据新鲜度未知/);
   assert.match(unknown, /当前阶段未知/);
+  assert.match(unknown, /--ops-status-unknown/);
+
+  const fresh = renderToStaticMarkup(React.createElement(CommandBar, {
+    view: fromManagerLoop({
+      state: { updated_at: '2026-10-01T12:00:00Z' },
+      serverNow: '2026-10-01T12:00:30Z',
+    }),
+  }));
+  assert.match(fresh, /数据新鲜/);
+  assert.match(fresh, /--ops-status-waiting/);
+  assert.doesNotMatch(fresh, /--ops-status-fresh|--ops-status-undefined/);
 });
 
 test('next-action card renders the deterministic highest-priority action', async () => {
@@ -185,4 +290,26 @@ test('diagnostics controls and legacy report remain reachable below command summ
   }));
   assert.match(route, /aria-label="事故指挥"/);
   assert.match(route, /查看证据与诊断/);
+});
+
+test('unified route statically integrates incident command and diagnostics', async () => {
+  const { default: OpskeeperUnifiedRoute } = await loadModule('/src/extensions/unified-route.jsx');
+  const unifiedSource = readFileSync(
+    resolve(dashboardRoot, 'src/extensions/unified-route.jsx'),
+    'utf8',
+  );
+  assert.match(unifiedSource, /<IncidentCommandRoute\s+api=\{api\}/);
+  const packageJson = JSON.parse(readFileSync(resolve(dashboardRoot, 'package.json'), 'utf8'));
+  assert.match(packageJson.scripts.test, /src\/extensions\/incident-command\.test\.js/);
+
+  const markup = renderToStaticMarkup(React.createElement(OpskeeperUnifiedRoute, {
+    api: {},
+    initialTab: 'incident-command',
+  }));
+  assert.match(markup, /aria-label="事故指挥与诊断"/);
+  assert.match(markup, /aria-label="事故指挥"/);
+  assert.match(markup, /事故诊断工具/);
+  assert.match(markup, /诊断报告/);
+  assert.match(markup, /链路自检/);
+  assert.match(markup, /插件管理/);
 });

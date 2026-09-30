@@ -132,7 +132,9 @@ export default function CommandBar({ view, locale = 'zh-CN', onOpenEvidence }) {
               margin: '3px 0 0',
               color: view?.freshness === 'stale'
                 ? 'var(--ops-status-active)'
-                : `var(--ops-status-${view?.freshness || 'unknown'})`,
+                : view?.freshness === 'fresh'
+                  ? 'var(--ops-status-waiting)'
+                  : 'var(--ops-status-unknown)',
             }}
           >
             {FRESHNESS_COPY[view?.freshness] || FRESHNESS_COPY.unknown}
