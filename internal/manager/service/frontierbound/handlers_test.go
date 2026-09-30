@@ -391,3 +391,177 @@ func TestInstall_WithoutAgentEvents_NoAgentEventHandler(t *testing.T) {
 		t.Error("agent.event was registered with no router behind it")
 	}
 }
+
+// --- agent.tool ---------------------------------------------------------
+
+// fakeAgentTools records the upcalls a node's agent made and answers
+// whatever the test scripted.
+type fakeAgentTools struct {
+	mu    sync.Mutex
+	calls []agentToolCall
+	// result and err are returned for every call.
+	result json.RawMessage
+	err    error
+}
+
+// agentToolCall is one recorded upcall.
+type agentToolCall struct {
+	edgeID    uint64
+	sessionID string
+	tool      string
+	args      json.RawMessage
+}
+
+func (f *fakeAgentTools) RunAgentTool(_ context.Context, edgeID uint64, sessionID, tool string, args json.RawMessage) (json.RawMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, agentToolCall{edgeID: edgeID, sessionID: sessionID, tool: tool, args: args})
+	return f.result, f.err
+}
+
+func (f *fakeAgentTools) last() (agentToolCall, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.calls) == 0 {
+		return agentToolCall{}, false
+	}
+	return f.calls[len(f.calls)-1], true
+}
+
+func installAgentTools(t *testing.T, runner AgentToolRunner) *fakeService {
+	t.Helper()
+	fs := newFakeService()
+	c := newWithService(fs, slog.Default())
+	err := Install(context.Background(), c, Wiring{
+		EdgeAuthn:      &edgebiz.AccessKeyAuthenticator{},
+		EdgeUC:         &edgebiz.Usecase{},
+		MetricIngester: &fakeMetricIngester{},
+		AgentTools:     runner,
+		Log:            slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	return fs
+}
+
+func TestInstall_AgentTool_RunsTheToolAndReturnsItsOutput(t *testing.T) {
+	tools := &fakeAgentTools{result: json.RawMessage(`{"edge_count":42}`)}
+	fs := installAgentTools(t, tools)
+	rpc, ok := fs.rpcs[tunnel.MethodAgentTool]
+	if !ok {
+		t.Fatal("agent.tool was not registered")
+	}
+
+	body, _ := json.Marshal(tunnel.AgentToolRequest{
+		SessionID: "s-1", Tool: "get_topology", Arguments: json.RawMessage(`{}`),
+	})
+	rsp := &fakeResp{}
+	rpc(context.Background(), &fakeReq{data: body, clientID: 7}, rsp)
+	if rsp.err != nil {
+		t.Fatalf("agent.tool returned an error: %v", rsp.err)
+	}
+
+	var out tunnel.AgentToolResponse
+	if err := json.Unmarshal(rsp.data, &out); err != nil {
+		t.Fatalf("decode response %q: %v", rsp.data, err)
+	}
+	if out.Error != "" {
+		t.Errorf("error = %q, want the tool's output", out.Error)
+	}
+	if string(out.Result) != `{"edge_count":42}` {
+		t.Errorf("result = %s, want the tool's bytes unchanged", out.Result)
+	}
+
+	got, ok := tools.last()
+	if !ok {
+		t.Fatal("nothing was run")
+	}
+	if got.tool != "get_topology" || got.sessionID != "s-1" {
+		t.Errorf("ran %+v, want the tool and session the node named", got)
+	}
+}
+
+func TestInstall_AgentTool_TrustsTheTransportEdgeID(t *testing.T) {
+	// The body has no edge id, and the one the transport supplies is what
+	// the connection authenticated as. A node authenticated as one edge
+	// must not be able to spend another's authority on the control plane.
+	tools := &fakeAgentTools{result: json.RawMessage(`{}`)}
+	fs := installAgentTools(t, tools)
+	rpc := fs.rpcs[tunnel.MethodAgentTool]
+
+	body, _ := json.Marshal(tunnel.AgentToolRequest{Tool: "get_topology"})
+	rpc(context.Background(), &fakeReq{data: body, clientID: 99}, &fakeResp{})
+
+	got, _ := tools.last()
+	if got.edgeID != 99 {
+		t.Errorf("ran for edge %d, want the transport's 99", got.edgeID)
+	}
+}
+
+// A refusal and a transport failure have to be distinguishable at the
+// node: one is a decision the model should respect, the other is an
+// incident an operator should look at.
+func TestInstall_AgentTool_ReportsAToolFailureAsARefusalNotAnRPCError(t *testing.T) {
+	tools := &fakeAgentTools{err: errors.New("query_alert_rules: alert usecase not configured")}
+	fs := installAgentTools(t, tools)
+	rpc := fs.rpcs[tunnel.MethodAgentTool]
+
+	body, _ := json.Marshal(tunnel.AgentToolRequest{Tool: "query_alert_rules"})
+	rsp := &fakeResp{}
+	rpc(context.Background(), &fakeReq{data: body, clientID: 1}, rsp)
+	if rsp.err != nil {
+		t.Fatalf("a tool failure became an RPC error: %v", rsp.err)
+	}
+
+	var out tunnel.AgentToolResponse
+	if err := json.Unmarshal(rsp.data, &out); err != nil {
+		t.Fatalf("decode response %q: %v", rsp.data, err)
+	}
+	if out.Error == "" {
+		t.Fatal("the node was told nothing about a failed tool")
+	}
+	if len(out.Result) != 0 {
+		t.Errorf("result = %s, want none alongside the error", out.Result)
+	}
+}
+
+func TestInstall_AgentTool_RefusesACallWithNoToolName(t *testing.T) {
+	tools := &fakeAgentTools{result: json.RawMessage(`{}`)}
+	fs := installAgentTools(t, tools)
+	rpc := fs.rpcs[tunnel.MethodAgentTool]
+
+	rsp := &fakeResp{}
+	rpc(context.Background(), &fakeReq{data: []byte(`{"session_id":"s"}`), clientID: 1}, rsp)
+	if rsp.err == nil {
+		t.Fatal("a nameless tool call was accepted")
+	}
+	if _, ok := tools.last(); ok {
+		t.Error("a nameless call reached the runner")
+	}
+}
+
+func TestInstall_AgentTool_RefusesABodyItCannotRead(t *testing.T) {
+	tools := &fakeAgentTools{result: json.RawMessage(`{}`)}
+	fs := installAgentTools(t, tools)
+	rpc := fs.rpcs[tunnel.MethodAgentTool]
+
+	rsp := &fakeResp{}
+	rpc(context.Background(), &fakeReq{data: []byte("{not json"), clientID: 1}, rsp)
+	if rsp.err == nil {
+		t.Fatal("an unreadable body was accepted")
+	}
+	if _, ok := tools.last(); ok {
+		t.Error("an unreadable body reached the runner")
+	}
+}
+
+func TestInstall_AgentTool_DoesNotInstallWithoutARunner(t *testing.T) {
+	// A node whose control-plane tools are unavailable is degraded, not
+	// broken: its host-local probes have to keep working, so the method
+	// simply is not there rather than answering "no" to everything.
+	fs := installAgentTools(t, nil)
+	if _, ok := fs.rpcs[tunnel.MethodAgentTool]; ok {
+		t.Error("agent.tool was registered with no runner behind it")
+	}
+}

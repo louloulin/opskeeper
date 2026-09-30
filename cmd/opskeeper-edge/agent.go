@@ -7,11 +7,14 @@ import (
 	"os"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/edge/gatesocket"
 	"github.com/vincent-wuhan/opskeeper/core/edge/pigsupervisor"
 	"github.com/vincent-wuhan/opskeeper/core/edge/policygate"
+	"github.com/vincent-wuhan/opskeeper/core/edge/toolbroker"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigrpc"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigwire"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
+	"github.com/vincent-wuhan/opskeeper/core/wire"
 
 	edgebiz "github.com/vincent-wuhan/opskeeper/internal/edgeagent/biz"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
@@ -123,6 +126,24 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 		slog.Int("tools", registry.Len()),
 		slog.Any("names", registry.Names()))
 
+	// The gate, the socket, the bridge and the supervisor reference each
+	// other, and the cycle is broken in one place rather than spread across
+	// the file: the supervisor is built first with a factory that reads the
+	// socket path at the moment it spawns, the bridge is built next, then
+	// the gate, then the socket, and only then is the supervisor started.
+	// Every reference below is to something already constructed, and the
+	// one forward reference is a variable the factory reads late.
+
+	// socketPath is read by the factory when it spawns the agent, which is
+	// after the socket exists. A closure over it rather than a value,
+	// because the socket cannot be created until the gate is.
+	var socketPath string
+
+	// toolSocketPath is read the same late way: the broker cannot exist
+	// until the invoker and the authoriser do, and those cannot be built
+	// until the registry is.
+	var toolSocketPath string
+
 	args := []string{"--mode", "rpc"}
 	// Every process is a new one: a restart is a new agent, not a resume.
 	// The agent holds no transcript across its own death, and pretending
@@ -135,6 +156,20 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 			Provider: cfg.Provider,
 			Model:    cfg.Model,
 			Version:  version,
+			// Two sockets, and they are the only things the agent is told:
+			// not the role, not the session, not what is permitted. An
+			// agent handed those would be handed the ability to assert
+			// them, and an assertion is not a lookup.
+			//
+			// The gate socket is how a tool call inside the agent reaches
+			// the host that is allowed to say no. The tool socket is how
+			// the call, once permitted, reaches the host that actually
+			// performs it — because the agent process holds no
+			// implementation of any of them.
+			Env: map[string]string{
+				wire.GateSocketEnv: socketPath,
+				wire.ToolSocketEnv: toolSocketPath,
+			},
 		})
 	}
 	sup, err := pigsupervisor.New(pigsupervisor.Config{
@@ -161,17 +196,6 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 	// counter would interleave two operators' turns into one sequence.
 	translators := pigwire.NewSet(nil, 0)
 
-	if err := sup.Start(ctx); err != nil {
-		// Report it and keep the supervisor. It is already in the
-		// crash-loop policy, so a binary that is missing now may be
-		// present after the next package push, and a node that gave up on
-		// its agent at boot would need the edge restarted to pick it up.
-		log.Error("edge agent did not start; the node will keep retrying under the crash policy",
-			slog.String("binary", cfg.Binary),
-			slog.String("dir", cfg.Cwd),
-			slog.Any("err", err))
-	}
-
 	bridge, err = edgebiz.NewAgentBridge(edgebiz.AgentBridgeOptions{
 		Source:    sup,
 		Client:    client,
@@ -183,12 +207,16 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 		return nil, nil, err
 	}
 
-	// The gate is the node's only path to a tool call, and the two objects
-	// reference each other: the gate relays approval frames through the
-	// bridge, and the bridge applies the operator's answers to the gate.
-	// The bridge is built first and given the gate afterwards so the
-	// reference is explicit rather than a closure over a variable that is
-	// written later.
+	// The gate is the node's only path to a tool call. It relays approval
+	// frames through the bridge and the bridge applies the operator's
+	// answers back to it, so the bridge is built first and given the gate
+	// afterwards.
+	//
+	// The base policy is read-only and every real decision goes through
+	// ByActor, so the only way a mutating call runs is by a role the
+	// manager authenticated and the node resolved. A caller the node
+	// cannot place in that ladder gets the base policy, which is the
+	// bottom of it.
 	gate, err := policygate.New(policygate.Options{
 		Policy:  registry.Policy(roleCeiling("")),
 		ByActor: func(actor string) policygate.Policy { return registry.Policy(roleCeiling(actor)) },
@@ -199,6 +227,65 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 		return nil, nil, fmt.Errorf("edge agent approval gate: %w", err)
 	}
 	bridge.SetDecider(gate)
+
+	// The socket is the enforcement point. It is created before the agent
+	// is started so there is no window in which a running agent has no way
+	// to ask, and it is the last thing torn down so a tool call in flight
+	// during shutdown still gets an answer.
+	socket, err := gatesocket.Listen(gatesocket.Options{
+		Admit: gate,
+		Actor: bridge.ActorFor,
+		Log:   log,
+	})
+	if err != nil {
+		stop()
+		return nil, nil, fmt.Errorf("edge agent gate socket: %w", err)
+	}
+	socketPath = socket.Path()
+	priorStop := stop
+	stop = func() {
+		if err := socket.Close(); err != nil {
+			log.Warn("edge agent gate socket did not close cleanly", slog.Any("err", err))
+		}
+		priorStop()
+	}
+
+	// The broker is the other half of the same arrangement, and it is
+	// built after the gate because it authorises against the same registry
+	// with the same role ladder. It re-checks rather than trusting the
+	// gate's answer because the gate is reached through an extension in
+	// the agent process: a package that replaced that extension would
+	// silence the check, and this is the one it cannot silence.
+	broker, err := toolbroker.Listen(toolbroker.Options{
+		Authorize: toolAuthorizer(registry),
+		Invoke:    &agentToolInvoker{client: client, log: log},
+		Actor:     bridge.ActorFor,
+		Log:       log,
+	})
+	if err != nil {
+		stop()
+		return nil, nil, fmt.Errorf("edge agent tool broker: %w", err)
+	}
+	toolSocketPath = broker.Path()
+	priorStop = stop
+	stop = func() {
+		if err := broker.Close(); err != nil {
+			log.Warn("edge agent tool broker did not close cleanly", slog.Any("err", err))
+		}
+		priorStop()
+	}
+
+	if err := sup.Start(ctx); err != nil {
+		// Report it and keep the supervisor. It is already in the
+		// crash-loop policy, so a binary that is missing now may be
+		// present after the next package push, and a node that gave up on
+		// its agent at boot would need the edge restarted to pick it up.
+		log.Error("edge agent did not start; the node will keep retrying under the crash policy",
+			slog.String("binary", cfg.Binary),
+			slog.String("dir", cfg.Cwd),
+			slog.Any("err", err))
+	}
+
 	// The console learns that the agent restarted through agent.state and
 	// agent.health, not through a resumed sequence. Carrying the old
 	// counters across the swap would make a fresh process answer a

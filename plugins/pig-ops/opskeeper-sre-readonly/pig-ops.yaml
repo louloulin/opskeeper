@@ -1,9 +1,9 @@
 # pig-ops.yaml — OpsKeeper governance manifest.
 #
-# The Pi package manifest shipped alongside this file stays Pi-compatible
-# and is what the agent runtime actually mounts. This file adds only the
-# governance fields Pi has no vocabulary for. Both are read on install; the
-# host validates this one with the sdk module's admission rules.
+# The Pi package manifest stays Pi-compatible and is what the agent runtime
+# actually mounts; this file adds only the governance fields Pi has no
+# vocabulary for. Both are read on install, and this one is validated by the
+# sdk module's admission rules before the node is allowed to start.
 apiVersion: opskeeper.io/v1
 kind: Plugin
 metadata:
@@ -26,6 +26,38 @@ spec:
   # rather than a runtime surprise.
   capabilities: [read]
 
+  # The tool inventory. This list is the host's allow-list: a tool the
+  # agent produces that is not named here is refused at the gate on every
+  # turn, so a package cannot become more capable by shipping an
+  # undeclared tool. The list is therefore the review surface — a tool
+  # added here is a tool somebody has agreed this package may run.
+  #
+  # Every entry is a read. A read touches no external system, so none of
+  # them enters the approval queue, and the whole package is safe to run
+  # against production without a human in the loop.
+  tools:
+    # Sorted. This list is the review surface, and a review is a diff
+    # between two versions more often than it is a reading of one file.
+    # Comments explain each entry; the order is not a category grouping.
+    - { name: expand_topology,     class: read }  # the graph, one hop out
+    - { name: find_outlier_edges,  class: read }  # edges behaving unlike their peers
+    - { name: find_topology_node,  class: read }  # where one component lives
+    - { name: get_topology,        class: read }  # the whole graph
+    - { name: host_dmesg,          class: read }  # kernel ring buffer
+    - { name: host_grep_file,      class: read }  # search across log files
+    - { name: host_lsof,           class: read }  # open files per process
+    - { name: host_mtr,            class: read }  # combined traceroute and loss
+    - { name: host_netns_inspect,  class: read }  # network namespaces
+    - { name: host_probe_dns,      class: read }  # name resolution
+    - { name: host_probe_http,     class: read }  # HTTP reachability and latency
+    - { name: host_probe_tcp,      class: read }  # TCP reachability and latency
+    - { name: host_read_journal,   class: read }  # systemd journal
+    - { name: host_sosreport,      class: read }  # support bundle summary
+    - { name: host_strace,         class: read }  # syscall trace of a pid
+    - { name: host_tail_file,      class: read }  # follow a log file
+    - { name: host_traceroute,     class: read }  # path to a host, hop by hop
+    - { name: query_alert_rules,   class: read }  # what is firing
+
   # The host injects credentials for exactly these scopes. A scope not
   # listed here is never handed to the plugin, so it cannot reach a
   # credential it did not ask for.
@@ -33,7 +65,6 @@ spec:
     - host.read
     - topology.read
     - alert.read
-    - observability.read
 
   audit:
     # The plugin reports tool activity; the host derives each ledger entry
@@ -44,7 +75,9 @@ spec:
     mutates: false
 
   approval:
-    # Read-only plugins never enter the approval queue.
+    # Read-only plugins never enter the approval queue. There is no blast
+    # radius here, and asking for one on a package that cannot mutate is a
+    # load error rather than a warning.
     required: false
 
   install:

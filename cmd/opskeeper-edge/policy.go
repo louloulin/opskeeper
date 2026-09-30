@@ -2,7 +2,10 @@ package main
 
 import (
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/edge/policygate"
+	"github.com/vincent-wuhan/opskeeper/core/edge/toolbroker"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
+	"github.com/vincent-wuhan/opskeeper/internal/skill"
 )
 
 // The node's role ladder.
@@ -58,4 +61,54 @@ func manifestsOf(plugins []pluginmanifest.Plugin) []domain.PluginManifest {
 		out = append(out, p.Manifest)
 	}
 	return out
+}
+
+// toolAuthorizer builds the broker's second allow-list check.
+//
+// It reads the same registry the gate reads, narrowed to the same role
+// ceiling, so the two cannot disagree about what is deployed. What it adds
+// is the class: where the node holds the real executor, it knows the tool's
+// actual permission class rather than the one a manifest claimed for it,
+// and it hands that to the gate's under-declaring rule.
+//
+// That is the check that makes the manifest mean something. A package that
+// declares host_restart_service as read is caught at the moment the model
+// calls it, by the host, with an executor in hand — not reviewed into
+// compliance by a human reading YAML, and not discovered after the
+// restart. The gate reaches the same conclusion a moment earlier from the
+// manifest alone; this one is what survives a package that replaced the
+// courier extension to get past the first.
+func toolAuthorizer(registry *policygate.Registry) toolbroker.Authorizer {
+	return func(actor, toolName string) (bool, string) {
+		call := policygate.Call{ToolName: toolName, Class: domain.ClassUnknown}
+		if exec, ok := skill.Get(toolName); ok {
+			call.Class = classOfSkill(exec.Metadata().EffectiveClass())
+		}
+		return registry.Policy(roleCeiling(actor)).Permitted(call)
+	}
+}
+
+// classOfSkill maps a skill's permission class onto the tool classes the
+// governance vocabulary uses.
+//
+// The two vocabularies are close but not identical — "safe" is about
+// whether a skill has side effects, "read" is about what an operator would
+// expect a tool named this to do — and the mapping is the conservative
+// one in every ambiguous case. host_restart_service is ClassMutating and
+// becomes write, which is what sends it to an approval queue instead of
+// running because a manifest said it was harmless.
+func classOfSkill(c skill.Class) domain.ToolClass {
+	switch c {
+	case skill.ClassSafe:
+		return domain.ClassRead
+	case skill.ClassMutating:
+		return domain.ClassWrite
+	case skill.ClassDangerous:
+		return domain.ClassDestructive
+	default:
+		// An unrecognised class is treated as the most dangerous thing in
+		// the system. A skill author who adds a class the host has not
+		// learned to read gets the strictest reading, not a default.
+		return domain.ClassDestructive
+	}
 }

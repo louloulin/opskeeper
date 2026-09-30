@@ -72,7 +72,29 @@ type Wiring struct {
 	// a turn. Their commands (prompt/steer/abort) still work, so this is
 	// a degraded conversation rather than a broken node.
 	AgentEvents AgentEventRouter
-	Log         *slog.Logger
+	// AgentTools runs a control-plane tool on behalf of a node's agent.
+	// Optional - when nil, agent.tool does not install and the node's
+	// topology and alert queries fail with a plain "not available", while
+	// its host-local probes keep working. A node whose agent cannot reach
+	// the control plane is degraded, not broken, and the half of the
+	// toolset that needs no round trip should not go down with the half
+	// that does.
+	AgentTools AgentToolRunner
+	Log        *slog.Logger
+}
+
+// AgentToolRunner runs one control-plane tool for a node's agent.
+//
+// The session travels with the call so the runner can check it, but the
+// runner does not have to trust it: edgeID comes from the authenticated
+// transport, and a session that does not belong to that edge is not that
+// edge's to act for.
+type AgentToolRunner interface {
+	// RunAgentTool returns the tool's JSON output, or an error written for
+	// the model that asked. A refusal and a failure are deliberately the
+	// same return, because the agent turns either into text and a model
+	// that can tell them apart retries the refusal.
+	RunAgentTool(ctx context.Context, edgeID uint64, sessionID, tool string, args json.RawMessage) (json.RawMessage, error)
 }
 
 // AgentEventRouter is the narrow surface the agent.event push needs.
@@ -517,6 +539,38 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 			return []byte(`{}`), nil
 		}); err != nil {
 			return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodAgentEvent, err)
+		}
+	}
+
+	// agent.tool: a node's agent asking the control plane to run a tool it
+	// does not implement. Topology and alert queries live here, so the
+	// node has to ask; the alternative — a second route into the control
+	// plane from inside the agent process — would be unaudited.
+	//
+	// The edge id is the transport's, never the node's own stamp, for the
+	// same reason agent.event does: it is what the connection authenticated
+	// as, so one node cannot spend another node's authority.
+	if w.AgentTools != nil {
+		if err := c.Register(ctx, tunnel.MethodAgentTool, func(rpcCtx context.Context, edgeID uint64, body []byte) ([]byte, error) {
+			var in tunnel.AgentToolRequest
+			if err := json.Unmarshal(body, &in); err != nil {
+				return nil, fmt.Errorf("agent.tool: decode: %w", err)
+			}
+			if in.Tool == "" {
+				return nil, fmt.Errorf("agent.tool: a call with no tool name cannot be run")
+			}
+			out, err := w.AgentTools.RunAgentTool(rpcCtx, edgeID, in.SessionID, in.Tool, in.Arguments)
+			if err != nil {
+				// Answered, not failed: the RPC succeeded and the tool did
+				// not. That distinction matters to the node, which turns an
+				// RPC error into "the control plane is unreachable" and an
+				// error string into something the model can read and act
+				// on.
+				return json.Marshal(tunnel.AgentToolResponse{Error: err.Error()})
+			}
+			return json.Marshal(tunnel.AgentToolResponse{Result: out})
+		}); err != nil {
+			return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodAgentTool, err)
 		}
 	}
 

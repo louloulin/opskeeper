@@ -1230,6 +1230,11 @@ func main() {
 	changeEventCleaner := changeeventbiz.NewCleaner(changeEventUC, log.With(slog.String("comp", "changeevent-cleaner")))
 	go changeEventCleaner.Run(rootCtx)
 
+	// The control-plane half of every node's toolset. Built here and
+	// filled in below: the aiops registry needs the tunnel client that
+	// Install brings up, so the two cannot be constructed in one step.
+	agentTools := &agentToolUpcall{fleet: nodeFleet}
+
 	if err := managersvcfb.Install(rootCtx, fbClient, managersvcfb.Wiring{
 		EdgeAuthn:      edgeAuthn,
 		EdgeUC:         edgeUC,
@@ -1243,6 +1248,9 @@ func main() {
 		// still run and still take commands, they just cannot deliver a
 		// turn, which the console shows as a conversation with no output.
 		AgentEvents: nodeFleet,
+		// AgentTools lets a node's agent ask the control plane to run the
+		// tools the node cannot: the topology graph and the alert rules.
+		AgentTools: agentTools,
 		// DeviceResolver wires the post-split edge_id → device_id
 		// resolution path (push pipeline). The biz junction repo is the
 		// source of truth.
@@ -1323,6 +1331,7 @@ func main() {
 		traceQuerier = pkgtracequery.New(cfg.Traces.URL, log.With(slog.String("comp", "aiops-tracequery")))
 	}
 	toolsReg := aiopstools.NewRegistry(fbClient, edgeUC, deviceUC, promQuerier, logQuerier, traceQuerier, alertUC, log)
+	agentTools.reg = toolsReg
 	repairPreviewRepository := repairpreviewcontrol.NewSQLRepository(db)
 	hitlProposalRepo := managerdatahitlstore.NewRepo(db)
 	hitlProposalSvc := managerbizhitl.NewService(hitlProposalRepo)
@@ -5765,4 +5774,54 @@ func (a deploymentHealthAdapter) Health(ctx context.Context) (managerserverversi
 		}
 	}
 	return managerserverversion.HealthSummary(summary), nil
+}
+
+// agentToolUpcall adapts the aiops tool registry to the transport's
+// agent.tool handler.
+//
+// It is a composition-root adapter on purpose. The registry is the control
+// plane's tool surface and the handler is a transport concern; wiring them
+// together here keeps frontierbound from importing the aiops registry, and
+// keeps the registry from knowing that a node process is one of its
+// callers.
+type agentToolUpcall struct {
+	reg   *aiopstools.Registry
+	fleet *managerbiznodefleet.Fleet
+}
+
+// RunAgentTool runs one tool a node's agent asked for.
+//
+// The session is the node's claim about whose conversation this is, and it
+// is checked rather than believed. A node authenticated as edge A naming a
+// conversation that belongs to edge B gets the answer for nobody: without
+// this check, one compromised node could drive the control plane under
+// another node's operator, and the audit trail would attribute it to
+// whichever conversation it happened to guess.
+//
+// An empty session is allowed through, because a node talking to itself —
+// a health probe, a package install check — has no conversation to name and
+// is not thereby impersonating one.
+func (a *agentToolUpcall) RunAgentTool(ctx context.Context, edgeID uint64, sessionID, tool string, args json.RawMessage) (json.RawMessage, error) {
+	if a.reg == nil {
+		// A call in the window between the transport coming up and the
+		// registry being built. Refusing is right: a half-built registry
+		// would answer for the tools it happened to have registered so far.
+		return nil, fmt.Errorf("%s is not available: the control plane is still starting", tool)
+	}
+	if a.fleet != nil && sessionID != "" {
+		if _, ok := a.fleet.Stats(edgeID, sessionID); !ok {
+			return nil, fmt.Errorf(
+				"%s was not run: this node has no open conversation %q, so the call cannot be attributed to an operator",
+				tool, sessionID)
+		}
+	}
+	res, err := a.reg.Invoke(ctx, tool, args)
+	if err != nil {
+		// The error is the model's to read, so it is passed through
+		// rather than flattened into a transport failure. "no such tool"
+		// and "the alert service is down" are different sentences and the
+		// model reacts to them differently.
+		return nil, fmt.Errorf("%s: %w", tool, err)
+	}
+	return res.ResultJSON, nil
 }

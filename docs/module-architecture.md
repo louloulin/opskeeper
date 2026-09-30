@@ -1,6 +1,6 @@
 # OpsKeeper 2.0 module architecture
 
-Status: **Phase A (foundation) landed. Phase B (PiG adapter) mostly landed.**
+Status: **Phases A, B and C landed. Phase D's B1 batch (read-only toolset) landed.**
 Phase C has started: the node agent's process contract and its supervisor
 exist and are tested; the tunnel methods and the control-plane fleet are not
 written yet. `internal/pkg/llm` still runs on eino — see "What the plan got
@@ -417,3 +417,43 @@ Releases replace those with tagged versions.
 This is **pre-existing** — it reproduces on a clean checkout without any
 2.0 change — and is tracked separately. It is not caused by the Go 1.26
 bump.
+
+
+## The node plane's two sockets
+
+`core/edge` holds three node-plane components, and the boundary between them
+is the reason the plugin ecosystem is safe rather than merely tidy:
+
+| Component | Path | Question it answers | Reached from |
+|---|---|---|---|
+| `policygate` | `core/edge/policygate/` | May this call run? | the gate socket |
+| `gatesocket` | `core/edge/gatesocket/` | Carries that question to the gate | the courier extension |
+| `toolbroker` | `core/edge/toolbroker/` | Run it | the toolset extension |
+
+The gate is reached through an extension inside the agent process, so a
+package that replaced the courier would silence it. The broker is host code,
+reached only by tool name, and it re-checks the same registry before it
+dispatches. Two checks reading one registry is the whole of the defence in
+depth here: a tool has to survive a check the agent could have suppressed.
+
+`cmd/opskeeper-edge` is the only place that knows all three exist, which is
+why `internal/edgeagent` may not import `core/edge` and vice versa. The same
+rule keeps a PiG upgrade confined to `core/pig` and the composition root.
+
+## Where a tool's implementation lives
+
+Not in the plugin. The read-only SRE toolset
+(`core/pig/extensions/opskeeper-sre-readonly/`) declares eighteen tools and
+implements none of them:
+
+- The thirteen `host_*` probes are the node's own, and `internal/skill/builtin`
+  already implements them with permission classes, spill handling and tests.
+- The five control-plane queries read the manager's graph and rule table. A
+  subprocess on the node has no legitimate path to either, so the node asks
+  over `tunnel.MethodAgentTool` and the manager answers on the same
+  authenticated edge session.
+
+So the agent process holds no operational code. That is what makes "isolated
+subprocess" a containment boundary rather than a naming convention, and it
+is why adding a read-only capability is a manifest line plus a skill, not a
+new extension.
