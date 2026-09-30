@@ -97,9 +97,22 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 	// validation is a boot error the operator has to fix, not a warning
 	// that scrolls past: starting the agent without it would produce a
 	// node that answers confidently and cannot see half the host.
-	admitted, err := admitPackages(cfg.Packages)
+	trust := loadTrustStore()
+	policy, err := nodePluginPolicy()
+	if err != nil {
+		return nil, nil, fmt.Errorf("edge agent policy: %w", err)
+	}
+	admitted, err := admitPackages(cfg.Packages, trust, policy)
 	if err != nil {
 		return nil, nil, fmt.Errorf("edge agent packages: %w", err)
+	}
+	if trust.LoadError() != nil {
+		// A trust store that was configured and could not be read is
+		// already a hard error from admitPackages. Reaching here means
+		// there is no configured store, which is worth saying once per
+		// boot: this node is running packages nobody signed.
+		log.Warn("node agent trust store is not configured; packages are not being signature-checked",
+			slog.String("set", "OPSKEEPER_EDGE_TRUST_STORE"))
 	}
 	settingsPath, err := writeAgentSettings(cfg.Cwd, packageRoots(admitted))
 	if err != nil {

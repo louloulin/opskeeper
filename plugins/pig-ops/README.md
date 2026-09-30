@@ -152,6 +152,102 @@ are what break first under pressure:
   installing the repair package on one node does not put the others out of
   compliance.
 
+## Review: signature, then manifest, then policy
+
+A package is admitted to a node in three steps, and **the order is the
+security property**:
+
+```
+1. signature   who published these exact bytes?
+2. manifest    is what they said well-formed and within its own ceiling?
+3. admission   may it run *here*, with what this node has been granted?
+```
+
+Every step reads something, so running them in a different order changes
+what is being trusted. Admit first and an unsigned package has been
+validated on its own say-so; the signature then becomes a later formality.
+Read the manifest first and a package that lies about its capabilities has
+already been parsed as fact. `Review` therefore authenticates the bytes
+before it looks at anything *in* them, and its `Decision.Step` records
+which step decided so an operator does not have to infer the ordering from
+the error text.
+
+Two tests exist specifically to keep that order, and they are written to
+fail if it changes:
+`TestTheSignatureIsCheckedBeforeTheManifestIsBelieved` and
+`TestTheSignatureIsCheckedBeforeAdmissionNotTheOtherWayRound`.
+
+### Signing
+
+`pig-ops.sig` is a detached ed25519 signature over a **hash of the whole
+package tree** — every file, its path, its executable bit and its bytes.
+It is a sidecar rather than a field inside `pig-ops.yaml` because the
+signature covers the manifest; a signature carried by the file it signs
+would be covering itself.
+
+The signature sidecar is the one file excluded from the tree hash, which is
+what makes it *detached*: a signed package can be moved from the machine
+that signed it to the node without being re-signed.
+
+What this buys, concretely:
+
+- The manifest and the code it governs cannot be separated after review.
+  Widening `spec.tools` or dropping `safety_level` after signing does not
+  verify.
+- Adding a file is as visible as editing one, so a package cannot gain
+  capability by dropping a new executable into its tree.
+- The public key ships with the node, never in the envelope. An envelope
+  that carried its own key would be verifying itself.
+
+OpsKeeper does **not** ship a release private key — shipping one would
+make every node trust whoever holds the repository. Signing happens in the
+operator's release pipeline against a key their nodes are configured with.
+
+### The node side
+
+| Setting | Default | Effect |
+|---|---|---|
+| `OPSKEEPER_EDGE_TRUST_STORE` | *unset* | path to the publisher keys this node trusts |
+| `OPSKEEPER_EDGE_MAX_SAFETY_LEVEL` | `L1` | highest package level this host will run |
+| `OPSKEEPER_EDGE_MAX_BLAST_RADIUS` | *(none)* | widest approval this host will grant |
+| `OPSKEEPER_EDGE_PLUGIN_SCOPES` | `host.read,topology.read,alert.read` | scopes injected into packages |
+
+The defaults are the lowest values that let the shipped read-only package
+work, which means **the L2 repair package is refused until an operator
+opts in**. A capability that has to be enabled is a capability nobody
+enabled by accident.
+
+An unrecognised value in `MAX_SAFETY_LEVEL` or `MAX_BLAST_RADIUS` is a boot
+error rather than a default. Guessing low refuses everything and looks
+like a broken plugin; guessing high hosts more than was asked for and looks
+like nothing.
+
+**On the trust store's absence.** A node with no trust store has been
+given no opinion about publishers, so it runs unsigned packages and logs a
+warning every boot. This is the wrong default, and it is a default only
+because "signatures required" cannot be true on a node that holds no key.
+The switch is the trust store's own presence: configure one and every
+package must verify, and there is no setting that turns that back off. A
+trust store that is *configured but unreadable* is a hard error — a
+security control that fails open on a typo is not a control.
+
+### Canary rollout
+
+`PlanRollout` orders the nodes and `Rollout` gates the waves:
+
+- The canary is the first wave — a tenth of the fleet, never zero.
+- It is chosen by hashing the package name and version, so **the same
+  release always reaches the same nodes** (a retry canaries the same set,
+  not a fresh one) and **two releases canary different ones** (a canary
+  that is always the same machines re-tests what was just proven).
+- `Advance` refuses to move while any node in the current wave is
+  unaccounted for. A node that *failed* counts as accounted — otherwise
+  one machine that is down for unrelated reasons stalls a whole fleet —
+  and `Failed()` exists so the operator sees why it moved early.
+- A `pin` strategy goes out in a single wave. A package an operator chose
+  deliberately and that will not be auto-upgraded does not need a canary it
+  will not get twice.
+
 ## The courier
 
 `extensions/opskeeper-gate/` is the one extension here that is not a

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
 )
 
@@ -49,27 +50,149 @@ type agentSettings struct {
 	Packages []string `json:"packages"`
 }
 
-// admitPackages validates each package and returns the admitted roots.
+// defaultPluginScopes is what a node grants when nobody has configured
+// anything else.
 //
-// Admission is a gate, not a formality. A package that fails the manifest
-// rules is not written into settings at all, so the agent never starts
-// with it: the alternative is a node that boots, loads code whose declared
-// capabilities nobody verified, and finds out during an incident.
+// It is exactly what the first-party read-only package declares, and that
+// is the point rather than a coincidence: a third-party package needing
+// anything more is refused until an operator adds the scope by hand, so
+// adding a plugin is a decision somebody makes rather than a consequence
+// of installing one. Before this check existed every package got every
+// scope implicitly, so this is not a narrowing of what ships — it is the
+// same grant, written down.
+var defaultPluginScopes = []domain.Scope{
+	domain.ScopeHostRead,
+	domain.ScopeTopologyRO,
+	domain.ScopeAlertRO,
+}
+
+// nodePluginPolicy builds the node's review policy from the environment.
+//
+// Everything is env-driven for the same reason the rest of the node agent
+// config is: a node is provisioned on a host OpsKeeper has never seen, and
+// the only thing that reaches it is install.sh and the tunnel. The
+// defaults are the ones that are safe to run without being told anything.
+//
+// The two that matter most are the safety ceiling and the scopes, because
+// both default to the *lowest* value that lets the shipped read-only
+// package work. In particular the ceiling is L1, which means the L2 repair
+// package is refused until an operator says this host may change things —
+// a capability that has to be enabled is a capability nobody enabled by
+// accident.
+func nodePluginPolicy() (pluginmanifest.Policy, error) {
+	level := domain.SafetyLevel(strings.TrimSpace(os.Getenv("OPSKEEPER_EDGE_MAX_SAFETY_LEVEL")))
+	if level == "" {
+		level = domain.SafetyL1
+	}
+	if !level.Valid() {
+		// Refused rather than defaulted. A typo in a capability ceiling
+		// is a node whose policy is not the one the operator believes it
+		// has, and a node that guessed L1 would either refuse everything
+		// or - if the guess went the other way - quietly host more than
+		// was asked for.
+		return pluginmanifest.Policy{}, fmt.Errorf(
+			"OPSKEEPER_EDGE_MAX_SAFETY_LEVEL=%q is not one of L0, L1, L2, L3", level)
+	}
+
+	radius := domain.BlastRadius(strings.TrimSpace(os.Getenv("OPSKEEPER_EDGE_MAX_BLAST_RADIUS")))
+	if !radius.Valid() {
+		return pluginmanifest.Policy{}, fmt.Errorf(
+			"OPSKEEPER_EDGE_MAX_BLAST_RADIUS=%q is not one of pod, single-ns, namespace, cluster", radius)
+	}
+
+	scopes := defaultPluginScopes
+	if raw := strings.TrimSpace(os.Getenv("OPSKEEPER_EDGE_PLUGIN_SCOPES")); raw != "" {
+		scopes = nil
+		for _, s := range splitList(raw) {
+			scopes = append(scopes, domain.Scope(s))
+		}
+	}
+
+	return pluginmanifest.PolicyFor(level, radius, scopes), nil
+}
+
+// loadTrustStore reads the node's publisher keys, if it has any.
+//
+// A node with no trust store has no opinion about who may publish for it,
+// and that is a different state from a node whose trust store is empty by
+// mistake. The first is a deployment that has not been set up; the second
+// is indistinguishable from the first, which is why the absence is logged
+// rather than swallowed — see admitPackages.
+func loadTrustStore() *pluginmanifest.TrustStore {
+	path := strings.TrimSpace(os.Getenv("OPSKEEPER_EDGE_TRUST_STORE"))
+	if path == "" {
+		return pluginmanifest.NewTrustStore()
+	}
+	store, err := pluginmanifest.TrustStoreFromConfig(path)
+	if err != nil {
+		// A configured but unreadable trust store is a hard error, not a
+		// fall back to unsigned packages: the operator asked for
+		// verification and the node cannot do it, and quietly running
+		// unsigned is the one answer that is certainly wrong.
+		store = pluginmanifest.NewTrustStore()
+		store.SetLoadError(err)
+	}
+	return store
+}
+
+// admitPackages reviews each package and returns the admitted ones.
+//
+// Admission is a gate, not a formality. A package that fails is not written
+// into settings at all, so the agent never starts with it: the alternative
+// is a node that boots, loads code whose declared capabilities nobody
+// verified, and finds out during an incident.
+//
+// The review runs in a fixed order — signature, then manifest, then this
+// node's policy — and the order is the security property. A package's own
+// description of itself is not consulted until the bytes it is written in
+// have been authenticated, so a package that lies about its capabilities
+// is refused by the signature step rather than by a later check that would
+// have believed it.
 //
 // A package that does not target the edge is refused here even though it
 // validates. Manifest targets are a declaration, and a declaration the node
 // does not honour is worse than none at all - it would read as "this
 // plugin was reviewed for the control plane" while running on a host.
-func admitPackages(roots []string) ([]pluginmanifest.Plugin, error) {
+func admitPackages(roots []string, trust *pluginmanifest.TrustStore, pol pluginmanifest.Policy) ([]pluginmanifest.Plugin, error) {
+	if trust == nil {
+		trust = pluginmanifest.NewTrustStore()
+	}
+	// A node that has never been told who it trusts runs unsigned packages,
+	// and says so, out loud, on every boot.
+	//
+	// This is a transitional default and it is the wrong default, which is
+	// why it is a default at all: OpsKeeper does not ship a release private
+	// key — shipping one would make every node trust whoever holds the
+	// repository — so "signatures required" cannot be true on a node that
+	// has not been given a key. The switch is the trust store's own
+	// presence: configure one and every package must verify, and there is
+	// no configuration that turns that back off. A node without a key is a
+	// node that has not finished being provisioned, and it says so here
+	// rather than being quietly permissive.
+	pol.AllowUnsigned = len(trust.KeyIDs()) == 0
+	if pol.AllowUnsigned {
+		if loadErr := trust.LoadError(); loadErr != nil {
+			return nil, fmt.Errorf("trust store: %w", loadErr)
+		}
+	}
+
 	out := make([]pluginmanifest.Plugin, 0, len(roots))
 	for _, root := range roots {
 		abs, err := filepath.Abs(root)
 		if err != nil {
 			return nil, fmt.Errorf("package %q: %w", root, err)
 		}
+		d := pluginmanifest.Review(abs, trust, pol)
+		if !d.Allowed {
+			return nil, fmt.Errorf("%s", d)
+		}
 		p, err := pluginmanifest.Load(abs)
 		if err != nil {
-			return nil, fmt.Errorf("package %q refused: %w", abs, err)
+			// Unreachable: Review loaded it a moment ago. Kept anyway
+			// because a node that skips this on the strength of a
+			// preceding call is a node that depends on nothing changing in
+			// between, and the cost is one re-read of a YAML file.
+			return nil, fmt.Errorf("package %q was admitted and then failed to load: %w", abs, err)
 		}
 		if !p.RunsOn("edge") {
 			return nil, fmt.Errorf("package %q does not target the edge; it declares targets %v",

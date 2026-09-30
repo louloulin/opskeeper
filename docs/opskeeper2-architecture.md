@@ -230,7 +230,7 @@ opskeeper-sre-readonly/                 # 插件根
 
 ## 六、当前实现进度
 
-基线：`go build ./...` 通过；`go test ./... -count=1` → **3732 passed / 3 failed /
+基线：`go build ./...` 通过；`go test ./... -count=1` → **3821 passed / 3 failed /
 7 skipped（274 包）**。3 个失败全部位于 `internal/skill/builtin` 的
 `TestTruncateOrSpill_*`，在干净检出上同样复现，属既有问题，与本次改造无关。
 `go run ./scripts/modulecheck .` → 边界全部成立。
@@ -240,7 +240,7 @@ opskeeper-sre-readonly/                 # 插件根
 | **A 模块化地基** | `go.work` + 5 个独立 `go.mod`；`core`（domain/ports/wire）；`sdk` 清单准入 | ✅ 已落地 |
 | **B PiG 适配层** | `pigmodel`（settings→`*ai.Model`）、`pigagent`、`pigrpc`（`pig --mode rpc` 客户端）、`pigwire`（SSE 帧翻译） | ✅ 已落地 |
 | **C 节点 Agent** | `pigsupervisor`（崩溃重启/退避/Degraded）、`policygate`（白名单+审批+digest）、`gatesocket`（unix socket 准入）、准入信使 extension、tunnel 7 个 `agent.*` 方法 + `agent.decide`、控制面 `NodeFleet` + `Service.Decide` + HTTP 决策端点、per-session 角色表 | ✅ 已落地 |
-| **D 插件生态** | L1 只读 profile（18 工具 + 7 persona + 信使）、`pluginimport` 导入器、**B1 只读工具集**（工具集 extension + `toolbroker` + `agent.tool` 反向调用 + 双向漂移测试）、**B3 修复包**（L2/5 工具/`approval.required`/`pod` 半径/pin 安装 + 审批回执 + 写操作全部走控制面） | 🟡 B1/B3 完成，B2 未开始 |
+| **D 插件生态** | L1 只读 profile（18 工具 + 7 persona + 信使）、`pluginimport` 导入器、**B1 只读工具集**（工具集 extension + `toolbroker` + `agent.tool` 反向调用 + 双向漂移测试）、**B3 修复包**（L2/5 工具/`approval.required`/`pod` 半径/pin 安装 + 审批回执 + 写操作全部走控制面）、**审核流水线**（ed25519 树签名 + 信任库 + 签名→清单→准入三段审核 + 灰度波次闸门 + 节点侧 `admitPackages` 接线） | 🟡 B1/B3/审核流水线完成，B2 未开始 |
 | **E 生态治理** | 插件市场版本矩阵、跨云 profile 模板、harness 8-case 回归 | ⬜ 未开始 |
 
 ### 已落地的关键决策（不可回退）
@@ -272,6 +272,24 @@ opskeeper-sre-readonly/                 # 插件根
     「注册了就在本地跑」解析，会找到一个被锁死的执行器。因此 `Invoke` 的本地
     分支收窄到 read：变更类一律上 `agent.tool` 走控制面。未知等级上送而非本地
     执行——上送只是多一个往返且有答案，本地执行则无人过问。
+15. **审核顺序即安全属性**：`签名 → 清单 → 准入`。每一步都要读东西，顺序变了
+    就是在读不同的东西。先准入再验签，未签名包已被「自证」通过；先读清单再
+    验签，一个谎报能力的包已经被当作事实解析。因此先认证字节、再看字节里的
+    任何内容。两条测试专门锁这个顺序，改动顺序即失败。
+16. **签名覆盖整棵树，不只是清单**：`pig-ops.sig` 是对包目录的哈希签名
+    （每个文件的路径、可执行位与内容）。清单与它治理的代码在事后无法被拆开；
+    事后加一个文件与改一个文件一样会被发现。签名的宿主 key 配置在节点上，
+    绝不随信封下发——携带自己公钥的信封等于自己验自己。
+17. **不随仓库下发发布私钥**：那会让每个节点都信任持有仓库的人。签名发生在
+    运维方自己的发布流水线里。因此「未配置信任库的节点跑未签名包」是一个
+    过渡默认值，且它每次启动都会大声告警——开关就是信任库本身的存在：
+    配了它，所有包必须验签，且没有任何配置项能把它关回去。**已配置但读不出来
+    的信任库是硬错误**：会因为一个拼写错误而 fail open 的安全控制不是控制。
+18. **灰度波次由「人人有回音」而非「时间到了」推进**：`Advance` 在当前波
+    还有节点未应答时拒绝前进。失败的节点算已应答——否则一台因无关原因离线的
+   机器会卡住整个集群——并由 `Failed()` 让运维看到它为何提前推进。金丝雀由
+   包名+版本哈希选出：同一版本重试命中同一批节点（而不是随机换一批），不同
+   版本命中不同节点（否则每次都在重测刚被证明的机器）。
 
 ### 当前真实缺口
 
@@ -302,8 +320,11 @@ opskeeper-sre-readonly/                 # 插件根
    写，`verify_recovery` / `draft_config_change` 读），`approval.required: true`、
    `max_blast_radius: pod`、`install.strategy: pin`。审批回执保证「一次批准 =
    一次执行」，且全部写工具经控制面 reviewer。
-4. **审核流水线**：manager 侧 manifest 校验 → 签名 → 灰度发布，复用现有
-   `fetch_package` / `apply_package`。
+4. ~~**审核流水线**~~ ✅ 已完成（策略与闸门已编码）：`Review` 三段审核、
+   `TreeDigest` + ed25519 信封、`TrustStore`（配置加载/吊销/换 key 拒绝）、
+   `PlanRollout` + `Rollout` 灰度闸门，并已接进节点 `admitPackages`。
+   **未接**：与现有 `fetch_package` / `apply_package` 通道的对接（发布节奏、
+   分批下发、回滚触发）尚未编码。
 
 ### E 阶段：生态治理
 

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
 )
 
 // writePackage lays down a plugin bundle carrying a governance manifest.
@@ -66,10 +68,23 @@ spec:
     strategy: rolling
 `
 
+// admit runs a package set through the node's real admission path, with
+// the environment the tests expect. Going through nodePluginPolicy rather
+// than a hand-built Policy is deliberate: these tests are about the node's
+// behaviour, and a policy assembled in the test would be testing the test.
+func admit(t *testing.T, roots []string) ([]pluginmanifest.Plugin, error) {
+	t.Helper()
+	pol, err := nodePluginPolicy()
+	if err != nil {
+		t.Fatalf("nodePluginPolicy: %v", err)
+	}
+	return admitPackages(roots, pluginmanifest.NewTrustStore(), pol)
+}
+
 func TestAValidPackageIsAdmitted(t *testing.T) {
 	base := t.TempDir()
 	root := writePackage(t, base, "readonly", strings.Replace(readonlyManifest, "%s", "readonly", 1))
-	got, err := admitPackages([]string{root})
+	got, err := admit(t, []string{root})
 	if err != nil {
 		t.Fatalf("admitPackages: %v", err)
 	}
@@ -86,7 +101,7 @@ func TestAPackageThatFailsValidationIsRefusedEntirely(t *testing.T) {
 	good := writePackage(t, base, "good", strings.Replace(readonlyManifest, "%s", "good", 1))
 	bad := writePackage(t, base, "bad", "apiVersion: opskeeper.io/v1\nkind: Plugin\nmetadata:\n  name: bad\n")
 
-	if _, err := admitPackages([]string{good, bad}); err == nil {
+	if _, err := admit(t, []string{good, bad}); err == nil {
 		t.Fatal("a package with an unusable manifest was admitted")
 	}
 }
@@ -96,7 +111,7 @@ func TestAPackageThatDoesNotTargetTheEdgeIsRefused(t *testing.T) {
 	// anyway would read as reviewed where nobody looked.
 	base := t.TempDir()
 	root := writePackage(t, base, "ctl", strings.Replace(managerOnlyManifest, "%s", "ctl", 1))
-	if _, err := admitPackages([]string{root}); err == nil {
+	if _, err := admit(t, []string{root}); err == nil {
 		t.Fatal("a manager-only package was admitted to a node")
 	}
 }
@@ -104,7 +119,7 @@ func TestAPackageThatDoesNotTargetTheEdgeIsRefused(t *testing.T) {
 func TestAMissingPackageDirectoryIsABootError(t *testing.T) {
 	// An operator who configured packages and found them gone needs to be
 	// told, not handed a node that answers confidently with no tools.
-	if _, err := admitPackages([]string{filepath.Join(t.TempDir(), "gone")}); err == nil {
+	if _, err := admit(t, []string{filepath.Join(t.TempDir(), "gone")}); err == nil {
 		t.Fatal("a package directory that does not exist was admitted")
 	}
 }
