@@ -17,17 +17,28 @@ sidecar rather than a fork of the package manifest.
 ## Layout
 
 ```
-opskeeper-sre-readonly/
+opskeeper-sre-readonly/       # L1 — every node
 ├── pig-ops.yaml              # governance sidecar (required)
 ├── skills/
 │   ├── diagnose-readonly/SKILL.md
 │   └── opskeeper-*/SKILL.md   # the seven worker personas
-├── extensions/
-│   └── opskeeper-gate/        # the gate courier
-├── agents/                   # optional; persona definitions
-├── prompts/                  # optional
-└── mcp/                      # optional; MCP server definitions
+└── extensions/
+    ├── opskeeper-gate/           # the gate courier
+    └── opskeeper-sre-readonly/   # the read-only toolset
+
+opskeeper-sre-repair/         # L2 — opt-in, mutating
+├── pig-ops.yaml
+├── skills/
+│   ├── opskeeper-repairer/SKILL.md
+│   └── opskeeper-verifier/SKILL.md
+└── extensions/
+    ├── opskeeper-gate/           # the same courier
+    └── opskeeper-sre-repair/     # the mutating toolset
 ```
+
+The `extensions/` contents are **generated** by `scripts/sync-pig-ops.sh`
+from `core/pig/extensions/`. Editing a packaged file directly is always
+wrong — the next run overwrites it.
 
 `extensions/`, `agents/`, `prompts/`, and `mcp/` are all optional. A
 plugin that ships only skills is valid.
@@ -111,6 +122,36 @@ Start from `opskeeper-sre-readonly/`, the read-only L1 baseline that every
 node runs: eighteen read-only tools, the seven worker personas, and the
 courier that makes every one of their tool calls ask the host first.
 
+## The two shipped packages
+
+They are separate packages rather than one package with two sections,
+because they make different promises about a node.
+
+| | `opskeeper-sre-readonly` | `opskeeper-sre-repair` |
+|---|---|---|
+| level | L1 | L2 |
+| tools | 18, all `read` | 5: 3 `write`, 2 `read` |
+| approval | none | every mutating call |
+| blast radius | none | `pod` — one named target |
+| install | rolling | pinned |
+| personas | all seven | repairer, verifier |
+| ships on | every node | nodes whose operators opted in |
+
+A node typically runs both, and the host builds one allow-list from both
+manifests. The rules that keep them apart are worth stating because they
+are what break first under pressure:
+
+- **No tool name may appear in both.** The host refuses a duplicated name
+  at boot rather than taking whichever loaded last, so a collision is a
+  failed install rather than a silent capability that depends on ordering.
+- **No mutating tool may appear in the read-only package.** If it did, the
+  L1 manifest's "needs no approval" claim would be false and the node
+  would sit in an approval queue nobody was told to watch.
+- **Admission is per package.** A node whose policy ceiling is read-only
+  still admits the read-only package while refusing the repair one, so
+  installing the repair package on one node does not put the others out of
+  compliance.
+
 ## The courier
 
 `extensions/opskeeper-gate/` is the one extension here that is not a
@@ -171,3 +212,43 @@ manager-side contract test are what keep the copy honest.
 
 Its canonical source is `core/pig/extensions/opskeeper-sre-readonly/`, and
 `TestThePackagedToolsetMatchesTheCanonicalSource` keeps the two identical.
+
+### The repair toolset
+
+`extensions/opskeeper-sre-repair/` is the same shape for the five tools
+that change something, and the shape matters more here.
+
+**Every tool in it is served by an upcall to the control plane** — including
+`host_restart_service`, which *is* in the node's skill registry. That is not
+an accident of naming: the registry entry is what lets the catalog draw the
+tool and lets the host classify it, and a broker that resolved tools by "is
+it registered here?" would find it and call its `Execute`. That `Execute` is
+deliberately locked off, because the approval for a restart lives in the
+manager's BaseTool wrapper, behind a reviewer a human can see. Dispatching
+it from the node would run the one action on that host whose gate cannot
+produce consent.
+
+So the routing rule is the tool's **class**, not its name or its scope —
+the same class the allow-list, the role ceiling and the receipt requirement
+are already built on. Reads run here, where the evidence is. Everything
+else is asked for.
+
+Two consequences are enforced by tests rather than by convention:
+
+- `TestAMutatingToolIsNeverDispatchedByTheNodeItself` asserts the control
+  plane is the thing that answers a restart, so the routing rule cannot be
+  quietly reverted to "registered means local".
+- `TestTheTwoToolsetsShareOneBrokerClient` asserts the two toolsets' copies
+  of the broker client are the same file, modulo the package clause. The
+  client is the thing that decides whether a call whose reply was lost gets
+  resent, and for a read that is wasteful while for a restart it is a second
+  outage. One protocol, one implementation, asserted equal.
+
+The repair package's personas are the read-only ones with the authority to
+act added and the discipline kept. `opskeeper-repairer` must state the blast
+radius and the rollback *before* the approval prompt appears, and is told
+explicitly not to rephrase a refused call and try again — the host compares
+the exact call, so a second attempt after a refusal is an attempt to evade a
+decision whatever the intent. `opskeeper-verifier` refuses to fix what it
+finds, because a verifier that repairs has a reason to want its own last
+verdict to be right.

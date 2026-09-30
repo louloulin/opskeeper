@@ -240,7 +240,7 @@ opskeeper-sre-readonly/                 # 插件根
 | **A 模块化地基** | `go.work` + 5 个独立 `go.mod`；`core`（domain/ports/wire）；`sdk` 清单准入 | ✅ 已落地 |
 | **B PiG 适配层** | `pigmodel`（settings→`*ai.Model`）、`pigagent`、`pigrpc`（`pig --mode rpc` 客户端）、`pigwire`（SSE 帧翻译） | ✅ 已落地 |
 | **C 节点 Agent** | `pigsupervisor`（崩溃重启/退避/Degraded）、`policygate`（白名单+审批+digest）、`gatesocket`（unix socket 准入）、准入信使 extension、tunnel 7 个 `agent.*` 方法 + `agent.decide`、控制面 `NodeFleet` + `Service.Decide` + HTTP 决策端点、per-session 角色表 | ✅ 已落地 |
-| **D 插件生态** | L1 只读 profile（18 工具 + 7 persona + 信使）、`pluginimport` 导入器、**B1 只读工具集已实现**（工具集 extension + `toolbroker` + `agent.tool` 反向调用 + 双向漂移测试） | 🟡 B1 完成，B2/B3 未开始 |
+| **D 插件生态** | L1 只读 profile（18 工具 + 7 persona + 信使）、`pluginimport` 导入器、**B1 只读工具集**（工具集 extension + `toolbroker` + `agent.tool` 反向调用 + 双向漂移测试）、**B3 修复包**（L2/5 工具/`approval.required`/`pod` 半径/pin 安装 + 审批回执 + 写操作全部走控制面） | 🟡 B1/B3 完成，B2 未开始 |
 | **E 生态治理** | 插件市场版本矩阵、跨云 profile 模板、harness 8-case 回归 | ⬜ 未开始 |
 
 ### 已落地的关键决策（不可回退）
@@ -262,17 +262,27 @@ opskeeper-sre-readonly/                 # 插件根
     执行器面前生效——清单低报在模型调用那一刻被宿主当场拒绝。
 12. **发送失败可重试，读取失败不重试**：请求没发出去重发是安全的；结果未知
     时重发是对写工具的二次执行，因此报「结果未知」而非重试。
+13. **一次审批 = 一次执行**：`Admit` 仅在人工放行时铸造一次性回执，broker
+    除白名单外还必须核验回执，回执按 `session + 工具名 + 参数摘要` 消费。
+    摘要只覆盖工具与参数，所以 session 必须进 key——两个会话可以产生同一摘要。
+    这堵住的是「用快递扩展替换信使」这一条真实路径。
+14. **按工具等级路由，而非按是否注册**：`host_restart_service` 在节点 skill
+    注册表里**确实存在**（否则目录画不出、宿主也分类不出），但它的 `Execute`
+    是刻意锁死的——审批在管理器 BaseTool 的 reviewer 后面。broker 若按
+    「注册了就在本地跑」解析，会找到一个被锁死的执行器。因此 `Invoke` 的本地
+    分支收窄到 read：变更类一律上 `agent.tool` 走控制面。未知等级上送而非本地
+    执行——上送只是多一个往返且有答案，本地执行则无人过问。
 
 ### 当前真实缺口
 
-- **B1 已闭环，B2/B3 未开始**：18 个只读工具已打通（本地执行 + 控制面
-  反向调用），但可观测栈 MCP（Prom/Loki/Tempo/Grafana）与中间件适配
-  MCP（PG/Redis/K8s/MQ/Git）尚未接入；写操作（`restart_service`、配置变更）
-  需按 `blastRadius` 分级后单独成包。
+- **B1/B3 已闭环，B2 未开始**：18 个只读工具与 5 个写工具均已打通。写工具
+  全部经控制面 reviewer，且要消耗一次性审批回执；`host_restart_service` 的
+  本地执行被证明确实锁死（回归测试可复现该失败）。仍缺的是可观测栈 MCP
+  （Prom/Loki/Tempo/Grafana）与中间件适配 MCP（PG/Redis/K8s/MQ/Git）。
 - 审核流水线（manifest 校验 + 签名 + 灰度）尚未编码。
 - eino 移除未完成（`internal/pkg/llm` 仍跑在 eino 上，约 20K LOC / 34 文件）。
 - `manager` / `edgeagent` / `harness` 的机械式包迁移未做（当前仍在 `internal/`；
-  `core/edge` 目前只含新写的 gatesocket/pigsupervisor/policygate）。
+  `core/edge` 目前含 gatesocket/pigsupervisor/policygate/toolbroker）。
 - `docs/module-architecture.md` 尚未补 `policygate`/`gatesocket`/信使/`spec.tools`；
   arch-lint 建议补这三个新组件条目。
 
@@ -287,7 +297,11 @@ opskeeper-sre-readonly/                 # 插件根
    控制面 registry），agent 进程只做路由。
 2. **B2 外部系统**：可观测栈 MCP（Prom/Loki/Tempo/Grafana）、
    中间件适配 MCP（PG/Redis/K8s/MQ/Git），Aliyun MCP 可直接挂载。
-3. **B3 写操作**（需审批）：`restart_service`、配置变更等，按 `blastRadius` 分级。
+3. ~~**B3 写操作**~~ ✅ 已完成：独立 L2 包 `opskeeper-sre-repair`，
+   5 个工具（`host_restart_service` / `apply_config_change` / `recovery.execute`
+   写，`verify_recovery` / `draft_config_change` 读），`approval.required: true`、
+   `max_blast_radius: pod`、`install.strategy: pin`。审批回执保证「一次批准 =
+   一次执行」，且全部写工具经控制面 reviewer。
 4. **审核流水线**：manager 侧 manifest 校验 → 签名 → 灰度发布，复用现有
    `fetch_package` / `apply_package`。
 

@@ -174,9 +174,11 @@ func TestTheShippedProfileRefusesAMutatingToolForAViewer(t *testing.T) {
 	c := &brokerClient{path: broker.Path()}
 	t.Cleanup(c.close)
 	// draft_config_change is not in this package, so this asserts the
-	// allow-list rather than the ceiling. Proving the ceiling needs a
-	// package that declares a write tool, which is B3's job; until then the
-	// ceiling is pinned directly in TestTheBrokerAppliesTheRoleCeilingToTools.
+	// allow-list rather than the ceiling: a write tool this node does not
+	// have is refused before the role is ever consulted. The ceiling
+	// itself needs a package that declares a write tool, which is the
+	// repair profile — see TestTheRepairProfileDoesNotMakeAViewerDangerous
+	// in repairpath_test.go.
 	reply, err := c.run(wire.ToolRequest{SessionID: "s", ToolName: "draft_config_change"})
 	if err != nil {
 		t.Fatalf("draft_config_change: %v", err)
