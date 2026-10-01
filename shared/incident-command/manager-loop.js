@@ -21,6 +21,14 @@ export const COMMAND_PHASE_LABELS = Object.freeze({
 const TERMINAL_EVENT_TYPES = new Set(['phase_failed', 'retry_exhausted']);
 const FRESHNESS_LIMIT_MS = 60_000;
 const FAILURE_STATES = new Set(['failed', 'aborted']);
+const RUNTIME_BLOCKER_KINDS = new Set([
+  'health',
+  'claim',
+  'lease',
+  'checkpoint',
+  'recovery',
+  'drift',
+]);
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -172,11 +180,12 @@ function normalizeRuntimeBlockers(readback, serverNow) {
   return blockers.map((blocker) => {
     const kind = text(blocker.kind).toLowerCase();
     const state = text(blocker.state).toLowerCase();
+    const runtimeId = text(blocker.runtime_id ?? blocker.runtimeId) || undefined;
     const observedAt = text(blocker.observed_at ?? blocker.observedAt) || undefined;
-    const valid = Boolean(kind && state);
+    const valid = RUNTIME_BLOCKER_KINDS.has(kind) && Boolean(state && runtimeId);
     return {
       kind: valid ? kind : 'unknown',
-      runtimeId: text(blocker.runtime_id ?? blocker.runtimeId) || undefined,
+      runtimeId,
       taskId: text(blocker.task_id ?? blocker.taskId) || undefined,
       state: valid ? state : 'unknown',
       observedAt,

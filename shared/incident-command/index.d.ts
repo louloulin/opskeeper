@@ -11,6 +11,24 @@ export type StageStatus = 'pending' | 'running' | 'blocked' | 'completed' | 'fai
 export type StageSubstate = 'awaiting_human' | 'approved' | 'executing' | 'verifying';
 export type Freshness = 'fresh' | 'stale' | 'unknown';
 export type Completeness = 'complete' | 'partial' | 'missing' | 'legacy_not_applicable';
+export type RuntimeBlockerKind =
+  | 'health'
+  | 'claim'
+  | 'lease'
+  | 'checkpoint'
+  | 'recovery'
+  | 'drift'
+  | 'unknown';
+
+export interface IncidentRuntimeBlocker {
+  kind: RuntimeBlockerKind;
+  runtimeId?: string;
+  taskId?: string;
+  state: string;
+  observedAt?: string;
+  freshness: Freshness;
+  detail?: string;
+}
 
 export interface IncidentCommandOwner {
   kind: 'manager' | 'worker' | 'human' | 'verifier' | 'system';
@@ -59,6 +77,7 @@ export interface IncidentCommandView {
     'incident' | 'cause' | 'preview' | 'authorization' | 'execution' | 'verification',
     Completeness
   >;
+  runtimeBlockers?: IncidentRuntimeBlocker[];
 }
 
 export interface IncidentCommandGoldenInputPair {

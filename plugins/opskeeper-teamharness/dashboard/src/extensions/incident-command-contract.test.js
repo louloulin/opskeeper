@@ -498,6 +498,75 @@ test('keeps absent or malformed runtime readback unknown rather than inferring f
   assert.equal('desiredState' in malformed, false);
 });
 
+test('normalizes unsupported or incomplete runtime blocker data while preserving evidence', () => {
+  const view = fromManagerLoop({
+    state: {
+      incident_id: 'inc-1',
+      current_phase: 'investigated',
+      status: 'running',
+      updated_at: serverNow,
+    },
+    timeline: timelineWithPhases(
+      [{ phase: 'investigated', status: 'running', worker_role: 'opskeeper-investigator' }],
+      [event(75, 'investigated', 'phase_entered')],
+    ),
+    runtimeReadback: {
+      blockers: [
+        {
+          kind: 'credential',
+          runtimeId: 'runtime-unsupported',
+          taskId: 'task-unsupported',
+          state: 'expired',
+          observedAt: serverNow,
+        },
+        {
+          kind: 'health',
+          runtimeId: 'runtime-empty-state',
+          state: '',
+          observedAt: serverNow,
+        },
+        {
+          kind: 'drift',
+          taskId: 'task-missing-runtime',
+          state: 'version-mismatch',
+          observedAt: serverNow,
+        },
+      ],
+    },
+    serverNow,
+  });
+
+  assert.deepEqual(view.runtimeBlockers, [
+    {
+      kind: 'unknown',
+      runtimeId: 'runtime-unsupported',
+      taskId: 'task-unsupported',
+      state: 'unknown',
+      observedAt: serverNow,
+      freshness: 'fresh',
+      detail: 'Runtime blocker readback is incomplete',
+    },
+    {
+      kind: 'unknown',
+      runtimeId: 'runtime-empty-state',
+      taskId: undefined,
+      state: 'unknown',
+      observedAt: serverNow,
+      freshness: 'fresh',
+      detail: 'Runtime blocker readback is incomplete',
+    },
+    {
+      kind: 'unknown',
+      runtimeId: undefined,
+      taskId: 'task-missing-runtime',
+      state: 'unknown',
+      observedAt: serverNow,
+      freshness: 'fresh',
+      detail: 'Runtime blocker readback is incomplete',
+    },
+  ]);
+});
+
 test('selects one deterministic next action by priority', () => {
   const action = selectNextAction({
     stage: 'approved',
