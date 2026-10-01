@@ -9,5 +9,6 @@ export { fromDemoScenario } from './demo-scenario.js';
 export {
   demoAwaitingApproval,
   emptyManagerLoop,
+  incidentCommandGoldenInputPairs,
   managerApprovedPause,
 } from './fixtures.js';

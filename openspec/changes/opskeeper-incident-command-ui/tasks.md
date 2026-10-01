@@ -33,9 +33,9 @@
 
 ## 4. P1.5 Shared Projection
 
-- [ ] 4.1 Extract shared projection, stage mapping, freshness, completeness, and formatting helpers.
-- [ ] 4.2 Adapt TeamHarness and the public live demo to shared helpers while preserving host/demo visual differences.
-- [ ] 4.3 Add cross-surface golden tests for stage, owner, freshness, next action, impact, and completeness.
+- [x] 4.1 Extract shared projection, stage mapping, freshness, completeness, and formatting helpers.
+- [x] 4.2 Adapt TeamHarness and the public live demo to shared helpers while preserving host/demo visual differences.
+- [x] 4.3 Add cross-surface golden tests for stage, owner, freshness, next action, impact, and completeness.
 
 ## 5. P2 Archive Replay and Knowledge
 

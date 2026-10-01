@@ -20,6 +20,7 @@ export const COMMAND_PHASE_LABELS = Object.freeze({
 
 const TERMINAL_EVENT_TYPES = new Set(['phase_failed', 'retry_exhausted']);
 const FRESHNESS_LIMIT_MS = 60_000;
+const FAILURE_STATES = new Set(['failed', 'aborted']);
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -108,6 +109,55 @@ function auditKinds(phase) {
   return new Set(rows.map((row) => text(row.kind).toLowerCase()));
 }
 
+export function normalizeIncidentOwner(input) {
+  const source = object(input);
+  const kind = text(source.kind).toLowerCase();
+  const role = text(source.role);
+  const label = text(source.label);
+  if (kind === 'human') return { kind: 'human', label: label || 'Human' };
+  const identity = `${role} ${label}`.toLowerCase();
+  if (kind === 'verifier' || /verifier/.test(identity)) {
+    return { kind: 'verifier', role: role || undefined, label: 'Verifier' };
+  }
+  if (kind === 'manager' || /(^|\b)(manager|orchestrator)/.test(identity) || label === 'Manager') {
+    return { kind: 'manager', role: role || undefined, label: 'Manager' };
+  }
+  if (kind === 'system' || /system failure|scenario runner/.test(identity)) {
+    return { kind: 'system', role: role || undefined, label: 'System failure' };
+  }
+  if (/alertmanager/.test(identity)) {
+    return { kind: 'system', role: role || undefined, label: 'Alertmanager' };
+  }
+  if (role || label) {
+    const displayRole = (role || label)
+      .replace(/^opskeeper[-_]/, '')
+      .split(/[-_\s]+/)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+    return { kind: 'worker', role: role || undefined, label: label || displayRole };
+  }
+  return undefined;
+}
+
+export function resolveEvidenceCompleteness(input = {}) {
+  const source = object(input);
+  const project = (name) => {
+    const evidence = object(source[name]);
+    if (!evidence.observed) return 'missing';
+    return evidence.complete ? 'complete' : 'partial';
+  };
+  return {
+    incident: project('incident'),
+    cause: project('cause'),
+    preview: source.preview?.legacyNotApplicable && !source.preview?.observed
+      ? 'legacy_not_applicable'
+      : project('preview'),
+    authorization: project('authorization'),
+    execution: project('execution'),
+    verification: project('verification'),
+  };
+}
+
 export function resolveFreshness(observedAt, serverNow) {
   const observed = date(observedAt);
   const now = date(serverNow);
@@ -148,10 +198,14 @@ function projectStages(timeline) {
             : 'unknown';
     const sourceEvent = contract || terminal || pauseControl || entered || resumed;
     const role = text(source.worker_role ?? source.workerRole);
+    const owner = normalizeIncidentOwner({
+      role,
+      label: paused && phase === 'approved' ? 'Human' : role ? undefined : 'Manager',
+    });
     return {
       stage: phase,
       status,
-      ownerLabel: paused && phase === 'approved' ? 'Human' : role,
+      ownerLabel: owner?.label,
       startedAt: entered?.createdAt || text(source.started_at ?? source.startedAt) || undefined,
       durationMs: milliseconds(
         text(source.started_at ?? source.startedAt),
@@ -174,14 +228,12 @@ function projectStages(timeline) {
 
 function ownerFor(stage, record) {
   if (stage === 'approved' && record.status === 'blocked') {
-    return { kind: 'human', label: 'Human' };
+    return normalizeIncidentOwner({ kind: 'human', label: 'Human' });
   }
-  const role = record.workerRole || text(record.ownerLabel);
-  if (role.startsWith('opskeeper-verifier')) {
-    return { kind: 'verifier', role, label: 'Verifier' };
-  }
-  if (role) return { kind: 'worker', role, label: role };
-  return undefined;
+  return normalizeIncidentOwner({
+    role: record.workerRole,
+    label: record.workerRole ? undefined : 'Manager',
+  });
 }
 
 function recoveredSubstate(record) {
@@ -203,7 +255,22 @@ function currentStage(state, timeline, stages) {
   const record = selected
     ? stages.find((item) => item.stage === selected)
     : undefined;
+  const terminalOutsideCommandPhase = timeline.events.find((event) => (
+    TERMINAL_EVENT_TYPES.has(event.eventType) && !isCommandPhase(event.phase)
+  ));
+  const stateStatus = text(state.status ?? state.state_status ?? state.loop_status).toLowerCase();
+  const authoritativeFailure = Boolean(terminalOutsideCommandPhase) || FAILURE_STATES.has(stateStatus);
   if (!selected || !record || record.status === 'unknown') {
+    if (authoritativeFailure) {
+      return {
+        stage: undefined,
+        stageStatus: 'failed',
+        stageSubstate: undefined,
+        owner: normalizeIncidentOwner({ kind: 'system', label: 'System failure' }),
+        sourceEventId: terminalOutsideCommandPhase?.id || undefined,
+        sourceTaskId: terminalOutsideCommandPhase?.taskId || undefined,
+      };
+    }
     return {
       stage: undefined,
       stageStatus: 'unknown',
@@ -290,21 +357,37 @@ function completeness(input, stages) {
   const recovered = byStage.get('recovered');
   const legacyPreview = archive.legacy_preview_not_applicable === true
     || (archive.closed === true && Array.isArray(archive.repair_previews) && archive.repair_previews.length === 0);
-  const auditCompleteness = (record, kind) => (
-    !record || record.status === 'unknown' ? 'missing' : record.audit.has(kind) ? 'complete' : 'partial'
-  );
-  return {
-    incident: identity(incident) ? 'complete' : 'missing',
-    cause: cause?.status === 'completed' && (cause.outcome || cause.evidenceRefs.length)
-      ? 'complete'
-      : cause && cause.status !== 'unknown' ? 'partial' : 'missing',
-    preview: preview.run_id || preview.runId
-      ? preview.passing || preview.passing_candidate ? 'complete' : 'partial'
-      : legacyPreview ? 'legacy_not_applicable' : 'missing',
-    authorization: auditCompleteness(approved, 'approval'),
-    execution: auditCompleteness(recovered, 'execution'),
-    verification: auditCompleteness(recovered, 'verification'),
-  };
+  const previewObserved = Boolean(preview.run_id || preview.runId);
+  return resolveEvidenceCompleteness({
+    incident: {
+      observed: Boolean(identity(incident) || identity(input.state) || identity(input.timeline)),
+      complete: true,
+    },
+    cause: {
+      observed: Boolean(cause && cause.status !== 'unknown'),
+      complete: cause?.status === 'completed' && Boolean(cause.outcome || cause.evidenceRefs.length),
+    },
+    preview: {
+      observed: previewObserved,
+      complete: previewObserved && Boolean(preview.passing || preview.passing_candidate),
+      legacyNotApplicable: legacyPreview,
+    },
+    authorization: {
+      observed: Boolean(approved && approved.status !== 'unknown'),
+      complete: Boolean(approved?.audit?.has('approval')),
+    },
+    execution: {
+      observed: Boolean(recovered && recovered.status !== 'unknown'),
+      complete: Boolean(recovered?.audit?.has('execution')),
+    },
+    verification: {
+      observed: Boolean(recovered && recovered.status !== 'unknown'),
+      complete: Boolean(
+        recovered?.audit?.has('verification')
+          && (recovered.status === 'completed' || stages.find((stage) => stage.stage === 'postmortem')?.status === 'completed'),
+      ),
+    },
+  });
 }
 
 export function fromManagerLoop(input = {}) {

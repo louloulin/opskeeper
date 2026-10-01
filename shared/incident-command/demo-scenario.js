@@ -1,12 +1,14 @@
 import {
   COMMAND_PHASES,
   COMMAND_PHASE_LABELS,
+  normalizeIncidentOwner,
+  resolveEvidenceCompleteness,
   resolveFreshness,
   selectNextAction,
 } from './manager-loop.js';
 
 const STATE_MAP = new Map([
-  ['starting', { stage: 'detected', status: 'running', owner: { kind: 'system', label: 'Manager' } }],
+  ['starting', { stage: 'detected', status: 'running', owner: { kind: 'manager', label: 'Manager' } }],
   ['awaiting_alert', { stage: 'detected', status: 'running', owner: { kind: 'system', label: 'Alertmanager' } }],
   ['alert_correlated', { stage: 'correlated', status: 'completed', owner: { kind: 'manager', label: 'Manager' } }],
   ['diagnosis_dispatched', { stage: 'investigated', status: 'running', owner: { kind: 'worker', role: 'opskeeper-investigator', label: 'Investigator' } }],
@@ -16,11 +18,12 @@ const STATE_MAP = new Map([
   ['verifying', { stage: 'recovered', status: 'running', substate: 'verifying', owner: { kind: 'verifier', role: 'opskeeper-verifier', label: 'Verifier' } }],
   ['recovered', { stage: 'recovered', status: 'completed', owner: { kind: 'verifier', role: 'opskeeper-verifier', label: 'Verifier' } }],
   ['closed', { stage: 'postmortem', status: 'completed', owner: { kind: 'manager', label: 'Manager' } }],
-  ['start_failed', { stage: undefined, status: 'failed', owner: { kind: 'system', label: 'Scenario runner' } }],
+  ['start_failed', { stage: undefined, status: 'failed', owner: { kind: 'system', label: 'System failure' } }],
 ]);
 
 function text(value) {
-  return typeof value === 'string' && value.trim() ? value.trim() : '';
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  return Number.isFinite(value) ? String(value) : '';
 }
 
 function object(value) {
@@ -68,8 +71,20 @@ export function fromDemoScenario(input = {}) {
   const scenario = object(source.scenario);
   const status = text(scenario.status);
   const mapped = STATE_MAP.get(status) || { stage: undefined, status: 'unknown', owner: undefined };
+  const incidentId = text(scenario.incident_id ?? scenario.incidentId);
   const observedAt = text(scenario.updated_at ?? scenario.updatedAt) || undefined;
   const stageIndex = COMMAND_PHASES.indexOf(mapped.stage);
+  const investigatedIndex = COMMAND_PHASES.indexOf('investigated');
+  const approvedIndex = COMMAND_PHASES.indexOf('approved');
+  const recoveredIndex = COMMAND_PHASES.indexOf('recovered');
+  const causeObserved = stageIndex >= investigatedIndex;
+  const previewObserved = [
+    'preview_ready', 'awaiting_approval', 'repair_dispatched', 'verifying', 'recovered', 'closed',
+  ].includes(status);
+  const authorizationObserved = stageIndex >= approvedIndex;
+  const recoveryObserved = stageIndex >= recoveredIndex;
+  const recoveryComplete = ['recovered', 'closed'].includes(status);
+  const owner = normalizeIncidentOwner(mapped.owner);
   const stageTimeline = COMMAND_PHASES.map((stage, index) => ({
     stage,
     status: stage === mapped.stage
@@ -77,17 +92,18 @@ export function fromDemoScenario(input = {}) {
       : stageIndex >= 0 && index < stageIndex
         ? 'completed'
         : 'pending',
-    ownerLabel: stage === mapped.stage ? mapped.owner?.label : undefined,
+    ownerLabel: stage === mapped.stage ? owner?.label : undefined,
     evidenceRefs: [],
   }));
   const command = {
+    incidentId,
     stage: mapped.stage,
     stageStatus: mapped.status,
     stageSubstate: mapped.substate,
-    owner: mapped.owner,
+    owner,
   };
   return {
-    incidentId: text(scenario.incident_id ?? scenario.incidentId),
+    incidentId,
     scenario: text(scenario.scenario_id ?? scenario.scenarioId),
     ...command,
     freshness: resolveFreshness(observedAt, source.serverNow),
@@ -96,13 +112,28 @@ export function fromDemoScenario(input = {}) {
     businessImpact: impact(source.snapshots),
     nextAction: selectNextAction(command),
     stageTimeline,
-    evidenceCompleteness: {
-      incident: command.incidentId ? 'complete' : 'partial',
-      cause: stageIndex >= COMMAND_PHASES.indexOf('investigated') ? 'complete' : 'partial',
-      preview: ['preview_ready', 'awaiting_approval', 'repair_dispatched', 'verifying', 'recovered', 'closed'].includes(status) ? 'complete' : 'partial',
-      authorization: ['repair_dispatched', 'verifying', 'recovered', 'closed'].includes(status) ? 'complete' : 'partial',
-      execution: ['verifying', 'recovered', 'closed'].includes(status) ? 'complete' : 'partial',
-      verification: ['recovered', 'closed'].includes(status) ? 'complete' : 'partial',
-    },
+    evidenceCompleteness: resolveEvidenceCompleteness({
+      incident: { observed: Boolean(command.incidentId), complete: true },
+      cause: {
+        observed: causeObserved,
+        complete: causeObserved && stageIndex > investigatedIndex,
+      },
+      preview: {
+        observed: previewObserved,
+        complete: previewObserved,
+      },
+      authorization: {
+        observed: authorizationObserved,
+        complete: ['repair_dispatched', 'verifying', 'recovered', 'closed'].includes(status),
+      },
+      execution: {
+        observed: recoveryObserved,
+        complete: recoveryObserved,
+      },
+      verification: {
+        observed: recoveryObserved,
+        complete: recoveryComplete,
+      },
+    }),
   };
 }

@@ -61,6 +61,19 @@ export interface IncidentCommandView {
   >;
 }
 
+export interface IncidentCommandGoldenInputPair {
+  readonly name:
+    | 'detected'
+    | 'approval_wait'
+    | 'executing_recovery'
+    | 'verifying_recovery'
+    | 'closed'
+    | 'failed'
+    | 'unknown';
+  readonly manager: Record<string, unknown>;
+  readonly demo: Record<string, unknown>;
+}
+
 export const COMMAND_PHASES: readonly CommandPhase[];
 export const COMMAND_PHASE_LABELS: Readonly<Record<CommandPhase, string>>;
 export function fromManagerLoop(input?: unknown): IncidentCommandView;
@@ -70,3 +83,4 @@ export function selectNextAction(input?: unknown): IncidentCommandView['nextActi
 export const emptyManagerLoop: IncidentCommandView;
 export const managerApprovedPause: IncidentCommandView;
 export const demoAwaitingApproval: IncidentCommandView;
+export const incidentCommandGoldenInputPairs: readonly IncidentCommandGoldenInputPair[];

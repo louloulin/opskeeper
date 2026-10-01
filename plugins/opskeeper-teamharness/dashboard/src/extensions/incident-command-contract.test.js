@@ -8,12 +8,21 @@ import {
   emptyManagerLoop,
   fromDemoScenario,
   fromManagerLoop,
+  incidentCommandGoldenInputPairs,
   managerApprovedPause,
   resolveFreshness,
   selectNextAction,
 } from '../../../../../shared/incident-command/index.js';
 
 const serverNow = '2026-10-01T12:00:30.000Z';
+
+const REQUIRED_PARITY_FIELDS = [
+  'stage',
+  'stageStatus',
+  'stageSubstate',
+  'freshness',
+  'evidenceCompleteness',
+];
 
 function event(id, phase, eventType, createdAt = '2026-10-01T12:00:00.000Z') {
   return { id, phase, event_type: eventType, created_at: createdAt };
@@ -244,6 +253,36 @@ test('exposes deterministic fixtures without fabricating demo source identity', 
   assert.equal(demoAwaitingApproval.stageSubstate, 'awaiting_human');
   assert.equal(demoAwaitingApproval.sourceEventId, undefined);
   assert.equal(demoAwaitingApproval.stageTimeline.filter((stage) => stage.ownerLabel).length, 1);
+});
+
+test('projects deterministic golden Manager and demo input pairs to identical command semantics', () => {
+  assert.deepEqual(
+    incidentCommandGoldenInputPairs.map((pair) => pair.name),
+    [
+      'detected',
+      'approval_wait',
+      'executing_recovery',
+      'verifying_recovery',
+      'closed',
+      'failed',
+      'unknown',
+    ],
+  );
+
+  for (const pair of incidentCommandGoldenInputPairs) {
+    const manager = fromManagerLoop(pair.manager);
+    const demo = fromDemoScenario(pair.demo);
+    for (const field of REQUIRED_PARITY_FIELDS) {
+      assert.deepEqual(manager[field], demo[field], `${pair.name}: ${field}`);
+    }
+    assert.equal(manager.nextAction?.kind, demo.nextAction?.kind, `${pair.name}: nextAction.kind`);
+    assert.equal(manager.businessImpact.level, demo.businessImpact.level, `${pair.name}: businessImpact.level`);
+    assert.deepEqual(
+      manager.owner && { kind: manager.owner.kind, label: manager.owner.label },
+      demo.owner && { kind: demo.owner.kind, label: demo.owner.label },
+      `${pair.name}: owner`,
+    );
+  }
 });
 
 test('computes generic business impact from demo snapshots', () => {

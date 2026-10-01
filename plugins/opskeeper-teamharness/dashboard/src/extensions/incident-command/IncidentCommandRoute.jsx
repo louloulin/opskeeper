@@ -32,6 +32,8 @@ export async function fetchIncidentCommand(api, incidentId, serverNow, incident)
     incident,
     state,
     timeline,
+    archive,
+    preview,
     serverNow: authoritativeNow,
   });
 
