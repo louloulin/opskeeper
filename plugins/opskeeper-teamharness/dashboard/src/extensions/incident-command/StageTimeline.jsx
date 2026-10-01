@@ -48,7 +48,14 @@ function sourceReference(stage) {
   ].filter(Boolean).join('，') || '来源缺失';
 }
 
-export default function StageTimeline({ stages = [], locale = 'zh-CN', onOpenEvidence }) {
+export default function StageTimeline({
+  stages = [],
+  locale = 'zh-CN',
+  onOpenEvidence,
+  title = '七阶段事故时间线',
+  ariaLabel = '七阶段事故时间线',
+  evidenceActionLabel = '查看证据',
+}) {
   const activeIndex = Math.max(-1, ...(stages || []).map((stage, index) => (
     stage && stage.status !== 'unknown' ? index : -1
   )));
@@ -56,7 +63,7 @@ export default function StageTimeline({ stages = [], locale = 'zh-CN', onOpenEvi
   return (
     <section
       className="opskeeper-incident-stage-timeline"
-      aria-label="七阶段事故时间线"
+      aria-label={ariaLabel}
       lang={locale}
       style={{
         '--ops-incident-surface': 'var(--ops-surface, #ffffff)',
@@ -95,7 +102,7 @@ export default function StageTimeline({ stages = [], locale = 'zh-CN', onOpenEvi
           .opskeeper-incident-stage-grid { grid-template-columns: 1fr; }
         }
       `}</style>
-      <h3 style={{ margin: 0, fontSize: 13 }}>七阶段事故时间线</h3>
+      <h3 style={{ margin: 0, fontSize: 13 }}>{title}</h3>
       <ol className="opskeeper-incident-stage-grid" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
         {(stages || []).map((stage, index) => {
           const substate = stageSubstate(stage);
@@ -144,7 +151,11 @@ export default function StageTimeline({ stages = [], locale = 'zh-CN', onOpenEvi
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '42px 1fr', gap: 4 }}>
                     <dt>来源</dt>
-                    <dd style={{ margin: 0, overflowWrap: 'anywhere' }}>{sourceReference(stage)}</dd>
+                    <dd style={{ margin: 0, overflowWrap: 'anywhere' }}>
+                      {stage?.sourceUrl ? (
+                        <a href={stage.sourceUrl} target="_blank" rel="noreferrer">来源链接</a>
+                      ) : sourceReference(stage)}
+                    </dd>
                   </div>
                 </dl>
                 <button
@@ -161,7 +172,7 @@ export default function StageTimeline({ stages = [], locale = 'zh-CN', onOpenEvi
                     padding: '3px 6px',
                   }}
                 >
-                  查看证据
+                  {evidenceActionLabel}
                 </button>
               </article>
             </li>

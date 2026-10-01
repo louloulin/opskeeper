@@ -39,12 +39,12 @@
 
 ## 5. P2 Archive Replay and Knowledge
 
-- [ ] 5.1 Design and implement replay from authoritative archived transitions.
-- [ ] 5.2 Group replay evidence by decision and retain links to source events.
-- [ ] 5.3 Distinguish decision-time evidence from post-incident enrichment and current knowledge references.
-- [ ] 5.4 Add evidence completeness and bounded historical-comparison summaries.
-- [ ] 5.5 Preserve explicit `legacy_not_applicable` states for optional newer fields.
-- [ ] 5.6 Add a visually secondary controlled-drill action only for scenarios with complete scenario, manifest, target, workload, and safety identity support.
+- [x] 5.1 Design and implement replay from authoritative archived transitions.
+- [x] 5.2 Group replay evidence by decision and retain links to source events.
+- [x] 5.3 Distinguish decision-time evidence from post-incident enrichment and current knowledge references.
+- [x] 5.4 Add evidence completeness and bounded historical-comparison summaries.
+- [x] 5.5 Preserve explicit `legacy_not_applicable` states for optional newer fields.
+- [x] 5.6 Add a visually secondary controlled-drill action only for scenarios with complete scenario, manifest, target, workload, and safety identity support.
 
 ## 6. P3 Runtime-Aware Command
 

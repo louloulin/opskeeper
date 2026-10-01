@@ -4,12 +4,206 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
+  projectArchiveReplay,
   normalizeArchiveIncidentList,
   normalizeArchiveResponse,
   normalizeIncidentSummary,
   normalizeRepairPreviews,
   normalizeRepairPreviewSummary,
 } from './archive.js';
+
+const replayArchive = {
+  incident_id: 'inc-replay',
+  evidence_complete: true,
+  recovery_observed: true,
+  closed: true,
+  event_count: 7,
+  first_event_at: '2026-09-18T01:00:00Z',
+  last_event_at: '2026-09-18T01:05:00Z',
+  localization_seconds: 90,
+  recovery_seconds: 60,
+  timeline: [
+    {
+      id: 'event-closed', occurred_at: '2026-09-18T01:05:00Z', phase: 'closure',
+      event_type: 'incident.closed', actor_type: 'system', actor: 'manager',
+      status: 'closed', evidence_ref: 'evidence/closed',
+    },
+    {
+      id: 'event-recovery', occurred_at: '2026-09-18T01:04:00Z', phase: 'recovery',
+      event_type: 'recovery_signal.observed', actor_type: 'system', actor: 'verifier',
+      status: 'verified', evidence_ref: 'evidence/recovery',
+    },
+    {
+      id: 'event-action', occurred_at: '2026-09-18T01:03:00Z', phase: 'recovery',
+      event_type: 'action.executed', actor_type: 'agent', actor: 'opskeeper-manager',
+      status: 'executed', action_fingerprint: 'action-fingerprint', evidence_ref: 'evidence/action',
+    },
+    {
+      id: 'event-approved', occurred_at: '2026-09-18T01:02:00Z', phase: 'approval',
+      event_type: 'recommendation.approved', actor_type: 'human', actor: 'approver@example.test',
+      status: 'approved', evidence_ref: 'evidence/approval',
+    },
+    {
+      id: 'event-root-cause', occurred_at: '2026-09-18T01:01:30Z', phase: 'investigation',
+      event_type: 'root_cause.confirmed', actor_type: 'agent', actor: 'investigator',
+      status: 'confirmed', evidence_ref: 'evidence/root-cause',
+    },
+    {
+      id: 'event-evidence', occurred_at: '2026-09-18T01:01:10Z', phase: 'investigation',
+      event_type: 'evidence.refreshed', actor_type: 'system', actor: 'manager',
+      status: 'refreshed', evidence_ref: 'evidence/refresh',
+    },
+    {
+      id: 'event-alert', occurred_at: '2026-09-18T01:00:00Z', phase: 'detection',
+      event_type: 'alert.received', actor_type: 'system', actor: 'prometheus',
+      status: 'firing', evidence_ref: 'evidence/alert',
+    },
+  ],
+  repair_previews: [{
+    run_id: 'run-replay',
+    target_fingerprint: 'sha256:target-v1',
+    workload_fingerprint: 'sha256:workload-v1',
+    seed_fingerprint: 'sha256:seed-v1',
+    selected_candidate_id: 'candidate-a',
+    candidates: [
+      { candidate_id: 'baseline', name: 'Baseline', decision: 'BASELINE', average_latency_ms: 18 },
+      {
+        candidate_id: 'candidate-a', name: 'Candidate A', decision: 'PASS',
+        average_latency_ms: 12, rejection_reason: '',
+      },
+      {
+        candidate_id: 'candidate-b', name: 'Candidate B', decision: 'REJECTED_BY_PREVIEW',
+        average_latency_ms: 25, rejection_reason: 'business probe failed',
+      },
+    ],
+  }],
+  rollback_plan: 'Restore pool configuration from pre-incident snapshot',
+  rollback_result: 'succeeded',
+  verification_result: 'passed',
+  verification_criteria: 'pool latency returns below 30ms and business probe passes',
+  postmortem_refs: [{
+    id: 'postmortem-replay',
+    root_cause: 'connection pool exhaustion',
+    confirmed_by: 'reviewer@example.test',
+    confirmed_at: '2026-09-19T01:00:00Z',
+    source_event_ids: ['event-root-cause'],
+  }],
+  similar_incidents: Array.from({ length: 8 }, (_, index) => ({
+    incident_id: `inc-similar-${index + 1}`,
+    closed: true,
+    similarity_score: 1 - index * 0.05,
+    generated_at: '2026-09-19T02:00:00Z',
+    source_event_ids: [`event-similar-${index + 1}`],
+  })),
+  similarity_limit: 3,
+  similarity_source: 'tenant incident archive',
+  controlled_drill: {
+    supported: true,
+    scenario_id: 'pg-pool-exhaustion',
+    manifest_id: 'manifest-v1',
+    target_fingerprint: 'sha256:target-v1',
+    workload_fingerprint: 'sha256:workload-v1',
+    safety_identity: 'sha256:safety-v1',
+    action: { type: 'read_only', href: '/drills/pg-pool-exhaustion?incident=inc-replay' },
+  },
+};
+
+test('projects chronological archive replay with frozen decision evidence and enrichment provenance', () => {
+  const replay = projectArchiveReplay(replayArchive);
+
+  assert.deepEqual(replay.timeline.map((event) => event.id), [
+    'event-alert', 'event-evidence', 'event-root-cause', 'event-approved',
+    'event-action', 'event-recovery', 'event-closed',
+  ]);
+  assert.deepEqual(replay.stageTimeline.map((stage) => stage.stage), [
+    'detected', 'correlated', 'investigated', 'critiqued', 'approved', 'recovered', 'postmortem',
+  ]);
+  assert.equal(replay.stageTimeline.find((stage) => stage.stage === 'recovered').sourceEventId, 'event-recovery');
+  assert.deepEqual(replay.timeline[0].evidenceRefs, ['evidence/alert']);
+  assert.equal(replay.timeline[6].sourceEventId, 'event-closed');
+  assert.equal(replay.closure.incidentId, 'inc-replay');
+  assert.equal(replay.closure.closed, true);
+  assert.equal(replay.completeness, 'complete');
+
+  assert.equal(replay.candidateComparison.selected.id, 'candidate-a');
+  assert.equal(replay.candidateComparison.rejected[0].id, 'candidate-b');
+  assert.equal(replay.candidateComparison.rejected[0].reason, 'business probe failed');
+  assert.equal(replay.rollback.result, 'succeeded');
+  assert.deepEqual(replay.rollback.sourceEventIds, ['event-action']);
+  assert.equal(replay.verification.result, 'passed');
+  assert.deepEqual(replay.verification.sourceEventIds, ['event-recovery']);
+
+  assert.equal(replay.decisionEvidence[0].provenance, 'decision_time');
+  assert.ok(replay.decisionEvidence.every((item) => item.sourceEventIds.length > 0));
+  assert.equal(replay.enrichment.postIncident[0].id, 'postmortem-replay');
+  assert.equal(replay.enrichment.postIncident[0].provenance, 'post_incident_enrichment');
+  assert.deepEqual(replay.enrichment.postIncident[0].sourceEventIds, ['event-root-cause']);
+  assert.ok(!replay.decisionEvidence.some((item) => item.id === 'postmortem-replay'));
+});
+
+test('bounds archive similarities and exposes explicit comparison provenance', () => {
+  const replay = projectArchiveReplay(replayArchive);
+
+  assert.equal(replay.similarities.limit, 3);
+  assert.equal(replay.similarities.total, 8);
+  assert.equal(replay.similarities.items.length, 3);
+  assert.equal(replay.similarities.truncated, true);
+  assert.deepEqual(replay.similarities.items.map((item) => item.id), [
+    'inc-similar-1', 'inc-similar-2', 'inc-similar-3',
+  ]);
+  assert.equal(replay.similarities.provenance.kind, 'post_incident_enrichment');
+  assert.equal(replay.similarities.provenance.source, 'tenant incident archive');
+  assert.deepEqual(replay.similarities.items[0].sourceEventIds, ['event-similar-1']);
+});
+
+test('marks legacy optional replay fields not applicable and never fabricates a drill', () => {
+  const replay = projectArchiveReplay({
+    incident_id: 'inc-legacy',
+    closed: true,
+    timeline: replayArchive.timeline.filter((event) => event.id !== 'event-closed').concat([{
+      ...replayArchive.timeline[0],
+      occurred_at: '2026-09-18T01:05:00Z',
+    }]),
+    repair_previews: [],
+    postmortem_refs: [],
+    similar_incidents: [],
+  });
+
+  assert.equal(replay.candidateComparison.completeness, 'legacy_not_applicable');
+  assert.equal(replay.candidateComparison.selected, null);
+  assert.deepEqual(replay.candidateComparison.rejected, []);
+  assert.equal(replay.completeness, 'partial');
+  assert.equal(replay.controlledDrill.supported, false);
+  assert.equal(replay.controlledDrill.action, undefined);
+});
+
+test('hides a controlled drill when one identity is missing even if support is claimed', () => {
+  const replay = projectArchiveReplay({
+    ...replayArchive,
+    controlled_drill: { ...replayArchive.controlled_drill, safety_identity: '' },
+  });
+
+  assert.equal(replay.controlledDrill.supported, false);
+  assert.deepEqual(replay.controlledDrill.missingIdentities, ['safety']);
+  assert.equal(replay.controlledDrill.action, undefined);
+});
+
+test('renders replay-first archive UI and hides unsupported controlled drills', () => {
+  const source = readFileSync(fileURLToPath(new URL('./archive-route.jsx', import.meta.url)), 'utf8');
+  const replaySummaryIndex = source.indexOf('<ArchiveReplaySummary');
+  const replayTimelineIndex = source.indexOf('<StageTimeline');
+  const sourceTableIndex = source.indexOf('aria-label="归档事件源"');
+  const denseTableIndex = source.indexOf('<RepairPreviewArchive');
+
+  assert.ok(replaySummaryIndex >= 0);
+  assert.ok(replayTimelineIndex > replaySummaryIndex);
+  assert.ok(sourceTableIndex > replayTimelineIndex);
+  assert.ok(denseTableIndex > sourceTableIndex);
+  assert.match(source, /projectArchiveReplay\(archive\)/u);
+  assert.match(source, /replay\.controlledDrill\.supported &&/u);
+  assert.match(source, /受控演练只读回看/u);
+  assert.doesNotMatch(source, /createDrill|startDrill|mutation|method:\s*['`]POST['`]/iu);
+});
 
 test('normalizes archive response wrappers and arrays', () => {
   const archive = normalizeArchiveResponse({

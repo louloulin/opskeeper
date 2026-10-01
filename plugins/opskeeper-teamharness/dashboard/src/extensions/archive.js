@@ -11,6 +11,26 @@ export const INCIDENT_EVENT_TYPES = Object.freeze({
   incidentReopened: 'incident.reopened',
 });
 
+const COMMAND_STAGES = Object.freeze([
+  'detected',
+  'correlated',
+  'investigated',
+  'critiqued',
+  'approved',
+  'recovered',
+  'postmortem',
+]);
+
+const ARCHIVE_EVENT_STAGE = Object.freeze(new Map([
+  [INCIDENT_EVENT_TYPES.alertReceived, ['detected']],
+  [INCIDENT_EVENT_TYPES.evidenceRefreshed, ['correlated']],
+  [INCIDENT_EVENT_TYPES.rootCauseConfirmed, ['investigated']],
+  [INCIDENT_EVENT_TYPES.recommendationApproved, ['critiqued', 'approved']],
+  [INCIDENT_EVENT_TYPES.actionExecuted, ['recovered']],
+  [INCIDENT_EVENT_TYPES.recoverySignalObserved, ['recovered']],
+  [INCIDENT_EVENT_TYPES.incidentClosed, ['postmortem']],
+]));
+
 const LEGACY_EVENT_TYPE_ALIASES = new Map([
   ['alert_received', INCIDENT_EVENT_TYPES.alertReceived],
   ['root_cause', INCIDENT_EVENT_TYPES.rootCauseConfirmed],
@@ -214,6 +234,373 @@ function completenessFor(facts, requiredFactIds = [], fallback = 'missing') {
   const populated = (item) => item.value !== '' && item.value !== false && item.value != null;
   if (required.every(populated)) return 'complete';
   return required.some(populated) ? 'partial' : fallback;
+}
+
+function projectionDate(value) {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function sortedArchiveEvents(archive) {
+  const events = (Array.isArray(archive.timeline) ? archive.timeline : [])
+    .filter((event) => event && typeof event === 'object')
+    .map(normalizeArchiveReplayEvent);
+  return events.sort((left, right) => {
+    const leftTime = projectionDate(left.occurredAt)?.getTime();
+    const rightTime = projectionDate(right.occurredAt)?.getTime();
+    if (leftTime == null && rightTime == null) return 0;
+    if (leftTime == null) return 1;
+    if (rightTime == null) return -1;
+    return leftTime - rightTime || left.sourceEventId.localeCompare(right.sourceEventId);
+  });
+}
+
+function normalizeArchiveReplayEvent(event) {
+  const source = projectionObject(event);
+  const rawType = projectionText(source.event_type ?? source.eventType);
+  const eventType = INCIDENT_EVENT_TYPES[rawType]
+    ?? LEGACY_EVENT_TYPE_ALIASES.get(rawType)
+    ?? rawType;
+  const evidenceRef = projectionText(source.evidence_ref ?? source.evidenceRef);
+  const traceId = projectionText(source.trace_id ?? source.traceId);
+  const id = projectionEventId(source);
+  return {
+    id,
+    incidentId: projectionText(source.incident_id ?? source.incidentId),
+    occurredAt: projectionText(source.occurred_at ?? source.occurredAt),
+    phase: projectionText(source.phase),
+    eventType,
+    actorType: projectionText(source.actor_type ?? source.actorType),
+    actor: projectionText(source.actor),
+    status: projectionText(source.status),
+    actionFingerprint: projectionText(source.action_fingerprint ?? source.actionFingerprint),
+    evidenceRef,
+    evidenceRefs: [evidenceRef, traceId].filter(Boolean),
+    traceId,
+    recoverySignal: source.recovery_signal ?? source.recoverySignal === true,
+    sourceEventId: id,
+    sourceUrl: projectionText(source.source_url ?? source.sourceUrl),
+  };
+}
+
+function archiveReplayStages(events) {
+  const eventsByStage = new Map(COMMAND_STAGES.map((stage) => [stage, []]));
+  for (const event of events) {
+    for (const stage of ARCHIVE_EVENT_STAGE.get(event.eventType) || []) {
+      eventsByStage.get(stage).push(event);
+    }
+  }
+
+  return COMMAND_STAGES.map((stage, index) => {
+    const candidates = eventsByStage.get(stage);
+    const source = stage === 'recovered'
+      ? candidates.find((event) => event.eventType === INCIDENT_EVENT_TYPES.recoverySignalObserved)
+        || candidates[0]
+      : candidates[0];
+    const previous = COMMAND_STAGES
+      .slice(0, index)
+      .map((priorStage) => eventsByStage.get(priorStage)[0])
+      .filter(Boolean).pop();
+    const startedAt = projectionDate(source?.occurredAt);
+    const previousAt = projectionDate(previous?.occurredAt);
+    return {
+      stage,
+      status: source
+        ? stage === 'recovered' && source.eventType === INCIDENT_EVENT_TYPES.actionExecuted
+          ? 'running'
+          : 'completed'
+        : 'unknown',
+      ownerLabel: source?.actor || undefined,
+      workerRole: source?.actor || undefined,
+      startedAt: source?.occurredAt,
+      durationMs: startedAt && previousAt ? Math.max(0, startedAt - previousAt) : undefined,
+      outcome: [source?.status, source?.evidenceRef].filter(Boolean).join(' · ') || undefined,
+      evidenceRefs: source?.evidenceRefs || [],
+      sourceEventId: source?.sourceEventId,
+      sourceUrl: source?.sourceUrl,
+    };
+  });
+}
+
+function normalizedReplayCandidate(candidate, run) {
+  const source = projectionObject(candidate);
+  const id = projectionText(source.candidate_id ?? source.candidateId ?? source.id);
+  if (!id) return null;
+  const decision = projectionText(source.decision).toUpperCase();
+  return {
+    id,
+    name: projectionText(source.name),
+    decision: decision || 'UNKNOWN',
+    latencyMs: Number.isFinite(Number(source.average_latency_ms ?? source.averageLatencyMs))
+      ? Number(source.average_latency_ms ?? source.averageLatencyMs)
+      : null,
+    businessProbePass: source.business_probe_pass ?? source.businessProbePass === true,
+    reason: projectionText(source.rejection_reason ?? source.rejectionReason),
+    sourceEventIds: [
+      projectionText(run?.run_id ?? run?.id),
+      projectionText(source.source_event_id ?? source.sourceEventId),
+    ].filter(Boolean),
+  };
+}
+
+function replayCandidateComparison(archive, events) {
+  const run = firstPreviewRun(archive);
+  const previewPresent = Boolean(projectionText(run.run_id ?? run.id));
+  const candidates = (Array.isArray(run.candidates) ? run.candidates : [])
+    .map((candidate) => normalizedReplayCandidate(candidate, run))
+    .filter(Boolean);
+  const explicitSelection = projectionText(
+    run.selected_candidate_id ?? run.selectedCandidateId ?? archive.selected_candidate_id,
+  );
+  const selected = candidates.find((candidate) => candidate.id === explicitSelection)
+    || candidates.find((candidate) => candidate.id !== 'baseline' && candidate.decision === 'PASS')
+    || null;
+  const rejected = candidates.filter((candidate) => (
+    candidate.id !== selected?.id
+      && ['FAIL', 'FAILED', 'REJECTED', 'REJECTED_BY_PREVIEW'].includes(candidate.decision)
+  ));
+  const completeness = !previewPresent && archive.closed === true
+    ? 'legacy_not_applicable'
+    : selected && rejected.length
+      ? 'complete'
+      : previewPresent
+        ? 'partial'
+        : 'missing';
+  return {
+    selected,
+    rejected,
+    baseline: candidates.find((candidate) => candidate.id === 'baseline') || null,
+    provenance: previewPresent ? 'decision_time' : '',
+    runId: projectionText(run.run_id ?? run.id),
+    completeness,
+    sourceEventIds: [
+      projectionText(run.run_id ?? run.id),
+      projectionEventId(events.find((event) => event.eventType === INCIDENT_EVENT_TYPES.recommendationApproved)),
+    ].filter(Boolean),
+  };
+}
+
+function replayRollback(archive, events) {
+  const action = events.find((event) => event.eventType === INCIDENT_EVENT_TYPES.actionExecuted);
+  const result = projectionText(
+    archive.rollback_result ?? archive.rollbackResult ?? action?.status,
+  );
+  const plan = projectionText(archive.rollback_plan ?? archive.rollbackPlan);
+  return {
+    result,
+    plan,
+    provenance: 'decision_time',
+    sourceEventIds: [action?.sourceEventId].filter(Boolean),
+    completeness: result && plan && action ? 'complete' : result || plan || action ? 'partial' : 'missing',
+  };
+}
+
+function replayVerification(archive, events) {
+  const recovery = events.find((event) => event.eventType === INCIDENT_EVENT_TYPES.recoverySignalObserved);
+  const result = projectionText(
+    archive.verification_result ?? archive.verificationResult ?? recovery?.status,
+  );
+  const criteria = projectionText(
+    archive.verification_criteria ?? archive.verificationCriteria,
+  );
+  return {
+    result,
+    criteria,
+    provenance: 'decision_time',
+    sourceEventIds: [recovery?.sourceEventId].filter(Boolean),
+    completeness: result && criteria && recovery ? 'complete' : result || criteria || recovery ? 'partial' : 'missing',
+  };
+}
+
+function sourceEventIds(value) {
+  const source = projectionObject(value);
+  const raw = source.source_event_ids ?? source.sourceEventIds ?? [source.source_event_id ?? source.sourceEventId];
+  return (Array.isArray(raw) ? raw : [raw]).map(projectionText).filter(Boolean);
+}
+
+function replayEnrichment(archive, events) {
+  const closure = events.find((event) => event.eventType === INCIDENT_EVENT_TYPES.incidentClosed);
+  const closureAt = projectionDate(closure?.occurredAt);
+  const rawPostIncident = [
+    ...(Array.isArray(archive.post_incident_evidence) ? archive.post_incident_evidence : []),
+    ...(Array.isArray(archive.enrichment?.post_incident) ? archive.enrichment.post_incident : []),
+  ];
+  const postmortems = (Array.isArray(archive.postmortem_refs) ? archive.postmortem_refs : [])
+    .map(projectionObject);
+  const normalizeEnrichment = (item) => {
+    const source = projectionObject(item);
+    return {
+      id: projectionText(source.id ?? source.incident_id ?? source.url),
+      kind: projectionText(source.kind ?? source.root_cause ?? 'postmortem'),
+      value: projectionText(source.value ?? source.root_cause ?? source.url),
+      occurredAt: projectionText(source.created_at ?? source.createdAt ?? source.confirmed_at ?? source.confirmedAt),
+      provenance: 'post_incident_enrichment',
+      sourceEventIds: sourceEventIds(source),
+    };
+  };
+  const currentKnowledge = [
+    ...(Array.isArray(archive.current_knowledge_refs) ? archive.current_knowledge_refs : []),
+    ...(Array.isArray(archive.enrichment?.current_knowledge_refs) ? archive.enrichment.current_knowledge_refs : []),
+  ].map((item) => {
+    const source = projectionObject(item);
+    return {
+      id: projectionText(source.id ?? source.url ?? source),
+      value: projectionText(source.value ?? source.title ?? source),
+      provenance: 'current_knowledge',
+      sourceEventIds: sourceEventIds(source),
+    };
+  }).filter((item) => item.id);
+
+  return {
+    postIncident: [...rawPostIncident, ...postmortems].map(normalizeEnrichment).filter((item) => item.id),
+    currentKnowledge,
+    closureAt: closure?.occurredAt || '',
+    provenance: 'archive enrichment is excluded from frozen decision-time evidence',
+  };
+}
+
+function replaySimilarities(archive) {
+  const source = Array.isArray(archive.similar_incidents) ? archive.similar_incidents : [];
+  const requestedLimit = Number(archive.similarity_limit ?? archive.similarityLimit ?? 5);
+  const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? requestedLimit : 5;
+  const items = source.slice(0, limit).map((item) => {
+    const sourceItem = projectionObject(item);
+    const id = projectionText(sourceItem.incident_id ?? sourceItem.id);
+    return id ? {
+      id,
+      score: Number.isFinite(Number(sourceItem.similarity_score ?? sourceItem.score))
+        ? Number(sourceItem.similarity_score ?? sourceItem.score)
+        : null,
+      closed: sourceItem.closed === true,
+      generatedAt: projectionText(sourceItem.generated_at ?? sourceItem.generatedAt),
+      provenance: 'post_incident_enrichment',
+      sourceEventIds: sourceEventIds(sourceItem),
+    } : null;
+  }).filter(Boolean);
+  const generated = items
+    .map((item) => projectionDate(item.generatedAt))
+    .filter(Boolean);
+  return {
+    items,
+    total: source.length,
+    limit,
+    truncated: source.length > items.length,
+    provenance: {
+      kind: 'post_incident_enrichment',
+      source: projectionText(archive.similarity_source ?? archive.similaritySource ?? 'archive.similar_incidents'),
+      generatedAt: generated.length ? projectionText(archive.similarity_generated_at) || items.find((item) => item.generatedAt)?.generatedAt : '',
+    },
+    completeness: source.length ? 'complete' : 'missing',
+  };
+}
+
+function replayControlledDrill(archive) {
+  const source = projectionObject(archive.controlled_drill ?? archive.controlledDrill);
+  const identitySource = projectionObject(
+    source.identity_support
+      ?? source.identitySupport
+      ?? source.identities
+      ?? archive.controlled_drill_identity_support
+      ?? archive.controlledDrillIdentitySupport,
+  );
+  const identityValue = (aliases) => projectionText(
+    aliases.map((key) => source[key] ?? identitySource[key]).find(Boolean),
+  );
+  const identities = {
+    scenario: identityValue(['scenario_id', 'scenarioId', 'scenario']),
+    manifest: identityValue(['manifest_id', 'manifestId', 'pool_manifest_id', 'poolManifestId']),
+    target: identityValue(['target_fingerprint', 'targetFingerprint', 'target']),
+    workload: identityValue(['workload_fingerprint', 'workloadFingerprint', 'workload']),
+    safety: identityValue(['safety_identity', 'safetyIdentity', 'safety_fingerprint', 'safetyFingerprint', 'safety']),
+  };
+  const complete = Object.values(identities).every(Boolean);
+  const action = projectionObject(source.action);
+  const supported = source.supported === true
+    && complete
+    && action.type === 'read_only'
+    && Boolean(projectionText(action.href));
+  return {
+    supported,
+    identities,
+    missingIdentities: Object.entries(identities).filter(([, value]) => !value).map(([key]) => key),
+    action: supported && action.type === 'read_only'
+      ? {
+        type: 'read_only',
+        href: projectionText(action.href),
+      }
+      : undefined,
+  };
+}
+
+function combinedReplayCompleteness(sections, archive) {
+  const values = sections.map((section) => section.completeness);
+  if (values.includes('missing') && !values.some((value) => value === 'complete' || value === 'partial')) return 'missing';
+  if (values.includes('partial') || archive.evidence_complete !== true) return 'partial';
+  return values.every((value) => value === 'complete' || value === 'legacy_not_applicable') ? 'complete' : 'partial';
+}
+
+export function projectArchiveReplay(input = {}) {
+  const archive = normalizeArchiveResponse(input) || { timeline: [] };
+  const events = sortedArchiveEvents(archive);
+  const candidateComparison = replayCandidateComparison(archive, events);
+  const rollback = replayRollback(archive, events);
+  const verification = replayVerification(archive, events);
+  const enrichment = replayEnrichment(archive, events);
+  const similarities = replaySimilarities(archive);
+  const controlledDrill = replayControlledDrill(archive);
+  const closureAt = projectionDate(
+    archive.closed_at ?? archive.closedAt ?? enrichment.closureAt,
+  );
+  const decisionEvidence = events
+    .filter((event) => (!closureAt || projectionDate(event.occurredAt) <= closureAt))
+    .map((event) => ({
+      id: event.sourceEventId,
+      kind: event.eventType,
+      value: event.evidenceRef || event.status,
+      occurredAt: event.occurredAt,
+      provenance: 'decision_time',
+      sourceEventIds: [event.sourceEventId],
+    }));
+  const timelineCompleteness = events.length && events.every((event) => event.sourceEventId)
+    ? 'complete'
+    : events.length
+      ? 'partial'
+      : 'missing';
+  const completeness = combinedReplayCompleteness(
+    [{ completeness: timelineCompleteness }, candidateComparison, rollback, verification],
+    archive,
+  );
+  const alert = events.find((event) => event.eventType === INCIDENT_EVENT_TYPES.alertReceived);
+  const cause = events.find((event) => event.eventType === INCIDENT_EVENT_TYPES.rootCauseConfirmed);
+  const action = events.find((event) => event.eventType === INCIDENT_EVENT_TYPES.actionExecuted);
+  const recovery = events.find((event) => event.eventType === INCIDENT_EVENT_TYPES.recoverySignalObserved);
+
+  return {
+    closure: {
+      incidentId: projectionText(archive.incident_id ?? archive.incidentId),
+      closed: archive.closed === true,
+      closedAt: enrichment.closureAt,
+      evidenceComplete: archive.evidence_complete === true,
+      recoveryObserved: archive.recovery_observed === true || Boolean(recovery),
+      localizationSeconds: Number.isFinite(Number(archive.localization_seconds)) ? Number(archive.localization_seconds) : null,
+      recoverySeconds: Number.isFinite(Number(archive.recovery_seconds)) ? Number(archive.recovery_seconds) : null,
+      firstEventAt: projectionText(archive.first_event_at ?? events[0]?.occurredAt),
+      lastEventAt: projectionText(archive.last_event_at ?? events[events.length - 1]?.occurredAt),
+      sourceEventIds: [alert?.sourceEventId, cause?.sourceEventId, recovery?.sourceEventId].filter(Boolean),
+    },
+    timeline: events,
+    stageTimeline: archiveReplayStages(events),
+    decisionEvidence,
+    candidateComparison,
+    rollback,
+    verification,
+    enrichment,
+    similarities,
+    controlledDrill,
+    completeness,
+  };
 }
 
 export function projectIncidentEvidence(input = {}) {

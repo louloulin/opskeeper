@@ -1,10 +1,12 @@
 import * as React from 'react';
 import { opskeeperApi } from './api.js';
 import {
+  projectArchiveReplay,
   normalizeArchiveIncidentList,
   normalizeArchiveResponse,
   normalizeIncidentSummary,
 } from './archive.js';
+import StageTimeline from './incident-command/StageTimeline.jsx';
 import { formatBeijingTime as formatTime } from './time-format.js';
 
 const PREVIEW_URL = 'https://opskeeper.yueming.xin/preview/';
@@ -34,6 +36,7 @@ export default function OpskeeperArchiveRoute({ api }) {
   const [loadingArchive, setLoadingArchive] = React.useState(false);
   const [incidentError, setIncidentError] = React.useState('');
   const [archiveError, setArchiveError] = React.useState('');
+  const [selectedReplayEvent, setSelectedReplayEvent] = React.useState(null);
 
   const loadIncidents = React.useCallback(async () => {
     setLoadingIncidents(true);
@@ -90,10 +93,8 @@ export default function OpskeeperArchiveRoute({ api }) {
     loadIncidents();
   }, [loadIncidents]);
 
-  const requiredEventTypes = archive?.required_event_types || [];
-  const missingEventTypes = new Set(archive?.missing_event_types || []);
-  const timeline = React.useMemo(
-    () => [...(archive?.timeline || [])].sort((left, right) => new Date(left.occurred_at) - new Date(right.occurred_at)),
+  const replay = React.useMemo(
+    () => (archive ? projectArchiveReplay(archive) : null),
     [archive],
   );
 
@@ -150,71 +151,93 @@ export default function OpskeeperArchiveRoute({ api }) {
 
       {archive && (
         <>
-          <section style={summaryGridStyle}>
-            <SummaryCard label="证据完整性" value={archive.evidence_complete ? '完整' : '缺失'} hint={`${archive.event_count || 0} 条事件`} color={archive.evidence_complete ? '#16a34a' : '#dc2626'} />
-            <SummaryCard label="恢复确认" value={archive.recovery_observed ? '已观测' : '未观测'} color={archive.recovery_observed ? '#16a34a' : '#f59e0b'} />
-            <SummaryCard label="定位耗时" value={formatSeconds(archive.localization_seconds)} hint="告警 → 根因" />
-            <SummaryCard label="恢复耗时" value={formatSeconds(archive.recovery_seconds)} hint="执行 → 恢复" />
-          </section>
+          <ArchiveReplaySummary replay={replay} />
+          <StageTimeline
+            stages={replay.stageTimeline}
+            title="闭环七阶段回放"
+            ariaLabel="闭环七阶段事故回放时间线"
+            evidenceActionLabel="查看决策证据"
+            onOpenEvidence={(stage) => setSelectedReplayEvent(
+              replay.timeline.find((event) => event.sourceEventId === stage.sourceEventId) || null,
+            )}
+          />
 
-          <section style={contentGridStyle}>
-            <Panel title="反向证据链">
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
-                {requiredEventTypes.map((eventType) => (
-                  <span key={eventType} style={stageChipStyle(missingEventTypes.has(eventType))}>
-                    {eventType}
-                  </span>
-                ))}
-              </div>
-              {timeline.map((event) => (
-                <div key={event.id || `${event.event_type}-${event.occurred_at}`} style={eventRowStyle()}>
+          <section
+            aria-label="归档事件源"
+            style={{ ...contentGridStyle, marginTop: 12 }}
+          >
+            <Panel title="Manager Archive 权威数据 · 只读投影">
+              {selectedReplayEvent ? (
+                <div style={{ marginBottom: 12, padding: 8, border: '1px solid var(--border)', borderRadius: 6 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>决策时证据：{selectedReplayEvent.eventType}</div>
+                  <MetricRow label="事件" value={selectedReplayEvent.sourceEventId || '未记录'} />
+                  <MetricRow label="证据" value={selectedReplayEvent.evidenceRef || '未记录'} />
+                  <MetricRow label="时间" value={formatTime(selectedReplayEvent.occurredAt)} />
+                  <button type="button" onClick={() => setSelectedReplayEvent(null)} style={{ ...buttonStyle(false), marginTop: 8 }}>
+                    关闭证据回看
+                  </button>
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: 'var(--muted-foreground)', marginBottom: 8 }}>
+                  在上方时间线选择任意阶段可回看决策时证据；下方列表保留权威事件源。
+                </div>
+              )}
+              {replay.timeline.map((event) => (
+                <div key={event.id || `${event.eventType}-${event.occurredAt}`} style={eventRowStyle()}>
                   <div style={{ flex: '1 1 220px', ...wrapAnywhereStyle }}>
-                    <div style={{ fontSize: 12, fontWeight: 600 }}>{event.event_type}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>{event.eventType}</div>
                     <div style={{ marginTop: 3, fontSize: 11, color: 'var(--muted-foreground)' }}>
-                      {event.phase || '未记录阶段'} · {event.actor_type || 'unknown'} / {event.actor || 'unknown'} · {event.status || 'unknown'}
+                      {event.phase || '未记录阶段'} · {event.actorType || 'unknown'} / {event.actor || 'unknown'} · {event.status || 'unknown'}
                     </div>
+                    <div style={{ marginTop: 3, fontSize: 11 }}>事件源：{event.sourceEventId || '缺失'}</div>
                   </div>
                   <div style={{ flex: '1 1 180px', textAlign: 'right', fontSize: 11, color: 'var(--muted-foreground)', ...wrapAnywhereStyle }}>
-                    <div>{formatTime(event.occurred_at)}</div>
-                    {event.evidence_ref && <div style={{ marginTop: 3 }}>{event.evidence_ref}</div>}
-                    {event.trace_id && <div style={{ marginTop: 3 }}>trace: {event.trace_id}</div>}
+                    <div>{formatTime(event.occurredAt)}</div>
+                    {event.evidenceRef && <div style={{ marginTop: 3 }}>{event.evidenceRef}</div>}
+                    {event.traceId && <div style={{ marginTop: 3 }}>trace: {event.traceId}</div>}
                   </div>
                 </div>
               ))}
-              {timeline.length === 0 && <EmptyState text="暂无事件" />}
+              {replay.timeline.length === 0 && <EmptyState text="暂无事件" />}
             </Panel>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
-              <Panel title="闭环状态">
-                <MetricRow label="事故已关闭" value={archive.closed ? '是' : '否'} />
-                <MetricRow label="Trace" value={archive.trace_ids?.length || 0} />
-                <MetricRow label="缺失事件" value={archive.missing_event_types?.length || 0} />
-                <MetricRow label="最近事件" value={formatTime(archive.last_event_at)} />
-              </Panel>
-
-              <Panel title="同类历史事故">
-                {archive.similar_incidents?.map((incident) => (
-                  <button key={incident.incident_id} type="button" onClick={() => { setIncidentId(incident.incident_id); loadArchive(incident.incident_id); }} style={linkRowStyle()}>
-                    <span>{incident.incident_id}</span>
-                    <span style={{ color: incident.closed ? '#16a34a' : 'var(--muted)' }}>{incident.closed ? '已关闭' : '未关闭'}</span>
+              <Panel title="有界历史相似度">
+                {replay.similarities.items.map((incident) => (
+                  <button
+                    key={incident.id}
+                    type="button"
+                    onClick={() => { setIncidentId(incident.id); loadArchive(incident.id); }}
+                    style={linkRowStyle()}
+                  >
+                    <span>{incident.id}</span>
+                    <span>{incident.score == null ? '相关度未知' : `相关度 ${Math.round(incident.score * 100)}%`}</span>
                   </button>
                 ))}
-                {archive.similar_incidents?.length === 0 && <EmptyState text="暂无可反查历史事故" />}
+                {replay.similarities.items.length === 0 && <EmptyState text="暂无可反查历史事故" />}
+                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted-foreground)' }}>
+                  {`上限 ${replay.similarities.limit} / 总数 ${replay.similarities.total}${replay.similarities.truncated ? '（已截断）' : ''} · ${replay.similarities.provenance.kind}`}
+                </div>
               </Panel>
 
-              <Panel title="复盘与修复预演">
-                {archive.postmortem_refs?.map((reference) => (
-                  <div key={reference.id || reference.incident_id} style={{ padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
-                    <div>{reference.root_cause || '未记录根因'}</div>
+              <Panel title="复盘与知识边界">
+                {replay.enrichment.postIncident.map((item) => (
+                  <div key={item.id} style={{ padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
+                    <div>{item.value || '未记录根因'}</div>
                     <div style={{ marginTop: 3, fontSize: 11, color: 'var(--muted-foreground)' }}>
-                      {reference.confirmed_by || 'unknown'} · {formatTime(reference.confirmed_at)}
+                      {item.provenance} · {formatTime(item.occurredAt)} · 源事件 {item.sourceEventIds.join('，') || '缺失'}
                     </div>
                   </div>
                 ))}
-                {archive.postmortem_refs?.length === 0 && <EmptyState text="暂无复盘引用" />}
-                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted-foreground)' }}>
-                  完整候选修复对比见下方 Manager 权威档案投影。
-                </div>
+                {replay.enrichment.currentKnowledge.map((item) => (
+                  <div key={item.id} style={{ padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
+                    <div>{item.value}</div>
+                    <div style={{ marginTop: 3, fontSize: 11, color: 'var(--muted-foreground)' }}>{item.provenance}</div>
+                  </div>
+                ))}
+                {replay.enrichment.postIncident.length === 0 && replay.enrichment.currentKnowledge.length === 0 && (
+                  <EmptyState text="暂无事后补充或当前知识引用" />
+                )}
               </Panel>
             </div>
           </section>
@@ -364,6 +387,93 @@ function RepairPreviewArchive({ runs, incidentId }) {
           {run.candidates.length === 0 && <EmptyState text="该预演 Run 未返回候选数据" />}
         </div>
       ))}
+    </section>
+  );
+}
+
+function ArchiveReplaySummary({ replay }) {
+  if (!replay) return null;
+  const candidateValue = replay.candidateComparison.completeness === 'legacy_not_applicable'
+    ? 'legacy_not_applicable'
+    : replay.candidateComparison.selected?.name
+      ? `${replay.candidateComparison.selected.name} / 拒绝 ${replay.candidateComparison.rejected.length} 项`
+      : '未记录';
+
+  return (
+    <section aria-label="事故回放摘要" style={{ minWidth: 0 }}>
+      <section style={summaryGridStyle}>
+        <SummaryCard
+          label="回放完整性"
+          value={replay.completeness}
+          hint={`${replay.timeline.length} 条权威事件`}
+          color={replay.completeness === 'complete' ? '#16a34a' : '#f59e0b'}
+        />
+        <SummaryCard
+          label="闭环状态"
+          value={replay.closure.closed ? '已关闭' : '未关闭'}
+          hint={formatTime(replay.closure.closedAt)}
+          color={replay.closure.closed ? '#16a34a' : '#f59e0b'}
+        />
+        <SummaryCard
+          label="候选决策"
+          value={candidateValue}
+          hint={replay.candidateComparison.provenance || 'legacy_not_applicable'}
+          color={replay.candidateComparison.completeness === 'complete' ? '#16a34a' : '#f59e0b'}
+        />
+        <SummaryCard
+          label="定位耗时"
+          value={formatSeconds(replay.closure.localizationSeconds)}
+          hint="告警 → 根因"
+        />
+        <SummaryCard
+          label="恢复耗时"
+          value={formatSeconds(replay.closure.recoverySeconds)}
+          hint="执行 → 恢复"
+        />
+      </section>
+
+      <Panel title="冻结决策回放">
+        <section style={contentGridStyle}>
+          <div style={{ minWidth: 0 }}>
+            <MetricRow label="选定候选" value={replay.candidateComparison.selected?.name || replay.candidateComparison.completeness} />
+            <MetricRow label="拒绝候选" value={replay.candidateComparison.rejected.map((candidate) => candidate.name || candidate.id).join('，') || replay.candidateComparison.completeness} />
+            <MetricRow label="回滚结果" value={replay.rollback.result || '未记录'} />
+            <MetricRow label="验证结果" value={replay.verification.result || '未记录'} />
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <MetricRow label="决策时证据" value={`${replay.decisionEvidence.length} 条，全部保留源事件链接`} />
+            <MetricRow label="事后补充" value={`${replay.enrichment.postIncident.length} 条，不参与决策时证据`} />
+            <MetricRow label="当前知识" value={`${replay.enrichment.currentKnowledge.length} 条独立引用`} />
+            <MetricRow label="相似度边界" value={`${replay.similarities.items.length}/${replay.similarities.total} · 上限 ${replay.similarities.limit}`} />
+          </div>
+        </section>
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 10 }}>
+          {replay.controlledDrill.supported && (
+            <a
+              href={replay.controlledDrill.action?.href || '#'}
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                border: '1px solid var(--border)',
+                borderRadius: 4,
+                padding: '4px 8px',
+                fontSize: 12,
+                color: 'var(--muted-foreground)',
+                background: 'transparent',
+              }}
+            >
+              受控演练只读回看（不创建、不修改）
+            </a>
+          )}
+          <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
+            演练入口仅在场景、清单、目标、负载与安全身份全部受支持时显示。
+          </span>
+        </div>
+      </Panel>
     </section>
   );
 }
