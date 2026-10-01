@@ -320,18 +320,22 @@ Manual review covers keyboard traversal, focus trapping, narrow-screen layout, c
 
 ## OPC Squad Packets
 
+The change README is the authoritative delivery board. It defines packet ownership, authoritative inputs, forbidden mutations, tests, handoffs, dependency gates, review criteria, and validation evidence.
+
 | Packet | Primary scope | Handoff |
 |---|---|---|
-| Contract owner | shared projection, phase matrix, fixtures | golden tests and typed model |
-| Command UI owner | TeamHarness IA, command bar, timeline | component tests/build |
-| Live demo owner | demo adapter and public command components | site typecheck/build/smoke |
-| Evidence/approval owner | drawer, candidate comparison, checklist | safety copy and focused tests |
-| Archive owner | replay and legacy projection | replay tests |
-| Runtime liaison | read-only blocker boundary | runtime mapping contract |
-| Design/a11y owner | tokens, focus, contrast, responsive | accessibility checklist |
-| Verification owner | test matrix and final review | validation report |
+| Contract owner | shared projection, exact phase matrix, fixtures | typed model and golden tests |
+| Command UI owner | TeamHarness IA, command bar, next action, timeline | component tests/build |
+| Live demo owner | demo adapter and public command components | typecheck/build/browser smoke |
+| Evidence/approval owner | evidence drawer, candidates, precise checklist | safety-copy and focus tests |
+| Archive owner | authoritative replay and legacy projection | replay and completeness tests |
+| Runtime liaison | read-only blocker projection | runtime mapping and gap tests |
+| Design/a11y owner | tokens, focus, contrast, responsive behavior | accessibility review |
+| Verification owner | full matrix, boundary scan, final review | validation references |
 
-The contract packet is the dependency gate. Parallel UI packets start only after phase IDs, source mappings, and golden fixtures freeze. No packet may change authoritative APIs or add mutation behavior.
+The contract packet is the dependency gate. Parallel UI packets start only after phase IDs, source mappings, and golden fixtures freeze. No packet may change authoritative APIs or add mutation behavior. Shared-contract changes after freeze require contract review plus TeamHarness and public-surface acknowledgment; otherwise packet edit scopes remain disjoint.
+
+The change README records the completed validation matrix, browser smoke, contrast remediation, decision log, non-blocking open questions, and cross-change runtime dependency. Incident-command components add no mutating call; the pre-existing public demo scenario start remains the only demo control.
 
 ## Implementation Sequence
 

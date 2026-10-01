@@ -6,10 +6,10 @@
 - [x] 1.2 Build the normative stage-mapping matrix using Manager loop phase IDs (`detected`, `correlated`, `investigated`, `critiqued`, `approved`, `recovered`, `postmortem`) and exact event/task names plus source identifiers.
 - [x] 1.3 Define `IncidentCommandView`, stage substates, generalized impact, freshness, completeness, source references, and next-action priority rules.
 - [x] 1.4 Define projection behavior for missing, partial, stale, malformed, and legacy data.
-- [ ] 1.5 Audit current labels, tab IDs, status colors, emoji, inline styles, keyboard behavior, focus behavior, and responsive breakpoints.
-- [ ] 1.6 Define scoped semantic tokens, status iconography, focus states, contrast requirements, and data-density rules.
-- [ ] 1.7 Add compatibility aliases for all existing TeamHarness tab IDs and deep-link states.
-- [ ] 1.8 Confirm UI copy uses the approved generic operations-platform wording and does not reference another product.
+- [x] 1.5 Audit current labels, tab IDs, status colors, emoji, inline styles, keyboard behavior, focus behavior, and responsive breakpoints.
+- [x] 1.6 Define scoped semantic tokens, status iconography, focus states, contrast requirements, and data-density rules.
+- [x] 1.7 Add compatibility aliases for all existing TeamHarness tab IDs and deep-link states.
+- [x] 1.8 Confirm UI copy uses the approved generic operations-platform wording and does not reference another product.
 
 ## 2. P0 Incident-First Orientation
 
@@ -55,17 +55,17 @@
 
 ## 7. OPC Squad Delivery and Governance
 
-- [ ] 7.1 Create role-scoped OPC execution packets for contract, command UI, live demo, evidence/approval, archive, runtime liaison, design/accessibility, and verification.
-- [ ] 7.2 Define each packet's scope, owner, authoritative sources, changed files, tests, forbidden mutations, and handoff artifact.
-- [ ] 7.3 Establish review gates for projection contract, safety copy, accessibility, runtime boundary, and archive replay.
-- [ ] 7.4 Maintain a dependency board separating P-1/P0/P1/P2/P3/P4 work and preventing duplicate parallel edits.
-- [ ] 7.5 Record decisions, open questions, and cross-change dependencies in the change handoff notes.
+- [x] 7.1 Create role-scoped OPC execution packets for contract, command UI, live demo, evidence/approval, archive, runtime liaison, design/accessibility, and verification.
+- [x] 7.2 Define each packet's scope, owner, authoritative sources, changed files, tests, forbidden mutations, and handoff artifact.
+- [x] 7.3 Establish review gates for projection contract, safety copy, accessibility, runtime boundary, and archive replay.
+- [x] 7.4 Maintain a dependency board separating P-1/P0/P1/P2/P3/P4 work and preventing duplicate parallel edits.
+- [x] 7.5 Record decisions, open questions, and cross-change dependencies in the change handoff notes.
 
 ## 8. Validation and Completion
 
-- [ ] 8.1 Validate strict OpenSpec change artifacts.
-- [ ] 8.2 Run focused TeamHarness tests/build.
-- [ ] 8.3 Run public live-demo tests/build and one end-to-end smoke flow.
-- [ ] 8.4 Validate Chinese/English copy, color contrast, tabular readability, keyboard paths, and narrow-screen behavior.
-- [ ] 8.5 Review final surfaces against incident-command positioning and remove residual generic-administrative framing.
-- [ ] 8.6 Verify no UI path mutates approval, safety, repair, runtime, or authoritative incident state.
+- [x] 8.1 Validate strict OpenSpec change artifacts.
+- [x] 8.2 Run focused TeamHarness tests/build.
+- [x] 8.3 Run public live-demo tests/build and one end-to-end smoke flow.
+- [x] 8.4 Validate Chinese/English copy, color contrast, tabular readability, keyboard paths, and narrow-screen behavior.
+- [x] 8.5 Review final surfaces against incident-command positioning and remove residual generic-administrative framing.
+- [x] 8.6 Verify no UI path mutates approval, safety, repair, runtime, or authoritative incident state.

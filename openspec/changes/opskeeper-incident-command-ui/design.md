@@ -173,7 +173,20 @@ The runtime-management change remains a separate authority track. Incident Comma
 
 ## OPC Squad Execution Model
 
-The OPC squad uses bounded role packets: contract owner, command UI owner, live demo owner, evidence/approval owner, archive owner, runtime liaison, design/accessibility owner, and verification owner. Every packet states its authoritative data source, forbidden mutations, changed files, tests, and handoff artifact. Cross-packet changes require an explicit review gate.
+The delivery README is the packet governance board. It records authoritative inputs, delivery scope, forbidden mutations, validation handoffs, the P-1 contract-freeze dependency gate, review criteria, and final validation evidence.
+
+| Packet | Primary scope | Handoff |
+|---|---|---|
+| Contract owner | shared projection, exact phase mapping, fixtures | typed model and golden tests |
+| Command UI owner | TeamHarness IA, command bar, next action, timeline | component tests/build |
+| Live demo owner | demo adapter and public command components | typecheck/build/browser smoke |
+| Evidence/approval owner | evidence drawer, candidates, precise checklist | safety-copy and focus tests |
+| Archive owner | authoritative replay and legacy projection | replay and completeness tests |
+| Runtime liaison | read-only blocker projection | runtime mapping and gap tests |
+| Design/a11y owner | tokens, focus, contrast, responsive behavior | accessibility review |
+| Verification owner | full matrix, boundary scan, final review | validation references |
+
+The contract packet is the dependency gate. Parallel UI packets start only after phase IDs, source mappings, and golden fixtures freeze. No packet may change authoritative APIs or add mutation behavior. Shared-contract changes after freeze require the contract reviewer plus both surface owners; otherwise packet edit scopes remain disjoint.
 
 ## Rollout
 
