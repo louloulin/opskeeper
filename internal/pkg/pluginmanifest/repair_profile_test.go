@@ -45,7 +45,21 @@ func classOfSkillForTest(c skill.Class) domain.ToolClass {
 // rather than silently returning an empty list.
 func readShippedToolNames(t *testing.T, pkgRoot string) map[string]bool {
 	t.Helper()
-	path := filepath.Join(pkgRoot, "extensions", repairProfile, "tools.go")
+	return readShippedToolNamesFor(t, pkgRoot, repairProfile)
+}
+
+// readShippedToolNamesFor is the same check against a named extension.
+//
+// The extension directory is a parameter rather than a constant because
+// every package ships its toolset under its own name, and a helper that
+// only knows the repair one would silently read the repair toolset when
+// asked about a different package — returning a plausible non-empty map of
+// names that belong to another package. That failure looks like a
+// disagreement between manifest and toolset, which is exactly the sort of
+// thing a reviewer would go looking for in the wrong file.
+func readShippedToolNamesFor(t *testing.T, pkgRoot, extName string) map[string]bool {
+	t.Helper()
+	path := filepath.Join(pkgRoot, "extensions", extName, "tools.go")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read the shipped toolset: %v", err)
@@ -308,23 +322,31 @@ func TestTheRepairProfilesDeclaredToolsAreExactlyWhatItShipsToTheModel(t *testin
 	}
 }
 
-// TestTheTwoPackagesBetweenThemDeclareEveryToolExactlyOnce is the property
-// the pair of packages exists to have.
+// TestEveryShippedPackageDeclaresEveryToolExactlyOnce is the property the
+// set of packages exists to have.
 //
-// The host builds one allow-list from both manifests and refuses a name
+// The host builds one allow-list from all the manifests and refuses a name
 // that two packages claim — which is the right behaviour, and means a
 // collision is a boot failure rather than a silent last-one-wins. Building
 // the registry here is what turns that into a test that runs in CI instead
 // of a node that will not start.
-func TestTheTwoPackagesBetweenThemDeclareEveryToolExactlyOnce(t *testing.T) {
+//
+// It is a walk over every shipped package rather than a hand-written pair
+// because the interesting case is the one nobody thought of: a collision
+// between two read packages looks harmless on paper, because neither of
+// them claims to mutate anything, and it is only the *joint* reading that
+// makes it a problem — two manifests, two different promises about the
+// same tool name, and one allow-list to honour both.
+func TestEveryShippedPackageDeclaresEveryToolExactlyOnce(t *testing.T) {
 	readOnly := loadProfile(t)
 	repair := loadRepairProfile(t)
+	observability := loadObservabilityProfile(t)
 
 	registry, err := policygate.RegistryFromManifests([]domain.PluginManifest{
-		readOnly.Manifest, repair.Manifest,
+		readOnly.Manifest, observability.Manifest, repair.Manifest,
 	})
 	if err != nil {
-		t.Fatalf("the two shipped packages cannot form one allow-list: %v", err)
+		t.Fatalf("the shipped packages cannot form one allow-list: %v", err)
 	}
 
 	// A mutating tool appearing in the read-only package would be the
@@ -342,10 +364,33 @@ func TestTheTwoPackagesBetweenThemDeclareEveryToolExactlyOnce(t *testing.T) {
 		}
 	}
 
-	// And the union must actually be a tool set, not an empty one.
-	if len(registry.Names()) != len(readOnly.Manifest.Spec.Tools)+len(repair.Manifest.Spec.Tools) {
-		t.Errorf("the union holds %d tools, want the sum of both manifests with no overlap",
-			len(registry.Names()))
+	// And the union must actually be a tool set, not an empty one, and
+	// every name in it must be accounted for by exactly one manifest.
+	// A sum check catches an overlap; the reverse walk catches a name the
+	// registry dropped, which a sum check alone would miss because two
+	// missing and one duplicated can add up.
+	want := len(readOnly.Manifest.Spec.Tools) +
+		len(observability.Manifest.Spec.Tools) +
+		len(repair.Manifest.Spec.Tools)
+	if got := len(registry.Names()); got != want {
+		t.Errorf("the union holds %d tools, want %d — the sum of all manifests with no overlap", got, want)
+	}
+
+	owners := map[string]string{}
+	for _, p := range []Plugin{readOnly, observability, repair} {
+		for _, tool := range p.Manifest.Spec.Tools {
+			if other, taken := owners[tool.Name]; taken {
+				t.Errorf("%q is declared by both %s and %s; two packages that promise different things "+
+					"about one tool name cannot both be honoured by a single allow-list",
+					tool.Name, other, p.Name())
+			}
+			owners[tool.Name] = p.Name()
+		}
+	}
+	for _, n := range registry.Names() {
+		if owners[n] == "" {
+			t.Errorf("the allow-list carries %q but no shipped manifest declares it", n)
+		}
 	}
 }
 

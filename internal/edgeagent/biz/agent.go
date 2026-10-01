@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/changewatcher"
 	skilldispatch "github.com/vincent-wuhan/opskeeper/internal/edgeagent/skill"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
@@ -102,6 +103,14 @@ type Agent struct {
 	// not registering the methods - which the manager can tell apart from
 	// an agent that is registered and refusing.
 	agentBridge *AgentBridge
+
+	// pluginInstaller is this node's package store, reached over the
+	// ports interface. Optional and wired post-construction for the same
+	// reason, plus one more: the review it performs needs the node's trust
+	// store and policy ceiling, and those are the operator's configuration
+	// in the composition root rather than anything this package should be
+	// able to see. Guarded by mu for the same reason pluginHealthFn is.
+	pluginInstaller ports.PluginInstaller
 }
 
 // SetPluginHealthFn wires the plugin-health provider used by the heartbeat
@@ -316,6 +325,11 @@ func (a *Agent) registerHandlers() {
 	if b := a.bridge(); b != nil {
 		b.Register(a.client)
 	}
+	// Plugin distribution. Registered before the rest of the node's own
+	// handlers so a manager's first call after a node comes up finds the
+	// plugin methods rather than a tunnel that has not heard of them —
+	// which a caller cannot tell apart from a node that is refusing.
+	a.registerPluginHandlers()
 	a.client.RegisterHandler(tunnel.MethodGetHostLoad,
 		func(ctx context.Context, _ tunnel.Session, _ string, _ []byte) ([]byte, error) {
 			return jsonEncode(a.collector.GetHostLoad(ctx))

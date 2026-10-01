@@ -166,7 +166,8 @@ func main() {
 	// was down would take the telemetry with it, and telemetry is the one
 	// thing a node cannot be redeployed to get back quickly.
 	agentLog := log.With(slog.String("comp", "node-agent"))
-	agentBridge, stopNodeAgent, err := startNodeAgent(egCtx, client, loadNodeAgentConfig(), version, agentLog)
+	nodeCfg := loadNodeAgentConfig()
+	agentBridge, stopNodeAgent, err := startNodeAgent(egCtx, client, nodeCfg, version, agentLog)
 	if err != nil {
 		log.Warn("node agent unavailable; the node runs without an AI agent", slog.Any("err", err))
 	} else {
@@ -175,6 +176,21 @@ func main() {
 		// agent supervisor's own loop, so the process is stopped on the
 		// way out rather than left orphaned holding node credentials.
 		defer stopNodeAgent()
+	}
+
+	// Plugin distribution. Wired outside the node-agent block above
+	// because it is independent of it: a node with no AI agent can still
+	// be handed a package, and a node whose agent failed to start should
+	// not silently become a node that cannot be updated.
+	//
+	// It shares nodeCfg on purpose. The store republishes the boot
+	// bundle alongside anything it installs, and the bundle it republishes
+	// has to be the one the node actually booted with.
+	if store, storeErr := newPluginStore(nodeCfg, log.With(slog.String("comp", "plugin-store"))); storeErr != nil {
+		log.Warn("plugin distribution is unavailable; the node runs its boot packages only",
+			slog.Any("err", storeErr))
+	} else {
+		agent.SetPluginInstaller(store)
 	}
 
 	// Local /metrics listener for debugging.

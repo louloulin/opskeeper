@@ -240,7 +240,7 @@ opskeeper-sre-readonly/                 # 插件根
 | **A 模块化地基** | `go.work` + 5 个独立 `go.mod`；`core`（domain/ports/wire）；`sdk` 清单准入 | ✅ 已落地 |
 | **B PiG 适配层** | `pigmodel`（settings→`*ai.Model`）、`pigagent`、`pigrpc`（`pig --mode rpc` 客户端）、`pigwire`（SSE 帧翻译） | ✅ 已落地 |
 | **C 节点 Agent** | `pigsupervisor`（崩溃重启/退避/Degraded）、`policygate`（白名单+审批+digest）、`gatesocket`（unix socket 准入）、准入信使 extension、tunnel 7 个 `agent.*` 方法 + `agent.decide`、控制面 `NodeFleet` + `Service.Decide` + HTTP 决策端点、per-session 角色表 | ✅ 已落地 |
-| **D 插件生态** | L1 只读 profile（18 工具 + 7 persona + 信使）、`pluginimport` 导入器、**B1 只读工具集**（工具集 extension + `toolbroker` + `agent.tool` 反向调用 + 双向漂移测试）、**B3 修复包**（L2/5 工具/`approval.required`/`pod` 半径/pin 安装 + 审批回执 + 写操作全部走控制面）、**审核流水线**（ed25519 树签名 + 信任库 + 签名→清单→准入三段审核 + 灰度波次闸门 + 节点侧 `admitPackages` 接线） | 🟡 B1/B3/审核流水线完成，B2 未开始 |
+| **D 插件生态** | L1 只读 profile（18 工具 + 7 persona + 信使）、`pluginimport` 导入器、**B1 只读工具集**（工具集 extension + `toolbroker` + `agent.tool` 反向调用 + 双向漂移测试）、**B2 可观测工具集**（12 只读工具，schema 由控制面 registry 生成，全量 upcall）、**B3 修复包**（L2/5 工具/`approval.required`/`pod` 半径/pin 安装 + 审批回执 + 写操作全部走控制面）、**审核流水线**（ed25519 树签名 + 信任库 + 签名→清单→准入三段审核 + 灰度波次闸门 + 节点侧 `admitPackages` 接线） | 🟡 B1/B2/B3/审核流水线完成；灰度运输通道未接 |
 | **E 生态治理** | 插件市场版本矩阵、跨云 profile 模板、harness 8-case 回归 | ⬜ 未开始 |
 
 ### 已落地的关键决策（不可回退）
@@ -293,11 +293,26 @@ opskeeper-sre-readonly/                 # 插件根
 
 ### 当前真实缺口
 
-- **B1/B3 已闭环，B2 未开始**：18 个只读工具与 5 个写工具均已打通。写工具
-  全部经控制面 reviewer，且要消耗一次性审批回执；`host_restart_service` 的
-  本地执行被证明确实锁死（回归测试可复现该失败）。仍缺的是可观测栈 MCP
-  （Prom/Loki/Tempo/Grafana）与中间件适配 MCP（PG/Redis/K8s/MQ/Git）。
-- 审核流水线（manifest 校验 + 签名 + 灰度）尚未编码。
+- **B1/B2/B3 已闭环**：18 个节点本地只读工具、12 个可观测只读工具、5 个写工具
+  均已打通。写工具全部经控制面 reviewer，且要消耗一次性审批回执；
+  `host_restart_service` 的本地执行被证明确实锁死（回归测试可复现该失败）。
+  可观测 12 工具覆盖 PromQL / LogQL / TraceQL / 数据库源 / 代码仓库 / 审计历史。
+- **B2 原本计划走 MCP，PiG 不支持，已改为 extension toolset**：PiG 的 `mcp`
+  包类型**只是声明**——PiG 全仓中所有 MCP 引用都在
+  `coding/packagecontent/packagecontent.go` 与 `cmd/pig/package_*.go`
+  （解析/校验/清单），**没有** JSON-RPC 客户端、**没有** `initialize` /
+  `tools/list` 握手、**没有**把声明的 MCP server 接进 agent 工具集的桥。
+  所以「可观测栈 → MCP server」在当前 PiG 上需要一个从零写的 MCP 运行时，
+  而 upcall 通道已经端到端跑通 12 个工具且带鉴权、审计、白名单与回归。
+  这是基于「PiG 是什么」的事实修正，不是对计划意图的重新解释；
+  补一个 MCP 客户端是后续独立决策，不是本包依赖的假设。
+- **可观测覆盖的真实边界**：K8s 与 MQ **没有**只读工具（控制面 registry 里
+  不存在），K8s 只在指标层面出现。仓库内没有假装覆盖——`opskeeper-observability`
+  persona 被要求显式声明「K8s 对象不在这些工具能看到的范围内」，
+  `TestTheObservabilityProfileShipsAPersonaThatKnowsItsOwnLimits` 守住这条。
+- 审核流水线（manifest 校验 + 签名 + 灰度）的策略与闸门已编码，但
+  **运输通道未接**：`fetch_package`/`apply_package` 的批量下发、发布节奏与
+  回滚触发器还没接上。
 - eino 移除未完成（`internal/pkg/llm` 仍跑在 eino 上，约 20K LOC / 34 文件）。
 - `manager` / `edgeagent` / `harness` 的机械式包迁移未做（当前仍在 `internal/`；
   `core/edge` 目前含 gatesocket/pigsupervisor/policygate/toolbroker）。
@@ -313,8 +328,17 @@ opskeeper-sre-readonly/                 # 插件根
 1. ~~**B1 只读工具集**~~ ✅ 已完成：拓扑 4 件套、`query_alert_rules`、
    13 个 host 探针全部打通。实现留在宿主（`internal/skill/builtin` 与
    控制面 registry），agent 进程只做路由。
-2. **B2 外部系统**：可观测栈 MCP（Prom/Loki/Tempo/Grafana）、
-   中间件适配 MCP（PG/Redis/K8s/MQ/Git），Aliyun MCP 可直接挂载。
+2. ~~**B2 外部系统**~~ ✅ 已完成（载体由 MCP 改为 extension toolset）：独立 L1 包
+   `opskeeper-sre-observability`，12 个只读工具（`query_promql` / `query_logql` /
+   `query_traceql` / `analyze_database_status` / `list_database_sources` /
+   `list_metric_catalog` / `get_edge_summary` / `get_host_load` /
+   `query_change_events` / `list_repo_sources` / `read_source` / `grep_source`）。
+   `approval.required: false`、`install.strategy: rolling`、12 个工具全部 upcall。
+   **schema 由控制面 registry 的 `Info()` 生成**（`OPSKEEPER_UPDATE_TOOLSET=1`
+   重新生成 + `scripts/sync-pig-ops.sh`），不手抄。
+   关键不变量：清单里任何一个名字都不得出现在节点自身 skill registry 中——
+   否则一个 read-class 工具会被节点本地执行，用一台机器的证据回答全舰队问题。
+   由 `TestNoToolInTheObservabilityPackageHasALocalExecutor` 守住。
 3. ~~**B3 写操作**~~ ✅ 已完成：独立 L2 包 `opskeeper-sre-repair`，
    5 个工具（`host_restart_service` / `apply_config_change` / `recovery.execute`
    写，`verify_recovery` / `draft_config_change` 读），`approval.required: true`、
@@ -361,6 +385,9 @@ opskeeper-sre-readonly/                 # 插件根
 
 - PiG 继续跟踪 Pi 0.87.1；插件契约以 Pi 为准，PiG 特有能力（fused/cellpack）
   只用于官方插件。
+- **PiG 的 `mcp` 包类型当前只是声明，不是运行时**。这是本计划中唯一一处
+  载体被事实修正的地方（可观测栈原计划走 MCP server）。若后续决定自建
+  MCP 客户端，它是一个独立的新决策，不应被当作已有能力来规划。
 - RAG、遥测采集、审计链不插件化，长期保留在宿主。
 - Web 控制台不重写，仅加「插件市场」与「节点 Agent」两个页面。
 - 存量 Nacos Skill Registry 转为插件索引/灰度通道，不再是插件本体格式。
@@ -372,14 +399,16 @@ opskeeper-sre-readonly/                 # 插件根
 
 | 能力域 | 判定 | 载体 |
 |---|---|---|
-| 50 个运维 BaseTool | ✅ 可插件化 | extension tool / MCP server |
+| 50 个运维 BaseTool | ✅ 可插件化 | extension tool（**已用**）；MCP 需自建运行时 |
 | 7 个 Worker persona | ✅ 可插件化 | package `agents` + `skills` |
 | Skill Registry | ⚠️ 降级为分发源 | Nacos 只做索引/灰度 |
 | System prompt 组装 | ⚠️ 拆分 | 骨架留宿主，能力清单由 `before_agent_start` 注入 |
 | 安全策略 / HITL 审批 | ✅ 可插件化 | `tool_call` 事件 Block/Reason；裁决权留宿主 |
 | 告警规则 / 草稿 | ✅ 可插件化 | extension tool + command |
 | 拓扑图 | ✅ 可插件化 | extension tool |
-| 可观测栈 / 中间件适配 | ✅ 可插件化 | MCP server |
+| 可观测栈（Prom/Loki/Tempo） | ✅ 可插件化 | extension tool（**已用**）；PiG 的 `mcp` 仅声明 |
+| 中间件适配（DB/Git） | ✅ 可插件化 | extension tool（**已用**） |
+| 中间件适配（K8s/MQ） | ❌ **无只读工具** | 控制面 registry 里不存在，仓库内不假装覆盖 |
 | Web 控制台 | ❌ 不可 | 保留 manager 侧 |
 | 身份/租户/权限 | ❌ 不可 | 保留宿主 |
 | 审计 HMAC chain | ❌ 不可下放 | 宿主强制，插件只读 |

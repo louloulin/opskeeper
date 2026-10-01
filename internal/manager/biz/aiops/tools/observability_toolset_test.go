@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"go/format"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -148,14 +149,30 @@ type observabilityEntry struct {
 }
 
 // toolsetPath locates the generated file.
+//
+// It walks up looking for go.work rather than counting directories. The
+// count is what would silently rot: this test moved once already, and a
+// wrong number here does not fail — it regenerates the file somewhere
+// nobody reads, or reads a stale copy from the wrong tree and passes.
 func toolsetPath(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate this test's source file")
 	}
-	repo := filepath.Join(filepath.Dir(file), "..", "..", "..")
-	return filepath.Join(repo, "core", "pig", "extensions", "opskeeper-sre-observability", "tools.go")
+	dir := filepath.Dir(file)
+	for i := 0; i < 12; i++ {
+		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
+			return filepath.Join(dir, "core", "pig", "extensions", "opskeeper-sre-observability", "tools.go")
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	t.Fatal("could not locate the repository root (no go.work found)")
+	return ""
 }
 
 // renderToolset builds the file body from the live registry.
@@ -202,7 +219,7 @@ func renderToolset(t *testing.T) string {
 		add("\t\tParameters: `%s`,\n", string(info.Parameters))
 		add("\t},\n")
 	}
-	add("\n")
+	add("}\n\n")
 	add("// ToolNames returns the inventory in order, for the host-side drift\n")
 	add("// check and for diagnostics.\n")
 	add("func ToolNames() []string {\n")
@@ -212,7 +229,22 @@ func renderToolset(t *testing.T) string {
 	add("\t}\n")
 	add("\treturn out\n")
 	add("}\n")
-	return string(b)
+
+	// gofmt the result rather than hand-formatting the template. The
+	// template has to care about the Go syntax, and indenting a nested
+	// table by hand in a string literal is a place a diff would look
+	// plausible and be wrong. Formatting here also means the file a node
+	// builds is gofmt-clean, so a reviewer reading the diff is reading
+	// the tools and not the whitespace.
+	//
+	// A formatting failure is fatal rather than skipped: this file is
+	// produced, not authored, so malformed output is a bug in the
+	// generator above, and shipping it unformatted would hide that.
+	pretty, err := format.Source(b)
+	if err != nil {
+		t.Fatalf("the generated toolset is not valid Go (%v); the generator above is wrong, not the input", err)
+	}
+	return string(pretty)
 }
 
 const toolsetHeader = `package opskeeperobservability

@@ -186,6 +186,27 @@ func (e Envelope) WriteTo(root string) (string, error) {
 	return path, nil
 }
 
+// Transport returns the envelope as a base64 string, for a control plane
+// that ships a package out of band.
+//
+// It is the same envelope the sidecar carries, and it is not a second
+// signature. The node's authority is still the file inside the tree — the
+// one the tree digest covers — and this copy is read only to make a
+// mismatch legible: a request whose KeyID names a key the node does not
+// hold, or an envelope that disagrees with the sidecar, produces a refusal
+// an operator can act on instead of a signature failure with no subject.
+func (e Envelope) Transport() string {
+	data, err := json.Marshal(e)
+	if err != nil {
+		// Envelope is four strings and a time; it cannot fail to encode.
+		// Returning empty rather than panicking means a caller with no
+		// transport to offer sends an empty string, and the node refuses
+		// for want of a signature — which is the right outcome anyway.
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(data)
+}
+
 // ReadEnvelope loads the sidecar from a package root.
 func ReadEnvelope(root string) (Envelope, error) {
 	var env Envelope

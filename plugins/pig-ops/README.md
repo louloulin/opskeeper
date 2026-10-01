@@ -26,6 +26,14 @@ opskeeper-sre-readonly/       # L1 — every node
     ├── opskeeper-gate/           # the gate courier
     └── opskeeper-sre-readonly/   # the read-only toolset
 
+opskeeper-sre-observability/  # L1 — the fleet's own view
+├── pig-ops.yaml
+├── skills/
+│   └── opskeeper-observability/SKILL.md
+└── extensions/
+    ├── opskeeper-gate/                # the same courier
+    └── opskeeper-sre-observability/   # Prom/Loki/Tempo/DB/Git, all by upcall
+
 opskeeper-sre-repair/         # L2 — opt-in, mutating
 ├── pig-ops.yaml
 ├── skills/
@@ -35,6 +43,20 @@ opskeeper-sre-repair/         # L2 — opt-in, mutating
     ├── opskeeper-gate/           # the same courier
     └── opskeeper-sre-repair/     # the mutating toolset
 ```
+
+Three packages, three promises, and a node may hold any combination:
+
+| Package | Level | Answers | Serves the request from | Install |
+|---|---|---|---|---|
+| `opskeeper-sre-readonly` | L1 | "what is this node doing" | the node itself | rolling |
+| `opskeeper-sre-observability` | L1 | "what is the fleet doing" | the control plane, always | rolling |
+| `opskeeper-sre-repair` | L2 | "what should be changed" | the control plane, always | pin |
+
+The first is the only one that runs probes locally. Both later ones are
+entirely upcalls, which is not an optimisation — it is what keeps a
+mutating tool from ever being answered by a process that cannot produce
+consent, and it is why the observability and repair packages can be
+withheld from a node that has no business holding them.
 
 The `extensions/` contents are **generated** by `scripts/sync-pig-ops.sh`
 from `core/pig/extensions/`. Editing a packaged file directly is always
@@ -122,35 +144,44 @@ Start from `opskeeper-sre-readonly/`, the read-only L1 baseline that every
 node runs: eighteen read-only tools, the seven worker personas, and the
 courier that makes every one of their tool calls ask the host first.
 
-## The two shipped packages
+## The three shipped packages
 
-They are separate packages rather than one package with two sections,
-because they make different promises about a node.
+They are separate packages rather than one package with sections, because
+they make different promises about a node.
 
-| | `opskeeper-sre-readonly` | `opskeeper-sre-repair` |
-|---|---|---|
-| level | L1 | L2 |
-| tools | 18, all `read` | 5: 3 `write`, 2 `read` |
-| approval | none | every mutating call |
-| blast radius | none | `pod` — one named target |
-| install | rolling | pinned |
-| personas | all seven | repairer, verifier |
-| ships on | every node | nodes whose operators opted in |
+| | `opskeeper-sre-readonly` | `opskeeper-sre-observability` | `opskeeper-sre-repair` |
+|---|---|---|---|
+| level | L1 | L1 | L2 |
+| tools | 18, all `read` | 12, all `read` | 5: 3 `write`, 2 `read` |
+| approval | none | none | every mutating call |
+| blast radius | none | none | `pod` — one named target |
+| install | rolling | rolling | pinned |
+| personas | all seven | one fleet reader | repairer, verifier |
+| answered by | the node | the control plane | the control plane |
+| ships on | every node | every node | nodes whose operators opted in |
 
-A node typically runs both, and the host builds one allow-list from both
-manifests. The rules that keep them apart are worth stating because they
-are what break first under pressure:
+A node typically runs all three, and the host builds one allow-list from
+all three manifests. The rules that keep them apart are worth stating
+because they are what break first under pressure:
 
-- **No tool name may appear in both.** The host refuses a duplicated name
+- **No tool name may appear in two.** The host refuses a duplicated name
   at boot rather than taking whichever loaded last, so a collision is a
   failed install rather than a silent capability that depends on ordering.
-- **No mutating tool may appear in the read-only package.** If it did, the
-  L1 manifest's "needs no approval" claim would be false and the node
-  would sit in an approval queue nobody was told to watch.
+  This matters most between the two read packages, where a collision looks
+  harmless on paper — neither claims to mutate anything — and is only the
+  joint reading that makes it a problem.
+- **No mutating tool may appear in either L1 package.** If it did, the
+  manifest's "needs no approval" claim would be false and the node would
+  sit in an approval queue nobody was told to watch.
 - **Admission is per package.** A node whose policy ceiling is read-only
-  still admits the read-only package while refusing the repair one, so
+  still admits both L1 packages while refusing the repair one, so
   installing the repair package on one node does not put the others out of
   compliance.
+- **A fleet-wide read is not a local read.** The observability package
+  deliberately does *not* ask for `host.read`, and a manifest that did
+  would be handing a toolset with no local probes a credential with no
+  purpose. See the observability toolset section below for the related
+  invariant about local executors.
 
 ## Review: signature, then manifest, then policy
 
@@ -334,7 +365,7 @@ Two consequences are enforced by tests rather than by convention:
 - `TestAMutatingToolIsNeverDispatchedByTheNodeItself` asserts the control
   plane is the thing that answers a restart, so the routing rule cannot be
   quietly reverted to "registered means local".
-- `TestTheTwoToolsetsShareOneBrokerClient` asserts the two toolsets' copies
+- `TestEveryToolsetsBrokerClientIsTheSameFile` asserts all three toolsets' copies
   of the broker client are the same file, modulo the package clause. The
   client is the thing that decides whether a call whose reply was lost gets
   resent, and for a read that is wasteful while for a restart it is a second
@@ -348,3 +379,87 @@ the exact call, so a second attempt after a refusal is an attempt to evade a
 decision whatever the intent. `opskeeper-verifier` refuses to fix what it
 finds, because a verifier that repairs has a reason to want its own last
 verdict to be right.
+
+### The observability toolset
+
+`extensions/opskeeper-sre-observability/` is the control plane's half of
+the read story, and it exists as its own package for one reason: the
+read-only package's promise is "this node can examine itself", and these
+twelve tools answer a different question — "what is the fleet doing".
+
+The twelve: `query_promql`, `query_logql`, `query_traceql`,
+`analyze_database_status`, `list_database_sources`, `list_metric_catalog`,
+`get_edge_summary`, `get_host_load`, `query_change_events`, and the three
+repository tools (`list_repo_sources`, `read_source`, `grep_source`).
+
+**Every one of them is an upcall, and all twelve are read class.** That
+combination is the thing worth being careful about, because the node's
+dispatcher runs a read locally whenever it has an executor for it — that
+is correct for `host_probe_tcp` and wrong for `query_promql`, and the two
+are told apart only by whether a local executor happens to exist. So the
+invariant this package rests on is not a comment in a manifest:
+
+> No name in this manifest may be a key in the node's own skill registry.
+
+`TestNoToolInTheObservabilityPackageHasALocalExecutor` asserts exactly
+that, by asking the registry rather than inspecting the names. A future
+tool that was read class *and* registered on the node would be executed
+against the node and would answer a fleet-wide question with one machine's
+worth of evidence, with nothing else in the system objecting.
+
+#### The schemas are generated, not copied
+
+`tools.go` for this package is a **generated file**, produced from the live
+`Info()` of the control plane's own tool registry:
+
+```
+OPSKEEPER_UPDATE_TOOLSET=1 go test ./internal/manager/biz/aiops/tools/ -run Toolset
+bash scripts/sync-pig-ops.sh
+```
+
+The direction of the copy is the point. The registry is the authority —
+it is what executes the call, so its schema is the one that has to be
+right — and the extension is the copy. Hand-copying these twelve would mean
+twelve chances to mistype a range bound, and the failure mode is not a
+build error: the model calls the schema in the table, the control plane
+parses the schema in the registry, and a disagreement surfaces as an
+argument error that reads like a model mistake rather than like a stale
+menu. `TestTheObservabilityToolsetMatchesTheRegistry` fails the moment the
+two drift apart, and the packaged copy is checked against the canonical
+one by the generic `TestEveryPackagedExtensionMatchesItsCanonicalSource`.
+
+#### What this package cannot see, stated plainly
+
+It covers metrics, logs, traces, the registered database sources, the
+audit history and the registered repositories. It does **not** cover
+Kubernetes objects or message queues: the control plane has no read tool
+for either today, so there is nothing to route. Kubernetes appears at the
+metrics level only, which is not the same thing and should not be reported
+as if it were.
+
+Rather than let a persona stretch the nearest tool to answer those
+questions, the shipped `opskeeper-observability` skill is required to name
+the gap — `TestTheObservabilityProfileShipsAPersonaThatKnowsItsOwnLimits`
+fails if no shipped skill says Kubernetes is outside what these tools can
+see. A persona that cannot name its own blind spot will invent an answer
+instead of reporting one, and an invented PromQL result is worse than no
+answer at all.
+
+#### Why this is not an MCP server
+
+The original plan for this package was an MCP server, and that is not what
+it is. PiG's `mcp` package kind is **declaration only** — every reference
+to MCP in PiG is in `coding/packagecontent/packagecontent.go` and
+`cmd/pig/package_*.go`, which parse, validate and inventory a manifest. There
+is no JSON-RPC client, no `initialize` or `tools/list` handshake, and
+nothing that bridges a declared MCP server into the agent's tool set.
+
+So an MCP-delivered package would have needed an MCP runtime written from
+scratch, in OpsKeeper, for the same capability — while the upcall path
+already carries twelve tools end to end through a channel that is
+authenticated, audited, allow-listed and tested. The decision to ship it
+as an extension toolset is a consequence of what PiG is, not a
+reinterpretation of the plan's intent. Writing an MCP client is a
+reasonable later decision and a new one; it is not an assumption this
+package rests on. See `docs/protoactor-evaluation.md` for the same kind of
+finding on the actor-framework question.

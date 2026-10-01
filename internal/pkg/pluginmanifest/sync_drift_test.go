@@ -3,6 +3,7 @@ package pluginmanifest
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -149,32 +150,53 @@ func TestEveryPackagedGoModCarriesNoReplaceDirective(t *testing.T) {
 	}
 }
 
-// TestTheTwoToolsetsShareOneBrokerClient asserts the one property that
+// toolsets are the extensions that each carry their own copy of the broker
+// client. Every directory under core/pig/extensions that ships one is
+// discovered rather than named: the test below walks this list, so adding a
+// fourth package without adding it here fails as a vacuous check rather
+// than passing silently.
+var toolsets = []string{
+	"opskeeper-sre-readonly",
+	"opskeeper-sre-observability",
+	"opskeeper-sre-repair",
+}
+
+// TestEveryToolsetsBrokerClientIsTheSameFile asserts the one property that
 // genuinely spans packages.
 //
-// The read-only and repair toolsets each carry their own copy of the
-// broker client, because each package has to build standalone on a node.
-// Two copies of a protocol are two things that can disagree, and the
-// disagreement that matters is the unsafe one: a repair client that resent
-// a call whose reply was lost would restart a service twice.
+// Each toolset carries its own copy of the broker client, because each
+// package has to build standalone on a node. N copies of a protocol are N
+// things that can disagree, and the disagreement that matters is the unsafe
+// one: a repair client that resent a call whose reply was lost would
+// restart a service twice.
 //
 // So the copies must be the same file, modulo the package clause they
-// belong to. Everything else — the framing, the line bound, the refusal
-// to resend an unknown outcome — is asserted equal here rather than left
-// to two sets of tests that happen to pass today.
-func TestTheTwoToolsetsShareOneBrokerClient(t *testing.T) {
-	readOnly, err := os.ReadFile(filepath.Join(repoRoot(t), "core", "pig", "extensions", "opskeeper-sre-readonly", "client.go"))
-	if err != nil {
-		t.Fatalf("read the read-only client: %v", err)
+// belong to. Everything else — the framing, the line bound, the refusal to
+// resend an unknown outcome — is asserted equal here rather than left to
+// several sets of tests that happen to pass today.
+func TestEveryToolsetsBrokerClientIsTheSameFile(t *testing.T) {
+	if len(toolsets) < 2 {
+		t.Fatal("the list is too short for the comparison below to mean anything")
 	}
-	repair, err := os.ReadFile(filepath.Join(repoRoot(t), "core", "pig", "extensions", "opskeeper-sre-repair", "client.go"))
-	if err != nil {
-		t.Fatalf("read the repair client: %v", err)
-	}
+	// Sorted, so the "and" in a failure message is stable across runs and
+	// a reviewer can see at a glance which two copies diverged.
+	sort.Strings(toolsets)
 
-	if stripPackageClause(string(readOnly)) != stripPackageClause(string(repair)) {
-		t.Error("the two toolsets' broker clients have diverged; they are the same protocol and a " +
-			"divergence in the repair copy is a second action taken on a live system")
+	want, err := os.ReadFile(filepath.Join(repoRoot(t), "core", "pig", "extensions", toolsets[0], "client.go"))
+	if err != nil {
+		t.Fatalf("read the %s client: %v", toolsets[0], err)
+	}
+	for _, other := range toolsets[1:] {
+		got, err := os.ReadFile(filepath.Join(repoRoot(t), "core", "pig", "extensions", other, "client.go"))
+		if err != nil {
+			t.Errorf("read the %s client: %v", other, err)
+			continue
+		}
+		if stripPackageClause(string(want)) != stripPackageClause(string(got)) {
+			t.Errorf("the %s and %s broker clients have diverged; they are the same protocol and a "+
+				"divergence in the %s copy is a second action taken on a live system",
+				toolsets[0], other, other)
+		}
 	}
 }
 
