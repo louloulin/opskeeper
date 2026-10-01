@@ -91,7 +91,7 @@ export default function StageTimeline({ stages = [], locale = 'zh-CN', onOpenEvi
         .opskeeper-incident-stage-item[data-status="running"] .opskeeper-incident-stage-row { border-left: 3px solid var(--ops-status-active, #0369a1); }
         .opskeeper-incident-stage-item[data-status="blocked"] .opskeeper-incident-stage-row { border-left: 3px solid var(--ops-status-waiting, #b45309); }
         .opskeeper-incident-stage-item[data-status="failed"] .opskeeper-incident-stage-row { border-left: 3px solid var(--ops-status-failure, #b91c1c); }
-        @media (max-width: 960px) {
+        @media (max-width: 1008px) {
           .opskeeper-incident-stage-grid { grid-template-columns: 1fr; }
         }
       `}</style>

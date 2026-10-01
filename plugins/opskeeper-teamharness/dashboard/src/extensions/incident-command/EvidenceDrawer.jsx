@@ -121,10 +121,6 @@ export default function EvidenceDrawer({ open = false, groups = [], onClose }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="opskeeper-evidence-title"
-        onKeyDown={(event) => handleEvidenceDrawerKeyDown(event, {
-          container: dialogRef.current,
-          onClose,
-        })}
         style={{
           display: 'grid',
           gridTemplateRows: 'auto 1fr',

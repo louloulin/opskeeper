@@ -506,7 +506,7 @@ test('evidence projection preserves five decisions, source IDs, and legacy seman
   assert.equal(legacy.find((group) => group.id === 'repair').completeness, 'legacy_not_applicable');
 });
 
-test('evidence drawer is a semantic modal with nested raw disclosures and focus cycling', async () => {
+test('evidence drawer is a semantic modal with nested raw disclosures and single-step focus cycling', async () => {
   const drawerModule = await loadModule('/src/extensions/incident-command/EvidenceDrawer.jsx');
   const {
     default: EvidenceDrawer,
@@ -534,6 +534,11 @@ test('evidence drawer is a semantic modal with nested raw disclosures and focus 
   assert.match(markup, /<summary[^>]*>为什么选择这个修复<span[^>]*>完整<\/span><\/summary>/);
   assert.match(markup, /<summary[^>]*>原始只读载荷<\/summary>/);
   assert.match(markup, /关闭证据抽屉/);
+  const drawerSource = readFileSync(
+    resolve(dashboardRoot, 'src/extensions/incident-command/EvidenceDrawer.jsx'),
+    'utf8',
+  );
+  assert.doesNotMatch(drawerSource, /onKeyDown=\{\(event\) => handleEvidenceDrawerKeyDown/);
 
   const focused = [];
   const targets = [
@@ -578,16 +583,19 @@ test('evidence drawer is a semantic modal with nested raw disclosures and focus 
     },
   };
   const detach = attachEvidenceDrawerDocumentListener({ current: container }, () => closeCalls.push('document'));
-  documentListeners.keydown({
+  focused.length = 0;
+  const propagatedTab = {
     key: 'Tab',
     preventDefault: () => prevented.push('document-tab'),
-  });
+  };
+  documentListeners.keydown(propagatedTab);
   detach();
   assert.deepEqual(documentEvents, [
     ['add', 'keydown', { capture: true }],
     ['remove', 'keydown'],
   ]);
   assert.deepEqual(prevented.slice(-1), ['document-tab']);
+  assert.deepEqual(focused, ['first']);
 
   handleEvidenceDrawerPointerDown({
     target: { id: 'dialog' },
