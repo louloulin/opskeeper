@@ -1,5 +1,5 @@
 workflow: full
-phase: build
+phase: verify
 build_mode: subagent-driven-development
 build_pause: null
 isolation: worktree
