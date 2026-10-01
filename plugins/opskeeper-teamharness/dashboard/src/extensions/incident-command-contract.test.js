@@ -167,6 +167,19 @@ test('derives stage facts from authoritative events and timeline phases', () => 
   assert.equal(view.stageTimeline[0].sourceEventId, '2');
 });
 
+test('keeps an absent Manager owner undefined', () => {
+  const view = fromManagerLoop({
+    state: { incident_id: 'inc-1', current_phase: 'detected', updated_at: serverNow },
+    timeline: timelineWithPhases([
+      { phase: 'detected', status: 'running' },
+    ], [event(71, 'detected', 'phase_entered')]),
+    serverNow,
+  });
+
+  assert.equal(view.owner, undefined);
+  assert.equal(view.stageTimeline.find((stage) => stage.stage === 'detected').ownerLabel, undefined);
+});
+
 test('marks failure and retry exhaustion without inferring progress', () => {
   for (const eventType of ['phase_failed', 'retry_exhausted']) {
     const view = fromManagerLoop({

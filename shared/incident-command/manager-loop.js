@@ -198,10 +198,9 @@ function projectStages(timeline) {
             : 'unknown';
     const sourceEvent = contract || terminal || pauseControl || entered || resumed;
     const role = text(source.worker_role ?? source.workerRole);
-    const owner = normalizeIncidentOwner({
-      role,
-      label: paused && phase === 'approved' ? 'Human' : role ? undefined : 'Manager',
-    });
+    const owner = paused && phase === 'approved'
+      ? normalizeIncidentOwner({ kind: 'human', label: 'Human' })
+      : normalizeIncidentOwner({ role });
     return {
       stage: phase,
       status,
@@ -230,10 +229,7 @@ function ownerFor(stage, record) {
   if (stage === 'approved' && record.status === 'blocked') {
     return normalizeIncidentOwner({ kind: 'human', label: 'Human' });
   }
-  return normalizeIncidentOwner({
-    role: record.workerRole,
-    label: record.workerRole ? undefined : 'Manager',
-  });
+  return normalizeIncidentOwner({ role: record.workerRole });
 }
 
 function recoveredSubstate(record) {

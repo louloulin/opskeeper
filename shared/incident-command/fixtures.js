@@ -147,9 +147,12 @@ export const incidentCommandGoldenInputPairs = Object.freeze([
   }),
   Object.freeze({
     name: 'failed',
-    manager: managerInput('scenario_start', [], [phaseEvent(1, 'scenario_start', 'phase_failed')], {
-      state: { status: 'failed' },
-    }),
+    manager: managerInput('failed', [
+      phaseRecord('failed', 'failed', {
+        worker_role: 'opskeeper-manager',
+        contract_summary: 'scenario failed',
+      }),
+    ], [phaseEvent(1, 'failed', 'phase_failed')]),
     demo: demoInput('start_failed'),
   }),
   Object.freeze({
