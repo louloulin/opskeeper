@@ -84,7 +84,7 @@ export function CommandStageTimeline({
                 <p className="text-sm font-semibold text-white">{phaseCopy[stage.stage][locale]}</p>
               </div>
               <p className="mt-2 text-xs text-ink-300">{statusCopy[stage.status][locale]}</p>
-              <p className="mt-1 text-xs text-ink-500">
+              <p className="mt-1 text-xs text-ink-400">
                 {zh ? '负责人：' : 'Owner: '}
                 {ownerLabel(stage.ownerLabel)}
               </p>

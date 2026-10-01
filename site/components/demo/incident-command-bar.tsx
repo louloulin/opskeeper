@@ -205,7 +205,7 @@ export function IncidentCommandBar({
       </div>
 
       {observedTimestamp && (
-        <p className="mt-4 text-xs text-ink-500">
+        <p className="mt-4 text-xs text-ink-400">
           {zh ? '观测时间：' : 'Observed at: '}
           {observedTimestamp.valid
             ? (
