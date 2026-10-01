@@ -34,7 +34,6 @@ import (
 	"syscall"
 	"time"
 
-	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
@@ -57,7 +56,7 @@ import (
 	wsfanout "github.com/vincent-wuhan/opskeeper/internal/pkg/wsfanout"
 
 	redis "github.com/redis/go-redis/v9"
-	harnessrunner "github.com/vincent-wuhan/opskeeper/internal/harness/runner"
+	harnessrunner "github.com/vincent-wuhan/opskeeper/core/harness/runner"
 
 	"encoding/json"
 	"strconv"
@@ -102,11 +101,13 @@ import (
 	managertopologydata "github.com/vincent-wuhan/opskeeper/internal/manager/data/topology/store"
 	managermodelalert "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
 
+	"github.com/vincent-wuhan/opskeeper/core/ports"
+
 	managerbizaiops "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops"
 	aiopsagent "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/agent"
+	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/agentkernel"
 	aiopschatruntime "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/chatruntime"
-	aiopsgraph "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/graph"
-	aiopsgraphcb "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/graph/callbacks"
+
 	aiopsinvestigator "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/investigator"
 	managerbizaiopsmentions "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/mentions"
 	aiopstools "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
@@ -154,6 +155,7 @@ import (
 	managerserverimbridge "github.com/vincent-wuhan/opskeeper/internal/manager/server/imbridge"
 	managerserverknowledge "github.com/vincent-wuhan/opskeeper/internal/manager/server/knowledge"
 	managerwebshellserver "github.com/vincent-wuhan/opskeeper/internal/manager/server/webshell"
+	middlewareregistry "github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
 	mcpclient "github.com/vincent-wuhan/opskeeper/internal/pkg/mcpclient"
 
 	internalagentteams "github.com/vincent-wuhan/opskeeper/internal/agentteams"
@@ -205,6 +207,7 @@ import (
 	managerservertraces "github.com/vincent-wuhan/opskeeper/internal/manager/server/traces"
 	managerserverversion "github.com/vincent-wuhan/opskeeper/internal/manager/server/version"
 
+	managerserverplugin "github.com/vincent-wuhan/opskeeper/internal/manager/server/plugin"
 	managersvcaiops "github.com/vincent-wuhan/opskeeper/internal/manager/service/aiops"
 	manageraiopsconfig "github.com/vincent-wuhan/opskeeper/internal/manager/service/aiopsconfig"
 	managersvcalert "github.com/vincent-wuhan/opskeeper/internal/manager/service/alert"
@@ -212,6 +215,7 @@ import (
 	managersvcedge "github.com/vincent-wuhan/opskeeper/internal/manager/service/edge"
 	managersvcfb "github.com/vincent-wuhan/opskeeper/internal/manager/service/frontierbound"
 	managersvcmetric "github.com/vincent-wuhan/opskeeper/internal/manager/service/metric"
+	managersvcplugin "github.com/vincent-wuhan/opskeeper/internal/manager/service/plugin"
 	managersvcprom "github.com/vincent-wuhan/opskeeper/internal/manager/service/prometheus"
 	managersvcsystemhealth "github.com/vincent-wuhan/opskeeper/internal/manager/service/systemhealth"
 	managersvcsystemupgrade "github.com/vincent-wuhan/opskeeper/internal/manager/service/systemupgrade"
@@ -556,7 +560,28 @@ func main() {
 	// Retention is 180 days by default; OPSKEEPER_AUDIT_RETENTION_DAYS=0
 	// disables the sweep entirely (operator manages archival externally).
 	auditRepo := manageraudtdata.New(db)
-	auditUC := managerbizaudit.New(auditRepo, log.With(slog.String("comp", "audit")))
+	auditChainStore := manageraudtdata.NewChainStore(db)
+	// HLD-010 tamper-evidence. The chain key lives only here, in the
+	// control plane: nodes, plugins, and models can read the ledger and
+	// none of them can extend it, because the append path is reached only
+	// from host code. With no key the ledger still records every row — an
+	// empty audit trail is a worse failure than an unchained one — but
+	// rows carry no digest and VerifyChain says so instead of reporting
+	// a clean bill of health.
+	auditChainKey := os.Getenv("OPSKEEPER_AUDIT_HMAC_KEY")
+	if auditChainKey == "" {
+		log.Warn("audit: OPSKEEPER_AUDIT_HMAC_KEY is not set; the audit trail will be recorded but not tamper-evident",
+			slog.String("hint", "generate with: openssl rand -hex 32"))
+	}
+	auditUC := managerbizaudit.New(auditRepo, log.With(slog.String("comp", "audit")),
+		managerbizaudit.WithChain(auditChainKey, auditChainStore))
+	// HLD-017 propose-confirm inbox: the human approval queue for dangerous
+	// actions (agent cloud-shell, mutating host commands, skill installs,
+	// MCP calls). Built here, next to the audit log, because the chat
+	// runtime's kernel gate needs it and the runtime is assembled far
+	// earlier than this BC's handlers. Producers register their
+	// execute-on-approve executor below, where those subsystems are built.
+	approvalUC := managerbizapproval.NewUsecase(managerapprovaldata.NewRepo(db), log.With(slog.String("comp", "approval")))
 	auditRetentionDays := 180
 	if v := os.Getenv("OPSKEEPER_AUDIT_RETENTION_DAYS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -692,61 +717,8 @@ func main() {
 	// the LLMSettingsResolver wired below, so /settings/llm edits
 	// propagate within ~60s. A provider with empty APIKey is silently
 	// dropped from the catalog so it never appears in the SPA selector.
-	providerCfgs := []llm.ProviderConfig{}
-	if cfg.OpenAI.APIKey != "" {
-		providerCfgs = append(providerCfgs, llm.ProviderConfig{
-			ID: "openai", Label: "OpenAI",
-			APIKey:  cfg.OpenAI.APIKey,
-			Model:   firstNonEmpty(cfg.OpenAI.Model, "gpt-5.4"),
-			BaseURL: cfg.OpenAI.BaseURL,
-			Models:  dedupeModels(firstNonEmpty(cfg.OpenAI.Model, "gpt-5.4"), "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"),
-		})
-	}
-	if cfg.LLM.Anthropic.APIKey != "" {
-		providerCfgs = append(providerCfgs, llm.ProviderConfig{
-			ID: "anthropic", Label: "Anthropic",
-			APIKey:  cfg.LLM.Anthropic.APIKey,
-			Model:   firstNonEmpty(cfg.LLM.Anthropic.Model, "claude-sonnet-4-6"),
-			BaseURL: firstNonEmpty(cfg.LLM.Anthropic.BaseURL, "https://api.anthropic.com/v1"),
-			Models:  cfg.LLM.Anthropic.Models,
-		})
-	}
-	if cfg.LLM.Zhipu.APIKey != "" {
-		providerCfgs = append(providerCfgs, llm.ProviderConfig{
-			ID: "zhipu", Label: "智谱 GLM",
-			APIKey:  cfg.LLM.Zhipu.APIKey,
-			Model:   firstNonEmpty(cfg.LLM.Zhipu.Model, "glm-4.7"),
-			BaseURL: firstNonEmpty(cfg.LLM.Zhipu.BaseURL, "https://open.bigmodel.cn/api/paas/v4"),
-			Models:  cfg.LLM.Zhipu.Models,
-		})
-	}
-	if cfg.LLM.Gemini.APIKey != "" {
-		providerCfgs = append(providerCfgs, llm.ProviderConfig{
-			ID: "gemini", Label: "Gemini",
-			APIKey:  cfg.LLM.Gemini.APIKey,
-			Model:   firstNonEmpty(cfg.LLM.Gemini.Model, "gemini-2.5-pro"),
-			BaseURL: firstNonEmpty(cfg.LLM.Gemini.BaseURL, "https://generativelanguage.googleapis.com/v1beta/openai"),
-			Models:  cfg.LLM.Gemini.Models,
-		})
-	}
-	if cfg.LLM.DeepSeek.APIKey != "" {
-		providerCfgs = append(providerCfgs, llm.ProviderConfig{
-			ID: "deepseek", Label: "DeepSeek",
-			APIKey:  cfg.LLM.DeepSeek.APIKey,
-			Model:   firstNonEmpty(cfg.LLM.DeepSeek.Model, "deepseek-v4-flash"),
-			BaseURL: firstNonEmpty(cfg.LLM.DeepSeek.BaseURL, "https://api.deepseek.com/v1"),
-			Models:  cfg.LLM.DeepSeek.Models,
-		})
-	}
-	if cfg.LLM.Kimi.APIKey != "" {
-		providerCfgs = append(providerCfgs, llm.ProviderConfig{
-			ID: "kimi", Label: "Kimi",
-			APIKey:  cfg.LLM.Kimi.APIKey,
-			Model:   firstNonEmpty(cfg.LLM.Kimi.Model, "kimi-k2.6"),
-			BaseURL: firstNonEmpty(cfg.LLM.Kimi.BaseURL, "https://api.moonshot.cn/v1"),
-			Models:  cfg.LLM.Kimi.Models,
-		})
-	}
+	providerCfgs := llm.ProviderConfigsFrom(cfg)
+
 	llmRouter := llm.NewMultiClient(providerCfgs, cfg.LLM.Default, openaiClient)
 
 	// Seed per-provider LLM settings rows from env on first boot so the
@@ -864,6 +836,59 @@ func main() {
 	}
 	llmSettingsResolver := managerbizsetting.NewLLMSettingsResolver(settingSvc, llmEnvDefaults, cfg.LLM.Default)
 	llmRouter.SetProvidersResolver(llmSettingsResolver)
+
+	// LLM backend selection. The default is the self-contained HTTP path
+	// (internal/pkg/llm/wire.go). OPSKEEPER_LLM_BACKEND=pig routes every
+	// provider through PiG's provider stack instead: PiG carries the
+	// compatibility table (which endpoints want max_tokens vs
+	// max_completion_tokens, which need a non-standard auth path), its
+	// retry/backoff, and its native Anthropic/Google adapters, none of
+	// which the hand-rolled HTTP client replicates.
+	//
+	// The switch is deliberately a per-deployment choice with an env
+	// escape hatch rather than a silent replacement: the two paths differ
+	// in retry behaviour and error text, and an operator rolling either
+	// direction must be able to say which one is live. Unrecognised
+	// values keep the HTTP path — never silently pick the less-tested
+	// one.
+	//
+	// One path stays HTTP even with the switch on: the router's fallback
+	// client, used only when a request names no provider AND the catalog
+	// has no default. That branch is reachable only when the cluster has
+	// literally no credential — the settings resolver also falls back to
+	// the env-seeded keys, so any usable key makes the catalog non-empty
+	// and the request routes through PiG — and it ends in ErrNoAPIKey
+	// either way. Rebuilding the fallback through PiG would change nothing
+	// observable, so it is left as the plain client it already is.
+	pigRegistry := llm.NewPigRegistry(llm.NewSettingsSource(llmSettingsResolver), log)
+	// Close the registry's cached provider transports on the way out. Without
+	// this a rolling restart leaks one connection pool per provider until the
+	// process exits — invisible in dev, a slow fd leak in production.
+	defer func() {
+		if cerr := pigRegistry.Close(); cerr != nil {
+			log.Warn("llm: closing pig provider transports", slog.Any("err", cerr))
+		}
+	}()
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("OPSKEEPER_LLM_BACKEND")), "pig") {
+		llmRouter.SetSubClientFactory(func(cfg llm.ProviderConfig) llm.Client {
+			// The factory ignores the per-provider coordinates on purpose:
+			// the registry resolves provider, base URL, and key from live
+			// settings on every call, so an admin edit applies without a
+			// router rebuild. The config is still what tells the router
+			// which providers exist for the picker.
+			if strings.TrimSpace(cfg.APIKey) == "" {
+				// Preserve the picker contract: a provider with no usable
+				// credential anywhere is not offered. The registry would
+				// otherwise report it as "configured" the moment a row
+				// exists, even with an empty key.
+				return nil
+			}
+			return pigRegistry.Client()
+		})
+		log.Info("llm: backend=pig (PiG provider stack); providers routed through the settings-backed registry")
+	} else {
+		log.Info("llm: backend=http (self-contained OpenAI-compatible wire)")
+	}
 
 	// All downstream agent/investigator wiring takes the router so a
 	// per-request Provider override flows through; absent that, behaviour
@@ -1235,6 +1260,18 @@ func main() {
 	// Install brings up, so the two cannot be constructed in one step.
 	agentTools := &agentToolUpcall{fleet: nodeFleet}
 
+	// Plugin releases. Built after the fleet because a release drives the
+	// same tunnel the node agents use, and wired into HTTP below. The
+	// handler is constructed before the manager so the routes exist even
+	// on a manager whose tunnel failed to come up: those endpoints then
+	// answer 503 ("not configured") rather than 404, which is a different
+	// sentence for an operator.
+	pluginReleaseHandler := managerserverplugin.NewHandler(nil)
+	pluginFleet := &edgeInventoryFleet{svc: edgeSvc}
+	pluginReleaseMgr := managersvcplugin.NewManager(pluginFleet, managersvcplugin.NewNodeFleet(fbClient),
+		log.With(slog.String("comp", "plugin-release")))
+	pluginReleaseHandler.SetService(pluginReleaseMgr)
+
 	if err := managersvcfb.Install(rootCtx, fbClient, managersvcfb.Wiring{
 		EdgeAuthn:      edgeAuthn,
 		EdgeUC:         edgeUC,
@@ -1444,9 +1481,11 @@ func main() {
 	)
 	aiopsUsage := managerbizaiops.NewUsageUsecase(aiopsRepo, log)
 
-	// PR-9 of optional new graph-based agent kernel. Default
-	// stays "legacy" so chat behaviour is unchanged out of the box;
-	// operators opt into the new path via OPSKEEPER_AGENT_KERNEL=graph.
+	// The optional PiG-backed agent kernel. Default stays "legacy"
+	// so chat behaviour is unchanged out of the box; operators opt
+	// into the new path via OPSKEEPER_AGENT_KERNEL=pig. The old
+	// "graph" spelling is retired but still accepted, and resolves
+	// to the same kernel.
 	// When the env is set we build:
 	//   - RoutingChatModel (PR-1) wrapping the existing llmRouter, one
 	//     per provider id ("openai" | "anthropic" | "zhipu" | "gemini").
@@ -1600,8 +1639,23 @@ func main() {
 		// aiopsRuntime is what the chat service consumes.
 		chatRT *aiopschatruntime.Runtime
 	)
-	if kernel == managersvcaiops.KernelGraph {
-		rt, rterr := buildAIOpsRuntime(rootCtx, cfg, llmClient, llmRouter, toolsReg, aiopsRepo, fbClient, edgeUC, deviceUC, reg, log, bootstrapSkillReg, bootstrapAgentReg, llmSettingsResolver)
+	// Kernel gate for the PiG loop: mutating calls whose approval is already
+	// owned by the tool itself run, everything else is asked through the
+	// human inbox. Built before the runtime because the runtime's kernel
+	// needs it, and extended at the MCP registrar below, where those tools
+	// and their risk classes are created.
+	kernelGate := agentkernel.NewDeferredGate(
+		agentkernel.NewInboxGate(agentkernel.NewInboxUsecase(approvalUC)),
+		selfSettledToolNames(),
+	)
+
+	if kernel.UsesChatRuntime() {
+		rt, rterr := buildAIOpsRuntime(rootCtx, cfg, llmClient, llmRouter, toolsReg, aiopsRepo, fbClient, edgeUC, deviceUC, reg, log, bootstrapSkillReg, bootstrapAgentReg, llmSettingsResolver, kernelWiring{
+			Kernel: kernel,
+			Models: pigRegistry,
+			Gate:   kernelGate,
+			Audit:  auditUC,
+		})
 		if rterr != nil {
 			log.Warn("aiops runtime build failed — falling back to legacy kernel", slog.Any("err", rterr))
 			kernel = managersvcaiops.KernelLegacy
@@ -1833,8 +1887,8 @@ func main() {
 			// related-alerts query (same DB handle, different method).
 			rcaInvConcrete = rcaInvConcrete.
 				WithRelatedQuerier(invRepo).
-				// Salvage seam: when the worker hits the eino
-				// MaxStep cap, read its partial trail back from
+				// Salvage seam: when the worker hits the turn
+				// cap, read its partial trail back from
 				// chat_messages and synthesise a low-confidence
 				// report instead of an empty failure.
 				WithMessageReader(aiopsRepo)
@@ -2071,6 +2125,42 @@ func main() {
 			}
 		}
 	}
+	// 修复动作派发：把 approved phase 的 RemediationOption 真正打到工具上。
+	//
+	// 这条链路此前不存在——approved phase 问完 pause hook 就直接返回
+	// ApprovedExecAdvance，什么都没执行。派发需要三样东西：读上游修复选项的
+	// loader、能按名字查/调工具的 registry、以及一个已连接的 adapter。
+	//
+	// 没有 DSN 时不装配任何东西：UnavailableInvoker 会让 approved phase 以
+	// 明确原因失败，而不是推进一个"看起来修好了"的 run。静默跳过比报错更糟，
+	// 因为 recovered 阶段会拿没变过的指标去验证，然后把结论写进复盘。
+	var loopRemediationLoader managerbizloop.RemediationOptionLoader
+	var loopRemediationInvoker managerbizloop.RemediationInvoker
+	// Every adapter that has a DSN configured is connected into one
+	// registry, so an action is dispatchable when its adapter is deployed
+	// rather than when the binary was built for it. OPSKEEPER_LOOP_PG_DSN
+	// keeps its old meaning; the other four are additive.
+	middlewareReg := middlewareregistry.NewRegistry()
+	adapterClosers := wireLoopRemediationAdapters(rootCtx, log, middlewareReg)
+	for _, closeAdapter := range adapterClosers {
+		defer closeAdapter()
+	}
+	if toolCount := len(middlewareReg.ListTools("")); toolCount > 0 {
+		causes := managerbizloop.ContractRootCauseLoader{Contracts: loopContractRepo}
+		loopRemediationLoader = managerbizloop.RootCauseRemediationLoader{Loader: causes}
+		loopRemediationInvoker = managerbizloop.RegistryInvoker{
+			Tools: middlewareReg,
+			// Arguments the option does not carry (a pid, a role) come
+			// from the evidence the investigation recorded, never from a
+			// default. Actions with no evidence-backed extractor still
+			// refuse through the invoker's own missing-argument check.
+			ArgResolver: managerbizloop.EvidenceArgResolver{Causes: causes},
+		}
+		log.Info("loop: remediation dispatch wired", slog.Int("tools", toolCount))
+	} else {
+		log.Warn("loop: no remediation adapter DSN is set; the approved phase cannot dispatch any remediation",
+			slog.String("hint", "set OPSKEEPER_LOOP_PG_DSN / _REDIS_DSN / _K8S_DSN / _MQ_DSN / _HOST_DSN"))
+	}
 	// KB-first wire-up (chatruntime-kb-implementation)
 	//  - PatternMeta: MySQL GORM UPSERT（metadata）
 	//  - QdrantPatternRepo: Qdrant cosine search（向量 + payload）
@@ -2169,6 +2259,8 @@ func main() {
 		// nil 默认跳过 KB 写回；后续 Day 5+ 集成期注入 *chatdiagnosestore.CompositePatternRepo。
 		PatternWriter:          compositeRepo,
 		ApprovedCritiqueLoader: managerbizloop.NoopApprovedCritiqueLoader{},
+		RemediationLoader:      loopRemediationLoader,
+		RemediationInvoker:     loopRemediationInvoker,
 	})
 	if err != nil {
 		log.Error("loop: phase worker factory", slog.Any("err", err))
@@ -2489,7 +2581,8 @@ func main() {
 	// HLD-017 propose-confirm inbox: human approval queue for dangerous
 	// actions (agent cloud-shell, etc.). Additive — empty until a producer
 	// proposes; producers register their execute-on-approve executor.
-	approvalUC := managerbizapproval.NewUsecase(managerapprovaldata.NewRepo(db), log.With(slog.String("comp", "approval")))
+	// approvalUC is built at the top of main (next to auditUC) because the
+	// chat runtime's kernel gate consumes it; see the marker there.
 	approvalHandler := managerserverapproval.NewHandler(approvalUC)
 	// HLD-029 Data-Guard 业务层防护（路径 A P1-3 阶段 1）：人工打标 / 启发式 / 继承。
 	if err := internaldataguardstore.Migrate(db); err != nil {
@@ -2659,8 +2752,8 @@ func main() {
 	// yield cloud_bash. SetCloudBashProposer fixes /v1/skills and any FRESH
 	// bag, but the already-built coordinator/worker graph still lacks the
 	// tool — and because the system prompt tells the LLM about cloud_bash,
-	// it issues a call that eino can't route, failing the whole stream with
-	// "tool cloud_bash not found in toolsNode indexes". Bolt it onto the
+	// it issues a call the loop cannot route, failing the call with "tool
+	// cloud_bash not found". Bolt it onto the
 	// live bag here, exactly like the AgentTool trio above. The coordinator
 	// (coordinatorToolNames) and specialist-ops (persona Tools list) filters
 	// both whitelist cloud_bash, so this single append reaches both.
@@ -2749,7 +2842,33 @@ func main() {
 			}
 			if len(mcpTools) > 0 {
 				chatRT.AppendToolBag(mcpTools)
+				// Declare each MCP tool settled at the gate. Their risk class
+				// is inferred from the server's own naming (MCPToolClass), so
+				// a name like mcp__k8s__delete_pod is write-class — and it
+				// already owns its approval: a trusted server's call runs
+				// directly, an untrusted one queues through ProposeMCPCall.
+				// Declaring them here, where they are created, is what keeps
+				// the declaration next to the decision.
+				names := make([]string, 0, len(mcpTools))
+				for _, t := range mcpTools {
+					if info, ierr := t.Info(rootCtx); ierr == nil && info != nil {
+						names = append(names, info.Name)
+					}
+				}
+				kernelGate.Add(names...)
 				log.Info("mcp tools bolted onto chat runtime bag", slog.Int("mcp_tool_count", len(mcpTools)), slog.Int("tool_count", chatRT.ToolCount()))
+			}
+		}
+		// Last: assert every mutating tool in the FINAL bag has a declared
+		// approval owner. The bag has just stopped growing (the coordination
+		// trio, the proposer-backed shell tools and the MCP servers are all
+		// bolted on above), so this is the first moment the check can see
+		// cloud_bash and friends — and the last moment before the process
+		// starts answering turns with them.
+		if kernel == managersvcaiops.KernelPig {
+			if cerr := checkMutatingToolsDeclared(rootCtx, chatRT.Tools(), kernelGate); cerr != nil {
+				log.Error("aiops: refusing to serve the PiG kernel", slog.Any("err", cerr))
+				return
 			}
 		}
 	}
@@ -3028,6 +3147,7 @@ func main() {
 			settingHandler.Register(protected)
 			integrationHandler.Register(protected)
 			marketplaceHandler.Register(protected)
+			pluginReleaseHandler.Register(protected)
 			secretHandler.Register(protected)
 			// /v1/mcp/servers 等 admin CRUD 仍走 protected（admin auth）
 			// /v1/mcp（Worker JSON-RPC 入口）/v1/state/*/v1/hitl/* 走 Bearer GatewayKey
@@ -3509,6 +3629,22 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
+func dedupeModels(vals ...string) []string {
+	seen := make(map[string]struct{}, len(vals))
+	out := make([]string, 0, len(vals))
+	for _, v := range vals {
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
 func knownLLMProviderIDs() []string {
 	return []string{
 		llm.ProviderOpenAI,
@@ -3577,22 +3713,6 @@ func pickProviderDefault(providers []llm.ProviderConfig, preferred string) (stri
 // as [configuredModel, "gpt-4o", "gpt-4-turbo"]; out-of-box the configured
 // model defaults to "gpt-4o", which would otherwise list "gpt-4o" twice in
 // the SPA model picker.
-func dedupeModels(vals ...string) []string {
-	seen := make(map[string]struct{}, len(vals))
-	out := make([]string, 0, len(vals))
-	for _, v := range vals {
-		if v == "" {
-			continue
-		}
-		if _, ok := seen[v]; ok {
-			continue
-		}
-		seen[v] = struct{}{}
-		out = append(out, v)
-	}
-	return out
-}
-
 // chainInvestigators fans an incident out to multiple alert.Investigator
 // implementations (legacy ai_initial_diagnosis + new structured RCA).
 // nil entries are skipped; an all-nil input returns nil so the caller
@@ -3845,23 +3965,6 @@ func (s agentRegistryShim) HasAgent(name string) bool {
 	return ok
 }
 
-// providerInjectingClient wraps an llm.Client and stamps a fixed
-// Provider id into every ChatReq before forwarding. Used by
-// buildAIOpsRuntime to keep RoutingChatModel's per-provider inner
-// ChatModels routing through the existing MultiClient (which already
-// honours ChatReq.Provider) without writing N near-identical adapters.
-type providerInjectingClient struct {
-	inner    llm.Client
-	provider string
-}
-
-func (p *providerInjectingClient) Chat(ctx context.Context, req llm.ChatReq) (*llm.ChatResp, error) {
-	if req.Provider == "" {
-		req.Provider = p.provider
-	}
-	return p.inner.Chat(ctx, req)
-}
-
 // loadBootstrapRegistries walks ./agents + ./skills + the marketplace
 // skill root and returns populated registries. Called once at boot
 // regardless of kernel choice, so /v1/agents has data to render even
@@ -3905,9 +4008,30 @@ func loadBootstrapRegistries(log *slog.Logger) (*aiopschatruntime.SkillRegistry,
 	return skillReg, agentReg
 }
 
+// kernelWiring groups the extras the PiG loop needs.
+//
+// Grouped rather than added as four more positional parameters because they
+// are consumed together, by one branch: a caller either has a complete
+// kernel wiring or it is not selecting that loop at all.
+type kernelWiring struct {
+	// Kernel is what the operator selected. Every chatruntime kernel builds
+	// one — including the retired "graph" spelling, which no longer has a
+	// graph under it but does still mean "use chatruntime.Runtime".
+	Kernel managersvcaiops.Kernel
+	// Models is the settings-backed registry the LLM client already uses.
+	// The kernel resolves through the same cache so a provider's transport
+	// and its prompt-cache session id are shared, not duplicated.
+	Models *llm.PigRegistry
+	// Gate decides whether a mutating call may run.
+	Gate *agentkernel.DeferredGate
+	// Audit receives the gate's decisions. The same ledger the rest of the
+	// control plane writes to.
+	Audit *managerbizaudit.Usecase
+}
+
 // buildAIOpsRuntime builds the chatruntime.Runtime when
-// OPSKEEPER_AGENT_KERNEL=graph. Returns (nil, err) on failure so the
-// caller can fall back to the legacy kernel without a panic.
+// OPSKEEPER_AGENT_KERNEL is graph or pig. Returns (nil, err) on failure so
+// the caller can fall back to the legacy kernel without a panic.
 //
 // coordinatorExtraToolNames are policy exceptions that are intentionally
 // coordinator-owned even though they are not registry core tools in every
@@ -3979,115 +4103,34 @@ func buildAIOpsRuntime(
 	skillReg *aiopschatruntime.SkillRegistry,
 	agentReg *aiopschatruntime.AgentRegistry,
 	resolver *managerbizsetting.LLMSettingsResolver,
+	wiring kernelWiring,
 ) (*aiopschatruntime.Runtime, error) {
-	// 1. RoutingChatModel — one inner per provider that exists. We
-	//    layer providerInjectingClient around the existing
-	//    llmRouter so each inner ChatModel routes its Chat() call
-	//    to the correct sub-Client. Models stamp their default model
-	//    name from cfg so a per-call model.WithModel still wins.
-	innerModels := map[string]einomodel.ChatModel{}
-	addInner := func(provider, defaultModel string) {
-		ic := &providerInjectingClient{inner: llmClient, provider: provider}
-		m, err := llm.NewClientChatModel(llm.ClientChatModelConfig{
-			Client: ic,
-			Model:  defaultModel,
-		})
-		if err != nil {
-			log.Warn("chatruntime: build inner ChatModel",
-				slog.String("provider", provider), slog.Any("err", err))
-			return
-		}
-		innerModels[provider] = m
-	}
-	// Build inners from the RESOLVED provider set (env + Settings-UI/DB),
-	// the same source the SPA model picker uses. Previously this gated on
-	// boot-time env keys only — so a provider configured via the UI (e.g.
-	// anthropic, with its key in the DB and an empty env var) showed in the
-	// picker but had no inner ChatModel, and picking it failed with
-	// "unknown provider". The per-call key is resolved by the
-	// resolver-backed llmClient, so registering the inner is all that's
-	// needed. defProv comes from the resolved default (DB default_provider).
-	defProv := cfg.LLM.Default
+	// 1. Model availability. The loop resolves its per-turn model through
+	//    the settings-backed PiG registry (pigRegistry) on every call, so
+	//    there are no per-provider inner ChatModels to compose here any
+	//    more: an admin key rotation lands on the next turn instead of at
+	//    the next restart.
+	//
+	//    What is still worth checking at boot is that the cluster has at
+	//    least one usable credential. Without one every turn fails with a
+	//    provider error, and the operator reads that as the product being
+	//    broken rather than as a missing key; refusing here lets main fall
+	//    back to the legacy loop and log which one is live.
 	if resolver != nil {
-		if provCfgs, resolvedDefault, rerr := resolver.ResolveProviders(ctx); rerr == nil {
-			for _, pc := range provCfgs {
-				addInner(pc.ID, pc.Model)
-			}
-			if id, _ := pickProviderDefault(provCfgs, resolvedDefault); id != "" {
-				defProv = id
-			}
+		provCfgs, _, rerr := resolver.ResolveProviders(ctx)
+		if rerr != nil {
+			log.Warn("chatruntime: resolve providers", slog.Any("err", rerr))
 		} else {
-			log.Warn("chatruntime: resolve providers for inner models", slog.Any("err", rerr))
-		}
-	}
-	// Safety net: if the resolver gave nothing (error / no rows), fall back
-	// to the boot-time env-keyed providers so the kernel still wires.
-	if len(innerModels) == 0 {
-		if cfg.OpenAI.APIKey != "" {
-			addInner(llm.ProviderOpenAI, firstNonEmpty(cfg.OpenAI.Model, "gpt-5.4"))
-		}
-		if cfg.LLM.Anthropic.APIKey != "" {
-			addInner(llm.ProviderAnthropic, firstNonEmpty(cfg.LLM.Anthropic.Model, "claude-sonnet-4-6"))
-		}
-		if cfg.LLM.Zhipu.APIKey != "" {
-			addInner(llm.ProviderZhipu, firstNonEmpty(cfg.LLM.Zhipu.Model, "glm-4.7"))
-		}
-		if cfg.LLM.Gemini.APIKey != "" {
-			addInner(llm.ProviderGemini, firstNonEmpty(cfg.LLM.Gemini.Model, "gemini-2.5-pro"))
-		}
-	}
-	// Pre-register an inner for every known provider id (incl. the generic
-	// "custom" endpoint) even if unconfigured at boot, so a provider whose key
-	// is added via the UI AFTER boot routes immediately — no restart. Only the
-	// inner's existence is boot-time; the per-call key/baseURL is resolved
-	// dynamically by llmClient. Unconfigured providers never reach the picker
-	// (the /v1/aiops/models catalog gates on ResolveProviders), so they're
-	// never selected; a stray call to one fails cleanly at key resolution.
-	for _, id := range knownLLMProviderIDs() {
-		if _, ok := innerModels[id]; !ok {
-			addInner(id, "") // model supplied per-call (picker / DefaultResolver)
-		}
-	}
-	if len(innerModels) == 0 {
-		return nil, fmt.Errorf("chatruntime: no LLM provider configured")
-	}
-	if defProv == "" {
-		defProv = llm.ProviderOpenAI
-	}
-	if _, ok := innerModels[defProv]; !ok {
-		// Default provider not configured — pick the first configured
-		// provider alphabetically so the result is deterministic across
-		// restarts (Go map iteration order is randomized).
-		keys := make([]string, 0, len(innerModels))
-		for k := range innerModels {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		defProv = keys[0]
-	}
-	// DefaultResolver lets calls that omit a provider (the RCA investigator
-	// worker, query_translate) track the LIVE configured default — the model
-	// the home-page picker writes to default_provider / <provider>_default_model
-	// — instead of the boot-time defProv. The chat picker pins a provider
-	// per-message and is unaffected. Resolved per-call (cheap: a settings read,
-	// and only on default-routed calls, which are low-frequency).
-	var defaultResolver func(context.Context) (string, string)
-	if resolver != nil {
-		defaultResolver = func(rctx context.Context) (string, string) {
-			provCfgs, resolvedDefault, rerr := resolver.ResolveProviders(rctx)
-			if rerr != nil {
-				return "", ""
+			usable := 0
+			for _, pc := range provCfgs {
+				if strings.TrimSpace(pc.APIKey) != "" {
+					usable++
+				}
 			}
-			return pickProviderDefault(provCfgs, resolvedDefault)
+			if usable == 0 {
+				return nil, fmt.Errorf("chatruntime: no LLM provider configured")
+			}
 		}
-	}
-	chatModel, err := llm.NewRoutingChatModel(llm.RoutingChatModelConfig{
-		Inner:           innerModels,
-		DefaultProvider: defProv,
-		DefaultResolver: defaultResolver,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("chatruntime: NewRoutingChatModel: %w", err)
 	}
 
 	// 2. Tool bag — Registry.BuildBaseTools + AppendHostFilesTools,
@@ -4161,26 +4204,14 @@ func buildAIOpsRuntime(
 		Source:   "builtin",
 	})
 
-	// 4. Callback deps. Persistence/Audit/Metrics use the same
-	//    SessionRepo + Registerer threaded everywhere. Budget gate is
-	//    wired when LLM.DailyTokenLimit > 0 — single global UTC-day cap
-	//    enforced against llm.InMemoryBudget (sufficient for the
-	//    private-MVP single-tenant scope).
-	cbDeps := aiopsgraphcb.Deps{
-		Persistence: aiopsgraphcb.PersistenceDeps{
-			Repo:       sessions,
-			Logger:     log.With(slog.String("comp", "chatruntime-persist")),
-			Registerer: reg,
-		},
-		Audit: aiopsgraphcb.AuditDeps{
-			Logger: log.With(slog.String("comp", "chatruntime-audit")),
-		},
-		Metrics: aiopsgraphcb.MetricsDeps{
-			Registerer: reg,
-		},
-	}
+	// 4. Daily token budget (optional). Single global UTC-day cap enforced
+	//    against llm.InMemoryBudget (sufficient for the private-MVP
+	//    single-tenant scope). The agent kernel consumes the same value
+	//    through agentkernel.NewBudget, so the cap is one number regardless
+	//    of which loop is live.
+	var dailyBudget *llm.InMemoryBudget
 	if cfg.LLM.DailyTokenLimit > 0 {
-		cbDeps.BudgetChecker = llm.NewInMemoryBudget(cfg.LLM.DailyTokenLimit)
+		dailyBudget = llm.NewInMemoryBudget(cfg.LLM.DailyTokenLimit)
 		log.Info("aiops: daily token budget enabled",
 			slog.Int("daily_limit", cfg.LLM.DailyTokenLimit),
 		)
@@ -4207,24 +4238,67 @@ func buildAIOpsRuntime(
 			Registerer: reg,
 		}))
 	}
+	// 5b. Agent kernel. When the deployment selected the PiG loop the
+	//     mutating-tool declaration is checked here, before the runtime
+	//     exists: a mutating tool nobody declared has no approval owner, and
+	//     discovering that at the first call would show up as a second
+	//     approval card for one action — indistinguishable, from the
+	//     console, from the product working as designed.
+	// The mutating-tool declaration check does NOT run here: this bag is
+	// still growing — the coordination trio, the proposer-backed shell tools
+	// and every MCP server are bolted on after this function returns. It
+	// runs in main() once the bag has stopped changing, which is the first
+	// moment it can see cloud_bash and friends.
+	var agentKernel ports.Agent
+	if wiring.Kernel.UsesChatRuntime() {
+		var runtimeRef *aiopschatruntime.Runtime
+		var kernelBudget agentkernel.TokenBudget
+		if dailyBudget != nil {
+			// Typed nil must not become a non-nil interface: NewBudget's
+			// guard is on the interface, and a *llm.InMemoryBudget boxed in
+			// one would pass it and then dereference nil on the first call.
+			kernelBudget = dailyBudget
+		}
+		k, kerr := newAgentKernel(agentKernelInput{
+			Models:     wiring.Models.Registry(),
+			Gate:       wiring.Gate,
+			Sessions:   sessions,
+			Audit:      wiring.Audit,
+			Budget:     kernelBudget,
+			Model:      cfg.OpenAI.Model,
+			Logger:     log.With(slog.String("comp", "agentkernel")),
+			Registerer: reg,
+			// Same ceiling the graph path uses; a persona may lower it.
+			MaxIterations: 30,
+			AfterAssistantRow: func(sessionID, messageID string) {
+				// The runtime is captured, not passed: it does not exist
+				// yet, and by the time a row is written it does.
+				if runtimeRef != nil {
+					runtimeRef.FlushAssistant(sessionID, messageID)
+				}
+			},
+		})
+		if kerr != nil {
+			return nil, kerr
+		}
+		agentKernel = k
+		log.Info("aiops: agent kernel=pig (PiG loop)",
+			slog.String("selected", string(wiring.Kernel)),
+			slog.Int("settled_mutating_tools", len(wiring.Gate.Declared())))
+	}
+
 	rt, err := aiopschatruntime.NewRuntime(aiopschatruntime.Config{
 		SkillRegistry:    skillReg,
 		AgentRegistry:    agentReg,
 		Sessions:         sessions,
-		ChatModel:        chatModel,
+		Kernel:           agentKernel,
 		ToolBag:          wrapped,
 		CoordinatorStubs: coordStubs,
 		MentionResolver:  nil, // wired below if we have a searcher
 		BasePrompt:       opskeeperBasePrompt(),
 		HistoryLimit:     50,
-		GraphCfg: aiopsgraph.Config{
-			Model:         cfg.OpenAI.Model,
-			Temperature:   0.1,
-			MaxIterations: 30,
-			ToolTimeout:   15 * time.Second,
-		},
-		CallbackDeps: cbDeps,
-		Logger:       log.With(slog.String("comp", "chatruntime")),
+		MaxIterations:    30,
+		Logger:           log.With(slog.String("comp", "chatruntime")),
 	})
 	if err != nil {
 		return nil, err
@@ -5774,6 +5848,36 @@ func (a deploymentHealthAdapter) Health(ctx context.Context) (managerserverversi
 		}
 	}
 	return managerserverversion.HealthSummary(summary), nil
+}
+
+// edgeInventoryFleet adapts the edge service to the release manager's
+// inventory port.
+//
+// It returns every registered edge, including ones that are offline. That
+// is deliberate: a node that is down is a node whose install fails, and the
+// failure is named in the release's status. A release that quietly skipped
+// the offline nodes would leave the fleet uneven with nothing recording why
+// — and the operator would find out when a node came back and was the only
+// one without the package.
+type edgeInventoryFleet struct {
+	svc *managersvcedge.Service
+}
+
+func (f *edgeInventoryFleet) EdgeIDs(ctx context.Context) ([]uint64, error) {
+	if f == nil || f.svc == nil {
+		return nil, fmt.Errorf("the edge service is not wired")
+	}
+	edges, err := f.svc.List(ctx, managerbizedge.ListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uint64, 0, len(edges))
+	for _, e := range edges {
+		if e != nil {
+			ids = append(ids, e.ID)
+		}
+	}
+	return ids, nil
 }
 
 // agentToolUpcall adapts the aiops tool registry to the transport's

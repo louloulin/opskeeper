@@ -1,25 +1,23 @@
-// Package basetool defines opskeeper's eino-aligned tool surface.
+// Package basetool defines opskeeper's tool surface.
 //
-// (Tool 层) lays out the migration target: each tool becomes
-// an object implementing tool.BaseTool — `Info(ctx) -> ToolInfo` plus
-// `InvokableRun(ctx, argsJSON) -> string` — and the standard decorator
-// chain (tenant_bind / timeout / audit / ratelimit / metric,
-// ASCII diagram and 主参考图 Tool 执行后端区块) wraps each tool
-// uniformly. This package owns the interface + value types so the
-// decorator package and individual tool impls can depend on it without
+// (Tool 层) each tool is an object implementing BaseTool —
+// `Info(ctx) -> ToolInfo` plus `InvokableRun(ctx, argsJSON) -> string` — and
+// the standard decorator chain (tenant_bind / timeout / audit / ratelimit /
+// metric, ASCII diagram and 主参考图 Tool 执行后端区块) wraps each tool
+// uniformly. This package owns the interface + value types so the decorator
+// package and individual tool implementations can depend on it without
 // reaching into the closure-style Tool/Registry from registry.go.
 //
-// Why a local interface that mirrors cloudwego/eino:
-//
-//   - PR-1 of owns the cloudwego/eino dep. PR-3 (this PR) MAY
-//     merge first, so we cannot import eino yet.
-//   - Field/method names match eino's tool.BaseTool + InvokableTool so
-//     the later "swap to eino" PR is a one-line type alias change in
-//     this file. Any callsite that consumes basetool.BaseTool keeps
-//     compiling.
+// Why the interface is local and small: the agent kernel consumes tools
+// through a different contract (ports.Tool — Schema/Invoke, adapted by
+// agentkernel.Tool), and this one is what every decorator, the governance
+// chain and the ~50 tool implementations already speak. Being adaptable is
+// enough; making this leaf package import an agent framework to declare
+// `Info` would invert the dependency direction the whole 2.0 module split
+// exists to keep.
 //
 // The closure-style Tool from registry.go stays — both paths coexist
-// for this PR (改进点 #5: 可单测，单文件可测).
+// (改进点 #5: 可单测，单文件可测).
 package basetool
 
 import (
@@ -27,12 +25,10 @@ import (
 	"encoding/json"
 )
 
-// BaseTool is opskeeper's eino-aligned tool surface. The signature mirrors
-// cloudwego/eino's `tool.BaseTool` + `tool.InvokableTool` (combined here
-// for ergonomic reasons; eino splits them so a tool can advertise its
-// schema without being executable, but every opskeeper tool is invokable so
-// we collapse). When PR-N of swaps in cloudwego/eino, this
-// interface becomes a thin alias; callsites do not change.
+// BaseTool is opskeeper's tool surface: metadata plus execution, combined
+// because every opskeeper tool is invokable (a tool that could only
+// advertise its schema would be ToolSearch's index entry, not a tool). The
+// agent kernel adapts it rather than importing it — see agentkernel.Tool.
 //
 // 改进点 #2: 装饰器自由组合 — every decorator returns a
 // BaseTool, so chains compose without leaking concrete types.

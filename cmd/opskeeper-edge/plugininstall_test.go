@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigrpc"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
 )
@@ -271,6 +272,53 @@ func newStore(t *testing.T, body []byte, trust *pluginmanifest.TrustStore, pol p
 	}
 }
 
+// TestMain gives every test in this package a node that knows what
+// version it runs.
+//
+// The default matters: this repository's binary carries "dev" unless it is
+// built with -ldflags, and "dev" is not a version — so without this every
+// fixture package, all of which declare min_edge_version, would be refused
+// for a reason the test is not about. The fail-closed case is asserted
+// explicitly by the tests that clear this variable.
+func TestMain(m *testing.M) {
+	if os.Getenv("OPSKEEPER_EDGE_VERSION") == "" {
+		_ = os.Setenv("OPSKEEPER_EDGE_VERSION", testEdgeVersion)
+	}
+	// The agent's version is a second number from a second binary. A
+	// fixture node that stated only the edge's would refuse every package
+	// that declares a min_pig_version — and, worse, would look like it had
+	// checked something.
+	if os.Getenv(pigVersionEnv) == "" {
+		_ = os.Setenv(pigVersionEnv, testPigVersion)
+	}
+	os.Exit(m.Run())
+}
+
+// testEdgeVersion is what the fixtures report as the node's own agent
+// version. It is above every min_edge_version the helpers write (0.1.0),
+// so a test about admission is not also a test about compatibility.
+const testEdgeVersion = "0.8.0"
+
+// testPigVersion is what the fixtures report as the PiG build they launch.
+// Like testEdgeVersion it sits above every minimum the helpers write, so a
+// fixture is not refused on an axis the test is not about.
+const testPigVersion = "0.3.0"
+
+// withEdgeVersion makes a store behave like a node that knows what
+// version it runs.
+//
+// The version is read from the environment on every request rather than
+// held on the store, deliberately: a node that is upgraded in place must
+// start enforcing the new version immediately, and a captured value would
+// keep the old ceiling until the next restart — which is exactly the
+// window in which a bad release is most likely to arrive. So the fixture
+// sets the environment, not a field, and the tests that check the
+// fail-closed default clear it.
+func withEdgeVersion(t *testing.T) {
+	t.Helper()
+	t.Setenv("OPSKEEPER_EDGE_VERSION", testEdgeVersion)
+}
+
 // readOnlyNode is a policy that admits an L1 read package — the shape a
 // normally-provisioned node has. The scopes are the first-party read-only
 // package's, so a test that copies a real bundle in can admit it without
@@ -391,6 +439,7 @@ func TestTheSamePackageArrivingTwiceConvergesRatherThanFailing(t *testing.T) {
 // that a later refusal left it alone.
 func seed(t *testing.T) (*pluginStore, []byte, ports.PluginSpec, *pluginmanifest.TrustStore) {
 	t.Helper()
+	withEdgeVersion(t)
 	body, spec, store := signedPackageTar(t, "acme-keep", "1.0.0", nil)
 	s := newStore(t, body, store, readOnlyNode())
 	if got := s.Install(t.Context(), spec); !got.Installed {
@@ -927,7 +976,7 @@ func TestRemoveRefusesWhenTheInstalledVersionIsNotTheOneAskedFor(t *testing.T) {
 	if want := []string{"acme-keep@1.0.0"}; !equalStrings(namesOf(s.Installed()), want) {
 		t.Errorf("installed = %v, want the package left alone", namesOf(s.Installed()))
 	}
-	if want := []string{"acme-keep", "acme-extra-1.0.0"}; !equalStrings(publishedPackages(t, s), want) {
+	if want := []string{"acme-keep-1.0.0"}; !equalStrings(publishedPackages(t, s), want) {
 		t.Errorf("the agent's package list is %v, want it untouched", publishedPackages(t, s))
 	}
 }
@@ -1154,4 +1203,323 @@ func seedStore(t *testing.T, body []byte, spec ports.PluginSpec, store *pluginma
 	s.trust = seedTrust
 	s.fetch = func(context.Context, string) ([]byte, error) { return body, nil }
 	return s
+}
+
+// ---------------------------------------------------------------------
+// the edge version
+// ---------------------------------------------------------------------
+
+// withMinEdgeVersion rewrites a staged manifest's min_edge_version. The
+// package is signed after this runs, so the change is what the node
+// reviews rather than something the signature catches.
+func withMinEdgeVersion(version string) func(root string) {
+	return func(root string) {
+		path := filepath.Join(root, pluginmanifest.ManifestFile)
+		body, err := os.ReadFile(path)
+		if err != nil {
+			panic(err)
+		}
+		out := strings.Replace(string(body),
+			"install: {strategy: rolling, min_edge_version: 0.1.0}",
+			"install: {strategy: rolling, min_edge_version: "+version+"}", 1)
+		if err := os.WriteFile(path, []byte(out), 0o640); err != nil {
+			panic(err)
+		}
+	}
+}
+
+// withPigVersion makes a store behave like a node whose agent version is
+// known to the operator.
+//
+// The test-only default in TestMain covers the ordinary case; this is for
+// a test that wants a specific version — typically an agent too old for
+// the package under test.
+func withPigVersion(t *testing.T, v string) {
+	t.Helper()
+	t.Setenv(pigVersionEnv, v)
+}
+
+// withMinPigVersion rewrites a fixture manifest's install block to declare
+// a min_pig_version. It runs before signing, so the envelope covers the
+// edited manifest.
+func withMinPigVersion(version string) func(root string) {
+	return func(root string) {
+		path := filepath.Join(root, pluginmanifest.ManifestFile)
+		body, err := os.ReadFile(path)
+		if err != nil {
+			panic(err)
+		}
+		out := strings.Replace(string(body),
+			"install: {strategy: rolling, min_edge_version: 0.1.0}",
+			"install: {strategy: rolling, min_edge_version: 0.1.0, min_pig_version: "+version+"}", 1)
+		if err := os.WriteFile(path, []byte(out), 0o640); err != nil {
+			panic(err)
+		}
+	}
+}
+
+func TestTheStoreRefusesAPackageNeedingANewerPiGThanItLaunches(t *testing.T) {
+	// The second axis. A node can run an edge build new enough and still
+	// be launching a pig too old to load the package's extensions — the
+	// two are upgraded on different cadences, and a check that reused the
+	// edge's version for both would pass this package.
+	s, _, _, _ := seed(t)
+	withPigVersion(t, "0.3.0")
+
+	body, spec, store := signedPackageTar(t, "acme-needs-new-pig", "1.0.0", withMinPigVersion("0.4.0"))
+	s.fetch = func(context.Context, string) ([]byte, error) { return body, nil }
+	s.trust = store
+
+	got := s.Install(t.Context(), spec)
+	if got.Refused == "" {
+		t.Fatalf("install = %+v, want a refusal — this node's agent is older than the package needs", got)
+	}
+	if !strings.Contains(got.Refused, "0.4.0") {
+		t.Errorf("refusal %q does not name the PiG version the package needs", got.Refused)
+	}
+	// The refusal has to name the agent, not the edge, or the operator
+	// upgrades the wrong binary.
+	if !strings.Contains(got.Refused, "PiG") {
+		t.Errorf("refusal %q does not name the component at fault", got.Refused)
+	}
+	if want := []string{"acme-keep@1.0.0"}; !equalStrings(namesOf(s.Installed()), want) {
+		t.Errorf("installed = %v, want the node's own package untouched", namesOf(s.Installed()))
+	}
+}
+
+func TestAnUnconfiguredNodeStillStatesItsAgentVersion(t *testing.T) {
+	// The agent is not a separately-upgraded binary here: `pig` is built
+	// from the same source as the edge and shipped inside it, so the
+	// linked PiG release line *is* what the node launches. Leaving that
+	// unread would make min_pig_version a field every node refuses, which
+	// is a check that fires on correct configurations — the failure mode
+	// that gets a safety control deleted.
+	//
+	// The edge's own version has no such fallback, deliberately: a binary
+	// cannot report a tag it was not given, and "dev" is not a version.
+	// That asymmetry is asserted in TestAnEdgeWithNoVersionStillRefuses.
+	t.Setenv(pigVersionEnv, "")
+
+	if got := pigSelfVersion(); got != pigrpc.PigVersion {
+		t.Fatalf("an unconfigured node reports its agent as %q, want the linked %q",
+			got, pigrpc.PigVersion)
+	}
+}
+
+func TestAPackageWithinTheLinkedAgentsReachInstallsWithNoConfiguration(t *testing.T) {
+	// The end-to-end half of the fallback: nothing set, and a package
+	// asking for exactly the linked version installs.
+	s, _, _, _ := seed(t)
+	t.Setenv(pigVersionEnv, "")
+
+	body, spec, store := signedPackageTar(t, "acme-pig-default", "1.0.0", withMinPigVersion(pigrpc.PigVersion))
+	s.fetch = func(context.Context, string) ([]byte, error) { return body, nil }
+	s.trust = store
+
+	if got := s.Install(t.Context(), spec); !got.Installed {
+		t.Fatalf("a fresh node refused a package matching the agent it ships: %+v", got)
+	}
+}
+
+func TestAMinimumAboveTheLinkedAgentIsRefusedWithNothingConfigured(t *testing.T) {
+	// And the check still bites when it should, on a node nobody has
+	// configured. The refusal names both numbers so the operator can see
+	// it is a version gap rather than a missing setting.
+	s, _, _, _ := seed(t)
+	t.Setenv(pigVersionEnv, "")
+
+	body, spec, store := signedPackageTar(t, "acme-pig-too-new", "1.0.0", withMinPigVersion("99.0.0"))
+	s.fetch = func(context.Context, string) ([]byte, error) { return body, nil }
+	s.trust = store
+
+	got := s.Install(t.Context(), spec)
+	if got.Installed {
+		t.Fatalf("install = %+v, want a refusal — the package needs an agent this node does not ship", got)
+	}
+	for _, want := range []string{"99.0.0", pigrpc.PigVersion} {
+		if !strings.Contains(got.Refused, want) {
+			t.Errorf("refusal %q does not name %q", got.Refused, want)
+		}
+	}
+}
+
+func TestAnEdgeWithNoVersionStillRefuses(t *testing.T) {
+	// The contrast that makes the fallback above a decision rather than an
+	// inconsistency. The edge's build version cannot be read from the
+	// binary — "dev" is not a version — so a node that was not told one
+	// refuses a package declaring min_edge_version, even though it can
+	// state its agent's version perfectly well.
+	s, _, _, _ := seed(t)
+	t.Setenv(edgeVersionEnv, "")
+
+	body, spec, store := signedPackageTar(t, "acme-edge-unknown", "1.0.0", withMinEdgeVersion("0.1.0"))
+	s.fetch = func(context.Context, string) ([]byte, error) { return body, nil }
+	s.trust = store
+
+	got := s.Install(t.Context(), spec)
+	if got.Installed {
+		t.Fatalf("install = %+v, want a refusal — the node cannot say what edge it runs", got)
+	}
+	if !strings.Contains(got.Refused, "unknown") {
+		t.Errorf("refusal %q does not say the node's own version is the problem", got.Refused)
+	}
+}
+
+func TestANodeConfiguredWithTheAgentsOwnVersionStringStillInstalls(t *testing.T) {
+	// `pig --version` prints "0.3.0+0.87.1", and pasting that into the
+	// environment is the first thing anybody will do. If it did not parse
+	// the node would refuse packages it can host, and the refusal would
+	// blame a string that plainly is a version — the worst kind of
+	// fail-closed, where the operator is told to fix something that is
+	// already right.
+	s, _, _, _ := seed(t)
+	withPigVersion(t, "0.3.0+0.87.1")
+
+	body, spec, store := signedPackageTar(t, "acme-pig-composite", "1.0.0", withMinPigVersion("0.3.0"))
+	s.fetch = func(context.Context, string) ([]byte, error) { return body, nil }
+	s.trust = store
+
+	if got := s.Install(t.Context(), spec); !got.Installed {
+		t.Fatalf("a node configured with pig's own version string refused a package it can host: %+v", got)
+	}
+}
+
+func TestAPackageWithinTheAgentsReachInstalls(t *testing.T) {
+	// The positive half. Without it every test above passes vacuously: a
+	// store that never read the agent version at all would refuse every
+	// min_pig_version package and look exactly like a working check.
+	// This is the one that fails when the version stops being read.
+	s, _, _, _ := seed(t)
+	withPigVersion(t, "0.4.0")
+
+	body, spec, store := signedPackageTar(t, "acme-pig-ok", "1.0.0", withMinPigVersion("0.4.0"))
+	s.fetch = func(context.Context, string) ([]byte, error) { return body, nil }
+	s.trust = store
+
+	got := s.Install(t.Context(), spec)
+	if !got.Installed {
+		t.Fatalf("a package exactly at the node's agent version was refused: %+v", got)
+	}
+	want := []string{"acme-keep@1.0.0", "acme-pig-ok@1.0.0"}
+	if !equalStrings(namesOf(s.Installed()), want) {
+		t.Errorf("installed = %v, want %v", namesOf(s.Installed()), want)
+	}
+}
+
+func TestAPiGMinimumIsNotCheckedAgainstTheEdgeVersion(t *testing.T) {
+	// The wrong-way-round test. Everything here is new enough except the
+	// agent, and the edge is deliberately far ahead — so a store that fed
+	// NodeVersion into both axes would admit this package.
+	s, _, _, _ := seed(t)
+	t.Setenv(edgeVersionEnv, "9.9.9")
+	withPigVersion(t, "0.2.0")
+
+	body, spec, store := signedPackageTar(t, "acme-pig-split", "1.0.0", withMinPigVersion("0.4.0"))
+	s.fetch = func(context.Context, string) ([]byte, error) { return body, nil }
+	s.trust = store
+
+	if got := s.Install(t.Context(), spec); got.Installed {
+		t.Fatalf("install = %+v, want a refusal; the edge version is not the agent version", got)
+	}
+}
+
+func TestTheStoreRefusesAPackageNeedingANewerEdgeThanItRuns(t *testing.T) {
+	// min_edge_version is in every shipped manifest and was, until this
+	// check existed, read by nothing. This is the compatibility matrix
+	// reduced to the one edge a node can evaluate about itself.
+	s, _, _, _ := seed(t)
+	t.Setenv("OPSKEEPER_EDGE_VERSION", "0.5.0")
+
+	body, spec, store := signedPackageTar(t, "acme-needs-new-edge", "1.0.0", withMinEdgeVersion("0.9.0"))
+	s.fetch = func(context.Context, string) ([]byte, error) { return body, nil }
+	s.trust = store
+
+	got := s.Install(t.Context(), spec)
+	if got.Refused == "" {
+		t.Fatalf("install = %+v, want a refusal — this node is older than the package needs", got)
+	}
+	if !strings.Contains(got.Refused, "0.9.0") {
+		t.Errorf("refusal %q does not name the version the package needs", got.Refused)
+	}
+	// The node's own package is untouched, so a refused install is not a
+	// half-completed one.
+	if want := []string{"acme-keep@1.0.0"}; !equalStrings(namesOf(s.Installed()), want) {
+		t.Errorf("installed = %v, want the node's own package untouched", namesOf(s.Installed()))
+	}
+}
+
+func TestAPackageWithNoMinimumInstallsOnANodeOfAnyVersion(t *testing.T) {
+	// The check must not become a blanket refusal. A package that declared
+	// no minimum is exactly what every package written before the field
+	// did, and they still install.
+	s, _, _, _ := seed(t)
+	t.Setenv("OPSKEEPER_EDGE_VERSION", "0.5.0")
+
+	body, spec, store := signedPackageTar(t, "acme-no-minimum", "1.0.0", withMinEdgeVersion(`""`))
+	s.fetch = func(context.Context, string) ([]byte, error) { return body, nil }
+	s.trust = store
+
+	if got := s.Install(t.Context(), spec); !got.Installed {
+		t.Fatalf("a package with no minimum was refused: %+v", got)
+	}
+}
+
+func TestTheStoreRefusesWhenItCannotStateItsOwnVersion(t *testing.T) {
+	// A node that cannot say what it runs is guessing, and the guess that
+	// is wrong permissively installs a package the node may not host. It
+	// is a refusal rather than an admission.
+	s, _, _, _ := seed(t)
+	// Clearing the override leaves the binary's own version, which under
+	// `go test` is the untagged default — not a version this node can
+	// compare, which is the state under test.
+	t.Setenv("OPSKEEPER_EDGE_VERSION", "")
+
+	body, spec, store := signedPackageTar(t, "acme-needs-a-version", "1.0.0", withMinEdgeVersion("0.9.0"))
+	s.fetch = func(context.Context, string) ([]byte, error) { return body, nil }
+	s.trust = store
+
+	got := s.Install(t.Context(), spec)
+	if got.Refused == "" {
+		t.Fatalf("install = %+v, want a refusal when the node cannot state its version", got)
+	}
+}
+
+func TestTheVersionOverrideWinsOverTheBuildVersion(t *testing.T) {
+	// The override exists because an operator's deployment can know the
+	// version better than the binary does — a node rolled back to an older
+	// binary in place, for instance. If the build tag silently won, the
+	// setting would be a lie.
+	t.Setenv("OPSKEEPER_EDGE_VERSION", "1.2.3")
+	if got := bootSelfVersion("0.1.0"); got != "1.2.3" {
+		t.Errorf("bootSelfVersion with an override = %q, want the override", got)
+	}
+	if got := bootSelfVersion("dev"); got != "1.2.3" {
+		t.Errorf("bootSelfVersion(dev) with an override = %q, want the override", got)
+	}
+	t.Setenv("OPSKEEPER_EDGE_VERSION", "")
+	if got := bootSelfVersion("0.1.0"); got != "0.1.0" {
+		t.Errorf("bootSelfVersion with no override = %q, want the build version", got)
+	}
+	if got := bootSelfVersion("dev"); got != unsupportedEdgeVersion {
+		t.Errorf("bootSelfVersion(dev) = %q, want %q — dev is not a version",
+			got, unsupportedEdgeVersion)
+	}
+	if got := bootSelfVersion(""); got != unsupportedEdgeVersion {
+		t.Errorf("bootSelfVersion(\"\") = %q, want %q", got, unsupportedEdgeVersion)
+	}
+}
+
+func TestTheRuntimeReviewUsesTheNodesOwnVersion(t *testing.T) {
+	// The store has to reach the same conclusion the boot path does, or a
+	// package the node cannot host would be installable at runtime and
+	// refused at boot.
+	s, _, _, _ := seed(t)
+	t.Setenv("OPSKEEPER_EDGE_VERSION", "0.7.0")
+	pol, err := s.reviewPolicy()
+	if err != nil {
+		t.Fatalf("reviewPolicy: %v", err)
+	}
+	if pol.NodeVersion != "0.7.0" {
+		t.Errorf("reviewPolicy NodeVersion = %q, want the configured override", pol.NodeVersion)
+	}
 }

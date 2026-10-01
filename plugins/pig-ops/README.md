@@ -239,9 +239,12 @@ operator's release pipeline against a key their nodes are configured with.
 | Setting | Default | Effect |
 |---|---|---|
 | `OPSKEEPER_EDGE_TRUST_STORE` | *unset* | path to the publisher keys this node trusts |
+| `OPSKEEPER_EDGE_PROFILE` | *unset* | named deployment profile; sets the three policy fields at once |
 | `OPSKEEPER_EDGE_MAX_SAFETY_LEVEL` | `L1` | highest package level this host will run |
 | `OPSKEEPER_EDGE_MAX_BLAST_RADIUS` | *(none)* | widest approval this host will grant |
 | `OPSKEEPER_EDGE_PLUGIN_SCOPES` | `host.read,topology.read,alert.read` | scopes injected into packages |
+| `OPSKEEPER_EDGE_VERSION` | build version | the edge version `min_edge_version` is checked against |
+| `OPSKEEPER_EDGE_PIG_VERSION` | *unknown* | the `pig` build `min_pig_version` is checked against |
 
 The defaults are the lowest values that let the shipped read-only package
 work, which means **the L2 repair package is refused until an operator
@@ -252,6 +255,68 @@ An unrecognised value in `MAX_SAFETY_LEVEL` or `MAX_BLAST_RADIUS` is a boot
 error rather than a default. Guessing low refuses everything and looks
 like a broken plugin; guessing high hosts more than was asked for and looks
 like nothing.
+
+### Deployment profiles
+
+`OPSKEEPER_EDGE_PROFILE` names one of two profiles, which set the ceiling,
+the radius and the granted scopes **together**:
+
+| Profile | Ceiling | Radius | Install | Withholds |
+|---|---|---|---|---|
+| `finance-strong-consistency` | `L2` | `pod` | `pin` | `k8s.exec`, `db.write`, `mq.write` |
+| `saas-multitenant` | `L3` | `namespace` | `rolling` | nothing — the *radius* is the containment |
+
+They exist because a profile is a decision per deployment, not three per
+host, and because a fleet whose policy is spread across four environment
+variables is a fleet whose policy nobody can state. Two properties make
+that more than a convenience:
+
+- **A contradicting setting is a boot error, not a merge.** If
+  `MAX_SAFETY_LEVEL` says `L3` and the named profile says `L2`, the node
+  refuses to start. Half-applying a profile produces a policy nobody
+  wrote, and "which file was edited last" must not be a host's
+  authorisation source.
+- **Narrowing is refused too.** A `PLUGIN_SCOPES` list that omits scopes
+  the profile grants is an error even though it is the safe direction —
+  the failure it causes is invisible: a release installs everywhere *but
+  here*, no error is raised anywhere, and the wave simply never finishes.
+
+Restating a profile's own values is fine; it just makes the host's
+configuration self-documenting.
+
+### `min_pig_version`: the second compatibility axis
+
+`min_edge_version` answers "is the edge new enough". `min_pig_version`
+answers a different question — "is the **agent binary** inside this node
+new enough" — and they are checked separately because a fleet's edge
+builds and its `pig` builds are upgraded on different cadences.
+
+A node reads `OPSKEEPER_EDGE_PIG_VERSION`, and when that is unset it falls
+back to the PiG release the edge binary itself linked — the agent is not a
+separately-upgraded binary here, it is built from the same source and
+shipped inside the edge, so the linked release line *is* what the node
+launches. The override wins because swapping the binary on the node's PATH
+is a real deployment.
+
+The edge's own version has **no** such fallback, and the asymmetry is the
+point: a binary cannot report a tag it was not given, and `dev` is not a
+version. So an unconfigured node states its agent version and refuses to
+state its edge version, and a package declaring `min_edge_version` is
+refused until an operator says what the node runs.
+
+A node that genuinely cannot name either — an unreadable override on a
+build with no version — refuses any package declaring a minimum. That is
+the same fail-closed rule as the edge axis: the guess that is wrong in the
+permissive direction installs a package whose extensions the agent
+silently cannot load, and the symptom is a conversation with no tools
+rather than a refusal anybody can act on.
+
+`pig --version` prints a composite string (`0.3.0+0.87.1`). The part after
+`+` is the upstream Pi release it targets — build metadata, which semver
+excludes from precedence — so a node configured with the full string has
+it reduced to `0.3.0` before comparison. Both axes use dotted-numeric
+comparison, not semver: `dev` is not a version, and "cannot tell" means
+refuse.
 
 **On the trust store's absence.** A node with no trust store has been
 given no opinion about publishers, so it runs unsigned packages and logs a
@@ -278,6 +343,76 @@ security control that fails open on a typo is not a control.
 - A `pin` strategy goes out in a single wave. A package an operator chose
   deliberately and that will not be auto-upgraded does not need a canary it
   will not get twice.
+
+### How a release actually reaches a node
+
+The policy above says which nodes go first. This is the transport that
+carries them there, and it is deliberately **not** the binary upgrade
+channel.
+
+`fetch_package` / `apply_package` move hundreds of megabytes of collector
+tooling and restart the edge process. A plugin is a few hundred kilobytes
+of Go sources and Markdown, and the thing it needs is a review rather than
+a restart, so it has its own three methods on the same tunnel:
+
+| method | direction | what it does |
+|---|---|---|
+| `plugin.install` | manager → edge | fetch, verify, review, activate one package |
+| `plugin.remove` | manager → edge | take one package off, optionally only a named version |
+| `plugin.list` | manager → edge | report the active set |
+
+The node's answer is a **closed set of three**, not a bool: `installed`,
+`refused`, `failed`. Collapsing the first two is how a rollout ends up
+retrying a signature rejection against every node in the fleet; collapsing
+the last two is how it counts a capability the node does not have.
+
+On the node, `pluginStore.Install` runs the order
+**fetch → digest → extract to `.staging-*` → review → activate →
+republish**. Activation renames the package *directory*, so a node either
+has the whole package or none of it — and the previous version's directory
+is left on disk, which is what makes a rollback a restore rather than a
+re-download.
+
+**Nothing restarts.** The node rewrites the agent's package list and the
+running agent picks the change up on its next package load. Restarting
+would guarantee the package is live and would also drop every in-flight
+turn on the node, turning a rolling release into a rolling outage. A
+package that is admitted but not yet loaded is a state an operator can see
+in `agent.state`.
+
+**`Replaced` is what makes rollback a restore.** Every install answer
+carries what the package was before, when there was anything. It has to
+travel in the answer because the node cannot be asked afterwards — the only
+list it can report is the post-install one, whose entry for this name is
+the *new* version. A manager that derived "what was there before" from that
+list would restore the release it is rolling back. A node that refuses, or
+that a wave never reached, is left alone: a remove sent there would either
+do nothing or, on a node that already had the package, remove the
+operator's own installation.
+
+**`min_edge_version` is enforced on the node.** Every shipped manifest
+declares it, and the node compares its own agent version against it as the
+last step of the review — after admission, because it is the only check
+that reads a fact about the *node* rather than about the package. The
+comparison is dotted-numeric, not semver: these versions come from build
+metadata, and an untagged build reports `dev`, which is not a version. A
+node that cannot state its own version refuses a package that asks for one
+rather than assuming it is new enough — the guess that is wrong in the
+permissive direction installs a package the node cannot host, and that
+failure surfaces during an incident.
+
+**A blank answer leaves a node pending, and the wave cannot advance past
+it.** A tunnel call that times out produces an outcome with nothing in it.
+Recording that as a failure would let the release walk past a node whose
+state is unknown; recording it as installed would be a lie. Pending is the
+only state that says "we do not know yet".
+
+From the console the whole lifecycle is six admin routes —
+`POST/GET /v1/plugins/releases`, and `GET`, `advance`, `halt`, `rollback`
+on `/v1/plugins/releases/{name}`. `halt` stops the release and **leaves
+what is installed installed**; `rollback` is a separate call, because an
+operator who has just watched the canary go bad may want the release
+stopped now and the decision about the canary taken calmly.
 
 ## The courier
 
@@ -463,3 +598,37 @@ reinterpretation of the plan's intent. Writing an MCP client is a
 reasonable later decision and a new one; it is not an assumption this
 package rests on. See `docs/protoactor-evaluation.md` for the same kind of
 finding on the actor-framework question.
+
+## What the fleet can actually serve
+
+A plugin fleet and a set of incident cases are two lists written by
+different people, and nothing used to join them. The consequence is the
+quiet one: a case whose expectations name a family no package provides
+scores zero on every run, and the leaderboard reports that as the agent
+being bad rather than as the case being unpassable.
+
+`opskeeper-eval plugin-coverage` prints the join:
+
+```
+$ opskeeper-eval plugin-coverage
+  packages: 3 (opskeeper-sre-observability, opskeeper-sre-readonly, opskeeper-sre-repair)
+  ok   host/cpu-spike              served by opskeeper-sre-observability
+  GAP  pg/lock-waits               uncovered: 4
+        pg.active_sessions           pg.active_sessions is served by the control plane's pg adapter, which is not a plugin package
+        ...
+  2/20 cases fully covered by the shipped plugin fleet
+```
+
+**Two out of twenty is the honest number today**, and the gaps are all one
+kind: `pg` / `redis` / `k8s` / `mq` / `kafka` / `rabbitmq` live in
+`internal/middleware/adapter/` as control-plane BaseTools and were never
+packaged. The report names each one rather than only counting it, because
+"uncovered" alone reads as a missing package and sends a reader looking
+for one that was never supposed to exist.
+
+`--fail-on-gap` turns it into a CI gate. The mapping from a tool name to a
+capability family is declared in `internal/pkg/pluginmanifest/coverage.go`
+and read off the extensions that register the tools — not inferred from
+the name, which would get `list_database_sources` right and
+`query_change_events` wrong. Drift in either direction is a test failure:
+a shipped tool with no family, or a table entry for a tool nobody ships.

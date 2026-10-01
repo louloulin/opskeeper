@@ -79,7 +79,32 @@ var defaultPluginScopes = []domain.Scope{
 // package is refused until an operator says this host may change things —
 // a capability that has to be enabled is a capability nobody enabled by
 // accident.
+// edgeProfileEnv names the deployment profile this node belongs to.
+//
+// A profile sets the ceiling, the radius and the granted scopes together,
+// because those three are one decision per deployment rather than three
+// per host. A node that sets only one of them is a node whose policy is
+// the profile's for the fields it did not set and its own for the field it
+// did — a combination no profile describes. That is why the fields below
+// are refused when a profile is named and they disagree, rather than
+// merged.
+const edgeProfileEnv = "OPSKEEPER_EDGE_PROFILE"
+
 func nodePluginPolicy() (pluginmanifest.Policy, error) {
+	profileName := strings.TrimSpace(os.Getenv(edgeProfileEnv))
+	if profileName != "" {
+		profile, err := pluginmanifest.ProfileForName(profileName)
+		if err != nil {
+			// Refused rather than defaulted, for the same reason a bad
+			// safety level is: a node silently running the narrow profile
+			// would refuse work its fleet is entitled to, and one silently
+			// running the wide profile is the failure this whole mechanism
+			// is meant to prevent.
+			return pluginmanifest.Policy{}, fmt.Errorf("OPSKEEPER_EDGE_PROFILE: %w", err)
+		}
+		return nodeProfilePolicy(profile)
+	}
+
 	level := domain.SafetyLevel(strings.TrimSpace(os.Getenv("OPSKEEPER_EDGE_MAX_SAFETY_LEVEL")))
 	if level == "" {
 		level = domain.SafetyL1
@@ -109,6 +134,93 @@ func nodePluginPolicy() (pluginmanifest.Policy, error) {
 	}
 
 	return pluginmanifest.PolicyFor(level, radius, scopes), nil
+}
+
+// nodeProfilePolicy applies a named deployment profile, and refuses an
+// environment that contradicts it.
+//
+// The refusal is the point of the function. A profile exists so that "which
+// policy is this host running" has one answer, and it is checkable remotely.
+// A node that allowed OPSKEEPER_EDGE_MAX_SAFETY_LEVEL to override the
+// profile's ceiling would be a node whose answer depends on which of two
+// settings somebody edited last — and the setting that widens a fleet's
+// blast radius is exactly the one that would get edited during an incident
+// and never removed afterwards.
+//
+// Unset fields are fine: they mean the operator let the profile decide,
+// which is the intended way to use it.
+func nodeProfilePolicy(p pluginmanifest.Profile) (pluginmanifest.Policy, error) {
+	if raw := strings.TrimSpace(os.Getenv("OPSKEEPER_EDGE_MAX_SAFETY_LEVEL")); raw != "" {
+		if domain.SafetyLevel(raw) != p.Ceiling {
+			return pluginmanifest.Policy{}, fmt.Errorf(
+				"OPSKEEPER_EDGE_MAX_SAFETY_LEVEL=%q contradicts profile %q, whose ceiling is %s; "+
+					"unset it to let the profile decide, or change the profile",
+				raw, p.Name, p.Ceiling)
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("OPSKEEPER_EDGE_MAX_BLAST_RADIUS")); raw != "" {
+		if domain.BlastRadius(raw) != p.MaxRadius {
+			return pluginmanifest.Policy{}, fmt.Errorf(
+				"OPSKEEPER_EDGE_MAX_BLAST_RADIUS=%q contradicts profile %q, whose ceiling is %q; "+
+					"unset it to let the profile decide, or change the profile",
+				raw, p.Name, p.MaxRadius)
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("OPSKEEPER_EDGE_PLUGIN_SCOPES")); raw != "" {
+		declared := domain.Scopes{}
+		for _, scope := range splitList(raw) {
+			declared = append(declared, domain.Scope(scope))
+		}
+		if missing := scopesMissingFrom(declared, p.Granted); len(missing) > 0 {
+			// Narrowing is refused even though it is the safe direction.
+			// A host that grants less than its profile says is a host
+			// where a plugin installs everywhere but here, and the
+			// symptom is a fleet that is 90% upgraded with no error
+			// anywhere — the release simply never finishes and nobody
+			// knows why.
+			return pluginmanifest.Policy{}, fmt.Errorf(
+				"OPSKEEPER_EDGE_PLUGIN_SCOPES omits %s, which profile %q grants; "+
+					"unset it to take the profile's grant, or change the profile",
+				strings.Join(missing, ", "), p.Name)
+		}
+	}
+	return p.Policy(), nil
+}
+
+// scopesMissingFrom reports which of want are absent from have, in want's
+// order, so the message names them the way the profile does.
+func scopesMissingFrom(have, want domain.Scopes) []string {
+	var missing []string
+	for _, s := range want {
+		if !have.Has(s) {
+			missing = append(missing, string(s))
+		}
+	}
+	return missing
+}
+
+// nodeBootPolicy is the policy the boot path reviews its bundle against:
+// nodePluginPolicy plus the node's own version.
+//
+// It is a separate function rather than two lines in startNodeAgent so the
+// compatibility rule has exactly one implementation. A boot path that
+// built its own policy would be a second place for "which version am I"
+// to be answered, and the two would eventually disagree — at which point a
+// package would be admissible at boot and refused at runtime, or the
+// reverse, and nobody would be able to say which was right.
+func nodeBootPolicy(buildVersion string) (pluginmanifest.Policy, error) {
+	pol, err := nodePluginPolicy()
+	if err != nil {
+		return pluginmanifest.Policy{}, err
+	}
+	pol.NodeVersion = bootSelfVersion(buildVersion)
+	// The agent's version is read the same way and with the same
+	// fail-closed default. It is not derivable from the edge's build:
+	// they are two binaries upgraded on two cadences, and a boot path
+	// that reused one number for both would enforce a package's
+	// min_pig_version against the wrong thing.
+	pol.PigVersion = pigSelfVersion()
+	return pol, nil
 }
 
 // loadTrustStore reads the node's publisher keys, if it has any.

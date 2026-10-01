@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/MichaelKinsy/PiG/ai"
@@ -213,7 +214,7 @@ func (r *Registry) provider(ctx context.Context, id domain.ProviderID, cfg Provi
 			APIKey:     cfg.APIKey,
 			Model:      cfg.DefaultModel,
 			ProviderID: providerID,
-			BaseURL:    base,
+			BaseURL:    geminiBaseURL(base),
 		})
 	case domain.ProviderOpenAI, domain.ProviderCustom, domain.ProviderZhipu,
 		domain.ProviderDeepSeek, domain.ProviderKimi:
@@ -299,4 +300,70 @@ func parseThinkingLevel(raw string) (ai.ThinkingLevel, bool) {
 	default:
 		return ai.ThinkingOff, false
 	}
+}
+
+// geminiBaseURL makes the operator's Gemini base URL usable by PiG's native
+// Google provider.
+//
+// PiG builds "{BaseURL}/{APIVersion}/models/{model}:streamGenerateContent"
+// and, because it treats an explicit non-empty BaseURL as the operator
+// saying "I know what I am doing", it then leaves APIVersion empty unless
+// the base URL already spells the version out. So a base URL of
+// "https://generativelanguage.googleapis.com" yields a request to
+// "/models/...", which 404s — and 404s only in production, because every
+// unit test points the provider at a URL it wrote itself.
+//
+// OpsKeeper's settings and env defaults historically carried the
+// OpenAI-compatible endpoint (".../v1beta/openai"), which is a different API
+// surface entirely: the native provider would post a Gemini-shaped body to
+// an OpenAI-shaped route. Rather than depend on what an operator pasted,
+// this normalises to the native endpoint by appending the default version
+// path when the base URL does not already end in one.
+//
+// A base URL that already carries a version path is left exactly as written:
+// a proxy or a pinned API version is a deliberate choice, and rewriting it
+// would be the same class of bug in the other direction.
+func geminiBaseURL(raw string) string {
+	if raw == "" {
+		// Empty lets PiG apply its own default (generativelanguage.googleapis.com
+		// + v1beta), which is correct and needs no help from here.
+		return ""
+	}
+	trimmed := strings.TrimRight(raw, "/")
+	// The settings default and the env bootstrap both shipped the
+	// OpenAI-compatible surface (".../v1beta/openai"). That path is a
+	// different API, so posting a Gemini-shaped body there cannot work;
+	// dropping the marker turns it back into the native endpoint the
+	// provider actually speaks.
+	trimmed = strings.TrimRight(strings.TrimSuffix(trimmed, "/openai"), "/")
+	if trimmed == "" {
+		return ""
+	}
+	if hasAPIVersionSuffix(trimmed) {
+		return trimmed
+	}
+	return trimmed + "/v1beta"
+}
+
+// hasAPIVersionSuffix reports whether a base URL already names an API
+// version as its last path segment.
+func hasAPIVersionSuffix(base string) bool {
+	last := base
+	if i := strings.LastIndexByte(base, '/'); i >= 0 {
+		last = base[i+1:]
+	}
+	// "v1", "v1beta", "v1alpha" — the shape Google's API versions take.
+	if len(last) < 2 || last[0] != 'v' {
+		return false
+	}
+	rest := last[1:]
+	if rest[0] < '0' || rest[0] > '9' {
+		return false
+	}
+	for _, r := range rest[1:] {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
 }

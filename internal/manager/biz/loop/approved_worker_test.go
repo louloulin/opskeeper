@@ -77,6 +77,68 @@ func (f *fakeApprovedCritiqueLoader) LoadCritiqueDimensions(_ context.Context, _
 	return f.dims, nil
 }
 
+// fakeRemediationLoader 是 RemediationOptionLoader 的内存 fake。
+type fakeRemediationLoader struct {
+	mu      sync.Mutex
+	options []RemediationOption
+	err     error
+}
+
+func (f *fakeRemediationLoader) LoadRemediationOptions(_ context.Context, _, _ string) ([]RemediationOption, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]RemediationOption(nil), f.options...), nil
+}
+
+// fakeRemediationInvoker records every dispatch and returns a canned outcome.
+//
+// The recording is the point: a test that only checked the phase's decision
+// could not tell a real dispatch from the no-op executor this file's tests
+// used to run against, and that distinction is the whole behaviour under
+// test.
+type fakeRemediationInvoker struct {
+	mu       sync.Mutex
+	requests []RemediationRequest
+	outcome  RemediationOutcome
+	err      error
+}
+
+func (f *fakeRemediationInvoker) Invoke(_ context.Context, req RemediationRequest) (RemediationOutcome, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requests = append(f.requests, req)
+	if f.outcome.Status == "" {
+		return RemediationOutcome{
+			Status:  RemediationStatusSuccess,
+			Message: "dispatched by the test invoker",
+			Args:    map[string]any{"target": req.Option.Target},
+		}, f.err
+	}
+	return f.outcome, f.err
+}
+
+func (f *fakeRemediationInvoker) seen() []RemediationRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]RemediationRequest(nil), f.requests...)
+}
+
+// defaultRemediationOptions is what the shared worker fixture proposes: one
+// pre-approved, safe action. Every test that only cares about the severity
+// tier wants the phase to reach an advance, and giving it an eligible action
+// means that advance is now a real dispatch rather than a silent no-op.
+func defaultRemediationOptions() []RemediationOption {
+	return []RemediationOption{{
+		Action:      "pg.vacuum_analyze",
+		Target:      "pg:inc-test",
+		Risk:        "safe",
+		AutoApprove: true,
+	}}
+}
+
 func (f *fakeApprovedCritiqueLoader) Calls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -132,11 +194,34 @@ func mustApprovedWorker(t *testing.T, hook PauseHook, loader ApprovedCritiqueLoa
 		nil, // clock: use default
 		log,
 		WithApprovedCritiqueLoader(loader),
+		WithRemediationLoader(&fakeRemediationLoader{options: defaultRemediationOptions()}),
+		WithRemediationInvoker(&fakeRemediationInvoker{}),
 	)
 	if err != nil {
 		t.Fatalf("NewApprovedPhaseWorker: %v", err)
 	}
 	return w
+}
+
+// mustApprovedWorkerDeps builds a worker with full control over the dispatch
+// seam, for the tests whose subject is the dispatch itself.
+func mustApprovedWorkerDeps(t *testing.T, hook PauseHook, log *slog.Logger, opts ...RemediationOption) (*ApprovedPhaseWorker, *fakeRemediationInvoker) {
+	t.Helper()
+	if opts == nil {
+		opts = defaultRemediationOptions()
+	}
+	inv := &fakeRemediationInvoker{}
+	w, err := NewApprovedPhaseWorker(
+		hook,
+		nil,
+		log,
+		WithRemediationLoader(&fakeRemediationLoader{options: opts}),
+		WithRemediationInvoker(inv),
+	)
+	if err != nil {
+		t.Fatalf("NewApprovedPhaseWorker: %v", err)
+	}
+	return w, inv
 }
 
 // ============================================================================
@@ -257,8 +342,17 @@ func TestApprovedWorker_MutatingAdvances(t *testing.T) {
 	if dec, _ := execRes.RawOutputs[ApprovedDecisionRawKey].(string); dec != string(ApprovedExecAdvance) {
 		t.Errorf("RawOutputs[%q] = %q, want %q", ApprovedDecisionRawKey, dec, ApprovedExecAdvance)
 	}
-	if len(execRes.SideEffects) != 0 {
-		t.Errorf("SideEffects should be empty for advance, got %d", len(execRes.SideEffects))
+	// An advance now carries the dispatch it performed. The previous
+	// expectation — zero side effects for an advance — was the no-op
+	// executor written down as a requirement.
+	if len(execRes.SideEffects) != 1 {
+		t.Fatalf("SideEffects = %d, want 1 (the dispatch that was performed)", len(execRes.SideEffects))
+	}
+	if got := execRes.SideEffects[0].Detail["status"]; got != RemediationStatusSuccess {
+		t.Errorf("side effect status = %v, want %q", got, RemediationStatusSuccess)
+	}
+	if len(execRes.ToolReplay) != 1 || execRes.ToolReplay[0].Name != "pg.vacuum_analyze" {
+		t.Errorf("ToolReplay = %+v, want one entry for pg.vacuum_analyze", execRes.ToolReplay)
 	}
 
 	verdict, err := w.Verifier(context.Background(), execRes)

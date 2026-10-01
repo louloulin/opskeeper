@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
@@ -133,23 +134,124 @@ func TestAReleaseWithoutAURLIsRefused(t *testing.T) {
 	}
 }
 
-func TestAReleaseIsVisibleFromTheMomentItStarts(t *testing.T) {
-	// The plan is a complete job before the first request goes out, so a
-	// release that dies mid-dispatch still shows up in List and can still
-	// be rolled back. A release that only appeared once a wave succeeded
-	// would be one whose first node cannot be undone.
+func TestAReleaseIsVisibleBeforeItsFirstNodeIsTouched(t *testing.T) {
+	// The plan is registered before the first request goes out, so the
+	// release is a job an operator can halt and roll back from the moment
+	// it exists. A manager that registered after dispatching would have a
+	// window in which the first node has the package and nothing in List
+	// knows about it — and that node could never be rolled back, because a
+	// rollback works off the plan.
+	//
+	// The observation is made from inside the first Install, which is the
+	// only moment that distinguishes the two orderings.
 	n := newFleet(fleet25()...)
-	m := newManager(t, n)
+	obs := &observingNode{inner: n}
+	m := NewManager(fixedFleet{ids: fleet25()}, obs, nil)
+	obs.manager = m
+
 	if _, err := m.Start(context.Background(), releaseRequest("acme", "1.0.0")); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	if len(obs.visibleDuringInstall) == 0 {
+		t.Fatal("no install was observed, so the fixture proved nothing")
+	}
+	for i, visible := range obs.visibleDuringInstall {
+		if visible == 0 {
+			t.Fatalf("during install #%d the release was not in List; a node can hold the package "+
+				"while the control plane has no record of the release that put it there", i+1)
+		}
+	}
+}
+
+// observingNode records how many releases the manager knows about at the
+// moment each Install is dispatched.
+type observingNode struct {
+	inner   Node
+	manager *Manager
+	// visibleDuringInstall holds, per install, the number of releases List
+	// reported at that instant.
+	visibleDuringInstall []int
+}
+
+func (o *observingNode) Install(ctx context.Context, edgeID uint64, spec ports.PluginSpec) Outcome {
+	o.visibleDuringInstall = append(o.visibleDuringInstall, len(o.manager.List()))
+	return o.inner.Install(ctx, edgeID, spec)
+}
+
+func (o *observingNode) Remove(ctx context.Context, edgeID uint64, name, version string) Outcome {
+	return o.inner.Remove(ctx, edgeID, name, version)
+}
+
+func (o *observingNode) Restore(ctx context.Context, edgeID uint64, name, version string) Outcome {
+	return o.inner.Restore(ctx, edgeID, name, version)
+}
+
+func TestHaltDoesNotWaitForTheWaveItIsStopping(t *testing.T) {
+	// Halt is the method an operator reaches for when a canary is going
+	// wrong, and a wave is one request per node. If the mutex were held
+	// across the wave, Halt would block until every node in it had
+	// answered — an emergency stop that waits for the thing it is
+	// stopping. The test halts from inside the first node's Install, which
+	// is the only place that can tell the two designs apart, and bounds
+	// the wait so a regression fails instead of hanging.
+	n := newFleet(fleet25()...)
+	obs := &haltingNode{inner: n}
+	m := NewManager(fixedFleet{ids: fleet25()}, obs, nil)
+	obs.manager = m
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := m.Start(context.Background(), releaseRequest("acme", "1.0.0")); err != nil {
+			t.Errorf("start: %v", err)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Start never returned; Halt could not take the lock while a wave was in flight")
+	}
+	if !obs.halted {
+		t.Fatal("the halt never reached the manager")
+	}
+	// The halt is recorded, so the release cannot walk on to the next wave.
 	st, err := m.Status("acme")
 	if err != nil {
-		t.Fatalf("the release is not visible after it started: %v", err)
+		t.Fatalf("status: %v", err)
 	}
-	if st.Version != "1.0.0" || st.Plugin != "acme" {
-		t.Errorf("status = %s v%s, want acme v1.0.0", st.Plugin, st.Version)
+	if !st.Halted {
+		t.Errorf("status = %+v, want the release reported as halted", st)
 	}
+	if _, _, err := m.Advance(context.Background(), "acme"); err == nil {
+		t.Error("advance stepped over a halt that arrived mid-wave")
+	}
+}
+
+// haltingNode halts its own release from inside the first install.
+type haltingNode struct {
+	inner   Node
+	manager *Manager
+	halted  bool
+}
+
+func (h *haltingNode) Install(ctx context.Context, edgeID uint64, spec ports.PluginSpec) Outcome {
+	out := h.inner.Install(ctx, edgeID, spec)
+	if !h.halted {
+		h.halted = true
+		// Synchronous, so a deadlock shows up here rather than as a
+		// goroutine leak nobody looks at.
+		_, _ = h.manager.Halt(spec.Name, "the canary is alerting")
+	}
+	return out
+}
+
+func (h *haltingNode) Remove(ctx context.Context, edgeID uint64, name, version string) Outcome {
+	return h.inner.Remove(ctx, edgeID, name, version)
+}
+
+func (h *haltingNode) Restore(ctx context.Context, edgeID uint64, name, version string) Outcome {
+	return h.inner.Restore(ctx, edgeID, name, version)
 }
 
 func TestAnEmptyFleetIsRefused(t *testing.T) {
@@ -202,7 +304,7 @@ func TestRollbackPutsThePreviousVersionBack(t *testing.T) {
 	n := newFleet(fleet25()...)
 	m := newManager(t, n)
 	for _, id := range fleet25() {
-		n.state[id] = []ports.PluginInfo{{Name: "acme", Version: "0.2.0", Digest: "d-0.2.0"}}
+		n.seed(id, ports.PluginInfo{Name: "acme", Version: "0.2.0", Digest: "d-0.2.0"})
 	}
 	if _, err := m.Start(context.Background(), releaseRequest("acme", "0.3.0")); err != nil {
 		t.Fatalf("start: %v", err)
@@ -231,7 +333,7 @@ func TestRollbackLeavesUnreachedNodesAlone(t *testing.T) {
 	n := newFleet(fleet25()...)
 	m := newManager(t, n)
 	for _, id := range fleet25() {
-		n.state[id] = []ports.PluginInfo{{Name: "acme", Version: "0.2.0", Digest: "d-0.2.0"}}
+		n.seed(id, ports.PluginInfo{Name: "acme", Version: "0.2.0", Digest: "d-0.2.0"})
 		n.install[id] = Outcome{Status: StatusRefused, Reason: "above this node's ceiling"}
 	}
 	if _, err := m.Start(context.Background(), releaseRequest("acme", "0.3.0")); err != nil {

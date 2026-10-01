@@ -80,3 +80,36 @@ type ToolBag interface {
 	// Names returns the admitted tool names.
 	Names() []string
 }
+
+// turnToolsCtxKey carries the tool bag one turn runs with.
+type turnToolsCtxKeyT struct{}
+
+var turnToolsCtxKey = turnToolsCtxKeyT{}
+
+// WithTurnTools returns ctx carrying the bag the caller resolved for one turn.
+//
+// The bag is host policy, not kernel plumbing: which tools a turn may reach
+// depends on the caller's role, the session's persona, the live write gate,
+// the intent filter and the per-run governance wrap — all of which live
+// upstream of the kernel. A kernel that resolved its own bag would have to
+// re-derive every one of those rules, and the second derivation is where a
+// viewer's session quietly regains a mutating tool.
+//
+// So the caller that already resolved the bag hands it over, and the host's
+// deps provider (which runs inside the kernel, without access to those policy
+// objects) reads it back. A nil bag is stored as absent rather than as an
+// empty bag: "this turn has no tools" and "nobody said what the tools are"
+// are different states, and only the second is a wiring bug.
+func WithTurnTools(ctx context.Context, bag ToolBag) context.Context {
+	if bag == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, turnToolsCtxKey, bag)
+}
+
+// TurnToolsFromContext returns the bag the caller resolved, or false when
+// none was stamped.
+func TurnToolsFromContext(ctx context.Context) (ToolBag, bool) {
+	bag, ok := ctx.Value(turnToolsCtxKey).(ToolBag)
+	return bag, ok
+}

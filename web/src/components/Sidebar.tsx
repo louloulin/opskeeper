@@ -32,6 +32,7 @@ import {
   Trash2,
   Share2,
   Plug,
+  Package,
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { AgentBadge } from './AgentBadge';

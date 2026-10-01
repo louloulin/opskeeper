@@ -134,35 +134,35 @@ func Start(t *testing.T, opts ...Option) *Env {
 	env.httpBase = fmt.Sprintf("http://127.0.0.1:%d", port)
 
 	managerEnv := map[string]string{
-		"OPSKEEPER_HTTP_ADDR":         fmt.Sprintf("127.0.0.1:%d", port),
-		"OPSKEEPER_METRICS_ADDR":      fmt.Sprintf("127.0.0.1:%d", metricsPort),
-		"OPSKEEPER_TUNNEL_ADDR":       "127.0.0.1:0", // disabled in practice; never dialed from e2e
-		"OPSKEEPER_DB_DIALECT":        "mysql",
-		"OPSKEEPER_DB_DSN":            dsn,
-		"OPSKEEPER_JWT_SECRET":        "test-jwt-secret-" + randomSuffix(),
-		"OPSKEEPER_ADMIN_EMAIL":       env.AdminEmail,
-		"OPSKEEPER_ADMIN_PASSWORD":    env.AdminPassword,
-		"OPSKEEPER_PUBLIC_URL":        env.httpBase,
-		"OPSKEEPER_PROM_ENABLED":      "true",
-		"OPSKEEPER_PROM_URL":          env.prom.URL(),
-		"OPSKEEPER_PROM_QUERY_URL":    env.prom.URL(),
-		"OPSKEEPER_LOG_QUERY_URL":     "", // Loki disabled in default e2e
-		"OPSKEEPER_TRACE_QUERY_URL":   "",
-		"OPSKEEPER_OPENAI_API_KEY":    "fake-test-key",
-		"OPSKEEPER_OPENAI_BASE_URL":   env.llm.URL() + "/v1",
-		"OPSKEEPER_OPENAI_MODEL":      "fake-gpt",
-		"OPSKEEPER_ANTHROPIC_API_KEY": "fake-test-key",
-		"OPSKEEPER_ANTHROPIC_BASE_URL": env.llm.URL(),
-		"OPSKEEPER_ANTHROPIC_MODEL":   "claude-fake",
-		"OPSKEEPER_ZHIPU_API_KEY":     "fake-test-key",
-		"OPSKEEPER_ZHIPU_BASE_URL":    env.llm.URL() + "/v1",
-		"OPSKEEPER_ZHIPU_MODEL":       "glm-fake",
+		"OPSKEEPER_HTTP_ADDR":           fmt.Sprintf("127.0.0.1:%d", port),
+		"OPSKEEPER_METRICS_ADDR":        fmt.Sprintf("127.0.0.1:%d", metricsPort),
+		"OPSKEEPER_TUNNEL_ADDR":         "127.0.0.1:0", // disabled in practice; never dialed from e2e
+		"OPSKEEPER_DB_DIALECT":          "mysql",
+		"OPSKEEPER_DB_DSN":              dsn,
+		"OPSKEEPER_JWT_SECRET":          "test-jwt-secret-" + randomSuffix(),
+		"OPSKEEPER_ADMIN_EMAIL":         env.AdminEmail,
+		"OPSKEEPER_ADMIN_PASSWORD":      env.AdminPassword,
+		"OPSKEEPER_PUBLIC_URL":          env.httpBase,
+		"OPSKEEPER_PROM_ENABLED":        "true",
+		"OPSKEEPER_PROM_URL":            env.prom.URL(),
+		"OPSKEEPER_PROM_QUERY_URL":      env.prom.URL(),
+		"OPSKEEPER_LOG_QUERY_URL":       "", // Loki disabled in default e2e
+		"OPSKEEPER_TRACE_QUERY_URL":     "",
+		"OPSKEEPER_OPENAI_API_KEY":      "fake-test-key",
+		"OPSKEEPER_OPENAI_BASE_URL":     env.llm.URL() + "/v1",
+		"OPSKEEPER_OPENAI_MODEL":        "fake-gpt",
+		"OPSKEEPER_ANTHROPIC_API_KEY":   "fake-test-key",
+		"OPSKEEPER_ANTHROPIC_BASE_URL":  env.llm.URL(),
+		"OPSKEEPER_ANTHROPIC_MODEL":     "claude-fake",
+		"OPSKEEPER_ZHIPU_API_KEY":       "fake-test-key",
+		"OPSKEEPER_ZHIPU_BASE_URL":      env.llm.URL() + "/v1",
+		"OPSKEEPER_ZHIPU_MODEL":         "glm-fake",
 		"OPSKEEPER_ALERT_EVAL_INTERVAL": "30s",
 		// Graph kernel is the live runtime (memory: chat quality
 		// 2026-05-25). The legacy kernel doesn't build chatruntime, so
 		// investigator / agent paths look "not wired". Default the
 		// harness to the same kernel production runs on.
-		"OPSKEEPER_AGENT_KERNEL": "graph",
+		"OPSKEEPER_AGENT_KERNEL": "pig",
 		// Tell the chatruntime loader where to find the agent + skill
 		// markdown files. The manager binary is spawned in a tempdir so
 		// the default `./agents` / `./skills` relative paths don't

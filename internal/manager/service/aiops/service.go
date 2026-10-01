@@ -12,11 +12,17 @@
 //
 //   - legacyAgent: the pre-PR-9 agent.Agent for-loop kernel.
 //   - runtime: the new chatruntime.Runtime graph kernel.
-//   - kernel: "legacy" | "graph" — picks which kernel runs.
+//   - kernel: "legacy" | "graph" | "pig" — picks which kernel runs. Both
+//     chatruntime values now run the PiG loop; "graph" is the retired
+//     spelling and is accepted for a deployment whose env predates the
+//     rename.
 //
 // Default = "legacy" so the cutover is opt-in via OPSKEEPER_AGENT_KERNEL.
 // The HTTP handler is unchanged: the SSE frame names emitted by both
 // kernels are byte-equal so the SPA round-trips without changes.
+//
+// The eino ReAct graph that used to sit under chatruntime.Runtime is gone;
+// the runtime drives the PiG kernel directly. Nothing here rebuilds it.
 package aiops
 
 import (
@@ -47,16 +53,26 @@ const (
 	RoleViewer = "viewer"
 )
 
-// Kernel enumerates the two agent kernels the service can dispatch
-// to. PR-9 of ships both side-by-side; default is legacy.
+// Kernel enumerates the agent kernels the service can dispatch to.
+// The three ship side-by-side; default is legacy.
 type Kernel string
 
 const (
 	// KernelLegacy is the pre-PR-9 agent.Agent for-loop (agent.go).
 	KernelLegacy Kernel = "legacy"
-	// KernelGraph is the new eino + chatruntime + graph kernel
-	// (PR-1..PR-7 of).
+	// KernelGraph is the retired spelling. It used to select an eino ReAct
+	// graph under chatruntime.Runtime; eino is gone, so the value now
+	// selects the same loop as KernelPig. It is kept because an env var
+	// read at boot cannot be told a rename: silently mapping it to the
+	// legacy loop would take every graph deployment back to the pre-2.0
+	// agent, which is a far larger behaviour change than the operator asked
+	// for.
 	KernelGraph Kernel = "graph"
+	// KernelPig is the same chatruntime.Runtime driven by the PiG agent
+	// kernel (core/pig/pigagent) instead of the eino graph. It is the
+	// end state of the 2.0 plan: same runtime, same SSE frames, no eino
+	// in the loop.
+	KernelPig Kernel = "pig"
 )
 
 // ParseKernel normalises a string env value into a Kernel. Empty or
@@ -65,9 +81,19 @@ func ParseKernel(s string) Kernel {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "graph":
 		return KernelGraph
+	case "pig":
+		return KernelPig
 	default:
 		return KernelLegacy
 	}
+}
+
+// UsesChatRuntime reports whether the kernel runs through
+// chatruntime.Runtime. Both the graph and pig kernels do; the legacy
+// for-loop does not. Callers branch on this instead of enumerating the
+// values, so a fourth runtime-backed kernel does not need a second edit.
+func (k Kernel) UsesChatRuntime() bool {
+	return k == KernelGraph || k == KernelPig
 }
 
 // Service bundles the agent + session repo. Handlers call into it with the
@@ -381,14 +407,18 @@ func (s *Service) runWithKernel(ctx context.Context, caller Caller, sessionID st
 		}
 	}
 
-	// Graph kernel — only when explicitly enabled AND wired.
-	if s.kernel == KernelGraph && s.runtime != nil {
+	// Runtime-backed kernel (graph or pig) — only when explicitly enabled
+	// AND wired. Both run through chatruntime.Runtime; which loop is under
+	// it is the runtime's own business (Config.Kernel), so this branch does
+	// not enumerate them.
+	if s.kernel.UsesChatRuntime() && s.runtime != nil {
 		return s.runGraph(ctx, sess, content, emit, opts)
 	}
-	// Legacy fallback. Logs once if kernel=graph but runtime is nil
-	// — ops misconfig that we want to be visible.
-	if s.kernel == KernelGraph && s.runtime == nil && s.log != nil {
-		s.log.Warn("aiops kernel=graph but runtime is nil — falling back to legacy agent",
+	// Legacy fallback. Logs once if a runtime-backed kernel was selected but
+	// the runtime is nil — ops misconfig that we want to be visible.
+	if s.kernel.UsesChatRuntime() && s.runtime == nil && s.log != nil {
+		s.log.Warn("aiops kernel selected but runtime is nil — falling back to legacy agent",
+			slog.String("kernel", string(s.kernel)),
 			slog.String("session_id", sess.ID))
 	}
 	if s.legacyAgent == nil {

@@ -222,9 +222,14 @@ func (b *AgentBridge) Register(c tunnel.Client) {
 // StartEvents subscribes to the agent's stream and relays frames to the
 // manager until ctx ends.
 //
-// It returns immediately; the relay runs on its own goroutine. Returning an
-// error here would be wrong for a node whose agent is simply not up yet —
-// that is reported by agent.state, not by a failure to subscribe.
+// It returns immediately: the subscription and the wait live on their own
+// goroutine. That is not a convenience, it is the contract callers are
+// written against — Agent.Run calls this from the middle of its startup
+// sequence, and a version that blocked here stranded everything below it
+// (the changewatcher, the upgrade sentinel, eg.Wait and therefore graceful
+// shutdown) while the node kept heartbeating and looked healthy. Nothing
+// is reported as an error for an agent that is not up yet: that is
+// agent.state's answer, not a failure to subscribe.
 func (b *AgentBridge) StartEvents(ctx context.Context) {
 	proc, err := b.source.Process()
 	if err != nil {
@@ -233,8 +238,10 @@ func (b *AgentBridge) StartEvents(ctx context.Context) {
 		// is simply nothing to relay yet.
 		return
 	}
-	_ = proc.OnEvent(b.relay)
-	<-ctx.Done()
+	go func() {
+		_ = proc.OnEvent(b.relay)
+		<-ctx.Done()
+	}()
 }
 
 // SetEdgeID updates the edge id frames are stamped with. The manager

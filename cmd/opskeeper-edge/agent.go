@@ -98,7 +98,11 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 	// that scrolls past: starting the agent without it would produce a
 	// node that answers confidently and cannot see half the host.
 	trust := loadTrustStore()
-	policy, err := nodePluginPolicy()
+	// The boot bundle is reviewed against the same rule the runtime path
+	// uses, including the version check: a node whose own bundle declares
+	// a min_edge_version it does not meet should say so at boot — loudly,
+	// once — rather than confidently serving a package it cannot host.
+	policy, err := nodeBootPolicy(version)
 	if err != nil {
 		return nil, nil, fmt.Errorf("edge agent policy: %w", err)
 	}

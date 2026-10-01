@@ -21,9 +21,8 @@ import (
 //  3. for each active skill, a `[能力: <name>]` header + skill PromptBody
 //
 // Pure string assembly — no per-turn system-reminder injection. That
-// happens in the graph layer (graph.buildSystemReminder is called by
-// graph.assembleMessages on every turn so the block survives long-
-// session attention drift), not here.
+// happens in the host turn (buildSystemReminder is re-applied on every
+// turn so the block survives long-session attention drift), not here.
 // coordinatorToolRouting steers the coordinator to the RIGHT tool family so it
 // doesn't (a) rabbit-hole through k8s tools for an opskeeper-device question, or
 // (b) fall back to an uninstalled `kubectl` for a genuine k8s question instead
@@ -54,8 +53,7 @@ func ComposeSystemPrompt(basePrompt string, activeSkills []*Skill, agentProfile 
 			// — the per-turn injection wraps this in
 			// <system-reminder>...</system-reminder>; here we just plant
 			// it once into the system prompt as the persona-level
-			// constant. The graph layer will additionally re-inject
-			// per-turn.
+			// constant. The host additionally re-injects it per-turn.
 			parts = append(parts, "<critical-reminder>\n"+reminder+"\n</critical-reminder>")
 		}
 	}

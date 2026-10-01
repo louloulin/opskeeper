@@ -7,7 +7,7 @@
 //   - Leaderboard 实例 per test（不共享状态）
 //   - 用 HeuristicJudge（无外部 LLM 依赖）— 离线可跑
 //   - Injector 用 mock：返回预定义结果，跳过真实注入（fault-injector 是 skeleton）
-//   - 真实 case.yaml 从 internal/harness/cases/ 加载（20 个黄金事故）
+//   - 真实 case.yaml 从 core/harness/cases/ 加载（20 个黄金事故）
 //
 // 覆盖：
 //   - 正常 case 跑通：load → run（mock inject + mock agent）→ judge → record
@@ -24,17 +24,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/harness/judge"
-	"github.com/vincent-wuhan/opskeeper/internal/harness/leaderboard"
-	"github.com/vincent-wuhan/opskeeper/internal/harness/schema"
+	"github.com/vincent-wuhan/opskeeper/core/harness/judge"
+	"github.com/vincent-wuhan/opskeeper/core/harness/leaderboard"
+	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
 )
 
 // harnessCasesDir 是 20 个黄金事故的根目录。
 // 测试运行在项目根目录（go test ./tests/e2e/...），所以相对路径可解析。
 func harnessCasesDir(t *testing.T) string {
 	t.Helper()
-	// 解析 internal/harness/cases 的相对路径
-	abs, err := filepath.Abs("../../internal/harness/cases")
+	// 解析 core/harness/cases 的相对路径
+	abs, err := filepath.Abs("../../core/harness/cases")
 	if err != nil {
 		t.Fatalf("resolve cases dir: %v", err)
 	}

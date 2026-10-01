@@ -18,11 +18,41 @@ import (
 // would be worthless, so the tests below are written to fail if the order
 // changes.
 
+// testNodeVersion is what the fixtures report as the node's own agent
+// version. It is above every min_edge_version the test helpers write
+// (0.1.0), so a test about ordering is not also a test about
+// compatibility — and a node that reports no version at all is asserted on
+// its own, in version_test.go.
+const testNodeVersion = "0.8.0"
+
+// testPigVersion is the agent build the fixtures model. It is spelled
+// like a PiG release so a package that declares a min_pig_version can be
+// written without the test also being about which number this is.
+const testPigVersion = "0.3.0"
+
 // signingPolicy is a policy that admits the L1 packages the test helpers
 // build, so a test about ordering is not also a test about admission.
 func signingPolicy() Policy {
-	return PolicyFor(domain.SafetyL3, domain.RadiusCluster,
+	return testPolicy(domain.SafetyL3, domain.RadiusCluster,
 		domain.Scopes{domain.ScopeHostRead, domain.ScopeHostWrite})
+}
+
+// testPolicy is PolicyFor plus the node's own agent version.
+//
+// Every real node has one, and every package the helpers build asks for
+// min_edge_version 0.1.0 — so a fixture that left the version empty would
+// be refused for a reason the test is not about. The fail-closed default
+// for an unknown version is asserted on its own in version_test.go.
+func testPolicy(max domain.SafetyLevel, radius domain.BlastRadius, scopes domain.Scopes) Policy {
+	pol := PolicyFor(max, radius, scopes)
+	pol.NodeVersion = testNodeVersion
+	// The agent's version is a different number from the edge's, and a
+	// real node states both. The fixture helpers write no
+	// min_pig_version, so this is not load-bearing for them — it is here
+	// so a test that adds one is testing the rule rather than a fixture
+	// that forgot to model the node.
+	pol.PigVersion = testPigVersion
+	return pol
 }
 
 // signedPackage builds a valid, signed L1 package and returns it with a
@@ -108,7 +138,7 @@ func TestAPackageExceedingTheNodePolicyIsRefusedAtAdmissionNotSignature(t *testi
 		t.Fatalf("WriteTo: %v", err)
 	}
 
-	d := Review(root, trustFor(t, s), PolicyFor(domain.SafetyL1, domain.RadiusNone,
+	d := Review(root, trustFor(t, s), testPolicy(domain.SafetyL1, domain.RadiusNone,
 		domain.Scopes{domain.ScopeHostRead}))
 	if d.Allowed {
 		t.Fatal("an L3 package was installed on a node whose ceiling is L1")
@@ -130,7 +160,7 @@ func TestTheSignatureIsCheckedBeforeAdmissionNotTheOtherWayRound(t *testing.T) {
 	root := t.TempDir()
 	writeManifest(t, root, "acme-repair", "1.0.0", "L3", "write")
 
-	d := Review(root, NewTrustStore(), PolicyFor(domain.SafetyL3, domain.RadiusCluster,
+	d := Review(root, NewTrustStore(), testPolicy(domain.SafetyL3, domain.RadiusCluster,
 		domain.Scopes{domain.ScopeHostRead, domain.ScopeHostWrite}))
 	if d.Allowed {
 		t.Fatal("an unsigned L3 package was installed on a permissive node")
@@ -265,7 +295,7 @@ func TestAMissingScopeIsNamedRatherThanSummarised(t *testing.T) {
 	// not actionable; the missing names are.
 	root, store := signedPackage(t, "acme-probe")
 
-	d := Review(root, store, PolicyFor(domain.SafetyL3, domain.RadiusCluster,
+	d := Review(root, store, testPolicy(domain.SafetyL3, domain.RadiusCluster,
 		domain.Scopes{domain.ScopeTopologyRO}))
 	if d.Allowed {
 		t.Fatal("a package was admitted without the scopes it declares")
@@ -350,4 +380,158 @@ func copyTree(t *testing.T, src, dst string) {
 			t.Fatalf("write %s: %v", d, err)
 		}
 	}
+}
+
+func TestANodeThatCannotStateItsVersionRefusesAtTheCompatibilityStep(t *testing.T) {
+	// The review is where this lands, so this is where it has to be
+	// locked. A package asking for a minimum and a node that has not said
+	// what it runs is the fail-closed case: the node would be guessing,
+	// and the guess that is wrong in the permissive direction installs a
+	// package the node cannot host.
+	//
+	// The step is asserted, not just the refusal, because "refused" alone
+	// would be satisfied by catching it at admission — which would send an
+	// operator to look at the node's policy ceiling for a problem that is
+	// about the node's binary.
+	root, store := signedPackage(t, "acme-probe")
+
+	pol := PolicyFor(domain.SafetyL3, domain.RadiusCluster,
+		domain.Scopes{domain.ScopeHostRead, domain.ScopeHostWrite})
+	// No NodeVersion: this node cannot say what it is.
+	d := Review(root, store, pol)
+	if d.Allowed {
+		t.Fatal("a node with no version admitted a package that declares a minimum")
+	}
+	if d.Step != StepVersion {
+		t.Errorf("step = %q, want %q", d.Step, StepVersion)
+	}
+	if !strings.Contains(d.Reason, "min_edge_version") && !strings.Contains(d.Reason, "0.1.0") {
+		t.Errorf("reason %q does not name the package's requirement, so an operator cannot act on it", d.Reason)
+	}
+}
+
+func TestTheSamePackageIsAdmittedOnceTheNodeCanStateItsVersion(t *testing.T) {
+	// The other half of the pair, so the test above cannot pass by
+	// refusing everything. The only difference between the two is that
+	// this node reports a version.
+	root, store := signedPackage(t, "acme-probe")
+
+	pol := PolicyFor(domain.SafetyL3, domain.RadiusCluster,
+		domain.Scopes{domain.ScopeHostRead, domain.ScopeHostWrite})
+	pol.NodeVersion = testNodeVersion
+	if d := Review(root, store, pol); !d.Allowed {
+		t.Fatalf("a node that states its version refused a package it can host: %s", d)
+	}
+}
+
+// ---------------------------------------------------------------------
+// the agent build is a second, independent axis
+// ---------------------------------------------------------------------
+
+func TestANodeThatCannotStateItsPiGVersionRefusesAtTheAgentStep(t *testing.T) {
+	// The step matters. Both version refusals are answered by upgrading a
+	// binary, and they are different binaries — an agent-axis refusal
+	// reported as the edge step would have an operator roll the edge
+	// package to fix a node whose problem is the `pig` on its PATH.
+	root, store := signedPackageWithMinPig(t, "acme-pigprobe", "0.4.0")
+
+	pol := testPolicy(domain.SafetyL3, domain.RadiusCluster,
+		domain.Scopes{domain.ScopeHostRead, domain.ScopeHostWrite})
+	pol.PigVersion = "" // this node cannot say what its agent is
+
+	d := Review(root, store, pol)
+	if d.Allowed {
+		t.Fatal("a node with no PiG version admitted a package that declares a min_pig_version")
+	}
+	if d.Step != StepAgentVersion {
+		t.Errorf("step = %q, want %q — an operator cannot tell which binary to upgrade from %q",
+			d.Step, StepAgentVersion, d.Step)
+	}
+	if !strings.Contains(d.Reason, "0.4.0") {
+		t.Errorf("reason %q does not name the package's requirement", d.Reason)
+	}
+}
+
+func TestAPiGUpdateAloneAdmitsThePackage(t *testing.T) {
+	// The other half of the pair, and the property that proves the axes
+	// are independent: the edge version is unchanged and only the agent
+	// moved, and that is enough. A check that read NodeVersion on both
+	// axes would still refuse here.
+	root, store := signedPackageWithMinPig(t, "acme-pigprobe2", "0.4.0")
+
+	pol := testPolicy(domain.SafetyL3, domain.RadiusCluster,
+		domain.Scopes{domain.ScopeHostRead, domain.ScopeHostWrite})
+	pol.NodeVersion = testNodeVersion // unchanged and already new enough
+	pol.PigVersion = ""               // still unknown: refused
+	if d := Review(root, store, pol); d.Allowed {
+		t.Fatal("precondition: the unknown agent version must be refused first")
+	}
+	pol.PigVersion = "0.5.0" // only the agent moved
+	if d := Review(root, store, pol); !d.Allowed {
+		t.Fatalf("an agent upgrade alone did not admit the package: %s", d)
+	}
+}
+
+func TestAnEdgeUpgradeAloneDoesNotClearTheAgentStep(t *testing.T) {
+	// The mirror image, and the one that catches the tempting
+	// simplification of using the edge's version for both checks.
+	root, store := signedPackageWithMinPig(t, "acme-pigprobe3", "0.4.0")
+
+	pol := testPolicy(domain.SafetyL3, domain.RadiusCluster,
+		domain.Scopes{domain.ScopeHostRead, domain.ScopeHostWrite})
+	pol.NodeVersion = "9.9.9" // the edge is far ahead
+	pol.PigVersion = "0.3.0"  // and the agent is not
+	d := Review(root, store, pol)
+	if d.Allowed {
+		t.Fatal("a new edge admitted a package the node's agent is too old to host")
+	}
+	if d.Step != StepAgentVersion {
+		t.Errorf("step = %q, want %q", d.Step, StepAgentVersion)
+	}
+}
+
+// signedPackageWithMinPig builds a signed package whose install block
+// declares a min_pig_version.
+//
+// It writes the field before signing rather than editing afterwards,
+// because the signature covers the whole tree: a manifest edited after
+// signing would be refused at the signature step, and the test would be
+// asserting the wrong rule.
+func signedPackageWithMinPig(t *testing.T, name, minPig string) (string, *TrustStore) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	manifest := `apiVersion: opskeeper.io/v1
+kind: Plugin
+metadata:
+  name: ` + name + `
+  version: 1.0.0
+  vendor: acme
+  homepage: https://example.invalid/` + name + `
+spec:
+  targets: [edge]
+  safety_level: L1
+  capabilities: [read]
+  tools:
+    - {name: host_probe_tcp, class: read}
+  required_scopes:
+    - host.read
+  audit: {emits: true, mutates: false}
+  approval: {required: false}
+  install: {strategy: rolling, min_edge_version: 0.1.0, min_pig_version: ` + minPig + `}
+`
+	write(t, filepath.Join(root, ManifestFile), manifest)
+	write(t, filepath.Join(root, "extensions", "tool", "tools.go"), "package tool\n\n// generated\n")
+
+	s := signerFor(t, "acme-2026")
+	env, err := s.Sign(root)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if _, err := env.WriteTo(root); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	return root, trustFor(t, s)
 }

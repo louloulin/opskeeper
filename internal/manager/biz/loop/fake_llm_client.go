@@ -5,7 +5,9 @@
 // docs/superpowers/specs/2026-08-12-llm-worker-integration-design.md §9.1）。
 //
 // 选 llm.Client.Chat 作为被 stub 的接口有两个原因：
-//  1. LLMJudge 已经直接依赖 llm.Client.Chat（internal/harness/judge/llm_judge.go）
+//  1. LLMJudge 需要"要一次补全"这个能力。它现在只依赖 core/ports.Completer
+//     （core/harness/judge/llm_judge.go），而 llm.Completer 把 Client 适配成
+//     那个端口——所以这个 fake 仍然能喂给它，适配层就在 llm 这一侧。
 //  2. internal/pkg/llm.Client 是当前 LLM 抽象的"最底层 + 最稳定"接口，
 //     LLMCaller / 5 phase worker 通过构造注入拿到它，单测只需替换 Client。
 //

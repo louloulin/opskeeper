@@ -18,6 +18,17 @@ type AgentRequest struct {
 	Role string
 	// UserText is the turn verbatim, after any mention rendering.
 	UserText string
+	// History is the conversation BEFORE this turn, oldest first.
+	//
+	// It exists on the request rather than being replayed out of the host's
+	// session store by the kernel, because the transcript is policy, not
+	// plumbing: the host has already applied history-window limits, dropped
+	// superseded tool batches, and redacted what a viewer must not see. A
+	// kernel that read the session itself would answer a different question
+	// from the one the host composed.
+	//
+	// An empty History is a first turn, not an error.
+	History []AgentMessage
 	// Selection pins the model for this turn. An unpinned selection
 	// resolves to the cluster default at call time.
 	Selection domain.ModelSelection
@@ -36,6 +47,61 @@ type AgentRequest struct {
 	// MaxIterations caps tool rounds for the turn. Zero means the kernel
 	// default applies.
 	MaxIterations int
+}
+
+// AgentMessage is one prior turn in the conversation, expressed in the
+// vocabulary every kernel already has.
+//
+// The shape is deliberately minimal. Tool definitions, arguments and results
+// are carried as opaque JSON strings rather than typed structures: the host
+// stores what the provider said, and a kernel that needs a richer form
+// decodes it. Typing them here would force every kernel to agree on a
+// provider wire format, which is precisely the coupling the kernel boundary
+// exists to prevent.
+//
+// Exactly one of the role-specific fields is set. A message with none set
+// carries no information and a kernel should skip it — silently dropping a
+// malformed entry is safer than failing a turn, because the entry came from
+// persisted history the operator cannot repair from the console.
+type AgentMessage struct {
+	// Role is "user" | "assistant" | "tool".
+	Role string
+	// Content is the text of the message. Empty is legal for an assistant
+	// turn that only requested tool calls.
+	Content string
+	// ToolCalls are the invocations an assistant turn requested.
+	ToolCalls []AgentToolCall
+	// ToolCallID identifies which assistant tool call a "tool" message
+	// answers. Required for role "tool": without it the result cannot be
+	// attached to its request and the provider rejects the transcript.
+	ToolCallID string
+	// ToolName is the tool a "tool" message reports on. Informational —
+	// provider correlation uses ToolCallID.
+	ToolName string
+
+	// Model and Usage annotate an assistant message the kernel observed
+	// accounting for. Both are optional and both are ignored on any other
+	// role.
+	//
+	// They ride here rather than on the turn result because the console
+	// shows provenance per message ("the answer above came from glm-4-plus")
+	// and the usage ledger sums per row. A kernel that observed them and
+	// could not hand them on would force the host to re-ask the provider or
+	// to show every turn as unattributed.
+	Model string
+	Usage *Usage
+}
+
+// AgentToolCall is one tool invocation an assistant asked for.
+type AgentToolCall struct {
+	// ID is the provider-assigned call id, echoed by the answering tool
+	// message.
+	ID string
+	// Name is the tool's wire name.
+	Name string
+	// Arguments is the raw JSON object the model produced, passed through
+	// unmodified.
+	Arguments []byte
 }
 
 // TurnResult is the settled outcome of one turn.
@@ -106,6 +172,10 @@ type AgentDeps struct {
 	// Budget is consulted before each model call. Returning false ends the
 	// turn with TurnToolBudget.
 	Budget BudgetChecker
+	// Recorder observes each admitted tool call from admission to settle.
+	// It is how the console's tool table is populated without the kernel
+	// knowing its schema. Optional: nil records nothing.
+	Recorder ToolCallRecorder
 }
 
 // BudgetChecker reports whether spend may continue.
@@ -131,6 +201,13 @@ var ErrSinkClosed = errors.New("ports: event sink is closed")
 // causes the kernel to drop frames and bump the session's Seq gap rather
 // than stall the loop: a stalled consumer must never hold a provider
 // connection open.
+//
+// Emit may be called concurrently. A kernel runs the sibling tool calls of
+// one assistant turn in parallel, so several goroutines reach the sink at
+// once; an implementation that appends to a bare slice will lose frames or
+// trip the race detector. Frame ORDER is the mapper's responsibility (it
+// hands out the sequence numbers under its own lock), so a sink must not
+// try to serialise for that reason — it only has to be safe to call.
 type EventSink interface {
 	// Emit delivers one frame. Returning an error ends the turn: a
 	// consumer that has gone away cancels the work it asked for.

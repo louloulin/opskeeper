@@ -1,7 +1,9 @@
 // Package llm is the real OpenAI-backed chat/tool-calling client.
 //
 // Red line: no provider abstraction — interface follows OpenAI's
-// shape. SDK is github.com/sashabaranov/go-openai.
+// shape. The wire format is owned in wire.go; no LLM SDK is imported, so
+// nothing between this package and the provider can reject a request the
+// caller built (see wire.go for why that matters).
 //
 // Red line: Prom metric labels MUST NOT contain user_id / org_id /
 // session_id. Allowed labels: model, kind, result.
@@ -18,8 +20,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -170,7 +170,7 @@ func NewWithResolver(cfg Config, resolver Resolver, budget BudgetChecker, reg *p
 	}
 
 	// With no resolver and no env key, fall back to noop so callers see a
-	// clean ErrNoAPIKey instead of a confusing 401 from the OpenAI SDK.
+	// clean ErrNoAPIKey instead of a confusing 401 from the provider.
 	if resolver == nil && cfg.APIKey == "" {
 		log.Warn("OPENAI_API_KEY empty and no Resolver wired — returning noop client; Chat will fail with ErrNoAPIKey")
 		return &noopClient{}
@@ -186,6 +186,11 @@ func NewWithResolver(cfg Config, resolver Resolver, budget BudgetChecker, reg *p
 	}
 }
 
+// openaiClient is the OpenAI-compatible client. It keeps the name the
+// removed SDK's wrapper had (rather than e.g. httpClient) because the
+// sibling files — router.go, budget_callback.go — refer to it by name in
+// their own comments, and a rename would leave those comments pointing at
+// a type that no longer exists.
 type openaiClient struct {
 	cfg      Config
 	resolver Resolver
@@ -193,11 +198,13 @@ type openaiClient struct {
 	metrics  *metrics
 	log      *slog.Logger
 
-	// SDK clients are keyed by (apiKey, baseURL) so a settings change
-	// transparently swaps the underlying *openai.Client without us having
-	// to rebuild it on every Chat.
-	sdkMu    sync.Mutex
-	sdkCache map[sdkKey]*openai.Client
+	// Endpoints are keyed by (apiKey, baseURL) so a settings change
+	// transparently swaps the credential and the URL without us having to
+	// rebuild anything on every Chat. The URL and the *http.Client are
+	// cached as one value on purpose: caching only the client would let a
+	// key rotation keep POSTing to the previous gateway's address.
+	ephMu    sync.Mutex
+	ephCache map[wireKey]wireEndpoint
 
 	// Resolver TTL cache so hot paths don't pay the DB round-trip per call.
 	resolveTTL time.Duration
@@ -216,10 +223,27 @@ type openaiClient struct {
 	noSampling   map[string]bool
 }
 
-type sdkKey struct {
+// wireKey identifies one endpoint. apiKey participates so a rotated key
+// builds a fresh entry; baseURL participates because the URL a call posts
+// to is derived from it, and a stale URL would silently keep talking to
+// the previous gateway.
+type wireKey struct {
 	apiKey  string
 	baseURL string
 }
+
+// wireEndpoint is a resolved (URL, client) pair, returned together because
+// a caller holding only the client could not tell which host it reaches.
+type wireEndpoint struct {
+	url    string
+	client *http.Client
+}
+
+// defaultBaseURL is the address used when neither the resolver nor the
+// bootstrap config names one. It matches the OpenAI v1 endpoint the removed
+// SDK defaulted to, so an operator who had not configured a base URL keeps
+// talking to the same place after the swap.
+const defaultBaseURL = "https://api.openai.com/v1"
 
 type resolvedCreds struct {
 	apiKey  string
@@ -260,47 +284,46 @@ func (c *openaiClient) effectiveCreds(ctx context.Context) (string, string, stri
 	return apiKey, model, baseURL, nil
 }
 
-// sdkFor returns a cached *openai.Client for the (apiKey, baseURL) pair.
-// The cache survives forever (it tops out at a handful of entries even
-// across a year of edits) but the value count is small enough to ignore.
+// endpointFor returns the cached URL and HTTP client for the (apiKey,
+// baseURL) pair. The cache tops out at a handful of entries even across a
+// year of settings edits, so it is never evicted.
 //
-// For Zhipu (open.bigmodel.cn) we install a custom HTTP transport that
-// rewrites Authorization to a freshly-signed JWT on every request
-// (raw <id>.<secret>) gets rejected by Zhipu's v4 endpoints with
-// 401). The SDK's static apiKey field becomes irrelevant — our
-// transport always overrides — but we still feed it the raw key so the
-// (apiKey, baseURL) cache key stays stable across calls.
-func (c *openaiClient) sdkFor(apiKey, baseURL string) *openai.Client {
+// For Zhipu (open.bigmodel.cn) the client carries a transport that rewrites
+// Authorization to a freshly-signed JWT on every request. Zhipu's v4
+// endpoints reject the raw <id>.<secret> key with a 401, so the transport —
+// not the static header set in wire.go — is what makes Zhipu work. The
+// (apiKey, baseURL) key therefore also decides *which transport* a call
+// uses, which is why a rotated key must miss the cache rather than reuse
+// the previous client.
+func (c *openaiClient) endpointFor(apiKey, baseURL string) wireEndpoint {
 	baseURL = normalizeOpenAIBaseURL(baseURL)
-	k := sdkKey{apiKey: apiKey, baseURL: baseURL}
-	c.sdkMu.Lock()
-	defer c.sdkMu.Unlock()
-	if c.sdkCache == nil {
-		c.sdkCache = make(map[sdkKey]*openai.Client)
+	if baseURL == "" {
+		baseURL = defaultBaseURL
 	}
-	if sdk, ok := c.sdkCache[k]; ok {
-		return sdk
+	k := wireKey{apiKey: apiKey, baseURL: baseURL}
+	c.ephMu.Lock()
+	defer c.ephMu.Unlock()
+	if c.ephCache == nil {
+		c.ephCache = make(map[wireKey]wireEndpoint)
 	}
-	sdkCfg := openai.DefaultConfig(apiKey)
-	if baseURL != "" {
-		sdkCfg.BaseURL = baseURL
+	if ep, ok := c.ephCache[k]; ok {
+		return ep
 	}
+	hc := &http.Client{}
 	if zhipuauth.LooksLikeZhipuURL(baseURL) && zhipuauth.LooksLikeZhipuKey(apiKey) {
-		sdkCfg.HTTPClient = &http.Client{
-			Transport: &zhipuJWTTransport{apiKey: apiKey, base: http.DefaultTransport},
-		}
+		hc.Transport = &zhipuJWTTransport{apiKey: apiKey, base: http.DefaultTransport}
 	}
-	sdk := openai.NewClientWithConfig(sdkCfg)
-	c.sdkCache[k] = sdk
-	return sdk
+	ep := wireEndpoint{url: baseURL + "/chat/completions", client: hc}
+	c.ephCache[k] = ep
+	return ep
 }
 
-// normalizeOpenAIBaseURL prepares a user-supplied base URL for the
-// go-openai SDK. The SDK builds every request as
-// TrimRight(BaseURL,"/") + "/chat/completions" — it does NOT insert a
-// "/v1" version segment. OpenAI's own default base URL already ends in
-// "/v1", and so does every hosted provider's documented endpoint, so the
-// SDK works as long as the configured base URL carries that segment.
+// normalizeOpenAIBaseURL prepares a user-supplied base URL for our own
+// client. A request is built as TrimRight(baseURL,"/") +
+// "/chat/completions" — no "/v1" version segment is inserted. OpenAI's own
+// default base URL already ends in "/v1", and so does every hosted
+// provider's documented endpoint, so a configured base URL that carries
+// that segment works unchanged.
 //
 // Operators pointing the Custom (OpenAI-compatible) provider at a local
 // Ollama / LM Studio / vLLM box routinely paste just the bare address
@@ -319,8 +342,8 @@ func normalizeOpenAIBaseURL(raw string) string {
 	}
 	u, err := url.Parse(s)
 	if err != nil || u.Host == "" {
-		// Malformed / scheme-less input: leave as-is so the SDK surfaces
-		// the real error rather than us silently reshaping garbage.
+		// Malformed / scheme-less input: leave as-is so the transport
+		// surfaces the real error rather than us silently reshaping garbage.
 		return s
 	}
 	if strings.Trim(u.Path, "/") == "" {
@@ -331,9 +354,9 @@ func normalizeOpenAIBaseURL(raw string) string {
 }
 
 // zhipuJWTTransport rewrites the Authorization header on every outbound
-// request to a freshly-signed Zhipu JWT (TTL 1h). go-openai's stock
-// Authorization header (raw apiKey as Bearer) is silently dropped in
-// favour of ours.
+// request to a freshly-signed Zhipu JWT (TTL 1h), replacing the Bearer
+// header postChatCompletion sets. Signing per request is what keeps the
+// token fresh across a long-lived client that is reused for many turns.
 type zhipuJWTTransport struct {
 	apiKey string
 	base   http.RoundTripper
@@ -379,8 +402,8 @@ func (c *openaiClient) Chat(ctx context.Context, req ChatReq) (*ChatResp, error)
 		}
 	}
 
-	// 2. Translate to openai.ChatCompletionRequest.
-	sdkReq, err := c.toOpenAIReq(req, model)
+	// 2. Translate to the OpenAI wire shape.
+	wireReq, err := c.toWireReq(req, model)
 	if err != nil {
 		return nil, fmt.Errorf("llm: build request: %w", err)
 	}
@@ -393,10 +416,13 @@ func (c *openaiClient) Chat(ctx context.Context, req ChatReq) (*ChatResp, error)
 		defer cancel()
 	}
 
-	// 4. Issue the request through the SDK matching the resolved creds.
-	sdk := c.sdkFor(apiKey, baseURL)
+	// 4. Issue the request through the endpoint matching the resolved
+	// creds. The body is marshalled inside postChatCompletion on every
+	// attempt, so the retry below sends the stripped body rather than a
+	// cached copy of the rejected one.
+	ep := c.endpointFor(apiKey, baseURL)
 	start := time.Now()
-	sdkResp, err := sdk.CreateChatCompletion(callCtx, sdkReq)
+	wireResp, err := c.postChatCompletion(callCtx, ep, apiKey, &wireReq)
 
 	// Reactive self-heal for reasoning models the name heuristic did not
 	// catch (custom gateway aliases like "gpt-5.6-sol"). These fix
@@ -405,12 +431,12 @@ func (c *openaiClient) Chat(ctx context.Context, req ChatReq) (*ChatResp, error)
 	// remember the model, strip the params, and retry once. Safe: this is
 	// still the single completion call — no tool has executed yet, so the
 	// no-retry-on-tools rule below does not apply.
-	if err != nil && isSamplingParamError(err) && hasCustomSampling(sdkReq) {
+	if err != nil && isSamplingParamError(err) && hasCustomSampling(wireReq) {
 		c.rememberNoSampling(model)
-		stripSamplingParams(&sdkReq)
+		stripSamplingParams(&wireReq)
 		c.log.Warn("llm: model rejects custom sampling params; retrying without them",
 			slog.String("model", model))
-		sdkResp, err = sdk.CreateChatCompletion(callCtx, sdkReq)
+		wireResp, err = c.postChatCompletion(callCtx, ep, apiKey, &wireReq)
 	}
 
 	dur := time.Since(start)
@@ -427,21 +453,21 @@ func (c *openaiClient) Chat(ctx context.Context, req ChatReq) (*ChatResp, error)
 		return nil, fmt.Errorf("llm: chat completion: %w", err)
 	}
 
-	if len(sdkResp.Choices) == 0 {
+	if len(wireResp.Choices) == 0 {
 		c.metrics.requestsTotal.WithLabelValues(model, "error").Inc()
 		return nil, fmt.Errorf("llm: empty choices in response")
 	}
 
 	// 6. Translate response back.
-	assistant, err := fromOpenAIMessage(sdkResp.Choices[0].Message)
+	assistant, err := decodeWireMessage(wireResp.Choices[0].Message)
 	if err != nil {
 		c.metrics.requestsTotal.WithLabelValues(model, "error").Inc()
 		return nil, fmt.Errorf("llm: decode assistant message: %w", err)
 	}
 	usage := Usage{
-		PromptTokens:     sdkResp.Usage.PromptTokens,
-		CompletionTokens: sdkResp.Usage.CompletionTokens,
-		TotalTokens:      sdkResp.Usage.TotalTokens,
+		PromptTokens:     wireResp.Usage.PromptTokens,
+		CompletionTokens: wireResp.Usage.CompletionTokens,
+		TotalTokens:      wireResp.Usage.TotalTokens,
 	}
 
 	c.metrics.tokensTotal.WithLabelValues(model, "prompt").Add(float64(usage.PromptTokens))
@@ -473,51 +499,60 @@ func (c *openaiClient) Chat(ctx context.Context, req ChatReq) (*ChatResp, error)
 	return &ChatResp{Assistant: assistant, Usage: usage}, nil
 }
 
-// toOpenAIReq translates the public ChatReq to the SDK request shape.
-func (c *openaiClient) toOpenAIReq(req ChatReq, model string) (openai.ChatCompletionRequest, error) {
+// toWireReq translates the public ChatReq into the request body we POST.
+//
+// It returns a value type, so the reactive retry in Chat mutates this
+// copy. The body itself is marshalled fresh on each attempt inside
+// postChatCompletion — if the JSON were built here and reused, the retry
+// would resend the temperature the provider had just rejected.
+func (c *openaiClient) toWireReq(req ChatReq, model string) (wireRequest, error) {
 	// Reasoning models (o-series, gpt-5.x) fix temperature/top_p/n at 1 and
 	// 400 on any other value, so we must NOT send a temperature for them.
-	// A zero Temperature is dropped by the SDK's `omitempty` tag, letting the
-	// provider apply its fixed default. Every other (chat-completion) model
-	// keeps the deterministic 0.1 default the AIOps loop relies on.
+	// The field is a pointer precisely so the zero value can be omitted
+	// while a real 0.0 could still be sent if a caller ever wanted it.
 	//
 	// isReasoningModel is the fast path for known families; noSampling is the
 	// reactively-learned set for gateway aliases the heuristic missed.
-	temp := req.Temperature
-	if temp == 0 && !isReasoningModel(model) && !c.modelRejectsSampling(model) {
-		temp = 0.1
-	}
-	if isReasoningModel(model) || c.modelRejectsSampling(model) {
-		temp = 0
-	}
-
-	msgs := make([]openai.ChatCompletionMessage, 0, len(req.Messages))
-	for i, m := range req.Messages {
-		sm, err := toOpenAIMessage(m)
-		if err != nil {
-			return openai.ChatCompletionRequest{}, fmt.Errorf("message[%d]: %w", i, err)
+	var temp *float32
+	if !isReasoningModel(model) && !c.modelRejectsSampling(model) {
+		t := req.Temperature
+		if t == 0 {
+			t = 0.1
 		}
-		msgs = append(msgs, sm)
+		temp = &t
 	}
 
-	var tools []openai.Tool
+	msgs := make([]wireMessage, 0, len(req.Messages))
+	for i, m := range req.Messages {
+		if m.Role == "" {
+			// A role-less message is a caller bug. Sending it would have
+			// the provider reject the whole batch with an opaque 400 that
+			// names no message index; naming it here is the difference
+			// between a one-line fix and a bisect.
+			return wireRequest{}, fmt.Errorf("message[%d]: role is empty", i)
+		}
+		msgs = append(msgs, encodeWireMessage(m))
+	}
+
+	var tools []wireTool
 	if len(req.Tools) > 0 {
-		tools = make([]openai.Tool, 0, len(req.Tools))
+		tools = make([]wireTool, 0, len(req.Tools))
 		for i, t := range req.Tools {
-			// Parameters is passed through as json.RawMessage; the SDK
-			// accepts `any` and re-marshals. Validate it is valid JSON up
-			// front so a malformed schema surfaces here, not at send time.
-			var params any = t.Parameters
+			// Validate the schema is real JSON here rather than letting the
+			// encoder emit it verbatim: json.RawMessage is written through
+			// unvalidated, so a malformed schema would surface as a provider
+			// 400 that names no tool. Failing at build time names it.
+			var params json.RawMessage
 			if len(t.Parameters) > 0 {
 				var tmp any
 				if err := json.Unmarshal(t.Parameters, &tmp); err != nil {
-					return openai.ChatCompletionRequest{}, fmt.Errorf("tool[%d] %q parameters: %w", i, t.Name, err)
+					return wireRequest{}, fmt.Errorf("tool[%d] %q parameters: %w", i, t.Name, err)
 				}
 				params = json.RawMessage(t.Parameters)
 			}
-			tools = append(tools, openai.Tool{
-				Type: openai.ToolTypeFunction,
-				Function: &openai.FunctionDefinition{
+			tools = append(tools, wireTool{
+				Type: "function",
+				Function: wireToolFunction{
 					Name:        t.Name,
 					Description: t.Description,
 					Parameters:  params,
@@ -526,7 +561,7 @@ func (c *openaiClient) toOpenAIReq(req ChatReq, model string) (openai.ChatComple
 		}
 	}
 
-	return openai.ChatCompletionRequest{
+	return wireRequest{
 		Model:       model,
 		Messages:    msgs,
 		Tools:       tools,
@@ -534,30 +569,43 @@ func (c *openaiClient) toOpenAIReq(req ChatReq, model string) (openai.ChatComple
 	}, nil
 }
 
-func toOpenAIMessage(m Message) (openai.ChatCompletionMessage, error) {
-	out := openai.ChatCompletionMessage{
+// encodeWireMessage maps one public Message onto the wire shape. Tool call
+// arguments travel as the raw JSON the model produced; only an absent
+// argument blob is coerced to "{}" so a provider that requires an object
+// still receives one.
+func encodeWireMessage(m Message) wireMessage {
+	out := wireMessage{
 		Role:       m.Role,
 		Content:    m.Content,
 		Name:       m.ToolName,
 		ToolCallID: m.ToolCallID,
 	}
 	if len(m.ToolCalls) > 0 {
-		out.ToolCalls = make([]openai.ToolCall, 0, len(m.ToolCalls))
+		out.ToolCalls = make([]wireToolCall, 0, len(m.ToolCalls))
 		for _, tc := range m.ToolCalls {
-			out.ToolCalls = append(out.ToolCalls, openai.ToolCall{
+			args := string(tc.Args)
+			if args == "" {
+				args = "{}"
+			}
+			out.ToolCalls = append(out.ToolCalls, wireToolCall{
 				ID:   tc.ID,
-				Type: openai.ToolTypeFunction,
-				Function: openai.FunctionCall{
+				Type: "function",
+				Function: wireToolCallFunction{
 					Name:      tc.Name,
-					Arguments: string(tc.Args),
+					Arguments: args,
 				},
 			})
 		}
 	}
-	return out, nil
+	return out
 }
 
-func fromOpenAIMessage(m openai.ChatCompletionMessage) (Message, error) {
+// decodeWireMessage maps the assistant message out of a response onto the
+// public Message. It cannot fail today, but it keeps the (Message, error)
+// shape the caller's error path already reports through, so a future field
+// that does need validation has a place to surface without a signature
+// change rippling into Chat.
+func decodeWireMessage(m wireMessage) (Message, error) {
 	out := Message{
 		Role:       m.Role,
 		Content:    m.Content,
@@ -567,6 +615,10 @@ func fromOpenAIMessage(m openai.ChatCompletionMessage) (Message, error) {
 	if len(m.ToolCalls) > 0 {
 		out.ToolCalls = make([]ToolCall, 0, len(m.ToolCalls))
 		for _, tc := range m.ToolCalls {
+			// A provider that omits arguments must not hand the tool
+			// executor a nil blob: json.RawMessage(nil) is not valid JSON,
+			// and the executor would fail on decode instead of on the
+			// model's actual intent. Empty is "no arguments".
 			args := json.RawMessage(tc.Function.Arguments)
 			if len(args) == 0 {
 				args = json.RawMessage(`{}`)
@@ -659,20 +711,16 @@ func isSamplingParamError(err error) bool {
 // hasCustomSampling reports whether req carries any sampling param that a
 // reasoning model would reject. Guards the reactive retry so we only re-issue
 // when stripping the params can actually change the outcome.
-func hasCustomSampling(req openai.ChatCompletionRequest) bool {
-	return req.Temperature != 0 || req.TopP != 0 || req.N != 0 ||
-		req.PresencePenalty != 0 || req.FrequencyPenalty != 0
+func hasCustomSampling(req wireRequest) bool {
+	return req.Temperature != nil
 }
 
-// stripSamplingParams zeroes every sampling param so the SDK's `omitempty`
-// tags drop them from the wire, letting a reasoning model apply its fixed
-// defaults.
-func stripSamplingParams(req *openai.ChatCompletionRequest) {
-	req.Temperature = 0
-	req.TopP = 0
-	req.N = 0
-	req.PresencePenalty = 0
-	req.FrequencyPenalty = 0
+// stripSamplingParams drops every sampling param so the `omitempty`/pointer
+// encoding leaves them off the wire, letting a reasoning model apply its
+// fixed defaults. It must zero *every* field the encoder can emit: a
+// leftover param reproduces the 400 the retry exists to escape.
+func stripSamplingParams(req *wireRequest) {
+	req.Temperature = nil
 }
 
 // estimatePromptTokens is a cheap pre-call estimate: ~4 chars per token is a

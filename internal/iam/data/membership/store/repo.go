@@ -76,15 +76,8 @@ func (r *Repo) DeleteByUser(ctx context.Context, userID uint64) error {
 		Delete(&model.OrgMembership{}).Error
 }
 
-// ListByOrg returns every membership in the given org with the
-// embedded user pre-joined.
-type MembershipWithUser struct {
-	model.OrgMembership
-	User model.User `gorm:"-"`
-}
-
 // ListByOrg lists memberships joined to user rows.
-func (r *Repo) ListByOrg(ctx context.Context, orgID uint64) ([]MembershipWithUser, error) {
+func (r *Repo) ListByOrg(ctx context.Context, orgID uint64) ([]model.MembershipWithUser, error) {
 	var ms []model.OrgMembership
 	if err := r.db.WithContext(ctx).
 		Where("org_id = ?", orgID).
@@ -107,22 +100,15 @@ func (r *Repo) ListByOrg(ctx context.Context, orgID uint64) ([]MembershipWithUse
 	for _, u := range users {
 		byID[u.ID] = u
 	}
-	out := make([]MembershipWithUser, 0, len(ms))
+	out := make([]model.MembershipWithUser, 0, len(ms))
 	for _, m := range ms {
-		out = append(out, MembershipWithUser{OrgMembership: m, User: byID[m.UserID]})
+		out = append(out, model.MembershipWithUser{OrgMembership: m, User: byID[m.UserID]})
 	}
 	return out, nil
 }
 
-// ListByUser returns every org the user is a member of, with the
-// embedded org row.
-type MembershipWithOrg struct {
-	model.OrgMembership
-	Org model.Org `gorm:"-"`
-}
-
 // ListByUser lists memberships joined to org rows.
-func (r *Repo) ListByUser(ctx context.Context, userID uint64) ([]MembershipWithOrg, error) {
+func (r *Repo) ListByUser(ctx context.Context, userID uint64) ([]model.MembershipWithOrg, error) {
 	var ms []model.OrgMembership
 	if err := r.db.WithContext(ctx).
 		Where("user_id = ?", userID).
@@ -145,9 +131,9 @@ func (r *Repo) ListByUser(ctx context.Context, userID uint64) ([]MembershipWithO
 	for _, o := range orgs {
 		byID[o.ID] = o
 	}
-	out := make([]MembershipWithOrg, 0, len(ms))
+	out := make([]model.MembershipWithOrg, 0, len(ms))
 	for _, m := range ms {
-		out = append(out, MembershipWithOrg{OrgMembership: m, Org: byID[m.OrgID]})
+		out = append(out, model.MembershipWithOrg{OrgMembership: m, Org: byID[m.OrgID]})
 	}
 	return out, nil
 }

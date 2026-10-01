@@ -84,8 +84,8 @@ type WorkerSpawner interface {
 }
 
 // MessageReader is an optional seam — when wired, the investigator
-// can salvage partial RCA work after a worker hits the eino MaxStep
-// cap. Without it, MaxStep just lands as status=failed. The salvage
+// can salvage partial RCA work after a worker hits the step-budget
+// cap. Without it, the cap just lands as status=failed. The salvage
 // path concatenates the agent's tool results into a synthetic
 // finalAnswer and runs Pass-2 extraction on that — operator gets a
 // low-confidence partial report instead of an empty failure card.
@@ -636,8 +636,8 @@ func (uc *Usecase) run(reportID string, incident alertmodel.Incident, dedupKeyVa
 		uc.log.Warn("worker errored",
 			slog.String("report_id", reportID),
 			slog.String("err", workerErr))
-		// Salvage path: when the eino ReAct graph runs out of step
-		// budget, the worker has typically called 10+ tools and
+		// Salvage path: when the agent loop runs out of step budget,
+		// the worker has typically called 10+ tools and
 		// gathered useful data — it just never wrote the final
 		// synthesis turn. Concatenate the trail and let Pass-2
 		// produce a partial report. The operator gets findings +
@@ -731,7 +731,7 @@ func renderAlertPrompt(in *alertmodel.Incident, locale string) string {
 	// HARD budget — keep it in the user prompt because models (especially
 	// GLM / non-frontier) follow user-message constraints more strictly
 	// than system-message ones. Without this, repeated empty logql/promql
-	// variants burn the eino MaxStep cap (v0.7.51..v0.7.55 failed RCAs).
+	// variants burn the step budget (v0.7.51..v0.7.55 failed RCAs).
 	b.WriteString("\nBUDGET: hard cap 10 tool calls. By tool call #7 you MUST start writing the final report; by #10 you MUST emit it even if some signals are unclear. ")
 	b.WriteString("If a tool returns empty (result:[] or streams:[]) twice in the same direction, STOP that line — empty is a finding, write it into the report and move on. ")
 	b.WriteString("Never call the same tool more than 3 times.\n")
@@ -770,13 +770,22 @@ func severityAtLeast(have, min string) bool {
 	return severityRank(have) >= severityRank(min)
 }
 
-// isMaxStepsError matches the eino graph runtime's MaxStep exceeded
-// error. Substring match because the wrapped error format includes
-// node path + bracket fluff that's not stable across versions.
+// isMaxStepsError matches the "ran out of step budget" error the
+// agent loop produces. Substring match because the wrapped error
+// format includes node path + bracket fluff that is not stable across
+// versions. Both wordings must be accepted: the PiG kernel says
+// "exceeded max iterations" (chatruntime/kernelpath.go, the
+// TurnMaxIterations branch) while the retired graph and the legacy
+// loop said "exceeds max steps" / "exceededmaxsteps". Dropping a
+// branch here silently disables the salvage path below, because the
+// failure then lands as a plain error instead of a truncated run.
 func isMaxStepsError(s string) bool {
 	low := strings.ToLower(s)
 	return strings.Contains(low, "exceeds max steps") ||
 		strings.Contains(low, "exceededmaxsteps") ||
+		strings.Contains(low, "exceeded max steps") ||
+		strings.Contains(low, "max iterations") ||
+		strings.Contains(low, "max_iterations") ||
 		strings.Contains(low, "graphrunerror")
 }
 

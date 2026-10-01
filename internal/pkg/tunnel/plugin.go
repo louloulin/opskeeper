@@ -38,6 +38,17 @@ const (
 	// "was never installed", and an audit asking what this node can do
 	// has one place to ask.
 	MethodPluginList = "plugin.list"
+
+	// MethodPluginRestore (manager → edge): re-activate a version this
+	// node already has on disk.
+	//
+	// It is its own method rather than a mode of plugin.install because
+	// what it needs from the wire is the opposite of install's: no URL,
+	// no digest, no signature — just a name and a version the node can
+	// find locally. Folding it into install would mean an install request
+	// whose artifact fields are deliberately ignored, which is exactly
+	// the kind of field a later reader assumes is checked.
+	MethodPluginRestore = "plugin.restore"
 )
 
 // PluginInstallRequest asks a node to install one package.
@@ -108,6 +119,32 @@ type PluginEntry struct {
 	Plugin  string `json:"plugin"`
 	Version string `json:"version"`
 	Digest  string `json:"digest,omitempty"`
+}
+
+// PluginRestoreRequest asks a node to put a version it already has back.
+//
+// There is deliberately no URL or digest here. The bytes are on the node,
+// and a request that carried a source would be a request that could ask the
+// node to fetch something new while calling itself a rollback.
+type PluginRestoreRequest struct {
+	Plugin string `json:"plugin"`
+	// Version is the version to make active. It must be one this node has
+	// installed; anything else is refused, not fetched.
+	Version string `json:"version"`
+}
+
+// PluginRestoreResponse is the node's verdict on a restore.
+//
+// It carries the whole active set for the same reason the install answer
+// does: a manager that had to ask again to find out what the restore left
+// behind would be making one decision from two moments.
+type PluginRestoreResponse struct {
+	Status    string        `json:"status"`
+	Plugin    string        `json:"plugin"`
+	Version   string        `json:"version,omitempty"`
+	Digest    string        `json:"digest,omitempty"`
+	Reason    string        `json:"reason,omitempty"`
+	Installed []PluginEntry `json:"installed,omitempty"`
 }
 
 // PluginRemoveRequest asks a node to take one package off.

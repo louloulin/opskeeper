@@ -101,6 +101,41 @@ func (f *NodeFleet) Remove(ctx context.Context, edgeID uint64, name, version str
 	}
 }
 
+// Restore asks one node to put a version it already has back.
+//
+// There is no URL here on purpose. The manager asks for a version by name
+// because the bytes are on the node; a restore that carried a source would
+// be an install, and the manager's rollback path does not have one for the
+// version it is going back to.
+func (f *NodeFleet) Restore(ctx context.Context, edgeID uint64, name, version string) Outcome {
+	if f == nil || f.caller == nil {
+		return Outcome{Status: StatusFailed, Reason: "the control plane has no tunnel to the fleet"}
+	}
+	body, err := json.Marshal(tunnel.PluginRestoreRequest{Plugin: name, Version: version})
+	if err != nil {
+		return Outcome{Status: StatusFailed, Reason: "malformed restore request: " + err.Error()}
+	}
+	raw, err := f.caller.Call(ctx, edgeID, tunnel.MethodPluginRestore, body)
+	if err != nil {
+		return Outcome{Status: StatusFailed, Reason: "no answer from the node: " + err.Error()}
+	}
+	var resp tunnel.PluginRestoreResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return Outcome{Status: StatusFailed, Reason: "unreadable answer from the node: " + err.Error()}
+	}
+	out := Outcome{
+		Plugin: resp.Plugin,
+		Status: resp.Status,
+		Digest: resp.Digest,
+		Reason: resp.Reason,
+		Set:    infosOf(resp.Installed),
+	}
+	if out.Reason == "" && out.Status == StatusRefused {
+		out.Reason = "the node refused the restore and gave no reason"
+	}
+	return out
+}
+
 // Installed asks one node what it is running.
 func (f *NodeFleet) Installed(ctx context.Context, edgeID uint64) ([]ports.PluginInfo, error) {
 	if f == nil || f.caller == nil {

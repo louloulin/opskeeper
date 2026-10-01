@@ -12,8 +12,11 @@ package registry
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
 )
 
@@ -31,8 +34,86 @@ type Tool struct {
 	// Handler 是实际执行函数（接收 ctx + args + tenant_id）
 	Handler func(ctx context.Context, args map[string]interface{}) (interface{}, error)
 
-	// ArgsSchema 是参数 schema（map[string]string 描述每个字段类型）
+	// ArgsSchema is the per-argument type map: name -> type.
+	//
+	// A trailing "!" marks the argument REQUIRED: "int!", "string!".
+	// A required argument is one the tool cannot invent a value for — a
+	// pid, a role name, a table name. Marking those separately from the
+	// merely typed ones is what lets a caller that is dispatching a
+	// decision rather than answering a question refuse to proceed when it
+	// has no value, instead of passing an empty string and letting the
+	// server decide what that means.
+	//
+	// The suffix is a convention rather than a struct because the field
+	// has always been a flat type map and changing its shape would touch
+	// every adapter. RequiredArgs parses it into a list.
 	ArgsSchema map[string]string
+}
+
+// RequiredMarker is the ArgsSchema value suffix that marks an argument
+// required.
+const RequiredMarker = "!"
+
+// RequiredArgs returns the names of the required arguments.
+//
+// Kept on Tool rather than at each call site so that "which arguments must
+// I have" is answered from the tool's own declaration. A caller that
+// duplicated this list per tool would drift from it, and the drift would
+// show up as a dispatch that reaches the server with something missing.
+func (t Tool) RequiredArgs() []string {
+	out := make([]string, 0, len(t.ArgsSchema))
+	for name, typ := range t.ArgsSchema {
+		if strings.HasSuffix(typ, RequiredMarker) {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// LookupTool returns the spec of a registered tool.
+//
+// The contract it returns is ports.ToolSpec rather than a type of this
+// package's own, so the closed loop's remediation executor can depend on the
+// shape without depending on this registry. The two are in different
+// modules; a structural copy of the same struct would let them drift, and
+// the drift would surface as a compile error at the moment somebody wired
+// them together.
+func (r *Registry) LookupTool(name string) (ports.ToolSpec, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	tool, ok := r.tools[name]
+	if !ok {
+		return ports.ToolSpec{}, false
+	}
+	return ports.ToolSpec{
+		Name:         tool.Name,
+		Description:  tool.Description,
+		RiskLevel:    string(tool.RiskLevel),
+		RequiredArgs: tool.RequiredArgs(),
+	}, true
+}
+
+// CallTool runs a registered tool by name.
+//
+// The args are forwarded as given and the tool's own handler validates
+// them; the registry adds no interpretation of its own, because a layer
+// that "helpfully" coerced argument types would be a second, disagreeing
+// definition of what each tool accepts.
+func (r *Registry) CallTool(ctx context.Context, name string, args map[string]interface{}) (interface{}, error) {
+	r.mu.RLock()
+	tool, ok := r.tools[name]
+	r.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("no tool registered as %q", name)
+	}
+	if tool.Handler == nil {
+		return nil, fmt.Errorf("tool %q is registered without a handler", name)
+	}
+	if args == nil {
+		args = map[string]interface{}{}
+	}
+	return tool.Handler(ctx, args)
 }
 
 // Factory 是创建 Adapter 实例的工厂函数（按租户懒创建）。
@@ -77,6 +158,10 @@ func ToolNamespace(t adapter.ResourceType) string {
 		return "rabbitmq."
 	case adapter.TypeKafka:
 		return "kafka."
+	case adapter.TypeMQ:
+		return "mq."
+	case adapter.TypeHost:
+		return "host."
 	case adapter.TypeK8sCluster:
 		return "k8s."
 	case adapter.TypeGitRepository:

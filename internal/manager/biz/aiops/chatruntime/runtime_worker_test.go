@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudwego/eino/schema"
+	"github.com/vincent-wuhan/opskeeper/core/ports"
+	"github.com/vincent-wuhan/opskeeper/core/wire"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/graph"
 	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
 	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
@@ -33,10 +33,7 @@ func TestWithWorkerOwner(t *testing.T) {
 // chat_sessions row was persisted with the audit columns
 // (agent_id / parent_session_id / background).
 func TestSpawnWorker_Sync(t *testing.T) {
-	scripted := newScriptedChatModel(&schema.Message{
-		Role:    schema.Assistant,
-		Content: "worker-result",
-	})
+	scripted := newScriptedKernel("worker-result")
 	store, parentID := newSeededRuntimeStore(t, 7)
 	rt := newRuntimeWithStore(t, "incident-investigator", scripted, nil, store)
 
@@ -96,18 +93,34 @@ func TestSpawnWorker_Sync(t *testing.T) {
 }
 
 func TestSpawnWorker_Sync_ForwardsWorkerToolEventsToParent(t *testing.T) {
-	scripted := newScriptedChatModel(
-		&schema.Message{
-			Role:    schema.Assistant,
-			Content: "checking metric",
-			ToolCalls: []schema.ToolCall{{
-				ID:       "call_worker_metric",
-				Type:     "function",
-				Function: schema.FunctionCall{Name: "query_promql", Arguments: `{"query":"up"}`},
-			}},
-		},
-		&schema.Message{Role: schema.Assistant, Content: "worker-result"},
-	)
+	// The fake kernel has no loop, so the tool call it "made" is the pair of
+	// frames a real loop would have emitted. Everything this test asserts —
+	// the parent stream seeing start+end, the args, the result, the scoped
+	// call id, and no assistant frame leaking — is the workerSink's job, and
+	// emitting the frames is the only way to reach it.
+	scripted := newScriptedKernel("worker-result")
+	scripted.onRun = func(ctx context.Context, _ ports.AgentRequest) error {
+		sink := ports.FromContext(ctx)
+		_ = sink.Emit(ctx, ports.StreamEvent{
+			Type:      wire.StreamToolStart,
+			SessionID: "ignored",
+			Tool: &wire.ToolFrame{
+				ToolCallID: "call_worker_metric",
+				Name:       "query_promql",
+				ArgsJSON:   `{"query":"up"}`,
+			},
+		})
+		return sink.Emit(ctx, ports.StreamEvent{
+			Type:      wire.StreamToolEnd,
+			SessionID: "ignored",
+			Tool: &wire.ToolFrame{
+				ToolCallID: "call_worker_metric",
+				Name:       "query_promql",
+				ResultJSON: `{"ok":true}`,
+				Status:     wire.ToolSuccess,
+			},
+		})
+	}
 	store, parentID := newSeededRuntimeStore(t, 7)
 	rt := newRuntimeWithStore(t, "specialist-sre", scripted, []basetool.BaseTool{
 		&fakeTool{name: "query_promql", schema: `{"type":"object","properties":{"query":{"type":"string"}}}`},
@@ -166,10 +179,7 @@ func TestSpawnWorker_Sync_ForwardsWorkerToolEventsToParent(t *testing.T) {
 // verifies (a) immediate return with status running OR completed (race)
 // + (b) eventual TaskNotification fires through ParentEmit.
 func TestSpawnWorker_Async(t *testing.T) {
-	scripted := newScriptedChatModel(&schema.Message{
-		Role:    schema.Assistant,
-		Content: "async-result",
-	})
+	scripted := newScriptedKernel("async-result")
 	rt := newRuntimeWithAgent(t, "general-purpose", scripted, nil)
 
 	var (
@@ -245,10 +255,7 @@ func TestSpawnWorker_Async(t *testing.T) {
 // TestSendToWorker_Continuation continues a completed worker with a
 // follow-up message and checks the Result is updated.
 func TestSendToWorker_Continuation(t *testing.T) {
-	scripted := newScriptedChatModel(
-		&schema.Message{Role: schema.Assistant, Content: "first"},
-		&schema.Message{Role: schema.Assistant, Content: "second"},
-	)
+	scripted := newScriptedKernel("first", "second")
 	rt := newRuntimeWithAgent(t, "general-purpose", scripted, nil)
 
 	w, err := rt.SpawnWorker(context.Background(), SpawnRequest{
@@ -279,10 +286,7 @@ func TestSendToWorker_Continuation(t *testing.T) {
 // TestStopWorker_Idempotent confirms StopWorker is safe to call on a
 // terminal worker.
 func TestStopWorker_Idempotent(t *testing.T) {
-	scripted := newScriptedChatModel(&schema.Message{
-		Role:    schema.Assistant,
-		Content: "x",
-	})
+	scripted := newScriptedKernel("x")
 	rt := newRuntimeWithAgent(t, "general-purpose", scripted, nil)
 
 	w, err := rt.SpawnWorker(context.Background(), SpawnRequest{
@@ -308,9 +312,7 @@ func TestStopWorker_Idempotent(t *testing.T) {
 // both and asserts ClosedAt is non-nil after termination.
 func TestSpawnWorker_ClosesSession(t *testing.T) {
 	t.Run("sync", func(t *testing.T) {
-		scripted := newScriptedChatModel(&schema.Message{
-			Role: schema.Assistant, Content: "done",
-		})
+		scripted := newScriptedKernel("done")
 		store, parentID := newSeededRuntimeStore(t, 1)
 		rt := newRuntimeWithStore(t, "incident-investigator", scripted, nil, store)
 
@@ -332,9 +334,7 @@ func TestSpawnWorker_ClosesSession(t *testing.T) {
 	})
 
 	t.Run("async", func(t *testing.T) {
-		scripted := newScriptedChatModel(&schema.Message{
-			Role: schema.Assistant, Content: "done",
-		})
+		scripted := newScriptedKernel("done")
 		store, parentID := newSeededRuntimeStore(t, 1)
 		rt := newRuntimeWithStore(t, "general-purpose", scripted, nil, store)
 
@@ -379,7 +379,7 @@ func TestSpawnWorker_ClosesSession(t *testing.T) {
 // TestSpawnWorker_UnknownAgent confirms SpawnWorker rejects a name not
 // in the AgentRegistry.
 func TestSpawnWorker_UnknownAgent(t *testing.T) {
-	scripted := newScriptedChatModel()
+	scripted := newScriptedKernel()
 	rt := newRuntimeWithAgent(t, "general-purpose", scripted, nil)
 	_, err := rt.SpawnWorker(context.Background(), SpawnRequest{
 		AgentName: "no-such-agent",
@@ -611,10 +611,7 @@ func containsName(names []string, want string) bool {
 }
 
 func TestSpawnWorker_DoesNotForceKnowledgePrologue(t *testing.T) {
-	scripted := newScriptedChatModel(&schema.Message{
-		Role:    schema.Assistant,
-		Content: "worker-result",
-	})
+	scripted := newScriptedKernel("worker-result")
 	var calls atomic.Int32
 	reg := NewAgentRegistry()
 	reg.Add(&Agent{
@@ -626,10 +623,10 @@ func TestSpawnWorker_DoesNotForceKnowledgePrologue(t *testing.T) {
 	})
 	rt, err := NewRuntime(Config{
 		Sessions:      newMemSessions(&model.Session{ID: "s1", UserID: 7}),
-		ChatModel:     scripted,
+		Kernel:        scripted,
 		ToolBag:       []basetool.BaseTool{&countingTool{name: "query_knowledge", calls: &calls}},
 		AgentRegistry: reg,
-		GraphCfg:      graph.Config{MaxIterations: 3},
+		MaxIterations: 3,
 	})
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
@@ -653,10 +650,7 @@ func TestSpawnWorker_DoesNotForceKnowledgePrologue(t *testing.T) {
 // TestNotificationFor_FieldShape locks down the wire shape consumers
 // (the SPA's task_notification renderer) depend on.
 func TestNotificationFor_FieldShape(t *testing.T) {
-	scripted := newScriptedChatModel(&schema.Message{
-		Role:    schema.Assistant,
-		Content: "shape-test",
-	})
+	scripted := newScriptedKernel("shape-test")
 	rt := newRuntimeWithAgent(t, "general-purpose", scripted, nil)
 	w, err := rt.SpawnWorker(context.Background(), SpawnRequest{
 		AgentName: "general-purpose",
@@ -712,18 +706,18 @@ func (t *countingTool) InvokableRun(_ context.Context, _ string, _ ...basetool.I
 
 // newRuntimeWithAgent builds a Runtime with one persona registered and
 // no tool bag. cfg.AgentRegistry's Add is used to inject the persona
-// inline so the test doesn't need a fixture file. Default
-// graph.MaxIterations is bumped down to keep tests snappy.
-func newRuntimeWithAgent(t *testing.T, name string, cm *scriptedChatModel, toolBag []basetool.BaseTool) *Runtime {
+// inline so the test doesn't need a fixture file. The persona's
+// MaxTurns is bumped down to keep tests snappy.
+func newRuntimeWithAgent(t *testing.T, name string, k *scriptedKernel, toolBag []basetool.BaseTool) *Runtime {
 	t.Helper()
 	sess := &model.Session{ID: "s1", UserID: 7}
-	return newRuntimeWithStore(t, name, cm, toolBag, newMemSessions(sess))
+	return newRuntimeWithStore(t, name, k, toolBag, newMemSessions(sess))
 }
 
 // newRuntimeWithStore is the shape used by tests that need to inspect
 // the SessionRepo after the spawn (worker session row, ListByParent).
 // Caller passes the pre-seeded *memSessions so the test can read it back.
-func newRuntimeWithStore(t *testing.T, name string, cm *scriptedChatModel, toolBag []basetool.BaseTool, store *memSessions) *Runtime {
+func newRuntimeWithStore(t *testing.T, name string, k *scriptedKernel, toolBag []basetool.BaseTool, store *memSessions) *Runtime {
 	t.Helper()
 	reg := NewAgentRegistry()
 	reg.Add(&Agent{
@@ -735,10 +729,10 @@ func newRuntimeWithStore(t *testing.T, name string, cm *scriptedChatModel, toolB
 	})
 	rt, err := NewRuntime(Config{
 		Sessions:      store,
-		ChatModel:     cm,
+		Kernel:        k,
 		ToolBag:       toolBag,
 		AgentRegistry: reg,
-		GraphCfg:      graph.Config{MaxIterations: 3},
+		MaxIterations: 3,
 	})
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)

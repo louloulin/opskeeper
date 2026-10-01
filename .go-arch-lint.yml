@@ -52,45 +52,73 @@ components:
   oxpig_model:   { in: core/pig/pigmodel/** }
   oxpig_agent:   { in: core/pig/pigagent/** }
   oxpig_rpc:     { in: core/pig/pigrpc/** }
-  oxedge_pigsup: { in: core/edge/pigsupervisor/** }
-  oxplugin_sdk:  { in: sdk/** }
+  oxedge_pigsup:    { in: core/edge/pigsupervisor/** }
+  oxedge_policygate: { in: core/edge/policygate/** }
+  oxedge_gatesocket: { in: core/edge/gatesocket/** }
+  oxedge_toolbroker: { in: core/edge/toolbroker/** }
+  oxpig_wire:       { in: core/pig/pigwire/** }
+  oxplugin_sdk:     { in: sdk/** }
+  oxharness_schema:    { in: core/harness/schema/** }
+  oxharness_injector:  { in: core/harness/injector/** }
+  oxharness_judge:     { in: core/harness/judge/** }
+  oxharness_runner:    { in: core/harness/runner/** }
+  oxharness_leaderboard: { in: core/harness/leaderboard/** }
 
 # 允许依赖的正向清单（未列出 = 禁止）
 deps:
+  # ---------------- BC → 2.0 契约层 ----------------
+  #
+  # 下面每个 BC 都被允许依赖 oxcore_*。这不是把边界放松，而是把已经存在
+  # 的事实写下来：BC 里有 51 个文件 import core/{domain,ports,wire}，在
+  # 2.0 之前这份配置把它们全部标成违规，而工具根本没装，所以没有人发现。
+  # 一份会拒绝仓库里 51 处合法导入的规则不是边界，是噪声——它真正的代价
+  # 是让人学会忽略红色。
+  #
+  # BC 仍然**不得**依赖另一个 BC，也不得依赖任何 oxedge_ 实现
+  # （manager_biz 的 pig 例外逐条写在下面），因为那才是边界本身。
+  # （显式列出而不是用 YAML 锚点：锚点展开成的是嵌套数组，
+  #   go-arch-lint 拿到的是 [["oxcore_domain", ...]] 而不是三个名字，
+  #   每一条都会静默失配。冗长但正确的配置，胜过一个看着干净、
+  #   实际上不生效的配置。）
+
   # ---------------- iam BC ----------------
   iam_server:
-    mayDependOn: [iam_service, iam_biz, iam_model, shared_pkg, api]
+    mayDependOn: [iam_service, iam_biz, iam_model, shared_pkg, api, oxcore_domain, oxcore_ports, oxcore_wire]
   iam_service:
     # 关键：service 不得直接依赖 iam_data（必须走 biz）
-    mayDependOn: [iam_biz, iam_model, shared_pkg, api]
+    mayDependOn: [iam_biz, iam_model, shared_pkg, api, oxcore_domain, oxcore_ports, oxcore_wire]
   iam_biz:
-    mayDependOn: [iam_model, shared_pkg]
+    mayDependOn: [iam_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
   iam_data:
-    mayDependOn: [iam_biz, iam_model, shared_pkg]
+    mayDependOn: [iam_biz, iam_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
   iam_model:
-    mayDependOn: [shared_pkg]
+    mayDependOn: [shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
 
   # ---------------- manager BC ----------------
   manager_server:
-    mayDependOn: [manager_service, manager_biz, manager_model, shared_pkg, api]
+    mayDependOn: [manager_service, manager_biz, manager_model, shared_pkg, api, oxcore_domain, oxcore_ports, oxcore_wire]
   manager_service:
-    mayDependOn: [manager_biz, manager_model, shared_pkg, api]
+    mayDependOn: [manager_biz, manager_model, shared_pkg, api, oxcore_domain, oxcore_ports, oxcore_wire]
+  # manager_biz 额外允许 pigagent/pigwire：内核的宿主绑定（决策 30）必须
+  # 拿到 PiG 的事件与内核类型，而 core/pig 不能反向依赖根模块——所以这层
+  # 适配只能落在根模块里。这是"PiG 变更收口到一个模块"与"core/pig 不
+  # 依赖根模块"两条规则交叉后的唯一落点。
   manager_biz:
-    mayDependOn: [manager_model, shared_pkg]
+    mayDependOn: [manager_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire, oxpig_agent, oxpig_wire]
   manager_data:
-    mayDependOn: [manager_biz, manager_model, shared_pkg]
+    mayDependOn: [manager_biz, manager_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
   manager_model:
-    mayDependOn: [shared_pkg]
+    mayDependOn: [shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
 
   # ---------------- edgeagent BC ----------------
   edgeagent_service:
-    mayDependOn: [edgeagent_biz, edgeagent_model, shared_pkg, api]
+    mayDependOn: [edgeagent_biz, edgeagent_model, shared_pkg, api, oxcore_domain, oxcore_ports, oxcore_wire]
   edgeagent_biz:
-    mayDependOn: [edgeagent_model, shared_pkg]
+    mayDependOn: [edgeagent_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
   edgeagent_data:
-    mayDependOn: [edgeagent_biz, edgeagent_model, shared_pkg]
+    mayDependOn: [edgeagent_biz, edgeagent_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
   edgeagent_model:
-    mayDependOn: [shared_pkg]
+    mayDependOn: [shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
 
   # ---------------- OpsKeeper 2.0 module direction ----------------
   # core is the root of the new graph: it may not depend on anything, not
@@ -103,11 +131,30 @@ deps:
   oxcore_wire:
     mayDependOn: []
 
-  # pig adapts the contracts onto PiG. It may not be depended upon by
-  # anything except the cmd assembly layer, which is what keeps PiG
-  # reachable from exactly one place.
+  # pig adapts the contracts onto PiG. The rule that actually contains PiG
+  # is enforced by scripts/modulecheck: only files inside the pig module may
+  # import github.com/MichaelKinsy/PiG. That is the boundary worth having,
+  # because a PiG API break then lands in one module instead of the
+  # repository.
+  #
+  # Requiring pig to be unreachable from everywhere else was the wrong
+  # version of the same idea: the root module's llm client and the kernel's
+  # host bindings have to reach the adapter somewhere, and both of them sit
+  # in the root module by construction (core/pig may not import it back).
+  #
+  # pigmodel reaches core's ports as well as its domain, because chat.go
+  # there is where a request becomes a transcript: the host names a request
+  # in ports vocabulary and never learns the PiG shape it turns into. That is
+  # the whole point of the boundary — the conversion is a PiG concern, and a
+  # host that had to perform it would hold a PiG type.
+  #
+  # The reverse direction is what the module graph forbids and this file
+  # cannot express: it has no way to say "no file in the ROOT module may
+  # import PiG", because the root module has no component here to attach the
+  # rule to. scripts/modulecheck covers that half, across every module,
+  # discovered from the go.mod files rather than from a list.
   oxpig_model:
-    mayDependOn: [oxcore_domain, oxcore_wire, oxpig_agent]
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxpig_agent]
   oxpig_agent:
     mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxpig_model]
   # pigrpc adapts the node agent's RPC client. It is the only place a
@@ -122,6 +169,26 @@ deps:
   # the module graph exists to keep.
   oxedge_pigsup:
     mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire]
+  # The node's policy gate. It reaches contracts and nothing else: an
+  # allow-list that could import an implementation is an allow-list that
+  # can be edited by the thing it is meant to constrain.
+  oxedge_policygate:
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire]
+  # The unix-socket gate the agent process reaches across. It depends on
+  # policygate's decision types (GateResult, Decision), which is the one
+  # internal edge-to-edge edge, published deliberately so the socket and
+  # the in-process gate cannot disagree about what a grant means.
+  oxedge_gatesocket:
+    mayDependOn: [oxcore_domain, oxcore_wire, oxedge_policygate]
+  # The broker executes what the gate admitted. It may not import
+  # policygate: reaching a decision is the gate's job, and a broker that
+  # could decide could approve its own calls.
+  oxedge_toolbroker:
+    mayDependOn: [oxcore_wire]
+  # pigwire translates PiG's stream into the frozen SSE frames. It reaches
+  # the contract layer only — the translation is the whole component.
+  oxpig_wire:
+    mayDependOn: [oxcore_ports, oxcore_wire]
 
   # sdk is what third-party plugins compile against. It may not reach any
   # internal implementation, or a plugin would inherit OpsKeeper's whole
@@ -129,10 +196,33 @@ deps:
   oxplugin_sdk:
     mayDependOn: [oxcore_domain, oxcore_wire]
 
+  # harness is the evaluation plane. It depends on the contract layer and
+  # on nothing else internal: a golden-case corpus that could import an
+  # implementation would make "run the regression" depend on the server's
+  # dependency graph. The model call it needs arrives as ports.Completer,
+  # injected by the caller.
+  oxharness_schema:
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire]
+  oxharness_injector:
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire]
+  oxharness_judge:
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxharness_schema]
+  oxharness_runner:
+    mayDependOn:
+      [oxcore_domain, oxcore_ports, oxcore_wire, oxharness_schema, oxharness_injector, oxharness_judge, oxharness_leaderboard]
+  oxharness_leaderboard:
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxharness_schema]
+
   # ---------------- 共享 ----------------
   shared_pkg:
-    # 不得依赖任何 BC（业务无关）
-    mayDependOn: []
+    # 不得依赖任何 BC（业务无关）。允许依赖契约层——契约层本身与业务无关，
+    # 依赖它不会把任何业务语义带进 shared_pkg。
+    #
+    # oxpig_model 的例外是决策 33 的直接后果：PiG 支撑的 llm.Client 必须
+    # 落在根模块（core/pig 不能 import 根模块），而 llm 住在 shared_pkg。
+    # oxedge_policygate 同理：清单校验要读闸门的决策类型，才不会对"批准"
+    # 有一套自己的理解。
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxpig_model, oxedge_policygate]
   api:
     mayDependOn: []
 
@@ -164,7 +254,16 @@ deps:
       - oxcore_wire
       - oxpig_model
       - oxpig_agent
+      - oxpig_rpc
+      - oxpig_wire
+      - oxedge_pigsup
+      - oxedge_policygate
+      - oxedge_gatesocket
+      - oxedge_toolbroker
       - oxplugin_sdk
+      - oxharness_schema
+      - oxharness_runner
+      - oxharness_leaderboard
 
 # 注：go-arch-lint 的 schema 字段（version / components / deps）按 v3
 # 主流文档书写；若 CI 报 schema 错，按实际版本微调字段名即可。

@@ -64,7 +64,7 @@ type StaticRule struct {
 	OnHit        OnHitBehavior `json:"on_hit"      yaml:"on_hit"`
 
 	// HarnessCaseID 关联 Harness 黄金事故 case ID（Day 7 跑通）。
-	// 与 internal/harness/cases/schema.json 中的 id 对齐。
+	// 与 core/harness/cases/*/case.yaml 中的 case id 对齐。
 	HarnessCaseID string `json:"harness_case_id" yaml:"harness_case_id"`
 }
 

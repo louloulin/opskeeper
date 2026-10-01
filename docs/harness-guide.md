@@ -32,7 +32,119 @@ opskeeper-eval inject --case k8s/pod-oom --env staging  # 仅注入不评分
 opskeeper-eval judge --case pg/long-running-tx --response agent-response.json  # 外部 judge
 opskeeper-eval leaderboard                          # 查看排行榜
 opskeeper-eval leaderboard --since 30d              # 近 30 天
+opskeeper-eval plugin-coverage                      # golden case 的能力期望 vs 插件包能力
+opskeeper-eval plugin-coverage --fail-on-gap         # CI：有结构性缺口即非零退出
+opskeeper-eval plugin-coverage --filter host/ --json # 只看主机类，机器可读
+opskeeper-eval vocabulary                           # golden case 的能力期望 vs 本构建全部能力注册表
+opskeeper-eval vocabulary --fail-on-gap              # CI：有结构上无法满足的 case 即非零退出
+opskeeper-eval vocabulary --json                    # 机器可读
+opskeeper-eval vocabulary --kind-map kinds.json     # 校验 kind 映射文件是否陈旧
+
+# 闭环最后一环：生产契约 → judge 可评分的响应
+opskeeper-eval project --contract rc.json --kind-map kinds.json --out resp.json
+opskeeper-eval project --contract rc.json --kind-map kinds.json --bare --out resp.json
+opskeeper-eval judge --case pg/lock-waits --response resp.json   # 直接评分
 ```
+
+> `judge` 会先做能力检查：本构建无法产出的 case **直接拒绝打分**，并指名缺哪个
+> 符号。确实要打分（例如为了看部分得分曲线）时加 `--allow-unservable`，结果
+> 里的 `unservable_case` 字段会一直跟着这个分数。
+
+---
+
+## 二.5、能力覆盖闸门（plugin-coverage）
+
+**问题**：golden case 的期望写成 `<family>.<method>`（`pg.lock_waits`、
+`host.host_load`），而舰队的能力来自插件包。两套词汇之前没有人做过连接，
+于是**一个结构上不可能通过的 case 会永远打 0 分**，而 leaderboard 把它
+显示成"Agent 不行"——这是个会让所有人查错方向的假象。
+
+**加入**：`internal/pkg/pluginmanifest/coverage.go` 建立连接表，
+`opskeeper-eval plugin-coverage` 打印结果，`--fail-on-gap` 让 CI 卡住。
+
+**关键性质**：
+
+- **映射是声明的，不是猜的**。`toolCapabilities` 的每一条都是从注册该工具的
+  extension 里读出来的，不是从工具名前缀推出来的——按前缀推会把
+  `list_database_sources` 猜对、`query_change_events` 猜错。
+- **每个缺口都要有解释**，而不是只报一个数字。归到两个命名清单之一：
+  - `MiddlewareFamilies`（`pg` / `redis` / `k8s` / `mq` / `kafka` / `rabbitmq`）
+    —— 控制面 adapter，**不是**插件包。清单的词汇来自 adapter 实现
+    （`internal/middleware/adapter/<pkg>/<pkg>.go` 注册 `"<pkg>.method"`），
+    不是 case 所在目录名：mq 目录下的 case 写的是 `kafka.*` / `rabbitmq.*`，
+    按目录名建表会把它们全报成"包不存在"。
+  - `NonPackageFamilies`（`git-artifact`）—— 控制面关联器，根本不是工具族。
+- **两个方向的漂移都是红色**：
+  - 己方包有工具没有能力族 → `TestEveryShippedToolHasACapabilityFamily`
+    （否则该工具对应的 case 会静默掉分）。
+  - 表里有条目没有对应工具 → `TestTheCapabilityTableHasNoDeadEntries`
+    （改名后遗留的死键在 review 时是误导）。
+  - case 里出现既没被打包、也没被任何清单解释的族 →
+    `TestEveryCaseFamilyIsEitherPackagedOrNamedAsADeliberateGap`。
+
+**当前真实结果：2/20 全绿。** host 两例由只读包覆盖；其余 18 例的缺口
+**全部**落在控制面 adapter 上。这是仓库的真实状态，不是回归——把它打印
+出来正是这个闸门存在的意义。
+
+---
+
+## 二.6、结构可满足性闸门（vocabulary）
+
+**问题**：`plugin-coverage` 回答的是"**插件包**能不能服务这个期望"。在那之前
+还有一层更靠前的问题——"**这个系统**能不能产出这个期望"。两套词表写在不同
+地方，从没有人做过连接，于是**一个任何注册表都没有对应工具的 case 会永远打
+0 分**，而 leaderboard 把它显示成"Agent 不行"。
+
+**加入**：`core/harness/vocabulary`（纯计算，不依赖实现）+ `opskeeper-eval
+vocabulary`。四个能力来源按"谁拥有这个能力"的顺序被咨询：
+
+| 来源 | 覆盖形态 | 读法 |
+|---|---|---|
+| `middleware-adapter` | **精确符号** | 真实调用 6 个 adapter 的 `RegisterTools` 进一个空 registry，再 `ListTools("")`。**不扫源码** |
+| `plugin:<name>` | **能力族** | `p.Capabilities()`。包声明的是"我覆盖 host 这个族"，不是逐个方法名 |
+| `loop-investigator` | **精确符号** | `investigatorreal.RemediationActions`（闭环修复规划器实际会提出的动作） |
+| `loop-root-cause-kinds` | 单独报告 | 从 `investigatedOutputSchema` **派生**的 enum，不并入并集 |
+
+**关键性质**：
+
+- **精确匹配优先于族匹配**。`plugin-coverage` 已经论证过按族连接是刻意的
+  （逐方法名匹配会在包改名的瞬间产生假阴性）；这里再进一步——全构建范围内
+  只要有任何一个注册表按字面名注册了该符号，就报那个注册表，因为它才是能被
+  精确指过去的子系统。
+- **adapter 工具表是"跑出来的"，不是"扫出来的"**。抓字符串字面量是第二个
+  解析器，它对什么算工具名有自己的看法，并且会静默漏掉任何它没有建模的注册
+  路径——而那正是能力闸门要防的失效。
+- **loop 的动作表有 AST 漂移测试**（`TestTheDeclaredVocabularyMatchesTheCode`），
+  双向比对：代码能产出但没声明 → 红；声明了但没代码路径能产出 → 红。
+- **根因 enum 是派生的**，直接解析模型实际被约束的那份 JSON schema，所以
+  不存在漂移可能；restate 一份就会变成"带测试形状的注释"。
+
+**`judge` 的拒绝**。可满足性不达标时 `opskeeper-eval judge` **直接拒绝打分**，
+错误信息指名缺哪个符号。理由和 plugin-coverage 一样：一个 0 分在产物里会被读
+成对 agent 的判决，而它其实是对语料库/能力表的判决。`--allow-unservable`
+可以强行打分，代价是产物里永久带上 `unservable_case` 字段。
+
+**当前真实结果：9/20 可满足。** 缺口具体且小——14 个符号：
+
+- 根因 3 个：`k8s.top_pods`、`pg.replication_status`、`git-artifact.LinkK8sImage`
+- 修复 11 个：`k8s.uncordon`、`k8s.drain`、`k8s.resize_pvc`、`k8s.cleanup_logs`、
+  `kafka.restart_broker`、`kafka.scale_consumer`、`kafka.repartition`、
+  `rabbitmq.scale_consumer`、`redis.kill_client`、`redis.scan_and_delete`、
+  `redis.scan_and_redistribute`
+
+注意 `redis.kill_client`（语料）vs `redis.client_kill`（adapter 注册）：**这是
+改名未对齐，不是能力缺失**——两种读法差一个字，而闸门按精确匹配处理，所以它
+是缺口。这条差异要由人来裁决，代码不应该替人猜。
+
+**当前真实结果：平台 9/20，闭环 0/20。** 第二个数字才是决定 judge 会怎么做的
+那个——见下一节。
+
+> **一个被抓住的错误**：这个闸门的第一版只拿 corpus 去比
+> `investigatorreal.RemediationActions`，报出 **0/20**。那个数字是错的——
+> 语料的 57 个符号里有 36 个由真实 middleware adapter 注册。拿单个子系统去
+> 比整张能力表，得到的是"全都不满足"，而一个"全都不满足"的闸门和一个正常
+> 工作的闸门**长得一模一样**：都打印数字、都非零退出。因此
+> `TestACaseWhoseSymbolsTheAdaptersRegisterIsReportedServable` 把方向钉死。
 
 ---
 
@@ -41,15 +153,15 @@ opskeeper-eval leaderboard --since 30d              # 近 30 天
 ### 3.1 目录结构
 
 ```
-internal/harness/cases/<resource>/<case-name>/case.yaml
+core/harness/cases/<resource>/<case-name>/case.yaml
 ```
 
 例：
 
 ```
-internal/harness/cases/host/disk-full/case.yaml
-internal/harness/cases/pg/long-running-tx/case.yaml
-internal/harness/cases/redis/big-key/case.yaml
+core/harness/cases/host/disk-full/case.yaml
+core/harness/cases/pg/long-running-tx/case.yaml
+core/harness/cases/redis/big-key/case.yaml
 ```
 
 ### 3.2 YAML 字段规范
@@ -137,7 +249,7 @@ metadata:
 
 ### 3.4 JSON Schema 校验
 
-`internal/harness/cases/schema.json` 是权威 schema。新增 case 自动校验：
+`core/harness/schema/case.schema.json` 是权威 schema。新增 case 自动校验：
 
 ```bash
 opskeeper-eval validate --case pg/long-running-tx
@@ -277,7 +389,7 @@ on:
   pull_request:
     paths:
       - 'internal/manager/**'
-      - 'internal/harness/**'
+      - 'core/harness/**'
       - 'cmd/opskeeper-eval/**'
 
 jobs:
@@ -375,7 +487,7 @@ logcli query '{app="opskeeper-eval"} |= "inject"' --since=24h
 
 ### 9.1 贡献流程
 
-1. 在 `internal/harness/cases/<resource>/<new-case>/case.yaml` 写新 case
+1. 在 `core/harness/cases/<resource>/<new-case>/case.yaml` 写新 case
 2. `opskeeper-eval validate --case <new-case>` 校验 schema
 3. 在 staging 跑一次：`opskeeper-eval run --case <new-case> --env staging`
 4. PR review + 合并
@@ -403,3 +515,69 @@ logcli query '{app="opskeeper-eval"} |= "inject"' --since=24h
 - 集成指南：[docs/integration-guide.md](integration-guide.md)
 - 运维手册：[docs/operations-manual.md](operations-manual.md)
 - API 文档：[docs/api/harness.md](api/harness.md)
+
+
+---
+
+## 二.7、闭环投影（project）：让 judge 评的是系统真产出的东西
+
+**问题**：judge 评的是 `judge.AgentResponse`，生产写的是 `RootCauseJSON`，两者之间
+**什么都没有**。于是历史上每一个分数都来自手写的响应文件，golden 语料从来没有被
+真正考核过——它只被一份人手写的东西考核过。
+
+**三套词表在这里相遇，只有两套能对上**：
+
+| 来源 | 形状 | 能否直接映射 |
+|---|---|---|
+| `remediation_options[].action` | `pg.terminate_long_tx` | ✅ 与 case 同构 |
+| `root_cause_object.kind` | `pg_lock`（闭集 enum） | ❌ 另一套 namespace |
+| `evidence_chain[].tool` | `query_promql`（裸名、跨族） | ⚠️ 只能作为 tool call 供 LLM judge 推理，不参与精确匹配 |
+
+**根因那一列是刻意留空的。** 投影包 `core/harness/projection` 接受一个
+`Resolver`，由调用方通过 `--kind-map` 提供：
+
+```bash
+opskeeper-eval project --contract rc.json \
+  --kind-map docs/kind-map.example.json \
+  --detected-at 2026-10-01T09:59:19Z \
+  --investigated-at 2026-10-01T10:00:00Z \
+  --recovered-at 2026-10-01T10:01:28Z \
+  --bare --out resp.json
+```
+
+- **kind 映射是数据，不是代码分支**。"pg_lock 和 pg.lock_waits 是同一个发现"是一次
+  关于**语义**的判断，只有懂这个领域的人能做；写成代码分支会让这个判断永远隐形。
+  写成 JSON，它可以被 review、diff、签字。
+- **没有映射就拒绝出响应**（除非 `--allow-unmapped-root-cause`）。输出一个
+  `root_cause_matched` 为空的响应，judge 会打 0 分并读成"这次诊断什么都没找到"——
+  那是一次凭空捏造的判决。
+- **`--bare` 输出裸响应**，因为 `judge --response` 已经用严格解码读
+  `judge.AgentResponse`；再套一层外壳等于让 judge 为同一个类型学第二套 schema。
+- **映射文件会被校验**：`vocabulary --kind-map` 会检查每一条映射指向的符号是否真的
+  有人产出。映射是数据，工具改名之后它会静默指向一个不存在的名字，然后每一次
+  经过它的运行都在 `remediation_quality` 上打 0 而**任何地方都不报错**。仓库里的
+  `docs/kind-map.example.json` 由一条测试守着（`TestTheShippedExampleKindMapHasNoStaleEntries`），
+  所以它是被维护的产物而不是会腐烂的文档。
+
+**端到端实测**（真实契约，`pg_lock` → 映射到 `pg/lock-waits` 的期望根因）：
+
+```
+$ opskeeper-eval project --contract rc.json --kind-map kinds.json --bare --out resp.json
+project: kind=pg_lock root_cause=[pg.lock_waits pg.active_sessions]
+         remediations=[pg.terminate_long_tx pg.kill_backend] tool_calls=2 → resp.json
+
+$ opskeeper-eval judge --case pg/lock-waits --response resp.json
+  rca_accuracy         1     ← kind 映射生效
+  remediation_quality  0     ← 闭环提的是 pg.kill_backend，case 期望 pg.kill_session
+  time_efficiency      1     ← 41s/60s、88s/120s
+  overall              0.70
+```
+
+那个 0 是**这一整轮最有价值的输出**：它把"闭环提不出语料期望的修复动作"这件一直
+看不见的事，变成了一个可以指着数字讨论的事实。
+
+**防锈**：`projection.Doc` 是 `loop.RootCauseJSON` 的手写镜像（评测面不得依赖控制面
+实现，这是 `scripts/modulecheck` 的模块规则）。镜像会烂——契约加字段，两边都还能编译，
+投影悄悄少投一层。所以有两条双向测试：真实契约过线格式进镜像（**严格解码**，未知字段
+即失败），镜像写出的东西再读回控制面类型。变异验证：给 `loop.RootCauseObject` 加一个
+字段 → `TestTheMirrorStillMatchesTheContract` 精确报错。

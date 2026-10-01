@@ -36,6 +36,13 @@ type Node interface {
 	Install(ctx context.Context, edgeID uint64, spec ports.PluginSpec) Outcome
 	// Remove asks a node to give one back.
 	Remove(ctx context.Context, edgeID uint64, name, version string) Outcome
+	// Restore asks a node to put a version it already has back in front.
+	//
+	// It is separate from Install because a restore has no artifact to
+	// fetch: the superseded version is still on the node's disk, and the
+	// manager has no URL for it — the only spec it holds is the one it is
+	// rolling back. See ports.PluginInstaller.Restore.
+	Restore(ctx context.Context, edgeID uint64, name, version string) Outcome
 }
 
 // Outcome is what a node said.
@@ -155,7 +162,7 @@ func Start(ctx context.Context, node Node, spec ports.PluginSpec, nodeIDs []uint
 	if err != nil {
 		return nil, err
 	}
-	if err := r.dispatch(ctx); err != nil {
+	if err := r.Dispatch(ctx); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -190,10 +197,18 @@ func Plan(spec ports.PluginSpec, nodeIDs []uint64, strategy string, node Node, l
 // same wave would re-install to every node in it, so a Release drives it
 // through Advance instead, which only moves after the wave is accounted
 // for.
+//
+// The lock is held only to read the wave, not across the requests. That
+// matters: a wave is one HTTP-shaped call per node, and holding the mutex
+// for the whole wave would make Halt — the one method an operator reaches
+// for when a canary is going wrong — block until every node in the wave had
+// answered. An emergency stop that waits for the thing it is stopping is
+// not a stop.
 func (r *Rollout) Dispatch(ctx context.Context) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.dispatch(ctx)
+	wave := append([]uint64(nil), r.plan.Wave()...)
+	r.mu.Unlock()
+	return r.dispatch(ctx, wave)
 }
 
 // Spec returns the package being rolled out.
@@ -202,57 +217,72 @@ func (r *Rollout) Spec() ports.PluginSpec { return r.spec }
 // Plan exposes the underlying plan for a console's progress display.
 func (r *Rollout) Plan() *pluginmanifest.Rollout { return r.plan }
 
-// dispatch sends the current wave. The caller holds the lock.
-func (r *Rollout) dispatch(ctx context.Context) error {
-	wave := r.plan.Wave()
+// dispatch sends one wave.
+//
+// It takes the wave's nodes as an argument rather than reading them off the
+// plan so the caller can release the lock before any request goes out. Each
+// result is folded back in under the lock, so a Halt arriving mid-wave is
+// recorded the moment the node in flight has answered.
+func (r *Rollout) dispatch(ctx context.Context, wave []uint64) error {
 	for _, edgeID := range wave {
 		out := r.node.Install(ctx, edgeID, r.spec)
 
+		r.mu.Lock()
 		if out.Status == StatusInstalled {
 			r.reached[edgeID] = previousOf(out.Replaced)
 			r.plan.Confirm(edgeID)
-			if r.log != nil {
-				r.log.Info("plugin installed on node",
-					slog.Uint64("edge", edgeID),
-					slog.String("plugin", r.spec.Name),
-					slog.String("version", r.spec.Version),
-					slog.String("digest", out.Digest))
+		} else if answered(out.Status) {
+			reason := out.Reason
+			if reason == "" {
+				reason = "the node gave no reason"
 			}
-			continue
+			r.plan.Fail(edgeID, fmt.Errorf("%s: %s", out.Status, reason))
 		}
-		if !answered(out.Status) {
-			// Left pending on purpose. See answered.
-			if r.log != nil {
-				r.log.Warn("plugin install produced no answer from node; leaving it pending",
-					slog.Uint64("edge", edgeID),
-					slog.String("plugin", r.spec.Name),
-					slog.String("version", r.spec.Version))
-			}
-			continue
-		}
+		r.mu.Unlock()
+		r.logOutcome(ctx, edgeID, out)
+	}
+	return nil
+}
+
+// logOutcome records one node's answer.
+//
+// A refusal is logged at warn and a failure at error on purpose. A refusal
+// means this node's configuration says no and will keep saying no; a
+// failure means the request did not get through, and that is the one an
+// operator should be woken for. A blank answer is the third case — a node
+// nobody has heard from — and leaving it pending is deliberate; see
+// answered.
+func (r *Rollout) logOutcome(ctx context.Context, edgeID uint64, out Outcome) {
+	if r.log == nil {
+		return
+	}
+	switch {
+	case out.Status == StatusInstalled:
+		r.log.Info("plugin installed on node",
+			slog.Uint64("edge", edgeID),
+			slog.String("plugin", r.spec.Name),
+			slog.String("version", r.spec.Version),
+			slog.String("digest", out.Digest))
+	case !answered(out.Status):
+		r.log.Warn("plugin install produced no answer from node; leaving it pending",
+			slog.Uint64("edge", edgeID),
+			slog.String("plugin", r.spec.Name),
+			slog.String("version", r.spec.Version))
+	default:
 		reason := out.Reason
 		if reason == "" {
 			reason = "the node gave no reason"
 		}
-		r.plan.Fail(edgeID, fmt.Errorf("%s: %s", out.Status, reason))
-		if r.log != nil {
-			// A refusal is logged at warn and a failure at error on
-			// purpose. A refusal means this node's configuration says no
-			// and will keep saying no; a failure means the request did not
-			// get through, and that is the one an operator should be
-			// woken for.
-			level := slog.LevelWarn
-			if out.Status == StatusFailed {
-				level = slog.LevelError
-			}
-			r.log.Log(ctx, level, "plugin not installed on node",
-				slog.Uint64("edge", edgeID),
-				slog.String("plugin", r.spec.Name),
-				slog.String("status", out.Status),
-				slog.String("reason", reason))
+		level := slog.LevelWarn
+		if out.Status == StatusFailed {
+			level = slog.LevelError
 		}
+		r.log.Log(ctx, level, "plugin not installed on node",
+			slog.Uint64("edge", edgeID),
+			slog.String("plugin", r.spec.Name),
+			slog.String("status", out.Status),
+			slog.String("reason", reason))
 	}
-	return nil
 }
 
 // Report records a node's answer to a current-wave install.
@@ -308,20 +338,25 @@ func (r *Rollout) Report(ctx context.Context, edgeID uint64, out Outcome) {
 // fleet.
 func (r *Rollout) Advance(ctx context.Context) (bool, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	if r.halted {
+		defer r.mu.Unlock()
 		return false, fmt.Errorf("plugin rollout is halted: %s", r.haltReason)
 	}
 	if r.plan.Done() {
+		r.mu.Unlock()
 		return false, nil
 	}
 	if !r.plan.Advance() {
 		// Not an error. The wave is simply not accounted for, and the
 		// caller is expected to come back when it is.
+		r.mu.Unlock()
 		return false, nil
 	}
-	if err := r.dispatch(ctx); err != nil {
+	wave := append([]uint64(nil), r.plan.Wave()...)
+	r.mu.Unlock()
+
+	if err := r.dispatch(ctx, wave); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -399,13 +434,21 @@ func (r *Rollout) Rollback(ctx context.Context) error {
 			}
 			continue
 		}
-		// Put the node back on what it was running. This is a fresh
-		// install of an older release, so it goes through the same node
-		// review as any other package — the node is not being asked to
-		// trust us because we are rolling back.
-		restore := r.spec
-		restore.Version = before.version
-		back := r.node.Install(ctx, id, restore)
+		// Put the node back on what it was running.
+		//
+		// This is a restore and not an install, and the difference is the
+		// whole reason it works. The node still has the superseded
+		// version's directory; what it does not have is that version in
+		// its package list, because publishing one version per name is
+		// what stops an upgraded node from running both. Asking the node
+		// to *install* the old version would need a URL for it, and the
+		// manager does not have one: r.spec describes the version being
+		// removed, which is the one version a rollback must not reinstall.
+		//
+		// The node still reviews on the way back in, so this is not a
+		// trust exemption — it is the same review, over bytes that were
+		// already accepted once and may have changed since.
+		back := r.node.Restore(ctx, id, r.spec.Name, before.version)
 		if back.Status != StatusInstalled {
 			problems = append(problems, fmt.Sprintf("node %d: could not restore %s: %s",
 				id, before.version, back.Reason))

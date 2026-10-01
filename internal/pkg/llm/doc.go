@@ -2,8 +2,9 @@
 // per-day token budget hook and Prom instrumentation.
 //
 // Red line: no provider abstraction — interface shape follows
-// OpenAI's. SDK is github.com/sashabaranov/go-openai. No auto-retry (tools
-// are not idempotent); no streaming.
+// OpenAI's. The HTTP wire format is owned in this package (wire.go); no LLM
+// SDK is imported, so no library can reject a request our caller built.
+// No auto-retry (tools are not idempotent); no streaming.
 //
 // Red line: Prom labels MUST NOT contain user_id / org_id /
 // session_id. The only labels used here are model, kind, result.

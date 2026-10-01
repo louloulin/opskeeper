@@ -15,7 +15,7 @@
 // errors while another silently double-charges a token budget).
 //
 // Phase workers MUST hold an LLMCaller, never an *llm.Client or any
-// cloudwego/eino SDK API. The orchestrator wires a single LLMCaller
+// provider SDK API. The orchestrator wires a single LLMCaller
 // at startup and shares it across all workers; bypassing the seam
 // re-introduces the duplication this abstraction exists to remove.
 //
@@ -38,8 +38,8 @@ import (
 )
 
 // LLMCaller is the unified entry point phase workers use to invoke the
-// LLM. Phase workers MUST NOT call internal/pkg/llm or any
-// cloudwego/eino SDK directly.
+// LLM. Phase workers MUST NOT call internal/pkg/llm or any provider SDK
+// directly.
 //
 // Failure semantics (see Call for the full matrix):
 //

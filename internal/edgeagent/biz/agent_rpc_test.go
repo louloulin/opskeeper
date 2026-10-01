@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -353,5 +354,141 @@ func TestAGateCallNamingTheRealSessionIsAnsweredByItsOwnRecord(t *testing.T) {
 
 	if got := b.ActorFor("s-viewer"); got != "viewer" {
 		t.Errorf("actor = %q, want viewer: the newest turn must not override an older conversation's own role", got)
+	}
+}
+
+// --- StartEvents must not block its caller -------------------------------
+
+// liveSource is a source whose agent process is real enough to subscribe
+// to, so the relay path is exercised rather than skipped.
+type liveSource struct {
+	proc  *liveProcess
+	mu    sync.Mutex
+	subs  []func(ports.ProcessEvent)
+	ready chan struct{}
+}
+
+func (s *liveSource) Process() (ports.AgentProcess, error) { return s.proc, nil }
+func (s *liveSource) Health() ports.ProcessHealth          { return ports.ProcessHealth{Running: true} }
+
+func (s *liveSource) subscribe(fn func(ports.ProcessEvent)) {
+	s.mu.Lock()
+	s.subs = append(s.subs, fn)
+	s.mu.Unlock()
+	select {
+	case s.ready <- struct{}{}:
+	default:
+	}
+}
+
+func (s *liveSource) emit(ev ports.ProcessEvent) {
+	s.mu.Lock()
+	var subs []func(ports.ProcessEvent)
+	subs = append(subs, s.subs...)
+	s.mu.Unlock()
+	for _, fn := range subs {
+		fn(ev)
+	}
+}
+
+// liveProcess is the minimum AgentProcess the relay needs.
+type liveProcess struct {
+	src *liveSource
+}
+
+func (p *liveProcess) Start(context.Context) error                    { return nil }
+func (p *liveProcess) Stop() error                                    { return nil }
+func (p *liveProcess) Running() bool                                  { return true }
+func (p *liveProcess) Exited() <-chan struct{}                        { return make(chan struct{}) }
+func (p *liveProcess) LastError() error                               { return nil }
+func (p *liveProcess) Prompt(context.Context, string) error           { return nil }
+func (p *liveProcess) Steer(context.Context, string) error            { return nil }
+func (p *liveProcess) Abort(context.Context) error                    { return nil }
+func (p *liveProcess) SetModel(context.Context, string, string) error { return nil }
+func (p *liveProcess) State(context.Context) (*ports.ProcessState, error) {
+	return &ports.ProcessState{}, nil
+}
+func (p *liveProcess) OnEvent(fn func(ports.ProcessEvent)) func() {
+	p.src.subscribe(fn)
+	return func() {}
+}
+
+// capturingTunnel records what the bridge pushes.
+type capturingTunnel struct {
+	mu    sync.Mutex
+	frame tunnel.AgentEventFrame
+	got   chan struct{}
+}
+
+func newCapturingTunnel() *capturingTunnel { return &capturingTunnel{got: make(chan struct{}, 8)} }
+
+func (c *capturingTunnel) Call(_ context.Context, method string, req, _ any) error {
+	if method != tunnel.MethodAgentEvent {
+		return nil
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	var f tunnel.AgentEventFrame
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.frame = f
+	c.mu.Unlock()
+	select {
+	case c.got <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// TestStartEventsDoesNotBlockItsCaller is a regression test for a wedge
+// that shipped: Agent.Run calls StartEvents from the middle of its
+// startup sequence, believing it returns immediately. A version that
+// blocked there stranded the changewatcher, the upgrade sentinel, eg.Wait
+// and therefore graceful shutdown — while the node kept heartbeating and
+// looked perfectly healthy to an operator.
+func TestStartEventsDoesNotBlockItsCaller(t *testing.T) {
+	src := &liveSource{ready: make(chan struct{}, 1)}
+	src.proc = &liveProcess{src: src}
+	tunnelStub := newCapturingTunnel()
+	b, err := NewAgentBridge(AgentBridgeOptions{Source: src, Client: tunnelStub, EdgeID: 7})
+	if err != nil {
+		t.Fatalf("NewAgentBridge: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	returned := make(chan struct{})
+	go func() {
+		b.StartEvents(ctx)
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartEvents blocked its caller; everything sequenced after it in Agent.Run is unreachable")
+	}
+
+	// And the relay must still work — a non-blocking StartEvents that
+	// quietly stopped relaying would be the same outage with a nicer
+	// shape.
+	select {
+	case <-src.ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartEvents returned without subscribing to the process")
+	}
+	src.emit(ports.ProcessEvent{
+		Type: "turn_start", SessionID: "s-1", Seq: 1,
+		Payload: []byte(`{}`),
+	})
+	select {
+	case <-tunnelStub.got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no event reached the tunnel after StartEvents returned")
 	}
 }

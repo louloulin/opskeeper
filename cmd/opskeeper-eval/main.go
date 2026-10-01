@@ -20,11 +20,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
-	harnessleaderboard "github.com/vincent-wuhan/opskeeper/internal/harness/leaderboard"
-	"github.com/vincent-wuhan/opskeeper/internal/harness/runner"
+	harnessleaderboard "github.com/vincent-wuhan/opskeeper/core/harness/leaderboard"
+	"github.com/vincent-wuhan/opskeeper/core/harness/runner"
 )
 
 // version 由 build 阶段注入
@@ -65,6 +66,12 @@ func main() {
 		err = cmdRunLoop(ctx, args)
 	case "list-cases":
 		err = cmdListCases(ctx, args)
+	case "plugin-coverage":
+		err = cmdPluginCoverage(ctx, args)
+	case "vocabulary":
+		err = cmdVocabulary(ctx, args)
+	case "project":
+		err = cmdProject(ctx, args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n\n", sub)
 		printUsage()
@@ -90,6 +97,11 @@ SUBCOMMANDS:
   run-loop     harness loop-mode 跑闭环（Day 6+）
                run-loop --execution-mode=real-agentteams 需要 --incident-id/--trace-id 与六类证据文件
   list-cases   列出所有 golden case
+  plugin-coverage  把 golden case 的能力期望与插件包能力做对照（哪些 case 结构上不可能通过）
+  vocabulary       把 golden case 的能力期望与本构建真实能产出的词表做对照
+                   （哪些 case 连结构上都无法满足——这类 case 的分数不是 agent 的成绩）
+  project          把生产的 RootCauseJSON 契约投影成 judge.AgentResponse
+                   project --contract rc.json --kind-map kinds.json --out resp.json
 
 FLAGS:
   --version    输出版本
@@ -101,7 +113,10 @@ EXAMPLE:
   opskeeper-eval run --case pg/long-running-tx --env staging
   opskeeper-eval run --suite middleware-baseline --concurrency 4
   opskeeper-eval inject --case k8s/pod-oom --target ns=test deploy=order-svc
-  opskeeper-eval judge --incident report-20260713-001.json --model claude-sonnet-4
+  opskeeper-eval judge --case pg/long-running-tx --response agent-response.json
+  opskeeper-eval judge --case pg/long-running-tx --response agent-response.json --judge llm --provider anthropic
+  opskeeper-eval run-loop --case host/cpu-spike --execution-mode=real-agentteams \
+      --incident-id host-cpu-spike-real --trace-id <32 hex> --postmortem-evidence pm.json --judge llm
   opskeeper-eval leaderboard --show --period 30d
   opskeeper-eval list-cases --filter pg
 
@@ -177,22 +192,6 @@ func cmdInject(ctx context.Context, args []string) error {
 }
 
 // cmdJudge 重跑 judge。
-func cmdJudge(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("judge", flag.ExitOnError)
-	incidentPath := fs.String("incident", "", "incident 报告路径")
-	model := fs.String("model", "claude-sonnet-4", "judge 模型")
-	rubricPath := fs.String("rubric", "", "rubric JSON 路径")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if *incidentPath == "" {
-		return fmt.Errorf("--incident required")
-	}
-	fmt.Printf("judge: incident=%s model=%s rubric=%s\n", *incidentPath, *model, *rubricPath)
-	fmt.Println("(skeleton) — full implementation in Task 2.7")
-	return nil
-}
-
 // cmdLeaderboard — Day 6+ harness loop leaderboard.
 //
 // Aggregates harness/result/loop/*.json → harness/result/leaderboard-<date>.md。
@@ -254,7 +253,7 @@ func cmdRunLoop(ctx context.Context, args []string) error {
 	tenantID := fs.String("tenant", "harness-default", "tenant ID")
 	incidentID := fs.String("incident-id", "", "real-agentteams 模式必填，必须贯穿全部证据")
 	traceID := fs.String("trace-id", "", "real-agentteams 模式必填，32 位小写 hex trace ID")
-	casesDir := fs.String("cases-dir", "internal/harness/cases", "cases 目录")
+	casesDir := fs.String("cases-dir", "core/harness/cases", "cases 目录")
 	outDir := fs.String("out-dir", "harness/result/loop", "LoopResult JSON 输出目录")
 	stateEvidence := fs.String("state-evidence", "", "real-agentteams state.json 路径")
 	hitlEvidence := fs.String("hitl-evidence", "", "real-agentteams Matrix HITL/proposal evidence 路径")
@@ -262,6 +261,9 @@ func cmdRunLoop(ctx context.Context, args []string) error {
 	fixtureBeforeEvidence := fs.String("fixture-before-evidence", "", "real-agentteams fixture before evidence 路径")
 	fixtureAfterEvidence := fs.String("fixture-after-evidence", "", "real-agentteams fixture after evidence 路径")
 	postmortemEvidence := fs.String("postmortem-evidence", "", "real-agentteams postmortem evidence 路径")
+	judgeMode := fs.String("judge", judgeHeuristic, "评分器：heuristic（不联网）/ llm（真实模型评分，仅 real-agentteams 模式有意义）")
+	judgeProvider := fs.String("judge-provider", "", "LLM provider（llm 模式）")
+	judgeModel := fs.String("judge-model", "", "模型（llm 模式）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -273,6 +275,13 @@ func cmdRunLoop(ctx context.Context, args []string) error {
 		return err
 	}
 	executionMode, err := runner.ParseLoopExecutionMode(*executionModeStr)
+	if err != nil {
+		return err
+	}
+	// Resolved before the run so an unusable judge configuration is a
+	// refusal to start rather than a run that produces an unscored result
+	// and reports success.
+	deps, err := buildLoopDeps(*judgeMode, *judgeProvider, *judgeModel, executionMode)
 	if err != nil {
 		return err
 	}
@@ -294,7 +303,7 @@ func cmdRunLoop(ctx context.Context, args []string) error {
 			FixtureAfter:  *fixtureAfterEvidence,
 			Postmortem:    *postmortemEvidence,
 		},
-	}, runner.LoopDeps{})
+	}, deps)
 	if err != nil {
 		return fmt.Errorf("run-loop: %w", err)
 	}
@@ -304,7 +313,48 @@ func cmdRunLoop(ctx context.Context, args []string) error {
 	fmt.Printf("  time_to_remediate: %s\n", res.Rubric.TimeToRemediate)
 	fmt.Printf("  approval_rate: %v\n", fmtFloatPtr(res.Rubric.ApprovalRate))
 	fmt.Printf("  recovery_pass_rate: %v\n", fmtFloatPtr(res.Rubric.RecoveryPassRate))
+	// Provenance, printed next to the numbers it describes. A reader who
+	// sees four rubric figures and no judge cannot tell a measurement from
+	// a synthesis, and the synthesis is the default in every mode but one.
+	if len(res.JudgeScores.JudgesUsed) == 0 {
+		fmt.Printf("  judge: none — rca_accuracy is synthesized from the terminal phase, not judged\n")
+	} else {
+		fmt.Printf("  judge: %s (overall=%.3f)\n",
+			strings.Join(res.JudgeScores.JudgesUsed, ","), res.JudgeScores.Overall)
+	}
+	for _, f := range res.Flags {
+		if f == "judge_heuristic_on_free_text" {
+			fmt.Printf("  warning: the heuristic judge matches symbolic root-cause ids by exact\n")
+			fmt.Printf("           string, so it cannot score a real postmortem's prose. This\n")
+			fmt.Printf("           rca_accuracy reflects the matcher, not the agent. Re-run with\n")
+			fmt.Printf("           --judge=llm for a score that means something.\n")
+		}
+	}
 	return nil
+}
+
+// buildLoopDeps resolves the judge wiring for one run.
+//
+// An LLM judge is only offered in real-agentteams mode. The other modes
+// either have no agent output to score (dry-run) or need an orchestrator
+// the CLI does not build (orchestrator), and injecting a paid model into a
+// run whose score is then discarded is a cost with no result.
+func buildLoopDeps(mode, provider, model string, executionMode runner.LoopExecutionMode) (runner.LoopDeps, error) {
+	if mode == judgeHeuristic {
+		return runner.LoopDeps{}, nil
+	}
+	if mode != judgeLLM {
+		return runner.LoopDeps{}, fmt.Errorf("--judge must be %q or %q, got %q", judgeHeuristic, judgeLLM, mode)
+	}
+	if executionMode != runner.ExecutionModeRealAgentTeams {
+		return runner.LoopDeps{}, fmt.Errorf(
+			"--judge=llm requires --execution-mode=real-agentteams: that is the only mode whose result carries an agent's own root cause to score")
+	}
+	c, err := resolveCompleter(provider, model)
+	if err != nil {
+		return runner.LoopDeps{}, err
+	}
+	return runner.LoopDeps{LLMClient: c}, nil
 }
 
 func fmtFloatPtr(p *float64) string {
@@ -317,7 +367,7 @@ func fmtFloatPtr(p *float64) string {
 // cmdListCases 列出所有 golden case。
 func cmdListCases(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("list-cases", flag.ExitOnError)
-	casesDir := fs.String("cases-dir", "internal/harness/cases", "cases 目录")
+	casesDir := fs.String("cases-dir", "core/harness/cases", "cases 目录")
 	filter := fs.String("filter", "", "过滤关键字（如 pg/redis/k8s）")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -350,7 +400,7 @@ func scanCases(dir, filter string) ([]string, error) {
 		if filepath.Base(path) != "case.yaml" {
 			return nil
 		}
-		// path 形如 internal/harness/cases/pg/long-running-tx/case.yaml
+		// path 形如 core/harness/cases/pg/long-running-tx/case.yaml
 		// 提取 pg/long-running-tx
 		rel, _ := filepath.Rel(dir, filepath.Dir(path))
 		if filter != "" && !contains(rel, filter) {

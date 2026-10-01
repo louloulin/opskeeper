@@ -128,4 +128,22 @@ type PluginInstaller interface {
 	// before a rollback so it can tell "removed" from "was never there",
 	// and an audit asking what this node can do has one place to ask.
 	Installed() []PluginInfo
+	// Restore re-activates a version this node already has on disk, with
+	// no fetch and no review of new bytes.
+	//
+	// It exists because Install cannot do this job. An upgrade keeps the
+	// superseded version, so the bytes are already here — but Install
+	// takes a PluginSpec, and the only spec the manager still holds when
+	// it decides to roll back is the one for the version it is removing.
+	// Asking the node to re-install the old version by URL would mean the
+	// manager remembering every version's coordinates forever, and a
+	// rollback that needs the release server to still be serving an
+	// artifact it may have garbage-collected.
+	//
+	// Restore makes the rollback what it should always have been: an
+	// operation on what this node has, decided by this node, requiring
+	// nothing of anybody else. A version that is not on disk is refused —
+	// the node does not fetch on demand, because a restore that downloads
+	// is an install wearing a different name.
+	Restore(ctx context.Context, name, version string) PluginState
 }

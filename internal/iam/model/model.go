@@ -153,3 +153,31 @@ type OrgMembership struct {
 
 // TableName pins the table name.
 func (OrgMembership) TableName() string { return "org_memberships" }
+
+// MembershipWithOrg is one membership together with the org it grants
+// access to.
+//
+// It lives in model rather than in the data layer because it is a shape
+// callers outside the data layer ask for by name. While it lived in
+// data/membership/store, the biz interface had to import the store to
+// name its return type and the service layer had to import the store to
+// name its own — and the store's package doc says the service layer must
+// never import data. A type that a public interface returns cannot live
+// below the layer that owns the interface: the type is part of the
+// contract, and the contract is what the layers above are written
+// against.
+//
+// The Org field is gorm-ignored because the row is joined in a second
+// query, not by the ORM: a membership's org is read in bulk for the
+// whole list rather than per row.
+type MembershipWithOrg struct {
+	OrgMembership
+	Org Org `gorm:"-"`
+}
+
+// MembershipWithUser is the mirror view: one membership together with the
+// user it belongs to. Same reasoning as MembershipWithOrg.
+type MembershipWithUser struct {
+	OrgMembership
+	User User `gorm:"-"`
+}

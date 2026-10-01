@@ -32,6 +32,7 @@ func NewHandler(uc *bizaudit.Usecase) *Handler { return &Handler{uc: uc} }
 // review governance evidence while mutations remain admin-only.
 func (h *Handler) Register(r chi.Router) {
 	r.Get("/v1/admin/audit-logs", h.list)
+	r.Get("/v1/admin/audit-logs/chain", h.chain)
 }
 
 type wireLog struct {
@@ -56,6 +57,32 @@ type wireLog struct {
 type listResp struct {
 	Items []wireLog `json:"items"`
 	Total int64     `json:"total"`
+}
+
+// chainResp is the tamper-evidence status of the whole ledger.
+//
+// Intact is a *bool rather than a bool because "there is no chain" and
+// "the chain is intact" are different answers, and a bool cannot tell
+// them apart. Null means the deployment has no key configured, which the
+// console has to render differently from a clean bill of health —
+// collapsing them would tell an operator asking about tampering that
+// nothing was found when nothing was checked.
+type chainResp struct {
+	// Enabled reports whether rows are being chained at all.
+	Enabled bool `json:"enabled"`
+	// Intact is null when the chain is disabled, true when the whole
+	// chain verified, false when it did not.
+	Intact *bool `json:"intact"`
+	// HeadSeq is the newest chained position, 0 when none.
+	HeadSeq uint64 `json:"head_seq"`
+	// AnchorSeq is the oldest position still present. Anything below it
+	// was removed by retention, so the ledger is verified only from here
+	// forward — a bounded claim the operator can see rather than one
+	// they have to assume.
+	AnchorSeq uint64 `json:"anchor_seq"`
+	// BrokenAtSeq and Reason are set only when Intact is false.
+	BrokenAtSeq uint64 `json:"broken_at_seq,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +123,48 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	out := listResp{Items: make([]wireLog, 0, len(rows)), Total: total}
 	for _, row := range rows {
 		out.Items = append(out.Items, toWire(row))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// chain reports whether the audit trail is tamper-evident and intact.
+//
+// It always answers 200. An operator asking "was this record altered?" is
+// asking a question whose answer may legitimately be "no", and returning
+// 500 for that would make the two outcomes indistinguishable to any
+// client that only looks at the status code.
+func (h *Handler) chain(w http.ResponseWriter, r *http.Request) {
+	if _, ok := tenantctx.From(r.Context()); !ok {
+		writeErr(w, errs.ErrUnauthorized)
+		return
+	}
+	state, err := h.uc.ChainState(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out := chainResp{Enabled: state.Enabled, HeadSeq: state.HeadSeq, AnchorSeq: state.AnchorSeq}
+	if !state.Enabled {
+		out.Reason = "audit chain disabled: OPSKEEPER_AUDIT_HMAC_KEY is not set, so rows carry no digest"
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	switch verr := h.uc.VerifyChain(r.Context()); {
+	case verr == nil:
+		ok := true
+		out.Intact = &ok
+	case errors.Is(verr, bizaudit.ErrChainDisabled):
+		out.Reason = verr.Error()
+	default:
+		bad := false
+		out.Intact = &bad
+		var broken *bizaudit.ErrChainBroken
+		if errors.As(verr, &broken) {
+			out.BrokenAtSeq = broken.Seq
+			out.Reason = broken.Reason
+		} else {
+			out.Reason = verr.Error()
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

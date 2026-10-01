@@ -32,7 +32,7 @@
 //
 // 严格 narrow interface 风格：
 //   - 不直接 import orchestrator 之外的包
-//   - 不依赖 cloudwego/eino / anthropic SDK
+//   - 不依赖任何 LLM provider SDK
 //   - LLM 通过 LLMCaller 抽象（subagent #1 落地的 shared seam）
 //   - 不引入新 go.mod 依赖
 package loop

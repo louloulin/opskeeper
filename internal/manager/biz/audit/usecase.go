@@ -17,6 +17,11 @@ import (
 
 // Repo is the persistence seam the usecase consumes. Implemented by
 // data/audit/store.Repo.
+//
+// DeleteOlderThan is unchained deletion by age and exists only for rows
+// written before the chain was switched on (Seq 0). Once the chain is on,
+// retention goes through ChainStore.DeleteChainedThrough so it can only
+// ever remove a prefix — see the retention comment in RunRetention.
 type Repo interface {
 	Insert(ctx context.Context, log *model.Log) error
 	List(ctx context.Context, f ListFilters) ([]model.Log, int64, error)
@@ -60,14 +65,55 @@ type Event struct {
 type Usecase struct {
 	repo Repo
 	log  *slog.Logger
+
+	// chain is nil-or-disabled on a deployment with no HMAC key. The
+	// write path checks Enabled() rather than assuming a chain exists,
+	// so "audit is on" and "audit is tamper-evident" never collapse into
+	// one silent truth.
+	chain *ChainStamper
+	// chainStore is nil when the deployment wired no chain store. A nil
+	// chainStore with an enabled chainer is a misconfiguration, and
+	// EmitWithID reports it instead of writing unchained rows under the
+	// impression that they are chained.
+	chainStore ChainStore
+}
+
+// Option configures a Usecase at construction.
+type Option func(*Usecase)
+
+// WithChain turns on the keyed hash chain. key is the deployment's
+// audit HMAC key; an empty key leaves the chain off, which callers should
+// surface rather than treat as a working audit trail.
+//
+// The store is required alongside the key. A chainer with nowhere to
+// commit its head would stamp rows that verify against nothing, so the
+// two are wired together by construction and a caller cannot half-enable
+// the chain.
+func WithChain(key string, chainStore ChainStore) Option {
+	return func(u *Usecase) {
+		u.chain = NewChainStamper(key)
+		u.chainStore = chainStore
+	}
 }
 
 // New builds a Usecase. log is mandatory for the warn-on-failure path.
-func New(repo Repo, log *slog.Logger) *Usecase {
+func New(repo Repo, log *slog.Logger, opts ...Option) *Usecase {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Usecase{repo: repo, log: log}
+	u := &Usecase{repo: repo, log: log}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(u)
+		}
+	}
+	if u.chain != nil && u.chain.Enabled() && u.chainStore != nil {
+		if err := u.chainStore.EnsureHead(context.Background()); err != nil {
+			u.log.Warn("audit: chain head could not be ensured; appends will retry per row",
+				slog.Any("err", err))
+		}
+	}
+	return u
 }
 
 // Emit persists one Event. Returns nothing — failures are warn-logged
@@ -118,10 +164,36 @@ func (u *Usecase) EmitWithID(ctx context.Context, ev Event) (uint64, error) {
 				slog.Any("err", err))
 		}
 	}
+	// The chained path is the only path that can report an ID, because
+	// the ID is the row's position in a chain that must be committed
+	// together with the row. Falling back to an unchained insert when
+	// the chain is misconfigured would be the worst of both: a ledger
+	// that looks chained and verifies as nothing.
+	if u.chainEnabled() {
+		stamper := u.chain
+		if err := u.chainStore.AppendChained(ctx, row, func(head store.Head) (store.Seal, error) {
+			return stamper.sealRow(row, head)
+		}); err != nil {
+			return 0, err
+		}
+		return row.ID, nil
+	}
+	// Unchained: either no chain was configured, or a chainer was
+	// configured with an empty key. Rows are still recorded — losing
+	// audit rows because nobody set a key would be a worse failure than
+	// having rows that carry no tamper-evidence — and ChainState /
+	// VerifyChain report the difference to whoever asks.
 	if err := u.repo.Insert(ctx, row); err != nil {
 		return 0, err
 	}
 	return row.ID, nil
+}
+
+// chainEnabled reports whether writes must go through the chain. It is a
+// method rather than a field read so the "enabled but nowhere to commit"
+// misconfiguration has exactly one answer everywhere it is asked.
+func (u *Usecase) chainEnabled() bool {
+	return u != nil && u.chain != nil && u.chain.Enabled() && u.chainStore != nil
 }
 
 // List is the read path for the admin UI.
@@ -180,7 +252,7 @@ func (u *Usecase) RunRetention(ctx context.Context, retentionDays int) error {
 		case <-timer.C:
 		}
 		cutoff := time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour)
-		removed, err := u.repo.DeleteOlderThan(ctx, cutoff)
+		removed, err := u.sweep(ctx, cutoff)
 		if err != nil {
 			u.log.Warn("audit retention: delete failed", slog.Any("err", err))
 			continue
@@ -196,4 +268,46 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// sweep removes rows older than cutoff while keeping the chain
+// verifiable.
+//
+// It is two deletes with different rules, and the difference is the
+// whole point. Unchained rows (Seq 0) are removed by age because nothing
+// links to them. Chained rows are removed as a *prefix of the chain*:
+// the walk stops at the first entry still inside the retention window.
+// Deleting by age alone would remove whatever row happened to carry an
+// old timestamp, and a single clock correction or retried insert is
+// enough to put one in the middle of the chain — where it produces a
+// verification failure no operator can distinguish from real tampering.
+// A chain that only ever loses its oldest entries has a describable
+// boundary, the anchor, which ChainState reports. A chain with a hole has
+// a mystery.
+func (u *Usecase) sweep(ctx context.Context, cutoff time.Time) (int64, error) {
+	var removed int64
+	if u.chainEnabled() {
+		cut, anchor, err := u.chainStore.TruncateExpiredPrefix(ctx, cutoff)
+		if err != nil {
+			return 0, err
+		}
+		removed += cut
+		if cut > 0 {
+			u.log.Info("audit retention: chain truncated at the front",
+				slog.Int64("rows_removed", cut),
+				slog.Uint64("new_anchor_seq", anchor))
+		}
+	}
+	// Pre-chain rows sit outside the chain and are swept by age alone.
+	var legacy int64
+	var err error
+	if u.chainEnabled() {
+		legacy, err = u.chainStore.DeleteUnchainedOlderThan(ctx, cutoff)
+	} else {
+		legacy, err = u.repo.DeleteOlderThan(ctx, cutoff)
+	}
+	if err != nil {
+		return removed, err
+	}
+	return removed + legacy, nil
 }

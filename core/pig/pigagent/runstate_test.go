@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,17 +91,34 @@ func (b *countingBudget) Allow(context.Context, string) (bool, string) {
 	return true, ""
 }
 
-// collectSink keeps the frames a turn produced, in order.
-type collectSink struct{ frames []wire.StreamEvent }
+// collectSink keeps the frames a turn produced.
+//
+// It is mutex-guarded because a kernel emits from every tool goroutine at
+// once. The slice is therefore in arrival order, not sequence order; a test
+// that cares about ordering sorts by Seq or reads the frames a single
+// goroutine produced.
+type collectSink struct {
+	mu     sync.Mutex
+	frames []wire.StreamEvent
+}
 
 func (s *collectSink) Emit(_ context.Context, ev wire.StreamEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.frames = append(s.frames, ev)
 	return nil
 }
 
+// Frames returns a copy of what was emitted so far.
+func (s *collectSink) Frames() []wire.StreamEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]wire.StreamEvent(nil), s.frames...)
+}
+
 func (s *collectSink) ofType(t wire.StreamEventType) []wire.StreamEvent {
 	var out []wire.StreamEvent
-	for _, f := range s.frames {
+	for _, f := range s.Frames() {
 		if f.Type == t {
 			out = append(out, f)
 		}
@@ -276,12 +294,46 @@ func TestGrantForDifferentArgumentsIsRefused(t *testing.T) {
 	}
 }
 
-func TestEmptyDigestDecisionStillRequiresGrant(t *testing.T) {
-	// A decision with no digest is treated as unbound, not as a grant: the
-	// only thing that can authorise a mutating call is an affirmative
-	// decision, and an unverified one is not affirmative enough.
+func TestAGrantWithoutTheBindingDigestIsRefused(t *testing.T) {
+	// An affirmative answer that does not echo the digest is not a grant. A
+	// host that dropped the field would otherwise authorise whatever call
+	// arrived next under the same request id, which is the one hole the
+	// digest exists to close.
+	//
+	// This is stricter than the request-id-only matching an empty digest
+	// used to fall back to, and the strictness is the point: the request
+	// carries the digest (see ports.ApprovalRequest.Digest), so a host has
+	// the value it needs to echo, and a host that does not echo it is not
+	// implementing the binding.
 	gate := &recordingGate{decide: func(req ports.ApprovalRequest) (ports.Decision, error) {
 		return ports.Decision{RequestID: req.ID, Digest: "", Decision: ports.ApprovalGranted}, nil
+	}}
+	r, sink := harness(t, ports.AgentDeps{
+		Tools: staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
+		Gate:  gate,
+	})
+
+	res := r.beforeToolCall(context.Background(), "tc-1", "restart_service", json.RawMessage(`{"target":"web-1"}`))
+	if !res.Block {
+		t.Fatal("an unbound grant authorised a mutating call")
+	}
+	if !strings.Contains(res.Reason, "digest") {
+		t.Fatalf("reason = %q, want it to name the binding failure", res.Reason)
+	}
+	if resolved := sink.ofType(wire.StreamApprovalResolved); len(resolved) != 1 {
+		t.Fatalf("approval_resolved frames = %d, want 1", len(resolved))
+	}
+}
+
+func TestTheRequestCarriesTheDigestTheDecisionMustEcho(t *testing.T) {
+	// The host cannot derive the digest: the algorithm belongs to this
+	// package. If the request did not carry it, every host would either
+	// guess wrong (and every grant would look like a different call) or
+	// leave it empty (and binding would be off).
+	var got ports.ApprovalRequest
+	gate := &recordingGate{decide: func(req ports.ApprovalRequest) (ports.Decision, error) {
+		got = req
+		return ports.Decision{RequestID: req.ID, Digest: req.Digest, Decision: ports.ApprovalGranted}, nil
 	}}
 	r, _ := harness(t, ports.AgentDeps{
 		Tools: staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
@@ -290,7 +342,13 @@ func TestEmptyDigestDecisionStillRequiresGrant(t *testing.T) {
 
 	res := r.beforeToolCall(context.Background(), "tc-1", "restart_service", json.RawMessage(`{"target":"web-1"}`))
 	if res.Block {
-		t.Errorf("an unbound but affirmative decision was refused: %s", res.Reason)
+		t.Fatalf("a correctly bound grant was refused: %s", res.Reason)
+	}
+	if got.Digest == "" {
+		t.Fatal("the request carried no digest for the host to echo")
+	}
+	if want := CallDigest("restart_service", json.RawMessage(`{"target":"web-1"}`)); got.Digest != want {
+		t.Fatalf("digest = %q, want the digest of the exact call", got.Digest)
 	}
 }
 

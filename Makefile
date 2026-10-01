@@ -106,6 +106,20 @@ test-e2e: ## E2E（默认 fakes，无外部凭证；catalog: docs/test/e2e-catal
 test-e2e-live: ## E2E live mode（用 tests/e2e/secrets.local.env 打通真实外部服务）
 	E2E_LIVE_ALL=1 go test -tags=e2e -count=1 -timeout=15m ./tests/e2e/...
 
+# The two corpus gates answer different prior questions, and both have to
+# be asked. plugin-coverage asks whether a *plugin package* can serve an
+# expectation; vocabulary asks whether the *system* can serve it at all.
+# Neither subsumes the other, and today both report large gaps — which is
+# only useful if the numbers are reproducible rather than remembered.
+.PHONY: eval-gates eval-vocabulary eval-coverage
+eval-gates: eval-coverage eval-vocabulary
+
+eval-coverage: ## golden case 能力期望 vs 插件包能力（哪些 case 没有插件能服务）
+	go run ./cmd/opskeeper-eval plugin-coverage
+
+eval-vocabulary: ## golden case 能力期望 vs 本构建真实词表（哪些 case 结构上无法满足）
+	go run ./cmd/opskeeper-eval vocabulary
+
 # ----------------------------------------------------------------------------
 # lint
 # ----------------------------------------------------------------------------
@@ -115,26 +129,38 @@ lint: ## 运行 golangci-lint
 	golangci-lint run
 
 arch-lint: ## 运行 go-arch-lint（校验 BC 边界）
-	@command -v go-arch-lint >/dev/null 2>&1 || { echo "go-arch-lint not installed; skipping"; exit 0; }
+	@command -v go-arch-lint >/dev/null 2>&1 || { \
+		echo "WARNING: go-arch-lint is not installed, so .go-arch-lint.yml is documentation only."; \
+		echo "         The enforced subset (bounded contexts may not reach each other,"; \
+		echo "         internal/pkg stays business agnostic, service goes through biz) runs"; \
+		echo "         under 'make module-check'. Install go-arch-lint to check the rest."; \
+		exit 0; }
 	go-arch-lint check
 
 module-check: ## 校验 OpsKeeper 2.0 模块边界（唯一 PiG 导入点 / core 无基础设施依赖）
 	go run ./scripts/modulecheck .
 
-module-test: ## 运行新模块（core / pig / edge / sdk）的测试
+# The root `make test` no longer reaches core/harness: it is a separate Go
+# module now, and that separation is the point. Anything that wants the
+# whole repository tested has to say so explicitly, or the golden-case
+# corpus silently stops being run.
+module-test: ## 运行新模块（core / pig / edge / harness / sdk）的测试
 	cd core && go test ./... -count=1
 	cd core/pig && go test ./... -count=1
 	cd core/edge && go test ./... -count=1
+	cd core/harness && go test ./... -count=1
 	cd sdk && go test ./... -count=1
 	cd core && go build ./...
 	cd core/pig && go build ./...
 	cd core/edge && go build ./...
+	cd core/harness && go build ./...
 	cd sdk && go build ./...
 
 module-race: ## 对新模块跑竞态检测（supervisor 重启循环是并发热点）
 	cd core && go test ./... -count=1 -race
 	cd core/pig && go test ./... -count=1 -race
 	cd core/edge && go test ./... -count=1 -race
+	cd core/harness && go test ./... -count=1 -race
 
 # ----------------------------------------------------------------------------
 # proto

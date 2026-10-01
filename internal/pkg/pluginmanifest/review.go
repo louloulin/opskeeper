@@ -23,7 +23,7 @@ import (
 // validated and admitted on its own say-so, and the signature would be a
 // later formality. So:
 //
-//	signature → manifest → admission
+//	signature → manifest → admission → version → agent version
 //
 // A package that fails at any step never reaches the ones after it, and
 // the Step field says which one it was so an operator does not have to
@@ -42,6 +42,20 @@ const (
 	// StepAdmission is the policy check: may this package run *here*, with
 	// the scopes this operator actually granted.
 	StepAdmission = "admission"
+	// StepVersion is the compatibility check: is this node new enough to
+	// host the package at all. It is a separate step from admission
+	// because it is a different question with a different fix — an
+	// admission refusal is answered by changing the node's policy, and
+	// this one by upgrading the node — and an operator sent to the wrong
+	// one is an operator who will not find it.
+	StepVersion = "version"
+	// StepAgentVersion is the second half of the compatibility check: is
+	// the PiG agent inside this node new enough. It is separate from
+	// StepVersion for the same reason StepVersion is separate from
+	// StepAdmission — the fix is to upgrade a different thing, and a
+	// refusal that does not say which sends an operator to the wrong
+	// component.
+	StepAgentVersion = "agent_version"
 )
 
 // Policy is the target's side of the decision.
@@ -76,6 +90,24 @@ type Policy struct {
 	// there was no signature at all, so a node running unsigned packages
 	// is visible in the same log as one that is not.
 	AllowUnsigned bool
+	// NodeVersion is the agent version this target is running, used to
+	// evaluate a package's min_edge_version. Empty means the node cannot
+	// state its own version, which refuses a package that asks for one:
+	// the node would be guessing, and the guess that is wrong in the
+	// permissive direction installs a package the node cannot host.
+	//
+	// It is not "unset means no check". A package that declares no
+	// minimum is admitted either way — an optional field left out is not
+	// a requirement — but a package that declares one is only admitted
+	// when the node can prove it is new enough.
+	NodeVersion string
+	// PigVersion is the PiG agent build this node launches, used to
+	// evaluate a package's min_pig_version. It is a different number from
+	// NodeVersion and is reported by a different thing, so it is a
+	// different field. Empty refuses a package that asks for one, on the
+	// same reasoning as NodeVersion: a guess in the permissive direction
+	// installs a package whose extensions the agent cannot load.
+	PigVersion string
 }
 
 // PolicyFor is the default policy for a production target: signatures
@@ -223,6 +255,29 @@ func Review(root string, trust *TrustStore, pol Policy) Decision {
 	}); err != nil {
 		decision.Step = StepAdmission
 		decision.Reason = err.Error()
+		return decision
+	}
+
+	// Step 4: compatibility. Everything above established what the
+	// package is and whether this node's operator will host it; this
+	// establishes whether this node's *binary* can. It runs last because
+	// it is the only check that reads a fact about the node rather than a
+	// fact about the package, and because a package that fails admission
+	// should be reported as an admission refusal — the more actionable of
+	// the two — even when it would also have failed here.
+	if ok, reason := MeetsMinEdgeVersion(p.Manifest.Spec.Install.MinEdgeVersion, pol.NodeVersion); !ok {
+		decision.Step = StepVersion
+		decision.Reason = reason
+		return decision
+	}
+
+	// Step 5: the agent's own compatibility. A node can run an edge build
+	// new enough for a package and still be launching an agent too old to
+	// load its extensions — the two are upgraded on different cadences —
+	// so this is checked after, not folded into, the edge version.
+	if ok, reason := MeetsMinPigVersion(p.Manifest.Spec.Install.MinPigVersion, pol.PigVersion); !ok {
+		decision.Step = StepAgentVersion
+		decision.Reason = reason
 		return decision
 	}
 

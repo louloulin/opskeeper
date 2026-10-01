@@ -20,12 +20,32 @@ import (
 type ResourceType string
 
 const (
-	TypePostgres      ResourceType = "postgres"
-	TypeRedis         ResourceType = "redis"
-	TypeRabbitMQ      ResourceType = "rabbitmq"
-	TypeKafka         ResourceType = "kafka"
+	TypePostgres ResourceType = "postgres"
+	TypeRedis    ResourceType = "redis"
+	TypeRabbitMQ ResourceType = "rabbitmq"
+	TypeKafka    ResourceType = "kafka"
+	// TypeMQ is the broker-agnostic message-queue namespace.
+	//
+	// It exists alongside TypeKafka and TypeRabbitMQ rather than replacing
+	// them because the two things they name are different: `kafka.` and
+	// `rabbitmq.` are the products' own vocabularies, and `mq.` is the
+	// closed loop's. A remediation writes `mq.drain_queue` without knowing
+	// or caring which broker serves the incident, and the adapter that
+	// registers that name resolves it against whichever broker it was
+	// connected to. Registering it under one product's namespace would make
+	// the loop's action set depend on which broker that tenant happens to
+	// run.
+	TypeMQ            ResourceType = "mq"
 	TypeK8sCluster    ResourceType = "k8s_cluster"
 	TypeGitRepository ResourceType = "git_repository"
+
+	// TypeHost is the machine the platform is pointed at.
+	//
+	// It sits beside the middleware types because the closed loop's
+	// remediation vocabulary names it: a host incident is prescribed
+	// host.garbage_collect or host.restart_service, and an action nothing can
+	// perform is an action the platform proposes and cannot carry out.
+	TypeHost ResourceType = "host"
 )
 
 // ConnectionSpec 是 Adapter 连接的最小描述。

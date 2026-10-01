@@ -11,7 +11,6 @@ import (
 	"github.com/vincent-wuhan/opskeeper/internal/iam/biz/membership"
 	"github.com/vincent-wuhan/opskeeper/internal/iam/biz/org"
 	biz "github.com/vincent-wuhan/opskeeper/internal/iam/biz/user"
-	"github.com/vincent-wuhan/opskeeper/internal/iam/data/membership/store"
 	"github.com/vincent-wuhan/opskeeper/internal/iam/model"
 )
 
@@ -97,7 +96,7 @@ func (s *Service) SetRole(ctx context.Context, id uint64, role string) error {
 
 // MembershipsByUser returns the orgs a user is in (or nil when memberships
 // service isn't wired).
-func (s *Service) MembershipsByUser(ctx context.Context, userID uint64) ([]store.MembershipWithOrg, error) {
+func (s *Service) MembershipsByUser(ctx context.Context, userID uint64) ([]model.MembershipWithOrg, error) {
 	if s.memberships == nil {
 		return nil, nil
 	}

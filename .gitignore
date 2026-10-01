@@ -110,3 +110,6 @@ plugins/opskeeper-teamharness/eval/reports/
 # Local build/cache output (not for source control)
 .dist/
 .docker-gocache/
+
+# Stray local binary from `go build ./scripts/modulecheck`
+/modulecheck

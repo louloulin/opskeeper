@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/MichaelKinsy/PiG/agent"
@@ -28,6 +29,13 @@ type runState struct {
 	deps   ports.AgentDeps
 	k      *Kernel
 	req    ports.AgentRequest
+
+	// mu guards blocked. PiG runs the sibling tool calls of one assistant
+	// turn concurrently, so a refusal recorded by one call beforeToolCall
+	// is read and consumed by that call end event on a different
+	// goroutine. A plain map here is a concurrent map write, which is a
+	// runtime fatal error rather than a wrong frame.
+	mu sync.Mutex
 
 	// usage accumulates token spend across the turn so the done frame
 	// reports a turn total rather than leaving the console to sum frames.
@@ -73,6 +81,8 @@ func (r *runState) onEvent(ev agent.AgentEvent) {
 		r.mapper.TurnStarted()
 	case agent.MessageEndEvent:
 		r.foldUsage(e.Message)
+	case agent.ToolExecutionStartEvent:
+		r.recordStart(e.ToolCallID, e.ToolName, e.Args)
 	case agent.ToolExecutionEndEvent:
 		// A call the host refused settles as an immediate outcome: it never
 		// runs, so it never reaches AfterToolCall. This is the only place
@@ -88,6 +98,9 @@ func (r *runState) onEvent(ev agent.AgentEvent) {
 				Outcome: "blocked",
 			})
 		}
+		// The record is written after the block marker is applied so the
+		// console reads the same terminal status the frame carries.
+		r.recordSettle(e)
 	}
 	for _, f := range r.mapper.Map(ev) {
 		if err := r.sink.Emit(context.Background(), f); err != nil {
@@ -97,6 +110,59 @@ func (r *runState) onEvent(ev agent.AgentEvent) {
 			return
 		}
 	}
+}
+
+// recordStart opens a tool-call record.
+//
+// The recorder is told before the gate decides anything: a call the host
+// refuses never executes, so this is the only observation point that sees
+// it, and the attempted restart of a host is exactly the event an incident
+// review needs. A recorder that fails is ignored — the call is about to run
+// regardless, and refusing a tool because a row could not be written would
+// turn a storage hiccup into a failed investigation.
+func (r *runState) recordStart(id, name string, args json.RawMessage) {
+	if r.deps.Recorder == nil || id == "" {
+		return
+	}
+	_ = r.deps.Recorder.Started(context.Background(), ports.ToolCallRecord{
+		SessionID: r.req.SessionID,
+		ID:        id,
+		Name:      name,
+		Class:     r.classOf(name),
+		Args:      append(json.RawMessage(nil), args...),
+	})
+}
+
+// recordSettle closes a tool-call record.
+//
+// A refused call is reported as blocked rather than failed: the console
+// renders a policy decision and a broken tool differently, and conflating
+// them would tell an operator that a tool is faulty when the host declined
+// to run it.
+func (r *runState) recordSettle(e agent.ToolExecutionEndEvent) {
+	if r.deps.Recorder == nil || e.ToolCallID == "" {
+		return
+	}
+	status := wire.ToolSuccess
+	if e.Result.IsError {
+		status = wire.ToolError
+	}
+	if isBlocked(e.Result) {
+		status = wire.ToolBlocked
+	}
+	rec := ports.ToolCallRecord{
+		SessionID: r.req.SessionID,
+		ID:        e.ToolCallID,
+		Name:      e.ToolName,
+		Class:     r.classOf(e.ToolName),
+		Status:    string(status),
+		Result:    e.Result.Text(),
+		Duration:  e.Duration,
+	}
+	if e.Result.IsError {
+		rec.Err = toolErrorText(e.Result)
+	}
+	_ = r.deps.Recorder.Settled(context.Background(), rec)
 }
 
 // foldUsage accumulates a settled message's token spend.
@@ -126,7 +192,7 @@ func (r *runState) persist(msg agent.AgentMessage) error {
 	if r.k.opts.Persist == nil {
 		return nil
 	}
-	return r.k.opts.Persist.Persist(context.Background(), r.req.SessionID, msg)
+	return r.k.opts.Persist.Persist(context.Background(), r.req.SessionID, toPortsMessage(msg, r.model))
 }
 
 // beforeToolCall is the host's policy gate. It runs before every tool
@@ -169,8 +235,15 @@ func (r *runState) beforeToolCall(ctx context.Context, toolCallID, toolName stri
 		ID:        toolCallID,
 		ToolName:  toolName,
 		Class:     class,
+		SessionID: r.req.SessionID,
 		Arguments: append([]byte(nil), args...),
 		Summary:   summary,
+		// The digest the decision must echo back. It rides on the request
+		// because the host cannot derive it: the algorithm is this package's
+		// (tool name, a NUL, the exact argument bytes), and a host left to
+		// invent it would either guess wrong — making every grant look like a
+		// different call — or leave it empty and turn binding off entirely.
+		Digest: digest,
 		// The blast radius is assessed by the host from the resolved
 		// target. A tool never sets it, so the narrowest admissible
 		// radius is used until the host policy widens it.
@@ -204,16 +277,23 @@ func (r *runState) beforeToolCall(ctx context.Context, toolCallID, toolName stri
 		return r.refuse(toolCallID, reason+": "+err.Error())
 	}
 
-	// A decision is bound to a digest of the exact proposed call. A grant
-	// that does not match this digest was issued for a different call and
-	// must not authorise this one.
-	if decision.Digest != "" && decision.Digest != digest {
-		_ = r.sink.Emit(ctx, r.mapper.ApprovalResolved(req.ID, string(ports.ApprovalDenied), "digest mismatch"))
-		return r.refuse(toolCallID, "approval digest does not match this call")
-	}
+	// An explicit refusal is reported as one, before the binding is checked:
+	// an operator who clicked deny is not told their decision "did not match
+	// the call", which would read as a console bug rather than as their own
+	// answer.
 	if decision.Decision != ports.ApprovalGranted {
 		_ = r.sink.Emit(ctx, r.mapper.ApprovalResolved(req.ID, string(decision.Decision), decision.Note))
 		return r.refuse(toolCallID, CodeApprovalDenied)
+	}
+
+	// A grant is bound to a digest of the exact proposed call, and a grant
+	// without one is not a grant. The comparison is against the literal
+	// digest rather than "any digest at all": an empty value means the host
+	// never echoed what the human approved, and accepting it would let a
+	// host that dropped the field authorise whatever call arrived next.
+	if decision.Digest != digest {
+		_ = r.sink.Emit(ctx, r.mapper.ApprovalResolved(req.ID, string(ports.ApprovalDenied), "digest mismatch"))
+		return r.refuse(toolCallID, "approval digest does not match this call")
 	}
 	_ = r.sink.Emit(ctx, r.mapper.ApprovalResolved(req.ID, string(ports.ApprovalGranted), decision.Note))
 	return agent.ToolCallHookResult{}
@@ -227,6 +307,8 @@ func (r *runState) beforeToolCall(ctx context.Context, toolCallID, toolName stri
 // error string; without this the console would render a policy decision as
 // a broken tool and the ledger would have no row for it at all.
 func (r *runState) refuse(toolCallID, reason string) agent.ToolCallHookResult {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.blocked == nil {
 		r.blocked = make(map[string]string)
 	}
@@ -237,6 +319,8 @@ func (r *runState) refuse(toolCallID, reason string) agent.ToolCallHookResult {
 // blockedCall reports whether the host refused this call, consuming the
 // record so a call is audited exactly once.
 func (r *runState) blockedCall(toolCallID string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	reason, ok := r.blocked[toolCallID]
 	if !ok {
 		return "", false

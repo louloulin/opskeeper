@@ -122,7 +122,7 @@ func TestKernelRunsATextOnlyTurn(t *testing.T) {
 		t.Errorf("content = %q, want the model's answer", res.Content)
 	}
 
-	types := frameTypes(sink.frames)
+	types := frameTypes(sink.Frames())
 	// The console opens a bubble, receives the text, and closes the turn.
 	if !hasType(types, wire.StreamAssistantStart) {
 		t.Error("no assistant_start frame: the console would render nothing")
@@ -141,7 +141,7 @@ func TestKernelRunsATextOnlyTurn(t *testing.T) {
 	}
 
 	// Every frame belongs to this session and carries a sequence number.
-	for i, f := range sink.frames {
+	for i, f := range sink.Frames() {
 		if f.SessionID != "s-1" {
 			t.Errorf("frame %d session = %q", i, f.SessionID)
 		}
@@ -203,7 +203,7 @@ func TestKernelRunsAReadOnlyToolRoundTrip(t *testing.T) {
 		t.Errorf("content = %q, want the final answer, not the tool round", res.Content)
 	}
 
-	types := frameTypes(sink.frames)
+	types := frameTypes(sink.Frames())
 	for _, want := range []wire.StreamEventType{wire.StreamToolStart, wire.StreamToolEnd, wire.StreamDone} {
 		if !hasType(types, want) {
 			t.Errorf("no %s frame: got %v", want, types)
@@ -258,7 +258,7 @@ func TestKernelAllowsAGrantedMutatingTool(t *testing.T) {
 	// that the console renders as refused would train operators to
 	// distrust the approval queue.
 	var ended *wire.ToolFrame
-	for _, f := range sink.frames {
+	for _, f := range sink.Frames() {
 		if f.Type == wire.StreamToolEnd {
 			ended = f.Tool
 		}
@@ -299,7 +299,7 @@ func TestKernelBlocksAMutatingToolWhenDenied(t *testing.T) {
 	}
 
 	var ended *wire.ToolFrame
-	for _, f := range sink.frames {
+	for _, f := range sink.Frames() {
 		if f.Type == wire.StreamToolEnd {
 			ended = f.Tool
 		}
@@ -347,7 +347,7 @@ func TestKernelBlocksAMutatingToolWithNoGate(t *testing.T) {
 		t.Fatal("a destructive tool ran with no approval gate configured")
 	}
 	var ended *wire.ToolFrame
-	for _, f := range sink.frames {
+	for _, f := range sink.Frames() {
 		if f.Type == wire.StreamToolEnd {
 			ended = f.Tool
 		}

@@ -1,8 +1,12 @@
-// runtime.go is the in-process orchestration entry the new graph-based
-// agent path goes through. PR-9 of — the cutover layer that
-// pre-PR-9 callers (legacy agent.go) bypass entirely. After this PR
-// the manager's HTTP service can pick which path runs based on the
-// OPSKEEPER_AGENT_KERNEL feature flag (default = legacy).
+// runtime.go is the in-process orchestration entry the new kernel-based
+// agent path goes through — the cutover layer that legacy agent.go
+// bypasses entirely. The manager's HTTP service picks which path runs
+// based on the OPSKEEPER_AGENT_KERNEL feature flag (default = legacy).
+//
+// It is HOST-ONLY by design: the loop itself lives in the agent kernel
+// (core/pig/pigagent, reached through ports.Agent). Everything below is
+// host concern — identity, skills, prompts, persistence, policy — and
+// none of it is kernel-specific.
 //
 // Responsibilities:
 //
@@ -20,19 +24,19 @@
 //  5. User-message persistence (chat_messages role=user). Mirrors the
 //     legacy "persist before LLM call" invariant from agent.go so a
 //     downstream crash leaves the user turn on disk.
-//  6. Graph invoke with the default callback chain
-//     (callbacks.NewDefaultHandlers) wired via compose.WithCallbacks.
-//     The callback chain handles persistence (assistant + tool rows),
-//     SSE streaming, audit, metrics, and budget gating.
+//  6. Kernel turn — runKernelTurn drives the ports.Agent kernel with
+//     a kernelSink translating kernel events into SSE frames, and an
+//     agentkernel.Persister writing assistant + tool rows. Audit,
+//     metrics and budget gating are installed as host decorators on
+//     the tool bag before the kernel ever sees it.
 //  7. Reply translation — a chatruntime.Reply that the service layer
 //     translates back to agent.Reply for HTTP response shape parity.
 //
 // Behaviour parity with legacy agent.go is the explicit goal — the
 // SPA, the persistence schema, and downstream reports must not see
-// the kernel switch. Where exact parity isn't reachable (e.g. eino's
-// graph runs the loop internally so we don't see per-iteration
-// AssistantEvent counts), the value is best-effort and documented
-// inline.
+// the kernel switch. Where exact parity isn't reachable (e.g. the
+// kernel runs the loop internally, so some per-iteration events never
+// reach the host), the value is best-effort and documented inline.
 package chatruntime
 
 import (
@@ -45,15 +49,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cloudwego/eino/components/model"
-	"github.com/cloudwego/eino/compose"
-	"github.com/cloudwego/eino/schema"
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 
 	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/graph"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/graph/callbacks"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/toolreplay"
+	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/alertdraft"
 	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/decorators"
 	aiopsmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
@@ -159,7 +160,8 @@ type Request struct {
 	Model            string
 	WebSearchEnabled bool
 	// Locale is the UI language ("en-US"/"zh-CN") the reply should use;
-	// threaded into graph.Input so the assembler adds a language directive.
+	// threaded into the kernel request so the assembler adds a language
+	// directive.
 	Locale string
 	// Emit is the streaming sink. nil = no streaming (blocking call).
 	Emit Emit
@@ -191,12 +193,15 @@ type Config struct {
 	// chat_messages / chat_tool_calls). Required.
 	Sessions biz.SessionRepo
 
-	// ChatModel is the eino model.ToolCallingChatModel. Required.
-	// Production wiring passes RoutingChatModel from PR-1; tests
-	// inject a scriptedChatModel.
-	ChatModel model.ToolCallingChatModel
+	// Kernel is the agent loop every turn runs on. Required: the runtime
+	// is only the host half of a turn — ownership, mention rendering,
+	// tool filtering, prompt composition, transcript writes and the frame
+	// vocabulary — and delegating the loop itself is the whole point of
+	// the seam. A runtime with no kernel has nothing to run a turn on, so
+	// NewRuntime refuses rather than silently answering nothing.
+	Kernel ports.Agent
 
-	// ToolBag is the pre-decorated BaseTool list the graph exposes
+	// ToolBag is the pre-decorated BaseTool list the kernel exposes
 	// to the LLM. cmd/opskeeper/main.go assembles this once via
 	// Registry.BuildBaseTools + AppendHostFilesTools + Wrap.
 	ToolBag []basetool.BaseTool
@@ -205,10 +210,9 @@ type Config struct {
 	// to the coordinator agent. They occupy hallucination-prone tool
 	// names (host_bash, get_host_load, ...) and return a "use
 	// AgentTool to dispatch to specialist-X" message instead of
-	// executing the real query. Without them, the eino runtime
-	// aborts with "tool not found in toolsNode indexes" the moment
-	// the LLM picks a name not actually in the coordinator's filtered
-	// bag — see internal/manager/biz/aiops/tools/redirect_stub.go.
+	// executing the real query. Without them, the turn aborts the
+	// moment the LLM picks a name not actually in the coordinator's
+	// filtered bag — see internal/manager/biz/aiops/tools/redirect_stub.go.
 	//
 	// Workers (specialists) never see this slice. They have the real
 	// tool under the same name in their own filtered bag.
@@ -235,15 +239,9 @@ type Config struct {
 	// (legacy default).
 	HistoryLimit int
 
-	// GraphCfg tunes the graph engine (max iterations, temperature,
-	// per-tool timeout).
-	GraphCfg graph.Config
-
-	// CallbackDeps are the cross-cutting deps wired into every graph
-	// run. Persistence.SessionID is filled per-request from
-	// Request.SessionID; the rest of Persistence + Audit + Metrics
-	// + Budget are filled at construction.
-	CallbackDeps callbacks.Deps
+	// MaxIterations caps tool rounds per turn when neither the request nor
+	// the persona sets its own ceiling. 0 → DefaultMaxIterations.
+	MaxIterations int
 
 	// AgentWriteEnabled, when set, is consulted live (per request) to decide
 	// whether the agent may use write/mutating tools. Returning false forces a
@@ -299,18 +297,29 @@ type Runtime struct {
 	// bag is the unredacted ToolBag handle wired by SetToolBag. nil
 	// when the caller wires the runtime without calling SetToolBag —
 	// not all code paths need it (legacy callers only feed
-	// cfg.ToolBag through the graph).
+	// cfg.ToolBag to the kernel).
 	bag ToolBagProvider
+
+	// sinks holds the in-flight turn of every live session so the
+	// persister's row-id callback can reach it. Always non-nil; harmless
+	// on turns where nothing registers.
+	sinks *sinkRegistry
 }
 
 // NewRuntime builds a Runtime. Returns an error when required deps
-// are missing — Sessions and ChatModel.
+// are missing — Sessions and Kernel.
 func NewRuntime(cfg Config) (*Runtime, error) {
 	if cfg.Sessions == nil {
 		return nil, errors.New("chatruntime: Sessions is required")
 	}
-	if cfg.ChatModel == nil {
-		return nil, errors.New("chatruntime: ChatModel is required")
+	// The kernel is the loop; without one there is no turn to run. Refusing
+	// here names the missing binding at boot instead of failing the first
+	// user question with errs.ErrNotWiredYet.
+	if cfg.Kernel == nil {
+		return nil, errors.New("chatruntime: Kernel is required")
+	}
+	if cfg.MaxIterations <= 0 {
+		cfg.MaxIterations = defaultMaxIterations
 	}
 	if cfg.HistoryLimit <= 0 {
 		cfg.HistoryLimit = 50
@@ -319,7 +328,23 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Runtime{cfg: cfg, log: log}, nil
+	return &Runtime{cfg: cfg, log: log, sinks: &sinkRegistry{}}, nil
+}
+
+// FlushAssistant releases the held assistant frame of a session's in-flight
+// turn with the committed row id.
+//
+// It is the hook the persistence binding calls (agentkernel.PersistDeps.
+// AfterAssistantRow) once the chat_messages row is written, and it is why the
+// sink is reachable at all: the row id only exists after the frame was
+// produced, and the console keys the bubble on that id. A session with no
+// live turn is a no-op — the row is written best-effort and can land after
+// the turn returned.
+func (rt *Runtime) FlushAssistant(sessionID, messageID string) {
+	if rt == nil {
+		return
+	}
+	rt.sinks.flush(sessionID, messageID)
 }
 
 // SetMentionResolver wires the @-mention hydrator post-construction.
@@ -360,7 +385,7 @@ func (rt *Runtime) SetAgentWriteEnabledProvider(fn func(ctx context.Context) boo
 // view is the deferred / redacted one. Idempotent; nil is a no-op so
 // tests can opt out without a panic.
 //
-// Note: the bag is INFORMATIONAL only. The graph still feeds the
+// Note: the bag is INFORMATIONAL only. The kernel still feeds the
 // LLM via cfg.ToolBag, which the caller assembles from
 // bag.SchemasForLLM() before calling NewRuntime — see
 // cmd/opskeeper/main.go's buildAIOpsRuntime for the wiring.
@@ -433,7 +458,22 @@ func (rt *Runtime) SkillRegistry() *SkillRegistry {
 
 // ToolCount returns how many tools are bound into the toolBag. Used
 // at boot time + tests for visibility (the spec asks us to log this
-// when OPSKEEPER_AGENT_KERNEL=graph).
+// when OPSKEEPER_AGENT_KERNEL=pig).
+// Tools returns the runtime's live tool bag as host tools.
+//
+// It exists for the assembly's boot-time checks. The bag mutates after
+// construction — AppendToolBag bolts on the coordination trio, the
+// proposer-backed shell tools and every connected MCP server — so a check
+// run before those appends silently misses the most dangerous tools in it,
+// and the first sign of a problem would be a second approval card in front
+// of an operator.
+func (rt *Runtime) Tools() []basetool.BaseTool {
+	if rt == nil {
+		return nil
+	}
+	return rt.cfg.ToolBag
+}
+
 func (rt *Runtime) ToolCount() int {
 	if rt == nil {
 		return 0
@@ -464,9 +504,9 @@ func (rt *Runtime) ToolNames(ctx context.Context) []string {
 
 // Handle runs one user turn end-to-end. Mirrors legacy
 // agent.runInternal: ownership check → mention inline → user message
-// persistence → graph invoke with callback chain → reply.
+// persistence → kernel turn (sink + persister) → reply.
 func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
-	if rt == nil || rt.cfg.Sessions == nil || rt.cfg.ChatModel == nil {
+	if rt == nil || rt.cfg.Sessions == nil || rt.cfg.Kernel == nil {
 		return nil, errs.ErrNotWiredYet
 	}
 	if req == nil {
@@ -478,7 +518,7 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 		emit = func(Event) {}
 	}
 	// Thread the active emitter into ctx so AgentTool's InvokableRun
-	// (deep inside the graph) can fire a task_notification SSE frame
+	// (deep inside the kernel turn) can fire a task_notification SSE frame
 	// when a background worker terminates. /
 	ctx = withEmit(ctx, req.Emit)
 
@@ -508,7 +548,7 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	}
 
 	// 3. Persist the user message first (legacy invariant — survives
-	//    a graph crash).
+	//    a kernel crash).
 	userContent := augmentedUserText
 	userMsg := &aiopsmodel.Message{
 		SessionID: sess.ID,
@@ -612,7 +652,7 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	// Coordinator gets the redirect-stub overlay: same-name shadows
 	// for hallucination-prone tool names that hand the LLM a
 	// "dispatch to specialist-X via AgentTool" message instead of
-	// crashing the graph with "tool not found in toolsNode". Stubs
+	// failing the turn outright. Stubs
 	// must come AFTER filterToolsForAgent so they survive any name
 	// collision with the (already-stripped) real tools.
 	if isCoordinator && len(rt.cfg.CoordinatorStubs) > 0 {
@@ -638,6 +678,13 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 		}
 	}
 	sessionToolBag = filterCoordinatorToolsForIntent(sessionToolBag, req.UserText, isCoordinator)
+	// Apply the per-run tool governance LAST, after every filter has settled
+	// the bag. It must wrap the final set, not an intermediate one: the memo
+	// and the per-tool cap are shared across the whole bag, and a tool added
+	// after the wrap (a coordinator stub, an intent filter's survivor) would
+	// run ungoverned. One Governance per Handle call = one run, which is
+	// exactly the scope both rules are defined over.
+	sessionToolBag = decorators.NewGovernance().WrapAll(sessionToolBag)
 	// AgentID="default" is the virtual top-level persona — same wiring
 	// as the no-agent coordinator (BasePrompt + full toolBag + agent
 	// catalog), but the session keeps "default" so the SPA shows the
@@ -657,434 +704,32 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	}
 	systemPrompt := ComposeSystemPrompt(basePrompt, activeSkills, nil)
 
-	// 6. Build the eino history slice. Convert persisted rows into
-	//    schema.Message so the graph assembler can replay them.
-	einoHistory := buildEinoHistory(history)
-
-	// 7. Build the graph (per-request — eino graphs are cheap to
-	//    compose and the inner ReAct agent is rebuilt on every call
-	//    today; an in-memory cache keyed on (toolBag identity, cfg)
-	//    is a future optimisation).
-	graphCfg := rt.cfg.GraphCfg
-	// Persona-level MaxTurns override — already honoured for workers
-	// via worker.go runWorker; mirror it here for the coordinator
-	// path so the default persona can have a tighter cap. Without
-	// this, the global 30-iteration cap lets a misbehaving
-	// coordinator chain 120+ tool calls (we observed exactly this
-	// pattern in the E2E eval before adding the override).
-	if rt.cfg.AgentRegistry != nil {
-		if persona, ok := rt.cfg.AgentRegistry.ByName(personaName); ok && persona.MaxTurns > 0 {
-			graphCfg.MaxIterations = persona.MaxTurns
-		}
-	}
-	g, err := graph.BuildReActGraph(rt.cfg.ChatModel, sessionToolBag, graphCfg)
-	if err != nil {
-		return nil, fmt.Errorf("chatruntime: build graph: %w", err)
-	}
-
-	// 8. Wire the per-request callback chain. Persistence's
-	//    SessionID is filled in here; everything else lives on
-	//    rt.cfg.CallbackDeps. The SSE handler is appended via the
-	//    cutover layer's emitter when req.Emit != nil.
-	deps := rt.cfg.CallbackDeps
-	deps.AlertDraftGuard.UserText = req.UserText
-	deps.Persistence.SessionID = sess.ID
-	deps.Persistence.Model = strings.TrimSpace(req.Model)
-	if deps.Persistence.Repo == nil {
-		deps.Persistence.Repo = rt.cfg.Sessions
-	}
-	if req.Emit != nil {
-		deps.SSE = rt.toCallbackEmitter(req.Emit, sess.ID)
-	} else {
-		deps.SSE = nil
-	}
-	handlers := callbacks.NewDefaultHandlers(deps)
-
-	// 9. Compute per-turn dynamic hints from history + persona's
-	//    critical_reminder (if a worker persona is active for this turn).
-	// — these get inlined into the per-turn
-	//    <system-reminder> block by graph.assembleMessages.
+	// 5c. Per-turn hints are pure functions of history and the active persona,
+	//     so they are computed here rather than at the invoke site. Both
+	//     kernels inject the same reminder block: which rules a long session
+	//     is nagged with is host policy, and a kernel that computed its own
+	//     hints would drift the model differently for no visible reason.
 	dynamicHints := rt.calcDynamicHints(history)
-	// AgentReminder is populated when the session is pinned to a
-	// persona (Phase 2). — anti-drift reminder gets
-	// inlined into the per-turn <system-reminder> block. Worker spawns
-	// have always passed CriticalReminder; the coordinator path now
-	// does too when sess.AgentID is set.
 	agentReminder := agentReminderForPersona
 
-	// 10. Invoke. The graph's outer Output carries the assistant
-	//     message + usage; the persistence callback already wrote the
-	//     assistant + tool rows by the time Invoke returns.
-	//
-	//     Per-request model selection (SPA model picker): thread
-	//     req.Provider/req.Model into the ChatModel node as eino model
-	//     options. RoutingChatModel.pick consumes WithProvider; the inner
-	//     clientChatModel honours WithModel. Without this the graph kernel
-	//     silently ignored the picker and always used the routing default
-	//     — so a user who chose e.g. claude-opus still got the default
-	//     model. When both are empty no option is added (default path
-	//     unchanged).
-	invokeOpts := []compose.Option{compose.WithCallbacks(handlers...)}
-	if mopts := chatModelOpts(req); len(mopts) > 0 {
-		invokeOpts = append(invokeOpts, compose.WithChatModelOption(mopts...))
-	}
-	invokeOpts = append(invokeOpts, compose.WithToolsNodeOption(
-		compose.WithToolOption(graph.WithInvokeOpts(basetool.WithUserText(req.UserText))),
-	))
-	// Thread the persona-filtered tool view onto ctx so ToolSearch
-	// (which runs inside the graph) only returns tools the current
-	// persona is allowed to see. Must happen BEFORE the coordinator-
-	// stub append so stubs don't leak into the filtered view.
-	ctx = basetool.WithFilteredTools(ctx, sessionToolBag)
-	// Thread the UI locale onto ctx so AgentTool can pick it up and
-	// forward it into the sub-agent's SpawnRequest. Without this, a
-	// coordinator that handles an English question hands off to a
-	// specialist that answers in zh (GLM default) — see
-	// feedback_ai_output_locale.md regression 2026-06-02.
-	ctx = basetool.WithLocale(ctx, req.Locale)
-	// Same idea for the LLM choice: stamp the coordinator's resolved
-	// provider+model so AgentTool can plumb them into the sub-agent's
-	// SpawnRequest. runWorker reads them back as chatModelOpts.
-	// Without this, sub-agents fall through to the routing default
-	// ("openai"), and installs without an OpenAI key see specialists
-	// fail with `provider "openai" not configured`.
-	ctx = basetool.WithLLMChoice(ctx, req.Provider, req.Model)
-	// HLD-019: attach the session id so cloud_bash can resolve a per-session
-	// agent workspace at exec time (files persist across commands in a session
-	// instead of running in a throwaway temp dir).
-	ctx = basetool.WithSessionID(ctx, sess.ID)
-	// Tag artifacts produced in this turn (serve_page) as chat-sourced so the
-	// operations UI's 生成来源 column can tell assistant pages from workflow pages.
-	ctx = basetool.WithArtifactSource(ctx, basetool.ArtifactSourceChat)
-	// Forward the admin write gate to host_bash: when ON, the tool tells the
-	// edge to bypass cmdpolicy and run the raw command. `writeEnabled` was
-	// resolved above (same value that gated the toolbag); reuse it so a single
-	// setting read drives both tool exposure and host-command authority.
-	ctx = basetool.WithHostWriteAllowed(ctx, writeEnabled)
-	// Always autoheal any in-flight tool batch on the way out — covers
-	// the "user closed browser mid-tool-batch" case the in-session
-	// ChatModel.OnStart flush can't reach. Defer with a background-rooted
-	// ctx so a cancelled request ctx doesn't block the stub inserts.
-	defer func() {
-		flushCtx := context.WithoutCancel(ctx)
-		callbacks.FinalizeBatches(flushCtx, handlers)
-	}()
-	out, invokeErr := g.Invoke(ctx, &graph.Input{
-		SystemPrompt:     systemPrompt,
-		History:          einoHistory,
-		UserText:         req.UserText,
-		WebSearchEnabled: req.WebSearchEnabled,
-		MentionsRendered: mentionsRendered,
-		AgentReminder:    agentReminder,
-		DynamicHints:     dynamicHints,
-		Locale:           req.Locale,
-	}, invokeOpts...)
-	if invokeErr != nil {
-		// Soft-fail graph-level errors: write an apology assistant
-		// message, emit it like a normal turn, and emit Done. Keeps
-		// SPA experience consistent with legacy agent.go's
-		// MaxIterations apology path. Without this, errors like
-		// eino's ErrExceededMaxSteps surface as "stream error" in
-		// the user's chat instead of an actionable message.
-		apology := buildGraphErrorApology(invokeErr)
-		fallbackMsg := &aiopsmodel.Message{
-			SessionID: sess.ID,
-			Role:      aiopsmodel.RoleAssistant,
-			Content:   &apology,
-			CreatedAt: time.Now().UTC(),
-		}
-		// Best-effort persist; if it fails we still emit so the user
-		// sees something instead of a stream error.
-		if persistErr := rt.cfg.Sessions.AppendMessage(ctx, fallbackMsg); persistErr != nil && rt.log != nil {
-			rt.log.Warn("chatruntime: persist apology failed",
-				slog.String("err", persistErr.Error()))
-		}
-		emit(Event{Type: EventAssistant, Assistant: &AssistantEvent{
-			MessageID: fallbackMsg.ID,
-			Content:   apology,
-			CreatedAt: fallbackMsg.CreatedAt,
-		}})
-		reply := &Reply{
-			Message: fallbackMsg,
-		}
-		emit(Event{Type: EventDone, Done: reply})
-		if rt.log != nil {
-			rt.log.Warn("chatruntime: graph invoke failed (apology emitted)",
-				slog.String("err", invokeErr.Error()))
-		}
-		return reply, nil
-	}
-
-	// 10. Translate Output → Reply. The graph's Output owns the
-	//     assistant message and best-effort iterations + usage; the
-	//     persistence handler has already written the chat_messages
-	//     row, so we re-fetch the recently-persisted assistant message
-	//     ID for handoff to the SSE adapter when needed.
-	reply := &Reply{Usage: out.Usage, Iterations: out.Iterations}
-	if out.AssistantMessage != nil {
-		// Build a synthetic *aiopsmodel.Message so the upper layer
-		// can re-render the legacy postMessageResp shape. The
-		// canonical row written by PersistenceHandler lives in
-		// chat_messages; we mirror its fields here for the wire DTO.
-		content := out.AssistantMessage.Content
-		if guard := callbacks.AlertDraftGuardFromHandlers(handlers); guard != nil {
-			content = guard.SanitizeAssistantContent(content)
-		}
-		var contentPtr *string
-		if content != "" {
-			contentPtr = &content
-		}
-		reply.Message = &aiopsmodel.Message{
-			SessionID: sess.ID,
-			Role:      aiopsmodel.RoleAssistant,
-			Content:   contentPtr,
-			CreatedAt: time.Now().UTC(),
-		}
-	}
-
-	// EventDone — keep parity with legacy agent.go's terminal
-	// emission. PersistenceHandler may have already written the
-	// assistant row; the legacy contract is "Done frame fires
-	// exactly once at terminal success".
-	emit(Event{Type: EventDone, Done: reply})
-	return reply, nil
-}
-
-// toCallbackEmitter adapts a chatruntime.Emit into the
-// callbacks.SSEEmitter the persistence/SSE chain consumes. The
-// adapter normalises the new event names back to the legacy ones
-// (SSEEventAssistantStart / SSEEventAssistantEnd → "assistant";
-// SSEEventAssistantDelta dropped — see PR-9 spec note about
-// IncludeDelta=false until the SPA catches up).
-func (rt *Runtime) toCallbackEmitter(emit Emit, sessionID string) callbacks.SSEEmitter {
-	return func(ev callbacks.SSEEvent) {
-		switch ev.Type {
-		case callbacks.SSEEventAssistantEnd:
-			if ev.Assistant == nil {
-				return
-			}
-			emit(Event{Type: EventAssistant, Assistant: &AssistantEvent{
-				Iteration:        ev.Assistant.Iteration,
-				MessageID:        ev.Assistant.MessageID,
-				Content:          ev.Assistant.Content,
-				CreatedAt:        ev.Assistant.CreatedAt,
-				PendingToolCalls: ev.Assistant.PendingToolCalls,
-			}})
-		case callbacks.SSEEventAssistantStart:
-			// Legacy frontend doesn't have an "assistant_start"
-			// frame; suppress it so the SPA doesn't see a phantom
-			// empty assistant bubble. The assistant_end frame
-			// (above) carries the full content + pending tool
-			// count which matches the legacy "assistant" frame.
-			return
-		case callbacks.SSEEventAssistantDelta:
-			// Token-level streaming is gated behind a feature flag
-			// pending SPA support. Drop for now — see PR-9 spec.
-			return
-		case callbacks.SSEEventToolStart:
-			if ev.Tool == nil {
-				return
-			}
-			emit(Event{Type: EventToolStart, Tool: &ToolEvent{
-				ToolCallID: ev.Tool.ToolCallID,
-				Name:       ev.Tool.Name,
-				ArgsJSON:   ev.Tool.ArgsJSON,
-				Status:     ev.Tool.Status,
-				StartedAt:  ev.Tool.StartedAt,
-			}})
-		case callbacks.SSEEventToolEnd:
-			if ev.Tool == nil {
-				return
-			}
-			emit(Event{Type: EventToolEnd, Tool: &ToolEvent{
-				ToolCallID: ev.Tool.ToolCallID,
-				Name:       ev.Tool.Name,
-				ArgsJSON:   ev.Tool.ArgsJSON,
-				Status:     ev.Tool.Status,
-				StartedAt:  ev.Tool.StartedAt,
-				EndedAt:    ev.Tool.EndedAt,
-				DurationMs: ev.Tool.DurationMs,
-				Error:      ev.Tool.Error,
-				ResultJSON: ev.Tool.ResultJSON,
-			}})
-		case callbacks.SSEEventDone:
-			// Done is emitted by Handle directly so the chatruntime
-			// caller sees a single, well-typed Done event with the
-			// full Reply. The graph's terminal "done" callback fires
-			// without a Reply payload, which is unhelpful for the
-			// adapter. Drop the empty version to avoid double-fire.
-			return
-		case callbacks.SSEEventError:
-			msg := ""
-			if ev.Error != nil {
-				msg = ev.Error.Message
-			}
-			emit(Event{Type: EventError, Error: msg})
-		}
-	}
-}
-
-// buildEinoHistory translates persisted aiopsmodel.Message rows into
-// schema.Message.
-//
-// Tool-call replay: tool-only assistant rows (Content=NULL, with hydrated
-// ToolCalls) are emitted as {role:assistant, content:"", tool_calls:[...]}
-// so the following role=tool messages remain paired. Strict providers
-// (DeepSeek v4+) reject orphan tool messages with HTTP 400; OpenAI silently
-// tolerated them. See toolreplay.Resolve for the LLM-call-id recovery
-// rules (post-fix llm_call_id column + back-compat pair-by-order).
-//
-// The graph assembler appends the user turn separately (from Input.UserText);
-// to avoid the LLM seeing the same turn twice we strip a trailing role=user
-// row from the persisted history.
-func buildEinoHistory(rows []*aiopsmodel.Message) []*schema.Message {
-	if len(rows) == 0 {
-		return nil
-	}
-	end := len(rows)
-	if end > 0 && rows[end-1].Role == aiopsmodel.RoleUser {
-		end--
-	}
-	// Resolve against the WHOLE history (not just rows[:end]) so the
-	// trailing-user trim doesn't accidentally break pair-by-order
-	// resolution for an assistant just before the trimmed user.
-	callIDs := toolreplay.Resolve(rows)
-	// Index role=tool rows by tool_call_id so an assistant with tool_calls
-	// can hoist its responses to the immediate-next position regardless
-	// of the persisted created_at order. Without this, long-running
-	// AgentTool sub-agent spawns leave their parent assistant's tool_call
-	// slot dangling — strict providers (DeepSeek v4+) reject with
-	// HTTP 400 "insufficient tool messages following tool_calls message".
-	toolIdx := toolreplay.IndexToolMessagesByCallID(rows)
-	skipTool := make(map[int]bool)
-	out := make([]*schema.Message, 0, end)
-
-	// emitToolByCallID looks up the tool row matching callID in toolIdx,
-	// appends it to out (as schema.Message), and marks it skipped so the
-	// natural-order iterator below doesn't re-emit it.
-	emitToolByCallID := func(callID string) {
-		j, ok := toolIdx[callID]
-		if !ok || j >= end {
-			// Tool result wasn't persisted (in flight) or sits in the
-			// trimmed trailing user range. Skip silently — the assistant
-			// turn that emitted this tool_call may need to be dropped
-			// upstream; here we simply omit this slot.
-			return
-		}
-		tm := rows[j]
-		content := ""
-		if tm.Content != nil {
-			content = sanitizeToolReplayContent(*tm.Content)
-		}
-		tcID := ""
-		if tm.ToolCallID != nil {
-			tcID = *tm.ToolCallID
-		}
-		tname := ""
-		if tm.ToolName != nil {
-			tname = *tm.ToolName
-		}
-		out = append(out, &schema.Message{
-			Role:       schema.RoleType(aiopsmodel.RoleTool),
-			Content:    content,
-			ToolCallID: tcID,
-			ToolName:   tname,
-		})
-		skipTool[j] = true
-	}
-	for i := 0; i < end; i++ {
-		m := rows[i]
-		switch m.Role {
-		case aiopsmodel.RoleUser, aiopsmodel.RoleSystem:
-			if m.Content == nil {
-				continue
-			}
-			out = append(out, &schema.Message{
-				Role:    schema.RoleType(m.Role),
-				Content: *m.Content,
-			})
-		case aiopsmodel.RoleAssistant:
-			calls, ok := callIDs[m.ID]
-			if len(m.ToolCalls) > 0 && !ok {
-				toolreplay.MarkDependentToolsForSkip(rows, i, len(m.ToolCalls), skipTool)
-				continue
-			}
-			// Precheck: every tool_call we'd emit must have a hoistable
-			// response inside the current window. If any is missing
-			// (parallel ToolsNode dropped an OnEnd → chat_tool_calls
-			// row written but no role=tool chat_messages row), drop the
-			// whole assistant turn + its dependent tools rather than
-			// send an envelope strict providers reject with HTTP 400
-			// "insufficient tool messages following tool_calls".
-			if ok && len(calls) > 0 {
-				complete := true
-				for _, tc := range calls {
-					if j, found := toolIdx[tc.ID]; !found || j >= end {
-						complete = false
-						break
-					}
-				}
-				if !complete {
-					toolreplay.MarkDependentToolsForSkip(rows, i, len(calls), skipTool)
-					continue
-				}
-			}
-			content := ""
-			if m.Content != nil {
-				content = *m.Content
-			}
-			msg := &schema.Message{
-				Role:    schema.RoleType(m.Role),
-				Content: content,
-			}
-			if ok {
-				msg.ToolCalls = make([]schema.ToolCall, 0, len(calls))
-				for _, tc := range calls {
-					msg.ToolCalls = append(msg.ToolCalls, schema.ToolCall{
-						ID:   tc.ID,
-						Type: "function",
-						Function: schema.FunctionCall{
-							Name:      tc.Name,
-							Arguments: tc.ArgsJSON,
-						},
-					})
-				}
-			}
-			if content == "" && len(msg.ToolCalls) == 0 {
-				// Polluted-data case: assistant with no replayable
-				// signal AND no hydrated tool_calls. Drop assistant
-				// + dependent tool rows so the LLM never sees orphans.
-				toolreplay.MarkAllFollowingToolsForSkip(rows, i, skipTool)
-				continue
-			}
-			out = append(out, msg)
-			// HOIST: for every tool_call in this assistant's slot,
-			// look up its response by tool_call_id and emit it RIGHT
-			// HERE so the LLM API's "tool messages must immediately
-			// follow tool_calls" invariant holds — even when the
-			// natural created_at order interleaves another assistant
-			// (e.g. long-running AgentTool finishing after later
-			// short tools).
-			for _, tc := range msg.ToolCalls {
-				emitToolByCallID(tc.ID)
-			}
-		case aiopsmodel.RoleTool:
-			// Tool messages are emitted ONLY via hoisting (emitToolByCallID,
-			// right after their assistant's tool_calls — which sets
-			// skipTool for that row). A role=tool row reaching this branch
-			// un-hoisted is an ORPHAN: its tool_call_id matches no preceding
-			// assistant tool_call. That happens when an out-of-order
-			// parallel completion persisted the response under a synthetic
-			// "<name>|einoToolAdapter" id (the autoheal stub then filled the
-			// real id slot, so the assistant turn survived the precheck and
-			// this real response is left dangling). Emitting it bare yields
-			// the provider 400 "Messages with role 'tool' must be a response
-			// to a preceding message with 'tool_calls'". Drop it — the
-			// assistant's slot is already satisfied by the hoisted row.
-			continue
-		}
-	}
-	return out
+	// 5d. The turn runs on the kernel. `writeEnabled` and the
+	//     persona-filtered bag are passed through rather than re-derived:
+	//     they were resolved above, and a second resolution is where a
+	//     viewer's session quietly regains a mutating tool. The live turn's
+	//     text (req.UserText) is stamped on ctx by stampToolContext so the
+	//     transcript write path can apply the alert-draft rule.
+	ctx = stampToolContext(ctx, req, sess, sessionToolBag, writeEnabled)
+	return rt.runKernelTurn(ctx, req, kernelTurn{
+		Sess:            sess,
+		History:         history,
+		Tools:           sessionToolBag,
+		SystemPrompt:    systemPrompt,
+		UserText:        userContent,
+		DynamicHints:    dynamicHints,
+		AgentReminder:   agentReminder,
+		PersonaMaxTurns: personaMaxTurns(rt.cfg.AgentRegistry, personaName),
+		DefaultMaxTurns: rt.cfg.MaxIterations,
+	}, emit)
 }
 
 const (
@@ -1116,25 +761,6 @@ func sanitizeToolReplayContent(content string) string {
 		return content
 	}
 	return string(b)
-}
-
-// chatModelOpts turns the per-request model selection (SPA picker) into eino
-// model options for the graph's ChatModel node. Empty fields add no option,
-// so the routing default applies (unchanged default path). Provider routes
-// via RoutingChatModel.pick (WithProvider); model name is honoured by the
-// inner clientChatModel (WithModel).
-func chatModelOpts(req *Request) []model.Option {
-	if req == nil {
-		return nil
-	}
-	var opts []model.Option
-	if p := strings.TrimSpace(req.Provider); p != "" {
-		opts = append(opts, llm.WithProvider(p))
-	}
-	if m := strings.TrimSpace(req.Model); m != "" {
-		opts = append(opts, model.WithModel(m))
-	}
-	return opts
 }
 
 func filterCoordinatorToolsForIntent(bag []basetool.BaseTool, userText string, isCoordinator bool) []basetool.BaseTool {
@@ -1404,7 +1030,7 @@ func (rt *Runtime) calcDynamicHints(history []*aiopsmodel.Message) []string {
 	}
 	// "Promise-without-execution" detection — see opskeeperBasePrompt()
 	// 中等档位的 LLM (e.g. glm-4-plus) 偶尔写 "让我..." / "我先..." 这种
-	// 计划句但没真发出 tool_call，导致 graph 提前 END，用户体验是消息
+	// 计划句但没真发出 tool_call，导致内核提前 END，用户体验是消息
 	// 戛然而止。这条 hint 在下一轮把 LLM 重新拽回来 — 但只在用户给了
 	// 续聊指令（如 "继续"）的时候触发，避免在用户主动终止对话时打扰。
 	if excerpt, found := detectUnfollowedPromise(history); found {
@@ -1558,7 +1184,7 @@ func alertDraftGuardNeedsDraftRetry(history []*aiopsmodel.Message) bool {
 	if currentIdx < 0 || strings.TrimSpace(currentUser) == "" {
 		return false
 	}
-	if !callbacks.LooksLikeAlertRuleCreationText(currentUser) && !looksLikeAlertDraftContinuation(currentUser) {
+	if !alertdraft.LooksLikeRuleCreation(currentUser) && !alertdraft.LooksLikeContinuation(currentUser) {
 		return false
 	}
 	for i := currentIdx - 1; i >= 0; i-- {
@@ -1571,7 +1197,7 @@ func alertDraftGuardNeedsDraftRetry(history []*aiopsmodel.Message) bool {
 			if m.Content == nil {
 				return false
 			}
-			return callbacks.LooksLikeAlertDraftGuardBlockedMessage(*m.Content)
+			return alertdraft.LooksLikeBlockedMessage(*m.Content)
 		case aiopsmodel.RoleUser:
 			return false
 		}
@@ -1662,7 +1288,7 @@ func detectUnfollowedPromise(history []*aiopsmodel.Message) (string, bool) {
 		return "", false
 	}
 	content := strings.TrimSpace(*history[asstIdx].Content)
-	if callbacks.LooksLikeAlertDraftGuardBlockedMessage(content) {
+	if alertdraft.LooksLikeBlockedMessage(content) {
 		return "", false
 	}
 	if content == "" || !containsAnyPromiseMarker(content) {
@@ -1696,11 +1322,16 @@ func containsAnyPromiseMarker(content string) bool {
 	return false
 }
 
-// buildGraphErrorApology turns a graph-level error into a user-facing
+// buildTurnErrorApology turns a loop-level error into a user-facing
 // markdown apology, picking different wording per error class so the user
 // (and downstream Ant audit) can tell what happened. Mirrors the apology
 // style of legacy agent.go's MaxIterations fallback.
-func buildGraphErrorApology(err error) string {
+//
+// Both loops share it: the matchers below are written against error text,
+// and the PiG kernel's caps and provider failures produce the same
+// sentences the previous graph's did, so one classifier keeps the
+// console's wording stable across the kernel switch.
+func buildTurnErrorApology(err error) string {
 	if err == nil {
 		return "抱歉，处理消息时遇到未知错误。请换个问法再问一次。"
 	}
@@ -1710,17 +1341,21 @@ func buildGraphErrorApology(err error) string {
 	// LLM hallucinated a tool name not in its actual schema (e.g.
 	// model "remembers" `get_host_load` from training even though
 	// only `query_devices / query_knowledge / ...` were presented).
-	// Eino's tool router can't dispatch → whole graph aborts. Map
-	// to a friendly retry message that nudges toward the right
-	// flow (AgentTool dispatch).
+	// The kernel's tool dispatch can't resolve it → the turn aborts.
+	// Map to a friendly retry message that nudges toward the right
+	// flow (AgentTool dispatch). "not found in toolsnode" is the
+	// retired graph's wording, kept so historical error strings in
+	// replayed sessions still classify the same way.
 	case strings.Contains(low, "not found in toolsnode"),
 		strings.Contains(low, "tool") && strings.Contains(low, "not found"):
 		return "这个问题需要的深度查询能力不在我（协调员）的工具范围内 — 那些工具都在专家手里。请直接告诉我你的具体诉求（例如「看 CPU/内存」「检查磁盘容量」「网络连通性」），我会派对应的 specialist 处理。"
-	// Match both eino's wording shapes: "exceeds max steps" (current
-	// runtime) and the legacy "exceeded max iterations" / "maxsteps"
-	// variants. The bug we ate before: matcher said "exceeded" (past
-	// tense) but eino emits "exceeds" (present tense), so every
-	// max-steps abort dumped raw "[GraphRunError]…" to the user.
+	// Match every wording shape we have emitted: the kernel's
+	// "exceeded max iterations" (see TurnMaxIterations in
+	// kernelpath.go), the retired graph's "exceeds max steps", and
+	// the legacy "exceeded max iterations" / "maxsteps" variants.
+	// The bug we ate before: matcher said "exceeded" (past tense)
+	// while the runtime emitted "exceeds" (present tense), so every
+	// max-steps abort dumped a raw graph error to the user.
 	case strings.Contains(low, "exceeds max"),
 		strings.Contains(low, "exceeded max"),
 		strings.Contains(low, "max steps"),
@@ -1733,8 +1368,8 @@ func buildGraphErrorApology(err error) string {
 		return "今日 LLM 预算已用完。请联系 admin 调整配额或明天再试。"
 	// History replay produced a tool_calls envelope that the upstream
 	// provider rejected because one or more tool responses are missing
-	// from chat_messages (eino ToolsNode dropped an OnEnd in parallel
-	// execution; the chat_tool_calls row is there but the role=tool
+	// from chat_messages (a parallel tool round lost its terminal
+	// event; the chat_tool_calls row is there but the role=tool
 	// chat_messages row is not). Distinct user message — this is a
 	// dirty-session issue, not a provider or quota problem; new session
 	// is the clean way out.

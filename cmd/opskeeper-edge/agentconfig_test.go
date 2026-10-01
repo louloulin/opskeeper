@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
 )
 
@@ -225,5 +226,142 @@ func TestSplitListIgnoresBlanksAndTrims(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("item %d = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+// ---------------------------------------------------------------------
+// deployment profiles
+// ---------------------------------------------------------------------
+//
+// A profile is the whole point of the cross-cloud story: the same binary
+// on a trading host and on a SaaS tenant, differing by one environment
+// variable that is checkable remotely. These tests are about the property
+// that makes that safe — a host cannot be half in one profile and half out
+// of it — because a partially-applied profile is a policy nobody wrote.
+
+func TestAProfileSetsTheCeilingTheRadiusAndTheScopesTogether(t *testing.T) {
+	t.Setenv(edgeProfileEnv, string(pluginmanifest.ProfileFinance))
+	fin, err := pluginmanifest.ProfileForName(string(pluginmanifest.ProfileFinance))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pol, err := nodePluginPolicy()
+	if err != nil {
+		t.Fatalf("the finance profile did not load: %v", err)
+	}
+	if pol.MaxSafetyLevel != fin.Ceiling {
+		t.Errorf("ceiling = %s, want the profile's %s", pol.MaxSafetyLevel, fin.Ceiling)
+	}
+	if pol.MaxBlastRadius != fin.MaxRadius {
+		t.Errorf("radius = %q, want the profile's %q", pol.MaxBlastRadius, fin.MaxRadius)
+	}
+	if !fin.Granted.Satisfies(pol.GrantedScopes) {
+		t.Errorf("granted = %v, want at least the profile's %v", pol.GrantedScopes, fin.Granted)
+	}
+	if pol.AllowUnsigned {
+		t.Error("a profile turned on unsigned installs")
+	}
+}
+
+func TestAnUnknownProfileIsABootErrorRatherThanADefault(t *testing.T) {
+	// The node refuses to start rather than picking a profile. Falling
+	// back to the narrow one would refuse work this fleet is entitled to
+	// with an error about a package; falling back to the wide one would
+	// widen the fleet where it matters most.
+	t.Setenv(edgeProfileEnv, "finance-strong-consistancy")
+	pol, err := nodePluginPolicy()
+	if err == nil {
+		t.Fatalf("a misspelled profile produced policy %+v", pol)
+	}
+	if !strings.Contains(err.Error(), "finance-strong-consistancy") {
+		t.Errorf("error %q does not quote the setting, so the operator cannot see the typo", err)
+	}
+}
+
+func TestAProfileRefusesAnEnvironmentThatContradictsIt(t *testing.T) {
+	// The combination a fleet drifts into: somebody widened the ceiling
+	// during an incident and the profile was adopted afterwards. Merging
+	// them would produce a host whose policy is neither the profile nor
+	// what the environment says, and whose answer depends on which file
+	// was edited last.
+	t.Setenv(edgeProfileEnv, string(pluginmanifest.ProfileFinance))
+	for _, tc := range []struct{ name, env, value string }{
+		{"a wider ceiling", "OPSKEEPER_EDGE_MAX_SAFETY_LEVEL", "L3"},
+		{"a wider radius", "OPSKEEPER_EDGE_MAX_BLAST_RADIUS", "cluster"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.env, tc.value)
+			if _, err := nodePluginPolicy(); err == nil {
+				t.Fatalf("%s=%s was accepted alongside a profile that does not allow it", tc.env, tc.value)
+			}
+		})
+	}
+}
+
+func TestAProfileRefusesANarrowedScopeListToo(t *testing.T) {
+	// Narrowing is the safe direction and is still refused, because the
+	// failure it causes is invisible: the release installs everywhere but
+	// here, no error is raised anywhere, and the wave simply never
+	// finishes.
+	t.Setenv(edgeProfileEnv, string(pluginmanifest.ProfileSaaS))
+	t.Setenv("OPSKEEPER_EDGE_PLUGIN_SCOPES", "host.read")
+	_, err := nodePluginPolicy()
+	if err == nil {
+		t.Fatal("a scope list omitting most of the profile's grant was accepted")
+	}
+	if !strings.Contains(err.Error(), "k8s.exec") {
+		t.Errorf("error %q does not name a missing scope, so the operator cannot fix it", err)
+	}
+}
+
+func TestAProfileAcceptsAnEnvironmentThatAgreesWithIt(t *testing.T) {
+	// The positive case, so the refusals above cannot pass by refusing
+	// everything an operator sets. Restating a profile's own values is a
+	// reasonable way to make a host's configuration self-documenting.
+	t.Setenv(edgeProfileEnv, string(pluginmanifest.ProfileSaaS))
+	saas, err := pluginmanifest.ProfileForName(string(pluginmanifest.ProfileSaaS))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPSKEEPER_EDGE_MAX_SAFETY_LEVEL", string(saas.Ceiling))
+	t.Setenv("OPSKEEPER_EDGE_MAX_BLAST_RADIUS", string(saas.MaxRadius))
+	t.Setenv("OPSKEEPER_EDGE_PLUGIN_SCOPES", strings.Join(scopeStrings(saas.Granted), ","))
+
+	pol, err := nodePluginPolicy()
+	if err != nil {
+		t.Fatalf("a configuration that agrees with its profile was refused: %v", err)
+	}
+	if pol.MaxBlastRadius != saas.MaxRadius {
+		t.Errorf("radius = %q, want %q", pol.MaxBlastRadius, saas.MaxRadius)
+	}
+}
+
+// scopeStrings renders scopes for an environment list.
+func scopeStrings(scopes domain.Scopes) []string {
+	out := make([]string, 0, len(scopes))
+	for _, s := range scopes {
+		out = append(out, string(s))
+	}
+	return out
+}
+
+func TestAProfileIsNotAppliedWhenNoneIsNamed(t *testing.T) {
+	// The default path must keep working: a node that names no profile
+	// gets the env-driven policy it had before profiles existed, which is
+	// what every host provisioned by an older install.sh has.
+	t.Setenv(edgeProfileEnv, "")
+	pol, err := nodePluginPolicy()
+	if err != nil {
+		t.Fatalf("the default policy no longer loads: %v", err)
+	}
+	if pol.MaxSafetyLevel != domain.SafetyL1 {
+		t.Errorf("default ceiling = %s, want L1", pol.MaxSafetyLevel)
+	}
+	if pol.MaxBlastRadius != domain.RadiusNone {
+		t.Errorf("default radius = %q, want none", pol.MaxBlastRadius)
+	}
+	if pol.AllowUnsigned {
+		t.Error("the default policy allows unsigned installs")
 	}
 }

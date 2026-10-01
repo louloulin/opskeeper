@@ -257,9 +257,16 @@ func TestTheShippedPackagesInstallOnANodeWithNoConfiguration(t *testing.T) {
 	} {
 		t.Setenv(key, "")
 	}
-	pol, err := nodePluginPolicy()
+	// The version is left as TestMain set it. A node always knows what it
+	// runs — that is a property of the binary, not of configuration — and
+	// the shipped packages all declare min_edge_version. Clearing it here
+	// would make this a test about version reporting rather than about
+	// policy defaults.
+	// The production boot policy, so a wiring mistake is what this test
+	// catches rather than a hand-built policy that cannot be wrong.
+	pol, err := nodeBootPolicy("0.8.0")
 	if err != nil {
-		t.Fatalf("nodePluginPolicy: %v", err)
+		t.Fatalf("nodeBootPolicy: %v", err)
 	}
 	trust := loadTrustStore()
 

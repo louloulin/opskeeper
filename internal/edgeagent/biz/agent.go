@@ -241,6 +241,13 @@ func (a *Agent) Run(ctx context.Context) error {
 	// the relay is on its own goroutine inside the bridge. A node whose
 	// agent is not up yet still serves agent.state and agent.health, so
 	// there is nothing to report as an error here.
+	//
+	// Load-bearing: everything below this line — the changewatcher, the
+	// upgrade sentinel, eg.Wait and therefore the graceful-shutdown
+	// sequence — is unreachable if this call ever blocks. The node would
+	// keep heartbeating and look healthy while never upgrading and never
+	// shutting down cleanly. See AgentBridge.StartEvents, and the
+	// regression test that pins the non-blocking contract.
 	if b := a.bridge(); b != nil {
 		b.StartEvents(egCtx)
 	}

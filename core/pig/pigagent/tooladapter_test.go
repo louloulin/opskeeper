@@ -21,6 +21,8 @@ type fakeTool struct {
 	err    error
 	// gotArgs records the arguments the tool was actually invoked with.
 	gotArgs json.RawMessage
+	// gotToolCallID records the tool-call id the adapter stamped onto ctx.
+	gotToolCallID string
 	// cancelCtx makes Invoke return a context error, standing in for a
 	// cancelled run.
 	cancelCtx bool
@@ -30,6 +32,7 @@ func (f *fakeTool) Schema() ports.ToolSchema { return f.schema }
 
 func (f *fakeTool) Invoke(ctx context.Context, args json.RawMessage) (string, error) {
 	f.gotArgs = args
+	f.gotToolCallID = ports.ToolCallIDFromContext(ctx)
 	if f.cancelCtx && ctx.Err() == nil {
 		return "", errors.New("should not be reached")
 	}
@@ -155,6 +158,38 @@ func TestExecuteReturnsTextResult(t *testing.T) {
 	}
 	if string(tool.gotArgs) != `{"a":"b"}` {
 		t.Errorf("tool received %q", tool.gotArgs)
+	}
+}
+
+func TestExecuteStampsToolCallIDOnContext(t *testing.T) {
+	// The id must reach the tool through ctx. Downstream consumers are
+	// host-side and cannot be reached from the kernel: the approval proposer
+	// pairs an approval card with the streaming card of THIS call, and the
+	// persistence handler pairs a call OnStart with its OnEnd. Reconstructing
+	// the id from completion order instead is what produced orphaned tool
+	// results and provider 400s when parallel tools settled out of order.
+	tool := newTool("get_topology")
+	a, _ := NewAdapter(tool)
+	if _, err := a.Execute(context.Background(), "call_abc123", json.RawMessage(`{}`), nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if tool.gotToolCallID != "call_abc123" {
+		t.Errorf("tool saw id %q, want call_abc123", tool.gotToolCallID)
+	}
+}
+
+func TestExecuteWithoutCallIDLeavesContextBare(t *testing.T) {
+	// A tool invoked outside a loop (a test, a scheduled job) has no
+	// model-assigned call. It must see "" rather than a fabricated id: a
+	// made-up id mis-pairs the result with an unrelated call and is worse
+	// than no id, which consumers already treat as unknown.
+	tool := newTool("ping")
+	a, _ := NewAdapter(tool)
+	if _, err := a.Execute(context.Background(), "", json.RawMessage(`{}`), nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if tool.gotToolCallID != "" {
+		t.Errorf("tool saw id %q, want empty", tool.gotToolCallID)
 	}
 }
 

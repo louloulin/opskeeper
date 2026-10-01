@@ -130,6 +130,18 @@ type InstallPolicy struct {
 	// plugin. A node below it is skipped during a rolling install rather
 	// than being handed a package it cannot run.
 	MinEdgeVersion string `json:"min_edge_version,omitempty" yaml:"min_edge_version,omitempty"`
+	// MinPigVersion is the lowest PiG agent build that can host this
+	// plugin. It is the other half of the compatibility matrix: a package
+	// that uses a tool-registration API, a hook name or an event field
+	// that its PiG version does not yet have installs cleanly and fails
+	// the first time a turn needs it.
+	//
+	// It is a separate field from MinEdgeVersion because the two move
+	// independently. A node fleet is upgraded on one cadence and the
+	// agent binary inside it on another, so "the edge is new enough" and
+	// "the agent is new enough" are different questions with different
+	// fixes.
+	MinPigVersion string `json:"min_pig_version,omitempty" yaml:"min_pig_version,omitempty"`
 }
 
 // Install strategy values.

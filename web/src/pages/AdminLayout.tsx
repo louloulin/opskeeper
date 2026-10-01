@@ -25,6 +25,7 @@ import { NavLink, Outlet } from 'react-router-dom';
 import {
   Building2,
   Loader2,
+  Package,
   ScrollText,
   Server,
   Users as UsersIcon,
@@ -52,12 +53,19 @@ function railItems(): RailItem[] {
     // the same rail. The icon (Server) is shared with the Manager
     // card on the page itself.
     { to: 'runtime', icon: Server, label: tr('运行时版本', 'Runtime / Version'), hint: tr('Manager / Worker / 插件 / 服务端 组合 + 健康检查 + 一次完整恢复操作', 'Manager / Worker / plugin / server composition + health + recovery example') },
+    // A plugin release is the widest-blast-radius action the console can
+    // take — it puts new code, including L2 tools that can restart
+    // services, onto hosts. That is why it is in Admin next to the audit
+    // log rather than in Settings next to the marketplace.
+    { to: 'plugins', icon: Package, label: tr('插件发布', 'Plugin releases'), hint: tr('把插件包推到节点舰队：逐波推进 / 停止 / 回滚', 'Push plugin packages to the fleet: advance / halt / roll back') },
   ];
 }
 
 export default function AdminLayout() {
   const { isAdmin } = usePermissions();
-  const items = railItems().filter((item) => isAdmin || item.to === 'audit' || item.to === 'runtime');
+  const items = railItems().filter(
+    (item) => isAdmin || item.to === 'audit' || item.to === 'runtime',
+  );
   return (
     <main className="anim-fade flex flex-1 flex-col overflow-hidden">
       <PageHeader

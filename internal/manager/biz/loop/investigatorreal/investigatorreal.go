@@ -188,7 +188,14 @@ func (t *InvestigatorToolset) ListRemediationsWithEvidence(_ context.Context, re
 			options = append(options, remediation("pg.connection_pause", target, "mutating", false))
 		}
 		if logCount > 0 {
-			options = append(options, remediation("pg.kill_backend", target, "mutating", false))
+			// pg.kill_session is the name the pg adapter actually registers. The
+			// previous pg.kill_backend was a rename nobody reconciled: PostgreSQL
+			// calls the same thing a backend in pg_terminate_backend and a session
+			// in pg_stat_activity, so the two names describe one operation — and
+			// only one of them resolves to something that can run. Writing the
+			// unregistered name into a contract put a fix in front of a human that
+			// the system could not carry out.
+			options = append(options, remediation("pg.kill_session", target, "mutating", false))
 		}
 	case "redis":
 		if hasMetric && metricValue >= 0.90 {
@@ -201,7 +208,7 @@ func (t *InvestigatorToolset) ListRemediationsWithEvidence(_ context.Context, re
 		if hasMetric && metricValue >= 0.10 {
 			options = append(options,
 				remediation("k8s.rolling_restart", target, "mutating", false),
-				remediation("k8s.scale_up", target, "mutating", false),
+				remediation("k8s.scale", target, "mutating", false),
 			)
 		}
 		if logCount >= 10 {

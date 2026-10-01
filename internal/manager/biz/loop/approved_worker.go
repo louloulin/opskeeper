@@ -68,6 +68,27 @@ type ApprovedPhaseWorker struct {
 	critiqueLoader ApprovedCritiqueLoader
 	clock          func() time.Time
 	log            *slog.Logger
+
+	// remediationLoader reads the candidate fixes the investigator
+	// proposed. nil → the Planner reports zero options and the Executor
+	// has nothing to dispatch, which is a phase failure rather than a
+	// silent advance.
+	remediationLoader RemediationOptionLoader
+
+	// invoker performs the selected action. The default is
+	// UnavailableInvoker, which refuses — see remediation.go for why the
+	// default has to be a refusal and not a success.
+	invoker RemediationInvoker
+
+	// incident / tenant carry the run's scope from the Plan into the
+	// Executor. The orchestrator calls Planner and Executor separately and
+	// PlanInput does not reach the Executor, so the Planner stashes them
+	// here. This is a per-run field, not shared state: the loop runs one
+	// incident at a time per worker instance, and a concurrent run against
+	// the same worker would be a bug worth surfacing rather than
+	// papering over with a lock.
+	incidentID string
+	tenantID   string
 }
 
 // ApprovedCritiqueLoader 加载 critiqued phase 输出的 CritiqueDimensions
@@ -125,6 +146,26 @@ func WithApprovedCritiqueLoader(loader ApprovedCritiqueLoader) ApprovedOption {
 	}
 }
 
+// WithRemediationLoader 注入 upstream 修复选项加载器。
+// 不注入 = 无选项可派发（Executor 会以明确原因失败，不会假装成功）。
+func WithRemediationLoader(loader RemediationOptionLoader) ApprovedOption {
+	return func(w *ApprovedPhaseWorker) {
+		if loader != nil {
+			w.remediationLoader = loader
+		}
+	}
+}
+
+// WithRemediationInvoker 注入修复动作执行器。
+// 不注入 = UnavailableInvoker（fail-closed：报告失败而不是静默推进）。
+func WithRemediationInvoker(invoker RemediationInvoker) ApprovedOption {
+	return func(w *ApprovedPhaseWorker) {
+		if invoker != nil {
+			w.invoker = invoker
+		}
+	}
+}
+
 // WithApprovedLogger 注入 slog.Logger；nil 走 slog.Default()。
 func WithApprovedLogger(log *slog.Logger) ApprovedOption {
 	return func(w *ApprovedPhaseWorker) {
@@ -164,6 +205,7 @@ func NewApprovedPhaseWorker(pauseHook PauseHook, clock func() time.Time, log *sl
 		critiqueLoader:  NoopApprovedCritiqueLoader{},
 		clock:           clock,
 		log:             log,
+		invoker:         UnavailableInvoker{},
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -213,6 +255,33 @@ const approvedMetaRemediationCount = "approved_remediation_count"
 // Actionability 原始值，悬浮在 Plan.Meta。
 const approvedMetaActionability = "approved_actionability"
 
+// approvedMetaRemediationOptions 是 Planner 写进 Plan.Meta 的上游修复
+// 选项，Executor 从这里读取。走 Plan.Meta 而不是重新读一次 loader，是为了让
+// 审批所依据的选项与被执行的选项在同一次读取内确定：中间若上游被改写，
+// 审批的和执行的不再是同一份数据。
+const approvedMetaRemediationOptions = "approved_remediation_options"
+
+// approvedMetaRemediationStatus / Message / Action 是 Executor 写回
+// RawOutputs 的派发结果，Verifier 与 orchestrator 读。
+const (
+	approvedMetaRemediationStatus  = "remediation_status"
+	approvedMetaRemediationMessage = "remediation_message"
+	approvedMetaRemediationAction  = "remediation_action"
+)
+
+// approvedAutoApprover 是 auto_approve=true 动作的审计署名。它是一个
+// 字面量而不是空串：审计链上必须能区分"策略自动批准"与"某个人批准"，
+// 而"policy:auto"让前者不冒充人。
+const approvedAutoApprover = "policy:auto"
+
+// approvedPolicyApprover 预留给 resume 路径上的人工批准。
+const approvedPolicyApprover = "policy:pending-human"
+
+// approvedRemediationReason 是写进审计记录的固定理由。它记录的是
+// "由 closed loop 按策略执行"，而不是把上游的 action 名重复一遍——
+// action 名已经在 side effect 的 target 里了。
+const approvedRemediationReason = "closed loop: pre-approved remediation dispatched by policy"
+
 // approvedMetaPauseRequired 是 Executor 写回 ExecResult.RawOutputs 的
 // pause 决策 flag（true / false），便于 Verifier / orchestrator
 // / Harness rubric 一次性判定是否有人工介入。Pause token 仍走
@@ -232,6 +301,29 @@ func (w *ApprovedPhaseWorker) Planner(ctx context.Context, in PlanInput) (Plan, 
 	remediationCount := 0
 	var actionability *float64
 
+	// The Planner keeps the run's scope for the Executor, which is called
+	// separately and never sees PlanInput.
+	w.incidentID = in.IncidentID
+	w.tenantID = in.TenantID
+
+	// Load the proposed fixes. This is the value the severity tier is
+	// partly about: a run with three proposed actions and a run with one
+	// are not the same approval decision, and reporting zero here made
+	// the pause hook's remediation_count argument a constant.
+	var proposed []RemediationOption
+	if w.remediationLoader != nil {
+		opts, err := w.remediationLoader.LoadRemediationOptions(ctx, in.TenantID, in.IncidentID)
+		if err != nil {
+			// A loader failure is not a reason to proceed with no
+			// options: that is indistinguishable from "the investigator
+			// proposed nothing", and it would advance a run whose
+			// approval was decided without reading what it was approving.
+			return Plan{}, fmt.Errorf("loop: approved planner: load remediation options: %w", err)
+		}
+		proposed = opts
+	}
+	remediationCount = len(proposed)
+
 	// LLM 风险评估：基于 critiqued phase 上游 CritiqueDimensions。
 	if w.critiqueLoader != nil {
 		dims, err := w.critiqueLoader.LoadCritiqueDimensions(ctx, in.IncidentID)
@@ -250,8 +342,9 @@ func (w *ApprovedPhaseWorker) Planner(ctx context.Context, in PlanInput) (Plan, 
 	}
 
 	meta := map[string]any{
-		approvedMetaSeverity:         severity,
-		approvedMetaRemediationCount: remediationCount,
+		approvedMetaSeverity:           severity,
+		approvedMetaRemediationCount:   remediationCount,
+		approvedMetaRemediationOptions: proposed,
 	}
 	if actionability != nil {
 		meta[approvedMetaActionability] = *actionability
@@ -316,13 +409,102 @@ func (w *ApprovedPhaseWorker) Executor(ctx context.Context, plan Plan) (ExecResu
 			},
 		}, nil
 	}
-	return ExecResult{
+	// The pause hook cleared the run, so the approved action may now be
+	// performed. This is the branch that used to return here having done
+	// nothing at all.
+	dispatch, err := w.dispatchRemediation(ctx, plan)
+	if err != nil {
+		// The partial result is returned alongside the error rather than
+		// discarded. dispatchRemediation has already written the
+		// ToolReplay entry for the attempt, and throwing it away would
+		// leave the phase_failed event with no record of what was tried —
+		// which downstream reads identically to "nothing was attempted".
+		//
+		// The decision key is deliberately absent: a failed dispatch is
+		// not an advance, and the Verifier keys off its absence.
+		return dispatch, err
+	}
+	dispatch.RawOutputs[ApprovedDecisionRawKey] = string(ApprovedExecAdvance)
+	dispatch.RawOutputs[approvedMetaPauseRequired] = false
+	dispatch.RawOutputs[approvedMetaSeverity] = severity
+	return dispatch, nil
+}
+
+// dispatchRemediation selects and performs the approved action.
+//
+// Four outcomes, and the distinction between them is the whole point:
+//
+//   - dispatched successfully → advance; the recovered phase verifies it
+//   - dispatched and failed    → the phase fails; the failure is in
+//     evidence before the recovery verifier runs, rather than after it
+//     has drawn a conclusion from unchanged metrics
+//   - nothing eligible         → the phase fails; a run whose every
+//     proposed action needs a human must stop for one
+//   - no loader wired          → the phase fails; this is a deployment
+//     fault and pretending otherwise produces a postmortem that claims a
+//     fix nobody applied
+func (w *ApprovedPhaseWorker) dispatchRemediation(ctx context.Context, plan Plan) (ExecResult, error) {
+	proposed, _ := plan.Meta[approvedMetaRemediationOptions].([]RemediationOption)
+	if w.remediationLoader == nil {
+		return ExecResult{}, fmt.Errorf(
+			"loop: approved phase cannot dispatch a remediation: no remediation option loader is wired "+
+				"(%d option(s) proposed); refusing to advance a run that would apply nothing", len(proposed))
+	}
+	selected, err := SelectRemediation(proposed)
+	if err != nil {
+		return ExecResult{}, err
+	}
+
+	approver := approvedAutoApprover
+	if !selected.AutoApprove {
+		// Unreachable through SelectRemediation today, but the branch
+		// exists because the resume path will grow: a human approving via
+		// pause token is not auto_approve, and when that lands the
+		// approver must be their id rather than a literal.
+		approver = approvedPolicyApprover
+	}
+	start := w.clock()
+	outcome, invokeErr := w.invoker.Invoke(ctx, RemediationRequest{
+		IncidentID: w.incidentID,
+		TenantID:   w.tenantID,
+		Option:     selected,
+		Approver:   approver,
+		Reason:     approvedRemediationReason,
+	})
+	if invokeErr != nil {
+		// A failure is recorded before it is returned. The phase_failed
+		// event and the ToolReplay entry are the two places a
+		// postmortem can later find out what was attempted; an error
+		// that only reached a log line leaves the incident looking
+		// like it never got that far.
+		outcome = RemediationOutcome{
+			Status:  RemediationStatusFailed,
+			Message: invokeErr.Error(),
+			Args:    outcome.Args,
+			Result:  outcome.Result,
+		}
+	}
+	replay, side := RecordRemediation(outcome, start, w.clock)
+	replay.Name = selected.Action
+	side.Target = selected.Target
+	side.Detail["action"] = selected.Action
+	side.Detail["risk"] = selected.Risk
+	side.Detail["auto_approve"] = selected.AutoApprove
+	side.Detail["approver"] = approver
+
+	result := ExecResult{
+		SideEffects: []SideEffect{side},
+		ToolReplay:  []ToolReplayEntry{replay},
 		RawOutputs: map[string]any{
-			ApprovedDecisionRawKey:    string(ApprovedExecAdvance),
-			approvedMetaPauseRequired: false,
-			approvedMetaSeverity:      severity,
+			approvedMetaRemediationStatus:  outcome.Status,
+			approvedMetaRemediationMessage: outcome.Message,
+			approvedMetaRemediationAction:  selected.Action,
 		},
-	}, nil
+	}
+	if outcome.Status != RemediationStatusSuccess || invokeErr != nil {
+		return result, fmt.Errorf("%w: %s: %s", ErrRemediationFailed, selected.Action, outcome.Message)
+	}
+	return result, nil
 }
 
 // remediationCountFromPlan 安全地从 Plan.Meta 读 remediation count，
@@ -352,6 +534,19 @@ func (w *ApprovedPhaseWorker) Verifier(_ context.Context, result ExecResult) (Ve
 	decision, _ := decisionRaw.(string)
 	switch ApprovedExecDecision(decision) {
 	case ApprovedExecAdvance, ApprovedExecAutoApprove:
+		// An advance must be backed by a dispatch. This check is what
+		// makes the fix durable: a later edit that restores a no-op
+		// executor, or a pause hook that clears a run with no eligible
+		// action, is caught here rather than being written into a
+		// postmortem as a fix.
+		status, _ := result.RawOutputs[approvedMetaRemediationStatus].(string)
+		if status != RemediationStatusSuccess {
+			action, _ := result.RawOutputs[approvedMetaRemediationAction].(string)
+			message, _ := result.RawOutputs[approvedMetaRemediationMessage].(string)
+			return Verdict{OK: false, Reasons: []string{
+				fmt.Sprintf("advance without a successful dispatch: action=%q status=%q message=%q", action, status, message),
+			}}, nil
+		}
 		return Verdict{OK: true, Confidence: 1.0}, nil
 	case ApprovedExecPause:
 		return Verdict{OK: false, Reasons: []string{"pause_required"}}, nil

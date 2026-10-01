@@ -178,7 +178,7 @@ func TestInvestigatorToolset_ListRemediationsWithEvidence_Thresholds(t *testing.
 		wantAction   string
 	}{
 		{"pg long transaction", "pg", `[{"value":[1,"42"]}]`, 0, "pg.terminate_long_tx"},
-		{"pg errors", "pg", `[]`, 1, "pg.kill_backend"},
+		{"pg errors", "pg", `[]`, 1, "pg.kill_session"},
 		{"redis pressure", "redis", `[{"value":[1,"0.95"]}]`, 0, "redis.failover"},
 		{"redis logs", "redis", `[]`, 1, "redis.client_kill"},
 		{"k8s restarts", "k8s", `[{"value":[1,"0.2"]}]`, 0, "k8s.rolling_restart"},

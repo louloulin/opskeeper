@@ -26,8 +26,13 @@ type scriptedNode struct {
 	mu sync.Mutex
 	// install answers per edge id. A node with no entry installs.
 	install map[uint64]Outcome
-	// state is each node's package set, mutated by the driver.
+	// state is each node's *active* package set, mutated by the driver.
 	state map[uint64][]ports.PluginInfo
+	// retained is what is on disk. It is separate from state because the
+	// real node keeps a superseded version's directory for a rollback and
+	// stops publishing it; a fixture with one set could not express the
+	// difference, and the difference is the whole reason Restore exists.
+	retained map[uint64][]ports.PluginInfo
 	// calls records every request, in order, as "op:edge".
 	calls []string
 	// removes that fail.
@@ -42,11 +47,13 @@ func newFleet(ids ...uint64) *scriptedNode {
 	n := &scriptedNode{
 		install:    map[uint64]Outcome{},
 		state:      map[uint64][]ports.PluginInfo{},
+		retained:   map[uint64][]ports.PluginInfo{},
 		failRemove: map[uint64]bool{},
 		silent:     map[uint64]bool{},
 	}
 	for _, id := range ids {
 		n.state[id] = nil
+		n.retained[id] = nil
 	}
 	return n
 }
@@ -76,6 +83,9 @@ func (n *scriptedNode) Install(_ context.Context, edgeID uint64, spec ports.Plug
 			n.state[edgeID] = upsert(n.state[edgeID], ports.PluginInfo{
 				Name: spec.Name, Version: spec.Version, Digest: "d-" + spec.Version,
 			})
+			n.retained[edgeID] = retain(n.retained[edgeID], ports.PluginInfo{
+				Name: spec.Name, Version: spec.Version, Digest: "d-" + spec.Version,
+			})
 			if before != nil && before.Version != spec.Version {
 				cp := *before
 				scoped.Replaced = &cp
@@ -91,6 +101,9 @@ func (n *scriptedNode) Install(_ context.Context, edgeID uint64, spec ports.Plug
 		before = &cp
 	}
 	n.state[edgeID] = upsert(n.state[edgeID], ports.PluginInfo{
+		Name: spec.Name, Version: spec.Version, Digest: "d-" + spec.Version,
+	})
+	n.retained[edgeID] = retain(n.retained[edgeID], ports.PluginInfo{
 		Name: spec.Name, Version: spec.Version, Digest: "d-" + spec.Version,
 	})
 	return Outcome{
@@ -126,7 +139,66 @@ func (n *scriptedNode) Remove(_ context.Context, edgeID uint64, name, version st
 		out = append(out, p)
 	}
 	n.state[edgeID] = out
+	// The bytes go too. The real store removes the directory, which is
+	// why a restore of a version that was removed is a refusal.
+	var kept []ports.PluginInfo
+	for _, p := range n.retained[edgeID] {
+		if p.Name == name && p.Version == version {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	n.retained[edgeID] = kept
 	return Outcome{Status: StatusInstalled, Set: append([]ports.PluginInfo(nil), out...)}
+}
+
+// Restore behaves the way the real node does: it reactivates bytes that are
+// already on disk and refuses a version that is not there.
+//
+// The refusal is the load-bearing half. A restore that fell back to
+// fetching would make every rollback an install, and the manager — which
+// has no URL for the version it is restoring — would ship a release while
+// believing it had undone one.
+func (n *scriptedNode) Restore(_ context.Context, edgeID uint64, name, version string) Outcome {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.calls = append(n.calls, fmt.Sprintf("restore:%d:%s@%s", edgeID, name, version))
+	if n.silent[edgeID] {
+		return Outcome{}
+	}
+	// Anything currently active is on disk by definition — the real store
+	// lists its package directory, and a package can only be in the agent's
+	// set if its directory is there. So a fixture that seeded `state`
+	// directly, as the tests that pre-load a fleet do, still has the bytes
+	// a restore needs.
+	if p := find(n.retained[edgeID], name); p == nil || p.Version != version {
+		if active := find(n.state[edgeID], name); active == nil || active.Version != version {
+			return Outcome{
+				Status: StatusRefused,
+				Reason: fmt.Sprintf("%s@%s is not installed on this node; a restore does not fetch", name, version),
+			}
+		}
+	}
+	n.state[edgeID] = upsert(n.state[edgeID], ports.PluginInfo{
+		Name: name, Version: version, Digest: "d-" + version,
+	})
+	return Outcome{Status: StatusInstalled, Digest: "d-" + version, Set: append([]ports.PluginInfo(nil), n.state[edgeID]...)}
+}
+
+// seed puts a package on a node the way a previous release would have:
+// active *and* on disk.
+//
+// Tests that pre-load a fleet must set both, because the real node keeps a
+// superseded version's directory and a fixture that only set the active set
+// could not be restored to — which is the difference the rollback path
+// depends on.
+func (n *scriptedNode) seed(edgeID uint64, infos ...ports.PluginInfo) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, info := range infos {
+		n.state[edgeID] = upsert(n.state[edgeID], info)
+		n.retained[edgeID] = retain(n.retained[edgeID], info)
+	}
 }
 
 func (n *scriptedNode) versions(edgeID uint64) []string {
@@ -147,6 +219,23 @@ func (n *scriptedNode) installedOn(edgeID uint64, name string) bool {
 		}
 	}
 	return false
+}
+
+// retain records that a package version's bytes are on disk.
+//
+// It is not upsert. upsert is keyed by name, which is right for the active
+// set — a node publishes one version per name — and wrong for the disk,
+// where an upgrade deliberately keeps the version it superseded so a
+// rollback has something to go back to. A fixture that keyed the disk by
+// name would lose the superseded version at the exact moment the rollback
+// needed it, and would report a correct restore as a refusal.
+func retain(list []ports.PluginInfo, p ports.PluginInfo) []ports.PluginInfo {
+	for _, e := range list {
+		if e.Name == p.Name && e.Version == p.Version {
+			return list
+		}
+	}
+	return append(append([]ports.PluginInfo(nil), list...), p)
 }
 
 func upsert(list []ports.PluginInfo, p ports.PluginInfo) []ports.PluginInfo {
@@ -348,7 +437,7 @@ func TestARollbackRestoresTheVersionANodeWasAlreadyOn(t *testing.T) {
 	fleet := newFleet(nodes(30)...)
 	for _, id := range nodes(30) {
 		if id%2 == 0 {
-			fleet.state[id] = []ports.PluginInfo{{Name: "acme-probe", Version: "0.9.0", Digest: "d-0.9.0"}}
+			fleet.seed(id, ports.PluginInfo{Name: "acme-probe", Version: "0.9.0", Digest: "d-0.9.0"})
 		}
 	}
 	r, err := Start(context.Background(), fleet, specFor("acme-probe", "1.0.0"), nodes(30), "rolling", nil)
@@ -370,6 +459,51 @@ func TestARollbackRestoresTheVersionANodeWasAlreadyOn(t *testing.T) {
 		}
 		if got := fleet.versions(id); !equal(got, want) {
 			t.Errorf("node %d is on %v, want %v", id, got, want)
+		}
+	}
+}
+
+func TestARollbackRefusesRatherThanFetchesWhenTheOldVersionIsGone(t *testing.T) {
+	// The property that makes a restore a restore: the bytes must already
+	// be on the node. A node that has lost the previous version — the
+	// store directory was cleaned, the disk was replaced — must refuse,
+	// because the alternative is that a rollback silently becomes an
+	// install, and the manager has no URL for the version it is rolling
+	// back to. Shipping the release it meant to undo is the one outcome a
+	// rollback must never produce.
+	fleet := newFleet(nodes(20)...)
+	// Every node has 0.9.0 active but not on disk: the operator cleaned the
+	// store, or the directory was lost.
+	for _, id := range nodes(20) {
+		fleet.state[id] = []ports.PluginInfo{{Name: "acme-probe", Version: "0.9.0", Digest: "d-0.9.0"}}
+	}
+
+	r, err := Start(context.Background(), fleet, specFor("acme-probe", "1.0.0"), nodes(20), "rolling", nil)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Only the calls the rollback itself makes are examined. The release's
+	// own installs are earlier in the log, and counting them would make
+	// this test fail on the release rather than on the rollback.
+	before := len(fleet.calls)
+	if err := r.Rollback(context.Background()); err == nil {
+		t.Fatal("a rollback whose previous version is not on disk reported success")
+	}
+	duringRollback := fleet.calls[before:]
+	// And no node was left running the release under cover of the failure.
+	for _, id := range nodes(20) {
+		for _, v := range fleet.versions(id) {
+			if v == "acme-probe@1.0.0" {
+				t.Errorf("node %d is still on the rolled-back release %s", id, v)
+			}
+		}
+	}
+	for _, c := range duringRollback {
+		if strings.HasPrefix(c, "install:") {
+			t.Errorf("the rollback issued an install, so it fetched rather than restored: %q", c)
+		}
+		if strings.HasPrefix(c, "restore:") && strings.HasSuffix(c, "@1.0.0") {
+			t.Errorf("the rollback restored the release it was undoing: %q", c)
 		}
 	}
 }
@@ -410,7 +544,7 @@ func TestARollbackSaysWhichNodesItCouldNotPutBack(t *testing.T) {
 	fleet := newFleet(nodes(20)...)
 	for _, id := range nodes(20) {
 		if id%2 == 0 {
-			fleet.state[id] = []ports.PluginInfo{{Name: "acme-probe", Version: "0.9.0", Digest: "d-0.9.0"}}
+			fleet.seed(id, ports.PluginInfo{Name: "acme-probe", Version: "0.9.0", Digest: "d-0.9.0"})
 		}
 	}
 	fleet.failRemove[3] = true

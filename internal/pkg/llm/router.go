@@ -64,6 +64,27 @@ type ProvidersResolver interface {
 // is wired (SetProvidersResolver), the catalog is refreshed lazily on
 // each Chat / Providers / Default call (TTL cache so a slow resolver
 // does not block hot paths).
+// SubClientFactory builds the Client that serves one provider. It is the
+// seam the PiG migration needs: MultiClient already speaks only the `Client`
+// interface, so swapping the HTTP implementation for the PiG one is a
+// factory change rather than a router rewrite.
+//
+// The factory receives the provider's ProviderConfig, but a PiG-backed
+// factory is expected to ignore it: in that mode the registry resolves
+// coordinates from live settings on every call, which is what makes an
+// admin edit take effect without a router rebuild. The static config is
+// then only a list of which providers exist.
+//
+// Returning nil means "this provider is not usable" and the entry is
+// skipped, exactly as an empty API key is today.
+type SubClientFactory func(cfg ProviderConfig) Client
+
+// defaultSubClientFactory is the HTTP path: one OpenAI-compatible client per
+// provider, seeded with the config's coordinates.
+func defaultSubClientFactory(cfg ProviderConfig) Client {
+	return New(Config{APIKey: cfg.APIKey, Model: cfg.Model, BaseURL: cfg.BaseURL}, nil, nil)
+}
+
 type MultiClient struct {
 	// Static provider set — built at construction. Used as the seed and
 	// as the fallback when no resolver is wired.
@@ -71,6 +92,21 @@ type MultiClient struct {
 	staticInfos []ProviderInfo
 	staticDefID string
 	fallback    Client
+
+	// subFactory builds a sub-client for one provider. nil means the
+	// HTTP path. It is read only through buildSub so the nil check lives
+	// in one place.
+	subFactory SubClientFactory
+
+	// staticDefault is the constructor's default provider id, kept so a
+	// factory swap can restore the same tie-break.
+	staticDefault string
+
+	// staticCfgs is the construction-time provider list, kept so
+	// SetSubClientFactory can rebuild the static set. Without it a swap
+	// that arrives after boot would leave the statically-built
+	// sub-clients (and therefore the fallback path) on the old backend.
+	staticCfgs []ProviderConfig
 
 	// Dynamic provider set — repopulated from the resolver every
 	// resolveTTL. When the resolver returns an empty slice, the static
@@ -97,15 +133,20 @@ type MultiClient struct {
 // loop without explicit provider) keep working unchanged.
 func NewMultiClient(providers []ProviderConfig, defaultProvider string, fallback Client) *MultiClient {
 	mc := &MultiClient{
-		staticSubs: make(map[string]Client, len(providers)),
-		fallback:   fallback,
-		resolveTTL: 60 * time.Second,
+		staticSubs:    make(map[string]Client, len(providers)),
+		fallback:      fallback,
+		resolveTTL:    60 * time.Second,
+		staticCfgs:    append([]ProviderConfig(nil), providers...),
+		staticDefault: defaultProvider,
 	}
 	for _, p := range providers {
 		if strings.TrimSpace(p.APIKey) == "" {
 			continue
 		}
-		sub := New(Config{APIKey: p.APIKey, Model: p.Model, BaseURL: p.BaseURL}, nil, nil)
+		sub := mc.buildSub(p)
+		if sub == nil {
+			continue
+		}
 		mc.staticSubs[p.ID] = sub
 		models := p.Models
 		if len(models) == 0 && p.Model != "" {
@@ -126,6 +167,86 @@ func NewMultiClient(providers []ProviderConfig, defaultProvider string, fallback
 		mc.staticDefID = mc.staticInfos[0].ID
 	}
 	return mc
+}
+
+// buildSub constructs the sub-client for one provider through the wired
+// factory, defaulting to the HTTP path. The nil check lives here so a
+// factory that declines a provider (returns nil) is skipped by every caller
+// instead of storing a nil Client that panics on first use.
+func (m *MultiClient) buildSub(cfg ProviderConfig) Client {
+	// The factory is read under the lock: SetSubClientFactory can run at any
+	// time from the assembly layer, and the dynamic resolve path calls this
+	// without holding the lock. An unsynchronised read here would be a data
+	// race on a field that decides which implementation serves traffic.
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.buildSubLocked(cfg)
+}
+
+// buildSubLocked is buildSub for callers that already hold m.mu. It returns
+// nil when the factory declines the provider, so every caller must check.
+func (m *MultiClient) buildSubLocked(cfg ProviderConfig) Client {
+	factory := m.subFactory
+	if factory == nil {
+		factory = defaultSubClientFactory
+	}
+	return factory(cfg)
+}
+
+// SetSubClientFactory replaces how sub-clients are built. The PiG migration
+// calls this once at assembly time; passing nil restores the HTTP path.
+//
+// The dynamic cache is invalidated so the next resolve rebuilds every
+// sub-client through the new factory. Without that, a router that had
+// already resolved its catalog would keep serving clients built by the old
+// factory until the TTL expired — a correctness bug that would look like
+// "the switch did not take effect on some requests".
+func (m *MultiClient) SetSubClientFactory(f SubClientFactory) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.subFactory = f
+	// Rebuild the static set too: the constructor may already have built
+	// sub-clients through the previous factory, and leaving them in place
+	// would mean the fallback path (ChatReq.Provider == "" with no
+	// configured default) kept talking to the old backend.
+	subs := make(map[string]Client, len(m.staticCfgs))
+	infos := make([]ProviderInfo, 0, len(m.staticCfgs))
+	for _, p := range m.staticCfgs {
+		if strings.TrimSpace(p.APIKey) == "" {
+			continue
+		}
+		sub := m.buildSubLocked(p)
+		if sub == nil {
+			continue
+		}
+		subs[p.ID] = sub
+		models := p.Models
+		if len(models) == 0 && p.Model != "" {
+			models = []string{p.Model}
+		}
+		infos = append(infos, ProviderInfo{ID: p.ID, Label: p.Label, Model: p.Model, Models: models})
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].ID < infos[j].ID })
+	m.staticSubs = subs
+	m.staticInfos = infos
+	// Re-resolve the default the same way the constructor does: the named
+	// default wins when it survived the rebuild, otherwise the first
+	// provider by sorted id. Leaving the old id in place would point the
+	// fallback at a provider the new factory declined.
+	m.staticDefID = ""
+	if def := strings.TrimSpace(m.staticDefault); def != "" {
+		if _, ok := subs[def]; ok {
+			m.staticDefID = def
+		}
+	}
+	if m.staticDefID == "" && len(infos) > 0 {
+		m.staticDefID = infos[0].ID
+	}
+	m.dynSubs = nil
+	m.dynInfos = nil
+	m.dynDefID = ""
+	m.dynLoadedAt = time.Time{}
+	m.dynActive = false
 }
 
 // SetProvidersResolver wires a dynamic catalog source. Pass nil to clear.
@@ -195,7 +316,10 @@ func (m *MultiClient) activeSubs(ctx context.Context) (map[string]Client, []Prov
 		if strings.TrimSpace(p.APIKey) == "" {
 			continue
 		}
-		sub := New(Config{APIKey: p.APIKey, Model: p.Model, BaseURL: p.BaseURL}, nil, nil)
+		sub := m.buildSub(p)
+		if sub == nil {
+			continue
+		}
 		newSubs[p.ID] = sub
 		models := p.Models
 		if len(models) == 0 && p.Model != "" {

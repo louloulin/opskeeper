@@ -150,10 +150,24 @@ func (o *orchestrator) walkPhases(ctx context.Context, opts RunOptions, from Pha
 		// Executor
 		execResult, err := worker.Executor(ctx, plan)
 		if err != nil {
-			events = append(events, o.appendEvent(ctx, opts, current, loopmodel.EventPhaseFailed, attempt, map[string]any{
+			// A worker may return a partial result alongside its error.
+			// The approved phase does exactly that when a remediation was
+			// attempted and failed: the ToolReplay entry is the only
+			// record that an action was tried, and dropping it here would
+			// leave the incident looking like the loop never got that far
+			// — which is a different and less truthful account than "it
+			// tried and the server refused".
+			payload := map[string]any{
 				"reason": "executor_error",
 				"err":    err.Error(),
-			}))
+			}
+			if len(execResult.ToolReplay) > 0 {
+				payload["tool_replay"] = execResult.ToolReplay
+			}
+			if len(execResult.SideEffects) > 0 {
+				payload["side_effects"] = execResult.SideEffects
+			}
+			events = append(events, o.appendEvent(ctx, opts, current, loopmodel.EventPhaseFailed, attempt, payload))
 			return events, PhaseFailed, nil
 		}
 

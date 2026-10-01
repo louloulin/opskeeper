@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/cloudwego/eino/compose"
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
 )
 
@@ -140,11 +140,13 @@ func (t *CloudBashTool) InvokableRun(ctx context.Context, argsJSON string, opts 
 	// active-skill bound credentials (HLD-017 design-time binding, attached
 	// to ctx by the runtime). De-duped, order-stable.
 	creds := mergeCreds(basetool.BoundCredentialsFromContext(ctx), strings.TrimSpace(in.Credential))
-	// eino's authoritative per-call id (compose.GetToolCallID) ties the live
-	// approval card to THIS tool call's existing streaming card so the UI
-	// renders a single card instead of a duplicate. Empty under the legacy
-	// kernel — the proposer falls back to a standalone card.
-	toolCallID := compose.GetToolCallID(ctx)
+	// The loop's authoritative per-call id ties the live approval card to
+	// THIS tool call's existing streaming card so the UI renders a single
+	// card instead of a duplicate. It arrives through the kernel-neutral
+	// basetool carrier rather than a kernel-specific lookup, so the tool
+	// outlives whatever loop is driving it. Empty outside a loop — the
+	// proposer then falls back to a standalone card.
+	toolCallID := ports.ToolCallIDFromContext(ctx)
 	// HLD-019: carry the session id into the approval so the execute-on-approve
 	// hook runs the command in this session's persistent workspace.
 	// HLD-021: ProposeAndAwait blocks until the human decides and returns the

@@ -28,6 +28,13 @@ type ApprovalRequest struct {
 	ID       string
 	ToolName string
 	Class    domain.ToolClass
+	// SessionID is the conversation the call belongs to. It rides on the
+	// request because the inbox is read back per session (ApprovalInbox.Open)
+	// and a console that reconnected has no other way to ask which of the
+	// outstanding rows belong to the session it is rendering. A request
+	// without one can still be queued and decided; it simply cannot be
+	// listed by session.
+	SessionID string
 	// Digest binds the eventual Decision back to this exact call. It is
 	// carried on the request rather than looked up by the decision, because
 	// a console that re-renders its queue after a reconnect has to echo it

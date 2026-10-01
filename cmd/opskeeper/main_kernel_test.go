@@ -11,6 +11,7 @@ import (
 //
 //	unset / empty → KernelLegacy (default = zero behavior change)
 //	"graph" → KernelGraph
+//	"pig"   → KernelPig
 //	"garbage" → KernelLegacy (with warn — see service.NewWithKernel)
 //
 // The actual env wiring lives in main(); this test exercises the
@@ -30,6 +31,9 @@ func TestKernelEnvParsing(t *testing.T) {
 		{"graph_upper", "GRAPH", true, managersvcaiops.KernelGraph},
 		{"graph_padded", "  graph  ", true, managersvcaiops.KernelGraph},
 		{"legacy_explicit", "legacy", true, managersvcaiops.KernelLegacy},
+		{"pig_lower", "pig", true, managersvcaiops.KernelPig},
+		{"pig_upper", "PIG", true, managersvcaiops.KernelPig},
+		{"pig_padded", "  pig  ", true, managersvcaiops.KernelPig},
 		{"garbage", "this-is-not-a-kernel", true, managersvcaiops.KernelLegacy},
 	}
 	for _, c := range cases {

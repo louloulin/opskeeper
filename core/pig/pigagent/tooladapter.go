@@ -125,6 +125,17 @@ func (a *Adapter) Execute(
 		params = json.RawMessage("{}")
 	}
 
+	// Stamp the provider-assigned call id onto ctx. The tool contract fixes
+	// the Invoke signature, so the id cannot ride as a parameter; every kernel
+	// threads a ctx down to the tool, so it rides there instead. Consumers
+	// are host-side: the approval proposer that pairs the approval card with
+	// the streaming card of this call, the persistence handler that pairs a
+	// call OnStart with its OnEnd, and the transcript writer that must echo
+	// the real id back or a strict provider rejects the turn. PiG can see
+	// none of them, which is why the stamp belongs here and not in the loop.
+	// An empty id is a no-op — see ports.WithToolCallID.
+	ctx = ports.WithToolCallID(ctx, toolCallID)
+
 	// Normalise before validation when the tool asks for it. Models emit
 	// flat legacy shapes often enough that validating first turns a
 	// recoverable call into a hard failure.

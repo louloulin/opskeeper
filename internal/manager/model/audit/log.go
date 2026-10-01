@@ -44,7 +44,51 @@ type Log struct {
 	PayloadJSON  string    `gorm:"type:text"`
 	RequestID    string    `gorm:"size:64;not null"`
 	CreatedAt    time.Time `gorm:"autoCreateTime"`
+
+	// Chain columns. HLD-010's tamper-evidence lives here: Seq is the
+	// row's position in the append-only chain, PrevHash is the Hash of
+	// the row before it, and Hash is the keyed digest over both plus
+	// every field above. Editing any field of any row invalidates that
+	// row's Hash and therefore every Hash after it, so a deletion or an
+	// edit cannot hide behind a later row that still looks plausible.
+	//
+	// Seq is 0 on rows written before the chain was switched on. Zero is
+	// the "unchained" marker rather than a position, which is what lets
+	// the chain be introduced on a live table without a backfill that
+	// would have to invent a history nobody can verify anyway.
+	Seq      uint64 `gorm:"not null;default:0;index:idx_audit_seq"`
+	PrevHash string `gorm:"size:64;not null;default:''"`
+	Hash     string `gorm:"size:64;not null;default:''"`
 }
+
+// ChainHead is the single row that serialises the hash chain.
+//
+// One row, id=1, holding the sequence number and hash of the most
+// recently appended entry. It exists because a chain built from a
+// cached in-process head forks the moment a second manager instance
+// writes: both read the same head, both stamp the same PrevHash, and
+// the result verifies as intact right up to the point where it is not.
+// The head is instead advanced with a compare-and-swap on Seq inside
+// the same transaction that inserts the entry, so a writer that lost
+// the race fails its update, reads the new head, and retries — and a
+// writer that crashes between the two leaves a head that is too high
+// rather than an entry that chains to nothing.
+type ChainHead struct {
+	ID        uint64    `gorm:"primaryKey;autoIncrement:false"`
+	Seq       uint64    `gorm:"not null;default:0"`
+	Hash      string    `gorm:"size:64;not null;default:''"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime"`
+}
+
+// TableName pins the head table. The constant name is spelled out in
+// code rather than left to GORM's pluraliser so a rename of the model
+// cannot silently orphan every writer's head.
+func (ChainHead) TableName() string { return "audit_chain_head" }
+
+// ChainHeadID is the fixed primary key of the one head row. It is not
+// an auto-increment sequence: there is exactly one head, and a second
+// one would mean two chains.
+const ChainHeadID uint64 = 1
 
 // TableName pins the table so a package rename doesn't silently create a
 // parallel empty table.
@@ -113,6 +157,21 @@ const (
 
 	ActionSkillInstall   = "skill_install"
 	ActionSkillUninstall = "skill_uninstall"
+
+	// Plugin releases. A release is the action that puts new code —
+	// including L2 tools that can restart services — onto hosts, so it is
+	// the single operation in this list with the widest blast radius.
+	//
+	// The four verbs are separate rather than folded into one action with
+	// a payload: an operator filtering the audit trail for "who rolled
+	// back" is asking a different question from "who shipped this", and a
+	// single row type would make both queries a payload scan. Halt and
+	// rollback are also two different decisions made by two different
+	// people at two different moments, and the trail should say which.
+	ActionPluginReleaseStart    = "plugin_release_start"
+	ActionPluginReleaseAdvance  = "plugin_release_advance"
+	ActionPluginReleaseHalt     = "plugin_release_halt"
+	ActionPluginReleaseRollback = "plugin_release_rollback"
 )
 
 // ResourceType buckets used in the resource_type column. Same flat-list
@@ -132,4 +191,7 @@ const (
 	ResourceRAG      = "rag"
 	ResourceAudit    = "audit"
 	ResourceAuth     = "auth"
+	// ResourcePlugin names a plugin release. The resource id is the
+	// package name, which is what an operator searches for.
+	ResourcePlugin = "plugin"
 )

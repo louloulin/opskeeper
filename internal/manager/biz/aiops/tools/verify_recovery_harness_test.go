@@ -183,7 +183,7 @@ func TestVerifyRecovery_HarnessCaseSchema_ShapeSanity(t *testing.T) {
 	// 静态校验：cpu-spike/case.yaml 必须含 verify_recovery metadata block。
 	// 用 case ID 解析验证 loader 仍能找到该 case。
 	// （这里不实际读 yaml 文件，因为 tools 包不应依赖 harness schema；harness
-	// 侧集成测试见 internal/harness/cases/host/cpu-spike/ 下游测试。）
+	// 侧集成测试见 core/harness/cases/host/cpu-spike/ 下游测试。）
 	argsJSON := `{
 		"skill_id":"host/cpu-spike","target":"host-injected","resource_type":"host",
 		"tolerance":0.15,"baseline_window":"5m","compare_window":"2m",

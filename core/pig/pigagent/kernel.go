@@ -41,8 +41,13 @@ type DepsProvider func(ctx context.Context, req ports.AgentRequest) (ports.Agent
 
 // Persister records a settled message. It is the host's write path; the
 // kernel never touches storage itself.
+//
+// The message is the kernel-neutral transcript entry rather than PiG's own
+// type. A host that took the PiG shape would have to import PiG to implement
+// this one method, which is exactly the boundary core/pig exists to hold;
+// the conversion is done here, once, and is covered by its own test.
 type Persister interface {
-	Persist(ctx context.Context, sessionID string, msg agent.AgentMessage) error
+	Persist(ctx context.Context, sessionID string, msg ports.AgentMessage) error
 }
 
 // KernelOptions configures a Kernel.
@@ -324,40 +329,9 @@ func (k *Kernel) LiveSessions() int {
 	return len(k.sessions)
 }
 
-// buildPrompt turns a request into the messages a turn starts from.
-//
-// The critical reminder is delivered as a separate user-role turn rather
-// than appended to the system prompt: the system prompt is cached by every
-// provider, so a persona's anti-drift text placed there would be read once
-// and then fade out of the model's attention, which is the opposite of what
-// a per-turn reminder is for.
-func buildPrompt(req ports.AgentRequest) []agent.AgentMessage {
-	var out []agent.AgentMessage
-	if r := trim(req.CriticalReminder); r != "" {
-		out = append(out, agent.AgentMessage{User: &agent.UserMessage{
-			Role:      "user",
-			Content:   agentUserContent(r),
-			Timestamp: nowMillis(),
-		}})
-	}
-	if t := trim(req.UserText); t != "" {
-		out = append(out, agent.AgentMessage{User: &agent.UserMessage{
-			Role:      "user",
-			Content:   agentUserContent(t),
-			Timestamp: nowMillis(),
-		}})
-	}
-	if len(out) == 0 {
-		// A turn with no prompt cannot run, and sending an empty user turn
-		// would make the provider charge for a call with nothing to answer.
-		out = append(out, agent.AgentMessage{User: &agent.UserMessage{
-			Role:      "user",
-			Content:   agentUserContent("(continue)"),
-			Timestamp: nowMillis(),
-		}})
-	}
-	return out
-}
+// buildPrompt lives in prompt.go — it now also replays AgentRequest.History,
+// which is enough logic (and enough ways to be wrong) to deserve its own
+// file and its own tests.
 
 func agentUserContent(s string) ai.UserText { return ai.UserText(s) }
 

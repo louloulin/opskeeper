@@ -397,3 +397,38 @@ func TestFirstParagraphOneLine(t *testing.T) {
 		}
 	}
 }
+
+// TestIsMaxStepsError_CoversKernelAndLegacyWordings pins the matcher
+// used to decide whether a failed worker run is salvageable. The PiG
+// kernel reports "exceeded max iterations"; the retired graph reported
+// "exceeds max steps" / "exceededmaxsteps". Dropping either branch
+// silently turns a truncated-but-useful investigation into a hard
+// failure, because the salvage path below never fires.
+func TestIsMaxStepsError_CoversKernelAndLegacyWordings(t *testing.T) {
+	positive := []string{
+		"exceeded max iterations",
+		"chatruntime: turn stopped: max_iterations",
+		"[GraphRunError] node=tools: exceeds max steps",
+		"agent: ExceededMaxSteps",
+		"worker aborted: exceeded max steps (budget 10)",
+		"[GraphRunError] something else entirely",
+	}
+	for _, in := range positive {
+		if !isMaxStepsError(in) {
+			t.Errorf("isMaxStepsError(%q) = false, want true", in)
+		}
+	}
+
+	negative := []string{
+		"",
+		"context canceled",
+		"insufficient_quota",
+		"tool not found in toolsnode",
+		"database connection refused",
+	}
+	for _, in := range negative {
+		if isMaxStepsError(in) {
+			t.Errorf("isMaxStepsError(%q) = true, want false", in)
+		}
+	}
+}

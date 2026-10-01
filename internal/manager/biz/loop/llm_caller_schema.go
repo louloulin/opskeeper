@@ -26,7 +26,8 @@
 // Why hand-rolled instead of pulling in google/jsonschema-go: the task
 // batch forbids new go.mod dependencies ("不引入新 go.mod 依赖"), and
 // eino-contrib/jsonschema v1.0.3 (the other candidate mentioned in the
-// design doc) is a struct→schema *generator* with no Validate() entry
+// design doc, and no longer in go.mod since eino left the tree) is a
+// struct→schema *generator* with no Validate() entry
 // point — see https://github.com/eino-contrib/jsonschema/blob/v1.0.3/schema.go.
 // The subset above is sufficient for the worker contract shapes in
 // this change; flagged as a deviation in the batch report so the next

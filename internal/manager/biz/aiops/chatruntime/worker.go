@@ -1,6 +1,6 @@
 // worker.go implements — the coordinator/worker multi-agent
 // path. The Runtime owns a small in-memory map of spawned workers; each
-// worker is an independent graph.Invoke against a tool-bag filtered by
+// worker is an independent kernel turn against a tool-bag filtered by
 // the worker agent's persona (whitelist + disallowed_tools — black wins).
 //
 // Non-goals (first version):
@@ -19,19 +19,19 @@
 //	pending — set transiently between SpawnRequest accept and goroutine
 //	           start (effectively never observable for sync spawns)
 //	  ↓
-//	running — goroutine has begun graph.Invoke; status flips here
-//	           BEFORE the child graph emits its first event
+//	running — goroutine has begun the kernel turn; status flips here
+//	           BEFORE the kernel emits its first event
 //	  ↓
-//	completed — graph.Invoke returned a non-nil AssistantMessage with
-//	           no error; Result holds the final assistant content
-//	failed — graph.Invoke returned err != nil OR the agent name was
+//	completed — the kernel turn returned final assistant content
+//	           with no error; Result holds that content
+//	failed — the kernel turn returned err != nil OR the agent name was
 //	            unknown / agent registry was nil
 //	killed — StopWorker called while status was running; cancel()
 //	            fires and the goroutine observes ctx.Done() then sets
 //	            EndedAt + status=killed (without overwriting err)
 //
 // Background semantics — when SpawnRequest.Background is true SpawnWorker
-// returns immediately with status=running and the graph.Invoke runs in a
+// returns immediately with status=running and the kernel turn runs in a
 // detached goroutine; the goroutine emits a "task_notification" SSE
 // envelope back through req.ParentEmit upon terminal status. Callers
 // (AgentTool) get the worker_id from the synchronous return and can
@@ -50,15 +50,14 @@ import (
 	"sync"
 	"time"
 
-	einocallbacks "github.com/cloudwego/eino/callbacks"
-	"github.com/cloudwego/eino/components/model"
-	"github.com/cloudwego/eino/compose"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/ports"
+	"github.com/vincent-wuhan/opskeeper/core/wire"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/graph"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/graph/callbacks"
+	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/agentkernel"
 	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/decorators"
 	aiopsmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
 )
 
@@ -71,12 +70,12 @@ const (
 	// only in tests that intercept between SpawnWorker accept and goroutine
 	// scheduling; in production this state is essentially transient.
 	WorkerStatusPending WorkerStatus = "pending"
-	// WorkerStatusRunning — graph.Invoke is in flight.
+	// WorkerStatusRunning — the kernel turn is in flight.
 	WorkerStatusRunning WorkerStatus = "running"
-	// WorkerStatusCompleted — graph.Invoke returned a final assistant
+	// WorkerStatusCompleted — the kernel turn returned a final assistant
 	// message with no error.
 	WorkerStatusCompleted WorkerStatus = "completed"
-	// WorkerStatusFailed — graph.Invoke returned an error, or the agent
+	// WorkerStatusFailed — the kernel turn returned an error, or the agent
 	// name was unknown.
 	WorkerStatusFailed WorkerStatus = "failed"
 	// WorkerStatusKilled — explicitly stopped via StopWorker.
@@ -210,7 +209,7 @@ type ApprovalPending struct {
 }
 
 // emitCtxKey is the unexported context key that threads the active
-// per-request Emit through the graph layer down into AgentTool's
+// per-request Emit through the host turn down into AgentTool's
 // InvokableRun via the WorkerSpawner shim. The shim reads it through
 // EmitFromContext to populate SpawnRequest.ParentEmit so a background
 // worker can fire its task_notification through the SSE channel that
@@ -220,7 +219,7 @@ type emitCtxKeyT struct{}
 var emitCtxKey = emitCtxKeyT{}
 
 // withEmit returns ctx augmented with emit. Internal — Handle threads
-// the request emitter in before invoking the graph.
+// the request emitter in before starting the turn.
 func withEmit(ctx context.Context, emit Emit) context.Context {
 	if emit == nil {
 		return ctx
@@ -248,14 +247,14 @@ func EmitFromContext(ctx context.Context) Emit {
 // killed; the returned *Worker has Result + Err filled.
 //
 // Background=true: returns immediately with a Worker whose Status =
-// running; the graph runs in a detached goroutine and the terminal
+// running; the kernel turn runs in a detached goroutine and the terminal
 // transition emits a task_notification through req.ParentEmit.
 func (rt *Runtime) SpawnWorker(ctx context.Context, req SpawnRequest) (*Worker, error) {
 	if rt == nil {
 		return nil, errors.New("chatruntime: nil runtime")
 	}
-	if rt.cfg.ChatModel == nil {
-		return nil, errors.New("chatruntime: ChatModel is required")
+	if rt.cfg.Kernel == nil {
+		return nil, errors.New("chatruntime: Kernel is required")
 	}
 	if rt.cfg.AgentRegistry == nil {
 		return nil, fmt.Errorf("chatruntime: agent %q: registry not wired", req.AgentName)
@@ -555,49 +554,41 @@ func (rt *Runtime) GetWorker(workerID string) (*Worker, bool) {
 }
 
 // runWorker is the inner spawn-and-invoke routine shared by SpawnWorker
-// and SendToWorker. It builds a per-worker tool bag (whitelist + black-
-// list filtered against the runtime's tool bag), composes the worker's
-// system prompt, and drives one graph.Invoke against the agent's
-// configured Model + MaxTurns.
+// and SendToWorker. It builds a per-worker tool bag (whitelist + blacklist
+// filtered against the runtime's tool bag), composes the worker's system
+// prompt, and drives one kernel turn against the agent's configured model
+// and MaxTurns.
 //
-// sessID is the worker's own chat_sessions row id. It is threaded into
-// the persistence callback so worker assistant + tool messages are
-// written into chat_messages under the worker's session (not the
-// coordinator's). The user-role prompt is persisted up-front here,
-// matching Handle()'s "user message lands on disk before the LLM call"
-// invariant — same survival semantics on a graph crash.
+// sessID is the worker's own chat_sessions row id, and it is the kernel
+// request's SessionID: worker assistant + tool rows land under the worker's
+// session (not the coordinator's). The user-role prompt is persisted
+// up-front here, matching Handle()'s "user message lands on disk before the
+// loop runs" invariant — same survival semantics on a crash.
 func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userText, locale string, parentEmit Emit, workerID string) (string, error) {
 	workerTools := filterToolsForAgent(rt.cfg.ToolBag, agentDef, false)
+	// A worker gets its OWN Governance: the memo and the per-tool cap are
+	// defined over one run, and a worker is a separate run with a separate
+	// transcript. Sharing the parent's would let a worker's read calls
+	// pre-populate (or consume) the coordinator's cap.
+	workerTools = decorators.NewGovernance().WrapAll(workerTools)
 
-	// Thread the persona-filtered tool view onto ctx so ToolSearch
-	// (which runs inside the worker graph) only returns tools the
-	// worker persona is allowed to see. ctx is per-request (each
-	// worker has its own), so concurrent workers don't race.
+	// The per-call view every tool reads: the persona-filtered bag (so
+	// ToolSearch only offers what this worker may see) plus the live turn's
+	// text (so the transcript write path can apply the alert-draft rule).
+	// ctx is per-request — each worker has its own — so concurrent workers
+	// do not race.
 	ctx = basetool.WithFilteredTools(ctx, workerTools)
+	ctx = basetool.WithTurnUserText(ctx, userText)
 
 	systemPrompt := ComposeSystemPrompt(rt.cfg.BasePrompt, nil, agentDef)
 	if digest := buildToolCapabilityDigest(workerTools); digest != "" {
 		systemPrompt = systemPrompt + "\n\n" + digest
 	}
 
-	cfg := rt.cfg.GraphCfg
-	if agentDef.MaxTurns > 0 {
-		cfg.MaxIterations = agentDef.MaxTurns
-	}
-	if agentDef.Model != "" {
-		cfg.Model = agentDef.Model
-	}
-
-	g, err := graph.BuildReActGraph(rt.cfg.ChatModel, workerTools, cfg)
-	if err != nil {
-		return "", fmt.Errorf("chatruntime: build worker graph: %w", err)
-	}
-
 	// Persist the user-role prompt under the worker's session id. Same
 	// invariant Handle() honours on the coordinator path — the user turn
-	// lives on disk before the graph runs so a crash mid-invoke leaves
-	// an auditable trace.
-	var handlers []einocallbacks.Handler
+	// lives on disk before the loop runs, so a crash mid-turn leaves an
+	// auditable trace.
 	if rt.cfg.Sessions != nil && sessID != "" {
 		content := userText
 		userMsg := &aiopsmodel.Message{
@@ -609,108 +600,114 @@ func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userT
 		if err := rt.cfg.Sessions.AppendMessage(ctx, userMsg); err != nil {
 			return "", fmt.Errorf("chatruntime: persist worker user msg: %w", err)
 		}
-
-		// Wire the per-worker persistence callback. Reuse the runtime's
-		// CallbackDeps for cross-cutting context (logger, registerer)
-		// but override Persistence.SessionID so writes land on the
-		// worker row. SSE / Audit / Metrics inherit from the runtime
-		// config (Audit + Metrics are session-id-aware via their own
-		// deps; we keep the worker's session id flowing into them too).
-		deps := rt.cfg.CallbackDeps
-		deps.Persistence.SessionID = sessID
-		deps.Persistence.Model = agentDef.Model
-		if deps.Persistence.Repo == nil {
-			deps.Persistence.Repo = rt.cfg.Sessions
-		}
-		// Persist worker messages under the worker session, but mirror
-		// tool lifecycle frames to the parent stream so AgentTool's
-		// internal work is visible while the synchronous dispatch runs.
-		// Assistant frames stay private to the worker transcript; only
-		// tool_start/tool_end are UI breadcrumbs for the parent chat.
-		deps.SSE = workerToolForwarder(parentEmit, workerID)
-		handlers = callbacks.NewDefaultHandlers(deps)
 	}
 
-	// Thread the coordinator's resolved LLM choice (stamped on ctx via
-	// basetool.WithLLMChoice at the SpawnWorker boundary) onto the
-	// graph's ChatModel as eino model options. Without these, the
-	// RoutingChatModel falls through to its built-in default — which
-	// is "openai" — and installs with no OpenAI key see the worker
-	// fail with `provider "openai" not configured`. Empty fields add
-	// no option, preserving back-compat with auto-spawn paths
-	// (investigator) that don't carry a coordinator choice.
-	invokeOpts := []compose.Option{compose.WithCallbacks(handlers...)}
-	if mopts := workerChatModelOpts(ctx); len(mopts) > 0 {
-		invokeOpts = append(invokeOpts, compose.WithChatModelOption(mopts...))
-	}
-	invokeOpts = append(invokeOpts, compose.WithToolsNodeOption(
-		compose.WithToolOption(graph.WithInvokeOpts(basetool.WithUserText(userText))),
-	))
-	// Sever the worker's callback chain from the coordinator's. The ctx we
-	// were handed carries the parent graph's callback manager (eino propagates
-	// it into nested Invokes), so WITHOUT this reset the worker's first
-	// ChatModel.OnStart fires the COORDINATOR's PersistenceHandler — whose
-	// flushIncompleteBatch then sees the still-in-flight AgentTool tool_call as
-	// "pending" (AgentTool is blocked right here running this worker) and
-	// autoheals it with an error stub. The coordinator's LLM reads that stub as
-	// "AgentTool unavailable" and gives up. InitCallbacks installs a fresh
-	// manager; the worker's own handlers are registered via WithCallbacks below.
-	workerCtx := einocallbacks.InitCallbacks(ctx, nil)
+	// The worker's frame path is its own: only the tool lifecycle is
+	// mirrored onto the parent stream, while the worker's assistant frames
+	// stay private to its transcript. Registering the sink under the
+	// worker's session is what lets the persister's committed-row callback
+	// reach it (FlushAssistant is a no-op for a session with no sink).
+	sink := &workerSink{parent: parentEmit, workerID: workerID}
+	rt.sinks.add(sessID, sink)
+	defer rt.sinks.remove(sessID, sink)
 
-	// Autoheal any tool batch still open when the worker exits — same
-	// rationale as the parent runtime defer. context.WithoutCancel
-	// keeps the stub inserts running even if the caller cancelled.
-	defer func() {
-		flushCtx := context.WithoutCancel(workerCtx)
-		callbacks.FinalizeBatches(flushCtx, handlers)
-	}()
-	out, err := g.Invoke(workerCtx, &graph.Input{
-		SystemPrompt: systemPrompt,
-		History:      nil,
-		UserText:     userText,
-		Locale:       locale,
-	}, invokeOpts...)
+	ctx = ports.WithSink(ctx, sink)
+	ctx = basetool.WithInvokeOptions(ctx,
+		basetool.WithUserID(workerUserID(ctx)),
+		basetool.WithUserText(userText),
+	)
+
+	// The bag is adapted once per turn: the kernel reads every tool's schema
+	// at the start of a turn and the adapter resolves each schema once.
+	bag, err := agentkernel.NewToolBag(ctx, workerTools)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("chatruntime: kernel tool bag: %w", err)
 	}
-	if out == nil || out.AssistantMessage == nil {
+	ctx = ports.WithTurnTools(ctx, bag)
+
+	// The coordinator's picker choice reaches us as ctx values
+	// (basetool.WithLLMChoice at the SpawnWorker boundary). Without
+	// forwarding it the sub-agent falls through to the routing default —
+	// "openai" — and installs with no OpenAI key see the worker fail with
+	// `provider "openai" not configured`. An agent definition that pins its
+	// own model wins over the inherited choice: the persona's model is the
+	// more specific statement.
+	selection := domain.ModelSelection{
+		Provider: domain.ProviderID(strings.TrimSpace(basetool.LLMProviderFromContext(ctx))),
+		Model:    strings.TrimSpace(basetool.LLMModelFromContext(ctx)),
+	}
+	if m := strings.TrimSpace(agentDef.Model); m != "" {
+		selection.Model = m
+	}
+
+	maxTurns := rt.cfg.MaxIterations
+	if agentDef.MaxTurns > 0 {
+		maxTurns = agentDef.MaxTurns
+	}
+
+	res, runErr := rt.cfg.Kernel.Run(ctx, ports.AgentRequest{
+		SessionID:     sessID,
+		UserID:        workerUserID(ctx),
+		UserText:      userText,
+		Selection:     selection,
+		SystemPrompt:  systemPrompt,
+		Locale:        locale,
+		MaxIterations: maxTurns,
+	})
+	if runErr != nil {
+		return "", runErr
+	}
+	if res == nil {
 		return "", nil
 	}
-	return out.AssistantMessage.Content, nil
+	return res.Content, nil
 }
 
-func workerToolForwarder(parent Emit, workerID string) callbacks.SSEEmitter {
-	if parent == nil {
+// workerUserID reports the owner a worker turn is billed to. It is read off
+// the tenant ctx SpawnWorker stamped (withWorkerOwner) rather than passed
+// down, because SendToWorker's callsite inherits the coordinator's ctx
+// directly and carries the same owner there.
+func workerUserID(ctx context.Context) uint64 {
+	if t, ok := tenantctx.From(ctx); ok {
+		return t.UserID
+	}
+	return 0
+}
+
+// workerSink mirrors a worker's tool lifecycle onto the parent stream while
+// keeping the worker's assistant frames private to its own transcript.
+//
+// The split mirrors the retired callback chain's, kept for the same two
+// coordinator's console has to show that the sub-agent is working — AgentTool
+// blocks while it does, and a silent stream reads as a hang — but the
+// worker's prose belongs in the worker session, not in the coordinator's
+// bubble. Call ids are scoped so two workers calling the same tool name
+// cannot collide on one console tile.
+type workerSink struct {
+	parent   Emit
+	workerID string
+}
+
+// Emit implements ports.EventSink.
+func (s *workerSink) Emit(_ context.Context, ev ports.StreamEvent) error {
+	if s == nil || s.parent == nil {
 		return nil
 	}
-	return func(ev callbacks.SSEEvent) {
-		if ev.Tool == nil {
-			return
-		}
-		switch ev.Type {
-		case callbacks.SSEEventToolStart:
-			parent(Event{Type: EventToolStart, Tool: &ToolEvent{
-				ToolCallID: scopedWorkerToolCallID(workerID, ev.Tool.ToolCallID),
-				Name:       ev.Tool.Name,
-				ArgsJSON:   ev.Tool.ArgsJSON,
-				Status:     ev.Tool.Status,
-				StartedAt:  ev.Tool.StartedAt,
-			}})
-		case callbacks.SSEEventToolEnd:
-			parent(Event{Type: EventToolEnd, Tool: &ToolEvent{
-				ToolCallID: scopedWorkerToolCallID(workerID, ev.Tool.ToolCallID),
-				Name:       ev.Tool.Name,
-				ArgsJSON:   ev.Tool.ArgsJSON,
-				Status:     ev.Tool.Status,
-				StartedAt:  ev.Tool.StartedAt,
-				EndedAt:    ev.Tool.EndedAt,
-				DurationMs: ev.Tool.DurationMs,
-				Error:      ev.Tool.Error,
-				ResultJSON: ev.Tool.ResultJSON,
-			}})
-		}
+	switch ev.Type {
+	case wire.StreamToolStart, wire.StreamToolEnd:
+	default:
+		return nil
 	}
+	out := toConsoleEvent(ev)
+	if out.Tool == nil {
+		return nil
+	}
+	out.Tool.ToolCallID = scopedWorkerToolCallID(s.workerID, out.Tool.ToolCallID)
+	s.parent(out)
+	return nil
 }
+
+var _ ports.EventSink = (*workerSink)(nil)
 
 func scopedWorkerToolCallID(workerID, toolCallID string) string {
 	workerID = strings.TrimSpace(workerID)
@@ -1025,20 +1022,11 @@ func (rt *Runtime) prologueKBLookup(ctx context.Context, bag []basetool.BaseTool
 	return b.String()
 }
 
-// workerChatModelOpts mirrors chatModelOpts but reads the (provider,
-// model) pair from ctx instead of a *Request, so SpawnWorker and
-// SendToWorker (which has no Request) share the same plumbing.
-// RoutingChatModel.pick consumes WithProvider; the inner
-// clientChatModel honours WithModel. Empty fields add no option, so
-// auto-spawn paths that don't carry a coordinator choice fall through
-// to the routing default unchanged.
-func workerChatModelOpts(ctx context.Context) []model.Option {
-	var opts []model.Option
-	if p := strings.TrimSpace(basetool.LLMProviderFromContext(ctx)); p != "" {
-		opts = append(opts, llm.WithProvider(p))
-	}
-	if m := strings.TrimSpace(basetool.LLMModelFromContext(ctx)); m != "" {
-		opts = append(opts, model.WithModel(m))
-	}
-	return opts
-}
+// FlushAssistant implements turnSink.
+//
+// It is a no-op on purpose: the worker's assistant frames are not forwarded
+// to the parent stream, so there is no held frame to release. The method
+// exists because the persister reports every committed assistant row through
+// the same registry, and a session-keyed lookup must not have to know which
+// kind of sink it finds.
+func (s *workerSink) FlushAssistant(string, string) {}

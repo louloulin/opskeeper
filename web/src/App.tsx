@@ -57,6 +57,10 @@ const AdminUsers = lazy(() => import('@/pages/settings/Users'));
 const AdminOrgs = lazy(() => import('@/pages/settings/Orgs'));
 const AdminAuditLog = lazy(() => import('@/pages/settings/AuditLog'));
 const AdminWebshell = lazy(() => import('@/pages/settings/Webshell'));
+// Plugin release console — the fleet-side half of the plugin ecosystem.
+// Sits under /admin because a release puts L2 code (tools that can restart
+// services) onto hosts, so it is governance rather than product config.
+const AdminPluginReleases = lazy(() => import('@/pages/settings/PluginReleases'));
 // Deployment / runtime / version composition page.
 const RuntimePage = lazy(() => import('@/pages/admin/Runtime'));
 
@@ -190,6 +194,7 @@ export default function App() {
               from any incident detail screen straight to the
               Manager / Worker / plugin composition view. */}
           <Route path="runtime" element={<RuntimePage />} />
+          <Route path="plugins" element={<AdminPluginReleases />} />
         </Route>
         {/* Audit log lives under the Admin (Users & Orgs) section — it's
             platform governance ("who did what"), grouped with users/orgs,

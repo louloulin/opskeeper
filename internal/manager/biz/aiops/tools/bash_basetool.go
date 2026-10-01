@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudwego/eino/compose"
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
 	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
 	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
@@ -333,7 +333,7 @@ func (t *BashTool) InvokableRun(ctx context.Context, argsJSON string, opts ...ba
 			return "", fmt.Errorf("%s: approval inbox not wired for mutating command", ToolNameBash)
 		}
 		cfg := basetool.ResolveOptions(opts)
-		return t.proposer.ProposeAndAwait(ctx, in.DeviceIDs, in.Cmd, in.TimeoutSeconds, basetool.SessionIDFromContext(ctx), compose.GetToolCallID(ctx), cfg.UserID)
+		return t.proposer.ProposeAndAwait(ctx, in.DeviceIDs, in.Cmd, in.TimeoutSeconds, basetool.SessionIDFromContext(ctx), ports.ToolCallIDFromContext(ctx), cfg.UserID)
 	}
 
 	batchCtx, cancel := context.WithTimeout(ctx, bashBatchTimeout)

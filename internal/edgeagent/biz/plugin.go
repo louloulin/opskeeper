@@ -82,6 +82,41 @@ func (a *Agent) registerPluginHandlers() {
 			}
 			return jsonEncode(a.handlePluginList(ctx, req), nil)
 		})
+
+	a.client.RegisterHandler(tunnel.MethodPluginRestore,
+		func(ctx context.Context, _ tunnel.Session, _ string, body []byte) ([]byte, error) {
+			var req tunnel.PluginRestoreRequest
+			if err := jsonDecode(body, &req); err != nil {
+				return nil, err
+			}
+			return jsonEncode(a.handlePluginRestore(ctx, req), nil)
+		})
+}
+
+// handlePluginRestore re-activates a version this node already has.
+//
+// It is separate from handlePluginInstall because it answers the same wire
+// shape from a different decision: no bytes arrive, so nothing can be
+// refused for a bad signature or a bad digest, and the only two outcomes
+// are "a version on this node is now active" and "it is not on this node".
+func (a *Agent) handlePluginRestore(ctx context.Context, req tunnel.PluginRestoreRequest) tunnel.PluginRestoreResponse {
+	store := a.pluginStore()
+	if store == nil {
+		return tunnel.PluginRestoreResponse{
+			Status: tunnel.PluginStatusFailed,
+			Plugin: req.Plugin,
+			Reason: noPluginStore,
+		}
+	}
+	state := store.Restore(ctx, req.Plugin, req.Version)
+	return tunnel.PluginRestoreResponse{
+		Status:    statusOf(state),
+		Plugin:    state.Name,
+		Version:   state.Version,
+		Digest:    state.Digest,
+		Reason:    firstNonEmpty(state.Refused, state.Note, state.Error),
+		Installed: entriesOf(a, store),
+	}
 }
 
 // handlePluginInstall implements MethodPluginInstall.

@@ -217,7 +217,7 @@ const ToolWebSearch = "web_search"
 // tool_calls by name. The set is small and exhaustive — every PR-N
 // addition of a write/destructive tool MUST add its wire name here.
 //
-// Production deployments running OPSKEEPER_AGENT_KERNEL=graph never hit
+// Production deployments running OPSKEEPER_AGENT_KERNEL=pig never hit
 // this gate; it's strictly a safety net for the legacy default and
 // for tests that exercise the legacy path.
 var legacyKernelMutatingTools = map[string]struct{}{
@@ -524,16 +524,16 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 				continue
 			}
 
-			// Legacy-kernel SOP gate. The graph kernel wraps every
+			// Legacy-kernel SOP gate. The PiG kernel wraps every
 			// BaseTool with the ReviewGate decorator (SOP
 			// double-sign); the legacy closure kernel does not. To
 			// avoid silently letting mutating tool_calls slip through
 			// without review, we deny the call by name. Operators who
-			// want SOP gating must run with OPSKEEPER_AGENT_KERNEL=graph
+			// want SOP gating must run with OPSKEEPER_AGENT_KERNEL=pig
 			// (which lands in cmd/main.go's runtime wiring).
 			if _, mutating := legacyKernelMutatingTools[tc.Name]; mutating {
 				execErr := fmt.Errorf("agent: tool %q is mutating — not supported in legacy kernel; "+
-					"set OPSKEEPER_AGENT_KERNEL=graph (SOP gating lives in the new graph runtime)", tc.Name)
+					"set OPSKEEPER_AGENT_KERNEL=pig (SOP gating lives in the PiG kernel runtime)", tc.Name)
 				toolPayload := toolResultPayload(tools.ExecuteResult{}, execErr)
 				endedAt := time.Now().UTC()
 				status, errMsgPtr, resultPtr := classifyToolOutcome(ctx, tools.ExecuteResult{}, execErr, toolPayload)

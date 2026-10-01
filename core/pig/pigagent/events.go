@@ -2,6 +2,7 @@ package pigagent
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MichaelKinsy/PiG/agent"
@@ -19,9 +20,16 @@ import (
 // assistant_end / tool_start / tool_end / done / error, and it keeps
 // receiving exactly those. Everything PiG-shaped is contained here.
 //
-// One Mapper serves one session. It is not safe for concurrent use, because
-// it owns the per-session counters the frames carry.
+// One Mapper serves one session, and it is safe for concurrent use because
+// it has to be: PiG runs the sibling tool calls of one assistant turn in
+// parallel, and each call's progress update reaches the mapper from its own
+// goroutine. The counters below are what the frames carry, so two
+// unsynchronised updates would both hand out the same sequence number and
+// the console would read a gap as a dropped frame.
 type Mapper struct {
+	// mu guards every field below plus the frame counters, so a caller may
+	// use one Mapper from any goroutine.
+	mu        sync.Mutex
 	sessionID string
 	// iteration is the turn number within the session, 1-based.
 	iteration int
@@ -66,7 +74,11 @@ func NewMapper(opts MapperOptions) *Mapper {
 }
 
 // Iteration reports the current turn number.
-func (m *Mapper) Iteration() int { return m.iteration }
+func (m *Mapper) Iteration() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.iteration
+}
 
 // SetUsage publishes the turn's accumulated token spend so the done frame
 // can report a total.
@@ -76,6 +88,8 @@ func (m *Mapper) Iteration() int { return m.iteration }
 // handed the running total rather than reading PiG types, which keeps the
 // frame construction free of provider accounting.
 func (m *Mapper) SetUsage(u ports.Usage, model string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.usage = wire.UsageFrame{
 		InputTokens:     u.InputTokens,
 		OutputTokens:    u.OutputTokens,
@@ -85,7 +99,7 @@ func (m *Mapper) SetUsage(u ports.Usage, model string) {
 	}
 }
 
-// next stamps and returns the next sequence number.
+// next stamps and returns the next sequence number. Callers hold m.mu.
 func (m *Mapper) next() int64 {
 	m.seq++
 	return m.seq
@@ -104,6 +118,8 @@ func (m *Mapper) frame(t wire.StreamEventType) wire.StreamEvent {
 // round trip, so the console's iteration column matches the number of
 // model calls the turn made.
 func (m *Mapper) TurnStarted() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.iteration++
 }
 
@@ -113,6 +129,8 @@ func (m *Mapper) TurnStarted() {
 // emits lifecycle and timing events that have no SSE counterpart, and
 // inventing frames for them would change the wire contract.
 func (m *Mapper) Map(ev agent.AgentEvent) []wire.StreamEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	switch e := ev.(type) {
 
 	case agent.TurnStartEvent:

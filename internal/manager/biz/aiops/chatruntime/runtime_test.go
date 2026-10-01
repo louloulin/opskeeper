@@ -8,59 +8,14 @@ import (
 	"testing"
 	"time"
 
-	einomodel "github.com/cloudwego/eino/components/model"
-	"github.com/cloudwego/eino/schema"
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 
 	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/graph"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/graph/callbacks"
+	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/alertdraft"
 	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
 	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
 )
-
-// scriptedChatModel returns one *schema.Message per Generate call,
-// tracking generateCalls so tests can assert how many turns ran.
-// Mirrors the pattern in graph/react_test.go.
-type scriptedChatModel struct {
-	mu      sync.Mutex
-	replies []*schema.Message
-	idx     int
-	calls   atomic.Int32
-}
-
-func newScriptedChatModel(replies ...*schema.Message) *scriptedChatModel {
-	return &scriptedChatModel{replies: replies}
-}
-
-func (s *scriptedChatModel) Generate(_ context.Context, _ []*schema.Message, _ ...einomodel.Option) (*schema.Message, error) {
-	s.calls.Add(1)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.replies) == 0 {
-		return &schema.Message{Role: schema.Assistant, Content: "ok"}, nil
-	}
-	if s.idx < len(s.replies) {
-		out := s.replies[s.idx]
-		s.idx++
-		return out, nil
-	}
-	return s.replies[len(s.replies)-1], nil
-}
-
-func (s *scriptedChatModel) Stream(ctx context.Context, input []*schema.Message, opts ...einomodel.Option) (*schema.StreamReader[*schema.Message], error) {
-	msg, err := s.Generate(ctx, input, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return schema.StreamReaderFromArray([]*schema.Message{msg}), nil
-}
-
-func (s *scriptedChatModel) BindTools(_ []*schema.ToolInfo) error { return nil }
-
-func (s *scriptedChatModel) WithTools(_ []*schema.ToolInfo) (einomodel.ToolCallingChatModel, error) {
-	return s, nil
-}
 
 // memSessions is an in-memory SessionRepo for runtime tests. Only the
 // methods runtime.Handle exercises are implemented; the rest panic on
@@ -196,9 +151,9 @@ func TestRuntime_NewRuntime_RequiresDeps(t *testing.T) {
 		t.Errorf("NewRuntime{} returned nil error — expected dep check")
 	}
 	if _, err := NewRuntime(Config{Sessions: newMemSessions(nil)}); err == nil {
-		t.Errorf("NewRuntime sans ChatModel should error")
+		t.Errorf("NewRuntime sans Kernel should error — the loop is not optional")
 	}
-	if _, err := NewRuntime(Config{ChatModel: newScriptedChatModel()}); err == nil {
+	if _, err := NewRuntime(Config{Kernel: newScriptedKernel()}); err == nil {
 		t.Errorf("NewRuntime sans Sessions should error")
 	}
 }
@@ -209,9 +164,9 @@ func TestRuntime_NewRuntime_RequiresDeps(t *testing.T) {
 func TestRuntime_Handle_OwnershipCheck(t *testing.T) {
 	sess := &model.Session{ID: "s1", UserID: 7}
 	rt, err := NewRuntime(Config{
-		Sessions:  newMemSessions(sess),
-		ChatModel: newScriptedChatModel(),
-		ToolBag:   nil,
+		Sessions: newMemSessions(sess),
+		Kernel:   newScriptedKernel(),
+		ToolBag:  nil,
 	})
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
@@ -227,7 +182,7 @@ func TestRuntime_Handle_OwnershipCheck(t *testing.T) {
 }
 
 // TestRuntime_Handle_HappyPath_FinalReply runs the graph once
-// against a scriptedChatModel that returns a no-tools assistant
+// against a scripted kernel that returns a no-tools assistant
 // message. Asserts:
 //   - user message persisted
 //   - Reply.Message non-nil with the model's content
@@ -235,15 +190,12 @@ func TestRuntime_Handle_OwnershipCheck(t *testing.T) {
 func TestRuntime_Handle_HappyPath_FinalReply(t *testing.T) {
 	sess := &model.Session{ID: "s1", UserID: 7}
 	store := newMemSessions(sess)
-	scripted := newScriptedChatModel(&schema.Message{
-		Role:    schema.Assistant,
-		Content: "all good",
-	})
+	scripted := newScriptedKernel("all good")
 	rt, err := NewRuntime(Config{
-		Sessions:  store,
-		ChatModel: scripted,
-		ToolBag:   nil,
-		GraphCfg:  graph.Config{MaxIterations: 5},
+		Sessions:      store,
+		Kernel:        scripted,
+		ToolBag:       nil,
+		MaxIterations: 5,
 	})
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
@@ -299,18 +251,15 @@ func TestRuntime_Handle_HappyPath_FinalReply(t *testing.T) {
 func TestRuntime_Handle_ConfirmedConfigDraft_AppliesWithoutLLM(t *testing.T) {
 	sess := &model.Session{ID: "s1", UserID: 7}
 	store := newMemSessions(sess)
-	scripted := newScriptedChatModel(&schema.Message{
-		Role:    schema.Assistant,
-		Content: "should not run",
-	})
+	scripted := newScriptedKernel("should not run")
 	apply := &captureApplyTool{
 		resp: `{"kind":"config_apply_result","domain":"alert_rule","action":"create","status":"applied","resource_id":42,"resource":{"name":"MySQL 连接使用率过高预警","type":"alert_rule"}}`,
 	}
 	rt, err := NewRuntime(Config{
-		Sessions:  store,
-		ChatModel: scripted,
-		ToolBag:   []basetool.BaseTool{apply},
-		GraphCfg:  graph.Config{MaxIterations: 5},
+		Sessions:      store,
+		Kernel:        scripted,
+		ToolBag:       []basetool.BaseTool{apply},
+		MaxIterations: 5,
 	})
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
@@ -337,8 +286,8 @@ func TestRuntime_Handle_ConfirmedConfigDraft_AppliesWithoutLLM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if scripted.calls.Load() != 0 {
-		t.Fatalf("LLM calls = %d, want 0 for deterministic confirm apply", scripted.calls.Load())
+	if n := scripted.runCount(); n != 0 {
+		t.Fatalf("kernel turns = %d, want 0 for deterministic confirm apply", n)
 	}
 	if apply.calls.Load() != 1 {
 		t.Fatalf("apply_config_change calls = %d, want 1", apply.calls.Load())
@@ -406,18 +355,15 @@ func TestRuntime_Handle_PlainOKAppliesLatestConfigDraftWithoutLLM(t *testing.T) 
 		&model.Message{ID: "m-tool", SessionID: sess.ID, Role: model.RoleTool, ToolName: strPtr("draft_config_change"), Content: strPtr(draftResult), CreatedAt: time.Now().Add(-2 * time.Minute)},
 		&model.Message{ID: "m-assistant", SessionID: sess.ID, Role: model.RoleAssistant, Content: strPtr("草稿已生成，确认后创建。"), CreatedAt: time.Now().Add(-time.Minute)},
 	)
-	scripted := newScriptedChatModel(&schema.Message{
-		Role:    schema.Assistant,
-		Content: "should not run",
-	})
+	scripted := newScriptedKernel("should not run")
 	apply := &captureApplyTool{
 		resp: `{"kind":"config_apply_result","domain":"alert_rule","action":"create","status":"applied","resource_id":95,"resource":{"name":"MySQL 慢查询异常增多","type":"alert_rule"}}`,
 	}
 	rt, err := NewRuntime(Config{
-		Sessions:  store,
-		ChatModel: scripted,
-		ToolBag:   []basetool.BaseTool{apply},
-		GraphCfg:  graph.Config{MaxIterations: 5},
+		Sessions:      store,
+		Kernel:        scripted,
+		ToolBag:       []basetool.BaseTool{apply},
+		MaxIterations: 5,
 	})
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
@@ -432,8 +378,8 @@ func TestRuntime_Handle_PlainOKAppliesLatestConfigDraftWithoutLLM(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if scripted.calls.Load() != 0 {
-		t.Fatalf("LLM calls = %d, want 0 for plain confirmation apply", scripted.calls.Load())
+	if n := scripted.runCount(); n != 0 {
+		t.Fatalf("kernel turns = %d, want 0 for plain confirmation apply", n)
 	}
 	if apply.calls.Load() != 1 {
 		t.Fatalf("apply_config_change calls = %d, want 1", apply.calls.Load())
@@ -510,8 +456,8 @@ func TestLatestConfigDraftApplyArgs_DoesNotCrossPreviousUserTurn(t *testing.T) {
 func TestRuntime_ToolCountAndNames(t *testing.T) {
 	sess := &model.Session{ID: "s1", UserID: 7}
 	rt, err := NewRuntime(Config{
-		Sessions:  newMemSessions(sess),
-		ChatModel: newScriptedChatModel(),
+		Sessions: newMemSessions(sess),
+		Kernel:   newScriptedKernel(),
 		ToolBag: []basetool.BaseTool{
 			&fakeTool{name: "echo", schema: `{"type":"object","properties":{}}`},
 			&fakeTool{name: "ping", schema: `{"type":"object","properties":{}}`},
@@ -641,8 +587,8 @@ func TestConsecutiveFailedTool(t *testing.T) {
 func TestCalcDynamicHints(t *testing.T) {
 	t.Parallel()
 	rt, err := NewRuntime(Config{
-		Sessions:  newMemSessions(&model.Session{ID: "s", UserID: 1}),
-		ChatModel: newScriptedChatModel(),
+		Sessions: newMemSessions(&model.Session{ID: "s", UserID: 1}),
+		Kernel:   newScriptedKernel(),
 	})
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
@@ -762,7 +708,7 @@ func TestCalcDynamicHints(t *testing.T) {
 	t.Run("alert_draft_guard_block_then_create_request_emits_draft_retry_hint", func(t *testing.T) {
 		hist := []*model.Message{
 			{Role: model.RoleUser, Content: strPtr("为 MySQL 创建连接数超过 85% 的告警")},
-			{Role: model.RoleAssistant, Content: strPtr(callbacks.AlertDraftGuardBlockedMessage)},
+			{Role: model.RoleAssistant, Content: strPtr(alertdraft.BlockedMessage)},
 			{Role: model.RoleUser, Content: strPtr("为 MySQL 创建一条告警，连接数达到 max_connections 的 85% 且持续 5 分钟触发 Warning")},
 		}
 		hints := rt.calcDynamicHints(hist)
@@ -778,7 +724,7 @@ func TestCalcDynamicHints(t *testing.T) {
 	t.Run("alert_draft_guard_block_then_why_question_no_draft_retry_hint", func(t *testing.T) {
 		hist := []*model.Message{
 			{Role: model.RoleUser, Content: strPtr("为 MySQL 创建连接数超过 85% 的告警")},
-			{Role: model.RoleAssistant, Content: strPtr(callbacks.AlertDraftGuardBlockedMessage)},
+			{Role: model.RoleAssistant, Content: strPtr(alertdraft.BlockedMessage)},
 			{Role: model.RoleUser, Content: strPtr("为什么要这样提示，不能直接创建 draft 吗")},
 		}
 		hints := rt.calcDynamicHints(hist)
@@ -851,8 +797,8 @@ func (t *captureApplyTool) InvokableRun(_ context.Context, argsJSON string, _ ..
 // survives the completeness precheck (both real ids have a row), but the
 // orphan synthetic-id row used to be emitted bare in natural order →
 // provider 400 "Messages with role 'tool' must be a response to a
-// preceding message with 'tool_calls'". buildEinoHistory must drop it.
-func TestBuildEinoHistory_DropsOrphanToolMessage(t *testing.T) {
+// preceding message with 'tool_calls'". buildKernelHistory must drop it.
+func TestBuildKernelHistory_DropsOrphanToolMessage(t *testing.T) {
 	callA, callB := "call_00_aaa", "call_01_bbb"
 	asst := &model.Message{
 		ID:      "asst-1",
@@ -876,14 +822,14 @@ func TestBuildEinoHistory_DropsOrphanToolMessage(t *testing.T) {
 		{ID: "u1", Role: model.RoleUser, Content: strPtr("1+2")},
 	}
 
-	out := buildEinoHistory(rows)
+	out := buildKernelHistory(rows)
 
 	// Every tool message must carry an id that the assistant actually
 	// emitted — no orphan synthetic-id row survives.
 	valid := map[string]bool{callA: true, callB: true}
 	toolCount := 0
 	for k, msg := range out {
-		if msg.Role != schema.RoleType(model.RoleTool) {
+		if msg.Role != model.RoleTool {
 			continue
 		}
 		toolCount++
@@ -892,7 +838,7 @@ func TestBuildEinoHistory_DropsOrphanToolMessage(t *testing.T) {
 		}
 		// A tool message must be preceded (somewhere before) by an
 		// assistant carrying a matching tool_call id.
-		if k == 0 || out[k-1].Role == schema.RoleType(model.RoleUser) {
+		if k == 0 || out[k-1].Role == model.RoleUser {
 			t.Errorf("tool message at %d not preceded by an assistant/tool", k)
 		}
 	}
@@ -902,7 +848,7 @@ func TestBuildEinoHistory_DropsOrphanToolMessage(t *testing.T) {
 	// The assistant slot must be present with both tool_calls.
 	var sawAsst bool
 	for _, msg := range out {
-		if msg.Role == schema.RoleType(model.RoleAssistant) && len(msg.ToolCalls) == 2 {
+		if msg.Role == model.RoleAssistant && len(msg.ToolCalls) == 2 {
 			sawAsst = true
 		}
 	}
@@ -911,7 +857,7 @@ func TestBuildEinoHistory_DropsOrphanToolMessage(t *testing.T) {
 	}
 }
 
-func TestBuildEinoHistory_SanitizesExpiredToolBudgetResult(t *testing.T) {
+func TestBuildKernelHistory_SanitizesExpiredToolBudgetResult(t *testing.T) {
 	callID := "call_budget_1"
 	rows := []*model.Message{
 		{ID: "u0", Role: model.RoleUser, Content: strPtr("创建数据库连接告警")},
@@ -933,12 +879,12 @@ func TestBuildEinoHistory_SanitizesExpiredToolBudgetResult(t *testing.T) {
 		{ID: "u1", Role: model.RoleUser, Content: strPtr("继续创建")},
 	}
 
-	out := buildEinoHistory(rows)
+	out := buildKernelHistory(rows)
 
-	var toolMsg *schema.Message
+	var toolMsg *ports.AgentMessage
 	for _, msg := range out {
-		if msg.Role == schema.RoleType(model.RoleTool) {
-			toolMsg = msg
+		if msg.Role == model.RoleTool {
+			toolMsg = &msg
 			break
 		}
 	}

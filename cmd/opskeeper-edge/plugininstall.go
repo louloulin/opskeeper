@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigrpc"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
 )
@@ -99,6 +100,23 @@ type pluginStore struct {
 	// review is a boot error, so it fails the republish rather than being
 	// dropped: the operator put it there on purpose.
 	base []string
+	// active overrides "the greatest version wins" with a version an
+	// operator or a restore has explicitly chosen, keyed by package name.
+	//
+	// It is needed because a rollback and a default disagree on purpose.
+	// The default is the greatest installed version, which is right after
+	// an install and wrong after a rollback: the node keeps the superseded
+	// version's directory as rollback material, so "greatest" would
+	// immediately undo the restore and put the bad release back. The pin
+	// is cleared when that version stops being one the node has, so a
+	// later upgrade is not held back by a stale choice.
+	//
+	// It is in memory rather than on disk on purpose. A node that reboots
+	// comes back with its greatest version active and its store intact —
+	// the same answer a fresh boot would have given before anyone
+	// installed anything, and the one an operator can reason about from
+	// the store's contents alone.
+	active map[string]string
 	// trust and policy are the node's own review inputs. The control
 	// plane supplies neither.
 	trust  *pluginmanifest.TrustStore
@@ -129,6 +147,17 @@ func (s *pluginStore) reviewPolicy() (pluginmanifest.Policy, error) {
 	}
 	pol := s.policy
 	pol.AllowUnsigned = len(trust.KeyIDs()) == 0
+	// The agent version is read per request for the same reason as the
+	// edge's: an upgrade replaces the binary under a running store, and a
+	// captured value would keep enforcing the version the node was built
+	// with. See the longer note on selfVersion's call site below.
+	pol.PigVersion = pigSelfVersion()
+	// The version is read per request rather than captured at construction.
+	// The store outlives a binary upgrade that replaced the file it was
+	// built from, and a captured value would keep enforcing the version
+	// the node was running at boot — which is the version the upgrade just
+	// moved it off.
+	pol.NodeVersion = s.selfVersion()
 	if pol.AllowUnsigned {
 		if err := trust.LoadError(); err != nil {
 			return pluginmanifest.Policy{}, fmt.Errorf("trust store: %w", err)
@@ -145,6 +174,120 @@ func (s *pluginStore) reviewPolicy() (pluginmanifest.Policy, error) {
 // manifest the operator wrote could name a directory this node fills in
 // on its own, which is a much larger thing to be true than it sounds.
 const defaultPluginStoreDir = "/var/lib/opskeeper-edge/plugins"
+
+// edgeVersionEnv overrides the build-time version for compatibility
+// checks.
+//
+// It exists because `--version` is not the only way a node is upgraded. A
+// node sitting in the slot of a version it replaced would enforce a
+// min_edge_version against a number that is not running, which is worse
+// than not checking at all: it would refuse packages the node can host and
+// advertise agreement with packages it cannot.
+const edgeVersionEnv = "OPSKEEPER_EDGE_VERSION"
+
+// unsupportedEdgeVersion is what a node says when it cannot tell what
+// version it is running.
+//
+// It is deliberately not the empty string. An empty value would reach the
+// review as "no version configured" and be reported as such, sending an
+// operator to look for a missing setting; this says the node *has* no
+// usable version, which is the thing to fix. It is spelled so it can never
+// be mistaken for a version.
+const unsupportedEdgeVersion = "unknown"
+
+// selfVersion reports the version this node enforces compatibility
+// against.
+//
+// The precedence is deliberate: an explicit override wins, then the
+// build's own version. A build with no version tag — "dev", which is what
+// an untagged local build gets — yields the sentinel rather than the
+// literal "dev", because "dev" is not a version and comparing against it
+// would fail with "cannot parse" instead of the honest "this node cannot
+// state what it is". Both refuse a package with a minimum, and only one of
+// them says why.
+//
+// This is a guess about nothing: there is no third source. A node that
+// wants min_edge_version enforced must be built with a version or told one
+// through the environment, and a node that declined both is a node that
+// has said it does not want the check.
+func (s *pluginStore) selfVersion() string {
+	if v := strings.TrimSpace(os.Getenv(edgeVersionEnv)); v != "" {
+		return v
+	}
+	return bootSelfVersion(version)
+}
+
+// pigVersionEnv names the version of the `pig` binary this node launches,
+// for the other axis of the compatibility matrix.
+//
+// It is a separate setting from the edge's own version because it is a
+// different binary. The edge is upgraded by replacing opskeeper-edge; the
+// agent is upgraded by replacing the pig build the node spawns, and they
+// happen on different cadences. A node that reported one number for both
+// would enforce a package's min_pig_version against the wrapper's version
+// — refusing packages its agent can host, and admitting ones it cannot.
+//
+// There is no way to read it from the binary cheaply: asking `pig --version`
+// costs a process spawn on the boot path, and reading the RPC session state
+// only works once the agent has started, which is after admission. So it is
+// configuration, and a node that has not set it refuses a package that
+// declares a minimum — the same fail-closed rule as the edge axis.
+const pigVersionEnv = "OPSKEEPER_EDGE_PIG_VERSION"
+
+// pigSelfVersion reports the agent version this node enforces
+// min_pig_version against.
+//
+// A node with no override reports the sentinel rather than guessing, for
+// the reason the whole check exists: a guess in the permissive direction
+// installs a package whose extensions the agent cannot load, and the
+// failure surfaces on the first turn that needs it rather than at install.
+// The fallback when nothing is configured is the PiG release this binary
+// linked, read from core/pig, which is the only module that can see it.
+//
+// It is a fallback here and *not* for the edge's own version, and the
+// asymmetry is deliberate rather than an oversight. `pig` is built from the
+// same source at the same time as the edge and shipped inside it, so the
+// linked release line is the thing the node launches. The edge's version
+// cannot be read that way: a binary cannot report a tag it was not given,
+// and "dev" is not a version.
+//
+// OPSKEEPER_EDGE_PIG_VERSION still wins, because swapping the binary on the
+// node's PATH is a real deployment and only its operator knows about it.
+func pigSelfVersion() string {
+	if raw := strings.TrimSpace(os.Getenv(pigVersionEnv)); raw != "" {
+		return comparablePigVersion(raw)
+	}
+	if v := strings.TrimSpace(pigrpc.PigVersion); v != "" {
+		return v
+	}
+	return unsupportedEdgeVersion
+}
+
+// comparablePigVersion reduces `pig --version`'s own string to the part
+// that decides whether an extension API exists.
+//
+// PiG reports a composite version — "0.3.0+0.87.1" — where the part after
+// the `+` is the upstream Pi release it targets. Build metadata is exactly
+// what semver says to ignore when deciding precedence, and the PiG release
+// line is the half that advances when an extension API appears, so the
+// left-hand part is the one to compare.
+//
+// This exists because the first thing an operator will do is paste the
+// output of `pig --version` into the environment. Leaving that
+// unparseable would refuse packages on a node whose configuration is
+// *right*, and the refusal would read as "your agent is not a version"
+// about a string that plainly is one. The strip happens here, at the edge
+// of the fleet, rather than in the comparison itself: the comparison is
+// about versions in general, and this is a fact about the agent's own
+// version string.
+func comparablePigVersion(raw string) string {
+	if i := strings.IndexByte(raw, '+'); i >= 0 {
+		if base := strings.TrimSpace(raw[:i]); base != "" {
+			return base
+		}
+	}
+	return raw
+}
 
 // newPluginStore builds the node's store from its configuration.
 //
@@ -182,6 +325,7 @@ func newPluginStore(cfg nodeAgentConfig, log *slog.Logger) (*pluginStore, error)
 		pkgDir:  dir,
 		workDir: cfg.Cwd,
 		base:    base,
+		active:  map[string]string{},
 		trust:   loadTrustStore(),
 		policy:  policy,
 		log:     log,
@@ -292,6 +436,10 @@ func (s *pluginStore) Install(ctx context.Context, spec ports.PluginSpec) ports.
 	if err := s.activate(spec, root); err != nil {
 		return s.fail(spec, err)
 	}
+	// An install always wins: the version just installed is the one the
+	// operator asked for, and a pin left over from an earlier rollback
+	// must not hold it back.
+	s.setActive(spec.Name, spec.Version)
 	if err := s.republish(); err != nil {
 		// The package is on disk but not in the agent's list. Roll the
 		// directory back out so the store does not hold a package the
@@ -423,10 +571,76 @@ func (s *pluginStore) Remove(_ context.Context, name, version string) ports.Plug
 		// installed should not be told off for being right about nothing.
 		return s.state(name, "", "was not installed")
 	}
+	if s.active[name] == version || version == "" {
+		delete(s.active, name)
+	}
 	if err := s.republish(); err != nil {
 		return ports.PluginState{Name: name, Error: err.Error()}
 	}
 	return s.state(name, "", "removed")
+}
+
+// Restore re-activates a version this node already has on disk.
+//
+// The bytes are already here: activate keeps a superseded version's
+// directory precisely so a rollback has somewhere to go. What is missing is
+// the ability to *choose* it, because republish deliberately publishes one
+// version per name — the greatest — so the retired version is on disk and
+// not in the agent's package list.
+//
+// This is the operation that makes a rollback a rollback. Re-installing the
+// old version by URL would also work and is what the manager used to do,
+// but it needs the manager to hold a spec for a version it is rolling back
+// to, which it does not: the only spec it has is the one it is removing.
+//
+// A version that is not on disk is refused rather than fetched. A restore
+// that downloads is an install wearing a different name, and the manager
+// asking for one is the case this method exists to make impossible.
+func (s *pluginStore) Restore(_ context.Context, name, version string) ports.PluginState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(version) == "" {
+		return ports.PluginState{Name: name, Version: version, Refused: "a restore needs a package name and a version"}
+	}
+	dirs, err := s.installedDirs()
+	if err != nil {
+		return ports.PluginState{Name: name, Version: version, Error: err.Error()}
+	}
+	for _, p := range dirs {
+		if p.Name != name || p.Version != version {
+			continue
+		}
+		if p.broken != "" {
+			return ports.PluginState{
+				Name: name, Version: version,
+				Refused: fmt.Sprintf("%s-%s is on disk but no longer loads (%s); it is not restored", name, version, p.broken),
+			}
+		}
+		// Review it on the way back in. The tree may have been edited, or
+		// this node's policy may have tightened since it was installed, and
+		// a restore is not an exemption from the review every other
+		// activation path performs.
+		pol, err := s.reviewPolicy()
+		if err != nil {
+			return ports.PluginState{Name: name, Version: version, Error: err.Error()}
+		}
+		if decision := pluginmanifest.Review(p.Dir, s.trust, pol); !decision.Allowed {
+			return ports.PluginState{
+				Name: name, Version: version,
+				Refused: fmt.Sprintf("%s-%s no longer passes this node's review: %s", name, version, decision),
+			}
+		}
+		s.setActive(name, version)
+		if err := s.republish(); err != nil {
+			return ports.PluginState{Name: name, Version: version, Error: err.Error()}
+		}
+		return ports.PluginState{Name: name, Version: version, Digest: p.Digest, Installed: true, Note: "restored"}
+	}
+	return ports.PluginState{
+		Name: name, Version: version,
+		Refused: fmt.Sprintf("%s-%s is not installed on this node; a restore does not fetch", name, version),
+	}
 }
 
 // Installed reports the active set, sorted.
@@ -708,6 +922,7 @@ func (s *pluginStore) republish() error {
 		roots = append(roots, base)
 	}
 	var dropped []string
+	var admissible []installedPackage
 	for _, p := range dirs {
 		switch {
 		case p.broken != "":
@@ -719,8 +934,9 @@ func (s *pluginStore) republish() error {
 			dropped = append(dropped, decision.String())
 			continue
 		}
-		roots = append(roots, p.Dir)
+		admissible = append(admissible, p)
 	}
+	roots = append(roots, s.activeRoots(admissible)...)
 	if _, err := writeAgentSettings(s.workDir, roots); err != nil {
 		return fmt.Errorf("publish the package list: %w", err)
 	}
@@ -890,4 +1106,116 @@ func firstN(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// bootSelfVersion is selfVersion for the boot path, where the binary's own
+// version is a parameter rather than the package variable.
+//
+// The two paths have to agree on the rule and cannot share the function,
+// because the boot path receives the version from main's ldflags variable
+// and the runtime path reads it from the store. Keeping the precedence in
+// one place — override, then build version, then sentinel — is the point;
+// the duplication is one line.
+func bootSelfVersion(build string) string {
+	if v := strings.TrimSpace(os.Getenv(edgeVersionEnv)); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(build); v != "" && v != "dev" {
+		return v
+	}
+	return unsupportedEdgeVersion
+}
+
+// setActive records which version of a package the agent should load.
+func (s *pluginStore) setActive(name, version string) {
+	if s.active == nil {
+		s.active = map[string]string{}
+	}
+	s.active[name] = version
+}
+
+// activeRoots picks the one directory the agent should load per package name.
+//
+// activate deliberately keeps the superseded version on disk so a rollback
+// has something to restore to. The consequence is that after an upgrade the
+// package directory holds two versions of one package, and an agent handed
+// both of them loads both: the retired version's tools stay live, an
+// operator who upgraded away from a package still sees it answering, and
+// plugin.list reports a node that cannot be running what it says it is.
+//
+// So exactly one directory per package name is published — the greatest
+// version — and the rest stay on disk, unreferenced, as rollback material.
+// Removing them would be the other half of the same mistake: a rollback
+// that has nothing to restore to is a delete.
+//
+// Versions that cannot be compared are all published rather than one being
+// chosen. The choice needs an ordering, and inventing one for input this
+// code cannot read would drop a package the node has already reviewed and
+// activated; keeping a package loaded is recoverable, silently retiring one
+// is not.
+func (s *pluginStore) activeRoots(pkgs []installedPackage) []string {
+	// A pin is dropped the moment the version it names is gone. Leaving it
+	// would make every later republish fall back to "greatest", so the
+	// symptom would be a rollback that silently reverted on the next
+	// unrelated install rather than at the moment it was made.
+	for name, version := range s.active {
+		found := false
+		for _, p := range pkgs {
+			if p.Name == name && p.Version == version {
+				found = true
+				break
+			}
+		}
+		if !found {
+			delete(s.active, name)
+		}
+	}
+
+	byName := make(map[string][]installedPackage)
+	order := make([]string, 0, len(pkgs))
+	for _, p := range pkgs {
+		if _, seen := byName[p.Name]; !seen {
+			order = append(order, p.Name)
+		}
+		byName[p.Name] = append(byName[p.Name], p)
+	}
+	sort.Strings(order)
+
+	out := make([]string, 0, len(order))
+	for _, name := range order {
+		group := byName[name]
+		if pinned, ok := s.active[name]; ok {
+			for _, p := range group {
+				if p.Version == pinned {
+					out = append(out, p.Dir)
+					break
+				}
+			}
+			continue
+		}
+		if len(group) == 1 {
+			out = append(out, group[0].Dir)
+			continue
+		}
+		best := group[0]
+		ordered := true
+		for _, candidate := range group[1:] {
+			cmp, ok := pluginmanifest.CompareVersions(candidate.Version, best.Version)
+			if !ok {
+				ordered = false
+				break
+			}
+			if cmp > 0 {
+				best = candidate
+			}
+		}
+		if !ordered {
+			for _, p := range group {
+				out = append(out, p.Dir)
+			}
+			continue
+		}
+		out = append(out, best.Dir)
+	}
+	return out
 }

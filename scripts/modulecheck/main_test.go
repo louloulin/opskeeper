@@ -368,3 +368,270 @@ func TestFixtureCoversEveryDeclaredModule(t *testing.T) {
 		}
 	}
 }
+
+// --- the PiG leak boundary ----------------------------------------------
+
+// pigFixture writes a repo whose modules are described by mods: a map from
+// module dir to that module's go.mod body, and a map from module dir to the
+// Go source placed in it.
+//
+// The modules are discovered from the go.mod files rather than declared to
+// the checker, so these fixtures also prove that discovery works — a checker
+// that only knew about the modules in rules() would pass every one of them
+// for the wrong reason.
+func pigFixture(t *testing.T, mods map[string]string, src map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	for dir, gomod := range mods {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(root, dir, "go.mod"), []byte(gomod), 0o644); err != nil {
+			t.Fatalf("write %s/go.mod: %v", dir, err)
+		}
+	}
+	for dir, body := range src {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(root, dir, "x.go"), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s/x.go: %v", dir, err)
+		}
+	}
+	return root
+}
+
+// The case that motivated the check: the root module reached for PiG
+// directly. It is invisible to rules() — the root module has no Allowed list
+// to violate — and invisible to the BC rules, which only ask which bounded
+// context reaches which. Left unchecked it is a PiG upgrade rebuilding every
+// binary in the repository.
+func TestPiGBoundaryCatchesADirectPiGImportInTheRootModule(t *testing.T) {
+	root := pigFixture(t,
+		map[string]string{
+			".":        "module github.com/vincent-wuhan/opskeeper\n",
+			"core/pig": "module github.com/vincent-wuhan/opskeeper/core/pig\n",
+		},
+		map[string]string{
+			"internal/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
+		},
+	)
+	v, err := checkPiGBoundary(root)
+	if err != nil {
+		t.Fatalf("checkPiGBoundary: %v", err)
+	}
+	if len(v) != 1 {
+		t.Fatalf("violations = %v, want exactly one for the root module's PiG import", v)
+	}
+	if !strings.Contains(v[0], "internal/pkg/llm/x.go") || !strings.Contains(v[0], "PiG/ai") {
+		t.Errorf("violation = %q, want it to name both the file and the import", v[0])
+	}
+}
+
+// The adapter module is where a PiG type belongs, so its own imports are the
+// job rather than the leak.
+func TestPiGBoundaryAllowsThePigModuleItself(t *testing.T) {
+	root := pigFixture(t,
+		map[string]string{
+			".":        "module github.com/vincent-wuhan/opskeeper\n",
+			"core/pig": "module github.com/vincent-wuhan/opskeeper/core/pig\n",
+		},
+		map[string]string{
+			"core/pig/pigmodel": "package pigmodel\n\nimport (\n\t\"github.com/MichaelKinsy/PiG/ai\"\n\t\"github.com/vincent-wuhan/opskeeper/core/ports\"\n)\n\nvar _ ai.Model\nvar _ ports.Completer\n",
+		},
+	)
+	v, err := checkPiGBoundary(root)
+	if err != nil {
+		t.Fatalf("checkPiGBoundary: %v", err)
+	}
+	if len(v) != 0 {
+		t.Errorf("violations = %v, want none: the pig module is the boundary", v)
+	}
+}
+
+// A shipped plugin is a PiG extension that PiG loads and runs, so it must
+// compile against PiG. This is the exemption that keeps the rule from being
+// merely annoying, and it is granted for a reason a module cannot fake by
+// being named conveniently.
+func TestPiGBoundaryAllowsAPluginExtensionModule(t *testing.T) {
+	root := pigFixture(t,
+		map[string]string{
+			".":                                  "module github.com/vincent-wuhan/opskeeper\n",
+			"plugins/pig-ops/pkg/extensions/ext": "module github.com/vincent-wuhan/opskeeper/plugins/pig-ops/pkg/extensions/ext\n\nrequire github.com/MichaelKinsy/PiG/extensions/sdk v0.3.0\n",
+		},
+		map[string]string{
+			"plugins/pig-ops/pkg/extensions/ext": "package ext\n\nimport sdk \"github.com/MichaelKinsy/PiG/extensions/sdk\"\n\nvar _ sdk.Extension\n",
+		},
+	)
+	v, err := checkPiGBoundary(root)
+	if err != nil {
+		t.Fatalf("checkPiGBoundary: %v", err)
+	}
+	if len(v) != 0 {
+		t.Errorf("violations = %v, want none: a plugin extension may link the PiG SDK", v)
+	}
+}
+
+// The exemption is for the extension SDK specifically, not for anything a
+// module that once linked it might also reach. Without this, the SDK
+// allowance would be a backdoor: add one import to a plugin module and every
+// application package behind it gains PiG.
+func TestPiGBoundaryDoesNotLetTheExtensionSDKAloneBeABackdoor(t *testing.T) {
+	root := pigFixture(t,
+		map[string]string{
+			".":                                  "module github.com/vincent-wuhan/opskeeper\n",
+			"plugins/pig-ops/pkg/extensions/ext": "module github.com/vincent-wuhan/opskeeper/plugins/pig-ops/pkg/extensions/ext\n\nrequire github.com/MichaelKinsy/PiG/extensions/sdk v0.3.0\n",
+		},
+		map[string]string{
+			"plugins/pig-ops/pkg/extensions/ext": "package ext\n\nimport (\n\tsdk \"github.com/MichaelKinsy/PiG/extensions/sdk\"\n\t\"github.com/MichaelKinsy/PiG/ai\"\n)\n\nvar _ sdk.Extension\nvar _ ai.Model\n",
+		},
+	)
+	v, err := checkPiGBoundary(root)
+	if err != nil {
+		t.Fatalf("checkPiGBoundary: %v", err)
+	}
+	if len(v) != 1 || !strings.Contains(v[0], "PiG/ai") {
+		t.Errorf("violations = %v, want one naming the ai import the SDK allowance does not cover", v)
+	}
+}
+
+// A nested module's imports belong to the nested module. Blaming the parent
+// would point a reviewer at the wrong file, and — worse — would make the
+// pig module look dirty for the extensions that legitimately live under it.
+func TestPiGBoundaryAttributesANestedModulesImportsToThatModule(t *testing.T) {
+	root := pigFixture(t,
+		map[string]string{
+			".":                                  "module github.com/vincent-wuhan/opskeeper\n",
+			"core/pig":                           "module github.com/vincent-wuhan/opskeeper/core/pig\n",
+			"core/pig/extensions/opskeeper-gate": "module github.com/vincent-wuhan/opskeeper/core/pig/extensions/opskeeper-gate\n",
+			"internal/pkg/llm":                   "module github.com/vincent-wuhan/opskeeper/internal/pkg/llm\n",
+		},
+		map[string]string{
+			// A nested module inside the root that is NOT under core/pig and
+			// does reach for PiG: the violation belongs to it, by its own
+			// path, not to the root module.
+			"internal/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
+		},
+	)
+	v, err := checkPiGBoundary(root)
+	if err != nil {
+		t.Fatalf("checkPiGBoundary: %v", err)
+	}
+	if len(v) != 1 {
+		t.Fatalf("violations = %v, want exactly one", v)
+	}
+	if !strings.HasPrefix(v[0], "internal/pkg/llm/x.go") {
+		t.Errorf("violation = %q, want the nested module's own path", v[0])
+	}
+	// The exempt module is named in the message text, so only the path can
+	// say who is to blame — and it must be the nested module.
+	if got := v[0][:strings.Index(v[0], ":")]; got != "internal/pkg/llm/x.go" {
+		t.Errorf("violation blames %q, want the nested module rather than the pig module", got)
+	}
+}
+
+// A module with no PiG import is not reported, and a fixture with no go.mod
+// at all is not an error: the checker is run against real trees and partial
+// ones, and finding no modules must not read as finding a violation.
+func TestPiGBoundaryIsQuietOnATreeWithNoPiGImports(t *testing.T) {
+	root := pigFixture(t,
+		map[string]string{
+			".": "module github.com/vincent-wuhan/opskeeper\n",
+		},
+		map[string]string{
+			"internal/pkg/llm": "package llm\n\nimport (\n\t\"context\"\n\t\"github.com/vincent-wuhan/opskeeper/core/ports\"\n)\n\nvar _ = context.Background\nvar _ ports.Completer\n",
+		},
+	)
+	v, err := checkPiGBoundary(root)
+	if err != nil {
+		t.Fatalf("checkPiGBoundary: %v", err)
+	}
+	if len(v) != 0 {
+		t.Errorf("violations = %v, want none", v)
+	}
+
+	empty := t.TempDir()
+	if v, err := checkPiGBoundary(empty); err != nil || len(v) != 0 {
+		t.Errorf("an empty tree gave (%v, %v), want no violations and no error", v, err)
+	}
+}
+
+// The invocation `make module-check` actually uses passes "." as the root, and
+// a walk rooted at "." reports the root directory's own name as ".". A guard
+// that skips dot-directories without exempting the walk root therefore skips
+// the entire repository before reading a file — and a boundary checker that
+// checked nothing reports "all boundaries hold", which is the most expensive
+// failure this tool could have.
+//
+// The fixture above cannot catch that: t.TempDir returns an absolute path
+// whose final element is not ".", so every fixture-based test walks a real
+// directory. Only an invocation from inside the tree reproduces it.
+func TestPiGBoundaryActuallyWalksWhenTheRootIsDot(t *testing.T) {
+	root := pigFixture(t,
+		map[string]string{
+			".": "module github.com/vincent-wuhan/opskeeper\n",
+		},
+		map[string]string{
+			"internal/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
+		},
+	)
+	t.Chdir(root)
+
+	roots, err := moduleRootsIn(".")
+	if err != nil {
+		t.Fatalf("moduleRootsIn: %v", err)
+	}
+	if len(roots) == 0 {
+		t.Fatal(`moduleRootsIn(".") found no modules; the walk root was skipped, ` +
+			"so this check would pass on a tree it never read")
+	}
+	v, err := checkPiGBoundary(".")
+	if err != nil {
+		t.Fatalf("checkPiGBoundary: %v", err)
+	}
+	if len(v) != 1 {
+		t.Errorf(`checkPiGBoundary(".") = %v, want the one violation it exists to find`, v)
+	}
+}
+
+// The same trap one level down: the root module's own directory is walked
+// from the repo root, so its walk root is the repo root — also ".".
+func TestPiGBoundaryFindsAViolationInTheRootModuleWhenInvokedAsDot(t *testing.T) {
+	root := pigFixture(t,
+		map[string]string{
+			".":        "module github.com/vincent-wuhan/opskeeper\n",
+			"core/pig": "module github.com/vincent-wuhan/opskeeper/core/pig\n",
+		},
+		map[string]string{
+			"internal/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/coding/rpcclient\"\n\nvar _ *rpcclient.RpcClient\n",
+		},
+	)
+	t.Chdir(root)
+	v, err := checkPiGBoundary(".")
+	if err != nil {
+		t.Fatalf("checkPiGBoundary: %v", err)
+	}
+	if len(v) != 1 || !strings.Contains(v[0], "rpcclient") {
+		t.Errorf("violations = %v, want the root module's PiG import found", v)
+	}
+}
+
+// A hidden directory is still skipped — the root exemption must not turn into
+// a blanket "walk everything", or .git and any vendored tree become input.
+func TestPiGBoundaryStillSkipsHiddenDirectories(t *testing.T) {
+	root := pigFixture(t,
+		map[string]string{
+			".": "module github.com/vincent-wuhan/opskeeper\n",
+		},
+		map[string]string{
+			".hidden": "package hidden\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
+		},
+	)
+	v, err := checkPiGBoundary(root)
+	if err != nil {
+		t.Fatalf("checkPiGBoundary: %v", err)
+	}
+	if len(v) != 0 {
+		t.Errorf("violations = %v, want none: a hidden directory is not source", v)
+	}
+}

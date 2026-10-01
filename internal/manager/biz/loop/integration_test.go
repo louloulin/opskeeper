@@ -42,7 +42,7 @@ import (
 )
 
 // pgLongRunningTxCase mirrors the harness case at
-// internal/harness/cases/pg/long-running-tx/case.yaml — we read
+// core/harness/cases/pg/long-running-tx/case.yaml — we read
 // just enough fields to drive the dry-run scenario.
 type pgLongRunningTxCase struct {
 	IncidentID   string
@@ -143,14 +143,17 @@ func newDryRunOrchestrator(t *testing.T, hooks PauseHook) (Orchestrator, *InMemo
 	// Build the 7 workers via the factory; the recovered phase
 	// uses the real RecoveredPhaseWorker (Day 3) and the approved
 	// phase uses ApprovedPhaseWorker (Day 5).
+	remediationLoader, remediationInvoker := dryRunRemediationDeps()
 	workers, err := DefaultPhaseWorkerFactory(PhaseWorkerDeps{
-		VerifyCaller:      verifyCaller,
-		StateStore:        stateStore,
-		ApprovedRefLoader: &pgApprovedLoader{},
-		FlowRunner:        NoopFlowRunner{},
-		PauseHook:         hooks,
-		Logger:            slog.New(slog.NewTextHandler(testWriter{t}, nil)),
-		Clock:             func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
+		VerifyCaller:       verifyCaller,
+		StateStore:         stateStore,
+		ApprovedRefLoader:  &pgApprovedLoader{},
+		RemediationLoader:  remediationLoader,
+		RemediationInvoker: remediationInvoker,
+		FlowRunner:         NoopFlowRunner{},
+		PauseHook:          hooks,
+		Logger:             slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+		Clock:              func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		t.Fatalf("DefaultPhaseWorkerFactory err: %v", err)
@@ -187,6 +190,69 @@ func (p *pgApprovedLoader) LoadApprovedDecision(_ context.Context, _ string, _ i
 		ApprovedAt:    time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 		ApprovedBy:    "auto",
 	}, nil
+}
+
+// dryRunRootCauseLoader supplies the investigated-phase contract the dry run
+// never produces (the dry run has no LLM caller, so the investigated phase
+// is a BasePhaseWorker and writes nothing).
+//
+// It goes through RootCauseRemediationLoader rather than implementing
+// RemediationOptionLoader directly, so the dry run exercises the same
+// production adapter the real deployment uses.
+type dryRunRootCauseLoader struct {
+	options []RemediationOption
+}
+
+func (d *dryRunRootCauseLoader) LoadRootCause(_ context.Context, _, _ string) (*RootCauseJSON, error) {
+	return &RootCauseJSON{
+		SchemaVersion:      ContractSchemaV1,
+		RootCauseObject:    &RootCauseObject{Kind: "pg.long_running_tx", Summary: "long running transactions hold locks"},
+		Confidence:         0.9,
+		EvidenceChain:      []EvidenceItem{{Tool: "pg.long_running_txns", Count: 3}},
+		RemediationOptions: d.options,
+	}, nil
+}
+
+// dryRunRemediationInvoker stands in for the real dispatch seam. It succeeds
+// so the dry run can reach the recovered phase, which is what these tests
+// are about; the dispatch contract itself is covered by the approved worker
+// unit tests.
+type dryRunRemediationInvoker struct {
+	mu   sync.Mutex
+	seen []RemediationRequest
+}
+
+func (d *dryRunRemediationInvoker) Invoke(_ context.Context, req RemediationRequest) (RemediationOutcome, error) {
+	d.mu.Lock()
+	d.seen = append(d.seen, req)
+	d.mu.Unlock()
+	return RemediationOutcome{
+		Status:   RemediationStatusSuccess,
+		Message:  "dry run: " + req.Option.Action + " dispatched",
+		Impacted: 1,
+		Args:     map[string]any{"target": req.Option.Target},
+		Result:   map[string]any{"dry_run": true},
+	}, nil
+}
+
+func (d *dryRunRemediationInvoker) dispatched() []RemediationRequest {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]RemediationRequest(nil), d.seen...)
+}
+
+// dryRunRemediationDeps is the dispatch wiring every dry-run orchestrator
+// shares. The proposed action is pre-approved and safe, which is what makes
+// a NoopPauseHook's "no human required" a licence to run it rather than a
+// licence to do nothing.
+func dryRunRemediationDeps() (RemediationOptionLoader, RemediationInvoker) {
+	loader := RootCauseRemediationLoader{Loader: &dryRunRootCauseLoader{options: []RemediationOption{{
+		Action:      "pg.terminate_long_tx",
+		Target:      "postgres://prod-cluster-1",
+		Risk:        "mutating",
+		AutoApprove: true,
+	}}}}
+	return loader, &dryRunRemediationInvoker{}
 }
 
 // testWriter fans test t.Logf output through t.Log so debug messages
@@ -332,14 +398,17 @@ func TestDryRun_RollbackOnFailedVerification(t *testing.T) {
 	cs := newPgLongRunningTxCase()
 	failingCaller := &failingVerifyCaller{}
 	stateStore := newInMemoryStateStore()
+	remediationLoader, remediationInvoker := dryRunRemediationDeps()
 	workers, err := DefaultPhaseWorkerFactory(PhaseWorkerDeps{
-		VerifyCaller:      failingCaller,
-		StateStore:        stateStore,
-		ApprovedRefLoader: &pgApprovedLoader{},
-		FlowRunner:        NoopFlowRunner{},
-		PauseHook:         NoopPauseHook{},
-		Logger:            slog.New(slog.NewTextHandler(testWriter{t}, nil)),
-		Clock:             func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
+		VerifyCaller:       failingCaller,
+		StateStore:         stateStore,
+		ApprovedRefLoader:  &pgApprovedLoader{},
+		RemediationLoader:  remediationLoader,
+		RemediationInvoker: remediationInvoker,
+		FlowRunner:         NoopFlowRunner{},
+		PauseHook:          NoopPauseHook{},
+		Logger:             slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+		Clock:              func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		t.Fatalf("DefaultPhaseWorkerFactory err: %v", err)
@@ -413,14 +482,17 @@ func TestDryRun_RollbackExhaustionBeyondMaxRetry(t *testing.T) {
 	cs := newPgLongRunningTxCase()
 	failingCaller := &failingVerifyCaller{}
 	stateStore := newInMemoryStateStore()
+	remediationLoader, remediationInvoker := dryRunRemediationDeps()
 	workers, err := DefaultPhaseWorkerFactory(PhaseWorkerDeps{
-		VerifyCaller:      failingCaller,
-		StateStore:        stateStore,
-		ApprovedRefLoader: &pgApprovedLoader{},
-		FlowRunner:        NoopFlowRunner{},
-		PauseHook:         NoopPauseHook{},
-		Logger:            slog.New(slog.NewTextHandler(testWriter{t}, nil)),
-		Clock:             func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
+		VerifyCaller:       failingCaller,
+		StateStore:         stateStore,
+		ApprovedRefLoader:  &pgApprovedLoader{},
+		RemediationLoader:  remediationLoader,
+		RemediationInvoker: remediationInvoker,
+		FlowRunner:         NoopFlowRunner{},
+		PauseHook:          NoopPauseHook{},
+		Logger:             slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+		Clock:              func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		t.Fatalf("DefaultPhaseWorkerFactory err: %v", err)

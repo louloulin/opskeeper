@@ -136,6 +136,8 @@ type PhaseWorkerDeps struct {
 	GitArtifactSink             GitArtifactSink             // postmortem worker
 	UpstreamContractLoader      UpstreamContractLoader      // postmortem worker（读 3 个上游 contract bundle）
 	ApprovedCritiqueLoader      ApprovedCritiqueLoader      // approved worker（基于 CritiqueDimensions 算 severity）
+	RemediationLoader           RemediationOptionLoader     // approved worker (read upstream remediation options)
+	RemediationInvoker          RemediationInvoker          // approved worker (actually perform the remediation action)
 	PatternWriter               PatternWriter               // postmortem worker（KB write-back hook，nil → 跳过）
 }
 
@@ -171,6 +173,8 @@ func DefaultPhaseWorkerFactory(deps PhaseWorkerDeps) (map[Phase]PhaseWorker, err
 	approved, err := NewApprovedPhaseWorker(
 		pause, clock, logger,
 		WithApprovedCritiqueLoader(approvedCritiqueLoader),
+		WithRemediationLoader(deps.RemediationLoader),
+		WithRemediationInvoker(deps.RemediationInvoker),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("loop: build approved worker: %w", err)

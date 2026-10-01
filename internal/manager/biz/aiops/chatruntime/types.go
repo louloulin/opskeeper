@@ -4,7 +4,7 @@
 // frontmatter + markdown body. This file defines just the in-memory structs;
 // parsing lives in skill_parser.go / agent_parser.go.
 //
-// PR-2 of / / scaffolding only — no graph, no LLM
+// scaffolding only — no kernel, no LLM
 // wiring, no tool execution. Old internal/skill stays running for compat.
 //
 // Field naming convention: every YAML / JSON tag uses snake_case per
