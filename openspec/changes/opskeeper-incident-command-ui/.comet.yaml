@@ -15,3 +15,5 @@ verified_at: null
 archived: false
 handoff_context: openspec/changes/opskeeper-incident-command-ui/.comet/handoff/design-context.json
 handoff_hash: cd7217cd70437111d6d9205a3fc44fb2c4e3e9f5f33d3da044613059291d4339
+build_command: bash -c 'cd plugins/opskeeper-teamharness/dashboard && npm test && npm run build && cd ../../../site && npm run typecheck && npm run build'
+verify_command: bash -c 'openspec validate opskeeper-incident-command-ui --type change --strict --no-interactive && cd plugins/opskeeper-teamharness/dashboard && npm test && npm run build && cd ../../../site && npm run typecheck && npm run build'
