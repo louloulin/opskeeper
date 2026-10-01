@@ -48,6 +48,15 @@ function sourceReference(stage) {
   ].filter(Boolean).join('，') || '来源缺失';
 }
 
+function hasSourceEvidence(stage) {
+  return Boolean(
+    stage?.sourceUrl
+    || (Array.isArray(stage?.evidenceRefs) && stage.evidenceRefs.length)
+    || stage?.sourceEventId
+    || stage?.sourceTaskId,
+  );
+}
+
 export default function StageTimeline({
   stages = [],
   locale = 'zh-CN',
@@ -110,6 +119,7 @@ export default function StageTimeline({
           const status = future ? 'future' : (stage?.status || 'unknown');
           const statusLabel = future ? '未开始' : (STATUS_LABELS[status] || '未知');
           const owner = stage?.ownerLabel || stage?.workerRole || '未知';
+          const evidenceAvailable = hasSourceEvidence(stage);
           return (
             <li
               key={stage?.stage || index}
@@ -160,7 +170,8 @@ export default function StageTimeline({
                 </dl>
                 <button
                   type="button"
-                  onClick={() => onOpenEvidence?.(stage)}
+                  disabled={!evidenceAvailable}
+                  onClick={evidenceAvailable ? () => onOpenEvidence?.(stage) : undefined}
                   style={{
                     justifySelf: 'start',
                     border: '1px solid var(--ops-incident-border)',
@@ -170,10 +181,17 @@ export default function StageTimeline({
                     font: 'inherit',
                     fontSize: 11,
                     padding: '3px 6px',
+                    cursor: evidenceAvailable ? 'pointer' : 'not-allowed',
+                    opacity: evidenceAvailable ? 1 : 0.65,
                   }}
                 >
-                  {evidenceActionLabel}
+                  {evidenceAvailable ? evidenceActionLabel : '证据缺失'}
                 </button>
+                {!evidenceAvailable && (
+                  <span style={{ fontSize: 10, color: 'var(--ops-incident-muted)' }}>
+                    未记录权威证据，无法查看
+                  </span>
+                )}
               </article>
             </li>
           );

@@ -41,6 +41,10 @@ const LEGACY_EVENT_TYPE_ALIASES = new Map([
   ['reopened', INCIDENT_EVENT_TYPES.incidentReopened],
 ]);
 
+function normalizeWireBoolean(value) {
+  return value === true;
+}
+
 export function normalizeArchiveResponse(response) {
   const archive = response?.data && typeof response.data === 'object'
     ? response.data
@@ -84,7 +88,7 @@ function normalizeRepairPreviewCandidate(candidate) {
     name: candidate.name || '',
     action: candidate.action || '',
     change_summary: candidate.change_summary || '',
-    consistent: Boolean(candidate.consistent),
+    consistent: normalizeWireBoolean(candidate.consistent),
     average_latency_ms: candidate.average_latency_ms ?? null,
     median_latency_ms: candidate.median_latency_ms ?? null,
     p95_latency_ms: candidate.p95_latency_ms ?? null,
@@ -93,7 +97,7 @@ function normalizeRepairPreviewCandidate(candidate) {
     error_count: candidate.error_count ?? 0,
     write_impact: candidate.write_impact || '',
     storage_delta_bytes: candidate.storage_delta_bytes ?? null,
-    business_probe_pass: Boolean(candidate.business_probe_pass),
+    business_probe_pass: normalizeWireBoolean(candidate.business_probe_pass),
     decision: candidate.decision || 'UNKNOWN',
     rejection_reason: candidate.rejection_reason || '',
   };
@@ -116,7 +120,7 @@ export function normalizeRepairPreviewSummary(response) {
     runId: summary.run_id || summary.runId || '',
     seedFingerprint: summary.seed_fingerprint || summary.seedFingerprint || '',
     workloadFingerprint: summary.workload_fingerprint || summary.workloadFingerprint || '',
-    controlledLoad: Boolean(summary.controlled_load ?? summary.controlledLoad),
+    controlledLoad: normalizeWireBoolean(summary.controlled_load ?? summary.controlledLoad),
     isolationBoundary: summary.isolation_boundary || summary.isolationBoundary || '',
     targetFingerprint: summary.target_fingerprint || summary.targetFingerprint || '',
     status: summary.status || '',
@@ -279,7 +283,7 @@ function normalizeArchiveReplayEvent(event) {
     evidenceRef,
     evidenceRefs: [evidenceRef, traceId].filter(Boolean),
     traceId,
-    recoverySignal: source.recovery_signal ?? source.recoverySignal === true,
+    recoverySignal: normalizeWireBoolean(source.recovery_signal ?? source.recoverySignal),
     sourceEventId: id,
     sourceUrl: projectionText(source.source_url ?? source.sourceUrl),
   };
@@ -336,7 +340,7 @@ function normalizedReplayCandidate(candidate, run) {
     latencyMs: Number.isFinite(Number(source.average_latency_ms ?? source.averageLatencyMs))
       ? Number(source.average_latency_ms ?? source.averageLatencyMs)
       : null,
-    businessProbePass: source.business_probe_pass ?? source.businessProbePass === true,
+    businessProbePass: normalizeWireBoolean(source.business_probe_pass ?? source.businessProbePass),
     reason: projectionText(source.rejection_reason ?? source.rejectionReason),
     sourceEventIds: [
       projectionText(run?.run_id ?? run?.id),
@@ -352,11 +356,14 @@ function replayCandidateComparison(archive, events) {
     .map((candidate) => normalizedReplayCandidate(candidate, run))
     .filter(Boolean);
   const explicitSelection = projectionText(
-    run.selected_candidate_id ?? run.selectedCandidateId ?? archive.selected_candidate_id,
+    run.selected_candidate_id
+    ?? run.selectedCandidateId
+    ?? archive.selected_candidate_id
+    ?? archive.selectedCandidateId,
   );
-  const selected = candidates.find((candidate) => candidate.id === explicitSelection)
-    || candidates.find((candidate) => candidate.id !== 'baseline' && candidate.decision === 'PASS')
-    || null;
+  const selected = explicitSelection
+    ? candidates.find((candidate) => candidate.id === explicitSelection) || null
+    : null;
   const rejected = candidates.filter((candidate) => (
     candidate.id !== selected?.id
       && ['FAIL', 'FAILED', 'REJECTED', 'REJECTED_BY_PREVIEW'].includes(candidate.decision)
@@ -370,6 +377,7 @@ function replayCandidateComparison(archive, events) {
         : 'missing';
   return {
     selected,
+    selectedCandidateId: explicitSelection,
     rejected,
     baseline: candidates.find((candidate) => candidate.id === 'baseline') || null,
     provenance: previewPresent ? 'decision_time' : '',
@@ -385,11 +393,18 @@ function replayCandidateComparison(archive, events) {
 function replayRollback(archive, events) {
   const action = events.find((event) => event.eventType === INCIDENT_EVENT_TYPES.actionExecuted);
   const result = projectionText(
-    archive.rollback_result ?? archive.rollbackResult ?? action?.status,
+    archive.rollback_result ?? archive.rollbackResult,
+  );
+  const evidenceRef = projectionText(
+    archive.rollback_evidence_ref
+    ?? archive.rollbackEvidenceRef
+    ?? archive.rollback_evidence
+    ?? archive.rollbackEvidence,
   );
   const plan = projectionText(archive.rollback_plan ?? archive.rollbackPlan);
   return {
     result,
+    evidenceRef,
     plan,
     provenance: 'decision_time',
     sourceEventIds: [action?.sourceEventId].filter(Boolean),
@@ -633,7 +648,9 @@ export function projectIncidentEvidence(input = {}) {
   const isolationBoundary = projectionText(
     previewSummary.isolationBoundary || previewRun.isolation_boundary || previewRun.isolationBoundary,
   );
-  const controlledLoad = Boolean(previewSummary.controlledLoad ?? previewRun.controlled_load ?? previewRun.controlledLoad);
+  const controlledLoad = normalizeWireBoolean(
+    previewSummary.controlledLoad ?? previewRun.controlled_load ?? previewRun.controlledLoad,
+  );
   const previewPresent = Boolean(previewSummary.runId || previewRun.id);
   const candidates = mergedPreviewCandidates(previewSummary, previewRun);
   const previewReady = Boolean((previewSummary.runId || previewRun.id) && previewCandidate);
@@ -784,7 +801,7 @@ export function normalizeArchiveIncidentList(response) {
       id: String(incident.incident_id ?? incident.id ?? '').trim(),
       summary: incident.summary || incident.title || incident.rule_key || incident.incident_id || '',
       status: incident.closed ? 'closed' : (incident.status || 'open'),
-      evidenceComplete: Boolean(incident.evidence_complete),
+      evidenceComplete: normalizeWireBoolean(incident.evidence_complete),
       eventCount: Number(incident.event_count ?? 0),
     }))
     .filter((incident) => incident.id);

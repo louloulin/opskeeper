@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import * as React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { createServer } from 'vite';
+import { resolve } from 'node:path';
 
 import {
   projectArchiveReplay,
@@ -11,6 +15,23 @@ import {
   normalizeRepairPreviews,
   normalizeRepairPreviewSummary,
 } from './archive.js';
+
+const dashboardRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
+const vite = await createServer({
+  configFile: false,
+  root: dashboardRoot,
+  appType: 'custom',
+  logLevel: 'error',
+  resolve: {
+    alias: {
+      '@opskeeper/incident-command': resolve(dashboardRoot, '../../../shared/incident-command/index.js'),
+    },
+  },
+});
+
+test.after(async () => {
+  await vite.close();
+});
 
 const replayArchive = {
   incident_id: 'inc-replay',
@@ -156,6 +177,98 @@ test('bounds archive similarities and exposes explicit comparison provenance', (
   assert.deepEqual(replay.similarities.items[0].sourceEventIds, ['event-similar-1']);
 });
 
+test('keeps a passing candidate pending without an authoritative selection identity', () => {
+  const archive = {
+    ...replayArchive,
+    repair_previews: [{
+      ...replayArchive.repair_previews[0],
+      selected_candidate_id: undefined,
+    }],
+  };
+
+  const replay = projectArchiveReplay(archive);
+
+  assert.equal(replay.candidateComparison.selectedCandidateId, '');
+  assert.equal(replay.candidateComparison.selected, null);
+  assert.deepEqual(
+    replay.candidateComparison.rejected.map((candidate) => candidate.id),
+    ['candidate-b'],
+  );
+  assert.equal(replay.candidateComparison.completeness, 'partial');
+
+  const explicitlySelected = projectArchiveReplay({
+    ...archive,
+    selectedCandidateId: 'candidate-a',
+  });
+
+  assert.equal(explicitlySelected.candidateComparison.selectedCandidateId, 'candidate-a');
+  assert.equal(explicitlySelected.candidateComparison.selected.id, 'candidate-a');
+});
+
+test('keeps rollback result unknown without explicit rollback evidence', () => {
+  const replay = projectArchiveReplay({
+    ...replayArchive,
+    rollback_result: undefined,
+  });
+
+  assert.equal(replay.rollback.result, '');
+  assert.equal(replay.rollback.evidenceRef, '');
+  assert.equal(replay.rollback.completeness, 'partial');
+});
+
+test('normalizes wire booleans strictly without treating false strings as true', () => {
+  const archive = {
+    ...replayArchive,
+    evidence_complete: 'false',
+    recovery_observed: 'false',
+    closed: 'false',
+    timeline: replayArchive.timeline.map((event) => (
+      event.event_type === 'recovery_signal.observed'
+        ? { ...event, recovery_signal: 'false' }
+        : event
+    )),
+    repair_previews: [{
+      ...replayArchive.repair_previews[0],
+      candidates: replayArchive.repair_previews[0].candidates.map((candidate) => ({
+        ...candidate,
+        business_probe_pass: 'false',
+      })),
+    }],
+    similar_incidents: replayArchive.similar_incidents.map((incident) => ({
+      ...incident,
+      closed: 'false',
+    })),
+    controlled_drill: { ...replayArchive.controlled_drill, supported: 'false' },
+  };
+
+  const replay = projectArchiveReplay(archive);
+
+  assert.equal(replay.closure.evidenceComplete, false);
+  assert.equal(replay.closure.closed, false);
+  assert.equal(replay.timeline.find((event) => event.id === 'event-recovery').recoverySignal, false);
+  assert.equal(
+    replay.candidateComparison.rejected.find((candidate) => candidate.id === 'candidate-b').businessProbePass,
+    false,
+  );
+  assert.equal(replay.similarities.items.every((incident) => incident.closed === false), true);
+  assert.equal(replay.controlledDrill.supported, false);
+
+  const preview = normalizeRepairPreviews({
+    data: {
+      repair_previews: [{
+        run_id: 'run-boolean',
+        candidates: [{ candidate_id: 'candidate-boolean', consistent: 'false', business_probe_pass: 'false' }],
+      }],
+    },
+  });
+  assert.equal(preview[0].candidates[0].consistent, false);
+  assert.equal(preview[0].candidates[0].business_probe_pass, false);
+  assert.equal(normalizeRepairPreviewSummary({ run_id: 'run-boolean', controlled_load: 'false' }).controlledLoad, false);
+  assert.equal(normalizeArchiveIncidentList({
+    items: [{ incident_id: 'inc-boolean', closed: 'false', evidence_complete: 'false' }],
+  })[0].evidenceComplete, false);
+});
+
 test('marks legacy optional replay fields not applicable and never fabricates a drill', () => {
   const replay = projectArchiveReplay({
     incident_id: 'inc-legacy',
@@ -203,6 +316,46 @@ test('renders replay-first archive UI and hides unsupported controlled drills', 
   assert.match(source, /replay\.controlledDrill\.supported &&/u);
   assert.match(source, /受控演练只读回看/u);
   assert.doesNotMatch(source, /createDrill|startDrill|mutation|method:\s*['`]POST['`]/iu);
+});
+
+test('renders unavailable evidence controls for archive stages without source evidence', async () => {
+  const { default: StageTimeline } = await vite.ssrLoadModule(
+    '/src/extensions/incident-command/StageTimeline.jsx',
+  );
+  const replay = projectArchiveReplay({
+    incident_id: 'inc-partial-replay',
+    timeline: [replayArchive.timeline.find((event) => event.id === 'event-alert')],
+    repair_previews: [],
+  });
+
+  const markup = renderToStaticMarkup(React.createElement(StageTimeline, {
+    stages: replay.stageTimeline,
+    title: '部分回放',
+    ariaLabel: '部分事故回放时间线',
+    evidenceActionLabel: '查看决策证据',
+  }));
+  const detected = markup.slice(
+    markup.indexOf('data-stage="detected"'),
+    markup.indexOf('data-stage="correlated"'),
+  );
+  const investigated = markup.slice(
+    markup.indexOf('data-stage="investigated"'),
+    markup.indexOf('data-stage="critiqued"'),
+  );
+
+  assert.match(detected, /<button[^>]*>查看决策证据<\/button>/u);
+  assert.doesNotMatch(detected, /disabled/u);
+  assert.match(investigated, /<button[^>]*disabled[^>]*>证据缺失<\/button>/u);
+  assert.match(investigated, /未记录权威证据，无法查看/u);
+});
+
+test('projects replay behavior without changing the authoritative archive input', () => {
+  const archive = structuredClone(replayArchive);
+  const replay = projectArchiveReplay(archive);
+
+  assert.equal(replay.candidateComparison.selected.id, 'candidate-a');
+  assert.equal(replay.rollback.result, 'succeeded');
+  assert.deepEqual(archive, structuredClone(replayArchive));
 });
 
 test('normalizes archive response wrappers and arrays', () => {
