@@ -48,10 +48,10 @@
 
 ## 6. P3 Runtime-Aware Command
 
-- [ ] 6.1 Define read-only projections from authoritative runtime inventory, task, health, and plugin-readback data.
-- [ ] 6.2 Show runtime and task blockers as incident/system-status explanations with claim, lease, checkpoint, recovery, and drift context.
-- [ ] 6.3 Keep detailed node, rollout, disk, credential, and plugin administration outside primary incident navigation.
-- [ ] 6.4 Add tests proving runtime data gaps produce unknown/stale states rather than inferred failures.
+- [x] 6.1 Define read-only projections from authoritative runtime inventory, task, health, and plugin-readback data.
+- [x] 6.2 Show runtime and task blockers as incident/system-status explanations with claim, lease, checkpoint, recovery, and drift context.
+- [x] 6.3 Keep detailed node, rollout, disk, credential, and plugin administration outside primary incident navigation.
+- [x] 6.4 Add tests proving runtime data gaps produce unknown/stale states rather than inferred failures.
 
 ## 7. OPC Squad Delivery and Governance
 

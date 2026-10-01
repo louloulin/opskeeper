@@ -166,6 +166,28 @@ export function resolveFreshness(observedAt, serverNow) {
   return now - observed <= FRESHNESS_LIMIT_MS ? 'fresh' : 'stale';
 }
 
+function normalizeRuntimeBlockers(readback, serverNow) {
+  const source = object(readback);
+  const blockers = Array.isArray(source.blockers) ? source.blockers.map(object) : [{}];
+  return blockers.map((blocker) => {
+    const kind = text(blocker.kind).toLowerCase();
+    const state = text(blocker.state).toLowerCase();
+    const observedAt = text(blocker.observed_at ?? blocker.observedAt) || undefined;
+    const valid = Boolean(kind && state);
+    return {
+      kind: valid ? kind : 'unknown',
+      runtimeId: text(blocker.runtime_id ?? blocker.runtimeId) || undefined,
+      taskId: text(blocker.task_id ?? blocker.taskId) || undefined,
+      state: valid ? state : 'unknown',
+      observedAt,
+      freshness: resolveFreshness(observedAt, serverNow),
+      detail: valid
+        ? text(blocker.detail ?? blocker.message ?? blocker.reason) || undefined
+        : 'Runtime blocker readback is incomplete',
+    };
+  });
+}
+
 function projectStages(timeline) {
   const byPhase = new Map(timeline.phases.map((phase) => [phase.phase, phase]));
   const eventsByPhase = new Map();
@@ -402,6 +424,7 @@ export function fromManagerLoop(input = {}) {
     .map((event) => date(event.createdAt))
     .filter(Boolean)
     .sort((left, right) => right - left)[0];
+  const runtimeReadback = source.runtimeReadback ?? source.runtime_readback;
   const view = {
     incidentId: incidentId(source, state, timeline),
     scenario: text(object(source.incident).scenario ?? object(source.incident).scenario_id),
@@ -414,6 +437,9 @@ export function fromManagerLoop(input = {}) {
     nextAction: selectNextAction({ ...command, preview: source.preview }),
     stageTimeline: stages.map(({ audit, workerRole, ...stage }) => stage),
     evidenceCompleteness: completeness(source, stages),
+    ...(runtimeReadback === undefined ? {} : {
+      runtimeBlockers: normalizeRuntimeBlockers(runtimeReadback, source.serverNow),
+    }),
   };
   return view;
 }

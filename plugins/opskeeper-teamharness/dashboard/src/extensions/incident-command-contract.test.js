@@ -327,6 +327,177 @@ test('uses server time and explicit thresholds for freshness', () => {
   assert.equal(resolveFreshness('invalid', serverNow), 'unknown');
 });
 
+test('projects only authoritative runtime blocker readback without administrative actions', () => {
+  const view = fromManagerLoop({
+    state: {
+      incident_id: 'inc-1',
+      current_phase: 'investigated',
+      status: 'running',
+      updated_at: serverNow,
+    },
+    timeline: timelineWithPhases(
+      [{ phase: 'investigated', status: 'running', worker_role: 'opskeeper-investigator' }],
+      [event(71, 'investigated', 'phase_entered')],
+    ),
+    runtimeReadback: {
+      blockers: [
+        {
+          kind: 'health',
+          runtime_id: 'runtime-1',
+          state: 'degraded',
+          observed_at: serverNow,
+          detail: 'Runtime health is degraded',
+        },
+        {
+          kind: 'claim',
+          runtime_id: 'runtime-1',
+          task_id: 'task-1',
+          state: 'unclaimed',
+          observed_at: serverNow,
+          detail: 'Task claim is absent',
+        },
+        {
+          kind: 'lease',
+          runtime_id: 'runtime-1',
+          task_id: 'task-1',
+          state: 'expired',
+          observed_at: '2026-10-01T11:00:00.000Z',
+          detail: 'Lease expired before checkpoint',
+        },
+        {
+          kind: 'checkpoint',
+          runtimeId: 'runtime-2',
+          taskId: 'task-2',
+          state: 'behind',
+          observedAt: serverNow,
+          detail: 'Checkpoint lags the observed task stream',
+        },
+        {
+          kind: 'recovery',
+          runtimeId: 'runtime-2',
+          taskId: 'task-2',
+          state: 'waiting',
+          observedAt: serverNow,
+          detail: 'Worker recovery is waiting for a lease',
+        },
+        {
+          kind: 'drift',
+          runtimeId: 'runtime-3',
+          state: 'plugin-version-mismatch',
+          observedAt: serverNow,
+          detail: 'Plugin version differs from the authoritative inventory',
+        },
+      ],
+    },
+    serverNow,
+  });
+
+  assert.deepEqual(view.runtimeBlockers, [
+    {
+      kind: 'health', runtimeId: 'runtime-1', taskId: undefined, state: 'degraded',
+      observedAt: serverNow, freshness: 'fresh', detail: 'Runtime health is degraded',
+    },
+    {
+      kind: 'claim', runtimeId: 'runtime-1', taskId: 'task-1', state: 'unclaimed',
+      observedAt: serverNow, freshness: 'fresh', detail: 'Task claim is absent',
+    },
+    {
+      kind: 'lease', runtimeId: 'runtime-1', taskId: 'task-1', state: 'expired',
+      observedAt: '2026-10-01T11:00:00.000Z', freshness: 'stale',
+      detail: 'Lease expired before checkpoint',
+    },
+    {
+      kind: 'checkpoint', runtimeId: 'runtime-2', taskId: 'task-2', state: 'behind',
+      observedAt: serverNow, freshness: 'fresh', detail: 'Checkpoint lags the observed task stream',
+    },
+    {
+      kind: 'recovery', runtimeId: 'runtime-2', taskId: 'task-2', state: 'waiting',
+      observedAt: serverNow, freshness: 'fresh', detail: 'Worker recovery is waiting for a lease',
+    },
+    {
+      kind: 'drift', runtimeId: 'runtime-3', taskId: undefined, state: 'plugin-version-mismatch',
+      observedAt: serverNow, freshness: 'fresh',
+      detail: 'Plugin version differs from the authoritative inventory',
+    },
+  ]);
+  assert.equal('desiredState' in view, false);
+  assert.equal(view.nextAction.kind, 'wait');
+  assert.deepEqual(
+    Object.keys(view).filter((key) => /desired|admin|mutate|rollout|credential/i.test(key)),
+    [],
+  );
+});
+
+test('keeps absent or malformed runtime readback unknown rather than inferring failure', () => {
+  const absent = fromManagerLoop({
+    state: {
+      incident_id: 'inc-1',
+      current_phase: 'investigated',
+      status: 'running',
+      updated_at: serverNow,
+    },
+    timeline: timelineWithPhases(
+      [{ phase: 'investigated', status: 'running', worker_role: 'opskeeper-investigator' }],
+      [event(72, 'investigated', 'phase_entered')],
+    ),
+    serverNow,
+  });
+  assert.equal(absent.runtimeBlockers, undefined);
+  assert.equal('desiredState' in absent, false);
+  assert.equal(absent.nextAction.kind, 'wait');
+
+  const incomplete = fromManagerLoop({
+    state: {
+      incident_id: 'inc-1',
+      current_phase: 'investigated',
+      status: 'running',
+      updated_at: serverNow,
+    },
+    timeline: timelineWithPhases(
+      [{ phase: 'investigated', status: 'running', worker_role: 'opskeeper-investigator' }],
+      [event(74, 'investigated', 'phase_entered')],
+    ),
+    runtimeReadback: {},
+    serverNow,
+  });
+  assert.deepEqual(incomplete.runtimeBlockers, [{
+    kind: 'unknown',
+    runtimeId: undefined,
+    taskId: undefined,
+    state: 'unknown',
+    observedAt: undefined,
+    freshness: 'unknown',
+    detail: 'Runtime blocker readback is incomplete',
+  }]);
+
+  const malformed = fromManagerLoop({
+    state: {
+      incident_id: 'inc-1',
+      current_phase: 'investigated',
+      status: 'running',
+      updated_at: serverNow,
+    },
+    timeline: timelineWithPhases(
+      [{ phase: 'investigated', status: 'running', worker_role: 'opskeeper-investigator' }],
+      [event(73, 'investigated', 'phase_entered')],
+    ),
+    runtimeReadback: { blockers: [{ runtime_id: 'runtime-unknown' }] },
+    serverNow,
+  });
+  assert.deepEqual(malformed.runtimeBlockers, [{
+    kind: 'unknown',
+    runtimeId: 'runtime-unknown',
+    taskId: undefined,
+    state: 'unknown',
+    observedAt: undefined,
+    freshness: 'unknown',
+    detail: 'Runtime blocker readback is incomplete',
+  }]);
+  assert.equal(malformed.stageStatus, 'running');
+  assert.equal(malformed.nextAction.kind, 'wait');
+  assert.equal('desiredState' in malformed, false);
+});
+
 test('selects one deterministic next action by priority', () => {
   const action = selectNextAction({
     stage: 'approved',
