@@ -2,7 +2,7 @@
 
 ## 1. Discovery, Contract, and Design Foundation
 
-- [ ] 1.1 Inventory live-demo, Manager incident, RCA task, approval, repair-preview, verification, archive, runtime, and plugin data dependencies.
+- [x] 1.1 Inventory live-demo, Manager incident, RCA task, approval, repair-preview, verification, archive, runtime, and plugin data dependencies.
 - [x] 1.2 Build the normative stage-mapping matrix using Manager loop phase IDs (`detected`, `correlated`, `investigated`, `critiqued`, `approved`, `recovered`, `postmortem`) and exact event/task names plus source identifiers.
 - [x] 1.3 Define `IncidentCommandView`, stage substates, generalized impact, freshness, completeness, source references, and next-action priority rules.
 - [x] 1.4 Define projection behavior for missing, partial, stale, malformed, and legacy data.
