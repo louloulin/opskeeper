@@ -32,6 +32,42 @@ func Register(e Executor) Metadata {
 	return globalRegistry.Register(e)
 }
 
+// Replace swaps the Executor already registered under e's Key.
+//
+// It exists for the one case the catalogue cannot express: a skill whose
+// dependencies are only knowable once the control plane has its services.
+// Every other skill registers a zero-value struct in init() and never needs
+// wiring. web_search is the exception — it needs a config resolver, an HTTP
+// client and two provider endpoints — and the alternative to this method was
+// six package-level setters mutating a registered singleton, which is how a
+// skill ends up half-configured in one goroutine and fully configured in
+// another.
+//
+// Register still panics on a duplicate Key: adding a *second* skill under an
+// existing name is an author error. Replace is for reconfiguring the *same*
+// skill once, at composition, and it panics if the key was never registered
+// so a typo fails at boot rather than silently doing nothing.
+func Replace(e Executor) Metadata {
+	return globalRegistry.Replace(e)
+}
+
+func (r *Registry) Replace(e Executor) Metadata {
+	if e == nil {
+		panic("skill: Replace called with nil Executor")
+	}
+	m := e.Metadata()
+	if err := m.Validate(); err != nil {
+		panic(fmt.Sprintf("skill: %q invalid metadata: %v", m.Key, err))
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.skills[m.Key]; !exists {
+		panic(fmt.Sprintf("skill: Replace called for unregistered Key %q", m.Key))
+	}
+	r.skills[m.Key] = e
+	return m
+}
+
 // Get looks up a skill by Key. Returns (nil, false) if the key is
 // unknown — the dispatcher converts that into a 404-style error to
 // the RPC caller.

@@ -1,4 +1,4 @@
-package llm
+package llmpig
 
 import (
 	"context"
@@ -6,18 +6,19 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
 // stubCatalog is a ProviderCatalog that returns a canned slice, or an error.
 type stubCatalog struct {
-	providers []ProviderConfig
+	providers []llm.ProviderConfig
 	def       string
 	err       error
 	calls     int
 }
 
-func (c *stubCatalog) ResolveProviders(context.Context) ([]ProviderConfig, string, error) {
+func (c *stubCatalog) ResolveProviders(context.Context) ([]llm.ProviderConfig, string, error) {
 	c.calls++
 	if c.err != nil {
 		return nil, "", c.err
@@ -32,7 +33,7 @@ func (c *stubCatalog) ResolveProviders(context.Context) ([]ProviderConfig, strin
 // hide a settings bug behind a retry storm.
 func TestSettingsSourceRejectsUnconfiguredProvider(t *testing.T) {
 	t.Parallel()
-	src := NewSettingsSource(&stubCatalog{providers: []ProviderConfig{
+	src := NewSettingsSource(&stubCatalog{providers: []llm.ProviderConfig{
 		{ID: "openai", APIKey: "sk-1", Model: "gpt-5"},
 	}})
 
@@ -50,7 +51,7 @@ func TestSettingsSourceRejectsUnconfiguredProvider(t *testing.T) {
 // failures — the first is a security bug, the second a usability one.
 func TestSettingsSourceMapsEveryField(t *testing.T) {
 	t.Parallel()
-	src := NewSettingsSource(&stubCatalog{providers: []ProviderConfig{
+	src := NewSettingsSource(&stubCatalog{providers: []llm.ProviderConfig{
 		{
 			ID: "custom", APIKey: "k", BaseURL: "https://vllm.internal/v1",
 			Model: "qwen3-72b", Models: []string{"qwen3-72b", "qwen3-32b"},
@@ -79,7 +80,7 @@ func TestSettingsSourceMapsEveryField(t *testing.T) {
 func TestSettingsSourceDefaultProviderSkipsAnUnconfiguredDefault(t *testing.T) {
 	t.Parallel()
 	src := NewSettingsSource(&stubCatalog{
-		providers: []ProviderConfig{
+		providers: []llm.ProviderConfig{
 			{ID: "openai", APIKey: "sk-1", Model: "gpt-5"},
 			{ID: "anthropic", APIKey: "", Model: "claude"},
 		},
@@ -100,7 +101,7 @@ func TestSettingsSourceDefaultProviderSkipsAnUnconfiguredDefault(t *testing.T) {
 func TestSettingsSourceDefaultProviderHonoursAConfiguredDefault(t *testing.T) {
 	t.Parallel()
 	src := NewSettingsSource(&stubCatalog{
-		providers: []ProviderConfig{
+		providers: []llm.ProviderConfig{
 			{ID: "openai", APIKey: "sk-1", Model: "gpt-5"},
 			{ID: "anthropic", APIKey: "sk-2", Model: "claude"},
 		},
@@ -168,7 +169,7 @@ func TestSettingsSourceSatisfiesTheRegistryContract(t *testing.T) {
 // reintroduce exactly the staleness pigmodel's design removes.
 func TestSettingsSourceDoesNotCache(t *testing.T) {
 	t.Parallel()
-	catalog := &stubCatalog{providers: []ProviderConfig{{ID: "openai", APIKey: "sk-1"}}}
+	catalog := &stubCatalog{providers: []llm.ProviderConfig{{ID: "openai", APIKey: "sk-1"}}}
 	src := NewSettingsSource(catalog)
 
 	_, _ = src.ProviderConfig(context.Background(), domain.ProviderOpenAI)

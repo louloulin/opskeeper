@@ -2,9 +2,9 @@
 // pigmodel.SettingsSource contract.
 //
 // Why a bridge rather than a direct implementation: the setting rows live in
-// the manager module, and core/pig may not import it (the module graph runs
-// control-plane -> core, never back). So the adapter sits in the root module,
-// between the two, and is the only place that knows both shapes.
+// core/manager, and core/pig may not import it (the module graph runs
+// control-plane -> core, never back). So the adapter sits here, in the one
+// package that is allowed to know both shapes — see doc.go.
 //
 // The adapter deliberately does NOT cache. pigmodel.Registry already re-reads
 // settings on every resolution — that is the mechanism that makes an admin
@@ -12,13 +12,14 @@
 // make the effective staleness a product of two intervals nobody can reason
 // about. The underlying setting.Service carries its own 60s cache, which is
 // the one place that decision belongs.
-package llm
+package llmpig
 
 import (
 	"context"
 	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
@@ -29,7 +30,7 @@ import (
 // directly) so the adapter can be tested without a database, and so a future
 // catalog source does not have to reshape this file.
 type ProviderCatalog interface {
-	ResolveProviders(ctx context.Context) (providers []ProviderConfig, defaultProvider string, err error)
+	ResolveProviders(ctx context.Context) (providers []llm.ProviderConfig, defaultProvider string, err error)
 }
 
 // NewSettingsSource adapts a ProviderCatalog onto pigmodel.SettingsSource.
@@ -46,7 +47,7 @@ type catalogSettings struct {
 	catalog ProviderCatalog
 }
 
-// ProviderConfig implements pigmodel.SettingsSource.
+// llm.ProviderConfig implements pigmodel.SettingsSource.
 //
 // A provider the catalog omits reports ok=false, which the registry treats
 // as "not configured" rather than "misconfigured". The distinction matters:
@@ -96,7 +97,7 @@ func (s *catalogSettings) DefaultProvider(ctx context.Context) (domain.ProviderI
 		return "", false
 	}
 	def = strings.TrimSpace(def)
-	configured := func(p ProviderConfig) bool { return strings.TrimSpace(p.APIKey) != "" }
+	configured := func(p llm.ProviderConfig) bool { return strings.TrimSpace(p.APIKey) != "" }
 	if def != "" {
 		for _, p := range providers {
 			if p.ID == def && configured(p) {

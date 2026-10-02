@@ -1,4 +1,4 @@
-package llm
+package llmpig
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
@@ -17,7 +18,7 @@ import (
 // HTTP endpoint rather than a stub.
 //
 // The distinction is the whole point. The thing that can break here is the
-// CONVERSION — OpsKeeper's OpenAI-flavoured ChatReq into PiG's normalized
+// CONVERSION — OpsKeeper's OpenAI-flavoured llm.ChatReq into PiG's normalized
 // transcript and back — and a stub would accept any shape, including exactly
 // the malformed ones a real provider rejects. A stub-based test therefore
 // passes while production shows "the model stopped calling tools".
@@ -68,11 +69,11 @@ func (s *pigTestServer) requests() []map[string]any {
 	return out
 }
 
-// newPigTestClient wires a real Client onto a registry whose only provider
+// newPigTestClient wires a real llm.Client onto a registry whose only provider
 // points at a local server echoing sse. Everything between Chat and the socket
 // is production code: the settings source, the registry, PiG's OpenAI provider,
 // and the transcript conversion.
-func newPigTestClient(t *testing.T, sse string, budget BudgetChecker) (Client, *pigTestServer) {
+func newPigTestClient(t *testing.T, sse string, budget llm.BudgetChecker) (llm.Client, *pigTestServer) {
 	t.Helper()
 	sink := &pigTestServer{}
 	sink.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -128,7 +129,7 @@ func TestSelectionForResolvesAnUnpinnedModel(t *testing.T) {
 		"faux": {ID: "faux", APIKey: "k", Models: []string{"m1"}, DefaultModel: "m1"},
 	}, "faux")
 
-	sel, err := selectionFor(ChatReq{Model: "m1"}, src)
+	sel, err := selectionFor(llm.ChatReq{Model: "m1"}, src)
 	if err != nil {
 		t.Fatalf("selectionFor: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestSelectionForUsesTheConfiguredDefault(t *testing.T) {
 	src := pigmodel.NewStaticSource(map[domain.ProviderID]pigmodel.ProviderConfig{
 		"faux": {ID: "faux", APIKey: "k", DefaultModel: "m1"},
 	}, "faux")
-	sel, err := selectionFor(ChatReq{}, src)
+	sel, err := selectionFor(llm.ChatReq{}, src)
 	if err != nil {
 		t.Fatalf("selectionFor: %v", err)
 	}
@@ -161,11 +162,11 @@ func TestSelectionForUsesTheConfiguredDefault(t *testing.T) {
 // operator never configured.
 func TestSelectionForRefusesWithNothingToResolveWith(t *testing.T) {
 	t.Parallel()
-	if _, err := selectionFor(ChatReq{}, nil); err == nil {
+	if _, err := selectionFor(llm.ChatReq{}, nil); err == nil {
 		t.Fatal("expected an error with no provider, no model, and no settings")
 	}
 	// But a named model IS resolvable without settings.
-	if _, err := selectionFor(ChatReq{Model: "m1"}, nil); err != nil {
+	if _, err := selectionFor(llm.ChatReq{Model: "m1"}, nil); err != nil {
 		t.Fatalf("a named model must be resolvable without a settings source: %v", err)
 	}
 }
@@ -179,12 +180,12 @@ func TestPigClientChatEndToEnd(t *testing.T) {
 	t.Parallel()
 	client, sink := newPigTestClient(t, openAITextSSE, nil)
 
-	resp, err := client.Chat(context.Background(), ChatReq{
-		Messages: []Message{
+	resp, err := client.Chat(context.Background(), llm.ChatReq{
+		Messages: []llm.Message{
 			{Role: "system", Content: "you are an SRE"},
 			{Role: "user", Content: "why slow?"},
 		},
-		Tools: []ToolSchema{{
+		Tools: []llm.ToolSchema{{
 			Name:        "get_host_load",
 			Description: "reads load",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{}}`),
@@ -233,16 +234,16 @@ func TestPigClientChatEndToEnd(t *testing.T) {
 }
 
 // TestPigClientKeepsToolCallsEndToEnd pins the return leg: a tool call the
-// provider emits must arrive as a ToolCall, not be flattened away. This is
+// provider emits must arrive as a llm.ToolCall, not be flattened away. This is
 // what the agent loop branches on, so losing it silently ends multi-step
 // diagnosis after the first round.
 func TestPigClientKeepsToolCallsEndToEnd(t *testing.T) {
 	t.Parallel()
 	client, _ := newPigTestClient(t, openAIToolSSE, nil)
 
-	resp, err := client.Chat(context.Background(), ChatReq{
-		Messages: []Message{{Role: "user", Content: "check node-01"}},
-		Tools: []ToolSchema{{
+	resp, err := client.Chat(context.Background(), llm.ChatReq{
+		Messages: []llm.Message{{Role: "user", Content: "check node-01"}},
+		Tools: []llm.ToolSchema{{
 			Name:        "get_host_load",
 			Description: "reads load",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{"host":{"type":"string"}}}`),
@@ -274,15 +275,15 @@ func TestPigClientKeepsToolCallsEndToEnd(t *testing.T) {
 // knows whether bytes were really sent.
 func TestPigClientBudgetGateRunsBeforeTheProvider(t *testing.T) {
 	t.Parallel()
-	budget := &countingBudget{checkErr: ErrBudgetExceeded}
+	budget := &countingBudget{checkErr: llm.ErrBudgetExceeded}
 	client, sink := newPigTestClient(t, openAITextSSE, budget)
 
-	_, err := client.Chat(context.Background(), ChatReq{
-		Messages: []Message{{Role: "user", Content: "hi"}},
+	_, err := client.Chat(context.Background(), llm.ChatReq{
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
 		UserID:   7,
 	})
-	if !errors.Is(err, ErrBudgetExceeded) {
-		t.Fatalf("err = %v, want ErrBudgetExceeded", err)
+	if !errors.Is(err, llm.ErrBudgetExceeded) {
+		t.Fatalf("err = %v, want llm.ErrBudgetExceeded", err)
 	}
 	if budget.checkCalls != 1 {
 		t.Errorf("budget.Check calls = %d, want 1", budget.checkCalls)
@@ -303,8 +304,8 @@ func TestPigClientRecordsUsageAfterSuccess(t *testing.T) {
 	budget := &countingBudget{}
 	client, _ := newPigTestClient(t, openAITextSSE, budget)
 
-	if _, err := client.Chat(context.Background(), ChatReq{
-		Messages: []Message{{Role: "user", Content: "hi"}},
+	if _, err := client.Chat(context.Background(), llm.ChatReq{
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
 		UserID:   7,
 	}); err != nil {
 		t.Fatalf("Chat: %v", err)
@@ -323,5 +324,28 @@ func TestPigClientRecordsUsageAfterSuccess(t *testing.T) {
 // that keeps a future refactor from quietly widening the interface.
 func TestPigClientSatisfiesTheClientInterface(t *testing.T) {
 	t.Parallel()
-	var _ Client = (*pigClient)(nil)
+	var _ llm.Client = (*pigClient)(nil)
+}
+
+// countingBudget is this package's own copy of the budget double, not a
+// shared one. The floor has an identical double for the HTTP client, and the
+// two are deliberately not shared: each test owns the behaviour it asserts
+// against, and a shared test helper across two packages turns into a
+// dependency between two tests that have no reason to fail together.
+type countingBudget struct {
+	checkCalls  int
+	recordCalls int
+	checkErr    error
+	lastUsage   llm.Usage
+}
+
+func (b *countingBudget) Check(ctx context.Context, userID uint64, estPromptTokens int) error {
+	b.checkCalls++
+	return b.checkErr
+}
+
+func (b *countingBudget) Record(ctx context.Context, userID uint64, usage llm.Usage) error {
+	b.recordCalls++
+	b.lastUsage = usage
+	return nil
 }

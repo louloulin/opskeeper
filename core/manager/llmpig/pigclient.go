@@ -1,7 +1,7 @@
 // pigclient.go is the PiG-backed implementation of the llm.Client interface.
 //
 // The plan's instruction is precise: keep the `llm.Client` interface, replace
-// its implementation. That matters because `Client` is the seam fifty-odd
+// its implementation. That matters because `llm.Client` is the seam fifty-odd
 // call sites already speak — the ReAct graph, the detected/investigated worker
 // loops, the RCA judge, chat_to_query, alertdraft — and all of them change
 // behaviour the moment the model call underneath them changes. Swapping the
@@ -22,18 +22,19 @@
 // Because a wrong conversion fails quietly, this file carries its own test
 // suite, and the package's behavioural tests (client_test.go) decide which
 // implementation the default constructor returns.
-package llm
+package llmpig
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
-// PigClientConfig wires a Client onto OpsKeeper's model registry.
+// PigClientConfig wires a llm.Client onto OpsKeeper's model registry.
 //
 // Registry and Settings are separate on purpose. The registry answers "which
 // provider serves this model and what are its coordinates"; the settings
@@ -44,14 +45,14 @@ type PigClientConfig struct {
 	Registry *pigmodel.Registry
 	Settings pigmodel.SettingsSource
 	// Budget gates requests before the network call; nil means no limit.
-	Budget BudgetChecker
+	Budget llm.BudgetChecker
 }
 
-// NewPigClient returns a Client that reaches providers through PiG.
+// NewPigClient returns a llm.Client that reaches providers through PiG.
 //
 // It fails closed on a missing registry: without one there is no provider to
 // resolve, and a client that answered anyway would have to invent a model.
-func NewPigClient(cfg PigClientConfig) (Client, error) {
+func NewPigClient(cfg PigClientConfig) (llm.Client, error) {
 	if cfg.Registry == nil {
 		return nil, fmt.Errorf("llm: pig client requires a model registry")
 	}
@@ -62,20 +63,20 @@ type pigClient struct {
 	cfg PigClientConfig
 }
 
-// Chat implements Client.
+// Chat implements llm.Client.
 //
 // The gate order matches the HTTP client exactly — budget before the network
 // call, usage recorded only on success — because the two must be
 // interchangeable from the caller's point of view: a deployment that switched
 // implementations must not also get a different billing trail.
-func (c *pigClient) Chat(ctx context.Context, req ChatReq) (*ChatResp, error) {
+func (c *pigClient) Chat(ctx context.Context, req llm.ChatReq) (*llm.ChatResp, error) {
 	selection, err := selectionFor(req, c.cfg.Settings)
 	if err != nil {
 		return nil, err
 	}
 
 	if c.cfg.Budget != nil {
-		if err := c.cfg.Budget.Check(ctx, req.UserID, estimatePromptTokens(req.Messages)); err != nil {
+		if err := c.cfg.Budget.Check(ctx, req.UserID, llm.EstimatePromptTokens(req.Messages)); err != nil {
 			return nil, err
 		}
 	}
@@ -98,16 +99,16 @@ func (c *pigClient) Chat(ctx context.Context, req ChatReq) (*ChatResp, error) {
 		_ = c.cfg.Budget.Record(ctx, req.UserID, usage)
 	}
 
-	return &ChatResp{Assistant: assistant, Usage: usage}, nil
+	return &llm.ChatResp{Assistant: assistant, Usage: usage}, nil
 }
 
-// selectionFor turns a ChatReq into a PiG model selection.
+// selectionFor turns a llm.ChatReq into a PiG model selection.
 //
 // A model named without a provider is a REQUEST to the registry, not an
 // error: the registry scans the configured providers for one that offers the
 // slug, which is what makes the SPA's model picker work when the operator
 // never pinned a provider.
-func selectionFor(req ChatReq, settings pigmodel.SettingsSource) (domain.ModelSelection, error) {
+func selectionFor(req llm.ChatReq, settings pigmodel.SettingsSource) (domain.ModelSelection, error) {
 	sel := domain.ModelSelection{
 		Provider: domain.ProviderID(req.Provider),
 		Model:    req.Model,
@@ -138,7 +139,7 @@ func selectionFor(req ChatReq, settings pigmodel.SettingsSource) (domain.ModelSe
 // hold a PiG type. A caller that wanted to build the transcript itself would
 // have to import PiG to name the result, which is the coupling this mapping
 // exists to remove.
-func toPortRequest(req ChatReq, sel domain.ModelSelection) ports.LLMRequest {
+func toPortRequest(req llm.ChatReq, sel domain.ModelSelection) ports.LLMRequest {
 	return ports.LLMRequest{
 		Selection: sel,
 		Messages:  toPortMessages(req.Messages),
@@ -146,7 +147,7 @@ func toPortRequest(req ChatReq, sel domain.ModelSelection) ports.LLMRequest {
 	}
 }
 
-func toPortMessages(in []Message) ports.Conversation {
+func toPortMessages(in []llm.Message) ports.Conversation {
 	if len(in) == 0 {
 		return nil
 	}
@@ -163,7 +164,7 @@ func toPortMessages(in []Message) ports.Conversation {
 	return out
 }
 
-func toPortToolCalls(in []ToolCall) []ports.ToolCall {
+func toPortToolCalls(in []llm.ToolCall) []ports.ToolCall {
 	if len(in) == 0 {
 		return nil
 	}
@@ -178,7 +179,7 @@ func toPortToolCalls(in []ToolCall) []ports.ToolCall {
 // governance fields — Class, Origin, WhenToUse — are host-side policy
 // metadata, and sending them to a provider would leak the node's
 // classification of a tool to a third party for no benefit.
-func toPortTools(in []ToolSchema) []ports.ToolSchema {
+func toPortTools(in []llm.ToolSchema) []ports.ToolSchema {
 	if len(in) == 0 {
 		return nil
 	}
@@ -195,9 +196,9 @@ func toPortTools(in []ToolSchema) []ports.ToolSchema {
 // The total is taken from the port's own accessor rather than summed here:
 // the port reports a provider-stated total when there is one, and that number
 // is the one the budget ledger bills against.
-func fromPortResponse(resp *ports.LLMResponse) (Message, Usage) {
-	msg := Message{Role: "assistant", Content: resp.Content, ToolCalls: fromPortToolCalls(resp.ToolCalls)}
-	usage := Usage{
+func fromPortResponse(resp *ports.LLMResponse) (llm.Message, llm.Usage) {
+	msg := llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: fromPortToolCalls(resp.ToolCalls)}
+	usage := llm.Usage{
 		PromptTokens:     resp.Usage.InputTokens + resp.Usage.CacheReadTokens + resp.Usage.CacheWriteTokens,
 		CompletionTokens: resp.Usage.OutputTokens,
 		TotalTokens:      resp.Usage.Total(),
@@ -205,13 +206,13 @@ func fromPortResponse(resp *ports.LLMResponse) (Message, Usage) {
 	return msg, usage
 }
 
-func fromPortToolCalls(in []ports.ToolCall) []ToolCall {
+func fromPortToolCalls(in []ports.ToolCall) []llm.ToolCall {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]ToolCall, len(in))
+	out := make([]llm.ToolCall, len(in))
 	for i, c := range in {
-		out[i] = ToolCall{ID: c.ID, Name: c.Name, Args: c.Arguments}
+		out[i] = llm.ToolCall{ID: c.ID, Name: c.Name, Args: c.Arguments}
 	}
 	return out
 }

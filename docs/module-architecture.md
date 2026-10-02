@@ -76,7 +76,7 @@ repository.
 | Module | Path | Responsibility | May import |
 |---|---|---|---|
 | `core` | `core/` | Domain vocabulary, port interfaces, wire DTOs | stdlib only |
-| `pig` | `core/pig/` | The PiG adapter | `core`, PiG |
+| `pig` | `core/pig/` | The PiG adapter, including the compiled contract (`pigcontract`) | `core`, PiG |
 | `manager` | `core/manager/` | Control plane | `core` (including `core/pig`), `sdk`, and any vendor (`AnyVendor`) |
 | `edge` | `core/edge/` | Node plane (agent, collectors, tools, sandbox) | `core`, `floor`, `prometheus`, `gopsutil`, `x/sync`, `yaml.v3` |
 | `floor` | `core/floor/` | Infrastructure both planes share | `core`, `sdk`, `prometheus`, `geminio`, `yaml.v3` |
@@ -89,6 +89,17 @@ toolchain enforces — `core`, `core/pig`, `core/edge`, `core/floor`,
 `core/manager`, `core/harness` and `sdk` — and `.go-arch-lint.yml` carries the
 intra-module rules for `core/manager`'s own bounded contexts (iam versus the
 control plane, and service → biz ← data inside each).
+
+`core/pig/pigcontract` is the compiled contract with PiG. `contract.go` names
+every upstream symbol OpsKeeper uses as a package-level build-time assertion, so
+a removed function, a renamed field, or a changed parameter stops
+`go build ./...` at the line that names what moved. `contract_test.go` pins what
+the type system cannot: the thinking-level strings compared against settings
+rows, the provider stream discriminants the RPC envelope is keyed by, the
+content-block JSON keys the node translator decodes, the seven wire event names
+its switch selects on, and the gate's hook name. The package imports no
+OpsKeeper package and nothing imports it, so it constrains only itself — when it
+goes red, the fix belongs in `core/pig`.
 
 One thing the module graph cannot express: `core/manager` carries a `core/edge`
 require so three of its test files can drive a real policy gate across a
@@ -160,7 +171,28 @@ Two checks, because they catch different things:
   fired. The same decision left the six production edges it then found in a
   `layerDebt` ledger, each with a reason, checked by
   `TestTheLayerDebtLedgerIsCurrent` so an entry that is paid off has to be
-  deleted rather than inherited.
+  deleted rather than inherited. Decision 66 added a second table,
+  `floorIsolation`, for the one direction the module graph cannot see: the
+  shared floor (`core/manager/pkg`, `core/floor`) may not import
+  `core/pig` at all, in any file including tests. It exists because
+  `manager -> pig` is a legal module direction, so the three PiG-facing
+  files that used to live in `core/manager/pkg/llm` were inside the rules
+  and outside the intent — and because a refactor that only relocates a
+  problem leaves the next person free to walk it back with one import. The
+  PiG-backed `llm.Client` now lives in `core/manager/llmpig`, which imports
+  the floor; the floor imports nothing from the adapter.
+- **`core/floor/skill` registers instances, not mutators** — thirteen of the
+  fourteen built-in skills are zero-value structs registered in `init()`.
+  `web_search` was the exception: a package-level singleton behind six
+  `SetWebSearch*` functions, mutated after registration. Its configuration
+  was therefore a property of the process at the moment of the call rather
+  than of the object, and every test in the package had to reset global
+  state before it could run. It is now `NewWebSearch(WebSearchDeps{...})`,
+  immutable after construction, and the composition root installs it with
+  `skill.Replace` — which swaps the instance under an existing key and
+  panics on an unregistered one, so a typo in the wiring fails at boot
+  instead of quietly doing nothing. `Register` still panics on a duplicate
+  key; that rule was not weakened.
 - **The middleware toolset is generated, never hand-written** —
   `core/manager/middleware/toolset.Registry()` registers the eight adapters and
   reads back the tools they expose; the node package's `tools.go` is that
@@ -537,9 +569,26 @@ in either order.
 
 `go.work` covers the root module plus `core`, `core/pig`, `core/edge`,
 `core/floor`, `core/harness`, `sdk` and the five extension modules under
-`core/pig/extensions/`, and pins PiG to a local checkout. Each `go.mod` also
-carries a relative `replace` so a bare module directory still builds in CI jobs
-that disable workspaces. Releases replace those with tagged versions.
+`core/pig/extensions/`. It is gitignored: it is the local convenience, never
+the published truth.
+
+What ships is in the `go.mod` files. PiG is a **tag** —
+`github.com/MichaelKinsy/PiG v0.3.0` with no `replace` — so a node building a
+plugin from source resolves the same thing a release does. The sibling modules
+still carry relative `replace` directives, because their version numbers only
+become real at release time.
+
+Two consequences, and both are enforced:
+
+- `make module-standalone-check` builds and tests all thirteen module
+  directories with `GOWORK=off`. A workspace build resolves siblings through
+  `go.work`; CI and a release do not, and the two only disagree when a
+  `go.mod` is wrong. That target exists because a green `make module-test` is a
+  statement about the workspace, and this one is a statement about what ships.
+- A developer changing PiG itself opts in explicitly:
+  `make pig-dev-pin PIG_DEV_PATH=/path/to/PiG` writes a `replace` into
+  `go.work`, and `make pig-dev-unpin` removes it. There is deliberately no
+  default path — a checked-in one is how a `replace` comes back by accident.
 
 ## Known issue (fixed during the floor move)
 

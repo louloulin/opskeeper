@@ -42,6 +42,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 	"github.com/vincent-wuhan/opskeeper/core/floor/httpserver"
 	"github.com/vincent-wuhan/opskeeper/core/floor/logger"
+	"github.com/vincent-wuhan/opskeeper/core/manager/llmpig"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/authzmw"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/dbx"
@@ -862,7 +863,7 @@ func main() {
 	// and the request routes through PiG — and it ends in ErrNoAPIKey
 	// either way. Rebuilding the fallback through PiG would change nothing
 	// observable, so it is left as the plain client it already is.
-	pigRegistry := llm.NewPigRegistry(llm.NewSettingsSource(llmSettingsResolver), log)
+	pigRegistry := llmpig.NewRegistry(llmpig.NewSettingsSource(llmSettingsResolver), log)
 	// Close the registry's cached provider transports on the way out. Without
 	// this a rolling restart leaks one connection pool per provider until the
 	// process exits — invisible in dev, a slow fd leak in production.
@@ -2913,12 +2914,22 @@ func main() {
 		slog.Bool("pinned_pubkey", mpPinnedKey != ""),
 	)
 
-	// Wire the multi-provider config resolver into the manager-scoped
-	// web_search built-in. Default provider is SearXNG (zero-config,
-	// docker-internal). The skill returns a skipped_reason envelope
-	// when the chosen provider is missing a key / unreachable, so this
-	// is safe to call even before any operator configures the integration.
-	skillbuiltin.SetWebSearchConfigResolver(managerbizsetting.NewWebSearchResolver(settingSvc))
+	// Build the manager-scoped web_search built-in with its dependencies
+	// and put it back in the catalogue. Default provider is SearXNG
+	// (zero-config, docker-internal). The skill returns a skipped_reason
+	// envelope when the chosen provider is missing a key / unreachable, so
+	// this is safe to call even before any operator configures the
+	// integration.
+	//
+	// Replace rather than mutate: the executor init() registered has no
+	// resolver and would answer every call with "SearXNG at its default
+	// URL, no key" for the life of the process. A registered instance that
+	// can be reconfigured after the fact is the thing this line used to do,
+	// through a package-level setter, and it is the reason the skill could
+	// not be tested in parallel.
+	skillcore.Replace(skillbuiltin.NewWebSearch(skillbuiltin.WebSearchDeps{
+		Resolver: managerbizsetting.NewWebSearchResolver(settingSvc),
+	}))
 
 	// Subprocess skill loader: walks each allowlist root and registers
 	// SubprocessSkills for every skill.json found. Empty dir list =
@@ -4051,7 +4062,7 @@ type kernelWiring struct {
 	// Models is the settings-backed registry the LLM client already uses.
 	// The kernel resolves through the same cache so a provider's transport
 	// and its prompt-cache session id are shared, not duplicated.
-	Models *llm.PigRegistry
+	Models *llmpig.Registry
 	// Gate decides whether a mutating call may run.
 	Gate *agentkernel.DeferredGate
 	// Audit receives the gate's decisions. The same ledger the rest of the

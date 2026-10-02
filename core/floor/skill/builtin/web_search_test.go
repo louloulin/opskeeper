@@ -13,8 +13,8 @@ import (
 )
 
 // stubKeyResolver is the legacy test double for the deprecated
-// builtin.TavilyKeyResolver. Kept so the back-compat shim
-// (SetWebSearchKeyResolver → legacyTavilyResolver) is exercised.
+// builtin.TavilyKeyResolver. Kept so the back-compat constructor
+// (NewWebSearchWithKeyResolver → legacyTavilyResolver) is exercised.
 type stubKeyResolver struct{ key string }
 
 func (s stubKeyResolver) TavilyAPIKey(_ context.Context) string { return s.key }
@@ -44,20 +44,13 @@ func (s stubConfigResolver) SearxngURL(_ context.Context) string {
 func (s stubConfigResolver) TavilyAPIKey(_ context.Context) string { return s.tavilyKey }
 func (s stubConfigResolver) BraveAPIKey(_ context.Context) string  { return s.braveKey }
 
-// resetWebSearch puts the package singleton back into a known state
-// after a test mutates it. Subtests that override the resolver /
-// endpoints / http client must defer this so they don't leak state
-// into other tests.
-func resetWebSearch() {
-	SetWebSearchConfigResolver(nil)
-	SetWebSearchHTTPClient(nil)
-	SetWebSearchTavilyEndpoint("https://api.tavily.com/search")
-	SetWebSearchBraveEndpoint("https://api.search.brave.com/res/v1/web/search")
-}
+// Every test below builds its own executor through NewWebSearch and calls
+// that one. There is no package singleton to reset, so these tests are
+// independent by construction and can run in parallel — which they could not
+// do while the skill was a registered mutable value behind setters.
 
 func TestWebSearch_Metadata(t *testing.T) {
-	defer resetWebSearch()
-	m := WebSearch.Metadata()
+	m := NewWebSearch(WebSearchDeps{}).Metadata()
 	if err := m.Validate(); err != nil {
 		t.Fatalf("metadata invalid: %v", err)
 	}
@@ -77,8 +70,6 @@ func TestWebSearch_Metadata(t *testing.T) {
 // returns "searxng" (zero-config baseline) and dispatch lands on the
 // searxng sub-fn.
 func TestWebSearch_DefaultProvider_IsSearxng(t *testing.T) {
-	defer resetWebSearch()
-
 	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -94,10 +85,12 @@ func TestWebSearch_DefaultProvider_IsSearxng(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	SetWebSearchConfigResolver(stubConfigResolver{searxngURL: srv.URL})
-	SetWebSearchHTTPClient(srv.Client())
+	webSearch := NewWebSearch(WebSearchDeps{
+		Resolver:   stubConfigResolver{searxngURL: srv.URL},
+		HTTPClient: srv.Client(),
+	})
 
-	out, err := WebSearch.Execute(context.Background(), json.RawMessage(`{"query":"k8s"}`))
+	out, err := webSearch.Execute(context.Background(), json.RawMessage(`{"query":"k8s"}`))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -121,21 +114,21 @@ func TestWebSearch_DefaultProvider_IsSearxng(t *testing.T) {
 // through to SearXNG, NOT to "skipped_reason: Tavily not configured".
 // SearXNG is the zero-config baseline, Tavily is explicit-opt-in.
 func TestWebSearch_FallbackToSearxng_WhenTavilyKeyEmpty(t *testing.T) {
-	defer resetWebSearch()
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"results":[{"title":"x","url":"https://x.com","content":"y"}]}`))
 	}))
 	defer srv.Close()
 
-	SetWebSearchConfigResolver(stubConfigResolver{
-		provider:   "", // not set → defaults
-		searxngURL: srv.URL,
-		tavilyKey:  "", // explicitly empty
+	webSearch := NewWebSearch(WebSearchDeps{
+		Resolver: stubConfigResolver{
+			provider:   "", // not set → defaults
+			searxngURL: srv.URL,
+			tavilyKey:  "", // explicitly empty
+		},
+		HTTPClient: srv.Client(),
 	})
-	SetWebSearchHTTPClient(srv.Client())
 
-	out, err := WebSearch.Execute(context.Background(), json.RawMessage(`{"query":"hi"}`))
+	out, err := webSearch.Execute(context.Background(), json.RawMessage(`{"query":"hi"}`))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -153,10 +146,11 @@ func TestWebSearch_FallbackToSearxng_WhenTavilyKeyEmpty(t *testing.T) {
 // covers the Tavily-without-key case. Provider is explicitly forced to
 // "tavily" so the fallback to SearXNG doesn't kick in.
 func TestWebSearch_ExplicitProviderTavily_NoKey_ReturnsSkippedReason(t *testing.T) {
-	defer resetWebSearch()
-	SetWebSearchConfigResolver(stubConfigResolver{provider: providerTavily, tavilyKey: ""})
+	webSearch := NewWebSearch(WebSearchDeps{
+		Resolver: stubConfigResolver{provider: providerTavily, tavilyKey: ""},
+	})
 
-	out, err := WebSearch.Execute(context.Background(), json.RawMessage(`{"query":"hello"}`))
+	out, err := webSearch.Execute(context.Background(), json.RawMessage(`{"query":"hello"}`))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -176,14 +170,13 @@ func TestWebSearch_ExplicitProviderTavily_NoKey_ReturnsSkippedReason(t *testing.
 }
 
 // TestWebSearch_LegacyShim_NoKey_ReturnsSkippedReason verifies the
-// back-compat path: callers still using SetWebSearchKeyResolver get a
+// back-compat path: callers still using NewWebSearchWithKeyResolver get a
 // resolver that pins provider=tavily and behaves identically to the
 // pre-SearXNG codebase.
 func TestWebSearch_LegacyShim_NoKey_ReturnsSkippedReason(t *testing.T) {
-	defer resetWebSearch()
-	SetWebSearchKeyResolver(stubKeyResolver{key: ""})
+	webSearch := NewWebSearchWithKeyResolver(stubKeyResolver{key: ""})
 
-	out, err := WebSearch.Execute(context.Background(), json.RawMessage(`{"query":"hello"}`))
+	out, err := webSearch.Execute(context.Background(), json.RawMessage(`{"query":"hello"}`))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -197,8 +190,6 @@ func TestWebSearch_LegacyShim_NoKey_ReturnsSkippedReason(t *testing.T) {
 }
 
 func TestWebSearch_Tavily_HappyPath_HitsAPI(t *testing.T) {
-	defer resetWebSearch()
-
 	var captured tavilyRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -221,12 +212,14 @@ func TestWebSearch_Tavily_HappyPath_HitsAPI(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	SetWebSearchTavilyEndpoint(srv.URL)
-	SetWebSearchConfigResolver(stubConfigResolver{provider: providerTavily, tavilyKey: "test-key-abc"})
-	SetWebSearchHTTPClient(srv.Client())
+	webSearch := NewWebSearch(WebSearchDeps{
+		Resolver:       stubConfigResolver{provider: providerTavily, tavilyKey: "test-key-abc"},
+		HTTPClient:     srv.Client(),
+		TavilyEndpoint: srv.URL,
+	})
 
 	args := json.RawMessage(`{"query":"kubernetes oom kill 排查","max_results":3,"include_domains":"example.com, kubernetes.io"}`)
-	out, err := WebSearch.Execute(context.Background(), args)
+	out, err := webSearch.Execute(context.Background(), args)
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -269,18 +262,18 @@ func TestWebSearch_Tavily_HappyPath_HitsAPI(t *testing.T) {
 }
 
 func TestWebSearch_Tavily_Error_PropagatesAsGoError(t *testing.T) {
-	defer resetWebSearch()
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "rate limit", http.StatusTooManyRequests)
 	}))
 	defer srv.Close()
 
-	SetWebSearchTavilyEndpoint(srv.URL)
-	SetWebSearchConfigResolver(stubConfigResolver{provider: providerTavily, tavilyKey: "k"})
-	SetWebSearchHTTPClient(srv.Client())
+	webSearch := NewWebSearch(WebSearchDeps{
+		Resolver:       stubConfigResolver{provider: providerTavily, tavilyKey: "k"},
+		HTTPClient:     srv.Client(),
+		TavilyEndpoint: srv.URL,
+	})
 
-	_, err := WebSearch.Execute(context.Background(), json.RawMessage(`{"query":"x"}`))
+	_, err := webSearch.Execute(context.Background(), json.RawMessage(`{"query":"x"}`))
 	if err == nil {
 		t.Fatal("expected error on Tavily 429")
 	}
@@ -290,17 +283,16 @@ func TestWebSearch_Tavily_Error_PropagatesAsGoError(t *testing.T) {
 }
 
 func TestWebSearch_EmptyQuery(t *testing.T) {
-	defer resetWebSearch()
-	SetWebSearchConfigResolver(stubConfigResolver{provider: providerTavily, tavilyKey: "k"})
+	webSearch := NewWebSearch(WebSearchDeps{
+		Resolver: stubConfigResolver{provider: providerTavily, tavilyKey: "k"},
+	})
 
-	if _, err := WebSearch.Execute(context.Background(), json.RawMessage(`{}`)); err == nil {
+	if _, err := webSearch.Execute(context.Background(), json.RawMessage(`{}`)); err == nil {
 		t.Fatal("expected error for empty query")
 	}
 }
 
 func TestWebSearch_Tavily_MaxResultsClamped(t *testing.T) {
-	defer resetWebSearch()
-
 	var captured tavilyRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -308,11 +300,13 @@ func TestWebSearch_Tavily_MaxResultsClamped(t *testing.T) {
 		_, _ = w.Write([]byte(`{"results":[]}`))
 	}))
 	defer srv.Close()
-	SetWebSearchTavilyEndpoint(srv.URL)
-	SetWebSearchConfigResolver(stubConfigResolver{provider: providerTavily, tavilyKey: "k"})
-	SetWebSearchHTTPClient(srv.Client())
+	webSearch := NewWebSearch(WebSearchDeps{
+		Resolver:       stubConfigResolver{provider: providerTavily, tavilyKey: "k"},
+		HTTPClient:     srv.Client(),
+		TavilyEndpoint: srv.URL,
+	})
 
-	if _, err := WebSearch.Execute(context.Background(),
+	if _, err := webSearch.Execute(context.Background(),
 		json.RawMessage(`{"query":"x","max_results":99}`)); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -325,8 +319,6 @@ func TestWebSearch_Tavily_MaxResultsClamped(t *testing.T) {
 // GET /search?q=...&format=json, parsing of results[].title/url/content
 // → normalised WebSearchResult, and that the provider field is populated.
 func TestWebSearch_Searxng_HappyPath(t *testing.T) {
-	defer resetWebSearch()
-
 	var capturedQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -349,13 +341,12 @@ func TestWebSearch_Searxng_HappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	SetWebSearchConfigResolver(stubConfigResolver{
-		provider:   providerSearxng,
-		searxngURL: srv.URL,
+	webSearch := NewWebSearch(WebSearchDeps{
+		Resolver:   stubConfigResolver{provider: providerSearxng, searxngURL: srv.URL},
+		HTTPClient: srv.Client(),
 	})
-	SetWebSearchHTTPClient(srv.Client())
 
-	out, err := WebSearch.Execute(context.Background(),
+	out, err := webSearch.Execute(context.Background(),
 		json.RawMessage(`{"query":"kubernetes oom","max_results":5}`))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -392,15 +383,16 @@ func TestWebSearch_Searxng_HappyPath(t *testing.T) {
 // (skipped_reason envelope, not Go error). The LLM should be able to
 // tell the operator how to recover.
 func TestWebSearch_Searxng_Unreachable_ReturnsSkippedReason(t *testing.T) {
-	defer resetWebSearch()
 	// Deliberate dead address — TCP dial should fail fast.
-	SetWebSearchConfigResolver(stubConfigResolver{
-		provider:   providerSearxng,
-		searxngURL: "http://127.0.0.1:1", // port 1 — connection refused
+	webSearch := NewWebSearch(WebSearchDeps{
+		Resolver: stubConfigResolver{
+			provider:   providerSearxng,
+			searxngURL: "http://127.0.0.1:1", // port 1 — connection refused
+		},
+		HTTPClient: &http.Client{},
 	})
-	SetWebSearchHTTPClient(&http.Client{})
 
-	out, err := WebSearch.Execute(context.Background(),
+	out, err := webSearch.Execute(context.Background(),
 		json.RawMessage(`{"query":"hi"}`))
 	if err != nil {
 		t.Fatalf("execute should not error on unreachable searxng: %v", err)
@@ -419,7 +411,6 @@ func TestWebSearch_Searxng_Unreachable_ReturnsSkippedReason(t *testing.T) {
 // max_results truncation happens after parse (SearXNG itself doesn't
 // honour count; we cap on our side).
 func TestWebSearch_Searxng_MaxResultsClamped_ServerSide(t *testing.T) {
-	defer resetWebSearch()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"results":[
 			{"title":"a","url":"https://a","content":""},
@@ -431,13 +422,12 @@ func TestWebSearch_Searxng_MaxResultsClamped_ServerSide(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	SetWebSearchConfigResolver(stubConfigResolver{
-		provider:   providerSearxng,
-		searxngURL: srv.URL,
+	webSearch := NewWebSearch(WebSearchDeps{
+		Resolver:   stubConfigResolver{provider: providerSearxng, searxngURL: srv.URL},
+		HTTPClient: srv.Client(),
 	})
-	SetWebSearchHTTPClient(srv.Client())
 
-	out, err := WebSearch.Execute(context.Background(),
+	out, err := webSearch.Execute(context.Background(),
 		json.RawMessage(`{"query":"x","max_results":2}`))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -453,8 +443,6 @@ func TestWebSearch_Searxng_MaxResultsClamped_ServerSide(t *testing.T) {
 // field overrides the resolver's choice. Uses a SearXNG-default
 // resolver but pins provider=tavily in the call args.
 func TestWebSearch_ProviderParamOverride(t *testing.T) {
-	defer resetWebSearch()
-
 	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits++
@@ -462,15 +450,17 @@ func TestWebSearch_ProviderParamOverride(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	SetWebSearchTavilyEndpoint(srv.URL)
-	SetWebSearchConfigResolver(stubConfigResolver{
-		// resolver default = searxng, but param should override
-		provider:  providerSearxng,
-		tavilyKey: "tk",
+	webSearch := NewWebSearch(WebSearchDeps{
+		Resolver: stubConfigResolver{
+			// resolver default = searxng, but param should override
+			provider:  providerSearxng,
+			tavilyKey: "tk",
+		},
+		HTTPClient:     srv.Client(),
+		TavilyEndpoint: srv.URL,
 	})
-	SetWebSearchHTTPClient(srv.Client())
 
-	out, err := WebSearch.Execute(context.Background(),
+	out, err := webSearch.Execute(context.Background(),
 		json.RawMessage(`{"query":"x","provider":"tavily"}`))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -489,8 +479,6 @@ func TestWebSearch_ProviderParamOverride(t *testing.T) {
 // X-Subscription-Token header, GET /web/search?q=...&count=N, and the
 // web.results[] → WebSearchResult mapping.
 func TestWebSearch_Brave_HappyPath(t *testing.T) {
-	defer resetWebSearch()
-
 	var capturedAuth, capturedQuery, capturedCount string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -510,11 +498,13 @@ func TestWebSearch_Brave_HappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	SetWebSearchBraveEndpoint(srv.URL)
-	SetWebSearchConfigResolver(stubConfigResolver{provider: providerBrave, braveKey: "bk-1"})
-	SetWebSearchHTTPClient(srv.Client())
+	webSearch := NewWebSearch(WebSearchDeps{
+		Resolver:      stubConfigResolver{provider: providerBrave, braveKey: "bk-1"},
+		HTTPClient:    srv.Client(),
+		BraveEndpoint: srv.URL,
+	})
 
-	out, err := WebSearch.Execute(context.Background(),
+	out, err := webSearch.Execute(context.Background(),
 		json.RawMessage(`{"query":"foo","max_results":5}`))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -551,10 +541,11 @@ func TestWebSearch_Brave_HappyPath(t *testing.T) {
 // TestWebSearch_Brave_NoKey_ReturnsSkippedReason — provider explicit,
 // no key → skipped_reason envelope mentioning Brave.
 func TestWebSearch_Brave_NoKey_ReturnsSkippedReason(t *testing.T) {
-	defer resetWebSearch()
-	SetWebSearchConfigResolver(stubConfigResolver{provider: providerBrave, braveKey: ""})
+	webSearch := NewWebSearch(WebSearchDeps{
+		Resolver: stubConfigResolver{provider: providerBrave, braveKey: ""},
+	})
 
-	out, err := WebSearch.Execute(context.Background(), json.RawMessage(`{"query":"x"}`))
+	out, err := webSearch.Execute(context.Background(), json.RawMessage(`{"query":"x"}`))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -565,5 +556,33 @@ func TestWebSearch_Brave_NoKey_ReturnsSkippedReason(t *testing.T) {
 	}
 	if resp.Provider != providerBrave {
 		t.Errorf("provider=%q, want brave", resp.Provider)
+	}
+}
+
+// TestTheWebSearchSkillIsInTheCatalogueByDefault pins the reason init() still
+// registers: the composition root swaps in a configured instance, and a
+// process that never runs it must still answer web_search rather than 404.
+//
+// It reads the catalogue and does not write to it, so it is safe alongside
+// every other test in this file — which is the point of the refactor. The
+// previous shape needed a resetWebSearch defer here for the same reason.
+func TestTheWebSearchSkillIsInTheCatalogueByDefault(t *testing.T) {
+	e, ok := skill.Get("web_search")
+	if !ok {
+		t.Fatal("web_search is not in the catalogue; init() must register a default instance")
+	}
+	if m := e.Metadata(); m.Key != "web_search" {
+		t.Errorf("registered under key %q", m.Key)
+	}
+	ws, ok := e.(*webSearchSkill)
+	if !ok {
+		t.Fatalf("registered instance is %T, want the immutable *webSearchSkill", e)
+	}
+	if ws.cfgResolver != nil {
+		t.Error("the default instance carries a resolver; the wiring belongs to the composition root")
+	}
+	if ws.tavilyEndpoint != defaultTavilyEndpoint || ws.braveEndpoint != defaultBraveEndpoint {
+		t.Errorf("default endpoints = %q / %q, want the public ones",
+			ws.tavilyEndpoint, ws.braveEndpoint)
 	}
 }

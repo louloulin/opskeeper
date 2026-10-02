@@ -27,9 +27,13 @@ require (
 	github.com/vincent-wuhan/opskeeper/core/edge v0.0.0
 )
 
+require github.com/MichaelKinsy/PiG/extensions/sdk v0.3.0
+
 require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
-	github.com/MichaelKinsy/PiG/extensions/sdk v0.3.0 // indirect
+	github.com/BurntSushi/toml v1.6.0 // indirect
+	github.com/Masterminds/semver/v3 v3.5.0 // indirect
+	github.com/alecthomas/chroma/v2 v2.24.1 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.7 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.10 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.32.17 // indirect
@@ -46,21 +50,32 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.21 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.1 // indirect
 	github.com/aws/smithy-go v1.25.1 // indirect
+	github.com/charmbracelet/x/ansi v0.11.7 // indirect
+	github.com/clipperhouse/displaywidth v0.11.0 // indirect
+	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
+	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/klauspost/compress v1.19.2 // indirect
+	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
+	github.com/mattn/go-runewidth v0.0.23 // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
+	github.com/yuin/goldmark v1.8.5 // indirect
+	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	golang.org/x/image v0.45.0 // indirect
+	golang.org/x/mod v0.40.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace (
-	// Development-time pin. PiG is pre-stable, so the workspace builds
-	// against the local checkout; releases replace this with a fixed
-	// tagged version.
-	github.com/MichaelKinsy/PiG => /Users/louloulin/appx/PiG
 	// Sibling modules resolve by path during development. The workspace
 	// covers this in a normal build; the replace keeps `go build` working
 	// from a bare module directory and in CI jobs that disable workspaces.

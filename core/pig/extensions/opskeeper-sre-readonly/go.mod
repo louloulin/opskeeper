@@ -23,8 +23,5 @@ require (
 )
 
 replace (
-	// The same development-time pin the rest of the workspace uses. PiG is
-	// pre-stable, so the workspace builds against the local checkout.
-	github.com/MichaelKinsy/PiG => /Users/louloulin/appx/PiG
 	github.com/vincent-wuhan/opskeeper/core => ../../../
 )

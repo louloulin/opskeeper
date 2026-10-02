@@ -772,6 +772,119 @@ func checkTestOnlyImports(root string) ([]string, error) {
 	return violations, nil
 }
 
+// floorIsolation are directory subtrees that may not reach an import prefix
+// at all — in any file, test or not.
+//
+// This exists because of a specific refactor that would otherwise have been
+// one good decision away from silently undoing itself. core/manager/pkg is
+// the shared floor: the LLM port, the provider table, the router, the budget
+// hook, every context imports it. Three files in its llm subpackage reached
+// the PiG adapter, which meant a PiG upgrade edited the floor and, through
+// it, every bounded context. Those files now live in core/manager/llmpig,
+// which imports the floor and is named in exactly one arch-lint component.
+//
+// The move is the fix; this is the part that keeps it. A refactor that only
+// relocates a problem leaves the next person free to walk it back with a
+// three-line import, and the "just reuse the settings adapter" suggestion is
+// exactly the kind that sounds like a simplification.
+var floorIsolation = []struct {
+	// Dir is the directory subtree, repository-relative, with a trailing
+	// slash. Every .go file beneath it is checked.
+	Dir string
+	// Prefix is the import prefix that subtree may not use.
+	Prefix string
+	// Why is printed with a violation.
+	Why string
+}{
+	{
+		Dir:    "core/manager/pkg/",
+		Prefix: coreModulePrefix + "/pig",
+		Why: "the shared floor is the control plane's business-agnostic base " +
+			"and every bounded context imports it, so a type it names is a " +
+			"type every context sees; reaching the PiG adapter from here " +
+			"turns a PiG upgrade into an edit to the floor and out to all of " +
+			"them, which is the one thing core/pig exists to prevent " +
+			"(decisions 57 and 62). The package that binds the two is " +
+			"core/manager/llmpig: it imports the floor, never the reverse",
+	},
+	{
+		Dir:    "core/floor/",
+		Prefix: coreModulePrefix + "/pig",
+		Why: "core/floor is the infrastructure both planes share, and the " +
+			"node plane reaches it through the same import path the " +
+			"control plane does; an adapter type here would put PiG in front " +
+			"of the node plane as well (decision 60)",
+	},
+}
+
+// checkFloorIsolation reports every file under an isolated subtree that
+// reaches a forbidden prefix.
+func checkFloorIsolation(root string) ([]string, error) {
+	var violations []string
+	for _, r := range floorIsolation {
+		base := filepath.Join(root, filepath.FromSlash(r.Dir))
+		if _, err := os.Stat(base); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("floor isolation rule %s: %w", r.Dir, err)
+		}
+		err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				name := info.Name()
+				if name == "testdata" || strings.HasPrefix(name, ".") {
+					return filepath.SkipDir
+				}
+				// A nested module is walked under its own root and is
+				// not the floor's to judge.
+				if path != base {
+					if rel, relErr := filepath.Rel(root, path); relErr == nil {
+						if moduleRoots()[filepath.ToSlash(filepath.Clean(rel))] {
+							return filepath.SkipDir
+						}
+					}
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") {
+				return nil
+			}
+			for _, imp := range importsOf(path) {
+				if !strings.HasPrefix(imp, r.Prefix) {
+					continue
+				}
+				rel, relErr := filepath.Rel(root, path)
+				if relErr != nil {
+					rel = path
+				}
+				violations = append(violations, fmt.Sprintf(
+					"%s: %s may not import %q; %s",
+					filepath.ToSlash(rel), r.Dir, imp, r.Why))
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Strings(violations)
+	return violations, nil
+}
+
+// moduleRoots returns the set of declared module roots, slash-cleaned and
+// repository-relative. It is the same table check() walks; a subtree walk
+// needs it to know where the floor stops and a module of its own begins.
+func moduleRoots() map[string]bool {
+	roots := make(map[string]bool)
+	for _, r := range rules() {
+		roots[filepath.ToSlash(filepath.Clean(r.Dir))] = true
+	}
+	return roots
+}
+
 // moduleRootsIn returns every Go module in the repo, as slash-cleaned paths
 // relative to root. They are discovered from the go.mod files themselves
 // rather than from a table, so a module added later is covered without this
@@ -863,6 +976,15 @@ func main() {
 		os.Exit(2)
 	}
 	violations = append(violations, testOnlyViolations...)
+
+	// The shared floor's isolation is a statement about a directory, not
+	// about a module, so it gets the same repo-wide treatment.
+	floorViolations, err := checkFloorIsolation(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "modulecheck: "+err.Error())
+		os.Exit(2)
+	}
+	violations = append(violations, floorViolations...)
 
 	if len(violations) == 0 {
 		fmt.Println("modulecheck: all module boundaries hold")

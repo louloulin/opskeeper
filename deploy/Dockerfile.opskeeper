@@ -8,9 +8,9 @@ ARG VERSION=dev
 # We need CGO for the fastembed-go local embedder (yalue/onnxruntime_go
 # is a thin cgo wrapper over libonnxruntime). Base image is
 # debian:bookworm-slim (already on CN mirrors; the docker.io
-# golang:1.25-bookworm blob is currently EOF-failing on every mirror);
-# Go 1.25 itself is installed from the Aliyun CDN in the RUN below.
-# This keeps the cgo + glibc toolchain the old golang:1.25-bookworm image
+# golang:*-bookworm blob is currently EOF-failing on every mirror);
+# Go itself is installed from the Aliyun CDN in the RUN below.
+# This keeps the cgo + glibc toolchain the golang:bookworm image
 # provided. Runtime image is also debian:bookworm-slim so the
 # onnxruntime .so finds its dependencies (libstdc++, libgomp).
 FROM debian:bookworm-slim AS builder
@@ -50,13 +50,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Go from the Aliyun CDN. The official golang:1.25-bookworm image's
+# Install Go from the Aliyun CDN. The official golang:bookworm image's
 # blob is EOF-failing on every CN mirror right now (CloudFront / R2 backend
 # flakiness), so we sidestep the registry entirely. Aliyun mirrors
 # https://go.dev/dl/ literally (same archives, same checksums), so this is
 # functionally equivalent to the docker.io image, just without the
 # registry-routing headache.
-ARG GO_VERSION=1.25.0
+ARG GO_VERSION=1.26.2
 ARG GO_MIRROR=https://mirrors.aliyun.com/golang
 ARG ONNXRUNTIME_VERSION=1.20.1
 ARG ONNXRUNTIME_MIRROR=https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}
@@ -72,10 +72,16 @@ RUN set -eux; \
     rm /tmp/go.tgz; \
     /usr/local/go/bin/go version
 
+# GOTOOLCHAIN=local: the go directives in this repository and in PiG both
+# say 1.26, and a build that silently downloads a different toolchain is a
+# build nobody reproduced. If a dependency ever raises its floor above
+# GO_VERSION, this fails here with one clear line instead of producing an
+# image from an unreviewed toolchain.
 ENV PATH=/usr/local/go/bin:/go/bin:$PATH \
     GOPATH=/go \
     GOCACHE=/root/.cache/go-build \
     GOMODCACHE=/go/pkg/mod \
+    GOTOOLCHAIN=local \
     # goproxy.cn is the canonical CN mirror for proxy.golang.org; the
     # upstream is unreachable from CN networks as of 2026-08. `direct` keeps
     # fall-through to proxy.golang.org for anything goproxy.cn misses

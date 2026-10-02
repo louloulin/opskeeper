@@ -256,13 +256,13 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 
 | 阶段 | 权重 | 完成度 | 判据与剩余 |
 |---|---|---|---|
-| A 模块化地基 | 20% | **95%** | 13 个模块落地、`internal/` 清空、`modulecheck` + `go-arch-lint` 两个闸门可执行且非空转。剩下 5% 是两条已记账的**债务**（底座的包级 setter 反向边、arch-lint 债务清单缺守卫），不是缺失的功能 |
-| B PiG 适配层 | 20% | **92%** | `pigmodel` / `pigagent` / `pigrpc` / `pigwire` 四件套齐、eino 与 go-openai 清零、`llm.Client` 换实现并接线、内核接缝（决策 32/33）打开。剩下：PiG 仍是 `replace` 到本地 checkout，发布要换成固定 tag；契约测试只锁住实际用到的 API 面 |
+| A 模块化地基 | 20% | **98%** | 13 个模块落地、`internal/` 清空、`modulecheck` + `go-arch-lint` 两个闸门可执行且非空转、共享底座的两条反向边已清并由 `floorIsolation` 钉住（决策 66）。剩下 2% 是一条已记账的**债务**（arch-lint 债务清单缺守卫），不是缺失的功能 |
+| B PiG 适配层 | 20% | **100%** | `pigmodel` / `pigagent` / `pigrpc` / `pigwire` 四件套齐、eino 与 go-openai 清零、`llm.Client` 换实现并接线、内核接缝（决策 32/33）打开、契约套件 `core/pig/pigcontract` 落地（决策 64）、**PiG 已换成固定 tag 并在发布条件下被验证**（决策 65）。剩下的不是缺口，是维护：契约要跟着上游新增能力补 |
 | C 节点 Agent | 20% | **90%** | `pig --mode rpc` 运维 profile + supervisor + `policygate` + 7 个 `agent.*` 隧道方法 + `NodeFleet` + 只读 piglet，三个剧本在新拓扑下通过。剩下：MCP 运行时（PiG 的 `mcp` 只是声明）、连接池上限与风暴抑制的规模验证 |
 | D 插件生态 | 25% | **90%** | B1/B2/B3 全部闭环（18 + 12 + 53 + 5 个工具）、审核流水线（签名 → 清单 → 准入 → 灰度 → 回滚）、运输通道 6 条路由、`sdk` 三个发布物。剩下：能力声明从"家族"升级到"逐方法"、更多插件迁移、容器格式导入器的覆盖面 |
 | E 生态治理 | 15% | **85%** | 兼容矩阵（edge 轴 × PiG 轴）、金融 / SaaS 两个 profile 模板、插件 × golden case 覆盖报告。剩下：插件市场前端页面、版本矩阵可视化、发布流程自动化 |
 
-加权合计 ≈ **90.7%**（20×0.95 + 20×0.92 + 20×0.90 + 25×0.90 + 15×0.85）。
+加权合计 ≈ **92.9%**（20×0.98 + 20×1.00 + 20×0.90 + 25×0.90 + 15×0.85）。
 
 **这个数最容易被误读的地方**：C 与 D 的 90% 里，"能跑通"和"能上生产"之间
 差的是规模验证与运维面（插件市场 UI、连接规模、发布自动化），不是核心链路。
@@ -273,7 +273,7 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 |---|---|
 | 根模块 `go test ./... -count=1` | **18 包 ok / 0 failed**——`internal/` 已清空（决策 63），根模块只剩 `cmd/`、`scripts/`、`tests/` 与 web 的 Go 工具包，全部是装配层与测试 |
 | `core` | 全部 ok（2 包） |
-| `core/pig` | 全部 ok（5 包） |
+| `core/pig` | 全部 ok（6 包，含契约套件 `pigcontract`） |
 | `core/edge` | 全部 ok（26 包）——`internal/edgeagent` 的 62 个文件整体迁入（决策 61），原有的 pigsupervisor/policygate/gatesocket/toolbroker/agentprofile 与它同模块 |
 | `core/floor` | 全部 ok（9 包，6 个有测试）——`spill_helper` 的 3 个用例在这里被修好（见决策 60） |
 | `core/harness` | 全部 ok（13 包） |
@@ -281,7 +281,7 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 | `core/manager` | **全部 ok（222 包，`-race` 亦 ok）**——控制面基础设施（决策 62）之后，`biz`/`data`/`model`/`server`/`service` 与 `iam` 也在这一轮迁入（决策 63）。1100 个 Go 文件，其中 413 个测试文件 |
 | 5 个 extension 模块 | 各 1 包，全部 ok |
 
-13 个目录（根模块 + 7 个已拆模块 + 5 个 extension）串行跑完：**302 包 ok / 0 failed**。四次搬迁（决策 60/61/62/63）前后总数一次没变，说明搬的是位置，不是测试；变的只是包落在哪个模块里——根模块 113 → 18，`core/manager` 50 → 222。`core/floor/skill/builtin` 的三个
+13 个目录（根模块 + 7 个已拆模块 + 5 个 extension）串行跑完：**303 包 ok / 0 failed**。四次搬迁（决策 60/61/62/63）前后总数一次没变，说明搬的是位置，不是测试；变的只是包落在哪个模块里——根模块 113 → 18，`core/manager` 50 → 222。`core/floor/skill/builtin` 的三个
 `TestTruncateOrSpill_*` 曾长期在 `/var/tmp` 存在但不可写的机器上失败——降级判据写在
 `MkdirAll` 而不是写入上，所以那条降级路径从未生效；决策 60 顺手修好了它（测试一直是
 对的，代码不是）。
@@ -289,6 +289,10 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 （包 → case 的家族级覆盖），`vocabulary` `--fail-on-gap` 在真语料上通过、在
 一个合成的不可满足语料上必须失败（新增的正反两面，见决策 59）。
 `go run ./scripts/modulecheck .` → 边界全部成立（模块规则见决策 37，BC 规则见决策 38）。
+`make module-standalone-check`（决策 65）→ 13 个模块在 `GOWORK=off` 下逐个
+`go build` + `go test` 通过，即**关掉 go.work、只用 go.mod 里的 tag 与
+replace、纯模块缓存（`GOPROXY=off`）也能构建**。这是 CI 与发布真正走的路，
+也是唯一能在发布前发现 go.mod 写错的检查。
 `make module-test` 一次跑完全部模块。
 `make module-race`（`core` / `core/pig` / `core/edge` / `core/floor` / `core/harness` 各自
 `go test ./... -count=1 -race`）→ 全部 ok，`pigsupervisor` 的重启循环这条
@@ -358,12 +362,13 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
 
 | 阶段 | 闸门 | 状态 |
 |---|---|---|
-| A | 7 模块 `go build` + 全量 `go test -count=1` 绿；arch-lint 拦住逆向依赖 | ✅ **13 个模块目录 `go build` 全过、全量 `go test` 302 包 ok / 0 failed**；`internal/` 已清空（决策 63）；逆向依赖由 `modulecheck`（可执行，含"只允许测试的跨模块边"一条）与 `go-arch-lint`（0 warnings）双重拦住（决策 37/38/60/62/63） |
+| A | 7 模块 `go build` + 全量 `go test -count=1` 绿；arch-lint 拦住逆向依赖 | ✅ **13 个模块目录 `go build` 全过、全量 `go test` 303 包 ok / 0 failed**；`internal/` 已清空（决策 63）；逆向依赖由 `modulecheck`（可执行，含"只允许测试的跨模块边"一条）与 `go-arch-lint`（0 warnings）双重拦住（决策 37/38/60/62/63） |
 | B | **SSE 帧 golden 逐帧一致** | ✅ 两条路径各有一份 golden，且互相逐字节相等（见下） |
 | B | **eino / go-openai 依赖清零** | ✅ `rg eino go.mod` 无命中；`core/manager/biz/aiops/graph/`（14 文件）与 `core/manager/pkg/llm/eino_*.go`、`budget_callback.go` 全部删除；`chatruntime` 测试全量迁到 `scriptedKernel`；`OPSKEEPER_AGENT_KERNEL=pig` 与退役拼写 `graph` 解析到同一内核（见决策 34） |
 | B | **7 provider 冒烟** | ✅ `pigmodel/smoke_test.go`：7 个 provider 各起一个 httptest SSE 源，真实走 `Provider.Stream` |
 | B | `go test -race` 无泄漏 | ✅ `core/pig/...`（198）、`service/plugin` + `core/edge/biz`（60）、`cmd/opskeeper-edge`（118）、`core/manager/pkg/llm`（107）全部 `-race` 通过 |
 | B | **`llm.Client` 换实现（PiG 支撑）** | ✅ `pigclient_test.go` 用 PiG 真实 provider 栈跑 httptest：选择/注册表/转写/请求体/流式/回传全链路，含 tool-call 往返与预算「先扣后发」；`router.go` 的子客户端工厂让**每个** provider 都走 PiG（见决策 26） |
+| B | **PiG 固定 tag，且在发布条件下成立** | ✅ 6 个 go.mod 去掉本地 replace，只留 `require v0.3.0`；`make module-standalone-check`（`GOWORK=off`，13 个模块逐个 build + test）绿；契约套件 `core/pig/pigcontract` 在**打 tag 的 PiG** 上通过（见决策 64/65） |
 | C | 端到端剧本 `alert_storm` / `rca_loop` / `recovery_verify` 在新拓扑下通过 | ✅ `core/manager/biz/nodefleet/e2e/` 6 个用例接在真 `NodeFleet` + 真 `AgentBridge` + 真 `policygate` + 真 `pigwire` 上跑（见决策 36） |
 | D | **插件安装→审核→灰度→回滚全链路** | ✅ `cmd/opskeeper-edge/pluginchain_test.go`：真包+真签名+真节点审核+真 `service/plugin.Manager`，只换掉 socket |
 | D | 越权调用被宿主闸门 Block；审计链完整 | ✅ 闸门已有回归；**审计链已落地**：`audit_logs` 增 `seq`/`prev_hash`/`hash`，`ChainStamper` 做 HMAC-SHA256 规范化摘要，`audit_chain_head` 单行 CAS 在同一事务内推进链头与插入，`VerifyChain` 全链走查 + `ErrChainBroken` 定位首个断点，保留策略只能裁前缀（见决策 35） |
@@ -1963,7 +1968,7 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
     `rg 'opskeeper/internal/' -g '*.go'` 现在 **0 命中**；全仓改动的 1489 个文件里，
     668 个的 import 指向了 `core/manager`（1378 个文件是以重命名形式记录的）。
     - **规模**：`core/manager` 现在 1100 个 Go 文件（413 个测试），222 个包；
-      根模块从 113 包掉到 18 包。13 个模块目录串行跑完 **302 包 ok / 0 failed**。
+      根模块从 113 包掉到 18 包。13 个模块目录串行跑完 **303 包 ok / 0 failed**。
     - **`modulecheck` 的 BC 表不能只改路径，这是这一轮最容易做错的地方**。
       `bcs` 原本是两条前缀 `{internal/iam/, internal/manager/}`——旧布局里它们
       是兄弟，一条前缀就是一棵树。现在 `iam` 是 `core/manager` 的**子目录**，
@@ -2017,22 +2022,32 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
 ### 当前真实缺口
 
 - **A 阶段（模块化地基）已经收口**——决策 63 把最后一块源码搬完，`internal/`
-  不再存在，七个模块 + 5 个 extension 全部落地，13 个目录 302 包全绿。
-  代码侧没有已知的未完成项。A 阶段**剩下的是债务而不是缺口**，逐条列在
-  下面两条里（共享底座的包级 setter、arch-lint 债务清单缺守卫）。
+  不再存在，七个模块 + 5 个 extension 全部落地，13 个目录 303 包全绿；
+  决策 66 把共享底座剩下的两条反向边清掉，并让它们不再会长回来。
+  代码侧没有已知的未完成项。A 阶段**剩下的是债务而不是缺口**，只剩一条，
+  见下面 arch-lint 那一项。
+- **B 阶段已收口，但"发布条件"目前只对外部依赖是真的 tag**。PiG 与
+  `extensions/sdk` 已经是 `v0.3.0`；`core` / `edge` / `floor` / `harness` /
+  `manager` / `pig` / `sdk` 七个兄弟模块之间仍是 `v0.0.0` + 相对 `replace`
+  （决策 60/62/65 的设计如此）。要把这一层也变成真 tag，需要先给七个模块
+  打 v0.x 版本并把 replace 换成版本号——那是一次**发布动作**，不是代码动作，
+  也不该在没有版本号的仓库里硬做。
 - **arch-lint 的 white-list 粒度问题（决策 58 第 3 步的已知代价）**。
   `mayDependOn` 是组件粒度：账本里为 `manager_biz → manager_data` 开了口子之后，
   **同一个组件**里新加一条 `manager_biz → manager_data/新store` 不会再报警。
   modulecheck 的 `layerDebt` 有 `TestTheLayerDebtLedgerIsCurrent` 守着（文件删了或
   债务还清就报错），arch-lint 这一份**没有对应的守卫**——这是当前两个闸门之间的
   一处不对称，修法是给 modulecheck 加一条"arch-lint 债务文件清单"检查。
-- **`internal/pkg → core/pig` 的反向边（deepScan 独立复现）**。
-  `core/manager/pkg/llm/pigsettings.go:41` 的 `NewSettingsSource` 返回
-  `pigmodel.SettingsSource`，`core/manager/pkg/{llm,promquery,promwrite}` 另有 3 处包级
-  setter 接收 manager_biz 的实现类型。前者是"共享底座依赖 PiG 适配模块"，后者是
-  "共享底座通过包级 setter 反向拿到业务实现"。两者都不在 import 图里（所以
-  `check` 报 0 条），但都在装配图里。修法同决策 57：底座与适配层解耦，
-  包级 setter 换成显式构造参数。
+- ~~**`internal/pkg → core/pig` 的反向边（deepScan 独立复现）**~~
+  ✅ 已完成（决策 66）。`pigsettings.go` / `pigregistry.go` / `pigclient.go`
+  搬进 `core/manager/llmpig`，`web_search` 的六个包级 setter 换成不可变构造
+  + `skill.Replace`。**这两条当初为什么 `modulecheck` 报不出来**——共享底座到
+  适配层的方向是模块内合法的（manager → pig），包级 setter 更是根本不进
+  import 图——现在各有一条专门的规则：前者是 `floorIsolation`，后者是
+  构造器本身不再存在。deepScan（`allow.deepScan`）仍然能报出装配层的边，
+  但它没有被打开，因为那会同时报出 54 条已知噪声；真正需要它的那四条
+  （`manager_biz → shared_pkg` 与 `cmd → shared_pkg`）已经在决策 66 之后
+  缩到只剩 `cmd → shared_pkg` 一条装配层调用。
 - **B1/B2/B3 已闭环**：18 个节点本地只读工具、12 个可观测只读工具、**53 个中间件
   只读工具**、5 个写工具均已打通。写工具全部经控制面 reviewer，且要消耗一次性
   审批回执；`host_restart_service` 的本地执行被证明确实锁死（回归测试可复现该
@@ -2113,33 +2128,195 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
 
 ---
 
+64. **契约套件落地：`core/pig/pigcontract`（计划 §六风险 1 的最后一块）**。
+    PiG 是 pre-stable 0.x，而 `core/pig/go.mod` 现在 `replace` 到本地
+    checkout——开发期正确，发布不可行。换固定 tag 的前提不是"读一遍上游
+    diff"，而是**把本仓库依赖的那部分 API 面变成可执行的断言**。这个包就是
+    那份断言，它分两层：
+
+    - **形状（`contract.go`，编译期）**：把每个用到的 PiG 符号写成包级
+      `var _ = ...` 初始化式——`ai.OpenAIConfig` 的每个字段（含
+      `DetectCompat` 的返回类型）、`ai.Model`/`ai.StreamOptions` 的字段集、
+      `ai.ToolSchema` 的 `Parameters`、`agent.AgentOptions` 的 15 个字段、
+      三个钩子的**精确签名**、`agent.StreamFn`、7 个事件类型、
+      `rpcclient` 的选项与 6 个动词、`piglet` 的 4 个解析函数、
+      `extensions/sdk` 的注册面。用调用形状写（`run, err :=
+      ag.BeginSendMessages(...)`）而不是命名返回类型，是为了在不复制 PiG
+      内部类型的前提下钉住方法签名。选 `var _ =` 而不是函数体，是为了让任何
+      linter 都删不掉它——每个 pin 每次 `go build` 都被类型检查一遍。
+    - **语义（`contract_test.go`，测试期）**：类型系统表达不了的值变化——
+      `ai.ThinkingOff` 等 6 个档位的字符串（settings 行按字符串比对）、
+      `ai.EventTextDelta` 等流判别式（`pigwire` 只留 `text_delta` 一条）、
+      内容块 JSON 的 `type`/`text` 键（`pigwire` 靠它统计 pending 工具调用）、
+      `sdk.EventTurnStart` 等 7 个节点线名（`pigwire` 的 switch 字面量）、
+      `sdk.EventToolCall` 这个闸门注册的钩子名、`ToolModeParallel` 的拼写、
+      两个版本字符串非空。**断言对象是"我们的代码写的字面量"与"上游的常量"，
+      不是字面量与自己**，所以一次上游改名会红在契约里，而不是变成一个没人
+      看见的空帧。
+
+    **本包是叶子**：不 import 任何 OpsKeeper 包，也没有任何包 import 它，所以
+    它只约束自己。`go build ./...` 变红时的修法在 `core/pig`——改适配层去
+    追上游，或者（上游删了我们需要的东西）这就成了与 PiG 的对话，而不是
+    一次全仓重建。**实测**：`cd core/pig && go build ./... && go test ./...
+    -count=1 -race` 全绿；新包使 13 个模块目录的包总数从 302 变成 **303**，
+    全量 `go test ./... -count=1` 依然 **303 包 / 0 failed**；
+    `modulecheck` 与 `go-arch-lint`（新增 `oxpig_contract` 组件）均 0 警告。
+    **没做的**：契约只覆盖我们实际用到的 API 面，上游新增能力不会自动进
+    契约；换 tag 本身（改 `replace` 指向 `v0.3.0`、CI 里在无本地 checkout 的
+    机器上跑一遍）仍是 §七第 1 条。
+
+---
+
+65. **PiG 换成固定 tag，并且"没有 workspace 也能构建"变成一条会跑的闸门**。
+    决策 64 落了契约套件，这一件事才做得成。改了三处，其中第一处是本轮真正的
+    内容，另外两处是它逼出来的。
+
+    - **`core/pig/go.mod` 与 5 个 `core/pig/extensions/*/go.mod` 去掉了
+      `github.com/MichaelKinsy/PiG => /Users/louloulin/appx/PiG`**，只留
+      `require github.com/MichaelKinsy/PiG v0.3.0`。**实测**：`GOWORK=off
+      GOPROXY=off`（纯模块缓存、无网络、无本地 checkout）下六个模块全部
+      `go build` + `go test` 通过——`pigcontract` 的 7 个语义断言在**打 tag 的
+      PiG 上**同样成立，这才是"换 tag 安全"的证据，而不是本地 checkout 上成立。
+      节点侧早就是 tag 路径：`scripts/sync-pig-ops.sh` 生成的包内 go.mod 从来
+      不带 replace，这次只是让仓库里的规范副本与它一致。
+    - **`go.work` 承担本地覆盖，并且它是不入库的**。开发 PiG 本身的人跑
+      `make pig-dev-pin PIG_DEV_PATH=/path/to/PiG`（`go work edit -replace`），
+      撤销用 `make pig-dev-unpin`。`PIG_DEV_PATH` 故意**不给默认值**：把某台
+      机器的路径写进 Makefile，就是 replace 指令悄悄回来的路径。覆盖期间跑的
+      测试对 tag 不作证，target 自己会把这句话打在屏幕上。
+    - **新增 `make module-standalone-check`**：13 个模块逐个 `GOWORK=off` 构建
+      并测试。这不是 `module-test` 的重复。`go.work` 在 `.gitignore` 里，
+      workspace 构建通过 go.work 解析兄弟模块与 PiG，而 CI 与发布没有这个
+      文件——两种构建**在 go.mod 写错的时候才会分歧**，而那正是发布时才暴露的
+      一类错。**它当场抓到了两个真缺陷**：
+      （1）`sdk/go.sum` 缺 `gopkg.in/yaml.v3` 的 go.mod 哈希，workspace 下被
+      掩盖；（2）根 `go.mod` 里 `core/floor` 的 require 版本与其余五个兄弟模块
+      不一致（`v0.0.0` vs `v0.0.0-00010101000000-...`），只有 go.work 兜着。
+      两条都修掉了，现在 13 个模块在 readonly 模式下离线全绿。
+
+    **顺带把 Go 1.26 落到了所有构建入口**。决策 34 之后每个 go.mod 都写着
+    `go 1.26.0`，而 CI、两个 Dockerfile 与 `Dockerfile.dev` 还钉在 1.25——
+    靠 `GOTOOLCHAIN=auto` 静默下载一个没人审过的工具链才能构建。现在：
+    `ci.yml` 与 `release.yml` 用 `1.26.x`；`Dockerfile.opskeeper` 装
+    `GO_VERSION=1.26.2` 并设 `GOTOOLCHAIN=local`（依赖抬高下限就在这里报一行，
+    而不是产出一个用了别的工具链的镜像）；edge 与 dev 镜像换 `1.26-alpine` /
+    `1.26-bookworm`；文档与 PPT 里的版本号一并对齐。
+
+    **CI 顺带修好了**：它此前只跑根模块的 `go build`/`go vet`/`go test`——
+    根模块只剩 18 个装配层包，**下面 12 个模块一次都没被编译过**；而它唯一
+    的失败叙事（PR #123）指向的 `internal/manager/biz/edge/...` 路径在决策 63
+    之后已经不存在。现在 CI 跑 `go vet`（根）、`make module-check`（模块边界）、
+    `make module-standalone-check`（13 个模块，发布条件），并把这条故事改写成
+    仍然成立的样子。
+
+    **没做的**：`core/manager` 与 `core/floor` 仍只打 `v0.0.0` 的本地
+    replace（决策 62/60 的设计：发布时换成打好的 tag），所以"发布条件"目前
+    只对 PiG 与 `sdk` 这类**外部**依赖是真正的 tag，对**兄弟模块**仍是路径。
+    要彻底关掉，需要先给 7 个模块打 v0.x tag 并把 replace 换成版本号——那是
+    一次发布动作，不是代码动作。
+
+---
+
+66. **共享底座的两条反向边清掉了——但清掉的方式是把"记住它"变成"跑它"**。
+    §七 第 1 条列了两件事：一件是共享底座依赖 PiG 适配层，一件是共享底座用
+    包级 setter 反向拿到实现。**只做搬迁，两条都会原样长回来**——下一次有人
+    为了省事在 `pkg/llm` 里 import 一次 `pigmodel`，或者再加一个
+    `SetXxx`，没有任何东西会响。所以这一条做的是两半：搬，加上让搬成为不变量。
+
+    ### 第一半：`core/manager/llmpig`
+
+    `core/manager/pkg/llm` 里的 `pigclient.go` / `pigregistry.go` /
+    `pigsettings.go`（576 行非测试 + 419 行测试）搬进新包
+    `core/manager/llmpig`，**方向反过来了：llmpig → pkg/llm**。
+
+    - **`EstimatePromptTokens` 从底座导出**。它原来叫
+      `estimatePromptTokens`，是 `pkg/llm` 的私有函数，被 HTTP 客户端和
+      PiG 客户端共用。搬包之后它必须跨包可见——而这暴露了一件本来就该说清
+      的事：**同一个 `llm.Client` 接口的两个实现必须用同一个估算值**，
+      否则预算按 A 估算、按 B 记账，谁也说不清。
+    - **`PigRegistry` → `Registry`、`NewPigRegistry` → `NewRegistry`**。
+      `llmpig.NewPigRegistry` 是 stutter，包名已经说明了它是什么。
+    - **装配点只有两处**：`cmd/opskeeper/main.go:865` 的
+      `llmpig.NewRegistry(llmpig.NewSettingsSource(...), log)`，和
+      `kernelWiring.Models` 的类型。`core/manager` 里只有两个包还认识
+      `core/pig`——`llmpig`（这道缝）与 `biz/aiops/agentkernel`（业务层，
+      方向本来就对）。**`core/manager/pkg` 与 `core/floor` 现在对 `core/pig`
+      的引用是 0 条。**
+    - **不变量**：`scripts/modulecheck` 新增 `floorIsolation` 规则表，
+      两条（`core/manager/pkg/`、`core/floor/`），任何 `.go` 文件——**包括
+      测试文件**——import `core/pig` 都报违规。这条规则带两个测试：一个用
+      故意写坏的 fixture 证明它会响（生产文件、测试文件各报一次，合法的
+      `llmpig` 与 `pkg/llm/wire.go` 不报），一个对着真实仓库跑，证明规则
+      描述的目录还在——后者是防"规则指向一个不存在的目录，于是永远通过"。
+    - **arch-lint** 新增 `shared_llmpig` 组件，并且**删掉了 `shared_pkg`
+      的 `mayDependOn` 里那条 `oxpig_model` 例外**。例外存在的原因是
+      "PiG 支撑的 llm.Client 必须落在控制面"；现在这个实现有了自己的名字，
+      底座重新变回一个不认识 agent 内核的底座。`cmd` 加了
+      `shared_llmpig`——装配层第一次同时看到底座和它的实现，因为
+      `NewRegistry(NewSettingsSource(...))` 这个组合本来就只发生在一处。
+
+    ### 第二半：`web_search` 的六个包级 setter
+
+    `core/floor/skill/builtin` 里有 14 个内置技能，**13 个是 `init()` 里注册
+    的零值结构体**，只有 `WebSearch` 是一个可变的包级单例，六个 setter
+    （`SetWebSearchConfigResolver` / `SetWebSearchHTTPClient` /
+    `SetWebSearchTavilyEndpoint` / `SetWebSearchBraveEndpoint` /
+    `SetWebSearchKeyResolver` / `SetWebSearchEndpoint`）在注册**之后**改它。
+    代价不是"不优雅"，是具体的：这个技能的配置是**进程在某一次调用时的
+    状态**而不是对象的属性，所以两个调用方不可能持有不同配置；测试必须先
+    `resetWebSearch()` 才能跑，因此整个包**不能并行**；半配置状态在
+    `Execute` 里被 `RLock` 快照出来是可以发生的。
+
+    改法是一个不可变执行器加一个显式构造点：
+
+    - `WebSearchDeps{Resolver, HTTPClient, TavilyEndpoint, BraveEndpoint}` +
+      `NewWebSearch(deps)`，字段构造后只读，`Execute` 里的 `RLock` 快照
+      整段删掉。
+    - `init()` 仍然注册一个**默认实例**，所以没接线的进程照样有
+      `web_search`（SearXNG 默认地址、无 key）——行为不变，只是"没接线"
+      从一个运行时事故变成了一个显式状态。
+    - 装配层改成 `skillcore.Replace(builtin.NewWebSearch(...))`。
+      `skill.Registry` 因此多了一个 `Replace`：**换**已有 key 的实例，
+      而 `Register` 仍然对重复 key 崩溃。`Replace` 对未注册的 key 也会崩，
+      所以装配层写错一个 key 会在启动时炸，而不是安静地什么都没做。
+      新增 `registry_test.go` 六个用例：换实例、目录不增长、三种该崩的
+      情况、以及 `Register` 的重复 key 保护**没有被削弱**。
+    - 16 个用例全部改成自建实例，`resetWebSearch` 消失。**测试现在可以
+      并行**，因为它们之间不再共享可变状态。
+
+    ### 实测
+
+    `core/manager` 222 包 + `core/floor` 9 包 + 根模块 18 包全绿；
+    `core/floor/skill/...` 与 `core/manager/llmpig` 的 `-race` 全绿；
+    `modulecheck`、`go-arch-lint`、`gofmt` 全部干净。
+
+    **没做的**：`core/floor/skill` 的**目录**仍然是全局的
+    （`globalRegistry`），这是全仓 14 个内置技能共用的设计，不是这次的问题。
+    `Replace` 是这个设计下唯一需要的例外，已经被限制成"同一个 key 换一次"。
+    真正要换成 per-instance 目录，是一次牵动所有技能与 HTTP 路由的改动。
+
+---
+
 ## 七、未来路线图
 
 ### 下一步（A 收口之后，按优先级）
 
-A 阶段已在决策 63 收口，路线图上不再有"先把模块拆出来"这一条。剩下的按
-优先级排是五件事，前两件是**欠账**，后三件是**新能力**：
+A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套件 + 固定 tag）。剩下
+的按优先级排是三件事，第一件是**欠账**，后两件是**新能力**：
 
-1. **PiG 换成固定 tag**（B 阶段收尾）。`core/pig/go.mod` 现在 `replace` 到
-   本地 checkout `/Users/louloulin/appx/PiG`——开发期是对的，发布不可行。
-   换 tag 之前需要一份**契约测试套件**，只针对本仓库实际用到的 API 面
-   （`ai.Model`、`agent` 事件、`extensions/sdk`、`rpcclient`），把"上游升级后
-   哪些行为变了"变成一条可执行的断言，而不是一次人工读 diff。
-2. **共享底座的两条反向边**（决策 57 遗留）。`core/manager/pkg/llm/
-   pigsettings.go` 的 `NewSettingsSource` 返回 `pigmodel.SettingsSource`
-   （底座依赖适配层），`pkg/{llm,promquery,promwrite}` 另有 3 处包级 setter
-   接收 `manager_biz` 的实现类型（底座反向拿到业务实现）。修法是把 setter
-   换成显式构造参数。这两条**不在 import 图里**，`modulecheck` 报不出来，
-   所以只能靠人记着——直到修掉。
-3. **arch-lint 债务清单的守卫**。`layerDebt` 有 `TestTheLayerDebtLedgerIsCurrent`
+1. ~~**共享底座的两条反向边**~~ ✅ 已完成（决策 66）：PiG 适配搬进
+   `core/manager/llmpig`、`web_search` 的六个包级 setter 换成不可变构造 +
+   `skill.Replace`，并由 `modulecheck` 的 `floorIsolation` 与 arch-lint 的
+   `shared_llmpig` 组件钉住，不再靠人记。
+2. **arch-lint 债务清单的守卫**。`layerDebt` 有 `TestTheLayerDebtLedgerIsCurrent`
    守着（账还清了就必须删条目），arch-lint 那份 `mayDependOn` 白名单没有
    对应的守卫：同一个组件里新加一条越层 import 不会再报警。修法是让
    modulecheck 把 arch-lint 的债务文件清单也读进来做同样的检查。
-4. **MCP 运行时**（D 阶段的可选加速器）。PiG 的 `mcp` 只是声明，没有
+3. **MCP 运行时**（D 阶段的可选加速器）。PiG 的 `mcp` 只是声明，没有
    JSON-RPC 客户端、没有握手、没有把 MCP server 接进 agent 工具集的桥。
    当前 65 个工具走 extension toolset 已端到端跑通（带鉴权、审计、白名单、
    回归），所以要不要补 MCP 是"接不接第三方 MCP 生态"的产品问题，不是债。
-5. **插件市场与节点页面的前端**（E 阶段唯一纯前端工作）。
+4. **插件市场与节点页面的前端**（E 阶段唯一纯前端工作）。
    `/v1/marketplace/*`（7 条）与 `/v1/plugins/releases`（6 条）已经有后端与
    测试，Web 控制台还没有"插件市场"和"节点 Agent"两个页面。
 
@@ -2412,7 +2589,7 @@ A 阶段已在决策 63 收口，路线图上不再有"先把模块拆出来"这
 
 - ~~**机械式模块迁移只剩最后一块**~~ **已完成（决策 63）**：`internal/manager`
   + `internal/iam` → `core/manager`，`internal/` 已删除，13 个模块目录
-  302 包全绿。`harness` 在 `core/harness`（决策 37），节点面在 `core/edge`
+  303 包全绿。`harness` 在 `core/harness`（决策 37），节点面在 `core/edge`
   （决策 61），共享底座在 `core/floor`（决策 60），控制面在 `core/manager`
   （决策 62/63），`sdk` 独立。`manager → floor ← edge` 这条主方向已固化在
   `scripts/modulecheck` 与 `.go-arch-lint.yml` 里。剩下的不是迁移，是两条
@@ -2487,8 +2664,13 @@ A 阶段已在决策 63 收口，路线图上不再有"先把模块拆出来"这
 
 **风险**
 
-- **PiG 0.x 双重不稳定**：缓解靠 `core/pig` 模块级收口 + 固定 commit +
-  针对实际使用 API 面的契约测试套件。
+- **PiG 0.x 双重不稳定**：缓解是三件事叠在一起——`core/pig` 模块级收口（一个
+  PiG 变更只落在这一个模块）、`core/pig/pigcontract` 契约套件（形状由
+  `contract.go` 在编译期钉住，语义由 `contract_test.go` 在测试期钉住，上游
+  改名或改值都会在这里红，而不是变成一个空帧）、以及**固定 tag 而不是本地
+  checkout**（决策 65：6 个 go.mod 只 `require v0.3.0`，`make
+  module-standalone-check` 在 `GOWORK=off` 下逐模块 build + test，所以"这次构建
+  用的到底是哪份 PiG"永远有一个可执行的答案）。
 - **插件安全是最大风险面**（高权限 bash + 第三方扩展）：缓解靠宿主强制三件套——
   能力注入式凭据、tool 白名单、宿主侧审计与审批。插件 **never** 获得审批放行权。
 - **NodeFleet 连接规模**：每 edge 常驻 RPC 流，需要连接池上限、心跳重连、风暴抑制

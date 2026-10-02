@@ -2,10 +2,18 @@ name: CI
 
 # Compile + unit-test gate. Exists because regressions like a model field
 # rename that left a fakeRepo test using the old API (PR #123 broke
-# `go test ./internal/manager/biz/edge/...` and sat unnoticed for weeks)
+# `go test ./core/manager/biz/edge/...` and sat unnoticed for weeks)
 # must fail a PR, not a release build. e2e tests are `//go:build e2e`
 # tagged and intentionally excluded here — they need docker + a live test
 # environment; this gate is the fast unit/compile layer.
+#
+# The build step is the multi-module one, and that is not a detail. go.work is
+# gitignored, so CI has no workspace: it resolves the sibling modules and PiG
+# through the replace directives and the tags in each go.mod, which is the
+# only resolution a release and a node building a plugin on a host will ever
+# do. A root-only `go build ./...` used to pass here while the twelve modules
+# beneath it were never compiled at all, and while two go.mod files could not
+# resolve without the workspace file CI cannot see.
 
 on:
   push:
@@ -48,17 +56,17 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           cache: true
 
-      - name: go build
-        run: go build ./...
-
-      - name: go vet
+      - name: go vet (root module)
         run: go vet ./...
 
-      - name: go test
-        run: go test ./...
+      - name: Module boundaries
+        run: make module-check
+
+      - name: Build and test every module on its own published tags
+        run: make module-standalone-check
 
       - name: Verify web console
         run: |

@@ -57,6 +57,11 @@ components:
   oxedge_model:   { in: core/edge/model/** }
 
   shared_pkg: { in: core/manager/pkg/** }
+  # 决策 66：llm 的 PiG 实现从 shared_pkg 里搬出来了。搬之前 shared_pkg 的
+  # mayDependOn 里挂着 oxpig_model 例外，理由是"PiG 支撑的 llm.Client 必须落在
+  # 控制面"——现在这个实现有自己的组件，例外可以删掉，shared_pkg 也就重新变回
+  # 一个不认识 agent 内核的底座。
+  shared_llmpig: { in: core/manager/llmpig/** }
   api:        { in: api/** }
   cmd:        { in: cmd/** }
 
@@ -145,6 +150,9 @@ components:
   oxedge_agentprofile:  { in: core/edge/agentprofile/** }
   oxpig_profile:        { in: core/pig/pigprofile/** }
   oxpig_ext:            { in: core/pig/extensions/** }
+  # The compiled PiG contract. A leaf: it imports no OpsKeeper package
+  # and nothing imports it, so it constrains only itself.
+  oxpig_contract:       { in: core/pig/pigcontract/** }
 
 # 允许依赖的正向清单（未列出 = 禁止）
 deps:
@@ -385,16 +393,31 @@ deps:
     # 不得依赖任何 BC（业务无关）。允许依赖契约层——契约层本身与业务无关，
     # 依赖它不会把任何业务语义带进 shared_pkg。
     #
-    # oxpig_model 的例外是决策 33 的直接后果：PiG 支撑的 llm.Client 必须
-    # 落在根模块（core/pig 不能 import 根模块），而 llm 住在 shared_pkg。
-    # oxedge_policygate 同理：清单校验要读闸门的决策类型，才不会对"批准"
+    # 决策 66 删掉了这里的 oxpig_model 例外。shared_pkg 里的 llm 曾经直接
+    # import pigmodel，理由是"PiG 支撑的 llm.Client 必须落在控制面"；现在
+    # 那三个文件在 shared_llmpig，方向反过来了（llmpig → shared_pkg），
+    # 例外也就没有存在理由了。这条规则由 modulecheck 的 floorIsolation
+    # 强制，不是注释。
+    #
+    # oxedge_policygate 仍在：清单校验要读闸门的决策类型，才不会对"批准"
     # 有一套自己的理解。
     mayDependOn:
       - oxcore_domain
       - oxcore_ports
       - oxcore_wire
-      - oxpig_model
       - oxplugin_sdk
+      - shared_pkg
+      - oxfloor
+
+  # 控制面里唯一绑定 PiG 适配层与 LLM 底座的包（决策 66）。
+  # 方向是 llmpig → shared_pkg：它用底座的词表实现同一个 llm.Client，
+  # 底座不反过来认识它。
+  shared_llmpig:
+    mayDependOn:
+      - oxcore_domain
+      - oxcore_ports
+      - oxcore_wire
+      - oxpig_model
       - shared_pkg
       - oxfloor
 
@@ -434,6 +457,9 @@ deps:
       - shared_migrator
       - shared_observability
       - shared_pkg
+      # 决策 66：装配层在这里第一次同时看到 LLM 底座与它的 PiG 实现，
+      # 因为 NewRegistry/NewSettingsSource 的组合本来就只发生在一处。
+      - shared_llmpig
       - oxfloor
       # The 2.0 modules assemble from cmd; only cmd may reach pig.
       - oxcore_domain

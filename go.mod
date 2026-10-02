@@ -27,7 +27,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/mysql v0.42.0
 	github.com/vincent-wuhan/opskeeper/core v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/edge v0.0.0
-	github.com/vincent-wuhan/opskeeper/core/floor v0.0.0-00010101000000-000000000000
+	github.com/vincent-wuhan/opskeeper/core/floor v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/harness v0.0.0-00010101000000-000000000000
 	github.com/vincent-wuhan/opskeeper/core/manager v0.0.0-00010101000000-000000000000
 	github.com/vincent-wuhan/opskeeper/core/pig v0.0.0-00010101000000-000000000000

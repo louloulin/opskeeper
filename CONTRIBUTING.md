@@ -28,8 +28,8 @@ opskeeper/                     # main repository
 ## Development environment
 
 ```bash
-# Go 1.25+ for backend
-go version  # go1.25.0+
+# Go 1.26+ for backend
+go version  # go1.26.0+
 
 # Python 3.10+ for plugin
 python3 --version  # 3.10+

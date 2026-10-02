@@ -391,7 +391,7 @@ func (c *openaiClient) Chat(ctx context.Context, req ChatReq) (*ChatResp, error)
 
 	// 1. Budget gate BEFORE any network call.
 	if c.budget != nil {
-		if err := c.budget.Check(ctx, req.UserID, estimatePromptTokens(req.Messages)); err != nil {
+		if err := c.budget.Check(ctx, req.UserID, EstimatePromptTokens(req.Messages)); err != nil {
 			c.metrics.requestsTotal.WithLabelValues(model, "budget_exceeded").Inc()
 			// Never log user content — we only note the fact and the user bucket.
 			c.log.Warn("llm budget check refused",
@@ -723,11 +723,17 @@ func stripSamplingParams(req *wireRequest) {
 	req.Temperature = nil
 }
 
-// estimatePromptTokens is a cheap pre-call estimate: ~4 chars per token is a
+// EstimatePromptTokens is a cheap pre-call estimate: ~4 chars per token is a
 // common rule of thumb for English, plus a fixed overhead per message for
 // role/tool framing. Good enough to gate budgets; real billing is the Usage
 // we get back.
-func estimatePromptTokens(msgs []Message) int {
+//
+// Exported because two implementations of the same Client interface have to
+// agree on it. The HTTP client in this file and the PiG-backed one in
+// core/manager/llmpig both gate a request on the same number, and a budget
+// that is enforced against one estimate and spent against the other is a
+// budget nobody can reason about.
+func EstimatePromptTokens(msgs []Message) int {
 	const perMsgOverhead = 4
 	total := 0
 	for _, m := range msgs {

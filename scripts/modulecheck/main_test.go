@@ -354,6 +354,102 @@ var _ policygate.Call
 	}
 }
 
+func TestTheSharedFloorMayNotReachThePigAdapter(t *testing.T) {
+	// The rule this pins is the second half of a refactor. Moving the three
+	// PiG-facing files out of core/manager/pkg/llm is the fix; refusing them
+	// a way back is the part that survives the next person who wants to
+	// "just reuse the settings adapter".
+	root := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	// A production file, a test file, and a sibling that stays legal: all
+	// three matter. Allowing tests would make the rule "the floor may reach
+	// the adapter as long as it is embarrassed about it", and the sibling
+	// is what proves the rule is scoped rather than a blanket ban on the
+	// module.
+	write("core/manager/pkg/llm/pigsettings.go", `package llm
+
+import "github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
+
+var _ pigmodel.SettingsSource
+`)
+	write("core/manager/pkg/llm/router_test.go", `package llm
+
+import "github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
+
+var _ pigmodel.ProviderConfig
+`)
+	write("core/manager/llmpig/pigsettings.go", `package llmpig
+
+import "github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
+
+var _ pigmodel.SettingsSource
+`)
+	write("core/manager/pkg/llm/wire.go", `package llm
+
+import "github.com/vincent-wuhan/opskeeper/core/ports"
+
+var _ ports.LLMRequest
+`)
+
+	msgs, err := checkFloorIsolation(root)
+	if err != nil {
+		t.Fatalf("checkFloorIsolation: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("want exactly two violations (the production file and the test file), got %v", msgs)
+	}
+	for _, want := range []string{
+		"core/manager/pkg/llm/pigsettings.go",
+		"core/manager/pkg/llm/router_test.go",
+	} {
+		found := false
+		for _, m := range msgs {
+			if strings.Contains(m, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no violation named %s; got %v", want, msgs)
+		}
+	}
+	for _, m := range msgs {
+		if strings.Contains(m, "core/manager/llmpig/pigsettings.go") ||
+			strings.Contains(m, "core/manager/pkg/llm/wire.go") {
+			t.Errorf("rule fired on a legal file: %q", m)
+		}
+	}
+}
+
+func TestTheFloorIsolationRulesStillDescribeTheTree(t *testing.T) {
+	// A rule whose directory does not exist checks nothing and reports
+	// success, which is the failure mode of every hardcoded path list. The
+	// root module directory is the repo itself, so at least one entry has to
+	// resolve for the rule to mean anything.
+	// The test binary runs in this package's directory, so the repository
+	// root is two levels up. Hardcoding it is the point: the rule has to
+	// hold against the tree that ships, not against a fixture.
+	msgs, err := checkFloorIsolation(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("checkFloorIsolation on the real tree: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("the real tree violates its own floor isolation rule: %v", msgs)
+	}
+	for _, r := range floorIsolation {
+		if _, err := os.Stat(filepath.Join("..", "..", filepath.Clean(filepath.FromSlash(r.Dir)))); err != nil {
+			t.Errorf("floor isolation rule points at %s, which does not exist: %v", r.Dir, err)
+		}
+	}
+}
+
 func TestTheLayerDebtLedgerIsCurrent(t *testing.T) {
 	// A debt ledger is only honest while every entry in it is still a debt.
 	// An entry for a file that was deleted, or one that no longer imports

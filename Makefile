@@ -176,6 +176,71 @@ module-race: ## 对新模块跑竞态检测（supervisor 重启循环是并发�
 	cd core/harness && go test ./... -count=1 -race
 
 # ----------------------------------------------------------------------------
+# pig pin
+# ----------------------------------------------------------------------------
+#
+# The published PiG dependency is a tag in six go.mod files, and this is the
+# only place in the repository that can turn that tag back into a directory on
+# somebody's disk. It matters because the two states are not the same build:
+# a workspace build resolves siblings through go.work, a release build
+# resolves them through the replace directives in each go.mod, and only one of
+# those is what a node running `go build` on a plugin will reproduce.
+#
+#   module-standalone-check
+#                  the gate. Builds and tests every module with GOWORK=off, so
+#                  what is proven is what CI and a node will see: the
+#                  published tags and the replace directives in each go.mod,
+#                  with no workspace. Prefix it with GOPROXY=off to also prove
+#                  the module cache is complete, which is what a sealed build
+#                  host looks like; CI needs the proxy, so it does not.
+#   pig-dev-pin    opt in to a local checkout, for the days someone is
+#                  changing PiG itself. It edits go.work, which is gitignored,
+#                  so the override cannot be committed by accident.
+#   pig-dev-unpin  undo it. Run this before trusting a green test again.
+#
+# This target is not a duplicate of module-test. go.work is gitignored, so a
+# workspace build resolves the sibling modules and the PiG tag through a file
+# CI never has; the two builds disagree exactly when a go.mod is wrong, which
+# is invisible until a release tries to build without the file. Two real
+# defects lived in that gap: a go.sum without the yaml.v3 go.mod hash, and a
+# root go.mod whose core/floor requirement only ever worked because go.work
+# covered it.
+#
+# A green `make module-test` is a statement about the workspace. This one is a
+# statement about what ships.
+
+PIG_MODULES := . core core/edge core/floor core/harness core/manager core/pig \
+	core/pig/extensions/opskeeper-gate \
+	core/pig/extensions/opskeeper-sre-readonly \
+	core/pig/extensions/opskeeper-sre-middleware \
+	core/pig/extensions/opskeeper-sre-observability \
+	core/pig/extensions/opskeeper-sre-repair \
+	sdk
+
+# Deliberately not defaulted to a path on any one developer's machine. A
+# checked-in default is how a replace directive comes back by accident.
+PIG_DEV_PATH ?=
+
+.PHONY: module-standalone-check pig-dev-pin pig-dev-unpin
+module-standalone-check: ## 关掉 workspace 与代理，按发布条件构建并测试全部模块
+	@for m in $(PIG_MODULES); do \
+		echo "  standalone: $$m"; \
+		( cd $$m && GOWORK=off go build ./... && GOWORK=off go test ./... -count=1 ) || exit 1; \
+	done
+	@echo "standalone: every module builds and tests on its own, on the published tags"
+
+pig-dev-pin: ## 本地改 PiG 时用：make pig-dev-pin PIG_DEV_PATH=/path/to/PiG
+	@test -n "$(PIG_DEV_PATH)" || { echo "usage: make pig-dev-pin PIG_DEV_PATH=/path/to/PiG"; exit 1; }
+	@test -d "$(PIG_DEV_PATH)" || { echo "no such directory: $(PIG_DEV_PATH)"; exit 1; }
+	go work edit -replace github.com/MichaelKinsy/PiG=$(PIG_DEV_PATH)
+	@echo "pig-dev-pin: the workspace now builds against $(PIG_DEV_PATH)."
+	@echo "             Tests here prove nothing about the tag. Run 'make pig-dev-unpin' then 'make module-standalone-check'."
+
+pig-dev-unpin: ## 撤销本地 PiG checkout 覆盖，回到固定 tag
+	go work edit -dropreplace github.com/MichaelKinsy/PiG
+	@echo "pig-dev-unpin: back on the published tag. Verify with 'make module-standalone-check'."
+
+# ----------------------------------------------------------------------------
 # proto
 # ----------------------------------------------------------------------------
 

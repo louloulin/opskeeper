@@ -75,7 +75,7 @@ AgentTeams生态：Dashboard | Manager | Workers(7角色)
 OpsKeeper平台：MCP工具层 | 事件控制面 | 安全执行边界 | 知识检索 | 可观测性 | 审计追溯
 
 ### 技术栈
-- 后端：Go 1.25+
+- 后端：Go 1.26+
 - 前端：React + Vite + TypeScript
 - 数据：PostgreSQL + Qdrant
 - 协议：MCP (Model Context Protocol)

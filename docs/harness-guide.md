@@ -399,7 +399,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
       - name: Build opskeeper-eval
         run: go build -o opskeeper-eval ./cmd/opskeeper-eval
       - name: Run harness suite

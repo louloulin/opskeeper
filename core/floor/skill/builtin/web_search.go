@@ -10,13 +10,16 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
 )
 
-func init() { skill.Register(WebSearch) }
+// init registers a default instance so the skill is always in the catalogue,
+// even in a process that never wires a resolver. A host with no settings
+// loaded gets SearXNG at its default URL and no key, which is exactly the
+// behaviour it had before the wiring became explicit.
+func init() { skill.Register(NewWebSearch(WebSearchDeps{})) }
 
 // Provider names — lowercased canonical form. Mirrors
 // core/manager/model/setting.ProviderXxx but kept locally to avoid
@@ -34,15 +37,89 @@ const (
 // URL row empty.
 const defaultSearxngURL = "http://searxng:8080"
 
-// WebSearch is the manager-side singleton instance — exported so
-// cmd/main.go can call SetWebSearchConfigResolver / SetHTTPClient at
-// boot to inject the config resolver and (for tests) a stub HTTP
-// client. Skills register their Executor with the global registry as a
-// value pointer, so external mutations on this var go through internal
-// sync primitives.
-var WebSearch = &webSearchSkill{
-	tavilyEndpoint: "https://api.tavily.com/search",
-	braveEndpoint:  "https://api.search.brave.com/res/v1/web/search",
+// The provider endpoints the skill talks to unless the composition root
+// overrides them. Overriding exists for tests and for deployments behind a
+// gateway; it is not a per-request setting.
+const (
+	defaultTavilyEndpoint       = "https://api.tavily.com/search"
+	defaultBraveEndpoint        = "https://api.search.brave.com/res/v1/web/search"
+	defaultWebSearchHTTPTimeout = 30 * time.Second
+)
+
+// WebSearchDeps is everything this skill cannot work out on its own.
+//
+// It is a struct rather than four setters because the executor is immutable
+// once built. The previous shape — a registered singleton behind six
+// SetWebSearch* functions — meant that "which resolver is this skill using"
+// was a property of the process at the moment of the call rather than of the
+// object, so two callers could not hold different configurations and a test
+// had to reset global state before it could run at all.
+type WebSearchDeps struct {
+	// Resolver supplies the live provider selection and the API keys.
+	// nil means "SearXNG at defaultSearxngURL, no key".
+	Resolver WebSearchConfigResolver
+	// HTTPClient carries every provider request. nil means a 30s timeout.
+	HTTPClient *http.Client
+	// TavilyEndpoint and BraveEndpoint override the public provider URLs.
+	// Empty means the public endpoint.
+	TavilyEndpoint string
+	BraveEndpoint  string
+}
+
+// NewWebSearch returns an immutable web_search executor over deps.
+//
+// The composition root calls this once and hands the result to
+// skill.Replace, which is why the catalogue can be process-wide while the
+// instance is not.
+func NewWebSearch(deps WebSearchDeps) *webSearchSkill {
+	s := &webSearchSkill{
+		tavilyEndpoint: deps.TavilyEndpoint,
+		braveEndpoint:  deps.BraveEndpoint,
+		cfgResolver:    deps.Resolver,
+		httpClient:     deps.HTTPClient,
+	}
+	if s.tavilyEndpoint == "" {
+		s.tavilyEndpoint = defaultTavilyEndpoint
+	}
+	if s.braveEndpoint == "" {
+		s.braveEndpoint = defaultBraveEndpoint
+	}
+	if s.httpClient == nil {
+		s.httpClient = &http.Client{Timeout: defaultWebSearchHTTPTimeout}
+	}
+	return s
+}
+
+// legacyTavilyResolver adapts a Tavily-only resolver into the full config
+// interface. Provider is pinned to "tavily" so existing setups keep their
+// pre-SearXNG behaviour.
+type legacyTavilyResolver struct {
+	inner TavilyKeyResolver
+}
+
+func (l legacyTavilyResolver) Provider(_ context.Context) string { return providerTavily }
+func (l legacyTavilyResolver) SearxngURL(_ context.Context) string {
+	return defaultSearxngURL
+}
+func (l legacyTavilyResolver) TavilyAPIKey(ctx context.Context) string {
+	if l.inner == nil {
+		return ""
+	}
+	return l.inner.TavilyAPIKey(ctx)
+}
+func (l legacyTavilyResolver) BraveAPIKey(_ context.Context) string { return "" }
+
+// NewWebSearchWithKeyResolver is the legacy, Tavily-only wiring.
+//
+// Deprecated: pass a WebSearchDeps whose Resolver is a
+// WebSearchConfigResolver. Kept so an integration that only ever knew about
+// Tavily keeps working; the returned executor is still immutable.
+func NewWebSearchWithKeyResolver(r TavilyKeyResolver) *webSearchSkill {
+	deps := WebSearchDeps{}
+	if r != nil {
+		deps.Resolver = legacyTavilyResolver{inner: r}
+	}
+	return NewWebSearch(deps)
 }
 
 // WebSearchConfigResolver returns the runtime config the skill needs to
@@ -75,83 +152,10 @@ type TavilyKeyResolver interface {
 	TavilyAPIKey(ctx context.Context) string
 }
 
-// SetWebSearchConfigResolver wires the full multi-provider config
-// resolver. nil disables the skill's resolver path (every invocation
-// falls back to the SearXNG default URL with no key).
-//
-// Idempotent — re-calling from tests overrides the previous resolver.
-func SetWebSearchConfigResolver(r WebSearchConfigResolver) {
-	WebSearch.mu.Lock()
-	WebSearch.cfgResolver = r
-	WebSearch.mu.Unlock()
-}
-
-// SetWebSearchKeyResolver is the legacy back-compat shim. Wraps a
-// Tavily-only resolver into a WebSearchConfigResolver that pins
-// provider=tavily.
-//
-// Deprecated: prefer SetWebSearchConfigResolver. Kept so external
-// callers (and historical tests) keep working through the transition.
-func SetWebSearchKeyResolver(r TavilyKeyResolver) {
-	if r == nil {
-		SetWebSearchConfigResolver(nil)
-		return
-	}
-	SetWebSearchConfigResolver(legacyTavilyResolver{inner: r})
-}
-
-// legacyTavilyResolver adapts a Tavily-only resolver into the full
-// config interface. Provider is pinned to "tavily" so existing setups
-// keep their pre-SearXNG behaviour.
-type legacyTavilyResolver struct {
-	inner TavilyKeyResolver
-}
-
-func (l legacyTavilyResolver) Provider(_ context.Context) string { return providerTavily }
-func (l legacyTavilyResolver) SearxngURL(_ context.Context) string {
-	return defaultSearxngURL
-}
-func (l legacyTavilyResolver) TavilyAPIKey(ctx context.Context) string {
-	if l.inner == nil {
-		return ""
-	}
-	return l.inner.TavilyAPIKey(ctx)
-}
-func (l legacyTavilyResolver) BraveAPIKey(_ context.Context) string { return "" }
-
-// SetWebSearchHTTPClient is a test seam for injecting an httptest server
-// roundtripper or a fake client. nil resets to the default 30s client.
-func SetWebSearchHTTPClient(c *http.Client) {
-	WebSearch.mu.Lock()
-	WebSearch.httpClient = c
-	WebSearch.mu.Unlock()
-}
-
-// SetWebSearchEndpoint overrides the Tavily search URL. Used by tests
-// pointing at httptest.NewServer.
-//
-// Deprecated: prefer SetWebSearchTavilyEndpoint.
-func SetWebSearchEndpoint(u string) { SetWebSearchTavilyEndpoint(u) }
-
-// SetWebSearchTavilyEndpoint overrides the Tavily search URL.
-func SetWebSearchTavilyEndpoint(u string) {
-	WebSearch.mu.Lock()
-	WebSearch.tavilyEndpoint = u
-	WebSearch.mu.Unlock()
-}
-
-// SetWebSearchBraveEndpoint overrides the Brave Search URL.
-func SetWebSearchBraveEndpoint(u string) {
-	WebSearch.mu.Lock()
-	WebSearch.braveEndpoint = u
-	WebSearch.mu.Unlock()
-}
-
 // webSearchSkill dispatches to one of three providers (SearXNG / Tavily
 // / Brave). Manager-scoped (no edge involved); ClassSafe (read-only
 // HTTP — the providers themselves are search APIs, no side effects).
 type webSearchSkill struct {
-	mu             sync.RWMutex
 	tavilyEndpoint string
 	braveEndpoint  string
 	cfgResolver    WebSearchConfigResolver
@@ -226,22 +230,12 @@ type webSearchResponse struct {
 // On "not configured" / "unreachable" we return a skipped_reason
 // envelope (NOT an error) so the LLM can tell the user how to fix it.
 func (s *webSearchSkill) Execute(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
-	s.mu.RLock()
+	// Every field below is fixed at construction, so reading them needs no
+	// lock and cannot observe a half-applied configuration.
 	tavilyURL := s.tavilyEndpoint
 	braveURL := s.braveEndpoint
 	resolver := s.cfgResolver
 	client := s.httpClient
-	s.mu.RUnlock()
-
-	if tavilyURL == "" {
-		tavilyURL = "https://api.tavily.com/search"
-	}
-	if braveURL == "" {
-		braveURL = "https://api.search.brave.com/res/v1/web/search"
-	}
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
-	}
 
 	var p webSearchParams
 	if len(bytes.TrimSpace(params)) > 0 {
