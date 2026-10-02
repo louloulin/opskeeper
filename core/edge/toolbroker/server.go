@@ -31,9 +31,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
 	"github.com/vincent-wuhan/opskeeper/core/wire"
 )
 
@@ -115,7 +117,36 @@ type Options struct {
 	Log Logger
 	// CallTimeout bounds one tool call. Default defaultCallTimeout.
 	CallTimeout time.Duration
+	// BudgetFor returns the resource ceiling the host enforces for a tool.
+	// Optional, and consulted for every call rather than once at start-up,
+	// because a package can be installed or removed while the agent runs.
+	//
+	// A tool it does not know about gets the host default. That is the whole
+	// point: a limit that only exists when a package declared it is a limit
+	// a package opts into, and the tools that flood a context are exactly
+	// the ones nobody thought to bound.
+	BudgetFor BudgetLookup
+	// SpillDir is where an oversized reply is written. Default
+	// skill.DefaultSpillDir; injectable so a test does not write into the
+	// host's real /var/tmp.
+	SpillDir string
 }
+
+// Budget is what one tool call may consume.
+//
+// It is declared here rather than taken as a domain type so that this
+// protocol layer does not have to know where the numbers came from; the
+// edge builds it from the manifest's declared limits.
+type Budget struct {
+	// MaxOutputBytes is the largest reply handed back. Zero means the host
+	// default.
+	MaxOutputBytes int64
+	// Timeout bounds this call. Zero means the broker's global ceiling.
+	Timeout time.Duration
+}
+
+// BudgetLookup answers "what may this tool consume".
+type BudgetLookup func(toolName string) Budget
 
 // Logger is the slice of a logger the server uses.
 type Logger interface {
@@ -128,6 +159,8 @@ type Server struct {
 	authorize Authorizer
 	invoke    Invoker
 	actor     ActorResolver
+	budget    BudgetLookup
+	spillDir  string
 	log       Logger
 	within    time.Duration
 
@@ -180,6 +213,8 @@ func Listen(opts Options) (*Server, error) {
 		authorize: opts.Authorize,
 		invoke:    opts.Invoke,
 		actor:     opts.Actor,
+		budget:    opts.BudgetFor,
+		spillDir:  opts.SpillDir,
 		log:       opts.Log,
 		within:    opts.CallTimeout,
 		path:      path,
@@ -326,7 +361,17 @@ func (s *Server) dispatch(line []byte) wire.ToolReply {
 		Actor:     actor,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.within)
+	budget := s.budgetFor(req.ToolName)
+	// The per-tool ceiling replaces the global one rather than narrowing it:
+	// a tool that declares none is bounded by the same five minutes as
+	// today, and a tool that declares a longer ceiling gets one, because
+	// the tools that legitimately take minutes (host_sosreport) and the
+	// tools that must not (a shell read) are the same kind of tool.
+	within := s.within
+	if budget.Timeout > 0 {
+		within = budget.Timeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), within)
 	defer cancel()
 
 	permitted, reason := s.authorize(ctx, call)
@@ -343,7 +388,103 @@ func (s *Server) dispatch(line []byte) wire.ToolReply {
 		}
 		return failed(req.ToolName + " failed: " + err.Error())
 	}
-	return wire.ToolReply{Result: out}
+	return s.replyFor(req.ToolName, out, budget.MaxOutputBytes)
+}
+
+// budgetFor resolves one tool's ceiling, applying the host default.
+func (s *Server) budgetFor(toolName string) Budget {
+	if s.budget == nil {
+		return Budget{}
+	}
+	return s.budget(toolName)
+}
+
+// boundOutput caps one tool reply before it can reach the model.
+//
+// This is the only place in the node where a tool's answer is still in host
+// hands, which is why it is here rather than in the tool: the tools that can
+// return a gigabyte are not the ones an author remembers to bound, and a
+// limit enforced by the tool is a limit the tool can decline to honour.
+//
+// Cutting a JSON document at a byte boundary would produce something the
+// model cannot parse — a failure that reads as a corrupt tool, not as a
+// truncated one. So an oversized reply is *replaced* by a notice that says
+// how big it was, what the limit is, and where the full text went. The model
+// can act on all three; it can act on none of them about a half-parsed
+// object.
+func (s *Server) replyFor(toolName string, out json.RawMessage, limit int64) wire.ToolReply {
+	if limit <= 0 {
+		limit = skill.DefaultMaxOutputBytes
+	}
+	if int64(len(out)) <= limit {
+		return wire.ToolReply{Result: out}
+	}
+
+	// The replacement has to fit inside the ceiling it is enforcing, and the
+	// preview is a *taste* of the output, not a fraction of the budget: a
+	// limit of a megabyte does not call for inlining a megabyte of preview
+	// into a notice about not inlining a megabyte. So the preview is capped
+	// twice — by what a taste is, and by what the envelope leaves over.
+	preview := skill.DefaultPreviewBytes
+	if room := int(limit) - noticeOverhead; room < preview {
+		preview = room
+	}
+	if preview < 0 {
+		preview = 0
+	}
+
+	spill := skill.Spill(toolName, s.spillDir, limit, preview, out)
+	if s.log != nil {
+		s.log.Warn("tool reply exceeded its budget",
+			"tool", toolName, "bytes", spill.TotalBytes, "limit", limit,
+			"spilled", spill.Spilled, "path", spill.SpillPath)
+	}
+	notice, err := json.Marshal(truncationNotice{
+		Truncated:   true,
+		Tool:        toolName,
+		Bytes:       spill.TotalBytes,
+		LimitBytes:  limit,
+		Spilled:     spill.Spilled,
+		SpillPath:   spill.SpillPath,
+		Explanation: spill.Inline,
+	})
+	if err != nil {
+		// Unreachable for these types, and a caller that got nothing at all
+		// would read as a tool that returned nothing — which is a different
+		// fact and a much more confusing one.
+		return failed(toolName + " returned more than its " + strconv.FormatInt(limit, 10) +
+			" byte limit, and the truncation notice could not be encoded")
+	}
+	if int64(len(notice)) > limit {
+		// A ceiling too small to state the ceiling in. This is answered as
+		// a refusal rather than as data, and the distinction is the point: a
+		// limit bounds the *result* a tool hands the model, and a refusal is
+		// the host's own sentence rather than the tool's payload. The
+		// alternatives are returning the oversized reply or returning
+		// something that quietly breaks the promise the limit just made.
+		return failed(toolName + " returned more than its " + strconv.FormatInt(limit, 10) +
+			" byte limit, and this limit is too small to carry the truncation notice; narrow the query")
+	}
+	return wire.ToolReply{Result: notice}
+}
+
+// noticeOverhead is what the truncation notice spends on itself: the JSON
+// field names, the tool name, the sizes, and the path.
+//
+// It is an estimate, and it errs high. Under-reserving would let the notice
+// exceed the ceiling by a few bytes — a bug with no symptom — while
+// over-reserving costs only a shorter preview.
+const noticeOverhead = 320
+
+// truncationNotice is what a model receives instead of an oversized reply.
+type truncationNotice struct {
+	Truncated   bool   `json:"truncated"`
+	Tool        string `json:"tool"`
+	Bytes       int    `json:"bytes"`
+	LimitBytes  int64  `json:"limit_bytes"`
+	Spilled     bool   `json:"spilled"`
+	SpillPath   string `json:"spill_path,omitempty"`
+	Explanation string `json:"explanation"`
 }
 
 func failed(reason string) wire.ToolReply { return wire.ToolReply{Error: reason} }

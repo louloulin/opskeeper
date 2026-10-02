@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 func init() { skill.Register(&Lsof{}) }
@@ -29,6 +31,10 @@ func (Lsof) Metadata() skill.Metadata {
 			{Name: "path", Param: skill.Param{Type: "string", Desc: "目标路径 (与 pid 二选一)"}},
 		},
 		ResultPreview: "{entries: [{command, pid, user, fd, type, name}], total, error?}",
+		// Bounded because the caller controls the volume: max_lines,
+		// max_matches and the file being read are all its to choose,
+		// and this is the reply that would otherwise be a model context.
+		Limits: domain.ToolLimits{OutputBytes: 262144, TimeoutSeconds: 60},
 	}
 }
 

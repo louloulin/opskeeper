@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 func init() { skill.Register(&Strace{}) }
@@ -32,6 +34,10 @@ func (Strace) Metadata() skill.Metadata {
 			{Name: "events", Param: skill.Param{Type: "string", Desc: "事件过滤, 如 'network,file,desc' (默认 all)"}},
 		},
 		ResultPreview: "{pid, syscalls: [{name, calls, errors, time_s}], duration_s, error?}",
+		// Bounded because the caller controls the volume: max_lines,
+		// max_matches and the file being read are all its to choose,
+		// and this is the reply that would otherwise be a model context.
+		Limits: domain.ToolLimits{OutputBytes: 131072, TimeoutSeconds: 300},
 	}
 }
 

@@ -294,3 +294,44 @@ func assertField(t *testing.T, err error, want string) {
 		t.Errorf("Field = %q, want %q (err: %v)", le.Field, want, err)
 	}
 }
+
+// The limits travel in the manifest because the manifest is the reviewed
+// artefact: a ceiling in code is invisible to whoever reads the package, and
+// a ceiling in the manifest that the host ignores is worse than neither.
+func TestDecodeCarriesTheDeclaredLimits(t *testing.T) {
+	withLimits := strings.Replace(goodPlugin,
+		"  install:\n",
+		"  tools:\n"+
+			"    - {name: host_grep_file, class: read, limits: {output_bytes: 262144, timeout_seconds: 120}}\n"+
+			"  install:\n", 1)
+
+	m, err := Decode([]byte(withLimits))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if len(m.Spec.Tools) != 1 {
+		t.Fatalf("decoded %d tools, want 1", len(m.Spec.Tools))
+	}
+	if got := m.Spec.Tools[0].Limits; got.OutputBytes != 262144 || got.TimeoutSeconds != 120 {
+		t.Errorf("limits decoded as %+v, want output_bytes=262144 timeout_seconds=120", got)
+	}
+}
+
+// A negative ceiling is refused at load, which is the only moment before the
+// node is running that a package can be told its manifest is wrong.
+func TestDecodeRefusesANegativeLimit(t *testing.T) {
+	for _, field := range []string{"output_bytes: -1", "timeout_seconds: -5"} {
+		withLimits := strings.Replace(goodPlugin,
+			"  install:\n",
+			"  tools:\n    - {name: host_grep_file, class: read, limits: {"+field+"}}\n  install:\n", 1)
+
+		_, err := Decode([]byte(withLimits))
+		if err == nil {
+			t.Errorf("%s was accepted; a limit is never negative", field)
+			continue
+		}
+		if !strings.Contains(err.Error(), "never negative") {
+			t.Errorf("%s: the refusal does not say what is wrong: %v", field, err)
+		}
+	}
+}

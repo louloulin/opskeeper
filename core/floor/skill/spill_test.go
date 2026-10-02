@@ -19,7 +19,7 @@ func oversized(n int) []byte {
 }
 
 func TestSpillPassesAReplythatFitsThrough(t *testing.T) {
-	res := Spill("host_dmesg", t.TempDir(), 1024, []byte("short output"))
+	res := Spill("host_dmesg", t.TempDir(), 1024, DefaultPreviewBytes, []byte("short output"))
 
 	if res.Spilled {
 		t.Error("a reply inside the limit was spilled")
@@ -37,7 +37,7 @@ func TestSpillPassesAReplythatFitsThrough(t *testing.T) {
 // caller that passes zero must not be the way to get one.
 func TestSpillTreatsNoLimitAsTheDefaultRatherThanAsNone(t *testing.T) {
 	dir := t.TempDir()
-	res := Spill("host_grep_file", dir, 0, oversized(int(DefaultMaxOutputBytes)+1))
+	res := Spill("host_grep_file", dir, 0, DefaultPreviewBytes, oversized(int(DefaultMaxOutputBytes)+1))
 
 	if res.Limit != DefaultMaxOutputBytes {
 		t.Errorf("Limit = %d, want the %d byte default", res.Limit, DefaultMaxOutputBytes)
@@ -50,7 +50,7 @@ func TestSpillTreatsNoLimitAsTheDefaultRatherThanAsNone(t *testing.T) {
 
 func TestSpillWritesTheWholeReplyWhereTheModelCanBeToldToLook(t *testing.T) {
 	out := oversized(int(DefaultMaxOutputBytes) + 512*1024)
-	res := Spill("host_grep_file", t.TempDir(), DefaultMaxOutputBytes, out)
+	res := Spill("host_grep_file", t.TempDir(), DefaultMaxOutputBytes, DefaultPreviewBytes, out)
 
 	if !res.Spilled || res.SpillPath == "" {
 		t.Fatalf("an oversized reply was not spilled: %+v", res)
@@ -70,7 +70,7 @@ func TestSpillWritesTheWholeReplyWhereTheModelCanBeToldToLook(t *testing.T) {
 	if !strings.Contains(res.Inline, "file tool") {
 		t.Errorf("the notice does not say how to read the spilled output: %q", res.Inline)
 	}
-	if len(res.Inline) > 2*spillPreviewBytes {
+	if len(res.Inline) > 2*DefaultPreviewBytes {
 		t.Errorf("the inline notice is %d bytes; the thing being bounded is the inline part", len(res.Inline))
 	}
 	_ = os.Remove(res.SpillPath)
@@ -83,7 +83,7 @@ func TestSpillIsNotWorldReadable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX file modes")
 	}
-	res := Spill("host_sosreport", t.TempDir(), 64, oversized(1024))
+	res := Spill("host_sosreport", t.TempDir(), 64, DefaultPreviewBytes, oversized(1024))
 	if !res.Spilled {
 		t.Fatal("nothing was spilled")
 	}
@@ -103,7 +103,7 @@ func TestSpillIsNotWorldReadable(t *testing.T) {
 // spill wherever the package chose.
 func TestASpillNameCannotBecomeAPath(t *testing.T) {
 	dir := t.TempDir()
-	res := Spill("../../etc/evil", dir, 64, oversized(1024))
+	res := Spill("../../etc/evil", dir, 64, DefaultPreviewBytes, oversized(1024))
 
 	if !res.Spilled {
 		t.Fatal("nothing was spilled")
@@ -135,7 +135,7 @@ func TestOldSpillsArePrunedAndForeignFilesAreNot(t *testing.T) {
 		}
 	}
 
-	Spill("host_dmesg", dir, 64, oversized(1024))
+	Spill("host_dmesg", dir, 64, DefaultPreviewBytes, oversized(1024))
 
 	if _, err := os.Stat(old); !os.IsNotExist(err) {
 		t.Error("a spill older than the retention is still on disk")
@@ -158,7 +158,7 @@ func TestAnUnwritableSpillDirectoryDegradesToTheTempDirectory(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	res := Spill("host_dmesg", dir, 64, oversized(4096))
+	res := Spill("host_dmesg", dir, 64, DefaultPreviewBytes, oversized(4096))
 
 	if !res.Spilled {
 		t.Fatal("a read-only spill directory ended the answer instead of degrading it")
@@ -192,7 +192,7 @@ func TestWhenNothingCanBeWrittenTheReplyIsStillBoundedAndExplained(t *testing.T)
 	tempDir = func() string { return seed("temp") }
 	defer func() { tempDir = original }()
 
-	res := Spill("host_dmesg", seed("spill"), 64, oversized(4096))
+	res := Spill("host_dmesg", seed("spill"), 64, DefaultPreviewBytes, oversized(4096))
 
 	if res.Spilled {
 		t.Error("a spill was reported although nothing could be written")

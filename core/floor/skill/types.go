@@ -30,6 +30,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 // Class is a skill's permission class. The zero value is safe (most
@@ -122,6 +124,19 @@ type Metadata struct {
 	// ResultPreview is a one-line hint about the result shape, shown in
 	// the UI and to the LLM. Keep terse; the actual result JSON varies.
 	ResultPreview string
+	// Limits is what this tool may consume.
+	//
+	// It lives beside the tool rather than in the manifest because the tool
+	// is what knows how much it can produce: a grep across log files and a
+	// DNS probe are the same kind of declaration in pig-ops.yaml, and only
+	// one of them can return a gigabyte. The manifest then has to agree
+	// with it — the node's build check compares the two — which is what
+	// keeps a ceiling from being a number only one of the two files has.
+	//
+	// Zero means the host default. Every high-cardinality read in this
+	// repository sets it, because those are the tools the default exists
+	// for and the ones a stricter ceiling suits.
+	Limits domain.ToolLimits
 }
 
 // Validate checks the metadata is internally consistent. Called by the

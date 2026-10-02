@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	floorSkill "github.com/vincent-wuhan/opskeeper/core/floor/skill"
 )
 
 // ToolBinding is one tool the host has decided is present, and what it is.
@@ -24,6 +26,36 @@ type ToolBinding struct {
 	// MaxBlastRadius caps what an approval may authorise for this tool.
 	// A package cannot widen it by declaration.
 	MaxBlastRadius domain.BlastRadius
+	// Limits is what this tool declared it may consume. Carried here rather
+	// than looked up from the manifest at call time because the registry is
+	// the host's own record of what it admitted: a ceiling the broker reads
+	// from the same place it reads the class is a ceiling that cannot be
+	// satisfied by one object and ignored by the other.
+	Limits domain.ToolLimits
+}
+
+// Budget returns the tool's output ceiling, with the host default applied.
+//
+// A zero in the declaration is not zero here. The default is applied at
+// lookup rather than at the call site so that "the package declared nothing"
+// and "the package declared nothing and nobody applied a default" cannot
+// both be true.
+func (b ToolBinding) Budget() int64 {
+	if b.Limits.OutputBytes <= 0 {
+		return floorSkill.DefaultMaxOutputBytes
+	}
+	return b.Limits.OutputBytes
+}
+
+// Timeout returns the tool's wall-clock ceiling, with the broker's global
+// default left to the broker: only a declared value is an override, so the
+// answer here is zero for "use the global one" and the broker reads that as
+// an absence rather than as a zero-second budget.
+func (b ToolBinding) Timeout() time.Duration {
+	if b.Limits.TimeoutSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(b.Limits.TimeoutSeconds) * time.Second
 }
 
 // Registry is the host's tool allow-list.
@@ -368,6 +400,7 @@ func RegistryFromManifests(manifests []domain.PluginManifest) (*Registry, error)
 				Class:          t.Class,
 				FromPlugin:     name,
 				MaxBlastRadius: m.Spec.Approval.MaxBlastRadius,
+				Limits:         t.Limits,
 			}); err != nil {
 				// Naming both packages matters here: a clash is a
 				// packaging problem in one of two trees, and an operator

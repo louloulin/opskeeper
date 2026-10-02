@@ -167,3 +167,91 @@ func TestAnEmptyRegistryReportsEveryDeclaredTool(t *testing.T) {
 		t.Errorf("the message should name the tool, got %q", err)
 	}
 }
+
+// A ceiling that exists in only one of the two files is the failure this
+// check exists to prevent. The manifest is what the host enforces and the
+// code is what runs, so a tool written against a 64 MiB reply and declared
+// at 1 MiB produces truncation notices nobody wrote code for — and a tool
+// declared at 64 MiB with an implementation that cannot produce that much
+// is a promise about a tool that does not exist.
+func TestALimitDisagreementIsReported(t *testing.T) {
+	r := NewRegistry("x")
+	if err := r.RegisterWithLimits("host_grep_file", domain.ClassRead,
+		domain.ToolLimits{OutputBytes: 1 << 20, TimeoutSeconds: 120}); err != nil {
+		t.Fatalf("RegisterWithLimits: %v", err)
+	}
+
+	matching := testManifest(domain.ToolDecl{
+		Name: "host_grep_file", Class: domain.ClassRead,
+		Limits: domain.ToolLimits{OutputBytes: 1 << 20, TimeoutSeconds: 120},
+	})
+	if err := r.Check(matching); err != nil {
+		t.Fatalf("matching limits must pass, got %v", err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		declared domain.ToolLimits
+	}{
+		{"output ceiling", domain.ToolLimits{OutputBytes: 4 << 20, TimeoutSeconds: 120}},
+		{"wall clock", domain.ToolLimits{OutputBytes: 1 << 20, TimeoutSeconds: 30}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := testManifest(domain.ToolDecl{
+				Name: "host_grep_file", Class: domain.ClassRead, Limits: tc.declared,
+			})
+			err := r.Check(m)
+			if err == nil {
+				t.Fatal("a ceiling that exists in only one file was accepted")
+			}
+			if !strings.Contains(err.Error(), "the host enforces") {
+				t.Errorf("the report does not say which side wins: %v", err)
+			}
+		})
+	}
+}
+
+// Registering is the author's first declaration, and a negative ceiling there
+// is caught before the manifest is ever written. Letting it through would
+// mean the error surfaces in a file the author generates from this one.
+func TestANegativeCeilingIsRefusedAtRegistration(t *testing.T) {
+	r := NewRegistry("x")
+	err := r.RegisterWithLimits("host_grep_file", domain.ClassRead,
+		domain.ToolLimits{OutputBytes: -1})
+	if err == nil {
+		t.Fatal("a negative output ceiling was registered")
+	}
+	if !strings.Contains(err.Error(), "never negative") {
+		t.Errorf("the refusal does not say what is wrong: %v", err)
+	}
+	if r.Len() != 0 {
+		t.Error("the refused tool was added to the inventory anyway")
+	}
+}
+
+// DeclaredManifest is the generator half: the limits an author registered
+// have to survive into the YAML they paste, or the pair Check compares is
+// not the pair they registered.
+func TestDeclaredManifestCarriesTheRegisteredCeilings(t *testing.T) {
+	r := NewRegistry("x")
+	r.MustRegister("a", domain.ClassRead)
+	if err := r.RegisterWithLimits("b", domain.ClassRead,
+		domain.ToolLimits{OutputBytes: 262144, TimeoutSeconds: 90}); err != nil {
+		t.Fatalf("RegisterWithLimits: %v", err)
+	}
+
+	generated := r.DeclaredManifest(testManifest())
+	if err := r.Check(generated); err != nil {
+		t.Fatalf("a manifest generated from the registry must agree with it: %v", err)
+	}
+	for _, tool := range generated.Spec.Tools {
+		if tool.Name != "b" {
+			continue
+		}
+		if tool.Limits.OutputBytes != 262144 || tool.Limits.TimeoutSeconds != 90 {
+			t.Errorf("the generated declaration carries %+v, want the registered ceilings", tool.Limits)
+		}
+		return
+	}
+	t.Fatal("the generated manifest does not declare b at all")
+}

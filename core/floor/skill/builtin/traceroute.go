@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 func init() { skill.Register(&Traceroute{}) }
@@ -32,6 +34,10 @@ func (Traceroute) Metadata() skill.Metadata {
 			{Name: "timeout_sec", Param: skill.Param{Type: "int", Default: 30, Desc: "总超时秒数, 默认 30"}},
 		},
 		ResultPreview: "{host, hops: [{hop, host, rtt_ms}], total_hops, truncated, error?}",
+		// Bounded because the caller controls the volume: max_lines,
+		// max_matches and the file being read are all its to choose,
+		// and this is the reply that would otherwise be a model context.
+		Limits: domain.ToolLimits{OutputBytes: 65536, TimeoutSeconds: 120},
 	}
 }
 

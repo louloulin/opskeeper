@@ -77,7 +77,13 @@ func liveRegistry(t *testing.T, ext shippedExtension, m domain.PluginManifest) (
 	reg := sdk.NewRegistry(ext.pkg)
 	for name := range shipped {
 		if exec, ok := skill.Get(name); ok {
-			if err := reg.Register(name, classOfSkillForTest(exec.Metadata().EffectiveClass())); err != nil {
+			// The limits come from the executor's own metadata, for the
+			// same reason the class does: reading them off the manifest
+			// would make the comparison in Check a tautology. A ceiling
+			// that only one of the two files has is a ceiling the author
+			// believes is enforced and the node does not enforce.
+			meta := exec.Metadata()
+			if err := reg.RegisterWithLimits(name, classOfSkillForTest(meta.EffectiveClass()), meta.Limits); err != nil {
 				return nil, err
 			}
 			continue

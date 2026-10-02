@@ -35,6 +35,18 @@ spec:
   # Every entry is a read. A read touches no external system, so none of
   # them enters the approval queue, and the whole package is safe to run
   # against production without a human in the loop.
+  #
+  # limits is what each tool may consume, and the node enforces it on the
+  # host side of the tool socket — a limit this file declares is a limit the
+  # host applies, not a request the tool may honour. It is declared on the
+  # high-cardinality reads because those are the ones whose volume the
+  # *caller* chooses (max_lines, max_matches, which file), and the ones that
+  # can otherwise put a gigabyte into a model's context. The tools with
+  # fixed-size answers are left to the host default, which is 1 MiB.
+  #
+  # The numbers here must match the executor's own metadata; the node's
+  # build check compares the two and fails on a difference, so a ceiling
+  # cannot exist in only one of the two files.
   tools:
     # Sorted. This list is the review surface, and a review is a diff
     # between two versions more often than it is a reading of one file.
@@ -43,19 +55,19 @@ spec:
     - { name: find_outlier_edges,  class: read }  # edges behaving unlike their peers
     - { name: find_topology_node,  class: read }  # where one component lives
     - { name: get_topology,        class: read }  # the whole graph
-    - { name: host_dmesg,          class: read }  # kernel ring buffer
-    - { name: host_grep_file,      class: read }  # search across log files
-    - { name: host_lsof,           class: read }  # open files per process
-    - { name: host_mtr,            class: read }  # combined traceroute and loss
+    - { name: host_dmesg,          class: read , limits: {output_bytes: 262144, timeout_seconds: 60}}  # kernel ring buffer
+    - { name: host_grep_file,      class: read , limits: {output_bytes: 262144, timeout_seconds: 120}}  # search across log files
+    - { name: host_lsof,           class: read , limits: {output_bytes: 262144, timeout_seconds: 60}}  # open files per process
+    - { name: host_mtr,            class: read , limits: {output_bytes: 65536, timeout_seconds: 120}}  # combined traceroute and loss
     - { name: host_netns_inspect,  class: read }  # network namespaces
     - { name: host_probe_dns,      class: read }  # name resolution
     - { name: host_probe_http,     class: read }  # HTTP reachability and latency
     - { name: host_probe_tcp,      class: read }  # TCP reachability and latency
-    - { name: host_read_journal,   class: read }  # systemd journal
-    - { name: host_sosreport,      class: read }  # support bundle summary
-    - { name: host_strace,         class: read }  # syscall trace of a pid
-    - { name: host_tail_file,      class: read }  # follow a log file
-    - { name: host_traceroute,     class: read }  # path to a host, hop by hop
+    - { name: host_read_journal,   class: read , limits: {output_bytes: 262144, timeout_seconds: 120}}  # systemd journal
+    - { name: host_sosreport,      class: read , limits: {output_bytes: 524288, timeout_seconds: 600}}  # support bundle summary
+    - { name: host_strace,         class: read , limits: {output_bytes: 131072, timeout_seconds: 300}}  # syscall trace of a pid
+    - { name: host_tail_file,      class: read , limits: {output_bytes: 262144, timeout_seconds: 60}}  # follow a log file
+    - { name: host_traceroute,     class: read , limits: {output_bytes: 65536, timeout_seconds: 120}}  # path to a host, hop by hop
     - { name: query_alert_rules,   class: read }  # what is firing
 
   # The host injects credentials for exactly these scopes. A scope not

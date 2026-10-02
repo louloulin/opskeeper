@@ -42,12 +42,13 @@ const DefaultMaxOutputBytes int64 = 1 << 20
 // `ls` they would have used anyway.
 const DefaultSpillDir = "/var/tmp"
 
-// spillPreviewBytes is how much of an oversized reply is echoed inline.
+// DefaultPreviewBytes is how much of an oversized reply is echoed inline
+// when the caller does not say.
 //
 // Small on purpose. The inline part is what enters the model's context, and
 // the model that asked for a 40 MiB grep is the reason it is being cut; it
 // gets the path, the size, and a taste, and it can ask for a narrower slice.
-const spillPreviewBytes = 1024
+const DefaultPreviewBytes = 1024
 
 // spillRetention is how long a spilled reply is kept.
 //
@@ -82,9 +83,16 @@ type SpillResult struct {
 
 // Spill bounds one tool reply.
 //
+// previewBytes caps the inline part, and it exists as a parameter rather than
+// as a constant because the *caller's* limit governs it: a caller whose
+// ceiling is 512 bytes cannot inline a kilobyte of preview and still honour
+// its own ceiling. A bound whose replacement is larger than the thing it
+// replaced is not a bound, and that is the bug this parameter was added to
+// fix — see toolbroker.boundOutput.
+//
 // A limit of zero or less means DefaultMaxOutputBytes; a dir of "" means
-// DefaultSpillDir. Both defaults exist so that a caller with nothing to say
-// still gets a bounded answer — the failure this whole mechanism exists to
+// DefaultSpillDir; a preview below zero means no preview. All three defaults
+// exist so that a caller with nothing to say still gets a bounded answer — the failure this whole mechanism exists to
 // prevent is a reply that was never bounded at all.
 //
 // Spilling is best-effort and never fails the call. A host whose /var/tmp is
@@ -93,12 +101,15 @@ type SpillResult struct {
 // failing the tool because the disk is full — would turn a truncatable
 // answer into no answer, and the model cannot tell those apart from "the tool
 // is broken".
-func Spill(toolName, dir string, limit int64, output []byte) SpillResult {
+func Spill(toolName, dir string, limit int64, previewBytes int, output []byte) SpillResult {
 	if limit <= 0 {
 		limit = DefaultMaxOutputBytes
 	}
 	if dir == "" {
 		dir = DefaultSpillDir
+	}
+	if previewBytes < 0 {
+		previewBytes = 0
 	}
 	res := SpillResult{TotalBytes: len(output), Limit: limit}
 	if int64(len(output)) <= limit {
@@ -108,7 +119,7 @@ func Spill(toolName, dir string, limit int64, output []byte) SpillResult {
 
 	path, err := writeSpill(toolName, dir, output)
 	if err != nil {
-		preview := previewOf(output)
+		preview := previewOf(output, previewBytes)
 		res.Inline = fmt.Sprintf("[%d bytes exceed the %d byte limit for %s; full output could not be saved: %v]\n%s",
 			len(output), limit, toolName, err, preview)
 		return res
@@ -116,7 +127,7 @@ func Spill(toolName, dir string, limit int64, output []byte) SpillResult {
 	res.Spilled = true
 	res.SpillPath = path
 	res.Inline = fmt.Sprintf("[%d bytes exceed the %d byte limit for %s; full output saved to %s — read it with a file tool or narrow the query]\n%s",
-		len(output), limit, toolName, path, previewOf(output))
+		len(output), limit, toolName, path, previewOf(output, previewBytes))
 	return res
 }
 
@@ -193,9 +204,9 @@ func sanitizeToolName(name string) string {
 	return b.String()
 }
 
-func previewOf(output []byte) string {
-	if len(output) <= spillPreviewBytes {
+func previewOf(output []byte, previewBytes int) string {
+	if len(output) <= previewBytes {
 		return string(output)
 	}
-	return string(output[:spillPreviewBytes])
+	return string(output[:previewBytes])
 }

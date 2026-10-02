@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 func init() { skill.Register(&Dmesg{}) }
@@ -30,6 +32,10 @@ func (Dmesg) Metadata() skill.Metadata {
 			{Name: "max_lines", Param: skill.Param{Type: "int", Default: 200, Desc: "最大返回行数, 默认 200"}},
 		},
 		ResultPreview: "{entries: [{timestamp, level, message}], total, truncated, error?}",
+		// Bounded because the caller controls the volume: max_lines,
+		// max_matches and the file being read are all its to choose,
+		// and this is the reply that would otherwise be a model context.
+		Limits: domain.ToolLimits{OutputBytes: 262144, TimeoutSeconds: 60},
 	}
 }
 

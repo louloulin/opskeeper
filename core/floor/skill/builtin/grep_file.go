@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 func init() { skill.Register(&GrepFile{}) }
@@ -31,6 +33,10 @@ func (GrepFile) Metadata() skill.Metadata {
 			{Name: "max_matches", Param: skill.Param{Type: "int", Default: 100, Desc: "最大返回命中数, 默认 100"}},
 		},
 		ResultPreview: "{path, matches: [{line_num, line}], total_matches, truncated, error?}",
+		// Bounded because the caller controls the volume: max_lines,
+		// max_matches and the file being read are all its to choose,
+		// and this is the reply that would otherwise be a model context.
+		Limits: domain.ToolLimits{OutputBytes: 262144, TimeoutSeconds: 120},
 	}
 }
 

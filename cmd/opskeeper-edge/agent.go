@@ -364,7 +364,27 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 		Authorize: toolAuthorizer(registry, gate),
 		Invoke:    &agentToolInvoker{client: client, log: log},
 		Actor:     bridge.ActorFor,
-		Log:       log,
+		// The declared limits, read from the same registry the class is
+		// read from. This is the last point at which a tool's answer is
+		// still in host hands, so it is where the ceiling is applied: the
+		// tools that can return a gigabyte are not the ones an author
+		// remembers to bound, and a limit enforced by the tool is a limit
+		// the tool can decline to honour.
+		BudgetFor: func(toolName string) toolbroker.Budget {
+			binding, ok := registry.Lookup(toolName)
+			if !ok {
+				// The authoriser refuses an unbound tool one line earlier;
+				// reaching here with an unknown name would mean the two
+				// disagree, and the default is what keeps the disagreement
+				// from also being an unbounded reply.
+				return toolbroker.Budget{}
+			}
+			return toolbroker.Budget{
+				MaxOutputBytes: binding.Budget(),
+				Timeout:        binding.Timeout(),
+			}
+		},
+		Log: log,
 	})
 	if err != nil {
 		stop()

@@ -488,8 +488,15 @@ deps:
   # The node's policy gate. It reaches contracts and nothing else: an
   # allow-list that could import an implementation is an allow-list that
   # can be edited by the thing it is meant to constrain.
+  # The host's own policy engine and the host's own tool broker both read
+  # the declared per-tool ceilings, and the default that makes "the package
+  # declared nothing" mean "the host default" rather than "unlimited" lives
+  # with the shared host infrastructure in floor/skill. The edge module
+  # depends on floor by design — see core/edge/go.mod — so these two rules
+  # name the edge half of that dependency rather than leaving it implicit in
+  # every other edge component.
   oxedge_policygate:
-    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire]
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
   # The unix-socket gate the agent process reaches across. It depends on
   # policygate's decision types (GateResult, Decision), which is the one
   # internal edge-to-edge edge, published deliberately so the socket and
@@ -500,7 +507,7 @@ deps:
   # policygate: reaching a decision is the gate's job, and a broker that
   # could decide could approve its own calls.
   oxedge_toolbroker:
-    mayDependOn: [oxcore_wire]
+    mayDependOn: [oxcore_wire, oxfloor]
   # pigwire translates PiG's stream into the frozen SSE frames. It reaches
   # the contract layer only - the translation is the whole component.
   oxpig_wire:
