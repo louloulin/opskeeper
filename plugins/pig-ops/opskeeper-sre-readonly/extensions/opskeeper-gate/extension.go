@@ -31,7 +31,7 @@ import (
 
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
 
-	"github.com/vincent-wuhan/opskeeper/core/wire"
+	"github.com/vincent-wuhan/opskeeper/plugins/pig-ops/opskeeper-sre-readonly/extensions/opskeeper-gate/wire"
 )
 
 // extensionName is how the agent names this extension in diagnostics.

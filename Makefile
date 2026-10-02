@@ -228,13 +228,27 @@ PIG_MODULES := . core core/edge core/floor core/harness core/manager core/pig \
 # checked-in default is how a replace directive comes back by accident.
 PIG_DEV_PATH ?=
 
-.PHONY: module-standalone-check pig-dev-pin pig-dev-unpin
+.PHONY: module-standalone-check pig-dev-pin pig-dev-unpin plugin-extension-build-check
 module-standalone-check: ## 关掉 workspace 与代理，按发布条件构建并测试全部模块
 	@for m in $(PIG_MODULES); do \
 		echo "  standalone: $$m"; \
 		( cd $$m && GOWORK=off go build ./... && GOWORK=off go test ./... -count=1 ) || exit 1; \
 	done
 	@echo "standalone: every module builds and tests on its own, on the published tags"
+
+# The node builds every packaged plugin extension from source, with the
+# workspace off, on a machine that has never heard of this repository. That
+# is a different build from every other one in this Makefile, so it gets its
+# own target: nothing else here would notice if the packages stopped
+# resolving on a node while continuing to build perfectly in-tree.
+#
+# The gate lives in the test suite (TestEveryPackagedExtensionBuildsTheWayThe-
+# NodeBuildsIt, so it cannot be forgotten) and runs as part of
+# module-standalone-check. This target is the fast, named way to run just
+# that gate while working on a package.
+plugin-extension-build-check: ## 按节点的方式构建每个打包扩展（GOWORK=off，节点无本地 checkout）
+	@go test ./core/floor/pluginmanifest/ -count=1 -run 'TestEveryPackaged'
+	@echo "plugin-extension-build-check: every packaged extension builds the way a node builds it"
 
 pig-dev-pin: ## 本地改 PiG 时用：make pig-dev-pin PIG_DEV_PATH=/path/to/PiG
 	@test -n "$(PIG_DEV_PATH)" || { echo "usage: make pig-dev-pin PIG_DEV_PATH=/path/to/PiG"; exit 1; }
@@ -337,33 +351,83 @@ build-linux: ## [release] 交叉编译 opskeeper linux/amd64
 		-o $(BIN_DIR)/linux-amd64/opskeeper ./cmd/opskeeper
 	@echo "built $(BIN_DIR)/linux-amd64/opskeeper"
 
+# ---- node AI agent (pig) ---------------------------------------------------
+# The node's AI agent is `pig`, and it ships inside the edge the same way the
+# other bundled binaries do. That is not a packaging preference: the edge
+# spawns it as a child process, and a node whose agent is missing is a node
+# that starts, authenticates, answers "how are you" and has no tools at all.
+# The exporters are optional because a node without them loses one signal;
+# this one is not optional, which is why the bundle treats it differently.
+#
+# The build runs from core/pig, not from the repo root, and that is the whole
+# point of the target. core/pig is the only module that requires PiG, and it
+# requires the *published tag* — the same condition `make module-standalone-check`
+# verifies. Building from the repo root would honour go.work, so a developer
+# with PiG replaced by a local checkout would ship a node running an agent built
+# from code that was never tagged, reviewed, or released. GOWORK=off makes that
+# impossible to do by accident.
+PIG_CMD := github.com/MichaelKinsy/PiG/cmd/pig
+PIG_LDFLAGS := -s -w
+
+.PHONY: build-pig-all
+build-pig-all: build-pig-linux-amd64 build-pig-linux-arm64 build-pig-darwin-amd64 build-pig-darwin-arm64 ## [release] 交叉编译节点 AI Agent (pig) 全部 4 个目标
+	@echo "built all node agent binaries in $(BIN_DIR)/<os>-<arch>/pig"
+
+.PHONY: build-pig-linux-amd64
+build-pig-linux-amd64: ## [release] 节点 AI Agent linux/amd64
+	@mkdir -p $(BIN_DIR)/linux-amd64
+	cd core/pig && GOWORK=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+		go build -trimpath -ldflags "$(PIG_LDFLAGS)" \
+		-o $(CURDIR)/$(BIN_DIR)/linux-amd64/pig $(PIG_CMD)
+
+.PHONY: build-pig-linux-arm64
+build-pig-linux-arm64: ## [release] 节点 AI Agent linux/arm64
+	@mkdir -p $(BIN_DIR)/linux-arm64
+	cd core/pig && GOWORK=off GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
+		go build -trimpath -ldflags "$(PIG_LDFLAGS)" \
+		-o $(CURDIR)/$(BIN_DIR)/linux-arm64/pig $(PIG_CMD)
+
+.PHONY: build-pig-darwin-amd64
+build-pig-darwin-amd64: ## [release] 节点 AI Agent darwin/amd64
+	@mkdir -p $(BIN_DIR)/darwin-amd64
+	cd core/pig && GOWORK=off GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 \
+		go build -trimpath -ldflags "$(PIG_LDFLAGS)" \
+		-o $(CURDIR)/$(BIN_DIR)/darwin-amd64/pig $(PIG_CMD)
+
+.PHONY: build-pig-darwin-arm64
+build-pig-darwin-arm64: ## [release] 节点 AI Agent darwin/arm64
+	@mkdir -p $(BIN_DIR)/darwin-arm64
+	cd core/pig && GOWORK=off GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 \
+		go build -trimpath -ldflags "$(PIG_LDFLAGS)" \
+		-o $(CURDIR)/$(BIN_DIR)/darwin-arm64/pig $(PIG_CMD)
+
 .PHONY: build-edge-all
-build-edge-all: build-edge-linux-amd64 build-edge-linux-arm64 build-edge-darwin-amd64 build-edge-darwin-arm64 ## [release] 交叉编译 opskeeper-edge 全部 4 个目标
-	@echo "built all edge binaries in $(BIN_DIR)/<os>-<arch>/opskeeper-edge"
+build-edge-all: build-edge-linux-amd64 build-edge-linux-arm64 build-edge-darwin-amd64 build-edge-darwin-arm64 ## [release] 交叉编译 opskeeper-edge + 节点 AI Agent 全部 4 个目标
+	@echo "built all edge binaries in $(BIN_DIR)/<os>-<arch>/{opskeeper-edge,pig}"
 
 .PHONY: build-edge-linux-amd64
-build-edge-linux-amd64: ## [release] edge linux/amd64
+build-edge-linux-amd64: build-pig-linux-amd64 ## [release] edge linux/amd64（含同架构节点 AI Agent）
 	@mkdir -p $(BIN_DIR)/linux-amd64
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
 		go build -trimpath -ldflags "-s -w $(LDFLAGS)" \
 		-o $(BIN_DIR)/linux-amd64/opskeeper-edge ./cmd/opskeeper-edge
 
 .PHONY: build-edge-linux-arm64
-build-edge-linux-arm64: ## [release] edge linux/arm64
+build-edge-linux-arm64: build-pig-linux-arm64 ## [release] edge linux/arm64（含同架构节点 AI Agent）
 	@mkdir -p $(BIN_DIR)/linux-arm64
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
 		go build -trimpath -ldflags "-s -w $(LDFLAGS)" \
 		-o $(BIN_DIR)/linux-arm64/opskeeper-edge ./cmd/opskeeper-edge
 
 .PHONY: build-edge-darwin-amd64
-build-edge-darwin-amd64: ## [release] edge darwin/amd64
+build-edge-darwin-amd64: build-pig-darwin-amd64 ## [release] edge darwin/amd64（含同架构节点 AI Agent）
 	@mkdir -p $(BIN_DIR)/darwin-amd64
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 \
 		go build -trimpath -ldflags "-s -w $(LDFLAGS)" \
 		-o $(BIN_DIR)/darwin-amd64/opskeeper-edge ./cmd/opskeeper-edge
 
 .PHONY: build-edge-darwin-arm64
-build-edge-darwin-arm64: ## [release] edge darwin/arm64
+build-edge-darwin-arm64: build-pig-darwin-arm64 ## [release] edge darwin/arm64（含同架构节点 AI Agent）
 	@mkdir -p $(BIN_DIR)/darwin-arm64
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 \
 		go build -trimpath -ldflags "-s -w $(LDFLAGS)" \

@@ -2,6 +2,7 @@ package pluginmanifest
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -16,8 +17,36 @@ import (
 // The specific per-package tests in profile_test.go stay, because they
 // say things about a particular package's promise. These are the
 // mechanical ones: every package, every extension, no exceptions.
+//
+// The one wrinkle every assertion here has to respect is that the
+// packaged copy is not byte-identical to the canonical file. The node
+// builds these from source and has no access to this repository, so the
+// wire vocabulary travels inside each extension as a local ./wire package
+// and the one import naming it is rewritten. Everything else must match
+// exactly, so the checks below apply the same single substitution the
+// script does and compare the result. A second substitution, or any edit
+// at all, still fails — the rewrite is not a licence to diverge.
 
 const syncScript = "scripts/sync-pig-ops.sh"
+
+// coreWireImport is the canonical import of the broker vocabulary, the
+// only path the generated copies rewrite.
+const coreWireImport = "github.com/vincent-wuhan/opskeeper/core/wire"
+
+// unpublishedCoreModule is the module a packaged extension must never
+// require. There is no such release: the repository has never tagged
+// core/vX.Y.Z, so "v0.0.0" is a placeholder that only ever resolved
+// through a local replace. A node has no such replace, so a require on
+// it fails the extension's very first build — after the package installs,
+// after the agent starts, after the conversation works. The agent would
+// be live and the model would have no tools, and nothing in an end-to-end
+// conversation test would notice.
+const unpublishedCoreModule = "github.com/vincent-wuhan/opskeeper/core"
+
+// publishedSDK is the one dependency a packaged extension is allowed to
+// keep. PiG stages it from its own tree at build time, so it resolves on
+// a node with no checkout of anything.
+const publishedSDK = "github.com/MichaelKinsy/PiG/extensions/sdk"
 
 // packagesDir is every shippable package.
 func packagesDir(t *testing.T) string {
@@ -25,14 +54,30 @@ func packagesDir(t *testing.T) string {
 	return filepath.Join(repoRoot(t), "plugins", "pig-ops")
 }
 
-// TestEveryPackagedExtensionMatchesItsCanonicalSource is the drift check.
-//
-// The node builds these from source and has no way to reach the reviewed
-// original, so a copy that has drifted is not a stale file — it is a node
-// running code nobody looked at. This walks every package rather than
-// naming them, so a new package is covered the moment it is added and a
-// renamed extension is caught rather than silently skipped.
-func TestEveryPackagedExtensionMatchesItsCanonicalSource(t *testing.T) {
+// packagedModule is the import path a package's copy of an extension is
+// built under. It mirrors what sync-pig-ops.sh writes into the go.mod.
+func packagedModule(pkg, ext string) string {
+	return "github.com/vincent-wuhan/opskeeper/plugins/pig-ops/" + pkg + "/extensions/" + ext
+}
+
+// asPackaged applies the one rewrite the generated copy is allowed to
+// differ by. Quoting the import matters: an unquoted replacement would
+// also catch the path inside a comment, and a comment that names the
+// canonical import is documentation, not a build input.
+func asPackaged(src, pkg, ext string) string {
+	return strings.ReplaceAll(
+		src,
+		`"`+coreWireImport+`"`,
+		`"`+packagedModule(pkg, ext)+`/wire"`,
+	)
+}
+
+// walkExtensions visits every package and every extension it ships, and
+// fails the test if it finds nothing. A drift check that walks an empty
+// tree passes forever, which is the failure mode most worth designing
+// out.
+func walkExtensions(t *testing.T, visit func(pkg, ext, canonical, packaged string)) int {
+	t.Helper()
 	packages, err := os.ReadDir(packagesDir(t))
 	if err != nil {
 		t.Fatalf("read the packages directory: %v", err)
@@ -41,7 +86,7 @@ func TestEveryPackagedExtensionMatchesItsCanonicalSource(t *testing.T) {
 		t.Fatal("no packages found; the walk below would be vacuous")
 	}
 
-	checked := 0
+	visited := 0
 	for _, pkg := range packages {
 		if !pkg.IsDir() {
 			continue
@@ -58,95 +103,248 @@ func TestEveryPackagedExtensionMatchesItsCanonicalSource(t *testing.T) {
 			if !ext.IsDir() {
 				continue
 			}
-			canonical := filepath.Join(repoRoot(t), "core", "pig", "extensions", ext.Name())
-			packaged := filepath.Join(extsDir, ext.Name())
-
-			entries, err := os.ReadDir(canonical)
-			if err != nil {
-				t.Errorf("%s ships extensions/%s but there is no canonical source at %s; "+
-					"a package may only ship extensions that exist under core/pig/extensions",
-					pkg.Name(), ext.Name(), canonical)
-				continue
-			}
-
-			for _, e := range entries {
-				name := e.Name()
-				if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-					continue
-				}
-				checked++
-				want, err := os.ReadFile(filepath.Join(canonical, name))
-				if err != nil {
-					t.Errorf("%s/%s: read canonical %s: %v", pkg.Name(), ext.Name(), name, err)
-					continue
-				}
-				got, err := os.ReadFile(filepath.Join(packaged, name))
-				if err != nil {
-					t.Errorf("%s/%s: read packaged %s: %v; run %s", pkg.Name(), ext.Name(), name, err, syncScript)
-					continue
-				}
-				if string(got) != string(want) {
-					t.Errorf("%s/%s: the packaged %s has drifted from core/pig/extensions/%s/%s; run %s",
-						pkg.Name(), ext.Name(), name, ext.Name(), name, syncScript)
-				}
-			}
+			visited++
+			visit(pkg.Name(), ext.Name(),
+				filepath.Join(repoRoot(t), "core", "pig", "extensions", ext.Name()),
+				filepath.Join(extsDir, ext.Name()))
 		}
 	}
+	return visited
+}
+
+// goBinary finds the toolchain the test builds with. It is looked up rather
+// than assumed so that a failure to find it reads as "no Go here" instead of
+// a compile error somewhere inside the assertion.
+func goBinary() (string, error) {
+	return exec.LookPath("go")
+}
+
+// TestEveryPackagedExtensionMatchesItsCanonicalSource is the drift check.
+//
+// The node builds these from source and has no way to reach the reviewed
+// original, so a copy that has drifted is not a stale file — it is a node
+// running code nobody looked at. This walks every package rather than
+// naming them, so a new package is covered the moment it is added and a
+// renamed extension is caught rather than silently skipped.
+func TestEveryPackagedExtensionMatchesItsCanonicalSource(t *testing.T) {
+	checked := walkExtensions(t, func(pkg, ext, canonical, packaged string) {
+		entries, err := os.ReadDir(canonical)
+		if err != nil {
+			t.Errorf("%s ships extensions/%s but there is no canonical source at %s; "+
+				"a package may only ship extensions that exist under core/pig/extensions",
+				pkg, ext, canonical)
+			return
+		}
+
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			want, err := os.ReadFile(filepath.Join(canonical, name))
+			if err != nil {
+				t.Errorf("%s/%s: read canonical %s: %v", pkg, ext, name, err)
+				return
+			}
+			got, err := os.ReadFile(filepath.Join(packaged, name))
+			if err != nil {
+				t.Errorf("%s/%s: read packaged %s: %v; run %s", pkg, ext, name, err, syncScript)
+				return
+			}
+			// Only the import rewrite may differ. Everything else — the
+			// framing, the line bound, the refusal to resend an unknown
+			// outcome — is compared as written.
+			if string(got) != asPackaged(string(want), pkg, ext) {
+				t.Errorf("%s/%s: the packaged %s has drifted from core/pig/extensions/%s/%s; run %s",
+					pkg, ext, name, ext, name, syncScript)
+			}
+		}
+	})
 	if checked == 0 {
 		t.Error("no packaged extension was checked, so this drift test is vacuous")
 	}
 }
 
-// TestEveryPackagedGoModCarriesNoReplaceDirective is the constraint that
-// makes the copies work at all.
+// TestEveryPackagedExtensionCarriesTheWireVocabulary asserts that the copy
+// of core/wire a package needs to build is actually inside it.
+//
+// This is the difference between a node that runs the reviewed protocol
+// and one that fails its first build. The wire package is three files of
+// DTOs with no dependencies outside the standard library, which is
+// exactly why it can travel inside an extension instead of being
+// required from a module no node can resolve. The test exists because
+// that argument is only true while the copy is actually being made: delete
+// it, or add a dependency to core/wire, and the reason evaporates without
+// anything else noticing.
+func TestEveryPackagedExtensionCarriesTheWireVocabulary(t *testing.T) {
+	wireRoot := filepath.Join(repoRoot(t), "core", "wire")
+	canonicalWire, err := os.ReadDir(wireRoot)
+	if err != nil {
+		t.Fatalf("read core/wire: %v", err)
+	}
+	wanted := 0
+	for _, e := range canonicalWire {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		wanted++
+	}
+	if wanted == 0 {
+		t.Fatal("core/wire has no sources, so this test would be vacuous")
+	}
+
+	checked := walkExtensions(t, func(pkg, ext, canonical, packaged string) {
+		packagedWire := filepath.Join(packaged, "wire")
+		entries, err := os.ReadDir(packagedWire)
+		if err != nil {
+			t.Errorf("%s/%s: the extension ships no ./wire package, so the node's build cannot "+
+				"resolve %s; run %s", pkg, ext, coreWireImport, syncScript)
+			return
+		}
+
+		// A stale file here would be worse than a missing one: it would
+		// compile and then describe a protocol the host no longer speaks.
+		if len(entries) != wanted {
+			t.Errorf("%s/%s/wire holds %d files but core/wire holds %d; a generated copy that "+
+				"outlived its source is a protocol disagreement waiting to happen; run %s",
+				pkg, ext, len(entries), wanted, syncScript)
+		}
+
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || !strings.HasSuffix(name, ".go") {
+				continue
+			}
+			want, err := os.ReadFile(filepath.Join(wireRoot, name))
+			if err != nil {
+				t.Errorf("%s/%s/wire: read canonical %s: %v", pkg, ext, name, err)
+				continue
+			}
+			got, err := os.ReadFile(filepath.Join(packagedWire, name))
+			if err != nil {
+				t.Errorf("%s/%s/wire: read packaged %s: %v; run %s", pkg, ext, name, err, syncScript)
+				continue
+			}
+			if string(got) != asPackaged(string(want), pkg, ext) {
+				t.Errorf("%s/%s/wire: the packaged %s has drifted from core/wire/%s; run %s",
+					pkg, ext, name, name, syncScript)
+			}
+		}
+	})
+	if checked == 0 {
+		t.Error("no packaged extension was checked, so this test is vacuous")
+	}
+}
+
+// TestEveryPackagedGoModResolvesOnANode is the constraint that makes the
+// copies work at all.
 //
 // A node has no checkout of this repository and no checkout of a
 // pre-stable PiG. A replace directive that resolves on a developer
-// machine points at a path that does not exist on the node, so the
-// package installs and then fails to build — which is discovered during
-// the first incident on the first node it was rolled to.
-func TestEveryPackagedGoModCarriesNoReplaceDirective(t *testing.T) {
-	packages, err := os.ReadDir(packagesDir(t))
-	if err != nil {
-		t.Fatalf("read the packages directory: %v", err)
-	}
+// machine points at a path that does not exist on the node. A require on
+// a version of the OpsKeeper module that was never published does not
+// resolve anywhere at all. Both fail the same way and at the same moment:
+// the package installs, the agent starts, and the extension's first build
+// dies.
+func TestEveryPackagedGoModResolvesOnANode(t *testing.T) {
+	checked := walkExtensions(t, func(pkg, ext, canonical, packaged string) {
+		data, err := os.ReadFile(filepath.Join(packaged, "go.mod"))
+		if err != nil {
+			t.Errorf("%s/%s: read go.mod: %v; run %s", pkg, ext, err, syncScript)
+			return
+		}
+		text := string(data)
 
-	checked := 0
-	for _, pkg := range packages {
-		if !pkg.IsDir() {
-			continue
-		}
-		extsDir := filepath.Join(packagesDir(t), pkg.Name(), "extensions")
-		exts, err := os.ReadDir(extsDir)
-		if os.IsNotExist(err) {
-			continue
-		}
-		for _, ext := range exts {
-			if !ext.IsDir() {
-				continue
+		for i, line := range strings.Split(text, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "replace") || strings.Contains(line, "=>") {
+				t.Errorf("%s/%s/go.mod line %d carries a replace directive (%q); a node cannot resolve it",
+					pkg, ext, i+1, trimmed)
 			}
-			modPath := filepath.Join(extsDir, ext.Name(), "go.mod")
-			data, err := os.ReadFile(modPath)
-			if err != nil {
-				t.Errorf("%s/%s: read go.mod: %v; run %s", pkg.Name(), ext.Name(), err, syncScript)
-				continue
-			}
-			checked++
-			for i, line := range strings.Split(string(data), "\n") {
-				if strings.HasPrefix(strings.TrimSpace(line), "replace") ||
-					strings.Contains(line, "=>") {
-					t.Errorf("%s/%s/go.mod line %d carries a replace directive (%q); a node cannot resolve it",
-						pkg.Name(), ext.Name(), i+1, strings.TrimSpace(line))
+			if strings.HasPrefix(trimmed, "require") || strings.HasPrefix(trimmed, unpublishedCoreModule) {
+				if strings.Contains(trimmed, unpublishedCoreModule) {
+					t.Errorf("%s/%s/go.mod line %d requires %s; no such release exists, so the "+
+						"node's build fails on the first attempt; run %s",
+						pkg, ext, i+1, unpublishedCoreModule, syncScript)
 				}
 			}
-			if !strings.Contains(string(data), "module github.com/vincent-wuhan/opskeeper/plugins/pig-ops/") {
-				t.Errorf("%s/%s/go.mod does not declare the packaged module path; run %s",
-					pkg.Name(), ext.Name(), syncScript)
+		}
+
+		if !strings.Contains(text, "module "+packagedModule(pkg, ext)) {
+			t.Errorf("%s/%s/go.mod does not declare the packaged module path; run %s", pkg, ext, syncScript)
+		}
+		if !strings.Contains(text, publishedSDK+" v0.3.0") {
+			t.Errorf("%s/%s/go.mod does not require %s v0.3.0; PiG stages that SDK from its own "+
+				"tree, so it is the one dependency a node can actually resolve; run %s",
+				pkg, ext, publishedSDK, syncScript)
+		}
+
+		// The go.sum is what lets the SDK resolve before PiG's staging
+		// takes over. It must exist, and it must name nothing else: a
+		// checksum for the OpsKeeper module would be a checksum for a
+		// module this package deliberately stopped requiring.
+		sum, err := os.ReadFile(filepath.Join(packaged, "go.sum"))
+		if err != nil {
+			t.Errorf("%s/%s: read go.sum: %v; run %s", pkg, ext, err, syncScript)
+			return
+		}
+		lines := 0
+		for _, line := range strings.Split(strings.TrimSpace(string(sum)), "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			lines++
+			if !strings.HasPrefix(line, publishedSDK+" ") {
+				t.Errorf("%s/%s/go.sum names %q; the only module this package resolves is %s; run %s",
+					pkg, ext, line, publishedSDK, syncScript)
 			}
 		}
-	}
+		if lines == 0 {
+			t.Errorf("%s/%s/go.sum is empty, so the SDK cannot resolve; run %s", pkg, ext, syncScript)
+		}
+	})
 	if checked == 0 {
 		t.Error("no packaged go.mod was checked, so this test is vacuous")
+	}
+}
+
+// TestEveryPackagedExtensionBuildsTheWayTheNodeBuildsIt turns the drift
+// checks above from an inspection into a proof.
+//
+// Everything else in this file compares files. This one runs the
+// compiler, with the two environment settings the agent runtime sets
+// (builder.go: GOWORK=off, CGO_ENABLED=0), over every packaged
+// extension. It is the only assertion here that would have caught the
+// original defect, because the original defect was not a drift — the
+// packaged go.mod was exactly what the script produced. It was a
+// module that resolved on a developer machine and nowhere else, and no
+// amount of reading a file distinguishes that from one that resolves
+// everywhere.
+func TestEveryPackagedExtensionBuildsTheWayTheNodeBuildsIt(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds every packaged extension from source; skipped under -short")
+	}
+	goTool, err := goBinary()
+	if err != nil {
+		t.Fatalf("locate the go toolchain: %v", err)
+	}
+
+	checked := walkExtensions(t, func(pkg, ext, canonical, packaged string) {
+		out := filepath.Join(t.TempDir(), "extension")
+		build := exec.Command(goTool, "build",
+			"-buildvcs=false", "-trimpath", "-ldflags", "-s -w", "-o", out, ".")
+		build.Dir = packaged
+		// The agent's build environment, verbatim. GOWORK=off is the one
+		// that matters: a workspace would resolve the OpsKeeper module
+		// from this checkout and hide the fact that a node cannot.
+		build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOWORK=off")
+		if combined, err := build.CombinedOutput(); err != nil {
+			t.Errorf("%s/%s: the packaged extension does not build the way the node builds it: %v\n%s",
+				pkg, ext, err, combined)
+		}
+	})
+	if checked == 0 {
+		t.Error("no packaged extension was built, so this test is vacuous")
 	}
 }
 

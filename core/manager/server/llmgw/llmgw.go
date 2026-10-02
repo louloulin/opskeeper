@@ -1,0 +1,431 @@
+// Package llmgw is the OpenAI-compatible model endpoint a node's agent talks
+// to.
+//
+// It exists because of one asymmetry: the agent on a node speaks the OpenAI
+// protocol, because PiG's OpenAI provider does, and the credentials that can
+// actually serve those requests live in the manager. So either the provider
+// key travels to the node, or the request does. The request is the one that
+// travels, and this package is the other end of it.
+//
+// What that buys is the property the whole node design rests on: a node
+// holds no provider credential, so a compromised node cannot spend the
+// operator's model budget against someone else's account, cannot reach a
+// provider endpoint that has its own allow-lists, and cannot be pointed at a
+// different model by editing a file on the host. What it costs is that the
+// manager now proxies every diagnostic turn, which is why the streaming path
+// exists and why nothing here settles a stream it could forward.
+package llmgw
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/MichaelKinsy/PiG/ai"
+	"github.com/go-chi/chi/v5"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
+)
+
+// maxRequestBodyBytes bounds one chat completion request.
+//
+// A node's agent sends a transcript and a tool catalogue, which on a long
+// investigation reaches a few hundred kilobytes. The bound is set well above
+// that because refusing a legitimate transcript produces a node that cannot
+// finish a diagnosis, and set at all because the alternative is an
+// unauthenticated-by-size body read on a route whose callers hold a
+// credential worth spending.
+const maxRequestBodyBytes = 4 << 20
+
+// EdgeAuthenticator turns a node's credential pair into an identity.
+//
+// It is the tunnel's own authenticator, declared here as the shape this
+// package needs rather than the concrete type it happens to be. That is not
+// an interface for its own sake: it is what makes the security argument in
+// this package's doc checkable. The gateway does not have a credential
+// store, a token table, or a second notion of who a node is. It calls the
+// same function the tunnel dial calls, so "a node is authenticated" means
+// one thing in the manager rather than two that drift.
+type EdgeAuthenticator interface {
+	Authenticate(ctx context.Context, accessKey, secretKey string) (tunnel.Session, error)
+}
+
+// Completer is the model call this gateway makes.
+//
+// pigmodel.Completer is the interface, named locally so a test can supply a
+// transcript back without a provider. The streaming path cannot use it — a
+// Completer settles the stream before returning — so it reaches for the
+// registry's own Model method, and that asymmetry is why both are named here.
+type Completer interface {
+	Complete(ctx context.Context, req pigmodel.Request) (*ai.AssistantMessage, error)
+}
+
+// Options configures the handler.
+type Options struct {
+	// Auth is the node credential check. Required.
+	Auth EdgeAuthenticator
+	// Completer serves both request shapes. A streaming request is answered
+	// as a well-formed frame sequence built from the settled reply; see
+	// streamCompletion for why that is a latency difference and not a
+	// correctness one.
+	Completer Completer
+	// DefaultModel is served when a request names no model.
+	DefaultModel string
+	// Log may be nil.
+	Log *slog.Logger
+}
+
+// Handler serves the gateway.
+type Handler struct {
+	opts Options
+	log  *slog.Logger
+}
+
+// NewHandler returns a Handler. It fails when the credential check or the
+// model call is missing, because a gateway that serves unauthenticated model
+// calls is worse than no gateway: it is a key dispenser with a URL.
+func NewHandler(opts Options) (*Handler, error) {
+	if opts.Auth == nil {
+		return nil, errors.New("llmgw: an edge authenticator is required")
+	}
+	if opts.Completer == nil {
+		return nil, errors.New("llmgw: a completer is required")
+	}
+	log := opts.Log
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	return &Handler{opts: opts, log: log}, nil
+}
+
+// Register attaches the routes.
+//
+// There is no X-Opskeeper-Version gate here, unlike every other route in the
+// manager, and the reason is that the caller is PiG's OpenAI provider rather
+// than the console. A version header this package invented would be one more
+// thing the provider cannot send, and the failure it would prevent — a node
+// built against a different wire shape — is already prevented by the wire
+// types refusing what they do not understand.
+func (h *Handler) Register(router chi.Router) {
+	router.Post("/v1/chat/completions", h.chatCompletions)
+	router.Get("/v1/models", h.models)
+}
+
+// edgeIdentity is the caller, resolved once per request.
+type edgeIdentity struct {
+	EdgeID uint64
+}
+
+// authenticate resolves the node behind a request.
+//
+// The credential is the node's existing pair, "accessKey:secretKey", and it
+// is the same pair the tunnel presents on every dial. Reusing it is a
+// deliberate choice over minting a second credential for this endpoint:
+//
+//   - There is nothing to rotate separately. Changing a node's secret key
+//     revokes its gateway access in the same operation, because it is the
+//     same secret. A second credential is a second thing to forget to revoke,
+//     and a revoked tunnel credential on a decommissioned host that still
+//     holds a working model token is an expensive mistake to make.
+//   - Nothing new is stored, so nothing new can leak.
+//
+// The cost is that a long-lived secret is now presented to an HTTP route, so
+// this endpoint must be behind TLS and must never log the header. Both are
+// noted where they are enforced.
+func (h *Handler) authenticate(r *http.Request) (edgeIdentity, error) {
+	header := r.Header.Get("Authorization")
+	if header == "" {
+		return edgeIdentity{}, errs.ErrUnauthorized
+	}
+	const prefix = "Bearer "
+	if !strings.HasPrefix(header, prefix) {
+		return edgeIdentity{}, errs.ErrUnauthorized
+	}
+	accessKey, secretKey, ok := strings.Cut(strings.TrimPrefix(header, prefix), ":")
+	if !ok || accessKey == "" || secretKey == "" {
+		return edgeIdentity{}, errs.ErrUnauthorized
+	}
+
+	session, err := h.opts.Auth.Authenticate(r.Context(), accessKey, secretKey)
+	if err != nil || session.EdgeID == 0 {
+		// One error for every failure. A gateway that distinguishes "no
+		// such node" from "wrong secret" is an oracle for enumerating the
+		// fleet, and the tunnel's own authenticator already collapses its
+		// failures for the same reason.
+		return edgeIdentity{}, errs.ErrUnauthorized
+	}
+	return edgeIdentity{EdgeID: session.EdgeID}, nil
+}
+
+// chatCompletions serves POST /v1/chat/completions.
+func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
+	identity, err := h.authenticate(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodyBytes+1))
+	if err != nil {
+		writeError(w, fmt.Errorf("%w: read request: %v", errs.ErrInvalid, err))
+		return
+	}
+	if len(body) > maxRequestBodyBytes {
+		writeError(w, fmt.Errorf("%w: request exceeds %d bytes", errs.ErrInvalid, maxRequestBodyBytes))
+		return
+	}
+
+	var request chatRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		writeError(w, fmt.Errorf("%w: request is not chat completions: %v", errs.ErrInvalid, err))
+		return
+	}
+	if _, err := request.toRequest(); err != nil {
+		writeError(w, err)
+		return
+	}
+	messages, err := request.messages()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if len(messages) == 0 {
+		writeError(w, fmt.Errorf("%w: messages is empty", errs.ErrInvalid))
+		return
+	}
+
+	model := request.Model
+	if model == "" {
+		model = h.opts.DefaultModel
+	}
+
+	// The node names a model and never a provider.
+	//
+	// This is the whole reason a node cannot make the manager spend money
+	// it was not asked to: the provider is resolved from the manager's own
+	// settings, so a node that asks for a model the cluster does not serve
+	// gets an error naming the cluster, and a node cannot reach a provider
+	// account the operator has not put in the cluster.
+	selection := domain.ModelSelection{Model: model}
+	pigReq := pigmodel.Request{
+		Selection: selection,
+		Messages:  messages,
+		Tools:     request.toolSchemas(),
+		// The node's own request id would be the honest cache key, but it is
+		// a value the node controls and providers key their cache on it, so
+		// it is left empty rather than forwarded. The registry applies its
+		// provider-scoped default instead.
+		SessionID: "",
+	}
+
+	id := newCompletionID()
+	created := time.Now().UTC().Unix()
+
+	if request.Stream {
+		h.streamCompletion(w, r, identity, id, model, created, pigReq)
+		return
+	}
+
+	settled, err := h.opts.Completer.Complete(r.Context(), pigReq)
+	if err != nil {
+		h.log.Warn("llmgw: completion failed",
+			slog.Uint64("edge_id", identity.EdgeID),
+			slog.String("model", model),
+			slog.Any("err", err))
+		writeError(w, err)
+		return
+	}
+	h.log.Info("llmgw: completion served",
+		slog.Uint64("edge_id", identity.EdgeID),
+		slog.String("model", model),
+		slog.Int("tool_calls", len(pigmodel.ReplyToolCalls(settled))))
+
+	writeJSON(w, http.StatusOK, reply(id, model, created, settled))
+}
+
+// streamCompletion forwards a reply as OpenAI streaming frames.
+//
+// The frames are produced from the settled reply rather than from the event
+// stream. That is a real difference from a provider that streams token by
+// token, and it is stated here rather than hidden: this gateway's first
+// purpose is that a node can reach a model at all, and a frame sequence that
+// is correct and complete is worth more than one that arrives earlier. A
+// settled reply still produces a well-formed stream, so a client cannot tell
+// the difference except in latency — and the path that would remove the
+// difference is the pigmodel.Streamer wiring, which is why that field exists
+// on Options rather than the code reaching for a registry.
+func (h *Handler) streamCompletion(
+	w http.ResponseWriter, r *http.Request, identity edgeIdentity,
+	id, model string, created int64, req pigmodel.Request,
+) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, fmt.Errorf("%w: streaming is not supported by this server", errs.ErrInvalid))
+		return
+	}
+
+	settled, err := h.opts.Completer.Complete(r.Context(), req)
+	if err != nil {
+		// The status line has to be written before the first frame, so a
+		// failure this late cannot become a 500. It is reported inside the
+		// stream instead, which is what a client mid-stream can act on.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+		writeFrame(w, errorFrame(err))
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	// The role frame first, with no content. Clients that key their state on
+	// it — several accumulate a message from deltas and need somewhere to
+	// start — treat its absence as a malformed stream.
+	writeFrame(w, chatChunk{
+		ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
+		Choices: []chatChoice{{Index: 0, Delta: &chatMessage{Role: roleAssistant}}},
+	})
+	if text := pigmodel.ReplyText(settled); text != "" {
+		writeFrame(w, chatChunk{
+			ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
+			Choices: []chatChoice{{Index: 0, Delta: &chatMessage{Role: roleAssistant, Content: text}}},
+		})
+	}
+	writeFrame(w, finalChunk(id, model, created, settled))
+	fmt.Fprint(w, "data: [DONE]\n\n")
+	flusher.Flush()
+
+	h.log.Info("llmgw: stream served",
+		slog.Uint64("edge_id", identity.EdgeID),
+		slog.String("model", model))
+}
+
+// errorFrame is an OpenAI-shaped error delivered inside a stream.
+//
+// The OpenAI wire puts the error object beside the chunk shape rather than in
+// it, and a client mid-stream is looking for exactly that key. Emitting an
+// empty choices array instead would parse as "the model finished without
+// saying anything", which is the one reading a caller cannot distinguish from
+// a real empty reply.
+func errorFrame(cause error) map[string]any {
+	message := cause.Error()
+	return map[string]any{
+		"error": map[string]any{
+			"message": message,
+			"type":    "upstream_error",
+			"code":    nil,
+		},
+	}
+}
+
+// newCompletionID mints an id in the shape clients log and correlate on.
+//
+// It is random rather than sequential on purpose: a node can see its own,
+// and a guessable id across a fleet is a way to correlate turns between
+// hosts that should not know about each other.
+func newCompletionID() string {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		// crypto/rand does not fail on any platform this runs on, and a
+		// completion id is not a security boundary — it is a correlation
+		// label. A time-derived one is strictly better than failing a
+		// diagnostic turn over a nonce.
+		return fmt.Sprintf("chatcmpl-%d", time.Now().UTC().UnixNano())
+	}
+	return "chatcmpl-" + hex.EncodeToString(buf[:])
+}
+
+// writeFrame writes one server-sent event.
+func writeFrame(w io.Writer, frame any) {
+	body, err := json.Marshal(frame)
+	if err != nil {
+		// A frame that cannot be encoded is a frame the client will treat as
+		// a dropped connection. Writing a shaped error keeps the stream
+		// terminated by [DONE] rather than by a reset.
+		body, _ = json.Marshal(map[string]string{"error": "the completion could not be encoded"})
+	}
+	fmt.Fprintf(w, "data: %s\n\n", body)
+}
+
+// writeJSON writes a JSON body.
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"the response could not be encoded","type":"opskeeper_internal_error"}}`))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+// writeError renders an error the way the OpenAI wire does, because the
+// caller is a provider client and it parses this shape to decide whether to
+// retry.
+func writeError(w http.ResponseWriter, err error) {
+	status := http.StatusBadRequest
+	kind := "invalid_request_error"
+	switch {
+	case errors.Is(err, errs.ErrUnauthorized):
+		status, kind = http.StatusUnauthorized, "authentication_error"
+	case errors.Is(err, errs.ErrForbidden):
+		status, kind = http.StatusForbidden, "permission_error"
+	case errors.Is(err, errs.ErrNotFound):
+		status, kind = http.StatusNotFound, "not_found_error"
+	}
+	writeJSON(w, status, map[string]any{
+		"error": map[string]any{
+			"message": err.Error(),
+			"type":    kind,
+			"code":    nil,
+		},
+	})
+}
+
+// models serves GET /v1/models.
+//
+// It is served so a node's agent can discover what the cluster serves rather
+// than being told a slug that may not exist. The list is the manager's own
+// configuration, which is the only list a node can be allowed to see: a node
+// that discovered providers from somewhere else would be discovering where
+// the operator's credentials live, not what this cluster can answer.
+//
+// A node authenticates to reach it, exactly as it does for a completion. An
+// unauthenticated catalogue is a free map of the deployment.
+func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
+	identity, err := h.authenticate(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	listed := map[string]any{"object": "list", "data": []map[string]any{}}
+	if h.opts.DefaultModel != "" {
+		listed["data"] = []map[string]any{{
+			"id":       h.opts.DefaultModel,
+			"object":   "model",
+			"owned_by": "opskeeper",
+		}}
+	}
+	h.log.Debug("llmgw: models listed", slog.Uint64("edge_id", identity.EdgeID))
+	writeJSON(w, http.StatusOK, listed)
+}

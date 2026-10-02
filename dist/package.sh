@@ -398,6 +398,30 @@ for target in ${EDGE_TARGETS}; do
     fi
 done
 
+# The node AI agent (pig) ships next to opskeeper-edge so install-edge.sh can
+# install it under /usr/local/lib/opskeeper-edge/pig and the edge can spawn it
+# as a child process.
+#
+# Unlike everything below this block, a missing pig is fatal rather than a
+# warning. Every other bundled binary is a signal source the node degrades
+# without; the agent is how a question gets answered at all. A release tarball
+# without it installs cleanly, the service starts, metrics flow, and the first
+# operator who asks the node anything gets an empty toolset with nothing in any
+# log to say why. `die` here is the only place in this script that refuses to
+# produce an artefact, and it refuses for the same reason install-edge.sh
+# refuses: the failure this prevents is invisible from the outside.
+for target in ${EDGE_TARGETS}; do
+    src="${REPO_ROOT}/bin/${target}/pig"
+    dst="${STAGE_DIR}/edge/pig-${target}"
+    if [ -f "$src" ]; then
+        cp "$src" "$dst"
+        chmod 755 "$dst"
+        log "  + edge/pig-${target}"
+    else
+        die "pig binary ${src} missing; a node installed from this tarball would run with no AI tools at all. Run 'make build-pig-all' first."
+    fi
+done
+
 # --- bundled plugin binaries (ADR-015) --------------------------------------
 # promtail (logs plugin) ships next to opskeeper-edge so install-edge.sh can
 # install it under /usr/local/lib/opskeeper-edge/promtail.

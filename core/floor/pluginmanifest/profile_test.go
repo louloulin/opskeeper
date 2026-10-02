@@ -87,7 +87,10 @@ func TestThePackagedCourierMatchesTheCanonicalSource(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read packaged %s: %v", name, err)
 		}
-		if string(got) != string(want) {
+		// The one permitted difference is the import of the broker
+		// vocabulary, which travels inside the packaged extension so a
+		// node can build it; see TestEveryPackagedExtensionCarriesTheWireVocabulary.
+		if string(got) != asPackaged(string(want), readOnlyProfile, "opskeeper-gate") {
 			t.Errorf("the packaged %s has drifted from core/pig/extensions/opskeeper-gate/%s; "+
 				"copy it across so the node runs the courier that was reviewed", name, name)
 		}
@@ -210,7 +213,10 @@ func TestThePackagedToolsetMatchesTheCanonicalSource(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read packaged %s: %v", name, err)
 		}
-		if string(got) != string(want) {
+		// The one permitted difference is the import of the broker
+		// vocabulary, which travels inside the packaged extension so a
+		// node can build it; see TestEveryPackagedExtensionCarriesTheWireVocabulary.
+		if string(got) != asPackaged(string(want), readOnlyProfile, "opskeeper-sre-readonly") {
 			t.Errorf("the packaged %s has drifted from core/pig/extensions/opskeeper-sre-readonly/%s; "+
 				"copy it across so the node offers the tools that were reviewed", name, name)
 		}

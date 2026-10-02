@@ -57,6 +57,16 @@ type nodeAgentConfig struct {
 	RestartBackoff time.Duration
 }
 
+// defaultAgentWorkingDir is the agent's working directory when nothing says
+// otherwise, and with it the plugin bundle root.
+//
+// It is a named constant rather than a literal at the call site because one
+// other thing has to agree with it, and that thing is a security property:
+// the agent resolves a relative configuration path against this directory, so
+// anything written inside it is inside reviewed, digest-covered plugin
+// content. See defaultAgentModelConfigDir and its test.
+const defaultAgentWorkingDir = "/var/lib/opskeeper-edge/agent"
+
 // defaultAgentPackageDir is the read-only profile every node starts with.
 //
 // It is a default, not a constant that always applies: an operator who
@@ -73,7 +83,7 @@ func loadNodeAgentConfig() nodeAgentConfig {
 	}
 	return nodeAgentConfig{
 		Binary:           envOr("OPSKEEPER_EDGE_AGENT_BIN", "pig"),
-		Cwd:              envOr("OPSKEEPER_EDGE_AGENT_DIR", "/var/lib/opskeeper-edge/agent"),
+		Cwd:              envOr("OPSKEEPER_EDGE_AGENT_DIR", defaultAgentWorkingDir),
 		Packages:         packages,
 		Provider:         os.Getenv("OPSKEEPER_EDGE_AGENT_PROVIDER"),
 		Model:            os.Getenv("OPSKEEPER_EDGE_AGENT_MODEL"),
@@ -143,6 +153,73 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 		slog.String("settings", settingsPath),
 		slog.String("profile", profilePath))
 
+	// The model endpoint, resolved before anything is started.
+	//
+	// This is a separate step from the package set above and it fails
+	// differently on purpose. A package that does not review is a boot
+	// error. A model endpoint that is half-configured is also a boot error,
+	// for a reason that has nothing to do with review: without it the node
+	// starts, loads its plugins, authenticates to the tunnel and then
+	// answers every question with no model behind it. The symptom is a node
+	// that reports healthy, and the cause is visible in exactly one place —
+	// a boot log nobody reads after the rollout is finished.
+	//
+	// A node with no endpoint at all is not an error. That is a deployment
+	// that has not been given a model yet, and the agent's own configuration
+	// scope is left entirely alone so an operator who provisioned one by
+	// hand keeps it. See agentmodel.go for why the default scope is not
+	// something to rely on.
+	modelCfg, modelConfigured, err := agentModelConfigFromEnv()
+	if err != nil {
+		return nil, nil, fmt.Errorf("edge agent model configuration: %w", err)
+	}
+	// socketPath is read by the factory when it spawns the agent, which is
+	// after the socket exists. A closure over it rather than a value,
+	// because the socket cannot be created until the gate is.
+	var socketPath string
+
+	// toolSocketPath is read the same late way: the broker cannot exist
+	// until the invoker and the authoriser do, and those cannot be built
+	// until the registry is.
+	var toolSocketPath string
+
+	// The agent's whole environment, assembled here and completed below,
+	// then read by the factory when it spawns.
+	//
+	// A Go map holds copies, not references, so the two socket entries are
+	// written again where the paths are actually assigned rather than being
+	// captured now with their empty values. That redundancy is deliberate
+	// and it is the whole reason the factory takes a map instead of being
+	// handed each value: "what the agent process is told" is then one
+	// object, and every key in it was written by code that had the value in
+	// hand. An agent told an empty gate socket path fails to load its
+	// plugins, and it does so by refusing every tool call — a node that
+	// looks configured and answers nothing.
+	agentEnv := map[string]string{
+		wire.GateSocketEnv: socketPath,
+		wire.ToolSocketEnv: toolSocketPath,
+	}
+	if modelConfigured {
+		modelsPath, err := writeAgentModelConfig(modelCfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		for key, value := range modelCfg.agentModelEnvVars() {
+			agentEnv[key] = value
+		}
+		// The endpoint and the model are safe to log; the token is not, and
+		// it is not in models.json either — see agentmodel.go.
+		log.Info("node agent model endpoint installed",
+			slog.String("models", modelsPath),
+			slog.String("provider", agentModelProviderID),
+			slog.String("base_url", modelCfg.BaseURL),
+			slog.String("model", modelCfg.Model))
+	} else {
+		log.Info("node agent has no model endpoint configured; the agent will use whatever "+
+			"provider its own configuration scope resolves",
+			slog.String("set", agentBaseURLEnv))
+	}
+
 	// The allow-list is built from the same manifests that were just
 	// admitted, and is built before the agent starts. Nothing reaches the
 	// gate later than this: a tool the host did not bind at boot is
@@ -167,16 +244,6 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 	// the gate, then the socket, and only then is the supervisor started.
 	// Every reference below is to something already constructed, and the
 	// one forward reference is a variable the factory reads late.
-
-	// socketPath is read by the factory when it spawns the agent, which is
-	// after the socket exists. A closure over it rather than a value,
-	// because the socket cannot be created until the gate is.
-	var socketPath string
-
-	// toolSocketPath is read the same late way: the broker cannot exist
-	// until the invoker and the authoriser do, and those cannot be built
-	// until the registry is.
-	var toolSocketPath string
 
 	// --mode rpc is the headless protocol this node speaks. --piglet points
 	// at the profile written above, and it is not optional: without it the
@@ -206,10 +273,12 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 			// the call, once permitted, reaches the host that actually
 			// performs it — because the agent process holds no
 			// implementation of any of them.
-			Env: map[string]string{
-				wire.GateSocketEnv: socketPath,
-				wire.ToolSocketEnv: toolSocketPath,
-			},
+			//
+			// The model endpoint and its credential are in here too, and
+			// for the same reason: the agent is told where to send a
+			// request, never how to answer one. It holds no provider key
+			// of its own and no way to reach one that was not named here.
+			Env: agentEnv,
 		})
 	}
 	sup, err := pigsupervisor.New(pigsupervisor.Config{
@@ -282,6 +351,7 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 		return nil, nil, fmt.Errorf("edge agent gate socket: %w", err)
 	}
 	socketPath = socket.Path()
+	agentEnv[wire.GateSocketEnv] = socketPath
 	priorStop := stop
 	stop = func() {
 		if err := socket.Close(); err != nil {
@@ -310,6 +380,7 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 		return nil, nil, fmt.Errorf("edge agent tool broker: %w", err)
 	}
 	toolSocketPath = broker.Path()
+	agentEnv[wire.ToolSocketEnv] = toolSocketPath
 	priorStop = stop
 	stop = func() {
 		if err := broker.Close(); err != nil {

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/wire"
+	"github.com/vincent-wuhan/opskeeper/plugins/pig-ops/opskeeper-sre-middleware/extensions/opskeeper-gate/wire"
 )
 
 // dialTimeout bounds establishing the connection.
