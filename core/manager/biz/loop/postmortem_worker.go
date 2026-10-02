@@ -47,8 +47,6 @@ import (
 	"log/slog"
 	"strings"
 	"time"
-
-	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/chatdiagnose"
 )
 
 // PostmortemContent is the LLM-rendered rich content body for the
@@ -163,14 +161,41 @@ type PostmortemInputs struct {
 	Verified  *VerifiedDelta
 }
 
-// PatternWriter is the narrow dep the postmortem worker uses to
-// write-back incident_pattern KB rows after a successful git commit.
+// PostmortemDigest is what a committed postmortem actually said, and the
+// only thing the postmortem worker is willing to hand out.
 //
-// chatdiagnose/store.CompositePatternRepo 实现本接口。postmortem_worker
-// 包不 import chatdiagnose（避免 manager/biz 跨域 import），但允许接受
-// 满足本接口的实例。
-type PatternWriter interface {
-	Save(ctx context.Context, p *chatdiagnosemodel.IncidentPattern) error
+// It used to hand out an incident_pattern row instead — a struct with 15
+// fields, 9 of them filled — and to derive that row itself: the signature,
+// the sha256 fingerprint, the severity, the confidence. That was a port that
+// still named the other side's model (the comment above it even said
+// "postmortem_worker 包不 import chatdiagnose" while the import was right
+// there), and it put the derivation of a **dedup key** in a package that does
+// not own the unique index the key has to satisfy (decision 114).
+type PostmortemDigest struct {
+	// IncidentID is the incident this postmortem belongs to.
+	IncidentID string
+	// CommitSHA is the git artifact commit the postmortem was written to. It
+	// is the pattern's provenance: "which postmortem taught us this".
+	CommitSHA string
+	// RootCause / Summary / LessonsLearned are the three fields the pattern
+	// is derived from, verbatim. The owner of the knowledge base decides
+	// what to keep of them.
+	RootCause      string
+	Summary        string
+	LessonsLearned string
+	// CreatedAt is the worker's clock at write-back time.
+	CreatedAt time.Time
+}
+
+// PatternLearner is told a postmortem was committed, and decides what to
+// learn from it. Implemented by biz/chatdiagnose, which owns the
+// incident_pattern table and the (tenant_id, fingerprint) unique index the
+// derived fingerprint deduplicates on.
+//
+// A failure is non-fatal by contract: the postmortem is already committed
+// to git, and losing a knowledge row must not un-commit it.
+type PatternLearner interface {
+	LearnFromPostmortem(ctx context.Context, digest PostmortemDigest) error
 }
 
 // PostmortemPhaseWorker is the PhaseWorker for PhasePostmortem.
@@ -179,12 +204,12 @@ type PatternWriter interface {
 type PostmortemPhaseWorker struct {
 	BasePhaseWorker
 
-	caller        LLMCaller
-	gitSink       GitArtifactSink
-	inputs        UpstreamContractLoader
-	patternWriter PatternWriter // 可选；nil → 跳过 KB 写回
-	clock         func() time.Time
-	log           *slog.Logger
+	caller  LLMCaller
+	gitSink GitArtifactSink
+	inputs  UpstreamContractLoader
+	learner PatternLearner // 可选；nil → 跳过 KB 写回
+	clock   func() time.Time
+	log     *slog.Logger
 }
 
 // NewPostmortemPhaseWorker wires the worker. All 3 narrow deps
@@ -197,7 +222,7 @@ func NewPostmortemPhaseWorker(
 	caller LLMCaller,
 	gitSink GitArtifactSink,
 	inputs UpstreamContractLoader,
-	patternWriter PatternWriter,
+	learner PatternLearner,
 	log *slog.Logger,
 ) (*PostmortemPhaseWorker, error) {
 	if caller == nil {
@@ -217,12 +242,12 @@ func NewPostmortemPhaseWorker(
 			PhaseRef:   PhasePostmortem,
 			VerifierMs: PostmortemPhaseVerifierTimeoutMs,
 		},
-		caller:        caller,
-		gitSink:       gitSink,
-		inputs:        inputs,
-		patternWriter: patternWriter,
-		clock:         func() time.Time { return time.Now().UTC() },
-		log:           log,
+		caller:  caller,
+		gitSink: gitSink,
+		inputs:  inputs,
+		learner: learner,
+		clock:   func() time.Time { return time.Now().UTC() },
+		log:     log,
 	}, nil
 }
 
@@ -354,10 +379,10 @@ func (w *PostmortemPhaseWorker) Executor(ctx context.Context, plan Plan) (ExecRe
 	}
 
 	// KB write-back (chatruntime-kb-implementation):
-	// git commit 成功后 → 调 patternWriter.Save(IncidentPattern)。
-	// 失败 MUST slog warn + continue（不阻塞 postmortem）。
-	if commitErr == nil && commitSHA != "" && w.patternWriter != nil {
-		w.writeBackPattern(ctx, incidentID, content, commitSHA)
+	// git commit 成功后 → 告诉知识库的拥有者「有一份 postmortem 落库了」，
+	// 由它决定学出什么。失败 MUST slog warn + continue（不阻塞 postmortem）。
+	if commitErr == nil && commitSHA != "" && w.learner != nil {
+		w.learnFromPostmortem(ctx, incidentID, content, commitSHA)
 	}
 	llmEnd := w.clock()
 
@@ -427,54 +452,23 @@ func (w *PostmortemPhaseWorker) Executor(ctx context.Context, plan Plan) (ExecRe
 	}, nil
 }
 
-// writeBackPattern 把 postmortem 落地到 incident_pattern KB（双写 MySQL + Qdrant）。
-//
-// 失败语义（继承 zero-manual-ops-loop §"KB miss MUST NOT block the chat"）：
-//   - Embedder 失败 → return（slog warn）
-//   - fingerprint 计算失败 → return（slog warn）
-//   - MySQL UPSERT 失败 → slog warn，**继续**（Qdrant 已写入）
-//   - Qdrant Upsert 失败 → slog warn，**继续**（MySQL 已写入 / 下次 write-back 重建）
-//   - 任何失败 MUST NOT 让 postmortem_worker 报错
-//
+// learnFromPostmortem 把「刚落库的 postmortem」交给知识库的拥有者。
 // 入参：
 //
 //	incidentID: postmortem 所属 incident
-//	content:    LLM 渲染的 PostmortemContent（用于 RootCause / Severity / Symptom）
-//	commitSHA:  git artifact commit SHA（写回时作 postmortem_ref）
-func (w *PostmortemPhaseWorker) writeBackPattern(ctx context.Context, incidentID string, content PostmortemContent, commitSHA string) {
-	// 1. 构造 signature：resource_type:root_cause_object:severity
-	//    当前 PostmortemContent 没有 ResourceType / Severity 字段；从
-	//    content.RootCause + content.Summary 启发式提取（保守值，避免幻觉）。
-	resourceType := "incident" // 默认；本 change 不解析 RootCauseJSON（避免 manager/biz 跨域 import closed-loop-orchestrator 包）
-	rootCauseObject := truncateForSignature(content.RootCause, 64)
-	severity := inferSeverity(content)
-	signature := resourceType + ":" + rootCauseObject + ":" + severity
-
-	// 2. 计算 fingerprint（sha256[:16]）— 本 change 直接走 MySQL 路径，
-	//    embedder 留给 KB 命中路径（postmortem 不需要每次都算 embed，
-	//    以免 Embedder 慢调用阻塞 postmortem）。MySQL metadata 写回 + Qdrant
-	//    upsert 都接受 fingerprint 作为 dedup key（详见 CompositePatternRepo.Save 注释）。
-	fpHash := sha256.Sum256([]byte(signature))
-	fingerprint := hex.EncodeToString(fpHash[:])[:16]
-
-	// 3. 构造 IncidentPattern
-	now := w.clock()
-	pattern := chatdiagnosemodel.IncidentPattern{
-		TenantID:           inferTenantFromCtx(ctx), // 占位：默认 "" 由 caller 保证
-		ResourceType:       resourceType,
-		RootCauseObject:    rootCauseObject,
-		Signature:          signature,
-		SourcePostmortemID: commitSHA,
-		Fingerprint:        fingerprint,
-		Severity:           severity,
-		Confidence:         0.5, // postmortem 默认 0.5（中间置信度）
-		CreatedAt:          now,
-		UpdatedAt:          now,
+//	content:    LLM 渲染的 PostmortemContent（只取 RootCause / Summary /
+//	            LessonsLearned 三个事实字段，措辞与截断都由对方决定）
+//	commitSHA:  git artifact commit SHA（作为 pattern 的 provenance）
+func (w *PostmortemPhaseWorker) learnFromPostmortem(ctx context.Context, incidentID string, content PostmortemContent, commitSHA string) {
+	digest := PostmortemDigest{
+		IncidentID:     incidentID,
+		CommitSHA:      commitSHA,
+		RootCause:      content.RootCause,
+		Summary:        content.Summary,
+		LessonsLearned: content.LessonsLearned,
+		CreatedAt:      w.clock(),
 	}
-
-	// 4. 调 patternWriter.Save → CompositePatternRepo 双写 MySQL + Qdrant
-	//    任一失败 MUST slog warn + 继续。
-	if err := w.patternWriter.Save(ctx, &pattern); err != nil {
+	if err := w.learner.LearnFromPostmortem(ctx, digest); err != nil {
 		w.log.Warn("postmortem: KB write-back failed (non-fatal)",
 			slog.String("incident_id", incidentID),
 			slog.String("commit_sha", commitSHA),
@@ -483,43 +477,7 @@ func (w *PostmortemPhaseWorker) writeBackPattern(ctx context.Context, incidentID
 	}
 	w.log.Info("postmortem: KB write-back succeeded",
 		slog.String("incident_id", incidentID),
-		slog.String("commit_sha", commitSHA),
-		slog.String("fingerprint", fingerprint))
-}
-
-// truncateForSignature 截断 + 清洗 root cause 文本。
-func truncateForSignature(s string, maxLen int) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "unknown"
-	}
-	if len(s) > maxLen {
-		s = s[:maxLen]
-	}
-	return s
-}
-
-// inferSeverity 从 PostmortemContent 启发式推断 severity（low/medium/high/critical）。
-func inferSeverity(content PostmortemContent) string {
-	text := strings.ToLower(content.Summary + " " + content.RootCause + " " + content.LessonsLearned)
-	switch {
-	case strings.Contains(text, "critical") || strings.Contains(text, "p0"):
-		return "critical"
-	case strings.Contains(text, "high") || strings.Contains(text, "p1"):
-		return "high"
-	case strings.Contains(text, "low") || strings.Contains(text, "minor"):
-		return "low"
-	default:
-		return "medium"
-	}
-}
-
-// inferTenantFromCtx 从 context 提取 tenant_id（占位 — 当前未注入，
-// 返回 "" 由 caller 保证；ChatDiagnoseService 透传 tenant_id）。
-func inferTenantFromCtx(_ context.Context) string {
-	// 简化实现：tenant_id 由 postmortem caller 在 Planner 阶段确定，
-	// 当前 change 不修改 PostmortemInputs，新增字段 deferred。
-	return ""
+		slog.String("commit_sha", commitSHA))
 }
 
 // Verifier checks the Executor's PostmortemContent against

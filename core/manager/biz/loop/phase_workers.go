@@ -138,7 +138,7 @@ type PhaseWorkerDeps struct {
 	ApprovedCritiqueLoader      ApprovedCritiqueLoader      // approved worker（基于 CritiqueDimensions 算 severity）
 	RemediationLoader           RemediationOptionLoader     // approved worker (read upstream remediation options)
 	RemediationInvoker          RemediationInvoker          // approved worker (actually perform the remediation action)
-	PatternWriter               PatternWriter               // postmortem worker（KB write-back hook，nil → 跳过）
+	PatternLearner              PatternLearner              // postmortem worker（KB write-back hook，nil → 跳过）
 }
 
 // DefaultPhaseWorkerFactory builds the seven default PhaseWorker
@@ -227,7 +227,7 @@ func DefaultPhaseWorkerFactory(deps PhaseWorkerDeps) (map[Phase]PhaseWorker, err
 		if upstreamLoader == nil {
 			upstreamLoader = NoopUpstreamContractLoader{}
 		}
-		postmortem, err := NewPostmortemPhaseWorker(deps.LLMCaller, gitSink, upstreamLoader, deps.PatternWriter, logger)
+		postmortem, err := NewPostmortemPhaseWorker(deps.LLMCaller, gitSink, upstreamLoader, deps.PatternLearner, logger)
 		if err != nil {
 			return nil, fmt.Errorf("loop: build postmortem worker: %w", err)
 		}

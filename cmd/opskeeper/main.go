@@ -2321,7 +2321,7 @@ func main() {
 	//  - EmbedderAdapter: bridge pkg/embedding → chatdiagnose.Embedder
 	var (
 		chatDiagKB managerbizchatdiagnose.KBLookup
-		// compositeRepo 在外层声明，供 postmortem worker 的 PatternWriter 复用
+		// compositeRepo 在外层声明，供 postmortem worker 的 PatternLearner 复用
 		compositeRepo *managerdatachatdiagnosestore.CompositePatternRepo
 	)
 	chatDiagAudit := managerbizchatdiagnose.NewAuditAdapter(auditUC)
@@ -2391,6 +2391,14 @@ func main() {
 	approvedDecisionLoader := managerbizloop.NewDBApprovedDecisionLoader(
 		managerdataloopstore.NewContractRepoDB(db), log,
 	)
+	// The postmortem phase worker does not learn by itself: it reports the
+	// committed postmortem and the knowledge base's owner derives the row.
+	// Kept as a nil interface (not a nil-valued one) when the KB is not
+	// available, so the worker skips write-back instead of calling through.
+	var patternLearner managerbizloop.PatternLearner
+	if compositeRepo != nil {
+		patternLearner = managerbizchatdiagnose.NewPatternLearner(compositeRepo)
+	}
 	loopWorkers, err := managerbizloop.DefaultPhaseWorkerFactory(managerbizloop.PhaseWorkerDeps{
 		// loop-repository-integration + loop-recovery-integration + agentteams-opskeeper-integration:
 		// all narrow deps on real adapters when DB available.
@@ -2408,8 +2416,15 @@ func main() {
 		GitArtifactSink:             loopGitSinkAdapter,
 		UpstreamContractLoader:      loopContractLoaderAdapter,
 		// chatruntime-kb-implementation: KB write-back hook for postmortem.
-		// nil 默认跳过 KB 写回；后续 Day 5+ 集成期注入 *chatdiagnosestore.CompositePatternRepo。
-		PatternWriter:          compositeRepo,
+		// nil 默认跳过 KB 写回。
+		//
+		// The nil test is on the concrete pointer, not on the interface. When
+		// Qdrant or the embedder is missing, compositeRepo stays a nil
+		// *CompositePatternRepo; handing that to an interface field makes the
+		// field non-nil, and the first postmortem of the run then calls Save
+		// on a nil receiver and dereferences c.meta. The previous wiring had
+		// exactly that shape (decision 114).
+		PatternLearner:         patternLearner,
 		ApprovedCritiqueLoader: managerbizloop.NoopApprovedCritiqueLoader{},
 		RemediationLoader:      loopRemediationLoader,
 		RemediationInvoker:     loopRemediationInvoker,

@@ -121,7 +121,7 @@ var edges = map[edge]string{
 
 	{"chatdiagnose", "aiops"}: "chat diagnosis runs on the agent's chat runtime",
 	{"chatdiagnose", "audit"}: "promoting a chat into an investigation is an operator action and belongs in the chain",
-	{"chatdiagnose", "loop"}:  "promoting a chat hands the work to the loop domain, which owns the investigation",
+	{"chatdiagnose", "loop"}:  "promoting a chat hands the work to the loop domain, which owns the investigation; the reverse of that edge used to exist because the loop wrote the knowledge base's own rows (decision 114)",
 
 	{"demo", "alert"}: "the scenario seeds and narrates real incident rows, so it writes the production alert model rather than a fixture of it. The alert side asks the scenario whether it owns a firing through a correlator port instead of importing it back (decision 113)",
 
@@ -144,10 +144,9 @@ var edges = map[edge]string{
 
 	{"integration", "grafana"}: "the integration tests build a real grafana client against a real endpoint",
 
-	{"loop", "aiops"}:        "the loop drives the agent kernel and builds its prompts through the agent's own prompt guard and base-tool contracts",
-	{"loop", "alert"}:        "an investigation starts from an alert and closes it, so the loop reads and updates alert state",
-	{"loop", "chatdiagnose"}: "the loop dispatches a chat into the investigation, which means naming the chat vocabulary",
-	{"loop", "report"}:       "a finished investigation produces its output through the report domain",
+	{"loop", "aiops"}:  "the loop drives the agent kernel and builds its prompts through the agent's own prompt guard and base-tool contracts",
+	{"loop", "alert"}:  "an investigation starts from an alert and closes it, so the loop reads and updates alert state",
+	{"loop", "report"}: "a finished investigation produces its output through the report domain",
 
 	{"marketplace", "aiops"}:        "the marketplace lists what an agent can install, which is the agent's tool vocabulary",
 	{"marketplace", "pluginimport"}: "installing from the marketplace is the plugin-import domain's job",
@@ -191,11 +190,10 @@ func pair(a, b string) [2]string {
 // cycle is made of today, so the next person can see what would have to
 // change to cut it.
 var cycles = map[[2]string]string{
-	{"aiops", "alert"}:       "the agent raises alerts and the alert domain asks the agent to investigate them; cutting this means alerts dispatch an investigation id instead of calling a runtime",
-	{"aiops", "hitl"}:        "the agent requests a human and the approval policy names agent remediations; cutting this means the policy reads a remediation descriptor rather than the agent's vocabulary",
-	{"aiops", "loop"}:        "the agent kernel drives the loop and the loop builds the agent's prompts; this is the largest cycle in the tree and the reason the registry seam (decision 104) exists",
-	{"chatdiagnose", "loop"}: "a chat is promoted into the loop and the loop dispatches chats; cutting this means the promotion is an event rather than a call",
-	{"loop", "report"}:       "the loop produces a report and a report is produced from a loop investigation; cutting this means the report domain subscribes rather than being called",
+	{"aiops", "alert"}: "the agent raises alerts and the alert domain asks the agent to investigate them; cutting this means alerts dispatch an investigation id instead of calling a runtime",
+	{"aiops", "hitl"}:  "the agent requests a human and the approval policy names agent remediations; cutting this means the policy reads a remediation descriptor rather than the agent's vocabulary",
+	{"aiops", "loop"}:  "the agent kernel drives the loop and the loop builds the agent's prompts; this is the largest cycle in the tree and the reason the registry seam (decision 104) exists",
+	{"loop", "report"}: "the loop produces a report and a report is produced from a loop investigation; cutting this means the report domain subscribes rather than being called",
 }
 
 // defaultRules is the shipped boundary.
