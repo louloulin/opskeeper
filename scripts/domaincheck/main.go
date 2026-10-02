@@ -144,9 +144,8 @@ var edges = map[edge]string{
 
 	{"integration", "grafana"}: "the integration tests build a real grafana client against a real endpoint",
 
-	{"loop", "aiops"}:  "the loop drives the agent kernel and builds its prompts through the agent's own prompt guard and base-tool contracts",
-	{"loop", "alert"}:  "an investigation starts from an alert and closes it, so the loop reads and updates alert state",
-	{"loop", "report"}: "a finished investigation produces its output through the report domain",
+	{"loop", "aiops"}: "the loop drives the agent kernel and builds its prompts through the agent's own prompt guard and base-tool contracts",
+	{"loop", "alert"}: "an investigation starts from an alert and closes it, so the loop reads and updates alert state",
 
 	{"marketplace", "aiops"}:        "the marketplace lists what an agent can install, which is the agent's tool vocabulary",
 	{"marketplace", "pluginimport"}: "installing from the marketplace is the plugin-import domain's job",
@@ -161,7 +160,7 @@ var edges = map[edge]string{
 	{"pluginimport", "aiops"}: "an imported plugin becomes part of the agent's tool surface, which is assembled in the chat runtime",
 
 	{"report", "aiops"}: "a report is produced out of an agent conversation",
-	{"report", "loop"}:  "a report can also be produced out of a loop investigation",
+	{"report", "loop"}:  "a report is produced out of an agent conversation or a loop investigation, and the postmortem service renders the loop's own postmortem contract (PostmortemDoc / RootCauseJSON / CritiqueScore) — one direction only since decision 115",
 
 	{"systemhealth", "alert"}: "the health summary counts active alerts through the alert service",
 	{"systemhealth", "edge"}:  "the health summary reports node reachability from the edge domain",
@@ -193,7 +192,6 @@ var cycles = map[[2]string]string{
 	{"aiops", "alert"}: "the agent raises alerts and the alert domain asks the agent to investigate them; cutting this means alerts dispatch an investigation id instead of calling a runtime",
 	{"aiops", "hitl"}:  "the agent requests a human and the approval policy names agent remediations; cutting this means the policy reads a remediation descriptor rather than the agent's vocabulary",
 	{"aiops", "loop"}:  "the agent kernel drives the loop and the loop builds the agent's prompts; this is the largest cycle in the tree and the reason the registry seam (decision 104) exists",
-	{"loop", "report"}: "the loop produces a report and a report is produced from a loop investigation; cutting this means the report domain subscribes rather than being called",
 }
 
 // defaultRules is the shipped boundary.

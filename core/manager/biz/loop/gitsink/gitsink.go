@@ -1,21 +1,34 @@
-// Package gitsink 提供 loop.GitArtifactSink 的 narrow adapter，
-// 包装 core/manager/biz/report.PostmortemSink（默认 *report.GitArtifactSink）。
+// Package gitsink provides loop.GitArtifactSink over whatever store owns
+// the postmortem documents.
 //
-// 设计动机：
-//   - loop 包不能直接 import report 包（形成 loop → report → loop 的 cycle；
-//     report.postmortem_sink.go 实现 loop.PostmortemSink 接口）
-//   - 通过把 adapter 放在独立子包 loop/gitsink，包图为：
-//     loop/gitsink → report → loop
-//     无环 ✅
+// The previous version of this file imported core/manager/biz/report and its
+// doc comment explained why that was fine:
 //
-// 行为：
-//   - 构造最小 PostmortemDoc（schema_version=v1, IncidentID, Markdown, GeneratedAt,
-//     Sources=["loop.postmortem"]）满足 ValidatePostmortemDoc 不变量
-//   - 失败：slog warn + 返回 ("", err)（postmortem worker 会把 commit failure 视为非致命）
+//   - loop 包不能直接 import report 包（形成 loop → report → loop 的 cycle）
+//   - 通过把 adapter 放在独立子包 loop/gitsink，包图为 loop/gitsink →
+//     report → loop，无环 ✅
 //
-// 已知 limitation：
-//   - body 来源目前仅 postmortem worker 自渲染 Markdown；Day 5+ 接 LLM-driven rendering 时
-//     可在 adapter 上加 ContentSource 回调让 Sources 字段精确反映来源（不破坏接口）
+// The package graph was acyclic. The **domain** graph was not: domaincheck
+// resolves biz/loop/gitsink to the `loop` domain, so the cycle stood and the
+// ✅ was describing a different graph than the one the boundary rule is
+// about. Same shape as decision 114 — an interface declared on the consuming
+// side whose signature still named the producing side.
+//
+// The import was never needed. All this adapter does is build a minimal
+// PostmortemDoc and hand it to something that can save one, so it now says
+// that (Sink) instead of saying who that something is. The production
+// implementation, *report.GitArtifactSink, satisfies Sink structurally, and
+// cmd/opskeeper/main.go still passes it — unchanged, because structural
+// satisfaction needs no import on either side.
+//
+// Behaviour, including the empty-input soft failures and the nil-sink panic,
+// is unchanged; see decision 115.
+//
+// Known limitation (carried over, still open):
+//   - the body currently comes only from the postmortem worker's own
+//     self-rendered Markdown. When LLM-driven rendering lands, a
+//     ContentSource callback can be added on the adapter so the Sources
+//     field reflects the real origin without breaking the interface.
 package gitsink
 
 import (
@@ -24,18 +37,32 @@ import (
 	"time"
 
 	loop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
-	managerbizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
 )
 
-// Adapter 适配 report.PostmortemSink → loop.GitArtifactSink。
+// Sink persists a rendered postmortem document and returns its commit SHA.
+//
+// It is the same shape as report.PostmortemSink and is satisfied by
+// *report.GitArtifactSink without either side importing the other. Declared
+// here because the adapter's job is to call "something that can save a doc",
+// and naming who that is turns a one-way call into a two-way dependency
+// (decision 115).
+type Sink interface {
+	Save(ctx context.Context, doc *loop.PostmortemDoc) (commitSHA string, err error)
+}
+
+// Adapter 适配 Sink → loop.GitArtifactSink。
 type Adapter struct {
-	sink managerbizreport.PostmortemSink
+	sink Sink
 	log  *slog.Logger
 	now  func() time.Time
 }
 
 // NewAdapter 构造。sink 不得为 nil；log 为 nil 时回退 slog.Default()。
-func NewAdapter(sink managerbizreport.PostmortemSink, log *slog.Logger) *Adapter {
+//
+// The nil check is on the interface, so it catches an unwired adapter and
+// not a nil pointer stored inside it — a limitation it has always had, kept
+// as-is so no caller changes shape.
+func NewAdapter(sink Sink, log *slog.Logger) *Adapter {
 	if sink == nil {
 		panic("gitsink: NewAdapter: sink is nil")
 	}

@@ -7,9 +7,24 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	loopgitsink "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop/gitsink"
 	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact"
 	gitastore "github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/store"
 )
+
+// TestGitArtifactSinkSatisfiesTheGitsinkPort is the counterpart of the
+// assertion that used to live in biz/loop/gitsink's own test, where naming
+// this type is what recreated the loop → report edge (decision 115).
+//
+// It sits here because this is the one file where both names are honestly
+// visible: cmd/opskeeper/main.go hands *GitArtifactSink to
+// gitsink.NewAdapter, and this is the assertion that the hand-off compiles
+// for the reason the wiring thinks it does — not because the two packages
+// import each other.
+func TestGitArtifactSinkSatisfiesTheGitsinkPort(t *testing.T) {
+	var _ loopgitsink.Sink = (*GitArtifactSink)(nil)
+	var _ PostmortemSink = (*GitArtifactSink)(nil)
+}
 
 func TestGitArtifactSink_Save_BuildsArtifactAndReturnsSHA(t *testing.T) {
 	store := gitastore.NewMemoryStore()

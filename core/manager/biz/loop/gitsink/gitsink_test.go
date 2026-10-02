@@ -8,14 +8,14 @@ import (
 	"testing"
 
 	loop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
-	managerbizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
 )
 
 func discardLogger3() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
-// stubSink 是 managerbizreport.PostmortemSink 的测试桩，记录最后收到的 doc。
+// stubSink satisfies Sink structurally — it never mentions the report
+// domain, which is the point of decision 115.
 type stubSink struct {
 	got       *loop.PostmortemDoc
 	sha       string
@@ -121,9 +121,16 @@ func TestAdapter_NilSinkPanics(t *testing.T) {
 }
 
 // 6. compile-time interface satisfaction
+//
+// The stub assertion used to be `var _ managerbizreport.PostmortemSink =
+// (*stubSink)(nil)`, i.e. this test file asserted that the loop-side double
+// satisfies a port declared in the report domain — the coupling written down
+// as an assertion. It now asserts the loop-side contract only, and the
+// counterpart ("the real sink satisfies Sink") lives in biz/report, where
+// both names are legitimately visible.
 func TestAdapter_InterfaceSatisfaction(t *testing.T) {
 	var _ loop.GitArtifactSink = (*Adapter)(nil)
-	var _ managerbizreport.PostmortemSink = (*stubSink)(nil)
+	var _ Sink = (*stubSink)(nil)
 }
 
 // 7. 多 tenant 不应互相污染：每个 adapter 实例自带 sink（不存 tenant 状态）
