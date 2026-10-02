@@ -89,6 +89,23 @@ type (
 	API = ai.API
 )
 
+// The provider-side values a host names when it resolves a model.
+//
+// Model is what pigmodel.Registry.Model hands back, and a host that wants to
+// serve a model catalogue — the OpenAI-compatible gateway the node's agent
+// talks to — has to be able to spell the return type without naming PiG. It is
+// the same type, not a projection: the fields a host reads are the fields the
+// provider was constructed with.
+type (
+	// Model is a resolved provider model: its identity, its limits and its
+	// wire format.
+	Model = ai.Model
+	// ToolSchema is one tool declaration in a request. The gateway passes
+	// these through from the agent's request to the provider unchanged, so a
+	// parameter the agent declared is a parameter the model was shown.
+	ToolSchema = ai.ToolSchema
+)
+
 // Usage is the provider's own accounting. It is not the stored ledger row:
 // see ports.TranscriptUsage for why the two are separate types, and
 // pigmodel.UsageOf for the fold between them.

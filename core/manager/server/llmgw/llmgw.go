@@ -29,12 +29,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
@@ -68,7 +68,17 @@ type EdgeAuthenticator interface {
 // Completer settles the stream before returning — so it reaches for the
 // registry's own Model method, and that asymmetry is why both are named here.
 type Completer interface {
-	Complete(ctx context.Context, req pigmodel.Request) (*ai.AssistantMessage, error)
+	Complete(ctx context.Context, req pigmodel.Request) (*pigai.AssistantMessage, error)
+}
+
+// DefaultModeler resolves the cluster's default model.
+//
+// pigmodel.Registry satisfies it. Declaring the shape here rather than taking
+// a *Registry keeps the gateway's dependency on a two-method interface, so a
+// test can answer the question without a provider and an admin editing the
+// operator's settings cannot make the catalogue disagree with the runtime.
+type DefaultModeler interface {
+	Model(ctx context.Context, sel domain.ModelSelection) (*pigai.Model, pigai.StreamOptions, error)
 }
 
 // Options configures the handler.
@@ -80,8 +90,16 @@ type Options struct {
 	// streamCompletion for why that is a latency difference and not a
 	// correctness one.
 	Completer Completer
-	// DefaultModel is served when a request names no model.
-	DefaultModel string
+	// DefaultModeler answers "which model does this cluster serve when the
+	// caller names none". Optional, and used only by GET /v1/models.
+	//
+	// It is a resolver rather than a configured string on purpose. A string
+	// here would be a second answer to a question the registry already
+	// answers from the operator's own settings, and two answers to one
+	// question is how a node ends up advertising a model the next request
+	// cannot serve. When it is absent the catalogue is empty, which is a
+	// valid OpenAI list and an honest one.
+	DefaultModeler DefaultModeler
 	// Log may be nil.
 	Log *slog.Logger
 }
@@ -205,10 +223,10 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An unnamed model is left unnamed on purpose: the registry resolves an
+	// empty selection to the cluster's default, which is the operator's
+	// setting rather than a second copy of it.
 	model := request.Model
-	if model == "" {
-		model = h.opts.DefaultModel
-	}
 
 	// The node names a model and never a provider.
 	//
@@ -305,7 +323,7 @@ func (h *Handler) streamCompletion(
 	if text := pigmodel.ReplyText(settled); text != "" {
 		writeFrame(w, chatChunk{
 			ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
-			Choices: []chatChoice{{Index: 0, Delta: &chatMessage{Role: roleAssistant, Content: text}}},
+			Choices: []chatChoice{{Index: 0, Delta: &chatMessage{Role: roleAssistant, Content: contentText(text)}}},
 		})
 	}
 	writeFrame(w, finalChunk(id, model, created, settled))
@@ -404,10 +422,10 @@ func writeError(w http.ResponseWriter, err error) {
 // models serves GET /v1/models.
 //
 // It is served so a node's agent can discover what the cluster serves rather
-// than being told a slug that may not exist. The list is the manager's own
-// configuration, which is the only list a node can be allowed to see: a node
-// that discovered providers from somewhere else would be discovering where
-// the operator's credentials live, not what this cluster can answer.
+// than being handed a slug that may not exist. The list is the manager's own
+// configuration, which is the only list a node may be shown: a node that
+// discovered providers from anywhere else would be discovering where the
+// operator's credentials live, not what this cluster can answer.
 //
 // A node authenticates to reach it, exactly as it does for a completion. An
 // unauthenticated catalogue is a free map of the deployment.
@@ -418,14 +436,27 @@ func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	listed := map[string]any{"object": "list", "data": []map[string]any{}}
-	if h.opts.DefaultModel != "" {
-		listed["data"] = []map[string]any{{
-			"id":       h.opts.DefaultModel,
-			"object":   "model",
-			"owned_by": "opskeeper",
-		}}
+	data := []map[string]any{}
+	if h.opts.DefaultModeler != nil {
+		model, _, err := h.opts.DefaultModeler.Model(r.Context(), domain.ModelSelection{})
+		if err != nil {
+			// The registry could not name a default. That is a manager-side
+			// configuration problem, and answering with an empty list rather
+			// than a 500 keeps a node's startup probe from failing on
+			// something it cannot act on.
+			h.log.Warn("llmgw: the cluster default model could not be resolved",
+				slog.Uint64("edge_id", identity.EdgeID),
+				slog.Any("err", err))
+		} else if model != nil && model.ID != "" {
+			data = append(data, map[string]any{
+				"id":       model.ID,
+				"object":   "model",
+				"owned_by": "opskeeper",
+			})
+		}
 	}
-	h.log.Debug("llmgw: models listed", slog.Uint64("edge_id", identity.EdgeID))
-	writeJSON(w, http.StatusOK, listed)
+	h.log.Debug("llmgw: models listed",
+		slog.Uint64("edge_id", identity.EdgeID),
+		slog.Int("models", len(data)))
+	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 }

@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
@@ -35,22 +35,22 @@ func (s *stubAuth) Authenticate(_ context.Context, accessKey, secretKey string) 
 // stubCompleter records what it was asked and returns a fixed reply.
 type stubCompleter struct {
 	got   pigmodel.Request
-	reply *ai.AssistantMessage
+	reply *pigai.AssistantMessage
 	err   error
 }
 
-func (s *stubCompleter) Complete(_ context.Context, req pigmodel.Request) (*ai.AssistantMessage, error) {
+func (s *stubCompleter) Complete(_ context.Context, req pigmodel.Request) (*pigai.AssistantMessage, error) {
 	s.got = req
 	return s.reply, s.err
 }
 
-func assistantWithToolCall() *ai.AssistantMessage {
-	msg := ai.AssistantMessage{}
-	msg.Content = append(msg.Content, ai.TextContent{Text: "let me look"})
-	msg.Content = append(msg.Content, ai.ToolCall{
+func assistantWithToolCall() *pigai.AssistantMessage {
+	msg := pigai.AssistantMessage{}
+	msg.Content = append(msg.Content, pigai.TextContent{Text: "let me look"})
+	msg.Content = append(msg.Content, pigai.ToolCall{
 		ID:   "call_abc123",
 		Name: "host_dmesg",
-		Arguments: ai.JsonObject{
+		Arguments: pigai.JsonObject{
 			"lines": json.Number("40"),
 		},
 	})
@@ -59,11 +59,7 @@ func assistantWithToolCall() *ai.AssistantMessage {
 
 func newTestHandler(t *testing.T, auth EdgeAuthenticator, completer Completer) *Handler {
 	t.Helper()
-	handler, err := NewHandler(Options{
-		Auth:         auth,
-		Completer:    completer,
-		DefaultModel: "opskeeper-default",
-	})
+	handler, err := NewHandler(Options{Auth: auth, Completer: completer})
 	if err != nil {
 		t.Fatalf("build the handler: %v", err)
 	}
@@ -102,7 +98,7 @@ func TestTheGatewayRefusesToBeBuiltWithoutACredentialCheck(t *testing.T) {
 // oracle for enumerating the fleet.
 func TestEveryCredentialFailureIsOneUnanswerableRefusal(t *testing.T) {
 	auth := &stubAuth{edges: map[string]uint64{"ak-1:sk-good": 42}}
-	handler := newTestHandler(t, auth, &stubCompleter{reply: &ai.AssistantMessage{}})
+	handler := newTestHandler(t, auth, &stubCompleter{reply: &pigai.AssistantMessage{}})
 	body := `{"model":"m","messages":[{"role":"user","content":"hi"}]}`
 
 	cases := []struct {
@@ -153,7 +149,7 @@ func TestToolCallIdentitySurvivesTheRoundTripInBothDirections(t *testing.T) {
 	if len(completer.got.Messages) != 3 {
 		t.Fatalf("the transcript has %d messages, want 3", len(completer.got.Messages))
 	}
-	assistant, ok := completer.got.Messages[1].(ai.AssistantMessage)
+	assistant, ok := completer.got.Messages[1].(pigai.AssistantMessage)
 	if !ok {
 		t.Fatalf("messages[1] is %T, want an assistant turn", completer.got.Messages[1])
 	}
@@ -165,7 +161,7 @@ func TestToolCallIdentitySurvivesTheRoundTripInBothDirections(t *testing.T) {
 		t.Errorf("the tool call's arguments were re-encoded as %T(%v); a number that arrives as "+
 			"a string makes a strict provider reject the whole turn", got, got)
 	}
-	result, ok := completer.got.Messages[2].(ai.ToolResultMessage)
+	result, ok := completer.got.Messages[2].(pigai.ToolResultMessage)
 	if !ok || result.ToolCallID != "call_abc123" {
 		t.Fatalf("the tool result lost its call id: %+v", completer.got.Messages[2])
 	}
@@ -196,7 +192,7 @@ func TestToolCallIdentitySurvivesTheRoundTripInBothDirections(t *testing.T) {
 // can name the index, rather than passed upstream to become a 400 that names
 // nothing. This is the check that keeps an orphan out of a transcript.
 func TestAToolResultWithNoMatchingCallIsRefusedAtTheEdge(t *testing.T) {
-	completer := &stubCompleter{reply: &ai.AssistantMessage{}}
+	completer := &stubCompleter{reply: &pigai.AssistantMessage{}}
 	handler := newTestHandler(t, &stubAuth{edges: map[string]uint64{"ak:sk": 7}}, completer)
 
 	body := `{"model":"m","messages":[
@@ -219,7 +215,7 @@ func TestAToolResultWithNoMatchingCallIsRefusedAtTheEdge(t *testing.T) {
 // could spend a credential the operator never put in this cluster, which is
 // the one thing the gateway exists to prevent.
 func TestANodeCannotChooseWhichProviderPays(t *testing.T) {
-	completer := &stubCompleter{reply: &ai.AssistantMessage{}}
+	completer := &stubCompleter{reply: &pigai.AssistantMessage{}}
 	handler := newTestHandler(t, &stubAuth{edges: map[string]uint64{"ak:sk": 7}}, completer)
 
 	body := `{"model":"some-model","messages":[{"role":"user","content":"hi"}]}`
@@ -243,7 +239,7 @@ func TestANodeCannotChooseWhichProviderPays(t *testing.T) {
 // model is offered with an empty parameter object is a tool it will call
 // wrongly, and the wrong call reaches a host.
 func TestToolDeclarationsKeepTheirSchemas(t *testing.T) {
-	completer := &stubCompleter{reply: &ai.AssistantMessage{}}
+	completer := &stubCompleter{reply: &pigai.AssistantMessage{}}
 	handler := newTestHandler(t, &stubAuth{edges: map[string]uint64{"ak:sk": 7}}, completer)
 
 	body := `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[
@@ -346,7 +342,7 @@ func TestAbsentProviderUsageIsReportedAsAbsent(t *testing.T) {
 	auth := &stubAuth{edges: map[string]uint64{"ak:sk": 7}}
 	body := `{"model":"m","messages":[{"role":"user","content":"hi"}]}`
 
-	rec := post(t, newTestHandler(t, auth, &stubCompleter{reply: &ai.AssistantMessage{}}), "ak:sk", body)
+	rec := post(t, newTestHandler(t, auth, &stubCompleter{reply: &pigai.AssistantMessage{}}), "ak:sk", body)
 	if !strings.Contains(rec.Body.String(), `"usage"`) && !strings.Contains(rec.Body.String(), `"choices"`) {
 		t.Fatalf("unexpected body: %s", rec.Body.String())
 	}
@@ -396,7 +392,7 @@ func TestMalformedRequestsAreRefusedBeforeTheModelIsCalled(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			completer := &stubCompleter{reply: &ai.AssistantMessage{}}
+			completer := &stubCompleter{reply: &pigai.AssistantMessage{}}
 			handler := newTestHandler(t, &stubAuth{edges: map[string]uint64{"ak:sk": 7}}, completer)
 			rec := post(t, handler, "ak:sk", tc.body)
 			if rec.Code != http.StatusBadRequest {
@@ -415,14 +411,14 @@ func TestMalformedRequestsAreRefusedBeforeTheModelIsCalled(t *testing.T) {
 // An empty string of arguments is a call with no arguments, which models emit
 // for a no-argument tool, and it decodes to an empty object rather than nil.
 func TestEmptyToolArgumentsDecodeToAnEmptyObject(t *testing.T) {
-	completer := &stubCompleter{reply: &ai.AssistantMessage{}}
+	completer := &stubCompleter{reply: &pigai.AssistantMessage{}}
 	handler := newTestHandler(t, &stubAuth{edges: map[string]uint64{"ak:sk": 7}}, completer)
 	body := `{"model":"m","messages":[
       {"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"ping","arguments":""}}]}]}`
 	if rec := post(t, handler, "ak:sk", body); rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	assistant := completer.got.Messages[0].(ai.AssistantMessage)
+	assistant := completer.got.Messages[0].(pigai.AssistantMessage)
 	calls := pigmodel.ReplyToolCalls(&assistant)
 	if len(calls) != 1 {
 		t.Fatalf("tool calls: %+v", calls)
@@ -431,4 +427,124 @@ func TestEmptyToolArgumentsDecodeToAnEmptyObject(t *testing.T) {
 		t.Error("empty arguments decoded to nil; a provider validating \"arguments is required\" " +
 			"is right to refuse nil, and \"this tool takes no arguments\" is a fact it needs told")
 	}
+}
+
+// Numbers past 2^53 must survive verbatim.
+//
+// This is not a hypothetical: the tools a node's agent calls take
+// nanosecond timestamps, byte counts on large volumes and nanosecond log
+// offsets, and every one of them is an integer a tool compares against
+// something. Decoded as float64 they come back rounded, the tool acts on a
+// number nobody passed, and the result is a wrong answer rather than an
+// error — the hardest class of bug to find during an incident.
+func TestLargeIntegerArgumentsSurviveVerbatim(t *testing.T) {
+	const timestamp = int64(1735689600123456789)
+
+	completer := &stubCompleter{reply: &pigai.AssistantMessage{}}
+	handler := newTestHandler(t, &stubAuth{edges: map[string]uint64{"ak:sk": 7}}, completer)
+
+	body := `{"model":"m","messages":[
+      {"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{
+        "name":"loki_query","arguments":"{\"since\":1735689600123456789}"}}]}]}`
+	if rec := post(t, handler, "ak:sk", body); rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	assistant := completer.got.Messages[0].(pigai.AssistantMessage)
+	calls := pigmodel.ReplyToolCalls(&assistant)
+	if len(calls) != 1 {
+		t.Fatalf("tool calls: %+v", calls)
+	}
+	number, ok := calls[0].Arguments["since"].(json.Number)
+	if !ok {
+		t.Fatalf("the argument arrived as %T, not a number that can be re-encoded exactly",
+			calls[0].Arguments["since"])
+	}
+	if got, err := number.Int64(); err != nil || got != timestamp {
+		t.Errorf("the argument is %v, want %d", number, timestamp)
+	}
+	// The re-encoded form is what a provider will be sent, so it is the
+	// string that has to be exact, not just the Go value.
+	encoded, err := json.Marshal(calls[0].Arguments)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	if !strings.Contains(string(encoded), "1735689600123456789") {
+		t.Errorf("re-encoding the arguments produced %s; the value a tool compares against "+
+			"would be wrong", encoded)
+	}
+}
+
+// The `content` field arrives in two shapes and which one is used is the
+// client's choice, not a property of the role.
+//
+// This is pinned here rather than only in tests/agentgateway because the
+// failure it guards is silent in the worst way: modelled as a plain string,
+// this gateway rejected *every* request a real agent sent, and the unit tests
+// did not notice because every one of them was written by the same hand that
+// wrote the string. The shapes below are copied from a real `pig` on v0.3.0.
+func TestTheContentFieldIsAcceptedInBothShapes(t *testing.T) {
+	t.Run("system turns send a bare string", func(t *testing.T) {
+		completer := &stubCompleter{reply: &pigai.AssistantMessage{}}
+		handler := newTestHandler(t, &stubAuth{edges: map[string]uint64{"ak:sk": 7}}, completer)
+		body := `{"model":"m","messages":[
+		  {"role":"system","content":"you are a node agent"},
+		  {"role":"user","content":"why is the disk full"}]}`
+		if rec := post(t, handler, "ak:sk", body); rec.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		if len(completer.got.Messages) != 2 {
+			t.Fatalf("messages: %d", len(completer.got.Messages))
+		}
+	})
+
+	t.Run("user turns send the content-parts array", func(t *testing.T) {
+		completer := &stubCompleter{reply: &pigai.AssistantMessage{}}
+		handler := newTestHandler(t, &stubAuth{edges: map[string]uint64{"ak:sk": 7}}, completer)
+		body := `{"model":"m","messages":[
+		  {"role":"user","content":[{"type":"text","text":"why is the disk full"}]}]}`
+		if rec := post(t, handler, "ak:sk", body); rec.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		user, ok := completer.got.Messages[0].(pigai.UserMessage)
+		if !ok {
+			t.Fatalf("messages[0] is %T, want a user turn", completer.got.Messages[0])
+		}
+		if got := pigmodel.MessageText(user); got != "why is the disk full" {
+			t.Errorf("the user turn reached the model as %q", got)
+		}
+	})
+
+	t.Run("several text parts join", func(t *testing.T) {
+		completer := &stubCompleter{reply: &pigai.AssistantMessage{}}
+		handler := newTestHandler(t, &stubAuth{edges: map[string]uint64{"ak:sk": 7}}, completer)
+		body := `{"model":"m","messages":[
+		  {"role":"user","content":[{"type":"text","text":"first "},{"type":"text","text":"second"}]}]}`
+		if rec := post(t, handler, "ak:sk", body); rec.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		if got := pigmodel.MessageText(completer.got.Messages[0]); got != "first second" {
+			t.Errorf("the parts joined as %q", got)
+		}
+	})
+
+	// A part this gateway cannot carry is refused. Dropping it would leave
+	// the model reasoning about something it was never shown, while the
+	// transcript looks complete.
+	t.Run("a non-text part is refused rather than dropped", func(t *testing.T) {
+		completer := &stubCompleter{reply: &pigai.AssistantMessage{}}
+		handler := newTestHandler(t, &stubAuth{edges: map[string]uint64{"ak:sk": 7}}, completer)
+		body := `{"model":"m","messages":[
+		  {"role":"user","content":[{"type":"image_url","image_url":{"url":"data:..."}}]}]}`
+		rec := post(t, handler, "ak:sk", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "image_url") {
+			t.Errorf("the refusal does not name the part it dropped: %s", rec.Body.String())
+		}
+		if completer.got.Messages != nil {
+			t.Error("a transcript missing an image reached the model")
+		}
+	})
 }

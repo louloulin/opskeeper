@@ -194,6 +194,7 @@ import (
 	managerserverhitl "github.com/vincent-wuhan/opskeeper/core/manager/server/hitl"
 	managerserverincident "github.com/vincent-wuhan/opskeeper/core/manager/server/incident"
 	managerserverintegration "github.com/vincent-wuhan/opskeeper/core/manager/server/integration"
+	"github.com/vincent-wuhan/opskeeper/core/manager/server/llmgw"
 	managerserverlogs "github.com/vincent-wuhan/opskeeper/core/manager/server/logs"
 	managerserverloop "github.com/vincent-wuhan/opskeeper/core/manager/server/loop"
 	managerservermarketplace "github.com/vincent-wuhan/opskeeper/core/manager/server/marketplace"
@@ -960,6 +961,33 @@ func main() {
 		log.Info("alert: failed orphaned investigations on boot", slog.Int64("rows", n))
 	}
 	edgeAuthn := managerbizedge.NewAccessKeyAuthenticator(edgeRepo, log)
+
+	// The node-facing model gateway.
+	//
+	// It is built here, next to the tunnel's own authenticator, because it
+	// authenticates with the same credential pair and the same function. A
+	// node's agent speaks the OpenAI protocol; the credentials that can serve
+	// those requests live here. Either the provider key travels to the node
+	// or the request does, and this is the end that chose the request.
+	//
+	// Registering it on the public mux rather than under /api is deliberate:
+	// the caller is PiG's OpenAI provider, not the console, so it carries a
+	// node credential and no manager session.
+	llmGateway, err := llmgw.NewHandler(llmgw.Options{
+		Auth:           edgeAuthn,
+		Completer:      modelRegistry,
+		DefaultModeler: modelRegistry,
+		Log:            log,
+	})
+	if err != nil {
+		// The two things it refuses to be built without are both constructed
+		// two lines above, so this is unreachable today. It is checked anyway
+		// because the failure it guards — a gateway that serves model calls
+		// to anyone who found the URL — is the one failure on this page that
+		// costs money and gives nothing away in the logs.
+		fmt.Fprintf(os.Stderr, "llm gateway: %v\n", err)
+		os.Exit(1)
+	}
 	edgeSvc := managersvcedge.New(edgeUC, nil, log)
 
 	// Plugin runtime config storage. UC notifier
@@ -3069,6 +3097,8 @@ func main() {
 	// without JWT. Network policy (docker-internal only) is the gate;
 	// nginx must NOT proxy_pass external traffic to /internal/auth/*.
 	edgeAuthHandler.Register(mux)
+	// A node reaches this one with its own credential, not a console session.
+	llmGateway.Register(mux)
 
 	// All BC HTTP lives under /api. Public iam routes (login / refresh)
 	// skip the auth middleware; everything else goes through it via

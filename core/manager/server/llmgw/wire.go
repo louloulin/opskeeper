@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/MichaelKinsy/PiG/ai"
-
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
@@ -50,7 +49,7 @@ type chatRequest struct {
 // field, by a 400, rather than served a transcript that quietly lost them.
 type chatMessage struct {
 	Role       string         `json:"role"`
-	Content    string         `json:"content"`
+	Content    contentText    `json:"content"`
 	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
 	Name       string         `json:"name,omitempty"`
@@ -149,21 +148,21 @@ const (
 
 // messages turns the wire transcript into PiG's.
 //
-// Every message becomes exactly one ai.Message. An assistant message that
+// Every message becomes exactly one pigai.Message. An assistant message that
 // carries both text and tool calls keeps both on the same message, because a
 // transcript that replays the text without the calls and then carries the
 // results anyway is an orphan — see pigmodel.AssistantTurn, which this calls
 // rather than reimplementing.
-func (r *chatRequest) messages() ([]ai.Message, error) {
-	out := make([]ai.Message, 0, len(r.Messages))
+func (r *chatRequest) messages() ([]pigai.Message, error) {
+	out := make([]pigai.Message, 0, len(r.Messages))
 	for i, msg := range r.Messages {
 		switch msg.Role {
 		case roleSystem:
-			out = append(out, systemTurn(msg.Content))
+			out = append(out, systemTurn(msg.Content.String()))
 		case roleUser:
-			out = append(out, userTurn(msg.Content))
+			out = append(out, userTurn(msg.Content.String()))
 		case roleAssistant:
-			calls := make([]ai.ToolCall, 0, len(msg.ToolCalls))
+			calls := make([]pigai.ToolCall, 0, len(msg.ToolCalls))
 			for _, call := range msg.ToolCalls {
 				if call.Function.Name == "" {
 					return nil, fmt.Errorf("%w: messages[%d].tool_calls has an entry with no function name", errs.ErrInvalid, i)
@@ -172,11 +171,11 @@ func (r *chatRequest) messages() ([]ai.Message, error) {
 				if err != nil {
 					return nil, fmt.Errorf("%w: messages[%d].tool_calls[%s].function.arguments: %v", errs.ErrInvalid, i, call.ID, err)
 				}
-				calls = append(calls, ai.ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: arguments})
+				calls = append(calls, pigai.ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: arguments})
 			}
-			out = append(out, assistantTurn(msg.Content, calls...))
+			out = append(out, assistantTurn(msg.Content.String(), calls...))
 		case roleTool:
-			out = append(out, toolTurn(msg.ToolCallID, msg.Name, msg.Content))
+			out = append(out, toolTurn(msg.ToolCallID, msg.Name, msg.Content.String()))
 		default:
 			return nil, fmt.Errorf("%w: messages[%d].role is %q", errs.ErrInvalid, i, msg.Role)
 		}
@@ -190,17 +189,31 @@ func (r *chatRequest) messages() ([]ai.Message, error) {
 // emit for a no-argument tool, and it decodes to an empty object rather than
 // to nil — a provider that validates "arguments is required and must be an
 // object" is right to refuse nil.
-func decodeArguments(raw string) (ai.JsonObject, error) {
+func decodeArguments(raw string) (pigai.JsonObject, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return ai.JsonObject{}, nil
+		return pigai.JsonObject{}, nil
 	}
-	var out ai.JsonObject
-	if err := json.Unmarshal([]byte(trimmed), &out); err != nil {
+	var out pigai.JsonObject
+	// UseNumber, not the plain unmarshal.
+	//
+	// A plain unmarshal decodes every JSON number into a float64, which is
+	// lossy above 2^53 — and the arguments a node's tools take are full of
+	// values past that. A nanosecond timestamp, a byte count on a large
+	// volume, a nanosecond duration in a log query: each of them is an
+	// integer a tool compares against something, and each of them comes back
+	// rounded. The tool then acts on a number nobody passed, and the failure
+	// is a wrong answer rather than an error.
+	//
+	// json.Number keeps the exact text, so the value re-encodes byte for byte
+	// and a strict provider sees the argument it was sent.
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	decoder.UseNumber()
+	if err := decoder.Decode(&out); err != nil {
 		return nil, fmt.Errorf("not a JSON object: %w", err)
 	}
 	if out == nil {
-		return ai.JsonObject{}, nil
+		return pigai.JsonObject{}, nil
 	}
 	return out, nil
 }
@@ -210,17 +223,17 @@ func decodeArguments(raw string) (ai.JsonObject, error) {
 // A declaration with no parameter schema gets an empty object rather than nil,
 // because "this tool takes no arguments" is a fact the model needs to be told
 // and nil says nothing at all.
-func (r *chatRequest) toolSchemas() []ai.ToolSchema {
+func (r *chatRequest) toolSchemas() []pigai.ToolSchema {
 	if len(r.Tools) == 0 {
 		return nil
 	}
-	out := make([]ai.ToolSchema, 0, len(r.Tools))
+	out := make([]pigai.ToolSchema, 0, len(r.Tools))
 	for _, tool := range r.Tools {
 		parameters := tool.Function.Parameters
 		if parameters == nil {
 			parameters = map[string]any{"type": "object", "properties": map[string]any{}}
 		}
-		out = append(out, ai.ToolSchema{
+		out = append(out, pigai.ToolSchema{
 			Name:        tool.Function.Name,
 			Description: tool.Function.Description,
 			Parameters:  parameters,
@@ -236,12 +249,12 @@ func (r *chatRequest) toolSchemas() []ai.ToolSchema {
 // free to drift from it. The symptom of the drift is a transcript that is
 // valid to PiG and wrong to the provider, which is a 400 on the node and a
 // stack trace in the manager.
-func systemTurn(text string) ai.Message { return pigmodel.SystemTurn(text) }
-func userTurn(text string) ai.Message   { return pigmodel.UserTurn(text) }
-func assistantTurn(text string, calls ...ai.ToolCall) ai.Message {
+func systemTurn(text string) pigai.Message { return pigmodel.SystemTurn(text) }
+func userTurn(text string) pigai.Message   { return pigmodel.UserTurn(text) }
+func assistantTurn(text string, calls ...pigai.ToolCall) pigai.Message {
 	return pigmodel.AssistantTurn(text, calls...)
 }
-func toolTurn(callID, name, text string) ai.Message { return pigmodel.ToolTurn(callID, name, text) }
+func toolTurn(callID, name, text string) pigai.Message { return pigmodel.ToolTurn(callID, name, text) }
 
 // chatResponse is the non-streaming reply.
 type chatResponse struct {
@@ -293,7 +306,7 @@ type chatUsage struct {
 // through, because PiG does not carry the field: a reply with tool calls is
 // "tool_calls" to every OpenAI client, and a client that reads "stop" will
 // stop the loop and never execute anything the model asked for.
-func reply(id, model string, created int64, msg *ai.AssistantMessage) chatResponse {
+func reply(id, model string, created int64, msg *pigai.AssistantMessage) chatResponse {
 	response := chatResponse{
 		ID:      id,
 		Object:  "chat.completion",
@@ -312,11 +325,11 @@ func reply(id, model string, created int64, msg *ai.AssistantMessage) chatRespon
 }
 
 // assistantWire renders a reply as the wire's assistant message.
-func assistantWire(msg *ai.AssistantMessage) *chatMessage {
+func assistantWire(msg *pigai.AssistantMessage) *chatMessage {
 	if msg == nil {
 		return &chatMessage{Role: roleAssistant}
 	}
-	out := &chatMessage{Role: roleAssistant, Content: pigmodel.ReplyText(msg)}
+	out := &chatMessage{Role: roleAssistant, Content: contentText(pigmodel.ReplyText(msg))}
 	for _, call := range pigmodel.ReplyToolCalls(msg) {
 		arguments, err := json.Marshal(call.Arguments)
 		if err != nil {
@@ -336,7 +349,7 @@ func assistantWire(msg *ai.AssistantMessage) *chatMessage {
 }
 
 // finishReason is what an OpenAI client branches on.
-func finishReason(msg *ai.AssistantMessage) string {
+func finishReason(msg *pigai.AssistantMessage) string {
 	if msg != nil && len(pigmodel.ReplyToolCalls(msg)) > 0 {
 		return "tool_calls"
 	}
@@ -349,7 +362,7 @@ func finishReason(msg *ai.AssistantMessage) string {
 // usage:null knows its provider reported nothing, and a client that sees
 // zeros knows a number was asserted. Those are different facts and only one
 // of them is safe to bill against.
-func usageOf(msg *ai.AssistantMessage) (chatUsage, bool) {
+func usageOf(msg *pigai.AssistantMessage) (chatUsage, bool) {
 	if msg == nil {
 		return chatUsage{}, false
 	}
@@ -382,7 +395,7 @@ func usageOf(msg *ai.AssistantMessage) (chatUsage, bool) {
 // reassembles a turn from deltas discards a final frame whose content differs
 // from what it already has would be non-conformant, and because a client that
 // reconnects mid-stream gets everything from this one frame.
-func finalChunk(id, model string, created int64, msg *ai.AssistantMessage) chatChunk {
+func finalChunk(id, model string, created int64, msg *pigai.AssistantMessage) chatChunk {
 	chunk := chatChunk{
 		ID:      id,
 		Object:  "chat.completion.chunk",
@@ -399,3 +412,67 @@ func finalChunk(id, model string, created int64, msg *ai.AssistantMessage) chatC
 	}
 	return chunk
 }
+
+// contentText is the wire's `content` field, which is not one type.
+//
+// Measured against a real `pig` on v0.3.0: a system turn sends a bare JSON
+// string, and a user turn sends the content-parts array —
+// [{"type":"text","text":"..."}]. Both are the same field, both appear in
+// the same request, and which shape a turn gets is the client's choice rather
+// than a property of the role. Modelling it as a plain string made this
+// gateway reject every request a real agent sent, and no unit test in this
+// package caught that, because every one of them was written by the same
+// hand that wrote the string. The end-to-end test in tests/agentgateway is
+// what found it, which is the argument for having one.
+//
+// A non-text part is refused rather than skipped. Dropping an image is how a
+// transcript ends up describing something the model never saw, and the model
+// then reasons confidently about a picture it was never sent.
+type contentText string
+
+// UnmarshalJSON accepts both shapes of the field.
+func (c *contentText) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	switch {
+	case trimmed == "" || trimmed == "null":
+		*c = ""
+		return nil
+	case strings.HasPrefix(trimmed, `"`):
+		var text string
+		if err := json.Unmarshal(data, &text); err != nil {
+			return err
+		}
+		*c = contentText(text)
+		return nil
+	case strings.HasPrefix(trimmed, "["):
+		var parts []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(data, &parts); err != nil {
+			return err
+		}
+		var text strings.Builder
+		for i, part := range parts {
+			switch part.Type {
+			case "text", "refusal", "":
+				// A refusal is text the model declined to place in
+				// `content`. On a node's diagnostics turn there is nothing
+				// else for it to be, and dropping it would leave the agent
+				// with an empty reply and no explanation.
+				text.WriteString(part.Text)
+			default:
+				return fmt.Errorf("content[%d].type is %q; this gateway serves text turns only, "+
+					"and silently dropping a part is how a transcript ends up describing something "+
+					"the model never saw", i, part.Type)
+			}
+		}
+		*c = contentText(text.String())
+		return nil
+	default:
+		return fmt.Errorf("content is %s; expected a string or an array of content parts", trimmed)
+	}
+}
+
+// String reads the field back.
+func (c contentText) String() string { return string(c) }
