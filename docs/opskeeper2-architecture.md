@@ -2762,26 +2762,157 @@ map，并把这件事写进注释：正因为有 map 在，「agent 被告知了
 `TestTheNodeIsToldHowToReachAModel`（断言 `agentmodel.go` 写了 scope、
 `agent.go` 真的把它交给 agent 进程、env 模板给了运维三个变量）。
 
-#### 4.31.5 还没做的一半，以及一个必须先做的决定
+#### 4.31.5 还没做的一半，以及那个必须先做的决定（**已决定，见 §4.32**）
 
 节点现在**有能力被正确配置**，但还没有可配的东西：manager 侧没有
 OpenAI 兼容的 `/v1` 端点，也没有节点令牌。这不是把管道接上就行，中间隔着一个
 **必须先定下来的鉴权决定**：
 
-节点现有的隧道凭据**不能**直接复用。`AccessKeyAuthenticator` 用 argon2id 校验
-`SecretKeyHash`——**manager 侧只有哈希，没有明文**。所以任何「由 secret key 派生
-网关令牌」的方案在 manager 侧不可验证。能落地的只有两条：
+节点现有的隧道凭据**不能**用来派生令牌。`AccessKeyAuthenticator` 用 argon2id
+校验 `SecretKeyHash`——**manager 侧只有哈希，没有明文**，所以任何「由 secret key
+派生网关令牌」的方案在 manager 侧不可验证。当时能落地的只有两条：
 
 1. **每节点独立网关令牌**，哈希存储、可轮换、可吊销。代价是 edge 表加一列
    （或一张新表）+ 签发 API + 轮换路径。
 2. **access key 单独当 bearer**。零存储成本，但 access key 是标识性质、很可能
    出现在 UI 和日志里，等于把 manager 的模型预算交给任何知道它的人。
 
-本轮**没有替这个决定下结论**，因为它涉及凭据存储与轮换，属于要写进 ADR 的取舍。
-在它定下来之前把网关实现出来，等于把一个会被推翻的鉴权模型写进代码。
+**决策 94 选了第三条路，而它的正确性来自对上面两条的重新读**：
+不是「派生」，是**原样复用**节点现有的 `accessKey:secretKey` 凭据对，由**已有的**
+`AccessKeyAuthenticator.Authenticate` 校验。
 
-因此 P0-1 记为**节点侧已关、manager 侧待决**，阶段 0 从 25% 记为 **35%**，
-加权合计从 14% 记为 **≈16%**。剩下的不是难，是要先回答「令牌存在哪」。
+- 零新存储、零 schema 迁移、零第二个真相源——所以它同时否掉了方案 1 的成本，
+  原因不是「不值得做」，而是这张表里本来就没有能验证派生结果的东西。
+- 轮换即现有 `UpdateSecretHash`：换 secret 的同一次操作吊销隧道与网关，
+  不存在「隧道凭据已吊销、模型令牌还在」这一种最贵的状态。
+- 方案 2 的风险被同一个 secret 消掉了一半：access key 单独当 bearer 时它是
+  唯一要素，而这里它必须与 secret 同时正确。
+
+代价写在这里而不是藏起来：一个**长期**的 secret 现在会被呈现在一条 HTTP 路由上，
+所以这条路由必须在 TLS 之后，且**永不记录这个 header**（`llmgw` 里没有一处
+log 触碰它，六个凭据失败塌缩成同一个 401 也是这个约束的一部分）。
+
+P0-1 至此**两侧都关**。
+
+### 4.32 决策 94：manager 侧的 OpenAI 兼容网关，以及真 agent 抓出来的两个形状错误
+
+§4.31 之后节点**能**被正确配置，manager 侧还**没有可配的东西**。本节补上那一端，
+并记下这一端的两处形状错误——它们是被**真 `pig` 二进制**抓出来的，18 条单元测试
+全绿时它们已经存在。
+
+#### 4.32.1 位置、鉴权与它买到了什么
+
+`core/manager/server/llmgw` 提供 `POST /v1/chat/completions`（流式与非流式）与
+`GET /v1/models`，挂在**公开 mux** 而不是 `/api`：调用方是 PiG 的 OpenAI provider，
+不是控制台，它带的是节点凭据、没有 manager 会话。鉴权见 §4.31.5 的决定。
+
+它买到的东西是节点设计整个压在上面的那一条性质：**节点不持 provider 凭据**。
+所以被攻破的节点无法拿运维方的账号去烧钱、无法打到有自己白名单的 provider 端点、
+也无法靠改主机上的一个文件把自己指向另一个模型。代价是 manager 现在代理每一个
+诊断回合——这也是流式路径存在、也是这里**不结算任何一条本可以转发的流**的原因。
+
+#### 4.32.2 两个形状错误：单元测试全绿，错的是写测试的同一只手
+
+方案 0.1 写「edge 侧注入 `OPENAI_BASE_URL` / `OPENAI_API_KEY`」，
+§4.28.1 已判定这条路不存在（PiG 没有这两个变量）。实测真 agent 的请求形状是：
+
+```
+顶层键: ['max_completion_tokens', 'messages', 'model', 'store', 'stream', 'stream_options', 'tools']
+stream: True                       ← 默认流式
+system role: content 是 str
+user   role: content 是 list —— [{"type":"text","text":"..."}]
+tools: ["read","bash","edit","write"]
+auth: "Bearer ak-node:sk-node"     ← 正是本设计选的格式
+```
+
+- **`content` 是联合类型**。我按 string 建模，于是网关**拒绝了真 agent 的每一个请求**，
+  而 18 条单元测试全绿——因为它们全是按 string 写的。现在 `contentText` 自带
+  `UnmarshalJSON`：接受 string **或** content-parts 数组，并且**非文本 part 拒绝而不是丢弃**。
+- **大整数**。`decodeArguments` 用 `decoder.UseNumber()`：去掉它，>2^53 的整数
+  （纳秒时间戳就是这一类）会在往返里被静默抹平，症状是工具收到一个错的参数而
+  不是报错。这条**去掉即红，已验证**。
+
+`tests/agentgateway` 是这条教训的常驻证据：真 `pig` 二进制 + 真 `agentmodel.Write` +
+真网关 handler，**唯一 fake 是上游模型**。
+
+#### 4.32.3 一处架构违规，同轮改掉
+
+网关与它的 e2e 测试原本直接 `import "github.com/MichaelKinsy/PiG/ai"`，
+违反「只有 `core/pig` 能 import PiG」——`make module-check` 报了出来。改为经
+`core/pig/pigai` 这个既有出口，并在其中补上两个别名：`Model`（宿主要能命名
+`Registry.Model` 的返回类型）与 `ToolSchema`（网关要把 agent 声明的工具原样传给
+provider）。别名加的是**名字**不是形状，调用方交出去的仍然是同一个类型。
+
+### 4.33 决策 95：网关的费用边界——「凭据不出中心」不等于「花不失控」
+
+方案 0.1 给网关列了四项职责：解析真实凭据、**预算拦截**、转发上游、
+**usage 写回计量表**；另有一条**按 edge 维度的令牌桶，超限 429**。
+决策 94 落地时只做了前两项的一半（凭据与转发），**后三项全空**。这不是遗漏，
+是当时最诚实的范围——鉴权模型没定下来时先写限流，等于把会被推翻的东西写两遍。
+现在鉴权定了，于是这一节补的是剩下的部分。
+
+#### 4.33.1 三个必须由 manager 侧执行的界
+
+节点的 agent 进程是受监管的二进制，但**没有任何东西在 PiG 里界定**一次调查跑多少
+回合、一条回复能跑多长、一个节点能让模型写多少。所以三个界都放在 manager 这一侧
+——**节点够不着的地方**，因为节点不可信正是「凭据集中」这个设计的出发点：
+
+| 界 | 形态 | 为什么在 manager 侧 |
+|---|---|---|
+| 每日 token 上限 | 复用**同一个** `llm.InMemoryBudget` 实例 | 咨询发生在 provider 被触碰之前；咨询了不记账的是绊线不是上限 |
+| 每节点请求速率 | 每 edge 一个令牌桶，超限 429 | 键是 **edge id** 而不是 session id：按节点可控的值限流，等于让节点自己把额度摊开 |
+| 调用方的输出上限 | `max_completion_tokens` 真正生效 | 之前它被解析后丢弃——一个要 4k 答案的 agent 拿到的是 provider 想写多少写多少 |
+
+**上限只有一个实例**这件事是本节最容易被做错的地方。`dailyBudget` 原本在
+`buildAIOpsRuntime` 内部构造，而网关在它之前就建好了；照抄一份，两个循环各记各的账，
+于是**集群能花掉运维方上限的两倍**——那正是上限存在的意义所反对的事。现在它在
+`main` 里构造一次，两边共用，那句「cap is one number regardless of which loop is
+live」才是一句关于代码的话而不是关于意图的话。
+
+`max_completion_tokens` 走 `pigmodel.Request.Tune` 而不是请求字段：max tokens 是
+registry 从模型配置里解析出来的**每请求旋钮**，调用方的值必须在那次解析**之后**
+应用；做成字段要么被忽略，要么就得把 registry 的优先级规则抄一遍。**缺席不等于零**——
+没带这个字段时 `Tune` 是 nil，模型配置说了算。
+
+#### 4.33.2 记账落在日志上，而不是新表
+
+usage 归集写在「completion served」那一行，带 `edge_id` 与三个 token 数。
+「哪个节点花的」因此是一次日志查询，而不是一张新表。
+
+**这是有意的取舍，写在这里以免被当成省事**：控制面的 usage 台账（`chat_messages`）
+是**会话**的账，节点的诊断回合没有会话行，硬塞进去就是把两件事记成一件。
+而一张新的按节点台账要的是 schema、迁移与读路径——**那是第二个真相源的成本**，
+它应该由一次单独的决策来付，不该由一个网关顺带引入。日志面已经存在、已经被消费，
+并且诚实：**provider 没报 usage 时记 0 并打 `usage_reported=false`**，不猜。
+一个不报 usage 的 provider 因此是「可见的未记账」，而不是「便宜的花费方式」。
+
+#### 4.33.3 两处顺带修掉的、且都不是风格问题的东西
+
+- **429 之前是 400。** `writeError` 自带一套状态码 switch，对 `ErrBudgetExceeded`
+  与 `ErrTooManyAttempts` **没有分支**，于是「集群没钱了」被报成「请求格式错了」——
+  一个没人能处理的 bug 单。现在状态码来自 `errs.HTTPStatus`（manager 的**唯一**
+  映射），这个函数只保留 OpenAI 的**报文形状**，因为调用方是 PiG 的 provider client。
+- **typed nil 的 panic，是测试抓到的，不是评审看出来的。** `NewLimiter(0)` 若直接
+  返回 `newEdgeLimiter` 的 nil 指针，它在 `Limiter` 接口里**不等于 nil**：
+  每个 `Limiter != nil` 检查都会放行，然后当天第一个请求 panic。现在返回**无类型**
+  的 nil，`admission` 里也留了一道显式检查，`Allow` 的 nil receiver 是第三道。
+  这与 `buildAIOpsRuntime` 里 `kernelBudget` 那段注释是同一条经验，写在了三处。
+
+#### 4.33.4 判定与进度影响
+
+阶段 0 的 0.1 至此**四项职责 + 一条限流全部落地**。新增 11 条网关用例
+（上限在 provider 之前生效、流式与非流式**都**记账、没报 usage 不记账、
+一个失控节点不能吃掉全机队额度、闲置桶被清扫、限流未配置 ≠ 全部拒绝、
+畸形请求不消耗额度、输出上限到达 provider、负数上限被拒、两个 seam 都容忍未接线），
+外加根模块一条「文档里的默认速率就是部署实际拿到的速率」的断言
+（`config.DefaultEdgeRequestsPerMinute` 与 `llmgw.DefaultEdgeRequestsPerMinute`
+分属两个不能互相 import 的模块，漂移了没人会发现）。
+
+阶段 0 因此从 **35% 记为 50%**，加权合计从 ≈16% 记为 **≈20%**。剩下的不是 P0，
+是验收本身：方案 0.4 要求 `make compose-up` 之后一台 edge 完成**一次真实对话**
+并返回流式输出——这需要 Docker 与一个真 provider key，本机不具备；
+以及 §4.28.4 记的 per-tool 配额（`PluginSpec` 无 `limits`），它挡的是**今天就在
+只读包里**的 `host_dmesg` / `host_grep_file`，按 §4.28.5 的判断属阶段 0 阻塞项。
 
 ## 五、插件契约：为什么「插件即 PiG Package」
 
@@ -2851,17 +2982,18 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 
 | 阶段 | 完成度 | 判据与剩余 |
 |---|---|---|
-| 0 边缘交付闭环（P0） | **35%** | **三条** P0 都是「代码意图已写、实现路径从未跑过」：`cmd/opskeeper-edge/agent.go:209-212` 的 `Env` 只有两个 socket，`dist/build-edge-bundle.sh:38-49` 与 `deploy/Dockerfile.opskeeper-edge` 都不含 `pig`，`Makefile` 没有任何 `build-pig*` 目标。**已实测可行**：从 `core/pig` 构建 `github.com/MichaelKinsy/PiG/cmd/pig` 退出码 0（71 MB）。方案的「注入 `OPENAI_BASE_URL`」**不成立**（PiG 无此变量），正确路径是 `models.json` 自定义 provider + `PIG_CODING_AGENT_DIR`（§4.28.1）。**本轮新发现的第三条 P0 比前两条都严重：节点上的插件扩展编译不过**（`GOWORK=off` 实测报 `unknown revision core/v0.0.0`，且无 `go.sum`）——补齐 pig 与凭据之后节点仍然零工具（§4.28.8）。**决策 91 已关掉其中的第三条**：`core/wire` 内联进每个打包扩展、`go.mod` 删掉未发布的 `core v0.0.0`、只留 PiG SDK 一条 require，8 个打包扩展在 `GOWORK=off CGO_ENABLED=0` 下实测 8/8 构建通过，并新增「按节点的方式构建」这条**实测会红**的闸门（§4.29）。**决策 92 关掉了第二条**：`make build-pig-all` 从 `core/pig` + `GOWORK=off` 构建并**被每个 `build-edge-<arch>` 依赖**，两处 bundle 清单、`dist/package.sh`、`install-edge.sh`（含 `pig --version` 自检）、`Dockerfile.opskeeper-edge`、env 模板全部接通，六个位置各有断言（`core/floor/delivery`，6 条测试，**实测会红**）。**决策 93 关掉了 P0-1 的节点侧**：节点有了完整的凭据链（`OPSKEEPER_EDGE_AGENT_CONFIG_DIR` + `models.json` 的 `"$VAR"` 引用 + `PIG_CODING_AGENT_DIR`），并**对着真 `pig` 二进制验证**了三条（能解析 / 无凭据则拒绝 / 无 scope 则找不到）。本轮还查出方案 10 条清单里没有的第四条：**`DefaultAgentDir()` 在 `$HOME` 未设置时丢弃错误、返回相对路径 `.pig/agent`，被 agent 按 Cwd（即插件包根）解析**——凭据会落进签名插件内容里（§4.31.1）。P0-1 剩下的是 **manager 侧网关 + 节点令牌**，且卡在一个要先做的鉴权决定上（隧道 secret 在 manager 侧只有 argon2id 哈希，派生不出可验证的令牌，§4.31.5）|
+| 0 边缘交付闭环（P0） | **50%** | **三条** P0 都是「代码意图已写、实现路径从未跑过」：`cmd/opskeeper-edge/agent.go:209-212` 的 `Env` 只有两个 socket，`dist/build-edge-bundle.sh:38-49` 与 `deploy/Dockerfile.opskeeper-edge` 都不含 `pig`，`Makefile` 没有任何 `build-pig*` 目标。**已实测可行**：从 `core/pig` 构建 `github.com/MichaelKinsy/PiG/cmd/pig` 退出码 0（71 MB）。方案的「注入 `OPENAI_BASE_URL`」**不成立**（PiG 无此变量），正确路径是 `models.json` 自定义 provider + `PIG_CODING_AGENT_DIR`（§4.28.1）。**本轮新发现的第三条 P0 比前两条都严重：节点上的插件扩展编译不过**（`GOWORK=off` 实测报 `unknown revision core/v0.0.0`，且无 `go.sum`）——补齐 pig 与凭据之后节点仍然零工具（§4.28.8）。**决策 91 已关掉其中的第三条**：`core/wire` 内联进每个打包扩展、`go.mod` 删掉未发布的 `core v0.0.0`、只留 PiG SDK 一条 require，8 个打包扩展在 `GOWORK=off CGO_ENABLED=0` 下实测 8/8 构建通过，并新增「按节点的方式构建」这条**实测会红**的闸门（§4.29）。**决策 92 关掉了第二条**：`make build-pig-all` 从 `core/pig` + `GOWORK=off` 构建并**被每个 `build-edge-<arch>` 依赖**，两处 bundle 清单、`dist/package.sh`、`install-edge.sh`（含 `pig --version` 自检）、`Dockerfile.opskeeper-edge`、env 模板全部接通，六个位置各有断言（`core/floor/delivery`，6 条测试，**实测会红**）。**决策 93 关掉了 P0-1 的节点侧**：节点有了完整的凭据链（`OPSKEEPER_EDGE_AGENT_CONFIG_DIR` + `models.json` 的 `"$VAR"` 引用 + `PIG_CODING_AGENT_DIR`），并**对着真 `pig` 二进制验证**了三条（能解析 / 无凭据则拒绝 / 无 scope 则找不到）。本轮还查出方案 10 条清单里没有的第四条：**`DefaultAgentDir()` 在 `$HOME` 未设置时丢弃错误、返回相对路径 `.pig/agent`，被 agent 按 Cwd（即插件包根）解析**——凭据会落进签名插件内容里（§4.31.1）。**决策 94 关掉了 P0-1 的 manager 侧**：`core/manager/server/llmgw` 提供 `POST /v1/chat/completions`（流式 + 非流式）与 `GET /v1/models`，鉴权**复用隧道凭据对**（零新存储、零 schema 迁移、轮换即现有 `UpdateSecretHash`，§4.31.5），节点能选 model 不能选 provider；真 `pig` 二进制端到端抓出两处形状错误——`content` 实际是 string **或** parts 数组的联合类型（按 string 建模会拒绝真 agent 的每一个请求，而 18 条单元测试全绿）、大整数必须 `UseNumber` 才能活过 `>2^53`（§4.32）。**决策 95 把方案 0.1 剩下的三项职责与限流补齐**：每日 token 上限复用**同一个** `llm.InMemoryBudget` 实例（两份账 = 集群能花掉两倍上限）、每 edge 一个令牌桶超限 429、调用方的 `max_completion_tokens` 真正生效（之前被解析后丢弃）；顺带修掉 **429 之前被报成 400**（`writeError` 自带的 switch 对预算与限流哨兵没有分支）与一处 typed nil panic（§4.33）。剩下的不是 P0，是验收本身：方案 0.4 的 `make compose-up` 真实对话需要 Docker 与真 provider key；per-tool 配额（`PluginSpec` 无 `limits`）挡的是**今天就在只读包里**的 `host_dmesg` / `host_grep_file`，按 §4.28.5 属阶段 0 阻塞项|
 | 1 离线与有限自治（P1） | **10%** | 已有的一半：changewatcher 内存批量缓冲（`tunnel_sink.go:16-52`，drop-oldest + 可观测计数）、tunnel full-jitter 重连（决策 78）。缺的一半：`metricsLoop` 连内存缓冲都没有（`agent.go:529-615`，失败只 log）、无落盘 WAL、无 replay、无 `core/edge/autonomy`、无动作级幂等键、`PluginSpec` 无 `limits` 字段。方案的 autonomy 设计与「审批裁决权在宿主」不冲突，但**必须以「宿主代码 + 中心签名策略 + 只读先行」三个前提重写**（§4.28.6） |
 | 2 生态与治理加固（P2） | **15%** | 工具注册表：`grep toolregistry` 只命中注释（`chatruntime/types.go:37-40` 自陈在 PR-3），**不存在 `tool_registry.go`**；per-tool 配额：`PluginSpec` 无 limits 字段（单是高基数只读工具就已经是阶段 0 阻塞项）；MCP 兼容层：运行时已有（决策 85），但**无对外 MCP 协议面**；成本结晶：`grep crystalliz` 零命中；eval 三维化：`judge.Score` 是过程四维，不是 Localization × Identification × Reason；prompt injection 标注：无 |
 | 3 控制面瘦身与联邦（P3） | **5%** | `iam → manager` 反向依赖仍在 `scripts/modulecheck/main.go:548-556` 的 `exceptions` 台账里（决策 35 的已知例外，注释已写明「未来拆分必须解决它」）；manager 27.3 万行（实测 `find core/manager -name '*.go' \| xargs wc -l`）；无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档） |
 
-加权合计 ≈ **16%**（四阶段等比：35 / 10 / 15 / 5 的均值 16.25%）。**这个数字
-不是好消息，也还早**：阶段 0 的三条 P0 里，两条已关（决策 91、92），第三条的
-节点侧已关（决策 93）——三条 P0 涉及的所有代码位置现在都有断言了。剩下的不是难，
-是 manager 侧的鉴权要先定：节点令牌的存储与轮换方式决定网关怎么写，这个决定
-应该先落在 ADR 里而不是先落在代码里。做完它，第一份计划的 98% 才第一次在真实
-节点上成立。**决策 90 的全部意义就是证明这个落差是可见、可测、可关的**
+加权合计 ≈ **20%**（四阶段等比：50 / 10 / 15 / 5 的均值 20%）。**这个数字
+仍然不是好消息，但阶段 0 的形状变了**：三条 P0 **全部关掉**（决策 91、92、93+94），
+四条涉及的位置现在都有断言，且方案 0.1 的五项职责（凭据解析、预算拦截、转发、
+usage 计量、429 限流）全部落地（决策 95）。阶段 0 剩下的不是难，是两件需要
+**外部条件**的事：方案 0.4 的真实对话验收要 Docker 与真 provider key，
+per-tool 配额要动 `PluginSpec` 的 schema。**决策 90 的全部意义就是证明这个落差
+是可见、可测、可关的**
 ——§4.28.8 说明若只按方案自己的清单做它关不掉，§4.29 / §4.30 则证明关掉两条之后，
 剩下的能被逐条指认，而且每一条都自带「实测会红」的闸门。
 

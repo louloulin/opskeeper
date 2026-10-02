@@ -400,6 +400,17 @@ type LLMProviderConfig struct {
 	Models  []string // closed-set of models exposed via /v1/aiops/models
 }
 
+// DefaultEdgeRequestsPerMinute is the per-node model request rate a
+// deployment gets without configuring one.
+//
+// It is a constant here rather than a literal at the env lookup so the value
+// can be named, compared and documented. The gateway keeps its own
+// recommended rate (llmgw.DefaultEdgeRequestsPerMinute) and a test in the
+// root module asserts the two agree: they are one fact split across two
+// modules that cannot import each other, and a silent divergence would mean
+// the documented default is not the effective one.
+const DefaultEdgeRequestsPerMinute = 60
+
 // LLMConfig groups the multi-provider router config. OpenAI lives in
 // its own top-level field for legacy reasons (see OpenAIConfig); the
 // non-OpenAI providers cluster here.
@@ -420,6 +431,20 @@ type LLMConfig struct {
 	// stays as a safety-net global cap.
 	// env: OPSKEEPER_LLM_DAILY_TOKEN_LIMIT; default 0 (unlimited).
 	DailyTokenLimit int
+	// EdgeRequestsPerMinute is the per-node ceiling on model requests
+	// served by the node-facing gateway, enforced on the manager's side of
+	// the wire with one token bucket per enrolled edge.
+	//
+	// The default is deliberately non-zero and deliberately generous. A node
+	// agent is a loop — diagnose, call a tool, diagnose again — and an
+	// incident fires several of those per node; a tighter number would
+	// throttle the exact moment the fleet is most wanted. The limit is here
+	// to stop a runaway loop within a second of it starting, not to shape
+	// traffic. 0 disables the gate, which is the operator saying they would
+	// rather find out what an unbounded fleet costs.
+	//
+	// env: OPSKEEPER_LLM_EDGE_RPM; default DefaultEdgeRequestsPerMinute.
+	EdgeRequestsPerMinute int
 }
 
 // AdminConfig holds bootstrap admin credentials. Used only by the cloud
@@ -520,6 +545,7 @@ func Load() (*Config, error) {
 	c.LLM.Kimi.Models = splitProviderModels(getEnv("OPSKEEPER_KIMI_MODELS", "kimi-k2.6,kimi-k2.5,moonshot-v1-128k"))
 	c.LLM.Default = getEnv("OPSKEEPER_LLM_DEFAULT_PROVIDER", "")
 	c.LLM.DailyTokenLimit = getEnvInt("OPSKEEPER_LLM_DAILY_TOKEN_LIMIT", 0)
+	c.LLM.EdgeRequestsPerMinute = getEnvInt("OPSKEEPER_LLM_EDGE_RPM", DefaultEdgeRequestsPerMinute)
 
 	c.Admin.Email = getEnv("OPSKEEPER_ADMIN_EMAIL", "")
 	c.Admin.Password = getEnv("OPSKEEPER_ADMIN_PASSWORD", "")

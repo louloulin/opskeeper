@@ -159,6 +159,15 @@ func validateTools(m domain.PluginManifest) error {
 		if !t.Class.Valid() {
 			return fieldErr(field+".class", fmt.Sprintf("unknown class %q", t.Class))
 		}
+		// A negative ceiling is a package that misunderstood the field,
+		// and a host that read it as "no ceiling" would enforce nothing
+		// while the manifest reads as if it had. Refusing it at load is
+		// the only place this can be caught before the node is running.
+		if !t.Limits.Valid() {
+			return fieldErr(field+".limits",
+				fmt.Sprintf("output_bytes=%d timeout_seconds=%d; a limit is never negative",
+					t.Limits.OutputBytes, t.Limits.TimeoutSeconds))
+		}
 		if prev, dup := seen[t.Name]; dup {
 			return fieldErr(field+".name",
 				fmt.Sprintf("%q is already declared at spec.tools[%d]", t.Name, prev))

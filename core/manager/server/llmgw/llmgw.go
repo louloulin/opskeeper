@@ -90,6 +90,22 @@ type Options struct {
 	// streamCompletion for why that is a latency difference and not a
 	// correctness one.
 	Completer Completer
+	// Budget is the cluster's spend ceiling. Optional: nil means no ceiling
+	// is configured, which is the deployment that set
+	// OPSKEEPER_LLM_DAILY_TOKEN_LIMIT to 0. It is the same budget the
+	// console's agent kernel is gated by, and main passes the same instance
+	// to both, so "the cap is one number regardless of which loop is live"
+	// is a statement about the code rather than about intent.
+	//
+	// Nil is not a default to paper over: a typed nil boxed in this field
+	// would pass an `== nil` check at wiring time and then dereference
+	// itself on the first request, so main must not assign a nil pointer
+	// into it. See the guard where the gateway is built.
+	Budget Budget
+	// Limiter is the per-node request rate gate. Optional; nil disables it.
+	// Built by NewLimiter rather than taken as a rate so the bucket policy
+	// stays in one file with the reasoning for its numbers.
+	Limiter Limiter
 	// DefaultModeler answers "which model does this cluster serve when the
 	// caller names none". Optional, and used only by GET /v1/models.
 	//
@@ -240,11 +256,26 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		Selection: selection,
 		Messages:  messages,
 		Tools:     request.toolSchemas(),
+		Tune:      request.tune(),
 		// The node's own request id would be the honest cache key, but it is
 		// a value the node controls and providers key their cache on it, so
 		// it is left empty rather than forwarded. The registry applies its
 		// provider-scoped default instead.
 		SessionID: "",
+	}
+
+	// The two gates, after the request is understood and before a provider
+	// is touched. A malformed request must not consume a node's allowance
+	// (that would let a node with a bug lock itself out of the cluster), and
+	// an over-budget request must not reach a provider (that is the whole
+	// point of the cap).
+	if err := h.admission(r.Context(), identity.EdgeID); err != nil {
+		h.log.Warn("llmgw: request refused before the provider",
+			slog.Uint64("edge_id", identity.EdgeID),
+			slog.String("model", model),
+			slog.Any("err", err))
+		writeError(w, err)
+		return
 	}
 
 	id := newCompletionID()
@@ -264,10 +295,21 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// Cost lands on the same line as the edge that caused it, so "which node
+	// spent this" is a log query rather than a new table. See spend.go for
+	// why the ledger is not a table.
+	usage, metered := usageOf(settled)
 	h.log.Info("llmgw: completion served",
 		slog.Uint64("edge_id", identity.EdgeID),
 		slog.String("model", model),
-		slog.Int("tool_calls", len(pigmodel.ReplyToolCalls(settled))))
+		slog.Int("tool_calls", len(pigmodel.ReplyToolCalls(settled))),
+		slog.Bool("usage_reported", metered),
+		slog.Int("prompt_tokens", usage.PromptTokens),
+		slog.Int("completion_tokens", usage.CompletionTokens),
+		slog.Int("total_tokens", usage.TotalTokens))
+	if metered {
+		h.charge(r.Context(), usage.TotalTokens)
+	}
 
 	writeJSON(w, http.StatusOK, reply(id, model, created, settled))
 }
@@ -330,9 +372,21 @@ func (h *Handler) streamCompletion(
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 
+	// The same accounting the non-streaming path does. A stream is not a
+	// cheaper call: it bills the same tokens, and a budget that counted only
+	// the buffered replies would be a budget a node could bypass by asking
+	// for a stream.
+	usage, metered := usageOf(settled)
 	h.log.Info("llmgw: stream served",
 		slog.Uint64("edge_id", identity.EdgeID),
-		slog.String("model", model))
+		slog.String("model", model),
+		slog.Bool("usage_reported", metered),
+		slog.Int("prompt_tokens", usage.PromptTokens),
+		slog.Int("completion_tokens", usage.CompletionTokens),
+		slog.Int("total_tokens", usage.TotalTokens))
+	if metered {
+		h.charge(r.Context(), usage.TotalTokens)
+	}
 }
 
 // errorFrame is an OpenAI-shaped error delivered inside a stream.
@@ -400,15 +454,24 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 // caller is a provider client and it parses this shape to decide whether to
 // retry.
 func writeError(w http.ResponseWriter, err error) {
-	status := http.StatusBadRequest
+	// The status comes from errs.HTTPStatus, the manager's one mapping. This
+	// function used to carry its own switch, and it was already out of date:
+	// it had no arm for the budget and rate-limit sentinels, so both arrived
+	// as 400 — an unconfigured cap reported to a node as a malformed
+	// request, which is a bug report nobody can act on. The wire *shape* is
+	// still local, because the caller is PiG's provider client and not the
+	// console; only the status is shared.
+	status := errs.HTTPStatus(err)
 	kind := "invalid_request_error"
 	switch {
 	case errors.Is(err, errs.ErrUnauthorized):
-		status, kind = http.StatusUnauthorized, "authentication_error"
-	case errors.Is(err, errs.ErrForbidden):
-		status, kind = http.StatusForbidden, "permission_error"
+		kind = "authentication_error"
+	case errors.Is(err, errs.ErrForbidden), errors.Is(err, errs.ErrTenantMismatch):
+		kind = "permission_error"
 	case errors.Is(err, errs.ErrNotFound):
-		status, kind = http.StatusNotFound, "not_found_error"
+		kind = "not_found_error"
+	case errors.Is(err, errs.ErrBudgetExceeded), errors.Is(err, errs.ErrTooManyAttempts):
+		kind = "rate_limit_error"
 	}
 	writeJSON(w, status, map[string]any{
 		"error": map[string]any{

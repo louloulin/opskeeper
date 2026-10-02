@@ -199,6 +199,54 @@ type ToolDecl struct {
 	// tool whose observed behaviour is worse than its declaration is
 	// refused at the gate.
 	Class ToolClass `json:"class" yaml:"class"`
+	// Limits is what this tool may consume. Optional, and the host applies
+	// its own default to a tool that declares nothing — so omitting it is
+	// never "unlimited", only "whatever the host's default is".
+	Limits ToolLimits `json:"limits,omitempty" yaml:"limits,omitempty"`
+}
+
+// ToolLimits is the per-tool resource ceiling the host enforces on the node.
+//
+// Both fields are enforced by host code, on the node, at the tool broker —
+// the one place every tool call passes through regardless of which package
+// implements it. A limit declared and not enforced would be worse than no
+// limit at all, because a review would read it as a guarantee.
+//
+// # Why output bytes and not memory
+//
+// The plan this schema came from asked for `limits.memory` and
+// `limits.output_bytes`. Output bytes is here; memory is not, and the reason
+// is that a memory ceiling on a skill that runs **in the edge process** is not
+// enforceable from here: the allocation has already happened by the time this
+// declaration is read. Bounding it needs the skill to run somewhere it can be
+// killed from outside — a subprocess with an rlimit — which is the sandbox
+// work in stage 1, not a manifest field. Declaring `memory` today would be a
+// field that reads as a guarantee and enforces nothing, and this repository
+// has spent several decisions deleting exactly that shape.
+type ToolLimits struct {
+	// OutputBytes is the largest tool reply the host will hand back. Beyond
+	// it the reply is replaced by a truncation notice carrying the full
+	// size, the limit, and — when the host could spill it — a path the
+	// model can ask another tool to read. 0 means "the host's default",
+	// which exists for the same reason this field does.
+	OutputBytes int64 `json:"output_bytes,omitempty" yaml:"output_bytes,omitempty"`
+	// TimeoutSeconds is the wall-clock ceiling for one call of this tool.
+	// 0 means the broker's global ceiling.
+	//
+	// It is per tool because the tools that need minutes — host_sosreport,
+	// host_strace on a busy process — and the tools that need seconds are
+	// the same kind of tool, and one global number has to be the larger of
+	// them.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty" yaml:"timeout_seconds,omitempty"`
+}
+
+// Valid reports whether the limits are expressible.
+//
+// Negative is invalid rather than "unlimited": a manifest that says
+// output_bytes: -1 is a package that misunderstood the field, and reading it
+// as a licence to return anything is how a ceiling stops being one.
+func (l ToolLimits) Valid() bool {
+	return l.OutputBytes >= 0 && l.TimeoutSeconds >= 0
 }
 
 // Tools is a declared tool inventory.

@@ -962,6 +962,22 @@ func main() {
 	}
 	edgeAuthn := managerbizedge.NewAccessKeyAuthenticator(edgeRepo, log)
 
+	// The cluster's daily token cap, built here rather than inside
+	// buildAIOpsRuntime because there are now two loops that spend against
+	// it: the console's agent kernel and the node-facing gateway. One
+	// instance means one counter, and the comment that used to claim "the
+	// cap is one number regardless of which loop is live" is a statement
+	// about this object rather than about intent. Two instances would each
+	// enforce the cap, so a fleet could spend twice the operator's ceiling —
+	// the exact failure a cap exists to prevent.
+	var dailyBudget *llm.InMemoryBudget
+	if cfg.LLM.DailyTokenLimit > 0 {
+		dailyBudget = llm.NewInMemoryBudget(cfg.LLM.DailyTokenLimit)
+		log.Info("llm: daily token budget enabled",
+			slog.Int("daily_limit", cfg.LLM.DailyTokenLimit),
+		)
+	}
+
 	// The node-facing model gateway.
 	//
 	// It is built here, next to the tunnel's own authenticator, because it
@@ -973,10 +989,21 @@ func main() {
 	// Registering it on the public mux rather than under /api is deliberate:
 	// the caller is PiG's OpenAI provider, not the console, so it carries a
 	// node credential and no manager session.
+	var gatewayBudget llmgw.Budget
+	if dailyBudget != nil {
+		// The typed-nil trap, spelled out because it is invisible at the
+		// call site: a *llm.InMemoryBudget that is nil, boxed into the
+		// interface field, is not equal to nil — it is an interface holding a
+		// nil pointer, which passes every `== nil` check in llmgw and then
+		// dereferences itself on the first request of the day.
+		gatewayBudget = globalTokenBudget{inner: dailyBudget}
+	}
 	llmGateway, err := llmgw.NewHandler(llmgw.Options{
 		Auth:           edgeAuthn,
 		Completer:      modelRegistry,
 		DefaultModeler: modelRegistry,
+		Budget:         gatewayBudget,
+		Limiter:        llmgw.NewLimiter(cfg.LLM.EdgeRequestsPerMinute),
 		Log:            log,
 	})
 	if err != nil {
@@ -1715,7 +1742,7 @@ func main() {
 			Gate:       kernelGate,
 			Audit:      auditUC,
 			PiGRuntime: pigRuntime,
-		})
+		}, dailyBudget)
 		if rterr != nil {
 			log.Warn("aiops runtime build failed — falling back to legacy kernel", slog.Any("err", rterr))
 			kernel = managersvcaiops.KernelLegacy
@@ -3675,6 +3702,32 @@ type edgeAuthAdapter struct {
 	authn *managerbizedge.AccessKeyAuthenticator
 }
 
+// globalTokenBudget adapts the console's daily-cap budget onto the node
+// gateway's two-method seam.
+//
+// It exists because the two consumers want different shapes of the same
+// question. The console's kernel asks per session and needs a user bucket;
+// the gateway asks per node and has no user at all, so it passes the global
+// bucket (user 0) — which is what the single-tenant deployment is, and is
+// still correct in a multi-tenant one because the daily cap stays a global
+// safety net (see config.LLMConfig.DailyTokenLimit).
+//
+// Both consumers hold the same *llm.InMemoryBudget, so a token spent by a
+// node is the same token the console sees against its ceiling.
+type globalTokenBudget struct {
+	inner *llm.InMemoryBudget
+}
+
+// Check reports whether the global daily bucket has room for one more call.
+func (b globalTokenBudget) Check(ctx context.Context, estPromptTokens int) error {
+	return b.inner.Check(ctx, 0, estPromptTokens)
+}
+
+// Record adds a settled call's tokens to the global daily bucket.
+func (b globalTokenBudget) Record(ctx context.Context, tokens int) error {
+	return b.inner.Record(ctx, 0, tokens)
+}
+
 func (a edgeAuthAdapter) AuthenticateEdge(ctx context.Context, accessKey, secretKey string) (uint64, error) {
 	sess, err := a.authn.Authenticate(ctx, accessKey, secretKey)
 	if err != nil {
@@ -4162,6 +4215,7 @@ func buildAIOpsRuntime(
 	agentReg *aiopschatruntime.AgentRegistry,
 	resolver *managerbizsetting.LLMSettingsResolver,
 	wiring kernelWiring,
+	dailyBudget *llm.InMemoryBudget,
 ) (*aiopschatruntime.Runtime, error) {
 	// 1. Model availability. The loop resolves its per-turn model through
 	//    the settings-backed PiG registry (pigRegistry) on every call, so
@@ -4262,18 +4316,11 @@ func buildAIOpsRuntime(
 		Source:   "builtin",
 	})
 
-	// 4. Daily token budget (optional). Single global UTC-day cap enforced
-	//    against llm.InMemoryBudget (sufficient for the private-MVP
-	//    single-tenant scope). The agent kernel consumes the same value
-	//    through agentkernel.NewBudget, so the cap is one number regardless
-	//    of which loop is live.
-	var dailyBudget *llm.InMemoryBudget
-	if cfg.LLM.DailyTokenLimit > 0 {
-		dailyBudget = llm.NewInMemoryBudget(cfg.LLM.DailyTokenLimit)
-		log.Info("aiops: daily token budget enabled",
-			slog.Int("daily_limit", cfg.LLM.DailyTokenLimit),
-		)
-	}
+	// 4. Daily token budget. Built by main and passed in rather than built
+	//    here, because the node gateway is gated by the same instance — see
+	//    the construction site for why that matters. nil means the operator
+	//    set no cap, and nil is what the kernel's own nil-safe wrapper
+	//    expects.
 
 	// 5. Stitch the runtime.
 	_ = ctx

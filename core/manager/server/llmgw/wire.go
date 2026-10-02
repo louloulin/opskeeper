@@ -37,16 +37,42 @@ type chatRequest struct {
 	Messages []chatMessage `json:"messages"`
 	Tools    []chatTool    `json:"tools,omitempty"`
 	Stream   bool          `json:"stream,omitempty"`
+	// MaxCompletionTokens is the caller's own output ceiling. It is honoured
+	// rather than parsed-and-dropped: an agent that asked for 4k tokens
+	// because its findings are read aloud in a call bridge is entitled to
+	// that bound, and a gateway that silently answered without one both
+	// overran the request and made the cost of an answer unforecastable.
+	//
+	// Zero means unset, which is not the same as "no limit": the registry
+	// applies whatever the operator's own model configuration says. A
+	// negative value is refused in tune, because it is a caller that
+	// misread the field rather than a caller asking for a small answer.
+	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
+}
+
+// tune turns the request's output ceiling into a pigmodel adjustment.
+//
+// It is a Tune rather than a field on pigmodel.Request because max tokens is
+// a per-request knob the registry fills in from the model configuration, and
+// the caller's value has to be applied after that resolution — a request field
+// would either be ignored or would have to duplicate the registry's own
+// precedence rules.
+func (r *chatRequest) tune() func(*pigai.StreamOptions) {
+	if r.MaxCompletionTokens == 0 {
+		return nil
+	}
+	limit := r.MaxCompletionTokens
+	return func(opts *pigai.StreamOptions) { opts.MaxTokens = limit }
 }
 
 // chatMessage is one entry of the request's transcript.
 //
-// Content is a string rather than the OpenAI content-parts union. PiG's
-// transcript keeps image blocks and a node's agent does not send any for a
-// diagnostics conversation, so the union would be a shape this gateway
-// accepted and then dropped on the floor — the exact failure described on
-// this type's package comment. A node that needs images is refused at the
-// field, by a 400, rather than served a transcript that quietly lost them.
+// Content is a union: a bare string, or the parts array. Both shapes are
+// accepted because a real agent sends the second one — a PiG user turn
+// carries its text as a one-element parts array, and a gateway that modelled
+// only the string refused every request a real node makes. The parts that are
+// accepted are exactly the ones that survive the translation, and a part that
+// would not is refused by name rather than dropped: see contentText.
 type chatMessage struct {
 	Role       string         `json:"role"`
 	Content    contentText    `json:"content"`
@@ -96,6 +122,10 @@ type chatToolFn struct {
 // here, at the edge, where the message can name the index — rather than
 // passed upstream to become a 400 that names nothing.
 func (r *chatRequest) toRequest() (toolNames map[string]string, err error) {
+	if r.MaxCompletionTokens < 0 {
+		return nil, fmt.Errorf("%w: max_completion_tokens is %d; it is a ceiling, "+
+			"and a negative one asks for no output at all", errs.ErrInvalid, r.MaxCompletionTokens)
+	}
 	toolNames = make(map[string]string, len(r.Tools))
 	for i, tool := range r.Tools {
 		if tool.Type != "" && tool.Type != "function" {

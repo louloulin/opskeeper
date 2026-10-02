@@ -49,6 +49,12 @@ type Registry struct {
 	name string
 	// byName is the declared set.
 	byName map[string]domain.ToolClass
+	// limits is what each tool says it needs. Kept beside byName rather
+	// than inside it because the two are compared and reported separately:
+	// a class mismatch is a question about authority, a limit mismatch is a
+	// question about capacity, and an author fixing one does not know they
+	// broke the other.
+	limits map[string]domain.ToolLimits
 	// order preserves registration order so a message can name the first
 	// offending tool rather than an arbitrary one.
 	order []string
@@ -56,7 +62,11 @@ type Registry struct {
 
 // NewRegistry starts an inventory for a named plugin.
 func NewRegistry(name string) *Registry {
-	return &Registry{name: name, byName: map[string]domain.ToolClass{}}
+	return &Registry{
+		name:   name,
+		byName: map[string]domain.ToolClass{},
+		limits: map[string]domain.ToolLimits{},
+	}
 }
 
 // Register records one tool.
@@ -68,6 +78,17 @@ func NewRegistry(name string) *Registry {
 // The two would then disagree about the same tool, which is the exact
 // failure this file exists to prevent.
 func (r *Registry) Register(name string, class domain.ToolClass) error {
+	return r.RegisterWithLimits(name, class, domain.ToolLimits{})
+}
+
+// RegisterWithLimits is Register plus the resource ceiling the tool needs.
+//
+// The limits are what the *code* expects; the manifest is what the host
+// enforces. Registering a ceiling and declaring none is allowed — the host's
+// default applies — but Check reports the difference, because a tool written
+// against a 64 MiB reply and served a 1 MiB one fails in production with a
+// truncation notice the author never saw.
+func (r *Registry) RegisterWithLimits(name string, class domain.ToolClass, limits domain.ToolLimits) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("%s: a tool needs a name", r.pluginName())
@@ -76,13 +97,24 @@ func (r *Registry) Register(name string, class domain.ToolClass) error {
 		return fmt.Errorf("%s: tool %q declares class %q; declare read, write or destructive",
 			r.pluginName(), name, class)
 	}
+	if !limits.Valid() {
+		return fmt.Errorf("%s: tool %q declares output_bytes=%d timeout_seconds=%d; a limit is never negative",
+			r.pluginName(), name, limits.OutputBytes, limits.TimeoutSeconds)
+	}
 	if prev, dup := r.byName[name]; dup {
 		return fmt.Errorf("%s: tool %q is registered twice (first as %q, now as %q)",
 			r.pluginName(), name, prev, class)
 	}
 	r.byName[name] = class
+	r.limits[name] = limits
 	r.order = append(r.order, name)
 	return nil
+}
+
+// Limits returns a registered tool's declared ceilings.
+func (r *Registry) Limits(name string) (domain.ToolLimits, bool) {
+	l, ok := r.limits[name]
+	return l, ok
 }
 
 // MustRegister is Register for table literals in a package's own source.
@@ -142,7 +174,11 @@ func (r *Registry) ToolDecls() domain.Tools {
 	names := r.Names()
 	out := make(domain.Tools, 0, len(names))
 	for _, name := range names {
-		out = append(out, domain.ToolDecl{Name: name, Class: r.byName[name]})
+		out = append(out, domain.ToolDecl{
+			Name:   name,
+			Class:  r.byName[name],
+			Limits: r.limits[name],
+		})
 	}
 	return out
 }
@@ -202,6 +238,16 @@ func (r *Registry) Check(m domain.PluginManifest) error {
 		failures = append(failures, fmt.Sprintf(
 			"tool %q is declared %q in spec.tools and registered as %q; the manifest is what the gate enforces, so the declaration decides whether an operator is asked before this runs",
 			t.Name, t.Class, actual))
+	}
+
+	for _, t := range m.Spec.Tools {
+		want, ok := r.limits[t.Name]
+		if !ok || want == t.Limits {
+			continue
+		}
+		failures = append(failures, fmt.Sprintf(
+			"tool %q is registered with output_bytes=%d timeout_seconds=%d and declared as output_bytes=%d timeout_seconds=%d; the manifest is what the host enforces, so the declared numbers are the ones in force",
+			t.Name, want.OutputBytes, want.TimeoutSeconds, t.Limits.OutputBytes, t.Limits.TimeoutSeconds))
 	}
 
 	if len(failures) == 0 {
