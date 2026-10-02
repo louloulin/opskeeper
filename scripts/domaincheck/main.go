@@ -126,8 +126,7 @@ var edges = map[edge]string{
 
 	{"demo", "alert"}: "the demo seeds alert rows through the alert model",
 
-	{"device", "edge"}: "a device record carries its node identity; the two vocabularies are one row",
-	{"edge", "device"}: "the edge domain resolves which device a node is",
+	{"edge", "device"}: "the edge register flow resolves, creates and updates the host Device behind a node (biz/edge, server/edge). One direction only: a device deletion reaches the edge identities through a revoker the composition root injects rather than by importing them (decision 112)",
 
 	{"flow", "scheduler"}: "a flow step schedules work through the scheduler domain",
 
@@ -198,7 +197,6 @@ var cycles = map[[2]string]string{
 	{"aiops", "loop"}:        "the agent kernel drives the loop and the loop builds the agent's prompts; this is the largest cycle in the tree and the reason the registry seam (decision 104) exists",
 	{"alert", "demo"}:        "the demo seeds alerts and the alert model is what a seeded row must satisfy; cutting this means the demo stops writing the production model",
 	{"chatdiagnose", "loop"}: "a chat is promoted into the loop and the loop dispatches chats; cutting this means the promotion is an event rather than a call",
-	{"device", "edge"}:       "a device record carries its node identity and the edge domain resolves which device a node is; the two vocabularies are one row today",
 	{"loop", "report"}:       "the loop produces a report and a report is produced from a loop investigation; cutting this means the report domain subscribes rather than being called",
 }
 

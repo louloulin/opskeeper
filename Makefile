@@ -235,7 +235,7 @@ module-check: ## 校验 OpsKeeper 2.0 模块边界（唯一 PiG 导入点 / core
 # Seven pairs of domains in the tree already reach each other both ways.
 # This gate makes those edges declared, and a new one red.
 .PHONY: domain-check
-domain-check: ## 校验 control plane 的域边界（55 个域 / 50 条声明边 / 7 对已知环）
+domain-check: ## 校验 control plane 的域边界（55 个域 / 49 条声明边 / 6 对已知环）
 	go run ./scripts/domaincheck .
 	go test ./scripts/domaincheck/ -count=1
 

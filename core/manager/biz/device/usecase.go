@@ -109,8 +109,10 @@ func (u *Usecase) UpdateNameDescription(ctx context.Context, id uint64, name, de
 
 // Delete removes an offline device plus its linked Edge identities. Online
 // devices are rejected so a live host cannot lose its access key while it is
-// still connected. The repository owns the transaction because it touches
-// devices, edge_devices, and edges together.
+// still connected. The repository owns the transaction because the device
+// row, its junction rows, and the edge identities behind them have to move
+// together; the edge half is delegated to a revoker, so this package still
+// does not know what an edge row is.
 func (u *Usecase) Delete(ctx context.Context, id uint64) error {
 	if u.repo == nil {
 		return errs.ErrNotWiredYet

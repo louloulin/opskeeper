@@ -94,6 +94,13 @@ type Repo interface {
 	// DeleteOfflineWithLinkedEdges deletes an offline device and the Edge
 	// identities linked to it in one transaction. It must reject online
 	// devices with ErrConflict so callers never remove a live host.
+	//
+	// The edge half of the cascade belongs to the edge vocabulary, so the
+	// implementation reaches it through a revoker it is handed rather than
+	// by importing the edge model — see data/device/store's
+	// EdgeIdentityRevoker and decision 112. The requirement this states is
+	// "these identities must be revoked with me", not "I know what an edge
+	// row looks like".
 	DeleteOfflineWithLinkedEdges(ctx context.Context, id uint64) error
 
 	// ReconcileOfflineOrphans flips online=true devices back to offline

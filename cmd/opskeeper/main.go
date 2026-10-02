@@ -921,7 +921,14 @@ func main() {
 
 	// manager/edge biz + service + server.
 	edgeRepo := manageredgedata.NewRepo(db)
-	deviceRepo := managerdevicedata.NewRepo(db)
+	// The device repo cannot name the edge vocabulary: deleting a device has
+	// to tombstone the credentials on the edge identities linked to it, in
+	// the same transaction, and the one direction that would allow it is the
+	// one the rest of the tree runs against (decision 112). So the edge repo
+	// is handed in here, at the composition root, as the device repo's
+	// EdgeIdentityRevoker. If the two signatures ever drift this stops
+	// compiling, which is the point of putting the wiring here.
+	deviceRepo := managerdevicedata.NewRepo(db, edgeRepo)
 	edgeDeviceRepo := managerdevicedata.NewEdgeDeviceRepo(db)
 	deviceUC := managerbizdevice.NewUsecase(deviceRepo, edgeDeviceRepo, log)
 	edgeUC := managerbizedge.NewUsecase(edgeRepo, deviceRepo, edgeDeviceRepo, log)

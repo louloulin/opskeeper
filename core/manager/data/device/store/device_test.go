@@ -9,10 +9,21 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	edgestore "github.com/vincent-wuhan/opskeeper/core/manager/data/edge/store"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
+
+// newRevokedRepo wires the *real* edge store in as the device store's
+// EdgeIdentityRevoker, exactly the way cmd/opskeeper/main.go does.
+//
+// The alternative — a fake that records the ids it was handed — would have
+// made these three tests pass while checking nothing about credentials,
+// which is the only thing they exist to check. A test file reaching across
+// into the edge domain is the boundary being exercised, not broken: it is
+// why domaincheck and .go-arch-lint.yml both exempt _test.go.
+func newRevokedRepo(db *gorm.DB) *Repo { return NewRepo(db, edgestore.NewRepo(db)) }
 
 func newDeviceTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -44,7 +55,7 @@ func sampleDevice(fingerprint string) *model.Device {
 
 func TestFindOrCreateByFingerprintSoftDeleteAllowsReuse(t *testing.T) {
 	db := newDeviceTestDB(t)
-	repo := NewRepo(db)
+	repo := newRevokedRepo(db)
 	ctx := context.Background()
 
 	first, err := repo.FindOrCreateByFingerprint(ctx, sampleDevice("host-a"))
@@ -117,7 +128,7 @@ func TestReconcileOfflineOrphans(t *testing.T) {
 	if err := db.AutoMigrate(&edgemodel.Edge{}); err != nil {
 		t.Fatalf("AutoMigrate edges: %v", err)
 	}
-	repo := NewRepo(db)
+	repo := newRevokedRepo(db)
 	ctx := context.Background()
 
 	mkOnlineDevice := func(fp string) uint64 {
@@ -192,7 +203,7 @@ func TestDeleteOfflineWithLinkedEdgesRejectsOnlineDevice(t *testing.T) {
 	if err := db.AutoMigrate(&edgemodel.Edge{}); err != nil {
 		t.Fatalf("AutoMigrate edges: %v", err)
 	}
-	repo := NewRepo(db)
+	repo := newRevokedRepo(db)
 	ctx := context.Background()
 
 	dev, err := repo.FindOrCreateByFingerprint(ctx, sampleDevice("delete-online"))
@@ -217,7 +228,7 @@ func TestDeleteOfflineWithLinkedEdgesRejectsOnlineLinkedEdge(t *testing.T) {
 	if err := db.AutoMigrate(&edgemodel.Edge{}); err != nil {
 		t.Fatalf("AutoMigrate edges: %v", err)
 	}
-	repo := NewRepo(db)
+	repo := newRevokedRepo(db)
 	links := NewEdgeDeviceRepo(db)
 	ctx := context.Background()
 
@@ -254,7 +265,7 @@ func TestDeleteOfflineWithLinkedEdgesCleansEdgesAndCredentials(t *testing.T) {
 	if err := db.AutoMigrate(&edgemodel.Edge{}); err != nil {
 		t.Fatalf("AutoMigrate edges: %v", err)
 	}
-	repo := NewRepo(db)
+	repo := newRevokedRepo(db)
 	links := NewEdgeDeviceRepo(db)
 	ctx := context.Background()
 

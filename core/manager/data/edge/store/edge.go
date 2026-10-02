@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -200,6 +201,67 @@ func (r *Repo) Delete(ctx context.Context, id uint64) error {
 		return errs.ErrNotFound
 	}
 	return nil
+}
+
+// RevokeIdentities tombstones the credentials on the edge identities named
+// by edgeIDs and soft-deletes the rows, all inside tx — the caller's
+// transaction, because the reason this method exists at all is that a
+// device row and the edge rows behind it have to move together or not at
+// all (decision 112).
+//
+// It refuses with errs.ErrConflict while any of them is still online: a
+// node that is talking to the control plane right now must not lose its
+// access key underneath the running tunnel.
+//
+// tx is the transaction the caller opened, not a handle this repo owns,
+// which is why the method is on *Repo but does not use r.db.
+func (r *Repo) RevokeIdentities(ctx context.Context, tx *gorm.DB, edgeIDs []uint64) error {
+	ids := uniqueIDs(edgeIDs)
+	if len(ids) == 0 {
+		return nil
+	}
+	var online int64
+	if err := tx.WithContext(ctx).Model(&model.Edge{}).
+		Where("id IN ? AND status = ?", ids, model.StatusOnline).
+		Count(&online).Error; err != nil {
+		return err
+	}
+	if online > 0 {
+		return fmt.Errorf("%w: linked edge must be offline before device deletion", errs.ErrConflict)
+	}
+	// Credentials go first and the row is soft-deleted after, so that a
+	// crash between the two leaves an edge that cannot authenticate rather
+	// than one that is gone but still holds a reusable key.
+	for _, id := range ids {
+		res := tx.Unscoped().Model(&model.Edge{}).
+			Where("id = ?", id).
+			Updates(map[string]any{
+				"access_key_id":   fmt.Sprintf("deleted-%d", id),
+				"secret_key_hash": "",
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+	}
+	return tx.Where("id IN ?", ids).Delete(&model.Edge{}).Error
+}
+
+// uniqueIDs drops zero and duplicate ids while keeping the caller's order,
+// so a junction that linked the same edge twice is revoked once.
+func uniqueIDs(ids []uint64) []uint64 {
+	seen := make(map[uint64]struct{}, len(ids))
+	out := make([]uint64, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 // Count returns the number of non-soft-deleted edges.

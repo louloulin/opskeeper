@@ -14,17 +14,43 @@ import (
 
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
-// Repo is the GORM-backed biz/device.Repo.
-type Repo struct {
-	db *gorm.DB
+// EdgeIdentityRevoker is what deleting a device needs from the edge
+// vocabulary, and it is declared here rather than in biz/device because
+// the only thing that crosses the domain boundary is a gorm transaction
+// handle: naming that in a biz port would put the ORM into the biz layer
+// for the sake of one method. Declared at the point of use instead, and
+// satisfied structurally by *data/edge/store.Repo — the composition root
+// in cmd/opskeeper/main.go passes that repo in, so a signature drift is a
+// compile error there rather than a nil panic at delete time.
+//
+// This is the same shape as biz/edge's NodeMirror, and it is the direction
+// the rest of the tree already runs: the edge register flow creates devices
+// and writes their host facts, so edge → device is load-bearing, and the
+// one place that ran the other way was this cascade.
+type EdgeIdentityRevoker interface {
+	// RevokeIdentities tombstones the credentials on the named edge
+	// identities and soft-deletes them inside tx, refusing with
+	// errs.ErrConflict while any of them is still online. It is
+	// expected to leave the junction rows to their owner.
+	RevokeIdentities(ctx context.Context, tx *gorm.DB, edgeIDs []uint64) error
 }
 
-// NewRepo constructs the repo around an opened *gorm.DB.
-func NewRepo(db *gorm.DB) *Repo { return &Repo{db: db} }
+// Repo is the GORM-backed biz/device.Repo.
+type Repo struct {
+	db      *gorm.DB
+	revoker EdgeIdentityRevoker
+}
+
+// NewRepo constructs the repo around an opened *gorm.DB. revoker is the
+// edge-vocabulary side of deleting a device and is required, not optional:
+// DeleteOfflineWithLinkedEdges returns errs.ErrNotWiredYet without it rather
+// than silently deleting a device and leaving its access keys alive.
+func NewRepo(db *gorm.DB, revoker EdgeIdentityRevoker) *Repo {
+	return &Repo{db: db, revoker: revoker}
+}
 
 // compile-time check.
 var _ biz.Repo = (*Repo)(nil)
@@ -315,7 +341,18 @@ func (r *Repo) Delete(ctx context.Context, id uint64) error {
 // rows, and every linked edge identity in one database transaction. Edge
 // credentials are tombstoned before the edge row is soft-deleted so a deleted
 // installation cannot keep a reusable access/secret pair around.
+//
+// The edge half of the cascade goes through r.revoker rather than through
+// the edge model directly. That is the whole point of decision 112: this
+// method used to write the edges table, which made the device domain depend
+// on the edge domain while the edge domain already depended on the device
+// domain, and the two could not be told apart in review. The junction stays
+// here because it belongs to the device side; the identities behind it do
+// not.
 func (r *Repo) DeleteOfflineWithLinkedEdges(ctx context.Context, id uint64) error {
+	if r.revoker == nil {
+		return errs.ErrNotWiredYet
+	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var d model.Device
 		if err := tx.First(&d, id).Error; err != nil {
@@ -332,33 +369,8 @@ func (r *Repo) DeleteOfflineWithLinkedEdges(ctx context.Context, id uint64) erro
 		if err := tx.Where("device_id = ?", id).Find(&links).Error; err != nil {
 			return err
 		}
-		edgeIDs := uniqueEdgeIDs(links)
-		if len(edgeIDs) > 0 {
-			var onlineEdges int64
-			if err := tx.Model(&edgemodel.Edge{}).
-				Where("id IN ? AND status = ?", edgeIDs, edgemodel.StatusOnline).
-				Count(&onlineEdges).Error; err != nil {
-				return err
-			}
-			if onlineEdges > 0 {
-				return fmt.Errorf("%w: linked edge must be offline before device deletion", errs.ErrConflict)
-			}
-		}
-		for _, edgeID := range edgeIDs {
-			res := tx.Unscoped().Model(&edgemodel.Edge{}).
-				Where("id = ?", edgeID).
-				Updates(map[string]any{
-					"access_key_id":   fmt.Sprintf("deleted-%d", edgeID),
-					"secret_key_hash": "",
-				})
-			if res.Error != nil {
-				return res.Error
-			}
-		}
-		if len(edgeIDs) > 0 {
-			if err := tx.Where("id IN ?", edgeIDs).Delete(&edgemodel.Edge{}).Error; err != nil {
-				return err
-			}
+		if err := r.revoker.RevokeIdentities(ctx, tx, uniqueEdgeIDs(links)); err != nil {
+			return err
 		}
 		if err := tx.Where("device_id = ?", id).Delete(&model.EdgeDevice{}).Error; err != nil {
 			return err
