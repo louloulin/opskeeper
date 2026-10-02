@@ -118,6 +118,7 @@ components:
   # them are new.
   oxedge_runtime:
     in:
+      - core/edge/agentmodel/**
       - core/edge/bash/**
       - core/edge/changewatcher/**
       - core/edge/cmdpolicy/**

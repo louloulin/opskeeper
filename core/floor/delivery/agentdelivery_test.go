@@ -180,15 +180,15 @@ func TestTheContainerImageCarriesTheAgent(t *testing.T) {
 //   - the rendered env file has to offer the endpoint and the credential, or
 //     an operator has nothing to fill in.
 func TestTheNodeIsToldHowToReachAModel(t *testing.T) {
-	mustContain(t, "cmd/opskeeper-edge/agentmodel.go", "the node's model configuration must name "+
+	mustContain(t, "core/edge/agentmodel/agentmodel.go", "the node's model configuration must name "+
 		"the scope it writes and refuse a half-configured endpoint",
 		"PIG_CODING_AGENT_DIR",
 		"models.json",
 		"\"$"+agentTokenEnvForTest+"\"")
 	mustContain(t, "cmd/opskeeper-edge/agent.go", "the agent process must be told where its "+
 		"configuration scope is and what credential to present",
-		"agentModelEnvVars()",
-		"writeAgentModelConfig(")
+		"agentmodel.Write(modelCfg)",
+		"modelCfg.AgentEnvVars()")
 	mustContain(t, "deploy/install/edge/opskeeper-edge.env.example", "an operator needs somewhere "+
 		"to put the endpoint and the credential",
 		"OPSKEEPER_EDGE_AGENT_CONFIG_DIR=",

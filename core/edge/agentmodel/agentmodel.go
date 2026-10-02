@@ -1,4 +1,12 @@
-package main
+// Package agentmodel is how a node tells its agent where to send a request.
+//
+// It is a package rather than a file in the edge command for one reason: the
+// end-to-end test that matters most — a real agent process making a real
+// request through a real gateway — has to use this exact code to write the
+// configuration, or it is testing a copy of it. A copy of a configuration
+// writer is a second answer to "what does a node tell its agent", and this
+// repository has spent three decisions removing exactly that.
+package agentmodel
 
 import (
 	"encoding/json"
@@ -40,56 +48,56 @@ import (
 // file. A token on disk would be a token an operator has to remember to
 // rotate, on every host, by hand.
 
-// agentModelConfigDirEnv names the node-owned agent configuration root.
+// ConfigDirEnv names the node-owned agent configuration root.
 //
 // It is a separate variable from OPSKEEPER_EDGE_AGENT_DIR on purpose: that
 // one is the *working* directory and therefore the package root, and this one
 // is the agent's own scope. They used to be conflated by nobody, because
 // there was no second one; conflating them now would put a credential inside
 // the plugin tree.
-const agentModelConfigDirEnv = "OPSKEEPER_EDGE_AGENT_CONFIG_DIR"
+const ConfigDirEnv = "OPSKEEPER_EDGE_AGENT_CONFIG_DIR"
 
-// defaultAgentModelConfigDir is where a node keeps its agent scope.
+// DefaultConfigDir is where a node keeps its agent scope.
 //
 // It is a sibling of the package root rather than a child, so that the agent
 // reading its configuration cannot walk into reviewed plugin content, and so
 // that removing the plugin bundle cannot take the node's model configuration
 // with it.
-const defaultAgentModelConfigDir = "/var/lib/opskeeper-edge/agent-home"
+const DefaultConfigDir = "/var/lib/opskeeper-edge/agent-home"
 
 // The environment contract. Three variables, because they answer three
 // different questions and combining any two of them produces a state that is
 // either ambiguous or unrecoverable.
 const (
-	// agentBaseURLEnv is the OpenAI-compatible endpoint the node's agent
+	// BaseURLEnv is the OpenAI-compatible endpoint the node's agent
 	// talks to. Empty means "this node has no model configured", which is a
 	// legitimate state — the agent's own scope is then left entirely alone,
 	// so an operator who provisioned a provider by hand keeps it.
-	agentBaseURLEnv = "OPSKEEPER_EDGE_AGENT_BASE_URL"
+	BaseURLEnv = "OPSKEEPER_EDGE_AGENT_BASE_URL"
 
-	// agentTokenEnv is both where the operator puts the credential and the
+	// TokenEnv is both where the operator puts the credential and the
 	// name the agent's configuration refers to. One name, two roles, on
 	// purpose: a second variable holding the *name* of the credential
 	// variable would let the two disagree, and the failure would be an agent
 	// that cannot authenticate with a message naming a variable nobody set.
-	agentTokenEnv = "OPSKEEPER_EDGE_AGENT_TOKEN"
+	TokenEnv = "OPSKEEPER_EDGE_AGENT_TOKEN"
 
-	// agentModelEnv pins the model slug the node's provider serves, so the
+	// ModelEnv pins the model slug the node's provider serves, so the
 	// node and the manager agree on which model answers.
-	agentModelEnv = "OPSKEEPER_EDGE_AGENT_MODEL"
+	ModelEnv = "OPSKEEPER_EDGE_AGENT_MODEL"
 )
 
-// agentModelProviderID is the provider name written into models.json.
+// ProviderID is the provider name written into models.json.
 //
 // It is a constant rather than configuration because it is not a choice: it
 // names the one provider the node knows how to reach, and an operator who
 // wants a different one is configuring a different deployment. Making it
 // configurable would only produce nodes whose console reports one provider
 // and whose agent resolves another.
-const agentModelProviderID = "opskeeper"
+const ProviderID = "opskeeper"
 
-// agentModelConfig is a node's resolved model endpoint.
-type agentModelConfig struct {
+// Config is a node's resolved model endpoint.
+type Config struct {
 	// BaseURL is the OpenAI-compatible root, e.g. https://opskeeper.example.com/llm/v1.
 	BaseURL string
 	// Token is the credential. It is passed to the agent in the process
@@ -129,7 +137,7 @@ type modelsModel struct {
 	Name string `json:"name,omitempty"`
 }
 
-// agentModelConfigFromEnv resolves the node's model endpoint.
+// ConfigFromEnv resolves the node's model endpoint.
 //
 // The error cases are the interesting part, and they are all refusals rather
 // than fallbacks:
@@ -147,41 +155,41 @@ type modelsModel struct {
 // Both are configuration errors an operator can fix, and the caller treats an
 // error here as "this node runs without an AI agent" — the edge still
 // collects telemetry, which is the property that makes failing loudly safe.
-func agentModelConfigFromEnv() (agentModelConfig, bool, error) {
-	baseURL := strings.TrimSpace(os.Getenv(agentBaseURLEnv))
-	token := strings.TrimSpace(os.Getenv(agentTokenEnv))
-	dir := strings.TrimSpace(os.Getenv(agentModelConfigDirEnv))
+func ConfigFromEnv() (Config, bool, error) {
+	baseURL := strings.TrimSpace(os.Getenv(BaseURLEnv))
+	token := strings.TrimSpace(os.Getenv(TokenEnv))
+	dir := strings.TrimSpace(os.Getenv(ConfigDirEnv))
 	if dir == "" {
-		dir = defaultAgentModelConfigDir
+		dir = DefaultConfigDir
 	}
 
 	switch {
 	case baseURL == "" && token == "":
 		// Not configured, not an error. The agent's own configuration scope
 		// is left untouched, so a node provisioned by hand keeps working.
-		return agentModelConfig{}, false, nil
+		return Config{}, false, nil
 	case baseURL == "":
-		return agentModelConfig{}, false, fmt.Errorf(
+		return Config{}, false, fmt.Errorf(
 			"%s is set but %s is empty; the credential would be sent to whatever provider the "+
 				"agent resolves on its own, which is not a destination anybody chose. "+
 				"Set %s, or unset %s",
-			agentTokenEnv, agentBaseURLEnv, agentBaseURLEnv, agentTokenEnv)
+			TokenEnv, BaseURLEnv, BaseURLEnv, TokenEnv)
 	case token == "":
-		return agentModelConfig{}, false, fmt.Errorf(
+		return Config{}, false, fmt.Errorf(
 			"%s=%s but %s is empty; the node would start, load its plugins, and answer every "+
 				"question with no model behind it",
-			agentBaseURLEnv, baseURL, agentTokenEnv)
+			BaseURLEnv, baseURL, TokenEnv)
 	}
 
-	return agentModelConfig{
+	return Config{
 		BaseURL: strings.TrimRight(baseURL, "/"),
 		Token:   token,
-		Model:   strings.TrimSpace(os.Getenv(agentModelEnv)),
+		Model:   strings.TrimSpace(os.Getenv(ModelEnv)),
 		Dir:     dir,
 	}, true, nil
 }
 
-// writeAgentModelConfig materialises the agent scope and returns its path.
+// Write materialises the agent scope and returns its path.
 //
 // It is written whole and installed by rename, for the reason
 // writeAgentSettings is: a node killed halfway through leaves either the old
@@ -191,7 +199,7 @@ func agentModelConfigFromEnv() (agentModelConfig, bool, error) {
 // The directory is 0700 and the file 0600 even though the file holds no
 // secret. It is the node's configuration root, and the next thing to land
 // there will be something that does.
-func writeAgentModelConfig(cfg agentModelConfig) (string, error) {
+func Write(cfg Config) (string, error) {
 	if cfg.Dir == "" {
 		return "", errors.New("agent model: no configuration directory")
 	}
@@ -204,11 +212,11 @@ func writeAgentModelConfig(cfg agentModelConfig) (string, error) {
 		models = append(models, modelsModel{ID: cfg.Model, Name: cfg.Model})
 	}
 	doc := modelsFile{Providers: map[string]modelsProvider{
-		agentModelProviderID: {
+		ProviderID: {
 			Name:    "OpsKeeper",
 			BaseURL: cfg.BaseURL,
 			// The reference, never the value. See the type comment.
-			APIKey:  "$" + agentTokenEnv,
+			APIKey:  "$" + TokenEnv,
 			API:     "openai-completions",
 			Models:  models,
 			Headers: nil,
@@ -246,7 +254,7 @@ func writeAgentModelConfig(cfg agentModelConfig) (string, error) {
 	return final, nil
 }
 
-// agentModelEnvVars is what the agent process needs in order to find the
+// AgentEnvVars is what the agent process needs in order to find the
 // configuration this node just wrote and the credential to use with it.
 //
 // The two are returned together rather than written into a map at the call
@@ -260,9 +268,30 @@ func writeAgentModelConfig(cfg agentModelConfig) (string, error) {
 // agentConfigDirName is: importing it would put PiG in the node's dependency
 // graph for a constant, and the node plane must not name PiG. The delivery
 // tests assert the two spellings stay in step.
-func (c agentModelConfig) agentModelEnvVars() map[string]string {
+func (c Config) AgentEnvVars() map[string]string {
 	return map[string]string{
 		"PIG_CODING_AGENT_DIR": c.Dir,
-		agentTokenEnv:          c.Token,
+		TokenEnv:               c.Token,
 	}
 }
+
+// WorkingDirEnv names the agent's working directory, which is also the
+// plugin bundle root.
+//
+// It is declared here, next to DefaultConfigDir, because the relationship
+// between the two is the property that matters: the agent resolves a relative
+// configuration path against its working directory, so DefaultConfigDir has
+// to be a sibling of this and not a child. Two constants in two packages
+// would be two answers to "where does the agent's configuration live", and
+// only one of them would be right after an edit to either.
+const WorkingDirEnv = "OPSKEEPER_EDGE_AGENT_DIR"
+
+// DefaultWorkingDir is the agent's working directory when nothing says
+// otherwise, and with it the plugin bundle root.
+const DefaultWorkingDir = "/var/lib/opskeeper-edge/agent"
+
+// defaultPackageDir is the read-only profile every node starts with, kept
+// here only so the sibling assertion below has both sides. It is the edge
+// command's setting, not this package's; the assertion is that whatever the
+// command configures, this package's default is not inside it.
+const defaultPackageDir = "/var/lib/opskeeper-edge/agent/packages"

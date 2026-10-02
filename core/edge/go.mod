@@ -15,6 +15,7 @@
 //
 // Subpackages:
 //
+//	agentmodel     how a node tells its agent which model endpoint and credential to use
 //	pigsupervisor  the node agent process lifecycle: spawn, restart, health
 //	policygate     the node's own policy engine: what a tool call may do
 //	gatesocket     the unix-socket admission channel the courier speaks

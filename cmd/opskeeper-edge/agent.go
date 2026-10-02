@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/edge/agentmodel"
 	"github.com/vincent-wuhan/opskeeper/core/edge/agentprofile"
 	"github.com/vincent-wuhan/opskeeper/core/edge/gatesocket"
 	"github.com/vincent-wuhan/opskeeper/core/edge/pigsupervisor"
@@ -57,16 +58,6 @@ type nodeAgentConfig struct {
 	RestartBackoff time.Duration
 }
 
-// defaultAgentWorkingDir is the agent's working directory when nothing says
-// otherwise, and with it the plugin bundle root.
-//
-// It is a named constant rather than a literal at the call site because one
-// other thing has to agree with it, and that thing is a security property:
-// the agent resolves a relative configuration path against this directory, so
-// anything written inside it is inside reviewed, digest-covered plugin
-// content. See defaultAgentModelConfigDir and its test.
-const defaultAgentWorkingDir = "/var/lib/opskeeper-edge/agent"
-
 // defaultAgentPackageDir is the read-only profile every node starts with.
 //
 // It is a default, not a constant that always applies: an operator who
@@ -83,7 +74,7 @@ func loadNodeAgentConfig() nodeAgentConfig {
 	}
 	return nodeAgentConfig{
 		Binary:           envOr("OPSKEEPER_EDGE_AGENT_BIN", "pig"),
-		Cwd:              envOr("OPSKEEPER_EDGE_AGENT_DIR", defaultAgentWorkingDir),
+		Cwd:              envOr(agentmodel.WorkingDirEnv, agentmodel.DefaultWorkingDir),
 		Packages:         packages,
 		Provider:         os.Getenv("OPSKEEPER_EDGE_AGENT_PROVIDER"),
 		Model:            os.Getenv("OPSKEEPER_EDGE_AGENT_MODEL"),
@@ -169,7 +160,7 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 	// scope is left entirely alone so an operator who provisioned one by
 	// hand keeps it. See agentmodel.go for why the default scope is not
 	// something to rely on.
-	modelCfg, modelConfigured, err := agentModelConfigFromEnv()
+	modelCfg, modelConfigured, err := agentmodel.ConfigFromEnv()
 	if err != nil {
 		return nil, nil, fmt.Errorf("edge agent model configuration: %w", err)
 	}
@@ -200,24 +191,24 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 		wire.ToolSocketEnv: toolSocketPath,
 	}
 	if modelConfigured {
-		modelsPath, err := writeAgentModelConfig(modelCfg)
+		modelsPath, err := agentmodel.Write(modelCfg)
 		if err != nil {
 			return nil, nil, err
 		}
-		for key, value := range modelCfg.agentModelEnvVars() {
+		for key, value := range modelCfg.AgentEnvVars() {
 			agentEnv[key] = value
 		}
 		// The endpoint and the model are safe to log; the token is not, and
-		// it is not in models.json either — see agentmodel.go.
+		// it is not in models.json either — see the agentmodel package.
 		log.Info("node agent model endpoint installed",
 			slog.String("models", modelsPath),
-			slog.String("provider", agentModelProviderID),
+			slog.String("provider", agentmodel.ProviderID),
 			slog.String("base_url", modelCfg.BaseURL),
 			slog.String("model", modelCfg.Model))
 	} else {
 		log.Info("node agent has no model endpoint configured; the agent will use whatever "+
 			"provider its own configuration scope resolves",
-			slog.String("set", agentBaseURLEnv))
+			slog.String("set", agentmodel.BaseURLEnv))
 	}
 
 	// The allow-list is built from the same manifests that were just

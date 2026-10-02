@@ -1,4 +1,4 @@
-package main
+package agentmodel
 
 import (
 	"os"
@@ -14,10 +14,10 @@ import (
 func setModelEnv(t *testing.T, baseURL, token, model, dir string) {
 	t.Helper()
 	for name, value := range map[string]string{
-		agentBaseURLEnv:        baseURL,
-		agentTokenEnv:          token,
-		agentModelEnv:          model,
-		agentModelConfigDirEnv: dir,
+		BaseURLEnv:   baseURL,
+		TokenEnv:     token,
+		ModelEnv:     model,
+		ConfigDirEnv: dir,
 	} {
 		t.Setenv(name, value)
 	}
@@ -31,7 +31,7 @@ func setModelEnv(t *testing.T, baseURL, token, model, dir string) {
 func TestAnUnconfiguredNodeLeavesTheAgentsOwnScopeAlone(t *testing.T) {
 	setModelEnv(t, "", "", "", "")
 
-	cfg, configured, err := agentModelConfigFromEnv()
+	cfg, configured, err := ConfigFromEnv()
 	if err != nil {
 		t.Fatalf("an unconfigured node must not be an error: %v", err)
 	}
@@ -54,12 +54,12 @@ func TestAHalfConfiguredEndpointIsRefusedRatherThanGuessed(t *testing.T) {
 	t.Run("endpoint without credential", func(t *testing.T) {
 		setModelEnv(t, "https://opskeeper.example.com/llm/v1", "", "gpt-x", t.TempDir())
 
-		_, _, err := agentModelConfigFromEnv()
+		_, _, err := ConfigFromEnv()
 		if err == nil {
 			t.Fatal("an endpoint with no credential was accepted; the node would start, load its " +
 				"plugins and answer every question with no model behind it")
 		}
-		for _, want := range []string{agentBaseURLEnv, agentTokenEnv} {
+		for _, want := range []string{BaseURLEnv, TokenEnv} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("the refusal does not name %s: %v", want, err)
 			}
@@ -69,12 +69,12 @@ func TestAHalfConfiguredEndpointIsRefusedRatherThanGuessed(t *testing.T) {
 	t.Run("credential without endpoint", func(t *testing.T) {
 		setModelEnv(t, "", "sk-node-token", "gpt-x", t.TempDir())
 
-		_, _, err := agentModelConfigFromEnv()
+		_, _, err := ConfigFromEnv()
 		if err == nil {
 			t.Fatal("a credential with no endpoint was accepted; the token would be handed to " +
 				"whatever provider the agent resolved on its own")
 		}
-		for _, want := range []string{agentTokenEnv, agentBaseURLEnv} {
+		for _, want := range []string{TokenEnv, BaseURLEnv} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("the refusal does not name %s: %v", want, err)
 			}
@@ -89,9 +89,9 @@ func TestAHalfConfiguredEndpointIsRefusedRatherThanGuessed(t *testing.T) {
 // effect on the next turn.
 func TestTheWrittenConfigurationReferencesTheTokenAndNeverCarriesIt(t *testing.T) {
 	dir := t.TempDir()
-	cfg := agentModelConfig{BaseURL: "https://opskeeper.example.com/llm/v1", Token: "sk-node-secret", Model: "gpt-x", Dir: dir}
+	cfg := Config{BaseURL: "https://opskeeper.example.com/llm/v1", Token: "sk-node-secret", Model: "gpt-x", Dir: dir}
 
-	path, err := writeAgentModelConfig(cfg)
+	path, err := Write(cfg)
 	if err != nil {
 		t.Fatalf("write the agent model configuration: %v", err)
 	}
@@ -105,9 +105,9 @@ func TestTheWrittenConfigurationReferencesTheTokenAndNeverCarriesIt(t *testing.T
 			"so that rotating the token is restarting a service rather than editing files on " +
 			"every host")
 	}
-	if !strings.Contains(string(body), `"$`+agentTokenEnv+`"`) {
+	if !strings.Contains(string(body), `"$`+TokenEnv+`"`) {
 		t.Errorf("models.json does not reference $%s; without the reference the agent has no "+
-			"credential at all", agentTokenEnv)
+			"credential at all", TokenEnv)
 	}
 	if !strings.Contains(string(body), cfg.BaseURL) {
 		t.Error("models.json does not carry the endpoint; the agent would resolve whatever " +
@@ -143,17 +143,17 @@ func TestTheAgentConfigurationDirectoryIsOutsideThePluginBundle(t *testing.T) {
 	// against, so that is what the configuration directory must not be
 	// inside — not the narrower package directory, which happens to sit
 	// under it today and is a separate setting.
-	if defaultAgentModelConfigDir == defaultAgentWorkingDir ||
-		strings.HasPrefix(defaultAgentModelConfigDir, defaultAgentWorkingDir+string(filepath.Separator)) {
+	if DefaultConfigDir == DefaultWorkingDir ||
+		strings.HasPrefix(DefaultConfigDir, DefaultWorkingDir+string(filepath.Separator)) {
 		t.Errorf("the agent configuration directory %q is inside the agent's working directory %q; "+
 			"an unpinned agent scope resolves to the working directory, so a credential written "+
 			"here would land in reviewed, digest-covered plugin content",
-			defaultAgentModelConfigDir, defaultAgentWorkingDir)
+			DefaultConfigDir, DefaultWorkingDir)
 	}
-	if filepath.Dir(defaultAgentModelConfigDir) != filepath.Dir(defaultAgentWorkingDir) {
+	if filepath.Dir(DefaultConfigDir) != filepath.Dir(DefaultWorkingDir) {
 		t.Errorf("the agent scope %q is no longer a sibling of the working directory %q; "+
 			"the sibling relationship is what keeps node configuration out of the plugin tree",
-			defaultAgentModelConfigDir, defaultAgentWorkingDir)
+			DefaultConfigDir, DefaultWorkingDir)
 	}
 }
 
@@ -162,10 +162,10 @@ func TestTheAgentConfigurationDirectoryIsOutsideThePluginBundle(t *testing.T) {
 // does not exist, or holding a credential with no configuration, is the same
 // misconfiguration in two costumes.
 func TestTheAgentEnvironmentCarriesTheScopeAndTheCredentialTogether(t *testing.T) {
-	cfg := agentModelConfig{BaseURL: "https://opskeeper.example.com/llm/v1", Token: "sk-node-secret", Dir: "/var/lib/opskeeper-edge/agent-home"}
+	cfg := Config{BaseURL: "https://opskeeper.example.com/llm/v1", Token: "sk-node-secret", Dir: "/var/lib/opskeeper-edge/agent-home"}
 
-	env := cfg.agentModelEnvVars()
-	for _, key := range []string{"PIG_CODING_AGENT_DIR", agentTokenEnv} {
+	env := cfg.AgentEnvVars()
+	for _, key := range []string{"PIG_CODING_AGENT_DIR", TokenEnv} {
 		if env[key] == "" {
 			t.Errorf("the agent environment has no %s; the agent would resolve its own scope "+
 				"relative to its working directory", key)
@@ -174,8 +174,8 @@ func TestTheAgentEnvironmentCarriesTheScopeAndTheCredentialTogether(t *testing.T
 	if env["PIG_CODING_AGENT_DIR"] != cfg.Dir {
 		t.Errorf("PIG_CODING_AGENT_DIR is %q, want %q", env["PIG_CODING_AGENT_DIR"], cfg.Dir)
 	}
-	if env[agentTokenEnv] != cfg.Token {
-		t.Errorf("%s does not carry the token", agentTokenEnv)
+	if env[TokenEnv] != cfg.Token {
+		t.Errorf("%s does not carry the token", TokenEnv)
 	}
 }
 
@@ -185,12 +185,12 @@ func TestTheAgentEnvironmentCarriesTheScopeAndTheCredentialTogether(t *testing.T
 // incident rather than during the deploy that caused it.
 func TestTheConfigurationIsReplacedWholesale(t *testing.T) {
 	dir := t.TempDir()
-	first := agentModelConfig{BaseURL: "https://old.example.com/llm/v1", Token: "sk-old", Model: "old-model", Dir: dir}
-	if _, err := writeAgentModelConfig(first); err != nil {
+	first := Config{BaseURL: "https://old.example.com/llm/v1", Token: "sk-old", Model: "old-model", Dir: dir}
+	if _, err := Write(first); err != nil {
 		t.Fatalf("write the first configuration: %v", err)
 	}
-	second := agentModelConfig{BaseURL: "https://new.example.com/llm/v1", Token: "sk-new", Model: "new-model", Dir: dir}
-	path, err := writeAgentModelConfig(second)
+	second := Config{BaseURL: "https://new.example.com/llm/v1", Token: "sk-new", Model: "new-model", Dir: dir}
+	path, err := Write(second)
 	if err != nil {
 		t.Fatalf("write the second configuration: %v", err)
 	}
@@ -225,23 +225,23 @@ func TestTheRealAgentResolvesTheNodeConfiguration(t *testing.T) {
 	binary := pigBinaryForTest(t)
 
 	dir := t.TempDir()
-	cfg := agentModelConfig{
+	cfg := Config{
 		BaseURL: "https://opskeeper.example.com/llm/v1",
 		Token:   "sk-node-secret",
 		Model:   "gpt-x",
 		Dir:     dir,
 	}
-	if _, err := writeAgentModelConfig(cfg); err != nil {
+	if _, err := Write(cfg); err != nil {
 		t.Fatalf("write the agent model configuration: %v", err)
 	}
-	env := cfg.agentModelEnvVars()
+	env := cfg.AgentEnvVars()
 
 	// A HOME that contains nothing, so the only way the agent can find this
 	// configuration is the variable this code sets.
 	run := func(t *testing.T, extra map[string]string) (string, error) {
 		t.Helper()
 		// #nosec G204 -- the path is this repository's own build output.
-		cmd := exec.Command(binary, "auth", "print-api-key", "--provider", agentModelProviderID)
+		cmd := exec.Command(binary, "auth", "print-api-key", "--provider", ProviderID)
 		cmd.Env = []string{
 			"PATH=" + os.Getenv("PATH"),
 			"HOME=" + t.TempDir(),
@@ -255,7 +255,7 @@ func TestTheRealAgentResolvesTheNodeConfiguration(t *testing.T) {
 	}
 
 	t.Run("resolves the credential from the environment", func(t *testing.T) {
-		out, err := run(t, map[string]string{agentTokenEnv: cfg.Token})
+		out, err := run(t, map[string]string{TokenEnv: cfg.Token})
 		if err != nil {
 			t.Fatalf("the agent could not resolve the credential this node wrote: %v\n%s", err, out)
 		}
@@ -269,17 +269,17 @@ func TestTheRealAgentResolvesTheNodeConfiguration(t *testing.T) {
 		// starts, loads its plugins, and cannot answer. The agent has to
 		// say so rather than fall back to some other provider.
 		if out, err := run(t, nil); err == nil {
-			t.Errorf("the agent resolved a credential with %s unset: %q", agentTokenEnv, out)
+			t.Errorf("the agent resolved a credential with %s unset: %q", TokenEnv, out)
 		}
 	})
 
 	t.Run("does not find the configuration without the scope", func(t *testing.T) {
 		// #nosec G204 -- the path is this repository's own build output.
-		cmd := exec.Command(binary, "auth", "print-api-key", "--provider", agentModelProviderID)
+		cmd := exec.Command(binary, "auth", "print-api-key", "--provider", ProviderID)
 		cmd.Env = []string{
 			"PATH=" + os.Getenv("PATH"),
 			"HOME=" + t.TempDir(),
-			agentTokenEnv + "=" + cfg.Token,
+			TokenEnv + "=" + cfg.Token,
 		}
 		out, err := cmd.CombinedOutput()
 		if err == nil {
@@ -301,10 +301,26 @@ func pigBinaryForTest(t *testing.T) string {
 		}
 		return override
 	}
-	candidate := filepath.Join("..", "..", "bin", runtime.GOOS+"-"+runtime.GOARCH, "pig")
-	if _, err := os.Stat(candidate); err != nil {
-		t.Skipf("no built agent at %s; run 'make build-pig-%s-%s' (or set OPSKEEPER_TEST_PIG_BIN) "+
-			"to exercise this against the real binary", candidate, runtime.GOOS, runtime.GOARCH)
+	// Walked up rather than counted, because this package has already moved
+	// once and a test that finds no binary and skips is a test that silently
+	// stops testing anything.
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
 	}
-	return candidate
+	for i := 0; i < 8; i++ {
+		candidate := filepath.Join(dir, "bin", runtime.GOOS+"-"+runtime.GOARCH, "pig")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	t.Skipf("no built agent under any parent of this package; run 'make build-pig-%s-%s' "+
+		"(or set OPSKEEPER_TEST_PIG_BIN) to exercise this against the real binary",
+		runtime.GOOS, runtime.GOARCH)
+	return ""
 }
