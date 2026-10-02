@@ -1234,6 +1234,248 @@ instance of AbortSignal`。查下来是 **jsdom 的 `AbortController` 与 vitest
 
 ---
 
+### 4.20 插件市场页，顺带统一了导入响应的字段命名（决策 82）
+
+决策 81 之后路线图 §七 第 4 条还剩插件市场这一半。核查发现**后端齐了、前端
+一个客户端都没有**：`POST /v1/marketplace/import`（决策 55 落的入口，
+`main.go:2542` 确实在生产装配里挂上了，未配置时答 503）与
+`GET /v1/plugins/{name}/compatibility`（E-1 要求的 PiG 版本 × edge 版本矩阵）
+两条路由都存在、都有 Go 测试，**前端从未调用过**。本轮把这两条接上，做成
+`web/src/pages/PluginMarketplace.tsx`（路由 `/plugins`）。
+
+**一、导入响应的字段命名原本是混的，已在源头统一。**
+
+`importResp` 内嵌 `*pluginimport.Report`，而 `Report` 与 `Decision`
+**没有 JSON tag**——于是同一段 JSON 里，`LoadWarning` 答 `{"path","reason",
+"code"}`，紧挨着的 `Report` 答 `{"Name","Decisions"}`。控制面两种约定并存，
+控制台就得为它单独记一份形状。
+
+修在 Go 侧而不是前端做兼容：这条路由**至今没有过任何消费者**，所以没有线
+兼容性要保，补 tag 是纯增量。而且顺序上扁平的先查、嵌套的后查是有理由的——
+扁平更老更常见，同时带两者的 handler 是 bug 不是形状。
+
+钉它的测试是新写的 `TestImport_AnswersTheReportInTheSameNamingAsTheWarnings
+BesideIt`，**故意解成 `map[string]any` 而不是结构体**：同文件里其它测试用的
+结构体带着同一批 tag，改名时两边一起动，套件照样全绿而控制台静默读到
+`undefined`。手写期望名才没有东西跟着一起动。三条变异（去掉
+`Decisions` 的 tag、去掉 `Decision.Why` 的 tag、把 `extensions` 改成
+`extension`）全部被抓。
+
+**二、页面上两处「不许说谎」的地方。**
+
+- **转换成功不是完成。** 存量容器里没有工具清单、没有安全级别、没有 scope、
+  没有爆炸半径，转换器拒绝编造它们（`importer.go` 的包注释原话：*invents
+  nothing*）。所以页面把**未决清单做成最大的那块**，资源计数压成一行小 chip
+  ——反过来排会让「12 skills / 3 extensions」读起来像一个成品包。空清单
+  也不报成功，而是提示「这个容器自带了治理声明，值得确认一下它是不是真的」：
+  真实存量容器**必然**产生未决项，空清单本身就是异常信号。
+- **`not-wired` 停在错误态，绝不渲染成空矩阵。** 管理面拿不到节点版本快照时
+  它对「谁能装」没有答案；渲染成「Hostable (0) / Refused (0)」会被读成
+  「全网都太旧」，于是去升级整个机队——一个由控制面从未说出口的句子引发的
+  机队级变更。同理导入的 503 文案明说「与上传的文件无关」（否则运维会去
+  重新打包一个没问题的归档），409 明说「导入不覆盖任何东西」（否则就是诱导
+  重试，而重试会毁掉已答过问题的旧包）。
+
+**三、10 条变异全部被抓**，含两条「丢帧」型：不渲染未决清单、丢掉 `why`
+（只留问题）、不显示落地路径、`not-wired` / 409 退化成通用文案、不显示是哪条
+轴被拒、不显示节点自己的拒绝理由、空清单说成「转换完成」、空清单静默、丢掉
+加载器告警。拒绝理由按节点原句显示而不是在页面另写一份措辞——两份措辞必然
+漂移，而 `version.go` 的注释已经写明这个句子是 node 侧审核与 manager 预检
+**共用同一次实现**的产物。
+
+**四、一处 HEAD 既有的 lint error 顺手修了。** `pluginReleases.ts` 的
+`ReleaseNodeState` 用了 `string & {}`，`@typescript-eslint/ban-types` 报
+**error**（不是 warning），`npm run lint` 因此一直是红的。它就在本轮修改的
+同一个文件里，改成 `string & Record<never, never>`——同一个惯用法、同一组
+补全行为，类型上不再是「任意非 null 值」。
+
+**验证**：`tsc` ok；`eslint`（本轮文件）0 问题；**全量前端 12 文件 / 87 测试
+全绿**；`vite build` 通过；`marketplace` / `pluginimport` / `service/plugin`
+三个 Go 包全绿；`modulecheck` 边界成立；`gofmt` 干净。
+
+**仍然缺、且本轮没做的**：节点上「实际装了什么」的清单面。后端有
+`agent.tool` 通道与 `pluginStore`，但**没有任何 HTTP 端点**能列出某台节点上
+的包——现在唯一能看见的窗口是一次发布的状态。要补就得在 tunnel 上加一个
+`plugin.list` 的读取面（该方法存在于节点侧，控制面没有暴露），这是后端工作，
+不在前端这一轮里顺手做掉。
+
+---
+
+### 4.21 节点插件清单面：端点、哨兵，以及两个只有测试找得到的缺陷（决策 83）
+
+决策 82 结尾点名的那个缺口。查下来比记录的更具体：**管道是通的，缺的只是
+HTTP 面**——`NodeFleet.Installed(ctx, edgeID)` 已实现、已测试
+（`manager_test.go:627`），节点侧的 `MethodPluginList` 处理器也完整，但
+`Installed` **没有任何生产调用方**，`/v1/plugins/*` 的 7 条路由里没有一条能
+回答「这台机器上装了什么」。运维想知道某台主机有没有吃上上周那个包，唯一的
+办法是发起一次发布——而发布期间恰恰是没人问这个的时候。
+
+新增 `GET /v1/plugins/nodes/{edgeID}/installed`，并把 `NodeFleet` 同时交给
+release manager 与这个读面（同一个适配器，不是两个，这样「一个节点能响应
+发布却不能响应清单」在构造上就不可能）。
+
+**一、`ErrNoTunnel`：同一句话的四个副本，一个都匹配不了。**
+
+`NodeFleet` 的四个方法各自 `fmt.Errorf("the control plane has no tunnel to
+the fleet")`。这不只是重复：**「这个管理面够不着任何节点」与「这台节点不应
+答」是两个事实、两种修法**，而调用方分不开就只能把两者渲染成同一个失败。
+运维会被送去错的地方——因为控制面从来没接过隧道，去重启一台 agent 好好的
+机器。现在它是哨兵，读面据此答 503 而非 502。
+
+**二、这个端点把三种答案分开，测试逐条钉住。**
+
+| 答案 | 含义 | 运维该去哪儿 |
+|---|---|---|
+| 200 + `[]` | 节点答了，它没装任何包 | 关于节点的**事实** |
+| 503 | 这个管理面没有隧道，对谁都不知道 | 配置 |
+| 502 | 这一台不应答，或答了读不懂 | 节点（或版本偏斜） |
+
+合并后两者就是 500，运维会去翻管理面日志，而真相是一台正在重启的机器。
+`packages` 在 JSON 里**恒为数组、绝不为 `null`**：`infosOf` 对空集返回 nil，
+Go 会把它序列化成 `null`，而 JS 里 `null` 最自然的读法是「字段不存在」——
+于是「节点没装」与「没人问过这台节点」又变成同一件事。handler 里归一成
+`[]`，这条用 `map[string]any` 解码来验（结构体解码看不见 `null` 与 `[]` 的
+区别）。7 条用例、7 条变异全被抓。
+
+前端第三张卡片「节点上装了什么」把这三种答案分开说，其中两条是硬要求：
+502 的文案明说「**这不是『它没有装插件』**」，503 的文案明说「**这不等于所有
+节点都是空的**」——后者会一次性对全机队做出一句从没问过的断言。
+
+**三、两个只有测试找得到的缺陷，都不是测试的问题。**
+
+- **页面上出现了两个都叫「查询 / Check」的按钮。** 兼容矩阵一张卡、节点清单
+  一张卡，两张卡各有一个 `Check`。测试用 `getByRole` 报「找到多个元素」——
+  那不是测试脆弱，是**页面对运维也说不清刚按的是哪一个**。改成「检查兼容性」
+  与「查看节点已装」，两边同时好了。
+- **digest 被截断到 19 字符。** 我先写了个 `digest.slice(0, 19)` 让它塞得进
+  那一行，测试立刻指出断言对不上。想清楚之后发现截断本身是错的：这个 digest
+  存在的**全部意义**就是与发布意图里的那个比对，截断之后运维在看得见的那几
+  位上分不出匹配与不匹配。改成完整展示 + 允许换行。
+
+**四、变异验证的锚点陷阱，这已经是第二次。**
+
+前两轮（决策 81 的 M8、决策 82 的 N8）我都写了「只改中文文案」的变异，而
+测试跑在 `en-US`，于是报 MISSED——**那是坏变异，不是覆盖缺口**。本轮 Q1/Q2
+又踩了一次。三次同一个形状，所以立成规矩：**变异锚点必须落在测试实际读取的
+那个 locale 上**；写完变异先问「测试跑的是哪个 locale，这段文案它读得到吗」。
+换英文锚点重做后，5 条全部被抓。
+
+**验证**：`go build ./...` 通过；`gofmt` 干净；`server/plugin` /
+`service/plugin` / `core/edge/...` 全绿；`modulecheck` 边界成立；前端
+**12 文件 / 91 测试**全绿、`tsc` ok、`eslint` 干净、`vite build` 通过。
+
+### 4.22 复读 SDK 文档：决策 75 的「已决」被推翻了（决策 84）
+
+用户要求「彻底改成 pig 风格，而不是适配」。这句话与决策 75 的结论正面冲突，
+所以这一轮不是继续实现，而是先去查那条结论到底还成不成立——**在一个被记成
+「已决」的问题上按新指示动手之前，先验证它是不是真的已决**。
+
+**一、决策 75 说了什么，为什么当时是对的。**
+
+它把控制面的 turn 挂在 `pigagent.Kernel`（直接嵌 `agent.Agent`）而不是
+`pigcoding.Session`（文档里的 SDK），列了两笔账：
+
+- **账一**：`coding.SessionStartOptions` 里没有 `MaxTurns`，换过去 turn 上限
+  静默消失。
+- **账二**：`coding.SessionManager` 是 `= icodingagent.Session` 的**类型别名
+  到具体结构体**（`coding/session_manager.go:12`），不是接口，注入不进去；且
+  `SessionStartOptions` 没有 `OnMessagePersist` 字段，而 Kernel 正靠它分配行
+  id 并回填 SSE 帧。
+
+两笔都成立，结论是选项 C：`pigcoding` 留在设置与模型目录。
+
+**二、账二在 HEAD 上依然成立，但它的推论是错的。**
+
+在 PiG `c7c2fe0`（v0.3.0 之后 5 个提交）逐条复核：
+
+- 类型别名确实没法注入——**这条仍然成立**。
+- 但**行 id 时序并不依赖它**。行 id 是 OpsKeeper 自己发的序号，需要的是
+  「每条落定消息按顺序回调一次」，而 `agent.TurnEndEvent`（`agent_loop.go:404`）
+  在 `Session.Events()` / `Agent.Subscribe()` 上**每轮恰好发一次**，带
+  `TurnIndex`、本轮的 `Message` 与 `ToolResults`；失败轮由 `agent.go:1405`
+  补发。顺序由事件流本身保证，不需要任何人替我们分配。
+- 顺带查实一件相关的事：`TurnEndEvent` 虽然有 `MessageEntryID` /
+  `ToolResultEntryIDs` 字段，但**两处发射点都没填**，恒为空。所以「改用 PiG
+  的 entry id」这条路是不存在的——但它本来也不需要存在。**决策 75 把「PiG 的
+  entry id」和「行 id 的顺序」当成了一件事**，这是账二推论错误的根因。
+
+**三、账一有一个我们已经在用的面板上的答案。**
+
+`MaxTurns` 字段确实不在 `SessionStartOptions` 里（复核无误）。但上限不需要
+字段：`BeforeToolCallHook` 返回的 `ToolCallHookResult` 自带
+`Block` / `Reason` / `Terminate`，而 OpsKeeper 的策略闸门**本来就在这个面板
+上**。
+
+链路查实：`tool_execution.go:282` 把被拒的调用变成一条 `Terminate` 的错误
+工具结果 → `shouldTerminateToolBatch`（同文件 196）在**每个**结果都要求停止
+时返回 true → `agent_loop.go:275` 的 `hasMoreToolCalls = !batch.terminate`
+结束这一轮。模型仍收到一条说明拒绝原因的工具结果，所以这一轮是**落定**的，
+不是卡死的。
+
+**四、这一轮真正查到的、比上面两笔都更要紧的东西。**
+
+- **调用方钩子是被追加而不是被替换的**：`SessionStartOptions.BeforeToolCall`
+  在 `session_ops.go:144` 进 `callerHooks`，`session_extension_hooks.go:25`
+  用的是 `AddBeforeToolCallHook`。**策略闸门在 SDK 路径上原样存活**——这是
+  整个迁移里最要紧的一条，没有它其余都不必谈。
+- **`SetFinishTurn` 是陷阱，不能碰**：`Session.installAgentBoundaryHooks`
+  （`session_boundaries.go:22`）自己 `SetFinishTurn` 并把 `previous` 包在
+  里面。OpsKeeper 若通过 `Session.Agent()` 覆写它，会**连扩展的 `turn_end`
+  边界一起砸掉**。所以上限必须走 `BeforeToolCall`，这也和第三节的结论一致。
+- 节点侧**早就是 pig 原生的**：`pig --mode rpc` 内部用的就是 `coding.Session`。
+  所以「适配」只存在于控制面，不存在于节点面——这缩小了改造的真实范围。
+
+**五、本轮落地（决策 84 的代码部分）。**
+
+| 落点 | 内容 |
+|---|---|
+| `core/pig/pigcoding/budget.go` | `TurnBudget`：按工具轮次计费，第 `max+1` 轮**软拒绝**（告知预算耗尽、令其收束），第 `max+2` 轮**硬终止** |
+| `composeBeforeToolCall` | 预算钩子**排在调用方钩子之前**，且抽成可测函数 |
+| `Start` 补面板 | `MaxRounds` / `SkipExtensionTools` / `AllowedTools` / `ExcludedTools` / `NoTools` / `SessionID` |
+| `Session.Budget()` | 让「为什么停了」有一个数字，而不是一段空白 |
+
+**为什么软硬两段而不是一步到位**：一步终止会扔掉最后一轮的发现，而最后一轮
+通常正是有答案的那一轮；只软拒绝又会让不听话的模型一直重试。前者让调查没有
+结论，后者让循环没有上界。两段都有，且上界是硬的。
+
+**为什么预算必须排在闸门之前**：闸门拒掉的调用**也是模型花掉的一轮**。闸门在
+前的话，一个「什么都拒」的门会让模型无限重试而预算一次都不 spend——**上界被
+它本该保护的防线关掉了**。这个顺序写成了 `composeBeforeToolCall` 里的代码，
+并有测试直接断言（`TestTheBudgetIsSpentBeforeThePolicyGateSeesTheCall`），
+而不是只写在注释里。
+
+**六、这一轮没有做的，以及它还差什么。**
+
+**内核没有换。** 控制面的 turn 仍然跑在 `pigagent.Kernel` 上。本轮拿掉的是
+「不能换」这个理由，不是「换」这件事本身。真要换，还差：
+
+1. `pigagent.Mapper` 与 `ports.AgentMessage` 这一层平行形状要拆掉——turn 的
+   结果与事件应当直接是 `agent.AgentMessage` / `agent.AgentEvent`，SSE 帧
+   仍由 `pigwire` 翻译（那是 wire 契约，不是适配层）。
+2. 行 id 改由 `TurnEndEvent` 顺序分配，SSE 帧 golden 要逐帧重验。
+3. `chatruntime` / `agentkernel` / `loop` / `investigator` 四处装配要重接。
+
+**七、留了一个已知的弱断言，没硬撑。**
+
+`TestTheHostGateBlocksAToolCall`（决策 76 之前就有）用 `PIG_TEST_FAUX=1`，
+而该 provider 不接受脚本化响应，所以那次 send **可能根本不产生工具调用**——
+它断言的是「如果发生了，闸门拦住了」。这条不变，但本轮新增的用例都刻意
+**不依赖**它：预算算术是纯函数断言，面板接线用 `SessionID` 验（PiG 在调用方
+不指定时会自己生成，不接线就必然不匹配），闸门顺序直接断言组合结果。
+
+**验证**：`go build ./...` 通过；`gofmt` 干净；`core/pig/...` 10 个包全绿；
+`go test -race ./core/pig/pigcoding/` 无竞态；`modulecheck` 边界成立；
+**6 条变异全部被抓**（闸门顺序对调、上限提前一轮、软拒绝变硬、硬终止被摘、
+无上限也造预算对象、`SessionID` 不接线）。
+
+过程中测试抓到一个真缺陷：`NewTurnBudget(0)` 返回非 nil，使「无上限」与
+「有上限但未花费」在唯一会读它的地方无法区分。按注释的承诺改成
+`MaxRounds <= 0` 时根本不造预算对象。
+
+---
+
+---
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
@@ -1285,7 +1527,7 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 | 阶段 | 权重 | 完成度 | 判据与剩余 |
 |---|---|---|---|
 | A 模块化地基 | 20% | **100%** | 13 个模块落地、`internal/` 清空、`modulecheck` + `go-arch-lint` 两个闸门可执行且非空转、共享底座的两条反向边已清并由 `floorIsolation` 钉住（决策 66）、**两个闸门之间的最后一处不对称已消除：`.go-arch-lint.yml` 有了读者，104 条无人行使的授权已删，逆向边按文件记名**（决策 74）。A 阶段无剩余项 |
-| B PiG 适配层 | 20% | **100%** | `pigmodel` / `pigagent` / `pigrpc` / `pigwire` 四件套齐、eino 与 go-openai 清零、内核接缝（决策 32/33）打开、契约套件 `core/pig/pigcontract` 落地（决策 64）、**PiG 已换成固定 tag 并在发布条件下被验证**（决策 65）、**AI 层已原生化：第二套模型词汇全部删除，宿主直接用 PiG 的 `ai` 类型**（决策 67，见 §4.5）。剩下的不是缺口，是维护：契约要跟着上游新增能力补 |
+| B PiG 适配层 | 20% | **90%** | `pigmodel` / `pigagent` / `pigrpc` / `pigwire` 四件套齐、eino 与 go-openai 清零、内核接缝（决策 32/33）打开、契约套件 `core/pig/pigcontract` 落地（决策 64）、**PiG 已换成固定 tag 并在发布条件下被验证**（决策 65）、**AI 层已原生化：第二套模型词汇全部删除，宿主直接用 PiG 的 `ai` 类型**（决策 67，见 §4.5）。**决策 84 把这个 100% 重新打开：控制面的 turn 仍跑在 `pigagent.Kernel`（自研装配 + `ports` 平行形状）而不是文档里的 `coding.Session`，「彻底改成 pig 风格」这一条尚未完成**。决策 75 当年判「维持 Kernel」的两条理由已在 §4.22 被逐条推翻，方向已定、内核未换，剩三步（拆 Mapper/ports 形状、行 id 改由 `TurnEndEvent` 分配并重验 SSE golden、四处装配重接）。另：契约要跟着上游新增能力补 |
 | C 节点 Agent | 20% | **95%** | `pig --mode rpc` 运维 profile + supervisor + `policygate` + 7 个 `agent.*` 隧道方法 + `NodeFleet` + 只读 piglet，三个剧本在新拓扑下通过；连接规模三项（连接池上限 / 心跳重连 / 风暴抑制）已全部落地（决策 78/79）。剩下：**只有 MCP 运行时**，而它是产品问题不是欠账——65 个工具已走 extension toolset 端到端跑通，PiG 的 `mcp` 至今只是声明 |
 | D 插件生态 | 25% | **95%** | B1/B2/B3 全部闭环（18 + 12 + 53 + 5 个工具）、审核流水线（签名 → 清单 → 准入 → 灰度 → 回滚）、运输通道 6 条路由、`sdk` 三个发布物、**能力声明已从「家族」升级到「逐方法」，四个包的「声明 == 实际」全部有守卫**（决策 69）。剩下：容器格式导入器的覆盖面、更多插件迁移 |
 | E 生态治理 | 15% | **95%** | 兼容矩阵（edge 轴 × PiG 轴）、金融 / SaaS 两个 profile 模板、profile × 实际目录的组合校验（决策 70）、**发布前兼容矩阵 API，管理侧预检与节点裁决共用 `CheckVersions`**（决策 71）、插件 × golden case 覆盖报告、发布全链路（Start/List/Status/Advance/Halt/Rollback）。**兼容矩阵 agent 轴不再是「无法判断」：节点随心跳自报 PiG 构建，控制面一次查询读取（决策 73）**。剩下：插件市场前端页面、兼容矩阵前端页面、发布流程的定时/触发自动化 |
@@ -3368,12 +3610,21 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
      `pages/NodeAgents.tsx` + 路由 `/node-agents` + 侧边栏入口，9 个用例，
      7 条变异验证抓到。顺带修掉 `client.ts` 读不懂嵌套错误信封（两个 2.0
      handler 的错误码此前在全站丢失，`Tasks` / `marketplace` 的分支都受影响）。
-   - ❌ **插件市场页**：`/v1/plugins/releases` 的 6 条已有页面
-     （`/admin/plugins`），但 2.0 插件生态这一侧仍缺——**导入器没有客户端**
-     （`POST /v1/marketplace/import`，决策 55 落的入口，前端从未调用过），
-     也没有把「节点上装了什么 / 哪些包可装 / 兼容矩阵」放在一起的目录视图。
-     存量技能市场是另一回事：`/settings/marketplace` 已于 2026-05-19 退役并
-     折进 `/skills?tab=install`，它服务的是 skill pack，不是 PiG package。
+   - ✅ **插件市场页**（决策 82）：`web/src/pages/PluginMarketplace.tsx`
+     （路由 `/plugins`）。补上两个此前**从未被前端调用**的后端入口：
+     `POST /v1/marketplace/import` 与
+     `GET /v1/plugins/{name}/compatibility`（PiG 版本 × edge 版本矩阵）。
+     7 个用例，10 条变异全部被抓。顺带统一了 `pluginimport.Report` 的
+     JSON 字段命名（此前与内嵌的 `LoadWarning` 两种约定并存）。
+   - ✅ **节点上「实际装了什么」的清单面**（决策 83）：新增
+     `GET /v1/plugins/nodes/{edgeID}/installed` + 页面第三张卡片。管道本来
+     就是通的（`NodeFleet.Installed` 已实现且有测试，节点侧
+     `MethodPluginList` 处理器完整），缺的只是 HTTP 面与调用方。顺带把
+     `NodeFleet` 里四处重复的「没有隧道」字符串收成 `ErrNoTunnel` 哨兵，
+     让「控制面够不着」与「这台不应答」在 HTTP 层分得开（503 vs 502）。
+   - ℹ️ 存量技能市场是另一回事：`/settings/marketplace` 已于 2026-05-19
+     退役并折进 `/skills?tab=install`，它服务的是 skill pack，不是 PiG
+     package，不计入上面这条。
 
 ### D 阶段续：把声明变成实现
 
@@ -3647,7 +3898,14 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
 ### 待决的大动作
 
 - ~~**控制面的 turn 要不要从 `pigagent.Kernel` 换到 `pigcoding.Session`**~~
-  **已决：维持 `Kernel`（决策 75，选项 C）。** 决策 72 把它挂起来是因为两个缺口，
+  **决策 75 曾判为「维持 `Kernel`」（选项 C）；决策 84 推翻了它，理由见
+  §4.22。** 两笔账在 HEAD 上都仍然成立，但**推论都不成立**：上限不需要
+  `MaxTurns` 字段（`ToolCallHookResult.Terminate` 就在策略闸门那个面板上），
+  行 id 时序不需要注入 `SessionManager`（`TurnEndEvent` 每轮一次、顺序由
+  事件流保证）。同时查实**调用方钩子是被追加而非替换**，策略闸门在 SDK
+  路径上原样存活——这是整件事成立的前提。**换的方向已定（用户明确要求
+  「彻底改成 pig 风格」），内核本身尚未换**，剩下的三步列在 §4.22 第六节。
+  以下是决策 75 的原始记录，保留作为该结论为何曾经合理的证据： 决策 72 把它挂起来是因为两个缺口，
   这一轮把其中一个的理由更正了、另一个坐实了：
   - **账二的理由错了**。`agent.AgentOptions.OnMessagePersist` 是个**字段**
     （`agent/agent.go:650`），不是构造后的 setter——`pigagent.Kernel` 正在用它分配

@@ -23,13 +23,20 @@
 // renders as "imported ✓" is telling an operator that a package is ready
 // when the most important part of it is still blank. The decisions are
 // therefore the largest thing on the card, and the counts are the smallest.
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, FileUp, Loader2, Package, Rocket, Upload } from 'lucide-react';
 
 import { ApiError } from '@/api/client';
 import { importPack, type ImportResponse } from '@/api/pluginImport';
-import { getCompatibility, type CompatibilityMatrix, type CompatibilityVerdict } from '@/api/pluginReleases';
+import {
+  getCompatibility,
+  getNodeInstalled,
+  type CompatibilityMatrix,
+  type CompatibilityVerdict,
+  type InstalledOnNode,
+} from '@/api/pluginReleases';
+import { listEdges, type Edge } from '@/api/edges';
 import { Button, Card, Chip, PageHeader } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { useI18n } from '@/i18n/locale';
@@ -56,9 +63,10 @@ export default function PluginMarketplacePage() {
           </Link>
         }
       />
-      <div className="grid flex-1 grid-cols-1 gap-4 overflow-auto p-6 xl:grid-cols-2">
+      <div className="grid flex-1 grid-cols-1 items-start gap-4 overflow-auto p-6 xl:grid-cols-2">
         <ImportCard isAdmin={isAdmin} />
         <CompatibilityCard isAdmin={isAdmin} />
+        <NodeInventoryCard isAdmin={isAdmin} />
       </div>
     </div>
   );
@@ -296,7 +304,12 @@ function CompatibilityCard({ isAdmin }: { isAdmin: boolean }) {
 
       <Button variant="primary" onClick={ask} disabled={!name.trim() || busy || !isAdmin}>
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-        {tr('查询', 'Check')}
+        {/* Named for what it checks rather than for the verb. Two cards on
+            one page both ending in a bare "Check" leaves an operator
+            guessing which one they just pressed, and a test has to reach
+            for an index to disambiguate — both are the same defect seen
+            from two sides. */}
+        {tr('检查兼容性', 'Check compatibility')}
       </Button>
 
       {error ? <ErrorNote text={error} /> : null}
@@ -478,4 +491,168 @@ function describeCompatFailure(err: unknown, tr: (zh: string, en: string) => str
     );
   }
   return (err as Error).message || tr('查询失败', 'compatibility check failed');
+}
+
+// ---------------------------------------------------------------------------
+// Node inventory
+// ---------------------------------------------------------------------------
+
+/** NodeInventoryCard answers "what is this host actually running".
+ *
+ *  Until this existed, the only window onto a node's package set was a
+ *  release in flight — which is exactly when nobody is asking. An operator
+ *  who wanted to know whether a host had picked up last week's package had
+ *  no way to find out short of starting a release, which is a terrible way
+ *  to ask a question.
+ *
+ *  What this card is careful about is the difference between the three
+ *  answers the endpoint can give. They are not variations on "no
+ *  packages": a node that runs nothing is a fact about the node, a node
+ *  the control plane cannot reach is a fact about the control plane, and a
+ *  node that did not answer is a fact about that host. Collapsing them into
+ *  an empty list would tell an operator that a host is clean when the truth
+ *  is that nobody asked it.
+ */
+function NodeInventoryCard({ isAdmin }: { isAdmin: boolean }) {
+  const { tr } = useI18n();
+  const [edges, setEdges] = useState<Edge[]>([]);
+  const [edgeId, setEdgeId] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<InstalledOnNode | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    listEdges()
+      .then((r) => {
+        if (!alive) return;
+        setEdges(r.items ?? []);
+        setEdgeId((cur) => cur ?? r.items?.[0]?.id ?? null);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const ask = useCallback(async () => {
+    if (edgeId == null) return;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      setResult(await getNodeInstalled(edgeId));
+    } catch (err) {
+      setError(describeInventoryFailure(err, tr));
+    } finally {
+      setBusy(false);
+    }
+  }, [edgeId, tr]);
+
+  return (
+    <Card className="space-y-4 xl:col-span-2">
+      <div>
+        <h2 className="text-sm font-semibold text-zinc-100">
+          {tr('节点上装了什么', 'What a node is running')}
+        </h2>
+        <p className="mt-1 text-xs text-zinc-500">
+          {tr(
+            '直接向节点查询它当前激活的包。节点不回答与管理面够不着是两回事，页面会分开说。',
+            'Ask the node directly what it has active. "The node did not answer" and "the manager cannot reach it" are different facts, and this page says which one you have.'
+          )}
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="block">
+          <span className="mb-1 block text-[11px] text-zinc-500">{tr('节点', 'Node')}</span>
+          <select
+            className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300"
+            value={edgeId ?? ''}
+            onChange={(e) => {
+              const v = e.target.value ? Number(e.target.value) : null;
+              setEdgeId(v);
+              setResult(null);
+              setError(null);
+            }}
+          >
+            <option value="">{tr('选择节点…', 'Select a node…')}</option>
+            {edges.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button variant="primary" onClick={ask} disabled={edgeId == null || busy || !isAdmin}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          {tr('查看节点已装', 'Check node')}
+        </Button>
+      </div>
+
+      {error ? <ErrorNote text={error} /> : null}
+      {result ? (
+        result.packages.length === 0 ? (
+          <p className="text-xs text-zinc-400">
+            {tr(
+              `节点 #${result.edge_id} 回答了：它没有装任何插件包。`,
+              `Node #${result.edge_id} answered: it has no plugin packages installed.`
+            )}
+          </p>
+        ) : (
+          <ul className="space-y-1.5">
+            {result.packages.map((p) => (
+              <li
+                key={`${p.name}@${p.version}`}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-zinc-800/60 bg-zinc-950/40 px-2.5 py-1.5"
+              >
+                <span className="truncate text-xs text-zinc-200">{p.name}</span>
+                <span className="flex items-center gap-1.5">
+                  <Chip dense>{p.version || '—'}</Chip>
+                  {/* The digest is the node's own tree digest, and its
+                      whole purpose is to be compared against the one a
+                      release meant to ship. Truncating it to fit the row
+                      would defeat that: an operator could not tell a match
+                      from a mismatch on the parts they can see. So it is
+                      shown whole and allowed to wrap. */}
+                  {p.digest ? (
+                    <span className="max-w-[22rem] break-all font-mono text-[10px] text-zinc-500">
+                      {p.digest}
+                    </span>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )
+      ) : null}
+    </Card>
+  );
+}
+
+/** describeInventoryFailure keeps the three answers apart.
+ *
+ *  503 means this manager was never given a tunnel, so it cannot tell you
+ *  anything about any node — that is a configuration fact, and rendering it
+ *  as "no packages" would be a lie about every host at once. 502 means this
+ *  one node did not answer, which is a fact about that host. Neither of
+ *  them is an empty list, and both are things an operator can act on in
+ *  completely different places. */
+function describeInventoryFailure(err: unknown, tr: (zh: string, en: string) => string): string {
+  if (err instanceof ApiError && (err.status === 502 || err.code === 'node_unreachable')) {
+    return tr(
+      '这台节点没有回答。它可能正在重启、agent 版本过旧，或者隧道那一端断了——这不是「它没有装插件」。',
+      'This node did not answer. It may be restarting, running an older agent, or the far end of the tunnel is down — which is not the same as it having nothing installed.'
+    );
+  }
+  if (err instanceof ApiError && err.status === 503) {
+    return tr(
+      '这个管理面没有可用的隧道，因此无法询问任何节点——这不等于所有节点都是空的。',
+      'This manager has no usable tunnel, so it cannot ask any node. That does not mean every node is empty.'
+    );
+  }
+  if (err instanceof ApiError && err.status === 403) {
+    return tr('节点上装了什么属于治理信息，只有管理员可以查看。', 'What a node runs is governance information; admin only.');
+  }
+  return (err as Error).message || tr('查询失败', 'inventory check failed');
 }

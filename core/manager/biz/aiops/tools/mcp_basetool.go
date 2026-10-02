@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
 // MCPCaller runs an MCP tool synchronously (trusted-server path).
@@ -59,26 +60,22 @@ func NewMCPTool(server, bareName, desc string, schema json.RawMessage, trusted b
 // MCPToolNamePrefix is the wire-name prefix every MCP tool carries. Callers
 // use it to recognise an MCP tool by name (e.g. the flow invoker routes these
 // to the live MCP dispatch path).
-const MCPToolNamePrefix = "mcp__"
+//
+// It is an alias rather than a literal so that a change to the rule cannot
+// land in one place and not the other.
+const MCPToolNamePrefix = ports.MCPToolNamePrefix
 
-// MCPToolName builds the LLM-facing wire name, sanitizing both segments.
+// MCPToolName builds the LLM-facing wire name.
+//
+// The rule lives in core/ports because the SDK-shaped surface in core/pig has
+// to compose the same names and cannot import this package. This one used to
+// be the only implementation, which is exactly why the stale comment on the
+// server model could go on claiming the name was "<server>__<tool>" while
+// every tool in production carried a "mcp__" prefix — the rule was invisible
+// to a reader who had not opened this file. Delegating keeps the authority
+// where it is and makes the second copy impossible.
 func MCPToolName(server, tool string) string {
-	return MCPToolNamePrefix + sanitizeMCPSeg(server) + "__" + sanitizeMCPSeg(tool)
-}
-
-func sanitizeMCPSeg(s string) string {
-	var b strings.Builder
-	for _, r := range strings.TrimSpace(s) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r + 32)
-		default:
-			b.WriteRune('_')
-		}
-	}
-	return b.String()
+	return ports.ComposeMCPToolName(server, tool)
 }
 
 // MCPToolClass infers an MCP tool's risk class from its name. MCP servers

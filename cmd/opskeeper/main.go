@@ -1288,13 +1288,20 @@ func main() {
 	// sentence for an operator.
 	pluginReleaseHandler := managerserverplugin.NewHandler(nil)
 	pluginFleet := &edgeInventoryFleet{svc: edgeSvc}
-	pluginReleaseMgr := managersvcplugin.NewManager(pluginFleet, managersvcplugin.NewNodeFleet(fbClient),
+	// The same adapter serves both the release lifecycle and the console's
+	// "what is this node actually running" read. They share it rather than
+	// each building one so a node that answers a release but not an
+	// inventory — or the other way round — is impossible by construction
+	// rather than by two adapters happening to be configured alike.
+	pluginNodeFleet := managersvcplugin.NewNodeFleet(fbClient)
+	pluginReleaseMgr := managersvcplugin.NewManager(pluginFleet, pluginNodeFleet,
 		log.With(slog.String("comp", "plugin-release"))).
 		// The compatibility matrix reads the same edge inventory the
 		// release does, so a matrix and a release are looking at one
 		// snapshot of the fleet rather than two taken at different moments.
 		WithVersions(&edgeVersionInventory{svc: edgeSvc})
 	pluginReleaseHandler.SetService(pluginReleaseMgr)
+	pluginReleaseHandler.SetInventory(pluginNodeFleet)
 
 	if err := managersvcfb.Install(rootCtx, fbClient, managersvcfb.Wiring{
 		EdgeAuthn:      edgeAuthn,

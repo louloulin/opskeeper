@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
@@ -28,6 +29,24 @@ type NodeFleet struct {
 	caller EdgeCaller
 }
 
+// ErrNoTunnel is the one answer this adapter gives about itself rather than
+// about a node.
+//
+// It is a sentinel rather than four copies of the same sentence because
+// "this manager cannot reach any node" and "this node did not answer" are
+// different facts with different remedies, and a caller that cannot tell
+// them apart has to render both as the same failure. The first is fixed by
+// configuration; the second is fixed by the node, and an operator who is
+// told the wrong one will go looking in the wrong place — restarting a node
+// whose agent is fine because the manager was never given a tunnel.
+//
+// The three mutating methods fold it into an Outcome's Reason because an
+// Outcome is what a rollout reports, and a rollout that swallowed the
+// distinction would print this sentence as a per-node failure on every node
+// at once. Installed returns it as an error because a read has no Outcome
+// to put it in.
+var ErrNoTunnel = errors.New("the control plane has no tunnel to the fleet")
+
 // NewNodeFleet builds the adapter. A nil caller is a programming error and
 // is refused by the methods rather than answering "refused" for every node,
 // because an unwired control plane looks exactly like a fleet-wide policy
@@ -37,7 +56,7 @@ func NewNodeFleet(caller EdgeCaller) *NodeFleet { return &NodeFleet{caller: call
 // Install asks one node to take a package.
 func (f *NodeFleet) Install(ctx context.Context, edgeID uint64, spec ports.PluginSpec) Outcome {
 	if f == nil || f.caller == nil {
-		return Outcome{Status: StatusFailed, Reason: "the control plane has no tunnel to the fleet"}
+		return Outcome{Status: StatusFailed, Reason: ErrNoTunnel.Error()}
 	}
 	body, err := json.Marshal(tunnel.PluginInstallRequest{
 		Plugin:    spec.Name,
@@ -79,7 +98,7 @@ func (f *NodeFleet) Install(ctx context.Context, edgeID uint64, spec ports.Plugi
 // Remove asks one node to give a package back.
 func (f *NodeFleet) Remove(ctx context.Context, edgeID uint64, name, version string) Outcome {
 	if f == nil || f.caller == nil {
-		return Outcome{Status: StatusFailed, Reason: "the control plane has no tunnel to the fleet"}
+		return Outcome{Status: StatusFailed, Reason: ErrNoTunnel.Error()}
 	}
 	body, err := json.Marshal(tunnel.PluginRemoveRequest{Plugin: name, Version: version})
 	if err != nil {
@@ -109,7 +128,7 @@ func (f *NodeFleet) Remove(ctx context.Context, edgeID uint64, name, version str
 // version it is going back to.
 func (f *NodeFleet) Restore(ctx context.Context, edgeID uint64, name, version string) Outcome {
 	if f == nil || f.caller == nil {
-		return Outcome{Status: StatusFailed, Reason: "the control plane has no tunnel to the fleet"}
+		return Outcome{Status: StatusFailed, Reason: ErrNoTunnel.Error()}
 	}
 	body, err := json.Marshal(tunnel.PluginRestoreRequest{Plugin: name, Version: version})
 	if err != nil {
@@ -139,7 +158,7 @@ func (f *NodeFleet) Restore(ctx context.Context, edgeID uint64, name, version st
 // Installed asks one node what it is running.
 func (f *NodeFleet) Installed(ctx context.Context, edgeID uint64) ([]ports.PluginInfo, error) {
 	if f == nil || f.caller == nil {
-		return nil, fmt.Errorf("the control plane has no tunnel to the fleet")
+		return nil, ErrNoTunnel
 	}
 	body, err := json.Marshal(tunnel.PluginListRequest{})
 	if err != nil {
@@ -147,12 +166,21 @@ func (f *NodeFleet) Installed(ctx context.Context, edgeID uint64) ([]ports.Plugi
 	}
 	raw, err := f.caller.Call(ctx, edgeID, tunnel.MethodPluginList, body)
 	if err != nil {
-		return nil, err
+		// Wrapped, not flattened. The caller is entitled to know whether
+		// the node stayed silent or answered with something unreadable,
+		// because the first is a node to look at and the second is a
+		// version skew between the manager and the node binary — the same
+		// class of problem the compatibility matrix reports per node.
+		return nil, fmt.Errorf("plugin.list: node %d did not answer: %w", edgeID, err)
 	}
 	var resp tunnel.PluginListResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("plugin.list: unmarshal: %w", err)
+		return nil, fmt.Errorf("plugin.list: node %d answered with something unreadable: %w", edgeID, err)
 	}
+	// A nil slice and an empty one are the same fact — the node runs
+	// nothing — and are deliberately not distinguished here. The
+	// distinction that matters is handled by the caller: a node that
+	// could not be reached is an error, never an empty list.
 	return infosOf(resp.Installed), nil
 }
 

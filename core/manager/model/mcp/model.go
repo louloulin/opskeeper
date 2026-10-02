@@ -18,8 +18,12 @@ import "time"
 type Server struct {
 	ID uint64 `gorm:"primaryKey;autoIncrement"`
 
-	// Name is the unique label and tool-name prefix (e.g. "github" →
-	// "github__create_issue").
+	// Name is the unique label and tool-name prefix. The wire name is
+	// "mcp__<name>__<tool>" with the name sanitised, so "GitHub" reaches
+	// the model as mcp__github__create_issue. That rule lives in
+	// core/ports.ComposeMCPToolName; it used to be described here as
+	// "<name>__<tool>" with no prefix, which was wrong and cost a second
+	// implementation of it somewhere else.
 	Name string `gorm:"size:64;not null;uniqueIndex"`
 
 	// Transport selects the wire: "http" (Streamable HTTP) or "stdio"

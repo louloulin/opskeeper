@@ -46,6 +46,14 @@ type Usecase struct {
 	repo    Repo
 	secrets SecretResolver
 	log     *slog.Logger
+
+	// toolFilter narrows Tools to what the caller in ctx may see. It is
+	// the MCP half of the same rule the tool_call path already applies,
+	// and it is set by the composition root rather than defaulted here: a
+	// deployment that has not stated its policy gets the permissive
+	// answer, and saying so in a field comment is better than saying it
+	// in a constructor default nobody reads.
+	toolFilter mcpToolFilter
 }
 
 // NewUsecase wires the repo, credential resolver, and logger.

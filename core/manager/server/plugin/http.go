@@ -22,10 +22,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 
 	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
@@ -62,9 +66,28 @@ type Service interface {
 	Compatibility(ctx context.Context, req release.Requirement) (release.Matrix, error)
 }
 
+// Inventory is the read side of a node's package set, kept apart from
+// Service on purpose.
+//
+// Service is the release lifecycle — starting, advancing, stopping. Reading
+// what a node currently runs is none of those, and folding it in would mean
+// every Service implementation grows a method it has no use for, including
+// the scripted ones the release tests drive. It is a separate, optional
+// dependency for the same reason SetService exists: the tunnel client is
+// built after this handler in main.
+type Inventory interface {
+	// Installed reports one node's active package set.
+	Installed(ctx context.Context, edgeID uint64) ([]ports.PluginInfo, error)
+}
+
 // Handler serves /v1/plugins/*.
 type Handler struct {
 	svc Service
+	// inv is optional. A nil inv still mounts the route, which then
+	// answers 503 rather than 404: "this manager cannot ask its nodes" is
+	// a different sentence from "this route does not exist", and an
+	// operator debugging a fleet acts on them completely differently.
+	inv Inventory
 }
 
 // NewHandler builds the handler. A nil service is tolerated so the wiring
@@ -77,6 +100,11 @@ func NewHandler(svc Service) *Handler { return &Handler{svc: svc} }
 // HTTP traffic arrives; the release manager needs the tunnel client, which
 // is built later in main than this handler.
 func (h *Handler) SetService(svc Service) { h.svc = svc }
+
+// SetInventory back-fills the node-inventory reader. Same reasoning as
+// SetService: the caller holds the tunnel client and hands it over after
+// construction.
+func (h *Handler) SetInventory(inv Inventory) { h.inv = inv }
 
 // Register attaches the release routes. The caller is expected to have
 // wrapped r in the auth middleware so tenantctx is populated.
@@ -92,6 +120,17 @@ func (h *Handler) Register(r chi.Router) {
 	// operator asking "can my fleet take this" must be able to ask it
 	// without a release in flight.
 	r.With(h.requireAdmin).Get("/v1/plugins/{name}/compatibility", h.compatibility)
+	// What a node is actually running, per node. Deliberately not a
+	// fleet-wide collection: the answer comes from one tunnel call per
+	// node, so a single endpoint that fanned out would hold the request
+	// open for as long as the slowest node and would have to invent a
+	// partial answer for the rest. Per node, the console asks about the
+	// node it is looking at and a failure is that node's alone.
+	//
+	// The path is /nodes/{edgeID}/installed rather than
+	// /{name}/installed so it cannot be confused with a package name, and
+	// so adding a second per-node read later does not collide with it.
+	r.With(h.requireAdmin).Get("/v1/plugins/nodes/{edgeID}/installed", h.installed)
 }
 
 // compatibility answers the pre-flight question for one package.
@@ -131,6 +170,72 @@ func (h *Handler) compatibility(w http.ResponseWriter, r *http.Request) {
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(matrix)
 }
+
+// installedResp is what the console gets for one node.
+//
+// `packages` is a list and never null on the wire, because a node that runs
+// nothing and a node whose answer failed to parse must not look alike in the
+// JSON — the second is a 502 and never reaches this struct at all, but a
+// console that had to distinguish them by the presence of a key would be
+// one refactor away from reading `undefined` as an empty fleet.
+type installedResp struct {
+	EdgeID   uint64             `json:"edge_id"`
+	Packages []ports.PluginInfo `json:"packages"`
+}
+
+// installed reports one node's active package set.
+//
+// The three answers it can give are kept apart on purpose, because an
+// operator debugging a node needs all three to mean different things:
+//
+//   - 200 with an empty list: the node answered and runs nothing. That is
+//     a fact about the node.
+//   - 503: this manager cannot reach any node. Fixed by configuration —
+//     the tunnel was never wired — and nothing about the node is known.
+//   - 502: this one node did not answer, or answered with something
+//     unreadable. Fixed on the node, or by a version skew between it and
+//     the manager.
+//
+// Collapsing the last two into a 500 would send an operator to the
+// manager's logs for what is a node that is busy, restarting, or running an
+// older binary than the control plane expects.
+func (h *Handler) installed(w http.ResponseWriter, r *http.Request) {
+	if h.inv == nil {
+		writeErr(w, errNotWired)
+		return
+	}
+	edgeID, err := strconv.ParseUint(chi.URLParam(r, "edgeID"), 10, 64)
+	if err != nil || edgeID == 0 {
+		writeErr(w, errors.Join(errs.ErrInvalid,
+			fmt.Errorf("%q is not a node id", chi.URLParam(r, "edgeID"))))
+		return
+	}
+	pkgs, err := h.inv.Installed(r.Context(), edgeID)
+	if err != nil {
+		if errors.Is(err, release.ErrNoTunnel) {
+			writeErr(w, errNotWired)
+			return
+		}
+		// 502, not 500: the request was well-formed and the control plane
+		// is fine, so the fault is on the far side of the tunnel. The
+		// console keys on this to say "this node" rather than "the
+		// platform", which is the difference between restarting one host
+		// and paging someone about the cluster.
+		writeErr(w, &nodeUnreachableError{err: err})
+		return
+	}
+	if pkgs == nil {
+		pkgs = []ports.PluginInfo{}
+	}
+	writeJSON(w, http.StatusOK, installedResp{EdgeID: edgeID, Packages: pkgs})
+}
+
+// nodeUnreachableError marks a per-node transport failure so mapErr can
+// give it 502 without every caller having to recognise the shape.
+type nodeUnreachableError struct{ err error }
+
+func (e *nodeUnreachableError) Error() string { return e.err.Error() }
+func (e *nodeUnreachableError) Unwrap() error { return e.err }
 
 // requireAdmin is the legacy enforcement, kept here rather than borrowed
 // from the edge handler so this package does not import a sibling server
@@ -437,6 +542,8 @@ func mapErr(err error) (string, int) {
 		return "no_release", http.StatusNotFound
 	case errors.Is(err, errNotWired):
 		return "not_wired", http.StatusServiceUnavailable
+	case errors.As(err, new(*nodeUnreachableError)):
+		return "node_unreachable", http.StatusBadGateway
 	default:
 		return "internal", http.StatusInternalServerError
 	}

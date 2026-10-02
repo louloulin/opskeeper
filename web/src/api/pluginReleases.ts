@@ -179,3 +179,36 @@ export async function getCompatibility(
     `/plugins/${encodeURIComponent(name)}/compatibility${suffix}`
   );
 }
+
+/** InstalledOnNode is what one node is actually running.
+ *
+ *  `packages` is always an array on the wire, never null. That is the
+ *  handler's doing, not a JSON detail: a node that runs nothing and a node
+ *  the manager never reached are different HTTP answers (200 with `[]`
+ *  versus 502), and a null in the success body would put them back
+ *  together in the console — `null` reads as absent, and absent reads as
+ *  "nothing is installed", which is a claim about a node nobody asked. */
+export interface InstalledOnNode {
+  edge_id: number;
+  packages: PluginInfo[];
+}
+
+/**
+ * getNodeInstalled reports one node's active package set.
+ *
+ * Per node, not fleet-wide, and that is the server's decision as much as
+ * this client's: the answer comes from one tunnel call per node, so a
+ * fleet-wide endpoint would hold the request open for as long as the
+ * slowest node and would have to invent a partial answer for the rest.
+ * Asking about one node also means a failure is that node's alone.
+ *
+ * The three failures are distinct and the console branches on them:
+ * 403 (not admin), 503 (this manager has no tunnel, so it cannot tell),
+ * and 502 (this node did not answer, so it is the node's problem).
+ */
+export async function getNodeInstalled(edgeId: number): Promise<InstalledOnNode> {
+  return request<InstalledOnNode>(
+    'GET',
+    `/plugins/nodes/${edgeId}/installed`
+  );
+}

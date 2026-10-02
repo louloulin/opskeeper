@@ -68,6 +68,46 @@ type Start struct {
 	// to a per-session scratch directory so a tool with a relative path
 	// cannot walk into the manager's own source tree.
 	CWDOverride string
+
+	// MaxRounds caps the tool rounds this turn may spend. Zero is
+	// unbounded; see NewTurnBudget for why this package declines to pick a
+	// default. OpsKeeper always sets it, because a session whose cap lives
+	// in a caller's good intentions is a session whose cap is a comment.
+	//
+	// The cap is enforced through the BeforeToolCall panel rather than an
+	// agent option, and Runtime.Start installs it ahead of the hooks below.
+	// See TurnBudget for the ordering argument.
+	MaxRounds int
+
+	// SkipExtensionTools omits the tools the Runtime's extensions
+	// contributed, leaving only Tools.
+	//
+	// It is a security knob, not a tidiness one. OpsKeeper registers its
+	// policy extensions on the Runtime so a gate cannot be forgotten on one
+	// construction path, which means every session also inherits every tool
+	// those extensions carry. A turn that must run with an empty bag says so
+	// here, rather than relying on the extension set happening to be empty.
+	SkipExtensionTools bool
+
+	// AllowedTools is an allowlist applied to the final tool set, built-in,
+	// extension and caller tools alike. Nil means no allowlist.
+	AllowedTools map[string]struct{}
+
+	// ExcludedTools is a denylist applied after the allowlist. It exists
+	// beside AllowedTools because the two answer different questions: an
+	// allowlist says what this turn may do, a denylist says what must never
+	// appear even though something else vouched for it.
+	ExcludedTools map[string]struct{}
+
+	// NoTools mirrors PiG's own shorthand: "all" exposes nothing, "builtin"
+	// omits the built-in coding tools. Empty leaves the set as assembled.
+	NoTools string
+
+	// SessionID pins the PiG session id instead of letting PiG generate
+	// one. OpsKeeper pins its own session row's id so a transcript can be
+	// traced to the agent that produced it without a second lookup table
+	// mapping one id onto the other.
+	SessionID string
 }
 
 // Session is one live turn's PiG session.
@@ -78,6 +118,11 @@ type Start struct {
 type Session struct {
 	sess   *coding.Session
 	closed bool
+
+	// budget is the round cap this turn is running under, or nil when the
+	// caller asked for none. It is retained so a caller can ask a turn why
+	// it stopped, which is a different question from whether it stopped.
+	budget *TurnBudget
 }
 
 // Start opens a session.
@@ -93,6 +138,21 @@ func (r *Runtime) Start(start Start) (*Session, error) {
 		return nil, errors.New("pigcoding: Start requires a Model")
 	}
 
+	// A caller that named no cap gets no budget object at all, rather than a
+	// budget reporting zero. The two would be indistinguishable at the call
+	// site that asks why a turn stopped, which is the only place the answer
+	// is read.
+	var budget *TurnBudget
+	if start.MaxRounds > 0 {
+		budget = NewTurnBudget(start.MaxRounds)
+	}
+
+	// The budget goes first, ahead of the caller's hooks, because it counts
+	// rounds and a round the policy gate refused is still a round the model
+	// spent. TurnBudget documents why reversing this order would let a
+	// refusing gate switch the cap off.
+	hooks := composeBeforeToolCall(budget, start.BeforeToolCall)
+
 	opts := coding.SessionStartOptions{
 		Model:                start.Model,
 		SystemPrompt:         start.SystemPrompt,
@@ -101,13 +161,18 @@ func (r *Runtime) Start(start Start) (*Session, error) {
 		// the extensions contributed. OpsKeeper skips extension tools
 		// separately (below), so the two sets are disjoint and the name is
 		// only a source-order detail.
-		ExtraTools:       start.Tools,
-		BeforeToolCall:   start.BeforeToolCall,
-		ThinkingLevel:    start.ThinkingLevel,
-		ScopedModels:     start.ScopedModels,
-		SessionManager:   start.SessionLog,
-		SkipBuiltinTools: start.SkipBuiltinTools,
-		NoSession:        start.NoSession,
+		ExtraTools:         start.Tools,
+		BeforeToolCall:     hooks,
+		ThinkingLevel:      start.ThinkingLevel,
+		ScopedModels:       start.ScopedModels,
+		SessionManager:     start.SessionLog,
+		SkipBuiltinTools:   start.SkipBuiltinTools,
+		SkipExtensionTools: start.SkipExtensionTools,
+		AllowedTools:       start.AllowedTools,
+		ExcludedTools:      start.ExcludedTools,
+		NoTools:            start.NoTools,
+		SessionID:          start.SessionID,
+		NoSession:          start.NoSession,
 	}
 	if start.CWDOverride != "" {
 		cwd := start.CWDOverride
@@ -118,7 +183,21 @@ func (r *Runtime) Start(start Start) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pigcoding: start session: %w", err)
 	}
-	return &Session{sess: sess}, nil
+	return &Session{sess: sess, budget: budget}, nil
+}
+
+// Budget is the round cap this turn is running under, or nil when the caller
+// asked for none.
+//
+// It answers "why did this investigation stop" with a number instead of an
+// absence. A turn that ends because it ran out of rounds and a turn that ends
+// because the model finished look identical in a transcript, and only one of
+// them is a defect worth an operator's attention.
+func (s *Session) Budget() *TurnBudget {
+	if s == nil {
+		return nil
+	}
+	return s.budget
 }
 
 // Send runs one turn to completion and returns the messages it produced.

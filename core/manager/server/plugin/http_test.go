@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 
 	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
@@ -658,5 +661,213 @@ func TestAHaltWithNoReasonSaysSoRatherThanRecordingAnEmptyField(t *testing.T) {
 	row := only(t, repo)
 	if !strings.Contains(row.PayloadJSON, "halted from the console") {
 		t.Errorf("payload = %s, want the default reason recorded", row.PayloadJSON)
+	}
+}
+
+// fakeInventory stands in for the node adapter on the read side.
+type fakeInventory struct {
+	installed func(edgeID uint64) ([]ports.PluginInfo, error)
+	lastEdge  uint64
+}
+
+func (f *fakeInventory) Installed(_ context.Context, edgeID uint64) ([]ports.PluginInfo, error) {
+	f.lastEdge = edgeID
+	return f.installed(edgeID)
+}
+
+// newInventoryServer is newServer plus the inventory. The existing helper
+// takes only a Service because the release routes never needed one; adding
+// a second constructor rather than a variadic keeps every existing call
+// site reading the way it did.
+func newInventoryServer(t *testing.T, svc Service, inv Inventory, role string) *httptest.Server {
+	t.Helper()
+	r := chi.NewRouter()
+	r.Use(asRole(role))
+	h := NewHandler(svc)
+	h.SetInventory(inv)
+	h.Register(r)
+	return httptest.NewServer(r)
+}
+
+// The endpoint this whole exercise was for: a node's package set, readable.
+// Before it, the only window onto what a host was running was a release in
+// flight, which is exactly when nobody is asking.
+func TestInstalled_ReportsWhatTheNodeIsRunning(t *testing.T) {
+	inv := &fakeInventory{installed: func(edgeID uint64) ([]ports.PluginInfo, error) {
+		return []ports.PluginInfo{
+			{Name: "opskeeper-sre-readonly", Version: "1.2.0", Digest: "sha256:aa"},
+			{Name: "opskeeper-sre-repair", Version: "0.4.1"},
+		}, nil
+	}}
+	srv := newInventoryServer(t, &fakeService{}, inv, "admin")
+	defer srv.Close()
+
+	resp := get(t, srv, "/v1/plugins/nodes/7/installed")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var got struct {
+		EdgeID   uint64             `json:"edge_id"`
+		Packages []ports.PluginInfo `json:"packages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.EdgeID != 7 {
+		t.Errorf("edge_id = %d, want the node that was asked about", got.EdgeID)
+	}
+	if inv.lastEdge != 7 {
+		t.Errorf("adapter saw node %d, want 7 — the path parameter is the node", inv.lastEdge)
+	}
+	if len(got.Packages) != 2 || got.Packages[0].Name != "opskeeper-sre-readonly" {
+		t.Errorf("packages = %+v, want the node's own list in the node's order", got.Packages)
+	}
+}
+
+// A node that runs nothing is a fact, and it has to arrive as a fact.
+//
+// The adapter returns a nil slice for an empty set, and Go marshals that as
+// `null`. A console reading `packages` would then have to tell "this node
+// runs nothing" from "the field is missing" by inspecting a null, and the
+// natural thing to do with a null in JavaScript is treat it as absent — at
+// which point a node running nothing and a node the manager never reached
+// render identically. The handler normalises to an empty slice so the two
+// are different HTTP answers: this is 200, the other is 502.
+func TestInstalled_AnEmptyNodeIsAnEmptyListAndNeverNull(t *testing.T) {
+	inv := &fakeInventory{installed: func(uint64) ([]ports.PluginInfo, error) { return nil, nil }}
+	srv := newInventoryServer(t, &fakeService{}, inv, "admin")
+	defer srv.Close()
+
+	resp := get(t, srv, "/v1/plugins/nodes/7/installed")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — a node running nothing is not a failure", resp.StatusCode)
+	}
+	// Decoded as a map rather than the handler's own struct: this asserts
+	// the bytes on the wire, and `null` versus `[]` is invisible to a
+	// struct decode.
+	var raw map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	pkgs, ok := raw["packages"].([]any)
+	if !ok {
+		t.Fatalf("packages = %#v, want an empty array", raw["packages"])
+	}
+	if len(pkgs) != 0 {
+		t.Errorf("packages = %#v, want empty", pkgs)
+	}
+}
+
+// 502 and not 500 is the whole point of this endpoint's error handling.
+//
+// The request was well formed and the control plane is fine, so the fault
+// is on the far side of the tunnel. A console has to be able to say "this
+// node did not answer" rather than "the platform is broken", because the
+// first is one host to look at and the second is somebody to page. Collapsing
+// it into a 500 sends an operator to the manager's logs for what is a node
+// that is busy or restarting.
+func TestInstalled_ANodeThatDidNotAnswerIsBadGatewayNotInternal(t *testing.T) {
+	inv := &fakeInventory{installed: func(uint64) ([]ports.PluginInfo, error) {
+		return nil, errors.New("plugin.list: node 7 did not answer: i/o timeout")
+	}}
+	srv := newInventoryServer(t, &fakeService{}, inv, "admin")
+	defer srv.Close()
+
+	resp := get(t, srv, "/v1/plugins/nodes/7/installed")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 so the console can blame the node", resp.StatusCode)
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Error.Code != "node_unreachable" {
+		t.Errorf("code = %q, want node_unreachable", body.Error.Code)
+	}
+}
+
+// A manager that was never given a tunnel must say so, and must not say it
+// as 404.
+//
+// 404 means the route does not exist, which sends an operator looking for a
+// version that has the feature. 503 says the route is here and this
+// deployment cannot use it — the same shape the compatibility matrix uses
+// for a missing version snapshot, and for the same reason: the control
+// plane cannot tell, and "cannot tell" is not "the answer is no".
+func TestInstalled_AnUnwiredInventoryIsServiceUnavailableNotNotFound(t *testing.T) {
+	srv := newInventoryServer(t, &fakeService{}, nil, "admin")
+	defer srv.Close()
+
+	resp := get(t, srv, "/v1/plugins/nodes/7/installed")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 — the route exists, this deployment cannot use it", resp.StatusCode)
+	}
+}
+
+// The same three-way distinction, one level down: a manager that HAS a tunnel
+// but whose adapter was built without one is still "cannot tell", not a
+// node failure. ErrNoTunnel is the sentinel that keeps those apart.
+func TestInstalled_AManagerWithNoTunnelIsServiceUnavailableNotBadGateway(t *testing.T) {
+	inv := &fakeInventory{installed: func(uint64) ([]ports.PluginInfo, error) {
+		return nil, fmt.Errorf("reading node 7: %w", release.ErrNoTunnel)
+	}}
+	srv := newInventoryServer(t, &fakeService{}, inv, "admin")
+	defer srv.Close()
+
+	resp := get(t, srv, "/v1/plugins/nodes/7/installed")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 — nothing is known about any node", resp.StatusCode)
+	}
+}
+
+// A node id that is not one. Zero is refused rather than broadcast to
+// whichever node happens to answer, which is what a `0` that reached the
+// tunnel would mean.
+func TestInstalled_RefusesAnEdgeIDThatIsNotANode(t *testing.T) {
+	inv := &fakeInventory{installed: func(uint64) ([]ports.PluginInfo, error) {
+		t.Error("the adapter was called for a node id that is not one")
+		return nil, nil
+	}}
+	srv := newInventoryServer(t, &fakeService{}, inv, "admin")
+	defer srv.Close()
+
+	for _, path := range []string{
+		"/v1/plugins/nodes/0/installed",
+		"/v1/plugins/nodes/abc/installed",
+		"/v1/plugins/nodes/-1/installed",
+	} {
+		resp := get(t, srv, path)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s status = %d, want 400", path, resp.StatusCode)
+		}
+	}
+}
+
+// What a node runs is governance information — it names the L2 tools a host
+// can reach — so it sits behind the same admin wall as the routes that put
+// them there. Reading is not the dangerous half; reading is who decides to
+// read it.
+func TestInstalled_ANSmallerRoleIsRefused(t *testing.T) {
+	inv := &fakeInventory{installed: func(uint64) ([]ports.PluginInfo, error) {
+		t.Error("a non-admin reached the node inventory")
+		return nil, nil
+	}}
+	srv := newInventoryServer(t, &fakeService{}, inv, "user")
+	defer srv.Close()
+
+	resp := get(t, srv, "/v1/plugins/nodes/7/installed")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
 	}
 }
