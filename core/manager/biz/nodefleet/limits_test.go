@@ -105,13 +105,29 @@ func TestTheFleetCapAppliesAcrossNodes(t *testing.T) {
 	}
 }
 
-// The regression this whole file is about. A cap checked before taking the
-// lock is a cap that holds in every test and not in production: two consoles
-// reading "2 of 2" at the same instant both insert, and the limit is exceeded
-// by however many goroutines happened to collide.
-func TestTheCapHoldsUnderConcurrentOpens(t *testing.T) {
+// What this test does and does not prove, because the difference is the
+// whole point of writing it down.
+//
+// It proves the cap holds while eight consoles open conversations at once.
+// It does NOT prove that the check and the insert share a critical section,
+// and no amount of repetition here would. Moving the check out of the lock —
+// reading the count under RLock, releasing, then inserting — was tried as a
+// mutation and the test stayed green through five runs at 8 goroutines and
+// five more at 64 x 100 attempts. -race does not catch it either, and cannot:
+// the mutated read is properly locked, so this is a check-then-act race
+// rather than a data race, and the race detector is not in the business of
+// reasoning about two separately-correct critical sections.
+//
+// So the atomicity is a property of where the code sits, and it is reviewed
+// the way the rest of the locking discipline is. The comment at the check in
+// Open says so. What this test buys is the weaker but still useful claim that
+// a burst of opens does not blow past the cap in practice, and — because each
+// goroutine keeps opening until it is refused — that the cap actually stops
+// them rather than merely being slow to notice.
+func TestTheCapHoldsWhenManyConsolesOpenAtOnce(t *testing.T) {
 	const cap = 8
-	const attempts = 64
+	const goroutines = 8
+	const maxEach = 200
 	f, err := New(Options{Dial: &fakeDial{reply: acceptAll()}, MaxSessionsPerEdge: cap, MaxSessions: cap})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -122,24 +138,58 @@ func TestTheCapHoldsUnderConcurrentOpens(t *testing.T) {
 	var start sync.WaitGroup
 	var done sync.WaitGroup
 	start.Add(1)
-	for i := 0; i < attempts; i++ {
+	for g := 0; g < goroutines; g++ {
 		done.Add(1)
-		go func(i int) {
+		go func(g int) {
 			defer done.Done()
 			start.Wait()
-			if err := openOn(t, f, 7, fmt.Sprintf("s-%d", i)); err == nil {
+			for i := 0; i < maxEach; i++ {
+				// A distinct id per attempt: the clash check would otherwise
+				// refuse the second try and the goroutine would exit having
+				// proved nothing.
+				if err := openOn(t, f, 7, fmt.Sprintf("g%d-s%d", g, i)); err != nil {
+					return
+				}
 				opened.Add(1)
 			}
-		}(i)
+		}(g)
 	}
 	start.Done()
 	done.Wait()
 
 	if got := opened.Load(); got != cap {
-		t.Errorf("%d of %d concurrent opens succeeded under a cap of %d", got, attempts, cap)
+		t.Errorf("%d conversations were opened under a cap of %d (%d goroutines x up to %d attempts)",
+			got, cap, goroutines, maxEach)
 	}
 	if got := f.SessionCount(); got != cap {
 		t.Errorf("SessionCount = %d, want %d", got, cap)
+	}
+}
+
+// A refused Open has to leave nothing behind — no entry, no frame relay
+// wired to a handle nobody will ever drive. The count is the part that is
+// easy to assert; the leak is the part that would not show up in SessionCount
+// at all if the relay were attached before the refusal.
+func TestARefusedOpenLeavesNoSessionBehind(t *testing.T) {
+	f, err := New(Options{Dial: &fakeDial{reply: acceptAll()}, MaxSessionsPerEdge: 1, MaxSessions: 1})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(f.CloseAll)
+
+	if err := openOn(t, f, 7, "s-1"); err != nil {
+		t.Fatalf("first Open: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		_ = openOn(t, f, 7, fmt.Sprintf("s-refused-%d", i))
+	}
+	if got := f.SessionCount(); got != 1 {
+		t.Errorf("SessionCount = %d after five refusals, want 1", got)
+	}
+	// The survivor must still work: a refusal that corrupted the map would
+	// leave the count right and the session unusable.
+	if _, ok := f.Stats(7, "s-1"); !ok {
+		t.Error("the conversation that was already open is no longer reachable after five refusals")
 	}
 }
 

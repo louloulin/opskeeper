@@ -223,11 +223,20 @@ func (f *Fleet) Open(req PromptRequest, sink ports.EventSink) (*TunelledProcess,
 		return nil, fmt.Errorf("nodefleet: session %q is already open on edge %d", req.SessionID, req.EdgeID)
 	}
 	// The caps are checked here, inside the same critical section as the
-	// insert, and not a line earlier. A check before the lock would let
+	// insert, and not a line earlier: a check before the lock would let
 	// two consoles opening the last two slots both read "31 of 32" and
-	// both insert, which is the failure a cap exists to prevent and the
-	// one shape of it that only appears under concurrency — so the test
-	// for it has to be concurrent too.
+	// both insert.
+	//
+	// That atomicity is a property of where this code sits, and it is
+	// worth being precise about how it is kept there, because the obvious
+	// test for it does not work. Reading the count under a separate lock
+	// and inserting under the write lock is a check-then-act race rather
+	// than a data race, so -race stays silent, and a concurrency test
+	// stayed green through it at 64 goroutines and 6400 attempts — the
+	// window is simply too narrow to hit by sampling. The comment in
+	// limits_test.go says the same thing from the other side. So this is
+	// reviewed like every other lock boundary in the file, and the tests
+	// beside it assert the cap's behaviour rather than its atomicity.
 	if n := len(f.sessions[req.EdgeID]); n >= f.perEdge {
 		f.mu.Unlock()
 		return nil, &LimitError{Scope: "edge", EdgeID: req.EdgeID, Open: n, Limit: f.perEdge}

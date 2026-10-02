@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -540,4 +541,66 @@ func readBody(t *testing.T, resp *http.Response) string {
 		return "<unreadable: " + err.Error() + ">"
 	}
 	return buf.String()
+}
+
+// A full fleet is a refusal the operator can act on, so it has to arrive as
+// one. 500 would send them to the manager's logs; 503 would have them wait
+// and retry a request that cannot succeed until somebody closes a
+// conversation.
+func TestAFullFleetIsReportedAsTooManyRequests(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{
+			name:   "per-node cap",
+			err:    &nodefleet.LimitError{Scope: "edge", EdgeID: 7, Open: 32, Limit: 32},
+			status: http.StatusTooManyRequests,
+			code:   "conversation_limit",
+		},
+		{
+			name:   "fleet cap",
+			err:    &nodefleet.LimitError{Scope: "fleet", Open: 512, Limit: 512},
+			status: http.StatusTooManyRequests,
+			code:   "conversation_limit",
+		},
+		{
+			// Wrapped on the way out of the biz layer, as a real handler
+			// would carry it. errors.Is has to see through that, or the
+			// mapping silently stops applying the moment someone adds
+			// context to an error message.
+			name:   "wrapped",
+			err:    fmt.Errorf("open conversation: %w", &nodefleet.LimitError{Scope: "edge", EdgeID: 9, Open: 3, Limit: 3}),
+			status: http.StatusTooManyRequests,
+			code:   "conversation_limit",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeErr(rec, tc.err)
+			if rec.Code != tc.status {
+				t.Errorf("status = %d, want %d", rec.Code, tc.status)
+			}
+			var body struct {
+				Error struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if body.Error.Code != tc.code {
+				t.Errorf("code = %q, want %q", body.Error.Code, tc.code)
+			}
+			// The message has to reach the operator: it is the only place
+			// the numbers that tell them which node is full appear.
+			if !strings.Contains(body.Error.Message, "conversation") {
+				t.Errorf("message = %q, want it to explain the limit", body.Error.Message)
+			}
+		})
+	}
 }

@@ -137,18 +137,35 @@ func emitCoverageText(out *os.File, plugins []pluginmanifest.Plugin, reports []p
 		//
 		// What is missing is not phase D's B3 batch — that is restart_service
 		// and the config changes, and the repair package ships all five of
-		// those. What is missing is the middleware write half: the adapters
-		// have implemented pg.kill_session and k8s.drain and the rest for a
-		// long time, and no package has ever declared them. The case files
-		// are ahead of the fleet, not the other way round, and each line
-		// above names a tool that could be packaged rather than a case that
-		// ought to be deleted.
+		// those. What is missing is the middleware write half, and "missing"
+		// is the wrong word for it. The adapters have implemented
+		// pg.kill_session and k8s.drain and the rest for a long time, and
+		// the closed loop dispatches every one of them: RegistryInvoker is
+		// constructed over the same middleware registry the upcall channel
+		// serves, and its Invoke is called from exactly one place, the
+		// approved phase, where a reviewer has already signed off and the
+		// audit chain already holds the record.
+		//
+		// The reason none of them shows up here is that the surface this
+		// command measures is a node's package, and a node's package is
+		// read-only by construction — deliberately, and for the same reason
+		// runMiddlewareTool re-derives each tool's class before dispatching
+		// it: the upcall channel has no approval queue behind it, so a write
+		// arriving there is a second door into the same room with nobody
+		// watching. Declaring these tools in a shipped package would not
+		// close a gap in the fleet. It would delete the queue.
 		fmt.Fprintf(out, "\nThe gaps above are structural, not model failures. A case naming a\n"+
 			"remediation no package ships scores zero on every run, and a leaderboard\n"+
 			"reads that as the agent being bad.\n\n"+
-			"Every shipped package is read-only, and these are the middleware writes:\n"+
-			"the control plane's adapters already implement them, so each line above\n"+
-			"names a tool that could be packaged rather than a case that ought to go.\n")
+			"Every shipped package is read-only, and these are the middleware writes.\n"+
+			"They are not absent capability: the adapters implement them and the closed\n"+
+			"loop dispatches them through the approved remediation path, where a reviewer\n"+
+			"sees the blast radius before anything runs. Packaging them into a node\n"+
+			"package would not close a gap, it would open a second door into the same\n"+
+			"room with no queue behind it — which is why the upcall channel refuses every\n"+
+			"non-read tool no matter which package asks.\n\n"+
+			"So this is not a phase D backlog. It is the answer to a narrower question —\n"+
+			"can a node's agent reach these — and for writes the answer is meant to be no.\n")
 	}
 }
 

@@ -831,7 +831,7 @@ Kernel 一直带着 `MaxTurns`，控制面的 `defaultMaxIterations = 30` 和 pe
 配套）。等控制面真的在 Session 路径上流式时它才有用。
 
 **对进度的影响。** 本轮不改运行时代码，§六 的百分比不动（A 100% / B 100% /
-C 90% / D 95% / E 95%）。变的是两件事：一个「待决」变成「已决」，以及 B 阶段
+C 95% / D 95% / E 95%）。变的是两件事：一个「待决」变成「已决」，以及 B 阶段
 闸门补上了它真正缺的那一半（§4.14）。**待决清单因此从五项降到四项。**
 
 
@@ -1025,7 +1025,134 @@ Makefile 目标，`make arch-lint-run` 是另一条；只挂一条的那个总�
 
 **这一条没有改变架构，只把一个已经写好的退避循环从「单机正确」变成「队伍正确」。**
 C 阶段的连接规模三项里，**风暴抑制已完成**；剩下的是**连接池上限**（`Fleet.Open`
-目前对每条边的常驻会话数没有上界），记在「待决的大动作」之外，作为下一项。
+对每条边的常驻会话数没有上界），由 §4.17 接手。
+
+---
+
+### 4.17 会话上界，以及一个证明不了的断言（决策 79）
+
+决策 78 做完风暴抑制，C 阶段连接规模三项里剩下的是**连接池上限**。这一条比它
+看起来小，实施过程中却撞到本项目迄今为止最难的一次坦白，所以两件事一起记。
+
+**上界本身。** `Fleet.Open` 此前对会话数**没有任何上界**，而一个节点 agent 是
+单进程多路复用会话的，所以一次无界的 `Open` 等于请控制面无限量地持有**某一个
+节点**的状态。不需要任何 bug：一个控制台重连循环，或者一个开了四十场排查的
+运维，就够了。
+
+**两个上界，不是一个。** 两者约束的是不同的东西：**每节点上界**收住单个节点
+（一个行为异常的 agent 不能让 manager 持有超过它那份的状态）；**全局上界**收住
+manager 本身（无论怎么分布，进程持有的 handle / sink / relay 数量有界）。只有
+每节点上界时，N 个节点各开满就等于没有上界；只有全局上界时，一个节点就能吃掉
+全部预算。默认 32 / 512，可配置，**负值直接拒绝**——「不限制」写成 -1 是那种
+从环境变量里一路敲错到生产的配置。
+
+**拒绝而不是驱逐。** 到顶就返回一个带数字的 `*LimitError`（哪个 scope、哪个
+节点、开了几个、上限几个），HTTP 层映射成 **429**。不驱逐最老的会话，是因为
+驱逐会静默杀掉某个人正在进行的排查，而 429 把「该关掉哪一场」交还给操作员——
+消息里带着节点号和计数，那是一句指令，「内部错误」只是一张派给别人的工单。
+**503 是错的**：等一分钟重试不会有任何不同，已经开着的会话不会自己关掉。
+
+**难的那一半：一个我证明不了的断言。**
+
+上界检查必须和插入在**同一个临界区**里。检查挪到加锁之前，就是一个
+check-then-act 竞态。我把它当变异装上去跑，**测试全绿**——先是 8 goroutine 跑
+5 次，再加到 64 goroutine × 100 次（共 6400 次尝试），一次都没抓到。加 `-race`
+也抓不到，而且**理应抓不到**：那个变异是用 `RLock` 读的，锁本身是对的，这是逻辑
+竞态而不是数据竞态，race detector 不负责推理两个各自正确的临界区之间的关系。
+
+**我不能把一个证明不了原子性的测试写成证明了原子性。** 所以做三件事：
+
+1. 测试改名为 `TestTheCapHoldsWhenManyConsolesOpenAtOnce`，并在注释里写明它
+   证到的是什么、证不到的是什么——它证的是「一群控制台同时开会话时上界仍然
+   成立」，证不到的是「检查与插入共享临界区」。
+2. `Open` 里那段注释从「所以测试也必须是并发的」改成如实陈述：原子性是**代码
+   摆放位置的属性**，和文件里其它锁边界一样靠评审；旁边的测试断言的是上界的
+   行为，不是它的原子性。
+3. 补了一条**能确定性验证**的相邻性质：被拒绝的 `Open` 不留下任何东西
+   （`SessionCount` 不变，且**原来那个会话仍然可用**）。后者是真正会坏的地方——
+   如果 relay 在拒绝之前就挂到了 handle 上，计数是对的，会话却是废的。
+
+**这一条同时是本项目第三次撞上同一个形状，值得单独立一条规矩：**
+
+| 轮次 | 测试写成 | 变异 | 结果 |
+|---|---|---|---|
+| 决策 76 | 直接调 `fullJitter` | `wait := ceiling` | 🟢 假覆盖 |
+| 决策 77 | 指向 `data → service` | 删掉检查 3 | 🟢 假覆盖（被检查 1 抢先报） |
+| 决策 79 | 并发 `Open` 计数 | 检查移出临界区 | 🟢 抓不到，且 `-race` 也抓不到 |
+
+三次都不是「测试写错了」，而是**「删掉被测的那段代码，哪个测试会红」这个问题在
+写测试时没有被问**。前两次能救回来，第三次不能——所以规矩是：并发性质的断言
+必须先问「我的变异能被抓到吗」，抓不到就**降级为它真正证明的那句话**，而不是
+让它继续假装。
+
+**三条变异验证**
+
+| 变异 | 结果 |
+|---|---|
+| 完全不做上界检查 | ❌ 5 个测试红 |
+| 上界按「历史开过的总数」计（Close 不释放名额） | ❌ 关闭后重开测试红 |
+| 429 改成 503 | ❌ 三个 HTTP 子用例红 |
+| 检查移出临界区 | ⚠️ **抓不到**，已在代码与测试注释里如实记下 |
+
+`nodefleet` 42 tests、`server/nodeagent` 16 tests 全绿。C 阶段连接规模三项
+（**连接池上限 / 心跳重连 / 风暴抑制**）至此全部落地。
+
+### 4.18 18 个 GAP 是真的，但结论不是「缺接线」（决策 80）
+
+上一轮把 `plugin-coverage` 的 18 个 GAP 读成了「26 个中间件写工具注册了
+却谁也调不到」，并据此把「控制面审批路径 → adapter registry 的接线」
+列为下一步。**这个结论是错的，接线早就存在。** 本轮把它查到底：
+
+```
+cmd/opskeeper/main.go:2147   middlewareReg := middlewareregistry.NewRegistry()
+             2148           adapterClosers := wireLoopRemediationAdapters(rootCtx, log, middlewareReg)
+             2154           agentTools.middleware = middlewareReg      // 同一个 registry，不是第二个
+             2195           loopRemediationInvoker = loop.RegistryInvoker{Tools: middlewareReg, ...}
+```
+
+三个事实：
+
+1. **八个家族全部接线**。`loopAdapterSources()` 覆盖 postgres / redis / k8s /
+   mq / kafka / rabbitmq / git / **host**，各配一个 DSN 环境变量。18 个 GAP 里
+   5 个 `host.*` 与另外 13 个不在同一条路上——`host` 也是接线的。
+2. **写工具的唯一调用点是 approved phase**。`RegistryInvoker.Invoke` 全仓库
+   只有 `approved_worker.go:467` 一个调用方。`RegistryInvoker` 构造在 approved
+   派发链上，而审批回执与审计链在它之前。这正是 `runMiddlewareTool` 注释里
+   说的「reachable through the closed loop's approved dispatch, where a
+   reviewer sees the blast radius」——那句话**有接线支撑，不是空头声明**。
+3. **upcall 通道与闭环共用同一个 registry**，这是刻意的（`main.go:2152`
+   注释原文：a node that could reach an adapter the loop cannot 会有两个答案）。
+   所以「节点调不到写工具」和「闭环调得到写工具」不是两条断裂的链，
+   是**同一条链上的两个门，门后面有没有人守着不同**——`main.go:2150` 的注释
+原文就是在解释为什么必须是同一个 registry 而不是两个。
+
+因此 GAP 是真的，理由是**口径**而不是**缺件**：`plugin-coverage` 量的是
+「插件包能提供什么」，节点包按设计只读（`tools.go` 是生成文件，只出 L0/L1；
+`toolset_gen_test.go` 的 `TestTheMiddlewareToolsetIsReadOnly` 强制写工具永不
+进入只读清单），
+所以每一个补救期望都必然落空。20 个 case 每个都同时命名诊断与补救，
+于是 0/20。`coverage_test.go:363` 的 `TestNoShippedCaseIsReportedAsCovered...`
+断言 `complete == 0` 正是这个意思——**0/20 是被测试钉住的正确答案，不是待修的缺陷。**
+
+**由此否掉两条本来要走的路**：
+
+- ❌ 把写工具打成节点 L2 包来消 GAP。这会同时违反两处写明理由的决策
+  （`tools.go` 的 second door / no queue behind it，和 `runMiddlewareTool`
+  重新复算工具等级的那道检查），并把一条有审批队列的写路径换成一条没有的。
+- ❌ 恢复家族级豁免（决策 59 删掉 `NonPackageFamilies` 正是因为它让
+  `k8s/pod-oom` 永久不可通过）。豁免只能精确到方法，且必须能证明该方法
+  在审批路径上可调——而**这正是 registry 已经做到的事**，只是报告没在说。
+
+**真正改掉的是报告的结语**：`plugincoverage.go` 原来收在「each line above
+names a tool that could be packaged」，把结论指向「去打包」。这句话与架构
+决策相反，容易诱导下一个人去做上面那条被否掉的路。结语改为陈述事实：
+这些写能力经审批路径可达，打包进节点包不是补缺口而是删掉队列；本报告的
+口径是「节点 agent 能不能碰到」，对写操作答案本就该是「不能」。
+
+**留到下一轮的真实待决**（不是这一条）：golden case 的期望集合该不该把
+「经审批可达」也算作已覆盖——那会改 harness 的语义（case 判分要不要区分
+「走节点 agent」与「走闭环审批」），属于 §六 D 阶段的范围决策，不在闸门
+口径里顺手改掉。
 
 ---
 
@@ -1081,11 +1208,11 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 |---|---|---|---|
 | A 模块化地基 | 20% | **100%** | 13 个模块落地、`internal/` 清空、`modulecheck` + `go-arch-lint` 两个闸门可执行且非空转、共享底座的两条反向边已清并由 `floorIsolation` 钉住（决策 66）、**两个闸门之间的最后一处不对称已消除：`.go-arch-lint.yml` 有了读者，104 条无人行使的授权已删，逆向边按文件记名**（决策 74）。A 阶段无剩余项 |
 | B PiG 适配层 | 20% | **100%** | `pigmodel` / `pigagent` / `pigrpc` / `pigwire` 四件套齐、eino 与 go-openai 清零、内核接缝（决策 32/33）打开、契约套件 `core/pig/pigcontract` 落地（决策 64）、**PiG 已换成固定 tag 并在发布条件下被验证**（决策 65）、**AI 层已原生化：第二套模型词汇全部删除，宿主直接用 PiG 的 `ai` 类型**（决策 67，见 §4.5）。剩下的不是缺口，是维护：契约要跟着上游新增能力补 |
-| C 节点 Agent | 20% | **90%** | `pig --mode rpc` 运维 profile + supervisor + `policygate` + 7 个 `agent.*` 隧道方法 + `NodeFleet` + 只读 piglet，三个剧本在新拓扑下通过。剩下：MCP 运行时（PiG 的 `mcp` 只是声明）、连接池上限与风暴抑制的规模验证 |
+| C 节点 Agent | 20% | **95%** | `pig --mode rpc` 运维 profile + supervisor + `policygate` + 7 个 `agent.*` 隧道方法 + `NodeFleet` + 只读 piglet，三个剧本在新拓扑下通过；连接规模三项（连接池上限 / 心跳重连 / 风暴抑制）已全部落地（决策 78/79）。剩下：**只有 MCP 运行时**，而它是产品问题不是欠账——65 个工具已走 extension toolset 端到端跑通，PiG 的 `mcp` 至今只是声明 |
 | D 插件生态 | 25% | **95%** | B1/B2/B3 全部闭环（18 + 12 + 53 + 5 个工具）、审核流水线（签名 → 清单 → 准入 → 灰度 → 回滚）、运输通道 6 条路由、`sdk` 三个发布物、**能力声明已从「家族」升级到「逐方法」，四个包的「声明 == 实际」全部有守卫**（决策 69）。剩下：容器格式导入器的覆盖面、更多插件迁移 |
 | E 生态治理 | 15% | **95%** | 兼容矩阵（edge 轴 × PiG 轴）、金融 / SaaS 两个 profile 模板、profile × 实际目录的组合校验（决策 70）、**发布前兼容矩阵 API，管理侧预检与节点裁决共用 `CheckVersions`**（决策 71）、插件 × golden case 覆盖报告、发布全链路（Start/List/Status/Advance/Halt/Rollback）。**兼容矩阵 agent 轴不再是「无法判断」：节点随心跳自报 PiG 构建，控制面一次查询读取（决策 73）**。剩下：插件市场前端页面、兼容矩阵前端页面、发布流程的定时/触发自动化 |
 
-加权合计 ≈ **96.0%**（20×1.00 + 20×1.00 + 20×0.90 + 25×0.95 + 15×0.95）。
+加权合计 ≈ **97.0%**（20×1.00 + 20×1.00 + 20×0.95 + 25×0.95 + 15×0.95）。
 
 **A 阶段到此 100%，且它是唯一「完成」而不是「差最后一点」的阶段**——计划 §五
 对 A 的三条验收（模块化 + 全量测试绿 + arch-lint 拦住逆向依赖）现在都由**两个
@@ -1112,8 +1239,10 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 `TestTruncateOrSpill_*` 曾长期在 `/var/tmp` 存在但不可写的机器上失败——降级判据写在
 `MkdirAll` 而不是写入上，所以那条降级路径从未生效；决策 60 顺手修好了它（测试一直是
 对的，代码不是）。
-`cmd/opskeeper-eval` 的两个闸门现在都是绿的：`plugin-coverage` **20/20**
-（包 → case 的家族级覆盖），`vocabulary` `--fail-on-gap` 在真语料上通过、在
+`cmd/opskeeper-eval` 的两个闸门现在都是绿的：`plugin-coverage` 按**方法名**
+join，读数 **0/20**（18 个 GAP，原因逐条给出；这是被
+`TestNoShippedCaseIsReportedAsCovered...` 钉住的正确答案，不是待修的缺陷，
+见决策 69 与决策 80），`vocabulary` `--fail-on-gap` 在真语料上通过、在
 一个合成的不可满足语料上必须失败（新增的正反两面，见决策 59）。
 `go run ./scripts/modulecheck .` → 边界全部成立（模块规则见决策 37，BC 规则见决策 38）。
 `make module-standalone-check`（决策 65）→ 13 个模块在 `GOWORK=off` 下逐个
@@ -1130,7 +1259,7 @@ replace、纯模块缓存（`GOPROXY=off`）也能构建**。这是 CI 与发布
 | **A 模块化地基** | `go.work` + 7 个模块 `go.mod`（`core` / `pig` / `edge` / **`floor`**（决策 60）/ **`manager`**（决策 62+63）/ `harness` / `sdk`）+ 5 个 extension 模块；`core`（domain/ports/wire）；`sdk` 清单准入 | ✅ **已完成**——`internal/` 已清空（决策 63），模块依赖方向由 `modulecheck`（可执行）+ `.go-arch-lint.yml`（文档）双重钉住；遗留两条债务（底座包级 setter、arch-lint 债务清单无守卫）见「当前真实缺口」 |
 | **B PiG 适配层** | `pigmodel`（settings→`*ai.Model`）、`pigagent`（含 `buildPrompt` 历史回放，见决策 25）、`pigrpc`（`pig --mode rpc` 客户端）、`pigwire`（SSE 帧翻译）；**`go-openai` 已整包移除**（`core/manager/pkg/llm` 自持 HTTP wire，见决策 22）；**工具治理已抽成与内核无关的装饰器**（见决策 24）；**PiG 支撑的 `llm.Client` 已落地并接入装配层**（`core/manager/pkg/llm/pigclient.go` + `pigsettings.go` + `pigregistry.go`，`OPSKEEPER_LLM_BACKEND=pig` 切换，见决策 26）；**内核侧宿主绑定已落地**（`core/manager/biz/aiops/agentkernel/`：`ToolBag` + `Persister`（同时是 `ToolCallRecorder`）；`core/manager/biz/aiops/chatruntime/kernelsink.go`：`ports.EventSink` → 控制面事件，含准入/结算两帧的 join，见决策 27/28；审计/预算/审批/依赖装配四件套落在 `agentkernel`，见决策 30；历史回放改为一计划两渲染，见决策 31；**换内核接缝已开**：`Runtime.Handle` 第 5d 步分流 + `kernelpath.go` 驱动 `ports.Agent`，见决策 32） | ⚠️ 部分——模型接口与**编排接缝**都已就位，**装配层已接线**（`OPSKEEPER_AGENT_KERNEL=pig`，见决策 33）；**eino 已彻底移除**：`go.mod`/`go.sum` 中 `cloudwego/eino` 与 `eino-contrib/jsonschema` 双双消失，`chatruntime` 只剩内核一条路（见决策 34） | ✅ 已落地 |
 | **C 节点 Agent** | `pigsupervisor`（崩溃重启/退避/Degraded）、`policygate`（白名单+审批+digest）、`gatesocket`（unix socket 准入）、准入信使 extension、tunnel 7 个 `agent.*` 方法 + `agent.decide`、控制面 `NodeFleet` + `Service.Decide` + HTTP 决策端点、per-session 角色表、**profile piglet**（`tools: []` 摘除 PiG 8 个内置工具含 `bash`，真实二进制 A/B 验证 0/8 active，见决策 48）、**内置具名 piglet**（`plugins/pig-ops/opskeeper-sre-readonly/pig-opskeeper-ops.yaml`：18 只读工具 + 8 skill + 信使，见决策 56） | ✅ 已落地——节点侧生成 profile 与内置具名 piglet 并存（决策 56） |
-| **D 插件生态** | L1 只读 profile（18 工具 + 7 persona + 信使）、`pluginimport` 导入器（`/v1/marketplace/import` 入口，见决策 55）、**B1 只读工具集**（工具集 extension + `toolbroker` + `agent.tool` 反向调用 + 双向漂移测试）、**B2 可观测工具集**（12 只读工具，schema 由控制面 registry 生成，全量 upcall）、**B2 中间件工具集**（`opskeeper-sre-middleware`：53 个只读工具，由 `core/manager/middleware/toolset` 从适配器活注册生成，`plugin-coverage` 因此从 2/20 到 **20/20**，见决策 59）、**B3 修复包**（L2/5 工具/`approval.required`/`pod` 半径/pin 安装 + 审批回执 + 写操作全部走控制面）、**审核流水线**（ed25519 树签名 + 信任库 + 签名→清单→准入三段审核 + 灰度波次闸门 + 节点侧 `admitPackages` 接线）、**发布运输通道**（`plugin.install` / `plugin.remove` / `plugin.list` + 节点 `pluginStore` + 控制面 `ReleaseManager` + 6 条 `/v1/plugins/releases` 路由）、**控制面适配器真实化**（pg/redis/k8s/mq/host 五条，见「闭环修复派发链路」）、**git 适配器真实化**（8 工具全实现，只读，见决策 45）、**`sdk` 发布面**（清单类型 + 注册 API + 版本协商，见决策 46） | ✅ B1/B2/B3/审核流水线/运输通道全部完成；`git` 适配器 8/8 工具真实；`sdk` 三个发布物齐全；**四个只读包**（readonly / observability / middleware / 修复包的只读半边）在 `plugins/pig-ops` 下齐备 |
+| **D 插件生态** | L1 只读 profile（18 工具 + 7 persona + 信使）、`pluginimport` 导入器（`/v1/marketplace/import` 入口，见决策 55）、**B1 只读工具集**（工具集 extension + `toolbroker` + `agent.tool` 反向调用 + 双向漂移测试）、**B2 可观测工具集**（12 只读工具，schema 由控制面 registry 生成，全量 upcall）、**B2 中间件工具集**（`opskeeper-sre-middleware`：53 个只读工具，由 `core/manager/middleware/toolset` 从适配器活注册生成；此包把 `plugin-coverage` 从 2/20 带到 20/20，但那 20/20 是**家族级 join 的产物，已被决策 69 推翻**，按方法名 join 的真实读数是 0/20，见决策 69 / 80）、**B3 修复包**（L2/5 工具/`approval.required`/`pod` 半径/pin 安装 + 审批回执 + 写操作全部走控制面）、**审核流水线**（ed25519 树签名 + 信任库 + 签名→清单→准入三段审核 + 灰度波次闸门 + 节点侧 `admitPackages` 接线）、**发布运输通道**（`plugin.install` / `plugin.remove` / `plugin.list` + 节点 `pluginStore` + 控制面 `ReleaseManager` + 6 条 `/v1/plugins/releases` 路由）、**控制面适配器真实化**（pg/redis/k8s/mq/host 五条，见「闭环修复派发链路」）、**git 适配器真实化**（8 工具全实现，只读，见决策 45）、**`sdk` 发布面**（清单类型 + 注册 API + 版本协商，见决策 46） | ✅ B1/B2/B3/审核流水线/运输通道全部完成；`git` 适配器 8/8 工具真实；`sdk` 三个发布物齐全；**四个只读包**（readonly / observability / middleware / 修复包的只读半边）在 `plugins/pig-ops` 下齐备 |
 | **E 生态治理** | 兼容矩阵（edge 轴 + **PiG 轴**）、跨云 profile 模板（金融/SaaS）、插件能力 × golden case 覆盖报告 | ✅ 已落地 |
 
 ### 闭环修复派发链路
@@ -2891,11 +3020,13 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
   失败）。可观测 12 工具覆盖 PromQL / LogQL / TraceQL / 数据库源 / 代码仓库 /
   审计历史；中间件 53 工具覆盖 pg / redis / k8s / kafka / rabbitmq / mq 的当下
   状态与 `git.find_runtime_link`（见决策 59）。
-- **`plugin-coverage` 现在是 20/20，但这个数字是家族级的**：它问的是"这个 case
-  的每个期望家族有没有包在服务"，不是"每个方法都真实存在"。`redis/slow-cmd`
-  期望的 `redis.kill_client`（适配器实际叫 `redis.client_kill`）现在被
+- ~~**`plugin-coverage` 现在是 20/20，但这个数字是家族级的**~~ **已被决策 69 推翻**：
+  join 改成按方法名之后读数是 **0/20**，下面这段描述的是它被推翻之前的样子，
+  保留是为了说明「家族级豁免」这条路为什么走不通。`redis/slow-cmd`
+  期望的 `redis.kill_client`（适配器实际叫 `redis.client_kill`）当时被
   `opskeeper-sre-middleware` 声明的 `redis` 家族覆盖，于是这个 case 从"结构性
-  不可通过"变成"可评分"——判分能不能过，是另一回事。按名字判定的那条轴是
+  不可通过"变成"可评分"——而舰队里从来没有任何节点跑过这个工具。判分能不能过，
+  是另一回事。按名字判定的那条轴是
   `loopActionExecutability`（只认精确符号，当前 0 缺口）。把包的能力声明从
   "家族"升级到"逐方法"是 `sdk` 的后续能力，见决策 59 末段。
 - **B2 原本计划走 MCP，PiG 不支持，已改为 extension toolset**：PiG 的 `mcp`
@@ -3358,14 +3489,18 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
 - **覆盖率闸门**（`core/floor/pluginmanifest/coverage.go` +
   `opskeeper-eval plugin-coverage`）：把 golden case 的
   `<family>.<method>` 期望与插件包能力做对照，缺口必须**被解释**。
-  当前真实结果：**20/20 全绿**——四个只读包（`opskeeper-sre-readonly`
+  当前真实结果：**0/20，18 个 GAP**——四个只读包（`opskeeper-sre-readonly`
   的 host/alert/topology、`opskeeper-sre-observability` 的
   database/source/observability、`opskeeper-sre-middleware` 的
   pg/redis/k8s/kafka/rabbitmq/mq/git-artifact、`opskeeper-sre-repair`
-  的 recovery）合起来盖住了全部 20 个 case。
-  两个口径要分清：这个闸门是**家族级**的（包声明 `pg` 就覆盖 `pg.*`），
-  按方法名判定的那条轴是 `opskeeper-eval vocabulary` 的
-  loop-action 可执行性（只认精确符号）。家族声明之外还剩
+  的 recovery）没有盖住任何一个 case 的**补救半边**：20 个 case 每个都同时
+  命名诊断与补救，而节点包按设计只出 L0/L1。缺口逐条给出方法名，0/20 由
+  `TestNoShippedCaseIsReportedAsCovered...` 钉住（决策 69 / 80）。
+  两个口径要分清：这个闸门量的是**插件包能提供什么**（按方法名精确匹配），
+  补救动作**经审批路径能否派发**是另一条轴——`opskeeper-eval vocabulary` 的
+  loop-action 可执行性，以及 `RegistryInvoker` 在 approved phase 上的实际接线
+  （决策 80 查实：八个家族全部接线，写工具唯一调用点是 approved phase）。
+  家族声明之外还剩
   `MiddlewareFamilies = {host, git}` 两族由控制面 adapter 服务，
   每一族都带理由；`NonPackageFamilies` 这个名单已经删掉——它当初把
   `git-artifact` 说成"任何包都服务不了的关联"，于是 `k8s/pod-oom`
