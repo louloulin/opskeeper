@@ -2183,6 +2183,309 @@ if from == "" {
 | 跨云迁移模板 | `pluginmanifest/profiles.go`：`finance-strong-consistency` / `saas-multitenant`，profile × 实际目录组合校验（决策 70） |
 | 评测接入 harness | `make eval-coverage`（诊断轴 16/20，`--fail-on-unrecorded-diagnose-gap`）进构建 |
 
+### 4.28 决策 90：分布式改造方案的可行性核对——两条 P0 成立，但修复路径与方案写的不一样
+
+这一节的写法与 §4.25–4.27 相同：**主张 → 实测证据 → 判定 → 建议做法**。
+被核对的是《OpsKeeper 分布式 AI 运维平台改造方案》（10 条问题清单 + 阶段 0–3
+改造方案）。判定只写本轮真实读到的代码位置与真跑出来的命令输出，不写文档
+回忆。
+
+#### 4.28.1 P0-1：LLM 凭据断链——**成立**，但「注入 OPENAI_BASE_URL」这条路不存在
+
+**主张**：`cmd/opskeeper-edge/agent.go:209` 启动 `pig` 时 `Env` 只注入 gate
+socket 与 tool socket，凭据只存在于 manager 侧；且 PiG 通过 `OPENAI_API_KEY` /
+`OPENAI_BASE_URL` 解析 provider，所以不必改 PiG 内核，走 `Options.Env` 即可。
+
+**实测**：
+
+| 读的东西 | 结果 |
+|---|---|
+| `cmd/opskeeper-edge/agent.go:209-212` | `Env: map[string]string{wire.GateSocketEnv: socketPath, wire.ToolSocketEnv: toolSocketPath}`——确认只有两个键，**无任何凭据**。同一构造里 `Provider`/`Model` 来自 `OPSKEEPER_EDGE_AGENT_PROVIDER` / `_MODEL`，默认全空 |
+| `deploy/install/edge/opskeeper-edge.env.example` | `grep -n "AGENT"` **零命中**：连 `OPSKEEPER_EDGE_AGENT_*` 一个都没写，更没有 provider 配置 |
+| `.env.example:37-39`、`core/floor/config/config.go:493` | `OPSKEEPER_OPENAI_API_KEY` / `_MODEL` / `_BASE_URL` 三件套是 **manager 的**配置；`core/manager/biz/setting/llm.go` 的 `LLMSettingsResolver` 从 `system_settings.llm.<provider>_{api_key,base_url,models}` 解析，env 只作兜底。**「凭据只在中心」属实** |
+| `core/pig/pigrpc/client.go:31-36`、`client.go:113-115` | `Options.Env` 原样带给 `rpcclient.RpcClientOptions.Env`，后者 `rpc_client.go:139-141` 在 spawn 后追加到 `cmd.Env`——**注入通道确实存在，且是现成的** |
+| `/Users/louloulin/appx/PiG` 全仓 `grep -rn "OPENAI_BASE_URL"` | **只匹配到 `AZURE_OPENAI_BASE_URL`（`ai/azure_openai_responses.go:99`）。不存在 `OPENAI_BASE_URL` 这个变量**。`ai/openai_responses.go:99-100` 的默认值是硬编码的 `https://api.openai.com/v1`，没有任何 env 能改它 |
+| 上游 TS（`.upstream/v0.87.1/packages/ai/src/env-api-keys.ts` 家族） | 同上：内置 `openai` provider 只认 key，不认 base URL |
+
+**判定：主张成立，机制写错。** 凭据断链是真的；但「注入 `OPENAI_BASE_URL`」
+在 PiG 0.3.0 上**不会生效**——这个变量不存在。照抄方案会让节点上的 `pig`
+连不上网关，而且失败得很安静（provider 仍指向 `api.openai.com`，报的是鉴权
+错误，读起来像密钥错，不像配置错）。
+
+**真正的接入点有两个，且都是 PiG 已有能力：**
+
+1. **`models.json` 自定义 provider**（`internal/codingagent/model_registry.go:62-84`
+   的 `providerConfig`，字段 `baseUrl` / `apiKey` / `api` / `models`）。
+   路径是 **`<agentDir>/models.json`**（`coding/model_runtime_create.go:45`；
+   `agentDir` = `~/.pig/agent`，或 `PIG_CODING_AGENT_DIR` 指定的目录）——
+   **注意不是工程目录下的 `.pig/`**，而 `settings.json` 恰恰是工程目录下的
+   （`internal/codingagent/settings.go:1445`，`ProjectConfigDir(cwd)`）。
+   两个文件不在一个 scope，这是下一节 0.2 的正确写法必须处理的第一件事。
+2. **`apiKey` 支持 `$VAR` 引用**：`internal/configvalue/configvalue.go` 的
+   `Resolve` 会把 `"$OPSKEEPER_EDGE_LLM_TOKEN"` 在**每次鉴权解析时**展开
+   （`internal/codingagent/request_auth_runtime.go:410-471` 的 `Resolve` 闭包，
+   经 `configContextEnv` 从 `authContext.Env` 现读，**没有进程级缓存**；只有
+   `!cmd` 形式才缓存）。这条性质直接决定了令牌能不能短时轮换，见 4.28.7。
+
+#### 4.28.2 P0-2：`pig` 二进制不在交付物——**成立，且比方案写的更彻底**
+
+**实测**：
+
+| 交付物 | 结果 |
+|---|---|
+| `dist/build-edge-bundle.sh:38-49` | `ENTRIES` 10 条：`opskeeper-edge` + 6 个 exporter + `promtail` + `otelcol-contrib` + `apply-pending-upgrade.sh`。**无 `pig`** |
+| `deploy/install/edge/build-edge-bundle.sh:33-46` | 同一份清单的原位副本，同样无 `pig` |
+| `deploy/Dockerfile.opskeeper-edge` | builder 只 `go build ./cmd/opskeeper-edge`，runtime 只 `COPY` 这一个文件 |
+| `Makefile` 全仓 | **没有任何 `build-pig*` 目标**：`grep -rn "cmd/pig\|build-pig" Makefile scripts/ dist/ deploy/` 零命中 |
+| `Makefile:341` + 4 个 `build-edge-*` | `build-edge-all` 只交叉编译 `opskeeper-edge` 的 4 个目标 |
+| `cmd/opskeeper-edge/plugininstall.go:235-264` | 节点**已经知道** `pig` 是「随 edge 一起、同时构建、打包在同一个东西里」（`pigSelfVersion` 的注释原文：*"`pig` is built from the same source at the same time as the edge and shipped inside it"*）。**代码的意图与构建系统的事实相反** |
+
+**判定：成立**，且这条注释是当前状态最有价值的证据——它说明缺的不是设计，
+是一条从未被跑过的构建路径。
+
+**可行性已实测**：从 `core/pig` 模块（钉 `github.com/MichaelKinsy/PiG v0.3.0`，
+无本地 replace）执行
+
+```
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/pig \
+    github.com/MichaelKinsy/PiG/cmd/pig
+```
+
+**退出码 0，产出 71 MB 静态二进制**。也就是说「本仓库构建分发 `pig`」不需要
+改 PiG、不需要新模块，只是一条 `go build` 加进 Makefile 与 bundle 清单。
+交叉编译面（linux/darwin × amd64/arm64）与 `build-edge-all` 完全一致。
+
+**建议做法**（与方案 0.3 一致，但补两处它没提的）：
+`build-pig-all` 目标必须**在 `core/pig` 目录里构建**而不是仓库根——从 `core/pig`
+构建才会用那条被 `module-standalone-check` 验证过的固定 tag；从根模块构建会
+用根模块自己的 PiG 版本，两者将来可能不同。另外补一条打包前必须定的事：**`pig` 本身是 71 MB 的静态二进制，但
+subprocess host 编译扩展需要节点上有对应语言的工具链**
+（`coding/extension/host/subprocess/builder.go:627-640` 的 `ensureBuildToolchain`：
+Go 扩展要 `go`、Rust 要 `cargo`、TS 要 `node`，错误信息里点名了另一条路
+"run this extension from a Piglet Binary or prebuilt package"）。
+我们第一方插件全是 Go 扩展，**所以节点还需要一个 Go 工具链**——bundle 清单里
+今天没有它（见 §4.28.8 的第 3 条建议与方案 C）。
+
+#### 4.28.3 P1-3 / P1-4：断连即丢数据——**部分成立**，已有的是内存缓冲，缺的是落盘
+
+**实测**：
+
+| 读的东西 | 结果 |
+|---|---|
+| `core/edge/biz/agent.go:529-615` | `metricsLoop` 每 `MetricsInterval`（默认 10s）采样一次，两次 `client.Call`（`push_host_metrics` / `push_prom_samples`）**同步发出，失败只 `log.Warn`**，注释原文 *"the next tick is the only retry strategy here"*。**这一路断连即丢，无缓冲** |
+| `core/edge/changewatcher/tunnel_sink.go:16-52` | **有** `BufferSize`（默认 `BatchSize*2`）、批量 flush、`Close` 强制 drain、失败 log warn。但它是**内存 channel**，进程退出或长时间断连后 drop-oldest 直接丢。**不是 WAL，没有 replay** |
+| `core/edge/collector/` 目录 | 12 个文件全员参与采样/映射，`grep -i "spool\|wal\|replay\|persist"` 在 `core/edge/` 内**没有命中任何落盘实现** |
+| `core/floor/tunnel/client.go` + `backoff.go` | 有 full jitter 重连退避（决策 78）与重连回调，所以**连接**会自愈；丢的是**数据**，不是连接 |
+
+**判定：部分成立。** 「无 spool / 无 replay / 无 WAL」**成立**；「无本地缓冲」
+**不准确**——changewatcher 已有内存批量缓冲，改造成落盘是在现成的
+`Sink` 接口（`changewatcher/types.go:66` 的 `Push(ctx, ChangeEvent) error`）
+后面加一个磁盘实现，而不是新写一层。`metricsLoop` 那一路连内存缓冲都没有，
+是更急的一条。
+
+#### 4.28.4 P1-5：工具级资源配额缺失——**成立**，且这一条直接挡住了阶段 2 的方案
+
+**实测**：`core/domain/plugin.go:171-180` 的 `PluginSpec` 只有
+`targets / safety_level / capabilities / tools / required_scopes / audit /
+approval / install` 八个字段，**没有任何 limits 类字段**；
+`grep -rn "limits\|quota" plugins/pig-ops/*/pig-ops.yaml sdk/ core/floor/pluginmanifest/`
+的命中全是工具名（`redis.memory_usage`）与注释，**没有一处是配额**。
+
+**但这条的主张方向写反了。** 方案把它列进「阶段 2：生态与治理加固」，理由是
+"插件数上到数百后必然需要"——实际风险不在插件数，在**单个高基数工具**：
+`host_dmesg` / `host_grep_file` / `host_tail_file` / `host_sosreport`
+（`plugins/pig-ops/opskeeper-sre-readonly/pig-ops.yaml`）今天就在只读包里，
+任何一个都能把 PB 级文本倒进 context。**这是阶段 0 的阻塞项，不是阶段 2 的
+加固项**，因为阶段 0 的目标恰恰是「每机一个 Agent 真正可交付」。
+
+顺带一条实测：PiG **自己**已有截断机制（`internal/codingagent/tools/truncate.go`
+的 `maxLines`/`maxBytes` 与 `outputBytes` 计量、`agent/messages.go:230-250`
+把 `truncated` + `fullOutputPath` 拼给模型）。所以配额的正确落法是
+**在 `pig-ops.yaml` 声明、在宿主的工具执行侧强制**（宿主是唯一能真正拒绝的
+位置），而不是指望 PiG 的默认值恰好够用。
+
+#### 4.28.5 P2-6 / 7 / 8 / 10：工具语义鸿沟、成本结晶、eval 三维、多集群联邦——**四条都成立**
+
+| 主张 | 实测 | 判定 |
+|---|---|---|
+| 6 · 缺工具注册表与语义检索 | `grep -rn "toolregistry\|ToolRegistry"` 全仓**只命中注释**（`chatruntime/types.go:37-40` 写着 *"ToolRegistry.Build (see tool_registry.go in PR-3)"* 与 `basetool.CheckOutboundAllowlist`），**没有一个 `tool_registry.go`**。插件数从 88（18+12+53+5）继续涨，模型面对的工具列表就是一张平铺清单 | 成立，且是**登记在注释里的已知欠账** |
+| 7 · 成本无结晶机制 | `grep -rn "crystalliz\|PromoteRunbook"` 零命中。每次执行都是完整推理，哪怕同一根因第 20 次出现 | 成立 |
+| 8 · eval 只看最终答案 | `core/harness/judge/judge.go:38-40` 的维度是 `rca_accuracy / time_efficiency / remediation_quality / collateral_safety`——是**过程维度**，但**不含 Localization × Identification × Reason 这组分解**。方案的说法「只判工具是否存在」**不准确**：那是 `cmd/opskeeper-eval/plugincoverage.go`（覆盖率闸门）在做的事，与 judge 是两回事 | 部分成立：三维化是**新增**，不是替换 |
+| 10 · 无多集群联邦 | `grep -rn "federation\|multi-cluster"` 的命中只有 `middleware/adapter/k8s/client.go:259` 的注释与一份 Prometheus 知识库文档；`core/manager/higress/server.go:117` 的 `/v1` 是网关控制面路由，不是联邦 | 成立 |
+
+#### 4.28.6 与既有不变量的三处冲突（这是本节最重要的部分）
+
+方案里有三处设计**与 2.0 已固化的不变量正面相撞**，直接照做会退回到改造前的
+状态。逐条说清楚该怎么改。
+
+**冲突一：`OPENAI_BASE_URL` 不存在 → 必须走 `models.json`，而 `models.json`
+在另一个 scope。**
+
+`settings.json` 写在工程目录（`agent.go` 的 `writeAgentSettings` →
+`ProjectConfigDir(cwd)`），但 `models.json` 读自 **agentDir**
+（`coding/model_runtime_create.go:45`），而 agentDir 默认是
+`$HOME/.pig/agent`（`internal/codingagent/settings.go:1392-1402`）。
+节点上 `HOME` 是 edge 进程继承来的，**当前代码从未设置过 `PIG_CODING_AGENT_DIR`
+或 `PIG_USE_PI_DIRS`**，所以：
+
+- 若沿用现状只写工程目录 → 网关 provider **永远不被读到**；
+- 若设 `PIG_CODING_AGENT_DIR` → 同时把 settings/auth/sessions 的全局目录
+  一起搬走。这不是坏事（节点上本来就该有一个由节点自己拥有的 agent 根目录，
+  顺手就让 `auth.json` 不可能拿到云厂商密钥），但**必须显式写进 0.2 的字段
+  设计**（`nodeAgentConfig` 加 `GatewayProvider` / `GatewayBaseURL` /
+  `TokenEnv`，并且在 `Env` 里带上 `PIG_CODING_AGENT_DIR=<cfg.Cwd>/.pig-agent`),
+  而不是像方案那样只写「`Env` 增加两个变量」。
+
+**冲突二：审批裁决权在宿主 —— 「autonomy 仲裁器插在 `policygate` 之前」必须
+重新表述。**
+
+§4.2 的不变量是「审批裁决权在宿主，插件永远拿不到放行权」。方案的
+「当前方案是 *失联超阈值 → 由本地 `core/edge/autonomy` 放行白名单动作*」
+**没有违反这条不变量，但前提是三个条件同时成立**，缺一个就违反：
+
+1. **仲裁器是宿主代码，不是插件代码。** `core/edge/autonomy` 必须和
+   `policygate` 一样是 edge 模块的一部分，插件只能**声明**动作
+   （`pig-ops.yaml` 扩展字段），不能提供裁决逻辑。方案文字上没写死这一点，
+   必须补，否则「插件化」的下一步就是把裁决器也插件化。
+2. **放行的依据是中心签名的策略，不是节点自己的判断。** 方案已经想到
+   「签名 `autonomy.yaml`，随插件包走同一条签名通道」——这是对的，且可以
+   直接复用现成的 `pluginmanifest/{signing,trust}.go`（ed25519 树签名 + 信任库）。
+   要补的是**过期语义**：策略本身的 `notAfter` 必须是中心签发的，节点失联期间
+   不能用「上次同步时间 + TTL」自己续期。
+3. **放行的是动作，不是工具。** 方案写的 `argv`（预定义参数数组、不接受
+   shell 字符串）正确且必要。当前 chain 上没有任何 idempotency key：
+   `grep -rn "idempot"` 在 `core/edge/` / `core/floor/` / `core/domain/` 的命中
+   全是「Start/Stop 幂等」这类**函数级**幂等，**没有一处是动作级去重**。
+   这是要新造的东西，不是复用。
+
+**冲突三：只读边界不能因为自治而放松。** 方案自己声明「`plugin-coverage`
+0/20 是刻意设计，必须保持」，这一点与现状一致（`make eval-coverage` 本轮
+复跑：诊断轴 16/20、补救轴 0/20、联合 0/20，且 `--fail-on-unrecorded-diagnose-gap`
+是绿的）。要补的是**自治白名单不能成为第二扇门**：`argv` 数组 + 签名策略 +
+`blast_radius` + 幂等键，四个字段缺任何一个，自治通道就等价于「离线时绕过
+审批队列执行写操作」，也就是把 §4.2 用另一种方式推翻。**建议的硬约束**：
+自治白名单**只允许 `class: read` 与「幂等的、单主机的、可回滚的」极小子集**，
+并且第一批只放 `read`——把 0.1/0.2/0.3 先做完，让节点能对话、能诊断，
+自治留到中心与节点的信任链路被端到端验证过之后再开。
+
+#### 4.28.7 结论与建议的最小闭环
+
+**直接做（阶段 0，与方案一致）**：
+1. `build-pig-all` + bundle/镜像清单 + `install-edge.sh` 自检（P0-2）。构建路径
+   已实测可行，是纯工程活。
+2. LLM Gateway + `models.json` provider + `PIG_CODING_AGENT_DIR` +
+   `pigrpc.Options.Env` 注入（P0-1）。**按 4.28.6 冲突一改写**：注入的不是
+   `OPENAI_BASE_URL`，是一个自定义 provider 与一个 `$VAR` 令牌引用。
+   令牌可短时轮换这一条已被源码证实（`configContextEnv` 每次解析现读 env），
+   不必为它改 PiG，也不必重启 `pig` 进程。
+3. 两条一起做才闭环：只做 2 不做 1，节点上没有 `pig`；只做 1 不做 2，
+   `pig` 起来了但没有凭据。
+4. **（本轮追加，见 §4.28.8）把 `core/wire` 内联进扩展，让节点侧构建不依赖任何
+   未发布的模块。** 这一条比 1 和 2 都靠后，也比它们都致命：不补它，前两条做完
+   之后节点上的 `pig` 会起来、会对话，但**一把工具都没有**。
+
+**要改计划再做（阶段 1）**：
+5. 遥测 spool：先补 `metricsLoop` 的落盘（那一路上连内存缓冲都没有），
+   再给 changewatcher 加磁盘 `Sink` 实现。按 tracer>metrics 的优先级丢弃
+   是合理的，但**回放必须做成可观测的**（丢弃计数、回放速率、回放积压），
+   否则「断连不丢数据」无法验证，只会变成「看起来没丢」。
+6. `core/edge/autonomy`：按 4.28.6 冲突二的三条前提重写设计；**幂等键与
+   执行租约是内核级测试项**，不是配置项。
+
+**不做**：方案自己排除的三条（自建 RCA 模型 / 写操作开放给节点插件 /
+重写 Web 控制台）与既有的「`plugin-coverage` 保持 0/20 只读边界」一致，
+维持。
+
+**本轮的验收读数**：`make module-check` 绿；`make eval-gates` 绿
+（诊断轴 16/20，`--fail-on-unrecorded-diagnose-gap` 通过）；`make eval-coverage`
+绿；`make module-standalone-check` 绿（13 模块 `GOWORK=off` 全部 build + test）；
+`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build github.com/MichaelKinsy/PiG/cmd/pig`
+退出码 0。
+
+#### 4.28.8 方案漏掉的第三条 P0：节点上的插件扩展**编译不过**（比前两条都严重）
+
+这一条是本轮实测出来的，方案 10 条清单里没有它。前两条 P0 是「装不装得上」，
+这一条是**「装上了也是零工具」**——`pig` 进程起来了、模型也答话了，但模型手里
+一把工具都没有，因为它要加载的每一个扩展在节点上都编译失败。
+
+**证据链**（每一步都是本轮实际跑出来的）：
+
+1. 节点把准入通过的包写进 `<cwd>/.pig/settings.json` 的 `packages`
+   （`cmd/opskeeper-edge/agentconfig.go` 的 `writeAgentSettings`），
+   `pig` 启动时从 `settings.json` 发现包内资源，再由 subprocess host 编译
+   `extensions/*`。
+2. 编译走的是 PiG 的 `coding/extension/host/subprocess/builder.go`：
+   `buildGo()` 执行 `go build -buildvcs=false -trimpath -ldflags "-s -w" -o <tmp> .`，
+   环境中带 `CGO_ENABLED=0` 与 **`GOWORK=off`**（`builder.go:666`）。
+3. 我们打包进插件的扩展是 **Go 源码**，其 `go.mod` 由
+   `scripts/sync-pig-ops.sh` 生成，末两行是：
+
+   ```
+   require (
+       github.com/MichaelKinsy/PiG/extensions/sdk v0.3.0
+       github.com/vincent-wuhan/opskeeper/core v0.0.0
+   )
+   ```
+
+   **没有 `replace`，也没有 `go.sum`**（`find plugins -name go.sum` 零命中；
+   规范源 `core/pig/extensions/opskeeper-sre-readonly/go.sum` 只有 2 行，
+   正是那个本地 `replace` 的产物，而 `sync-pig-ops.sh` 把 `replace` 整段删掉了）。
+4. 把这个目录复制到 `/tmp` 后按节点的方式构建：
+
+   ```
+   $ GOWORK=off GOFLAGS=-mod=mod go build ./...
+   go: downloading github.com/vincent-wuhan/opskeeper/core v0.0.0
+   client.go:12:2: reading github.com/vincent-wuhan/opskeeper/core/go.mod
+       at revision core/v0.0.0: unknown revision core/v0.0.0
+   ```
+
+   去掉 `-mod=mod`（PiG 的 `buildGo` 也不加它）时先死在更早一步：
+   `missing go.sum entry for module providing package
+   github.com/MichaelKinsy/PiG/extensions/sdk`。
+5. 为什么 `core v0.0.0` 永远解析不出来：仓库的 tag 只有
+   `backend-v* / plugins-v* / release-v*`（`git tag` 共 7 个），**没有
+   `core/v0.0.0`**；`curl https://proxy.golang.org/github.com/vincent-wuhan/opskeeper/core/@v/list`
+   返回 **404**。`sync-pig-ops.sh` 的注释其实已经写明了这件事——"a node has no
+   local checkout of OpsKeeper and no local checkout of a pre-stable PiG,
+   so a replace directive here would send the node's build to a path that
+   does not exist on it"——**它把 replace 删掉是对的，但没有给出替代的解析来源**。
+6. PiG 侧唯一的免工具链通道是 prebuilt / Piglet Binary
+   （`runtimecell.SetPrebuiltResolver`，`coding/extension/host/runtimecell/prebuilt.go`），
+   而**它默认是 nil**："stock pig builds every cell from source exactly as before"。
+   我们没有注册 resolver，也没有任何预构建产物（`find plugins -name '*.bin'` 零命中）。
+
+**判定：成立，且严重性高于方案列出的两条 P0。** 三者的依赖顺序是：
+
+```
+扩展编译不过  →  节点零工具（装了 pig 也白装）
+零工具        →  必须先补 pig 二进制
+没有 pig 二进制 → 必须先有模型凭据
+```
+
+也就是说**方案 0.1–0.3 做完之后，节点仍然不能诊断任何东西**，而这一点在方案的
+验收标准里（"`make compose-up` 后一台 edge 能完成一次真实对话并返回流式输出"）
+不会被发现——对话能成功，工具一个都不会出现。
+
+**建议做法（按代价从低到高）：**
+
+| 方案 | 做法 | 代价 | 评价 |
+|---|---|---|---|
+| **A** | 把 `core` 的 `wire` 包（`core/wire/` 三个文件，只依赖 `encoding/json`）**内联进扩展源码**，扩展不再需要 `opskeeper/core` | 最小 | 最优。扩展对 `core` 的全部依赖就是 `core/wire` 的三个文件；内联后 `go.mod` 只剩 PiG SDK 一条 require，而 PiG SDK 由 PiG 自己 stage（`pigsdklock.WithBuild` + `stagedGoModFile`），节点不需要网络也不需要本地 checkout |
+| **B** | 给 `core` 打 `core/vX.Y.Z` tag，让 `v0.0.0` 变成真实版本 | 中 | 可行但把「节点能否构建」绑在「运维仓 tag 发布纪律」上；且 `sync-pig-ops.sh` 仍需把规范源的 `go.sum` 一并复制，否则照样卡在 `missing go.sum entry` |
+| **C** | 预构建 + 注册 `PrebuiltResolver`（Piglet Binary 路线） | 大 | 最稳（节点无 Go 工具链、无网络也能跑），但要新增构建产物分发与摘要校验通道；**建议作为阶段 1 的目标形态**，不适合塞进阶段 0 |
+
+**推荐 A 作为阶段 0 的必要项**，理由是它把「节点能否构建」变成一个**不需要
+网络、不需要 tag、不需要工具链之外任何东西**的纯本地事实——与本仓库既有的
+「零基础设施依赖」原则同源。改完之后 §4.28.2 里实测通过的那条
+`go build github.com/MichaelKinsy/PiG/cmd/pig` 才是真的补齐了最后一块。
+
+**验收闸门（新增，建议进 CI）**：在 `module-standalone-check` 之后加一步
+「按节点的方式构建打包扩展」——`GOWORK=off GOPROXY=off` 下对
+`plugins/pig-ops/*/extensions/*` 各跑一次 `go build ./...`。`GOPROXY=off` 是
+关键：它证明的不是「能构建」，而是「不需要从网络取任何东西就能构建」，这正是
+一个生产节点的状态。这条闸门今天会红（红的原因已定位到 `go.sum` 与
+`core v0.0.0`），改完 A 之后转绿。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
@@ -2240,6 +2543,27 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 | E 生态治理 | 15% | **95%** | 兼容矩阵（edge 轴 × PiG 轴）、金融 / SaaS 两个 profile 模板、profile × 实际目录的组合校验（决策 70）、**发布前兼容矩阵 API，管理侧预检与节点裁决共用 `CheckVersions`**（决策 71）、插件 × golden case 覆盖报告、发布全链路（Start/List/Status/Advance/Halt/Rollback）。**兼容矩阵 agent 轴不再是「无法判断」：节点随心跳自报 PiG 构建，控制面一次查询读取（决策 73）**。**计划 E-3「插件纳入黄金集回归」已落地**：`plugin-coverage` 的诊断轴由 `--fail-on-unrecorded-diagnose-gap` 把进构建（§4.25），剩下的 4 个缺口逐条登记在 `pluginmanifest.DiagnosisGaps` 并附理由，登记表两个方向都有守卫。**两个前端页面已经落地**：插件市场 + 同一个页面上的兼容矩阵卡片（决策 82，§4.20）、节点已装插件清单面（决策 83，§4.21）——此前记在这里的「插件市场前端页面、兼容矩阵前端页面」是过期条目，不是欠账。剩下：发布流程的定时/触发自动化（唯一的实现项，且不在原计划 §四 E 的三条里） |
 
 加权合计 ≈ **98.0%**（20×1.00 + 20×1.00 + 20×0.95 + 25×0.95 + 15×0.95）。
+
+#### 进度百分比之二：分布式改造方案（决策 90，本轮新增的第二把尺子）
+
+上面那张表量的是**上一份计划**（模块化 / PiG 适配 / 节点 Agent / 插件生态 /
+生态治理）。本轮核对的是**另一份计划**——《OpsKeeper 分布式 AI 运维平台改造
+方案》，它问的是另一个问题：*「每机一个 Agent」这个交付形态，今天能不能真的
+装上、真的跑起来？* 两把尺子不可混算：前者 98% 说的是架构完成度，后者说的是
+交付闭环，**后者才是节点上能不能用**。
+
+| 阶段 | 完成度 | 判据与剩余 |
+|---|---|---|
+| 0 边缘交付闭环（P0） | **0%** | **三条** P0 都是「代码意图已写、实现路径从未跑过」：`cmd/opskeeper-edge/agent.go:209-212` 的 `Env` 只有两个 socket，`dist/build-edge-bundle.sh:38-49` 与 `deploy/Dockerfile.opskeeper-edge` 都不含 `pig`，`Makefile` 没有任何 `build-pig*` 目标。**已实测可行**：从 `core/pig` 构建 `github.com/MichaelKinsy/PiG/cmd/pig` 退出码 0（71 MB）。方案的「注入 `OPENAI_BASE_URL`」**不成立**（PiG 无此变量），正确路径是 `models.json` 自定义 provider + `PIG_CODING_AGENT_DIR`（§4.28.1）。**本轮新发现的第三条 P0 比前两条都严重：节点上的插件扩展编译不过**（`GOWORK=off` 实测报 `unknown revision core/v0.0.0`，且无 `go.sum`）——补齐 pig 与凭据之后节点仍然零工具（§4.28.8） |
+| 1 离线与有限自治（P1） | **10%** | 已有的一半：changewatcher 内存批量缓冲（`tunnel_sink.go:16-52`，drop-oldest + 可观测计数）、tunnel full-jitter 重连（决策 78）。缺的一半：`metricsLoop` 连内存缓冲都没有（`agent.go:529-615`，失败只 log）、无落盘 WAL、无 replay、无 `core/edge/autonomy`、无动作级幂等键、`PluginSpec` 无 `limits` 字段。方案的 autonomy 设计与「审批裁决权在宿主」不冲突，但**必须以「宿主代码 + 中心签名策略 + 只读先行」三个前提重写**（§4.28.6） |
+| 2 生态与治理加固（P2） | **15%** | 工具注册表：`grep toolregistry` 只命中注释（`chatruntime/types.go:37-40` 自陈在 PR-3），**不存在 `tool_registry.go`**；per-tool 配额：`PluginSpec` 无 limits 字段（单是高基数只读工具就已经是阶段 0 阻塞项）；MCP 兼容层：运行时已有（决策 85），但**无对外 MCP 协议面**；成本结晶：`grep crystalliz` 零命中；eval 三维化：`judge.Score` 是过程四维，不是 Localization × Identification × Reason；prompt injection 标注：无 |
+| 3 控制面瘦身与联邦（P3） | **5%** | `iam → manager` 反向依赖仍在 `scripts/modulecheck/main.go:548-556` 的 `exceptions` 台账里（决策 35 的已知例外，注释已写明「未来拆分必须解决它」）；manager 27.3 万行（实测 `find core/manager -name '*.go' \| xargs wc -l`）；无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档） |
+
+加权合计 ≈ **6%**（按四阶段等比估算：0 + 10 + 15 + 5 的均值）。**这个数字不是
+坏消息**：阶段 0 的三条 P0 合计不到两天工作量（一条 Makefile 目标 + 一条 bundle
+清单 + 一个 `models.json` 生成函数 + 把 `core/wire` 内联进扩展），做完它，第一份计划
+的 98% 才第一次在真实节点上成立。**决策 90 的全部意义就是证明这个落差是可见、
+可测、可关的**——而 §4.28.8 说明，若只按方案自己的清单做，这个落差关不掉。
 
 **A 阶段到此 100%，且它是唯一「完成」而不是「差最后一点」的阶段**——计划 §五
 对 A 的三条验收（模块化 + 全量测试绿 + arch-lint 拦住逆向依赖）现在都由**两个
