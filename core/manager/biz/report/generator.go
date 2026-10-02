@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/chatruntime"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/report"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
 )
 
 // WorkerSpawner is the narrow seam onto chatruntime.Runtime that the

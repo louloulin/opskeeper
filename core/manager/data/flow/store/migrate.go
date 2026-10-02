@@ -3,7 +3,7 @@ package store
 import (
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/flow"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/flow"
 )
 
 // Migrate registers the flow tables with gorm AutoMigrate. AutoMigrate

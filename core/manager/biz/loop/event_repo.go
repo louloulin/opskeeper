@@ -8,7 +8,7 @@
 //
 // Why a narrow interface (not the full loop_event_log repository):
 //
-//   - The loop package must not import internal/manager/repo/loop
+//   - The loop package must not import core/manager/repo/loop
 //     (monorepo boundary, AGENTS.md §架构).
 //   - Tests inject an in-memory fake (inmemory_repos.go); production
 //     wires a *sql.DB-backed adapter in cmd/opskeeper/main.go.
@@ -21,7 +21,7 @@ package loop
 import (
 	"context"
 
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 // EventRepo is the narrow seam the orchestrator uses for the

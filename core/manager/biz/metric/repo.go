@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/metric"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
 )
 
 // Writer persists host metrics. Implemented in
-// internal/manager/data/metric/store (and, later, .../clickhouse).
+// core/manager/data/metric/store (and, later, .../clickhouse).
 //
 // The interface is storage-agnostic: it takes domain Point / Bucket types
 // (plain Go, no gorm tags) so the biz layer never learns what table the

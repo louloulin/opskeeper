@@ -1,6 +1,6 @@
 // Package logquery is the manager-side Loki query client.
 //
-// Mirrors internal/pkg/promquery and internal/pkg/tracequery — same
+// Mirrors core/manager/pkg/promquery and core/manager/pkg/tracequery — same
 // shape, separate package so the three signal types stay independently
 // swappable. Backend-decoupled name (logquery, not lokiquery) per
 // — when Loki gets swapped for VictoriaLogs the

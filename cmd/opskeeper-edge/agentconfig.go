@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 )
 
 // agentSettingsFile is the per-project settings the agent reads on start.

@@ -6,7 +6,7 @@
 //
 // Why narrow interfaces (vs. importing loop_contract directly):
 //
-//   - The report package must not import internal/manager/repo/loop
+//   - The report package must not import core/manager/repo/loop
 //     (monorepo boundary).
 //   - Each loader is a 1-method seam that the integration PR (Day 5)
 //     wires by adapting the loop_contract repository. The narrow

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	alertsvc "github.com/vincent-wuhan/opskeeper/internal/manager/service/alert"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	alertsvc "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 )
 
 type fakeDB struct{ err error }

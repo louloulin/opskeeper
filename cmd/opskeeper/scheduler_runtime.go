@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	managerbizalert "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	managerbizscheduler "github.com/vincent-wuhan/opskeeper/internal/manager/biz/scheduler"
+	managerbizalert "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	managerbizscheduler "github.com/vincent-wuhan/opskeeper/core/manager/biz/scheduler"
 )
 
 // schedulerAlertSink adapts the scheduler consumer contract to the existing

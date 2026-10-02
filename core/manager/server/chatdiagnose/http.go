@@ -1,5 +1,5 @@
 // Package chatdiagnose — HTTP handler for the chat diagnose entry
-// point. Mirrors internal/manager/server/loop/http.go shape (chi
+// point. Mirrors core/manager/server/loop/http.go shape (chi
 // router, narrow Service interface, Swagger annotations).
 package chatdiagnose
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	chatdiagnosebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/chatdiagnose"
+	chatdiagnosebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/chatdiagnose"
 )
 
 // ChatDiagnoseService is the narrow contract the handler needs.

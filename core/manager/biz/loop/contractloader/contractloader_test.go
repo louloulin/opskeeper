@@ -11,9 +11,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	loop "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	loopstore "github.com/vincent-wuhan/opskeeper/internal/manager/data/loop/store"
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	loop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	loopstore "github.com/vincent-wuhan/opskeeper/core/manager/data/loop/store"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 // newTestDB 建一张含完整 loop schema 的 sqlite 文件库。

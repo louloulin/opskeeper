@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/migrate"
-	"github.com/vincent-wuhan/opskeeper/internal/migrate/clients"
+	"github.com/vincent-wuhan/opskeeper/core/manager/migrate"
+	"github.com/vincent-wuhan/opskeeper/core/manager/migrate/clients"
 )
 
 // mockOpsKeeper 模拟 ops-keeper HTTP API。

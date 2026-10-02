@@ -21,7 +21,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/chatdiagnose"
+	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/chatdiagnose"
 )
 
 // PatternMeta 是 incident_pattern 表的 MySQL metadata 持久化层。

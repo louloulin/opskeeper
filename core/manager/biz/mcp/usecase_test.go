@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/mcp"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/mcp"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // fakeRepo is an in-memory Repo for tests (no DB, no network).

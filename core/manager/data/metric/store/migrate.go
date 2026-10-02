@@ -3,7 +3,7 @@ package store
 import (
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/metric"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
 )
 
 // Migrate registers all metric tables with gorm's AutoMigrate: raw samples,

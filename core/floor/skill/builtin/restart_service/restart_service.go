@@ -6,16 +6,16 @@
 //     and the actual restart runs on the edge.
 //   - The framework's permission gate refuses to invoke this skill
 //     directly from the LLM. Instead, the manager BaseTool counterpart
-//     (internal/manager/biz/aiops/tools/restart_service_basetool.go) is
+//     (core/manager/biz/aiops/tools/restart_service_basetool.go) is
 //     wrapped by the ReviewGate decorator (decorators/review_gate.go),
 //     which spawns a reviewer worker (agents/reviewer.md) and only
 //     dispatches if the reviewer returns "Decision: approve".
 //
 // This Executor is the **registration shim**: it teaches the
-// internal/skill registry that "host_restart_service" exists with the right
+// core/floor/skill registry that "host_restart_service" exists with the right
 // metadata (Class=mutating, Scope=edge) so the framework can render it
 // in catalogs / docs / SPA listings. The actual edge dispatcher lives
-// in internal/edgeagent/restart_service/handlers.go and is invoked
+// in core/edge/restart_service/handlers.go and is invoked
 // through the tunnel — NOT through this Executor's Execute method.
 //
 // Why this Executor's Execute path is locked off:
@@ -40,7 +40,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/vincent-wuhan/opskeeper/internal/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
 )
 
 // Key is the skill's stable identifier. Lowercase-snake; same string

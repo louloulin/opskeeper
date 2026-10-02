@@ -13,7 +13,7 @@ import (
 
 // ShellRunner is the IsolationNone backend: an in-process subprocess. Env
 // is fully replaced (no manager-env inheritance), output + time are capped.
-// Mirrors the proven knobs of internal/skill/subprocess.go, generalized to
+// Mirrors the proven knobs of core/floor/skill/subprocess.go, generalized to
 // arbitrary argv/script.
 type ShellRunner struct{}
 

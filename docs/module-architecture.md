@@ -1,10 +1,22 @@
 # OpsKeeper 2.0 module architecture
 
-Status: **Phases A, B and C landed. Phase D's B1 batch (read-only toolset) landed.**
-Phase C has started: the node agent's process contract and its supervisor
-exist and are tested; the tunnel methods and the control-plane fleet are not
-written yet. `internal/pkg/llm` still runs on eino — see "What the plan got
-wrong about eino" below.
+Status: **Phases A, B, C, D and E landed.** A is complete: the seven modules
+exist, `internal/` no longer does, and both boundary checkers run. The node
+plane moved into `core/edge` (decision 61), the packages the two planes share
+(`config`, `pluginmanifest`, `prom`, `tunnel` and the host skill registry) into
+`core/floor` (decisions 57 and 60), and the control plane — its infrastructure
+first (decision 62), then `iam` and the `biz`/`data`/`model`/`server`/`service`
+layers (decision 63) — into `core/manager`. B is complete: eino and go-openai
+are gone and `core/manager/pkg/llm` runs on `pigmodel`. C is complete: the node
+agent's process contract, its supervisor, the policy gate, the gate socket, the
+courier extension, the seven `agent.*` tunnel methods + `agent.decide`, the
+control-plane fleet, and the node's own generated piglet profile are all in
+place. D's B1/B2/B3 batches, the review pipeline, and the release transport have
+landed, and E's compatibility matrix and cross-cloud profiles have too.
+
+What is *not* complete is not a module: it is the debt listed under "当前真实缺口"
+in `docs/opskeeper2-architecture.md` — the shared floor's package-level setters,
+and the missing guard on the arch-lint debt ledger.
 
 This document describes the module graph, why it is shaped this way, and the
 rules CI enforces. It is the reference for anyone adding a module or a
@@ -12,7 +24,7 @@ plugin.
 
 ## The problem this shape solves
 
-OpsKeeper is migrating its AI runtime from `cloudwego/eino` to
+OpsKeeper migrated its AI runtime from `cloudwego/eino` to
 [PiG](https://github.com/MichaelKinsy/PiG), a Go port of the Pi coding agent.
 
 Two facts about PiG drive the whole design:
@@ -30,37 +42,69 @@ plugin, and the plugin ecosystem dies on first contact with upstream churn.
 ## The graph
 
 ```
-                          core
-              (contracts, no dependencies)
-                 ^          ^          ^
-                 |          |          |
-               pig       manager     edge        harness
-          (PiG adapter)  (control)   (node)     (evaluation)
-                 ^          ^          ^
-                 |          |          |
-                 +----------+----------+
-                            |
-                           sdk
-                 (third-party plugin surface)
+                    core
+          (contracts, stdlib only)
+        ^        ^         ^        ^
+        |        |         |        |
+      pig      edge     harness    sdk
+ (PiG adapter) (node)  (evaluation) (third-party
+                                   plugin surface)
+        ^        ^
+        |        |
+      floor (shared infrastructure) -> core, sdk
+   (config, log, manifest, metrics, transport, skills)
+
+   manager (control plane) -> core, pig, floor
 ```
 
-The arrows are the only permitted dependency directions. Every module except
-`core` may import `core`. Only `pig` may import PiG. Only `cmd` may import
-`pig`.
+The arrows are the only permitted dependency directions, and they are all
+toward `core`: no module imports another module's internals, and `pig` and
+`manager` are siblings rather than a stack. Only `core/pig` may import
+`github.com/MichaelKinsy/PiG`; every other module reaches PiG through it, which
+is what keeps an upstream API break a one-module change.
+
+`manager` was the last module of the split and it is now whole: the module
+`core/manager` holds the infrastructure the control plane runs on (the old
+`internal/pkg`, `internal/middleware`, `internal/control`, `internal/knowledge`,
+`internal/dataguard`, `internal/agentteams`, `internal/observability`,
+`internal/higress`, `internal/migrate`, `internal/migrator` — decision 62) and
+the layers themselves, `biz`/`data`/`model`/`server`/`service` plus `iam`
+(decision 63). It is 222 packages and 1100 Go files, the largest module by far,
+and that is the honest shape of the thing: the control plane *is* most of the
+repository.
 
 | Module | Path | Responsibility | May import |
 |---|---|---|---|
 | `core` | `core/` | Domain vocabulary, port interfaces, wire DTOs | stdlib only |
 | `pig` | `core/pig/` | The PiG adapter | `core`, PiG |
-| `manager` | (split pending) | Control plane | `core`, `pig`, `sdk` |
-| `edge` | (split pending) | Node plane | `core`, `pig` |
-| `harness` | (split pending) | Evaluation | `core` |
+| `manager` | `core/manager/` | Control plane | `core` (including `core/pig`), `sdk`, and any vendor (`AnyVendor`) |
+| `edge` | `core/edge/` | Node plane (agent, collectors, tools, sandbox) | `core`, `floor`, `prometheus`, `gopsutil`, `x/sync`, `yaml.v3` |
+| `floor` | `core/floor/` | Infrastructure both planes share | `core`, `sdk`, `prometheus`, `geminio`, `yaml.v3` |
+| `harness` | `core/harness/` | Evaluation | `core` |
 | `sdk` | `sdk/` | Third-party plugin surface | `core`, `yaml.v3` |
 
-`manager`, `edge`, and `harness` are still the pre-split packages inside the
-root module. Splitting them is mechanical work that has not been done yet;
-the boundaries above are already enforced for the three new modules, and
-`.go-arch-lint.yml` carries the intra-module rules for the rest.
+The root module is now only the assembly layer: `cmd/`, `scripts/`, `tests/`
+and the Go tooling under `web/` — 18 packages. Everything else is a module the
+toolchain enforces — `core`, `core/pig`, `core/edge`, `core/floor`,
+`core/manager`, `core/harness` and `sdk` — and `.go-arch-lint.yml` carries the
+intra-module rules for `core/manager`'s own bounded contexts (iam versus the
+control plane, and service → biz ← data inside each).
+
+One thing the module graph cannot express: `core/manager` carries a `core/edge`
+require so three of its test files can drive a real policy gate across a
+loopback tunnel. Go has no test-only require, so `scripts/modulecheck`'s
+`testOnlyImports` table enforces the half the module system cannot: that import
+may appear in a `_test.go` file and nowhere else.
+
+The split had to be sequenced. The packages the two planes *share* could not go
+into `core` (stdlib-only) or into either plane (that would create a
+`manager → edge` edge the graph does not have), so they went into `floor`
+(decision 60). The trees only the control plane uses went into `core/manager`
+first, before the layers themselves (decision 62) — otherwise the manager
+module would have had to require the root module, and the root module requires
+the manager module, which is the require cycle decision 57 rejected.
+`docs/opskeeper2-architecture.md` decisions 57, 60 and 62 record the
+measurements and the order.
 
 ## What lives in core
 
@@ -101,15 +145,65 @@ failure mode, not just the happy path:
 
 Two checks, because they catch different things:
 
-- **`.go-arch-lint.yml`** (`make arch-lint`) — the intra-module BC rules that
-  predate 2.0, plus the new module direction.
-- **`scripts/modulecheck`** (`make module-check`) — the rule neither the Go
+- **`scripts/modulecheck`** (`make module-check`) — the rules neither the Go
   toolchain nor arch-lint can express: *only `core/pig` may import
-  `github.com/MichaelKinsy/PiG`*. It walks every module's import graph and
-  is itself unit-tested against deliberately broken fixtures, because a
-  checker that cannot fail is worse than no checker.
+  `github.com/MichaelKinsy/PiG`*, the bounded contexts may not reach each
+  other, the shared floor (`core/manager/pkg` and `core/floor`) stays
+  business agnostic, and the service -> biz <- data direction inside a
+  context. The directories it walks are derived from the rule tables, not
+  hardcoded: an earlier version walked `internal` unconditionally and stopped
+  covering the contexts the moment the first of them moved (decision 62). It walks every module's
+  import graph and is itself unit-tested against deliberately broken
+  fixtures, because a checker that cannot fail is worse than no checker.
+  Decision 58 is the reason the layer rule is in that list: it compared a
+  file path and an import path against a context *label*, so it had never
+  fired. The same decision left the six production edges it then found in a
+  `layerDebt` ledger, each with a reason, checked by
+  `TestTheLayerDebtLedgerIsCurrent` so an entry that is paid off has to be
+  deleted rather than inherited.
+- **The middleware toolset is generated, never hand-written** —
+  `core/manager/middleware/toolset.Registry()` registers the eight adapters and
+  reads back the tools they expose; the node package's `tools.go` is that
+  output, and `TestToolsetMatchesTheAdapters` byte-compares the two, so a
+  package cannot ship a tool an adapter has renamed (the failure mode would
+  only ever appear on a node). What is deliberately *not* packaged is
+  recorded in two ledgers: `NotPackagedFamilies` for a whole prefix (`host`,
+  whose adapter is the root-executing remediation one) and `NotPackaged`
+  for individual tools (seven `git.*` repository reads already served by the
+  observability package). `TestTheNotPackagedLedgerIsCurrent` fails in both
+  directions — an entry that no longer explains anything, and an unexcluded
+  read tool nobody explained — so the ledger cannot rot into a list of
+  names. This is the same shape as `layerDebt`: a debt list, not an
+  exception list.
+- **`.go-arch-lint.yml`** (`make arch-lint`) — the intra-module BC rules that
+  predate 2.0, plus the new module direction, with per-component
+  `mayDependOn` lists. As of decision 58 it parses, runs, and reports
+  **zero notices** (the path there was 1272 -> 210 -> 438 with tests and
+  generated copies in scope -> 261 -> 0). Zero notices is not the same as
+  zero debt: the six surviving production violations are allowed by name
+  and each carries a `# !!! 已知债务` comment listing the exact files, so
+  the next reader sees a ledger rather than a green light. `mayDependOn` is
+  component-granular, which is the cost of that ledger — a *new* import of
+  the same kind from the same component will not fire. Only `modulecheck`'s
+  `layerDebt` has a test guarding it; the arch-lint ledger does not yet.
+  - `_test.go`, `plugins/pig-ops/*/extensions/**` (copies produced by
+    `scripts/sync-pig-ops.sh`) and `web/node_modules/**` are excluded, each
+    with its reason written next to it in `excludeFiles`.
+  - `allow.deepScan` is explicitly `false`. Turning it on reports 41 more
+    notices; most are ports being implemented or `cmd` assembling, but it
+    also reaches through package-level setters that the import graph cannot
+    see (`core/manager/pkg` holding `pigmodel.SettingsSource`,
+    `core/floor/skill` holding a `manager_biz` resolver). Those are real and
+    are recorded in `docs/opskeeper2-architecture.md` instead of being
+    silenced with a licence to import `manager` from the floor.
+  - `make arch-lint` skips with a warning when the binary is absent;
+    `make arch-lint-run` fetches and runs it with `go run`, so the
+    declaration can be exercised without installing anything.
 
-`make module-test` builds and tests all three new modules.
+`make module-test` builds and tests all seven new modules (`core`, `core/pig`,
+`core/edge`, `core/floor`, `core/manager`, `core/harness`, `sdk`).
+`make module-race` runs the same set under `-race`, which is what covers the
+supervisor's restart loop.
 
 ## Plugin governance
 
@@ -135,7 +229,7 @@ spec:
   install: {strategy: rolling, min_edge_version: 0.7.0}
 ```
 
-The host reads it through `internal/pkg/pluginmanifest`, which wraps the
+The host reads it through `core/floor/pluginmanifest`, which wraps the
 `sdk` module. Every shipped plugin under `plugins/pig-ops/` is validated by
 `TestShippedPluginsAreValid`, so a bad manifest fails the build rather than a
 production install.
@@ -153,6 +247,34 @@ No plugin can widen its own authority, regardless of what its manifest says:
    to a digest of the exact proposed call. `blast_radius` is assessed by the
    host, not declared by the plugin.
 
+### `spec.tools` is the allow-list, not a summary
+
+A package's `spec.tools` is not documentation of what its extension registers —
+it is the list the host checks a call against. A tool the agent produces that is
+not named there is refused at the gate on every turn, so a package cannot become
+more capable by shipping an undeclared tool. Each entry carries the class the
+host holds it to, and a class above the package's declared `capabilities`
+ceiling is a load error rather than a runtime surprise. The list is therefore
+the review surface: a tool added to it is a tool somebody agreed this package
+may run.
+
+The same inventory is written out a second time in the node's piglet profile,
+and there it is also exact rather than additive. A piglet intersects its own
+declared tools with what the runtime registered: an extension the profile does
+*not* name keeps every tool it registered, and an extension it *does* name loses
+every tool the profile does not list. Writing the list instead of omitting it is
+what turns "this extension's tool set grew" from a capability that quietly
+appeared on every node into a diff a reviewer has to accept.
+
+### The courier is a policy extension, not a toolset
+
+`opskeeper-gate` (`core/pig/extensions/opskeeper-gate/`) registers no tools at
+all. It listens for `tool_call` and carries the call to the host's gate socket,
+which owns the allow-list and the approval decision. It ships as a package for
+the same reason a toolset does — and the profile names it with `tools: []` on
+purpose: for the one extension whose job is to sit in front of every call,
+"whatever it registers later" is the wrong thing to promise.
+
 ## Where the agent runtime plugs in
 
 `core/ports.Agent` is the seam. Its implementation is the kernel in
@@ -162,12 +284,16 @@ budget — so the same kernel serves the control plane, a background
 investigator, and a per-node `pig` process with different policies and no
 code changes.
 
-Landed so far: `pigmodel` (settings → PiG providers and models, with
+All of it has landed: `pigmodel` (settings → PiG providers and models, with
 per-request credential injection so an admin edit lands on the next call
-without a restart), and `pigagent` in full — the tool adapter, the SSE event
+without a restart), `pigagent` in full — the tool adapter, the SSE event
 mapper, the run state that enforces host policy, and the kernel that drives
-PiG's `agent.Agent`. Removing eino and reimplementing `internal/pkg/llm` on
-`pigmodel` is the rest of this phase.
+PiG's `agent.Agent` — and `core/manager/pkg/llm` itself, which now runs on
+`pigmodel` behind the `OPSKEEPER_LLM_BACKEND=pig` switch. eino is gone from
+`go.mod`/`go.sum` and from the code; the assembly layer selects the kernel with
+`OPSKEEPER_AGENT_KERNEL=pig`. The section below is kept because the plan's
+"zero caller changes" claim was wrong when it was written, and the rewrite it
+actually took is worth remembering.
 
 ### Four defects the test suite found
 
@@ -322,9 +448,9 @@ console's gap detection fire on nearly every frame.
 
 | Side | Type | Role |
 |---|---|---|
-| node | `edgebiz.AgentBridge` (`internal/edgeagent/biz/agent_rpc.go`) | serves `agent.*`, relays frames |
-| manager | `nodefleet.Fleet` (`internal/manager/biz/nodefleet/`) | routes a frame to the conversation that named it |
-| manager | `nodeagent.Service` (`internal/manager/biz/nodeagent/`) | binds a console's SSE stream to a conversation |
+| node | `edgebiz.AgentBridge` (`core/edge/biz/agent_rpc.go`) | serves `agent.*`, relays frames |
+| manager | `nodefleet.Fleet` (`core/manager/biz/nodefleet/`) | routes a frame to the conversation that named it |
+| manager | `nodeagent.Service` (`core/manager/biz/nodeagent/`) | binds a console's SSE stream to a conversation |
 
 The fleet holds a `ports.AgentProcess` per conversation and cannot tell it
 is four network hops away — the same interface the node's own supervisor
@@ -383,9 +509,14 @@ environment variable the agent uses, because two sides disagreeing about
 where config lives produces a node that boots with no plugins while its own
 settings say otherwise.
 
-## What the plan got wrong about eino
+## What the plan got wrong about eino (historical)
 
-The plan states that removing eino leaves `loop`, `judge`, `chat_to_query`
+This section is kept for the record: the migration it describes has since been
+completed (decisions 22/26/33/34 in `docs/opskeeper2-architecture.md`). Re-reading
+it is the fastest way to see why the plan's "zero caller changes" estimate was
+low.
+
+The plan stated that removing eino leaves `loop`, `judge`, `chat_to_query`
 and `alertdraft` with "zero caller changes". That is not true of this
 codebase, and the difference is worth recording rather than discovering
 mid-rewrite:
@@ -404,25 +535,30 @@ in either order.
 
 ## Development
 
-`go.work` covers the root module plus `core`, `core/pig`, `core/edge`, and
-`sdk`, and
-pins PiG to a local checkout. Each `go.mod` also carries a relative `replace`
-so a bare module directory still builds in CI jobs that disable workspaces.
-Releases replace those with tagged versions.
+`go.work` covers the root module plus `core`, `core/pig`, `core/edge`,
+`core/floor`, `core/harness`, `sdk` and the five extension modules under
+`core/pig/extensions/`, and pins PiG to a local checkout. Each `go.mod` also
+carries a relative `replace` so a bare module directory still builds in CI jobs
+that disable workspaces. Releases replace those with tagged versions.
 
-## Known issue
+## Known issue (fixed during the floor move)
 
-`internal/skill/builtin` has three failing tests
-(`TestTruncateOrSpill_OverLimit`, `_FileSuffix`, `_FallsBackToTempDir`).
-This is **pre-existing** — it reproduces on a clean checkout without any
-2.0 change — and is tracked separately. It is not caused by the Go 1.26
-bump.
+`core/floor/skill/builtin` (then `internal/skill/builtin`) had three failing tests
+(`TestTruncateOrSpill_OverLimit`, `_FileSuffix`, `_FallsBackToTempDir`) on
+any host where `/var/tmp` exists but is not writable: the spill helper only
+fell back to `os.TempDir()` when `MkdirAll` failed, and `MkdirAll` succeeds
+on an existing read-only directory, so the write failed and the result had
+no path. The helper now falls back when the *write* fails, which is what the
+three tests always asserted. The package moved to `core/floor/skill/builtin`
+with the rest of the floor, where the tests are green.
 
 
 ## The node plane's two sockets
 
-`core/edge` holds three node-plane components, and the boundary between them
-is the reason the plugin ecosystem is safe rather than merely tidy:
+`core/edge` holds the whole node plane — the supervisor, the gate, the broker
+and the eighteen tool implementations behind them — and the boundary between
+its three safety components is the reason the plugin ecosystem is safe rather
+than merely tidy:
 
 | Component | Path | Question it answers | Reached from |
 |---|---|---|---|
@@ -436,9 +572,12 @@ reached only by tool name, and it re-checks the same registry before it
 dispatches. Two checks reading one registry is the whole of the defence in
 depth here: a tool has to survive a check the agent could have suppressed.
 
-`cmd/opskeeper-edge` is the only place that knows all three exist, which is
-why `internal/edgeagent` may not import `core/edge` and vice versa. The same
-rule keeps a PiG upgrade confined to `core/pig` and the composition root.
+`cmd/opskeeper-edge` is the only place that knows all three exist. That used
+to be a rule (the old `internal/edgeagent` could not import `core/edge`); since the
+node plane moved into the module (decision 61) it is a fact about the shape of
+the code rather than a boundary someone has to remember. The same shape keeps a
+PiG upgrade confined to `core/pig` and the composition root: the supervisor is
+handed a client, not a PiG type.
 
 ## Where a tool's implementation lives
 
@@ -446,8 +585,9 @@ Not in the plugin. The read-only SRE toolset
 (`core/pig/extensions/opskeeper-sre-readonly/`) declares eighteen tools and
 implements none of them:
 
-- The thirteen `host_*` probes are the node's own, and `internal/skill/builtin`
-  already implements them with permission classes, spill handling and tests.
+- The thirteen `host_*` probes are the node's own, and
+  `core/floor/skill/builtin` already implements them with permission classes,
+  spill handling and tests.
 - The five control-plane queries read the manager's graph and rule table. A
   subprocess on the node has no legitimate path to either, so the node asks
   over `tunnel.MethodAgentTool` and the manager answers on the same

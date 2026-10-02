@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // DefaultSinkConfig 是 TunnelSink 的默认参数。测试可覆写。

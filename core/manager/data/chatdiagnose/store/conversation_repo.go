@@ -23,8 +23,8 @@ import (
 
 	"gorm.io/gorm"
 
-	chatdiagnose "github.com/vincent-wuhan/opskeeper/internal/manager/biz/chatdiagnose"
-	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/chatdiagnose"
+	chatdiagnose "github.com/vincent-wuhan/opskeeper/core/manager/biz/chatdiagnose"
+	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/chatdiagnose"
 )
 
 // ConversationRepoDB 是 chatdiagnose.ConversationRepo 的 GORM 实现。

@@ -13,8 +13,8 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 	"github.com/vincent-wuhan/opskeeper/core/wire"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/nodefleet"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/nodefleet"
 )
 
 const (

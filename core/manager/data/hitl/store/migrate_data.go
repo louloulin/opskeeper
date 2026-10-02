@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	aiopsmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
-	approvalmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/approval"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
+	aiopsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
+	approvalmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/approval"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 // MigrateResult 描述一次迁移的执行结果，cmd/opskeeper 在启动时打印并写指标。

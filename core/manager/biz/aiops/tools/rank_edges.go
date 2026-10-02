@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // ToolNameRankEdges is the stable wire name the LLM sees.

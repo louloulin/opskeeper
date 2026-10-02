@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // fakeRepo 是 in-memory 实现 biz/hitl.Repo 的 fake，用于测 Service 状态机。

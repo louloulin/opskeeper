@@ -7,7 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
-	skillcore "github.com/vincent-wuhan/opskeeper/internal/skill"
+	skillcore "github.com/vincent-wuhan/opskeeper/core/floor/skill"
 )
 
 // SkillExecution is the audit row written for every Execute call.

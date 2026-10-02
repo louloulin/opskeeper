@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	knowledgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/knowledge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
 )
 
 // CodeBrowser is the narrow biz contract these tools need. *knowledge.Usecase
@@ -41,7 +41,7 @@ var listRepoSourcesSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
     "repo": {"type": "string", "description": "Which registered repo: its URL (or a unique substring like \"liaison-cloud\") or numeric id."},
-    "subpath": {"type": "string", "description": "Directory inside the repo to list (e.g. \"internal/manager\"). Empty = repo root."}
+    "subpath": {"type": "string", "description": "Directory inside the repo to list (e.g. \"core/manager\"). Empty = repo root."}
   },
   "required": ["repo"]
 }`)
@@ -99,7 +99,7 @@ var readSourceSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
     "repo": {"type": "string", "description": "Which registered repo: URL / unique substring / numeric id."},
-    "path": {"type": "string", "description": "File path relative to repo root, e.g. \"internal/pkg/tunnel/messages.go\"."},
+    "path": {"type": "string", "description": "File path relative to repo root, e.g. \"core/floor/tunnel/messages.go\"."},
     "start_line": {"type": "integer", "description": "1-indexed first line to return. Omit/0 = whole file. Set this to the line from a stack trace.", "minimum": 1},
     "end_line": {"type": "integer", "description": "Inclusive last line. Omit/0 = to EOF (or a sensible window around start_line)."}
   },
@@ -162,7 +162,7 @@ var grepSourceSchema = json.RawMessage(`{
   "properties": {
     "repo": {"type": "string", "description": "Which registered repo: URL / unique substring / numeric id."},
     "pattern": {"type": "string", "description": "git-grep basic regex. e.g. a function name \"func ResolveEdgeID\" or an error string \"connection refused\"."},
-    "path_glob": {"type": "string", "description": "Optional pathspec to narrow the search, e.g. \"*.go\" or \"internal/manager/\". Empty = whole repo."},
+    "path_glob": {"type": "string", "description": "Optional pathspec to narrow the search, e.g. \"*.go\" or \"core/manager/\". Empty = whole repo."},
     "max_results": {"type": "integer", "description": "Cap on hits returned. Default 50, max 200.", "default": 50, "minimum": 1, "maximum": 200}
   },
   "required": ["repo", "pattern"]

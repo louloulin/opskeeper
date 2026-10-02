@@ -16,11 +16,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/vincent-wuhan/opskeeper/internal/agentteams"
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
-	knowledgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/knowledge"
-	knowledgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/knowledge"
-	mcpauth "github.com/vincent-wuhan/opskeeper/internal/manager/server/mcp/middleware"
+	"github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
+	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
+	knowledgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
+	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
 
 type memBackend struct {

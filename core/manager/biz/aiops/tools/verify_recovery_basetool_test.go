@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 // fakeQuerier 是 MetricQuerier 的内存 fake，按 target+metric 装 baseline/current。

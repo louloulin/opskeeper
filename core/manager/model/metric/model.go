@@ -12,7 +12,7 @@ package metric
 import (
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // Point is the domain value type for a single raw host-metric sample.

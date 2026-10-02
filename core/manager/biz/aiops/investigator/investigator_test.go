@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // fakeLLM stubs llm.Client; returns the canned content on Chat.

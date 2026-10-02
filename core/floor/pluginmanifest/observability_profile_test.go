@@ -21,7 +21,7 @@ import (
 //
 // Nothing in this file asserts that the tools work. The manager's own
 // registry is the authority on that, and TestTheObservabilityToolsetMatchesTheRegistry
-// in internal/manager/biz/aiops/tools keeps the shipped schemas honest.
+// in core/manager/biz/aiops/tools keeps the shipped schemas honest.
 // What is asserted here is narrower and about the boundary: what the
 // package claims, which node it runs on, and which data it can reach.
 

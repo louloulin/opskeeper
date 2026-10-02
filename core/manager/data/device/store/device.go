@@ -12,10 +12,10 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/device"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Repo is the GORM-backed biz/device.Repo.

@@ -9,10 +9,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	aiopstoolsdec "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/decorators"
-	loopbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	aiopstoolsdec "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
+	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 func TestMCPBaseTools_RunThroughStandardDecoratorChain(t *testing.T) {

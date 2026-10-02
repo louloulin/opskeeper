@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // Inhibitor decides whether a freshly-fired incident's notification should

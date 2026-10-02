@@ -3,7 +3,7 @@ package dbx
 import (
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/config"
+	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 	"gorm.io/gorm"
 )
 

@@ -13,7 +13,7 @@
 //     secret_key per edge). Re-using the existing wire path means we
 //     don't have to expose a public Prom remote_write endpoint behind
 //     auth_request — manager nginx never has to learn about it.
-//  2. The manager-side ingester (internal/manager/biz/promwrite) injects
+//  2. The manager-side ingester (core/manager/biz/promwrite) injects
 //     the canonical `device_id` label from the edge's host device row,
 //     which is the join key every PromQL `by(device_id)` and every
 //     `correlate_incident` expects. Pushing through the tunnel means we
@@ -40,8 +40,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/edge/plugins"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // Name is the OTel signal name used as plugin identifier and as the

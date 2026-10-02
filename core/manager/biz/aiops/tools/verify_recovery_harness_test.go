@@ -21,7 +21,7 @@ import (
 // 与本测试同形；Day 4 harness judge 会把这里的断言接进去。
 //
 // 跨域约束：tools 包不 import loop；loop 侧的 RecoveredPhaseWorker
-// 集成测试见 internal/manager/biz/loop/recovery_test.go 的
+// 集成测试见 core/manager/biz/loop/recovery_test.go 的
 // TestRecoveredWorker_Verifier_Pass / TestRecoveredWorker_Verifier_Fail。
 func TestVerifyRecovery_HarnessCpuSpike(t *testing.T) {
 	t.Parallel()

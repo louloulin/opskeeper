@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/knowledge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/qdrantx"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/qdrantx"
 )
 
 // fakeVec is a record-only QdrantClient. GetPoints returns whatever head

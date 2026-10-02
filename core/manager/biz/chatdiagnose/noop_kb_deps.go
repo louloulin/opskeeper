@@ -11,7 +11,7 @@ import (
 	"errors"
 	"sync"
 
-	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/chatdiagnose"
+	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/chatdiagnose"
 )
 
 // NoopPatternRepo — PatternRepo 占位实现。

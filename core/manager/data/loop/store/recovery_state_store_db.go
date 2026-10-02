@@ -2,7 +2,7 @@
 //
 // DB-backed RecoveryStateStore：复用 loop_state.retry_count 列（0001
 // migration 本就为此设计）。同一 struct 通过 Go 结构化类型同时满足：
-//   - loop.RecoveryStateStore（internal/manager/biz/loop/recovery.go:365）
+//   - loop.RecoveryStateStore（core/manager/biz/loop/recovery.go:365）
 //   - aiops/tools.RecoveryStateStore（verify_recovery_basetool.go:208）
 //
 // 两个接口签名完全同形（Get/Increment/Reset），不需要 proxy。data 层不
@@ -25,7 +25,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 // RecoveryStateStoreDB 是 RecoveryStateStore 的 DB-backed 实现。

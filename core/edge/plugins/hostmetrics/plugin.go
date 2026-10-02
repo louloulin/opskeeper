@@ -37,7 +37,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins"
+	"github.com/vincent-wuhan/opskeeper/core/edge/plugins"
 )
 
 // Name is the OTel-aligned plugin name; matches manager's

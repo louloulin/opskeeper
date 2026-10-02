@@ -14,14 +14,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert/investigator"
-	bizaudit "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	auditmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
-	auditmw "github.com/vincent-wuhan/opskeeper/internal/manager/server/middleware"
-	svc "github.com/vincent-wuhan/opskeeper/internal/manager/service/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/alert/investigator"
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	auditmw "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
+	svc "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 )
 
 type IncidentService interface {

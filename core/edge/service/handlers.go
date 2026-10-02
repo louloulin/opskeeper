@@ -12,8 +12,8 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/biz"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/edge/biz"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // Register installs the cloud->edge handler set on the given tunnel

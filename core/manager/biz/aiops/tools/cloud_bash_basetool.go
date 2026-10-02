@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
 )
 
 // cloud_bash — the cloud-side (manager) command tool, sibling of host_bash

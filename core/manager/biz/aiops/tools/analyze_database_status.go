@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
 )
 
 const ToolNameAnalyzeDatabaseStatus = "analyze_database_status"

@@ -9,7 +9,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/qdrantx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/qdrantx"
 )
 
 // QdrantCollection 是 incident_pattern collection 的启动期生命周期包装。

@@ -46,7 +46,7 @@ type PluginConfig struct {
 func (PluginConfig) TableName() string { return "edge_plugin_configs" }
 
 // Plugin name constants. Keep in lock-step with
-// internal/edgeagent/plugins/<name> packages and
+// core/edge/plugins/<name> packages and
 const (
 	PluginNameMetrics  = "metrics"
 	PluginNameLogs     = "logs"

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // fakeClient is a tunnel.Client stub. Same shape as the host_files

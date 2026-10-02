@@ -10,7 +10,7 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // Mapper extracts the 8-field tunnel.HostMetricPoint fast path from a

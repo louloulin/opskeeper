@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	alertbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // fakeAlertUC is a minimal AlertUsecase used by the BaseTool tests for

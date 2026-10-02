@@ -8,8 +8,8 @@ import (
 
 	"gorm.io/gorm"
 
-	bizreport "github.com/vincent-wuhan/opskeeper/internal/manager/biz/report"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/promquery"
+	bizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
 )
 
 // FactsCollector implements bizreport.FactsCollector. It computes the

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/cmdpolicy"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/edge/cmdpolicy"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // fakeClient mirrors host_files's test stub.

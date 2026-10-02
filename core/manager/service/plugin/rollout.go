@@ -21,8 +21,8 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
 )
 
 // Node is one edge, as this package needs it.

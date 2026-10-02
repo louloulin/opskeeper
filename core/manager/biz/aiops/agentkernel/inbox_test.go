@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	bizapproval "github.com/vincent-wuhan/opskeeper/core/manager/biz/approval"
+	modelapproval "github.com/vincent-wuhan/opskeeper/core/manager/model/approval"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	bizapproval "github.com/vincent-wuhan/opskeeper/internal/manager/biz/approval"
-	modelapproval "github.com/vincent-wuhan/opskeeper/internal/manager/model/approval"
 )
 
 // fakeApprovalRepo is an in-memory approval store. It records the row it was

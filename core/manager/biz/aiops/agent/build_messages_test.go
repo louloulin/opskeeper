@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 )
 
 func sp(s string) *string { return &s }

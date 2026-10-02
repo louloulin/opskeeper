@@ -21,7 +21,7 @@
 //	                                   Message 字段保留 summary_text
 //
 // TODO(#task-1.2): Day 1 任务完成后，RootCauseJSON 改为从
-// "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop" import；
+// "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop" import；
 // 当前为本地定义避免跨 PR 依赖。
 package investigator
 

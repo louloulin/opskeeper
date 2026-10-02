@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
 )
 
 // QueryLogQLTool is the BaseTool form of query_logql. Mirrors the closure

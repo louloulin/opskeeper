@@ -13,10 +13,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
-	auditmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // Handler exposes the admin-facing audit endpoints.

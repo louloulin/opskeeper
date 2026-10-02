@@ -16,8 +16,8 @@ import (
 
 	"github.com/google/uuid"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/flow"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/flow"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Repo is the flow-definition persistence contract.

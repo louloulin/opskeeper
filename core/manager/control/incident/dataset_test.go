@@ -40,7 +40,7 @@ func TestIncidentDatasets_FourPrototypes_AreComplete(t *testing.T) {
 func TestIncidentDatasetTimelines_CanReplayAndComputeMetrics(t *testing.T) {
 	datasets := loadScenarioFiles(t)
 	for _, dataset := range datasets {
-		timelinePath := filepath.Join("..", "..", "..", "deploy", "incident-events", dataset.ID+".timeline.jsonl")
+		timelinePath := filepath.Join(repoDeployDir(t), "incident-events", dataset.ID+".timeline.jsonl")
 		events := readTimelineFile(t, timelinePath)
 		require.NotEmpty(t, events)
 
@@ -110,7 +110,7 @@ func TestIncidentDatasetPostmortems_CanPersistAndAuditRRFRecall(t *testing.T) {
 
 func loadScenarioFiles(t *testing.T) []Dataset {
 	t.Helper()
-	directory := filepath.Join("..", "..", "..", "deploy", "incident-events")
+	directory := filepath.Join(repoDeployDir(t), "incident-events")
 	entries, err := os.ReadDir(directory)
 	require.NoError(t, err)
 
@@ -167,4 +167,26 @@ func TestDatasetValidation_MissingInput_IsRejected(t *testing.T) {
 
 func mustTime() time.Time {
 	return time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
+}
+
+// repoDeployDir returns the repository's deploy/ directory.
+//
+// It walks up to the workspace root rather than counting ".." levels: the
+// package lives in the manager module now, and a hardcoded depth is a
+// number that has to be re-derived by hand every time a tree moves. Two
+// tests here were written that way and broke on the move.
+func repoDeployDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
+			return filepath.Join(dir, "deploy")
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("no go.work above %s", dir)
+		}
+		dir = parent
+	}
 }

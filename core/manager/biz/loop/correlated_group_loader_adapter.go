@@ -18,7 +18,7 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 // CorrelatedGroupReader 是 loopstore.ContractRepoDB 需要满足的最小 narrow interface。

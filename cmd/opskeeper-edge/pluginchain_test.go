@@ -17,9 +17,9 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/service/plugin"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/manager/service/plugin"
 )
 
 // The Phase D acceptance gate: "install -> review -> canary -> rollback,

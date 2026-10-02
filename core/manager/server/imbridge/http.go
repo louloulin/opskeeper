@@ -14,12 +14,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	iammodel "github.com/vincent-wuhan/opskeeper/internal/iam/model"
-	bizbridge "github.com/vincent-wuhan/opskeeper/internal/manager/biz/imbridge"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/imbridge/provider/feishu"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/imbridge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizbridge "github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge/provider/feishu"
+	iammodel "github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/imbridge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 	"log/slog"
 )
 

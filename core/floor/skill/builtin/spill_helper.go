@@ -35,20 +35,31 @@ func truncateOrSpill(toolName string, output []byte) SpillResult {
 		return res
 	}
 	ts := time.Now().Unix()
-	// 确保目录存在 (容器里 /var/tmp 可能只读, 退化到 os.TempDir).
+	// 确保目录存在后落盘. 容器里 /var/tmp 可能不可写, 退化到 os.TempDir.
 	dir := SpillDir
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		dir = os.TempDir()
 	}
 	path := filepath.Join(dir, fmt.Sprintf("opskeeper-%s-%d.log", toolName, ts))
+	// 退化的判据必须是"写失败", 不能只是 MkdirAll 失败: 一个已存在但只读的
+	// 目录会让 MkdirAll 成功、WriteFile 失败, 而那正是容器里 /var/tmp 的
+	// 样子 (存在、0755、root 所有). 只在 mkdir 上退化等于这条降级路径从未
+	// 生效过.
 	if err := os.WriteFile(path, output, 0o644); err != nil {
-		// 落盘失败: hard truncate + 错误信息
-		preview := output
-		if len(preview) > 1024 {
-			preview = preview[:1024]
+		if tmp := os.TempDir(); tmp != dir {
+			if alt := filepath.Join(tmp, filepath.Base(path)); os.WriteFile(alt, output, 0o644) == nil {
+				path, err = alt, nil
+			}
 		}
-		res.Inline = fmt.Sprintf("%s\n[truncated, spill failed: %v]", preview, err)
-		return res
+		if err != nil {
+			// 落盘失败: hard truncate + 错误信息
+			preview := output
+			if len(preview) > 1024 {
+				preview = preview[:1024]
+			}
+			res.Inline = fmt.Sprintf("%s\n[truncated, spill failed: %v]", preview, err)
+			return res
+		}
 	}
 	res.Spilled = true
 	res.SpillPath = path

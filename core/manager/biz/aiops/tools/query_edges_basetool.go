@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	devicemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/device"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 )
 
 // QueryEdgesTool is the BaseTool form of query_devices (legacy go id:

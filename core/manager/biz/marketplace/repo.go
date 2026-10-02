@@ -3,7 +3,7 @@ package marketplace
 import (
 	"context"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/marketplace"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/marketplace"
 )
 
 // Repo is the persistence surface the usecase depends on. Concrete

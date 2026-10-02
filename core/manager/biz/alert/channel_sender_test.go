@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 func chWithConfig(name, typ string, cfg map[string]string) *model.Channel {

@@ -7,8 +7,8 @@ import (
 	"sync"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
 )
 
 // DeferredGate routes every mutating call to one of two answers: it runs now

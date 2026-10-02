@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	alertbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	devicemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/device"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/logquery"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tracequery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tracequery"
 )
 
 // correlate_incident_basetool.go — N+15 batch refactor. Outer fan-out

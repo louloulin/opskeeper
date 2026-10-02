@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/auth"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 var (

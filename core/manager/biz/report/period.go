@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/report"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
 )
 
 // Period is the [Start, End) time window a report covers. End is

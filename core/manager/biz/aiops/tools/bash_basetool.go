@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
 )
 
 // bash_basetool.go — N+15 batch refactor. The BaseTool form of bash now

@@ -3,7 +3,7 @@ package grafana
 import (
 	"testing"
 
-	monitormodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/monitor"
+	monitormodel "github.com/vincent-wuhan/opskeeper/core/manager/model/monitor"
 )
 
 // TestBuildMonitorDashboardJSON verifies the renderer maps each opskeeper

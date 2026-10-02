@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 func TestSetCustomMetricsRejectsDuplicateTargetURL(t *testing.T) {

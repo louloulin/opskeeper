@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/chatruntime"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 )
 
 // TestBuildCapabilityDeclaration_BareSkillCredentials guards the terraform-runner

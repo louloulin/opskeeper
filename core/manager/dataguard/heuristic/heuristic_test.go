@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 )
 
 func TestPGEngine_PII(t *testing.T) {

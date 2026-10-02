@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // ToolNameQueryAlertRules is the stable wire name the LLM sees.

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 // WorkerSpawner is the narrow seam AgentTool / SendMessageTool / TaskStopTool

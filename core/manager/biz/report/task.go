@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/report"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
 )
 
 // task.go — the unified-task usecase (HLD-022 Phase 2). Stored tasks are oneoff

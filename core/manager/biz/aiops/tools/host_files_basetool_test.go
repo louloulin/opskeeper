@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // fakeHostFilesResolver is a stub hostFilesDeviceResolver. Tests

@@ -1,5 +1,5 @@
 // Package gitsink 提供 loop.GitArtifactSink 的 narrow adapter，
-// 包装 internal/manager/biz/report.PostmortemSink（默认 *report.GitArtifactSink）。
+// 包装 core/manager/biz/report.PostmortemSink（默认 *report.GitArtifactSink）。
 //
 // 设计动机：
 //   - loop 包不能直接 import report 包（形成 loop → report → loop 的 cycle；
@@ -23,8 +23,8 @@ import (
 	"log/slog"
 	"time"
 
-	loop "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	managerbizreport "github.com/vincent-wuhan/opskeeper/internal/manager/biz/report"
+	loop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	managerbizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
 )
 
 // Adapter 适配 report.PostmortemSink → loop.GitArtifactSink。

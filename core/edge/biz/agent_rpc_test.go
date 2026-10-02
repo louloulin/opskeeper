@@ -11,7 +11,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // recordingDecider stands in for the node's approval gate.

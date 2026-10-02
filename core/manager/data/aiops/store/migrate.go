@@ -3,7 +3,7 @@ package store
 import (
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 )
 
 // Migrate registers the aiops chat tables (sessions, messages, tool calls,

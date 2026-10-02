@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/metric"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
 )
 
 // Downsampler rolls raw samples into 5m and 1h aggregates on a schedule.

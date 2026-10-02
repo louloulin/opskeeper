@@ -42,7 +42,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
 )
 
 func init() { skill.Register(&HostNetnsInspect{}) }

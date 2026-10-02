@@ -3,9 +3,9 @@ package aiopsconfig
 import (
 	"context"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/alertconfig"
-	aiopstools "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
-	managersvcalert "github.com/vincent-wuhan/opskeeper/internal/manager/service/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/alertconfig"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	managersvcalert "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 )
 
 type alertRuleService interface {

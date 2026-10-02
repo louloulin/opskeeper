@@ -11,7 +11,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // ErrNoSession means no conversation with that id is open on this node.

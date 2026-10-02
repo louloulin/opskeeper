@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/imbridge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/imbridge"
 )
 
 // testClient points a real Client at an httptest server (base URL override),

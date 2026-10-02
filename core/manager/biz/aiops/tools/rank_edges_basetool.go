@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // RankEdgesTool is the BaseTool form of rank_edges. Mirrors

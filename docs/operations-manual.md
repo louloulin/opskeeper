@@ -171,7 +171,7 @@ opskeeper-migrate rollback --to backup-20260713.sql
 ### 2.5 闭环修复动作的适配器装配
 
 approved phase 要把一个修复动作真正打到工具上，需要该动作所属的中间件适配器
-被连上。五个适配器各自独立，按环境变量装配到同一个工具 registry；**没配 DSN
+被连上。六个适配器各自独立，按环境变量装配到同一个工具 registry；**没配 DSN
 的适配器只是不出现**（对应的动作会被明确拒绝并说明原因，不会静默跳过或猜参数）。
 配了但连不上的会被记录并跳过，不会阻止 manager 启动。
 
@@ -182,12 +182,21 @@ approved phase 要把一个修复动作真正打到工具上，需要该动作�
 | `OPSKEEPER_LOOP_K8S_DSN` | Kubernetes | 19 | `kubeconfig:///path/to/kubeconfig`、`incluster://`、`https://host:port?token=...` |
 | `OPSKEEPER_LOOP_MQ_DSN` | 消息队列 | 6 | `amqp(s)://`（RabbitMQ，走 management API）或 `kafka://`（broker 列表） |
 | `OPSKEEPER_LOOP_HOST_DSN` | 主机 | 7 | `local://` 或 `ssh://user@host[:port]?key=/path/to/key` |
+| `OPSKEEPER_LOOP_GIT_DSN` | Git 仓库 | 8 | `/path/to/checkout`、`/path/to/checkout#branch`、`https://host/owner/repo.git`、`git@host:owner/repo.git` |
+
+Git 适配器**只读**：`git.connect` / `list_repos` / `commit_history` /
+`file_at_commit` / `blame` / `diff` / `search_code` / `find_runtime_link`。
+`Execute` 即使收到 `approved_by` 也会拒绝全部 `push` / `tag` / `reset`——
+平台没有经过审批闸门的 git 写路径，一个只看"审批人字段非空"就执行 push 的
+入口比没有入口更危险。远端 DSN 会 clone 到临时目录（**全量 fetch，不是
+`--depth=1`**：浅克隆会让 `git blame` 把每一行都归给切点），`Close` 时删除；
+本地路径就地读取，不会被清理。
 
 主机适配器的写操作还有一层独立的闸门：`OPSKEEPER_HOST_UNIT_ALLOWLIST`
 （逗号分隔的 systemd unit 名单）。**它为空时拒绝所有重启请求**，不是允许所有——
 这是一个需要显式配置才能打开的开关。
 
-DSN 支持 `secret://` 前缀（`internal/pkg/secretbox`），也接受明文（兼容读取）。
+DSN 支持 `secret://` 前缀（`core/manager/pkg/secretbox`），也接受明文（兼容读取）。
 
 检查装配结果：manager 启动日志里每个成功的适配器各有一行
 `loop: remediation adapter wired`；一个都没连上时是一条 `Warn`，并附上可用变量名。

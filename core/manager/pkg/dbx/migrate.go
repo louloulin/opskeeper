@@ -10,7 +10,7 @@ import (
 )
 
 // Migrator is any function that registers models with gorm. Typically each
-// data-layer package (e.g. internal/iam/data/user/sqlite) exposes one as
+// data-layer package (e.g. core/manager/iam/data/user/sqlite) exposes one as
 // sqlite.Migrate that calls db.AutoMigrate(&User{}, ...).
 //
 // The name "sqlite" in those packages is historical; the same function

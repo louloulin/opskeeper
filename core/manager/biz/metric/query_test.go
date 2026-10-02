@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/metric"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // fakeReader records the last call and returns configurable fixtures.

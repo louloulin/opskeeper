@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 )
 
 func TestMeetsSensitivity(t *testing.T) {

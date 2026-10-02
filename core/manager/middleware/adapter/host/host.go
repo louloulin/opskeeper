@@ -34,9 +34,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/secretbox"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/secretbox"
 )
 
 const (
@@ -277,6 +277,10 @@ func (a *Adapter) Execute(ctx context.Context, op adapter.ExecOp) (*adapter.Exec
 		impacted, message, ok, err = a.garbageCollect(ctx, p)
 	case "restart_service":
 		impacted, message, ok, err = a.restartService(ctx, p)
+	case "kill_process":
+		impacted, message, ok, err = a.killProcess(ctx, p)
+	case "remove_old_logs":
+		impacted, message, ok, err = a.removeOldLogs(ctx, p)
 	default:
 		return nil, fmt.Errorf("%w: host.%s", ErrUnknownOperation, op.Operation)
 	}
@@ -303,6 +307,12 @@ func (a *Adapter) OpRiskLevel(op string) adapter.RiskLevel {
 	switch op {
 	case "garbage_collect", "restart_service":
 		return adapter.RiskL2SoftWrite
+	case "kill_process", "remove_old_logs":
+		// Both destroy something the platform cannot put back: a running
+		// process, and the bytes of a log file. Neither is recoverable by
+		// retrying, so both sit above the operations a unit restart
+		// survives, and both carry a human in the loop.
+		return adapter.RiskL3HardWrite
 	default:
 		return adapter.RiskL1Diagnostic
 	}
@@ -332,6 +342,18 @@ func RegisterTools(reg *registry.Registry, a *Adapter) error {
 		makeTool("host.restart_service", adapter.RiskL2SoftWrite,
 			"重启一个在允许列表内的 systemd 单元并确认其恢复",
 			map[string]string{"unit": "string!"}, writeOp(a, "restart_service")),
+		makeTool("host.top_processes", adapter.RiskL0ReadOnly,
+			"按 CPU 占用排序列出进程（ps），只返回达到阈值的那些",
+			map[string]string{"limit": "int"}, readOp(a, runTopProcesses)),
+		makeTool("host.old_log_files", adapter.RiskL0ReadOnly,
+			"列出目录下超过指定天数未改写的日志文件及大小",
+			map[string]string{"path": "string", "older_than_days": "int", "limit": "int"}, readOp(a, runOldLogFiles)),
+		makeTool("host.kill_process", adapter.RiskL3HardWrite,
+			"向一个进程发送 SIGTERM 并读回它的状态（不自动升级到 SIGKILL）",
+			map[string]string{"pid": "int!"}, writeOp(a, "kill_process")),
+		makeTool("host.remove_old_logs", adapter.RiskL3HardWrite,
+			"删除目录下超过指定天数未改写的日志文件；系统目录一律拒绝",
+			map[string]string{"path": "string!", "older_than_days": "int", "dry_run": "bool"}, writeOp(a, "remove_old_logs")),
 	}
 	return reg.RegisterTools(adapter.TypeHost, tools)
 }

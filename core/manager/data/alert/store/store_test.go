@@ -11,9 +11,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	demomodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	demomodel "github.com/vincent-wuhan/opskeeper/core/manager/model/demo"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 func newTestRepo(t *testing.T) *Repo {

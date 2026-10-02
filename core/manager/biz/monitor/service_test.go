@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/monitor"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/monitor"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // fakeRepo is an in-memory Repo implementation just rich enough for the

@@ -25,7 +25,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 // toolMemo is a per-run cache of identical (read-tool, args) calls.

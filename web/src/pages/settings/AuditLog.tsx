@@ -282,7 +282,7 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
 // Human-readable label for a canonical audit action string. Falls back
 // to the raw key when an unknown action appears (e.g. data from a
 // not-yet-deployed manager version, or legacy http_* rows the operator
-// hasn't purged yet). Keep this in sync with internal/manager/model/
+// hasn't purged yet). Keep this in sync with core/manager/model/
 // audit/log.go.
 type Tr = (zh: string, en: string) => string;
 

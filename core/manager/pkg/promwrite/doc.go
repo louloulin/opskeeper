@@ -14,6 +14,6 @@
 // Only the encode path is needed (manager pushes; never reads remote_write).
 //
 // Cross-BC: this package is dependency-free of any manager/* import; it
-// lives under internal/pkg/ so both the manager-side biz wrapper and any
+// lives under core/manager/pkg/ so both the manager-side biz wrapper and any
 // future internal user (e.g. tests) can reuse it.
 package promwrite

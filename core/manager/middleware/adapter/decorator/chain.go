@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 // ChainConfig 是装饰器链配置。

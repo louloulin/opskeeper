@@ -19,8 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	bizmp "github.com/vincent-wuhan/opskeeper/internal/manager/biz/marketplace"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	bizmp "github.com/vincent-wuhan/opskeeper/core/manager/biz/marketplace"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 const (

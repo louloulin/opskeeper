@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
-	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	demomodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
+	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	demomodel "github.com/vincent-wuhan/opskeeper/core/manager/model/demo"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 type fakeIncidents struct {

@@ -3,7 +3,7 @@ package knowledge
 import (
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/qdrantx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/qdrantx"
 )
 
 // TestDedupeByIDAlias_PrechunkingManualDoc — the regression that drove the

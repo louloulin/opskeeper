@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	pkgpromwrite "github.com/vincent-wuhan/opskeeper/internal/pkg/promwrite"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	pkgpromwrite "github.com/vincent-wuhan/opskeeper/core/manager/pkg/promwrite"
 )
 
 // fakeWriter records the last Write call.

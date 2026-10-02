@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
-	iamodel "github.com/vincent-wuhan/opskeeper/internal/iam/model"
+	iamodel "github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
 	"gorm.io/gorm"
 )
 

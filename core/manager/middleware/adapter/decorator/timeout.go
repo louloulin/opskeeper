@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 // DefaultTimeout 是默认每调用超时（15s，与 opskeeper BaseTool 一致）。

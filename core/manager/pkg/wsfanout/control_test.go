@@ -9,7 +9,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/wsfanout"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/wsfanout"
 )
 
 func TestControl_SendSubscribe(t *testing.T) {

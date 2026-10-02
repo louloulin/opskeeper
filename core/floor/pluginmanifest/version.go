@@ -1,9 +1,11 @@
 package pluginmanifest
 
 import (
+	"errors"
 	"fmt"
-	"strconv"
 	"strings"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 // Comparing the version a package needs against the version a node runs.
@@ -14,12 +16,13 @@ import (
 // the manager, for the same reason the review does — the manager may ask
 // for a package, but only the node can say whether *it* can run it.
 //
-// Dotted numeric comparison is deliberately not semver. The versions on
-// this fleet come from build metadata: "0.8.0", "0.7.43", and on a
-// developer machine "dev". A semver library would reject the last one and
-// the honest answer for it is "unknown, so refuse" — not "assume it is
-// old". Handling pre-release tags would add a rule that no version in this
-// repository uses, and a rule nobody exercises is a rule nobody can trust.
+// The comparison itself lives in core/domain, because the SDK has to run
+// the same check for a plugin author at build time and the SDK reaches core
+// and nothing else internal. What stays here is the node's *policy*: which
+// refusals are fatal, and what an operator is told. Keeping the arithmetic
+// in one place is what stops the build-time answer and the install-time
+// answer from disagreeing — a disagreement whose only symptom is a package
+// that passes its author's check and is refused on a node.
 
 // CompareVersions compares two dotted numeric versions.
 //
@@ -29,101 +32,24 @@ import (
 // tell", which for an admission check means refuse: a node that guessed
 // here would either run a package it cannot host or refuse one it can, and
 // only one of those is recoverable.
-//
-// Missing components count as zero, so "0.8" and "0.8.0" are equal. That
-// is what a person writing "0.8" means, and the alternative — treating a
-// short version as unparseable — would refuse a package over a trailing
-// zero.
 func CompareVersions(a, b string) (int, bool) {
-	as, ok := parseVersion(a)
-	if !ok {
+	av, err := domain.ParseVersion(a)
+	if err != nil {
 		return 0, false
 	}
-	bs, ok := parseVersion(b)
-	if !ok {
+	bv, err := domain.ParseVersion(b)
+	if err != nil {
 		return 0, false
 	}
-	n := len(as)
-	if len(bs) > n {
-		n = len(bs)
-	}
-	for i := 0; i < n; i++ {
-		var av, bv int
-		if i < len(as) {
-			av = as[i]
-		}
-		if i < len(bs) {
-			bv = bs[i]
-		}
-		switch {
-		case av < bv:
-			return -1, true
-		case av > bv:
-			return 1, true
-		}
-	}
-	return 0, true
-}
-
-// parseVersion splits a dotted numeric version into its components.
-func parseVersion(v string) ([]int, bool) {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return nil, false
-	}
-	parts := strings.Split(v, ".")
-	out := make([]int, 0, len(parts))
-	for _, p := range parts {
-		// A leading "v" is how a git tag is spelled, and a package author
-		// who wrote one meant the version. It is stripped on the first
-		// component only, so "1.v2.3" stays unparseable.
-		if len(out) == 0 {
-			p = strings.TrimPrefix(p, "v")
-		}
-		if p == "" {
-			return nil, false
-		}
-		n, err := strconv.Atoi(p)
-		if err != nil || n < 0 {
-			return nil, false
-		}
-		out = append(out, n)
-	}
-	return out, true
+	return domain.Compare(av, bv), true
 }
 
 // MeetsMinEdgeVersion reports whether a node running nodeVersion may host a
 // package that requires minEdgeVersion.
-//
-// An empty requirement means the package did not say, and the answer is
-// yes: refusing every package that omits an optional field would make the
-// field mandatory by accident. A version that cannot be compared — either
-// side — is a refusal, and the returned reason says which side was
-// unreadable so an operator is not sent to inspect a working node.
 func MeetsMinEdgeVersion(minEdgeVersion, nodeVersion string) (bool, string) {
-	minEdgeVersion = strings.TrimSpace(minEdgeVersion)
-	if minEdgeVersion == "" {
-		return true, ""
-	}
-	if _, ok := parseVersion(minEdgeVersion); !ok {
-		return false, fmt.Sprintf("the package asks for edge version %q, which is not a version this node can compare", minEdgeVersion)
-	}
-	if _, ok := parseVersion(nodeVersion); !ok {
-		// The node's own version is unknown. It might well be new enough;
-		// nobody can say. Refusing names the real problem — the node
-		// cannot state what it is — instead of pretending the package is
-		// the thing at fault.
-		return false, fmt.Sprintf("this node reports its agent version as %q, which is not a version, so it cannot tell whether it is new enough for a package needing %s",
-			nodeVersion, minEdgeVersion)
-	}
-	cmp, ok := CompareVersions(nodeVersion, minEdgeVersion)
-	if !ok {
-		return false, fmt.Sprintf("cannot compare edge version %q with the required %s", nodeVersion, minEdgeVersion)
-	}
-	if cmp < 0 {
-		return false, fmt.Sprintf("this node runs edge %s, but the package needs at least %s", nodeVersion, minEdgeVersion)
-	}
-	return true, ""
+	return meetsVersion(domain.AxisEdge, minEdgeVersion, nodeVersion,
+		"this node reports its agent version as %q, which is not a version, so it cannot tell whether it is new enough for a package needing %s",
+		"edge")
 }
 
 // MeetsMinPigVersion reports whether a node whose agent binary is pigVersion
@@ -142,29 +68,44 @@ func MeetsMinEdgeVersion(minEdgeVersion, nodeVersion string) (bool, string) {
 // answers on its stdio — and a node that conflated them would enforce a
 // requirement against a number that has nothing to do with it.
 func MeetsMinPigVersion(minPigVersion, pigVersion string) (bool, string) {
-	minPigVersion = strings.TrimSpace(minPigVersion)
-	if minPigVersion == "" {
-		// Same rule as the edge axis: an optional field left out is not a
-		// requirement, and every package written before this field
-		// existed must keep installing.
+	return meetsVersion(domain.AxisPig, minPigVersion, pigVersion,
+		"this node reports its PiG agent version as %q, which is not a version, so it cannot tell whether it is new enough for a package needing %s",
+		"PiG")
+}
+
+// meetsVersion runs one axis and converts the domain-layer refusal into the
+// node's operator-facing wording.
+//
+// The host-unreadable case gets a component-specific sentence because that
+// is the case where an operator has something to do; the requirement-unreadable
+// case is the package author's mistake on either axis and reads the same.
+func meetsVersion(axis, minimum, host, hostUnknownFormat, component string) (bool, string) {
+	// An empty requirement means the package did not say, and the answer
+	// is yes: refusing every package that omits an optional field would
+	// make the field mandatory by accident.
+	if strings.TrimSpace(minimum) == "" {
 		return true, ""
 	}
-	if _, ok := parseVersion(minPigVersion); !ok {
-		return false, fmt.Sprintf("the package asks for PiG version %q, which is not a version this node can compare", minPigVersion)
+	req := domain.VersionRequirement{Axis: axis, Min: minimum, Host: host}
+	ok, err := req.Satisfied()
+	if ok {
+		return true, ""
 	}
-	if _, ok := parseVersion(pigVersion); !ok {
-		// The agent's own version is unknown, so the node cannot tell. The
-		// message names the agent rather than the edge so nobody upgrades
-		// the wrong binary chasing it.
-		return false, fmt.Sprintf("this node reports its PiG agent version as %q, which is not a version, so it cannot tell whether it is new enough for a package needing %s",
-			pigVersion, minPigVersion)
+	// errors.As rather than a type assertion: these errors are the
+	// domain layer's, and a future revision that wrapped them (to add
+	// context, say) would break a bare assertion silently — the branch
+	// would fall through and the operator would get the generic message
+	// instead of the one naming which component to upgrade.
+	var unreadable *domain.UnreadableVersionError
+	if errors.As(err, &unreadable) {
+		if unreadable.Side == "host" {
+			return false, fmt.Sprintf(hostUnknownFormat, host, minimum)
+		}
+		return false, fmt.Sprintf("the package asks for %s version %q, which is not a version this node can compare", component, minimum)
 	}
-	cmp, ok := CompareVersions(pigVersion, minPigVersion)
-	if !ok {
-		return false, fmt.Sprintf("cannot compare PiG version %q with the required %s", pigVersion, minPigVersion)
+	var tooOld *domain.VersionTooOldError
+	if errors.As(err, &tooOld) {
+		return false, fmt.Sprintf("this node runs %s %s, but the package needs at least %s", component, host, minimum)
 	}
-	if cmp < 0 {
-		return false, fmt.Sprintf("this node runs PiG %s, but the package needs at least %s", pigVersion, minPigVersion)
-	}
-	return true, ""
+	return false, err.Error()
 }

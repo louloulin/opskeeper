@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/promquery"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
 )
 
 func TestModelNormalizeKindAliases(t *testing.T) {

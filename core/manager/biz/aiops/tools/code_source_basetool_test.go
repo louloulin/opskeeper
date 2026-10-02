@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"testing"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	knowledgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/knowledge"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
 )
 
 // codeKnowledge satisfies BOTH KnowledgeSearcher and CodeBrowser — i.e. the

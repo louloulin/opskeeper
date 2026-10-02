@@ -30,12 +30,12 @@ import (
 	"strings"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/monitor"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/monitor"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Repo is the narrow persistence contract this service depends on. The
-// concrete implementation lives in internal/manager/data/monitor/store;
+// concrete implementation lives in core/manager/data/monitor/store;
 // the interface lets tests substitute an in-memory fake.
 type Repo interface {
 	List(ctx context.Context) ([]*model.Panel, error)

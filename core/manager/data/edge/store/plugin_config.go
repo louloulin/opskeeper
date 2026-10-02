@@ -8,13 +8,13 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // PluginConfigRepo persists edge_plugin_configs.
 // Constructed by cmd/opskeeper wiring; biz consumes the narrow interface in
-// internal/manager/biz/edge/plugin_config.go.
+// core/manager/biz/edge/plugin_config.go.
 type PluginConfigRepo struct {
 	db *gorm.DB
 }

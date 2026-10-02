@@ -3,7 +3,7 @@ package store
 import (
 	"gorm.io/gorm"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // NewBizRepo is the wire-ready constructor. cmd/opskeeper binds this at

@@ -3,11 +3,11 @@
 // wraps the stream with golang.org/x/crypto/ssh.NewClientConn, runs
 // PTY + Shell, and pumps stdin/stdout to the browser WebSocket.
 //
-// Edge agent is a dumb byte forwarder — see internal/edgeagent/
+// Edge agent is a dumb byte forwarder — see core/edge/
 // webshell. SSH protocol, pty, session lifecycle all live here.
 //
 // The package is HTTP-only. State (active session router + audit)
-// lives in internal/manager/biz/webshell.
+// lives in core/manager/biz/webshell.
 package webshell
 
 import (
@@ -20,7 +20,7 @@ import (
 	"net"
 	"net/http"
 
-	wsfanout "github.com/vincent-wuhan/opskeeper/internal/pkg/wsfanout"
+	wsfanout "github.com/vincent-wuhan/opskeeper/core/manager/pkg/wsfanout"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,13 +32,13 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
 
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	bizwebshell "github.com/vincent-wuhan/opskeeper/internal/manager/biz/webshell"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	wsmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/webshell"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	bizwebshell "github.com/vincent-wuhan/opskeeper/core/manager/biz/webshell"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // AuthzMW is the narrow casbin middleware contract.

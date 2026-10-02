@@ -3,7 +3,7 @@ package toolreplay
 import (
 	"testing"
 
-	aiopsmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	aiopsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 )
 
 func sp(s string) *string { return &s }

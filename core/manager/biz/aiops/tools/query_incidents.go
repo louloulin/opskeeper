@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	alertbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // ToolNameQueryIncidents is the stable wire name the LLM sees.

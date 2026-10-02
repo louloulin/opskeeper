@@ -11,8 +11,8 @@ import (
 	"context"
 	"log/slog"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/metric"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/metric"
 )
 
 // Service delegates to biz.IngestService and biz.QueryUsecase.

@@ -23,11 +23,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	devicemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/device"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
 )
 
 // Type is the closed-set of mention kinds the SPA can search.

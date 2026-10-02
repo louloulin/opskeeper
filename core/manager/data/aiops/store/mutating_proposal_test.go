@@ -10,8 +10,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // newProposalRepo opens an in-memory SQLite DB and applies this

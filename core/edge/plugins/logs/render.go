@@ -7,7 +7,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins"
+	"github.com/vincent-wuhan/opskeeper/core/edge/plugins"
 )
 
 // promtailTemplate is the Promtail config we render per edge. Stays

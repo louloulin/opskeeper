@@ -13,8 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	chatdiagnosebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/chatdiagnose"
-	loop "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
+	chatdiagnosebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/chatdiagnose"
+	loop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 )
 
 // fakeService implements ChatDiagnoseService for tests.

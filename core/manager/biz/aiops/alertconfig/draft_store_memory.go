@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 type memoryAlertRuleDraftStore struct {

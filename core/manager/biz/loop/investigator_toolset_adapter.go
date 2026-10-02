@@ -4,9 +4,9 @@
 // 设计：
 //   - Investigate：返回 1 条最小 evidence（resource_alert + alertID），让 LLM 有最小输入
 //     真实 evidence 链路（query_metrics / query_logs / link_runtime_to_commit）
-//     Day 5+ 接 internal/manager/biz/aiops/tools 三件套
+//     Day 5+ 接 core/manager/biz/aiops/tools 三件套
 //   - ListRemediations：5 个 resource_type 的静态映射（pg / redis / k8s / host / mq）
-//     Day 5+ 替换为 internal/manager/biz/aiops/remediations/ 真策略
+//     Day 5+ 替换为 core/manager/biz/aiops/remediations/ 真策略
 //
 // 失败语义：slog warn + 返回空（KB 风格：不阻塞 investigated worker）
 
@@ -58,7 +58,7 @@ func (i *InvestigatorToolsetAdapter) Investigate(ctx context.Context, resourceTy
 
 // ListRemediations 静态映射 5 个 resource_type → 默认 remediation options。
 //
-// Day 5+：从 internal/manager/biz/aiops/remediations/ 真策略替换。
+// Day 5+：从 core/manager/biz/aiops/remediations/ 真策略替换。
 func (i *InvestigatorToolsetAdapter) ListRemediations(ctx context.Context, resourceType string) ([]RemediationOption, error) {
 	if resourceType == "" {
 		return nil, fmt.Errorf("loop: ListRemediations requires resourceType")

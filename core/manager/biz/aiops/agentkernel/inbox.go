@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
+	bizapproval "github.com/vincent-wuhan/opskeeper/core/manager/biz/approval"
+	modelapproval "github.com/vincent-wuhan/opskeeper/core/manager/model/approval"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	bizapproval "github.com/vincent-wuhan/opskeeper/internal/manager/biz/approval"
-	modelapproval "github.com/vincent-wuhan/opskeeper/internal/manager/model/approval"
 )
 
 // inbox.go binds the kernel approval gate onto the manager's human

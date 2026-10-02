@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 type fakeLLM struct {

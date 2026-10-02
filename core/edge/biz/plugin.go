@@ -3,8 +3,8 @@ package biz
 import (
 	"context"
 
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
 )
 
 // Plugin distribution, on the edge side.

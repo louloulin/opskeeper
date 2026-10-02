@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	bizreport "github.com/vincent-wuhan/opskeeper/internal/manager/biz/report"
+	bizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
 )
 
 // The facts collector queries tables owned by other domains by name.

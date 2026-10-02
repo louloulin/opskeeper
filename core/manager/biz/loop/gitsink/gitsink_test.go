@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"testing"
 
-	loop "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	managerbizreport "github.com/vincent-wuhan/opskeeper/internal/manager/biz/report"
+	loop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	managerbizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
 )
 
 func discardLogger3() *slog.Logger {

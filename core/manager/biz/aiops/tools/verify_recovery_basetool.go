@@ -2,7 +2,7 @@
 //
 // verify_recovery 是 zero-manual-ops-loop Day 3 落地的恢复验证 BaseTool，
 // 由 orchestrator 的 recovered phase 通过 PhaseWorker 调用（见
-// internal/manager/biz/loop/recovery.go）。
+// core/manager/biz/loop/recovery.go）。
 //
 // 设计依据：
 //
@@ -46,8 +46,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	loop "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	loop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 )
 
 // ToolNameVerifyRecovery 是 verify_recovery 在工具表里的稳定 wire 名。

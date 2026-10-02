@@ -16,7 +16,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	incident "github.com/vincent-wuhan/opskeeper/internal/control/incident"
+	incident "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
 )
 
 type seedResult struct {

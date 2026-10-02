@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 // DefaultTimeout is the per-call timeout applied when WithTimeout is

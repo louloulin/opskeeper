@@ -7,7 +7,7 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 // ErrRateLimited 是限流错误。

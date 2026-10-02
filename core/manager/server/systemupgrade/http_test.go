@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	upgradesvc "github.com/vincent-wuhan/opskeeper/internal/manager/service/systemupgrade"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	upgradesvc "github.com/vincent-wuhan/opskeeper/core/manager/service/systemupgrade"
 )
 
 type stubUpgrade struct {

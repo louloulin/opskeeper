@@ -9,9 +9,9 @@ import (
 	"log/slog"
 	"time"
 
-	edgestore "github.com/vincent-wuhan/opskeeper/internal/manager/data/edge/store"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
+	edgestore "github.com/vincent-wuhan/opskeeper/core/manager/data/edge/store"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 // Usecase is the narrow API the frontierbound handler and the

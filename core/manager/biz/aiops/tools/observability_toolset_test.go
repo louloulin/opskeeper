@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 // The node's observability and middleware toolset, generated from this
@@ -34,7 +34,7 @@ import (
 //
 // Regenerate with:
 //
-//	OPSKEEPER_UPDATE_TOOLSET=1 go test ./internal/manager/biz/aiops/tools/ -run Toolset
+//	OPSKEEPER_UPDATE_TOOLSET=1 go test ./core/manager/biz/aiops/tools/ -run Toolset
 //
 // after changing a schema. Then run scripts/sync-pig-ops.sh to copy the
 // extension into the package.
@@ -252,13 +252,13 @@ const toolsetHeader = `package opskeeperobservability
 // GENERATED FILE — do not edit.
 //
 // Produced from the live Info() of the tools in
-// internal/manager/biz/aiops/tools by that package's tests. The registry
+// core/manager/biz/aiops/tools by that package's tests. The registry
 // is the authority: it is what executes the call, so its schema is the one
 // that has to be correct, and this file is the copy the node's agent reads.
 //
 // Regenerate with:
 //
-//	OPSKEEPER_UPDATE_TOOLSET=1 go test ./internal/manager/biz/aiops/tools/ -run Toolset
+//	OPSKEEPER_UPDATE_TOOLSET=1 go test ./core/manager/biz/aiops/tools/ -run Toolset
 //
 // then run scripts/sync-pig-ops.sh to copy the extension into the package.
 // TestTheObservabilityToolsetMatchesTheRegistry fails if this file and the
@@ -318,14 +318,14 @@ func TestTheObservabilityToolsetMatchesTheRegistry(t *testing.T) {
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read the generated toolset: %v\n"+
-			"regenerate it with OPSKEEPER_UPDATE_TOOLSET=1 go test ./internal/manager/biz/aiops/tools/ -run Toolset",
+			"regenerate it with OPSKEEPER_UPDATE_TOOLSET=1 go test ./core/manager/biz/aiops/tools/ -run Toolset",
 			err)
 	}
 	if string(got) != want {
 		t.Errorf("the generated toolset has drifted from the registry.\n"+
 			"  file:     %s (sha256 %s)\n"+
 			"  registry: %s (sha256 %s)\n"+
-			"Regenerate it with OPSKEEPER_UPDATE_TOOLSET=1 go test ./internal/manager/biz/aiops/tools/ -run Toolset",
+			"Regenerate it with OPSKEEPER_UPDATE_TOOLSET=1 go test ./core/manager/biz/aiops/tools/ -run Toolset",
 			path, digestOf(got), "", digestOf([]byte(want)))
 	}
 }

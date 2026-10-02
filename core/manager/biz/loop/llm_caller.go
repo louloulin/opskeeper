@@ -5,7 +5,7 @@
 // Each worker would otherwise re-implement the same five concerns:
 //
 //  1. Prompt rendering (system + user message pair).
-//  2. Provider-agnostic LLM call (goes through internal/pkg/llm.Client).
+//  2. Provider-agnostic LLM call (goes through core/manager/pkg/llm.Client).
 //  3. JSON extraction from prose-wrapped model output.
 //  4. Schema validation of the extracted JSON.
 //  5. Cost / token / latency telemetry.
@@ -34,11 +34,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // LLMCaller is the unified entry point phase workers use to invoke the
-// LLM. Phase workers MUST NOT call internal/pkg/llm or any provider SDK
+// LLM. Phase workers MUST NOT call core/manager/pkg/llm or any provider SDK
 // directly.
 //
 // Failure semantics (see Call for the full matrix):
@@ -101,7 +101,7 @@ type CallOutput struct {
 	// safe to unmarshal into a typed struct.
 	Raw json.RawMessage
 
-	// TokensIn / TokensOut reflect the Usage reported by internal/pkg/llm
+	// TokensIn / TokensOut reflect the Usage reported by core/manager/pkg/llm
 	// on the call that produced Raw. Populated on success only.
 	TokensIn  int
 	TokensOut int
@@ -145,7 +145,7 @@ var ErrSchemaUnparseable = errors.New("llm_caller: caller schema unparseable")
 const defaultCallTimeoutMs = 60_000
 
 // llmCaller is the production LLMCaller backed by an llm.Client from
-// internal/pkg/llm. It is safe to share across goroutines: the wrapped
+// core/manager/pkg/llm. It is safe to share across goroutines: the wrapped
 // llm.Client is already concurrency-safe, and llmCaller holds no
 // mutable state of its own outside the constructor-supplied logger.
 type llmCaller struct {
@@ -183,7 +183,7 @@ func WithQwenNoThink() Option {
 // NewLLMCaller wires a LLMCaller backed by an llm.Client.
 //
 // The client MUST be non-nil; passing nil is a programming error and
-// will panic on first Call. Construct the client via internal/pkg/llm
+// will panic on first Call. Construct the client via core/manager/pkg/llm
 // .New(cfg, budget, reg) so workers stay decoupled from SDK choices.
 func NewLLMCaller(client llm.Client, opts ...Option) LLMCaller {
 	if client == nil {

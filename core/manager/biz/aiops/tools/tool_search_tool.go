@@ -18,7 +18,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 // ToolSearchToolName is the wire name the LLM sees. Anthropic's

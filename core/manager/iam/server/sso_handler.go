@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/vincent-wuhan/opskeeper/internal/iam/biz/sso"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/sso"
 )
 
 // SSOHandler wires the SSOService into the manager's HTTP router.

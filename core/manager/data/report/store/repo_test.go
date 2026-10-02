@@ -10,8 +10,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/report"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 func newReportTestRepo(t *testing.T) *Repo {

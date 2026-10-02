@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/chatdiagnose"
+	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/chatdiagnose"
 )
 
 // makePattern 构造一个测试用 IncidentPattern。

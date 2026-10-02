@@ -1,5 +1,5 @@
 // Package contractloader 提供 loop.UpstreamContractLoader 的 narrow adapter，
-// 包装 internal/manager/data/loop/store.ContractRepoDB。
+// 包装 core/manager/data/loop/store.ContractRepoDB。
 //
 // 设计动机：
 //   - loop 包（biz 层）不能直接 import data/loop/store，否则形成
@@ -26,9 +26,9 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	loopstore "github.com/vincent-wuhan/opskeeper/internal/manager/data/loop/store"
+	loopstore "github.com/vincent-wuhan/opskeeper/core/manager/data/loop/store"
 
-	loop "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
+	loop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 )
 
 // Adapter 把 loopstore.ContractRepoDB 适配到 loop.UpstreamContractLoader 接口。

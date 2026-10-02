@@ -6,8 +6,8 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/edge/policygate"
 	"github.com/vincent-wuhan/opskeeper/core/edge/toolbroker"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
-	"github.com/vincent-wuhan/opskeeper/internal/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
+	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
 )
 
 // The node's role ladder.

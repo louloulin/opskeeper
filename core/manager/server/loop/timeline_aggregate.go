@@ -26,13 +26,13 @@ import (
 	"strings"
 	"time"
 
-	loopbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 // forwardPhaseOrder is the canonical 7-phase list the timeline view
 // renders in stable order. It must match allForwardPhases in
-// internal/manager/biz/loop/orchestrator.go so phase_entered event
+// core/manager/biz/loop/orchestrator.go so phase_entered event
 // rows render against the same phase names. The string values come
 // from loopbiz.Phase constants so the wire format stays in sync
 // with the orchestrator.
@@ -653,14 +653,14 @@ func parseCritiqueSubPhases(events []loopmodel.Event) []TimelineSubPhase {
 // loop-harness-rubric spec:
 //
 //   - rca_accuracy:    ratio of phases that wrote a non-empty
-//                      RootCauseJSON contract to total forward phases.
+//     RootCauseJSON contract to total forward phases.
 //   - time_to_remediate: wall-clock between the first detected event
-//                      and the recovered-phase contract write.
+//     and the recovered-phase contract write.
 //   - approval_rate:   ratio of approved-phase events to total
-//                      approval attempts (1.0 when no human approval
-//                      was needed).
+//     approval attempts (1.0 when no human approval
+//     was needed).
 //   - recovery_pass_rate: ratio of phases whose VerifiedDelta.passed
-//                      is true to total recovery attempts.
+//     is true to total recovery attempts.
 //
 // Empty / partial event sets return zero-value metrics with a
 // pending status; the SPA renders "—" rather than "0.00" in that case.
@@ -732,13 +732,13 @@ func BuildRubric(events []loopmodel.Event) TimelineRubric {
 	// recovery_pass_rate: weighted by VerifiedDelta.sample_size so a
 	// 60s observation window that produced 60 observations
 	// contributes 60 samples to the denominator instead of just 1.
-// The VerifyRecovery worker emits one contract per observation
-// window (typically sample_size >= 3 per design §D5), and the
-// rubric must reflect the multi-sample reality rather than
-// counting each contract as a single +/-1 boolean. When a
-// contract omits sample_size we fall back to counting it as one
-// attempt so the metric stays defined for legacy/partial event
-// logs.
+	// The VerifyRecovery worker emits one contract per observation
+	// window (typically sample_size >= 3 per design §D5), and the
+	// rubric must reflect the multi-sample reality rather than
+	// counting each contract as a single +/-1 boolean. When a
+	// contract omits sample_size we fall back to counting it as one
+	// attempt so the metric stays defined for legacy/partial event
+	// logs.
 	recoveryAttempts := 0
 	recoveryPasses := 0
 	for _, ev := range events {

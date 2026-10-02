@@ -29,7 +29,7 @@ import (
 	"log/slog"
 	"time"
 
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 // canWalk reports whether the orchestrator is wired with the optional

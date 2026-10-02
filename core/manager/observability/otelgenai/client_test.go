@@ -10,7 +10,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 func TestClientChatRecordsGenAIAttributes(t *testing.T) {

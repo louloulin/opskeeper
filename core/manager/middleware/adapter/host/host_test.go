@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 // fakeRunner answers with scripted output and records the argv it was given.

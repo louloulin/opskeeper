@@ -10,9 +10,9 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard"
-	gitartifact "github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
+	gitartifact "github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact"
 )
 
 // --- Fakes --------------------------------------------------------------

@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizdemo "github.com/vincent-wuhan/opskeeper/internal/manager/biz/demo"
-	servicedemo "github.com/vincent-wuhan/opskeeper/internal/manager/service/demo"
+	bizdemo "github.com/vincent-wuhan/opskeeper/core/manager/biz/demo"
+	servicedemo "github.com/vincent-wuhan/opskeeper/core/manager/service/demo"
 )
 
 const maxRequestBodyBytes = 16 << 10

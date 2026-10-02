@@ -2,8 +2,8 @@
 # 运行：make arch-lint
 #
 # 顶层规则：
-#   - iam / manager / edgeagent 三大 BC 两两禁止互 import
-#   - internal/pkg/** 不得 import 任何 BC
+#   - iam / manager 两大 BC 两两禁止互 import（edgeagent 已迁出为 core/edge 模块）
+#   - core/manager/pkg/** 与 core/floor/** 不得 import 任何 BC
 #   - 同一 BC 内部 service 层禁止越过 biz 直接 import 同 BC 的 data 层
 #     （go-arch-lint v3 支持以独立组件 + deps 表达，见下方 iam_service / manager_service 等）
 #
@@ -13,27 +13,104 @@
 version: 3
 workdir: .
 
+# Vendor imports are not what this file is about: it encodes *component*
+# direction. The vendor graph is the go.mod's business, and turning the
+# per-component vendor check on here would add a second list to maintain for
+# no architectural statement. Project-component direction stays fully
+# enforced.
+allow:
+  depOnAnyVendor: true
+  # 依赖注入 / setter 注入分析默认关，而且必须显式关。
+  #
+  # 打开它时，工具会顺着构造函数把「谁被装配进谁」也算成一条依赖，然后用
+  # mayDependOn 这把尺子去判——但那把尺子管的是 **import**，不是 **装配**。
+  # 结果有两类假阳性：
+  #   1. 六边形结构本身：core/ports 的接口在 cmd 里由 manager_biz 的实现
+  #      满足，工具判成 "oxcore_ports 依赖 manager_biz"，而这正是端口存在
+  #      的意义（import 方向仍然只有 manager → core）。
+  #   2. cmd 是装配层：把 cmd 里定义的类型注入 manager_biz，判成
+  #      "manager_biz 依赖 cmd"，方向恰好相反。
+  #
+  # 关掉不等于承认没问题。它抓到的 41 条里有几条是真问题（core/manager/pkg 与
+  # core/floor/skill 通过包级 Set*Resolver 反向拿到 manager/biz/setting 的
+  # 实现，绕过了 import 图）。用 mayDependOn 修这类问题等于给 core/floor/skill
+  # 发一张 import manager 的许可证——修法是拆掉包级 setter，那是 manager
+  # 迁移（决策 57）范围内的活，已经逐条记在 docs/opskeeper2-architecture.md
+  # 的「当前真实缺口」里。
+  deepScan: false
+
 components:
-  iam_service:     { in: internal/iam/service/** }
-  iam_biz:         { in: internal/iam/biz/** }
-  iam_data:        { in: internal/iam/data/** }
-  iam_model:       { in: internal/iam/model/** }
-  iam_server:      { in: internal/iam/server/** }
+  iam_service:     { in: core/manager/iam/service/** }
+  iam_biz:         { in: core/manager/iam/biz/** }
+  iam_data:        { in: core/manager/iam/data/** }
+  iam_model:       { in: core/manager/iam/model/** }
+  iam_server:      { in: core/manager/iam/server/** }
 
-  manager_service: { in: internal/manager/service/** }
-  manager_biz:     { in: internal/manager/biz/** }
-  manager_data:    { in: internal/manager/data/** }
-  manager_model:   { in: internal/manager/model/** }
-  manager_server:  { in: internal/manager/server/** }
+  manager_service: { in: core/manager/service/** }
+  manager_biz:     { in: core/manager/biz/** }
+  manager_data:    { in: core/manager/data/** }
+  manager_model:   { in: core/manager/model/** }
+  manager_server:  { in: core/manager/server/** }
 
-  edgeagent_service: { in: internal/edgeagent/service/** }
-  edgeagent_biz:     { in: internal/edgeagent/biz/** }
-  edgeagent_data:    { in: internal/edgeagent/data/** }
-  edgeagent_model:   { in: internal/edgeagent/model/** }
+  oxedge_service: { in: core/edge/service/** }
+  oxedge_biz:     { in: core/edge/biz/** }
+  oxedge_model:   { in: core/edge/model/** }
 
-  shared_pkg: { in: internal/pkg/** }
+  shared_pkg: { in: core/manager/pkg/** }
   api:        { in: api/** }
   cmd:        { in: cmd/** }
+
+  # The rest of the shared floor. These trees are used by more than one
+  # bounded context (core/floor/skill by the node plane, the middleware
+  # adapters by manager and cmd, dataguard by iam and manager), which is what
+  # makes them floor rather than anybody's business layer. `internal/pkg`
+  # was the only one declared until now, so every import of the others read
+  # as "a component reached an undeclared package".
+  #
+  # They moved from internal/* to core/manager/* when the control plane's
+  # infrastructure went with the manager module (decision 62). The component
+  # names are unchanged because the rules they encode are unchanged; only
+  # the paths and the module underneath them are new.
+  # core/floor is the seventh module (decision 60): the infrastructure both
+  # planes need. It is a separate go module, so the Go toolchain already
+  # prevents it from reaching a bounded context; this component records the
+  # same fact where the rest of the directions are written down.
+  oxfloor: { in: core/floor/** }
+  shared_middleware:  { in: core/manager/middleware/** }
+  shared_knowledge:   { in: core/manager/knowledge/** }
+  shared_control:     { in: core/manager/control/** }
+  shared_dataguard:   { in: core/manager/dataguard/** }
+  shared_agentteams:  { in: core/manager/agentteams/** }
+  shared_observability: { in: core/manager/observability/** }
+  shared_migrate:     { in: core/manager/migrate/** }
+  shared_migrator:    { in: core/manager/migrator/** }
+  shared_higress:     { in: core/manager/higress/** }
+
+  # The node plane's own trees outside service/biz/model: the collectors,
+  # the plugins, the sandbox policies and the webshell. They are the node's
+  # data plane, and cmd/opskeeper-edge assembles them.
+  #
+  # The whole node plane moved from core/edge to the edge module
+  # (decision 61). The component names keep their shape because the rules
+  # they encode are unchanged; only the paths and the Go module underneath
+  # them are new.
+  oxedge_runtime:
+    in:
+      - core/edge/bash/**
+      - core/edge/changewatcher/**
+      - core/edge/cmdpolicy/**
+      - core/edge/collector/**
+      - core/edge/host_files/**
+      - core/edge/plugins/**
+      - core/edge/restart_service/**
+      - core/edge/skill/**
+      - core/edge/webshell/**
+
+  # Tooling and tests are their own components: a test that wires two
+  # planes together is not a violation of the planes' boundary, it is the
+  # place the boundary is exercised.
+  tests:   { in: tests/** }
+  scripts: { in: scripts/** }
 
   # ---------------- OpsKeeper 2.0 modules ----------------
   # These are separate go modules, not just subtrees. The Go module
@@ -63,6 +140,11 @@ components:
   oxharness_judge:     { in: core/harness/judge/** }
   oxharness_runner:    { in: core/harness/runner/** }
   oxharness_leaderboard: { in: core/harness/leaderboard/** }
+  oxharness_projection: { in: core/harness/projection/** }
+  oxharness_vocabulary: { in: core/harness/vocabulary/** }
+  oxedge_agentprofile:  { in: core/edge/agentprofile/** }
+  oxpig_profile:        { in: core/pig/pigprofile/** }
+  oxpig_ext:            { in: core/pig/extensions/** }
 
 # 允许依赖的正向清单（未列出 = 禁止）
 deps:
@@ -83,53 +165,132 @@ deps:
 
   # ---------------- iam BC ----------------
   iam_server:
-    mayDependOn: [iam_service, iam_biz, iam_model, shared_pkg, api, oxcore_domain, oxcore_ports, oxcore_wire]
+    # !!! 已知债务：arch-lint 的 mayDependOn 是组件粒度白名单，同组件新增同类导入不会再报警。
+    # 每条都对应真实违例文件，manager/iam 迁移到 core/manager 时随条目一起删除：
+    #   - manager_biz: core/manager/iam/server/http.go 复用 manager/biz/audit
+    #   - manager_model: core/manager/iam/server/http.go 复用 manager/model/audit
+    #   - manager_server: core/manager/iam/server/http.go 复用 manager/server/middleware
+    mayDependOn:
+      - api
+      - iam_biz
+      - iam_model
+      - iam_service
+      - manager_biz
+      - manager_model
+      - manager_server
+      - oxcore_domain
+      - oxcore_ports
+      - oxcore_wire
+      - shared_pkg
+      - oxfloor
   iam_service:
     # 关键：service 不得直接依赖 iam_data（必须走 biz）
-    mayDependOn: [iam_biz, iam_model, shared_pkg, api, oxcore_domain, oxcore_ports, oxcore_wire]
+    mayDependOn: [iam_biz, iam_model, shared_pkg, api, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
   iam_biz:
-    mayDependOn: [iam_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
+    # !!! 已知债务：arch-lint 的 mayDependOn 是组件粒度白名单，同组件新增同类导入不会再报警。
+    # 每条都对应真实违例文件，manager/iam 迁移到 core/manager 时随条目一起删除：
+    #   - iam_data: core/manager/iam/biz/sso/service.go 直接 import iam/data/sso（biz 越过端口拿实现）
+    mayDependOn: [iam_data, iam_model, oxcore_domain, oxcore_ports, oxcore_wire, shared_dataguard, shared_pkg, oxfloor]
   iam_data:
-    mayDependOn: [iam_biz, iam_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
+    mayDependOn: [iam_biz, iam_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
   iam_model:
-    mayDependOn: [shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
+    mayDependOn: [shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
 
   # ---------------- manager BC ----------------
   manager_server:
-    mayDependOn: [manager_service, manager_biz, manager_model, shared_pkg, api, oxcore_domain, oxcore_ports, oxcore_wire]
+    # !!! 已知债务：arch-lint 的 mayDependOn 是组件粒度白名单，同组件新增同类导入不会再报警。
+    # 每条都对应真实违例文件，manager/iam 迁移到 core/manager 时随条目一起删除：
+    #   - iam_model: core/manager/server/imbridge/http.go 复用 iam/model
+    mayDependOn:
+      - api
+      - iam_model
+      - manager_biz
+      - manager_model
+      - manager_server
+      - manager_service
+      - oxcore_domain
+      - oxcore_ports
+      - oxcore_wire
+      - shared_agentteams
+      - shared_control
+      - shared_dataguard
+      - shared_pkg
+      - oxfloor
   manager_service:
-    mayDependOn: [manager_biz, manager_model, shared_pkg, api, oxcore_domain, oxcore_ports, oxcore_wire]
+    mayDependOn:
+      - api
+      - manager_biz
+      - manager_model
+      - manager_service
+      - oxcore_domain
+      - oxcore_ports
+      - oxcore_wire
+      - shared_pkg
+      - oxfloor
   # manager_biz 额外允许 pigagent/pigwire：内核的宿主绑定（决策 30）必须
   # 拿到 PiG 的事件与内核类型，而 core/pig 不能反向依赖根模块——所以这层
   # 适配只能落在根模块里。这是"PiG 变更收口到一个模块"与"core/pig 不
   # 依赖根模块"两条规则交叉后的唯一落点。
   manager_biz:
-    mayDependOn: [manager_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire, oxpig_agent, oxpig_wire]
+    # !!! 已知债务：arch-lint 的 mayDependOn 是组件粒度白名单，同组件新增同类导入不会再报警。
+    # 每条都对应真实违例文件，manager/iam 迁移到 core/manager 时随条目一起删除：
+    #   - manager_data: biz 直接 import data/*/store：proposal/expiry.go、audit/chain.go、audit/usecase.go、edge/changeevent/usecase.go、loop/contractloader/contractloader.go
+    #   - manager_service: core/manager/biz/imbridge/adapter.go 反向 import manager/service/aiops
+    mayDependOn:
+      - manager_biz
+      - manager_data
+      - manager_model
+      - manager_service
+      - oxcore_domain
+      - oxcore_ports
+      - oxcore_wire
+      - oxpig_agent
+      - oxpig_wire
+      - shared_control
+      - shared_dataguard
+      - shared_knowledge
+      - shared_observability
+      - shared_pkg
+      - oxfloor
   manager_data:
-    mayDependOn: [manager_biz, manager_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
+    mayDependOn:
+      - manager_biz
+      - manager_model
+      - oxcore_domain
+      - oxcore_ports
+      - oxcore_wire
+      - shared_knowledge
+      - shared_pkg
+      - oxfloor
   manager_model:
-    mayDependOn: [shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
+    mayDependOn: [shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
 
-  # ---------------- edgeagent BC ----------------
-  edgeagent_service:
-    mayDependOn: [edgeagent_biz, edgeagent_model, shared_pkg, api, oxcore_domain, oxcore_ports, oxcore_wire]
-  edgeagent_biz:
-    mayDependOn: [edgeagent_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
-  edgeagent_data:
-    mayDependOn: [edgeagent_biz, edgeagent_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
-  edgeagent_model:
-    mayDependOn: [shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire]
+  # ---------------- edge module (was the edgeagent BC) ----------------
+  # These four components are the node plane's own layers. They no longer
+  # live in the root module, so the Go toolchain now refuses a node file
+  # that reaches the control plane; what is left for these rules is the
+  # intra-module direction, which the toolchain does not check.
+  oxedge_service:
+    mayDependOn: [oxedge_biz, oxedge_model, oxedge_runtime, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
+  oxedge_biz:
+    mayDependOn: [oxedge_model, oxedge_runtime, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
+  oxedge_model:
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
 
   # ---------------- OpsKeeper 2.0 module direction ----------------
   # core is the root of the new graph: it may not depend on anything, not
   # even on shared_pkg. A contract that reaches into infrastructure forces
   # every plugin to resolve that infrastructure.
-  oxcore_domain:
-    mayDependOn: []
+  #
+  # "May depend on nothing" is expressed by *omitting* the rule, not by
+  # writing `mayDependOn: []`: go-arch-lint's spec validator refuses a rule
+  # with an empty list and no `anyProjectDeps`/`anyVendorDeps` flag, calling
+  # it a misconfiguration. That is why oxcore_domain, oxcore_wire and api
+  # have no entry below. It also means every rule that *is* written must
+  # list its own component - this linter does not treat a component as
+  # implicitly allowed to import itself.
   oxcore_ports:
     mayDependOn: [oxcore_domain, oxcore_wire]
-  oxcore_wire:
-    mayDependOn: []
 
   # pig adapts the contracts onto PiG. The rule that actually contains PiG
   # is enforced by scripts/modulecheck: only files inside the pig module may
@@ -145,7 +306,7 @@ deps:
   # pigmodel reaches core's ports as well as its domain, because chat.go
   # there is where a request becomes a transcript: the host names a request
   # in ports vocabulary and never learns the PiG shape it turns into. That is
-  # the whole point of the boundary — the conversion is a PiG concern, and a
+  # the whole point of the boundary - the conversion is a PiG concern, and a
   # host that had to perform it would hold a PiG type.
   #
   # The reverse direction is what the module graph forbids and this file
@@ -186,7 +347,7 @@ deps:
   oxedge_toolbroker:
     mayDependOn: [oxcore_wire]
   # pigwire translates PiG's stream into the frozen SSE frames. It reaches
-  # the contract layer only — the translation is the whole component.
+  # the contract layer only - the translation is the whole component.
   oxpig_wire:
     mayDependOn: [oxcore_ports, oxcore_wire]
 
@@ -204,12 +365,18 @@ deps:
   oxharness_schema:
     mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire]
   oxharness_injector:
-    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire]
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxharness_injector, oxharness_schema]
   oxharness_judge:
     mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxharness_schema]
   oxharness_runner:
     mayDependOn:
-      [oxcore_domain, oxcore_ports, oxcore_wire, oxharness_schema, oxharness_injector, oxharness_judge, oxharness_leaderboard]
+      - oxcore_domain
+      - oxcore_ports
+      - oxcore_wire
+      - oxharness_injector
+      - oxharness_judge
+      - oxharness_leaderboard
+      - oxharness_schema
   oxharness_leaderboard:
     mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxharness_schema]
 
@@ -222,32 +389,52 @@ deps:
     # 落在根模块（core/pig 不能 import 根模块），而 llm 住在 shared_pkg。
     # oxedge_policygate 同理：清单校验要读闸门的决策类型，才不会对"批准"
     # 有一套自己的理解。
-    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxpig_model, oxedge_policygate]
-  api:
-    mayDependOn: []
+    mayDependOn:
+      - oxcore_domain
+      - oxcore_ports
+      - oxcore_wire
+      - oxpig_model
+      - oxplugin_sdk
+      - shared_pkg
+      - oxfloor
 
   # ---------------- 装配层 ----------------
-  # cmd/opskeeper 装配 iam + manager，cmd/opskeeper-edge 装配 edgeagent；
+  # cmd/opskeeper 装配 iam + manager，cmd/opskeeper-edge 装配 edge；
   # go-arch-lint v3 无"按子目录分 cmd"的原生表达，这里合并授权，
   # 由人工 review 与 CODEOWNERS 把住"cmd/opskeeper-edge 不 import iam/manager"。
+  # 注意 cmd 是唯一被允许同时看到两个平面的地方——这正是装配层的定义。
   cmd:
     mayDependOn:
-      - iam_server
-      - iam_service
+      - api
+      - oxedge_biz
+      - oxedge_model
+      - oxedge_runtime
+      - oxedge_service
       - iam_biz
       - iam_data
       - iam_model
-      - manager_server
-      - manager_service
+      - iam_server
+      - iam_service
       - manager_biz
       - manager_data
       - manager_model
-      - edgeagent_service
-      - edgeagent_biz
-      - edgeagent_data
-      - edgeagent_model
+      - manager_server
+      - manager_service
+      - oxedge_agentprofile
+      - oxharness_judge
+      - oxharness_projection
+      - oxharness_vocabulary
+      - shared_agentteams
+      - shared_control
+      - shared_dataguard
+      - shared_higress
+      - shared_knowledge
+      - shared_middleware
+      - shared_migrate
+      - shared_migrator
+      - shared_observability
       - shared_pkg
-      - api
+      - oxfloor
       # The 2.0 modules assemble from cmd; only cmd may reach pig.
       - oxcore_domain
       - oxcore_ports
@@ -265,7 +452,52 @@ deps:
       - oxharness_runner
       - oxharness_leaderboard
 
-# 注：go-arch-lint 的 schema 字段（version / components / deps）按 v3
-# 主流文档书写；若 CI 报 schema 错，按实际版本微调字段名即可。
+  # ---------------- 底座 / 运行时 / 工具链 ----------------
+  # 这些组件此前没有 deps 条目，于是每一次合法 import 都报一条 warning。
+  # 规则不变：底座与运行时不得依赖任何 BC，只允许依赖契约层和自己。
+  oxedge_runtime:
+    mayDependOn: [oxedge_runtime, oxedge_model, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
+  oxharness_projection:
+    mayDependOn: [oxharness_judge]
+  oxharness_vocabulary:
+    mayDependOn: [oxharness_schema]
+  oxpig_ext:
+    mayDependOn: [oxcore_wire]
+  scripts:
+    mayDependOn: [shared_agentteams]
+  shared_agentteams:
+    mayDependOn: [shared_pkg, oxfloor]
+  shared_dataguard:
+    mayDependOn: [shared_dataguard, shared_pkg, oxfloor]
+  shared_knowledge:
+    mayDependOn: [shared_knowledge, shared_pkg, oxfloor]
+  shared_middleware:
+    mayDependOn: [oxcore_ports, shared_knowledge, shared_middleware, shared_pkg, oxfloor]
+  shared_migrate:
+    mayDependOn: [shared_migrate]
+  shared_observability:
+    mayDependOn: [shared_pkg, oxfloor]
+  oxfloor:
+    # 不得依赖任何 BC。core 契约层 + sdk 是它的全部 opskeeper 依赖；
+    # 其余是 yaml / prometheus / geminio 这类第三方库。
+    mayDependOn: [oxfloor, oxcore_domain, oxcore_ports, oxcore_wire, oxplugin_sdk]
+
 commonComponents: []
-excludeFiles: []
+
+# 排除规则（正则，匹配 FileRelativePath；每条都要有理由，否则就是一块遮羞布）：
+#
+#   _test\.go$
+#     测试把两个平面接起来，正是边界被演练的地方，而不是边界被违反的地方。
+#     scripts/modulecheck 对 _test.go 用的是同一把尺（见其 exceptions）。
+#
+#   /plugins/pig-ops/[^/]+/extensions/
+#     scripts/sync-pig-ops.sh 从 core/pig/extensions/** 复制出来的独立 go.mod
+#     副本，只是分发产物；同一份代码在 core/pig/extensions 里已被 oxpig_ext
+#     组件覆盖，重复统计只会产生噪声。
+#
+#   /web/node_modules/
+#     第三方 vendored 代码，不是本仓库的架构。
+excludeFiles:
+  - "_test\\.go$"
+  - "/plugins/pig-ops/[^/]+/extensions/"
+  - "/web/node_modules/"

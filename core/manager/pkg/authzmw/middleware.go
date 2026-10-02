@@ -28,8 +28,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // Authorizer is the narrow contract — *iam/biz/authz.Enforcer satisfies

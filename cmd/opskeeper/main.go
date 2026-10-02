@@ -39,21 +39,21 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/auth"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/authzmw"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/config"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/dbx"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/httpserver"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/leader"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/logger"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/probes"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/runner"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/secretbox"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/shutdown"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/workspace"
-	wsfanout "github.com/vincent-wuhan/opskeeper/internal/pkg/wsfanout"
+	"github.com/vincent-wuhan/opskeeper/core/floor/config"
+	"github.com/vincent-wuhan/opskeeper/core/floor/httpserver"
+	"github.com/vincent-wuhan/opskeeper/core/floor/logger"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/authzmw"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/dbx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/leader"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/probes"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/runner"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/secretbox"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/shutdown"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/workspace"
+	wsfanout "github.com/vincent-wuhan/opskeeper/core/manager/pkg/wsfanout"
 
 	redis "github.com/redis/go-redis/v9"
 	harnessrunner "github.com/vincent-wuhan/opskeeper/core/harness/runner"
@@ -61,170 +61,172 @@ import (
 	"encoding/json"
 	"strconv"
 
-	"github.com/vincent-wuhan/opskeeper/internal/observability/otelgenai"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/embedding"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/qdrantx"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tracing"
+	"github.com/vincent-wuhan/opskeeper/core/manager/observability/otelgenai"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/embedding"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/qdrantx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tracing"
 
-	pkglogquery "github.com/vincent-wuhan/opskeeper/internal/pkg/logquery"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/notify"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/promauth"
-	pkgpromquery "github.com/vincent-wuhan/opskeeper/internal/pkg/promquery"
-	pkgpromwrite "github.com/vincent-wuhan/opskeeper/internal/pkg/promwrite"
-	pkgtracequery "github.com/vincent-wuhan/opskeeper/internal/pkg/tracequery"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
+	pkglogquery "github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/notify"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promauth"
+	pkgpromquery "github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
+	pkgpromwrite "github.com/vincent-wuhan/opskeeper/core/manager/pkg/promwrite"
+	pkgtracequery "github.com/vincent-wuhan/opskeeper/core/manager/pkg/tracequery"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
-	iambizauthz "github.com/vincent-wuhan/opskeeper/internal/iam/biz/authz"
-	iambizmembership "github.com/vincent-wuhan/opskeeper/internal/iam/biz/membership"
-	iambizorg "github.com/vincent-wuhan/opskeeper/internal/iam/biz/org"
-	iambizuser "github.com/vincent-wuhan/opskeeper/internal/iam/biz/user"
-	iamdatamembership "github.com/vincent-wuhan/opskeeper/internal/iam/data/membership/store"
-	iamdataorg "github.com/vincent-wuhan/opskeeper/internal/iam/data/org/store"
-	iamdatauser "github.com/vincent-wuhan/opskeeper/internal/iam/data/user/sqlite"
-	iammodel "github.com/vincent-wuhan/opskeeper/internal/iam/model"
-	iamserver "github.com/vincent-wuhan/opskeeper/internal/iam/server"
-	iamservice "github.com/vincent-wuhan/opskeeper/internal/iam/service"
+	iambizauthz "github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/authz"
+	iambizmembership "github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/membership"
+	iambizorg "github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/org"
+	iambizuser "github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/user"
+	iamdatamembership "github.com/vincent-wuhan/opskeeper/core/manager/iam/data/membership/store"
+	iamdataorg "github.com/vincent-wuhan/opskeeper/core/manager/iam/data/org/store"
+	iamdatauser "github.com/vincent-wuhan/opskeeper/core/manager/iam/data/user/sqlite"
+	iammodel "github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
+	iamserver "github.com/vincent-wuhan/opskeeper/core/manager/iam/server"
+	iamservice "github.com/vincent-wuhan/opskeeper/core/manager/iam/service"
 
-	managerbizdemo "github.com/vincent-wuhan/opskeeper/internal/manager/biz/demo"
-	managerbizdevice "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	managerbizedge "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	changeeventbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge/changeevent"
-	managerbizmetric "github.com/vincent-wuhan/opskeeper/internal/manager/biz/metric"
-	managerbizpromwrite "github.com/vincent-wuhan/opskeeper/internal/manager/biz/promwrite"
-	managerbiztopology "github.com/vincent-wuhan/opskeeper/internal/manager/biz/topology"
-	manageralertdata "github.com/vincent-wuhan/opskeeper/internal/manager/data/alert/store"
-	managerdemodata "github.com/vincent-wuhan/opskeeper/internal/manager/data/demo"
-	managerdevicedata "github.com/vincent-wuhan/opskeeper/internal/manager/data/device/store"
-	manageredgedata "github.com/vincent-wuhan/opskeeper/internal/manager/data/edge/store"
-	managermetricdata "github.com/vincent-wuhan/opskeeper/internal/manager/data/metric/store"
-	managertopologydata "github.com/vincent-wuhan/opskeeper/internal/manager/data/topology/store"
-	managermodelalert "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	managerbizdemo "github.com/vincent-wuhan/opskeeper/core/manager/biz/demo"
+	managerbizdevice "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	managerbizedge "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	changeeventbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge/changeevent"
+	managerbizmetric "github.com/vincent-wuhan/opskeeper/core/manager/biz/metric"
+	managerbizpromwrite "github.com/vincent-wuhan/opskeeper/core/manager/biz/promwrite"
+	managerbiztopology "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
+	manageralertdata "github.com/vincent-wuhan/opskeeper/core/manager/data/alert/store"
+	managerdemodata "github.com/vincent-wuhan/opskeeper/core/manager/data/demo"
+	managerdevicedata "github.com/vincent-wuhan/opskeeper/core/manager/data/device/store"
+	manageredgedata "github.com/vincent-wuhan/opskeeper/core/manager/data/edge/store"
+	managermetricdata "github.com/vincent-wuhan/opskeeper/core/manager/data/metric/store"
+	managertopologydata "github.com/vincent-wuhan/opskeeper/core/manager/data/topology/store"
+	managermodelalert "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
-	managerbizaiops "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops"
-	aiopsagent "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/agent"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/agentkernel"
-	aiopschatruntime "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/chatruntime"
+	managerbizaiops "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
+	aiopsagent "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
+	aiopschatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 
-	aiopsinvestigator "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/investigator"
-	managerbizaiopsmentions "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/mentions"
-	aiopstools "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
-	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	aiopstoolsdec "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/decorators"
-	managerbizalert "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	investigator "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert/investigator"
-	managerbizapproval "github.com/vincent-wuhan/opskeeper/internal/manager/biz/approval"
-	managerbizchatdiagnose "github.com/vincent-wuhan/opskeeper/internal/manager/biz/chatdiagnose"
-	managerbizgrafana "github.com/vincent-wuhan/opskeeper/internal/manager/biz/grafana"
-	managerbizhitl "github.com/vincent-wuhan/opskeeper/internal/manager/biz/hitl"
-	managerbizimbridge "github.com/vincent-wuhan/opskeeper/internal/manager/biz/imbridge"
-	managerbizimbridgefeishu "github.com/vincent-wuhan/opskeeper/internal/manager/biz/imbridge/provider/feishu"
-	managerbizimbridgeslack "github.com/vincent-wuhan/opskeeper/internal/manager/biz/imbridge/provider/slack"
-	managerbizimbridgetelegram "github.com/vincent-wuhan/opskeeper/internal/manager/biz/imbridge/provider/telegram"
-	managerbizknowledge "github.com/vincent-wuhan/opskeeper/internal/manager/biz/knowledge"
-	managerbizloop "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	managerbizloopcontractloader "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop/contractloader"
-	managerbizloopgitsink "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop/gitsink"
-	managerbizloopinvestigatorreal "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop/investigatorreal"
-	managerbizmarketplace "github.com/vincent-wuhan/opskeeper/internal/manager/biz/marketplace"
-	managerbizmcp "github.com/vincent-wuhan/opskeeper/internal/manager/biz/mcp"
-	managerbizmonitor "github.com/vincent-wuhan/opskeeper/internal/manager/biz/monitor"
-	managerbiznodeagent "github.com/vincent-wuhan/opskeeper/internal/manager/biz/nodeagent"
-	managerbiznodefleet "github.com/vincent-wuhan/opskeeper/internal/manager/biz/nodefleet"
-	managerbizsecret "github.com/vincent-wuhan/opskeeper/internal/manager/biz/secret"
-	managerbizsetting "github.com/vincent-wuhan/opskeeper/internal/manager/biz/setting"
-	managerbizskill "github.com/vincent-wuhan/opskeeper/internal/manager/biz/skill"
-	managerwebshellbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/webshell"
-	manageraiopsdata "github.com/vincent-wuhan/opskeeper/internal/manager/data/aiops/store"
-	managerapprovaldata "github.com/vincent-wuhan/opskeeper/internal/manager/data/approval/store"
-	managerdatachatdiagnosestore "github.com/vincent-wuhan/opskeeper/internal/manager/data/chatdiagnose/store"
-	managerdatahitlstore "github.com/vincent-wuhan/opskeeper/internal/manager/data/hitl/store"
-	managerimbridgedata "github.com/vincent-wuhan/opskeeper/internal/manager/data/imbridge/store"
-	managerknowledgedata "github.com/vincent-wuhan/opskeeper/internal/manager/data/knowledge/store"
-	managerdataloopstore "github.com/vincent-wuhan/opskeeper/internal/manager/data/loop/store"
-	managermarketplacedata "github.com/vincent-wuhan/opskeeper/internal/manager/data/marketplace/store"
-	managermcpdata "github.com/vincent-wuhan/opskeeper/internal/manager/data/mcp/store"
-	managermonitordata "github.com/vincent-wuhan/opskeeper/internal/manager/data/monitor/store"
-	managersecretdata "github.com/vincent-wuhan/opskeeper/internal/manager/data/secret/store"
-	managersettingdata "github.com/vincent-wuhan/opskeeper/internal/manager/data/setting/store"
-	managerwebshelldata "github.com/vincent-wuhan/opskeeper/internal/manager/data/webshell/store"
-	settingmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/setting"
-	wsmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/webshell"
-	managerserverimbridge "github.com/vincent-wuhan/opskeeper/internal/manager/server/imbridge"
-	managerserverknowledge "github.com/vincent-wuhan/opskeeper/internal/manager/server/knowledge"
-	managerwebshellserver "github.com/vincent-wuhan/opskeeper/internal/manager/server/webshell"
-	middlewareregistry "github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
-	mcpclient "github.com/vincent-wuhan/opskeeper/internal/pkg/mcpclient"
+	aiopsinvestigator "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/investigator"
+	managerbizaiopsmentions "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/mentions"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	aiopstoolsdec "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
+	managerbizalert "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	investigator "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert/investigator"
+	managerbizapproval "github.com/vincent-wuhan/opskeeper/core/manager/biz/approval"
+	managerbizchatdiagnose "github.com/vincent-wuhan/opskeeper/core/manager/biz/chatdiagnose"
+	managerbizgrafana "github.com/vincent-wuhan/opskeeper/core/manager/biz/grafana"
+	managerbizhitl "github.com/vincent-wuhan/opskeeper/core/manager/biz/hitl"
+	managerbizimbridge "github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge"
+	managerbizimbridgefeishu "github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge/provider/feishu"
+	managerbizimbridgeslack "github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge/provider/slack"
+	managerbizimbridgetelegram "github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge/provider/telegram"
+	managerbizknowledge "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
+	managerbizloop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	managerbizloopcontractloader "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop/contractloader"
+	managerbizloopgitsink "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop/gitsink"
+	managerbizloopinvestigatorreal "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop/investigatorreal"
+	managerbizmarketplace "github.com/vincent-wuhan/opskeeper/core/manager/biz/marketplace"
+	managerbizmcp "github.com/vincent-wuhan/opskeeper/core/manager/biz/mcp"
+	managerbizmonitor "github.com/vincent-wuhan/opskeeper/core/manager/biz/monitor"
+	managerbiznodeagent "github.com/vincent-wuhan/opskeeper/core/manager/biz/nodeagent"
+	managerbiznodefleet "github.com/vincent-wuhan/opskeeper/core/manager/biz/nodefleet"
+	managerbizpluginimport "github.com/vincent-wuhan/opskeeper/core/manager/biz/pluginimport"
+	managerbizsecret "github.com/vincent-wuhan/opskeeper/core/manager/biz/secret"
+	managerbizsetting "github.com/vincent-wuhan/opskeeper/core/manager/biz/setting"
+	managerbizskill "github.com/vincent-wuhan/opskeeper/core/manager/biz/skill"
+	managerwebshellbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/webshell"
+	manageraiopsdata "github.com/vincent-wuhan/opskeeper/core/manager/data/aiops/store"
+	managerapprovaldata "github.com/vincent-wuhan/opskeeper/core/manager/data/approval/store"
+	managerdatachatdiagnosestore "github.com/vincent-wuhan/opskeeper/core/manager/data/chatdiagnose/store"
+	managerdatahitlstore "github.com/vincent-wuhan/opskeeper/core/manager/data/hitl/store"
+	managerimbridgedata "github.com/vincent-wuhan/opskeeper/core/manager/data/imbridge/store"
+	managerknowledgedata "github.com/vincent-wuhan/opskeeper/core/manager/data/knowledge/store"
+	managerdataloopstore "github.com/vincent-wuhan/opskeeper/core/manager/data/loop/store"
+	managermarketplacedata "github.com/vincent-wuhan/opskeeper/core/manager/data/marketplace/store"
+	managermcpdata "github.com/vincent-wuhan/opskeeper/core/manager/data/mcp/store"
+	managermonitordata "github.com/vincent-wuhan/opskeeper/core/manager/data/monitor/store"
+	managersecretdata "github.com/vincent-wuhan/opskeeper/core/manager/data/secret/store"
+	managersettingdata "github.com/vincent-wuhan/opskeeper/core/manager/data/setting/store"
+	managerwebshelldata "github.com/vincent-wuhan/opskeeper/core/manager/data/webshell/store"
+	middlewareregistry "github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/toolset"
+	settingmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/setting"
+	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
+	mcpclient "github.com/vincent-wuhan/opskeeper/core/manager/pkg/mcpclient"
+	managerserverimbridge "github.com/vincent-wuhan/opskeeper/core/manager/server/imbridge"
+	managerserverknowledge "github.com/vincent-wuhan/opskeeper/core/manager/server/knowledge"
+	managerwebshellserver "github.com/vincent-wuhan/opskeeper/core/manager/server/webshell"
 
-	internalagentteams "github.com/vincent-wuhan/opskeeper/internal/agentteams"
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
-	repairpreviewcontrol "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
-	internaldataguard "github.com/vincent-wuhan/opskeeper/internal/dataguard"
-	internaldataguardheuristic "github.com/vincent-wuhan/opskeeper/internal/dataguard/heuristic"
-	internaldataguardlabel "github.com/vincent-wuhan/opskeeper/internal/dataguard/label"
-	internaldataguardstore "github.com/vincent-wuhan/opskeeper/internal/dataguard/store"
-	managerbizaudit "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
-	managerbizflow "github.com/vincent-wuhan/opskeeper/internal/manager/biz/flow"
-	managerbizreport "github.com/vincent-wuhan/opskeeper/internal/manager/biz/report"
-	managerbizscheduler "github.com/vincent-wuhan/opskeeper/internal/manager/biz/scheduler"
-	manageraudtdata "github.com/vincent-wuhan/opskeeper/internal/manager/data/audit/store"
-	managerflowdata "github.com/vincent-wuhan/opskeeper/internal/manager/data/flow/store"
-	managerreportdata "github.com/vincent-wuhan/opskeeper/internal/manager/data/report/store"
-	managerserveragentteams "github.com/vincent-wuhan/opskeeper/internal/manager/server/agentteams"
-	managerserveraiops "github.com/vincent-wuhan/opskeeper/internal/manager/server/aiops"
-	managerserveralert "github.com/vincent-wuhan/opskeeper/internal/manager/server/alert"
-	managerserverapproval "github.com/vincent-wuhan/opskeeper/internal/manager/server/approval"
-	managerserveraudit "github.com/vincent-wuhan/opskeeper/internal/manager/server/audit"
-	managerserverchatdiagnose "github.com/vincent-wuhan/opskeeper/internal/manager/server/chatdiagnose"
-	managerservercluster "github.com/vincent-wuhan/opskeeper/internal/manager/server/cluster"
-	managerserverdataguard "github.com/vincent-wuhan/opskeeper/internal/manager/server/dataguard"
-	managerserverdemo "github.com/vincent-wuhan/opskeeper/internal/manager/server/demo"
-	managerserverdevice "github.com/vincent-wuhan/opskeeper/internal/manager/server/device"
-	managerserveredge "github.com/vincent-wuhan/opskeeper/internal/manager/server/edge"
-	managerserveredgeauth "github.com/vincent-wuhan/opskeeper/internal/manager/server/edgeauth"
-	managerserverflow "github.com/vincent-wuhan/opskeeper/internal/manager/server/flow"
-	managerserverhitl "github.com/vincent-wuhan/opskeeper/internal/manager/server/hitl"
-	managerserverincident "github.com/vincent-wuhan/opskeeper/internal/manager/server/incident"
-	managerserverintegration "github.com/vincent-wuhan/opskeeper/internal/manager/server/integration"
-	managerserverlogs "github.com/vincent-wuhan/opskeeper/internal/manager/server/logs"
-	managerserverloop "github.com/vincent-wuhan/opskeeper/internal/manager/server/loop"
-	managerservermarketplace "github.com/vincent-wuhan/opskeeper/internal/manager/server/marketplace"
-	managerservermcp "github.com/vincent-wuhan/opskeeper/internal/manager/server/mcp"
-	managerservermetric "github.com/vincent-wuhan/opskeeper/internal/manager/server/metric"
-	managermiddleware "github.com/vincent-wuhan/opskeeper/internal/manager/server/middleware"
-	managerservermonitor "github.com/vincent-wuhan/opskeeper/internal/manager/server/monitor"
-	managerservernodeagent "github.com/vincent-wuhan/opskeeper/internal/manager/server/nodeagent"
-	managerserverprom "github.com/vincent-wuhan/opskeeper/internal/manager/server/prometheus"
-	managerserverreport "github.com/vincent-wuhan/opskeeper/internal/manager/server/report"
-	managerserversecret "github.com/vincent-wuhan/opskeeper/internal/manager/server/secret"
-	managerserversetting "github.com/vincent-wuhan/opskeeper/internal/manager/server/setting"
-	managerserverskill "github.com/vincent-wuhan/opskeeper/internal/manager/server/skill"
-	managerserversystemhealth "github.com/vincent-wuhan/opskeeper/internal/manager/server/systemhealth"
-	managerserversystemupgrade "github.com/vincent-wuhan/opskeeper/internal/manager/server/systemupgrade"
-	managerservertopology "github.com/vincent-wuhan/opskeeper/internal/manager/server/topology"
-	managerservertraces "github.com/vincent-wuhan/opskeeper/internal/manager/server/traces"
-	managerserverversion "github.com/vincent-wuhan/opskeeper/internal/manager/server/version"
+	internalagentteams "github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
+	managerbizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	managerbizflow "github.com/vincent-wuhan/opskeeper/core/manager/biz/flow"
+	managerbizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
+	managerbizscheduler "github.com/vincent-wuhan/opskeeper/core/manager/biz/scheduler"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
+	repairpreviewcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
+	manageraudtdata "github.com/vincent-wuhan/opskeeper/core/manager/data/audit/store"
+	managerflowdata "github.com/vincent-wuhan/opskeeper/core/manager/data/flow/store"
+	managerreportdata "github.com/vincent-wuhan/opskeeper/core/manager/data/report/store"
+	internaldataguard "github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
+	internaldataguardheuristic "github.com/vincent-wuhan/opskeeper/core/manager/dataguard/heuristic"
+	internaldataguardlabel "github.com/vincent-wuhan/opskeeper/core/manager/dataguard/label"
+	internaldataguardstore "github.com/vincent-wuhan/opskeeper/core/manager/dataguard/store"
+	managerserveragentteams "github.com/vincent-wuhan/opskeeper/core/manager/server/agentteams"
+	managerserveraiops "github.com/vincent-wuhan/opskeeper/core/manager/server/aiops"
+	managerserveralert "github.com/vincent-wuhan/opskeeper/core/manager/server/alert"
+	managerserverapproval "github.com/vincent-wuhan/opskeeper/core/manager/server/approval"
+	managerserveraudit "github.com/vincent-wuhan/opskeeper/core/manager/server/audit"
+	managerserverchatdiagnose "github.com/vincent-wuhan/opskeeper/core/manager/server/chatdiagnose"
+	managerservercluster "github.com/vincent-wuhan/opskeeper/core/manager/server/cluster"
+	managerserverdataguard "github.com/vincent-wuhan/opskeeper/core/manager/server/dataguard"
+	managerserverdemo "github.com/vincent-wuhan/opskeeper/core/manager/server/demo"
+	managerserverdevice "github.com/vincent-wuhan/opskeeper/core/manager/server/device"
+	managerserveredge "github.com/vincent-wuhan/opskeeper/core/manager/server/edge"
+	managerserveredgeauth "github.com/vincent-wuhan/opskeeper/core/manager/server/edgeauth"
+	managerserverflow "github.com/vincent-wuhan/opskeeper/core/manager/server/flow"
+	managerserverhitl "github.com/vincent-wuhan/opskeeper/core/manager/server/hitl"
+	managerserverincident "github.com/vincent-wuhan/opskeeper/core/manager/server/incident"
+	managerserverintegration "github.com/vincent-wuhan/opskeeper/core/manager/server/integration"
+	managerserverlogs "github.com/vincent-wuhan/opskeeper/core/manager/server/logs"
+	managerserverloop "github.com/vincent-wuhan/opskeeper/core/manager/server/loop"
+	managerservermarketplace "github.com/vincent-wuhan/opskeeper/core/manager/server/marketplace"
+	managerservermcp "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp"
+	managerservermetric "github.com/vincent-wuhan/opskeeper/core/manager/server/metric"
+	managermiddleware "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
+	managerservermonitor "github.com/vincent-wuhan/opskeeper/core/manager/server/monitor"
+	managerservernodeagent "github.com/vincent-wuhan/opskeeper/core/manager/server/nodeagent"
+	managerserverprom "github.com/vincent-wuhan/opskeeper/core/manager/server/prometheus"
+	managerserverreport "github.com/vincent-wuhan/opskeeper/core/manager/server/report"
+	managerserversecret "github.com/vincent-wuhan/opskeeper/core/manager/server/secret"
+	managerserversetting "github.com/vincent-wuhan/opskeeper/core/manager/server/setting"
+	managerserverskill "github.com/vincent-wuhan/opskeeper/core/manager/server/skill"
+	managerserversystemhealth "github.com/vincent-wuhan/opskeeper/core/manager/server/systemhealth"
+	managerserversystemupgrade "github.com/vincent-wuhan/opskeeper/core/manager/server/systemupgrade"
+	managerservertopology "github.com/vincent-wuhan/opskeeper/core/manager/server/topology"
+	managerservertraces "github.com/vincent-wuhan/opskeeper/core/manager/server/traces"
+	managerserverversion "github.com/vincent-wuhan/opskeeper/core/manager/server/version"
 
-	managerserverplugin "github.com/vincent-wuhan/opskeeper/internal/manager/server/plugin"
-	managersvcaiops "github.com/vincent-wuhan/opskeeper/internal/manager/service/aiops"
-	manageraiopsconfig "github.com/vincent-wuhan/opskeeper/internal/manager/service/aiopsconfig"
-	managersvcalert "github.com/vincent-wuhan/opskeeper/internal/manager/service/alert"
-	managersvcdemo "github.com/vincent-wuhan/opskeeper/internal/manager/service/demo"
-	managersvcedge "github.com/vincent-wuhan/opskeeper/internal/manager/service/edge"
-	managersvcfb "github.com/vincent-wuhan/opskeeper/internal/manager/service/frontierbound"
-	managersvcmetric "github.com/vincent-wuhan/opskeeper/internal/manager/service/metric"
-	managersvcplugin "github.com/vincent-wuhan/opskeeper/internal/manager/service/plugin"
-	managersvcprom "github.com/vincent-wuhan/opskeeper/internal/manager/service/prometheus"
-	managersvcsystemhealth "github.com/vincent-wuhan/opskeeper/internal/manager/service/systemhealth"
-	managersvcsystemupgrade "github.com/vincent-wuhan/opskeeper/internal/manager/service/systemupgrade"
+	managerserverplugin "github.com/vincent-wuhan/opskeeper/core/manager/server/plugin"
+	managersvcaiops "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
+	manageraiopsconfig "github.com/vincent-wuhan/opskeeper/core/manager/service/aiopsconfig"
+	managersvcalert "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
+	managersvcdemo "github.com/vincent-wuhan/opskeeper/core/manager/service/demo"
+	managersvcedge "github.com/vincent-wuhan/opskeeper/core/manager/service/edge"
+	managersvcfb "github.com/vincent-wuhan/opskeeper/core/manager/service/frontierbound"
+	managersvcmetric "github.com/vincent-wuhan/opskeeper/core/manager/service/metric"
+	managersvcplugin "github.com/vincent-wuhan/opskeeper/core/manager/service/plugin"
+	managersvcprom "github.com/vincent-wuhan/opskeeper/core/manager/service/prometheus"
+	managersvcsystemhealth "github.com/vincent-wuhan/opskeeper/core/manager/service/systemhealth"
+	managersvcsystemupgrade "github.com/vincent-wuhan/opskeeper/core/manager/service/systemupgrade"
 
 	// Builtin skill init() blocks register Executors with the shared
-	// internal/skill registry. Both manager (metadata) and edge
+	// core/floor/skill registry. Both manager (metadata) and edge
 	// (dispatcher) need this import to populate the registry.
-	skillcore "github.com/vincent-wuhan/opskeeper/internal/skill"
-	skillbuiltin "github.com/vincent-wuhan/opskeeper/internal/skill/builtin"
+	skillcore "github.com/vincent-wuhan/opskeeper/core/floor/skill"
+	skillbuiltin "github.com/vincent-wuhan/opskeeper/core/floor/skill/builtin"
 )
 
 // version is overwritten at build time via -ldflags.
@@ -358,7 +360,7 @@ func main() {
 	// registered later, after their owning types are constructed;
 	// migrate:runner is intentionally skipped — it runs once at
 	// boot in dbx.RunMigrations and is serialised via MySQL
-	// GET_LOCK rather than Redis (see internal/migrator/runner.go).
+	// GET_LOCK rather than Redis (see core/manager/migrator/runner.go).
 	var leaderMgr *leader.Manager
 	if cfg.Leader.Enabled {
 		opts := []leader.Option{
@@ -538,12 +540,12 @@ func main() {
 	// Prometheus registry shared by all BCs.
 	reg := prom.NewRegistry()
 	// Self-observability collectors (alert evaluator latency, prom remote_write
-	// outcome). Registered once here so package-globals in internal/pkg/prom
+	// outcome). Registered once here so package-globals in core/floor/prom
 	// are non-nil before any evaluator tick or promwrite Push runs.
 	prom.RegisterManagerMetrics(reg, log.With(slog.String("comp", "prom-manager-metrics")))
 	// AgentTeams / closed-loop orchestrator metrics (MCP call counter +
 	// histogram, Higress resolve, plugin sync, 7-phase loop, DBApprovedDecision
-	// loader outcomes). See internal/pkg/prom/agentteams_metrics.go.
+	// loader outcomes). See core/floor/prom/agentteams_metrics.go.
 	prom.RegisterAgentTeamsMetrics(reg, log.With(slog.String("comp", "prom-agentteams-metrics")))
 	notifyRouter := notify.NewFromConfig(cfg.Notification, log.With(slog.String("comp", "notify")))
 
@@ -838,7 +840,7 @@ func main() {
 	llmRouter.SetProvidersResolver(llmSettingsResolver)
 
 	// LLM backend selection. The default is the self-contained HTTP path
-	// (internal/pkg/llm/wire.go). OPSKEEPER_LLM_BACKEND=pig routes every
+	// (core/manager/pkg/llm/wire.go). OPSKEEPER_LLM_BACKEND=pig routes every
 	// provider through PiG's provider stack instead: PiG carries the
 	// compatibility table (which endpoints want max_tokens vs
 	// max_completion_tokens, which need a non-standard auth path), its
@@ -1538,7 +1540,7 @@ func main() {
 	var (
 		knowledgeUC *managerbizknowledge.Usecase
 		// qdrantClient 在更广作用域声明，供 chatdiagnose KB wire-up 复用
-		//（internal/manager/data/chatdiagnose/store.NewQdrantPatternRepo 需要同一个 client）
+		//（core/manager/data/chatdiagnose/store.NewQdrantPatternRepo 需要同一个 client）
 		qdrantClient = qdrantx.New(qdrantURL, log.With(slog.String("comp", "qdrant")))
 	)
 	{
@@ -1733,7 +1735,7 @@ func main() {
 	// goroutine per (enabled, stream-mode) ImApp; reconciles every
 	// 30s against the DB. Factories are registered separately so we
 	// don't drag in the Feishu / DingTalk SDKs from this file —
-	// they live under internal/manager/biz/imbridge/provider/{feishu,
+	// they live under core/manager/biz/imbridge/provider/{feishu,
 	// dingtalk}/stream and self-register via stream_supervisor.go's
 	// RegisterFactory hook. Without a factory the supervisor just
 	// logs "no factory for provider — skipping" and the webhook path
@@ -2105,26 +2107,6 @@ func main() {
 		}
 		loopLLMCaller = managerbizloop.NewLLMCaller(llmRouter, loopLLMOptions...)
 	}
-	var loopInvestigatorToolset managerbizloop.InvestigatorToolset = managerbizloop.NoopInvestigatorToolset{}
-	if promQuerier != nil || logQuerier != nil {
-		loopInvestigatorToolset = managerbizloopinvestigatorreal.New(promQuerier, logQuerier, log)
-	} else {
-		loopInvestigatorToolset = managerbizloop.NewInvestigatorToolsetAdapter(log)
-	}
-	if pgInvestigatorDSN := os.Getenv("OPSKEEPER_LOOP_PG_DSN"); pgInvestigatorDSN != "" {
-		pgInvestigator, pgErr := managerbizloop.NewPGStatInvestigatorToolset(pgInvestigatorDSN)
-		if pgErr != nil {
-			log.Error("loop: PostgreSQL investigator init failed", slog.Any("err", pgErr))
-		} else {
-			defer pgInvestigator.Close()
-			routingInvestigator, routingErr := managerbizloop.NewResourceRoutingInvestigatorToolset(pgInvestigator, loopInvestigatorToolset)
-			if routingErr != nil {
-				log.Error("loop: resource routing investigator init failed", slog.Any("err", routingErr))
-			} else {
-				loopInvestigatorToolset = routingInvestigator
-			}
-		}
-	}
 	// 修复动作派发：把 approved phase 的 RemediationOption 真正打到工具上。
 	//
 	// 这条链路此前不存在——approved phase 问完 pause hook 就直接返回
@@ -2142,8 +2124,48 @@ func main() {
 	// keeps its old meaning; the other four are additive.
 	middlewareReg := middlewareregistry.NewRegistry()
 	adapterClosers := wireLoopRemediationAdapters(rootCtx, log, middlewareReg)
+	// The node's agent reaches the same adapters through the upcall
+	// channel. It is the same registry rather than a second one, because a
+	// node that could reach an adapter the loop cannot (or the other way
+	// round) would be two answers to "is this deployment connected to
+	// PostgreSQL" with no way to tell which one was meant.
+	agentTools.middleware = middlewareReg
 	for _, closeAdapter := range adapterClosers {
 		defer closeAdapter()
+	}
+	// The investigator is assembled after the adapter registry, because it
+	// probes the domain through it: without a probe source the toolset sees
+	// one metric and a log line, which cannot tell a bloated table from a
+	// stuck vacuum from a slow query.
+	var loopInvestigatorToolset managerbizloop.InvestigatorToolset = managerbizloop.NoopInvestigatorToolset{}
+	if promQuerier != nil || logQuerier != nil {
+		// The labels source is what lets a remediation dispatch name the
+		// object it acts on. Without it the evidence chain holds only a
+		// metric and a log line, and every write action refuses at
+		// dispatch for want of a pod name, queue or unit the firing alert
+		// already carried.
+		loopInvestigatorToolset = managerbizloopinvestigatorreal.NewWithLabels(
+			promQuerier, logQuerier, managerbizloop.NewAlertLabelsAdapter(alertRepo), log).
+			// The probes are how the investigation learns which table is
+			// bloating and which node is NotReady, instead of inferring
+			// it from a restart rate that looks the same either way.
+			WithProbes(middlewareReg)
+	} else {
+		loopInvestigatorToolset = managerbizloop.NewInvestigatorToolsetAdapter(log)
+	}
+	if pgInvestigatorDSN := os.Getenv("OPSKEEPER_LOOP_PG_DSN"); pgInvestigatorDSN != "" {
+		pgInvestigator, pgErr := managerbizloop.NewPGStatInvestigatorToolset(pgInvestigatorDSN)
+		if pgErr != nil {
+			log.Error("loop: PostgreSQL investigator init failed", slog.Any("err", pgErr))
+		} else {
+			defer pgInvestigator.Close()
+			routingInvestigator, routingErr := managerbizloop.NewResourceRoutingInvestigatorToolset(pgInvestigator, loopInvestigatorToolset)
+			if routingErr != nil {
+				log.Error("loop: resource routing investigator init failed", slog.Any("err", routingErr))
+			} else {
+				loopInvestigatorToolset = routingInvestigator
+			}
+		}
 	}
 	if toolCount := len(middlewareReg.ListTools("")); toolCount > 0 {
 		causes := managerbizloop.ContractRootCauseLoader{Contracts: loopContractRepo}
@@ -2399,7 +2421,7 @@ func main() {
 	}
 
 	// L2 skill framework: builtin Executors registered via init() in
-	// internal/skill/builtin (imported above). Service dispatches via
+	// core/floor/skill/builtin (imported above). Service dispatches via
 	// frontierbound.Client; audit goes to MySQL skill_executions.
 	skillSvc := managerbizskill.New(
 		fbClient,
@@ -2488,6 +2510,14 @@ func main() {
 		DevMode:              mpDevMode,
 	}, log.With(slog.String("comp", "marketplace")))
 	marketplaceHandler := managerservermarketplace.NewHandler(mpUC)
+	// Legacy container -> PiG package conversion (PLAN D2). The route is
+	// admin-only and writes converted packages under the import root, which
+	// is where an operator reviews them before publishing through the
+	// release routes. Until OPSKEEPER_PLUGIN_IMPORT_DIR names a directory
+	// the route answers 503: a converter with nowhere reviewed to write is
+	// not half a feature, it is one that would put packages somewhere
+	// nobody chose.
+	marketplaceHandler.SetImporter(managerbizpluginimport.Import, os.Getenv("OPSKEEPER_PLUGIN_IMPORT_DIR"))
 	// HLD-017 generic secret vault: the single semantics-agnostic credential
 	// store installed skills (and future external-MCP clients) inject from.
 	secretUC := managerbizsecret.NewUsecase(managersecretdata.NewRepo(db))
@@ -4176,7 +4206,7 @@ func buildAIOpsRuntime(
 	// without letting the coordinator turn into a full deep-dive worker.
 	// AgentTool / SendMessage / TaskStop survive automatically via the
 	// coordinatorOnlyTools carve-out (see filterToolsForAgent in
-	// internal/manager/biz/aiops/chatruntime/worker.go).
+	// core/manager/biz/aiops/chatruntime/worker.go).
 	//
 	// Coordinator whitelist:
 	//   - registered core tools from ToolBag metadata — query_* observability,
@@ -5891,6 +5921,22 @@ func (f *edgeInventoryFleet) EdgeIDs(ctx context.Context) ([]uint64, error) {
 type agentToolUpcall struct {
 	reg   *aiopstools.Registry
 	fleet *managerbiznodefleet.Fleet
+	// middleware is the second registry this handler dispatches from: the
+	// adapters that talk to PostgreSQL, Redis, Kubernetes and the brokers.
+	//
+	// Two registries rather than one because they are two different
+	// things. The aiops registry holds the tools that answer *about* the
+	// fleet — the graph, the alert table, the metric store. The middleware
+	// registry holds the tools that reach *into* the systems the control
+	// plane is connected to. Merging them would mean one registry whose
+	// entries have two different lifecycles: the aiops tools exist because
+	// the binary was built with them, and the middleware tools exist
+	// because an operator configured a DSN for them.
+	//
+	// It is nil on a deployment that wired no adapters, which is not an
+	// error: the node's package then offers tools that answer "not
+	// configured", which is the correct answer.
+	middleware *middlewareregistry.Registry
 }
 
 // RunAgentTool runs one tool a node's agent asked for.
@@ -5919,6 +5965,15 @@ func (a *agentToolUpcall) RunAgentTool(ctx context.Context, edgeID uint64, sessi
 				tool, sessionID)
 		}
 	}
+	// A middleware family goes to its own registry. Routing by prefix
+	// rather than by trying one registry and then the other is deliberate:
+	// a lookup-order fallback would let a middleware tool be shadowed by an
+	// aiops tool of the same name, and the two surfaces are reviewed by
+	// different people for different reasons.
+	if toolset.ParseFamily(tool) != "" {
+		return a.runMiddlewareTool(tool, args)
+	}
+
 	res, err := a.reg.Invoke(ctx, tool, args)
 	if err != nil {
 		// The error is the model's to read, so it is passed through
@@ -5928,4 +5983,64 @@ func (a *agentToolUpcall) RunAgentTool(ctx context.Context, edgeID uint64, sessi
 		return nil, fmt.Errorf("%s: %w", tool, err)
 	}
 	return res.ResultJSON, nil
+}
+
+// runMiddlewareTool dispatches a middleware tool the node's agent asked for.
+//
+// Three checks stand between the request and the adapter, and none of them
+// is the allow-list — that already ran on the node, twice: once in the
+// courier extension before the call left the agent process, and again in the
+// broker, which consults the admitted manifests before it dispatches. What
+// is added here is the check the node cannot make for itself.
+//
+//   - The tool must be registered in this deployment. An adapter with no DSN
+//     registers nothing, so a package's declared tool can legitimately not
+//     exist here, and "not configured on this deployment" is a different
+//     sentence from "no such tool". The first one an operator can act on.
+//   - The tool must be a read. This channel has no approval queue: a call
+//     that arrives on it is dispatched immediately and attributed to a
+//     conversation, and the adapters in this registry also offer
+//     pg.kill_session, k8s.drain and redis.flushdb. Those are reachable
+//     through the closed loop's approved dispatch, where a reviewer sees
+//     the blast radius; offering them here would be a second door into the
+//     same room with nobody behind it.
+//   - The result must marshal. The agent reads JSON, and a tool that
+//     returned a channel or a function would otherwise surface as a
+//     transport error that reads like the control plane being down.
+//
+// The class is re-derived here rather than trusted from the manifest for
+// the reason the node's gate re-derives it: a manifest is a claim, and a
+// claim that can widen a channel is worth checking twice.
+func (a *agentToolUpcall) runMiddlewareTool(tool string, args json.RawMessage) (json.RawMessage, error) {
+	if a.middleware == nil {
+		return nil, fmt.Errorf(
+			"%s is a middleware tool and this control plane wired no adapters, so it cannot run", tool)
+	}
+	spec, ok := a.middleware.GetTool(tool)
+	if !ok {
+		return nil, fmt.Errorf(
+			"%s is not available on this deployment: the %s adapter is not configured",
+			tool, toolset.ParseFamily(tool))
+	}
+	if !toolset.IsRead(spec.RiskLevel) {
+		return nil, fmt.Errorf(
+			"%s is a %s tool and this channel does not carry writes; it is reachable through the "+
+				"approved remediation path, where the change is reviewed before it runs",
+			tool, spec.RiskLevel)
+	}
+	var parsed map[string]interface{}
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &parsed); err != nil {
+			return nil, fmt.Errorf("%s: the arguments were not an object: %w", tool, err)
+		}
+	}
+	out, err := a.middleware.CallTool(context.Background(), tool, parsed)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", tool, err)
+	}
+	body, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("%s ran, but its result could not be encoded for the agent: %w", tool, err)
+	}
+	return body, nil
 }

@@ -8,8 +8,8 @@ import (
 
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // MutatingProposalRepo is the GORM-backed persistence for

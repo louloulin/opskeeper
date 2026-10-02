@@ -26,8 +26,8 @@ import (
 	"testing"
 	"time"
 
-	loop "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	loop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 type stubLoopOrchestrator struct {

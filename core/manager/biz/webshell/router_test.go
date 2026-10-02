@@ -8,7 +8,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/prometheus/client_golang/prometheus"
 
-	wsfanout "github.com/vincent-wuhan/opskeeper/internal/pkg/wsfanout"
+	wsfanout "github.com/vincent-wuhan/opskeeper/core/manager/pkg/wsfanout"
 )
 
 // TestRouter_Kill_LocalOnly 验证未注入 fanout 时 Kill 走原路径。

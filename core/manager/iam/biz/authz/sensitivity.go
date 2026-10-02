@@ -16,7 +16,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 )
 
 // SensitivityTier sensitivity-reader 等级（与 dataguard.Sensitivity 1:1 对应）。

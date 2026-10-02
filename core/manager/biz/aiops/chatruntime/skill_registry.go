@@ -221,7 +221,7 @@ func filterToolsByPolicy(tools []ToolDecl, policy Policy) []ToolDecl {
 
 // pathHasPrefix returns true when child sits inside parent (or is the
 // parent itself). Cleans both paths first so trailing slashes don't
-// cause false negatives. Mirrors internal/skill/loader.go for consistency.
+// cause false negatives. Mirrors core/floor/skill/loader.go for consistency.
 func pathHasPrefix(child, parent string) bool {
 	child = filepath.Clean(child)
 	parent = filepath.Clean(parent)

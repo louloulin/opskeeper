@@ -23,7 +23,7 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // Scraper drives one HTTP scrape goroutine per target and stores the

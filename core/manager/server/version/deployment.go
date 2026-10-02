@@ -93,19 +93,19 @@ type ManagerVersion string
 // passed through verbatim so the panel can render the full manifest
 // if asked.
 type PluginManifest struct {
-	APIVersion    string            `json:"apiVersion"`
-	Kind          string            `json:"kind"`
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	Version       string            `json:"version"`
-	Description   string            `json:"description,omitempty"`
-	Author        string            `json:"author,omitempty"`
-	Entry         map[string]string `json:"entry,omitempty"`
-	DashboardVersion string          `json:"dashboardVersion,omitempty"`
-	MinVersion    string            `json:"min_version,omitempty"`
-	ExtensionPoints []string         `json:"extensionPoints,omitempty"`
-	Permissions   []string          `json:"permissions,omitempty"`
-	Dependencies  []string          `json:"dependencies,omitempty"`
+	APIVersion       string            `json:"apiVersion"`
+	Kind             string            `json:"kind"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Version          string            `json:"version"`
+	Description      string            `json:"description,omitempty"`
+	Author           string            `json:"author,omitempty"`
+	Entry            map[string]string `json:"entry,omitempty"`
+	DashboardVersion string            `json:"dashboardVersion,omitempty"`
+	MinVersion       string            `json:"min_version,omitempty"`
+	ExtensionPoints  []string          `json:"extensionPoints,omitempty"`
+	Permissions      []string          `json:"permissions,omitempty"`
+	Dependencies     []string          `json:"dependencies,omitempty"`
 }
 
 // SkillVersion is one worker's skill_meta.yaml content, flattened to
@@ -149,44 +149,44 @@ type DeployDependency struct {
 // 7-stage loop and exercises every audit kind (dispatch /
 // approval / execution / verification).
 type RecoveryOperation struct {
-	IncidentID       string            `json:"incident_id"`
-	Title            string            `json:"title"`
-	FaultFamily      string            `json:"fault_family"`
-	PhasesObserved   int               `json:"phases_observed"`
-	PhasesExpected   int               `json:"phases_expected"`
-	RecoverySignal   bool              `json:"recovery_signal"`
-	Closed           bool              `json:"closed"`
-	DurationSec      int               `json:"duration_sec"`
-	AuditKinds       []string          `json:"audit_kinds"`
-	Evidence         map[string]string `json:"evidence,omitempty"`
-	Phases           []TimelinePhaseLite `json:"phases,omitempty"`
+	IncidentID     string              `json:"incident_id"`
+	Title          string              `json:"title"`
+	FaultFamily    string              `json:"fault_family"`
+	PhasesObserved int                 `json:"phases_observed"`
+	PhasesExpected int                 `json:"phases_expected"`
+	RecoverySignal bool                `json:"recovery_signal"`
+	Closed         bool                `json:"closed"`
+	DurationSec    int                 `json:"duration_sec"`
+	AuditKinds     []string            `json:"audit_kinds"`
+	Evidence       map[string]string   `json:"evidence,omitempty"`
+	Phases         []TimelinePhaseLite `json:"phases,omitempty"`
 }
 
 // TimelinePhaseLite is a tiny phase-row shape (no tool calls / no
 // audit rows) so the version panel can render the 7-stage sequence
 // without duplicating the full ClosedLoopTimeline payload.
 type TimelinePhaseLite struct {
-	Phase       string `json:"phase"`
-	PhaseLabel  string `json:"phase_label"`
-	Status      string `json:"status"`
-	WorkerRole  string `json:"worker_role"`
-	SkillVer    string `json:"skill_version"`
-	Duration    string `json:"duration,omitempty"`
-	Summary     string `json:"summary,omitempty"`
+	Phase      string `json:"phase"`
+	PhaseLabel string `json:"phase_label"`
+	Status     string `json:"status"`
+	WorkerRole string `json:"worker_role"`
+	SkillVer   string `json:"skill_version"`
+	Duration   string `json:"duration,omitempty"`
+	Summary    string `json:"summary,omitempty"`
 }
 
 // DeploymentResponse is the GET /v1/version/deployment body.
 type DeploymentResponse struct {
-	Manager        ManagerVersion       `json:"manager_version"`
-	GoVersion      string               `json:"go_version"`
-	OSArch         string               `json:"os_arch"`
-	BuildAt        string               `json:"build_at,omitempty"`
-	Plugin         PluginManifest       `json:"plugin"`
-	Skills         []SkillVersion       `json:"skills"`
-	Health         HealthSummary        `json:"health"`
-	Dependencies   []DeployDependency   `json:"dependencies"`
-	Recovery       RecoveryOperation    `json:"recovery_example"`
-	GeneratedAt    string               `json:"generated_at"`
+	Manager      ManagerVersion     `json:"manager_version"`
+	GoVersion    string             `json:"go_version"`
+	OSArch       string             `json:"os_arch"`
+	BuildAt      string             `json:"build_at,omitempty"`
+	Plugin       PluginManifest     `json:"plugin"`
+	Skills       []SkillVersion     `json:"skills"`
+	Health       HealthSummary      `json:"health"`
+	Dependencies []DeployDependency `json:"dependencies"`
+	Recovery     RecoveryOperation  `json:"recovery_example"`
+	GeneratedAt  string             `json:"generated_at"`
 }
 
 // Source describes how the handler resolves each piece of the
@@ -194,9 +194,9 @@ type DeploymentResponse struct {
 // "data source" badge so reviewers can see whether a value came
 // from the runtime, from disk, or from a fixture.
 type Source struct {
-	PluginPath      string
-	SkillsDir       string
-	HealthService   HealthSource
+	PluginPath    string
+	SkillsDir     string
+	HealthService HealthSource
 }
 
 // HealthSource is the narrow seam the handler uses to ask the

@@ -23,6 +23,8 @@ go 1.26.0
 require (
 	github.com/MichaelKinsy/PiG v0.3.0
 	github.com/vincent-wuhan/opskeeper/core v0.0.0
+	// Test-only (pigprofile). See the replace note below.
+	github.com/vincent-wuhan/opskeeper/core/edge v0.0.0
 )
 
 require (
@@ -63,4 +65,12 @@ replace (
 	// covers this in a normal build; the replace keeps `go build` working
 	// from a bare module directory and in CI jobs that disable workspaces.
 	github.com/vincent-wuhan/opskeeper/core => ../
+	// The node profile contract test (pigprofile) is the only thing in
+	// this module that reaches for core/edge, and it does so to read the
+	// profile the node writes. It is the reverse of the direction the
+	// architecture runs in, confined to a test, and it is here because
+	// this is the one module that is allowed to know what PiG's profile
+	// schema says — which is the whole reason the assertion lives here
+	// rather than next to the code that renders the file.
+	github.com/vincent-wuhan/opskeeper/core/edge => ../edge
 )

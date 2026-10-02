@@ -9,10 +9,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	alertsvc "github.com/vincent-wuhan/opskeeper/internal/manager/service/alert"
-	healthsvc "github.com/vincent-wuhan/opskeeper/internal/manager/service/systemhealth"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	alertsvc "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
+	healthsvc "github.com/vincent-wuhan/opskeeper/core/manager/service/systemhealth"
 )
 
 type HealthService interface {

@@ -140,7 +140,7 @@ type LLMResponse struct {
 
 // LLMClient LLM provider 抽象。
 //
-// 生产实现 = chatruntime / internal/pkg/llm.Client；
+// 生产实现 = chatruntime / core/manager/pkg/llm.Client；
 // 测试用 fakeLLM 固定返回。
 type LLMClient interface {
 	Complete(ctx context.Context, req LLMRequest) (*LLMResponse, error)

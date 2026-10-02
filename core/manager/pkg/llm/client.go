@@ -23,7 +23,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/zhipuauth"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/zhipuauth"
 )
 
 // Sentinel errors.

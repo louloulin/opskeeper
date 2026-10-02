@@ -6,10 +6,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/alertdraft"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 	"github.com/vincent-wuhan/opskeeper/core/wire"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/alertdraft"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
 )
 
 // The alert-draft rule has to hold on the kernel path, which is the only path

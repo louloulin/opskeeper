@@ -190,7 +190,7 @@ func TestReadSkillVersions_SkipsFilesAndDirs(t *testing.T) {
 }
 
 func TestDeriveDependencies_DoesNotLeakURLs(t *testing.T) {
-	
+
 	t.Setenv("OPSKEEPER_DB_DSN", "postgres://secret@host:5432/db")
 	t.Setenv("OPSKEEPER_PROM_URL", "http://internal-prom:9090")
 	deps := deriveDependencies()

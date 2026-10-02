@@ -12,11 +12,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/vincent-wuhan/opskeeper/internal/iam/biz/org"
-	"github.com/vincent-wuhan/opskeeper/internal/iam/biz/user"
-	"github.com/vincent-wuhan/opskeeper/internal/iam/model"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/org"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/user"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // ----- DTOs -----

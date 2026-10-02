@@ -1,5 +1,5 @@
 // chatdiagnose/store/gitartifact_linker.go — incident_pattern KB 的
-// gitartifact linker 真实实现，包装 internal/knowledge/gitartifact/store。
+// gitartifact linker 真实实现，包装 core/manager/knowledge/gitartifact/store。
 //
 // 设计：
 //   - 复用 v1 store（gitastore.MemoryStore / JSONFileStore）
@@ -19,10 +19,10 @@ import (
 	"strconv"
 	"strings"
 
-	gitamodel "github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact/model"
-	gitastore "github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact/store"
+	gitamodel "github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/model"
+	gitastore "github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/store"
 
-	chatdiagnose "github.com/vincent-wuhan/opskeeper/internal/manager/biz/chatdiagnose"
+	chatdiagnose "github.com/vincent-wuhan/opskeeper/core/manager/biz/chatdiagnose"
 )
 
 // DBGitArtifactLinker 实现 chatdiagnose.GitArtifactLinker 接口，

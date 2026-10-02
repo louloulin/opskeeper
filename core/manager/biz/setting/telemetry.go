@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/setting"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/setting"
 )
 
 // LokiResolver reads loki.url + optional basic auth from system_settings.

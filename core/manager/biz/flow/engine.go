@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/flow"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/flow"
 )
 
 // maxConcurrentNodes caps fan-out so a wide graph can't spawn an

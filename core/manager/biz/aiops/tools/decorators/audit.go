@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 // AuditSink is the interface-only seam that the audit decorator writes

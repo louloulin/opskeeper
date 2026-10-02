@@ -8,7 +8,7 @@ import (
 // This file hand-mirrors api/tunnel/v1/tunnel.proto message shapes as Go
 // structs with JSON tags. the tunnel body wire format is JSON
 // in MVP; we deliberately avoid generating protobuf Go types for these
-// payloads so internal/pkg/tunnel/ stays dependency-free (no protobuf
+// payloads so core/floor/tunnel/ stays dependency-free (no protobuf
 // import, no generated-code directory). When (if) we switch to protobuf
 // binary in Phase 2, this file is the seam: swap types here, keep
 // callers unchanged.
@@ -157,7 +157,7 @@ type ShellExitResponse struct{}
 
 // GetPluginConfigsResponse is the wire snapshot served on
 // MethodGetPluginConfigs. Mirrors biz/edge.WireSnapshot — duplicated
-// here to keep internal/pkg/tunnel free of biz imports.
+// here to keep core/floor/tunnel free of biz imports.
 type GetPluginConfigsResponse struct {
 	EdgeID  uint64                           `json:"edge_id"`
 	Configs map[string]GetPluginConfigsEntry `json:"configs"`
@@ -233,7 +233,7 @@ type HostInfo struct {
 
 	// HardwareFingerprint is a clone-resistant hardware identity computed
 	// edge-side from physical-NIC MACs + CPU model + disk serials (see
-	// internal/edgeagent/collector hardwareFingerprint). Unlike Fingerprint
+	// core/edge/collector hardwareFingerprint). Unlike Fingerprint
 	// (gopsutil HostID), it does NOT collapse cloned Linux VMs, which share a
 	// single SMBIOS product_uuid (issue #96): a hypervisor regenerates the NIC
 	// MAC per clone. The cloud prefers this when non-empty and falls back to

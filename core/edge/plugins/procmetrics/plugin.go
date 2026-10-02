@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"text/template"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins"
+	"github.com/vincent-wuhan/opskeeper/core/edge/plugins"
 	"gopkg.in/yaml.v3"
 )
 

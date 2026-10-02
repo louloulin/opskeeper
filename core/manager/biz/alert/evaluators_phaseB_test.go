@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/logquery"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
 )
 
 func TestCompileLogMatch_Defaults(t *testing.T) {

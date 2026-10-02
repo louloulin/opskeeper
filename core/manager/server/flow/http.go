@@ -13,10 +13,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizflow "github.com/vincent-wuhan/opskeeper/internal/manager/biz/flow"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/flow"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizflow "github.com/vincent-wuhan/opskeeper/core/manager/biz/flow"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/flow"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 const roleViewer = "viewer"

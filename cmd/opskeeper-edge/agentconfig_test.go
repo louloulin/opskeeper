@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 )
 
 // writePackage lays down a plugin bundle carrying a governance manifest.

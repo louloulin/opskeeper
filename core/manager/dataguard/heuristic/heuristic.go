@@ -12,7 +12,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 )
 
 // ResourceType 资源类型枚举。

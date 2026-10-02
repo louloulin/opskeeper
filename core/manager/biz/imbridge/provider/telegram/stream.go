@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	bizbridge "github.com/vincent-wuhan/opskeeper/internal/manager/biz/imbridge"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/imbridge"
+	bizbridge "github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/imbridge"
 )
 
 // pollTimeoutSec is the server-side long-poll wait; the per-poll context

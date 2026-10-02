@@ -8,10 +8,10 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/edge/toolbroker"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
-	"github.com/vincent-wuhan/opskeeper/internal/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	// The executors have to be registered for skill.Get to find them.
-	_ "github.com/vincent-wuhan/opskeeper/internal/skill/builtin"
+	_ "github.com/vincent-wuhan/opskeeper/core/floor/skill/builtin"
 )
 
 // fakeTunnel records what a node asked the control plane for.

@@ -31,11 +31,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	internalagentteams "github.com/vincent-wuhan/opskeeper/internal/agentteams"
-	mcpauth "github.com/vincent-wuhan/opskeeper/internal/manager/server/mcp/middleware"
+	internalagentteams "github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
+	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
 
-// PluginSyncClient 在 internal/agentteams 包定义（本文件复用）
+// PluginSyncClient 在 core/manager/agentteams 包定义（本文件复用）
 type PluginSyncClient = internalagentteams.PluginSyncClient
 
 // PluginLimits 控制 plugin 安装时的资源约束（与 Dashboard 的 server-package.ts 对齐）。

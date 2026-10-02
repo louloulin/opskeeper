@@ -12,9 +12,9 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/edge/policygate"
 	"github.com/vincent-wuhan/opskeeper/core/edge/toolbroker"
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/wire"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
 )
 
 // brokerClient is the agent's side of the tool protocol, written out here

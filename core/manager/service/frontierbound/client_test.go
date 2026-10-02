@@ -14,7 +14,7 @@ import (
 	"github.com/singchia/geminio"
 	"github.com/singchia/geminio/options"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // ---------------------------------------------------------------------

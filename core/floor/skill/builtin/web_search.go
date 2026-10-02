@@ -13,13 +13,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
 )
 
 func init() { skill.Register(WebSearch) }
 
 // Provider names — lowercased canonical form. Mirrors
-// internal/manager/model/setting.ProviderXxx but kept locally to avoid
+// core/manager/model/setting.ProviderXxx but kept locally to avoid
 // the skill package depending on the manager-side model package
 // (layering rule, see TavilyKeyResolver comment).
 const (
@@ -48,7 +48,7 @@ var WebSearch = &webSearchSkill{
 // WebSearchConfigResolver returns the runtime config the skill needs to
 // dispatch to the right provider. Implementations live in the manager's
 // biz/setting package; the skill keeps the dependency as an interface
-// so internal/skill never imports internal/manager.
+// so core/floor/skill never imports core/manager.
 //
 // All methods are called per-Execute; resolver impls are expected to be
 // cache-backed (Service does this) so the round-trip is cheap.

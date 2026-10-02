@@ -135,7 +135,7 @@ enforced outside the plugin entirely:
 ### Validation
 
 Every plugin in this directory is validated by
-`internal/pkg/pluginmanifest/TestShippedPluginsAreValid`, so a manifest that
+`core/floor/pluginmanifest/TestShippedPluginsAreValid`, so a manifest that
 violates a rule fails the build rather than a production install. The rules
 are enforced in the `sdk` module, which is also what third-party plugin
 authors depend on — one implementation, not two.
@@ -548,7 +548,7 @@ worth of evidence, with nothing else in the system objecting.
 `Info()` of the control plane's own tool registry:
 
 ```
-OPSKEEPER_UPDATE_TOOLSET=1 go test ./internal/manager/biz/aiops/tools/ -run Toolset
+OPSKEEPER_UPDATE_TOOLSET=1 go test ./core/manager/biz/aiops/tools/ -run Toolset
 bash scripts/sync-pig-ops.sh
 ```
 
@@ -627,7 +627,7 @@ packaged. The report names each one rather than only counting it, because
 for one that was never supposed to exist.
 
 `--fail-on-gap` turns it into a CI gate. The mapping from a tool name to a
-capability family is declared in `internal/pkg/pluginmanifest/coverage.go`
+capability family is declared in `core/floor/pluginmanifest/coverage.go`
 and read off the extensions that register the tools — not inferred from
 the name, which would get `list_database_sources` right and
 `query_change_events` wrong. Drift in either direction is a test failure:

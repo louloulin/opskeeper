@@ -11,7 +11,7 @@ package topology
 import (
 	"context"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/topology"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/topology"
 )
 
 // NodeListFilter narrows Node.List results.

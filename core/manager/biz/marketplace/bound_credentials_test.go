@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/marketplace"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/marketplace"
 )
 
 // TestBoundCredentialNamesForSkills covers the HLD-017 exec-injection lookup:

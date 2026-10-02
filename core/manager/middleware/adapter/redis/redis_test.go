@@ -9,8 +9,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 // The tests run against miniredis rather than a hand-written fake.

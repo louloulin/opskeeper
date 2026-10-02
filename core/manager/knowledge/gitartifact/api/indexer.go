@@ -21,9 +21,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact"
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact/model"
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact/store"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/store"
 )
 
 // SymbolExtractor 从 artifact 中提取符号（骨架：返回 meta 中预提取的符号）。

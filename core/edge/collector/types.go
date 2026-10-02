@@ -3,7 +3,7 @@ package collector
 import (
 	"context"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // CollectorSource is a typed alias for the Source string carried with each

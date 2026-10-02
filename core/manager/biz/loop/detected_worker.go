@@ -97,7 +97,7 @@ type DetectedEvent struct {
 // Mirrors Design Doc §4.1 verbatim. Two notes:
 //
 //  1. "severity" declares an enum; our hand-rolled validator
-//     (internal/manager/biz/loop/llm_caller_schema.go) supports it.
+//     (core/manager/biz/loop/llm_caller_schema.go) supports it.
 //  2. The hand-rolled validator does not support JSON Schema "format";
 //     normalizeDetectedJSON removes non-RFC3339 values before Go decodes
 //     the contract; the Planner then fills a zero time from its clock.

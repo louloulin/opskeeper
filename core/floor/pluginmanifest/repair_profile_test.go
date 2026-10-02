@@ -9,9 +9,9 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/edge/policygate"
-	"github.com/vincent-wuhan/opskeeper/internal/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
 	// The executors have to be registered for skill.Get to find them.
-	_ "github.com/vincent-wuhan/opskeeper/internal/skill/builtin"
+	_ "github.com/vincent-wuhan/opskeeper/core/floor/skill/builtin"
 	"github.com/vincent-wuhan/opskeeper/sdk"
 )
 

@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 func (u *Usecase) IngestAlertmanager(ctx context.Context, in AlertmanagerWebhookInput) (*AlertmanagerIngestResult, error) {

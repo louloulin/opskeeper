@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	ssostore "github.com/vincent-wuhan/opskeeper/internal/iam/data/sso"
-	iamodel "github.com/vincent-wuhan/opskeeper/internal/iam/model"
+	ssostore "github.com/vincent-wuhan/opskeeper/core/manager/iam/data/sso"
+	iamodel "github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
 )
 
 // StateStore is the narrow interface SSOService uses to persist

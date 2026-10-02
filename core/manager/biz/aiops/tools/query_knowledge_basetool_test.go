@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	knowledgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/knowledge"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/knowledge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
 )
 
 type recordingKnowledgeSearcher struct {

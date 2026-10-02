@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/promquery"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
 )
 
 func TestFindOutlierEdgesTool_Info(t *testing.T) {

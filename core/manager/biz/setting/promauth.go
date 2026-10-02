@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/setting"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/promauth"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/setting"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promauth"
 )
 
 // PromResolver implements three resolver interfaces against the

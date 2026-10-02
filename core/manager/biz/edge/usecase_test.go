@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	devicemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/device"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // fakeDeviceRepo is the in-memory devicebiz.Repo used by HandleRegister

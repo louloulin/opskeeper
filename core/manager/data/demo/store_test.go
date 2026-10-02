@@ -9,9 +9,9 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/demo"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 func newTestDB(t *testing.T) *gorm.DB {

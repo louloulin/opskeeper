@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
-	loopbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 func TestMCPAdapter_VerifyInvokesRealRecoveryToolFromApprovalState(t *testing.T) {

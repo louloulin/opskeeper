@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	chatruntime "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/chatruntime"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/marketplace"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	chatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/marketplace"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // ----- in-memory repo --------------------------------------------------

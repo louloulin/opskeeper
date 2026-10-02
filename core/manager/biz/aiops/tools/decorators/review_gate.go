@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 // ReviewGate is the SOP-double-sign decorator (+ mutating-class gate).
@@ -594,7 +594,7 @@ func truncate(s string, n int) string {
 
 // model_DecisionApprove / Reject mirror model.DecisionApprove /
 // DecisionReject without forcing this package to import
-// internal/manager/model/aiops (which would create a manager-side
+// core/manager/model/aiops (which would create a manager-side
 // dependency tree the decorator package must stay clear of —
 // The string values are the source-of-truth contract;
 // the model file's constants must equal these.

@@ -30,7 +30,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 )
 
 // silentLoggerRM returns a slog.Logger that drops everything — keeps test

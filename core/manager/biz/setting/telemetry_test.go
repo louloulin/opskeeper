@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/setting"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/setting"
 )
 
 // TestLokiResolverFallsBackToEnv verifies the resolver returns the

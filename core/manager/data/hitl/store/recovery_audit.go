@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // RecoveryApprovalQuery binds an approved AgentTeams proposal to one recovery

@@ -29,8 +29,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/auth"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // ResolvedIdentity 是解析后的 Worker 身份。
@@ -542,7 +542,7 @@ func checkTenantConsistency(consumerName, tenantID string) (string, error) {
 	return "", ErrTenantMismatch
 }
 
-// inferRoleFromName 由 consumerName 推断角色（与 internal/agentteams/higress.go 同步）。
+// inferRoleFromName 由 consumerName 推断角色（与 core/manager/agentteams/higress.go 同步）。
 func inferRoleFromName(name string) string {
 	switch {
 	case strings.HasPrefix(name, "manager-"):

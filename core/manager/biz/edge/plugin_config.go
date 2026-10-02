@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // PluginConfigRepo is the narrow persistence contract this biz layer
@@ -51,7 +51,7 @@ type EndpointResolver interface {
 // PluginConfigUC is the use-case for managing per-edge plugin configs.
 //
 // Two consumers:
-//   - HTTP API (UI): list / set / delete via internal/manager/server/edge.
+//   - HTTP API (UI): list / set / delete via core/manager/server/edge.
 //   - Tunnel RPC (edge): FetchForEdge serves the wire snapshot when an
 //     edge calls MethodGetPluginConfigs.
 //

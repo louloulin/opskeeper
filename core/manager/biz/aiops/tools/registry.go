@@ -18,15 +18,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
+	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
 	"log/slog"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	topologybiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/topology"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	topologybiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // Caller is the narrow seam this package needs from the frontierbound SDK

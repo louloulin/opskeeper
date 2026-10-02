@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 // TestFindOutlierEdgesTool_RejectsLoadMetric is the BaseTool sibling of

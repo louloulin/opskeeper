@@ -35,8 +35,8 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/harness/vocabulary"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/config"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/floor/config"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // judgeHeuristic and judgeLLM are the two scoring paths.
@@ -82,11 +82,12 @@ func cmdJudge(ctx context.Context, args []string) error {
 	}
 
 	// A case this build cannot satisfy produces a score that is a statement
-	// about the corpus, not about the agent. All 20 golden cases are in that
-	// state today: they name root causes and remediations the running system
-	// has no vocabulary for. Emitting a number anyway would put a zero on a
-	// leaderboard where it reads as "the agent reasoned badly", which is a
-	// false statement about a question the agent was never asked.
+	// about the corpus, not about the agent. No shipped case is in that
+	// state today — the plugin fleet serves all 20 — but the check is not
+	// vacuous: a case added tomorrow that names a family nobody packaged
+	// would otherwise score a zero that reads as "the agent reasoned
+	// badly", a false statement about a question the agent was never asked.
+	// Emitting a number anyway is what this refuses.
 	cap, _, err := productionCapability(*pluginsDir)
 	if err != nil {
 		return fmt.Errorf("read the production vocabulary: %w", err)

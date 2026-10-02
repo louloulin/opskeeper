@@ -8,8 +8,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/setting"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/setting"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Repo is the GORM-backed persistence for system_settings. It is

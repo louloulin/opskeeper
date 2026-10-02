@@ -3,7 +3,7 @@ package setting
 import (
 	"context"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/setting"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/setting"
 )
 
 // agent.go — typed accessor for CategoryAgent behaviour toggles. Mirrors the

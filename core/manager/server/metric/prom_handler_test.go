@@ -15,7 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
 )
 
 // fakePromQuerier captures the last QueryRange call and returns a

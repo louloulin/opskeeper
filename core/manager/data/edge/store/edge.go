@@ -7,9 +7,9 @@ import (
 
 	"gorm.io/gorm"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Repo is the GORM-backed biz/edge.Repo.

@@ -21,7 +21,7 @@ import (
 
 	"net/url"
 
-	demomodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
+	demomodel "github.com/vincent-wuhan/opskeeper/core/manager/model/demo"
 )
 
 const (

@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
 )
 
 // ErrUnknownOperation is returned for an operation this adapter does not

@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact"
-	gitastore "github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact/store"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact"
+	gitastore "github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/store"
 )
 
 func TestGitArtifactSink_Save_BuildsArtifactAndReturnsSHA(t *testing.T) {

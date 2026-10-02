@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 func TestCreateRuleLeavesUserRuleSourceCustom(t *testing.T) {

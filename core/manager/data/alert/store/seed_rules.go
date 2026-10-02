@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/config"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/notify"
+	"github.com/vincent-wuhan/opskeeper/core/floor/config"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/notify"
 )
 
 // SeedBuiltinRules populates alert_rules with the canonical built-in

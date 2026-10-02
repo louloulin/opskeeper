@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 )
 
 // The node's end of the review pipeline.

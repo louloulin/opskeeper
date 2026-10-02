@@ -3,11 +3,11 @@ package device
 import (
 	"context"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/device"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 )
 
 // EdgeDeviceRepo is the persistence contract for the edge_devices M:N
-// junction table. Implemented in internal/manager/data/device/store.
+// junction table. Implemented in core/manager/data/device/store.
 //
 // Communication paths the manager wires through this:
 //

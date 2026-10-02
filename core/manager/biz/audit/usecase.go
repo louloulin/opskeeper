@@ -11,8 +11,8 @@ import (
 	"log/slog"
 	"time"
 
-	store "github.com/vincent-wuhan/opskeeper/internal/manager/data/audit/store"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
+	store "github.com/vincent-wuhan/opskeeper/core/manager/data/audit/store"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
 )
 
 // Repo is the persistence seam the usecase consumes. Implemented by

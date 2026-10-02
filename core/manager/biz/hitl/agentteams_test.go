@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 func TestCanonicalPayloadHashNormalizesFieldOrder(t *testing.T) {

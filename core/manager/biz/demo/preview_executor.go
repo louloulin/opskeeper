@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
+	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
 )
 
 const defaultPreviewWorkloadPath = "deploy/repair-preview/pg-pool-workload.yaml"

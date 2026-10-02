@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/hitl"
-	hitlmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/hitl"
+	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 // PausePoint 是路径 A P1-2 阶段 2 任务 2.2 的工具执行前 PausePoint 装饰器。

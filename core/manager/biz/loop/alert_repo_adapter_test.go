@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	alertbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // stubAlertRepo 是 alertbiz.Repo 的最小内存实现：

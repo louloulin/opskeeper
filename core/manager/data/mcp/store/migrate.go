@@ -3,7 +3,7 @@ package store
 import (
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/mcp"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/mcp"
 )
 
 // Migrate AutoMigrates the mcp_servers table. Registered in

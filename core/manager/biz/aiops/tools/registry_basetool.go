@@ -4,7 +4,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 // envIntDefault parses an env-var-string into an int. Returns def when

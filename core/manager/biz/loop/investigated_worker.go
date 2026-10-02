@@ -314,6 +314,7 @@ func (w *InvestigatedPhaseWorker) Executor(ctx context.Context, plan Plan) (Exec
 }
 
 func (w *InvestigatedPhaseWorker) rootCauseExecResult(plan Plan, rc *RootCauseJSON, tokensIn, tokensOut int, costUSD float64, latencyMs int) ExecResult {
+	StampSubject(plan, rc)
 	return ExecResult{
 		ContractRef: nil, // contract 由 Run 时机的 contract-writer 写入 loop_contract
 		SideEffects: []SideEffect{{
@@ -337,6 +338,59 @@ func (w *InvestigatedPhaseWorker) rootCauseExecResult(plan Plan, rc *RootCauseJS
 			"cost_usd":        costUSD,
 			"latency_ms":      latencyMs,
 		},
+	}
+}
+
+// StampSubject guarantees the recorded subject survives into the contract.
+//
+// The evidence chain in a contract is normally whatever the investigator LLM
+// chose to echo back from its prompt. That is fine for a metric or a log
+// line, but the subject is load-bearing in a way the LLM cannot know: the
+// remediation resolvers read the pod name, queue, unit and client address out
+// of this chain, and a summarizer that paraphrases or drops the label item
+// silently turns every write action back into a refusal. The same reasoning
+// the host uses to own the audit chain and the approval gate applies here —
+// the fact must not depend on a model's memory of its input.
+//
+// It is exported because the invariant is a property of a finalized
+// contract, not of one worker: anything that assembles a contract from a
+// plan owes the same guarantee, and a test outside this package must be able
+// to assert it.
+//
+// So the subject is re-stamped from the plan's own toolset evidence, which
+// is the authoritative record. It is added only when absent: the toolset
+// item is the one that was actually observed, and replacing an LLM-supplied
+// copy with it keeps a single source of truth. If the toolset recorded no
+// subject, nothing is added and the resolvers refuse as they should.
+func StampSubject(plan Plan, rc *RootCauseJSON) {
+	if rc == nil {
+		return
+	}
+	for _, item := range rc.EvidenceChain {
+		if item.Tool == SubjectEvidenceTool {
+			return
+		}
+	}
+	evidence, ok := plan.Meta["evidence_chain"].([]EvidenceItem)
+	if !ok {
+		return
+	}
+	for _, item := range evidence {
+		if item.Tool != SubjectEvidenceTool {
+			continue
+		}
+		// The contract validator caps the chain at 50 entries and runs
+		// before this point, so a chain already at the cap would be
+		// rejected on write for the sake of one more item. The subject is
+		// the item the write path cannot do without, so it takes the
+		// slot from the oldest observation — the first thing recorded is
+		// the furthest from the conclusion, and a stale metric is the
+		// least damaging thing to lose next to the object name.
+		if len(rc.EvidenceChain) >= maxEvidenceChainEntries {
+			rc.EvidenceChain = rc.EvidenceChain[1:]
+		}
+		rc.EvidenceChain = append(rc.EvidenceChain, item)
+		return
 	}
 }
 

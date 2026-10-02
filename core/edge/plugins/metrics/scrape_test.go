@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/edge/plugins"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // nodeExporterFixture is a trimmed snapshot of a real node_exporter /metrics

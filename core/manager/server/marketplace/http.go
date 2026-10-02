@@ -16,10 +16,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizmp "github.com/vincent-wuhan/opskeeper/internal/manager/biz/marketplace"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/marketplace"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizmp "github.com/vincent-wuhan/opskeeper/core/manager/biz/marketplace"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/marketplace"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // Service is the narrow surface the handler depends on. *bizmp.Usecase
@@ -35,6 +35,13 @@ type Service interface {
 // Handler bundles the marketplace routes.
 type Handler struct {
 	svc Service
+
+	// importInto converts a legacy container directory into a PiG package,
+	// and importRoot is where converted packages are written. Both are set
+	// through SetImporter (see import.go); until they are, the import route
+	// answers 503 rather than converting into a directory nobody named.
+	importInto ImportFunc
+	importRoot string
 }
 
 // NewHandler builds the handler.
@@ -45,6 +52,7 @@ func NewHandler(svc Service) *Handler { return &Handler{svc: svc} }
 func (h *Handler) Register(r chi.Router) {
 	r.Post("/v1/marketplace/install", h.install)
 	r.Post("/v1/marketplace/upload", h.upload)
+	r.Post("/v1/marketplace/import", h.importContainer)
 	r.Get("/v1/marketplace/installed", h.listInstalled)
 	r.Delete("/v1/marketplace/installed/{pack_id}", h.uninstall)
 	r.Put("/v1/marketplace/installed/{pack_id}/bindings", h.setBindings)
@@ -193,6 +201,8 @@ func mapErr(err error) (int, string) {
 		return http.StatusConflict, "conflict"
 	case errors.Is(err, errs.ErrInvalid):
 		return http.StatusBadRequest, "invalid-argument"
+	case errors.As(err, new(notWiredError)):
+		return http.StatusServiceUnavailable, "not-wired"
 	default:
 		return http.StatusInternalServerError, "internal"
 	}

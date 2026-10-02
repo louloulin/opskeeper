@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/logquery"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
 
-	loop "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
+	loop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 )
 
 func quietLogger() *slog.Logger {

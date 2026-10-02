@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	middlewareregistry "github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
+	middlewareregistry "github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 // clearLoopAdapterEnv pins every adapter DSN to a known state for the
@@ -96,6 +96,17 @@ func TestLoopAdapterEnvNames(t *testing.T) {
 		"k8s":      "OPSKEEPER_LOOP_K8S_DSN",
 		"mq":       "OPSKEEPER_LOOP_MQ_DSN",
 		"host":     "OPSKEEPER_LOOP_HOST_DSN",
+		// git carries no remediation action — the loop's vocabulary is
+		// host/pg/redis/mq/k8s only — but its tools are what let an
+		// investigator check a claim against the source of truth, so it
+		// is wired on the same opt-in env scheme as the rest.
+		"git": "OPSKEEPER_LOOP_GIT_DSN",
+		// The product-namespaced MQ tools. These two namespaces used to be
+		// registered by the capability gate and by nothing else, so the
+		// gate was reporting on a fleet no deployment could build. Each is
+		// independent of OPSKEEPER_LOOP_MQ_DSN.
+		"kafka":    "OPSKEEPER_LOOP_KAFKA_DSN",
+		"rabbitmq": "OPSKEEPER_LOOP_RABBITMQ_DSN",
 	}
 	got := map[string]string{}
 	for _, src := range loopAdapterSources() {
@@ -107,6 +118,35 @@ func TestLoopAdapterEnvNames(t *testing.T) {
 	for name, env := range want {
 		if got[name] != env {
 			t.Errorf("adapter %s reads %s, want %s", name, got[name], env)
+		}
+	}
+}
+
+// The control plane and the capability gate must describe the same fleet.
+//
+// This is the property that was broken and is the reason the two product
+// namespaces are wired here at all. `cmd/opskeeper-eval vocabulary` builds
+// its own registry to decide what this build can do, and a namespace it
+// counts that no deployment registers is not a capability — it is a number.
+// The gate is not importable from here (it is package main), so the check is
+// the one that can be made from this side: every adapter the gate counts is
+// either wired here or is deliberately not a loop adapter, and the
+// namespaces are named explicitly so adding one to the gate alone fails.
+//
+// The exception is `mq.` and the two product namespaces, which is the whole
+// subject: they used to be on the gate's side only.
+func TestTheProductNamespacesAreWiredNotJustCounted(t *testing.T) {
+	wired := map[string]bool{}
+	for _, src := range loopAdapterSources() {
+		wired[src.name] = true
+	}
+	// These are the namespaces cmd/opskeeper-eval vocabulary counts from
+	// the adapter registries. If one is ever removed from the control
+	// plane without being removed from the gate's list, this fails.
+	for _, namespace := range []string{"postgres", "redis", "k8s", "mq", "kafka", "rabbitmq", "host", "git"} {
+		if !wired[namespace] {
+			t.Errorf("the capability gate counts the %q namespace, but the control plane does not wire it; "+
+				"the gate would then report a capability no deployment has", namespace)
 		}
 	}
 }

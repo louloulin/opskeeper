@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/notify"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/notify"
 )
 
 // RetryWorkerOpts wires the retry worker. MaxAttempts caps the per-delivery

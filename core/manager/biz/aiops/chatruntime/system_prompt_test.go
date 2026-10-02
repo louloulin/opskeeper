@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 func TestComposeSystemPrompt_Empty(t *testing.T) {

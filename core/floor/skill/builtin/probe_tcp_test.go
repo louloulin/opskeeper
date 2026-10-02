@@ -6,7 +6,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
 )
 
 func TestProbeTCP_Metadata(t *testing.T) {

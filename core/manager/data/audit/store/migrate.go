@@ -6,7 +6,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
 )
 
 // Migrate registers the audit_logs table and the chain head.

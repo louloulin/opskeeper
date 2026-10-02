@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	svc "github.com/vincent-wuhan/opskeeper/internal/manager/service/prometheus"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/promquery"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	svc "github.com/vincent-wuhan/opskeeper/core/manager/service/prometheus"
 )
 
 type stubService struct {

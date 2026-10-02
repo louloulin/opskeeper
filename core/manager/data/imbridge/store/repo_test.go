@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/imbridge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/imbridge"
 )
 
 func newIMBridgeTestRepo(t *testing.T) *Repo {

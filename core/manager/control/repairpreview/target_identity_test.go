@@ -54,11 +54,11 @@ func TestReadTargetIdentityFailsClosedWhenMissing(t *testing.T) {
 }
 
 func TestDeployedTargetIdentitySeedAndMigrationAgree(t *testing.T) {
-	seedData, err := os.ReadFile("../../../deploy/repair-preview/seed.sql")
+	seedData, err := os.ReadFile("../../../../deploy/repair-preview/seed.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	migrationData, err := os.ReadFile("../../../deploy/repair-preview/migrate-target-identity.sql")
+	migrationData, err := os.ReadFile("../../../../deploy/repair-preview/migrate-target-identity.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestTargetIdentityMigrationDoesNotOverwriteExistingIdentity(t *testing.T) {
 		VALUES (TRUE, 'wrong-scenario', 'wrong-target', 'sha256:wrong-workload')`); err != nil {
 		t.Fatal(err)
 	}
-	migrationData, err := os.ReadFile("../../../deploy/repair-preview/migrate-target-identity.sql")
+	migrationData, err := os.ReadFile("../../../../deploy/repair-preview/migrate-target-identity.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

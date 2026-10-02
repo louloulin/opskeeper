@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 // ListFilter is the parameter object for Repo.List / Usecase.List.
@@ -23,7 +23,7 @@ type ListFilter struct {
 }
 
 // Repo is the manager/edge persistence contract. Implemented in
-// internal/manager/data/edge/store. Post-pivot there is no org_id
+// core/manager/data/edge/store. Post-pivot there is no org_id
 // parameter.
 type Repo interface {
 	Create(ctx context.Context, e *model.Edge) error

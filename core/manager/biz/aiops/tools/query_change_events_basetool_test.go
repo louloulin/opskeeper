@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	auditmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 type fakeAuditLister struct {

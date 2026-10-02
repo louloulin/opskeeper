@@ -1,10 +1,10 @@
 package tunnel
 
 // bash is the generic shell-execution wire — see
-// internal/edgeagent/bash/handlers.go for the edge implementation and
-// internal/manager/biz/aiops/tools/bash_basetool.go for the manager-side
+// core/edge/bash/handlers.go for the edge implementation and
+// core/manager/biz/aiops/tools/bash_basetool.go for the manager-side
 // BaseTool. v1 ships a read-only policy enforced via cmdpolicy
-// (internal/edgeagent/cmdpolicy); future mutating-bash variants would
+// (core/edge/cmdpolicy); future mutating-bash variants would
 // reuse this same wire under a different policy preset.
 //
 // The wire shape stays minimal: a single Cmd string plus an optional
@@ -38,7 +38,7 @@ type BashExecRequest struct {
 	// admin "allow Agent write actions" gate is ON (resolved per request via
 	// the AgentWriteEnabled setting). Default false = the locked read-only
 	// cmdpolicy path. This is a deliberate, admin-gated escape hatch — see
-	// internal/manager/biz/aiops/chatruntime/runtime.go for where it's set.
+	// core/manager/biz/aiops/chatruntime/runtime.go for where it's set.
 	Unrestricted bool `json:"unrestricted,omitempty"`
 }
 

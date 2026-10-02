@@ -13,7 +13,7 @@ package opskeeperrepair
 // rather than rewritten. A tool whose schema the model sees and whose
 // schema the executor parses are two different objects, and a hand-edited
 // copy of one is a lie the model finds out about at run time. The drift
-// test in internal/pkg/pluginmanifest is what keeps the copy honest.
+// test in core/floor/pluginmanifest is what keeps the copy honest.
 //
 // The descriptions say what will happen before the tool runs, because on
 // this side of the socket the model is the only thing that can tell the

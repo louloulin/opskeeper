@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 )
 
 type fakeAlertRulePort struct {

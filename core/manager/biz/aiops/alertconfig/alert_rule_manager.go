@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"time"
 
-	alertdraft "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/alertdraft"
-	aiopstools "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	alertdraft "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/alertdraft"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 const (

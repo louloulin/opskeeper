@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact"
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact/model"
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact/store"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/store"
 )
 
 func sampleArtifact(id string) *model.Artifact {

@@ -23,12 +23,12 @@ import (
 	"strings"
 	"time"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/toolreplay"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/toolreplay"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // ErrMaxIterationsReached is returned from Run when cfg.MaxIterations elapse

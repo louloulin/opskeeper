@@ -15,12 +15,12 @@ import (
 	"fmt"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 // Repo 是 biz/hitl 视角的持久化接口（data 层 Repo 实现此接口）。
 //
-// 字段含义与 internal/manager/data/hitl/store.Repo 一致；biz 层只关心
+// 字段含义与 core/manager/data/hitl/store.Repo 一致；biz 层只关心
 // 行为契约，不导入 data 包（gospec §架构）。
 type Repo interface {
 	Create(ctx context.Context, p *model.Proposal) error

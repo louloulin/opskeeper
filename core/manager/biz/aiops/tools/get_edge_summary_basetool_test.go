@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 func TestGetEdgeSummaryTool_Info(t *testing.T) {

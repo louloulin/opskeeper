@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/chatruntime"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 )
 
 // write puts a file at rel under dir, creating parents.

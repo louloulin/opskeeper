@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // ToolNameGetProcessList is the stable wire name the LLM sees for this tool.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 )
 
 // TokenSums is the aggregated token / request count returned by
@@ -18,7 +18,7 @@ type TokenSums struct {
 }
 
 // SessionRepo persists chat sessions, messages, and tool-call rows.
-// Implemented in internal/manager/data/aiops/store.
+// Implemented in core/manager/data/aiops/store.
 //
 // All reads scoped to a single session return messages in ascending order by
 // id (chronological). ListSessions returns sessions ordered by id DESC (most

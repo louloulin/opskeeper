@@ -15,34 +15,34 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/config"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/httpserver"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/logger"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/config"
+	"github.com/vincent-wuhan/opskeeper/core/floor/httpserver"
+	"github.com/vincent-wuhan/opskeeper/core/floor/logger"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 
-	edgebash "github.com/vincent-wuhan/opskeeper/internal/edgeagent/bash"
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/edgeagent/biz"
-	edgecollector "github.com/vincent-wuhan/opskeeper/internal/edgeagent/collector"
-	edgehostfiles "github.com/vincent-wuhan/opskeeper/internal/edgeagent/host_files"
-	edgeplugins "github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins"
-	edgeplugincustommetrics "github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins/custommetrics"
-	edgeplugindatabasemetrics "github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins/databasemetrics"
-	edgepluginhostmetrics "github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins/hostmetrics"
-	edgepluginlogs "github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins/logs"
-	edgepluginmetrics "github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins/metrics"
-	edgepluginprocmetrics "github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins/procmetrics"
-	edgeplugintraces "github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins/traces"
-	edgerestartservice "github.com/vincent-wuhan/opskeeper/internal/edgeagent/restart_service"
-	edgesvc "github.com/vincent-wuhan/opskeeper/internal/edgeagent/service"
-	edgewebshell "github.com/vincent-wuhan/opskeeper/internal/edgeagent/webshell"
+	edgebash "github.com/vincent-wuhan/opskeeper/core/edge/bash"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/edge/biz"
+	edgecollector "github.com/vincent-wuhan/opskeeper/core/edge/collector"
+	edgehostfiles "github.com/vincent-wuhan/opskeeper/core/edge/host_files"
+	edgeplugins "github.com/vincent-wuhan/opskeeper/core/edge/plugins"
+	edgeplugincustommetrics "github.com/vincent-wuhan/opskeeper/core/edge/plugins/custommetrics"
+	edgeplugindatabasemetrics "github.com/vincent-wuhan/opskeeper/core/edge/plugins/databasemetrics"
+	edgepluginhostmetrics "github.com/vincent-wuhan/opskeeper/core/edge/plugins/hostmetrics"
+	edgepluginlogs "github.com/vincent-wuhan/opskeeper/core/edge/plugins/logs"
+	edgepluginmetrics "github.com/vincent-wuhan/opskeeper/core/edge/plugins/metrics"
+	edgepluginprocmetrics "github.com/vincent-wuhan/opskeeper/core/edge/plugins/procmetrics"
+	edgeplugintraces "github.com/vincent-wuhan/opskeeper/core/edge/plugins/traces"
+	edgerestartservice "github.com/vincent-wuhan/opskeeper/core/edge/restart_service"
+	edgesvc "github.com/vincent-wuhan/opskeeper/core/edge/service"
+	edgewebshell "github.com/vincent-wuhan/opskeeper/core/edge/webshell"
 
 	// Builtin skill init() blocks register Executors with the shared
-	// internal/skill registry. The edge-side dispatcher
-	// (internal/edgeagent/skill) routes execute_skill RPCs by key —
+	// core/floor/skill registry. The edge-side dispatcher
+	// (core/edge/skill) routes execute_skill RPCs by key —
 	// without this import the registry is empty and every skill call
 	// returns "unknown skill".
-	_ "github.com/vincent-wuhan/opskeeper/internal/skill/builtin"
+	_ "github.com/vincent-wuhan/opskeeper/core/floor/skill/builtin"
 )
 
 // version is overwritten at build time via -ldflags.
@@ -128,7 +128,7 @@ func main() {
 	}
 
 	// bash skill: generic read-only shell-execution gated by
-	// internal/edgeagent/cmdpolicy. The cmdpolicy package owns the
+	// core/edge/cmdpolicy. The cmdpolicy package owns the
 	// rules (binary classes / arg matchers / path + network
 	// allowlists); this Register call wires the cmdpolicy.Sandbox to
 	// the host_files path validator and installs the handler. Boot
@@ -142,7 +142,7 @@ func main() {
 	// WebSSH: edge is a stream port-forwarder. Manager opens a
 	// frontier stream with Meta describing the target (sshd at
 	// 127.0.0.1:22), edge io.Copy's bytes both ways. SSH client
-	// lives entirely on the manager — see internal/manager/server/
+	// lives entirely on the manager — see core/manager/server/
 	// webshell. The edge has no SSH lib, no PTY, no session map.
 	edgewebshell.Register(client, log.With(slog.String("comp", "webshell")))
 
@@ -407,7 +407,7 @@ func envOr(key, def string) string {
 // collectorAdapter bridges the collector package's Collector interface to
 // the biz package's identical-shaped interface. Two interfaces, one
 // implementation — the seam exists so biz/agent.go does not import
-// internal/edgeagent/collector (avoids cycles when the collector package
+// core/edge/collector (avoids cycles when the collector package
 // in turn depends on tunnel types).
 type collectorAdapter struct {
 	c edgecollector.Collector

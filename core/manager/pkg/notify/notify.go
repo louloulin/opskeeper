@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/config"
+	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 )
 
 // Severity is the product-level priority of a notification.

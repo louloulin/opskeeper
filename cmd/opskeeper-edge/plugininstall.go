@@ -21,9 +21,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigrpc"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
 )
 
 // The node's plugin store: what a package has to survive to become

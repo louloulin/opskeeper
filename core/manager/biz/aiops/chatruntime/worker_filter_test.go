@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 // originTool is a minimal BaseTool whose Info carries a configurable Origin /

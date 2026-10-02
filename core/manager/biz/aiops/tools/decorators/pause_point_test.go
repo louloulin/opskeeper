@@ -7,9 +7,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/hitl"
-	hitlmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/hitl"
+	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 // fakeCoord 是 PauseCoordinator 的最小 stub：返回预设的 (ref, err)。

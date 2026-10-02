@@ -21,8 +21,8 @@ import (
 	"strings"
 	"sync"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/setting"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/setting"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Repo is the persistence surface the service depends on. The concrete

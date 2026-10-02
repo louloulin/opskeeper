@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 type fakeTemplates struct {

@@ -27,8 +27,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 // ApprovedContractReader 是 loopstore.ContractRepoDB 需要满足的

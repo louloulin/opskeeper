@@ -20,7 +20,7 @@ import (
 	redis "github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/leader"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/leader"
 )
 
 // Role is the leader election role label. Mirrors leader.Role so this

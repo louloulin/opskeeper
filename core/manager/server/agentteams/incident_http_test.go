@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
-	alertbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	mcpauth "github.com/vincent-wuhan/opskeeper/internal/manager/server/mcp/middleware"
+	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
 
 type linkedAlertResolver struct {

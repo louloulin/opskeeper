@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	bizalert "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/notify"
+	bizalert "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/notify"
 )
 
 type Caller struct {

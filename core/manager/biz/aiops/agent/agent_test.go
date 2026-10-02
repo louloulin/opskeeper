@@ -12,14 +12,14 @@ import (
 	"testing"
 	"time"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // ----- fakes -----

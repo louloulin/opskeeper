@@ -185,6 +185,6 @@ type OpRiskLevel interface {
 
 // 装饰器栈：与 opskeeper BaseTool 共享 Audit / Timeout / RateLimit / Metrics。
 // 路径 A 阶段 2 任务 2.1 实现：
-//   - internal/middleware/adapter/decorator/audit.go
-//   - internal/middleware/adapter/decorator/timeout.go
-//   - internal/middleware/adapter/decorator/metrics.go
+//   - core/manager/middleware/adapter/decorator/audit.go
+//   - core/manager/middleware/adapter/decorator/timeout.go
+//   - core/manager/middleware/adapter/decorator/metrics.go

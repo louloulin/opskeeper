@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	alertdraft "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/alertdraft"
-	aiopstools "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
+	alertdraft "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/alertdraft"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 )
 
 const (

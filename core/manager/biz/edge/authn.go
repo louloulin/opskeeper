@@ -5,14 +5,14 @@ import (
 	"log/slog"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/passwd"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/passwd"
 )
 
 // AccessKeyAuthenticator implements tunnel.AuthFunc for edge handshakes.
-// Injected into internal/pkg/tunnel at wiring time by cmd/opskeeper.
+// Injected into core/floor/tunnel at wiring time by cmd/opskeeper.
 type AccessKeyAuthenticator struct {
 	repo  Repo
 	log   *slog.Logger

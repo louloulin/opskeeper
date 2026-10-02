@@ -8,14 +8,14 @@ import (
 	"net"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	changeeventbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge/changeevent"
-	metricbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/metric"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	changeeventbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge/changeevent"
+	metricbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/metric"
 )
 
 // PromwriteIngester is the narrow surface the push_prom_samples handler
-// needs from internal/manager/biz/promwrite. Declared here as an interface
+// needs from core/manager/biz/promwrite. Declared here as an interface
 // so this package does not import the biz package directly (matches the
 // MetricIngester pattern). A nil value means Prom is disabled - the
 // handler still installs but silently 200s so edges back off cleanly.
@@ -125,7 +125,7 @@ type PluginConfigFetcher interface {
 // Install registers all manager-side reverse-call handlers and the three
 // lifecycle callbacks (GetEdgeID, EdgeOnline, EdgeOffline) on the client.
 //
-// Method names match the constants in internal/pkg/tunnel/messages.go;
+// Method names match the constants in core/floor/tunnel/messages.go;
 // edges send those exact strings on the wire. Payloads are JSON in the
 // shapes declared in that same file.
 func Install(ctx context.Context, c *Client, w Wiring) error {
@@ -496,7 +496,7 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 				return nil, fmt.Errorf("get_plugin_configs: %w", err)
 			}
 			// Convert biz snapshot to wire snapshot (same shape, separate
-			// types so internal/pkg/tunnel stays biz-free).
+			// types so core/floor/tunnel stays biz-free).
 			out := tunnel.GetPluginConfigsResponse{
 				EdgeID:  snap.EdgeID,
 				Configs: make(map[string]tunnel.GetPluginConfigsEntry, len(snap.Configs)),

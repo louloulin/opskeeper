@@ -6,7 +6,7 @@ package device
 import (
 	"context"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/device"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 )
 
 // ListFilter narrows Device.List results.
@@ -30,7 +30,7 @@ type ListFilter struct {
 }
 
 // Repo is the device persistence contract. The sqlite/mysql implementation
-// lives under internal/manager/data/device.
+// lives under core/manager/data/device.
 type Repo interface {
 	// FindOrCreateByFingerprint returns the existing Device for the
 	// (Fingerprint) key or creates a fresh row carrying the provided

@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	topologybiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/topology"
-	topologymodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/topology"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	topologybiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
+	topologymodel "github.com/vincent-wuhan/opskeeper/core/manager/model/topology"
 )
 
 const (

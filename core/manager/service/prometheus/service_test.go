@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
 )
 
 func TestBuildLaunchAndVerifyTicket(t *testing.T) {

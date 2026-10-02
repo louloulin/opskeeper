@@ -9,7 +9,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/wsfanout"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/wsfanout"
 )
 
 // newTestRedis 起一个 miniredis + redis.Client。t.Cleanup 自动收尾。

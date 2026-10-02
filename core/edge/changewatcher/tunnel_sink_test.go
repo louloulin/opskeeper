@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // fakeClient 实现 tunnel.Client 接口, 记录所有 Call 接收到的请求.

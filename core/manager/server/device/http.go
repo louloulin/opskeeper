@@ -17,10 +17,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	devicemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/device"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // roleAdmin mirrors iam/model.RoleAdmin without crossing the BC boundary

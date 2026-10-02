@@ -9,8 +9,8 @@ import (
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 
-	bizbridge "github.com/vincent-wuhan/opskeeper/internal/manager/biz/imbridge"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/imbridge"
+	bizbridge "github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/imbridge"
 )
 
 // StreamClient is the long-connection variant of the Feishu provider

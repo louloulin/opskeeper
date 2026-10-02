@@ -3,9 +3,9 @@ package tools
 import (
 	"context"
 
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	devicemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/device"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 )
 
 // DeviceResolver resolves a device_id to its host edge_id via the

@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/report"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
 )
 
 // task.go — persistence for the unified-task spine (HLD-022 Phase 2). Only

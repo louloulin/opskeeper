@@ -18,8 +18,8 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/collector"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/edge/collector"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // Target is one HTTP /metrics endpoint to scrape.

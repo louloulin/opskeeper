@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // silentCritiqueLogger 把所有日志输出丢到 io.Discard，让单测输出干净。

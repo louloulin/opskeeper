@@ -18,7 +18,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // Dialer opens a command channel to one node.
@@ -32,7 +32,7 @@ type Dialer interface {
 
 // Refusal codes the node returns in a well-formed reply body.
 //
-// The node's codes are defined in internal/edgeagent/biz; they are repeated
+// The node's codes are defined in core/edge/biz; they are repeated
 // here rather than imported because the edge and the control plane will
 // eventually be separate binaries, and a shared string constant is a weaker
 // contract than a compiled one. A code the manager does not recognise is

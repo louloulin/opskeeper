@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 // newRabbitTestAdapter points an adapter at a stub management API.

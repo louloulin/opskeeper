@@ -3,7 +3,7 @@ package chatruntime
 import (
 	"testing"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 )
 
 // historyScenarios are the replay shapes that decide whether a strict

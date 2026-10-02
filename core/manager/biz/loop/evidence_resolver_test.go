@@ -162,7 +162,9 @@ func TestEvidenceArgResolver_RefusesToPauseEveryRoleItSaw(t *testing.T) {
 // claiming authority over actions it knows nothing about.
 func TestEvidenceArgResolver_LeavesUndeclaredActionsToTheInvoker(t *testing.T) {
 	r := EvidenceArgResolver{}
-	for _, action := range []string{"pg.vacuum_analyze", "k8s.evict_pod", "host.restart_service"} {
+	// These actions have no declared extractor, so the invoker's own
+	// missing-argument refusal stays in charge and speaks for them.
+	for _, action := range []string{"pg.vacuum_analyze", "pg.terminate_long_tx", "mq.inspect_consumer_lag", "host.garbage_collect"} {
 		args, err := r.Resolve(context.Background(), RemediationRequest{
 			Option: opt(action, "mutating", false),
 		}, ToolSpec{Name: action, RequiredArgs: []string{"pid"}})

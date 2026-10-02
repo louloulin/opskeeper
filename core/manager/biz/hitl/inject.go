@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 // ErrProposalPending 在 ShouldPause 返回非空 Proposal 时一并返回，caller 应

@@ -39,8 +39,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/knowledge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // CreateSSHIdentityInput is the create-form payload. PrivateKey is PEM-

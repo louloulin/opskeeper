@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	skillsvc "github.com/vincent-wuhan/opskeeper/internal/manager/biz/skill"
-	skillcore "github.com/vincent-wuhan/opskeeper/internal/skill"
+	skillcore "github.com/vincent-wuhan/opskeeper/core/floor/skill"
+	skillsvc "github.com/vincent-wuhan/opskeeper/core/manager/biz/skill"
 )
 
 // fakeSkillRunner records what the bridge dispatched. We use it to

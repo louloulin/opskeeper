@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/report"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
 )
 
 // ReportFilter scopes a report list query. Zero value = all reports,

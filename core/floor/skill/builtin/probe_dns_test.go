@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
 )
 
 func TestProbeDNS_Metadata(t *testing.T) {

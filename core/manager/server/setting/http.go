@@ -14,12 +14,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
-	bizsetting "github.com/vincent-wuhan/opskeeper/internal/manager/biz/setting"
-	auditmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
-	auditmw "github.com/vincent-wuhan/opskeeper/internal/manager/server/middleware"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	bizsetting "github.com/vincent-wuhan/opskeeper/core/manager/biz/setting"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	auditmw "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
 )
 
 // SettingService is the narrow surface the handler depends on. The

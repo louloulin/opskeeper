@@ -7,7 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 // DualWriteRepo 在数据迁移期提供"先写新表、再回写旧表"的桥接通道。

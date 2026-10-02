@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact/model"
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact/store"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/store"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // StoredArtifact 是 model.Artifact 的别名（向后兼容旧代码 / 测试）。

@@ -1,5 +1,5 @@
 // Package store provides GORM-backed persistence for edge-domain
-// entities. See also: internal/manager/data/<domain>/store/.
+// entities. See also: core/manager/data/<domain>/store/.
 package store
 
 import (
@@ -9,8 +9,8 @@ import (
 
 	"gorm.io/gorm"
 
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // ChangeEventRepo persists ChangeEventRow records reported by edge

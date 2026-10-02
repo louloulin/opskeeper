@@ -11,11 +11,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/iam/biz/user"
-	iammodel "github.com/vincent-wuhan/opskeeper/internal/iam/model"
-	"github.com/vincent-wuhan/opskeeper/internal/iam/service"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/auth"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/user"
+	iammodel "github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/service"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 type serverTestRepo struct {

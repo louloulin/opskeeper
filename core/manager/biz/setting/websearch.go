@@ -4,14 +4,14 @@ import (
 	"context"
 	"strings"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/setting"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/setting"
 )
 
 // WebSearchResolver reads the provider selection + per-provider config
 // (Tavily / Brave key, SearXNG URL) from system_settings. Implements
 // the builtin.WebSearchConfigResolver interface declared in
-// internal/skill/builtin/web_search.go so cmd/main.go can wire the
-// skill at boot without internal/skill importing biz/setting.
+// core/floor/skill/builtin/web_search.go so cmd/main.go can wire the
+// skill at boot without core/floor/skill importing biz/setting.
 //
 // Mirrors LokiResolver / TempoResolver — single dependency on Service,
 // nil-safe Get path so the skill returns "not configured" cleanly when

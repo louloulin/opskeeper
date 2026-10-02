@@ -206,7 +206,7 @@ const (
 )
 
 // SeverityTier classifies the blast radius of a mutating proposal.
-// Drives the approval policy (see internal/manager/biz/aiops/proposal).
+// Drives the approval policy (see core/manager/biz/aiops/proposal).
 const (
 	// SeveritySafe — read-only effect (effectively a no-op for the
 	// approval flow; auto-approved when the reviewer returns approve).

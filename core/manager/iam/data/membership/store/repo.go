@@ -6,8 +6,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/vincent-wuhan/opskeeper/internal/iam/model"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Repo is the GORM-backed membership repository.

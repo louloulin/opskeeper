@@ -13,9 +13,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
-	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
+	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 type Repository interface {

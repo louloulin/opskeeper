@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // GenLLM is the one-shot completion seam used for generation (reuses the same

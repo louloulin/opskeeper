@@ -9,6 +9,8 @@ package mq
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -138,4 +140,58 @@ func asString(m map[string]any, key string) string {
 	}
 	s, _ := m[key].(string)
 	return s
+}
+
+// requireInt reads a required integer argument. A partition id of zero is
+// valid, so this cannot go through intArg, which rejects anything
+// non-positive — a rule that is right for limits and wrong for indexes.
+func (p params) requireInt(name string) (int, error) {
+	raw, ok := p[name]
+	if !ok || raw == nil {
+		return 0, fmt.Errorf("mq: %s is required", name)
+	}
+	v, err := toInt(raw)
+	if err != nil {
+		return 0, fmt.Errorf("mq: %s: %w", name, err)
+	}
+	return v, nil
+}
+
+// brokerIDList reads a comma-separated list of broker ids.
+//
+// It is a string rather than an array because that is how a broker id
+// arrives from an operator ("move it to 3,4,5") and from a terminal the
+// investigation is being read in. It is parsed rather than passed through,
+// so a typo in one entry is a refusal naming that entry instead of a
+// replica list Kafka accepts and cannot place.
+func (p params) brokerIDList(name string) ([]int, error) {
+	raw, err := p.requireString(name)
+	if err != nil {
+		return nil, err
+	}
+	var out []int
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, fmt.Errorf("mq: %s entry %q is not a broker id; broker ids are non-negative integers", name, part)
+		}
+		if id < 0 {
+			return nil, fmt.Errorf("mq: %s entry %q is not a broker id; broker ids are non-negative integers", name, part)
+		}
+		if slices.Contains(out, id) {
+			return nil, fmt.Errorf("mq: %s lists broker %d twice; a replica cannot be on the same broker twice", name, id)
+		}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("mq: %s must name at least one broker", name)
+	}
+	if len(out) > maxReplicasPerPartition {
+		return nil, fmt.Errorf("mq: %s names %d brokers, which is past the %d this adapter will submit", name, len(out), maxReplicasPerPartition)
+	}
+	return out, nil
 }

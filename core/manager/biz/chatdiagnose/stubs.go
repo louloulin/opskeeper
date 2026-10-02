@@ -15,7 +15,7 @@ package chatdiagnose
 import (
 	"context"
 
-	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/chatdiagnose"
+	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/chatdiagnose"
 )
 
 // NoopKBLookup 是 KBLookup 的零行为实现（生产替换为 KBLookupImpl +
@@ -46,7 +46,7 @@ func (NoopChatRuntime) ReAct(_ context.Context, req ChatRuntimeRequest) (*ChatRu
 }
 
 // NoopAuditLogger 是 AuditLogger 的零行为实现。生产替换为
-// internal/manager/biz/audit.Usecase 适配。
+// core/manager/biz/audit.Usecase 适配。
 type NoopAuditLogger struct{}
 
 // Write 实现 AuditLogger。

@@ -23,7 +23,7 @@ package collector
 import (
 	"context"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // NoopPush returns a Collector that produces no periodic samples while

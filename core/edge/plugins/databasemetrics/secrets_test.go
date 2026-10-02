@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 func TestWriteManagedSecretInBaseWritesStrictFile(t *testing.T) {

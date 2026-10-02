@@ -7,7 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // Migrate registers the alert tables with gorm AutoMigrate. After AutoMigrate

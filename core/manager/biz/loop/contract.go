@@ -30,7 +30,7 @@ import (
 	"fmt"
 	"time"
 
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 // Contract schema versions. Bump according to the evolution rule
@@ -277,6 +277,12 @@ var ErrInvalidSchema = errors.New("loop: invalid contract schema")
 //   - time_window.start < time_window.end
 //   - remediation_options >= 1 entry, <= 10 entries
 //   - each remediation_options[].risk ∈ {"safe","mutating","dangerous"}
+//
+// maxEvidenceChainEntries is the contract cap on recorded evidence. The
+// investigator writes at most a handful; the cap exists to bound the LLM's
+// output, and stampSubject honours it when it re-adds the subject.
+const maxEvidenceChainEntries = 50
+
 func ValidateRootCauseJSON(c *RootCauseJSON) error {
 	if c == nil {
 		return fmt.Errorf("%w: nil RootCauseJSON", ErrInvalidSchema)
@@ -299,8 +305,8 @@ func ValidateRootCauseJSON(c *RootCauseJSON) error {
 	if len(c.EvidenceChain) < 1 {
 		return fmt.Errorf("%w: evidence_chain empty (need >= 1)", ErrInvalidSchema)
 	}
-	if len(c.EvidenceChain) > 50 {
-		return fmt.Errorf("%w: evidence_chain has %d entries (max 50)", ErrInvalidSchema, len(c.EvidenceChain))
+	if len(c.EvidenceChain) > maxEvidenceChainEntries {
+		return fmt.Errorf("%w: evidence_chain has %d entries (max %d)", ErrInvalidSchema, len(c.EvidenceChain), maxEvidenceChainEntries)
 	}
 	if !c.TimeWindow.End.After(c.TimeWindow.Start) {
 		return fmt.Errorf("%w: time_window end <= start", ErrInvalidSchema)

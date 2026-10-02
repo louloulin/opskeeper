@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/iam/model"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/auth"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // fakeRepo is an in-memory Repo for usecase-level tests.

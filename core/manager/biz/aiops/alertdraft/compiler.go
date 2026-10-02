@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 func shouldBlockAlertRuleCreateOnPreviewSkip(reason string) bool {

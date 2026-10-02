@@ -7,7 +7,7 @@ package dbx
 // Migrator function (type Migrator func(*gorm.DB) error) that registers
 // its own models:
 //
-//	// internal/iam/data/user/sqlite/user.go
+//	// core/manager/iam/data/user/sqlite/user.go
 //	func Migrate(db *gorm.DB) error { return db.AutoMigrate(&User{}) }
 //
 // The cloud binary (cmd/opskeeper) composes them in startup order and hands

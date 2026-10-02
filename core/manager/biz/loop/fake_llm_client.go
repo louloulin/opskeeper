@@ -8,7 +8,7 @@
 //  1. LLMJudge 需要"要一次补全"这个能力。它现在只依赖 core/ports.Completer
 //     （core/harness/judge/llm_judge.go），而 llm.Completer 把 Client 适配成
 //     那个端口——所以这个 fake 仍然能喂给它，适配层就在 llm 这一侧。
-//  2. internal/pkg/llm.Client 是当前 LLM 抽象的"最底层 + 最稳定"接口，
+//  2. core/manager/pkg/llm.Client 是当前 LLM 抽象的"最底层 + 最稳定"接口，
 //     LLMCaller / 5 phase worker 通过构造注入拿到它，单测只需替换 Client。
 //
 // 用法：
@@ -34,7 +34,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // FakeLLMClient 是 llm.Client 的 mock 实现。

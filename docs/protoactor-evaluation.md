@@ -45,7 +45,7 @@
 
 ## 二、我们现有的通讯架构
 
-约 6954 行（`internal/pkg/tunnel` + `frontierbound` + `internal/edgeagent/biz` + `core/wire`），四层：
+约 6954 行（`core/floor/tunnel` + `frontierbound` + `core/edge/biz` + `core/wire`），四层：
 
 ```
 ① console ──HTTP/SSE──► manager                    帧契约已冻结
@@ -183,5 +183,5 @@ beta、无 tag、API 会变的依赖——**同样的风险，零收益**。
 - README：<https://raw.githubusercontent.com/asynkron/protoactor-go/dev/README.md>
 - 仓库元数据 / 目录 / 提交：<https://api.github.com/repos/asynkron/protoactor-go>
 - 依赖实测：本地 `go mod tidy`（仅 `actor` / `cluster`+`remote` 两种范围）
-- OpsKeeper 侧：`internal/pkg/tunnel/doc.go`（broker 中继与出站拨号）、
+- OpsKeeper 侧：`core/floor/tunnel/doc.go`（broker 中继与出站拨号）、
   `core/wire/events.go`（冻结的 SSE 事件类型）、`core/edge/pigsupervisor/supervisor.go`

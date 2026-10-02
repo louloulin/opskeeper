@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	_ "github.com/glebarez/go-sqlite"
-	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
+	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
 )
 
 const testPreviewTargetFingerprint = "0123456789abcdef"
@@ -24,7 +24,7 @@ func TestRepairPreviewExecutorFailsClosedWithoutConfiguration(t *testing.T) {
 
 func TestRepairPreviewExecutorRejectsUnexpectedWorkloadProfile(t *testing.T) {
 	_, err := NewRepairPreviewExecutor(
-		"postgres://preview", "../../../deploy/repair-preview/pg-pool-workload.yaml", "sha256:not-current", nil,
+		"postgres://preview", "../../../../deploy/repair-preview/pg-pool-workload.yaml", "sha256:not-current", nil,
 	)
 	if err == nil {
 		t.Fatal("expected workload fingerprint mismatch to fail")

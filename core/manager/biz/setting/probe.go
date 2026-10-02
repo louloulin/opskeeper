@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/setting"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/setting"
 )
 
 // LokiURLProbe is a URLProbe implementation that hits the configured

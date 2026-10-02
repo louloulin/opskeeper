@@ -9,10 +9,10 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/topology"
-	store "github.com/vincent-wuhan/opskeeper/internal/manager/data/topology/store"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/topology"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
+	store "github.com/vincent-wuhan/opskeeper/core/manager/data/topology/store"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/topology"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 func newUC(t *testing.T) *biz.Usecase {

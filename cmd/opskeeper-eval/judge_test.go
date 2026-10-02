@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 	"github.com/vincent-wuhan/opskeeper/core/harness/runner"
 	"github.com/vincent-wuhan/opskeeper/core/harness/vocabulary"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/config"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // clearProviderEnv removes every provider credential for the duration of a
@@ -359,20 +359,22 @@ func TestTheCommandRefusesToScoreACaseTheBuildCannotSatisfy(t *testing.T) {
 	respPath := filepath.Join(dir, "resp.json")
 	raw, _ := json.Marshal(map[string]any{
 		"tool_calls":           []map[string]string{{"name": "query_promql"}},
-		"root_cause_matched":   []string{"redis.slow_cmd"},
-		"remediations_matched": []string{"redis.kill_client"},
+		"root_cause_matched":   []string{"pg.lock_waits"},
+		"remediations_matched": []string{"zookeeper.restart_quorum"},
 	})
 	if err := os.WriteFile(respPath, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// redis/slow-cmd expects redis.kill_client, which no registry in this
-	// build offers — the adapter registers redis.client_kill. A run scoring
-	// zero on that case is saying something about a rename nobody reconciled,
-	// not about the agent.
+	// The corpus is synthetic because every case the repository ships is
+	// servable now — that is what the plugin fleet bought. This one expects
+	// a "zookeeper" family no package declares, and only on the remediation
+	// axis: the root cause is pg.lock_waits, which the pg adapter registers
+	// by name. A run scoring zero on it would be saying something about the
+	// corpus, not about the agent.
 	err := cmdJudge(context.Background(), []string{
-		"--case", "redis/slow-cmd",
+		"--case", "zookeeper/session-timeout",
 		"--response", respPath,
-		"--cases-dir", filepath.Join("..", "..", "core", "harness", "cases"),
+		"--cases-dir", writeUnservableCorpus(t),
 		"--plugins-dir", filepath.Join("..", "..", "plugins", "pig-ops"),
 	})
 	if err == nil {
@@ -380,7 +382,7 @@ func TestTheCommandRefusesToScoreACaseTheBuildCannotSatisfy(t *testing.T) {
 	}
 	// The message has to be actionable: which case, which symbols, and
 	// what to do about it.
-	for _, want := range []string{"redis/slow-cmd", "redis.kill_client", "opskeeper-eval vocabulary", "--allow-unservable"} {
+	for _, want := range []string{"zookeeper/session-timeout", "zookeeper.restart_quorum", "opskeeper-eval vocabulary", "--allow-unservable"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
 		}
@@ -402,17 +404,17 @@ func TestOptingOutOfTheRefusalStampsTheReasonIntoTheArtifact(t *testing.T) {
 	respPath := filepath.Join(dir, "resp.json")
 	raw, _ := json.Marshal(map[string]any{
 		"tool_calls":           []map[string]string{{"name": "query_promql"}},
-		"root_cause_matched":   []string{"redis.slow_cmd"},
-		"remediations_matched": []string{"redis.kill_client"},
+		"root_cause_matched":   []string{"pg.lock_waits"},
+		"remediations_matched": []string{"zookeeper.restart_quorum"},
 	})
 	if err := os.WriteFile(respPath, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	outPath := filepath.Join(dir, "score.json")
 	if err := cmdJudge(context.Background(), []string{
-		"--case", "redis/slow-cmd",
+		"--case", "zookeeper/session-timeout",
 		"--response", respPath,
-		"--cases-dir", filepath.Join("..", "..", "core", "harness", "cases"),
+		"--cases-dir", writeUnservableCorpus(t),
 		"--allow-unservable",
 		"--plugins-dir", filepath.Join("..", "..", "plugins", "pig-ops"),
 		"--out", outPath,
@@ -464,10 +466,22 @@ func TestTheProductionCapabilityIsReadFromTheRealRegistries(t *testing.T) {
 	if _, cov, ok := cap.ProviderOf("pg.kill_session"); !ok || cov != vocabulary.CoverageExact {
 		t.Errorf("pg.kill_session is covered by %q (%v); the pg adapter registers it", cov, ok)
 	}
-	// A symbol no registry offers must still be a miss, or the gate is
-	// accepting everything.
-	if _, cov, ok := cap.ProviderOf("pg.definitely_not_a_tool"); ok {
+	// A symbol in a family no provider declares must still be a miss, or
+	// the gate is accepting everything.
+	if _, cov, ok := cap.ProviderOf("zookeeper.session_timeout"); ok {
 		t.Errorf("an unknown symbol was covered by %q", cov)
+	}
+	// Inside a family some package does declare, the join is by family, not
+	// by method: a package declares the capabilities it serves, not every
+	// method of them (see pluginmanifest.CoverageOf, which documents the
+	// choice). Pinned down here so that a move to per-method claims is a
+	// deliberate change rather than a silent one — and so the limit is
+	// written down rather than discovered: the middleware package cannot
+	// dispatch pg.definitely_not_a_tool, and the boolean alone does not say
+	// so. The dispatch axis that does say so is loopActionExecutability,
+	// which counts exact symbols only.
+	if _, cov, ok := cap.ProviderOf("pg.definitely_not_a_tool"); !ok || cov != vocabulary.CoverageFamily {
+		t.Errorf("a method inside a declared family resolved as (%q, %v); the join is family-level by design", cov, ok)
 	}
 	// The loop's own remediation vocabulary is a separate provider: the
 	// closed loop proposes pg.kill_backend where the adapter offers

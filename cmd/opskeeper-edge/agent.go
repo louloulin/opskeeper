@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/edge/agentprofile"
 	"github.com/vincent-wuhan/opskeeper/core/edge/gatesocket"
 	"github.com/vincent-wuhan/opskeeper/core/edge/pigsupervisor"
 	"github.com/vincent-wuhan/opskeeper/core/edge/policygate"
@@ -16,8 +18,8 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 	"github.com/vincent-wuhan/opskeeper/core/wire"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/edgeagent/biz"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/edge/biz"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // nodeAgentConfig is how a node is told which agent to run and what it may
@@ -84,9 +86,10 @@ func loadNodeAgentConfig() nodeAgentConfig {
 // serves the manager's agent.* commands against it.
 //
 // It is a composition point, not a layer: this file is the one place that
-// knows both the PiG adapter and the node supervisor exist. Neither
-// core/edge nor internal/edgeagent may import the other, so a PiG upgrade
-// changes this file and core/pig and nothing else on the node plane.
+// knows both the PiG adapter and the node supervisor exist. The supervisor
+// is handed a client, not a PiG type, so the node module never names PiG
+// and a PiG upgrade changes this file and core/pig and nothing else on the
+// node plane.
 //
 // A node agent that fails to start is not fatal. The edge still collects
 // metrics, still serves its own skill RPCs, and still answers agent.state
@@ -122,9 +125,23 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// The profile, written next to the package list and for the same
+	// reason: it is the other half of what this agent may do, and it is
+	// written before the process starts so the two can never describe
+	// different nodes. A failure here stops the node. The profile is not
+	// a convenience - a node that booted without it would hand the model
+	// a shell on a production host, and the gate would then refuse every
+	// call to it, which is a safe but unreadable place to be during an
+	// incident.
+	profilePath, err := agentprofile.Write(filepath.Join(cfg.Cwd, agentConfigDirName()))
+	if err != nil {
+		return nil, nil, fmt.Errorf("edge agent profile: %w", err)
+	}
 	log.Info("node agent package set installed",
 		slog.Int("packages", len(admitted)),
-		slog.String("settings", settingsPath))
+		slog.String("settings", settingsPath),
+		slog.String("profile", profilePath))
 
 	// The allow-list is built from the same manifests that were just
 	// admitted, and is built before the agent starts. Nothing reaches the
@@ -161,7 +178,13 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 	// until the registry is.
 	var toolSocketPath string
 
-	args := []string{"--mode", "rpc"}
+	// --mode rpc is the headless protocol this node speaks. --piglet points
+	// at the profile written above, and it is not optional: without it the
+	// agent starts with PiG's stock built-ins, which include a shell, and
+	// the model on a production node would be offered it. The order is the
+	// agent's own; both flags are read before the session starts, so
+	// neither has to precede the other.
+	args := []string{"--mode", "rpc", "--piglet", profilePath}
 	// Every process is a new one: a restart is a new agent, not a resume.
 	// The agent holds no transcript across its own death, and pretending
 	// otherwise would drop the turn's output without saying so.

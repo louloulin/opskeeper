@@ -104,13 +104,13 @@ func TestHarness_FullFlow_OneCase(t *testing.T) {
 	// 2. Record 到 leaderboard
 	lb := leaderboard.NewLeaderboard()
 	e := &leaderboard.Entry{
-		RunID:     "e2e-run-1",
-		CaseID:    target.ID,
-		Branch:    "e2e",
-		Score:     score.Overall,
-		Flagged:   score.Flagged,
+		RunID:      "e2e-run-1",
+		CaseID:     target.ID,
+		Branch:     "e2e",
+		Score:      score.Overall,
+		Flagged:    score.Flagged,
 		JudgesUsed: score.JudgesUsed,
-		Timestamp: time.Now(),
+		Timestamp:  time.Now(),
 	}
 	if err := lb.Record(e); err != nil {
 		t.Fatalf("lb.Record: %v", err)

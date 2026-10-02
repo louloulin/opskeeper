@@ -37,6 +37,26 @@ func (p params) optionalString(name string) (string, error) {
 	return strings.TrimSpace(s), nil
 }
 
+// optionalInt reads an integer argument, falling back to def when it is
+// absent or null.
+//
+// The fallback is the only place this adapter invents a value, and it is
+// confined to a bound (how many rows, how many days) rather than to an
+// identifier: a default limit changes how much is shown, while a default
+// pid would change what is killed. Identifiers go through requireString or
+// are absent, never defaulted.
+func (p params) optionalInt(name string, def int) (int, error) {
+	raw, ok := p[name]
+	if !ok || raw == nil {
+		return def, nil
+	}
+	n, err := toInt(raw)
+	if err != nil {
+		return 0, fmt.Errorf("host: %s: %w", name, err)
+	}
+	return n, nil
+}
+
 func toInt(raw any) (int, error) {
 	switch v := raw.(type) {
 	case int:

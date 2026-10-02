@@ -4,7 +4,7 @@
 // narrow Recorder interface for the HTTP layer to drop audit rows.
 //
 // The HTTP / WebSocket handler lives next door in
-// internal/manager/server/webshell — this package stays HTTP-agnostic
+// core/manager/server/webshell — this package stays HTTP-agnostic
 // so it can be unit-tested with fakes.
 package webshell
 
@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	wsmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/webshell"
-	wsfanout "github.com/vincent-wuhan/opskeeper/internal/pkg/wsfanout"
+	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
+	wsfanout "github.com/vincent-wuhan/opskeeper/core/manager/pkg/wsfanout"
 )
 
 // Caller is the narrow tunnel surface used to invoke RPCs against

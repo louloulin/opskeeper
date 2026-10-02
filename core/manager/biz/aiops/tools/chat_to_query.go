@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // ToolNameChatToQuery is the stable wire name the LLM sees.

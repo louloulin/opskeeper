@@ -9,7 +9,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/wsfanout"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/wsfanout"
 )
 
 // TestIntegration_CrossPodFanOut 验证 AIOps chat 跨副本 stop 的端到端行为。

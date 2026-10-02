@@ -1,7 +1,7 @@
 // Package tenantctx stores the per-request caller identity on
 // context.Context.
 //
-// The auth middleware (internal/pkg/auth) decodes JWT claims and calls With;
+// The auth middleware (core/manager/pkg/auth) decodes JWT claims and calls With;
 // downstream service/biz/data layers read the Tenant via From to check role /
 // ownership. The name "tenant" is vestigial — in the single-tenant private MVP
 // there is just one user namespace, so Tenant is really just the

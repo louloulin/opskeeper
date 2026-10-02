@@ -20,9 +20,9 @@ import (
 	"strings"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/logquery"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/notify"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/notify"
 )
 
 // evaluateLogMatch runs every enabled log_match rule's count_over_time

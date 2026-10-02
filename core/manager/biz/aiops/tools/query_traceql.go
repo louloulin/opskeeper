@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tracequery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tracequery"
 )
 
 // ToolNameQueryTraceQL is the stable wire name the LLM sees for the TraceQL

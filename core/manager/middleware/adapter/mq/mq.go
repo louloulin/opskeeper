@@ -28,9 +28,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/secretbox"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/secretbox"
 )
 
 const defaultTimeout = 30 * time.Second
@@ -358,9 +358,16 @@ func (a *Adapter) Execute(ctx context.Context, op adapter.ExecOp) (*adapter.Exec
 		}
 	case "purge_queue":
 		if rabbit == nil {
-			return nil, fmt.Errorf("%w: mq.%s", ErrUnknownOperation, op.Operation)
+			return nil, fmt.Errorf("%w: purging a queue is a RabbitMQ operation; this adapter is connected to %s",
+				ErrUnknownOperation, a.kind)
 		}
 		impacted, message, ok, err = rabbit.drainQueue(ctx, p)
+	case "repartition":
+		if kf == nil {
+			return nil, fmt.Errorf("%w: moving a partition between brokers is a Kafka operation; this adapter is connected to %s",
+				ErrUnknownOperation, a.kind)
+		}
+		impacted, message, ok, err = kf.repartition(ctx, p)
 	default:
 		return nil, fmt.Errorf("%w: mq.%s", ErrUnknownOperation, op.Operation)
 	}
@@ -411,6 +418,14 @@ func RegisterTools(reg *registry.Registry, a *Adapter) error {
 		makeTool("mq.replay_messages", adapter.RiskL3HardWrite,
 			"重放消息（RabbitMQ 从 queue 取消息并重新投递到 exchange；Kafka 将 group offset 重置到最早）",
 			map[string]string{"queue": "string!", "group": "string", "exchange": "string", "routing_key": "string", "limit": "int"}, writeOp(a, "replay_messages")),
+		// The `kafka.` and `rabbitmq.` names are NOT registered here even
+		// though the code for some of them is in this package. The registry
+		// ties a tool name to the resource type that owns it, and that rule
+		// is right: it is what stops two subsystems from claiming one name.
+		// The product namespaces are owned by core/manager/middleware/adapter/
+		// mq/{kafka,rabbitmq}, and those packages reach this implementation
+		// through Delegate below — one implementation, two namespaces, with
+		// ownership where the registry can see it. See decision 53.
 	}
 	return reg.RegisterTools(adapter.TypeMQ, tools)
 }

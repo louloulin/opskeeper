@@ -19,7 +19,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	mcpauth "github.com/vincent-wuhan/opskeeper/internal/manager/server/mcp/middleware"
+	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
 
 type stubSync struct {

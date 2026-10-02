@@ -8,9 +8,9 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	aiopsmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
-	approvalmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/approval"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
+	aiopsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
+	approvalmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/approval"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 // fullTestDB 建一张含 approvals + chat_mutating_proposals + proposal 全套表的测试 DB。

@@ -8,7 +8,7 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 func TestFlattenSamplesDropsNonFiniteValues(t *testing.T) {

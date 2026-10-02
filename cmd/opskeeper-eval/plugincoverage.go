@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
 )
 
 // opskeeper-eval plugin-coverage — the answer to "can the fleet we ship
@@ -23,12 +23,14 @@ import (
 // unpassable. This subcommand prints the join, names the reason for every
 // gap, and can fail a build on it.
 //
-// The honest state of the repository today is in the report itself: the
-// host cases are covered by the read-only package, and the middleware
-// cases (pg / redis / k8s / mq) are not covered at all because those
-// adapters live in the control plane as BaseTools and were never packaged.
-// Saying that out loud is the point — a coverage number that hid it would
-// be a number nobody could act on.
+// The honest state of the repository today is in the report itself, and it
+// is not the state this command was written for. It was written while the
+// middleware cases (pg / redis / k8s / mq) had no package at all, because
+// those adapters live in the control plane as BaseTools. They have one now
+// — opskeeper-sre-middleware — so the report reads 20/20. The command is
+// kept as the check that has to stay true, not as a description of a gap:
+// the day a case names a family the fleet stopped shipping, this is what
+// says so, and it says it before a leaderboard does.
 
 type coverageFlags struct {
 	casesDir      string

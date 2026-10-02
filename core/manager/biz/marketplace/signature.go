@@ -23,7 +23,7 @@ type SignatureState = string
 
 // SigStateVerified / SigStateUnsigned / SigStateFailed mirror the
 // model package constants so callers in the biz layer don't need to
-// reach across into internal/manager/model/marketplace just to compare
+// reach across into core/manager/model/marketplace just to compare
 // states.
 const (
 	SigStateVerified SignatureState = "verified"

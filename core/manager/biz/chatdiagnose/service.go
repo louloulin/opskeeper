@@ -43,8 +43,8 @@ import (
 	"strings"
 	"time"
 
-	loop "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/chatdiagnose"
+	loop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/chatdiagnose"
 )
 
 // ChatDiagnoseRequest is the inbound DTO. The HTTP layer maps the

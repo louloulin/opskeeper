@@ -12,7 +12,7 @@ package store
 import (
 	"gorm.io/gorm"
 
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 // Migrate 注册 closed-loop 三表（loop_event_log / loop_contract /

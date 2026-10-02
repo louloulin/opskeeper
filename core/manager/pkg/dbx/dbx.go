@@ -28,7 +28,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/config"
+	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 )
 
 // Open opens the configured database backend. Dialect selects MySQL (default),

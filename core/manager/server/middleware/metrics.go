@@ -12,7 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 )
 
 // MetricsMiddleware wraps a chi.Router request and records duration +

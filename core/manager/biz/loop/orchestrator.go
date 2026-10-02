@@ -37,7 +37,7 @@ import (
 	"sync"
 	"time"
 
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 // Phase is a typed-string phase of the closed-loop state machine.

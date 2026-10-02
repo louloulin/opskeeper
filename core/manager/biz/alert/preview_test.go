@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/logquery"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/promquery"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
 )
 
 type fakePromRange struct {

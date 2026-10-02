@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/leader"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/probes"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/leader"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/probes"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // stubLeaderState satisfies LeaderState for unit tests.

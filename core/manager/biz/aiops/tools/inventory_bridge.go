@@ -39,8 +39,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	skillcore "github.com/vincent-wuhan/opskeeper/internal/skill"
+	skillcore "github.com/vincent-wuhan/opskeeper/core/floor/skill"
+	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 // baseToolSkillExecutor wraps an aiops BaseTool as a skill.Executor.

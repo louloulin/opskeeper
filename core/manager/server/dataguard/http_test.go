@@ -12,12 +12,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard"
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard/heuristic"
-	dglabel "github.com/vincent-wuhan/opskeeper/internal/dataguard/label"
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard/store"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/heuristic"
+	dglabel "github.com/vincent-wuhan/opskeeper/core/manager/dataguard/label"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/store"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // fakeRepo is the in-memory label repo used by these HTTP tests.

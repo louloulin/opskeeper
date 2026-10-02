@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
 )
 
 // ErrHeadConflict reports that another writer advanced the chain head
@@ -168,14 +169,37 @@ func (s *ChainStore) tx(tx *gorm.DB) *gorm.DB {
 	return s.db
 }
 
-// appendRetries bounds the compare-and-swap retry loop. Each retry means
-// another writer advanced the head between our read and our update, so
-// this is a contention bound rather than a patience setting: past this
-// many rounds the deployment is either far busier than a single ledger
-// writer was designed for, or the head row is being updated by something
-// that is not appending. Either way the caller is told, because a ledger
-// that quietly gives up looks identical to a ledger nobody is writing.
-const appendRetries = 8
+// appendBudget bounds the compare-and-swap retry loop in *time*, not in
+// rounds.
+//
+// It used to be eight rounds, and eight was wrong in a way this comment
+// itself predicted: "past this many rounds the deployment is either far
+// busier than a single ledger writer was designed for, or the head row is
+// being updated by something that is not appending." Neither is true of a
+// burst of ordinary appenders on one ledger. A round count measures
+// contention the wrong way round — how many times *this* writer loses
+// depends on how many other writers there are, not on how long anyone is
+// willing to wait — so the same eight rounds that are generous for two
+// writers are not enough for eight. The test that pins this
+// (TestChain_ConcurrentAppendsAllVerify, 8 writers) lost a row under -race,
+// which is exactly the failure the bound exists to make loud rather than
+// silent. It made it loud, so the bound moved to where it belongs: bound
+// the wait, keep telling the caller, drop nothing.
+//
+// The caller is still told. A ledger that quietly gives up looks identical
+// to a ledger nobody is writing, and that is the one thing an append path
+// must not do.
+const appendBudget = 15 * time.Second
+
+// appendBackoff is the first sleep between attempts and the cap it doubles
+// up to. The sleep is not politeness: a retry loop that spins re-reads the
+// same head and loses the same race, which turns contention into a
+// busy-wait that makes the contention worse. The jitter keeps two losers
+// from waking together and colliding again in lockstep.
+const (
+	appendBackoff    = 200 * time.Microsecond
+	appendBackoffMax = 20 * time.Millisecond
+)
 
 // AppendChained assigns row's chain columns and inserts it, atomically
 // with advancing the head.
@@ -196,7 +220,9 @@ func (s *ChainStore) AppendChained(ctx context.Context, row *model.Log, seal fun
 	if seal == nil {
 		return errors.New("audit: AppendChained requires a seal function")
 	}
-	for attempt := 0; attempt < appendRetries; attempt++ {
+	backoff := appendBackoff
+	deadline := time.Now().Add(appendBudget)
+	for {
 		want, err := s.Head(ctx)
 		if err != nil {
 			return err
@@ -226,11 +252,20 @@ func (s *ChainStore) AppendChained(ctx context.Context, row *model.Log, seal fun
 			// update. Re-read and reseal: the row's Seq, PrevHash and
 			// Hash all depend on the head, so they must be recomputed,
 			// not just retried.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			if !time.Now().Before(deadline) {
+				return fmt.Errorf("audit: chain head still contended after %s", appendBudget)
+			}
+			time.Sleep(backoff/2 + rand.N(backoff/2+1))
+			if backoff < appendBackoffMax {
+				backoff *= 2
+			}
 			continue
 		}
 		return err
 	}
-	return fmt.Errorf("audit: chain head still contended after %d attempts", appendRetries)
 }
 
 // TruncateExpiredPrefix removes the leading run of chained entries whose

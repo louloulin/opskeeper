@@ -1,4 +1,4 @@
-// skill_bridge.go auto-registers every safe skill (internal/skill
+// skill_bridge.go auto-registers every safe skill (core/floor/skill
 // registry) as an OpenAI function-calling Tool on this aiops Registry.
 //
 // Wiring:
@@ -22,8 +22,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	skillsvc "github.com/vincent-wuhan/opskeeper/internal/manager/biz/skill"
-	skillcore "github.com/vincent-wuhan/opskeeper/internal/skill"
+	skillcore "github.com/vincent-wuhan/opskeeper/core/floor/skill"
+	skillsvc "github.com/vincent-wuhan/opskeeper/core/manager/biz/skill"
 )
 
 // SkillRunner is the narrow contract the bridge needs. *skillsvc.Service

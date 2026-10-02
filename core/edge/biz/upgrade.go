@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // handleAgentUpgrade implements MethodAgentUpgrade. It downloads the

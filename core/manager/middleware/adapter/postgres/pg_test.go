@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 // ── a fake database/sql driver ─────────────────────────────────────────
@@ -572,6 +572,7 @@ func TestAdapter_Diagnose_RoutesCategories(t *testing.T) {
 		{catIndexUsage, "idx_scan"},
 		{catVacuumStatus, "pg_stat_progress_vacuum"},
 		{catSlowLog, "mean_exec_time"},
+		{catReplication, "pg_stat_replication"},
 	}
 	for _, tc := range cases {
 		d.reset()
@@ -809,5 +810,88 @@ func TestNormaliseCell(t *testing.T) {
 	}
 	if normaliseCell(nil) != nil {
 		t.Error("NULL must stay nil")
+	}
+}
+
+// ── replication_status ─────────────────────────────────────────────────
+
+// A standby that has not yet reported its replay position has an unknown
+// lag, not a zero one. The query computes the difference with
+// pg_wal_lsn_diff, which is NULL when either side is NULL, and the adapter
+// must carry that NULL through instead of printing a healthy-looking 0.
+func TestReplicationStatus_NullLagIsUnknownNotZero(t *testing.T) {
+	a, d := connected(t)
+	d.cols = []string{"application_name", "client_addr", "state", "sync_state", "sent_lsn", "replay_lsn", "replay_lag_bytes", "replay_lag_seconds"}
+	// A standby that just connected: positions not reported yet.
+	d.rows = [][]driver.Value{{"standby-1", "10.0.0.2", "startup", "async", "0/5000000", nil, nil, nil}}
+
+	rows, err := replicationStatus(context.Background(), a, nil, 0)
+	if err != nil {
+		t.Fatalf("replicationStatus: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+	for _, key := range []string{"replay_lsn", "replay_lag_bytes", "replay_lag_seconds"} {
+		v, present := rows[0][key]
+		if !present {
+			t.Errorf("%s must be present as an explicit unknown, not dropped", key)
+			continue
+		}
+		if v != nil {
+			t.Errorf("%s = %v (%T); a NULL position is unknown, and 0 would read as caught up", key, v, v)
+		}
+	}
+	call, _ := d.last()
+	if !strings.Contains(call.Query, "pg_wal_lsn_diff") {
+		t.Errorf("the lag must be computed as a LSN difference so a NULL stays NULL:\n%s", call.Query)
+	}
+	if !strings.Contains(call.Query, "pg_stat_replication") {
+		t.Errorf("this must read the primary's WAL sender view:\n%s", call.Query)
+	}
+}
+
+// The two lag figures are reported separately because they answer different
+// questions: bytes is what grows during an incident, seconds is what an RPO
+// statement is written in, and neither is derivable from the other.
+func TestReplicationStatus_ReportsBothLagFigures(t *testing.T) {
+	a, d := connected(t)
+	d.cols = []string{"application_name", "client_addr", "state", "sync_state", "sent_lsn", "replay_lsn", "replay_lag_bytes", "replay_lag_seconds"}
+	d.rows = [][]driver.Value{{"standby-1", "10.0.0.2", "streaming", "sync", "0/6000000", "0/5000000", int64(1048576), 2.5}}
+
+	rows, err := replicationStatus(context.Background(), a, nil, 0)
+	if err != nil {
+		t.Fatalf("replicationStatus: %v", err)
+	}
+	if rows[0]["replay_lag_bytes"] != int64(1048576) {
+		t.Errorf("replay_lag_bytes = %v (%T)", rows[0]["replay_lag_bytes"], rows[0]["replay_lag_bytes"])
+	}
+	if rows[0]["replay_lag_seconds"] != 2.5 {
+		t.Errorf("replay_lag_seconds = %v (%T)", rows[0]["replay_lag_seconds"], rows[0]["replay_lag_seconds"])
+	}
+	if rows[0]["sync_state"] != "sync" {
+		t.Errorf("sync_state = %v, want the replication mode kept", rows[0]["sync_state"])
+	}
+}
+
+// No rows means this instance has no connected standbys — often because it is
+// itself a standby, or because the DSN points at the wrong host. That is a
+// different finding from "replication is perfectly caught up", and the
+// category's suggestion has to say so.
+func TestReplicationStatus_NoRowsIsNotZeroLag(t *testing.T) {
+	a, d := connected(t)
+	d.cols = []string{"application_name"}
+	d.rows = nil
+
+	res, err := a.Diagnose(context.Background(), adapter.DiagnoseQuery{Category: catReplication})
+	if err != nil {
+		t.Fatalf("Diagnose(replication): %v", err)
+	}
+	if len(res.Findings) != 0 {
+		t.Fatalf("expected no findings, got %#v", res.Findings)
+	}
+	joined := strings.Join(res.Suggestions, " ")
+	if !strings.Contains(joined, "zero lag") {
+		t.Errorf("suggestions = %q, want the no-standby answer distinguished from zero lag", res.Suggestions)
 	}
 }

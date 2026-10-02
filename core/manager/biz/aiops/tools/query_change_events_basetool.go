@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	auditmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 // query_change_events_basetool.go — HLD-013 Phase 2. Gives the RCA

@@ -3,11 +3,11 @@ package user
 import (
 	"context"
 
-	"github.com/vincent-wuhan/opskeeper/internal/iam/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
 )
 
 // Repo is the iam/user persistence contract. Implemented in
-// internal/iam/data/user/sqlite.
+// core/manager/iam/data/user/sqlite.
 type Repo interface {
 	Create(ctx context.Context, u *model.User) error
 	GetByEmail(ctx context.Context, email string) (*model.User, error)

@@ -26,10 +26,10 @@ import (
 	"strings"
 	"time"
 
-	settingbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/setting"
-	monitormodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/monitor"
-	settingmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/setting"
-	pkggrafana "github.com/vincent-wuhan/opskeeper/internal/pkg/grafana"
+	settingbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/setting"
+	monitormodel "github.com/vincent-wuhan/opskeeper/core/manager/model/monitor"
+	settingmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/setting"
+	pkggrafana "github.com/vincent-wuhan/opskeeper/core/manager/pkg/grafana"
 )
 
 // Identifiers we hand to the user's Grafana. Keep these stable; they're

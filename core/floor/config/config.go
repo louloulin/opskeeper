@@ -53,7 +53,7 @@ type Config struct {
 
 // SkillsConfig wires the manager-side subprocess skill loader. The
 // loader scans each directory for skill.json manifests and registers
-// them as ScopeManager SubprocessSkills (see internal/skill/loader.go).
+// them as ScopeManager SubprocessSkills (see core/floor/skill/loader.go).
 //
 // Default ExternalDirs is empty unless OPSKEEPER_SKILLS_EXTERNAL_DIRS is
 // set; on the deployed image the compose env block points it at
@@ -125,7 +125,7 @@ type GrafanaConfig struct {
 // NotificationConfig controls outbound notifications for alerts, scheduled
 // tasks, and future AIOps proactive recommendations.
 //
-// The concrete delivery adapters live in internal/pkg/notify. Keeping only
+// The concrete delivery adapters live in core/manager/pkg/notify. Keeping only
 // plain configuration here avoids coupling config loading to any transport
 // client.
 type NotificationConfig struct {
@@ -310,7 +310,7 @@ type DBPoolConfig struct {
 }
 
 // RedisConfig is the runtime config for the manager's Redis client
-// (used by internal/pkg/redislock + internal/pkg/leader). When Addr is
+// (used by core/manager/pkg/redislock + core/manager/pkg/leader). When Addr is
 // empty the manager skips Redis-dependent features (leader election,
 // distributed lock) and degrades to single-replica behaviour; this
 // is the historical MVP fallback.

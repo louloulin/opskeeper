@@ -36,7 +36,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/vincent-wuhan/opskeeper/internal/higress"
+	"github.com/vincent-wuhan/opskeeper/core/manager/higress"
 )
 
 const version = "1.0.0-dev"

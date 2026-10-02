@@ -7,9 +7,9 @@ import (
 
 	"gorm.io/gorm"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/iam/biz/user"
-	"github.com/vincent-wuhan/opskeeper/internal/iam/model"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/user"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Repo is the GORM-backed biz/user.Repo. Construct via NewRepo.

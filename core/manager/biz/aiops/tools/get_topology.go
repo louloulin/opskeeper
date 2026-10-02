@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 // ToolNameGetTopology is the stable wire name the LLM sees.

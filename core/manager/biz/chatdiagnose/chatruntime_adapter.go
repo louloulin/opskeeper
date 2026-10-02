@@ -16,8 +16,8 @@ import (
 	"fmt"
 	"strconv"
 
-	aiopschatruntime "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/chatruntime"
-	aiopsmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	aiopschatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
+	aiopsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 	"go.opentelemetry.io/otel/trace"
 )
 

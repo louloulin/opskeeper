@@ -9,10 +9,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizhitl "github.com/vincent-wuhan/opskeeper/internal/manager/biz/hitl"
-	hitlmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizhitl "github.com/vincent-wuhan/opskeeper/core/manager/biz/hitl"
+	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 const maxRequestBodyBytes = 32 << 10

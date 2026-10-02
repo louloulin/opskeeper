@@ -9,8 +9,8 @@ import (
 
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/device"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/dbx"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/dbx"
 )
 
 // Migrate registers the device + edge_devices schema and backfills any

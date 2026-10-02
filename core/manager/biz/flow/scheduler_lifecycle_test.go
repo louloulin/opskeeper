@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/flow"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/flow"
 )
 
 // nopSchedulerStateRepo 满足 ScheduleStateRepo 接口但不返回任何持久化状态。

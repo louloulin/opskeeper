@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	ssostore "github.com/vincent-wuhan/opskeeper/internal/iam/data/sso"
-	iamodel "github.com/vincent-wuhan/opskeeper/internal/iam/model"
+	ssostore "github.com/vincent-wuhan/opskeeper/core/manager/iam/data/sso"
+	iamodel "github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
 )
 
 // inMemState is the test StateStore. Real prod binds to Redis.

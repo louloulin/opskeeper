@@ -11,7 +11,7 @@ import (
 )
 
 // repoRoot walks up from the test's working directory to the repository
-// root. The test lives at internal/pkg/pluginmanifest, so the plugin
+// root. The test lives at core/floor/pluginmanifest, so the plugin
 // directory is four levels up.
 func repoRoot(t *testing.T) string {
 	t.Helper()

@@ -8,14 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // restart_service_basetool.go is the manager-side BaseTool that pairs
-// with internal/edgeagent/restart_service/handlers.go. It is the FIRST
+// with core/edge/restart_service/handlers.go. It is the FIRST
 // mutating-class BaseTool in opskeeper (Class="write" —
 // blast-radius taxonomy and SOP double-sign), and the proof
 // that the ReviewGate decorator (decorators/review_gate.go) intercepts
@@ -56,7 +56,7 @@ import (
 // both paths exist on purpose.
 
 // ToolNameRestartService is the stable wire name the LLM sees. Equal
-// to the skill key in internal/skill/builtin/restart_service so audit
+// to the skill key in core/floor/skill/builtin/restart_service so audit
 // logs and catalogs cross-link.
 const ToolNameRestartService = "host_restart_service"
 

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	demomodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
+	demomodel "github.com/vincent-wuhan/opskeeper/core/manager/model/demo"
 )
 
 func TestMatrixWorkflowPublisherSignsAndSendsAuthorityEvent(t *testing.T) {

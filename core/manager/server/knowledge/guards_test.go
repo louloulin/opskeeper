@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/knowledge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
 )
 
 // seedReadOnly plants a head-chunk point the public API can't create.

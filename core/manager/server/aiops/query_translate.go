@@ -11,7 +11,7 @@
 //
 // Backend protections:
 //   - 120-second timeout — project-wide unification floor for any LLM
-//     call (see internal/pkg/llm/client.go::defaultTimeout). Originally
+//     call (see core/manager/pkg/llm/client.go::defaultTimeout). Originally
 //     6 s tuned for a Haiku-class default; bumped to 20 s once the
 //     cluster default moved to DeepSeek; finally unified at 120 s with
 //     the rest of the LLM-call sites so a slow reasoning model can
@@ -33,9 +33,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 const queryTranslateTimeout = 120 * time.Second

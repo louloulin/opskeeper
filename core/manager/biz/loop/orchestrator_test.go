@@ -43,7 +43,7 @@ import (
 	"testing"
 	"time"
 
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 // --- PhaseStateMachine: forward transitions ----------------------------

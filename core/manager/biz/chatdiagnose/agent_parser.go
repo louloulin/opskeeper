@@ -6,7 +6,7 @@
 // copy — v1's parser carried rich prefix semantics (skill / command /
 // skill-arg layers) that v2 doesn't need. v2 collapses that to a flat
 // set of agent slugs because the chat runtime already has its own
-// SkillRegistry (internal/manager/biz/aiops/chatruntime/skill_registry.go)
+// SkillRegistry (core/manager/biz/aiops/chatruntime/skill_registry.go)
 // that resolves the heavy lifting.
 //
 // The parser exposes two passes:
@@ -55,7 +55,7 @@ type ResourceRef struct {
 }
 
 // agentMentionRegex matches @<agent-slug>. The slug set is the closed
-// list shipped in internal/manager/biz/aiops/agents/. Adding a new
+// list shipped in core/manager/biz/aiops/agents/. Adding a new
 // agent slug here requires a corresponding file in that directory or
 // the runtime registry will reject it.
 //

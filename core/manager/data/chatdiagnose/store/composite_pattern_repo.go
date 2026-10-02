@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"time"
 
-	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/chatdiagnose"
+	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/chatdiagnose"
 )
 
 // CompositePatternRepo 组合 PatternMeta（metadata）+ QdrantPatternRepo（向量）。

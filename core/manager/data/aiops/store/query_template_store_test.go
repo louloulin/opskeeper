@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 	"gorm.io/gorm"
 )
 

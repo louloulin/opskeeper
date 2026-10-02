@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // fakeClient is a tunnel.Client stub that records registered handlers.
-// Mirrors the pattern in internal/edgeagent/biz/agent_test.go but kept
+// Mirrors the pattern in core/edge/biz/agent_test.go but kept
 // here to avoid depending on biz internals.
 type fakeClient struct {
 	mu       sync.Mutex

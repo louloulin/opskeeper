@@ -8,9 +8,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/topology"
-	devmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/device"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/topology"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
+	devmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/topology"
 )
 
 // TestBackfillDeviceNodes asserts the topology migration creates a

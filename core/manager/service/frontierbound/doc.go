@@ -9,7 +9,7 @@
 // geminio.Request / geminio.Response.
 //
 // The wire-level message names + JSON shapes live in
-// internal/pkg/tunnel/messages.go and are shared with the edge agent;
+// core/floor/tunnel/messages.go and are shared with the edge agent;
 // they are intentionally NOT re-declared here. Lifecycle Meta is the same
 // JSON {access_key, secret_key} the edge already sends.
 package frontierbound

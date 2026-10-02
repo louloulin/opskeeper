@@ -86,8 +86,22 @@
                     │  清单 schema + 准入校验   │  → 只依赖 core
                     └────────────────────────┘
 
+        ┌──────────────────────────────────────────────┐
+        │  floor  两个平面共用的基础设施（第 7 个模块）    │
+        │  config · log · pluginmanifest · prom ·       │
+        │  tunnel · skill（宿主 skill registry）        │
+        │  → 只依赖 core 与 sdk，不认任何 BC             │
+        └──────────────────────────────────────────────┘
+             manager ──► floor ◄── edge      （横向共用，不是上下级）
+
         唯一允许 import github.com/MichaelKinsy/PiG 的地方：core/pig
 ```
+
+已拆出的模块（`go.mod` 实存）：`core`、`pig`、`edge`、`floor`、`manager`、
+`harness`、`sdk`。七个模块都在了，`internal/` 已经不存在——控制面的最后一层
+（`iam` + `manager/{biz,data,model,server,service}`）在决策 63 里搬进了
+`core/manager`。根模块退化成装配层：`cmd/`、`scripts/`、`tests/`，以及 web
+控制台那几个 Go 工具包。
 
 **为什么 `pig` 必须是单点？** PiG 是 0.x 预稳定版本，API 与依赖图都会动
 （当前还会拖进 AWS SDK、Google API client、十余个 provider 库）。若插件能
@@ -156,7 +170,7 @@ policygate
                        └─ 未命中 → tunnel agent.tool 反向调用控制面
 ```
 
-**为什么插件不自己实现工具**：`internal/skill/builtin` 里 13 个 `host_*`
+**为什么插件不自己实现工具**：`core/floor/skill/builtin` 里 13 个 `host_*`
 实现早已存在，带权限等级、溢出处理和测试。在高权限 agent 进程里重写一遍，
 是**把已解决的问题变成新的风险**。而另外 5 个工具（`get_topology`、
 `query_alert_rules` 等）读的是控制面的图和规则表——agent 子进程根本没有
@@ -234,26 +248,58 @@ opskeeper-sre-readonly/                 # 插件根
 `go test ./...` 在仓库根只覆盖根模块，`core/harness` 拆出去之后黄金事故
 语料就不再被根测试触达（决策 37 记录了这个静默漏洞与它的补法）：
 
+### 进度百分比（对照计划 §四 A–E 的验收闸门）
+
+百分比是**估计，不是测量**：判据是每一阶段计划里写下的验收闸门（§五），
+不是代码行数。它适合回答"还差多少"，不适合回答"值多少"——A 阶段 95% 与
+E 阶段 85% 里剩下的东西，不是一个量级的工作。
+
+| 阶段 | 权重 | 完成度 | 判据与剩余 |
+|---|---|---|---|
+| A 模块化地基 | 20% | **95%** | 13 个模块落地、`internal/` 清空、`modulecheck` + `go-arch-lint` 两个闸门可执行且非空转。剩下 5% 是两条已记账的**债务**（底座的包级 setter 反向边、arch-lint 债务清单缺守卫），不是缺失的功能 |
+| B PiG 适配层 | 20% | **92%** | `pigmodel` / `pigagent` / `pigrpc` / `pigwire` 四件套齐、eino 与 go-openai 清零、`llm.Client` 换实现并接线、内核接缝（决策 32/33）打开。剩下：PiG 仍是 `replace` 到本地 checkout，发布要换成固定 tag；契约测试只锁住实际用到的 API 面 |
+| C 节点 Agent | 20% | **90%** | `pig --mode rpc` 运维 profile + supervisor + `policygate` + 7 个 `agent.*` 隧道方法 + `NodeFleet` + 只读 piglet，三个剧本在新拓扑下通过。剩下：MCP 运行时（PiG 的 `mcp` 只是声明）、连接池上限与风暴抑制的规模验证 |
+| D 插件生态 | 25% | **90%** | B1/B2/B3 全部闭环（18 + 12 + 53 + 5 个工具）、审核流水线（签名 → 清单 → 准入 → 灰度 → 回滚）、运输通道 6 条路由、`sdk` 三个发布物。剩下：能力声明从"家族"升级到"逐方法"、更多插件迁移、容器格式导入器的覆盖面 |
+| E 生态治理 | 15% | **85%** | 兼容矩阵（edge 轴 × PiG 轴）、金融 / SaaS 两个 profile 模板、插件 × golden case 覆盖报告。剩下：插件市场前端页面、版本矩阵可视化、发布流程自动化 |
+
+加权合计 ≈ **90.7%**（20×0.95 + 20×0.92 + 20×0.90 + 25×0.90 + 15×0.85）。
+
+**这个数最容易被误读的地方**：C 与 D 的 90% 里，"能跑通"和"能上生产"之间
+差的是规模验证与运维面（插件市场 UI、连接规模、发布自动化），不是核心链路。
+核心链路——告警 → 诊断 → 审批 → 修复 → 验收——是通的，也是本仓库测试盯得
+最紧的一段。
+
 | 模块 | 结果 |
 |---|---|
-| 根模块 `go test ./... -count=1` | **180 包 ok / 3 failed（88 包无测试）**——3 个失败仍是既有的 `spill_helper` |
-| `core` | 全部 ok（3 包） |
-| `core/pig` | 全部 ok（4 包） |
-| `core/edge` | 全部 ok（4 包） |
+| 根模块 `go test ./... -count=1` | **18 包 ok / 0 failed**——`internal/` 已清空（决策 63），根模块只剩 `cmd/`、`scripts/`、`tests/` 与 web 的 Go 工具包，全部是装配层与测试 |
+| `core` | 全部 ok（2 包） |
+| `core/pig` | 全部 ok（5 包） |
+| `core/edge` | 全部 ok（26 包）——`internal/edgeagent` 的 62 个文件整体迁入（决策 61），原有的 pigsupervisor/policygate/gatesocket/toolbroker/agentprofile 与它同模块 |
+| `core/floor` | 全部 ok（9 包，6 个有测试）——`spill_helper` 的 3 个用例在这里被修好（见决策 60） |
 | `core/harness` | 全部 ok（13 包） |
 | `sdk` | 全部 ok（1 包） |
+| `core/manager` | **全部 ok（222 包，`-race` 亦 ok）**——控制面基础设施（决策 62）之后，`biz`/`data`/`model`/`server`/`service` 与 `iam` 也在这一轮迁入（决策 63）。1100 个 Go 文件，其中 413 个测试文件 |
+| 5 个 extension 模块 | 各 1 包，全部 ok |
 
-3 个失败全部位于 `internal/skill/builtin` 的 `TestTruncateOrSpill_*`，在干净
-检出上同样复现，属既有问题，与本次改造无关。
+13 个目录（根模块 + 7 个已拆模块 + 5 个 extension）串行跑完：**302 包 ok / 0 failed**。四次搬迁（决策 60/61/62/63）前后总数一次没变，说明搬的是位置，不是测试；变的只是包落在哪个模块里——根模块 113 → 18，`core/manager` 50 → 222。`core/floor/skill/builtin` 的三个
+`TestTruncateOrSpill_*` 曾长期在 `/var/tmp` 存在但不可写的机器上失败——降级判据写在
+`MkdirAll` 而不是写入上，所以那条降级路径从未生效；决策 60 顺手修好了它（测试一直是
+对的，代码不是）。
+`cmd/opskeeper-eval` 的两个闸门现在都是绿的：`plugin-coverage` **20/20**
+（包 → case 的家族级覆盖），`vocabulary` `--fail-on-gap` 在真语料上通过、在
+一个合成的不可满足语料上必须失败（新增的正反两面，见决策 59）。
 `go run ./scripts/modulecheck .` → 边界全部成立（模块规则见决策 37，BC 规则见决策 38）。
 `make module-test` 一次跑完全部模块。
+`make module-race`（`core` / `core/pig` / `core/edge` / `core/floor` / `core/harness` 各自
+`go test ./... -count=1 -race`）→ 全部 ok，`pigsupervisor` 的重启循环这条
+并发热点没有数据竞争。sdk 无并发测试。
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| **A 模块化地基** | `go.work` + 6 个独立 `go.mod`；`core`（domain/ports/wire）；`core/edge`；`core/pig`；**`core/harness`**（决策 37）；`sdk` 清单准入 | ⚠️ 部分——除 `manager` 外全部拆出 |
-| **B PiG 适配层** | `pigmodel`（settings→`*ai.Model`）、`pigagent`（含 `buildPrompt` 历史回放，见决策 25）、`pigrpc`（`pig --mode rpc` 客户端）、`pigwire`（SSE 帧翻译）；**`go-openai` 已整包移除**（`internal/pkg/llm` 自持 HTTP wire，见决策 22）；**工具治理已抽成与内核无关的装饰器**（见决策 24）；**PiG 支撑的 `llm.Client` 已落地并接入装配层**（`internal/pkg/llm/pigclient.go` + `pigsettings.go` + `pigregistry.go`，`OPSKEEPER_LLM_BACKEND=pig` 切换，见决策 26）；**内核侧宿主绑定已落地**（`internal/manager/biz/aiops/agentkernel/`：`ToolBag` + `Persister`（同时是 `ToolCallRecorder`）；`internal/manager/biz/aiops/chatruntime/kernelsink.go`：`ports.EventSink` → 控制面事件，含准入/结算两帧的 join，见决策 27/28；审计/预算/审批/依赖装配四件套落在 `agentkernel`，见决策 30；历史回放改为一计划两渲染，见决策 31；**换内核接缝已开**：`Runtime.Handle` 第 5d 步分流 + `kernelpath.go` 驱动 `ports.Agent`，见决策 32） | ⚠️ 部分——模型接口与**编排接缝**都已就位，**装配层已接线**（`OPSKEEPER_AGENT_KERNEL=pig`，见决策 33）；**eino 已彻底移除**：`go.mod`/`go.sum` 中 `cloudwego/eino` 与 `eino-contrib/jsonschema` 双双消失，`chatruntime` 只剩内核一条路（见决策 34） | ✅ 已落地 |
-| **C 节点 Agent** | `pigsupervisor`（崩溃重启/退避/Degraded）、`policygate`（白名单+审批+digest）、`gatesocket`（unix socket 准入）、准入信使 extension、tunnel 7 个 `agent.*` 方法 + `agent.decide`、控制面 `NodeFleet` + `Service.Decide` + HTTP 决策端点、per-session 角色表 | ✅ 已落地 |
-| **D 插件生态** | L1 只读 profile（18 工具 + 7 persona + 信使）、`pluginimport` 导入器、**B1 只读工具集**（工具集 extension + `toolbroker` + `agent.tool` 反向调用 + 双向漂移测试）、**B2 可观测工具集**（12 只读工具，schema 由控制面 registry 生成，全量 upcall）、**B3 修复包**（L2/5 工具/`approval.required`/`pod` 半径/pin 安装 + 审批回执 + 写操作全部走控制面）、**审核流水线**（ed25519 树签名 + 信任库 + 签名→清单→准入三段审核 + 灰度波次闸门 + 节点侧 `admitPackages` 接线）、**发布运输通道**（`plugin.install` / `plugin.remove` / `plugin.list` + 节点 `pluginStore` + 控制面 `ReleaseManager` + 6 条 `/v1/plugins/releases` 路由）、**控制面适配器真实化**（pg/redis/k8s/mq/host 五条，见「闭环修复派发链路」） | ✅ B1/B2/B3/审核流水线/运输通道全部完成；`git` 适配器仍是骨架 |
+| **A 模块化地基** | `go.work` + 7 个模块 `go.mod`（`core` / `pig` / `edge` / **`floor`**（决策 60）/ **`manager`**（决策 62+63）/ `harness` / `sdk`）+ 5 个 extension 模块；`core`（domain/ports/wire）；`sdk` 清单准入 | ✅ **已完成**——`internal/` 已清空（决策 63），模块依赖方向由 `modulecheck`（可执行）+ `.go-arch-lint.yml`（文档）双重钉住；遗留两条债务（底座包级 setter、arch-lint 债务清单无守卫）见「当前真实缺口」 |
+| **B PiG 适配层** | `pigmodel`（settings→`*ai.Model`）、`pigagent`（含 `buildPrompt` 历史回放，见决策 25）、`pigrpc`（`pig --mode rpc` 客户端）、`pigwire`（SSE 帧翻译）；**`go-openai` 已整包移除**（`core/manager/pkg/llm` 自持 HTTP wire，见决策 22）；**工具治理已抽成与内核无关的装饰器**（见决策 24）；**PiG 支撑的 `llm.Client` 已落地并接入装配层**（`core/manager/pkg/llm/pigclient.go` + `pigsettings.go` + `pigregistry.go`，`OPSKEEPER_LLM_BACKEND=pig` 切换，见决策 26）；**内核侧宿主绑定已落地**（`core/manager/biz/aiops/agentkernel/`：`ToolBag` + `Persister`（同时是 `ToolCallRecorder`）；`core/manager/biz/aiops/chatruntime/kernelsink.go`：`ports.EventSink` → 控制面事件，含准入/结算两帧的 join，见决策 27/28；审计/预算/审批/依赖装配四件套落在 `agentkernel`，见决策 30；历史回放改为一计划两渲染，见决策 31；**换内核接缝已开**：`Runtime.Handle` 第 5d 步分流 + `kernelpath.go` 驱动 `ports.Agent`，见决策 32） | ⚠️ 部分——模型接口与**编排接缝**都已就位，**装配层已接线**（`OPSKEEPER_AGENT_KERNEL=pig`，见决策 33）；**eino 已彻底移除**：`go.mod`/`go.sum` 中 `cloudwego/eino` 与 `eino-contrib/jsonschema` 双双消失，`chatruntime` 只剩内核一条路（见决策 34） | ✅ 已落地 |
+| **C 节点 Agent** | `pigsupervisor`（崩溃重启/退避/Degraded）、`policygate`（白名单+审批+digest）、`gatesocket`（unix socket 准入）、准入信使 extension、tunnel 7 个 `agent.*` 方法 + `agent.decide`、控制面 `NodeFleet` + `Service.Decide` + HTTP 决策端点、per-session 角色表、**profile piglet**（`tools: []` 摘除 PiG 8 个内置工具含 `bash`，真实二进制 A/B 验证 0/8 active，见决策 48）、**内置具名 piglet**（`plugins/pig-ops/opskeeper-sre-readonly/pig-opskeeper-ops.yaml`：18 只读工具 + 8 skill + 信使，见决策 56） | ✅ 已落地——节点侧生成 profile 与内置具名 piglet 并存（决策 56） |
+| **D 插件生态** | L1 只读 profile（18 工具 + 7 persona + 信使）、`pluginimport` 导入器（`/v1/marketplace/import` 入口，见决策 55）、**B1 只读工具集**（工具集 extension + `toolbroker` + `agent.tool` 反向调用 + 双向漂移测试）、**B2 可观测工具集**（12 只读工具，schema 由控制面 registry 生成，全量 upcall）、**B2 中间件工具集**（`opskeeper-sre-middleware`：53 个只读工具，由 `core/manager/middleware/toolset` 从适配器活注册生成，`plugin-coverage` 因此从 2/20 到 **20/20**，见决策 59）、**B3 修复包**（L2/5 工具/`approval.required`/`pod` 半径/pin 安装 + 审批回执 + 写操作全部走控制面）、**审核流水线**（ed25519 树签名 + 信任库 + 签名→清单→准入三段审核 + 灰度波次闸门 + 节点侧 `admitPackages` 接线）、**发布运输通道**（`plugin.install` / `plugin.remove` / `plugin.list` + 节点 `pluginStore` + 控制面 `ReleaseManager` + 6 条 `/v1/plugins/releases` 路由）、**控制面适配器真实化**（pg/redis/k8s/mq/host 五条，见「闭环修复派发链路」）、**git 适配器真实化**（8 工具全实现，只读，见决策 45）、**`sdk` 发布面**（清单类型 + 注册 API + 版本协商，见决策 46） | ✅ B1/B2/B3/审核流水线/运输通道全部完成；`git` 适配器 8/8 工具真实；`sdk` 三个发布物齐全；**四个只读包**（readonly / observability / middleware / 修复包的只读半边）在 `plugins/pig-ops` 下齐备 |
 | **E 生态治理** | 兼容矩阵（edge 轴 + **PiG 轴**）、跨云 profile 模板（金融/SaaS）、插件能力 × golden case 覆盖报告 | ✅ 已落地 |
 
 ### 闭环修复派发链路
@@ -280,7 +326,7 @@ RequiredArgs 缺值 ──► ErrUnresolvableArguments，报出缺哪个参数
 ToolReplay{Args, Result}                      （复盘里记的是"实际发了什么"）
 ```
 
-五个中间件适配器各自独立按环境变量装配，装到**同一个 registry** 上——
+六个中间件适配器各自独立按环境变量装配，装到**同一个 registry** 上——
 一个动作可不可派发，取决于这个部署连了哪些中间件，而不是取决于二进制是为谁
 编译的。没配 DSN 的适配器只是不出现，配了但连不上的会被记录并从装配里跳过
 （不为一个修复便利把控制面拖下水）。
@@ -292,26 +338,33 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
 | `OPSKEEPER_LOOP_K8S_DSN` | k8s（19 工具，自建 REST 客户端） | `k8s.` |
 | `OPSKEEPER_LOOP_MQ_DSN` | mq（6 工具，RabbitMQ management API / Kafka offset reset） | `mq.` |
 | `OPSKEEPER_LOOP_HOST_DSN` | host（7 工具，`local://` 或 `ssh://`） | `host.` |
+| `OPSKEEPER_LOOP_GIT_DSN` | git（8 工具，只读；本地路径或 remote URL） | `git.` |
 
 参数缺口在闸门里被**再分成两类**：`resolvable`（有提取器，值在证据里）与
-`no evidence records this value`（值根本没被采集过）。两者今天都是拒绝，但
-需要的工作完全不同——给后者写解析器，是给一个从没被观测到的 Pod 名写查找表。
+`no evidence records this value`（值根本没被采集过）。两者都是拒绝，但需要的
+工作完全不同——给后者写解析器，是给一个从没被观测到的 Pod 名写查找表。
+**决策 49 已把这一类清零**：Pod 名与队列名不是"没被观测到"，而是 firing 告警
+的 `labels_json` 里一直写着、只是没有进入证据链。9/9 动作现为 `resolvable`。
 
 装配代码 `cmd/opskeeper/loop_adapters.go`，测试 `loop_adapters_test.go`
 （无 DSN 空注册表 / 坏 DSN 被跳过不影响其它适配器 / `local://` 真的注册了
 `host.garbage_collect` 与 `host.restart_service` / 环境变量名是部署契约）。
+`git` 是这条规则的例外：它没有对应的闭环动作（`git.*` 不在
+`investigatorreal.RemediationActions` 里），所以接不接它**不改变任何闭环数字**；
+接它的理由是"拿证据去仓库核对"这类根因查询需要它，而一个只在别的进程里
+碰巧注册了的工具等于不存在。
 
 ### 验收闸门（计划 §五）现状
 
 | 阶段 | 闸门 | 状态 |
 |---|---|---|
-| A | 6 模块 `go build` + 全量 `go test -count=1` 绿；arch-lint 拦住逆向依赖 | ⚠️ 部分——**6 个模块里 5 个已拆出**（`core`/`pig`/`edge`/`harness`/`sdk`），只有 `manager` 还在根模块；逆向依赖由 `modulecheck` 真正拦住（决策 37/38） |
+| A | 7 模块 `go build` + 全量 `go test -count=1` 绿；arch-lint 拦住逆向依赖 | ✅ **13 个模块目录 `go build` 全过、全量 `go test` 302 包 ok / 0 failed**；`internal/` 已清空（决策 63）；逆向依赖由 `modulecheck`（可执行，含"只允许测试的跨模块边"一条）与 `go-arch-lint`（0 warnings）双重拦住（决策 37/38/60/62/63） |
 | B | **SSE 帧 golden 逐帧一致** | ✅ 两条路径各有一份 golden，且互相逐字节相等（见下） |
-| B | **eino / go-openai 依赖清零** | ✅ `rg eino go.mod` 无命中；`internal/manager/biz/aiops/graph/`（14 文件）与 `internal/pkg/llm/eino_*.go`、`budget_callback.go` 全部删除；`chatruntime` 测试全量迁到 `scriptedKernel`；`OPSKEEPER_AGENT_KERNEL=pig` 与退役拼写 `graph` 解析到同一内核（见决策 34） |
+| B | **eino / go-openai 依赖清零** | ✅ `rg eino go.mod` 无命中；`core/manager/biz/aiops/graph/`（14 文件）与 `core/manager/pkg/llm/eino_*.go`、`budget_callback.go` 全部删除；`chatruntime` 测试全量迁到 `scriptedKernel`；`OPSKEEPER_AGENT_KERNEL=pig` 与退役拼写 `graph` 解析到同一内核（见决策 34） |
 | B | **7 provider 冒烟** | ✅ `pigmodel/smoke_test.go`：7 个 provider 各起一个 httptest SSE 源，真实走 `Provider.Stream` |
-| B | `go test -race` 无泄漏 | ✅ `core/pig/...`（198）、`service/plugin` + `edgeagent/biz`（60）、`cmd/opskeeper-edge`（118）、`internal/pkg/llm`（107）全部 `-race` 通过 |
+| B | `go test -race` 无泄漏 | ✅ `core/pig/...`（198）、`service/plugin` + `core/edge/biz`（60）、`cmd/opskeeper-edge`（118）、`core/manager/pkg/llm`（107）全部 `-race` 通过 |
 | B | **`llm.Client` 换实现（PiG 支撑）** | ✅ `pigclient_test.go` 用 PiG 真实 provider 栈跑 httptest：选择/注册表/转写/请求体/流式/回传全链路，含 tool-call 往返与预算「先扣后发」；`router.go` 的子客户端工厂让**每个** provider 都走 PiG（见决策 26） |
-| C | 端到端剧本 `alert_storm` / `rca_loop` / `recovery_verify` 在新拓扑下通过 | ✅ `internal/manager/biz/nodefleet/e2e/` 6 个用例接在真 `NodeFleet` + 真 `AgentBridge` + 真 `policygate` + 真 `pigwire` 上跑（见决策 36） |
+| C | 端到端剧本 `alert_storm` / `rca_loop` / `recovery_verify` 在新拓扑下通过 | ✅ `core/manager/biz/nodefleet/e2e/` 6 个用例接在真 `NodeFleet` + 真 `AgentBridge` + 真 `policygate` + 真 `pigwire` 上跑（见决策 36） |
 | D | **插件安装→审核→灰度→回滚全链路** | ✅ `cmd/opskeeper-edge/pluginchain_test.go`：真包+真签名+真节点审核+真 `service/plugin.Manager`，只换掉 socket |
 | D | 越权调用被宿主闸门 Block；审计链完整 | ✅ 闸门已有回归；**审计链已落地**：`audit_logs` 增 `seq`/`prev_hash`/`hash`，`ChainStamper` 做 HMAC-SHA256 规范化摘要，`audit_chain_head` 单行 CAS 在同一事务内推进链头与插入，`VerifyChain` 全链走查 + `ErrChainBroken` 定位首个断点，保留策略只能裁前缀（见决策 35） |
 | E | 插件安装→审核→灰度→回滚全链路；版本矩阵兼容性检查 | ✅ 同 D 行；版本矩阵已双向锁 |
@@ -327,7 +380,7 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
 7. gate 决策必须 digest 匹配；摘要不符则拒收**且不消耗请求**（修正后的决策仍可送达）。
 8. `FrameSink` 签名带 `sessionID`——否则控制面会丢帧。
 9. **宿主执行、插件路由**：agent 进程内零运维实现。`host_*` 复用
-   `internal/skill/builtin` 已有实现；`get_topology` / `query_alert_rules`
+   `core/floor/skill/builtin` 已有实现；`get_topology` / `query_alert_rules`
    等控制面工具经 `agent.tool` 反向调用，不在节点上另造路径。
 10. **闸门与 broker 各查一次白名单**，读同一份 registry。闸门经由 agent
     进程内的 extension 触达，可被替换压制；broker 是宿主代码，按名字可达。
@@ -379,7 +432,7 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
     绝不下载：会下载的恢复就是改名的安装。
 21. ~~**审计链目前是行式的**~~ ✅ 已落地（决策 35）：`audit_logs` 现在带
     `seq`/`prev_hash`/`hash`，写入走 HMAC 链，`VerifyChain` 真会走查。
-22. **LLM SDK 已从请求路径上移除，只剩 eino 的 agent 编排**：`internal/pkg/llm`
+22. **LLM SDK 已从请求路径上移除，只剩 eino 的 agent 编排**：`core/manager/pkg/llm`
     原先依赖 `github.com/sashabaranov/go-openai`，该库在 `CreateChatCompletion`
     内会**在发请求前**做模型校验（`MaxTokens` 在推理模型上被拒、schema 校验、
     已知推理模型带采样参数被本地拒）。本地拒绝对调用点与 provider 400 无法区分，
@@ -395,7 +448,7 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
     以及 `graph.BuildReActGraph` / `chatruntime.Runtime` 这两处需要重新表达在
     `pigagent.Kernel` 上的编排。**根模块可以 import `core/pig/*`，`core/pig`
     不能 import 根模块**——因此一个 PiG 支撑的 `llm.Client` 必须落在根模块
-    （如 `internal/pkg/llm/pigclient.go`），落在 `core/pig` 就是反向依赖。
+    （如 `core/manager/pkg/llm/pigclient.go`），落在 `core/pig` 就是反向依赖。
 24. **工具治理是装饰器，不是内核的一环**：`identical-call memo`、`per-tool 上限`、
     `draft_config_change 的 metric-catalog 前置校验` 原先长在 eino 的
     `graph/tool_adapter.go` 里（`einoToolAdapter.memo`）。这三条规则不是 eino 的
@@ -424,7 +477,7 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
     `llm.MultiClient` 的**子客户端工厂**上（`SetSubClientFactory`），因为 router 本来
     就只认识 `Client` 接口，换工厂就换掉了**每一个** provider，而不是只换 fallback
     那一条。三个刻意的设计：
-    - **设置源适配器放在根模块**（`internal/pkg/llm/pigsettings.go`）。`core/pig`
+    - **设置源适配器放在根模块**（`core/manager/pkg/llm/pigsettings.go`）。`core/pig`
     不能 import 控制面，所以桥必须在中间；它不缓存，因为 `pigmodel.Registry`
     本来就每次重读设置——那正是「改 key 下一次请求生效」的机制，再加一层 TTL 会让
     有效陈旧度变成两个间隔的乘积，没人推得清。
@@ -585,7 +638,7 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
    `internal/manager/biz/nodefleet/e2e/` 用真 `nodefleet.Fleet` + 真
    `AgentBridge` + 真 `policygate.Gate` + 真 `pigwire` 翻译器跑
    `alert_storm` / `rca_loop` / `recovery_verify`，6 个用例。
-   - **`StartEvents` 的实现与它自己的契约相反**：`internal/edgeagent/biz/agent_rpc.go`
+   - **`StartEvents` 的实现与它自己的契约相反**：`core/edge/biz/agent_rpc.go`
      的函数体是 `_ = proc.OnEvent(b.relay); <-ctx.Done()`——**阻塞**；而它自己的
      doc 与 `agent.go:245` 的调用点注释都写着「立即返回」。后果不是某个用例失败，
      是 `Agent.Run` 卡在第 245 行，其后的 changewatcher、升级哨兵
@@ -655,7 +708,7 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
      锚点**：`*contracts` 展开成的是嵌套数组 `[["oxcore_domain", …]]` 而不是
      三个名字，`go-arch-lint` 拿到之后每一条都静默失配——配置看着干净，
      实际一行都不生效。冗长但正确的配置，胜过一个不生效的。
-   - **可执行的那份放进 `modulecheck`**：BC 两两不可达、`internal/pkg`
+   - **可执行的那份放进 `modulecheck`**：BC 两两不可达、`core/manager/pkg`
      不得知道业务、`service → biz ← data` 的方向。`make arch-lint` 在工具
      缺失时改为**大声告警**并指向 `module-check`，不再假装通过。
    - **三处真实越界，第一处是真 bug**：`iam/service/service.go` 的包注释
@@ -869,7 +922,8 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
      按 `OPSKEEPER_LOOP_{PG,REDIS,K8S,MQ,HOST}_DSN` 各自连接并注册到同一个
      registry；坏 DSN 记录并跳过，不让一个修复便利把控制面拖下水。
    - **结果**：闭环动作未实现数 **8 → 0**，闭环覆盖 **0/20 → 3/20**（remediation 轴），
-     剩下的 9 个是**参数缺口**（要 pid / pod / queue），不是实现缺口。
+     剩下的 9 个是**参数缺口**（要 pid / pod / queue），不是实现缺口——这一层
+     由决策 49 闭合。
 
 44. **`ArgResolver` 从接缝变成实现：从证据里取值，候选多于一个就拒绝**。
     决策 43 留下的 9 个"名字有、参数没有"的动作里，`RegistryInvoker.ArgResolver`
@@ -902,19 +956,1104 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
      是 `investigatorreal.RemediationActions` 的子集：一个有提取器但 investigator
      永远不会提议的动作是死代码。
 
+45. **`git` 适配器从骨架变成实现：用 git CLI，不用 go-git；并且不提供写路径**。
+    骨架阶段留了三句话——"引入 go-git 替代 os/exec""真实实现 7 个 CLI 工具"
+    "存量和增量 clone + watch"——这一轮把第一句和第二句都推翻重写了，理由
+    记录如下，因为它们不是实现偏好，是这一层能不能被信任的前提。
+   - **为什么是 CLI 而不是 go-git**：`deploy/Dockerfile.opskeeper` 已经装了 git
+    （知识库的 clone 用它），所以"再引一个纯 Go 实现"不是省依赖，而是**在同一个
+    容器里放两套对 packfile、ref、重命名检测和 textconv 各有各的 bug 的实现**。
+    CLI 的成本是一次进程创建（~5ms）和 `runner.go` 这一个文件；换来的是
+    agent 给出的答案与运维人员在提示符下敲 `git log` 得到的是同一个。
+    `core/pig` 那边已经把"上游不稳定面收口到一个模块"，这里是同一个手法用在
+    另一个上游上。
+   - **安全属性落在 `runner.go` 一处**，且每条都有理由：
+     - **完整替换子进程环境**，而不是继承后追加。manager 进程里握着 secretbox
+       密钥、数据库 DSN 和每个 skill 拿到的凭据；一次 git 调用需要的是 PATH，
+       别的都不需要。`GIT_PAGER` / `GIT_EXTERNAL_DIFF` / `GIT_ASKPASS` 这类
+       变量能让 git 去执行东西，`GIT_CONFIG_GLOBAL` 能让它去读宿主的
+       `~/.gitconfig`——`GIT_CONFIG_NOSYSTEM=1` **挡不住后者**，它只管
+       `/etc/gitconfig`。两者都设成空/`/dev/null` 才是"读就是读"。
+     - **`--no-optional-locks`**：这些是并发读者，跑在一个别的进程可能正在
+       fetch 的仓库上；为了刷新 stat cache 去抢 index lock，会变成
+       "another git process seems to be running"。
+     - **所有路径 `-z`（NUL 分隔）**：git 的默认输出用 `:` 分隔字段，而仓库里
+       可以有一个叫 `a:b/c.go` 的文件——`git grep` 的默认格式会把那条记录读成
+       `rev=HEAD:a`、`path=b/c.go:12:…`。这不是理论问题，测试
+       `TestSearchCode_ParsesAPathContainingAColon` 就是为此写的。
+     - **搜索模式走 stdin（`-f -`）**：模式一旦进 argv 就会被 `ps` 公布，
+       而被搜索的字符串经常正是凭据的形状。
+     - **出口封顶**（stdout 1MiB / stderr 64KiB）+ 30s 超时 +
+       `cmd.WaitDelay`：一个把十年历史倒出来的 `git log` 不是答案，它会把
+       模型上下文占满。
+   - **空结果是发现，不是失败**：`git grep` 用退出码 1 表示"没匹配到"，
+     适配器把它转成 `rows: [], count: 0` 与一句"这个字符串在 <rev> 里不存在"。
+     把"没有"报成错误，会教 agent 认为"仓库里没有这个东西"是工具坏了。
+   - **每个工具一个独立的重命名/边界事实**：`git.diff` 用 `--numstat -z`，
+     重命名记录是 `added TAB deleted TAB NUL old NUL new`——把空路径字段当普通
+     行读，会把一个重命名的增删算到一个叫 "" 的文件头上。`git.blame` 读
+     `--line-porcelain`，并把 `boundary` 标记成 `boundary: true`：那是浅克隆
+     切断历史的位置，不标出来，调用方会把克隆本身的 commit 当成引入该行的改动。
+   - **远端 DSN 用 full fetch，不用 `--depth=1`**：浅克隆会让 `git blame` 对
+     每一行返回 boundary，并让"哪个改动引入了这一行"答成克隆。取全量历史是
+     这个适配器唯一有意义的答案。远端 clone 到临时目录，`Close` 删除；
+     本地路径就地读，`Close` 不动它（`TestAdapter_Close_RemovesOnlyWhatItCloned`）。
+   - **`Execute` 永远拒绝**，即使 `ApprovedBy` 非空。这不是"待实现"，是决定：
+     git 写操作（push / tag / reset）影响远端与不可逆历史，平台目前没有任何一条
+     经过**审批闸门**的 git 写路径。一个拿到 `ApprovedBy` 就执行 push 的入口，
+     会让审批退化成"检查了一个非空字段"，比没有入口更危险。
+   - **闸门此前高估了这一块**：`cmd/opskeeper-eval vocabulary` 只按**名字**判断
+     `git.*` 是否可服务，于是 8 个工具里有 7 个返回
+     `not_implemented` 却仍被算作已覆盖。现在这 8 个都是实现，并且
+     `ArgsSchema` 用 `!` 标出必填参数（`git.file_at_commit` 要 `path`、
+     `git.search_code` 要 `pattern`、`git.blame` 要 `path`），闸门从
+     live registration 读到的 `RequiredArgs` 因此与真实情况一致。
+   - **顺手把这个洞补成一条常设守卫**：对一个按名字计数的闸门，"注册了但没实现"
+     是它**结构上看不见**的一类缺口——这次是靠一次临时探针才发现的。新增
+     `core/manager/middleware/adapter/skeleton_test.go`：用 `nil` 参数探测每一个
+     已注册工具（真适配器会报参数校验或未连接，骨架会报它自己那句固定消息），
+     要求找到的骨架**恰好等于**声明清单 `knownSkeletons`。
+     清单**双向比对**：修好一个而不从清单里删，测试失败；新增一个骨架，测试
+     立刻失败——清单不会比缺口活得更久。今天这份清单只剩 10 条，全部是
+     `kafka.*` / `rabbitmq.*` 两套旧骨架包（见缺口 8）。
+
+46. **`sdk` 补齐三件事：清单类型之外的注册 API 与版本协商，算术下沉到 `core`**。
+    计划 D-1 要求 `sdk/` 是「插件清单 Go 类型 + 注册 API + 版本协商」。此前
+    `sdk` 只有 `manifest.go`（解析/校验/`Admit`），后两件不在——而它们恰好是
+    插件作者**在没有控制面、没有节点的时候**唯一能自查的两件事，缺了它们，
+    SDK 就只是宿主内部结构体的别名导出。这一轮补齐，并顺手把一处**已经存在
+    的分叉风险**收掉。
+   - **版本比较下沉到 `core/domain/version.go`**：节点（`pluginmanifest`）与插件
+     作者（`sdk`）必须跑**同一套算术**，而 `sdk` 按模块规则只能 import `core`。
+     所以 `CompareVersions` 的实现搬到了 `core/domain`，`pluginmanifest/version.go`
+     改成一层**转发壳**，签名与错误文案逐字节不变——既有 `version_test.go`
+     一行未改仍全绿，这就是搬运没有改变行为的证据。留在 `pluginmanifest` 的只有
+     「节点对操作员说的话」（升级哪个二进制），搬运之后两边不可能再对同一个
+     版本得出不同结论。
+   - **`sdk/negotiate.go`：构建期兼容性检查**。`Host{Edge, Pig}` +
+     `Negotiate(manifest, host)` 一次报**两条轴**（`errors.Join`），因为作者要
+     同时修两个字段，而节点侧只报第一条——操作员只需要知道先升哪个二进制。
+     两边的**故意不对称**写在文件里：宿主版本未知时 `sdk` 不拒绝（否则一条
+     命令在开发机上永远跑不通），节点则必须拒绝，因为**跑代码的是它**。
+     需求串解析错误即使宿主未知也照样报出来，这样 YAML 打错字在作者机器上就
+     被抓住，而不是等发到舰队上。
+   - **`sdk/register.go`：注册 API，堵住清单与代码无声背离的两个方向**。
+     `spec.tools` 是**手写的 YAML**，而扩展实际注册的工具集是**代码**，两者
+     可以互相说谎且都不报错：注册了但没声明 → 模型看得见、闸门每轮都拒，
+     看起来像工具坏了；声明了但没注册 → 审核通过了一个**不可能被调用**的能力。
+     `Registry` 从**注册表**而不是 YAML 建立，`Check(manifest)` 一次报出三类
+     分歧（未声明 / 未注册 / **类别不一致**）——第三类才是有牙齿的那类：
+     清单里的类别才是闸门用来决定「要不要问人」的值，所以低报类别不是省一次
+     审批，而是**改变一次写操作是否需要人文审批**。`ClassUnknown` 被显式拒绝
+     而不是提升成 read：零值必须失败关闭。另给 `DeclaredManifest` 做生成侧，
+     但**有意不碰 `capabilities` / `safety_level`**——那是操作员的判断，不是
+     代码注册表的重新表述，生成它会把一次评审决定变成一次推导。
+   - **不对称处留了一句注释**：`Check` 一次报全部三类而不是短路，因为作者要
+     一次改完；节点侧的闸门则按「最坏一类」决定，因为闸门要的只是一个裁决。
+
+47. **`sdk.Registry` 接进三个真实发布包：SDK 的检查必须在真数据上跑过**。
+    决策 46 把注册 API 加进了 `sdk`，但一个只在自家 fixture 上跑过的检查，
+    只能证明它在手工构造的数据上成立。真正的两个方向的分歧——扩展注册了但
+    清单没声明、清单声明了但没人注册——都发生在**真实包**里，所以新增
+    `core/floor/pluginmanifest/sdk_registry_wiring_test.go`，把
+    `sdk.Registry` 建在三个发布包的 shipped toolset 上（名字从
+    `tools.go` 里读，与节点构建的是同一份文件），再拿它们各自的
+    `pig-ops.yaml` 去 `Check`。
+   - **正向用例本身是弱断言**：`Check` 无条件返回 `nil` 也能过。所以三个
+     **反证**才是真正的断言，每一个只破坏三类分歧中的一类，并要求 `Check`
+     点名它：注册一个未声明的工具；从注册表里删掉一个已声明的工具；
+     把 `host_restart_service`（本节点按 `write` 分类的真工具）在清单里
+     改写成 `read`。
+   - **类别从哪来决定了这个测试有没有意义**：如果类别也从清单里读，
+     `Check` 的类别比对就成了同义反复。所以对于**本节点有执行器**的工具，
+     类别取自执行器自己的 `EffectiveClass()`（就是调用点会用到的那个值）；
+     只有控制面 upcall 工具（节点没有执行器、无法独立分类）才回退到清单。
+     既没有执行器、清单里也没有的工具会**报错而不是猜一个类别**——给它填
+     `read` 正是类别检查要抓的那种低报。
+   - **最后一个用例钉住前提**：上面所有断言都假设
+     `readShippedToolNamesFor` 读到的就是节点构建的文件。它加了一条
+     canonical（`core/pig/extensions/`）与 packaged 副本的工具名集合比对，
+     让这个假设在漂移测试之外也有一条直接的守卫。
+
+48. **节点 agent 补 profile piglet：「拒绝」不等于「不提供」**。
+    本轮审计节点 agent 的启动参数时发现一处安全缺口：节点以
+    `pig --mode rpc` 启动，**没有带任何 profile**，于是 PiG 的内置工具
+    `read / bash / powershell / edit / write / grep / find / ls` 全部对模型
+    可见。宿主闸门（`core/edge/policygate`）确实会 Block 任何未绑定的调用，
+    所以这不是一个可被利用的提权——但它仍然是一个缺口，理由有三：
+      - 节点 agent 是**独立进程**、以节点权限运行，`bash` 在这个进程里等价于
+        主机上的任意代码执行。安全边界不能建立在「反正会被拒」上。
+      - 每次尝试都要多走一个来回，事故 transcript 里塞满本来就不可能成功的
+        调用，噪声会淹没真正的证据。
+      - 运维看到 agent 在够一个 shell，还要自己判断这是否被允许——把安全
+        属性从闸门挪到人的判断上，是架构的倒退。
+    实现落在 `core/edge/agentprofile`（新包，生成
+    `opskeeper-node.piglet.yaml`，原子写、0640），由
+    `cmd/opskeeper-edge/agent.go` 在 `writeAgentSettings` 之后写入，args 改为
+    `{"--mode","rpc","--piglet",profilePath}`。两处设计是有意的：
+      - `tools: []` 是**减法**而非加法。`piglet.ScopeTools` 中，profile 未点名
+        的 extension 工具一律保留（`toolAllowed(nil, …) == true`），所以已
+        准入的插件工具**完全不受影响**；这个字段只减掉宿主自己那个 shell。
+      - `discovery.extensions/skills: []` 关闭环境发现，堵住「往 agent home
+        里丢一个 skill 就多一个工具」这条路——节点的 skill 集合必须是评审过的
+        集合。它**不影响** `settings.json` 里的 `packages`。
+   - **`core/pig/pigprofile` 用 PiG 自己的解析器做契约测试**，而不是自写
+     YAML 读取器：它直接调 PiG 的 `ParseBytes` + `ScopeTools`，证明内置工具
+     确实被移除、extension 工具全部保留，并带三个反证控制。这样上游语义变了
+     测试就会红——`agentprofile` 自己的测试则刻意不引入 `yaml.v3`
+     （`modulecheck` 会拦），只用手写字段读取器断言**我们自己生成的文本**。
+   - **真实二进制 A/B 验证**（PiG 0.3.0+0.87.1，`pig --mode rpc`）：
+
+     ```
+     带 profile： [piglet] Applied scoping (session_start): 0/8 tools active, 8 hidden
+                {"id":"1","type":"response","command":"get_state","success":true,...}
+     不带 profile： （无 scoping 行）
+                {"id":"1","type":"response","command":"get_state","success":true,...}
+     ```
+
+     8 个内置工具被移除，RPC 指令通路不受影响，两条路径的 `get_state` 都成功。
+     这一步补的是 `core/pig/pigprofile` 覆盖不到的部分：契约测试证明「按
+     PiG 的语义应当如此」，二进制证明「PiG 确实如此」。
+   - **`core/pig/go.mod` 里那条反向依赖是有意的**：`pigprofile` 需要
+     `core/edge/agentprofile` 生成的真实文件，而 `edge → pig` 是既定方向。
+     所以这里加的是**仅测试用**的 `require` + `replace`，并在文件里注明了
+     方向是反的。`modulecheck` 仍然全绿，因为测试依赖不构成发布面依赖。
+
+49. **证据链补上 subject：写动作派发不出去，不是因为找不到 pod 名**。
+    本轮审计 9 个「有名有实现但派发不出参数」的动作，结论与字面读数相反。
+    `cmd/opskeeper-eval vocabulary` 报的是 `no evidence records this value`，
+    读起来像「平台观测不到 pod」，但真正的成因是：**证据链里根本没有
+    subject 这一项**。investigator 记录的始终只有 `resource_alert`（告警
+    id）、`query_promql`（一个数值）、`query_logql`（一行日志计数）——
+    告警**指向哪个实体**这件事，从来没有进入过证据。
+    而它是已知的：`alert_incidents.labels_json` 里就写着 `pod=order-svc-7d9`、
+    `queue=payments-in`、`unit=nginx.service`，因为告警规则正是靠这些标签
+    选中 firing 对象的。所以缺的不是观测能力，是**把已知事实带进证据链的
+    那一步**。
+   - **新增 `internal/manager/biz/loop/subject.go`**：`resource_alert_labels`
+    证据项，逐字记录 firing 告警的标签。刻意与 `resource_alert` 分开命名，
+    这样「哪条告警」与「哪个对象」在证据链里可分辨，subject 才能被独立
+    重新盖章。
+   - **别名表按字段声明，不是按动作随手取键**：`pod` 接受
+    `pod/k8s_pod/pod_name/exported_pod/kubernetes_pod_name`，`replicas` 接受
+    `replicas/desired_replicas/spec_replicas`，依此类推。**只有被声明的键才
+    可能成为参数**——这正是防止别名表退化成注入面的性质：给系统加一个
+    `queue` 标签不会让 `k8s.evict_pod` 拿到一个队列。
+   - **拒绝规则与既有 pg 提取器同构**：
+      - 缺 subject 项 → 拒绝，且消息**指名要记录什么**（`no recorded
+        subject names the pod ... one of: pod, k8s_pod, ...`），而不是只说
+        「缺参数」。
+      - 两个别名键指向**不同对象**（`pod=a` 且 `k8s_pod=b`）→ 判定为矛盾并
+        拒绝，把两个值都列出来。这是一条告警在描述本平台尚不理解的东西，
+        猜工具要哪个就是在赌。
+      - 两个别名键指向**同一对象** → 不是矛盾，折叠为一个。这是同义标签的
+        常态。
+      - `replicas` 非数字 → 拒绝，并说明它不是副本数。副本数是**决定**，
+        证据要么记录了它要么没有；从不记录的数字里造一个目标值，是这套
+        机制存在的反面。
+   - **生产侧**：`investigatorreal.InvestigatorToolset` 增加可选的
+    `AlertLabelsProvider`（`NewWithLabels`），在 `Investigate` 里记录 subject。
+    标签查询失败只 warn 不阻断——事故仍可用指标与日志调查，代价是写动作
+    带着「缺 subject」的消息拒绝，这比「无参数派发一个写操作」正确。
+    `cmd/opskeeper/main.go` 用新的 `AlertLabelsAdapter`（按
+    `alert_incidents` 主键回读 `Labels()`）接线。适配器对「id 不是数字 /
+    事件不存在 / 标签非法 JSON」一律返回 error 而非空 map：空 map 在下游
+    读起来是「这条告警确实没点名任何对象」，会把排查引向证据而不是引向
+    这次失败的查询。
+   - **宿主强制盖章**：合同里的证据链通常是 investigator LLM 回述的，而
+    subject 是承重的——9 个 resolver 的参数全从它读。一个会改写或丢弃标签
+    项的总结模型，会把每个写动作**静默地**变回拒绝。理由与宿主自持审计链、
+    审批闸门相同：这个事实不能依赖模型对自己输入的记忆。因此
+    `StampSubject` 从 plan 里的 toolset 证据把 subject 补回最终合同
+    （已存在则不重复；链满 50 条时挤掉最旧一条，最旧观测离结论最远）。
+    它被导出，因为这是**已定稿合同**的不变量，不是某个 worker 的私事。
+   - **端到端测试走完整条路**（`investigatorreal/subject_e2e_test.go`），
+    中间没有桩：告警标签 → 证据链 → 合同 → 参数 resolver → 派发带上
+    `pod=order-svc-7d9f2`。反证同在：告警没点名时必须拒绝。
+   - **一处被守卫测试挡下的过度设计**：本轮还顺手给 `k8s.rollout_undo` /
+    `k8s.uncordon` / `k8s.drain` 加了 extractor（它们的 `deployment` /
+    `node` 参数同样来自 subject）。`TestTheResolvableActionsAreAResolvable
+    SubsetOfTheLoopVocabulary` 立即判红：这些动作在
+    `investigatorreal.RemediationActions` 里没有，investigator 永远不会提议，
+    extractor 是死代码。守卫是对的，已撤回。**顺序应当是 investigator 先
+    学会提议，再要求派发能力**——反过来做就是为不可达的动作写代码。
+     接回 subject 机制后补齐成本很低，但那是另一个决定。
+
+   **效果与边界**：`vocabulary` 闸门的「Loop action executability」一段里，
+   9 个动作从「无证据可依」全部变为 `resolvable`（2/9 → 9/9）。
+   **但同一份报告的 remediation 轴仍是 3/20，两者是不同的缺口，不要混读**：
+     - 本轮闭合的是**参数派发**：闭环已经会提议这些动作，但派发时拿不出参数。
+     - 仍然敞开的是**提议本身**：14 个 case 期待的修复动作
+       （`k8s.rollout_undo`、`k8s.uncordon`、`k8s.drain`、`kafka.restart_broker`、
+       `rabbitmq.purge_queue`、`pg.vacuum_table`、`redis.scan_and_delete`……）
+       investigator 根本不会写进合同。它们卡在两处，且**都不该用同一个动作解决**：
+       一部分只是命名空间未对齐（`redis.kill_client` ↔ `redis.client_kill`，
+       需人裁决），一部分是真实能力缺失（`kafka.*` / `rabbitmq.*` 仍是骨架，
+       见路线第 8 条）。
+   - 所以下一步不是继续加 extractor，而是**让 investigator 在证据支持的前提下
+     真的提议这些动作**——顺序上提议先于派发能力，这也正是上面那条守卫测试
+     坚持的（extractor 只能服务于已可提议的动作）。
+
+50. **领域探针：让调查去问，而不是去猜**。
+    决策 49 闭合了「派发不出参数」这一层，但同一份 `vocabulary` 报告的
+    **remediation 轴仍是 3/20**。本轮查清了它为什么不涨，结论与读数方向相反：
+    **不是缺适配器**——闭环要派发的每个工具都已实现；**不是缺参数解析器**——
+    决策 49 之后 12 个动作全部 `resolvable`。真正的原因是 investigator
+    **物理上无法区分不同故障**。
+    它查 Prometheus 拿一个标量、查 Loki 拿一个日志行数，于是每一个
+    PostgreSQL 事故都是同一个形状：
+    `max(pg_stat_activity_max_tx_duration_seconds)` 加一个数字。表膨胀、
+    vacuum 卡住、查询变慢是三种故障、三种修法，在那个分辨率下**完全同形**。
+    现有分支靠阈值区分，而「调到刚好分开黄金用例」的阈值不是阈值，是答案本身。
+   - **做法是去问**。`pg.table_bloat` 报告每张表的死元组比例，
+     `pg.vacuum_status` 报告 vacuum 是否真的在推进，`k8s.node_list` 报告哪些
+     节点 NotReady。每一条都是**被记录下来的观测**，由它门控的提议才说得出
+     「为什么提这个」。与本仓库其余部分同一条规则：证据，不是推断；
+     有歧义，就拒绝。
+   - **`investigatorreal` 新增领域探针**（`domain_probe.go`）：按资源类型跑一
+     份**只读**调用计划，把适配器返回的原样结果记成证据项。只读不是注释而是
+     强制：调查发生在任何审批之前，探针若能到 L2 以上，就等于「为了看一眼而
+     执行一次写操作」，所以 `probeRiskCeiling = "L1"` 在运行时校验每个工具的
+     自评风险等级，**等级无法解析的按超限处理**——不肯说明自己做什么的工具，
+     不该被无提示地调用。计划是数据，因此这条性质由测试守住而不是靠人读。
+   - **探针失败只跳过，不阻断**。数据库拒绝连接恰恰是最该调查的事故；因为四
+     个问题里有一个没答上来就什么都不记，会让它在最需要的时候最没用。链变薄，
+     依赖那条证据的提议就不做。
+   - **提议分支按观测门控**，五条，全部有反证：
+     - `pg.table_bloat` 有行且 `dead_pct >= 20` → `pg.vacuum_table`（下界写成
+       数字而不是按部署调：调到黄金用例刚好的阈值就是答案本身）
+     - `pg.slow_log` 有行 → `pg.explain_query`，risk 记 **`safe`**——
+       `EXPLAIN` 不带 `ANALYZE`，不执行语句，所以它不承诺任何东西
+     - `k8s.rollout_status` 有 `rollout_complete=false` 的行 → `k8s.rollout_undo`
+       （**二次过滤**：探针虽传了 `only_stuck`，但一个忽略该参数的适配器不该
+       把健康 Deployment 放到回滚提议面前）
+     - `k8s.node_list` 有 `status != Ready` 的行 → `k8s.uncordon` + `k8s.drain`
+   - **五个 extractor 与提议同源**（`domain_extractors.go`）。三个过滤器
+     （`BloatedTableRows` / `StuckRolloutRows` / `NotReadyNodeRows`）**从 loop
+     包导出**并被两侧共用：investigator 因为过滤器命中而提议，resolver 只有在
+     同一个过滤器命中时才肯指名目标。**两份阈值就是两次对「证据说了什么」产生
+     分歧的机会**。规则照旧：单一候选解析，多个拒绝并列出候选，没有则拒绝并
+     指名是哪个探针本该回答这个问题。`pg.vacuum_table` 的 `table` 取自膨胀
+     最高的那张表——`pg_stat_statements` 本来就按时长排序，取最慢的那条是读
+     数据库自己报的顺序，不是挑。
+   - **装配顺序调整**：toolset 的构造从「适配器注册表之前」移到「之后」，
+     因为它要通过那张表去探领域。`main.go` 用 `.WithProbes(middlewareReg)`
+     接线。
+
+   **效果**（`cmd/opskeeper-eval vocabulary`，均可复现）：
+   - **remediation 轴 3/20 → 9/20**。解锁 6 个 case：`k8s/deployment-failed`、
+     `k8s/node-notready`、`k8s/pod-oom`、`pg/slow-query`、`pg/table-bloat`、
+     `pg/vacuum-stuck`。
+   - blocked 列表 14 → 11。**平台轴仍 10/20**（本轮不涉及能力注册表）。
+   - 剩下 11 个分两类，**不该用同一个动作解决**：
+     - **工具不存在**（9）：`host.kill_process`、`host.remove_old_logs`、
+       `k8s.cleanup_logs`、`redis.scan_and_delete`、`redis.scan_and_redistribute`、
+       `redis.kill_client`（实为 `redis.client_kill` 改名未对齐，需人裁决）、
+       `kafka.restart_broker`/`scale_consumer`/`repartition`、
+       `rabbitmq.scale_consumer`。
+     - **参数是决策而非观测**（1）：`redis/memory-burst` 期待
+       `redis.config_set`（要 parameter + value）与 `redis.flushdb`（要 confirm）。
+       这三个值都不是「证据里记录了什么」，而是**操作员要做的决定**。给它们写
+       猜测式 extractor 就是本文件开头批评的那种事，正确做法是让它们在审批
+       环节由人补齐，而不是让代码替人选。
+
+51. **A 类缺口第一批：host 与 redis 的四个工具，两条「参数即决策」的提议**。
+    决策 50 把 11 个缺口分成两拨，本轮处理 A 类里命名空间干净、无需人裁决的
+    那一部分（mq 命名空间与 `redis.kill_client` 改名各是一次裁决，不在本轮）。
+   - **host 适配器新增 4 个工具**（`core/manager/middleware/adapter/host/pressure.go`
+     与 `pressure_ops.go`）：
+     - `host.top_processes`（只读）：`ps -eo pid=,ppid=,user=,pcpu=,pmem=,comm=`
+       在 Go 侧排序，**不依赖 GNU-only 的 `ps --sort`**——本仓库的探测命令
+       要在别的平台上也能跑，下界 `cpuFloor = 50.0` 写死为「只返回超阈值
+       进程」，不是「调参调到黄金用例刚分开」。
+     - `host.old_log_files`（只读）：`find -xdev -mtime +N -printf`，**GNU find
+       假设已在注释里写明**；`-xdev` 是为了不让挂载的别的文件系统里
+       的文件混进来。
+     - `host.kill_process`（**L3**）：**只发 SIGTERM，绝不自动升级 SIGKILL**。
+       进程不该因为一次探测就死掉。读回状态；拒绝 pid ≤ 1、拒绝自己 / 父进程 /
+       内核线程（`comm` 形如 `[kthreadd]`）。这四条拒绝路径各有反证用例。
+     - `host.remove_old_logs`（**L3**）：**重新运行同一个 `find`，不接受调用方
+       传来的文件列表**。调用方给的列表是上一秒的世界，删除按它执行就是
+       删掉一个可能刚被重建的日志；有 `dry_run`，`protectedPaths` 拒绝系统
+       目录。
+   - **redis 适配器新增 1 个工具**（`keyspace_ops.go`）：
+     `redis.scan_and_delete`（**L3**）。`min_bytes` **必填无默认值**——「删掉
+     多少算大」是策略不是事实；`maxDeletePerCall = 100`，**超限拒绝而不是
+     部分执行**，因为部分执行会让人以为已经删干净了。`dry_run` 可用；
+     报告里明说 **SCAN 是抽样不是普查**，因此返回的字节数是下界不是上界；
+     `humanBytes` 同时给舍入值和精确值。
+   - **两条提议，其参数是决策，故**只提议**不写 extractor**：
+     `redis.info` 的 `used_memory` ÷ `maxmemory` 得填充率，
+     - 填充率 ≥ 0.90 且 `maxmemory-policy == noeviction` → `redis.config_set`
+     - 填充率 ≥ 0.99 → `redis.flushdb`，risk 记 **`dangerous`**
+     - `maxmemory == 0`（未设上限）时**不提议任何内存修复**：比例在无上限
+       面前无意义，按比例提议就是拿无意义的量做决策。
+     它们的 `parameter` / `value` / `confirm` 由审批环节由人补齐，
+     executability 闸门因此诚实地报 `no evidence records this value`——
+     **这是正确状态，不是缺口**。这与决策 50 的 B 类同一条规则：
+     参数是观测才写 extractor，参数是决策就停在审批。
+   - **`host.remove_old_logs` 的 `path` 来自 subject 而非探针**：探针只门控
+     「有无可回收文件」，路径取 `subject` 的 `mount` / `path` / `dir` 标签。
+     让探针去选目录等于让一次只读探测替人决定删哪里。
+   - **`redis.scan_and_delete` 的 `min_bytes` 来自唯一超大 key 的实际大小；
+     若不唯一则**拒绝**并列出全部**。取最小值会扫掉未观测的同尺寸 key。
+
+   **效果**（`cmd/opskeeper-eval vocabulary`）：
+   - **remediation 轴 9/20 → 13/20**（本轮 3 → 9 → 11 → 12 → 13）；
+     **平台轴 10/20 → 11/20**。
+   - **blocked 列表 11 → 7**：
+     `k8s/pv-full`（`k8s.resize_pvc` 尺寸是决策 + `k8s.cleanup_logs` 工具不存在）、
+     `mq/*` 四个（kafka 三个 + rabbitmq 一个，命名空间裁决）、
+     `redis/hot-key`（`redis.scan_and_redistribute`——见下）、
+     `redis/slow-cmd`（`redis.kill_client` 改名未对齐）。
+   - **`redis.scan_and_redistribute` 本轮明确不实现**：Redis 没有
+     「重新分配热 key」这种服务端操作。热 key 的真正修法在**应用层**
+     （本地缓存 / key 加后缀分片 / 读副本）。造一个名叫 redistribute 却做
+     别的事的工具，就是让名字说谎——本文件开头批评的那种失败。
+     **需要人裁决**：是改工具名，还是调整黄金语料。
+   - **17 个动作里 14 个 `resolvable`**，3 个停在审批
+     （`redis.config_set` / `redis.flushdb` / 命名空间待定的 `mq.*`）。
+
+52. **磁盘满：把「申请了多大」和「用了多少」拆成两个工具，量不出来就说量不出来**。
+    决策 51 之后 blocked 剩 7 个，其中 `k8s/pv-full` 是唯一一个不需要人裁决的。
+    它卡住的根因不是缺提议，而是**整条链上没有任何一处能看见文件系统**。
+   - **Kubernetes API 不知道卷用了多少。** 这不是本仓库没实现，是 API 语义：
+     `kubectl get pvc` 打印的是 claim **申请**的容量，API server 只把块设备交给
+     pod，从不往里看。所以 `k8s.pvc_list`（L0，纯 API 数据）**刻意不带任何
+     「 fullness」列**——凭申请量编一个占用率，就是让一个猜测长得像权威数字。
+     它的 summary 直接写明这一点并指向测量工具。
+   - **`k8s.pvc_usage`（L1）去量。** 做法是：找**正在运行且挂载了该 claim**
+     的 pod → 从该 pod 自己的 `spec.volumes[].volumeMounts` 读出挂载点 →
+     在那里跑 `df -P -k`。挂载点**不问调用方**：路径是对别人应用布局的猜测，
+     猜错了就是「这个卷的名字 + 另一个文件系统的数字」。跑
+     `df -P -k` 而非 `df --output=…`——前两个选项是 POSIX，BusyBox 与 coreutils
+     都认；`--output` 是 GNU 扩展，distroless 和 Alpine 没有。
+   - **它被评为 L1 而不是 L4**，理由与 `k8s.exec_into_pod` 评为 L4 是同一条
+     线：**风险等级看调用方能改变什么，不看有没有起进程。** 这里的程序是本
+     适配器写死的 `df`，调用方选的是「量哪个卷」，不是「跑什么」。argv 由调用
+     方提供的那个仍然是 L4。
+   - **量不到就是量不到。** claim 未 Bound、没有运行中 pod 挂载、raw block
+     device 没有文件系统路径、distroless 镜像没有 `df`、同一个 pod 在两个路径
+     挂载（那是应用的事实，不是集群的）——五种都返回 `measured: false` 加一句
+     原因，**且 row 里根本不出现 `used_percent` 这个键**。把「未知」读成 0% 会
+     让每一个无权 exec 的 namespace 都产出一条自信的扩容提议，这是本文件里
+     最危险的一行，所以由测试钉死。
+   - **多副本不构成歧义。** 三个副本挂同一个 PVC 看到的是**同一个**文件系统，
+     按名字排序取第一个是**正确采样而不是猜测**，并把来源写进 `measured_from`。
+     真歧义是「一个 pod 挂在两个路径」，那个拒绝并列。
+   - **探针必须能链式展开。** 「这个卷满了吗」是关于某一个盘的问题，而那个盘
+     要集群先回答「有哪些 claim」才知道。所以 `DomainProbe` 增加了
+     `ForEach`：`k8s.pvc_list` 先跑，每个 row 展开成一次 `k8s.pvc_usage`，
+     `pvc` 与 `namespace` 都取自**同一行**（claim 名只在 namespace 内唯一）。
+     展开**不豁免只读闸门**——L3 或等级无法解析的工具在展开后一样不被调用。
+     源探针没跑成 / 没行 / 缺列，就**一次都不调用**，绝不带空参数去量
+     「凭据默认的那个 namespace」再把答案记在这个 claim 名下。
+   - **`ProbeRows` 改为拼接同一工具的多次调用。** 一个探针被调用多次是合法的
+     （每个 claim 一次），每次都是一条独立记录；只取第一条会让测了五个卷的
+     链去回答其中一个卷的问题，而且**不报错**——它给出的不是更糟的答案，是
+     另一个问题的答案。
+   - **两条提议，其参数分属两类，都不写 extractor**：
+     - `k8s.resize_pvc`（mutating）：`pvc` **可解**——extractor 读的就是 `df`
+       真正跑过的那个 claim，并且**按 `namespace/name` 复合身份计数**
+       （每个 namespace 都有一个叫 `data` 的 claim；按裸名折叠会把这个判成
+       「一致」而解出一个谁都没量过的卷）。`size` **不可解**：扩多大是带 recurring
+       bill 的预算决策，证据链里没有「谁决定花多少钱」。extractor **只给
+       pvc + namespace**。
+     - `k8s.cleanup_logs`（**dangerous**）：`path` **不可解**，且理由与 `size`
+       不同——卷里哪个目录是日志，是别人应用的布局，任何文件系统读数都不知道。
+       工具**自己**安全地回答这个问题：`dry_run` **默认 true**，先报「能回收
+       多少」再等确认。
+   - **`k8s.cleanup_logs`（L4）的三条不装饰的决定**：
+     - **`truncate -s 0` 而不是 `rm`**：释放块、保留 inode，**正持有该文件
+       追加写的应用不用重新学习「我的日志文件不见了」**。`rm` 破坏这个契约，
+       而一个把写入方一起带下线的磁盘修复，是用一个更大的故障换了一个故障。
+     - **`dry_run` 默认 true**：工具负责提案，人负责处置。**对着一个没被
+       想过的默认值**拼出一条看起来合理的调用，正是这条默认值要防的。
+     - **文件清单重新跑 `find` 得到，从不接收**：调用方给的是**上一秒的世界**，
+       而日志在这中间会被轮转、重写、重建。按它执行就是 truncate 掉那些名字
+       上**现在**的东西。报告跑一次，写入前再跑一次。
+     - 另外：`path` **必须在发现的挂载点内**（否则会 truncate 容器自己的
+       `/var/log` 却把卷的字节报成已回收）；挂载根目录本身被拒；`older_than_days`
+       有**下界**（截断正在被追加写的日志会毁掉操作员正在读的那几分钟）；
+       超过 `cleanupMaxFilesPerCall` **拒绝而非部分执行**（清 500 个报成功是
+       比不清更糟的结果）；系统目录拒绝；`find` 没有 `-printf`（BusyBox）时报错
+       而不是去清理它列不出来的东西；**清单有读不懂的行就整体拒绝**——
+       部分可读的总和是一个操作员会相信的数字。
+
+   **效果**（`cmd/opskeeper-eval vocabulary`）：
+   - `k8s/pv-full` **`ok ... fully servable`**（此前是 blocked）。
+   - **平台轴 11/20 → 12/20**；**remediation 轴 13/20 → 14/20**；
+     **blocked 7 → 6**。
+   - executability：19 个动作里 16 个 `resolvable`；3 个停在审批
+     （`k8s.cleanup_logs` / `redis.config_set` / `redis.flushdb`），
+     其中 `k8s.resize_pvc` 显示 `resolvable` 是因为 `pvc` 可从证据解出，
+     `size` 仍留给审批人——这正是期望状态。
+   - 修掉一个真实缺陷：`pvcRow` 曾把 `volumeMode` 的缺省值写成 `Block`，
+     于是**每一个普通 claim 都被报成裸设备**，同时把「量它需要挂载点」这件事
+     藏了起来。K8s 的缺省是 `Filesystem`，已修并加测试。
+
+53. **产品命名空间委托给中立实现：一套实现、两个命名空间、每个名字一个所有者**。
+    A 类缺口第三批处理 mq。这一轮挖出的问题比「4 个 case 没有提议」更深，
+    值得按发现的顺序记下来。
+   - **发现一：十个工具名在注册表里，但调用全部返回 `not_implemented`。**
+     `core/manager/middleware/adapter/mq/{kafka,rabbitmq}` 注册了 10 个工具，
+     每个 handler 都答 `not_implemented: pending Task 2.4`。真正的 Kafka /
+     RabbitMQ 代码一直在**上一层**（`core/manager/middleware/adapter/mq`），
+     挂在 `mq.` 前缀下。于是评测闸门按「名字是否注册」计数，把这 10 个算成
+     平台能力。`core/manager/middleware/adapter/skeleton_test.go` 抓住了它并把它
+     钉成了已知债务清单；**这一轮把那份清单清空了**。
+   - **发现二（更严重）：那两个命名空间根本没有接进运行时的控制面。**
+     `cmd/opskeeper/loop_adapters.go` 只接线 `postgres/redis/k8s/mq/git/host`。
+     `kafka.` 与 `rabbitmq.` 的唯一调用方是评测闸门自己。也就是说**闸门在为
+     一个不存在的机队打分**——报告里的每一个数字都关于一个没人能部署出来的
+     部署。这与本文件反复引用的那句话直接冲突（「两个闸门描述同一支机队」）。
+     已新增 `OPSKEEPER_LOOP_KAFKA_DSN` / `OPSKEEPER_LOOP_RABBITMQ_DSN` 两条
+     独立可选的接线，并加了一条反向测试：闸门计数的每个命名空间都必须在
+     控制面里接线，否则失败。
+   - **为什么不能从 mq 包直接注册产品名**：`registry.RegisterTools` 拒绝名字
+     前缀与资源类型不匹配的工具，这条规则是对的（它防止两个子系统抢一个名字）。
+     所以**所有权留在产品包**，实现通过 `mq.Delegate` 到达。委托面的每个方法都
+     校验连上的 broker 就是名字里的那个产品——命名空间是**闸门而不是标签**，
+     否则 `kafka.repartition` 跑在 RabbitMQ 连接上会找到「最近的、存在的操作」
+     并把命名空间变成错误行为上的标签。
+   - **`kafka.partition_skew` 说清楚它测的是什么。** Kafka 管理协议**不提供**
+     分区级字节/消息速率，所以「哪个分区流量最大」没有 API 可问。它报的是两个
+     真实分布：每个分区**未消费记录数**（各 group 已提交 offset 与日志末尾之差，
+     跨 group 求和是真实量而不是代理量——两个 group 在同一分区上确实各有未消费
+     记录）与其占比，以及**副本同步**（ISR vs replicas）。每行带 `measured` 与
+     `not_measured` 两个字段，因为读者找到一个数字而没有依据时，会当它就是自己
+     在找的那个。
+   - **`kafka.repartition` 是真实 API**（`AlterPartitionReassignments`），
+     并拒绝三件 API 会照单全收的事：**副本数被意外改变**（目标列表长度必须等于
+     当前副本数，否则要显式 `allow_replica_factor_change: true`——一个单副本
+     分区离数据丢失只差一次 broker 故障）、**指向不存在的 broker**（先读活着的
+     broker 集合再逐个校验）、**在已有迁移之上再提交一次**（先查 in-flight，
+     两次重叠迁移不会报冲突，但会得到谁也没打算要的副本集）。还有一条诚实报告：
+     **Kafka 接受请求后是异步迁移**，所以消息写的是「已提交，不是已完成」。
+   - **三个名字没有注册，因为没有任何 broker 协议能做它们说的事**：
+     - `kafka.restart_broker`——重启进程是 systemd / StatefulSet / 云实例的事，
+       不是 broker 客户端的事。
+     - `kafka.scale_consumer` / `rabbitmq.scale_consumer`——consumer group 的
+       并行度等于加入它的客户端实例数，改它是一次部署。RabbitMQ 有一个形似的
+       真实操作（policy 提高 prefetch），但那不是「扩消费者」。
+     - `kafka.rebalance_history`——Kafka 暴露 group 的**当前**成员与分配
+       （DescribeGroups），没有历史。报当前状态却叫 history 就是答非所问。
+     这四个是**关于黄金语料或平台真实能力的命名裁决**，不是实现缺口。
+     把它们注册成桩会让能力闸门回到发现一的状态，所以它们现在是能力报告里
+     可见的缺口，而不是让报告说谎的桩。这与 `redis.scan_and_redistribute`
+     是同一条规则（决策 51）。
+   - **`rabbitmq.queue_depth` 与 `rabbitmq.consumer_status` 是两个问题，不是
+     一个工具两个名字。** 管理 API 在同一个 queue 文档上同时返回深度与消费者数，
+     所以底层是一次调用——但读到的东西不同、失败方式也不同。深度是「还堆着多少」，
+     按最深优先；消费者覆盖是「谁在读」，按每条消息需要多少个消费者排序。40 万条
+     消息 4 个消费者是健康的，同样的队列 0 个消费者是没人发现的事故，而**按深度
+     排这两个队列在同一个位置的同一个理由上**。
+   - **两条提议接进闭环**（remediation 轴 14/20 → 15/20）：
+     `kafka.repartition` 由 `kafka.partition_skew` 观测门控，探针用
+     `ForEach` 从 `mq.inspect_consumer_lag` 的行上展开 topic（一个 topic 没人
+     落后就不该去量它的倾斜，否则会为一个健康 topic 提一条没有意义的复制）。
+     extractor 给 `topic` + `partition`，**`to_brokers` 不给**——放哪台 broker
+     需要活的 broker 列表、机架与既有负载，证据链里一条都没有。
+   - 顺手修掉一个真实缺陷：`consumer_status` 的排序键用 `-1` 表示「没有消费者」，
+     在**降序**排序里这个值排最后，与注释写的「排最前」完全相反；更糟的是它
+     把一个不是任何东西计数的 `-1` 发布成了「每消费者消息数」。已改为
+     「(stalled, 每消费者消息数)」双键排序，无消费者时不发布该字段。
+
+   **效果**（`cmd/opskeeper-eval vocabulary`）：
+   - **平台轴 12/20 → 13/20**（`mq/partition-skew` 变为 `fully servable`）；
+     **remediation 轴 14/20 → 15/20**；**remediation 侧 blocked 6 → 5**。
+   - `middleware-adapter` 符号数 **98 → 108**（10 个桩变成 10 个真实工具）。
+   - 能力报告变得更诚实：`kafka.rebalance_history` 从「被算作有」变成一条
+     可见的缺口。这是数字下降方向上的正确变化。
+
+54. **根因轴上的两块证据：`pg.replication_status` 与 `k8s.top_pods`**。
+    这一批补的是**诊断面**（观测），不是提议面（修复），所以 remediation 轴
+    不动、平台轴 +1。两块工具的写法和它们拒绝做的猜测同样重要。
+
+    - **`pg.replication_status`（L1）读 primary 的 WAL sender 视图**，不是
+      standby 自己的 `pg_last_wal_replay_lsn()`。这个适配器连的是一条 DSN
+      （通常就是 primary），而 `pg_stat_replication` 在 primary 上、一次连接
+      就能看到**所有**连进来的 standby；standby 自身视角只回答它自己、而且要
+      另一条 DSN。选前者是「一次连接回答整个集群的复制问题」。
+    - **两个 lag 数字都报，因为它们回答不同的问题、且互不可推导**：
+      `replay_lag_bytes` 是事故期间一直在长、运维据此估修复量的那个量；
+      `replay_lag_seconds` 是 RPO 声明用的单位。一个 standby 可以落后 1 GiB
+      却只慢 2 秒，也可以落后 1 MiB 却慢 20 分钟（时钟或长事务）。
+    - **NULL 不是 0。** `pg_wal_lsn_diff` 在任一参数为 NULL 时返回 NULL，
+      而 NULL 的 `replay_lsn` / `replay_lag` 意味着这个 standby 还没上报位置
+      （刚建连、或还在从基础备份追赶）。适配器把这个 NULL 原样带出去，
+      测试钉住「未知不能变成 0」——把没上报当成追平，正好会在最需要看见
+      它的时候说"复制正常"。
+    - **空结果不是零延迟**：空的 `pg_stat_replication` 最常见的意思是
+      「这个实例不是 primary」或者「DSN 指错地方了」。
+    - **顺手修掉一个真实缺陷（这一批唯一的非新增代码改动）**：`Diagnose`
+      只在 `len(rows) > 0` 时附上 category 的 suggestion，而 replication 的
+      suggestion 原文就是写给**空结果**的——它永远不会出现。修法不是把闸门
+      改成"总是附上"：另外 6 条 route 的建议都是「怎么处理你看到的行」
+      （"对阻塞别人的 pid 用 pg.kill_session"），挂在空结果上是误导。
+      新增了 `emptySuggestion` 字段，只有声明了它的 route 才在空结果时说话。
+    - **`k8s.top_pods`（L1）报的是"每个容器对其自身 limit 的占比"，不是
+      节点容量占比。** 一台 40% 内存的节点上可以有一个容器正踩着自己 100%
+      的 limit 等被杀；一台 95% 的节点上可能每个容器都在自己 limit 的一半、
+      压力完全来自别处。节点容量回答"这台机器满了吗"，这个工具回答"哪个容器
+      没地方了"——对 CrashLooping 的 Pod，这是同一个词写成的两个不同问题。
+    - **OOM 证据读两处，因为两处都有用**：当前状态
+      （`state.terminated.reason`）是 Pod 现在的样子，而一个被杀后已经重启的
+      容器这里通常是空的；上一个状态（`lastState.terminated.reason`）能活过
+      重启，它才是"这个容器死于 OOM 而不是坏镜像或探针失败"的证据。只报当前
+      状态的列表会在 Pod 看起来健康时展示 restart_count 一路涨。
+    - **无 limit 不是 0%。** 没有 limit 的容器被标成
+      `mem_limit_pct_unlimited` 并且**不发布百分比**：这两种是相反的发现，
+      无 limit 意味着它可以吃掉整个节点、更危险，而给它印一个 0% 会让它
+      排在"最安全"的位置。排序也据此把未知 limit 放最后——它们不是安全，
+      只是没被测量，排在最前会把真正要 OOM 的容器埋掉。
+    - **没装 metrics-server 报错，不报空列表**：空列表在这个工具里的读数是
+      "没有容器接近自己的 limit"，恰好是没人能判断的时候最不该说的话。
+      错误消息点名 metrics-server 是可能的缺失项。
+    - **没有 per-container 分解的 metrics 条目不丢**：Pod 级 usage 仍然是
+      一次真实测量，丢掉它会让一个吃内存的 Pod 变得不可见；此时用它自己
+      spec 里的第一个容器的 limit 作为最接近的答案，并保持 container 为空。
+    - **测试**：k8s 侧 5 条（自身 limit / 无 limit 不是 0% / 未知 limit 排序 /
+      无 per-container 分解 / metrics-server 缺失），postgres 侧 3 条
+      （NULL 不是 0 且查询确实用 `pg_wal_lsn_diff` / 两个 lag 各报各的 /
+      空结果不是零延迟）。每一条的断言都是"未知不是零"这一条规则的一个面。
+
+    **效果**（`cmd/opskeeper-eval vocabulary`）：
+    - `pg/replication-lag` **`ok ... fully servable`**；**平台轴 13/20 →
+      14/20**；remediation 轴与 blocked 列表不变（15/20、5 个）。
+    - `k8s/pod-oom` 从「1 root cause + 2 缺口」变成只剩
+      `git-artifact.LinkK8sImage` 一条。
+    - `middleware-adapter` 符号数 **100**（以闸门输出为准，不手工维护）。
+
+55. **导入器有了入口，且入口不把它当成 install**。
+    `pluginimport` 到决策 54 为止是一个**有实现、有测试、没有调用方**的库——
+    仓库里最像"已完成"的那种缺口。这一轮补的是入口：`POST /v1/marketplace/import`
+    （admin），multipart 上传一个存量容器 → 解包 → 转换 → 写到
+    `OPSKEEPER_PLUGIN_IMPORT_DIR` 下的 `<包名>/`，响应带 `dest` + 转换报告 +
+    **仍未决的清单**。
+    - **它和 install 不是一件事，也不共用一条路。** install 的意思是"这个包
+      已被准予使用"；import 的意思是"这个包得先说明自己是什么"。转换产物是
+      **惰性的**：无工具、无 scope、无审批，`safety_level: L1`，
+      `install.strategy: pin`。一个猜着填完这些字段的转换器，等于声称自己评审过
+      它只读过文件名的代码；所以那些字段以 `Decision{Field, Question, Why}`
+      的形式回到调用方，`Why` 说的是"为什么推不出来"，而不只是"缺个值"。
+    - **写进 import root，不写进节点。** 转换的全部意义是把评审逼出来；
+      直接下发会跳过这一步。运维答完 decisions，再走第 16 条那套
+      `/v1/plugins/releases` 发布。
+    - **这一轮挖出的真实缺陷（`descendSingleDir` 的无条件下钻）。**
+      归档常见"外面套一层目录"，所以解包后要下钻一层；但原来的
+      `descendSingleDir` 只要顶层**恰好只有一个目录**就下钻。而一个裸
+      skills.sh 包打成 zip 时，顶层唯一的目录**正好是 `skills/`** —— 于是它被
+      当成"套壳目录"钻进去，再对 `skills/` 本身找容器标记，得到一句
+      "no recognized pack layout"。修法是：**只在顶层不被识别为容器时才下钻**
+      （`chatruntime.DetectContainer` 判），而这是同一个识别意见，不是第二个。
+    - **解包目录名要取归档名。** 裸 skills.sh 包没有 manifest，loader 从**目录名**
+      合成包 id；解到随机 temp 目录里会给每个裸包起一个 temp 目录的名字。
+      `archiveBaseName` 把归档名裁剪成包名允许的字符集（`../../etc` → `etc`），
+      且这个名字只会拼到本进程刚创建的 temp 目录上——一个"推理过才知道安全"的
+      名字，离被拼到别处只差一次重构。
+    - **同名包拒绝覆盖（409）**。第一次转换里的 decisions 可能已经被人答过，
+      覆盖/合并会留下没人评审过的文件（与 `pluginimport.Import` 自己的拒绝
+      同一条规则）。**未配置时答 503 并点名 `OPSKEEPER_PLUGIN_IMPORT_DIR`**：
+      500 会把运维引去找一个根本没打开的转换器的 bug。
+    - **测试 6 条**：非 admin 不得到达转换器、未配置是 503 且点名配置项、
+      `.claude-plugin` 容器端到端落盘（`pig-ops.yaml` 存在、`commands` →
+      `prompts` 的改名生效、decisions 含 `spec.tools`、根目录只剩那一个包）、
+      第二次同包 409 且旧包未被动过、裸包按归档名命名、非容器 400 且不留残留。
+
+56. **内置 ops piglet 建出来了，而且它必须待在它所编排的包里**。
+    C 阶段此前只有**节点侧生成 profile**（`core/edge/agentprofile` 在准入之后
+    按"这台机器实际收下了哪些包"写 `opskeeper-node.piglet.yaml`），没有一个
+    **第一方组合**可供开发者在工作站上直接跑，也没有一个可供节点 profile 对照的
+    参照物。这一轮补上
+    `plugins/pig-ops/opskeeper-sre-readonly/pig-opskeeper-ops.yaml`：一句
+    `pig --mode rpc --piglet <该文件>` 就得到一个**已上闸门**的只读运维 agent。
+    - **它和节点 profile 的关系是"同一条安全线，不同的名单"。** 两者都
+      `tools: []`（摘掉 PiG 8 个内置工具含 `bash`），都 `discovery: []`
+      （无环境发现）；分歧只在**点名了哪些 extension**——节点 profile 说
+      "这台机器收下了什么"，内置 piglet 说"第一方组合是什么"。节点 profile
+      依然由 `core/edge/agentprofile` 生成，两者不是谁替代谁。
+    - **它必须在 `opskeeper-sre-readonly/` 包内，不能点名兄弟包。**
+      PiG 的 loader 拒绝任何逃出 piglet 自身目录的 `local:` origin
+      （报 `escapes the Piglet anchor`），所以一个点名兄弟包的组合**先得把那个
+      包复制进来**。这里没有东西可复制——origin 本来就是本包自己的
+      `extensions/` 与 `skills/`。跨包组合要付一次生成式复制，那是这份组合
+      不需要的机械。**observability 包与 repair 包有意不在其中**：前者按节点
+      装，后者是 L2 写操作。
+    - **每条 skill 单独成 entry，指向自己的目录。** 包自己的 Pi manifest 可以
+      让一个 entry 指到父 `skills/` 目录，但 piglet 的一个 skill entry 解析成
+      **一个** skill：PiG 的 baker 读那个路径，发现多于一个定义、名字又对不上
+      就拒绝——父目录形态"能通过校验、然后构建失败"。逐条点名也让 8 个 skill
+      （`diagnose-readonly` + 7 个 persona）变成一张可评审的清单，而不是一次
+      目录 glob。
+    - **工具清单写死、不留给 extension。** 信使 extension `opskeeper-gate`
+      的 `tools: []` 是**显式写出**而非省略：省略的意思是"这个 extension
+      注册什么就是什么"，而对那个职责是坐在每次调用前面的 extension 来说，
+      "它以后注册的"恰恰是最不该承诺的东西。只读工具集 `opskeeper-sre-readonly`
+      的 18 个名字同样写死，于是 extension 后来加一个工具，会先以**一行 diff**
+      出现在这里（reviewer 得接受），而不是作为一个能力凭空出现在每台节点上。
+    - **两个模块各验一半，各有负向对照。**
+      - `core/pig/pigprofile/piglet_contract_test.go`（PiG 侧）：PiG 自己的
+        parser + `Validate()` 接受它、builtin 工具列表恰好为空、每个 origin 经
+        `ResolveSkills`/`ResolveExtensions` 解析成功、每个 skill 目录有
+        `SKILL.md` 且目录名 == entry 名、每个 extension 目录有 `go.mod`。
+        最硬的一条是用 `piglet.ScopeTools` 比对：**从 extension 的 `tools.go`
+        AST 抓 `Name:` 字面量**得到注册集，断言它恰好等于 piglet 声明的列表，
+        且 `bash` 与 8 个 builtin 都不在。负向对照两条已经实测：删掉声明的
+        `host_mtr` → scope 测试报 "piglet allows […] vs registers […]"；
+        删掉 `opskeeper-critic` skill → 解析报缺 critic。
+      - `core/floor/pluginmanifest/piglet_composition_test.go`（治理侧）：
+        每个 origin 反推回包根 → `Load(root)`，断言
+        `HighestCapability() == ClassRead`、`SafetyLevel == L1`、且
+        `Spec.Tools[].Class` 全是 `ClassRead`；再用 `toolsNotMatching`
+        **双向**断言 piglet 的工具名集合 ↔ `pig-ops.yaml` 的 tools 集合相等
+        （missing 与 extra 都要报）。负向对照：`toolsNotMatching` 能说不。
+        这里用**宽松的 `yaml.Unmarshal`**——piglet schema 是 PiG 的，PiG 加
+        字段不应让治理检查失败。注意 `local:extensions/opskeeper-gate` 会被解析
+        到**同一个包根**：gate 是包内 extension，不是独立包。
+
+57. **manager 模块迁移卡在一个计划没写的结构问题上：共享底座放哪儿**。
+    计划 §四 A-1 说"按 2.1 迁移包路径"，2.1 的表把 `internal/manager` +
+    `internal/iam` 划给 `core/manager`。这一轮把这条搬迁的实际形状量了出来，
+    结论是**它不是一次纯路径重写**——`internal/manager` 没法只带着自己的目录搬走。
+    - **它依赖哪些根模块代码**：27 个 `internal/pkg` 子包（`errs` 169 处、
+      `tenantctx` 73、`tunnel` 48、`llm` 25、`promquery` 22、`logquery` 16、
+      `prom` 14、`auth` 11、`notify` 10、`tracequery` 8、`qdrantx` 8、`dbx` 8……），
+      外加 `internal/middleware`（27 文件）、`internal/skill`（22）、
+      `internal/control`（18）、`internal/dataguard`（12）、`internal/knowledge`（6）、
+      `internal/agentteams`（3）、`internal/observability`（1）。
+    - **量级**：`internal/manager` 128,532 行 + `internal/iam` 4,504 行（845 个 Go
+      文件，含测试），再加上面这些树（`internal/pkg` 15,592、`internal/middleware`
+      15,833、`internal/skill` 3,598、`internal/control` 2,819、`internal/knowledge`
+      1,925、`internal/agentteams` 1,539、`internal/dataguard` 1,303、
+      `internal/observability` 141），合计约 **17.6 万行**，占全仓非测试 Go 的
+      **76%**。它们一起搬走之后，根模块就只剩 `cmd/`。
+    - **共享面其实很小**：把两侧（manager/iam 与 edgeagent/`cmd/opskeeper-edge`）
+      各自用到的 `internal/pkg` 子包求交，只有 **4 个**——`config`、
+      `pluginmanifest`、`prom`、`tunnel`——再加 `internal/skill`（edge 侧 9 文件）。
+      底座基本可以按平面切开，卡住的只是这 5 个。
+    - **为什么这 5 个进不了 `core`**：`core` 的规则是 standard library only
+      （`scripts/modulecheck` 强制）。而 `prom` 拉 `prometheus/client_golang`，
+      `tunnel` 拉 `geminio`（网络库），`pluginmanifest` 拉 `yaml.v3` + `sdk` +
+      `core/edge/policygate` + `internal/skill`。真正能进 `core` 的只有契约形状的
+      那两个：`errs` 与 `tenantctx`。
+    - **于是只剩三种放法，每种违反一条既定规则**：
+      - **(a) 加第 7 个模块**（如 `core/floor`），只装这 5 个包 → 违反计划
+        "6 个 `go.mod`"的字面，但保住依赖方向（`manager → floor ← edge`）
+        与"`core` 零基础设施"。
+      - **(b) 底座留在根模块，`core/manager` 反向 require 根模块** → `cmd/`
+        又要 require `core/manager`，形成模块级 require 环。Go 允许，
+        但两个模块从此不能独立发布，"模块级收口"这个目的就没了。
+      - **(c) 底座放进 `core/edge`，manager 依赖 edge** → 得到
+        `manager → edge` 这条计划没写的边：控制面反过来依赖节点面，方向是反的。
+    - **推荐 (a)**：它是唯一保住计划"依赖方向"那一段
+      （`manager → pig`、`edge → pig`、`manager/edge/harness → core`、
+      `plugin-sdk → core`）的选择——多出来的 `manager/edge → floor` 是这套规则的
+      延伸，不是例外。代价是"6 个模块"变成"6 个架构模块 + 1 个共享底座模块"。
+    - **这一轮不动手**：选 (a)/(b)/(c) 会直接决定 `core/manager` 的依赖清单长
+      什么样；先搬再改等于把 17.6 万行搬两遍。裁决之后搬迁本身是机械的，
+      `scripts/modulecheck` 就是闸门，可以分批搬、每批全绿。
+
+58. **把声明真的跑起来：两个"会跑的"闸门里，一个从来没跑过，另一个有一条规则从来没生效**。
+    计划 A-1 说"依赖方向落到 `.go-arch-lint.yml`"。这一轮没有假定它成立，而是把两
+    条声明都执行了一遍，结果两条都有问题。
+    - **`make arch-lint` 说"go-arch-lint 没装就静默跳过"，但它没有跳过——它报错。**
+      那个 guard 写成一个 `|| { …; exit 0; }` 块，而 `exit 0` 只结束那一行的
+      shell：下一行 `go-arch-lint check` 照跑，于是"静默跳过"实际是
+      `make: *** [arch-lint] Error 1`（exit 2）。改成单个 `if` 块之后，
+      该 target 真的按文档行为返回 0 并打印警告；另加 `make arch-lint-run`
+      用 `go run github.com/fe3dback/go-arch-lint@latest check` 把它跑起来
+      （不安装、首次需要网络）。
+    - **`.go-arch-lint.yml` 在当前 linter（v1.19，支持 arch file 1..3）下根本跑不起来**：
+      它声明了一个不存在的目录 `core/edge/data/**`，还有三条
+      `mayDependOn: []` 的规则——validator 把"空列表且没有任何
+      `anyProjectDeps`/`anyVendorDeps` 标志"判为误配置。"不依赖任何东西"只能用
+      **省略规则**表达，这一点连同"每条规则必须列出它自己"（这个 linter 不把
+      组件对自身的依赖当作隐式允许）一起写进了文件注释。另外补了
+      `allow.depOnAnyVendor: true`：这份文件讲的是**组件**方向，vendor 图是
+      go.mod 的事，为每个组件再维护一份 vendor 白名单不产生任何架构陈述。
+    - **修好之后第一次真正运行：1272 条 → 修掉配置错误后 210 条**（都是真实的
+      组件方向问题，不是解析噪声）。分布：`cmd` 75（依赖 15 个**未声明**的树：
+      `internal/skill`、`internal/middleware`、`internal/dataguard`、
+      `internal/control`、`internal/knowledge`、`internal/agentteams`、
+      `internal/observability`、`internal/migrate`、`internal/migrator`、
+      `internal/higress`、edgeagent 的采集器/插件子树、
+      `core/harness/{projection,vocabulary}`、`core/edge/agentprofile`）、
+      `manager_biz` 39、`manager_server` 32、`shared_pkg` 32、
+      `oxharness_injector` 14、`iam_biz` 5、`manager_service` 4、
+      `edgeagent_biz` 3、`iam_server` 3、`manager_data` 2、`oxpig_agent` 1。
+      这一轮已经把**缺失的组件**（11 个 shared floor + edgeagent 数据面 +
+      tests/scripts + 4 个 2.0 包）补进 components。**没有**做的是：给这些组件定
+      "共享底座不得依赖任何 BC"这条策略——那是一个设计判断（哪些树是 floor），
+      不是机械补全；在那之前把当前 import 全量写进 `mayDependOn` 会把闸门变成
+      一份现状快照。
+    - **收尾（本轮完成）：210 条 → 0 条，`make arch-lint` 现在 exit 0。** 清零
+      分四步做，每一步都留下可复查的依据，没有一步是"把数字按下去"：
+      1. **先定 floor 语义，再补 `mayDependOn`**：`internal/{skill,middleware,
+         knowledge,control,dataguard,agentteams,observability,migrate,migrator,
+         higress}` 与 `core/{domain,ports,wire}` 被认定为**共享底座**，规则写成
+         "底座不得依赖任何 BC，只允许依赖契约层和自己"。补进去的每一条都是
+         *已经存在* 的合法 import，不是新授权；反向（底座 → BC）仍然禁止，
+         并且有 `scripts/modulecheck` 独立复核。
+      2. **测试与生成物排除，各有理由（写进 `excludeFiles` 注释）**：`_test.go`
+         是边界被演练的地方而不是被违反的地方，与 modulecheck 的例外同一把尺；
+         `plugins/pig-ops/*/extensions/**` 是 `scripts/sync-pig-ops.sh` 从
+         `core/pig/extensions/**` 复制出来的分发副本（同一份代码已被 `oxpig_ext`
+         覆盖）；`web/node_modules/**` 是第三方 vendored 代码。排除后 438 → 261，
+         再补规则到 0。
+      3. **真实违例进债务账本，不静默放行**：清零后剩下的**生产级**违例只有
+         4 个文件 6 条 import——`internal/iam/server/http.go` 复用 manager 的
+         HTTP middleware 与 audit（3 条）、`internal/manager/server/imbridge/http.go`
+         复用 `iam/model`（1 条）、`internal/iam/biz/sso/service.go` 直接 import
+         `iam/data/sso`（1 条）、`manager/biz` 6 个文件直接 import 自己的
+         `data/*/store` 或反向 import `manager/service`（6 条，其中 5 条已由
+         modulecheck 的 `layerDebt` 记账）。这些以 `mayDependOn` 放行，但每条都
+         配一段 `# !!! 已知债务` 注释写明**具体文件**，并注明"arch-lint 的白名单
+         是组件粒度的，同组件新增同类导入不会再报警"——这是账本，不是例外。
+         它们全部落在决策 57 的 manager/iam 迁移范围内，迁移时随条目一起删。
+      4. **`deepScan` 显式关掉，并说明关掉的是什么**：打开后它报 41 条，
+         其中绝大多数是假阳性——六边形结构本身（`core/ports` 的接口在 `cmd`
+         里由 `manager_biz` 实现，被算成 "oxcore_ports 依赖 manager_biz"）与装配
+         层（`cmd` 定义的类型注入 `manager_biz`，被算成反向依赖）。但它也抓到
+         4 条**真问题**：`internal/pkg` 与 `internal/skill` 通过包级
+         `Set*Resolver`（`skillbuiltin.SetWebSearchConfigResolver` 等）反向拿到
+         `manager/biz/setting` 的实现，绕过了 import 图。用 `mayDependOn` 修这
+         类问题等于给 `internal/skill` 发一张 import manager 的许可证——所以
+         它**不**进白名单，而是逐条记进本文件的「当前真实缺口」，修法是拆掉
+         包级 setter（同属决策 57 范围）。
+         关掉之后逐条核对，41 条里只有 **9 条**需要记账，其余 32 条是上面两类
+         假阳性（`gate` 是 `cmd/main.go` 的装配点，或 `core/ports` 的接口被
+         实现）。9 条按性质分三组：
+         - **端口被实现（合法，架构本来如此）3 条**：`core/ports` 的
+           `Completer` 被 `cmd/opskeeper-eval/judge.go` 与
+           `core/harness/runner/loop.go` 满足。`core/ports` 是接口，实现方
+           落在 harness 里是端口的用途，不是 import 违规。**不记账。**
+         - **已进白名单的层跨越 4 条**：`manager_server`/`manager_service` 直接
+           注入 `manager_data` 的 `store.Repo`——与决策 58 第 3 步记的
+           `manager_biz → manager_data` 是同一族债务（手术未做，账已记）。
+         - **装配层注入 2 条**：`cmd` 定义的 `edgeAuthAdapter`、`slogAdapter`
+           等被注入 `manager_server`——方向与 import 相反（是 cmd 依赖 manager，
+           不是 manager 依赖 cmd），属假阳性。**不记账。**
+         - **真实且未记账的 1 类（新发现）**：`internal/pkg` 自己持有
+           `manager_biz` 的实现类型——`core/manager/pkg/llm/pigsettings.go:41` 的
+           `NewSettingsSource(catalog ProviderCatalog)` 收的是一个
+           **`pigmodel.SettingsSource`**，也就是 `internal/pkg`（共享底座）
+           反向依赖 `core/pig`；同族的还有 `core/manager/pkg/llm/client.go:165`、
+           `core/manager/pkg/prom{query,write}/client.go` 的 setter。
+           `internal/pkg → core/pig` 正是决策 57 说的"共享底座放哪儿"问题，
+           在此又被独立复现一次。已记入「当前真实缺口」。
+    - **`scripts/modulecheck` 的第四、五条规则从来没生效过。** 它把
+      service→biz←data 的方向写成 `strings.HasPrefix(rel, from+"service/")`，
+      而 `from` 是 BC 的**标签**（`iam`）、`rel` 是仓库相对**文件路径**
+      （`internal/iam/biz/sso/service.go`）、`rest` 是**导入路径**
+      （`internal/iam/data/sso`）——三者没有一个以 `iam/service/` 开头，所以那两条
+      case 永远为假。它一直在报告"边界全部成立"，因为它什么都没检查。
+      - 修法：新增 `bcDir(label)` 返回 BC 的目录前缀（`internal/iam/`），用它
+        比较；加回归测试 `TestABizPackageMayNotReachItsOwnDataLayer`（先红后绿，
+        反证已实测）。
+      - **一修好就抓到 12 条真实违规**：6 个生产文件（`iam/biz/sso/service.go`、
+        `manager/biz/aiops/proposal/expiry.go`、`manager/biz/audit/{chain,usecase}.go`、
+        `manager/biz/edge/changeevent/usecase.go`、
+        `manager/biz/loop/contractloader/contractloader.go`）与 6 个测试。
+      - 测试豁免这条规则（一个 biz 测试装一个真 store 是集成测试，与跨平面
+        例外同一把尺子）；6 个生产文件进 `layerDebt` 账本，每个带原因，并由
+        `TestTheLayerDebtLedgerIsCurrent` 守着——文件被删、或不再 import 自己的
+        data 层，条目就过期，测试报"债务已还清，删掉这一条"。这是**债务清单，
+        不是例外清单**：这 6 条里没有任何一条是某个决策要求的。
+    - **净效果**：`make module-check` 从"4 条规则（2 条是死的）"变成"5 条规则全部
+      生效 + 一份可核销的债务账本"；`.go-arch-lint.yml` 从"跑不起来"变成
+      **"跑得起来且报 0 条"**（过程数字：1272 → 210 → 438【含测试/生成物】→
+      261 → 0）。两个闸门现在是互补的：arch-lint 管**组件方向**（含跨 BC import、
+      层跨越），modulecheck 管**模块边界 + PiG 收口**（哪些 go.mod 能 import
+      PiG、service→biz←data 的层规则、债务账本是否过期）。数字清零不等于债务清零
+      ——债务被逐条写进了两处账本，可查、可核销。
+
+59. **中间件适配器打包成节点插件包 `opskeeper-sre-middleware`：一个生成器、两份
+    排除账本、53 个只读工具**。
+    - **为什么要单独成包**：控制面 registry 里一直有 pg / redis / k8s / mq / kafka /
+      rabbitmq 六个适配器的只读工具，但它们只存在于控制面，节点侧 persona 看不到，
+      golden case 的 pg / redis / k8s / mq 家族因此一条包都命中不了——`plugin-coverage`
+      上一轮是 **2/20**。这一轮把它们（52 个 middleware 读 + `git.find_runtime_link`）
+      生成进一个独立 extension 包，数字变成 **20/20**。
+    - **真相源是适配器本身，不是清单**：`core/manager/middleware/toolset.Registry()` 跑活
+      注册（8 个适配器、53 个读工具），`core/pig/extensions/opskeeper-sre-middleware/tools.go`
+      由它生成，`TestToolsetMatchesTheAdapters` 逐字节比对；重新生成是
+      `OPSKEEPER_UPDATE_TOOLSET=1 go test ./core/manager/middleware/toolset/ -run Toolset`。
+      手写清单会漂，而漂的方式恰好是"包声明了一个适配器已经改名的工具"——一个只有
+      在节点上才会暴露的失败。
+    - **两份排除账本，各有理由**：`NotPackagedFamilies = {host}`——host 适配器是
+      remediation 适配器（以 root 执行写），本机的只读探针已经由
+      `opskeeper-sre-readonly` 的 18 个工具 + `get_host_load` 服务；`NotPackaged` =
+      7 个 `git.*` 仓库读——与 `opskeeper-sre-observability` 的 `source` 家族重复。
+      两份账本都由 `TestTheNotPackagedLedgerIsCurrent` **双向**守着：条目过期报错，
+      没被解释的读工具也报错。
+    - **`git-artifact` 从"非包家族"里删掉了**：它原本被写成"任何包都服务不了的关联"，
+      于是 `k8s/pod-oom` 结构上永远不可通过。实际上 `git.find_runtime_link` 就是服务
+      它的那个工具，所以它是一条能力家族（`CapGitArtifact`），不是一条例外。删掉
+      这条账目之后 `MiddlewareFamilies` 从 6 个缩到 2 个（`host`、`git`）。
+    - **upcall 通道只放读**：`cmd/opskeeper` 的 `runMiddlewareTool` 在派发前**重新推导**
+      风险等级（L0/L1 放行，L2/L3/L4 拒绝并指向审批路径），因为这条通道没有审批队列。
+      装配层因此有**两个 registry**——aiops registry 答"关于集群的问题"，middleware
+      registry 答"伸进系统的工具"，生命周期不同；派发按**前缀路由**而不是
+      lookup-order fallback，否则同名工具会互相遮蔽，而两个 surface 是不同的人
+      为不同的理由审的。
+    - **已知精度代价**：`plugin-coverage` 的连接是**家族级**的——一个包声明了 `pg`，
+      任何 `pg.*` 期望都算被覆盖。这是 `CoverageOf` 写明的选择（"一个错的缺口报告
+      比一个慷慨的更糟"），所以 20/20 的含义是"这个家族有包在服务"，不是"每个方法
+      都存在"；真正按名字判定的轴是 `loopActionExecutability`（只认精确符号）。
+      把家族声明升级成逐方法声明是 `sdk` 的后续能力，不是这一轮的假设。
+
+60. **决策 57 的 (a) 落地：第 7 个模块 `core/floor`，以及 modulecheck 的一个盲区**。
+    决策 57 把三种放法量了个遍，推荐 (a) 但没动手，理由是"先搬 17.6 万行再改等于搬两遍"。
+    这一轮把 (a) 执行了：共享底座不再是一个待决问题，而是一个目录。
+    - **搬了什么**：`internal/pkg/{config,httpserver,logger,pluginmanifest,prom,tunnel}`
+      与 `internal/skill`（含 `builtin/` 的 13 个 host 探针与 `restart_service`），
+      共 7 棵树。全仓 181 个文件的 import 路径按**最长前缀优先**重写，
+      `.go`/`.yml`/`.yaml`/`.sh`/`Makefile` 一并覆盖。
+    - **为什么叫 floor 而不是继续叫 pkg**：它现在是一个能自己发布的模块，
+      名字要能回答"谁能依赖我"。floor 描述的是位置（两个平面共用的地基）
+      而不是内容，内容会继续长——`internal/pkg` 这个名字在 2.0 里只会越用越少。
+    - **为什么不放进 `core`**：`core` 的规则是 standard library only
+      （`scripts/modulecheck` 强制）。`prom` 拉 `prometheus/client_golang`，
+      `tunnel` 拉 `geminio`，`pluginmanifest` 拉 `yaml.v3` + `sdk`——放进 `core`
+      等于让每个只想读一个契约类型的插件都去解析 Prometheus 客户端。
+    - **`internal/skill` 为什么也进来**：它不是 manager 的私产，也不是 edge 的私产。
+      edge 侧要跑 13 个 host 探针，manager 侧要用同一份权限等级表与溢出处理；
+      两边各拷一份就是两份会漂的真相。它进 floor 之后，
+      "宿主持有工具实现、插件只声明工具名"这条 4.3 的架构约束第一次有了
+      编译期载体。
+    - **`core/edge/policygate` 只做 test-only 依赖**：`pluginmanifest` 的
+      治理检查要断言"审批半径"的语义与 gate 的策略引擎**完全一致**——两边
+      各自解释 `pod`/`namespace`/`cluster` 就是一次迟早会漂的翻译。
+      这个依赖只出现在 `_test.go` 里，floor 的 `go.mod` 因此显式 require
+      `core/edge` 并写明原因；生产图上 floor 与 edge 无依赖。
+    - **`oxfloor` 的允许集**：`core` 的契约子包、`sdk`、以及三个它真的在说的
+      格式/协议库（`prometheus`、`geminio`、`yaml.v3`）。没有 BC，没有
+      `internal/*`，没有 `core/pig`——`internal/pkg → core/pig` 那条决策 58
+      发现的反向边，在 floor 里是模块级编译错误。
+    - **modulecheck 补了两处**：① 加第 7 条 module rule
+      （`core/floor` 的 Allowed 集）；② 补一个**盲区**——`checkBC` 原本只走
+      `internal/`，而 floor 下的文件恰好不在里面，于是"共享底座不得 import
+      BC"这条规则对 floor 从未生效过。现在 `sharedPkgs` 是两条前缀
+      （`internal/pkg/` 与 `core/floor/`），两个根都走一遍。
+      反证实测：往 `core/floor/config` 扔一行 import `internal/manager/biz/audit`，
+      modulecheck 报 2 条（模块级 + BC 级），删掉即绿。
+    - **根模块第一次全绿**：`internal/skill` 搬走之后，根模块 `go test ./...`
+      从 182 ok / 1 failed 变成 **177 ok / 0 failed**。原来那 3 个
+      `TestTruncateOrSpill_*` 失败不是环境的错——降级判据写在 `MkdirAll` 上，
+      而"目录已存在但只读"时 `MkdirAll` 返回 nil，于是 `/var/tmp` 写入失败、
+      SpillPath 为空。测试一直是对的，代码不是；改成"写失败才降级"之后
+      三个用例在 floor 里全绿（测试意图没变，只是第一次被执行）。
+    - **这一步之后立刻做的**：`internal/edgeagent` 也搬完了（决策 61），
+      所以决策 60 结尾说的"两块"只剩一块——`internal/manager` +
+      `internal/iam` 仍在根模块。它们不再是"卡在裁决上"，而是"还没搬"：
+      路径重写与依赖核对，搬完跑一次全量测试。
+
+61. **`internal/edgeagent` → `core/edge`：14K 行的节点面第一次成为真正的模块**。
+    决策 60 把共享底座搬进 floor 之后，A 阶段剩下的"两块机械迁移"里，节点面这块
+    先做了。它比 manager 那块小两个数量级，但它是**第一次让一个完整平面**（采集器、
+    插件、bash、沙箱、webshell、技能分发、升级、RPC 桥）落在自己的模块里——此前
+    `core/edge` 只有 pigsupervisor / policygate / gatesocket / toolbroker 五个包，
+    真正的节点实现在根模块。
+    - **搬了什么**：`internal/edgeagent` 全部 12 个子树、62 个文件、14,057 行
+      （`bash` / `biz` / `changewatcher` / `cmdpolicy` / `collector` / `host_files` /
+      `model` / `plugins` / `restart_service` / `service` / `skill` / `webshell`），
+      路径一一对应到 `core/edge/<同名>`。
+    - **为什么这次几乎零风险**：节点面的依赖面本来就是干净的——它只 import
+      `core/{ports,wire}` 与 `core/floor/{prom,skill,tunnel}`，**没有一条**
+      `internal/*` 依赖。所以迁移只是 31 个文件的 import 重写，没有一处需要
+      重新裁决"这个包该跟谁走"。这也反过来验证了决策 60 把 floor 先切出来的
+      价值：切完之后，节点面的外部依赖只剩一个已经定好归属的模块。
+    - **`core/edge/go.mod` 新增的允许集**：`core`、`core/floor`，加上四类它真的在
+      说的东西——`gopsutil`（进程/主机指标）、`prometheus/{client_model,common}`
+      （exposition 格式）、`golang.org/x/sync`（errgroup）、`yaml.v3`（bash 策略
+      文件）。版本与根模块**逐一对齐**（例如 `gopsutil v3.23.6`）：`go.work` 会把
+      整个 workspace 收敛到最高版本，若这里写新版本，等于顺手把根模块的
+      gopsutil 升上去，那是一次没人要求的行为变更。
+    - **modulecheck 的两处收尾**：`core/edge` 的 Allowed 加上四类第三方；
+      `internal/edgeagent` 从 BC 表里删掉（它不再是根模块内的 BC），随之删掉
+      两条 cross-plane exception——从 manager 测试 import `core/edge/*` 现在是
+      普通跨模块 import，`bcOf` 返回空、自然放行。这正是迁移买来的东西：
+      原先靠 allow-list 守的边界，现在由模块图守。
+    - **`.go-arch-lint.yml` 同步改名改路径**：`edgeagent_{service,biz,model,runtime}`
+      → `oxedge_{service,biz,model,runtime}`（与既有 `oxedge_pigsup` 等同一命名族），
+      路径指到 `core/edge/**`。规则本身没放松：`oxedge_biz → oxedge_{model,runtime}`、
+      `oxedge_service → oxedge_biz`、runtime 只碰契约层与 floor。改完
+      `go-arch-lint check` 仍是 **0 warnings**。
+    - **实测**：`core/edge` 19 包 ok（原 5 包 + edgeagent 的 14 个有测试包）；
+      根模块 177 → **163 包 ok / 0 failed**（14 个测试包跟着搬走）；全仓总数仍是
+      **214 包 ok / 0 failed**，说明这次搬迁没有丢测试、也没有新增失败。
+    - **一个已知的、可接受的副作用**：`core/edge` 与 `core/floor` 之间形成了
+      **模块级 require 环**——floor 的 `pluginmanifest` 测试 import
+      `core/edge/policygate`（决策 60 记录的那条 test-only 依赖），而 edge 的生产
+      代码 import `core/floor/{prom,skill,tunnel}`。包级 import 图无环
+      （policygate 只碰 `core/{domain,ports,wire}`），`go build`、`go mod tidy`、
+      workspace 构建全部通过，发布时两个 tag 可以同时打。若要把环彻底去掉，
+      修法是把那次"审批半径语义一致"的断言从 floor 的测试挪到 edge 侧，或降级为
+      契约测试——它不阻塞 A 阶段，但记在这里，免得下次有人把它当成新问题。
+    - **没做的**：`internal/manager` + `internal/iam`（128.5K + 4.5K 行）仍在根模块。
+      它们才是 A 阶段的主菜：manager 还依赖 27 个 `internal/pkg` 子包与
+      `internal/middleware`、`internal/control`、`internal/knowledge`、
+      `internal/dataguard`、`internal/agentteams`、`internal/observability`，
+      这些树的归属要在那一次搬迁里一并定。
+
+62. **控制面基础设施先搬：`core/manager` 建起来了，`internal/pkg` 从此不存在**。
+    决策 57 把 manager 迁移卡点归结为"共享底座放哪儿"，决策 60 解掉了两个平面
+    共用的那一半（floor）。剩下的一半——**只有控制面用的那些树**——这一轮搬完了，
+    于是 A 阶段最后一次搬迁（`internal/manager` + `internal/iam`）不再有前置裁决。
+    - **搬了什么**：29 个 `internal/pkg` 子包 → `core/manager/pkg/*`；再加上
+      `middleware`、`control`、`knowledge`、`dataguard`、`agentteams`、
+      `observability`、`higress`、`migrate`、`migrator` 九棵树 → `core/manager/*`。
+      新模块 `core/manager` 的 go.mod 落地，`go.work` 与根 go.mod 的 require/replace
+      同步。全仓 381 个文件的 import 路径被重写。
+    - **为什么是 manager 而不是 floor**：这次不是拍脑袋，是数出来的。用 import
+      图统计每一棵树的实际使用者：`internal/pkg` 的 375 处引用里，
+      manager 占绝大多数（`errs` 158、`tenantctx` 71、`llm` 25、`promquery` 22），
+      其余是 iam、dataguard、cmd——**全是控制面**，节点面一处都没有。
+      floor 的定义是"两个平面都要用的基础设施"，这些不是；它们是一个平面的地基，
+      跟着那个平面走。
+    - **为什么必须现在搬**：如果先搬 `internal/manager` 而把这些树留在根模块，
+      `core/manager` 就要 require 根模块，而根模块又要 require `core/manager`
+      ——正是决策 57 判为不可接受的 (b) 方案。底座先行，是让最后一步只剩
+      import 重写的唯一顺序。
+    - **`go mod tidy` 在这里是个陷阱，必须点出来**：新模块里第一次 tidy 会挑每个
+      依赖的**最新版本**（`miniredis v2.39`、`otel v1.46`、`pgx v5.11`、`gorm v1.31.2`
+      ……），而 `go.work` 的构建列表是整个 workspace 取**最高版本**——也就是说，
+      一个"只加了新模块"的动作会把根模块和节点面的依赖一起升上去，没有任何人
+      要求过。修法：先在 `core/manager/go.mod` 里按根 go.mod 的版本逐个写死
+      require，再 tidy；tidy 之后逐项验证 workspace 的解析结果仍是旧版本
+      （`miniredis v2.38.0`、`otel v1.43.0`、`pgx v5.8.0`、`gopsutil v3.23.6`）。
+      **这一步是这次搬迁里唯一一处会静默改变运行时行为的风险，值得写进流程。**
+    - **顺手修掉一个我自己引入的检查器漏洞**：`modulecheck` 的 BC 规则一直写死
+      走 `internal/`。上一轮为了让 floor 也被检查，我把这一次调用改成了"遍历
+      `sharedPkgs`"——而 `sharedPkgs` 当时是 `{internal/pkg/, core/floor/}`，
+      于是 BC 之间的规则与 service→biz←data 的层规则**整整一轮没有跑过**，
+      检查器照旧打印"all module boundaries hold"。这一轮把遍历根改成从
+      `bcs` + `sharedPkgs` **推导**（`bcWalkRoots`），不存在的根跳过但列表必须
+      来自规则表；并补了两个测试：一个断言每个 BC 与每个 floor 目录都在遍历
+      列表里，一个构造 fixture 断言"manager 的包 import iam 的 data 层"确实
+      会被报出来。反证已实测：把 BC 那半段从 `bcWalkRoots` 摘掉，两个测试都红。
+    - **两处"数 `..` 层级"的测试断了**，这是搬迁的必然产物，修法是消掉这个模式：
+      `control/incident` 的 dataset 测试与 middleware 的 toolset 生成器都靠
+      `../../../` 定位仓库根，包一深一层就找错地方。前者改成向上找 `go.work`，
+      后者同理——生成器尤其重要：它原本靠"第一个 go.mod"定位仓库根，
+      搬进 `core/manager` 之后第一个 go.mod 变成了模块自己的，模板会被生成到
+      `core/manager/core/pig/extensions/...`。`go.work` 才是"仓库根"的判据。
+      生成产物随后用 `OPSKEEPER_UPDATE_TOOLSET=1` 重生成并跑 `sync-pig-ops.sh`
+      同步，插件包里的两份副本一起更新。
+    - **modulecheck 的 `AnyVendor`**：控制面天生坐在一大堆库上（gorm、redis、
+      pgx、kafka、otel、casbin、lark……）。给 `core/manager` 逐条列 vendor 白名单
+      是第二份依赖清单，且不含任何架构陈述。所以规则新增 `AnyVendor` 开关：
+      **第三方 import 不设限，OpsKeeper 模块之间的 import 仍然逐条判定**
+      （`core/*` 与 `sdk` 是它的全部允许集），PiG 的直接 import 仍由
+      `checkPiGBoundary` 全仓拦。`floor`/`edge`/`sdk` 的小 vendor 面保持逐条列出
+      ——那是它们的设计约束，不是噪声。
+    - **实测**：`core/manager` 50 包 ok；根模块 163 → **113 包 ok / 0 failed**；
+      13 个模块目录总数仍是 **214 包 ok / 0 failed**——三次搬迁前后总数一次没变。
+      `modulecheck` 全绿、`go-arch-lint` 0 warnings、`gofmt` 干净、两个 eval 闸门
+      仍是 20/20。
+    - **还剩什么**：`internal/iam` → `core/manager/iam`，`internal/manager/{biz,data,
+      model,server,service}` → `core/manager/*`，然后删掉空掉的 `internal/`。
+      这一步不再有设计问题，只有 import 重写与依赖核对——**决策 63 做完了**。
+
+63. **A 阶段收口：`internal/` 不存在了，`core/manager` 就是控制面模块**。
+    决策 62 之后只剩最后一块源码，这一轮搬完：`internal/iam` →
+    `core/manager/iam`，`internal/manager/{biz,data,model,server,service}` →
+    `core/manager/{biz,data,model,server,service}`，两级空目录一并删掉。
+    `rg 'opskeeper/internal/' -g '*.go'` 现在 **0 命中**；全仓改动的 1489 个文件里，
+    668 个的 import 指向了 `core/manager`（1378 个文件是以重命名形式记录的）。
+    - **规模**：`core/manager` 现在 1100 个 Go 文件（413 个测试），222 个包；
+      根模块从 113 包掉到 18 包。13 个模块目录串行跑完 **302 包 ok / 0 failed**。
+    - **`modulecheck` 的 BC 表不能只改路径，这是这一轮最容易做错的地方**。
+      `bcs` 原本是两条前缀 `{internal/iam/, internal/manager/}`——旧布局里它们
+      是兄弟，一条前缀就是一棵树。现在 `iam` 是 `core/manager` 的**子目录**，
+      若仍写"`core/manager/` 属于 manager 上下文"，那么 `core/manager/pkg`
+      （共享底座）、`core/manager/dataguard`、`core/manager/control`、
+      `core/manager/middleware`……会被全部吞进业务上下文：iam 用 dataguard
+      会被报成跨上下文 import，底座引用自己会被报成"底座在猜业务"。
+      所以 `bcs` 拆成 `{label, dirs, layerRoot}`：**manager 上下文只拥有
+      `biz/ data/ model/ server/ service/` 五个目录**，而层规则需要的
+      `layerRoot` 是它们的父目录 `core/manager/`（`service → biz ← data`
+      比较的是 `layerRoot + "service/"` 这类路径）。第一次跑出来 66 条误报，
+      改完是 0 条。
+    - **底座方向的豁免要写明**：旧布局里 `internal/pkg` 不匹配任何 BC 前缀，
+      `bcOf` 自己返回空串，规则静默放行。`core/manager/pkg` 匹配 manager 前缀，
+      这条豁免就得显式写出来，否则 `pkg/auth` 引用 `pkg/tenantctx` 会被报成
+      "底座在猜业务"。豁免的**方向**是有意的：底座可以服务所有人，底座自己
+      **不许** import 任何 BC——后者仍是红的，有测试守着。
+    - **新增一条"只允许测试用"的跨模块边**：`core/manager` 的 go.mod 里出现了
+      `core/edge`。原因是三个测试：`biz/nodefleet/e2e` 的两个用例要驱动真
+      `policygate` 跨回环隧道（这是边界被**演练**的地方），`biz/aiops/tools`
+      还要断言管理面的 `when_to_use` 与节点面 `cmdpolicy.DefaultReadOnly()`
+      不漂移。Go 没有"仅测试的 require"，所以这条边就是存在的，而注释拦不住它。
+      于是 `modulecheck` 加了 `testOnlyImports` 表：**`core/manager` 只能在
+      `_test.go` 里 import `core/edge/`**，非测试文件命中即红，违规信息里带
+      上理由。配套用例正反两面都测了（生产文件红、测试文件绿）。
+    - **检查器不是空转，这一条是实测的**：把 `exceptions` 表清空重跑，
+      报出来的正好是 4 条真实跨上下文边——`iam/server/http.go` →
+      `{biz/audit, model/audit, server/middleware}`，`server/imbridge/http.go`
+      → `iam/model`。装上例外表即 0 条。也就是说"全绿"这句话背后确实有 4 条
+      被裁决过的边，不是"什么都没扫到"。
+    - **两处"数 `..` 层级"的测试又断了一次**（`biz/demo/preview_executor_test.go`
+      与 `control/incident/dataset_test.go`），修法与决策 62 相同：向上找
+      `go.work`，或者按新的包深重算。
+    - **`.go-arch-lint.yml` 同步**：`iam_*` / `manager_*` 十个组件的路径从
+      `internal/**` 改成 `core/manager/**`（`manager_biz` 是 `core/manager/biz/**`，
+      不含 `pkg`——`pkg` 是 `shared_pkg`）。`go-arch-lint check` 复跑：
+      **OK - No warnings**。
+    - **搬迁把一条真问题带进了 `-race` 闸门，顺手修了**：`make module-race`
+      包含 `core/manager`，而在 `biz/audit` 搬进来之前，那个模块里没有审计链。
+      第一次跑 `-race` 就红了：`TestChain_ConcurrentAppendsAllVerify`（8 个
+      writer × 10 次追加）丢了 1 行——`data/audit/store` 的 CAS 重试上限是
+      **固定 8 轮**，`-race` 把每次尝试拖慢之后，8 轮不够用，于是
+      `Emit` 报错、这行审计被丢弃。轮数本身就是错的度量：**一个 writer 输几次
+      取决于同时有几个 writer，而不是它愿意等多久**。改成"限时 15s + 指数
+      退避 + 抖动"，仍然把失败告诉调用方（"账本悄悄放弃"和"没人写账本"看起来
+      一样，这是追加路径唯一不能做的事）。改后 `./... -race` 222 包全绿。
+    - **`gofmt` / `go vet` 的既有例外不动**：`core/floor/skill/builtin/spill_helper.go`
+      的格式与 `middleware/adapter/k8s/cleanup.go:203` 的 `append with no values`
+      都是搬迁前就在的，属于别人的账。
+
 ### 当前真实缺口
 
-- **B1/B2/B3 已闭环**：18 个节点本地只读工具、12 个可观测只读工具、5 个写工具
-  均已打通。写工具全部经控制面 reviewer，且要消耗一次性审批回执；
-  `host_restart_service` 的本地执行被证明确实锁死（回归测试可复现该失败）。
-  可观测 12 工具覆盖 PromQL / LogQL / TraceQL / 数据库源 / 代码仓库 / 审计历史。
+- **A 阶段（模块化地基）已经收口**——决策 63 把最后一块源码搬完，`internal/`
+  不再存在，七个模块 + 5 个 extension 全部落地，13 个目录 302 包全绿。
+  代码侧没有已知的未完成项。A 阶段**剩下的是债务而不是缺口**，逐条列在
+  下面两条里（共享底座的包级 setter、arch-lint 债务清单缺守卫）。
+- **arch-lint 的 white-list 粒度问题（决策 58 第 3 步的已知代价）**。
+  `mayDependOn` 是组件粒度：账本里为 `manager_biz → manager_data` 开了口子之后，
+  **同一个组件**里新加一条 `manager_biz → manager_data/新store` 不会再报警。
+  modulecheck 的 `layerDebt` 有 `TestTheLayerDebtLedgerIsCurrent` 守着（文件删了或
+  债务还清就报错），arch-lint 这一份**没有对应的守卫**——这是当前两个闸门之间的
+  一处不对称，修法是给 modulecheck 加一条"arch-lint 债务文件清单"检查。
+- **`internal/pkg → core/pig` 的反向边（deepScan 独立复现）**。
+  `core/manager/pkg/llm/pigsettings.go:41` 的 `NewSettingsSource` 返回
+  `pigmodel.SettingsSource`，`core/manager/pkg/{llm,promquery,promwrite}` 另有 3 处包级
+  setter 接收 manager_biz 的实现类型。前者是"共享底座依赖 PiG 适配模块"，后者是
+  "共享底座通过包级 setter 反向拿到业务实现"。两者都不在 import 图里（所以
+  `check` 报 0 条），但都在装配图里。修法同决策 57：底座与适配层解耦，
+  包级 setter 换成显式构造参数。
+- **B1/B2/B3 已闭环**：18 个节点本地只读工具、12 个可观测只读工具、**53 个中间件
+  只读工具**、5 个写工具均已打通。写工具全部经控制面 reviewer，且要消耗一次性
+  审批回执；`host_restart_service` 的本地执行被证明确实锁死（回归测试可复现该
+  失败）。可观测 12 工具覆盖 PromQL / LogQL / TraceQL / 数据库源 / 代码仓库 /
+  审计历史；中间件 53 工具覆盖 pg / redis / k8s / kafka / rabbitmq / mq 的当下
+  状态与 `git.find_runtime_link`（见决策 59）。
+- **`plugin-coverage` 现在是 20/20，但这个数字是家族级的**：它问的是"这个 case
+  的每个期望家族有没有包在服务"，不是"每个方法都真实存在"。`redis/slow-cmd`
+  期望的 `redis.kill_client`（适配器实际叫 `redis.client_kill`）现在被
+  `opskeeper-sre-middleware` 声明的 `redis` 家族覆盖，于是这个 case 从"结构性
+  不可通过"变成"可评分"——判分能不能过，是另一回事。按名字判定的那条轴是
+  `loopActionExecutability`（只认精确符号，当前 0 缺口）。把包的能力声明从
+  "家族"升级到"逐方法"是 `sdk` 的后续能力，见决策 59 末段。
 - **B2 原本计划走 MCP，PiG 不支持，已改为 extension toolset**：PiG 的 `mcp`
   包类型**只是声明**——PiG 全仓中所有 MCP 引用都在
   `coding/packagecontent/packagecontent.go` 与 `cmd/pig/package_*.go`
   （解析/校验/清单），**没有** JSON-RPC 客户端、**没有** `initialize` /
   `tools/list` 握手、**没有**把声明的 MCP server 接进 agent 工具集的桥。
   所以「可观测栈 → MCP server」在当前 PiG 上需要一个从零写的 MCP 运行时，
-  而 upcall 通道已经端到端跑通 12 个工具且带鉴权、审计、白名单与回归。
+  而 upcall 通道已经端到端跑通 65 个工具（12 可观测 + 53 中间件）且带鉴权、
+  审计、白名单与回归（`runMiddlewareTool` 的读写分界见决策 59）。
   这是基于「PiG 是什么」的事实修正，不是对计划意图的重新解释；
   补一个 MCP 客户端是后续独立决策，不是本包依赖的假设。
 - **可观测覆盖的真实边界**：`opskeeper-sre-observability` 的 12 个 upcall 工具
@@ -947,8 +2086,8 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
   `eino-contrib/jsonschema` 从 `go.mod`/`go.sum` 双双消失，`rg eino go.mod` 无命中。
   代码侧：删除 `internal/manager/biz/aiops/graph/` 整目录（14 文件、约 5710 行，
   含 `callbacks/` 的 persistence/sse/metrics/audit/chain/alert_draft_guard 六件套
-  与全部测试）、`internal/pkg/llm/{eino_routing,budget_callback}.go` 及其测试；
-  provider 常量与 `ErrUnknownProvider` 搬到新的 `internal/pkg/llm/providers.go`。
+  与全部测试）、`core/manager/pkg/llm/{eino_routing,budget_callback}.go` 及其测试；
+  provider 常量与 `ErrUnknownProvider` 搬到新的 `core/manager/pkg/llm/providers.go`。
   `chatruntime.Config` 删掉 `ChatModel`/`GraphCfg`/`CallbackDeps`，新增 `MaxIterations`，
   `ports.Agent`（`Kernel`）成为**必填**——缺内核直接报错而不是静默走图；
   `Runtime.Handle` 恒走 `runKernelTurn`，`worker.go` 改为直接驱动 `cfg.Kernel.Run`。
@@ -965,8 +2104,10 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
   顺带修掉一个真实回归：`investigator.isMaxStepsError` 原本只认
   `exceeds max steps` / `exceededmaxsteps` / `graphrunerror`，而内核报的是
   `exceeded max iterations`——RCA 抢救路径会静默失效。已补齐两种措辞并加测试钉住。
-- `manager` / `edgeagent` / `harness` 的机械式包迁移未做（当前仍在 `internal/`；
-  `core/edge` 目前含 gatesocket/pigsupervisor/policygate/toolbroker）。
+- ~~`manager` / `iam` 的机械式包迁移未做~~ **已完成（决策 63）**。`harness`
+  已在 `core/harness`（决策 37），`edgeagent` 已在 `core/edge`（决策 61），
+  控制面基础设施与两层业务代码都在 `core/manager`（决策 62/63），`internal/`
+  已删除。
 - `docs/module-architecture.md` 尚未补 `policygate`/`gatesocket`/信使/`spec.tools`
   （arch-lint 侧已齐，见「待决的大动作」）。
 
@@ -974,10 +2115,43 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
 
 ## 七、未来路线图
 
+### 下一步（A 收口之后，按优先级）
+
+A 阶段已在决策 63 收口，路线图上不再有"先把模块拆出来"这一条。剩下的按
+优先级排是五件事，前两件是**欠账**，后三件是**新能力**：
+
+1. **PiG 换成固定 tag**（B 阶段收尾）。`core/pig/go.mod` 现在 `replace` 到
+   本地 checkout `/Users/louloulin/appx/PiG`——开发期是对的，发布不可行。
+   换 tag 之前需要一份**契约测试套件**，只针对本仓库实际用到的 API 面
+   （`ai.Model`、`agent` 事件、`extensions/sdk`、`rpcclient`），把"上游升级后
+   哪些行为变了"变成一条可执行的断言，而不是一次人工读 diff。
+2. **共享底座的两条反向边**（决策 57 遗留）。`core/manager/pkg/llm/
+   pigsettings.go` 的 `NewSettingsSource` 返回 `pigmodel.SettingsSource`
+   （底座依赖适配层），`pkg/{llm,promquery,promwrite}` 另有 3 处包级 setter
+   接收 `manager_biz` 的实现类型（底座反向拿到业务实现）。修法是把 setter
+   换成显式构造参数。这两条**不在 import 图里**，`modulecheck` 报不出来，
+   所以只能靠人记着——直到修掉。
+3. **arch-lint 债务清单的守卫**。`layerDebt` 有 `TestTheLayerDebtLedgerIsCurrent`
+   守着（账还清了就必须删条目），arch-lint 那份 `mayDependOn` 白名单没有
+   对应的守卫：同一个组件里新加一条越层 import 不会再报警。修法是让
+   modulecheck 把 arch-lint 的债务文件清单也读进来做同样的检查。
+4. **MCP 运行时**（D 阶段的可选加速器）。PiG 的 `mcp` 只是声明，没有
+   JSON-RPC 客户端、没有握手、没有把 MCP server 接进 agent 工具集的桥。
+   当前 65 个工具走 extension toolset 已端到端跑通（带鉴权、审计、白名单、
+   回归），所以要不要补 MCP 是"接不接第三方 MCP 生态"的产品问题，不是债。
+5. **插件市场与节点页面的前端**（E 阶段唯一纯前端工作）。
+   `/v1/marketplace/*`（7 条）与 `/v1/plugins/releases`（6 条）已经有后端与
+   测试，Web 控制台还没有"插件市场"和"节点 Agent"两个页面。
+
 ### D 阶段续：把声明变成实现
 
+0. ~~**`sdk/` 发布（计划 §四 D-1）**~~ ✅ 已完成（决策 46）：`plugin-sdk` 的
+   三个发布物——插件清单 Go 类型、注册 API、版本协商——全部在 `sdk/`，且
+   `sdk` 仍只依赖 `core` 与 `yaml.v3`。版本比较算术下沉 `core/domain`，
+   节点与插件作者共用同一份实现。
+
 1. ~~**B1 只读工具集**~~ ✅ 已完成：拓扑 4 件套、`query_alert_rules`、
-   13 个 host 探针全部打通。实现留在宿主（`internal/skill/builtin` 与
+   13 个 host 探针全部打通。实现留在宿主（`core/floor/skill/builtin` 与
    控制面 registry），agent 进程只做路由。
 2. ~~**B2 外部系统**~~ ✅ 已完成（载体由 MCP 改为 extension toolset）：独立 L1 包
    `opskeeper-sre-observability`，12 个只读工具（`query_promql` / `query_logql` /
@@ -1010,38 +2184,140 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
    与 Kafka offset reset）、host（7 工具，`local://` / `ssh://`）三个适配器从骨架
    变成实现；连同既有的 pg / redis，五个适配器按 `OPSKEEPER_LOOP_*_DSN` 装进同一
    个工具 registry。闭环动作未实现数 **8 → 0**。
-7. 🟡 **参数解析器（`ArgResolver`）**：闭环还剩 9 个动作"名字有实现、参数派发不
-   出去"——`pg.kill_session` 要 pid、`k8s.evict_pod` 要 pod、`k8s.scale` 要
-   deployment+replicas、`mq.drain_queue` 要 queue、`k8s.rolling_restart` 要
-   deployment、`mq.replay_messages` 要 queue、`pg.connection_pause` 要 role、
-   `redis.client_kill` 要 addr、`host.restart_service` 要 unit。`RegistryInvoker`
-   已经有 `ArgResolver` 接缝，缺两样东西：
-   - **定位信息从哪来**。`RemediationOption` 只有 `Action` + `Target`
-     （形如 `"pg:alert-17"`，只有资源类型与告警 ID），而 pod / pid / role / queue
-     都不在其中。要么让 investigator 在证据里带上定位信息（例如 `k8s.pod_list`
-     的证据里本来就有 pod 名与 namespace），要么给 `RemediationOption` 加一个
-     定位器字段——**前者的数据已经存在，后者要动被校验的合同 schema**，因此
-     先做前者。
+7. ✅ **参数解析器（`ArgResolver`）——已闭合（决策 44 + 49）**。原先 9 个动作
+   "名字有实现、参数派发不出去"：`pg.kill_session` 要 pid、`k8s.evict_pod` 要
+   pod、`k8s.scale` 要 deployment+replicas、`mq.drain_queue` 要 queue、
+   `k8s.rolling_restart` 要 deployment、`mq.replay_messages` 要 queue、
+   `pg.connection_pause` 要 role、`redis.client_kill` 要 addr、
+   `host.restart_service` 要 unit。`RegistryInvoker` 接缝两侧的来由：
+   - **参数从哪来**。`RemediationOption` 只有 `Action` + `Target`
+     （形如 `"pg:alert-17"`），定位信息不在其中。决策 44 用
+     `pg_stat_activity` 证据行解决 pid 与 role；决策 49 用 firing 告警的
+     `labels_json` 解决其余 7 个——**证据链新增 `resource_alert_labels`
+     subject 项**，investigator 记录、`StampSubject` 宿主强制补回最终合同。
+     两条来源都是观测而非推断，缺证据或证据自相矛盾时一律拒绝。
+   - **为什么走证据而不是给 `RemediationOption` 加定位器字段**：前者的数据
+     已经存在（`k8s.pod_list` 证据里本来就有 pod 名与 namespace，
+     `alert_incidents.labels_json` 里一直有 pod/queue/unit），后者要动被校验的
+     合同 schema。
    - **每个动作一张"证据字段 → 工具参数"的表**，并且**缺一个就拒绝**，
      绝不填默认值。把猜出来的 pid 打进 `pg_terminate_backend`，就是把"终止那个
-     长事务"变成"终止 planner 碰巧先读到的那个后端"。
-   - **已落地的那一半**（决策 44）：`EvidenceArgResolver` 从
-     `RootCauseJSON.EvidenceChain` 取值，覆盖 `pg.kill_session`(pid) 与
-     `pg.connection_pause`(role)。`pg_stat_activity` 的行在合同表里既是
-     `[]map[string]any` 又可能是 JSON 往返后的 `[]any`，两种形态都读。
+     长事务"变成"终止 planner 碰巧先读到的那个后端"。别名表按**字段**声明
+     （`pod` 接受 `pod/k8s_pod/pod_name/...`），只有被声明的键才可能成为
+     参数；两个别名键指向不同对象时判为矛盾并拒绝。
+   - **两条来源都已落地**：`EvidenceArgResolver` 从
+     `RootCauseJSON.EvidenceChain` 取值。决策 44 覆盖 `pg.kill_session`(pid) 与
+     `pg.connection_pause`(role)，取自 `pg_stat_activity` 证据行（合同表里既是
+     `[]map[string]any` 又可能是 JSON 往返后的 `[]any`，两种形态都读）；决策 49
+     覆盖其余 7 个，取自 subject 证据项。**候选多于一个就拒绝并列出候选**。
      没有声明提取器的动作返回 `(nil, nil)`，把话留给 invoker 自己的缺参拒绝——
      解析器不该对它一无所知的动作声称有权威。
 8. ⏳ **旧 `mq/kafka` + `mq/rabbitmq` 骨架的去向**：两个包仍在，`kafka.` /
    `rabbitmq.` 命名空间保留未动，与新的中立 `mq.` 并存。可选方案是让它们委托到
    新包（一套实现、两个命名空间），或明确标为待删。**这是命名空间的治理决定，
-   不是技术障碍**。
-9. ⏳ **`git` 适配器仍是骨架**（7 + 1 工具，只有 `find_runtime_link` 真实），
-   闭环动作表里没有 `git.*`，所以它不阻塞闭环，但会阻塞
-   `git-artifact.LinkK8sImage` 这类根因证据。
+   不是技术障碍**。这 10 个工具是**当前唯一**还在报 `not_implemented` 的注册项，
+   已全部登记在 `core/manager/middleware/adapter/skeleton_test.go` 的
+   `knownSkeletons` 里并附了理由：这条守卫会拦住任何新增骨架，也会在这 10 条里
+   任何一条被实现后要求把它从清单里删掉。反过来说，能力闸门对这 10 个名字的
+   计数**今天仍然是虚高的**——它们是已知的、被点名的那一类虚高，不是未知的。
+9. ~~**`git` 适配器仍是骨架**~~ ✅ 已完成（决策 45）：8 个工具全部真实
+   （`connect` / `list_repos` / `commit_history` / `file_at_commit` / `blame` /
+   `diff` / `search_code` + `find_runtime_link`），走 git CLI，只读，
+   `ArgsSchema` 按真实必填参数声明，并按 `OPSKEEPER_LOOP_GIT_DSN` 接进
+   `cmd/opskeeper/loop_adapters.go`。闭环动作表里仍然没有 `git.*`（所以闭环
+   数字不变），它服务的是"拿证据去仓库核对"这一类根因证据，例如
+   `git-artifact.LinkK8sImage` 指向的镜像改动到底进了哪个 commit。
+10. ~~**`sdk/` 发布面（计划 D-1）**~~ ✅ 已完成（决策 46）：清单 Go 类型
+    （`sdk/manifest.go`，既有）、**注册 API**（`sdk/register.go`：`Registry` /
+    `Register` / `ToolDecls` / `Check` / `DeclaredManifest`）、**版本协商**
+    （`sdk/negotiate.go`：`Host` / `Negotiate` / `RequireVersion`），版本比较算术
+    下沉到 `core/domain/version.go` 供节点与作者共用。`sdk` 仍然只依赖 `core`
+    与 `gopkg.in/yaml.v3`，模块边界检查覆盖。
+
+11. ✅ **领域探针（决策 50）**——提议从「猜阈值」改为「问领域」。这是把
+    remediation 轴从 3/20 推到 9/20 的那一项，详见决策 50。
+12. ✅ **A 类缺口第一批：host + redis 工具（决策 51）**——新增 5 个工具
+    （`host.top_processes` / `host.old_log_files` / `host.kill_process` /
+    `host.remove_old_logs` / `redis.scan_and_delete`）与 2 条只提议不写
+    extractor 的修复。remediation 轴 **9/20 → 13/20**，平台轴 **10/20 → 11/20**，
+    blocked 列表 **11 → 7**。
+14. ✅ **A 类缺口第二批：`k8s/pv-full`（决策 52）**——`k8s.pvc_list`（L0）+
+    `k8s.pvc_usage`（L1）+ `k8s.cleanup_logs`（L4）三个新工具，探针链式展开
+    机制，以及两条提议。**平台轴 11/20 → 12/20，remediation 轴 13/20 → 14/20，
+    blocked 7 → 6。**
+16. ✅ **A 类缺口第三批：mq 命名空间（决策 53）**——10 个 `not_implemented`
+    骨架变成真实工具（产品命名空间委托到中立 `mq.` 实现），新增
+    `kafka.partition_skew` / `kafka.repartition` / `rabbitmq.purge_queue`，
+    并把 `kafka.` / `rabbitmq.` **真正接进控制面**（此前只有评测闸门在数它们）。
+    **平台轴 12/20 → 13/20，remediation 轴 14/20 → 15/20，blocked 6 → 5。**
+    已加反向测试：闸门计数的每个命名空间都必须在控制面接线。
+17. ✅ **A 类缺口第四批：诊断面两件套（决策 54）**——`pg.replication_status`（L1，
+    primary 的 `pg_stat_replication` 视角，两个 lag 维度都报）与 `k8s.top_pods`
+    （L1，每个容器对其**自身 limit** 的用量，含 current/last terminated 两处
+    OOM 证据）。**平台轴 13/20 → 14/20**（`pg/replication-lag` 变为
+    `fully servable`）；`k8s/pod-oom` 的缺口从 2 个降到 1 个（只剩
+    `git-artifact.LinkK8sImage`，那是连接器不是工具）。remediation 轴不变。
+    顺手修掉一个真实缺陷：`Diagnose` 只在**有行**时才附 suggestion，而
+    replication 的 suggestion 恰恰是写给空结果的（见决策 54）。
+18. **剩余 5 个 blocked，全部需要裁决，代码侧无阻塞**：
+    - **A. 三个名字承诺了 broker 交付不了的操作（3 个 case）**——
+      `kafka.restart_broker`（重启进程是编排层的事）、
+      `kafka.scale_consumer` / `rabbitmq.scale_consumer`（并行度=客户端实例数，
+      改它是一次部署）。RabbitMQ 的 policy/prefetch 是形似的真实操作但不是它。
+      选项：**(a) 改语料**（把这些 case 的期望换成真实可做的操作）、
+      **(b) 在插件层提供编排动作**（k8s 删 pod / 调整 Deployment 副本，
+      但那属于 `k8s.` 命名空间）。**推荐 (b)**，因为「重启 broker」在 K8s 上
+      确实有真实实现，只是不在 broker 命名空间里。
+    - **B. `kafka.rebalance_history`（并入 A 的 case）**——Kafka 只有当前
+      分配没有历史。要么改语料，要么新增一个采集器把多次 DescribeGroups
+      的结果存成历史（那是采集器的事，不是 broker 客户端的事）。
+    - **C. 工具名承诺了 Redis 交付不了的修复（1 个 case）**——`redis/hot-key`
+      → `redis.scan_and_redistribute`。**已判定不实现**：Redis 没有「重新分配
+      热 key」的服务端操作。需裁决：改工具名，还是调黄金语料。
+    - **D. 改名未对齐（1 个 case）**——`redis/slow-cmd` → `redis.kill_client`。
+      适配器注册的是 `redis.client_kill`。决策 43 的先例是**适配器名是规范**。
+      三个选项：(a) 改适配器（破坏现有调用方）、(b) 注册别名（不裁决）、
+      (c) 改语料（有先例）。**不要单方面裁决。**
+    - **E. `k8s/pod-oom` 的根因轴缺口（决策 54 后只剩一个）**——
+      `git-artifact.LinkK8sImage` 属知识库/连接器而非工具：`gitartifact`
+      有四种 linker 类型（`pg_query` / `redis_cmd` / `k8s_image` /
+      `http_route`），它是把证据连起来的东西，不是一个可注册的
+      `<family>.<method>` 工具。要裁决的是「linker 算不算一种平台能力」——
+      要么在词汇表闸门里为它注册一个 provider（承认算），要么改语料。
+      `k8s.top_pods` 一侧已经补齐。这是根因轴而非 remediation 轴。
+    - 这些做完之后，remediation 轴的上限是 **20/20**；在那之前，每一步都应
+      重跑 `cmd/opskeeper-eval vocabulary` 看两个轴各自的读数，而不是看合计。
+
+19. ✅ **导入器有了入口：`POST /v1/marketplace/import`（决策 55）**——
+    转换器此前只是库（`internal/manager/biz/pluginimport` 有实现、有测试、
+    没有调用方）。admin 上传 → 解包 → 转换 → 写进
+    `OPSKEEPER_PLUGIN_IMPORT_DIR` 下的 `<包名>/`，响应带 dest + 报告 + 未决清单；
+    未配置答 503。同时修掉一个真实缺陷：无条件下钻会把一个只含 `skills/` 的
+    裸 skills.sh 包判成"不是容器"。详见决策 55。
+
+20. ✅ **内置 ops piglet 建出来了（决策 56）**——
+    `plugins/pig-ops/opskeeper-sre-readonly/pig-opskeeper-ops.yaml`：第一方只读
+    组合（18 只读工具 + 信使 extension + 8 skill），`tools: []` + `discovery: []`
+    与节点生成 profile 同一条安全线。它**必须在包内**（PiG 拒绝逃出 anchor 的
+    `local:` origin），**每条 skill 单独成 entry**（baker 一个路径一个定义），
+    并由 PiG 侧（AST 抓注册名 × `ScopeTools`）与治理侧（能力/L1/工具名双向）
+    两组契约测试钉住，各带负向对照。有意不含 observability 与 repair（后者 L2）。
+
+21. ✅ **两条"会跑的"边界声明都真的跑过了，而且都绿了（决策 58）**——
+    `make arch-lint` 的 guard 修好（原本会 `Error 1`），`.go-arch-lint.yml` 修到
+    能被当前 linter 解析（删掉不存在的组件、把"不依赖任何东西"改成省略规则、
+    显式 `depOnAnyVendor`），`modulecheck` 的 service→biz←data 规则从死代码修活
+    并抓到 12 条真实违规（6 个测试豁免 + 6 个生产文件进 `layerDebt` 债务账本）。
+    收尾：给 11 个共享底座 + edgeagent 数据面 + tests/scripts + 4 个 2.0 包定了
+    `mayDependOn`（**底座不得依赖任何 BC** 这条规则没有被放松），测试与生成物
+    进 `excludeFiles`，`deepScan` 显式关闭并写明关掉的是什么。结果：
+    `go-arch-lint check` → **0 notices，exit 0**（1272 → 210 → 438 → 261 → 0）。
+    剩下的真实违例（6 条 import + 4 条包级 setter 反查）逐条进了债务记账，
+    见决策 58 与「当前真实缺口」。
 
 ### E 阶段：生态治理
 
-- **兼容矩阵**（`internal/pkg/pluginmanifest/version.go`）：两个**独立**轴。
+- **兼容矩阵**（`core/floor/pluginmanifest/version.go`）：两个**独立**轴。
   - edge 轴：`min_edge_version` × 节点 `selfVersion()`（构建版本或
     `OPSKEEPER_EDGE_VERSION`）。
   - **PiG 轴**：`min_pig_version` × 节点启动的 `pig` 版本
@@ -1054,7 +2330,7 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
   `dev` 不是版本，未知即拒绝。节点把 `pig --version` 的复合串
   (`0.3.0+0.87.1`) 剥掉 `+` 元数据后再比，因为构建元数据正是 semver 规定
   不参与优先级比较的部分，而 `+` 左边才是扩展 API 出现时推进的那条线。
-- **跨云迁移模板**（`internal/pkg/pluginmanifest/profiles.go` +
+- **跨云迁移模板**（`core/floor/pluginmanifest/profiles.go` +
   节点 `OPSKEEPER_EDGE_PROFILE`）：
   - `finance-strong-consistency`：L2 上限 / `pod` 半径 / pin 安装 /
     不给 `k8s.exec`、`db.write`、`mq.write`。
@@ -1064,13 +2340,21 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
     半套用 profile 的主机跑的是没人写过的策略；"哪个文件最后改的"不能
     成为一台主机的权限来源。narrowing（少给 scope）同样拒绝——它导致的
     失败是隐形的：处处装好、只有这里没装，没有任何报错。
-- **覆盖率闸门**（`internal/pkg/pluginmanifest/coverage.go` +
+- **覆盖率闸门**（`core/floor/pluginmanifest/coverage.go` +
   `opskeeper-eval plugin-coverage`）：把 golden case 的
-  `<family>.<method>` 期望与插件包能力做对照，缺口必须**被解释**——
-  要么归 `MiddlewareFamilies`（控制面 adapter，不是包），要么归
-  `NonPackageFamilies`（关联器，不是工具族）。当前真实结果：
-  **2/20 全绿**（host 两例由只读包覆盖），其余缺口全部落在控制面
-  adapter 上——这是仓库真实状态，不是回归。
+  `<family>.<method>` 期望与插件包能力做对照，缺口必须**被解释**。
+  当前真实结果：**20/20 全绿**——四个只读包（`opskeeper-sre-readonly`
+  的 host/alert/topology、`opskeeper-sre-observability` 的
+  database/source/observability、`opskeeper-sre-middleware` 的
+  pg/redis/k8s/kafka/rabbitmq/mq/git-artifact、`opskeeper-sre-repair`
+  的 recovery）合起来盖住了全部 20 个 case。
+  两个口径要分清：这个闸门是**家族级**的（包声明 `pg` 就覆盖 `pg.*`），
+  按方法名判定的那条轴是 `opskeeper-eval vocabulary` 的
+  loop-action 可执行性（只认精确符号）。家族声明之外还剩
+  `MiddlewareFamilies = {host, git}` 两族由控制面 adapter 服务，
+  每一族都带理由；`NonPackageFamilies` 这个名单已经删掉——它当初把
+  `git-artifact` 说成"任何包都服务不了的关联"，于是 `k8s/pod-oom`
+  永远不可通过（决策 59）。
 - 双向漂移测试：每个**己方**工具必须有能力族归类；表里每个条目必须有
   对应工具。任一方向漂移都是红色。
 
@@ -1114,9 +2398,11 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
   **14 个动作里 8 个没有实现**——`k8s.rollout_status`、`k8s.rolling_restart`、
   `k8s.scale`、`k8s.drain`、`host.garbage_collect`、`host.restart_service`、
   `mq.drain_queue`、`mq.replay_messages`。补齐 k8s/MQ/Host 三个真实适配器后
-  降到 **0**。闸门同时把"名字有实现但没有参数可派发"单列一类，当前 **9 个**
-  （`pg.kill_session` 要 pid、`k8s.evict_pod` 要 pod……），这一类不需要写适配器，
-  需要参数解析器——把两类混在一起会让人去实现一个已经存在的工具。
+  降到 **0**。闸门同时把"名字有实现但没有参数可派发"单列一类，这一类不需要
+  写适配器，需要参数解析器——把两类混在一起会让人去实现一个已经存在的工具。
+  决策 49 补上 subject 证据项后，该类从 **9 个** 降到 **0 个**：9 个动作
+  全部标记为 `resolvable`（2/9 → 9/9），即每个动作的参数都有明确的证据来源
+  与拒绝规则。
 - **插件全链路**：第一次运行查出 **节点会同时发布同一个包的多个版本**——
   升级保留旧目录是对的（回滚要用），但重发布把两个目录都写进了 agent 的包
   列表，"每个包名一个版本"这条规则从来没被表达过。第二次运行又查出**回滚
@@ -1124,10 +2410,13 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
 
 ### 待决的大动作
 
-- **机械式模块迁移只剩 `manager`**：`internal/manager` + `internal/iam` →
-  `core/manager`（775 文件 / 约 200K 行，423 处 `internal/pkg` 引用加 7 个
-  兄弟包，整仓重构级别）。`edgeagent` 已在 `core/edge`，`harness` 已在
-  `core/harness`（决策 37），`sdk` 独立。
+- ~~**机械式模块迁移只剩最后一块**~~ **已完成（决策 63）**：`internal/manager`
+  + `internal/iam` → `core/manager`，`internal/` 已删除，13 个模块目录
+  302 包全绿。`harness` 在 `core/harness`（决策 37），节点面在 `core/edge`
+  （决策 61），共享底座在 `core/floor`（决策 60），控制面在 `core/manager`
+  （决策 62/63），`sdk` 独立。`manager → floor ← edge` 这条主方向已固化在
+  `scripts/modulecheck` 与 `.go-arch-lint.yml` 里。剩下的不是迁移，是两条
+  债务（底座的包级 setter、arch-lint 债务清单无守卫），列在「当前真实缺口」。
 - **LLM judge 已接上，但只在 real-agentteams 模式有意义**（决策 39）。
   `orchestrator` 模式仍然不可达：它需要一个带 advisory lock + DB + LLM 的
   Orchestrator，CLI 不提供。dry-run 的 `rca_accuracy` 仍然是"有没有走到
@@ -1138,31 +2427,47 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
   `k8s.rollout_status`、`mq.drain_queue`……），并且 `RemediationActions` 由一条
   扫自己 AST 的测试双向钉住，改名漂移不可能再无声发生。闭环覆盖从 **0/20**
   升到 **3/20**（remediation 轴），根因轴 13/20，两轴同时满足 3/20。
-  剩下的缺口是**语料词汇与适配器词汇仍未对齐的少数符号**
-  （`redis.scan_and_delete`、`redis.scan_and_redistribute`、`kafka.restart_broker`、
-  `rabbitmq.scale_consumer`、`k8s.cleanup_logs` 等）——其中
-  `redis.kill_client` ↔ `redis.client_kill` 仍是需要人裁决的改名，闸门按精确
-  匹配算缺口是有意的。
-- **闭环能提议、但派发不出参数的 9 个动作**（决策 43/44）是闭环当前最后一层缺口：
-  `RemediationOption` 只有 `Action` + `Target`，而 `pg.kill_session` 要 pid、
-  `k8s.evict_pod` 要 pod、`mq.drain_queue` 要 queue。`RegistryInvoker` 在
+- **闭环的提议能力已从「猜阈值」改为「问领域」**（决策 50）。remediation 轴
+  **3/20 → 9/20**，blocked 从 14 降到 11。原因是 investigator 此前只查
+  Prometheus 与 Loki，物理上无法区分表膨胀 / vacuum 卡住 / 查询变慢——三者
+  产生同一个标量。现在它用只读工具**去问**（`pg.table_bloat`、
+  `pg.vacuum_status`、`pg.slow_log`、`k8s.rollout_status`、`k8s.node_list`），
+  把答案记成证据，由证据门控提议；提议与派发共用同一组过滤器，两侧不可能对
+  「证据说了什么」产生分歧。剩下的 11 个缺口分两类：
+  - **工具不存在**（9）：`host.kill_process`、`host.remove_old_logs`、
+    `k8s.cleanup_logs`、`redis.scan_and_delete`、`redis.scan_and_redistribute`、
+    `kafka.restart_broker` / `scale_consumer` / `repartition`、
+    `rabbitmq.scale_consumer`。
+  - **参数是决策而非观测**（1）：`redis/memory-burst` 的 `redis.config_set`
+    （parameter + value）与 `redis.flushdb`（confirm）。这些值不是「证据记录了
+    什么」，而是操作员要做的决定；给它们写猜测式 extractor 正是决策 50 批评的
+    那种事，正确做法是在审批环节由人补齐。
+  - `redis.kill_client` ↔ `redis.client_kill` 仍是需要人裁决的改名，闸门按精确
+    匹配算缺口是有意的。
+- ~~**闭环能提议、但派发不出参数的 9 个动作**（决策 43/44）~~ **已闭合（决策 49）**。
+  这一层的根因不是实现缺失，是**证据链里没有 subject**：`RemediationOption`
+  只有 `Action` + `Target`，而 `pg.kill_session` 要 pid、`k8s.evict_pod` 要 pod、
+  `mq.drain_queue` 要 queue，这些值从来没有被记录进证据——尽管 firing 告警的
+  `labels_json` 里一直写着。`RegistryInvoker` 在
   `ArgResolver` 缺失时**拒绝派发并说明原因**，不会用默认值猜——把猜出来的 pid
   打进 `pg_terminate_backend` 就是把"终止那个长事务"变成"终止 planner 碰巧先
   读到的那个后端"。生产侧的解析器已经落地（决策 44）：`EvidenceArgResolver`
   从**调查已经记录的证据链**里取值，`pg.kill_session` 的 pid 与
   `pg.connection_pause` 的 role 取自 `pg_stat_activity` 证据行，
   **候选多于一个就拒绝并列出候选**——"随机挑一个"不是修复。
-  剩下 7 个动作（k8s/mq/host/redis）卡在同一个前置条件上：
-  **证据里根本没有那个资源名**，Pod 名与队列名不在现有的 prom/log 证据里，
-  需要先让对应 investigator 采到它。
-- **语料与能力表的 14 个符号缺口**（决策 41，`make eval-vocabulary` 可复现）：
-  根因 3 个（`k8s.top_pods`、`pg.replication_status`、
-  `git-artifact.LinkK8sImage`），修复 11 个（`k8s.uncordon`、`k8s.drain`、
-  `k8s.resize_pvc`、`k8s.cleanup_logs`、`kafka.restart_broker`、
-  `kafka.scale_consumer`、`kafka.repartition`、`rabbitmq.scale_consumer`、
-  `redis.kill_client`、`redis.scan_and_delete`、`redis.scan_and_redistribute`）。
-  其中 `redis.kill_client` ↔ `redis.client_kill` 看起来是**改名未对齐**而不是
-  能力缺失——这一条需要人来裁决，闸门按精确匹配算缺口是有意的。
+  剩下 7 个动作（k8s/mq/host/redis）曾卡在同一个前置条件上：**证据里根本没有
+  那个资源名**。决策 49 补上了 subject 证据项（firing 告警的 `labels_json`），
+  7 个动作的 pod / deployment / replicas / queue / unit / addr 全部有来源，
+  闸门读数 **2/9 → 9/9 resolvable**。
+- ~~**语料与能力表的 14 个符号缺口**（决策 41）~~ **在家族口径下已清零**
+  （决策 54 补上 `k8s.top_pods` / `pg.replication_status` 两个根因工具，
+  决策 59 把 `git-artifact` 与六个中间件家族收进
+  `opskeeper-sre-middleware`，`opskeeper-eval vocabulary` 现在读
+  **20/20 fully servable**）。清零的是"这个家族有没有人服务"这个口径，
+  不是"每个方法都存在"：`redis.kill_client` ↔ `redis.client_kill` 的改名
+  仍然无人裁决，只是它现在被 `redis` 家族声明兜住了。要按方法名看真实
+  覆盖，读 `opskeeper-eval vocabulary` 的 loop-action 可执行性一节
+  （只认精确符号）与「闭环的提议能力」那一节的缺口清单。
 - **审计端口**：`iam/server` 为了写审计行而 import `manager/{biz,model}/audit`
   （决策 38 登记的例外）。决策 35 把审计链放在 manager 的唯一咽喉上是对的，
   但代价是 iam 依赖 manager。要真正解开，需要一个两边都能依赖的审计端口。
@@ -1212,7 +2517,7 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
 
 | 能力域 | 判定 | 载体 |
 |---|---|---|
-| 50 个运维 BaseTool | ✅ 可插件化 | extension tool（**已用**）；MCP 需自建运行时 |
+| 50 个运维 BaseTool | ⚠️ 部分 | 35 个已打包（只读 18 / 可观测 12 / 修复 5）；控制面 registry 的 `middleware-adapter` 另有 **100 个符号**（pg/redis/k8s/mq/git）**未被任何包服务** |
 | 7 个 Worker persona | ✅ 可插件化 | package `agents` + `skills` |
 | Skill Registry | ⚠️ 降级为分发源 | Nacos 只做索引/灰度 |
 | System prompt 组装 | ⚠️ 拆分 | 骨架留宿主，能力清单由 `before_agent_start` 注入 |
@@ -1220,8 +2525,7 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
 | 告警规则 / 草稿 | ✅ 可插件化 | extension tool + command |
 | 拓扑图 | ✅ 可插件化 | extension tool |
 | 可观测栈（Prom/Loki/Tempo） | ✅ 可插件化 | extension tool（**已用**）；PiG 的 `mcp` 仅声明 |
-| 中间件适配（DB/Git） | ✅ 可插件化 | extension tool（**已用**） |
-| 中间件适配（K8s/MQ） | ❌ **无只读工具** | 控制面 registry 里不存在，仓库内不假装覆盖 |
+| 中间件适配（pg/redis/k8s/mq/git） | ✅ 可插件化 | 控制面 registry 里**真实存在**（`middleware-adapter` 100 个符号）；**尚未打包成插件包**——`plugin-coverage` 现在报的 18 个 GAP 全部来自这一条 |
 | Web 控制台 | ❌ 不可 | 保留 manager 侧 |
 | 身份/租户/权限 | ❌ 不可 | 保留宿主 |
 | 审计 HMAC chain | ❌ 不可下放 | 宿主强制，插件只读 |

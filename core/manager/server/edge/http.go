@@ -1,6 +1,6 @@
 // Package edge builds the HTTP routes for the manager/edge sub-domain.
 //
-// The Handler assumes the caller-wide auth middleware (internal/pkg/auth)
+// The Handler assumes the caller-wide auth middleware (core/manager/pkg/auth)
 // has already populated tenantctx so per-route role checks are a simple
 // tenantctx.From() lookup.
 //
@@ -22,13 +22,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	devicemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/device"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // roleAdmin mirrors iam/model.RoleAdmin without crossing the BC boundary

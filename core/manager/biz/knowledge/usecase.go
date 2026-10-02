@@ -32,13 +32,13 @@ import (
 	"time"
 	"unicode"
 
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/knowledge"
-	"github.com/vincent-wuhan/opskeeper/internal/observability/otelgenai"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/embedding"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/qdrantx"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/observability/otelgenai"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/embedding"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/qdrantx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 	"go.opentelemetry.io/otel/attribute"
 )
 

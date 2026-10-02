@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/agent"
-	svcaiops "github.com/vincent-wuhan/opskeeper/internal/manager/service/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	svcaiops "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
 )
 
 // LLMDefaultProvider returns the cluster-wide default LLM provider id +

@@ -120,13 +120,13 @@ func (f *FakeLLM) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	reply := f.reply
 	f.mu.Unlock()
 	resp := map[string]any{
-		"id":      "msg_fake",
-		"type":    "message",
-		"role":    "assistant",
-		"model":   req.Model,
-		"content": []map[string]any{{"type": "text", "text": reply}},
+		"id":          "msg_fake",
+		"type":        "message",
+		"role":        "assistant",
+		"model":       req.Model,
+		"content":     []map[string]any{{"type": "text", "text": reply}},
 		"stop_reason": "end_turn",
-		"usage": map[string]any{"input_tokens": 42, "output_tokens": 8},
+		"usage":       map[string]any{"input_tokens": 42, "output_tokens": 8},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
@@ -135,7 +135,7 @@ func (f *FakeLLM) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 // ─── Fake Slack incoming webhook ───────────────────────────────────────
 //
 // Captures every POST so the test can assert payload shape (e.g. the
-// attachments format from internal/pkg/notify/webhook.go). The fake
+// attachments format from core/manager/pkg/notify/webhook.go). The fake
 // always returns 200 OK with body "ok", which is what real Slack does.
 
 type FakeSlack struct {
@@ -146,7 +146,7 @@ type FakeSlack struct {
 }
 
 type SlackCapture struct {
-	Path    string
+	Path string
 	// RawQuery is the URL-encoded query string of the request, captured
 	// without modification so signing-via-URL providers (DingTalk:
 	// ?timestamp=…&sign=…) can be asserted on. Empty for Slack/Feishu
@@ -210,11 +210,11 @@ func (f *FakeSlack) handle(w http.ResponseWriter, r *http.Request) {
 type FakeTelegram struct {
 	server *httptest.Server
 
-	mu       sync.Mutex
-	updates  []map[string]any // queued inbound updates (FIFO)
-	sent     []map[string]any // outbound sendMessage bodies
-	edited   []map[string]any // outbound editMessageText bodies
-	nextID   int
+	mu      sync.Mutex
+	updates []map[string]any // queued inbound updates (FIFO)
+	sent    []map[string]any // outbound sendMessage bodies
+	edited  []map[string]any // outbound editMessageText bodies
+	nextID  int
 }
 
 func NewFakeTelegram() *FakeTelegram {
@@ -223,8 +223,8 @@ func NewFakeTelegram() *FakeTelegram {
 	return f
 }
 
-func (f *FakeTelegram) URL() string  { return f.server.URL }
-func (f *FakeTelegram) Close()       { f.server.Close() }
+func (f *FakeTelegram) URL() string { return f.server.URL }
+func (f *FakeTelegram) Close()      { f.server.Close() }
 
 // PushUpdate queues a fake inbound message. text is the user's message;
 // fromID is the Telegram numeric user id (must match allow_from). chatID
@@ -305,8 +305,8 @@ type FakeProm struct {
 	server *httptest.Server
 
 	mu      sync.Mutex
-	series  map[string][][2]any         // for query_range: query → samples
-	instant map[string][]InstantEntry   // for query: query → entries
+	series  map[string][][2]any       // for query_range: query → samples
+	instant map[string][]InstantEntry // for query: query → entries
 }
 
 // InstantEntry is one vector entry the FakeProm returns for /api/v1/query.

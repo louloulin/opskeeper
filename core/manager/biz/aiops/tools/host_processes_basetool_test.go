@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 func newProcessListToolFor(_ *testing.T, resolver hostFilesDeviceResolver, fc *fakeCaller) *GetProcessListTool {

@@ -1,6 +1,6 @@
 // Package cmdpolicy is the policy + sandbox layer that gates which
 // shell commands the edge will execute on behalf of an LLM-driven tool
-// (currently the bash skill — internal/edgeagent/bash). The policy is
+// (currently the bash skill — core/edge/bash). The policy is
 // intentionally decoupled from any single tool: future skills (plugin
 // custom shells, guarded mutating bash, etc.) can compose a different
 // Policy + the same Sandbox runner.

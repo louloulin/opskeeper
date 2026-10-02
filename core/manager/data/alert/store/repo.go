@@ -9,10 +9,10 @@ import (
 
 	"gorm.io/gorm"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	demomodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/demo"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	demomodel "github.com/vincent-wuhan/opskeeper/core/manager/model/demo"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Repo is the GORM-backed biz/alert.Repo.

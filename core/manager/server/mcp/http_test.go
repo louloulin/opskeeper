@@ -16,15 +16,15 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
-	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	auditbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
-	knowledgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/knowledge"
-	loopbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/knowledge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/auth"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/mcpclient"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	auditbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
+	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/mcpclient"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 type fakeKnowledgeSearcher func(context.Context, string, knowledgebiz.SearchOptions) ([]knowledgebiz.SearchHit, error)

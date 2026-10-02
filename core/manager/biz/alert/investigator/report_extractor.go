@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // LLMSummarizer is the narrow seam used by the report-extractor step.

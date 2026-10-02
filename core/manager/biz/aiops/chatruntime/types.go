@@ -5,7 +5,7 @@
 // parsing lives in skill_parser.go / agent_parser.go.
 //
 // scaffolding only — no kernel, no LLM
-// wiring, no tool execution. Old internal/skill stays running for compat.
+// wiring, no tool execution. Old core/floor/skill stays running for compat.
 //
 // Field naming convention: every YAML / JSON tag uses snake_case per
 // — the spec explicitly aligns opskeeper with claude-code agent

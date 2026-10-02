@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // CompositeCollector combines an embedded baseline collector with scrape

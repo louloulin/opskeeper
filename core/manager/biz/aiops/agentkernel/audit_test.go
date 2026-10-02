@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	bizaudit "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
 )
 
 // The interface this binding exists to satisfy, declared at the definition

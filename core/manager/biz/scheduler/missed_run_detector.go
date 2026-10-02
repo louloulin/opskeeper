@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 )
 
 // AlertSink 告警写入接口。

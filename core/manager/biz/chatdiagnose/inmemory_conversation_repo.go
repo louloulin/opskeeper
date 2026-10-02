@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/chatdiagnose"
+	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/chatdiagnose"
 )
 
 // InMemoryConversationRepo 是 chatdiagnose.ConversationRepo 的内存

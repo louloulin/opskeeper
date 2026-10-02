@@ -22,7 +22,7 @@ func BuildSchema(e Executor) (json.RawMessage, error) {
 // ToJSONSchema converts a ParamSchema into the JSON Schema shape
 // OpenAI's function-calling tools use. The output is a "object" schema
 // with a "properties" map and a "required" list — the same shape
-// internal/pkg/llm.ToolSchema expects.
+// core/manager/pkg/llm.ToolSchema expects.
 //
 // Type mapping:
 //

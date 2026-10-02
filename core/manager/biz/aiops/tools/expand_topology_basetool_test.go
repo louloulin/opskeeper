@@ -10,10 +10,10 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
-	topologybiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/topology"
-	store "github.com/vincent-wuhan/opskeeper/internal/manager/data/topology/store"
-	topologymodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/topology"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	topologybiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
+	store "github.com/vincent-wuhan/opskeeper/core/manager/data/topology/store"
+	topologymodel "github.com/vincent-wuhan/opskeeper/core/manager/model/topology"
 )
 
 func newTopologyUC(t *testing.T) *topologybiz.Usecase {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"text/template"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins"
+	"github.com/vincent-wuhan/opskeeper/core/edge/plugins"
 )
 
 // otelcolTemplate is the OTel Collector config we render per edge.

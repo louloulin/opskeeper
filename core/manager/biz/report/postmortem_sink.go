@@ -13,11 +13,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact"
-	gitamodel "github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact/model"
-	gitastore "github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact/store"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact"
+	gitamodel "github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/model"
+	gitastore "github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/store"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 )
 
 // GitArtifactSink is the default PostmortemSink. It records the

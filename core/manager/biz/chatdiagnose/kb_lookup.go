@@ -3,12 +3,12 @@
 //
 // Two KB sources, queried serially:
 //
-//  1. incident_pattern table (internal/manager/model/chatdiagnose).
+//  1. incident_pattern table (core/manager/model/chatdiagnose).
 //     Tenant-scoped signature retrieval. Populated by postmortem
 //     completion; vector similarity comes from Qdrant and lexical recall
 //     uses tenant-filtered BM25 candidates.
 //
-//  2. gitartifact linker (internal/manager/biz/knowledge/gitartifact
+//  2. gitartifact linker (core/manager/biz/knowledge/gitartifact
 //     — Day 2 spike, not yet present). Resolves "@pg-prod-01"-style
 //     resource references to historical commit / doc hits.
 //
@@ -31,7 +31,7 @@ import (
 	"strings"
 	"time"
 
-	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/chatdiagnose"
+	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/chatdiagnose"
 )
 
 // KBLookupRequest is the input to KBLookup.Lookup. Signature is the
@@ -116,7 +116,7 @@ type KBLookup interface {
 }
 
 // PatternRepo is the persistence contract for incident_pattern. The
-// data layer (internal/manager/data/chatdiagnose/store/repo.go) will
+// data layer (core/manager/data/chatdiagnose/store/repo.go) will
 // implement it; tests use an in-memory fake.
 type PatternRepo interface {
 	// FindSimilar returns up to topK pattern rows whose tenant
@@ -195,7 +195,7 @@ type KBLookupImpl struct {
 }
 
 // AuditLogger is the narrow contract the KB impl uses to emit audit
-// events. The real audit package (internal/manager/biz/audit) will
+// events. The real audit package (core/manager/biz/audit) will
 // implement it in a later PR; tests can supply a fake.
 type AuditLogger interface {
 	Write(ctx context.Context, entry AuditEntry) error

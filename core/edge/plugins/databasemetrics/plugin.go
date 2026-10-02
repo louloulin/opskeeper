@@ -21,9 +21,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins"
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins/metricscommon"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/edge/plugins"
+	"github.com/vincent-wuhan/opskeeper/core/edge/plugins/metricscommon"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 const Name = "databasemetrics"

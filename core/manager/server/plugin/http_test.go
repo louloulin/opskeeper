@@ -15,11 +15,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
-	auditmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
-	auditmw "github.com/vincent-wuhan/opskeeper/internal/manager/server/middleware"
-	release "github.com/vincent-wuhan/opskeeper/internal/manager/service/plugin"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	auditmw "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
+	release "github.com/vincent-wuhan/opskeeper/core/manager/service/plugin"
 )
 
 // fakeService is a scripted release manager. The rollout's own behaviour is
@@ -61,7 +61,7 @@ func (f *fakeService) Rollback(_ context.Context, name string) (release.Status, 
 
 // asRole stands in for the auth middleware, which every route here sits
 // behind. It writes the tenant both to the plain context value and to
-// the mutable slot, exactly as internal/pkg/auth does — the slot is the
+// the mutable slot, exactly as core/manager/pkg/auth does — the slot is the
 // path the audit middleware reads, so a helper that only did With()
 // would let the audit row come out with an empty role while the
 // handler still saw the tenant.

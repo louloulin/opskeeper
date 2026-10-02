@@ -8,7 +8,7 @@ import (
 	"errors"
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 // Migrate AutoMigrate 新增的 proposal / proposal_state 表（additive）。

@@ -7,9 +7,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/topology"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/topology"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/topology"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // RelationTypeRepo is the GORM-backed biz/topology.RelationTypeRepo.

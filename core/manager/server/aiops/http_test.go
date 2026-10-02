@@ -11,13 +11,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/agent"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
-	svc "github.com/vincent-wuhan/opskeeper/internal/manager/service/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	svc "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
 )
 
 // fakeService implements AIOpsService.

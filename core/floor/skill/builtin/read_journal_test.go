@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
 )
 
 func TestReadJournal_Metadata(t *testing.T) {

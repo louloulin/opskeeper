@@ -9,7 +9,7 @@ import (
 
 // EnvInstanceIDOverride 是显式覆盖 pod ID 的环境变量名。
 //
-// 与 internal/pkg/leader.NewManager 复用同一约定，便于运维排障时统一识别实例。
+// 与 core/manager/pkg/leader.NewManager 复用同一约定，便于运维排障时统一识别实例。
 const EnvInstanceIDOverride = "OPSKEEPER_LEADER_INSTANCE_ID"
 
 // NewPodID 构造本进程唯一标识。优先取环境变量显式覆盖；否则 hostname-uuid[:8]。

@@ -26,10 +26,11 @@ require (
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/mysql v0.42.0
 	github.com/vincent-wuhan/opskeeper/core v0.0.0
-	github.com/vincent-wuhan/opskeeper/core/edge v0.0.0-00010101000000-000000000000
+	github.com/vincent-wuhan/opskeeper/core/edge v0.0.0
+	github.com/vincent-wuhan/opskeeper/core/floor v0.0.0-00010101000000-000000000000
 	github.com/vincent-wuhan/opskeeper/core/harness v0.0.0-00010101000000-000000000000
+	github.com/vincent-wuhan/opskeeper/core/manager v0.0.0-00010101000000-000000000000
 	github.com/vincent-wuhan/opskeeper/core/pig v0.0.0-00010101000000-000000000000
-	github.com/vincent-wuhan/opskeeper/sdk v0.0.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.68.0
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.43.0
@@ -143,6 +144,7 @@ require (
 	github.com/sugarme/tokenizer v0.2.3-0.20230829214935-448e79b1ed65 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
+	github.com/vincent-wuhan/opskeeper/sdk v0.0.0 // indirect
 	github.com/yalue/onnxruntime_go v1.7.0 // indirect
 	github.com/yuin/goldmark v1.8.5 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
@@ -202,7 +204,9 @@ require (
 replace (
 	github.com/vincent-wuhan/opskeeper/core => ./core
 	github.com/vincent-wuhan/opskeeper/core/edge => ./core/edge
+	github.com/vincent-wuhan/opskeeper/core/floor => ./core/floor
 	github.com/vincent-wuhan/opskeeper/core/harness => ./core/harness
+	github.com/vincent-wuhan/opskeeper/core/manager => ./core/manager
 	github.com/vincent-wuhan/opskeeper/core/pig => ./core/pig
 	github.com/vincent-wuhan/opskeeper/sdk => ./sdk
 )

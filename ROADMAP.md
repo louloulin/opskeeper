@@ -73,7 +73,7 @@ across sections.
 - **B.4** `✓` Network Layer-1 — cmdpolicy expansion (shipped)
   - 9 binaries: OVS / nft / conntrack / ipset / ethtool / bpftool / `ip netns`
   - read-side only; write-side gated for SOP
-  - source: `internal/edgeagent/cmdpolicy/policy.go`
+  - source: `core/edge/cmdpolicy/policy.go`
 - **B.5** `◐` Network Layer-2/3 skills [v1.0]
   - `host_ovs_show`, `host_netfilter_dump`, `host_conntrack_summary`
   - eBPF preset library — preset IDs only, never raw `bpftrace -e <body>`

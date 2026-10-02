@@ -14,10 +14,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/knowledge"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/knowledge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/qdrantx"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/qdrantx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // ---- in-memory qdrant ----

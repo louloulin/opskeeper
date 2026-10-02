@@ -26,17 +26,17 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
-	auditmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
-	auditmw "github.com/vincent-wuhan/opskeeper/internal/manager/server/middleware"
-	release "github.com/vincent-wuhan/opskeeper/internal/manager/service/plugin"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	auditmw "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
+	release "github.com/vincent-wuhan/opskeeper/core/manager/service/plugin"
 )
 
 // roleAdmin mirrors iam/model.RoleAdmin without crossing the BC boundary.
 // If the literal changes in iam/model it must change here too, which is the
-// same trade internal/manager/server/edge already makes.
+// same trade core/manager/server/edge already makes.
 const roleAdmin = "admin"
 
 // Service is the narrow surface this handler needs. *release.Manager

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 // fakeContractRepo is a ContractRepo that serves one contract, and records

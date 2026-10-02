@@ -6,11 +6,11 @@ import (
 	"log/slog"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 
 	"github.com/google/uuid"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/data/aiops/store"
+	"github.com/vincent-wuhan/opskeeper/core/manager/data/aiops/store"
 )
 
 // Expirer is the D.4.7 background loop that auto-declines pending

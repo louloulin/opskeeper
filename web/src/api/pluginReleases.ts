@@ -2,7 +2,7 @@ import { request } from './client';
 
 // Plugin release client — talks to /v1/plugins/releases (admin only).
 //
-// The backend is internal/manager/server/plugin/http.go, and the shapes
+// The backend is core/manager/server/plugin/http.go, and the shapes
 // mirror Go's release.Status. A release is a job that outlives the request
 // that started it, so the console polls status and calls advance / halt /
 // rollback separately rather than expecting one call to do all three.

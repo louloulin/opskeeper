@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 )
 
 // ProviderConfig describes one configured upstream. Models is the

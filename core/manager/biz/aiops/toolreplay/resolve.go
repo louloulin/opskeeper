@@ -28,7 +28,7 @@
 package toolreplay
 
 import (
-	aiopsmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	aiopsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 )
 
 // ResolvedToolCall is one entry in the tool_calls slot of an assistant

@@ -40,8 +40,8 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 )
 
 // SourceCommit is the postmortem-Markdown-friendly view of a resolved

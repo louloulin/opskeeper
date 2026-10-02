@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"time"
 
-	alertbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	devicemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/device"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 // ToolNameGetEdgeSummary is the stable wire name the LLM sees.

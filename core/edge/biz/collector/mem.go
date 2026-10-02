@@ -3,7 +3,7 @@ package collector
 import (
 	"context"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/model"
+	"github.com/vincent-wuhan/opskeeper/core/edge/model"
 )
 
 // CollectMem samples memory usage from /proc/meminfo.

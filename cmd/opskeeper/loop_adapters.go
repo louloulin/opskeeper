@@ -26,13 +26,17 @@ import (
 	"strings"
 	"time"
 
-	middlewareadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
-	hostadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter/host"
-	k8sadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter/k8s"
-	mqadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter/mq"
-	pgadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter/postgres"
-	redisadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter/redis"
-	middlewareregistry "github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact"
+	middlewareadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
+	gitadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/git"
+	hostadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/host"
+	k8sadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/k8s"
+	mqadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/mq"
+	kafkaadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/mq/kafka"
+	rabbitmqadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/mq/rabbitmq"
+	pgadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/postgres"
+	redisadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/redis"
+	middlewareregistry "github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 // loopAdapterConnectTimeout bounds a single adapter's connect. It is short
@@ -108,6 +112,76 @@ func loopAdapterSources() []loopAdapterSource {
 					return nil, err
 				}
 				if err := mqadapter.RegisterTools(reg, a); err != nil {
+					_ = a.Close(context.Background())
+					return nil, err
+				}
+				return func() { _ = a.Close(context.Background()) }, nil
+			},
+		},
+		{
+			// The product-namespaced MQ tools. Until these two entries
+			// existed, `kafka.*` and `rabbitmq.*` were registered by the
+			// capability gate and by nothing else: cmd/opskeeper-eval
+			// counted them as capabilities the platform has, and a running
+			// control plane had never heard of them. That is the worst
+			// possible state for a gate — it measures a fleet that does
+			// not exist, so every number it reports is about a deployment
+			// nobody can build. Both are opt-in and both are independent
+			// of OPSKEEPER_LOOP_MQ_DSN: a deployment can serve the
+			// neutral names, the product names, or both, and each
+			// connection is separate so a wrong DSN in one does not take
+			// the others down.
+			name: "kafka",
+			env:  "OPSKEEPER_LOOP_KAFKA_DSN",
+			wire: func(ctx context.Context, dsn string, reg *middlewareregistry.Registry) (func(), error) {
+				a := kafkaadapter.New()
+				if err := a.Connect(ctx, middlewareadapter.ConnectionSpec{DSN: dsn, Timeout: loopAdapterConnectTimeout}); err != nil {
+					return nil, err
+				}
+				if err := kafkaadapter.RegisterTools(reg, a); err != nil {
+					_ = a.Close(context.Background())
+					return nil, err
+				}
+				return func() { _ = a.Close(context.Background()) }, nil
+			},
+		},
+		{
+			name: "rabbitmq",
+			env:  "OPSKEEPER_LOOP_RABBITMQ_DSN",
+			wire: func(ctx context.Context, dsn string, reg *middlewareregistry.Registry) (func(), error) {
+				a := rabbitmqadapter.New()
+				if err := a.Connect(ctx, middlewareadapter.ConnectionSpec{DSN: dsn, Timeout: loopAdapterConnectTimeout}); err != nil {
+					return nil, err
+				}
+				if err := rabbitmqadapter.RegisterTools(reg, a); err != nil {
+					_ = a.Close(context.Background())
+					return nil, err
+				}
+				return func() { _ = a.Close(context.Background()) }, nil
+			},
+		},
+		{
+			// git is not in the closed loop's remediation vocabulary
+			// (see investigatorreal.RemediationActions), so wiring it
+			// changes no loop number. It is wired anyway because the
+			// git.* tools are what let an investigator check a claim
+			// against the repository — "was this RPC added in the
+			// deploy we are looking at" is answered from git, not from
+			// a dashboard — and a tool that is only reachable when a
+			// separate process happens to register it is a tool that
+			// silently is not there.
+			name: "git",
+			env:  "OPSKEEPER_LOOP_GIT_DSN",
+			wire: func(ctx context.Context, dsn string, reg *middlewareregistry.Registry) (func(), error) {
+				// The LinkerRegistry is empty here: find_runtime_link's
+				// reverse index is populated by the git-artifact
+				// indexer at runtime, and a lookup with no linker
+				// registered is a plain miss rather than an error.
+				a := gitadapter.New(gitartifact.NewLinkerRegistry())
+				if err := a.Connect(ctx, middlewareadapter.ConnectionSpec{DSN: dsn, Timeout: loopAdapterConnectTimeout}); err != nil {
+					return nil, err
+				}
+				if err := gitadapter.RegisterTools(reg, a); err != nil {
 					_ = a.Close(context.Background())
 					return nil, err
 				}

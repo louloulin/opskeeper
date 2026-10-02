@@ -19,8 +19,8 @@ import (
 	"fmt"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
 )
 
 // Tool adapts one decorated host tool to the kernel tool contract.

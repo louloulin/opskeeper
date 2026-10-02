@@ -1,5 +1,5 @@
 // Package store is the GORM-backed persistence layer for monitor_panels.
-// Mirrors the conventions of internal/manager/data/setting/store —
+// Mirrors the conventions of core/manager/data/setting/store —
 // dialect-agnostic AutoMigrate composed from cmd/opskeeper via
 // dbx.RunMigrations.
 package store
@@ -7,7 +7,7 @@ package store
 import (
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/monitor"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/monitor"
 )
 
 // Migrate registers the monitor_panels table.

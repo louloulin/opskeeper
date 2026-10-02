@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/metric"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
 )
 
 // retentionWriter records the cutoff and limit for each Delete*Before

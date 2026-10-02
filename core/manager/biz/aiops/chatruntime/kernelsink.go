@@ -8,8 +8,8 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 	"github.com/vincent-wuhan/opskeeper/core/wire"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/alertdraft"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/alertdraft"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 // kernelsink.go translates the kernel frame vocabulary into the console

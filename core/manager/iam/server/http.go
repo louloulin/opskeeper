@@ -1,5 +1,5 @@
 // Package server constructs the iam BC's HTTP router and middleware chain.
-// It is the only place that imports internal/iam/service.
+// It is the only place that imports core/manager/iam/service.
 package server
 
 import (
@@ -14,14 +14,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/iam/biz/user"
-	"github.com/vincent-wuhan/opskeeper/internal/iam/model"
-	"github.com/vincent-wuhan/opskeeper/internal/iam/service"
-	bizaudit "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
-	auditmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
-	auditmw "github.com/vincent-wuhan/opskeeper/internal/manager/server/middleware"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/user"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/service"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	auditmw "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
 )
 
 // loginThrottle caps failed-login bursts to defeat naive bruteforce /

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // fakeChatReq 构造 {system, user} 双 message 的最小 ChatReq。

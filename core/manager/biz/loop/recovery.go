@@ -35,7 +35,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 )
 
 // RecoveredPhaseWorker 是 PhaseWorker 的 recovered phase 实现。

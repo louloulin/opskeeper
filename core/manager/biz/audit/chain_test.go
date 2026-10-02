@@ -14,8 +14,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	store "github.com/vincent-wuhan/opskeeper/internal/manager/data/audit/store"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
+	store "github.com/vincent-wuhan/opskeeper/core/manager/data/audit/store"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
 )
 
 const testKey = "audit-hmac-test-key-0123456789"

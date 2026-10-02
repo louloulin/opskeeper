@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/secret"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/credinject"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/secretbox"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/secret"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/credinject"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/secretbox"
 )
 
 // Repo is the persistence contract (data/secret/store).

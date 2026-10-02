@@ -9,8 +9,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/data/aiops/store"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/data/aiops/store"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 )
 
 func setupExpirer(t *testing.T) (*Expirer, *store.MutatingProposalRepo, *store.ProposalAuditRepo, *gorm.DB) {

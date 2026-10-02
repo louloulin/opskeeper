@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 func validateCustomMetricsSpec(spec map[string]interface{}) error {

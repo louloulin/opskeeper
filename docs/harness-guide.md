@@ -59,7 +59,7 @@ opskeeper-eval judge --case pg/lock-waits --response resp.json   # 直接评分
 于是**一个结构上不可能通过的 case 会永远打 0 分**，而 leaderboard 把它
 显示成"Agent 不行"——这是个会让所有人查错方向的假象。
 
-**加入**：`internal/pkg/pluginmanifest/coverage.go` 建立连接表，
+**加入**：`core/floor/pluginmanifest/coverage.go` 建立连接表，
 `opskeeper-eval plugin-coverage` 打印结果，`--fail-on-gap` 让 CI 卡住。
 
 **关键性质**：
@@ -70,7 +70,7 @@ opskeeper-eval judge --case pg/lock-waits --response resp.json   # 直接评分
 - **每个缺口都要有解释**，而不是只报一个数字。归到两个命名清单之一：
   - `MiddlewareFamilies`（`pg` / `redis` / `k8s` / `mq` / `kafka` / `rabbitmq`）
     —— 控制面 adapter，**不是**插件包。清单的词汇来自 adapter 实现
-    （`internal/middleware/adapter/<pkg>/<pkg>.go` 注册 `"<pkg>.method"`），
+    （`core/manager/middleware/adapter/<pkg>/<pkg>.go` 注册 `"<pkg>.method"`），
     不是 case 所在目录名：mq 目录下的 case 写的是 `kafka.*` / `rabbitmq.*`，
     按目录名建表会把它们全报成"包不存在"。
   - `NonPackageFamilies`（`git-artifact`）—— 控制面关联器，根本不是工具族。
@@ -388,7 +388,7 @@ name: Harness Eval
 on:
   pull_request:
     paths:
-      - 'internal/manager/**'
+      - 'core/manager/**'
       - 'core/harness/**'
       - 'cmd/opskeeper-eval/**'
 

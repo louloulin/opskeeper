@@ -40,7 +40,7 @@ import (
 	"fmt"
 	"strings"
 
-	loop "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
+	loop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 )
 
 // LoopOrchestrator is the production-side Orchestrator contract the

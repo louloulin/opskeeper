@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/promquery"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
 )
 
 type fakeEdgeLister struct {

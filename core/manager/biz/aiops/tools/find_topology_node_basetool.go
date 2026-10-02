@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	topologybiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/topology"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	topologybiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
 )
 
 const (

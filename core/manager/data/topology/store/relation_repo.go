@@ -6,9 +6,9 @@ import (
 
 	"gorm.io/gorm"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/topology"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/topology"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/topology"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // RelationRepo is the GORM-backed biz/topology.RelationRepo.

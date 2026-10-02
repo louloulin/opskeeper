@@ -18,7 +18,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 // ToolHandler 是装饰器包装的目标函数签名。

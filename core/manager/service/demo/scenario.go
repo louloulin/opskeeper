@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	bizdemo "github.com/vincent-wuhan/opskeeper/internal/manager/biz/demo"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	bizdemo "github.com/vincent-wuhan/opskeeper/core/manager/biz/demo"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 type StartScenarioInput = bizdemo.StartScenarioInput

@@ -17,7 +17,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/config"
+	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 )
 
 // providerSpec is the static half of a catalog entry: everything that does

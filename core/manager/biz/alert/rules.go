@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // effectiveScope returns the rule's stored scope_type, defaulting per

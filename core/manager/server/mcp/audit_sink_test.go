@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/decorators"
-	auditbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
+	auditbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 func TestAuditSink_AgentTeamsRoleFitsSchema(t *testing.T) {

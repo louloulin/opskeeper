@@ -3,5 +3,5 @@
 // AI tool registry; the response is passed back to the LLM verbatim, so we
 // preserve the raw JSON shape.
 //
-// Cross-BC: lives under internal/pkg/ and has no manager/* import.
+// Cross-BC: lives under core/manager/pkg/ and has no manager/* import.
 package promquery

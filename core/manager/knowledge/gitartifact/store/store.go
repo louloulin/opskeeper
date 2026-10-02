@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/model"
 )
 
 // ListFilter 是 List 查询条件。

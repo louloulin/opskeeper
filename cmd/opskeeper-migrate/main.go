@@ -22,7 +22,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/vincent-wuhan/opskeeper/internal/migrate"
+	"github.com/vincent-wuhan/opskeeper/core/manager/migrate"
 )
 
 const version = "1.0.0-dev"

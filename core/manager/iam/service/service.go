@@ -1,22 +1,22 @@
 // Package service is the iam BC's HTTP/gRPC handler layer. It validates
 // requests, maps errors and delegates to biz/ usecases. It must never
-// import internal/iam/data/** (gospec red line, enforced by go-arch-lint).
+// import core/manager/iam/data/** (gospec red line, enforced by go-arch-lint).
 package service
 
 import (
 	"context"
 	"log/slog"
 
-	"github.com/vincent-wuhan/opskeeper/internal/iam/biz/authz"
-	"github.com/vincent-wuhan/opskeeper/internal/iam/biz/membership"
-	"github.com/vincent-wuhan/opskeeper/internal/iam/biz/org"
-	biz "github.com/vincent-wuhan/opskeeper/internal/iam/biz/user"
-	"github.com/vincent-wuhan/opskeeper/internal/iam/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/authz"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/membership"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/org"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/user"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
 )
 
 // Service wraps the iam/user biz usecase plus (Phase-1 additions) the
 // org / membership / authz biz services. The HTTP router in
-// internal/iam/server is the only consumer.
+// core/manager/iam/server is the only consumer.
 type Service struct {
 	user        *biz.Usecase
 	orgs        *org.Service

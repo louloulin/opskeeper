@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
 )
 
 func TestQueryLogQLTool_Info(t *testing.T) {

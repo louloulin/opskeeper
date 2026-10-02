@@ -1,5 +1,5 @@
 // chatdiagnose/audit_adapter.go — adapter 实现 chatdiagnose.AuditLogger
-// interface，包装 *audit.Usecase（internal/manager/biz/audit）。
+// interface，包装 *audit.Usecase（core/manager/biz/audit）。
 //
 // 类型转换：
 //   - chatdiagnose.AuditEntry{TenantID, Actor, Action, Resource, Payload} ↔
@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 )
 
 // AuditAdapter 包装 *audit.Usecase 实现 chatdiagnose.AuditLogger。

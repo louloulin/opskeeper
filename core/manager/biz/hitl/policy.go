@@ -14,12 +14,12 @@ import (
 	"strings"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 // DataGuardSensitivityProvider 提供资源的敏感级别（来自 P1-3 data-guard）。
 //
-// biz/hitl 不直接依赖 internal/dataguard，避免跨子域耦合；装配由 cmd/main.go 注入。
+// biz/hitl 不直接依赖 core/manager/dataguard，避免跨子域耦合；装配由 cmd/main.go 注入。
 type DataGuardSensitivityProvider interface {
 	// Lookup 返回 resource (e.g. "host:edge-1" / "db:pg-prod-3") 的敏感级别。
 	// 未知资源应返回 SensitivityInternal。

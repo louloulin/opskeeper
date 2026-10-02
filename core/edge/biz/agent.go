@@ -13,14 +13,14 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/vincent-wuhan/opskeeper/core/edge/changewatcher"
+	skilldispatch "github.com/vincent-wuhan/opskeeper/core/edge/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/changewatcher"
-	skilldispatch "github.com/vincent-wuhan/opskeeper/internal/edgeagent/skill"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
 )
 
 // Collector is the contract the edge agent requires of a metric source.
-// Implementations live in internal/edgeagent/collector — both the
+// Implementations live in core/edge/collector — both the
 // embedded (gopsutil) and scrape (HTTP /metrics) backends satisfy it.
 //
 // CollectAll returns one CollectorOutput per logical source on each
@@ -359,7 +359,7 @@ func (a *Agent) registerHandlers() {
 		})
 	// Skill dispatcher: one handler routes every execute_skill RPC by
 	// the skill key in the request body. The skill registry is populated
-	// by init() blocks in internal/skill/builtin/* packages — the agent
+	// by init() blocks in core/floor/skill/builtin/* packages — the agent
 	// just imports them transitively to trigger registration.
 	a.client.RegisterHandler(tunnel.MethodExecuteSkill,
 		func(ctx context.Context, _ tunnel.Session, _ string, body []byte) ([]byte, error) {

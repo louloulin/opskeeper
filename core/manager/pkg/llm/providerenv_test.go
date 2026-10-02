@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/config"
+	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 )
 
 func TestAnUnknownOrUnconfiguredProviderIsNotBuilt(t *testing.T) {

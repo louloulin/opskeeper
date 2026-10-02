@@ -6,8 +6,8 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/report"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // CronNext computes the next fire time strictly after `after`, in the

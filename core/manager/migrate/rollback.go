@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/migrate/clients"
+	"github.com/vincent-wuhan/opskeeper/core/manager/migrate/clients"
 )
 
 // RollbackOptions 控制回滚行为。

@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/report"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Repo is the storage surface the Usecase needs. Implemented by

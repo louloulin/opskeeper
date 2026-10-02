@@ -8,7 +8,7 @@
 //     agentteams_metrics 是 2026-08-26 新增的 AI-ops 业务。
 //     关注点不同（一个管"我的告警怎么响"，一个管"我的
 //     multi-agent 编排怎么跑"），分文件减少 reviewer 噪音。
-//   - 共享 `internal/pkg/prom` 包避免新增 import 路径；调用方
+//   - 共享 `core/floor/prom` 包避免新增 import 路径；调用方
 //     `prom.ObserveAgentTeamsMCPCall(...)` 与 `prom.IncPromWrite(...)`
 //     风格一致。
 //
@@ -225,7 +225,7 @@ func ObserveLoopPhase(phase string, seconds float64, err error) {
 }
 
 // ErrSeverityEscalated marks retry_count > MaxRetryCount escalation;
-// see internal/manager/biz/loop/recovery.go. Exported so call sites in
+// see core/manager/biz/loop/recovery.go. Exported so call sites in
 // other packages can construct the sentinel without leaking private types.
 var ErrSeverityEscalated = errSeverityEscalated{}
 

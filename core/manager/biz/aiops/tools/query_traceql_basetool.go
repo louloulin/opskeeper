@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tracequery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tracequery"
 )
 
 // QueryTraceQLTool is the BaseTool form of query_traceql. Mirrors the

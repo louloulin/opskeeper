@@ -3,12 +3,13 @@ package git
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 func TestAdapter_Type(t *testing.T) {
@@ -27,8 +28,8 @@ func TestAdapter_Health_NotConnected(t *testing.T) {
 }
 
 func TestAdapter_Execute_RequiresApproval(t *testing.T) {
-	a := New(nil)
-	_ = a.Connect(context.Background(), adapter.ConnectionSpec{})
+	src := newTestRepo(t)
+	a := connectedAdapter(t, src, nil)
 	_, err := a.Execute(context.Background(), adapter.ExecOp{
 		Operation: "push",
 		// 缺 ApprovedBy
@@ -38,17 +39,93 @@ func TestAdapter_Execute_RequiresApproval(t *testing.T) {
 	}
 }
 
+// TestAdapter_Execute_RefusesEvenWhenApproved pins the decision that this
+// adapter has no write path at all. An approved push must still be refused,
+// and refused for a reason that says so rather than with a silent success.
+func TestAdapter_Execute_RefusesEvenWhenApproved(t *testing.T) {
+	src := newTestRepo(t)
+	a := connectedAdapter(t, src, nil)
+	res, err := a.Execute(context.Background(), adapter.ExecOp{
+		Operation:  "push",
+		ApprovedBy: "alice",
+		Reason:     "incident 42",
+	})
+	if !errors.Is(err, adapter.ErrInvalidOp) {
+		t.Fatalf("expected ErrInvalidOp, got %v (result %+v)", err, res)
+	}
+	if !strings.Contains(err.Error(), "reads only") {
+		t.Errorf("refusal should say the adapter is read-only, got %q", err)
+	}
+}
+
 func TestAdapter_Connect(t *testing.T) {
+	src := newTestRepo(t)
 	a := New(nil)
-	if err := a.Connect(context.Background(), adapter.ConnectionSpec{}); err != nil {
+	if err := a.Connect(context.Background(), adapter.ConnectionSpec{DSN: src}); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
+	t.Cleanup(func() { _ = a.Close(context.Background()) })
+
 	h, err := a.Health(context.Background())
 	if err != nil {
 		t.Fatalf("Health failed: %v", err)
 	}
-	if !strings.Contains(h.Message, "skeleton") {
-		t.Errorf("expected skeleton marker in health message: %s", h.Message)
+	if h.Status != "healthy" {
+		t.Errorf("status = %q, want healthy (message: %s)", h.Status, h.Message)
+	}
+	if !strings.Contains(h.Message, "HEAD ") {
+		t.Errorf("health message should name HEAD, got %q", h.Message)
+	}
+}
+
+// TestAdapter_Connect_NotARepository checks that a directory which is not a
+// repository is refused at Connect rather than at the first read.
+func TestAdapter_Connect_NotARepository(t *testing.T) {
+	a := New(nil)
+	err := a.Connect(context.Background(), adapter.ConnectionSpec{DSN: t.TempDir()})
+	if err == nil {
+		t.Fatal("expected Connect to refuse a directory that is not a repository")
+	}
+	if !strings.Contains(err.Error(), "not a readable repository") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestAdapter_Connect_EmptyDSN(t *testing.T) {
+	a := New(nil)
+	err := a.Connect(context.Background(), adapter.ConnectionSpec{})
+	if err == nil || !strings.Contains(err.Error(), "DSN is required") {
+		t.Errorf("expected a DSN error, got %v", err)
+	}
+}
+
+// TestAdapter_Close_RemovesOnlyWhatItCloned checks the cleanup contract: a
+// remote DSN leaves nothing behind, a local path is left alone.
+func TestAdapter_Close_RemovesOnlyWhatItCloned(t *testing.T) {
+	src := newTestRepo(t)
+	a := New(nil)
+	if err := a.Connect(context.Background(), adapter.ConnectionSpec{DSN: src}); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	a.mu.RLock()
+	dir := a.runner.dir
+	a.mu.RUnlock()
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("Close removed the operator's own checkout: %v", err)
+	}
+}
+
+func TestAdapter_Health_AfterClose(t *testing.T) {
+	src := newTestRepo(t)
+	a := connectedAdapter(t, src, nil)
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := a.Health(context.Background()); !errors.Is(err, adapter.ErrNotConnected) {
+		t.Errorf("expected ErrNotConnected after Close, got %v", err)
 	}
 }
 
@@ -113,8 +190,6 @@ func TestRegisterTools_DuplicateRegistrationFails(t *testing.T) {
 }
 
 func TestFindRuntimeLink_MissingSymbolType(t *testing.T) {
-	a := New(nil)
-	_ = a.Connect(context.Background(), adapter.ConnectionSpec{})
 	tool, _ := newTestRegistry(t).GetTool("git.find_runtime_link")
 	_, err := tool.Handler(context.Background(), map[string]interface{}{})
 	if err == nil || !strings.Contains(err.Error(), "symbol_type") {
@@ -123,8 +198,6 @@ func TestFindRuntimeLink_MissingSymbolType(t *testing.T) {
 }
 
 func TestFindRuntimeLink_MissingInput(t *testing.T) {
-	a := New(nil)
-	_ = a.Connect(context.Background(), adapter.ConnectionSpec{})
 	tool, _ := newTestRegistry(t).GetTool("git.find_runtime_link")
 	_, err := tool.Handler(context.Background(), map[string]interface{}{
 		"symbol_type": "pg_query",
@@ -135,8 +208,6 @@ func TestFindRuntimeLink_MissingInput(t *testing.T) {
 }
 
 func TestFindRuntimeLink_LinkerNotConfigured(t *testing.T) {
-	a := New(nil) // nil LinkerRegistry
-	_ = a.Connect(context.Background(), adapter.ConnectionSpec{})
 	tool, _ := newTestRegistry(t).GetTool("git.find_runtime_link")
 	_, err := tool.Handler(context.Background(), map[string]interface{}{
 		"symbol_type": "pg_query",
@@ -149,7 +220,6 @@ func TestFindRuntimeLink_LinkerNotConfigured(t *testing.T) {
 
 func TestFindRuntimeLink_UnsupportedSymbolType(t *testing.T) {
 	a := New(gitartifact.NewLinkerRegistry())
-	_ = a.Connect(context.Background(), adapter.ConnectionSpec{})
 	tool, _ := newTestRegistryWithAdapter(t, a).GetTool("git.find_runtime_link")
 	_, err := tool.Handler(context.Background(), map[string]interface{}{
 		"symbol_type": "unknown_type",
@@ -167,7 +237,6 @@ func TestFindRuntimeLink_MissReturnsHitFalse(t *testing.T) {
 		t.Fatalf("register empty pg linker failed: %v", err)
 	}
 	a := New(reg)
-	_ = a.Connect(context.Background(), adapter.ConnectionSpec{})
 
 	tool, _ := newTestRegistryWithAdapter(t, a).GetTool("git.find_runtime_link")
 	out, err := tool.Handler(context.Background(), map[string]interface{}{
@@ -204,7 +273,6 @@ func TestFindRuntimeLink_HitReturnsCommit(t *testing.T) {
 	}
 
 	a := New(reg)
-	_ = a.Connect(context.Background(), adapter.ConnectionSpec{})
 
 	tool, _ := newTestRegistryWithAdapter(t, a).GetTool("git.find_runtime_link")
 	out, err := tool.Handler(context.Background(), map[string]interface{}{
@@ -250,7 +318,6 @@ func TestFindRuntimeLink_LowConfidenceFlagsForConfirm(t *testing.T) {
 	}
 
 	a := New(reg)
-	_ = a.Connect(context.Background(), adapter.ConnectionSpec{})
 
 	tool, _ := newTestRegistryWithAdapter(t, a).GetTool("git.find_runtime_link")
 	out, err := tool.Handler(context.Background(), map[string]interface{}{
@@ -283,6 +350,17 @@ func TestSetLinkerRegistry_UpdatesReference(t *testing.T) {
 }
 
 // helpers
+
+// connectedAdapter builds an adapter already connected to src.
+func connectedAdapter(t *testing.T, src string, reg *gitartifact.LinkerRegistry) *Adapter {
+	t.Helper()
+	a := New(reg)
+	if err := a.Connect(context.Background(), adapter.ConnectionSpec{DSN: src}); err != nil {
+		t.Fatalf("Connect(%s): %v", src, err)
+	}
+	t.Cleanup(func() { _ = a.Close(context.Background()) })
+	return a
+}
 
 func newTestRegistry(t *testing.T) *registry.Registry {
 	t.Helper()

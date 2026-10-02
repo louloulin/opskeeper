@@ -2,7 +2,7 @@
 //
 // recovery.execute 是 zero-manual-ops-loop Day 4 落地的闭环修复
 // BaseTool，由 orchestrator 的 recovered phase 调用（见
-// internal/manager/biz/loop/recovery.go）。它是 verify_recovery 之后的
+// core/manager/biz/loop/recovery.go）。它是 verify_recovery 之后的
 // 动作执行环节：闭环已经拿到 investigator 给出的 skill_id / target /
 // resource_type，并且 verify_recovery 已经判定需要修复；本工具负责把
 // mutating proposal gate 与底层 host_restart_service 桥接起来。
@@ -34,10 +34,10 @@ import (
 	"log/slog"
 	"time"
 
-	repairpreview "github.com/vincent-wuhan/opskeeper/internal/control/repairpreview"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	hitlmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
+	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // ToolNameRecoveryExecute is the stable wire name the LLM sees.

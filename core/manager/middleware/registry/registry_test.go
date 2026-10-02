@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
 )
 
 func TestRegistry_RegisterFactory(t *testing.T) {

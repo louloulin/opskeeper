@@ -26,11 +26,11 @@ import (
 	"sync"
 	"time"
 
-	chatruntime "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/chatruntime"
-	aiopsmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	managerprom "github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	managerprom "github.com/vincent-wuhan/opskeeper/core/floor/prom"
+	chatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
+	aiopsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // Repo is the persistence contract — implemented by
@@ -207,7 +207,7 @@ func NewUsecase(repo Repo, spawner WorkerSpawner, summarizer LLMSummarizer, cfg 
 	}
 	if cfg.SummarizerTimeout == 0 {
 		// Unified with the project-wide LLM timeout floor (see
-		// internal/pkg/llm/client.go::defaultTimeout). Was 30 s when
+		// core/manager/pkg/llm/client.go::defaultTimeout). Was 30 s when
 		// the default model was Haiku-class; bumped to 120 s once the
 		// cluster default moved to slower reasoning models so the
 		// report extractor's structured-JSON pass stops false-failing.

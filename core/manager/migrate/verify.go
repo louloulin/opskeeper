@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/vincent-wuhan/opskeeper/internal/migrate/clients"
+	"github.com/vincent-wuhan/opskeeper/core/manager/migrate/clients"
 )
 
 // VerifyOptions 控制验证行为。

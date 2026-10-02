@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // ChannelResolver picks the notification channels for an incident. The

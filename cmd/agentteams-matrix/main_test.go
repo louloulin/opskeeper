@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
 )
 
 func TestMatrix_PrintWithoutCheck(t *testing.T) {

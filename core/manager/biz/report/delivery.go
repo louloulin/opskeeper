@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/report"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
 )
 
 // Deliverer fans a finished report out to notification channels. It's a

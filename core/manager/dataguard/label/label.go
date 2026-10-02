@@ -16,10 +16,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard"
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard/heuristic"
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard/store"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/heuristic"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/store"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Repo 是 biz 视角的持久化接口（store 层实现）。

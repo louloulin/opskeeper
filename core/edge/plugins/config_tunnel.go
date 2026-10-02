@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // TunnelConfigFetcher pulls plugin configs from the manager via the

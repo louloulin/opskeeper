@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
 )
 
 // scriptedKernel is a ports.Agent that answers with a canned result. It

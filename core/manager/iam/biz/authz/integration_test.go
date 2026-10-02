@@ -9,7 +9,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 )
 
 func newTestEnforcer(t *testing.T) (*Enforcer, SensitivityTierRepo) {

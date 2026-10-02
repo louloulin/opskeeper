@@ -9,8 +9,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/topology"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/dbx"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/topology"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/dbx"
 )
 
 // Migrate registers nodes / relations / relation_types with GORM

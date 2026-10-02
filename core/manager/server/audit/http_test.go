@@ -13,10 +13,10 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
-	store "github.com/vincent-wuhan/opskeeper/internal/manager/data/audit/store"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	store "github.com/vincent-wuhan/opskeeper/core/manager/data/audit/store"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 const testKey = "audit-http-test-key-0123456789"

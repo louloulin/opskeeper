@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/vincent-wuhan/opskeeper/internal/iam/model"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // defaultSeedName is the canonical name of the platform's single

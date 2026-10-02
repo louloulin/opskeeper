@@ -24,7 +24,7 @@ import (
 	redis "github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/leader"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/leader"
 )
 
 // Drainer abstracts the HTTP server's Shutdown method so the package

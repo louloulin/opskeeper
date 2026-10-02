@@ -9,7 +9,7 @@
 // permission gate, and the audit log from skill metadata.
 //
 // Sub-packaged skills (one per directory) are blank-imported below so
-// the same `_ "internal/skill/builtin"` import in cmd/opskeeper + cmd/
+// the same `_ "core/floor/skill/builtin"` import in cmd/opskeeper + cmd/
 // opskeeper-edge transitively wires every skill regardless of layout.
 // New mutating / dangerous skills live in their own
 // sub-packages so the registration shim and any auxiliary types stay
@@ -21,5 +21,5 @@ package builtin
 // new mutating-class skill: write the file under its own subdir and
 // add a one-line blank import here.
 import (
-	_ "github.com/vincent-wuhan/opskeeper/internal/skill/builtin/restart_service"
+	_ "github.com/vincent-wuhan/opskeeper/core/floor/skill/builtin/restart_service"
 )

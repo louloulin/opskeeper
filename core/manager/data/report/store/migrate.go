@@ -5,8 +5,8 @@ package store
 import (
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/report"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/dbx"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/dbx"
 )
 
 // Migrate registers the report tables with gorm AutoMigrate. AutoMigrate

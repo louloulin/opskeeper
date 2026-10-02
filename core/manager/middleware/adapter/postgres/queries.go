@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
 )
 
 // identRe is the shape of an unquoted PostgreSQL identifier this adapter
@@ -331,6 +331,7 @@ const (
 	catVacuumStatus = "vacuum_status"
 	catSlowLog      = "slow_log"
 	catExplain      = "explain"
+	catReplication  = "replication"
 )
 
 var diagnoseRoutes = map[string]diagnoseRoute{
@@ -411,6 +412,16 @@ var diagnoseRoutes = map[string]diagnoseRoute{
 		query:   qExplain,
 		summary: "query plan; the statement is not executed",
 	},
+	catReplication: {
+		query:   qReplicationStatus,
+		bind:    func(q adapter.DiagnoseQuery) ([]any, error) { return nil, nil },
+		summary: "standbys and their WAL lag",
+		// The empty answer is the one that needs saying here: an empty
+		// pg_stat_replication is most often "this is not the primary" or
+		// "the DSN points somewhere else", and both read as "replication
+		// is fine" if nobody says otherwise.
+		emptySuggestion: "no rows means this instance is not a primary with connected standbys, which is a different answer from zero lag",
+	},
 }
 
 // diagnoseCategoryNames lists the categories, for the error message.
@@ -422,3 +433,39 @@ func diagnoseCategoryNames() []string {
 	sort.Strings(names)
 	return names
 }
+
+// qReplicationStatus reads the WAL sender's view of each standby.
+//
+// Why pg_stat_replication and not the standby's own view. This adapter
+// connects to one DSN, which is normally the primary. pg_stat_replication
+// lives on the primary and reports every standby connected to it, which
+// answers "is replication behind" for the whole cluster from one connection.
+// A standby's own pg_last_wal_replay_lsn() answers a narrower question and
+// requires connecting to that standby, which is a different DSN.
+//
+// The lag figures are computed two ways because they mean different things.
+// `replay_lag_bytes` is how much WAL has not been applied — what grows during
+// an incident and what an operator sizes a fix against. `replay_lag_seconds`
+// is the time behind the primary, which is what an RPO statement is written
+// in. Neither is derivable from the other: a standby can be a gigabyte behind
+// and two seconds behind, or a megabyte behind and twenty minutes behind
+// after a clock or a long transaction.
+//
+// A NULL replay_lsn or NULL replay_lag is NOT zero lag. It means the standby
+// has not yet reported those positions — a new connection, or a standby that
+// is still catching up from a base backup — and the adapter reports those as
+// unknown rather than as healthy. `pg_wal_lsn_diff` returns NULL when either
+// argument is NULL, which is what carries that through.
+const qReplicationStatus = `
+SELECT application_name,
+       client_addr,
+       state,
+       sync_state,
+       sent_lsn,
+       write_lsn,
+       flush_lsn,
+       replay_lsn,
+       pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS replay_lag_bytes,
+       EXTRACT(EPOCH FROM replay_lag) AS replay_lag_seconds
+FROM pg_stat_replication
+ORDER BY pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) DESC NULLS FIRST`

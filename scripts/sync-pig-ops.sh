@@ -8,7 +8,7 @@
 # copy is how they drift.
 #
 # So the copies are generated, and the drift tests in
-# internal/pkg/pluginmanifest are the check that this script was run. Run
+# core/floor/pluginmanifest are the check that this script was run. Run
 # this after touching anything under core/pig/extensions/, then run the
 # tests. Editing a packaged file directly is always wrong — the next run
 # of this script overwrites it, which is the intended outcome.

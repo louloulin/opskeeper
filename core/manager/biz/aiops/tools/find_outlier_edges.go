@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // ToolNameFindOutlierEdges is the stable wire name the LLM sees.

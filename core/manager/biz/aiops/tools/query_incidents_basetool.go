@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	alertbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // QueryIncidentsTool is the BaseTool form of query_incidents. Mirrors

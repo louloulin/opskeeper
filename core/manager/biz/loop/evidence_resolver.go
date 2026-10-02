@@ -15,10 +15,17 @@ package loop
 // returns it; when it recorded several it lists them and declines, because
 // choosing between them is a judgement the evidence does not make.
 //
-// The map is deliberately small. An action with no entry returns (nil, nil),
-// which leaves the invoker's own missing-argument refusal in charge — the
-// same behaviour this code had before an implementation existed. Declaring
-// an extractor that guesses would be worse than declaring none.
+// The map covers every action whose arguments are recorded somewhere the
+// investigation can be held to. An action with no entry returns (nil, nil),
+// which leaves the invoker's own missing-argument refusal in charge.
+// Declaring an extractor that guesses would be worse than declaring none —
+// so the rule for adding one is that it must be able to say no.
+//
+// Two sources of truth feed it. The pg resolvers read pg_stat_activity rows,
+// which the investigator queried. The seven object-identity resolvers read
+// the recorded subject (see subject.go), which is the firing alert's own
+// labels. Both are observations rather than inferences, and both refuse when
+// the evidence is absent or contradicts itself.
 
 import (
 	"context"
@@ -53,8 +60,126 @@ type evidenceArgExtractor func(req RemediationRequest, evidence []EvidenceItem) 
 // an action that is not in this map is not resolved, and a name that drifts
 // stops resolving rather than resolves wrongly.
 var evidenceArgExtractors = map[string]evidenceArgExtractor{
-	"pg.kill_session":     extractPGSessionPID,
-	"pg.connection_pause": extractPGRole,
+	"pg.kill_session":       extractPGSessionPID,
+	"pg.connection_pause":   extractPGRole,
+	"pg.vacuum_table":       extractPGBloatTable,
+	"pg.explain_query":      extractPGSlowQuery,
+	"k8s.evict_pod":         extractK8sPod,
+	"k8s.rolling_restart":   extractK8sDeployment,
+	"k8s.rollout_undo":      extractK8sStuckRollout,
+	"k8s.uncordon":          extractK8sNotReadyNode,
+	"k8s.drain":             extractK8sNotReadyNode,
+	"k8s.scale":             extractK8sScale,
+	"k8s.resize_pvc":        extractK8sResizePVC,
+	"kafka.repartition":     extractKafkaRepartition,
+	"mq.drain_queue":        extractMQQueue,
+	"mq.replay_messages":    extractMQQueue,
+	"host.restart_service":  extractHostUnit,
+	"host.kill_process":     extractHostHotProcess,
+	"host.remove_old_logs":  extractHostLogPath,
+	"redis.client_kill":     extractRedisAddr,
+	"redis.scan_and_delete": extractRedisMinBytes,
+}
+
+// Accepted alert-label keys per subject field.
+//
+// An alert names its object under whichever key its rule was written with,
+// so each field accepts the spellings that appear in real rules rather than
+// one canonical name. These are the ONLY keys an extractor will read: a
+// label that is not listed here cannot become an argument, so adding an
+// unrelated label to the platform does not widen what a write action can act
+// on.
+var (
+	podLabelKeys        = []string{"pod", "k8s_pod", "pod_name", "exported_pod", "kubernetes_pod_name"}
+	deploymentLabelKeys = []string{"deployment", "k8s_deployment", "deploy", "deployment_name", "workload"}
+	replicasLabelKeys   = []string{"replicas", "desired_replicas", "spec_replicas"}
+	queueLabelKeys      = []string{"queue", "mq_queue", "queue_name", "kafka_topic", "topic"}
+	unitLabelKeys       = []string{"unit", "systemd_unit", "service", "service_name"}
+	addrLabelKeys       = []string{"addr", "client_addr", "client", "address"}
+)
+
+// subjectArg reads one identity argument from the recorded subject.
+func subjectArg(req RemediationRequest, evidence []EvidenceItem, action, arg string, accepted []string) (map[string]any, error) {
+	labels, ok := subjectLabels(evidence)
+	if !ok {
+		return nil, missingSubject(action, arg, accepted)
+	}
+	value, _, err := subjectValue(labels, accepted)
+	if err != nil {
+		return nil, fmt.Errorf("%s cannot resolve %s: %w", action, arg, err)
+	}
+	if value == "" {
+		return nil, missingSubject(action, arg, accepted)
+	}
+	return map[string]any{arg: value}, nil
+}
+
+func extractK8sPod(req RemediationRequest, evidence []EvidenceItem) (map[string]any, error) {
+	return subjectArg(req, evidence, "k8s.evict_pod", "pod", podLabelKeys)
+}
+
+func extractK8sDeployment(req RemediationRequest, evidence []EvidenceItem) (map[string]any, error) {
+	return subjectArg(req, evidence, "k8s.rolling_restart", "deployment", deploymentLabelKeys)
+}
+
+func extractK8sScale(req RemediationRequest, evidence []EvidenceItem) (map[string]any, error) {
+	deployment, _, err := subjectDeployment(evidence)
+	if err != nil {
+		return nil, err
+	}
+	replicas, _, err := subjectReplicas(evidence)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"deployment": deployment, "replicas": replicas}, nil
+}
+
+func subjectDeployment(evidence []EvidenceItem) (string, []string, error) {
+	labels, ok := subjectLabels(evidence)
+	if !ok {
+		return "", nil, missingSubject("k8s.scale", "deployment", deploymentLabelKeys)
+	}
+	value, keys, err := subjectValue(labels, deploymentLabelKeys)
+	if err != nil {
+		return "", keys, fmt.Errorf("k8s.scale cannot resolve deployment: %w", err)
+	}
+	if value == "" {
+		return "", nil, missingSubject("k8s.scale", "deployment", deploymentLabelKeys)
+	}
+	return value, keys, nil
+}
+
+func subjectReplicas(evidence []EvidenceItem) (int, []string, error) {
+	labels, ok := subjectLabels(evidence)
+	if !ok {
+		return 0, nil, missingSubject("k8s.scale", "replicas", replicasLabelKeys)
+	}
+	value, keys, err := subjectValue(labels, replicasLabelKeys)
+	if err != nil {
+		return 0, keys, fmt.Errorf("k8s.scale cannot resolve replicas: %w", err)
+	}
+	if value == "" {
+		return 0, nil, missingSubject("k8s.scale", "replicas", replicasLabelKeys)
+	}
+	n, convErr := strconv.Atoi(value)
+	if convErr != nil || n < 0 {
+		return 0, keys, fmt.Errorf("k8s.scale cannot resolve replicas: the alert records %q (%s), "+
+			"which is not a replica count; scaling to it would be a guess", value, strings.Join(keys, "/"))
+	}
+	return n, keys, nil
+}
+
+func extractMQQueue(req RemediationRequest, evidence []EvidenceItem) (map[string]any, error) {
+	action := strings.TrimSpace(req.Option.Action)
+	return subjectArg(req, evidence, action, "queue", queueLabelKeys)
+}
+
+func extractHostUnit(req RemediationRequest, evidence []EvidenceItem) (map[string]any, error) {
+	return subjectArg(req, evidence, "host.restart_service", "unit", unitLabelKeys)
+}
+
+func extractRedisAddr(req RemediationRequest, evidence []EvidenceItem) (map[string]any, error) {
+	return subjectArg(req, evidence, "redis.client_kill", "addr", addrLabelKeys)
 }
 
 // Resolve implements ArgResolver.

@@ -9,8 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizsetting "github.com/vincent-wuhan/opskeeper/internal/manager/biz/setting"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizsetting "github.com/vincent-wuhan/opskeeper/core/manager/biz/setting"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 type llmRevealTestService struct {

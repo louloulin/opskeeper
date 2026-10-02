@@ -14,8 +14,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 // newTestAdapter wires an adapter against a stub API server.
@@ -104,11 +104,12 @@ func TestRegisterTools_ExposesEveryLoopActionAndRequiredArgs(t *testing.T) {
 	names := reg.ListTools("k8s.")
 	want := []string{
 		"k8s.cluster_info", "k8s.node_list", "k8s.pod_list", "k8s.deployment_status", "k8s.rollout_status",
-		"k8s.rollout_history", "k8s.pod_logs", "k8s.events", "k8s.top_nodes",
+		"k8s.rollout_history", "k8s.pod_logs", "k8s.events", "k8s.top_nodes", "k8s.top_pods",
+		"k8s.pvc_usage", "k8s.pvc_list",
 		"k8s.describe_pod",
 		"k8s.scale", "k8s.rollout_undo", "k8s.rolling_restart", "k8s.cordon", "k8s.uncordon",
 		"k8s.drain", "k8s.evict_pod", "k8s.resize_pvc",
-		"k8s.exec_into_pod",
+		"k8s.exec_into_pod", "k8s.cleanup_logs",
 	}
 	present := map[string]bool{}
 	for _, n := range names {

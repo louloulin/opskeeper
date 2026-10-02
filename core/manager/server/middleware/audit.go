@@ -8,9 +8,9 @@ import (
 
 	chimw "github.com/go-chi/chi/v5/middleware"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
-	auditmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // auditContextKey points to a mutable *auditSlot in the request

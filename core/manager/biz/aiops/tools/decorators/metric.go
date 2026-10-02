@@ -8,7 +8,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 // metricCollectors bundles the Prom collectors registered by the metric
@@ -27,7 +27,7 @@ var (
 )
 
 // getMetricCollectors returns (and lazily creates / registers) the
-// collectors for reg. Identical pattern to internal/pkg/llm/metrics.go's
+// collectors for reg. Identical pattern to core/manager/pkg/llm/metrics.go's
 // registerOrExisting — we treat AlreadyRegisteredError as "reuse the
 // existing collector" so multiple decorator chains over the same
 // registry don't panic.

@@ -7,13 +7,13 @@ import (
 
 	"gorm.io/gorm"
 
-	investigator "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert/investigator"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	investigator "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert/investigator"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // InvestigationRepo is the storage layer for investigation_reports.
-// Operations match the biz interface in internal/manager/biz/alert/investigator.
+// Operations match the biz interface in core/manager/biz/alert/investigator.
 type InvestigationRepo struct {
 	db *gorm.DB
 }

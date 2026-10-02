@@ -48,7 +48,7 @@ import (
 	"strings"
 	"time"
 
-	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/chatdiagnose"
+	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/chatdiagnose"
 )
 
 // PostmortemContent is the LLM-rendered rich content body for the
@@ -129,7 +129,7 @@ const PostmortemMarkdownMinLen = 100
 // live in git per design §6.2).
 //
 // The Day 4 + Day 5 wire-up will provide a concrete impl
-// (internal/manager/biz/report/postmortem_sink.go already has a
+// (core/manager/biz/report/postmortem_sink.go already has a
 // Sink wrapper around go-git; this batch supplies only the
 // placeholder SHA computation per borrow-map §B.3 deferred item).
 //

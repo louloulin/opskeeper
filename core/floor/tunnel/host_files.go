@@ -6,7 +6,7 @@ import "time"
 // (Caller) and edge (RegisterHandler) use to address the three filesystem
 // inspection tools introduced by PR-8 of The skill manifest at
 // skills/host-files/SKILL.md routes the LLM to these via the BaseTool
-// implementations in internal/manager/biz/aiops/tools/host_files_basetool.go.
+// implementations in core/manager/biz/aiops/tools/host_files_basetool.go.
 //
 // Body wire format is JSON (). Field names match the public
 // JSON Schema declared in the BaseTool Info() method —

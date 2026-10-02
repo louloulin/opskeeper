@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins"
+	"github.com/vincent-wuhan/opskeeper/core/edge/plugins"
 )
 
 func TestRenderHappyPath(t *testing.T) {

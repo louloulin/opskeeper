@@ -3,7 +3,7 @@ package sqlite
 import (
 	"gorm.io/gorm"
 
-	"github.com/vincent-wuhan/opskeeper/internal/iam/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
 )
 
 // Migrate registers the iam user model with gorm's AutoMigrate. It is

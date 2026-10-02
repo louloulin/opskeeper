@@ -1,5 +1,5 @@
 // Package bash registers the edge-side handler for MethodBashExec
-// (internal/pkg/tunnel/bash.go). The handler is a thin shim over
+// (core/floor/tunnel/bash.go). The handler is a thin shim over
 // cmdpolicy.Sandbox: parse the wire request, call sandbox.Exec,
 // translate the ShellResult back to a BashExecResponse, return.
 //
@@ -29,9 +29,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/cmdpolicy"
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/host_files"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/edge/cmdpolicy"
+	"github.com/vincent-wuhan/opskeeper/core/edge/host_files"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // DefaultPolicyOverridePath is the fixed location an operator may drop

@@ -6,9 +6,9 @@ import (
 
 	"gorm.io/gorm"
 
-	bizreport "github.com/vincent-wuhan/opskeeper/internal/manager/biz/report"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/report"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	bizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Compile-time check that Repo satisfies the API read surface too.

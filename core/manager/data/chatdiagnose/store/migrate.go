@@ -13,7 +13,7 @@ package store
 import (
 	"gorm.io/gorm"
 
-	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/chatdiagnose"
+	chatdiagnosemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/chatdiagnose"
 )
 
 // Migrate 注册 chatdiagnose 三表（diagnostic_conversation /

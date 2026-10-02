@@ -9,22 +9,22 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
 	"github.com/vincent-wuhan/opskeeper/core/harness/vocabulary"
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	managerbizloop "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop/investigatorreal"
-	gitadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter/git"
-	hostadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter/host"
-	k8sadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter/k8s"
-	mqadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter/mq"
-	kafkaadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter/mq/kafka"
-	rabbitmqadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter/mq/rabbitmq"
-	pgadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter/postgres"
-	redisadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter/redis"
-	middlewareregistry "github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	managerbizloop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/loop/investigatorreal"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact"
+	gitadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/git"
+	hostadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/host"
+	k8sadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/k8s"
+	mqadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/mq"
+	kafkaadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/mq/kafka"
+	rabbitmqadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/mq/rabbitmq"
+	pgadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/postgres"
+	redisadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/redis"
+	middlewareregistry "github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 // opskeeper-eval vocabulary — can this build produce the answers the golden
@@ -226,8 +226,12 @@ func middlewareAdapterTools() ([]string, map[string][]string, error) {
 		{"host", func(r *middlewareregistry.Registry) error {
 			return hostadapter.RegisterTools(r, hostadapter.New())
 		}},
-		{"kafka", kafkaadapter.RegisterTools},
-		{"rabbitmq", rabbitmqadapter.RegisterTools},
+		{"kafka", func(r *middlewareregistry.Registry) error {
+			return kafkaadapter.RegisterTools(r, kafkaadapter.New())
+		}},
+		{"rabbitmq", func(r *middlewareregistry.Registry) error {
+			return rabbitmqadapter.RegisterTools(r, rabbitmqadapter.New())
+		}},
 		{"git", func(r *middlewareregistry.Registry) error {
 			return gitadapter.RegisterTools(r, gitadapter.New(gitartifact.NewLinkerRegistry()))
 		}},

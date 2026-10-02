@@ -10,10 +10,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigagent"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
 )
 
 // The two interfaces this binding exists to satisfy. Declared here so a

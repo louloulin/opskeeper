@@ -8,8 +8,8 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/edge/toolbroker"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
-	"github.com/vincent-wuhan/opskeeper/internal/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // The node's tool invoker: what the broker dispatches to.
@@ -41,9 +41,11 @@ import (
 // where it is permissioned by the skill registry, covered by tests written
 // before any of this existed, and recorded.
 //
-// It lives in the composition root rather than in internal/edgeagent
-// because it is the one place that knows both the skill framework and the
-// broker protocol exist, and internal/edgeagent may not import core/edge.
+// It lives in the composition root rather than in the edge module because
+// it is the one place that knows both the skill framework and the broker
+// protocol exist: core/edge holds the tools and the broker, and cmd wires
+// them to the tunnel. A component that knew both ends would be the whole
+// node plane in one package.
 
 // agentToolInvoker runs a tool the broker has already permitted.
 type agentToolInvoker struct {

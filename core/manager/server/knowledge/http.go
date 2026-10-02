@@ -30,14 +30,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/knowledge"
-	auditmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/knowledge"
-	auditmw "github.com/vincent-wuhan/opskeeper/internal/manager/server/middleware"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/docextract"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/docextract"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	auditmw "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
 )
 
 // Service is the narrow biz surface the handler depends on.

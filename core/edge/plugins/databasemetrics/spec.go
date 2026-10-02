@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins/metricscommon"
+	"github.com/vincent-wuhan/opskeeper/core/edge/plugins/metricscommon"
 )
 
 type connectionSpec struct {

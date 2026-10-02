@@ -15,9 +15,9 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/secretbox"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/secretbox"
 )
 
 const (
@@ -422,6 +422,8 @@ func (a *Adapter) dispatch(ctx context.Context, op string, p params) (int, strin
 		return a.configSet(ctx, p)
 	case "flushdb":
 		return a.flushDB(ctx, p)
+	case "scan_and_delete":
+		return a.scanAndDelete(ctx, p)
 	default:
 		return 0, "", false, fmt.Errorf("%w: redis.%s", ErrUnknownOperation, op)
 	}
@@ -437,6 +439,11 @@ func (a *Adapter) OpRiskLevel(op string) adapter.RiskLevel {
 	case "config_set":
 		return adapter.RiskL3HardWrite
 	case "client_kill", "failover":
+		return adapter.RiskL3HardWrite
+	case "scan_and_delete":
+		// Deletes real data, one key at a time, with no undo. It sits
+		// below flushdb only because the floor is required and the batch
+		// is capped, so one call cannot empty a keyspace.
 		return adapter.RiskL3HardWrite
 	case "flushdb":
 		return adapter.RiskL4Destructive
@@ -477,6 +484,10 @@ func RegisterTools(reg *registry.Registry, a *Adapter) error {
 		makeTool("redis.config_set", adapter.RiskL3HardWrite, "修改配置（需审批）",
 			map[string]string{"parameter": "string!", "value": "string!"}, writeOp(a, "config_set")),
 		// L4 破坏性
+		makeTool("redis.scan_and_delete", adapter.RiskL3HardWrite,
+			"按大小下限扫描并删除超大 key（min_bytes 必填，单次上限 100 个，支持 dry_run）",
+			map[string]string{"min_bytes": "int!", "pattern": "string", "limit": "int", "scan_limit": "int", "dry_run": "bool"},
+			writeOp(a, "scan_and_delete")),
 		makeTool("redis.flushdb", adapter.RiskL4Destructive,
 			"清空当前 db（删除全部 key，需审批 + 显式确认）",
 			map[string]string{"confirm": "string!"}, writeOp(a, "flushdb")),

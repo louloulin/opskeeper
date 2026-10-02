@@ -124,18 +124,25 @@ eval-vocabulary: ## golden case 能力期望 vs 本构建真实词表（哪些 c
 # lint
 # ----------------------------------------------------------------------------
 
-.PHONY: lint arch-lint
+.PHONY: lint arch-lint arch-lint-run
 lint: ## 运行 golangci-lint
 	golangci-lint run
 
 arch-lint: ## 运行 go-arch-lint（校验 BC 边界）
-	@command -v go-arch-lint >/dev/null 2>&1 || { \
+	@if command -v go-arch-lint >/dev/null 2>&1; then \
+		go-arch-lint check; \
+	else \
 		echo "WARNING: go-arch-lint is not installed, so .go-arch-lint.yml is documentation only."; \
 		echo "         The enforced subset (bounded contexts may not reach each other,"; \
-		echo "         internal/pkg stays business agnostic, service goes through biz) runs"; \
-		echo "         under 'make module-check'. Install go-arch-lint to check the rest."; \
-		exit 0; }
-	go-arch-lint check
+		echo "         core/manager/pkg and core/floor stay business agnostic,"; \
+		echo "         service goes through biz, and since decision 58 the"; \
+		echo "         service -> biz <- data direction) runs"; \
+		echo "         under 'make module-check'. Install go-arch-lint, or run"; \
+		echo "         'make arch-lint-run' to fetch and run it without installing."; \
+	fi
+
+arch-lint-run: ## 不安装、直接用 go run 跑 go-arch-lint（首次需要网络）
+	go run github.com/fe3dback/go-arch-lint@latest check
 
 module-check: ## 校验 OpsKeeper 2.0 模块边界（唯一 PiG 导入点 / core 无基础设施依赖）
 	go run ./scripts/modulecheck .
@@ -144,15 +151,19 @@ module-check: ## 校验 OpsKeeper 2.0 模块边界（唯一 PiG 导入点 / core
 # module now, and that separation is the point. Anything that wants the
 # whole repository tested has to say so explicitly, or the golden-case
 # corpus silently stops being run.
-module-test: ## 运行新模块（core / pig / edge / harness / sdk）的测试
+module-test: ## 运行新模块（core / pig / edge / floor / manager / harness / sdk）的测试
 	cd core && go test ./... -count=1
 	cd core/pig && go test ./... -count=1
 	cd core/edge && go test ./... -count=1
+	cd core/floor && go test ./... -count=1
+	cd core/manager && go test ./... -count=1
 	cd core/harness && go test ./... -count=1
 	cd sdk && go test ./... -count=1
 	cd core && go build ./...
 	cd core/pig && go build ./...
 	cd core/edge && go build ./...
+	cd core/floor && go build ./...
+	cd core/manager && go build ./...
 	cd core/harness && go build ./...
 	cd sdk && go build ./...
 
@@ -160,6 +171,8 @@ module-race: ## 对新模块跑竞态检测（supervisor 重启循环是并发�
 	cd core && go test ./... -count=1 -race
 	cd core/pig && go test ./... -count=1 -race
 	cd core/edge && go test ./... -count=1 -race
+	cd core/floor && go test ./... -count=1 -race
+	cd core/manager && go test ./... -count=1 -race
 	cd core/harness && go test ./... -count=1 -race
 
 # ----------------------------------------------------------------------------

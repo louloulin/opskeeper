@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	tadapter "github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
+	tadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
 func TestChain_WrapsTool_FullStack(t *testing.T) {

@@ -19,7 +19,7 @@
 package proposal
 
 import (
-	"github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 )
 
 // SeverityTier is a re-exported string type for the three approval

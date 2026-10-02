@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/config"
+	"github.com/vincent-wuhan/opskeeper/core/floor/config"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // SeedChannelsFromConfig keeps notification_channels in sync with the env

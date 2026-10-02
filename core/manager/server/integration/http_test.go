@@ -10,9 +10,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizgrafana "github.com/vincent-wuhan/opskeeper/internal/manager/biz/grafana"
-	pkggrafana "github.com/vincent-wuhan/opskeeper/internal/pkg/grafana"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizgrafana "github.com/vincent-wuhan/opskeeper/core/manager/biz/grafana"
+	pkggrafana "github.com/vincent-wuhan/opskeeper/core/manager/pkg/grafana"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // stubGrafana implements GrafanaService with overridable hooks. Each hook

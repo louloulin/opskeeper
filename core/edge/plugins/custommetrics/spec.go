@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins/metricscommon"
+	"github.com/vincent-wuhan/opskeeper/core/edge/plugins/metricscommon"
 )
 
 func parseSpec(spec map[string]interface{}) ([]metricscommon.Target, error) {

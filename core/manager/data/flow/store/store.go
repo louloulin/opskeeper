@@ -11,10 +11,10 @@ import (
 
 	"gorm.io/gorm"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/flow"
-	schedulerbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/scheduler"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/flow"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/flow"
+	schedulerbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/scheduler"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/flow"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Repo implements biz/flow.Repo.

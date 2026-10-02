@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/report"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // reportListItem is the compact shape for the list view.

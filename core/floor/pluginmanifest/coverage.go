@@ -43,6 +43,36 @@ const (
 	CapDatabase = "database"
 	// CapSource is the code repository registry.
 	CapSource = "source"
+	// CapPostgres is the live PostgreSQL adapter: sessions, lock chains,
+	// bloat, vacuum and replication state. It is separate from CapDatabase,
+	// which is the *registered sources* view from exporter metrics — one is
+	// asked of the instance, the other of what OpsKeeper recorded about it.
+	CapPostgres = "pg"
+	// CapRedis is the live Redis adapter: key census, memory shape, slow log.
+	CapRedis = "redis"
+	// CapK8s is the live Kubernetes adapter: pods, rollouts, nodes, events.
+	CapK8s = "k8s"
+	// CapMQ is the neutral broker adapter, for deployments wired through it
+	// rather than through a vendor-specific one.
+	CapMQ = "mq"
+	// CapKafka and CapRabbitMQ are the two vendor adapters. They are their
+	// own families because a case names the broker it is about — a
+	// kafka.consumer_lag expectation is not answered by a RabbitMQ tool —
+	// and the directory a case sits in is the topic, not the system.
+	CapKafka    = "kafka"
+	CapRabbitMQ = "rabbitmq"
+	// CapGitArtifact is the git-artifact linker: a runtime symbol (a
+	// PostgreSQL query, a Redis command, a Kubernetes image, an HTTP route)
+	// resolved back to the commit and file:line that produced it.
+	//
+	// It is its own family because it is not "git" — the git adapter's other
+	// tools read a repository, and this one reads a correlation index. It is
+	// also the case that made the capability table's doc comment true: the
+	// tool is git.find_runtime_link and the family is git-artifact, so a map
+	// that guessed from the prefix would have filed it under "git" and
+	// silently left the k8s/pod-oom case uncovered.
+	CapGitArtifact = "git-artifact"
+
 	// CapRecovery is the bounded-remediation dispatcher: a reserved,
 	// approved action chosen from a fixed catalogue rather than composed
 	// by the model. It is its own family because it is not "host" —
@@ -95,6 +125,71 @@ var toolCapabilities = map[string]string{
 	"query_promql":            CapObservability,
 	"query_traceql":           CapObservability,
 	"read_source":             CapSource,
+
+	// --- opskeeper-sre-middleware ---
+	//
+	// These names are the adapters' own, read off a live registration by
+	// core/manager/middleware/toolset rather than inferred, and the entries are
+	// written out for the reason the top of this file gives: the map is the
+	// place a claim about a package is written down, and a rule derived from
+	// the prefix would be a second, silent opinion about it.
+	// TestMiddlewareFamiliesComeFromTheAdapters (core/manager/middleware/toolset)
+	// and TestTheMiddlewareFamiliesMatchTheAdapters (cmd/opskeeper-eval,
+	// which may import both sides) fail if these entries and the adapters'
+	// prefixes disagree.
+	"pg.active_sessions":        CapPostgres,
+	"pg.connect":                CapPostgres,
+	"pg.explain_query":          CapPostgres,
+	"pg.index_usage":            CapPostgres,
+	"pg.list_databases":         CapPostgres,
+	"pg.list_schemas":           CapPostgres,
+	"pg.list_tables":            CapPostgres,
+	"pg.lock_waits":             CapPostgres,
+	"pg.long_running_txns":      CapPostgres,
+	"pg.replication_status":     CapPostgres,
+	"pg.slow_log":               CapPostgres,
+	"pg.table_bloat":            CapPostgres,
+	"pg.top_queries_by_calls":   CapPostgres,
+	"pg.top_queries_by_time":    CapPostgres,
+	"pg.vacuum_status":          CapPostgres,
+	"redis.big_keys":            CapRedis,
+	"redis.blocked_clients":     CapRedis,
+	"redis.client_list":         CapRedis,
+	"redis.cluster_info":        CapRedis,
+	"redis.config_get":          CapRedis,
+	"redis.connect":             CapRedis,
+	"redis.dbsize":              CapRedis,
+	"redis.fragmentation_ratio": CapRedis,
+	"redis.info":                CapRedis,
+	"redis.key_space":           CapRedis,
+	"redis.memory_usage":        CapRedis,
+	"redis.slow_log":            CapRedis,
+	"k8s.cluster_info":          CapK8s,
+	"k8s.connect":               CapK8s,
+	"k8s.deployment_status":     CapK8s,
+	"k8s.events":                CapK8s,
+	"k8s.node_list":             CapK8s,
+	"k8s.pod_list":              CapK8s,
+	"k8s.pod_logs":              CapK8s,
+	"k8s.pvc_list":              CapK8s,
+	"k8s.pvc_usage":             CapK8s,
+	"k8s.rollout_history":       CapK8s,
+	"k8s.rollout_status":        CapK8s,
+	"k8s.top_nodes":             CapK8s,
+	"k8s.top_pods":              CapK8s,
+	"kafka.broker_skew":         CapKafka,
+	"kafka.consumer_lag":        CapKafka,
+	"kafka.partition_skew":      CapKafka,
+	"kafka.topic_list":          CapKafka,
+	"rabbitmq.cluster_info":     CapRabbitMQ,
+	"rabbitmq.consumer_status":  CapRabbitMQ,
+	"rabbitmq.queue_depth":      CapRabbitMQ,
+	"rabbitmq.queue_list":       CapRabbitMQ,
+	"mq.broker_status":          CapMQ,
+	"mq.connect":                CapMQ,
+	"mq.inspect_consumer_lag":   CapMQ,
+	"mq.queue_list":             CapMQ,
+	"git.find_runtime_link":     CapGitArtifact,
 
 	// --- opskeeper-sre-repair ---
 	"apply_config_change":  CapAlert,
@@ -168,9 +263,11 @@ func (c CaseCoverage) Complete() bool { return len(c.Uncovered) == 0 }
 //
 // A case line with no dot is returned whole: it names no family, so
 // nothing can be said about coverage and the caller sees a miss rather
-// than a panic. A line whose family is not one a package can serve — "pg"
-// and "k8s" today, because the middleware adapters are not plugin
-// packages — is reported as uncovered, which is true.
+// than a panic. A line whose family no package serves is reported as
+// uncovered, which is true. Since the middleware package shipped, that set
+// is small — "host" and "git", the two families still served only by the
+// control plane — and each is explained in MiddlewareFamilies rather than
+// left to read as an oversight.
 func CapabilityPrefix(expectation string) string {
 	if i := strings.IndexByte(expectation, '.'); i >= 0 {
 		return expectation[:i]
@@ -217,47 +314,44 @@ func CoverageOf(caseID string, expectations []string, plugins []Plugin) CaseCove
 }
 
 // MiddlewareFamilies are the resource prefixes the golden cases use that
-// live in the control plane rather than in a plugin package.
+// still have no plugin package offering them.
+//
+// It used to be pg, redis, k8s, mq, kafka and rabbitmq. Those six became
+// the opskeeper-sre-middleware package, and deleting them from this list is
+// the one-line change this comment promised when it was first written: the
+// adapter is still the implementation, but a package now offers it, so the
+// report credits the package instead of explaining the gap.
+//
+// Two entries remain, and both are decisions rather than oversights:
+//
+//   - host — the host adapter executes as root on the machine OpsKeeper
+//     exists to keep alive, over a local:// or ssh:// target. The `host`
+//     family is already served by the read-only package's own probes and by
+//     get_host_load, so its reads are a second route to an answer the fleet
+//     already has, and its writes belong to the approval path.
+//   - git — the git adapter's repository reads duplicate the observability
+//     package's source family. Its one non-duplicate, the git-artifact
+//     linker, is packaged and is its own family (see CapGitArtifact), which
+//     is why "git" here does not mean "the git adapter is unpackaged".
+//
+// core/manager/middleware/toolset records the same exclusions next to the code
+// that enforces them, and a test in cmd/opskeeper-eval — the only package
+// that may import both sides — fails if the two lists stop agreeing.
 //
 // The vocabulary is read from the adapter implementations
-// (internal/middleware/adapter/<pkg>/<pkg>.go registers "<pkg>.method" tool
+// (core/manager/middleware/adapter/<pkg>/<pkg>.go registers "<pkg>.method" tool
 // names), not from the resource directory a case happens to sit in. The two
 // differ: the k8s cases name k8s.* tools, but the mq cases name kafka.*
 // and rabbitmq.* — the directory is the topic, the prefix is the system —
 // so a list built from directory names would fail to place every Kafka and
-// RabbitMQ expectation and report them as packages that were never
-// supposed to exist.
-//
-// It is a named list rather than a comment because it is a decision, and
-// because it makes the day one of these becomes a plugin package a
-// one-line deletion rather than a hunt.
-var MiddlewareFamilies = []string{"pg", "redis", "k8s", "mq", "kafka", "rabbitmq"}
-
-// NonPackageFamilies are the prefixes the golden cases use that belong to
-// neither a plugin package nor a middleware adapter.
-//
-// git-artifact is a Linker — a correlation between a deployment and the
-// commit that produced it — not a tool family on any host or registry.
-// Keeping it apart from MiddlewareFamilies keeps the two claims distinct:
-// one says "served elsewhere in the control plane", the other says "not a
-// tool family at all". A reader who conflated them would go looking for a
-// git adapter to package.
-var NonPackageFamilies = []string{"git-artifact"}
+// RabbitMQ expectation and report them as packages that were never supposed
+// to exist.
+var MiddlewareFamilies = []string{string(CapHost), "git"}
 
 // IsMiddlewareFamily reports whether a family is served by a control-plane
-// adapter rather than a plugin package.
+// adapter that no shipped package offers.
 func IsMiddlewareFamily(family string) bool {
 	for _, f := range MiddlewareFamilies {
-		if f == family {
-			return true
-		}
-	}
-	return false
-}
-
-// IsNonPackageFamily reports whether a family is not a tool family at all.
-func IsNonPackageFamily(family string) bool {
-	for _, f := range NonPackageFamilies {
 		if f == family {
 			return true
 		}
@@ -271,9 +365,13 @@ func CoverageReason(expectation string) string {
 	family := CapabilityPrefix(expectation)
 	switch {
 	case IsMiddlewareFamily(family):
-		return fmt.Sprintf("%s is served by the control plane's %s adapter, which is not a plugin package", expectation, family)
-	case IsNonPackageFamily(family):
-		return fmt.Sprintf("%s belongs to a control-plane correlation, not a tool family any package could serve", expectation)
+		// True for the two families that remain: the adapter exists in the
+		// control plane and no shipped package offers it. The sentence used
+		// to end "which is not a plugin package" — that stopped being the
+		// right explanation when the middleware adapters became one, so it
+		// now says the narrower, still-true thing: nothing shipped offers
+		// *this* name.
+		return fmt.Sprintf("%s is served by the control plane's %s adapter, and no shipped package offers it", expectation, family)
 	default:
 		return fmt.Sprintf("no installed package declares a tool serving %q", family)
 	}

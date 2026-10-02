@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
 )
 
 // ToolNameQueryPromQL is the stable wire name the LLM sees for the PromQL tool.

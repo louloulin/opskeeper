@@ -51,13 +51,13 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/alertdraft"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/decorators"
-	aiopsmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/alertdraft"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
+	aiopsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // Mention mirrors the legacy agent.Mention shape so chatruntime can
@@ -212,7 +212,7 @@ type Config struct {
 	// AgentTool to dispatch to specialist-X" message instead of
 	// executing the real query. Without them, the turn aborts the
 	// moment the LLM picks a name not actually in the coordinator's
-	// filtered bag — see internal/manager/biz/aiops/tools/redirect_stub.go.
+	// filtered bag — see core/manager/biz/aiops/tools/redirect_stub.go.
 	//
 	// Workers (specialists) never see this slice. They have the real
 	// tool under the same name in their own filtered bag.

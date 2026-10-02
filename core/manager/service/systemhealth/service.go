@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	edgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/edge"
-	alertsvc "github.com/vincent-wuhan/opskeeper/internal/manager/service/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	alertsvc "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 )
 
 type Status string

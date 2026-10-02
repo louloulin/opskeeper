@@ -15,9 +15,9 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/collector"
-	"github.com/vincent-wuhan/opskeeper/internal/edgeagent/plugins"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/edge/collector"
+	"github.com/vincent-wuhan/opskeeper/core/edge/plugins"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // specView is the parsed-and-defaulted shape of PluginConfig.Spec.
@@ -40,7 +40,7 @@ type specView struct {
 
 // Defaults match the host/proc-metrics plugins' subprocesses
 // (node_exporter on :9102, process_exporter on :9256 — see
-// internal/edgeagent/plugins/hostmetrics, .../procmetrics).
+// core/edge/plugins/hostmetrics, .../procmetrics).
 // Localhost only because all processes live in the same systemd unit
 // on the edge.
 var defaultURLs = []string{
@@ -175,7 +175,7 @@ func scrapeOnce(ctx context.Context, spec specView, targetURL string) ([]tunnel.
 	}
 	mfs := familiesToSlice(families)
 	now := time.Now()
-	// FlattenSamples lives in internal/edgeagent/collector — it already
+	// FlattenSamples lives in core/edge/collector — it already
 	// handles counter / gauge / histogram / summary fan-out plus
 	// extraLabels merge. We don't reimplement.
 	samples := collector.FlattenSamples(now, spec.SourceLabel, mfs, spec.ExtraLabels)

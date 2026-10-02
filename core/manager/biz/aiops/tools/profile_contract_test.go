@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 )
 
 // The control-plane half of the node's read-only toolset.

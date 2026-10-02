@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/promquery"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
 )
 
 // fakePromQuerier captures the last QueryRange call.

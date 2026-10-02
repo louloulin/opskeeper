@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	chatruntime "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/chatruntime"
+	chatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 )
 
 // TestIntegration_InstallReloadVisibleInRealRegistry exercises the

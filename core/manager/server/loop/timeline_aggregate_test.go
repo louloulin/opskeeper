@@ -4,16 +4,16 @@
 // SPA consumed the timeline endpoint with no aggregation before
 // Day 11, so the test cases here focus on the new contract:
 //
-//   1. Empty event slice yields 7 forward phases (all "pending") and
-//      a zero-value rubric.
-//   2. A fully-walked PG-connection-pool incident produces 7 phases
-//      in stable order with the rubric metrics matching the
-//      loop-harness-rubric spec.
-//   3. The chain footer reports coverage, current/final phase,
-//      recovery signal, and closure flags.
-//   4. A terminal-state event (failed) appears as a trailing row so
-//      the renderer can show "loop closed by failure" instead of
-//      hiding the failure inside the last forward phase.
+//  1. Empty event slice yields 7 forward phases (all "pending") and
+//     a zero-value rubric.
+//  2. A fully-walked PG-connection-pool incident produces 7 phases
+//     in stable order with the rubric metrics matching the
+//     loop-harness-rubric spec.
+//  3. The chain footer reports coverage, current/final phase,
+//     recovery signal, and closure flags.
+//  4. A terminal-state event (failed) appears as a trailing row so
+//     the renderer can show "loop closed by failure" instead of
+//     hiding the failure inside the last forward phase.
 package loop
 
 import (
@@ -27,8 +27,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	loopbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
+	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
 func TestBuildTimelinePhases_Empty(t *testing.T) {
@@ -214,29 +214,29 @@ func TestBuildTimelinePhases_TerminalFailure(t *testing.T) {
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	events := []loopmodel.Event{
 		{
-			ID:           1,
-			IncidentID:   "INC-X",
-			Phase:        "detected",
-			EventType:    loopmodel.EventTypePhaseEntered,
-			CreatedAt:    now,
+			ID:             1,
+			IncidentID:     "INC-X",
+			Phase:          "detected",
+			EventType:      loopmodel.EventTypePhaseEntered,
+			CreatedAt:      now,
 			IdempotencyKey: "detected:entered:1",
 		},
 		{
-			ID:           2,
-			IncidentID:   "INC-X",
-			Phase:        "detected",
-			EventType:    loopmodel.EventPhaseContractWritten,
-			CreatedAt:    now.Add(10 * time.Second),
-			Payload:      `{"summary":"alert dedup confirmed"}`,
+			ID:             2,
+			IncidentID:     "INC-X",
+			Phase:          "detected",
+			EventType:      loopmodel.EventPhaseContractWritten,
+			CreatedAt:      now.Add(10 * time.Second),
+			Payload:        `{"summary":"alert dedup confirmed"}`,
 			IdempotencyKey: "detected:contract:1",
 		},
 		{
-			ID:           3,
-			IncidentID:   "INC-X",
-			Phase:        "failed",
-			EventType:    loopmodel.EventPhaseFailed,
-			CreatedAt:    now.Add(2 * time.Minute),
-			Payload:      `{"error":"upstream MCP gateway down"}`,
+			ID:             3,
+			IncidentID:     "INC-X",
+			Phase:          "failed",
+			EventType:      loopmodel.EventPhaseFailed,
+			CreatedAt:      now.Add(2 * time.Minute),
+			Payload:        `{"error":"upstream MCP gateway down"}`,
 			IdempotencyKey: "failed:phase_failed:1",
 		},
 	}
@@ -404,10 +404,10 @@ func TestBuildRubric_RecoveryPassRateWeightedBySampleSize(t *testing.T) {
 	events := []loopmodel.Event{
 		{ID: 1, Phase: "recovered", EventType: loopmodel.EventPhaseContractWritten,
 			CreatedAt: now,
-			Payload: `{"schema_version":"v1","passed":true,"recovery_signal":true,"sample_size":60,"tolerance":0.15}`},
+			Payload:   `{"schema_version":"v1","passed":true,"recovery_signal":true,"sample_size":60,"tolerance":0.15}`},
 		{ID: 2, Phase: "recovered", EventType: loopmodel.EventPhaseContractWritten,
 			CreatedAt: now.Add(time.Minute),
-			Payload: `{"schema_version":"v1","passed":false,"recovery_signal":false,"sample_size":20,"tolerance":0.15}`},
+			Payload:   `{"schema_version":"v1","passed":false,"recovery_signal":false,"sample_size":20,"tolerance":0.15}`},
 	}
 	rubric := BuildRubric(events)
 	want := 60.0 / 80.0
@@ -427,7 +427,7 @@ func TestBuildRubric_RecoveryPassRateFallsBackToOneWhenSampleMissing(t *testing.
 	events := []loopmodel.Event{
 		{ID: 1, Phase: "recovered", EventType: loopmodel.EventPhaseContractWritten,
 			CreatedAt: now,
-			Payload: `{"schema_version":"v1","passed":true,"recovery_signal":true,"tolerance":0.15}`},
+			Payload:   `{"schema_version":"v1","passed":true,"recovery_signal":true,"tolerance":0.15}`},
 	}
 	rubric := BuildRubric(events)
 	if rubric.RecoveryPassRate < 0.99 {

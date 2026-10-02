@@ -11,7 +11,7 @@ import (
 
 	fbsvc "github.com/singchia/frontier/api/dataplane/v1/service"
 	"github.com/singchia/geminio"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // Config carries the runtime parameters needed to dial the frontier broker.

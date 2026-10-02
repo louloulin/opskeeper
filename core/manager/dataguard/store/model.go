@@ -3,7 +3,7 @@ package store
 import (
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/dataguard"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 )
 
 // LabelSource 标签来源（自动 / 人工 / 继承）。

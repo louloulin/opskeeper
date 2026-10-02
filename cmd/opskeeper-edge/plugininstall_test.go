@@ -17,9 +17,9 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigrpc"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/pluginmanifest"
 )
 
 // The install path's tests are about what survives.

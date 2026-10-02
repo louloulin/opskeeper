@@ -23,11 +23,11 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	bizapproval "github.com/vincent-wuhan/opskeeper/internal/manager/biz/approval"
-	bizsecret "github.com/vincent-wuhan/opskeeper/internal/manager/biz/secret"
-	approvalstore "github.com/vincent-wuhan/opskeeper/internal/manager/data/approval/store"
-	secretstore "github.com/vincent-wuhan/opskeeper/internal/manager/data/secret/store"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/runner"
+	bizapproval "github.com/vincent-wuhan/opskeeper/core/manager/biz/approval"
+	bizsecret "github.com/vincent-wuhan/opskeeper/core/manager/biz/secret"
+	approvalstore "github.com/vincent-wuhan/opskeeper/core/manager/data/approval/store"
+	secretstore "github.com/vincent-wuhan/opskeeper/core/manager/data/secret/store"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/runner"
 )
 
 func openDB(t *testing.T) *gorm.DB {

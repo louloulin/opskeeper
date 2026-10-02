@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 type IncidentFilter struct {

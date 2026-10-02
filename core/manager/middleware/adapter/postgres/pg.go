@@ -17,9 +17,9 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/secretbox"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/secretbox"
 )
 
 const (
@@ -215,6 +215,11 @@ type diagnoseRoute struct {
 	bind       func(q adapter.DiagnoseQuery) ([]any, error)
 	summary    string
 	suggestion string
+	// emptySuggestion is the answer for a category whose empty result is
+	// itself a finding. A route with no rows and no message leaves the
+	// reader to decide whether it means "nothing wrong" or "nothing to
+	// read", and those are opposite conclusions.
+	emptySuggestion string
 }
 
 // Diagnose 通用诊断入口。
@@ -247,8 +252,11 @@ func (a *Adapter) Diagnose(ctx context.Context, q adapter.DiagnoseQuery) (*adapt
 	elapsed := time.Since(start).Milliseconds()
 
 	suggestions := []string{}
-	if route.suggestion != "" && len(rows) > 0 {
+	switch {
+	case len(rows) > 0 && route.suggestion != "":
 		suggestions = append(suggestions, route.suggestion)
+	case len(rows) == 0 && route.emptySuggestion != "":
+		suggestions = append(suggestions, route.emptySuggestion)
 	}
 	summary := route.summary
 	if n := len(rows); n == 1 {
@@ -425,6 +433,9 @@ func RegisterTools(reg *registry.Registry, a *Adapter) error {
 		makeTool("pg.index_usage", adapter.RiskL1Diagnostic, "索引使用率（未使用索引优先）",
 			map[string]string{"limit": "int"}, readOp(a, indexUsage)),
 		makeTool("pg.vacuum_status", adapter.RiskL1Diagnostic, "正在进行的 vacuum 进度", nil, readOp(a, vacuumStatus)),
+		makeTool("pg.replication_status", adapter.RiskL1Diagnostic,
+			"流复制状态：每个 standby 的 state / sync_state / 未应用 WAL 字节数与秒数。空结果=本实例没有连着的 standby（可能它自己就是 standby），不等于零延迟；replay_lsn 为 NULL 表示位置未知而非零",
+			map[string]string{"limit": "int"}, readOp(a, replicationStatus)),
 		makeTool("pg.slow_log", adapter.RiskL1Diagnostic, "慢查询（pg_stat_statements）",
 			map[string]string{"min_ms": "int", "limit": "int"}, readOp(a, slowLog)),
 		makeTool("pg.explain_query", adapter.RiskL1Diagnostic, "EXPLAIN（不带 ANALYZE，不执行语句）",
@@ -608,6 +619,29 @@ func indexUsage(ctx context.Context, a *Adapter, args map[string]interface{}, li
 
 func vacuumStatus(ctx context.Context, a *Adapter, args map[string]interface{}, limit int) ([]map[string]any, error) {
 	rows, err := a.queryRows(ctx, qVacuumStatus)
+	if err != nil {
+		return nil, err
+	}
+	return capRows(rows, limit), nil
+}
+
+// replicationStatus reports every standby connected to this instance.
+//
+// The read is deliberately honest about the two ways it can come back empty
+// or null, because both look like "healthy" and neither is.
+//
+// An empty result means this instance has no standbys connected — it is a
+// standby itself, or a standalone, or every standby is down. Reporting
+// "no lag" for any of those is the same number for three different situations,
+// so the summary says what was actually observed.
+//
+// A standby whose replay_lsn is NULL is not at zero lag. It is one whose
+// position is not yet known, which for a streaming standby usually means it
+// is still catching up. The row keeps the NULL and the query orders those
+// first, so a half-caught-up standby is at the top of the list rather than
+// hidden by a zero.
+func replicationStatus(ctx context.Context, a *Adapter, _ map[string]interface{}, limit int) ([]map[string]any, error) {
+	rows, err := a.queryRows(ctx, qReplicationStatus)
 	if err != nil {
 		return nil, err
 	}

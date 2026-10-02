@@ -2,7 +2,7 @@
 // (find_large_files / du_summary / stat_file) that the manager-side
 // BaseTools introduced by PR-8 of dispatch through the frontier
 // tunnel. The three method constants live in
-// internal/pkg/tunnel/host_files.go.
+// core/floor/tunnel/host_files.go.
 //
 // Batch protocol (2026-05-07): every request now carries `paths []string`
 // (1..16) and the response carries `results []*ResultEntry`, one per
@@ -54,7 +54,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // hostFilesPerPathTimeout caps a single path's handler work (one find,
@@ -722,7 +722,7 @@ func runStatOnePath(_ context.Context, sb *SandboxConfig, path string) tunnel.St
 // =====================================================================
 
 // humanBytes returns a "12.3 MiB"-style binary size string. Lifted from
-// internal/pkg/humanize semantics; kept local so this package has no
+// core/manager/pkg/humanize semantics; kept local so this package has no
 // dependency outside std + tunnel types.
 func humanBytes(n int64) string {
 	const unit = 1024

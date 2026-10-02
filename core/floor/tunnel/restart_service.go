@@ -6,7 +6,7 @@ import "time"
 // double-sign verification end-to-end (PR-7 of +). The
 // handler restarts an allow-listed systemd service via `systemctl
 // restart <unit>`. Manager dispatches via the manager-side BaseTool in
-// internal/manager/biz/aiops/tools/restart_service_basetool.go, which is
+// core/manager/biz/aiops/tools/restart_service_basetool.go, which is
 // gated through the new ReviewGate decorator (decorators/review_gate.go)
 // so the call is intercepted before reaching the tunnel: the coordinator
 // LLM emits a restart_service tool_call, the decorator spawns a
@@ -16,7 +16,7 @@ import "time"
 // First version intentionally keeps the wire shape thin (unit name,
 // optional reason for the audit row) and mirrors host_files.go: one
 // method constant + Request/Response struct pair. Real systemctl
-// shell-out is deferred — see internal/edgeagent/restart_service for
+// shell-out is deferred — see core/edge/restart_service for
 // the mock + sandbox implementation.
 const (
 	// MethodRestartService restarts a systemd service on the edge. Only
@@ -34,7 +34,7 @@ type RestartServiceRequest struct {
 	// Service is the short systemd unit name (e.g. "nginx", "redis").
 	// No `.service` suffix; no full path. The edge sandbox declares the
 	// allow-list authoritatively — see
-	// internal/edgeagent/restart_service/handlers.go::DefaultSandbox.
+	// core/edge/restart_service/handlers.go::DefaultSandbox.
 	Service string `json:"service"`
 
 	// Reason is the operator-supplied justification, copied verbatim

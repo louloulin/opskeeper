@@ -12,9 +12,9 @@ import (
 	"log/slog"
 	"strings"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/mcp"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/mcpclient"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/mcp"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/mcpclient"
 )
 
 // Transport values.

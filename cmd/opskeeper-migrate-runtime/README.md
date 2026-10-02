@@ -120,7 +120,7 @@ package migrations
 
 import (
     "context"
-    "github.com/vincent-wuhan/opskeeper/internal/migrator"
+    "github.com/vincent-wuhan/opskeeper/core/manager/migrator"
     "gorm.io/gorm"
 )
 
@@ -173,7 +173,7 @@ func init() {
 package store
 
 import (
-    "github.com/vincent-wuhan/opskeeper/internal/migrator"
+    "github.com/vincent-wuhan/opskeeper/core/manager/migrator"
 )
 
 func init() {

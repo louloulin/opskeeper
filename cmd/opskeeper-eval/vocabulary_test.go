@@ -8,10 +8,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
 	"github.com/vincent-wuhan/opskeeper/core/harness/vocabulary"
-	managerbizloop "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop/investigatorreal"
+	managerbizloop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/loop/investigatorreal"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/toolset"
 )
 
 func runVocabularyTo(t *testing.T, args ...string) (string, error) {
@@ -41,6 +44,8 @@ func runVocabularyTo(t *testing.T, args ...string) (string, error) {
 			flags.filter = strings.TrimPrefix(a, "--filter=")
 		case strings.HasPrefix(a, "--kind-map="):
 			flags.kindMap = strings.TrimPrefix(a, "--kind-map=")
+		case strings.HasPrefix(a, "--cases-dir="):
+			flags.casesDir = strings.TrimPrefix(a, "--cases-dir=")
 		}
 	}
 	err = runVocabulary(flags, f)
@@ -49,6 +54,44 @@ func runVocabularyTo(t *testing.T, args ...string) (string, error) {
 		t.Fatal(readErr)
 	}
 	return string(doc), err
+}
+
+// writeUnservableCorpus writes a one-case corpus whose remediation names a
+// family no shipped package declares.
+//
+// The repository's own 20 cases are fully servable now — that is the point
+// of the plugin fleet — so the refusal path cannot be exercised against
+// them. A gate nobody has ever seen fail is not known to work, so this
+// corpus exists to be the counter-example the checks below run against.
+// The root cause is deliberately servable and only the remediation is not:
+// that is what lets a test assert the message names the axis that is short
+// and stays silent about the one that is fine.
+func writeUnservableCorpus(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	caseDir := filepath.Join(dir, "zookeeper", "session-timeout")
+	if err := os.MkdirAll(caseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const body = `id: zookeeper/session-timeout
+description: a remediation family no shipped package serves
+severity: P2
+prerequisites:
+  - opskeeper.adapter registered
+inject:
+  - type: zookeeper.inject_session_timeout
+expect:
+  time_to_detect: 60
+  time_to_remediate: 120
+  root_cause_lines:
+    - pg.lock_waits
+  remediation_options:
+    - zookeeper.restart_quorum
+`
+	if err := os.WriteFile(filepath.Join(caseDir, "case.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func TestTheReportNamesTheVocabularyAndTheCount(t *testing.T) {
@@ -107,8 +150,17 @@ func TestTheReportAgreesWithThePackageAboutHowManyCasesAreServable(t *testing.T)
 }
 
 func TestFailOnGapExitsNonZeroWhenTheCorpusCannotBeServed(t *testing.T) {
-	if _, err := runVocabularyTo(t, "--fail-on-gap"); err == nil {
+	if _, err := runVocabularyTo(t, "--fail-on-gap", "--cases-dir="+writeUnservableCorpus(t)); err == nil {
 		t.Error("--fail-on-gap passed while the corpus is unservable; the gate does nothing")
+	}
+}
+
+// The other half of the gate. A check that failed everything would look
+// identical to a working one from the refusal side, and the corpus the
+// shipped fleet serves is the case where the answer has to be "yes".
+func TestFailOnGapPassesWhenTheCorpusIsServed(t *testing.T) {
+	if _, err := runVocabularyTo(t, "--fail-on-gap"); err != nil {
+		t.Errorf("--fail-on-gap failed on the corpus the shipped fleet serves: %v", err)
 	}
 }
 
@@ -548,6 +600,52 @@ func TestTheResolvableActionsAreAResolvableSubsetOfTheLoopVocabulary(t *testing.
 	for _, a := range resolvable {
 		if _, ok := actions[a]; !ok {
 			t.Errorf("%s has an evidence extractor but the investigator can never propose it", a)
+		}
+	}
+}
+
+// The middleware package's capability entries have to be the adapters'
+// own tool names, and every name it ships has to be one an adapter really
+// registers.
+//
+// This is the cross-check that the coverage table cannot make on its own:
+// pluginmanifest cannot import the adapters (the adapters import it) and
+// the adapters cannot import the manifests, so the only place the two
+// sides meet is here. A name that no adapter registers would be a declared
+// capability nothing can serve — a node asked to route a call to a tool
+// that does not exist — and it would look, in every report, exactly like
+// coverage.
+func TestTheMiddlewareFamiliesMatchTheAdapters(t *testing.T) {
+	reg, err := toolset.Registry()
+	if err != nil {
+		t.Fatalf("build the adapter registry: %v", err)
+	}
+	plugins, err := pluginmanifest.LoadAll(filepath.Join("..", "..", "plugins", "pig-ops"))
+	if err != nil {
+		t.Fatalf("load the shipped packages: %v", err)
+	}
+	var mw *pluginmanifest.Plugin
+	for i := range plugins {
+		if plugins[i].Name() == "opskeeper-sre-middleware" {
+			mw = &plugins[i]
+		}
+	}
+	if mw == nil {
+		t.Fatal("opskeeper-sre-middleware is not among the shipped packages")
+	}
+	declared := mw.Manifest.Spec.Tools
+	if len(declared) == 0 {
+		t.Fatal("the middleware package declares no tools, so this test would pass vacuously")
+	}
+	for _, d := range declared {
+		if d.Class != domain.ClassRead {
+			t.Errorf("%s is declared class %q; this package ships reads only", d.Name, d.Class)
+		}
+		if _, ok := reg.GetTool(d.Name); !ok {
+			t.Errorf("%s is declared by the middleware package but no adapter registers it", d.Name)
+		}
+		if fam := toolset.ParseFamily(d.Name); fam == "" {
+			t.Errorf("%s parses to no middleware family, so the upcall cannot route it", d.Name)
 		}
 	}
 }

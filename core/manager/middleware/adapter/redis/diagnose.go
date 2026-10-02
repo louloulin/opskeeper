@@ -20,7 +20,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
 )
 
 // parseInfoSections turns an INFO reply into section -> field -> value.

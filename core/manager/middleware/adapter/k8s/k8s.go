@@ -17,9 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/registry"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/secretbox"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/secretbox"
 )
 
 // Adapter 是 Kubernetes Cluster Adapter 实现。
@@ -469,13 +469,20 @@ func (a *Adapter) OpRiskLevel(op string) adapter.RiskLevel {
 // whatever the caller wired in. A global would make the tool set correct for
 // exactly one cluster.
 //
-// Nineteen tools, grouped by the risk ladder they sit on:
+// Twenty-three tools, grouped by the risk ladder they sit on:
 //
-//   - L0 (5)：cluster_info / node_list / pod_list / deployment_status / rollout_status
-//   - L1 (4)：rollout_history / pod_logs / events / top_nodes
+//   - L0 (6)：cluster_info / node_list / pod_list / deployment_status / rollout_status / pvc_list
+//   - L1 (6)：rollout_history / pod_logs / events / top_nodes / top_pods / pvc_usage
 //   - L2 (1)：describe_pod
 //   - L3 (8)：scale / rollout_undo / rolling_restart / cordon / uncordon / drain / evict_pod / resize_pvc
-//   - L4 (1)：exec_into_pod
+//   - L4 (2)：exec_into_pod / cleanup_logs
+//
+// Two of those grades need justifying, because they are the only tools here
+// that run a program rather than make a request. `k8s.pvc_usage` runs a fixed
+// `df` in a container the caller cannot choose a command for, and
+// `k8s.cleanup_logs` runs a fixed `find` plus a fixed `truncate`; both are
+// read or strictly bounded, so the grade is about what the caller can vary,
+// not about the fact that a process runs.
 func RegisterTools(reg *registry.Registry, a *Adapter) error {
 	tools := []registry.Tool{
 		// L0 只读
@@ -489,6 +496,11 @@ func RegisterTools(reg *registry.Registry, a *Adapter) error {
 			map[string]string{"namespace": "string", "name": "string", "unavailable": "bool", "limit": "int"}, readOp(a, runDeploymentList)),
 		makeTool("k8s.rollout_status", adapter.RiskL0ReadOnly, "rollout 进展与阻塞原因；给 deployment 看单个，不给则列出全部未完成 rollout",
 			map[string]string{"deployment": "string", "namespace": "string", "only_stuck": "bool", "limit": "int"}, readOp(a, runRolloutStatusTool)),
+		makeTool("k8s.top_pods", adapter.RiskL1Diagnostic,
+			"每个容器的用量对其自身 limit 的占比（需 metrics-server），含 OOMKilled 证据（current/last terminated reason）与重启次数。无 limit 的容器单独标出——那不是安全",
+			map[string]string{"namespace": "string", "limit": "int"}, readOp(a, runTopPods)),
+		makeTool("k8s.pvc_list", adapter.RiskL0ReadOnly, "列出 PersistentVolumeClaim：申请容量 / 实际容量 / 绑定状态 / StorageClass。注意 API 不上报文件系统用量，用量要靠 k8s.pvc_usage 测量",
+			map[string]string{"namespace": "string", "limit": "int"}, readOp(a, runPVCList)),
 		// L1 诊断
 		makeTool("k8s.rollout_history", adapter.RiskL1Diagnostic, "Deployment 的 ReplicaSet 修订历史",
 			map[string]string{"deployment": "string!", "namespace": "string", "limit": "int"}, readOp(a, runRolloutHistoryTool)),
@@ -498,6 +510,14 @@ func RegisterTools(reg *registry.Registry, a *Adapter) error {
 			map[string]string{"namespace": "string", "warnings_only": "bool", "limit": "int"}, readOp(a, runEventsTool)),
 		makeTool("k8s.top_nodes", adapter.RiskL1Diagnostic, "Node 资源使用（需 metrics-server）",
 			map[string]string{"limit": "int"}, readOp(a, runTopNodesTool)),
+		// L1, not L4: the program is this adapter's, not the caller's.
+		// The caller chooses which claim to measure; it cannot choose what
+		// runs. Measuring needs a container, which is why this cannot be a
+		// plain GET, and it is why the measurement is reported as measured
+		// or explicitly NOT measured — a filesystem with no df in it is
+		// unknown, never empty.
+		makeTool("k8s.pvc_usage", adapter.RiskL1Diagnostic, "测量 PVC 文件系统真实用量（找到挂载该 claim 的 Running Pod，在其挂载点执行 df）。测不到时返回 measured=false 与原因，不返回 0",
+			map[string]string{"pvc": "string!", "namespace": "string"}, readOp(a, runPVCUsage)),
 		// L2 软写（生成诊断报告，不变更集群资源）
 		makeTool("k8s.describe_pod", adapter.RiskL2SoftWrite, "生成 Pod 详细诊断报告（状态 + 容器 + 最近事件）",
 			map[string]string{"pod": "string!", "namespace": "string"}, readOp(a, runDescribePodTool)),
@@ -521,6 +541,13 @@ func RegisterTools(reg *registry.Registry, a *Adapter) error {
 		// L4 破坏性
 		makeTool("k8s.exec_into_pod", adapter.RiskL4Destructive, "在 Pod 容器内执行命令（双层审批 + 全审计 + 超时）",
 			map[string]string{"pod": "string!", "namespace": "string", "container": "string", "command": "string!"}, writeOp(a, "exec_into_pod")),
+		// L4: truncating log files is irreversible. dry_run defaults to
+		// TRUE, so a call that did not think about the flag reports what it
+		// would reclaim and changes nothing. The path must sit inside the
+		// discovered mount, so the tool cannot be pointed at the container's
+		// own filesystem and reported as having freed the volume.
+		makeTool("k8s.cleanup_logs", adapter.RiskL4Destructive, "回收 PVC 内旧日志占用的空间（truncate -s 0 而非删除，保留 inode）。dry_run 默认 true；path 必须位于该 claim 的挂载点内",
+			map[string]string{"pvc": "string!", "path": "string!", "namespace": "string", "older_than_days": "int", "min_file_mb": "int", "dry_run": "bool"}, cleanupLogsOp(a)),
 	}
 	return reg.RegisterTools(adapter.TypeK8sCluster, tools)
 }
@@ -576,6 +603,35 @@ func readOp(a *Adapter, run readRun) handler {
 // synthesises: the broker is the component that knows who approved, and a
 // handler that invented its own approver would make the gate a formality
 // while still logging a name against a production change.
+// cleanupLogsOp wraps the log-reclaim handler in the same result envelope the
+// other write tools return, so a caller does not have to learn a second
+// response shape for one operation.
+func cleanupLogsOp(a *Adapter) handler {
+	return func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+		if _, err := a.handle(); err != nil {
+			return nil, err
+		}
+		if args == nil {
+			args = map[string]interface{}{}
+		}
+		impacted, message, ok, err := runCleanupLogs(ctx, a, args)
+		if err != nil {
+			return nil, err
+		}
+		dryRun, _ := args["dry_run"].(bool)
+		if _, present := args["dry_run"]; !present {
+			dryRun = true
+		}
+		return map[string]interface{}{
+			"operation": "cleanup_logs",
+			"success":   ok,
+			"message":   message,
+			"impacted":  impacted,
+			"dry_run":   dryRun,
+		}, nil
+	}
+}
+
 func writeOp(a *Adapter, operation string) handler {
 	return func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 		res, err := a.Execute(ctx, adapter.ExecOp{

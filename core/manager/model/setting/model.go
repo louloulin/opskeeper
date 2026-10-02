@@ -131,7 +131,7 @@ const (
 	LLMProviderCustom    = "custom"
 )
 
-// Well-known keys under CategoryProm. internal/pkg/promauth reads bearer/
+// Well-known keys under CategoryProm. core/manager/pkg/promauth reads bearer/
 // basic on every request via the Resolver; URLs are read at startup (env
 // seed → DB) and changes require a manager restart.
 const (
@@ -187,7 +187,7 @@ const (
 )
 
 // Well-known keys under CategoryWebSearch. Read by the manager-scoped
-// `web_search` skill (internal/skill/builtin/web_search.go) every time
+// `web_search` skill (core/floor/skill/builtin/web_search.go) every time
 // the AI agent decides to look something up on the public web.
 //
 // Provider selection (KeyWebSearchProvider): which backend to dispatch to.

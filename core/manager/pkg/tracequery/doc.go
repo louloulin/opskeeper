@@ -8,5 +8,5 @@
 // is a single import-site change rather than a rename ripple. See
 // for the same convention applied to logquery.
 //
-// Cross-BC: lives under internal/pkg/ and has no manager/* import.
+// Cross-BC: lives under core/manager/pkg/ and has no manager/* import.
 package tracequery

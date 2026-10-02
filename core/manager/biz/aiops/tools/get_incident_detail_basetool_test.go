@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 func TestGetIncidentDetailTool_Info(t *testing.T) {

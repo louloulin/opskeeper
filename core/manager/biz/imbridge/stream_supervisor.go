@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/imbridge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/imbridge"
 )
 
 // StreamClient is the interface every per-provider long-connection

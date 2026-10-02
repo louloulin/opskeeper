@@ -7,8 +7,8 @@ import (
 
 	"gorm.io/gorm"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/metric"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/metric"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/metric"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
 )
 
 // Writer is the GORM-backed biz.Writer implementation.

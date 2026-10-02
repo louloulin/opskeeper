@@ -9,8 +9,8 @@ package store
 import (
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/marketplace"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/dbx"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/marketplace"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/dbx"
 )
 
 // Migrate registers the installed_skills table with GORM's AutoMigrate.

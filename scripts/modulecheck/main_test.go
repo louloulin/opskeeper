@@ -185,6 +185,205 @@ var _ ai.Model
 	}
 }
 
+func TestABizPackageMayNotReachItsOwnDataLayer(t *testing.T) {
+	// The intra-context rules are written against paths, and there are two
+	// path forms in play: rel is a repository-relative *file* path
+	// ("core/manager/iam/biz/sso/service.go") and rest is an *import* path
+	// ("core/manager/iam/data/sso"). A rule that compared either of them
+	// against the context's label ("iam") would never match anything, and
+	// would sit in the checker looking like enforcement. That is what this
+	// test is for: it asserts the rule fires, so the day somebody rewrites
+	// the comparison the failure is here rather than in a boundary nobody
+	// notices is unguarded.
+	cases := []struct {
+		name string
+		rel  string
+		imp  string
+		red  bool
+	}{
+		{
+			name: "biz reaching its own data layer",
+			rel:  "core/manager/iam/biz/org/service.go",
+			imp:  repoModule + "/core/manager/iam/data/org/store",
+			red:  true,
+		},
+		{
+			name: "service reaching its own data layer",
+			rel:  "core/manager/service/alert/list.go",
+			imp:  repoModule + "/core/manager/data/alert/store",
+			red:  true,
+		},
+		{
+			name: "a test may wire the layer it tests",
+			rel:  "core/manager/service/alert/list_test.go",
+			imp:  repoModule + "/core/manager/data/alert/store",
+			red:  false,
+		},
+		{
+			name: "a file in the debt ledger is known, not refused",
+			rel:  "core/manager/biz/audit/chain.go",
+			imp:  repoModule + "/core/manager/data/audit/store",
+			red:  false,
+		},
+		{
+			name: "biz reaching its own model",
+			rel:  "core/manager/iam/biz/org/service.go",
+			imp:  repoModule + "/core/manager/iam/model",
+			red:  false,
+		},
+		{
+			name: "service reaching its own biz",
+			rel:  "core/manager/service/alert/list.go",
+			imp:  repoModule + "/core/manager/biz/alert",
+			red:  false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := checkBCImport(tc.rel, tc.imp)
+			if tc.red && got == "" {
+				t.Errorf("%s imports %s must be refused; the layer rule did not fire",
+					tc.rel, tc.imp)
+			}
+			if !tc.red && got != "" {
+				t.Errorf("%s imports %s is allowed, got %q", tc.rel, tc.imp, got)
+			}
+		})
+	}
+}
+
+// TestTheWalkRootsCoverEveryBoundedContext pins the list the bounded-context
+// rules are checked over.
+//
+// It exists because the walk root was hardcoded to `internal` and stopped
+// covering the BCs the moment they began moving out — the checker kept
+// reporting "all boundaries hold" for a tree it was no longer reading. A
+// test that only exercised checkBCImport would not have noticed, because
+// the rule was fine and the walk was not.
+func TestTheWalkRootsCoverEveryBoundedContext(t *testing.T) {
+	roots := bcWalkRoots()
+	for _, bc := range bcs {
+		for _, dir := range bc.dirs {
+			want := strings.TrimSuffix(dir, "/")
+			if !containsString(roots, want) {
+				t.Errorf("bounded context %s (%s) is not walked; the rules for it never run", bc.label, dir)
+			}
+		}
+	}
+	for _, floor := range sharedPkgs {
+		want := strings.TrimSuffix(floor, "/")
+		if !containsString(roots, want) {
+			t.Errorf("shared floor %s is not walked; its \"must not know what a business is\" rule never runs", floor)
+		}
+	}
+}
+
+// TestTheBCWalkFindsACrossContextImportOutsideInternal is the end-to-end
+// version: a manager file importing iam's data layer must be reported by the
+// same entry point main() uses. core/manager is where the BCs live today, so
+// the fixture is rooted there; what the test actually pins is that a walk
+// rooted in a table finds the violation rather than walking past it.
+func TestTheBCWalkFindsACrossContextImportOutsideInternal(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	write("core/manager/iam/data/org/store.go", "package org\n\ntype Store struct{}\n")
+	write("core/manager/biz/alert/rule.go", `package alert
+
+import "github.com/vincent-wuhan/opskeeper/core/manager/iam/data/org"
+
+var _ org.Store
+`)
+
+	msgs, err := checkAllBC(root)
+	if err != nil {
+		t.Fatalf("checkAllBC: %v", err)
+	}
+	if len(msgs) == 0 {
+		t.Fatal("a manager package importing iam's data layer was not reported; the walk is not reaching the BCs")
+	}
+	if !strings.Contains(strings.Join(msgs, "\n"), "bounded contexts may not reach each other") {
+		t.Fatalf("violation reported, but not the cross-context one: %v", msgs)
+	}
+}
+
+func TestANonTestFileMayNotReachATestOnlyImport(t *testing.T) {
+	// The rule this pins is the one a comment could not hold: core/manager
+	// carries a go.mod edge to core/edge so its cross-plane tests can drive
+	// a real policy gate, and nothing in the module system distinguishes
+	// "a test imports it" from "the package imports it".
+	root := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	write("core/manager/biz/alert/rule.go", `package alert
+
+import "github.com/vincent-wuhan/opskeeper/core/edge/policygate"
+
+var _ policygate.Call
+`)
+	write("core/manager/biz/alert/rule_test.go", `package alert
+
+import "github.com/vincent-wuhan/opskeeper/core/edge/policygate"
+
+var _ policygate.Call
+`)
+
+	msgs, err := checkTestOnlyImports(root)
+	if err != nil {
+		t.Fatalf("checkTestOnlyImports: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("want exactly one violation (the non-test file), got %v", msgs)
+	}
+	if !strings.Contains(msgs[0], "core/manager/biz/alert/rule.go") {
+		t.Fatalf("the violation should name the production file, got %q", msgs[0])
+	}
+}
+
+func TestTheLayerDebtLedgerIsCurrent(t *testing.T) {
+	// A debt ledger is only honest while every entry in it is still a debt.
+	// An entry for a file that was deleted, or one that no longer imports
+	// its own data layer, is a line that makes the boundary look worse than
+	// it is — and the next reader has no way to tell it apart from a real
+	// exception. So each entry is checked against the repository it claims to
+	// describe.
+	root := filepath.Join("..", "..")
+	for rel, reason := range layerDebt {
+		if strings.TrimSpace(reason) == "" {
+			t.Errorf("%s is in the debt ledger with no reason", rel)
+		}
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		src, err := os.ReadFile(p)
+		if err != nil {
+			t.Errorf("%s is in the debt ledger but cannot be read (%v); remove the entry", rel, err)
+			continue
+		}
+		dir := bcDir(bcOf(rel))
+		if dir == "" {
+			t.Errorf("%s is in the debt ledger but belongs to no bounded context", rel)
+			continue
+		}
+		if !strings.Contains(string(src), dir+"data/") {
+			t.Errorf("%s no longer imports %sdata; the debt is paid, so remove the entry",
+				rel, dir)
+		}
+	}
+}
+
 func TestCheckIgnoresTestdataFixtures(t *testing.T) {
 	// A sample plugin under testdata is documentation, not compiled code.
 	root := standardFixture(t, cleanCore, cleanPig, cleanSDK)
@@ -413,7 +612,7 @@ func TestPiGBoundaryCatchesADirectPiGImportInTheRootModule(t *testing.T) {
 			"core/pig": "module github.com/vincent-wuhan/opskeeper/core/pig\n",
 		},
 		map[string]string{
-			"internal/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
+			"core/manager/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
 		},
 	)
 	v, err := checkPiGBoundary(root)
@@ -423,7 +622,7 @@ func TestPiGBoundaryCatchesADirectPiGImportInTheRootModule(t *testing.T) {
 	if len(v) != 1 {
 		t.Fatalf("violations = %v, want exactly one for the root module's PiG import", v)
 	}
-	if !strings.Contains(v[0], "internal/pkg/llm/x.go") || !strings.Contains(v[0], "PiG/ai") {
+	if !strings.Contains(v[0], "core/manager/pkg/llm/x.go") || !strings.Contains(v[0], "PiG/ai") {
 		t.Errorf("violation = %q, want it to name both the file and the import", v[0])
 	}
 }
@@ -504,13 +703,13 @@ func TestPiGBoundaryAttributesANestedModulesImportsToThatModule(t *testing.T) {
 			".":                                  "module github.com/vincent-wuhan/opskeeper\n",
 			"core/pig":                           "module github.com/vincent-wuhan/opskeeper/core/pig\n",
 			"core/pig/extensions/opskeeper-gate": "module github.com/vincent-wuhan/opskeeper/core/pig/extensions/opskeeper-gate\n",
-			"internal/pkg/llm":                   "module github.com/vincent-wuhan/opskeeper/internal/pkg/llm\n",
+			"core/manager/pkg/llm":               "module github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm\n",
 		},
 		map[string]string{
 			// A nested module inside the root that is NOT under core/pig and
 			// does reach for PiG: the violation belongs to it, by its own
 			// path, not to the root module.
-			"internal/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
+			"core/manager/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
 		},
 	)
 	v, err := checkPiGBoundary(root)
@@ -520,12 +719,12 @@ func TestPiGBoundaryAttributesANestedModulesImportsToThatModule(t *testing.T) {
 	if len(v) != 1 {
 		t.Fatalf("violations = %v, want exactly one", v)
 	}
-	if !strings.HasPrefix(v[0], "internal/pkg/llm/x.go") {
+	if !strings.HasPrefix(v[0], "core/manager/pkg/llm/x.go") {
 		t.Errorf("violation = %q, want the nested module's own path", v[0])
 	}
 	// The exempt module is named in the message text, so only the path can
 	// say who is to blame — and it must be the nested module.
-	if got := v[0][:strings.Index(v[0], ":")]; got != "internal/pkg/llm/x.go" {
+	if got := v[0][:strings.Index(v[0], ":")]; got != "core/manager/pkg/llm/x.go" {
 		t.Errorf("violation blames %q, want the nested module rather than the pig module", got)
 	}
 }
@@ -539,7 +738,7 @@ func TestPiGBoundaryIsQuietOnATreeWithNoPiGImports(t *testing.T) {
 			".": "module github.com/vincent-wuhan/opskeeper\n",
 		},
 		map[string]string{
-			"internal/pkg/llm": "package llm\n\nimport (\n\t\"context\"\n\t\"github.com/vincent-wuhan/opskeeper/core/ports\"\n)\n\nvar _ = context.Background\nvar _ ports.Completer\n",
+			"core/manager/pkg/llm": "package llm\n\nimport (\n\t\"context\"\n\t\"github.com/vincent-wuhan/opskeeper/core/ports\"\n)\n\nvar _ = context.Background\nvar _ ports.Completer\n",
 		},
 	)
 	v, err := checkPiGBoundary(root)
@@ -572,7 +771,7 @@ func TestPiGBoundaryActuallyWalksWhenTheRootIsDot(t *testing.T) {
 			".": "module github.com/vincent-wuhan/opskeeper\n",
 		},
 		map[string]string{
-			"internal/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
+			"core/manager/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
 		},
 	)
 	t.Chdir(root)
@@ -603,7 +802,7 @@ func TestPiGBoundaryFindsAViolationInTheRootModuleWhenInvokedAsDot(t *testing.T)
 			"core/pig": "module github.com/vincent-wuhan/opskeeper/core/pig\n",
 		},
 		map[string]string{
-			"internal/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/coding/rpcclient\"\n\nvar _ *rpcclient.RpcClient\n",
+			"core/manager/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/coding/rpcclient\"\n\nvar _ *rpcclient.RpcClient\n",
 		},
 	)
 	t.Chdir(root)

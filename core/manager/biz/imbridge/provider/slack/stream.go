@@ -11,8 +11,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	bizbridge "github.com/vincent-wuhan/opskeeper/internal/manager/biz/imbridge"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/imbridge"
+	bizbridge "github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/imbridge"
 )
 
 // pingInterval is the keep-alive we send Slack — Slack closes idle Socket

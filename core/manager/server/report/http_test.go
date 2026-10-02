@@ -14,10 +14,10 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	bizreport "github.com/vincent-wuhan/opskeeper/internal/manager/biz/report"
-	reportstore "github.com/vincent-wuhan/opskeeper/internal/manager/data/report/store"
-	reportmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/report"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	bizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
+	reportstore "github.com/vincent-wuhan/opskeeper/core/manager/data/report/store"
+	reportmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 func newTestHandler(t *testing.T) (*Handler, *gorm.DB) {

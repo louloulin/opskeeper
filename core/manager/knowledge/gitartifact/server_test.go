@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/knowledge/gitartifact/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/model"
 )
 
 func newTestServer(t *testing.T) (*Server, *LinkerRegistry) {

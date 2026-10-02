@@ -1,12 +1,12 @@
 // Package skill is the manager-side skill orchestration layer. It
-// turns the shared registry (internal/skill) into operator-facing
+// turns the shared registry (core/floor/skill) into operator-facing
 // affordances:
 //   - List/Get HTTP-friendly metadata
 //   - Execute by dispatching the cloud->edge MethodExecuteSkill RPC
 //   - Permission gating (Class -> caller role policy)
 //   - Audit log
 //
-// The on-edge implementation runs through internal/edgeagent/skill —
+// The on-edge implementation runs through core/edge/skill —
 // the manager never executes skill bodies in-process; it only
 // dispatches and records the round-trip.
 package skill
@@ -19,9 +19,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
-	skillcore "github.com/vincent-wuhan/opskeeper/internal/skill"
+	skillcore "github.com/vincent-wuhan/opskeeper/core/floor/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Caller is the narrow auth context the service needs. Mirrors

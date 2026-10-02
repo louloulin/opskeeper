@@ -11,10 +11,10 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/alertdraft"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/alertdraft"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 )
 
 // persist.go binds the kernel write path onto the chat tables.

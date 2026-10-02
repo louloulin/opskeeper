@@ -8,6 +8,6 @@
 //
 // the cloud-side listening end is no longer in this repo; the
 // upstream github.com/singchia/frontier broker terminates geminio for us
-// and the manager dials it via internal/manager/service/frontierbound.
+// and the manager dials it via core/manager/service/frontierbound.
 // Only the edge keeps a NewClient here.
 package tunnel

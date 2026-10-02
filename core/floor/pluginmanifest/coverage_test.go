@@ -110,23 +110,48 @@ func TestAHostCaseIsCoveredByTheShippedPackages(t *testing.T) {
 	}
 }
 
-func TestAMiddlewareCaseSaysWhyItIsUncoveredRatherThanJustBeingUncovered(t *testing.T) {
-	// The gap this repository actually has. pg / redis / k8s / mq are
-	// control-plane BaseTools, not plugin packages, so every case built
-	// on them is structurally unpassable on a node. The report has to say
-	// that, because "uncovered" alone reads as a missing package and sends
-	// a reader looking for one that was never supposed to exist.
+// middlewareProfile is the package that made the six middleware families
+// reachable from a node. Naming it in one place keeps the tests below from
+// each spelling it out.
+const middlewareProfile = "opskeeper-sre-middleware"
+
+func TestAMiddlewareFamilyIsCoveredByItsPackageRatherThanExplainedAway(t *testing.T) {
+	// This assertion used to run the other way. pg / redis / k8s / mq were
+	// control-plane BaseTools with no package behind them, so every case
+	// built on them was structurally unpassable on a node and the report
+	// had to say why. Now they are a package, and the test's job has
+	// inverted: it fails if the coverage goes back to being a gap.
 	plugins := shippedPlugins(t)
 	cov := CoverageOf("pg/lock-waits", []string{"pg.lock_waits", "pg.active_sessions"}, plugins)
-	if cov.Complete() {
-		t.Fatal("a middleware case came out covered; the adapters are not packages")
+	if !cov.Complete() {
+		t.Fatalf("pg/lock-waits is not covered by the shipped fleet: uncovered=%v\n%s",
+			cov.Uncovered, CoverageReason(cov.Uncovered[0]))
 	}
-	if len(cov.Uncovered) != 2 {
-		t.Errorf("uncovered = %v, want both expectations", cov.Uncovered)
+	for _, name := range cov.Packages {
+		if name != middlewareProfile {
+			t.Errorf("case covered by %q; the middleware family must be served by %s",
+				name, middlewareProfile)
+		}
+	}
+}
+
+func TestAFamilyStillServedOnlyByTheControlPlaneSaysSoRatherThanReadingAsMissing(t *testing.T) {
+	// git is what remains: the adapter exists, its reads are deliberately
+	// not packaged (they duplicate the observability package's source
+	// family), and the report must distinguish that from a family nothing
+	// serves at all. The distinction is the difference between "somebody
+	// decided" and "somebody forgot".
+	plugins := shippedPlugins(t)
+	cov := CoverageOf("git/blame", []string{"git.blame"}, plugins)
+	if cov.Complete() {
+		t.Fatal("git.blame came out covered; the middleware package excludes the git reads on purpose")
 	}
 	reason := CoverageReason(cov.Uncovered[0])
 	if !strings.Contains(reason, "control plane") {
-		t.Errorf("reason %q does not explain that this family is not a package", reason)
+		t.Errorf("reason %q does not explain that this family belongs to the control plane", reason)
+	}
+	if !strings.Contains(reason, "git adapter") {
+		t.Errorf("reason %q does not name the adapter that serves it", reason)
 	}
 }
 
@@ -233,7 +258,7 @@ func TestEveryCaseFamilyIsEitherPackagedOrNamedAsADeliberateGap(t *testing.T) {
 			return err
 		}
 		for _, family := range familiesIn(string(raw)) {
-			if served[family] || IsMiddlewareFamily(family) || IsNonPackageFamily(family) {
+			if served[family] || IsMiddlewareFamily(family) {
 				continue
 			}
 			unexplained = append(unexplained,
@@ -246,7 +271,7 @@ func TestEveryCaseFamilyIsEitherPackagedOrNamedAsADeliberateGap(t *testing.T) {
 	}
 	if len(unexplained) > 0 {
 		t.Errorf("cases name families nothing serves and no list explains:\n  %s\n"+
-			"either package them or add them to MiddlewareFamilies/NonPackageFamilies with a reason",
+			"either package them or add them to MiddlewareFamilies with a reason",
 			strings.Join(unexplained, "\n  "))
 	}
 }
@@ -279,20 +304,44 @@ func familiesIn(raw string) []string {
 
 func TestTheMiddlewareListIsNotSilentlySwallowingEverything(t *testing.T) {
 	// The gap list is an escape hatch, and an escape hatch that grows is a
-	// coverage report that reports nothing. Every entry must correspond to
-	// a real adapter family or a real non-package family, and the list
-	// must stay small enough that its size is itself a signal.
-	if len(MiddlewareFamilies) > 8 || len(NonPackageFamilies) > 4 {
-		t.Errorf("the gap lists have grown to %d middleware and %d non-package families; "+
-			"at this size they stop being exceptions and start being the answer",
-			len(MiddlewareFamilies), len(NonPackageFamilies))
+	// coverage report that reports nothing. It is now down to two entries —
+	// where it started at six and the six are packaged — so the bound is
+	// tight on purpose: a third entry is a decision somebody has to argue
+	// for here rather than a number that quietly moved.
+	if len(MiddlewareFamilies) > 2 {
+		t.Errorf("the middleware gap list has grown to %d families (%v); at that size it stops "+
+			"being an exception and starts being the answer",
+			len(MiddlewareFamilies), MiddlewareFamilies)
 	}
 	for _, f := range MiddlewareFamilies {
-		if IsNonPackageFamily(f) {
-			t.Errorf("%q is in both gap lists; the two claims are different", f)
-		}
 		if f == "" {
 			t.Error("the middleware list contains an empty family")
 		}
+	}
+}
+
+// TestTheGitArtifactFamilyIsServedByAPackage is the other half of removing
+// it from the gap list.
+//
+// git-artifact used to be recorded as "not a tool family any package could
+// serve". That was wrong: git.find_runtime_link serves it, and the case that
+// names it (k8s/pod-oom) was permanently unpassable because of the claim.
+// Deleting the entry without this assertion would leave the decision
+// invisible to the next person who reads the list.
+func TestTheGitArtifactFamilyIsServedByAPackage(t *testing.T) {
+	var found bool
+	for _, p := range shippedPlugins(t) {
+		for _, cap := range p.Capabilities() {
+			if cap == CapGitArtifact {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no shipped package serves the %q family, so k8s/pod-oom is unpassable again",
+			CapGitArtifact)
+	}
+	if IsMiddlewareFamily(CapGitArtifact) {
+		t.Errorf("%q is both packaged and on the gap list", CapGitArtifact)
 	}
 }

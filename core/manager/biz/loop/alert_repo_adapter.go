@@ -18,8 +18,8 @@ import (
 	"strconv"
 	"time"
 
-	manberalbizalert "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	manberalbizalert "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // AlertRepoAdapter 把 manberalbizalert.Repo 适配到 loop.AlertRepository。

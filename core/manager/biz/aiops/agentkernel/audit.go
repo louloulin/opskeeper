@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	bizaudit "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
 )
 
 // LedgerWriter is the narrow seam onto the host's durable audit row

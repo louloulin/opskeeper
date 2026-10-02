@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/agent"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/imbridge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/imbridge"
 )
 
 // Repo is the narrow data-layer surface this bridge needs. Implemented
@@ -29,7 +29,7 @@ type Repo interface {
 }
 
 // AgentSession is the interface this bridge needs from the aiops
-// runtime. Wires to internal/manager/service/aiops.Service (which
+// runtime. Wires to core/manager/service/aiops.Service (which
 // already exposes PostMessageStreamWithOpts). We keep the dependency
 // abstract so the bridge can be tested with a fake.
 type AgentSession interface {

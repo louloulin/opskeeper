@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/harness/projection"
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 )
 
 // The harness cannot import the control plane — that is the module rule in

@@ -8,7 +8,7 @@ import (
 
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/audit"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
 )
 
 // Repo wraps *gorm.DB with the audit_logs operations the biz layer

@@ -8,7 +8,7 @@
 // These tests start the real worker entrypoint in-process via TestServer.
 // To run against a REAL external worker, set E2E_WORKER_URL=http://host:8088.
 //
-// Run with: go test ./internal/agentteams/e2e_test/ -v
+// Run with: go test ./core/manager/agentteams/e2e_test/ -v
 package e2e_test
 
 import (
@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/agentteams"
+	"github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
 )
 
 // makeFakePluginZip creates a minimal zip with a top-level dir containing plugin.json.

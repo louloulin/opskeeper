@@ -4,7 +4,7 @@ package store
 import (
 	"gorm.io/gorm"
 
-	"github.com/vincent-wuhan/opskeeper/internal/iam/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
 )
 
 // Migrate runs AutoMigrate for the orgs table.

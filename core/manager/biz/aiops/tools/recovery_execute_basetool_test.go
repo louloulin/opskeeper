@@ -8,10 +8,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	hitlmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // fakeAuditRepo is the in-memory MutatingProposalAuditRepo for tests.

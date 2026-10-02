@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 func TestMiddlewareVerifiesAgentTeamsServiceToken(t *testing.T) {

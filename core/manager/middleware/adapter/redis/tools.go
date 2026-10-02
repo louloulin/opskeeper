@@ -12,7 +12,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
 )
 
 func runCategory(name string) func(ctx context.Context, a *Adapter, args map[string]interface{}) ([]map[string]any, string, error) {

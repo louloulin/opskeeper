@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	managersvcaiops "github.com/vincent-wuhan/opskeeper/internal/manager/service/aiops"
+	managersvcaiops "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
 )
 
 // TestKernelEnvParsing covers the cmd-level boot-time decision:

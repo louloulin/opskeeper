@@ -13,11 +13,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
-	alertbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	mcpauth "github.com/vincent-wuhan/opskeeper/internal/manager/server/mcp/middleware"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/auth"
+	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
+	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
 
 type recordIncidentEventReq struct {

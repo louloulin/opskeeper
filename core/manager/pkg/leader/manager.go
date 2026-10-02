@@ -22,7 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/redislock"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/redislock"
 )
 
 // Role 标识一个 leader-only worker 的逻辑角色。

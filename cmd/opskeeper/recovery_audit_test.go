@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
-	hitlmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 func TestRecoveryApprovalQueryFromRequest_PreservesApprovedExecution(t *testing.T) {

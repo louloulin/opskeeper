@@ -25,14 +25,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/vincent-wuhan/opskeeper/internal/agentteams"
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/internal/control/incident"
-	alertbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/alert"
-	knowledgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/knowledge"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	knowledgemodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/knowledge"
-	mcpauth "github.com/vincent-wuhan/opskeeper/internal/manager/server/mcp/middleware"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
+	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	knowledgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
+	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
 
 // StateBackend 是 MinIO / state store 的接口。

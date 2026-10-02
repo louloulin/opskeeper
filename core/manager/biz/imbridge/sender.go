@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/agent"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
 )
 
 // Sender is the platform-agnostic outbound surface. The provider
@@ -153,7 +153,7 @@ func (e *streamEditor) flush() error {
 // can just take it.
 func assistantText(ev agent.Event) string {
 	// agent.Event.Assistant is set on assistant events — see
-	// internal/manager/biz/aiops/agent/agent.go. We avoid a direct
+	// core/manager/biz/aiops/agent/agent.go. We avoid a direct
 	// type assertion on the field shape to stay forward-compatible:
 	// if the runtime adds richer payloads (citations, attachments)
 	// they live on the same Event struct.

@@ -16,8 +16,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	"github.com/vincent-wuhan/opskeeper/internal/middleware/adapter"
 )
 
 // Tool 是 Adapter 暴露给 Agent 的工具方法描述。
@@ -33,6 +33,23 @@ type Tool struct {
 
 	// Handler 是实际执行函数（接收 ctx + args + tenant_id）
 	Handler func(ctx context.Context, args map[string]interface{}) (interface{}, error)
+
+	// ParamsSchema is a complete JSON Schema for this tool's arguments,
+	// for the tools whose arguments are not a flat name → type map.
+	//
+	// ArgsSchema came first and is what the loop's dispatcher reads: it
+	// needs to know which arguments must be present, not how to describe
+	// them to a model. A tool taking a nested object cannot be expressed in
+	// a flat map at all, and until this field existed the answer was to
+	// describe it in prose and let the caller guess — which is how
+	// git.find_runtime_link worked, with four different input shapes
+	// behind one untyped `input` argument.
+	//
+	// When this is set it is the authority for the *agent's* copy of the
+	// tool definition; ArgsSchema remains the authority for required
+	// arguments. A tool that sets it should keep the two consistent, and
+	// the toolset generator's tests assert that the schema is valid JSON.
+	ParamsSchema string
 
 	// ArgsSchema is the per-argument type map: name -> type.
 	//

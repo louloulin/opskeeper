@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
 )
 
 // The tests below are about the control plane's half of a release: which

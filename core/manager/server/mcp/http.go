@@ -29,14 +29,14 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	auditbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/audit"
-	loopbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/prom"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
+	auditbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/mcp"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/mcpclient"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/mcp"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/mcpclient"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // Service is the narrow surface the handler depends on. *bizmcp.Usecase

@@ -75,7 +75,7 @@ func TestWorkloadValidate_RejectsCredentialLabels(t *testing.T) {
 }
 
 func TestDeployedWorkloadAndSeedMatchRunner(t *testing.T) {
-	workloadData, err := os.ReadFile("../../../deploy/repair-preview/pg-pool-workload.yaml")
+	workloadData, err := os.ReadFile("../../../../deploy/repair-preview/pg-pool-workload.yaml")
 	require.NoError(t, err)
 	spec, err := LoadWorkload(workloadData)
 	require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestDeployedWorkloadAndSeedMatchRunner(t *testing.T) {
 	require.Equal(t, "resize_pool", spec.Candidates[0].Action)
 	require.Equal(t, "reset_pool", spec.Candidates[1].Action)
 
-	seedData, err := os.ReadFile("../../../deploy/repair-preview/seed.sql")
+	seedData, err := os.ReadFile("../../../../deploy/repair-preview/seed.sql")
 	require.NoError(t, err)
 	require.Contains(t, string(seedData), strings.TrimSpace(repairPreviewSeedSQL))
 }

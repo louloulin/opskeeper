@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // TestCachedRulesProviderRefresh verifies the post-Phase-3-collapse path:

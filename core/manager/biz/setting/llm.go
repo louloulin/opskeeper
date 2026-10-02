@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/setting"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/setting"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // LLMSettingsResolver shapes per-provider rows in system_settings.llm.*

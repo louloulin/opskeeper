@@ -40,9 +40,9 @@ import (
 	"sync"
 	"time"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools"
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/llm"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // Defaults tuned for first customer rollout. We expect <10 incidents/min
@@ -52,7 +52,7 @@ const (
 	defaultWorkers    = 3
 	defaultQueueDepth = 100
 	// Unified with the project-wide LLM timeout floor (see
-	// internal/pkg/llm/client.go::defaultTimeout). The 60 s prior
+	// core/manager/pkg/llm/client.go::defaultTimeout). The 60 s prior
 	// default false-failed on reasoning-model defaults; 120 s gives a
 	// tool-rich turn room without escaping the human-grade timescale.
 	defaultLLMTimeout = 120 * time.Second

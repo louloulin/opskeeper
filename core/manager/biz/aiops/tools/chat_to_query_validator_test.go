@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 )
 
 func TestValidator_HappyPath_LowRisk(t *testing.T) {

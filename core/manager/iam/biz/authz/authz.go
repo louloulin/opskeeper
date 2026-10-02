@@ -34,7 +34,7 @@ import (
 	gormadapter "github.com/casbin/gorm-adapter/v3"
 	"gorm.io/gorm"
 
-	iammodel "github.com/vincent-wuhan/opskeeper/internal/iam/model"
+	iammodel "github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
 )
 
 //go:embed model.conf

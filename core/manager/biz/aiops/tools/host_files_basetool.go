@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
-	devicebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/edge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // host_files_basetool.go is PR-8 of the manager-side BaseTool
@@ -32,7 +32,7 @@ import (
 // Why a single file for three tools: they share identical wiring (same
 // device→edge resolver, same tunnel.Caller seam, same error envelope) so
 // putting them side-by-side makes the symmetry visible. The edge-side
-// handlers in internal/edgeagent/host_files/ mirror this layout. The
+// handlers in core/edge/host_files/ mirror this layout. The
 // closure-style legacy registry path (registry.go::Tool) is NOT used —
 // these tools are BaseTool-native from day one (改进点 #1).
 
@@ -43,7 +43,7 @@ import (
 const hostFilesCallTimeout = 60 * time.Second
 
 // hostFilesMaxBatchPaths is the manager-side hard upper bound on
-// len(paths). Mirrored at the edge in internal/edgeagent/host_files
+// len(paths). Mirrored at the edge in core/edge/host_files
 // for defense in depth. Keep in sync with the schema's maxItems below.
 const hostFilesMaxBatchPaths = 16
 

@@ -32,7 +32,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/zhipuauth"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/zhipuauth"
 )
 
 // Embedder is the narrow interface the knowledge service consumes.

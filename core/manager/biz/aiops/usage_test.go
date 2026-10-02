@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/aiops"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 )
 
 // fakeRepo only implements SumTokensSince meaningfully; the rest are stubs

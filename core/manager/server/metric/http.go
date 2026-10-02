@@ -12,8 +12,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	biz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/metric"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/metric"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // MetricService is the narrow service contract the handler depends on.

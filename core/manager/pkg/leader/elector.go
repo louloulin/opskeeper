@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/redislock"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/redislock"
 )
 
 // electLoop 是单个 role 的 election 主循环。

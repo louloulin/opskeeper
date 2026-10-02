@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/knowledge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
 )
 
 // TestE2E_ManualDocLifecycle drives the full create→list→get→search→edit→

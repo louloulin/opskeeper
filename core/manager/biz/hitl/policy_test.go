@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/hitl"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 func TestPolicy_SafeSkipsPause(t *testing.T) {

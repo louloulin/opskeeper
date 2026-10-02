@@ -27,10 +27,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	loopbiz "github.com/vincent-wuhan/opskeeper/internal/manager/biz/loop"
-	loopmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/loop"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // ---------- mocks ----------

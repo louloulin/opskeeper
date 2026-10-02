@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	chatruntime "github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/chatruntime"
-	alertmodel "github.com/vincent-wuhan/opskeeper/internal/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/tenantctx"
+	chatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 // fakeRepo records every call so the tests can assert state transitions.

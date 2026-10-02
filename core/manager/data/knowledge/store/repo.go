@@ -1,6 +1,6 @@
 // Package store is the persistence layer for the small relational
 // part of the knowledge base (git repo registrations). Doc storage
-// moved to qdrant (vector store) — see internal/pkg/qdrantx + the
+// moved to qdrant (vector store) — see core/manager/pkg/qdrantx + the
 // biz/knowledge usecase that drives both.
 package store
 
@@ -10,8 +10,8 @@ import (
 
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/internal/manager/model/knowledge"
-	"github.com/vincent-wuhan/opskeeper/internal/pkg/errs"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
 // Migrate registers knowledge_repos + ssh_identities.

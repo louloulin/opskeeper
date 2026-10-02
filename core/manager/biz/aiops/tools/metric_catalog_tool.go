@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/vincent-wuhan/opskeeper/internal/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
 const ToolNameListMetricCatalog = "list_metric_catalog"
