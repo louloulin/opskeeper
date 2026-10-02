@@ -103,7 +103,7 @@ var sharedDomains = map[string]string{
 var edges = map[edge]string{
 	{"agentteams", "alert"}: "a worker's finding has to land in the same alert rows the platform shows and be judged by the same rules; a second alert vocabulary would be a second thing to page on",
 	{"agentteams", "mcp"}:   "the middleware that authenticates an AgentTeams worker over MCP lives in server/mcp; splitting it would mean two auth chains for one protocol",
-	{"aiops", "alert"}:      "the agent raises and silences alerts through the platform's rules rather than carrying a second alert implementation",
+	{"aiops", "alert"}:      "the agent raises and silences alerts through the platform's rules rather than carrying a second alert implementation. One direction only since decision 118, which was the last cycle in the tree: the alert domain used to call the agent kernel's own SpawnRequest/Worker structs, and it now asks for one investigation in its own value types",
 	{"aiops", "approval"}:   "a remediation the agent wants to run is queued in the approval domain, which is the HITL path it must not be able to route around",
 	{"aiops", "audit"}:      "the agent kernel's LedgerWriter writes agent actions (tool calls, turns) into the same chain an operator reads",
 	{"aiops", "device"}:     "an alert names a device and a tool call resolves it to a machine; the agent needs the device vocabulary to say which one",
@@ -116,8 +116,7 @@ var edges = map[edge]string{
 	{"aiopsconfig", "aiops"}: "the config service assembles the agent's alert-config and tool surfaces: it configures aiops rather than reimplementing it",
 	{"aiopsconfig", "alert"}: "the agent's settings endpoints resolve alert configuration through the alert service",
 
-	{"alert", "aiops"}: "an alert's investigation is driven by the agent's chat runtime; the alert domain asks the agent rather than embedding a second runtime",
-	{"alert", "edge"}:  "an alert is raised against a node, and acknowledging it has to update that node's state",
+	{"alert", "edge"}: "an alert is raised against a node, and acknowledging it has to update that node's state",
 
 	{"chatdiagnose", "aiops"}: "chat diagnosis runs on the agent's chat runtime",
 	{"chatdiagnose", "audit"}: "promoting a chat into an investigation is an operator action and belongs in the chain",
@@ -184,9 +183,7 @@ func pair(a, b string) [2]string {
 // written, which is a checker people turn off. Each reason says what the
 // cycle is made of today, so the next person can see what would have to
 // change to cut it.
-var cycles = map[[2]string]string{
-	{"aiops", "alert"}: "the agent raises alerts and the alert domain asks the agent to investigate them; cutting this means alerts dispatch an investigation id instead of calling a runtime",
-}
+var cycles = map[[2]string]string{}
 
 // defaultRules is the shipped boundary.
 func defaultRules() rules {

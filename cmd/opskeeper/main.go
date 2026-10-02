@@ -1997,7 +1997,7 @@ func main() {
 			// operator override for rare cases.
 			sumProvider := os.Getenv("OPSKEEPER_INVESTIGATOR_SUMMARIZER_PROVIDER")
 			sumModel := os.Getenv("OPSKEEPER_INVESTIGATOR_SUMMARIZER_MODEL")
-			rcaInvConcrete = investigator.NewUsecase(invRepo, concreteRt, llmClient, investigator.Config{
+			rcaInvConcrete = investigator.NewUsecase(invRepo, investigationRunner{runtime: concreteRt}, llmClient, investigator.Config{
 				Enabled:            true,
 				MinSeverity:        firstNonEmpty(os.Getenv("OPSKEEPER_INVESTIGATOR_MIN_SEVERITY"), "warning"),
 				DedupWindow:        5 * time.Minute,
@@ -2023,7 +2023,7 @@ func main() {
 				// cap, read its partial trail back from
 				// chat_messages and synthesise a low-confidence
 				// report instead of an empty failure.
-				WithMessageReader(aiopsRepo)
+				WithMessageReader(transcriptReader{repo: aiopsRepo})
 			rcaInv = rcaInvConcrete
 			log.Info("alert: structured RCA investigator wired",
 				slog.String("summarizer_provider", firstNonEmpty(sumProvider, "llm_default")),
@@ -3650,6 +3650,95 @@ func main() {
 
 type hitlRecoveryAuditRepo struct {
 	repo *managerdatahitlstore.Repo
+}
+
+// investigationRunner and transcriptReader are the two places where the
+// alert domain's words meet the agent kernel's, and they live here rather
+// than in either domain. That placement is the point: decision 118 cut
+// the last aiops <-> alert cycle by giving biz/alert/investigator ports
+// stated in its own value types, and a translation still has to happen
+// somewhere. Putting it in the composition root means the alert domain
+// never learns the agent's struct names and the agent never learns the
+// alert domain's — and a reader looking for "how does an alert become an
+// investigation" finds both halves on one screen instead of hunting
+// through two packages.
+
+type investigationRunner struct {
+	runtime interface {
+		SpawnWorker(ctx context.Context, req aiopschatruntime.SpawnRequest) (*aiopschatruntime.Worker, error)
+		StopWorker(ctx context.Context, workerID string) error
+	}
+}
+
+func (r investigationRunner) RunInvestigation(
+	ctx context.Context,
+	req investigator.InvestigationRequest,
+) (investigator.InvestigationOutcome, error) {
+	// Background: false is the contract, not a preference: the caller
+	// owns the report row's lifecycle and needs the answer before it can
+	// choose between ready, failed and salvaged.
+	worker, err := r.runtime.SpawnWorker(ctx, aiopschatruntime.SpawnRequest{
+		AgentName:   req.AgentName,
+		Prompt:      req.Prompt,
+		Background:  false,
+		SessionKind: req.SessionKind,
+		OwnerUserID: req.OwnerUserID,
+	})
+	if err != nil {
+		return investigator.InvestigationOutcome{}, err
+	}
+	if worker == nil {
+		// The nil-worker guard that used to live in the alert usecase,
+		// written as a defensive check against a fake, belongs here:
+		// this is the only side that can produce that value. Turning it
+		// into an error keeps the old behaviour — the report row still
+		// reaches a terminal state — now that a value return can no
+		// longer smuggle a silent success past the caller.
+		return investigator.InvestigationOutcome{}, errors.New("investigation runner: runtime returned no worker")
+	}
+	return investigator.InvestigationOutcome{
+		WorkerID:  worker.ID,
+		SessionID: worker.SessionID,
+		Result:    worker.Result,
+		Err:       worker.Err,
+	}, nil
+}
+
+func (r investigationRunner) StopWorker(ctx context.Context, workerID string) error {
+	return r.runtime.StopWorker(ctx, workerID)
+}
+
+type transcriptReader struct {
+	repo managerbizaiops.SessionRepo
+}
+
+// ListMessages narrows a transcript row to the three fields the salvage
+// path reads. The row will keep gaining columns as the chat runtime
+// grows; this projection is what keeps those additions out of the alert
+// domain's contract. A nil element is dropped rather than mapped to a
+// zero value, so a hole in the transcript is a gap in the rendered
+// summary instead of a fake empty message attributed to the assistant.
+func (t transcriptReader) ListMessages(
+	ctx context.Context,
+	sessionID string,
+	limit int,
+) ([]investigator.TranscriptMessage, error) {
+	rows, err := t.repo.ListMessages(ctx, sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]investigator.TranscriptMessage, 0, len(rows))
+	for _, m := range rows {
+		if m == nil {
+			continue
+		}
+		out = append(out, investigator.TranscriptMessage{
+			Role:     m.Role,
+			Content:  m.Content,
+			ToolName: m.ToolName,
+		})
+	}
+	return out, nil
 }
 
 func recoveryApprovalQueryFromRequest(

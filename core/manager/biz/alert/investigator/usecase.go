@@ -27,8 +27,6 @@ import (
 	"time"
 
 	managerprom "github.com/vincent-wuhan/opskeeper/core/floor/prom"
-	chatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
-	aiopsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
@@ -71,11 +69,62 @@ type ReadyFields struct {
 	ToolCallCount         int
 }
 
-// WorkerSpawner is a narrow seam for the chatruntime.Runtime. Keeping
-// it narrow lets tests inject a fake without standing up the full
-// runtime + LLM + tool wiring.
-type WorkerSpawner interface {
-	SpawnWorker(ctx context.Context, req chatruntime.SpawnRequest) (*chatruntime.Worker, error)
+// InvestigationRequest is the whole of what the alert domain asks the
+// agent for: run this prompt as this persona, in a session of this kind,
+// owned by this user (0 = nobody in particular).
+//
+// These are local value types on purpose. They used to be the agent
+// kernel's own SpawnRequest and Worker structs, which is the fourth
+// shape of the same self-deception catalogued in decision 115: the port
+// was declared here, in the consumer, so the file read as though this
+// package never named the agent — and then the two struct names sat in
+// the signature. That cannot be fixed by redeclaring them, because a
+// struct redeclared here is a different type and the runtime stops
+// satisfying the method (decision 114 walked into exactly that). So the
+// seam is stated in this domain's own words and the composition root
+// translates. Every field is a scalar, which is what makes that
+// translation worth doing rather than a second source of truth.
+type InvestigationRequest struct {
+	// AgentName is the persona to run as.
+	AgentName string
+	// Prompt is the initial user message.
+	Prompt string
+	// SessionKind tags the persisted session so auto-spawned RCA
+	// transcripts stay out of the operator's /chat list.
+	SessionKind string
+	// OwnerUserID 0 marks the session system-owned.
+	OwnerUserID uint64
+}
+
+// InvestigationOutcome is what came back.
+//
+// Result and Err are separate fields rather than one error because a
+// worker that ran out of step budget still left a trail worth
+// salvaging. Collapsing them would force the salvage path to parse an
+// error string to find out whether there is anything to salvage, and
+// the string is the one thing in this path nobody controls.
+type InvestigationOutcome struct {
+	// WorkerID is the id the runner would accept in StopWorker.
+	WorkerID string
+	// SessionID is where the transcript lives, needed for the salvage
+	// read and for the tool-call count on the report.
+	SessionID string
+	// Result is the worker's final answer, empty if it never got one.
+	Result string
+	// Err is the worker's own failure, empty if it finished.
+	Err string
+}
+
+// WorkerRunner is the alert domain's whole dependency on the agent
+// kernel. It was the other half of the aiops <-> alert cycle (decision
+// 118); the direction that survives is the one the domain table already
+// declared, because the agent raises alerts and reads them back.
+type WorkerRunner interface {
+	// RunInvestigation blocks until the worker reaches a terminal
+	// state or ctx expires. The blocking is the contract, not an
+	// accident: run() owns the report row's lifecycle and needs the
+	// answer before it can decide between ready, failed and salvaged.
+	RunInvestigation(ctx context.Context, req InvestigationRequest) (InvestigationOutcome, error)
 	// StopWorker is best-effort: kills a running worker if it's still
 	// in the runtime's workers map. Errors are downgraded to warn-log
 	// at the call site so a stale worker_id (e.g. after manager
@@ -90,8 +139,23 @@ type WorkerSpawner interface {
 // finalAnswer and runs Pass-2 extraction on that — operator gets a
 // low-confidence partial report instead of an empty failure card.
 // Implemented by data/aiops/store.SessionRepo.ListMessages.
+//
+// The three fields below are the three this package reads, and they are
+// declared here rather than imported. The persisted message row is the
+// chat transcript's own type and it will keep growing fields; a port
+// that returned the row itself would make every one of those additions
+// a change to the alert domain's contract, and would make the salvage
+// path depend on a table this domain does not own. Values rather than
+// pointers: a nil element in that list was only ever a thing a pointer
+// slice could have, and the two call sites already skipped it.
+type TranscriptMessage struct {
+	Role     string
+	Content  *string
+	ToolName *string
+}
+
 type MessageReader interface {
-	ListMessages(ctx context.Context, sessionID string, limit int) ([]*aiopsmodel.Message, error)
+	ListMessages(ctx context.Context, sessionID string, limit int) ([]TranscriptMessage, error)
 }
 
 // RelatedAlertQuerier finds incidents that fired close in time to the
@@ -166,7 +230,7 @@ type Config struct {
 // Usecase is the orchestrator.
 type Usecase struct {
 	repo             Repo
-	spawner          WorkerSpawner
+	spawner          WorkerRunner
 	summarizer       LLMSummarizer
 	related          RelatedAlertQuerier
 	messages         MessageReader
@@ -195,7 +259,7 @@ type Usecase struct {
 // of attempting to invoke the worker. summarizer may be nil — when
 // nil, the structured-extraction step is skipped and the report
 // ships findings_md + first-line root_cause only.
-func NewUsecase(repo Repo, spawner WorkerSpawner, summarizer LLMSummarizer, cfg Config, log *slog.Logger) *Usecase {
+func NewUsecase(repo Repo, spawner WorkerRunner, summarizer LLMSummarizer, cfg Config, log *slog.Logger) *Usecase {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -599,40 +663,35 @@ func (uc *Usecase) run(reportID string, incident alertmodel.Incident, dedupKeyVa
 	defer cancel()
 
 	prompt := renderAlertPrompt(&incident, locale)
-	worker, err := uc.spawner.SpawnWorker(ctx, chatruntime.SpawnRequest{
+	outcome, err := uc.spawner.RunInvestigation(ctx, InvestigationRequest{
 		AgentName:   uc.cfg.AgentName,
 		Prompt:      prompt,
-		Background:  false, // sync — this goroutine blocks until terminal
 		SessionKind: "investigation",
 		OwnerUserID: ownerUserID,
 	})
 	if err != nil {
-		uc.log.Warn("worker spawn failed",
+		uc.log.Warn("investigation run failed",
 			slog.String("report_id", reportID),
 			slog.Uint64("incident_id", incident.ID),
 			slog.Any("err", err))
 		_ = uc.repo.UpdateStatus(context.Background(), reportID,
-			alertmodel.InvestigationStatusFailed, fmt.Sprintf("spawn: %v", err))
+			alertmodel.InvestigationStatusFailed, fmt.Sprintf("run: %v", err))
 		return
 	}
-	if worker == nil {
-		// Spawner returned (nil, nil) — only seen in tests with a fake
-		// spawner that wasn't fully configured, but the dedup-gate
-		// removal unmasked the path. Fail gracefully so the row at
-		// least reaches a terminal state.
-		_ = uc.repo.UpdateStatus(context.Background(), reportID,
-			alertmodel.InvestigationStatusFailed, "spawn: nil worker")
-		return
-	}
+	// There is no "nil outcome" case any more, and there was never a
+	// test for it. That branch existed because the port handed back the
+	// agent's own *Worker, so (nil, nil) was a shape the type system
+	// allowed and a badly-wired fake could produce. A value return
+	// removes the shape rather than guarding it.
 
 	// Attach worker / audit session early so a long-running worker is
 	// visible in the report row while it runs (status flips to running).
-	if attachErr := uc.repo.AttachWorker(context.Background(), reportID, worker.ID, worker.SessionID); attachErr != nil {
+	if attachErr := uc.repo.AttachWorker(context.Background(), reportID, outcome.WorkerID, outcome.SessionID); attachErr != nil {
 		uc.log.Warn("attach worker failed (non-fatal)",
 			slog.String("report_id", reportID), slog.Any("err", attachErr))
 	}
 
-	if workerErr := strings.TrimSpace(worker.Err); workerErr != "" {
+	if workerErr := strings.TrimSpace(outcome.Err); workerErr != "" {
 		uc.log.Warn("worker errored",
 			slog.String("report_id", reportID),
 			slog.String("err", workerErr))
@@ -644,12 +703,12 @@ func (uc *Usecase) run(reportID string, incident alertmodel.Incident, dedupKeyVa
 		// suggested actions with a low-confidence flag instead of an
 		// empty failure card.
 		if uc.messages != nil && isMaxStepsError(workerErr) {
-			if salvaged := uc.salvagePartialAnswer(worker.SessionID); salvaged != "" {
+			if salvaged := uc.salvagePartialAnswer(outcome.SessionID); salvaged != "" {
 				uc.log.Info("salvaging partial RCA after MaxStep",
 					slog.String("report_id", reportID),
 					slog.Int("salvaged_chars", len(salvaged)))
 				salvageNote := "工作器超出最大步数预算（exceeds max steps）；以下为根据已收集工具结果的局部分析，置信度偏低。\n\n"
-				worker.Result = salvageNote + salvaged
+				outcome.Result = salvageNote + salvaged
 				// Fall through into the normal post-success path
 				// below, which writes status=ready via MarkReady.
 			} else {
@@ -664,7 +723,7 @@ func (uc *Usecase) run(reportID string, incident alertmodel.Incident, dedupKeyVa
 		}
 	}
 
-	finalAnswer := strings.TrimSpace(worker.Result)
+	finalAnswer := strings.TrimSpace(outcome.Result)
 	if finalAnswer == "" {
 		_ = uc.repo.UpdateStatus(context.Background(), reportID,
 			alertmodel.InvestigationStatusFailed, "worker returned empty final answer")
@@ -677,7 +736,7 @@ func (uc *Usecase) run(reportID string, incident alertmodel.Incident, dedupKeyVa
 	// tool_call_count is read back from the worker transcript (chat_messages
 	// by session_id) so the report + UI show how many tools the
 	// investigation actually invoked instead of a hardcoded 0.
-	toolCalls := uc.countToolCalls(worker.SessionID)
+	toolCalls := uc.countToolCalls(outcome.SessionID)
 	fields := uc.extractStructured(context.Background(), incident, finalAnswer, toolCalls, locale)
 
 	if err := uc.repo.MarkReady(context.Background(), reportID, fields); err != nil {
@@ -806,7 +865,7 @@ func (uc *Usecase) countToolCalls(sessionID string) int {
 	}
 	n := 0
 	for _, m := range msgs {
-		if m != nil && m.Role == "tool" {
+		if m.Role == "tool" {
 			n++
 		}
 	}
@@ -834,9 +893,6 @@ func (uc *Usecase) salvagePartialAnswer(sessionID string) string {
 	}
 	var b strings.Builder
 	for _, m := range msgs {
-		if m == nil {
-			continue
-		}
 		switch m.Role {
 		case "assistant":
 			if m.Content != nil && strings.TrimSpace(*m.Content) != "" {

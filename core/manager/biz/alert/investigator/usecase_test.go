@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	chatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
@@ -80,25 +79,25 @@ func (r *fakeRepo) ListIncidentsWithoutReport(_ context.Context, _ time.Time, _ 
 }
 
 type fakeSpawner struct {
-	mu     sync.Mutex
-	calls  []chatruntime.SpawnRequest
-	worker *chatruntime.Worker
-	err    error
-	wait   time.Duration
+	mu      sync.Mutex
+	calls   []InvestigationRequest
+	outcome InvestigationOutcome
+	err     error
+	wait    time.Duration
 }
 
-func (s *fakeSpawner) SpawnWorker(ctx context.Context, req chatruntime.SpawnRequest) (*chatruntime.Worker, error) {
+func (s *fakeSpawner) RunInvestigation(ctx context.Context, req InvestigationRequest) (InvestigationOutcome, error) {
 	if s.wait > 0 {
 		select {
 		case <-time.After(s.wait):
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return InvestigationOutcome{}, ctx.Err()
 		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, req)
-	return s.worker, s.err
+	return s.outcome, s.err
 }
 
 func (s *fakeSpawner) StopWorker(_ context.Context, _ string) error { return nil }
@@ -150,8 +149,8 @@ func TestEnqueue_ParallelDistinctIncidents(t *testing.T) {
 func TestEnqueue_ConcurrencyCap(t *testing.T) {
 	repo := &fakeRepo{}
 	spawner := &fakeSpawner{
-		worker: &chatruntime.Worker{ID: "w", SessionID: "s", Result: "ok"},
-		wait:   200 * time.Millisecond, // keep workers in-flight
+		outcome: InvestigationOutcome{WorkerID: "w", SessionID: "s", Result: "ok"},
+		wait:    200 * time.Millisecond, // keep workers in-flight
 	}
 	uc := NewUsecase(repo, spawner, nil, Config{
 		Enabled:       true,
@@ -185,8 +184,8 @@ func TestEnqueue_ConcurrencyCap(t *testing.T) {
 func TestEnqueue_HappyPath(t *testing.T) {
 	repo := &fakeRepo{}
 	spawner := &fakeSpawner{
-		worker: &chatruntime.Worker{
-			ID:        "wkr_abc",
+		outcome: InvestigationOutcome{
+			WorkerID:  "wkr_abc",
 			SessionID: "ses_def",
 			Result:    "Root cause: PID 8821 saturated CPU on pg-replica-7.\n\nDetails follow...",
 		},
@@ -258,7 +257,7 @@ func TestRenderAlertPromptIncludesCrossDomainRCA(t *testing.T) {
 
 func TestEnqueuePropagatesOwnerToWorker(t *testing.T) {
 	repo := &fakeRepo{}
-	spawner := &fakeSpawner{worker: &chatruntime.Worker{ID: "w", SessionID: "s", Result: "root cause"}}
+	spawner := &fakeSpawner{outcome: InvestigationOutcome{WorkerID: "w", SessionID: "s", Result: "root cause"}}
 	uc := NewUsecase(repo, spawner, nil, Config{Enabled: true}, nil)
 	ctx := tenantctx.With(context.Background(), tenantctx.Tenant{UserID: 42})
 	uc.Enqueue(ctx, &alertmodel.Incident{ID: 42, Rule: "db_latency", Severity: "critical"})
@@ -283,8 +282,11 @@ func TestEnqueuePropagatesOwnerToWorker(t *testing.T) {
 	}
 }
 
-// TestEnqueue_WorkerError — when SpawnWorker returns an error the row
-// flips to failed with the error string.
+// TestEnqueue_WorkerError — when RunInvestigation returns an error the
+// row flips to failed with the error string. This is the case that used
+// to be reachable two ways: a spawn failure, and a runtime that handed
+// back (nil, nil). The second one is now an error the runner adapter
+// raises, so both arrive here and there is one place to assert.
 func TestEnqueue_WorkerError(t *testing.T) {
 	repo := &fakeRepo{}
 	spawner := &fakeSpawner{err: errors.New("LLM timeout")}
@@ -326,8 +328,8 @@ func TestRunObservesTerminalDurationStatus(t *testing.T) {
 	}{
 		{
 			name: "ready",
-			spawner: &fakeSpawner{worker: &chatruntime.Worker{
-				ID: "worker-ready", SessionID: "session-ready", Result: "root cause",
+			spawner: &fakeSpawner{outcome: InvestigationOutcome{
+				WorkerID: "worker-ready", SessionID: "session-ready", Result: "root cause",
 			}},
 			want: alertmodel.InvestigationStatusReady,
 		},
