@@ -14,14 +14,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/user"
 	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
 	"github.com/vincent-wuhan/opskeeper/core/manager/iam/service"
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
-	auditmw "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
 )
 
 // loginThrottle caps failed-login bursts to defeat naive bruteforce /
@@ -243,12 +241,12 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	emailKey := strings.ToLower(strings.TrimSpace(in.Email))
 	if err := h.throttle.check(ip, emailKey); err != nil {
-		auditmw.SetAuditEvent(r, bizaudit.Event{
-			Action:       auditmodel.ActionAuthLoginFailed,
-			ResourceType: auditmodel.ResourceAuth,
+		auditport.SetAuditEvent(r, auditport.Event{
+			Action:       auditport.ActionAuthLoginFailed,
+			ResourceType: auditport.ResourceAuth,
 			ResourceID:   emailKey,
 			UserEmail:    emailKey,
-			Status:       auditmodel.StatusFailure,
+			Status:       auditport.StatusFailure,
 			ErrorMessage: "rate limited",
 		})
 		writeErr(w, err)
@@ -259,12 +257,12 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		h.throttle.recordFailure(ip, emailKey)
 		// HLD-010: record failed login. UserID stays nil; email comes
 		// from request body so we can spot password-spraying patterns.
-		auditmw.SetAuditEvent(r, bizaudit.Event{
-			Action:       auditmodel.ActionAuthLoginFailed,
-			ResourceType: auditmodel.ResourceAuth,
+		auditport.SetAuditEvent(r, auditport.Event{
+			Action:       auditport.ActionAuthLoginFailed,
+			ResourceType: auditport.ResourceAuth,
 			ResourceID:   emailKey,
 			UserEmail:    emailKey,
-			Status:       auditmodel.StatusFailure,
+			Status:       auditport.StatusFailure,
 			ErrorMessage: err.Error(),
 		})
 		writeErr(w, err)
@@ -329,11 +327,11 @@ func (h *Handler) issueAgentTeamsToken(w http.ResponseWriter, r *http.Request) {
 		TTLSeconds:   in.TTLSeconds,
 	})
 	ttlSeconds := in.TTLSeconds
-	auditEvent := bizaudit.Event{
-		Action:       "agentteams_token_issue",
-		ResourceType: auditmodel.ResourceAuth,
+	auditEvent := auditport.Event{
+		Action:       auditport.ActionAgentTeamsTokenIssue,
+		ResourceType: auditport.ResourceAuth,
 		ResourceID:   in.TenantID + "/" + in.Worker,
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 		Payload: map[string]any{
 			"worker_role":   in.Role,
 			"allowed_tools": in.AllowedTools,
@@ -341,13 +339,13 @@ func (h *Handler) issueAgentTeamsToken(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	if err != nil {
-		auditEvent.Status = auditmodel.StatusFailure
+		auditEvent.Status = auditport.StatusFailure
 		auditEvent.ErrorMessage = err.Error()
-		auditmw.SetAuditEvent(r, auditEvent)
+		auditport.SetAuditEvent(r, auditEvent)
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, auditEvent)
+	auditport.SetAuditEvent(r, auditEvent)
 	writeJSON(w, http.StatusOK, agentTeamsTokenResp{
 		Token:     token.Token,
 		ExpiresIn: token.ExpiresIn,
@@ -369,12 +367,12 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionUserCreate,
-		ResourceType: auditmodel.ResourceUser,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionUserCreate,
+		ResourceType: auditport.ResourceUser,
 		ResourceID:   strconv.FormatUint(u.ID, 10),
 		ResourceName: u.Email,
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 		Payload:      map[string]any{"role": u.Role},
 	})
 	writeJSON(w, http.StatusCreated, userDTO{ID: u.ID, Email: u.Email, Role: u.Role})
@@ -423,11 +421,11 @@ func (h *Handler) deleteUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionUserDelete,
-		ResourceType: auditmodel.ResourceUser,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionUserDelete,
+		ResourceType: auditport.ResourceUser,
 		ResourceID:   strconv.FormatUint(id, 10),
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -450,11 +448,11 @@ func (h *Handler) setRole(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionUserUpdate,
-		ResourceType: auditmodel.ResourceUser,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionUserUpdate,
+		ResourceType: auditport.ResourceUser,
 		ResourceID:   strconv.FormatUint(id, 10),
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 		Payload:      map[string]any{"field": "role", "new_role": in.Role},
 	})
 	w.WriteHeader(http.StatusNoContent)

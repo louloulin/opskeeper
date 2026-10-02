@@ -234,25 +234,23 @@ deps:
 
   # ---------------- iam BC ----------------
   iam_server:
-    # 这三条是**跨 BC** 越界，由 modulecheck 的 exceptions 台账逐个 import
-    # 路径记名并写了理由（决策 35：审计链故意放在 manager 的 biz 层，
-    # 作为 HLD-010 每一行必须经过的唯一咽喉）。决策 74 之前这里写着
-    # 「已知债务：mayDependOn 是组件粒度白名单，同组件新增同类导入不会
-    # 再报警」——那句话现在只对了一半：
-    #   - 越界本身有台账：modulecheck 的 exceptions 是 import 路径粒度的，
-    #     新增一条跨 BC 导入是红的（记名，不是整目录放行）；
-    #   - 但白名单仍是组件粒度，所以这三条一旦不再被任何文件使用，
-    #     go-arch-lint 不会提醒。决策 74 加的 dead-grant 检查补上了这一半：
-    #     没有 import 的授权一律报出来要求删除。
-    # 对应文件：core/manager/iam/server/http.go 复用 manager 的
-    # biz/audit、model/audit、server/middleware。
+    # 决策 109：这里原来挂着的 manager_biz / manager_model / manager_server
+    # 三条已经删掉。它们只服务于一件事：core/manager/iam/server/http.go 要能给一行
+    # 审计记录命名（动作、资源、结果），而审计链在 manager 的 biz 层（决策 35），
+    # 于是叶子 BC 只能反向 import 上层的三个包。现在行的形状改放在 shared_pkg 下的
+    # core/manager/pkg/audit：只剩「怎么写一行」这个形状，写入的咽喉（biz/audit）
+    # 一点都没动。
+    #
+    # 为什么这不是把封装换个地址：原来那三条不是循环，只是因为 biz/audit 恰好没有
+    # import iam。现在 iam 依赖的是一个不依赖任何 BC 的树节点，而依赖方向由 Go 模块图
+    # 和 arch-lint 双重强制，不再靠「那个包没回头引用我」这个巧合。
+    #
+    # 保留的机制：决策 74 加的 dead-grant 检查会在授权无对应 import 时报错，所以上面
+    # 三条一删，就不会留下「可能有用」的死授权。
     mayDependOn:
       - iam_biz
       - iam_model
       - iam_service
-      - manager_biz
-      - manager_model
-      - manager_server
       - shared_pkg
   iam_service:
     # 关键：service 不得直接依赖 iam_data（必须走 biz）
@@ -366,7 +364,11 @@ deps:
       - shared_pkg
       - oxfloor
   manager_model:
-    mayDependOn: [oxfloor]
+    # shared_pkg 是决策 109 加的：model/audit 里的动作/资源/状态词表现在是
+    # core/manager/pkg/audit 的常量别名，指针只有一个定义。模型层依赖一个
+    # 不认识任何 BC 的树节点，和 biz 层依赖它是同一件事——存储不懂业务，
+    # 但它得能说出自己这行记录叫什么。
+    mayDependOn: [oxfloor, shared_pkg]
 
   # ---------------- edge module (was the edgeagent BC) ----------------
   # These four components are the node plane's own layers. They no longer

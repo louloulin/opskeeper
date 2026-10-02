@@ -545,17 +545,27 @@ func bcDir(label string) string {
 // go-arch-lint is not installed and `make arch-lint` skips silently when
 // it is missing. Three real edges existed underneath them.
 var exceptions = map[string]string{
-	// iam's HTTP handlers write to manager's audit ledger. Decision 35
-	// deliberately put the audit chain in the manager's biz layer as the
-	// single throat every HLD-010 row passes through, so this edge is the
-	// consequence of that decision rather than an accident. It is also the
-	// one edge here that a future split must resolve rather than inherit:
-	// an audit port both contexts can depend on is the only version of
-	// this that is not a cycle waiting to happen.
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/audit":         "iam handlers emit audit rows through the manager's single audit throat (decision 35)",
-	"github.com/vincent-wuhan/opskeeper/core/manager/model/audit":       "same edge, the audit row type the handlers construct",
-	"github.com/vincent-wuhan/opskeeper/core/manager/server/middleware": "same edge, the request id the handlers stamp rows with",
-
+	// The three audit exceptions that used to be here are gone (decision
+	// 109), and their removal is the reason the ledger is still
+	// trustworthy rather than merely relocated.
+	//
+	// What they were: iam's HTTP handlers wrote audit rows, the ledger
+	// lives in manager's biz layer (decision 35 made it the single throat
+	// every HLD-010 row passes through), and the row *shape* lived in the
+	// biz and model layers. So a leaf bounded context had to import three
+	// packages above it. The edge was not a cycle only because none of
+	// those three happened to import iam.
+	//
+	// What replaced it: core/manager/pkg/audit holds the shape and the
+	// request-scoped slot, and nothing else. It has no usecase, no
+	// repository, no chain head and no HMAC key, so a caller holding it
+	// can ask to be remembered and cannot write a row. The throat did not
+	// move: biz/audit still re-exports the type and is still the only
+	// writer, and the middleware still enriches and emits.
+	//
+	// The check below is what keeps that honest. A new cross-BC import
+	// from iam is red, because the ledger's vocabulary now lives in a tree
+	// node that depends on no bounded context at all.
 	// manager's IM bridge reads iam's model types. A model is the one
 	// thing two contexts are meant to agree on; a bridge that copied the
 	// type would own a second version of it.

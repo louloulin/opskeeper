@@ -10,48 +10,23 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
-// auditContextKey points to a mutable *auditSlot in the request
-// context. The slot is **installed by AuditMiddleware before the
-// inner middleware chain runs**, so handlers down the chain can write
-// to it even after intermediate middlewares (auth, otel, ...) have
-// re-wrapped the request via r.WithContext — the pointer survives
-// wrapping because the value type is `*auditSlot`, not the Event
-// itself. Earlier impl (set Event by mutating *r) broke whenever any
-// middleware between Audit and handler called r.WithContext, which
-// is most of them.
-type auditContextKey struct{}
-
-type auditSlot struct {
-	ev  audit.Event
-	set bool
-}
-
-// SetAuditEvent records the explicit Event the handler wants audited.
-// Safe to call even outside an AuditMiddleware chain — it just no-ops
-// if the slot isn't installed.
-func SetAuditEvent(r *http.Request, ev audit.Event) {
-	if r == nil {
-		return
-	}
-	slot, ok := r.Context().Value(auditContextKey{}).(*auditSlot)
-	if !ok || slot == nil {
-		return
-	}
-	slot.ev = ev
-	slot.set = true
-}
-
-// GetAuditEvent returns the stashed Event, if any.
-func GetAuditEvent(ctx context.Context) (audit.Event, bool) {
-	slot, ok := ctx.Value(auditContextKey{}).(*auditSlot)
-	if !ok || slot == nil || !slot.set {
-		return audit.Event{}, false
-	}
-	return slot.ev, true
-}
+// The request-scoped slot — the key, the value, and the two accessors
+// — now live in core/manager/pkg/audit (decision 109). This middleware
+// installs it; handlers in any bounded context write to it without
+// importing this package. The re-exported functions below keep every
+// existing `auditmw.SetAuditEvent` call site compiling unchanged.
+var (
+	// SetAuditEvent records the explicit Event the handler wants audited.
+	// Safe to call even outside an AuditMiddleware chain — it just no-ops
+	// if the slot isn't installed.
+	SetAuditEvent = auditport.SetAuditEvent
+	// GetAuditEvent returns the stashed Event, if any.
+	GetAuditEvent = auditport.GetAuditEvent
+)
 
 // AuditMiddleware records HLD-010 audit_logs rows for **explicitly-
 // annotated user actions only**. The middleware no longer derives a
@@ -73,13 +48,12 @@ func AuditMiddleware(uc *audit.Usecase) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ww := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
-			// Install a mutable slot in the context so handlers down
-			// the chain (past auth + otel + ...) can write to it via
-			// SetAuditEvent. We hand the inner chain a new request
-			// pointer carrying the slot; the slot pointer itself
-			// survives every subsequent r.WithContext call.
-			slot := &auditSlot{}
-			ctx := context.WithValue(r.Context(), auditContextKey{}, slot)
+			// Install the port's mutable slot in the context so handlers
+			// down the chain (past auth + otel + ...) can write to it via
+			// SetAuditEvent. We hand the inner chain a new request pointer
+			// carrying the slot; the slot is a pointer, so it survives
+			// every subsequent r.WithContext call.
+			ctx := auditport.WithSlot(r.Context())
 			// tenantctx slot lives at the OUTER ctx so auth.Middleware
 			// (deeper in the chain) can mutate it and we see the value
 			// here post-handler. Without this, enrichFromRequest below
@@ -89,7 +63,8 @@ func AuditMiddleware(uc *audit.Usecase) func(http.Handler) http.Handler {
 			ctx = tenantctx.WithSlot(ctx)
 			next.ServeHTTP(ww, r.WithContext(ctx))
 
-			if uc == nil || !slot.set {
+			ev, set := auditport.GetAuditEvent(ctx)
+			if uc == nil || !set {
 				return
 			}
 			// IMPORTANT: pass the wrapped ctx (the one carrying the
@@ -97,8 +72,8 @@ func AuditMiddleware(uc *audit.Usecase) func(http.Handler) http.Handler {
 			// outer r.Context() — the outer ctx doesn't have the slot
 			// key. The slot itself is a pointer so the mutation by
 			// auth.Middleware deeper in the chain is visible here.
-			enrichFromRequest(&slot.ev, r, ctx, ww.Status())
-			uc.Emit(ctx, slot.ev)
+			enrichFromRequest(&ev, r, ctx, ww.Status())
+			uc.Emit(ctx, ev)
 		})
 	}
 }

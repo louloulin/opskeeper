@@ -177,6 +177,24 @@ mcp-surface-check: ## MCP 对外协议面：握手、保活、分页、可见性
 	go test ./core/manager/biz/aiops/tools/ -count=1 -run 'TestAToolWhoseSeamIsSetLaterIsAbsentUntilItIsSet'
 	@echo "mcp-surface-check: handshake, keepalive, pagination, visibility and the late-seam trap are green"
 
+# The audit port is a claim about a *boundary*, and the two places that
+# boundary used to be written down — the exceptions ledger in
+# scripts/modulecheck and the mayDependOn grant in .go-arch-lint.yml — are
+# both artifacts a careless edit can quietly re-open. The gate therefore
+# drives the tests that read those artifacts directly, not a grep: the
+# import walk, the grant walk, the closed vocabulary, and the end-to-end
+# path from a handler's SetAuditEvent to the row the writer persists.
+.PHONY: audit-port-check
+audit-port-check: ## 审计端口：iam 不再反向依赖 manager，词表闭合，行照常落库
+	go test ./core/manager/iam/server/ -count=1 -run \
+		'TestThisContextReachesNothingAboveItself|TestEveryAuditRowThisContextEmitsIsNamedThroughThePort|TestTheArchitectureRulesGrantThisContextNothingAboveIt'
+	go test ./core/manager/pkg/audit/ -count=1 -run \
+		'TestTheSlotSurvivesEveryContextRewrap|TestOutsideAMiddlewareChainNothingIsRemembered|TestThePortCannotReachTheLedger|TestTheVocabularyIsWellFormed'
+	go test ./core/manager/model/audit/ -count=1 -run 'TestTheReExportCoversTheWholeVocabulary'
+	go test ./core/manager/server/middleware/ -count=1 -run \
+		'TestTheRowAHandlerAsksForIsTheRowTheLedgerGets|TestAnUnannotatedRequestIsNotAudited|TestAFailingRequestIsAuditedAsAFailure'
+	@echo "audit-port-check: the port is BC-free, the vocabulary is closed, the grant is gone and rows still land"
+
 # ----------------------------------------------------------------------------
 # lint
 # ----------------------------------------------------------------------------

@@ -15,6 +15,7 @@ import (
 
 	store "github.com/vincent-wuhan/opskeeper/core/manager/data/audit/store"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
 )
 
 // Repo is the persistence seam the usecase consumes. Implemented by
@@ -34,34 +35,13 @@ type Repo interface {
 // can depend only on biz/audit without importing data/audit/store.
 type ListFilters = store.ListFilters
 
-// Event is the input shape for Emit. Caller fills what it knows; the
-// usecase stamps OccurredAt and serialises Payload.
-type Event struct {
-	// Actor — filled by the middleware from JWT claims, by handlers
-	// for failed-auth or anon paths.
-	UserID    *uint64
-	UserEmail string
-	Role      string
-	IP        string
-	UserAgent string
-	RequestID string
-
-	// Action — must be one of the canonical model.Action* constants.
-	Action       string
-	ResourceType string
-	ResourceID   string
-	ResourceName string
-
-	// Outcome.
-	Status       string // success|failure|denied
-	ErrorCode    string
-	ErrorMessage string
-
-	// Free-form structured detail. Caller is responsible for redacting
-	// secrets BEFORE passing in (LLM keys, passwords, tokens). Pass a
-	// map or struct; the usecase JSON-encodes.
-	Payload any
-}
+// Event is the row shape this usecase accepts. The definition lives in
+// core/manager/pkg/audit (decision 109) because a handler in another
+// bounded context has to be able to name an audit row without importing
+// this package — see the note on the alias: it is an alias, not a second
+// type, so a value built through the port and a value built here are the
+// same type and the throat in this package stays the only writer.
+type Event = auditport.Event
 
 // Usecase is the BC façade.
 type Usecase struct {

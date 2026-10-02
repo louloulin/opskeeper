@@ -1,11 +1,22 @@
-// Package audit holds the persistence entity + canonical constants for
-// the HLD-010 audit trail. One row per (actor, action, resource, outcome)
-// observation. The whole point of this table is to be unforgeable record-
-// keeping for "who did what" — code in this package must never mutate or
-// delete rows except via the retention job.
+// Package audit holds the persistence entity for the HLD-010 audit trail.
+// One row per (actor, action, resource, outcome) observation. The whole
+// point of this table is to be unforgeable record-keeping for "who did
+// what" — code in this package must never mutate or delete rows except via
+// the retention job.
+//
+// The action vocabulary that used to be spelled out here now lives in
+// core/manager/pkg/audit and is re-exported below, so a handler in
+// another bounded context can name a row without importing this package
+// (decision 109). The GORM entities stayed: they are storage, not
+// vocabulary, and nothing outside data/audit/store has any business
+// knowing that this table is called audit_logs.
 package audit
 
-import "time"
+import (
+	"time"
+
+	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
+)
 
 // Log is one audit observation.
 //
@@ -94,121 +105,76 @@ const ChainHeadID uint64 = 1
 // parallel empty table.
 func (Log) TableName() string { return "audit_logs" }
 
-// Status enum — bounded set used by both the writer and the list filter.
+// The action / resource / status vocabulary below was moved to
+// core/manager/pkg/audit in decision 109 and is re-exported here rather
+// than duplicated. Two things depend on it being one definition: the
+// middleware buckets an HTTP status into Status* before the writer ever
+// sees the row, and iam's handlers name actions from another bounded
+// context — which is exactly why the constants cannot live above them.
+// A const alias is a compile-time identity, so a row written with
+// auditmodel.ActionUserCreate and a row written with
+// auditport.ActionUserCreate are the same string by construction, not by
+// a test that would eventually be forgotten.
 const (
-	StatusSuccess = "success"
-	StatusFailure = "failure"
-	StatusDenied  = "denied"
-)
+	StatusSuccess = auditport.StatusSuccess
+	StatusFailure = auditport.StatusFailure
+	StatusDenied  = auditport.StatusDenied
 
-// Canonical actions. The naming convention is verb_resource in
-// snake_case — kept deliberately small. Sub-flavours (enable vs disable,
-// role-change vs password-reset, single vs bulk) live in the payload,
-// not the action name, so the UI's action dropdown stays short and the
-// audit row's payload tells the operator exactly what changed.
-//
-// Operator feedback 2026-05-20: the prior 38-action enum mixed
-// CRUD verbs with state-transition flavours (rule_enable / rule_disable)
-// and per-setting names (llm_key_set / grafana_config_set), which made
-// the action filter sprawl. The current set collapses those to the
-// underlying verb + a payload that carries the specifics.
-const (
-	// Note 2026-05-21: auth_login / auth_logout / audit_view dropped.
-	// Operator flagged read-only / session-bookkeeping rows as drowning
-	// out the mutation signal. We keep auth_login_failed because a
-	// brute-force pattern still wants to be visible.
-	ActionAuthLoginFailed = "auth_login_failed"
+	ActionAuthLoginFailed = auditport.ActionAuthLoginFailed
 
-	// User CRUD. role / password / profile field changes all surface as
-	// user_update — the payload field carries which field flipped.
-	ActionUserCreate = "user_create"
-	ActionUserUpdate = "user_update"
-	ActionUserDelete = "user_delete"
-	ActionUserExport = "user_export"
+	ActionUserCreate = auditport.ActionUserCreate
+	ActionUserUpdate = auditport.ActionUserUpdate
+	ActionUserDelete = auditport.ActionUserDelete
+	ActionUserExport = auditport.ActionUserExport
 
-	// Device CRUD. enable / disable / bulk-delete fold into update /
-	// delete + a payload (e.g. {"enabled": false, "count": 3}).
-	ActionDeviceUpdate = "device_update"
-	ActionDeviceDelete = "device_delete"
+	ActionDeviceUpdate = auditport.ActionDeviceUpdate
+	ActionDeviceDelete = auditport.ActionDeviceDelete
 
-	// Alert rule CRUD. enable / disable fold into update with payload
-	// {"enabled": <bool>}.
-	ActionRuleCreate = "rule_create"
-	ActionRuleUpdate = "rule_update"
-	ActionRuleDelete = "rule_delete"
+	ActionRuleCreate = auditport.ActionRuleCreate
+	ActionRuleUpdate = auditport.ActionRuleUpdate
+	ActionRuleDelete = auditport.ActionRuleDelete
 
-	ActionIncidentAck     = "incident_ack"
-	ActionIncidentResolve = "incident_resolve"
-	ActionIncidentSilence = "incident_silence"
+	ActionIncidentAck     = auditport.ActionIncidentAck
+	ActionIncidentResolve = auditport.ActionIncidentResolve
+	ActionIncidentSilence = auditport.ActionIncidentSilence
 
-	// Settings umbrella. LLM key / Grafana config / SSH key writes all
-	// land here; payload carries {"key": "...", "category": "..."}.
-	// Sensitive values are redacted upstream.
-	ActionSettingUpdate = "setting_update"
-	ActionSettingDelete = "setting_delete"
+	ActionSettingUpdate = auditport.ActionSettingUpdate
+	ActionSettingDelete = auditport.ActionSettingDelete
 
-	ActionChannelCreate = "channel_create"
-	ActionChannelUpdate = "channel_update"
-	ActionChannelDelete = "channel_delete"
+	ActionChannelCreate = auditport.ActionChannelCreate
+	ActionChannelUpdate = auditport.ActionChannelUpdate
+	ActionChannelDelete = auditport.ActionChannelDelete
 
-	ActionRepoCreate = "repo_create"
-	ActionRepoDelete = "repo_delete"
-	ActionRepoSync   = "repo_sync"
+	ActionRepoCreate = auditport.ActionRepoCreate
+	ActionRepoDelete = auditport.ActionRepoDelete
+	ActionRepoSync   = auditport.ActionRepoSync
 
-	ActionSkillInstall   = "skill_install"
-	ActionSkillUninstall = "skill_uninstall"
+	ActionSkillInstall   = auditport.ActionSkillInstall
+	ActionSkillUninstall = auditport.ActionSkillUninstall
 
-	// Plugin releases. A release is the action that puts new code —
-	// including L2 tools that can restart services — onto hosts, so it is
-	// the single operation in this list with the widest blast radius.
-	//
-	// The four verbs are separate rather than folded into one action with
-	// a payload: an operator filtering the audit trail for "who rolled
-	// back" is asking a different question from "who shipped this", and a
-	// single row type would make both queries a payload scan. Halt and
-	// rollback are also two different decisions made by two different
-	// people at two different moments, and the trail should say which.
-	ActionPluginReleaseStart    = "plugin_release_start"
-	ActionPluginReleaseAdvance  = "plugin_release_advance"
-	ActionPluginReleaseHalt     = "plugin_release_halt"
-	ActionPluginReleaseRollback = "plugin_release_rollback"
+	ActionPluginReleaseStart    = auditport.ActionPluginReleaseStart
+	ActionPluginReleaseAdvance  = auditport.ActionPluginReleaseAdvance
+	ActionPluginReleaseHalt     = auditport.ActionPluginReleaseHalt
+	ActionPluginReleaseRollback = auditport.ActionPluginReleaseRollback
 
-	// Autonomy execution. One row per decision the node made on its own
-	// while the control plane was unreachable, written locally before the
-	// action ran and replayed into this chain when the link came back.
-	//
-	// It is a single action with the phase in the payload rather than two
-	// (started / finished) because the phase is the same decision seen
-	// twice, and an operator filtering "what did this node do to itself"
-	// wants both halves in one list. The idempotency key that the node
-	// consumed also travels in the payload, which is what lets an
-	// investigator match a node's self-heal to the approval that would
-	// have covered it.
-	ActionAutonomyExecute = "autonomy_execute"
-)
+	ActionAutonomyExecute = auditport.ActionAutonomyExecute
 
-// ResourceType buckets used in the resource_type column. Same flat-list
-// convention as Action — group in the UI, not the data.
-const (
-	ResourceUser     = "user"
-	ResourceDevice   = "device"
-	ResourceIncident = "incident"
-	ResourceSetting  = "setting"
-	ResourceRule     = "rule"
-	ResourceChannel  = "channel"
-	ResourceRepo     = "repo"
-	ResourceSkill    = "skill"
-	ResourceLLM      = "llm"
-	ResourceGitKey   = "git_ssh_key"
-	ResourceGrafana  = "grafana"
-	ResourceRAG      = "rag"
-	ResourceAudit    = "audit"
-	ResourceAuth     = "auth"
-	// ResourcePlugin names a plugin release. The resource id is the
-	// package name, which is what an operator searches for.
-	ResourcePlugin = "plugin"
-	// ResourceEdge names a node. The resource id is the numeric edge id as
-	// a string, which is how every other edge-scoped row in this table
-	// already identifies itself.
-	ResourceEdge = "edge"
+	ActionAgentTeamsTokenIssue = auditport.ActionAgentTeamsTokenIssue
+
+	ResourceUser     = auditport.ResourceUser
+	ResourceDevice   = auditport.ResourceDevice
+	ResourceIncident = auditport.ResourceIncident
+	ResourceSetting  = auditport.ResourceSetting
+	ResourceRule     = auditport.ResourceRule
+	ResourceChannel  = auditport.ResourceChannel
+	ResourceRepo     = auditport.ResourceRepo
+	ResourceSkill    = auditport.ResourceSkill
+	ResourceLLM      = auditport.ResourceLLM
+	ResourceGitKey   = auditport.ResourceGitKey
+	ResourceGrafana  = auditport.ResourceGrafana
+	ResourceRAG      = auditport.ResourceRAG
+	ResourceAudit    = auditport.ResourceAudit
+	ResourceAuth     = auditport.ResourceAuth
+	ResourcePlugin   = auditport.ResourcePlugin
+	ResourceEdge     = auditport.ResourceEdge
 )
