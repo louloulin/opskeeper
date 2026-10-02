@@ -13,7 +13,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatprompt"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	aiopsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigagent"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
@@ -178,14 +178,14 @@ func (rt *Runtime) runKernelTurn(ctx context.Context, req *Request, t kernelTurn
 	// complete answer, and the actionable message is the one that says the
 	// search did not converge.
 	switch res.Stopped {
-	case ports.TurnMaxIterations:
+	case pigagent.TurnMaxIterations:
 		return rt.kernelFailure(ctx, t, emit, errors.New("exceeded max iterations"))
-	case ports.TurnToolBudget:
+	case pigagent.TurnToolBudget:
 		return rt.kernelFailure(ctx, t, emit, errors.New("budget exhausted"))
 	}
 
 	reply := &Reply{
-		Usage:      kernelUsage(res.Usage),
+		Usage:      res.Usage,
 		Iterations: res.Iterations,
 	}
 	content := res.Content
@@ -250,21 +250,6 @@ func (rt *Runtime) kernelFailure(ctx context.Context, t kernelTurn, emit Emit, c
 			slog.String("stopped", strings.TrimSpace(cause.Error())))
 	}
 	return reply, nil
-}
-
-// kernelUsage maps the kernel's token accounting onto the legacy wire shape.
-//
-// The two count different things: the kernel separates cache reads and writes
-// because providers bill them differently, while the legacy shape has one
-// prompt number. Cache tokens are counted as prompt tokens here because that is
-// what the operator's console means by "prompt" — the alternative would show a
-// turn that read a large cached context as having sent almost nothing.
-func kernelUsage(u ports.Usage) llm.Usage {
-	return llm.Usage{
-		PromptTokens:     u.InputTokens + u.CacheReadTokens + u.CacheWriteTokens,
-		CompletionTokens: u.OutputTokens,
-		TotalTokens:      u.Total(),
-	}
 }
 
 // defaultMaxIterations is the turn's tool-round ceiling when neither the

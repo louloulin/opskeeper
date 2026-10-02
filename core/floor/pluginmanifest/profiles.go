@@ -53,6 +53,32 @@ type Profile struct {
 	Intent      string
 	NotGranted  string
 	BlockedNote string
+	// Composes is the package set this profile installs.
+	//
+	// Everything above this field is a *ceiling* — it says what the fleet
+	// may host, and a ceiling alone leaves the operator with a policy and
+	// no answer to the question they actually have, which is "so which
+	// packages do I install". A profile that granted host.write for
+	// host-scoped repair and then composed nothing that needs it would be
+	// a correct policy and a useless template.
+	//
+	// So the composition is written down, sorted, and checked against the
+	// shipped catalogue by the tests beside it: every name here must exist,
+	// every one must be admitted by the policy above it, and every shipped
+	// package must be composed by at least one profile — a package no
+	// profile installs is a package nobody put on a node, and nothing else
+	// in the system would say so.
+	Composes []string
+}
+
+// ComposesPackage reports whether the profile installs p by name.
+func (p Profile) ComposesPackage(name string) bool {
+	for _, n := range p.Composes {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Policy renders the profile as the node review policy.
@@ -93,13 +119,26 @@ var deploymentProfiles = []Profile{
 		Granted: domain.Scopes{
 			domain.ScopeHostRead, domain.ScopeHostWrite,
 			domain.ScopeK8sRead, domain.ScopeDBRead, domain.ScopeMQRead,
-			domain.ScopeMetricsRO, domain.ScopeTopologyRO, domain.ScopeAlertRO,
+			domain.ScopeMetricsRO, domain.ScopeTopologyRO,
+			domain.ScopeAlertRO, domain.ScopeAlertWrite,
 		},
-		Intent: "Host-scoped repair (host.write) is granted because restarting one unit on one host is the operation this fleet most needs to automate. Every scope that reaches past the host — k8s.exec, db.write, mq.write — is withheld, so a package needing one is refused at admission rather than at the moment it tries.",
+		Intent: "Host-scoped repair (host.write) is granted because restarting one unit on one host is the operation this fleet most needs to automate, and alert.write is granted alongside it because the repair package that does the restarting also commits confirmed alert-rule drafts — a package that bundles the two, so granting one without the other leaves the flagship package uninstallable in the one deployment it was written for. Neither scope reaches trading state: one restarts a systemd unit, the other edits when a rule fires. Every scope that reaches past the host and past the alert system — k8s.exec, db.write, mq.write — is withheld, so a package needing one is refused at admission rather than at the moment it tries.",
 		// Named so an operator asking "why was this refused" gets the
-		// missing scope rather than a generic denial.
+		// missing scope rather than a generic denial. This list was wrong
+		// until the composition tests existed: it did not mention
+		// alert.write, which the profile was withholding while its own
+		// Intent said the repair package was the reason host.write was
+		// granted. A profile whose stated reason and stated refusal
+		// disagree is worse than one with no prose, because the prose is
+		// what an operator trusts.
 		NotGranted:  "k8s.exec, db.write, mq.write",
 		BlockedNote: "an L3 package or one declaring a radius wider than pod is refused here even if its scopes were granted; widen MaxRadius in this profile rather than in a node's environment, so the change is reviewable.",
+		Composes: []string{
+			"opskeeper-sre-middleware",
+			"opskeeper-sre-observability",
+			"opskeeper-sre-readonly",
+			"opskeeper-sre-repair",
+		},
 	},
 	{
 		Name:    ProfileSaaS,
@@ -134,6 +173,12 @@ var deploymentProfiles = []Profile{
 		// grant as the control.
 		NotGranted:  "nothing — the namespace ceiling is what contains this profile, not the scope list",
 		BlockedNote: "a cluster-radius action is refused here. That is the tenancy boundary; a fleet that needs one is a fleet considering a different profile, not a reason to edit this one.",
+		Composes: []string{
+			"opskeeper-sre-middleware",
+			"opskeeper-sre-observability",
+			"opskeeper-sre-readonly",
+			"opskeeper-sre-repair",
+		},
 	},
 }
 

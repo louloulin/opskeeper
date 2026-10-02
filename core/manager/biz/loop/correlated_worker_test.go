@@ -5,7 +5,7 @@
 //	CorrelatedPhaseWorker
 //	  1. 成功：alertRepo 找到 3 个同 labelsetkey 历史 alert +
 //	     LLM 给 valid JSON → CorrelatedGroup 字段断言
-//	  2. LLM 失败：FakeLLMClient.SetError → wrapped error
+//	  2. LLM 失败：fakeCompleter.SetError → wrapped error
 //	  3. schema-invalid：缺 alert_ids 字段 → ErrSchemaInvalid 路径
 //	辅助
 //	  4. NewCorrelatedPhaseWorker nil 依赖拒绝
@@ -125,7 +125,7 @@ func validDetectionEvent(alertID, labelsetkey string, detectedAt time.Time) Dete
 // 构造器拒绝（与 RecoveredPhaseWorker 同原则："fail at wire-up"）。
 func TestNewCorrelatedPhaseWorker_RequiresDeps(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
+	fc := newFakeCompleter()
 	caller := NewLLMCaller(fc, WithLogger(silentLog()))
 	cases := []struct {
 		name             string
@@ -179,8 +179,8 @@ func TestCorrelatedWorker_HappyPath(t *testing.T) {
 		validDetectionEvent(historical3, labelsetkey, now.Add(-5*time.Minute)),
 	})
 
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, validCorrelatedJSON(incidentID,
+	fc := newFakeCompleter()
+	fc.setResponse(0, validCorrelatedJSON(incidentID,
 		[]string{currentAlert, historical1, historical2, historical3},
 		"shared root cause: long-running transaction",
 		0.92,
@@ -254,8 +254,8 @@ func TestCorrelatedWorker_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Executor err: %v", err)
 	}
-	if fc.CallCount() != 1 {
-		t.Errorf("LLM CallCount = %d, want 1", fc.CallCount())
+	if fc.callCount() != 1 {
+		t.Errorf("LLM CallCount = %d, want 1", fc.callCount())
 	}
 	rawGroup, ok := result.RawOutputs["correlated_group"]
 	if !ok {
@@ -363,7 +363,7 @@ func TestCorrelatedWorker_HappyPath(t *testing.T) {
 
 // TestCorrelatedWorker_LLMFailure 覆盖"LLM 失败"路径：
 //   - alertRepo 配 1 个同 labelsetkey 历史 alert
-//   - FakeLLMClient 在第 0 次调用就 SetError → 连续 transient 失败耗尽
+//   - fakeCompleter 在第 0 次调用就 SetError → 连续 transient 失败耗尽
 //   - Executor 返回 wrapped error（包含 "correlated llm call" 上下文）
 func TestCorrelatedWorker_LLMFailure(t *testing.T) {
 	t.Parallel()
@@ -379,9 +379,9 @@ func TestCorrelatedWorker_LLMFailure(t *testing.T) {
 		validDetectionEvent("a-hist-1", labelsetkey, now.Add(-1*time.Hour)),
 	})
 
-	fc := NewFakeLLMClient()
-	fc.SetError(0, errors.New("context deadline exceeded"))
-	fc.SetError(1, errors.New("context deadline exceeded"))
+	fc := newFakeCompleter()
+	fc.setError(0, errors.New("context deadline exceeded"))
+	fc.setError(1, errors.New("context deadline exceeded"))
 	caller := NewLLMCaller(fc, WithLogger(silentLog()))
 
 	current := validDetectionEvent("a-current", labelsetkey, now)
@@ -417,8 +417,8 @@ func TestCorrelatedWorker_LLMFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "after 1 retries") {
 		t.Errorf("Executor error should mention retry exhaustion; got %v", err)
 	}
-	if fc.CallCount() != 2 {
-		t.Errorf("FakeLLM CallCount = %d, want 2 (1 retry)", fc.CallCount())
+	if fc.callCount() != 2 {
+		t.Errorf("FakeLLM CallCount = %d, want 2 (1 retry)", fc.callCount())
 	}
 }
 
@@ -445,8 +445,8 @@ func TestCorrelatedWorker_SchemaInvalid_MissingAlertIDs(t *testing.T) {
 
 	missingFieldJSON := `{"incident_id":"inc-corr-3","root_hypothesis":"some hypothesis"}`
 
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, missingFieldJSON)
+	fc := newFakeCompleter()
+	fc.setResponse(0, missingFieldJSON)
 	caller := NewLLMCaller(fc, WithLogger(silentLog()))
 
 	current := validDetectionEvent("a-current", labelsetkey, now)
@@ -482,8 +482,8 @@ func TestCorrelatedWorker_SchemaInvalid_MissingAlertIDs(t *testing.T) {
 	if !strings.Contains(err.Error(), "correlated llm call") {
 		t.Errorf("Executor error should mention correlated llm call; got %v", err)
 	}
-	if fc.CallCount() != 1 {
-		t.Errorf("FakeLLM CallCount = %d, want 1 (no retry on schema-invalid)", fc.CallCount())
+	if fc.callCount() != 1 {
+		t.Errorf("FakeLLM CallCount = %d, want 1 (no retry on schema-invalid)", fc.callCount())
 	}
 }
 
@@ -509,8 +509,8 @@ func TestCorrelatedWorker_Verifier_RejectsEmptyAlertIDs(t *testing.T) {
 
 	emptyAlertIDsJSON := validCorrelatedJSON(incidentID, []string{}, "ambiguous", 0.4)
 
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, emptyAlertIDsJSON)
+	fc := newFakeCompleter()
+	fc.setResponse(0, emptyAlertIDsJSON)
 	caller := NewLLMCaller(fc, WithLogger(silentLog()))
 
 	current := validDetectionEvent("", labelsetkey, now)
@@ -568,7 +568,7 @@ func TestCorrelatedWorker_Verifier_RejectsEmptyAlertIDs(t *testing.T) {
 func TestCorrelatedWorker_VerifierTimeoutMs(t *testing.T) {
 	t.Parallel()
 	w := newCorrelatedWorkerFor(t,
-		NewLLMCaller(NewFakeLLMClient(), WithLogger(silentLog())),
+		NewLLMCaller(newFakeCompleter(), WithLogger(silentLog())),
 		newFakeAlertRepo(),
 	)
 	if got := w.VerifierTimeoutMs(); got != 60_000 {
@@ -678,7 +678,7 @@ func TestValidateCorrelatedGroup(t *testing.T) {
 func TestCorrelatedWorker_Planner_RequiresLoader(t *testing.T) {
 	t.Parallel()
 	w := newCorrelatedWorkerFor(t,
-		NewLLMCaller(NewFakeLLMClient(), WithLogger(silentLog())),
+		NewLLMCaller(newFakeCompleter(), WithLogger(silentLog())),
 		newFakeAlertRepo(),
 	)
 	_, err := w.Planner(context.Background(), PlanInput{
@@ -705,7 +705,7 @@ func TestCorrelatedWorker_Planner_AlertRepoError(t *testing.T) {
 	now := time.Date(2026, 8, 12, 14, 0, 0, 0, time.UTC)
 	repo := newFakeAlertRepo()
 	repo.err = errors.New("db connection refused")
-	caller := NewLLMCaller(NewFakeLLMClient(), WithLogger(silentLog()))
+	caller := NewLLMCaller(newFakeCompleter(), WithLogger(silentLog()))
 	current := validDetectionEvent("a-current", "device_id=1", now)
 	loader := &fakeEventLoader{ev: current}
 	w := newCorrelatedWorkerFor(t, caller, repo,
@@ -731,8 +731,8 @@ func TestCorrelatedWorker_Planner_AlertRepoError(t *testing.T) {
 func TestCorrelatedWorker_SchemaAllowsTrustedIncidentFallback(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 12, 14, 0, 0, 0, time.UTC)
-	fake := NewFakeLLMClient()
-	fake.SetResponse(0, `{"alert_ids":["a-current"],"root_hypothesis":"single-alert group","confidence":0.8}`)
+	fake := newFakeCompleter()
+	fake.setResponse(0, `{"alert_ids":["a-current"],"root_hypothesis":"single-alert group","confidence":0.8}`)
 	caller := NewLLMCaller(fake, WithLogger(silentLog()))
 	current := validDetectionEvent("a-current", "device_id=1", now)
 	w := newCorrelatedWorkerFor(t, caller, newFakeAlertRepo(),

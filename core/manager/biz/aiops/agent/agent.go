@@ -28,7 +28,12 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigtools"
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
 // ErrMaxIterationsReached is returned from Run when cfg.MaxIterations elapse
@@ -53,8 +58,12 @@ type Config struct {
 
 // Reply is the terminal result returned to the caller.
 type Reply struct {
-	Message    *model.Message
-	Usage      llm.Usage
+	Message *model.Message
+	// Usage is the turn's token accounting in the stored-ledger shape. It
+	// is deliberately not a copy of the provider's own usage record — see
+	// ports.TranscriptUsage for why the two are different types, and for
+	// what every stored row would have to be rewritten to make them one.
+	Usage      ports.TranscriptUsage
 	Iterations int
 	ToolCalls  []*model.ToolCall
 }
@@ -226,7 +235,7 @@ var legacyKernelMutatingTools = map[string]struct{}{
 
 // Agent wires the LLM client, tool registry, and session repo.
 type Agent struct {
-	llm      llm.Client
+	llm      pigmodel.Completer
 	tools    *tools.Registry
 	sessions biz.SessionRepo
 	cfg      Config
@@ -240,7 +249,7 @@ func (a *Agent) SetMentionResolver(r MentionResolver) { a.resolver = r }
 
 // New builds an Agent. Defaults are filled in here so callers can pass a
 // zero-value Config and get sane behaviour.
-func New(llmClient llm.Client, toolsReg *tools.Registry, sessions biz.SessionRepo, cfg Config, log *slog.Logger) *Agent {
+func New(llmClient pigmodel.Completer, toolsReg *tools.Registry, sessions biz.SessionRepo, cfg Config, log *slog.Logger) *Agent {
 	if cfg.Model == "" {
 		cfg.Model = "gpt-5.4"
 	}
@@ -356,7 +365,7 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 		effectiveModel = a.cfg.Model
 	}
 
-	var totalUsage llm.Usage
+	var totalUsage ports.TranscriptUsage
 	var toolCallRows []*model.ToolCall
 
 	// Per-turn schema list: the manager-scoped web_search skill is only
@@ -368,33 +377,51 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 	if !opts.WebSearchEnabled {
 		exposedSchemas = filterToolSchemas(exposedSchemas, ToolWebSearch)
 	}
+	// The registry publishes the host's governance records — a tool's
+	// class, origin and routing hint. Only three of those fields mean
+	// anything to a provider, and the rest are the node's own
+	// classification of its own tools. Rendering happens here, on the way
+	// to the wire, so nothing has to remember to strip them.
+	modelSchemas, err := pigtools.Schemas(exposedSchemas)
+	if err != nil {
+		return nil, fmt.Errorf("agent: render tool schemas: %w", err)
+	}
 
 	for i := 0; i < a.cfg.MaxIterations; i++ {
-		resp, err := a.llm.Chat(ctx, llm.ChatReq{
-			Model:       effectiveModel,
-			Provider:    effectiveProvider,
-			Messages:    llmMsgs,
-			Tools:       exposedSchemas,
-			Temperature: a.cfg.Temperature,
-			UserID:      userID,
+		resp, err := a.llm.Complete(ctx, pigmodel.Request{
+			Selection: domain.ModelSelection{
+				Provider: domain.ProviderID(effectiveProvider),
+				Model:    effectiveModel,
+			},
+			Messages: llmMsgs,
+			Tools:    modelSchemas,
+			Tune: func(opts *pigai.StreamOptions) {
+				opts.Temperature = float64(a.cfg.Temperature)
+				opts.TemperatureSet = true
+				// The session id is the provider's prompt-cache key, and
+				// the one value here that stays stable across the whole
+				// tool loop. It is derived from the caller the platform
+				// already accounts against; it never reaches a metric
+				// label and is not a tenant identifier on the wire.
+				opts.SessionID = cacheKeyFor(userID, sess.ID)
+			},
 		})
 		if err != nil {
-			return nil, fmt.Errorf("agent: llm.Chat: %w", err)
+			return nil, fmt.Errorf("agent: model completion: %w", err)
 		}
-		totalUsage.PromptTokens += resp.Usage.PromptTokens
-		totalUsage.CompletionTokens += resp.Usage.CompletionTokens
-		totalUsage.TotalTokens += resp.Usage.TotalTokens
+		totalUsage.Add(pigmodel.UsageOf(resp))
 
 		// Persist the assistant message. If Content is empty and there are
 		// tool calls, we still write the row (Content is a *string so nil
 		// means "no textual reply").
-		asstContent := resp.Assistant.Content
+		asstContent := pigmodel.ReplyText(resp)
 		var asstContentPtr *string
 		if asstContent != "" {
 			asstContentPtr = &asstContent
 		}
-		pt := resp.Usage.PromptTokens
-		ct := resp.Usage.CompletionTokens
+		turnUsage := pigmodel.UsageOf(resp)
+		pt := turnUsage.InputTokens
+		ct := turnUsage.OutputTokens
 		modelTag := effectiveModel
 		asstRow := &model.Message{
 			SessionID:        sess.ID,
@@ -414,22 +441,23 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 			MessageID:        asstRow.ID,
 			Content:          asstContent,
 			CreatedAt:        asstRow.CreatedAt,
-			PendingToolCalls: len(resp.Assistant.ToolCalls),
+			PendingToolCalls: len(pigmodel.ReplyToolCalls(resp)),
 		}})
 
-		// Append the assistant message (with its tool_calls) to the llm
-		// working history so the next round sees it.
-		llmMsgs = append(llmMsgs, resp.Assistant)
+		// Append the assistant message (with its tool_calls) to the working
+		// transcript so the next round sees it.
+		assistantTurn, toolCalls := assistantTurnOf(resp)
+		llmMsgs = append(llmMsgs, assistantTurn)
 
-		if len(resp.Assistant.ToolCalls) == 0 {
+		if len(toolCalls) == 0 {
 			// Terminal: no tools requested, conversation is done.
 			if a.log != nil {
 				a.log.Info("agent run completed",
 					slog.String("session_id", sess.ID),
 					slog.Uint64("user_id", userID),
 					slog.Int("iterations", i+1),
-					slog.Int("prompt_tokens", totalUsage.PromptTokens),
-					slog.Int("completion_tokens", totalUsage.CompletionTokens),
+					slog.Int("prompt_tokens", totalUsage.InputTokens),
+					slog.Int("completion_tokens", totalUsage.OutputTokens),
 				)
 			}
 			reply := &Reply{
@@ -445,13 +473,19 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 		// Execute each requested tool sequentially. We persist a pending
 		// chat_tool_calls row, execute, then update the row with the
 		// result or error, and feed a role=tool message back to the LLM.
-		for _, tc := range resp.Assistant.ToolCalls {
+		for _, tc := range toolCalls {
+			// PiG's tool call carries arguments as a decoded object. The
+			// registry and the stored row both want the original bytes, so
+			// they are re-encoded once here rather than each deriving its
+			// own encoding — two encoders is how a tool starts rejecting
+			// its own arguments as malformed.
+			rawArgs := pigmodel.ArgumentsJSON(tc.Arguments)
 			startedAt := time.Now().UTC()
 			llmCallID := tc.ID
 			tcRow := &model.ToolCall{
 				MessageID:     asstRow.ID,
 				ToolName:      tc.Name,
-				ArgumentsJSON: string(tc.Args),
+				ArgumentsJSON: string(rawArgs),
 				LLMCallID:     &llmCallID,
 				Status:        model.StatusPending,
 				StartedAt:     startedAt,
@@ -466,7 +500,7 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 				Name:       tc.Name,
 				Status:     model.StatusPending,
 				StartedAt:  startedAt,
-				ArgsJSON:   string(tc.Args),
+				ArgsJSON:   string(rawArgs),
 			}})
 
 			// Belt-and-braces: even though we filtered web_search out of
@@ -494,7 +528,7 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 					StartedAt:  startedAt,
 					EndedAt:    &endedAt,
 					DurationMs: endedAt.Sub(startedAt).Milliseconds(),
-					ArgsJSON:   string(tc.Args),
+					ArgsJSON:   string(rawArgs),
 					ResultJSON: truncateJSON(toolPayload, 8*1024),
 				}
 				if errMsgPtr != nil {
@@ -515,12 +549,7 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 				if err := a.sessions.AppendMessage(ctx, toolRow); err != nil {
 					return nil, fmt.Errorf("agent: persist tool msg: %w", err)
 				}
-				llmMsgs = append(llmMsgs, llm.Message{
-					Role:       model.RoleTool,
-					Content:    string(toolPayload),
-					ToolCallID: tc.ID,
-					ToolName:   tc.Name,
-				})
+				llmMsgs = append(llmMsgs, pigmodel.ToolTurn(tc.ID, tc.Name, string(toolPayload)))
 				continue
 			}
 
@@ -552,7 +581,7 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 					StartedAt:  startedAt,
 					EndedAt:    &endedAt,
 					DurationMs: endedAt.Sub(startedAt).Milliseconds(),
-					ArgsJSON:   string(tc.Args),
+					ArgsJSON:   string(rawArgs),
 					ResultJSON: truncateJSON(toolPayload, 8*1024),
 				}
 				if errMsgPtr != nil {
@@ -573,17 +602,12 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 				if err := a.sessions.AppendMessage(ctx, toolRow); err != nil {
 					return nil, fmt.Errorf("agent: persist tool msg: %w", err)
 				}
-				llmMsgs = append(llmMsgs, llm.Message{
-					Role:       model.RoleTool,
-					Content:    string(toolPayload),
-					ToolCallID: tc.ID,
-					ToolName:   tc.Name,
-				})
+				llmMsgs = append(llmMsgs, pigmodel.ToolTurn(tc.ID, tc.Name, string(toolPayload)))
 				continue
 			}
 
 			toolCtx, cancel := context.WithTimeout(ctx, a.cfg.ToolTimeout)
-			execResult, execErr := a.tools.Invoke(toolCtx, tc.Name, tc.Args)
+			execResult, execErr := a.tools.Invoke(toolCtx, tc.Name, rawArgs)
 			cancel()
 
 			toolPayload := toolResultPayload(execResult, execErr)
@@ -610,7 +634,7 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 				StartedAt:  startedAt,
 				EndedAt:    &endedAt,
 				DurationMs: endedAt.Sub(startedAt).Milliseconds(),
-				ArgsJSON:   string(tc.Args),
+				ArgsJSON:   string(rawArgs),
 				ResultJSON: truncateJSON(toolPayload, 8*1024),
 			}
 			if errMsgPtr != nil {
@@ -635,12 +659,7 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 				return nil, fmt.Errorf("agent: persist tool msg: %w", err)
 			}
 
-			llmMsgs = append(llmMsgs, llm.Message{
-				Role:       model.RoleTool,
-				Content:    string(toolPayload),
-				ToolCallID: tc.ID,
-				ToolName:   tc.Name,
-			})
+			llmMsgs = append(llmMsgs, pigmodel.ToolTurn(tc.ID, tc.Name, string(toolPayload)))
 		}
 	}
 
@@ -675,7 +694,7 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 }
 
 // buildMessages translates persisted history rows + optional system prompt
-// into the llm.Message shape.
+// into PiG's own transcript vocabulary.
 //
 // Tool-call replay: chat_messages stores assistant turns that emit
 // tool_calls as Content=NULL rows (because the LLM gave us no natural-
@@ -695,7 +714,7 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 // matching tool row), we drop both the assistant row and dependent
 // tool rows — the same shape the pre-fix MVP emitted — so the request
 // at worst regresses to the old behavior, never makes it worse.
-func (a *Agent) buildMessages(history []*model.Message) []llm.Message {
+func (a *Agent) buildMessages(history []*model.Message) []pigai.Message {
 	callIDs := toolreplay.Resolve(history)
 	// See chatruntime.buildEinoHistory for rationale: index tool rows by
 	// tool_call_id so we can hoist responses next to their parent
@@ -704,9 +723,9 @@ func (a *Agent) buildMessages(history []*model.Message) []llm.Message {
 	toolIdx := toolreplay.IndexToolMessagesByCallID(history)
 	skipTool := make(map[int]bool)
 
-	out := make([]llm.Message, 0, len(history)+1)
+	out := make([]pigai.Message, 0, len(history)+1)
 	if a.cfg.SystemPrompt != "" {
-		out = append(out, llm.Message{Role: "system", Content: a.cfg.SystemPrompt})
+		out = append(out, pigmodel.SystemTurn(a.cfg.SystemPrompt))
 	}
 
 	emitToolByCallID := func(callID string) {
@@ -726,12 +745,7 @@ func (a *Agent) buildMessages(history []*model.Message) []llm.Message {
 		if tm.ToolName != nil {
 			tname = *tm.ToolName
 		}
-		out = append(out, llm.Message{
-			Role:       model.RoleTool,
-			Content:    content,
-			ToolCallID: tcID,
-			ToolName:   tname,
-		})
+		out = append(out, pigmodel.ToolTurn(tcID, tname, content))
 		skipTool[j] = true
 	}
 	for idx, m := range history {
@@ -740,7 +754,7 @@ func (a *Agent) buildMessages(history []*model.Message) []llm.Message {
 			if m.Content == nil {
 				continue
 			}
-			out = append(out, llm.Message{Role: m.Role, Content: *m.Content})
+			out = append(out, pigmodel.UserTurn(*m.Content))
 		case model.RoleAssistant:
 			calls, ok := callIDs[m.ID]
 			if len(m.ToolCalls) > 0 && !ok {
@@ -771,18 +785,17 @@ func (a *Agent) buildMessages(history []*model.Message) []llm.Message {
 			if m.Content != nil {
 				content = *m.Content
 			}
-			msg := llm.Message{Role: m.Role, Content: content}
+			msg := pigmodel.AssistantTurn(content)
 			if ok {
-				msg.ToolCalls = make([]llm.ToolCall, 0, len(calls))
 				for _, tc := range calls {
-					msg.ToolCalls = append(msg.ToolCalls, llm.ToolCall{
-						ID:   tc.ID,
-						Name: tc.Name,
-						Args: json.RawMessage(tc.ArgsJSON),
+					msg.Content = append(msg.Content, pigai.ToolCall{
+						ID:        tc.ID,
+						Name:      tc.Name,
+						Arguments: decodeReplayArgs(tc.ArgsJSON),
 					})
 				}
 			}
-			if content == "" && len(msg.ToolCalls) == 0 {
+			if content == "" && len(pigmodel.ReplyToolCalls(&msg)) == 0 {
 				// Polluted-data case: assistant turn with no replayable
 				// signal AND no hydrated tool_calls. Drop the assistant
 				// AND the dependent tool rows so they don't become
@@ -794,7 +807,7 @@ func (a *Agent) buildMessages(history []*model.Message) []llm.Message {
 			// HOIST: pull each tool_call's response in by id so it
 			// follows the assistant immediately, regardless of where
 			// the natural created_at order put it.
-			for _, tc := range msg.ToolCalls {
+			for _, tc := range pigmodel.ReplyToolCalls(&msg) {
 				emitToolByCallID(tc.ID)
 			}
 		case model.RoleTool:
@@ -812,12 +825,7 @@ func (a *Agent) buildMessages(history []*model.Message) []llm.Message {
 			if m.ToolName != nil {
 				toolName = *m.ToolName
 			}
-			out = append(out, llm.Message{
-				Role:       m.Role,
-				Content:    content,
-				ToolCallID: toolCallID,
-				ToolName:   toolName,
-			})
+			out = append(out, pigmodel.ToolTurn(toolCallID, toolName, content))
 		}
 	}
 	return out
@@ -853,7 +861,7 @@ func toolResultPayload(r tools.ExecuteResult, err error) []byte {
 // Name matches one of the excluded tools removed. Used to gate the
 // web_search skill behind the SPA's globe toggle without rebuilding
 // the whole tool registry per request.
-func filterToolSchemas(schemas []llm.ToolSchema, excludeNames ...string) []llm.ToolSchema {
+func filterToolSchemas(schemas []ports.ToolSchema, excludeNames ...string) []ports.ToolSchema {
 	if len(excludeNames) == 0 {
 		return schemas
 	}
@@ -861,7 +869,7 @@ func filterToolSchemas(schemas []llm.ToolSchema, excludeNames ...string) []llm.T
 	for _, n := range excludeNames {
 		exclude[n] = struct{}{}
 	}
-	out := make([]llm.ToolSchema, 0, len(schemas))
+	out := make([]ports.ToolSchema, 0, len(schemas))
 	for _, s := range schemas {
 		if _, drop := exclude[s.Name]; drop {
 			continue

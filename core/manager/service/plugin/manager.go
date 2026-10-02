@@ -51,7 +51,10 @@ type Fleet interface {
 type Manager struct {
 	fleet Fleet
 	node  Node
-	log   *slog.Logger
+	// versions is the compatibility matrix's only input. Optional, and
+	// refused at use rather than at construction — see WithVersions.
+	versions Versions
+	log      *slog.Logger
 
 	mu       sync.Mutex
 	releases map[string]*Rollout

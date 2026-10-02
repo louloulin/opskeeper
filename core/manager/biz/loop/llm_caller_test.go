@@ -21,7 +21,7 @@
 //   - call without schema  — empty OutputSchema accepts arbitrary JSON.
 //   - nil client panics    — guard clause on construction.
 //
-// The shared FakeLLMClient (loop/fake_llm_client.go) covers most cases
+// The shared fakeCompleter (loop/fake_completer_test.go) covers most cases
 // and is shared with future phase worker + LLMJudge tests per Design
 // Doc §9.1. The cost-telemetry test needs Usage injection, which the
 // shared fake does not support (intentionally narrow surface), so it
@@ -41,33 +41,53 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
-// fakeLLM is an in-test stub of llm.Client that supports Usage
-// injection. Only the cost-telemetry test needs this; everywhere else
-// we reuse the shared FakeLLMClient.
+// fakeLLM scripts one reply plus the usage a test wants attributed to it.
+//
+// The usage is the reason this stub exists rather than a plain
+// pigtest.Completer: the caller copies token counts into its telemetry, and
+// a stub that reported none would make that copy untestable — the fields
+// would read zero in every assertion and nobody would notice they were
+// never populated.
 type fakeLLM struct {
+	content string
+	err     error
+	usage   pigai.Usage
+
 	mu         sync.Mutex
-	content    string
-	usage      llm.Usage
-	err        error
-	calls      atomic.Int32
+	calls      atomic.Int64
 	lastPrompt string
 }
 
-func (f *fakeLLM) Chat(ctx context.Context, req llm.ChatReq) (*llm.ChatResp, error) {
+var _ pigmodel.Completer = (*fakeLLM)(nil)
+
+// Complete records the prompt it was handed before answering. Recording it
+// from the request rather than from a field the caller sets is the point:
+// the soft-switch test below exists because a switch has to be appended to
+// the text the *provider* would see, and a fake that echoed back what the
+// caller told it would pass whether or not the caller did the work.
+func (f *fakeLLM) Complete(_ context.Context, req pigmodel.Request) (*pigai.AssistantMessage, error) {
 	f.calls.Add(1)
 	f.mu.Lock()
-	f.lastPrompt = req.Messages[len(req.Messages)-1].Content
+	f.lastPrompt = ""
+	for _, m := range req.Messages {
+		if _, ok := m.(pigai.UserMessage); ok {
+			f.lastPrompt = pigmodel.MessageText(m)
+		}
+	}
 	f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &llm.ChatResp{
-		Assistant: llm.Message{Role: "assistant", Content: f.content},
-		Usage:     f.usage,
-	}, nil
+	reply := pigmodel.AssistantTurn(f.content)
+	reply.Usage = f.usage
+	reply.StopReason = pigai.StopReasonStop
+	return &reply, nil
 }
 
 func (f *fakeLLM) callCount() int { return int(f.calls.Load()) }
@@ -112,8 +132,8 @@ func silentLogger() *slog.Logger {
 func TestCall_Success(t *testing.T) {
 	t.Parallel()
 	content := validJSONFor("investigated", "high", []string{"noop"})
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, content)
+	fc := newFakeCompleter()
+	fc.setResponse(0, content)
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	out, err := caller.Call(context.Background(), CallInput{
@@ -125,8 +145,8 @@ func TestCall_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call returned err = %v, want nil", err)
 	}
-	if fc.CallCount() != 1 {
-		t.Errorf("CallCount = %d, want 1 (no retry on happy path)", fc.CallCount())
+	if fc.callCount() != 1 {
+		t.Errorf("CallCount = %d, want 1 (no retry on happy path)", fc.callCount())
 	}
 	if !json.Valid(out.Raw) {
 		t.Errorf("CallOutput.Raw is not valid JSON: %s", out.Raw)
@@ -170,9 +190,9 @@ func TestCall_WithQwenNoThink_AppendsSoftSwitchOnce(t *testing.T) {
 // (1 original + 1 retry), then a wrapped failure.
 func TestCall_Timeout(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
-	fc.SetError(0, errors.New("ChatCompletion: context deadline exceeded"))
-	fc.SetError(1, errors.New("ChatCompletion: context deadline exceeded"))
+	fc := newFakeCompleter()
+	fc.setError(0, errors.New("ChatCompletion: context deadline exceeded"))
+	fc.setError(1, errors.New("ChatCompletion: context deadline exceeded"))
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	_, err := caller.Call(context.Background(), CallInput{
@@ -189,7 +209,7 @@ func TestCall_Timeout(t *testing.T) {
 	if !strings.Contains(err.Error(), "after 1 retries") {
 		t.Errorf("err = %v, want 'after 1 retries' in chain", err)
 	}
-	if got := fc.CallCount(); got != 2 {
+	if got := fc.callCount(); got != 2 {
 		t.Errorf("CallCount = %d, want 2 (1 original + 1 retry)", got)
 	}
 }
@@ -198,9 +218,9 @@ func TestCall_Timeout(t *testing.T) {
 // as transient and retried.
 func TestCall_APIServerError(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
-	fc.SetError(0, errors.New("ChatCompletion: unexpected status 503 Service Unavailable"))
-	fc.SetError(1, errors.New("ChatCompletion: unexpected status 503 Service Unavailable"))
+	fc := newFakeCompleter()
+	fc.setError(0, errors.New("ChatCompletion: unexpected status 503 Service Unavailable"))
+	fc.setError(1, errors.New("ChatCompletion: unexpected status 503 Service Unavailable"))
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	_, err := caller.Call(context.Background(), CallInput{
@@ -214,7 +234,7 @@ func TestCall_APIServerError(t *testing.T) {
 	if !strings.Contains(err.Error(), "503") {
 		t.Errorf("err = %v, want wrapped 503", err)
 	}
-	if got := fc.CallCount(); got != 2 {
+	if got := fc.callCount(); got != 2 {
 		t.Errorf("CallCount = %d, want 2 (1 original + 1 retry)", got)
 	}
 	if errors.Is(err, ErrSchemaInvalid) {
@@ -226,8 +246,8 @@ func TestCall_APIServerError(t *testing.T) {
 // Treated as non-transient; NO retry.
 func TestCall_PermanentErrorFailsFast(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
-	fc.SetError(0, errors.New("ChatCompletion: unexpected status 401 Unauthorized"))
+	fc := newFakeCompleter()
+	fc.setError(0, errors.New("ChatCompletion: unexpected status 401 Unauthorized"))
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	_, err := caller.Call(context.Background(), CallInput{
@@ -241,7 +261,7 @@ func TestCall_PermanentErrorFailsFast(t *testing.T) {
 	if !strings.Contains(err.Error(), "401") {
 		t.Errorf("err = %v, want wrapped 401", err)
 	}
-	if got := fc.CallCount(); got != 1 {
+	if got := fc.callCount(); got != 1 {
 		t.Errorf("CallCount = %d, want 1 (4xx is permanent, no retry)", got)
 	}
 }
@@ -251,8 +271,8 @@ func TestCall_PermanentErrorFailsFast(t *testing.T) {
 func TestCall_SchemaInvalid(t *testing.T) {
 	t.Parallel()
 	missingActions := `{"summary":"x","severity":"low"}` // "actions" missing
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, missingActions)
+	fc := newFakeCompleter()
+	fc.setResponse(0, missingActions)
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	_, err := caller.Call(context.Background(), CallInput{
@@ -269,7 +289,7 @@ func TestCall_SchemaInvalid(t *testing.T) {
 	if !strings.Contains(err.Error(), "actions") {
 		t.Errorf("err = %v, want mention of failing field 'actions'", err)
 	}
-	if got := fc.CallCount(); got != 1 {
+	if got := fc.callCount(); got != 1 {
 		t.Errorf("CallCount = %d, want 1 (schema-invalid does NOT retry)", got)
 	}
 }
@@ -279,8 +299,8 @@ func TestCall_SchemaInvalid(t *testing.T) {
 func TestCall_SchemaInvalidEnum(t *testing.T) {
 	t.Parallel()
 	badEnum := `{"summary":"x","severity":"critical","actions":["a"]}`
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, badEnum)
+	fc := newFakeCompleter()
+	fc.setResponse(0, badEnum)
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	_, err := caller.Call(context.Background(), CallInput{
@@ -297,7 +317,7 @@ func TestCall_SchemaInvalidEnum(t *testing.T) {
 }
 
 // TestCall_CostTelemetry — uses an inline fake (rather than the shared
-// FakeLLMClient) because we need to inject Usage and verify
+// fakeCompleter) because we need to inject Usage and verify
 // CallOutput.TokensIn/Out/CostUSD reflect it. The shared fake has an
 // intentionally narrow surface to keep LLMJudge tests stable; future
 // change may extend it.
@@ -306,7 +326,7 @@ func TestCall_CostTelemetry(t *testing.T) {
 	content := validJSONFor("telemetry", "low", []string{"a"})
 	fake := &fakeLLM{
 		content: content,
-		usage:   llm.Usage{PromptTokens: 1000, CompletionTokens: 500, TotalTokens: 1500},
+		usage:   pigai.Usage{Input: 1000, Output: 500, TotalTokens: 1500},
 	}
 
 	wantCost := 0.42
@@ -345,9 +365,9 @@ func TestCall_CostTelemetry(t *testing.T) {
 // "after 2 retries" failure.
 func TestCall_RetryExhaustion(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
+	fc := newFakeCompleter()
 	for i := 0; i < 3; i++ {
-		fc.SetError(i, errors.New("network: connection refused"))
+		fc.setError(i, errors.New("network: connection refused"))
 	}
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
@@ -371,7 +391,7 @@ func TestCall_RetryExhaustion(t *testing.T) {
 	if !strings.Contains(err.Error(), "after 2 retries") {
 		t.Errorf("err = %v, want 'after 2 retries'", err)
 	}
-	if got := fc.CallCount(); got != 3 {
+	if got := fc.callCount(); got != 3 {
 		t.Errorf("CallCount = %d, want 3 (1 + 2 retries)", got)
 	}
 	// 2 backoffs × 100ms minimum = ≥200ms. We don't enforce an upper
@@ -387,8 +407,8 @@ func TestCall_RetryExhaustion(t *testing.T) {
 // wrong". The chat call is never made.
 func TestCall_InvalidCallerSchema(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, validJSONFor("ok", "low", []string{"a"}))
+	fc := newFakeCompleter()
+	fc.setResponse(0, validJSONFor("ok", "low", []string{"a"}))
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	_, err := caller.Call(context.Background(), CallInput{
@@ -402,7 +422,7 @@ func TestCall_InvalidCallerSchema(t *testing.T) {
 	if errors.Is(err, ErrSchemaInvalid) {
 		t.Errorf("err = %v wrapped ErrSchemaInvalid; expected ErrSchemaUnparseable only", err)
 	}
-	if got := fc.CallCount(); got != 0 {
+	if got := fc.callCount(); got != 0 {
 		t.Errorf("CallCount = %d, want 0 (schema parse fails before chat)", got)
 	}
 }
@@ -413,8 +433,8 @@ func TestCall_InvalidCallerSchema(t *testing.T) {
 func TestCall_ProseWrappedJSON(t *testing.T) {
 	t.Parallel()
 	wrapped := "```json\n" + validJSONFor("fenced", "medium", []string{"x"}) + "\n```"
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, wrapped)
+	fc := newFakeCompleter()
+	fc.setResponse(0, wrapped)
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	out, err := caller.Call(context.Background(), CallInput{
@@ -440,8 +460,8 @@ func TestCall_ProseWrappedJSON(t *testing.T) {
 func TestCall_EmptySchema(t *testing.T) {
 	t.Parallel()
 	arbitrary := `{"anything":true,"goes":42}`
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, arbitrary)
+	fc := newFakeCompleter()
+	fc.setResponse(0, arbitrary)
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	out, err := caller.Call(context.Background(), CallInput{
@@ -460,8 +480,8 @@ func TestCall_EmptySchema(t *testing.T) {
 // wraps ErrSchemaInvalid (contract violated: implicit JSON requirement).
 func TestCall_NonJSONOutput(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, "Sorry, I cannot answer that.")
+	fc := newFakeCompleter()
+	fc.setResponse(0, "Sorry, I cannot answer that.")
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	_, err := caller.Call(context.Background(), CallInput{
@@ -529,7 +549,7 @@ func TestIsTransient_Classifier(t *testing.T) {
 		{"403", errors.New("status 403 Forbidden"), false},
 		{"429", errors.New("status 429 Too Many Requests"), false},
 		{"budget", llm.ErrBudgetExceeded, false},
-		{"no-api-key", llm.ErrNoAPIKey, false},
+		{"no-provider-configured", pigmodel.ErrNotConfigured, false},
 	}
 	for _, tc := range cases {
 		tc := tc

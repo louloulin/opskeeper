@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
@@ -19,7 +21,7 @@ import (
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
 // ----- fakes -----
@@ -169,8 +171,12 @@ func (r *fakeRepo) SumTokensSince(_ context.Context, _ time.Time) (biz.TokenSums
 
 var _ biz.SessionRepo = (*fakeRepo)(nil)
 
+// chatScript is a pre-loaded sequence of replies. It is a script rather
+// than a queue of functions because these tests assert on *which* turn
+// produced which persisted row, and a closure per turn would make that
+// assertion live in the stub instead of the test.
 type chatScript struct {
-	resps []llm.ChatResp
+	resps []pigai.AssistantMessage
 	errs  []error
 	idx   int32
 	calls atomic.Int32
@@ -180,7 +186,7 @@ type fakeLLM struct {
 	script *chatScript
 }
 
-func (f *fakeLLM) Chat(_ context.Context, _ llm.ChatReq) (*llm.ChatResp, error) {
+func (f *fakeLLM) Complete(_ context.Context, _ pigmodel.Request) (*pigai.AssistantMessage, error) {
 	i := int(f.script.idx)
 	f.script.idx++
 	f.script.calls.Add(1)
@@ -190,8 +196,41 @@ func (f *fakeLLM) Chat(_ context.Context, _ llm.ChatReq) (*llm.ChatResp, error) 
 	if i < len(f.script.errs) && f.script.errs[i] != nil {
 		return nil, f.script.errs[i]
 	}
-	r := f.script.resps[i]
-	return &r, nil
+	reply := f.script.resps[i]
+	return &reply, nil
+}
+
+var _ pigmodel.Completer = (*fakeLLM)(nil)
+
+// replyText is a settled assistant turn carrying text and its accounting.
+//
+// The usage argument is a set of three plain numbers rather than an pigai.Usage
+// literal at every call site: these tests assert on the *stored row*, and the
+// row splits cache reads out of input, so writing the provider shape here
+// would hide the one mapping the test is actually about.
+func replyText(text string, input, output int) pigai.AssistantMessage {
+	reply := pigmodel.AssistantTurn(text)
+	reply.Usage = pigai.Usage{Input: input, Output: output, TotalTokens: input + output}
+	reply.StopReason = pigai.StopReasonStop
+	return reply
+}
+
+// withUsage stamps accounting onto a reply that is defined by its tool call
+// rather than its text.
+func withUsage(reply pigai.AssistantMessage, input, output int) pigai.AssistantMessage {
+	reply.Usage = pigai.Usage{Input: input, Output: output, TotalTokens: input + output}
+	return reply
+}
+
+// replyToolCall is a settled assistant turn that asks for one tool. No text
+// block, because a model that calls a tool mid-investigation says nothing
+// until the result comes back.
+func replyToolCall(id, name, argsJSON string) pigai.AssistantMessage {
+	reply := pigmodel.AssistantTurn("", pigai.ToolCall{
+		ID: id, Name: name, Arguments: decodeReplayArgs(argsJSON),
+	})
+	reply.StopReason = pigai.StopReasonToolUse
+	return reply
 }
 
 // fakeCaller mimics the frontierbound.Client.Call surface. Tests preload
@@ -285,6 +324,7 @@ func (r *fakeEdgeRepoAgent) UpdateRoles(_ context.Context, _ uint64, _ uint8) er
 func (r *fakeEdgeRepoAgent) UpdateName(_ context.Context, _ uint64, _ string) error      { return nil }
 func (r *fakeEdgeRepoAgent) SetDeviceID(_ context.Context, _ uint64, _ uint64) error     { return nil }
 func (r *fakeEdgeRepoAgent) SetAgentVersion(_ context.Context, _ uint64, _ string) error { return nil }
+func (r *fakeEdgeRepoAgent) SetPigVersion(_ context.Context, _ uint64, _ string) error   { return nil }
 func (r *fakeEdgeRepoAgent) Delete(_ context.Context, _ uint64) error                    { return nil }
 func (r *fakeEdgeRepoAgent) Count(_ context.Context) (int64, error)                      { return 1, nil }
 
@@ -305,11 +345,8 @@ func TestRun_SingleShotReplyNoTools(t *testing.T) {
 	reg := buildRegistry(t, tunnel.GetHostLoadResponse{CPUPct: 10})
 
 	script := &chatScript{
-		resps: []llm.ChatResp{
-			{
-				Assistant: llm.Message{Role: "assistant", Content: "node-a looks fine."},
-				Usage:     llm.Usage{PromptTokens: 5, CompletionTokens: 7, TotalTokens: 12},
-			},
+		resps: []pigai.AssistantMessage{
+			replyText("node-a looks fine.", 5, 7),
 		},
 	}
 	a := New(&fakeLLM{script: script}, reg, repo, Config{Model: "m", MaxIterations: 4}, slog.Default())
@@ -324,8 +361,8 @@ func TestRun_SingleShotReplyNoTools(t *testing.T) {
 	if reply.Message == nil || reply.Message.Content == nil || *reply.Message.Content != "node-a looks fine." {
 		t.Errorf("reply message = %+v", reply.Message)
 	}
-	if reply.Usage.TotalTokens != 12 {
-		t.Errorf("usage.total = %d, want 12", reply.Usage.TotalTokens)
+	if reply.Usage.Total() != 12 {
+		t.Errorf("usage total = %d, want 12", reply.Usage.Total())
 	}
 	if len(reply.ToolCalls) != 0 {
 		t.Errorf("tool calls = %d, want 0", len(reply.ToolCalls))
@@ -346,21 +383,9 @@ func TestRun_OneToolRound(t *testing.T) {
 	reg := buildRegistry(t, tunnel.GetHostLoadResponse{CPUPct: 77, MemPct: 44})
 
 	script := &chatScript{
-		resps: []llm.ChatResp{
-			{
-				Assistant: llm.Message{
-					Role: "assistant",
-					ToolCalls: []llm.ToolCall{{
-						ID: "call_1", Name: "get_host_load",
-						Args: json.RawMessage(`{"edge_name":"node-a"}`),
-					}},
-				},
-				Usage: llm.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
-			},
-			{
-				Assistant: llm.Message{Role: "assistant", Content: "cpu is 77%."},
-				Usage:     llm.Usage{PromptTokens: 15, CompletionTokens: 4, TotalTokens: 19},
-			},
+		resps: []pigai.AssistantMessage{
+			withUsage(replyToolCall("call_1", "get_host_load", `{"edge_name":"node-a"}`), 10, 2),
+			replyText("cpu is 77%.", 15, 4),
 		},
 	}
 	a := New(&fakeLLM{script: script}, reg, repo, Config{Model: "m", MaxIterations: 4}, slog.Default())
@@ -382,8 +407,11 @@ func TestRun_OneToolRound(t *testing.T) {
 		t.Errorf("tool call edge id = %v, want *1", reply.ToolCalls[0].DeviceID)
 	}
 	// Total usage sums both chat calls.
-	if reply.Usage.TotalTokens != 31 {
-		t.Errorf("total tokens = %d, want 31", reply.Usage.TotalTokens)
+	// The two round trips billed 12 and 19; the turn reports their sum, not
+	// the last call's figure. A turn total that reported only the final call
+	// is how a tool-heavy investigation reads as nearly free.
+	if reply.Usage.Total() != 31 {
+		t.Errorf("total tokens = %d, want 31", reply.Usage.Total())
 	}
 
 	// Persisted messages: user + assistant(tool_call) + tool(result) + assistant(final) = 4
@@ -399,13 +427,8 @@ func TestRun_MaxIterations(t *testing.T) {
 	reg := buildRegistry(t, tunnel.GetHostLoadResponse{})
 
 	// Script that always emits a tool call, never a final reply.
-	resp := llm.ChatResp{
-		Assistant: llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{{
-			ID: "call_x", Name: "get_host_load",
-			Args: json.RawMessage(`{"edge_name":"node-a"}`),
-		}}},
-	}
-	script := &chatScript{resps: []llm.ChatResp{resp, resp, resp, resp, resp}}
+	resp := replyToolCall("call_x", "get_host_load", `{"edge_name":"node-a"}`)
+	script := &chatScript{resps: []pigai.AssistantMessage{resp, resp, resp, resp, resp}}
 	a := New(&fakeLLM{script: script}, reg, repo, Config{Model: "m", MaxIterations: 3}, slog.Default())
 
 	reply, err := a.Run(context.Background(), sess.ID, 1, "go")
@@ -436,14 +459,9 @@ func TestRun_ToolErrorFeedsIntoModel(t *testing.T) {
 	reg := buildRegistryWithErr(t, "tunnel blew up")
 
 	script := &chatScript{
-		resps: []llm.ChatResp{
-			{
-				Assistant: llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{{
-					ID: "call_e", Name: "get_host_load",
-					Args: json.RawMessage(`{"edge_name":"node-a"}`),
-				}}},
-			},
-			{Assistant: llm.Message{Role: "assistant", Content: "sorry, tool blew up"}},
+		resps: []pigai.AssistantMessage{
+			replyToolCall("call_e", "get_host_load", `{"edge_name":"node-a"}`),
+			replyText("sorry, tool blew up", 0, 0),
 		},
 	}
 	a := New(&fakeLLM{script: script}, reg, repo, Config{Model: "m", MaxIterations: 4}, slog.Default())

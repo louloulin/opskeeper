@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -49,6 +50,16 @@ type Service interface {
 	Advance(ctx context.Context, name string) (bool, release.Status, error)
 	Halt(name, reason string) (release.Status, error)
 	Rollback(ctx context.Context, name string) (release.Status, error)
+	// Compatibility answers, for one package, which nodes can host it.
+	//
+	// It is a read, and the only one on this Service that takes a
+	// requirement from the caller rather than from a release. The manager
+	// does not hold manifests — a release carries a URL, a digest and a
+	// signature, and the node fetches the package and reviews it itself —
+	// so the console supplies the install policy and the matrix echoes it
+	// back in its response. A caller that asks about the wrong requirement
+	// therefore gets a visibly wrong answer rather than a plausible one.
+	Compatibility(ctx context.Context, req release.Requirement) (release.Matrix, error)
 }
 
 // Handler serves /v1/plugins/*.
@@ -76,6 +87,49 @@ func (h *Handler) Register(r chi.Router) {
 	r.With(h.requireAdmin).Post("/v1/plugins/releases/{name}/advance", h.advance)
 	r.With(h.requireAdmin).Post("/v1/plugins/releases/{name}/halt", h.halt)
 	r.With(h.requireAdmin).Post("/v1/plugins/releases/{name}/rollback", h.rollback)
+	// The compatibility matrix is a GET and not part of the release
+	// lifecycle: it dispatches nothing and changes nothing, and an
+	// operator asking "can my fleet take this" must be able to ask it
+	// without a release in flight.
+	r.With(h.requireAdmin).Get("/v1/plugins/{name}/compatibility", h.compatibility)
+}
+
+// compatibility answers the pre-flight question for one package.
+//
+// The three version fields are query parameters rather than a body because
+// this is a read the console issues on a page load and while an operator
+// edits a target list, and a GET is what a browser, a cache and a log line
+// all agree on. They are echoed in the response by the matrix itself, so
+// what was asked is always visible next to what was answered.
+func (h *Handler) compatibility(w http.ResponseWriter, r *http.Request) {
+	if h.svc == nil {
+		writeErr(w, errNotWired)
+		return
+	}
+	q := r.URL.Query()
+	req := release.Requirement{
+		Plugin:         releaseName(r),
+		Version:        strings.TrimSpace(q.Get("version")),
+		MinEdgeVersion: strings.TrimSpace(q.Get("min_edge_version")),
+		MinPigVersion:  strings.TrimSpace(q.Get("min_pig_version")),
+	}
+	matrix, err := h.svc.Compatibility(r.Context(), req)
+	if err != nil {
+		// A manager with no version snapshot reports that as an error, and
+		// it has to stay an error all the way to the console. Rendering it
+		// as an empty matrix would tell an operator their whole fleet is
+		// ready when the control plane simply cannot tell.
+		if errors.Is(err, release.ErrNoVersionSnapshot) {
+			writeErr(w, errNotWired)
+			return
+		}
+		writeErr(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(matrix)
 }
 
 // requireAdmin is the legacy enforcement, kept here rather than borrowed

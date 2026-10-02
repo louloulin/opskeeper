@@ -12,7 +12,7 @@ func TestInMemoryBudgetUnlimited(t *testing.T) {
 	if err := b.Check(context.Background(), 1, 10_000_000); err != nil {
 		t.Fatalf("Check on unlimited budget = %v, want nil", err)
 	}
-	if err := b.Record(context.Background(), 1, Usage{TotalTokens: 9999}); err != nil {
+	if err := b.Record(context.Background(), 1, 9999); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 }
@@ -24,7 +24,7 @@ func TestInMemoryBudgetCap(t *testing.T) {
 	if err := b.Check(ctx, 1, 50); err != nil {
 		t.Fatalf("Check 50 with empty bucket = %v, want nil", err)
 	}
-	if err := b.Record(ctx, 1, Usage{TotalTokens: 60}); err != nil {
+	if err := b.Record(ctx, 1, 60); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 	// used=60; asking for 50 more -> 110 > 100 -> reject.
@@ -42,7 +42,7 @@ func TestInMemoryBudgetDayRollover(t *testing.T) {
 	now := time.Date(2026, 4, 23, 23, 59, 0, 0, time.UTC)
 	b.now = func() time.Time { return now }
 
-	_ = b.Record(context.Background(), 1, Usage{TotalTokens: 95})
+	_ = b.Record(context.Background(), 1, 95)
 	if err := b.Check(context.Background(), 1, 10); !errors.Is(err, ErrBudgetExceeded) {
 		t.Fatalf("pre-rollover Check = %v, want ErrBudgetExceeded", err)
 	}

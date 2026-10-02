@@ -8,17 +8,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
+
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // LLMSummarizer is the narrow seam used by the report-extractor step.
-// Implemented by *llm.MultiClient and any structurally-compatible test
-// double. Kept narrow so tests can inject a deterministic response
-// without standing up the multi-provider router.
-type LLMSummarizer interface {
-	Chat(ctx context.Context, req llm.ChatReq) (*llm.ChatResp, error)
-}
+//
+// It is PiG's own completer rather than a host-defined summarizer port: the
+// step sends one system turn plus one user turn and reads back a settled
+// assistant message, which is exactly what pigmodel.Completer is. A narrower
+// interface here would only re-state the same call in a second vocabulary.
+type LLMSummarizer = pigmodel.Completer
 
 // extractedReport is the JSON schema we ask the LLM to return. Mirrors
 // the persistable ReadyFields plus a few intermediate types the model
@@ -65,14 +69,20 @@ func (uc *Usecase) extractStructured(ctx context.Context, incident alertmodel.In
 	cctx, cancel := context.WithTimeout(ctx, uc.cfg.SummarizerTimeout)
 	defer cancel()
 
-	resp, err := uc.summarizer.Chat(cctx, llm.ChatReq{
-		Model:       uc.cfg.SummarizerModel,
-		Provider:    uc.cfg.SummarizerProvider,
-		Temperature: 0,
-		Messages: []llm.Message{
-			{Role: "system", Content: extractorSystemPrompt},
-			{Role: "user", Content: prompt},
+	reply, err := uc.summarizer.Complete(cctx, pigmodel.Request{
+		Selection: domain.ModelSelection{
+			Provider: domain.ProviderID(uc.cfg.SummarizerProvider),
+			Model:    uc.cfg.SummarizerModel,
 		},
+		Messages: []pigai.Message{
+			pigmodel.SystemTurn(extractorSystemPrompt),
+			pigmodel.UserTurn(prompt),
+		},
+		// Extraction is a read of the worker's own answer, not a
+		// creative step: the same answer under a different sampling is a
+		// different incident report, and the fallback heuristic would
+		// then ship whichever one the dice picked.
+		Tune: func(o *pigai.StreamOptions) { o.Temperature = 0 },
 	})
 	if err != nil {
 		uc.logger().Info("report extractor LLM failed; falling back",
@@ -80,7 +90,7 @@ func (uc *Usecase) extractStructured(ctx context.Context, incident alertmodel.In
 		return fallback
 	}
 
-	rawAnswer := strings.TrimSpace(resp.Assistant.Content)
+	rawAnswer := strings.TrimSpace(pigmodel.ReplyText(reply))
 	jsonBlob := extractJSONBlob(rawAnswer)
 	if jsonBlob == "" {
 		uc.logger().Info("report extractor returned no JSON; falling back",

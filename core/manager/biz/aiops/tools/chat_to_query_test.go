@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 type fakeTemplates struct {
@@ -268,4 +267,3 @@ func TestChatToQuery_Info(t *testing.T) {
 
 // Compile-time guard that fakeLLM satisfies LLMClient
 var _ LLMClient = (*fakeLLM)(nil)
-var _ llm.ChatReq = llm.ChatReq{}

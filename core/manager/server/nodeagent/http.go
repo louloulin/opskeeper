@@ -284,6 +284,13 @@ func writeErr(w http.ResponseWriter, err error) {
 		code, status = "no_session", http.StatusNotFound
 	case errors.Is(err, nodeagent.ErrSessionExists):
 		code, status = "session_exists", http.StatusConflict
+	case errors.Is(err, nodefleet.ErrFleetFull):
+		// 429 rather than 503: nothing is broken and retrying in a moment
+		// changes nothing, because the conversations already open are not
+		// going to close themselves. The console has to close one, which
+		// means it has to be told which scope ran out rather than handed a
+		// generic "try later".
+		code, status = "conversation_limit", http.StatusTooManyRequests
 	case errors.Is(err, nodeagent.ErrNoStream):
 		// 409 rather than 400: nothing is wrong with the request, the
 		// console simply has to attach to the stream before sending.

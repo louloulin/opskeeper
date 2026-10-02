@@ -6,22 +6,28 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/core/ports"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
-// fakeLLMClient 是测试用 ports.Completer stub。
+// fakeLLMClient 是测试用 pigmodel.Completer stub。
 //
 //   - responses: 按调用顺序返回的 assistant content
 //   - errOnCall: 指定调用序号的错误（覆盖 responses）
-//   - recorded: 收集实际收到的 LLMRequest（断言 prompt 内容）
+//   - recorded: 收集实际收到的 pigmodel.Request（断言 prompt 内容）
+//
+// recorded 存全部请求而不是只留最后一个：judge 每次 Score 恰好发一次请求，
+// 但 fallback 后再断言"到底问了几次"是这个文件的主要价值——fallback 路径
+// 悄悄多发一次请求，是这类 judge 最难发现的回归。
 type fakeLLMClient struct {
 	responses []string
 	calls     int
 	errOnCall map[int]error
-	recorded  []ports.LLMRequest
+	recorded  []pigmodel.Request
 }
 
-func (f *fakeLLMClient) Complete(_ context.Context, req ports.LLMRequest) (*ports.LLMResponse, error) {
+func (f *fakeLLMClient) Complete(_ context.Context, req pigmodel.Request) (*pigai.AssistantMessage, error) {
 	idx := f.calls
 	f.calls++
 	f.recorded = append(f.recorded, req)
@@ -31,9 +37,9 @@ func (f *fakeLLMClient) Complete(_ context.Context, req ports.LLMRequest) (*port
 	if idx >= len(f.responses) {
 		return nil, errors.New("fake: no more responses")
 	}
-	return &ports.LLMResponse{
-		Content: f.responses[idx],
-	}, nil
+	reply := pigmodel.AssistantTurn(f.responses[idx])
+	reply.StopReason = pigai.StopReasonStop
+	return &reply, nil
 }
 
 func TestLLMJudge_Name(t *testing.T) {
@@ -115,10 +121,16 @@ func TestLLMJudge_Score_LLMSuccess_PromptContent(t *testing.T) {
 		t.Fatalf("expected 1 Chat call, got %d", len(fake.recorded))
 	}
 	req := fake.recorded[0]
-	if len(req.Messages) != 2 || req.Messages[0].Role != "system" || req.Messages[1].Role != "user" {
-		t.Errorf("messages = %+v, want [system, user]", req.Messages)
+	if len(req.Messages) != 2 {
+		t.Fatalf("messages = %d, want 2 (system, user)", len(req.Messages))
 	}
-	prompt := req.Messages[1].Content
+	if _, ok := req.Messages[0].(pigai.SystemMessage); !ok {
+		t.Errorf("messages[0] = %T, want pigai.SystemMessage", req.Messages[0])
+	}
+	// The type assertions above prove the *shape* of the two turns; the
+	// prompt assertions below only need their words, so they go through
+	// the one renderer rather than a second copy of it.
+	prompt := pigmodel.MessageText(req.Messages[1])
 	for _, want := range []string{
 		"Expected root cause",
 		"pg.lock_waits",

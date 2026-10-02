@@ -32,13 +32,6 @@ type ModelResolver interface {
 	Model(ctx context.Context, sel domain.ModelSelection) (*ai.Model, ai.StreamOptions, error)
 }
 
-// DepsProvider supplies the host services one turn runs against.
-//
-// It is a function rather than a struct so a host can vary the policy per
-// turn — a viewer's tool bag, a worker's reduced scope, an investigator's
-// audit sink — without constructing a different kernel.
-type DepsProvider func(ctx context.Context, req ports.AgentRequest) (ports.AgentDeps, error)
-
 // Persister records a settled message. It is the host's write path; the
 // kernel never touches storage itself.
 //
@@ -100,6 +93,10 @@ type session struct {
 // NewKernel returns a Kernel. Models and Deps are required: a kernel with
 // no model could only fail at the first turn, and a kernel with no host
 // services would run tools outside the audit and approval guarantees.
+// The production Agent. Asserted here so a change to the loop's method set
+// breaks this file rather than every host that stores an Agent.
+var _ Agent = (*Kernel)(nil)
+
 func NewKernel(opts KernelOptions) (*Kernel, error) {
 	if opts.Models == nil {
 		return nil, errors.New("pigagent: Models is required")
@@ -119,11 +116,8 @@ func NewKernel(opts KernelOptions) (*Kernel, error) {
 	return &Kernel{opts: opts, sessions: make(map[string]*session)}, nil
 }
 
-// Compile-time proof the kernel satisfies the port.
-var _ ports.Agent = (*Kernel)(nil)
-
 // Run settles one turn.
-func (k *Kernel) Run(ctx context.Context, req ports.AgentRequest) (*ports.TurnResult, error) {
+func (k *Kernel) Run(ctx context.Context, req ports.AgentRequest) (*TurnResult, error) {
 	if req.SessionID == "" {
 		return nil, fmt.Errorf("%w: session id required", ErrNoRun)
 	}
@@ -229,7 +223,7 @@ func (k *Kernel) Run(ctx context.Context, req ports.AgentRequest) (*ports.TurnRe
 //
 // The frame is emitted before returning so the console sees a failure even
 // when the caller only inspects the returned error.
-func (k *Kernel) failTurn(m *Mapper, sink ports.EventSink, err error, retryable bool) (*ports.TurnResult, error) {
+func (k *Kernel) failTurn(m *Mapper, sink ports.EventSink, err error, retryable bool) (*TurnResult, error) {
 	code := "agent_error"
 	if errors.Is(err, context.DeadlineExceeded) {
 		code = "turn_timeout"
@@ -237,7 +231,7 @@ func (k *Kernel) failTurn(m *Mapper, sink ports.EventSink, err error, retryable 
 		code = "turn_cancelled"
 	}
 	_ = sink.Emit(context.Background(), m.Error(code, err.Error(), retryable))
-	return &ports.TurnResult{Stopped: ports.TurnError, Err: err}, err
+	return &TurnResult{Stopped: TurnError, Err: err}, err
 }
 
 // Steer injects a message into the turn already running for a session.

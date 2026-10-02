@@ -286,7 +286,7 @@ func TestMapperDoneCarriesUsageAndCounters(t *testing.T) {
 	m.TurnStarted()
 	m.Map(agent.MessageEndEvent{Message: assistantMessage("", 1)})
 	m.Map(agent.ToolExecutionStartEvent{ToolCallID: "tc-a", ToolName: "get_topology"})
-	m.SetUsage(ports.Usage{InputTokens: 1200, OutputTokens: 340, CacheReadTokens: 800, CostUSD: 0.0123}, "test-model")
+	m.SetUsage(ports.TranscriptUsage{InputTokens: 1200, OutputTokens: 340, CacheReadTokens: 800, CostUSD: 0.0123}, "test-model")
 
 	frames := m.Map(agent.AgentEndEvent{})
 	if len(frames) != 1 {

@@ -33,6 +33,8 @@ func NewClient(cfg ClientConfig) Client {
 		cfg:      cfg,
 		log:      log,
 		handlers: make(map[string]Handler),
+		jitter:   fullJitter,
+		sleep:    sleepWithContext,
 	}
 }
 
@@ -45,6 +47,20 @@ type geminioClient struct {
 	// every (re)connect via the RetryEnd's memory of registered RPCs.
 	handlersMu sync.RWMutex
 	handlers   map[string]Handler
+
+	// jitter spreads the first-dial retry schedule so a fleet whose broker
+	// restarted does not come back in lockstep. See backoff.go for why the
+	// plain exponential schedule is the wrong shape for many nodes.
+	jitter backoffJitter
+
+	// sleep is how the dial loop waits between attempts. It is a field so
+	// the schedule a client is really running can be observed without a
+	// broker and without spending 60 seconds to find out. Everything that
+	// would otherwise be a time.After in Dial is behind it, which is also
+	// what keeps that one line honest: a loop that stopped consulting the
+	// schedule would still compile, and a test that cannot see the loop
+	// cannot notice.
+	sleep func(ctx context.Context, wait time.Duration) error
 
 	// reconnectCallbacks fire after a successful auto-reconnect (broker
 	// route invalidation -> redial). They let the agent re-register_edge
@@ -59,9 +75,9 @@ type geminioClient struct {
 	closed    atomic.Bool
 }
 
-// Dial attempts to establish the connection, retrying with exponential
-// backoff (1s -> 2s -> ... capped at 60s) until ctx is cancelled or a
-// dial succeeds. After first success, disconnects are handled by the
+// Dial attempts to establish the connection, retrying with jittered
+// exponential backoff (a ceiling of 1s -> 2s -> ... capped at 60s, with the
+// actual wait drawn from it) until ctx is cancelled or a dial succeeds. After first success, disconnects are handled by the
 // underlying geminio.client.RetryEnd.
 func (c *geminioClient) Dial(ctx context.Context) error {
 	if c.closed.Load() {
@@ -83,8 +99,7 @@ func (c *geminioClient) Dial(ctx context.Context) error {
 		return fmt.Errorf("tunnel: marshal meta: %w", err)
 	}
 
-	backoff := time.Second
-	const maxBackoff = 60 * time.Second
+	backoff := newDialBackoff(c.jitter)
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -122,20 +137,21 @@ func (c *geminioClient) Dial(ctx context.Context) error {
 		// errors at this layer (the server just closes the connection).
 		// Keep retrying with the capped backoff but log at warn; ops
 		// will see continuous failures if the key is truly wrong.
+		//
+		// The logged wait is the one actually taken, not the ceiling it was
+		// drawn from. An operator reading "backoff=1s" on a node that
+		// actually slept 900ms has been told something false, and the
+		// ceiling would be just as useless: it is the same number on every
+		// node, which is the property being fixed.
+		wait := backoff.next()
 		c.log.Warn("tunnel: dial failed; will retry",
 			slog.String("server_addr", c.cfg.resolvedServerAddr()),
-			slog.Duration("backoff", backoff),
+			slog.Duration("backoff", wait),
 			slog.Any("err", derr),
 		)
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(backoff):
-		}
-		backoff *= 2
-		if backoff > maxBackoff {
-			backoff = maxBackoff
+		if serr := c.sleep(ctx, wait); serr != nil {
+			return serr
 		}
 	}
 }

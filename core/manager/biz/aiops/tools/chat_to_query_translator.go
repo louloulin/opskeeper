@@ -7,18 +7,23 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
-// LLMClient is the narrow slice of *llm.Client the translator needs.
-// Splitting the interface here keeps tests from having to mock the
-// full Client (which carries auth / budget / provider routing the
-// translator doesn't care about).
-type LLMClient interface {
-	Chat(ctx context.Context, req llm.ChatReq) (*llm.ChatResp, error)
-}
+// LLMClient is the model port the translator needs.
+//
+// It is pigmodel.Completer under a local name rather than a slice of it.
+// A one-method port with a name of its own is worth having here: the
+// translator is constructed in a package that has no other business knowing
+// what a model registry is, and the alternative — importing pigmodel into
+// every file that builds a translator — spreads the dependency further than
+// the one method deserves.
+type LLMClient = pigmodel.Completer
 
 // Translator turns a natural-language question into a query
 // (PromQL / LogQL / TraceQL) via an LLM. The hot path is:
@@ -225,15 +230,21 @@ func (t *Translator) Translate(ctx context.Context, question, signalHint string)
 	}
 
 	prompt := promptForSignal(signal, ctxStr, question)
-	resp, err := t.llm.Chat(ctx, llm.ChatReq{
-		Model:       t.model,
-		Messages:    []llm.Message{{Role: "system", Content: prompt}},
-		Temperature: 0.1,
+	reply, err := t.llm.Complete(ctx, pigmodel.Request{
+		Selection: domain.ModelSelection{Model: t.model},
+		Messages:  []pigai.Message{pigmodel.SystemTurn(prompt)},
+		Tune: func(opts *pigai.StreamOptions) {
+			// Low but non-zero: a query the model wrote from memory is
+			// worse than an expensive one, and zero makes several
+			// reasoning models skip the catalogue reasoning entirely.
+			opts.Temperature = 0.1
+			opts.TemperatureSet = true
+		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("translator: llm chat: %w", err)
+		return nil, fmt.Errorf("translator: model completion: %w", err)
 	}
-	raw := resp.Assistant.Content
+	raw := pigmodel.ReplyText(reply)
 	body := extractJSON(raw)
 	if body == "" {
 		return nil, fmt.Errorf("translator: no JSON in llm reply: %q", truncate(raw, 200))

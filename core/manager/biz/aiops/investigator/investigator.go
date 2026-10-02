@@ -42,7 +42,10 @@ import (
 
 	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
 // Defaults tuned for first customer rollout. We expect <10 incidents/min
@@ -107,7 +110,7 @@ type Config struct {
 // InvestigateAsync from the alert usecase whenever a fresh incident is
 // born. Drain the worker pool on shutdown via Close.
 type Investigator struct {
-	llmClient llm.Client
+	llmClient pigmodel.Completer
 	tools     ToolInvoker
 	events    EventWriter
 	cfg       Config
@@ -131,7 +134,7 @@ type job struct {
 // no-op: InvestigateAsync drops the job silently. main.go is expected
 // to gate construction on an available LLM provider so the no-op shape is
 // only hit in tests.
-func New(llmClient llm.Client, tools ToolInvoker, events EventWriter, cfg Config, log *slog.Logger) *Investigator {
+func New(llmClient pigmodel.Completer, tools ToolInvoker, events EventWriter, cfg Config, log *slog.Logger) *Investigator {
 	if cfg.Workers <= 0 {
 		cfg.Workers = defaultWorkers
 	}
@@ -246,30 +249,34 @@ func (i *Investigator) runOne(incident *model.Incident) {
 
 	bundleJSON = capUserMessage(bundleJSON, i.cfg.UserMsgCap)
 
-	resp, err := i.llmClient.Chat(ctx, llm.ChatReq{
-		Model: i.cfg.Model,
-		Messages: []llm.Message{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: string(bundleJSON)},
+	reply, err := i.llmClient.Complete(ctx, pigmodel.Request{
+		Selection: domain.ModelSelection{Model: i.cfg.Model},
+		Messages: []pigai.Message{
+			pigmodel.SystemTurn(systemPrompt),
+			pigmodel.UserTurn(string(bundleJSON)),
 		},
-		Temperature: 0.2,
+		Tune: func(opts *pigai.StreamOptions) {
+			opts.Temperature = 0.2
+			opts.TemperatureSet = true
+		},
 	})
 	if err != nil {
-		// ErrNoAPIKey is the known-benign case (LLM disabled mid-flight
-		// after wiring), log at INFO-ish; everything else is WARN.
-		if errors.Is(err, llm.ErrNoAPIKey) {
-			logCtx.Info("AI investigation skipped: LLM not configured")
+		// An unconfigured provider is the known-benign case (model settings
+		// cleared mid-flight after wiring), log below WARN; everything else
+		// is a real failure worth an operator's attention.
+		if errors.Is(err, pigmodel.ErrNotConfigured) || errors.Is(err, pigmodel.ErrNoFallback) {
+			logCtx.Info("AI investigation skipped: model not configured")
 			return
 		}
-		logCtx.Warn("AI investigation: llm.Chat failed", slog.Any("err", err))
-		return
-	}
-	if resp == nil || resp.Assistant.Content == "" {
-		logCtx.Warn("AI investigation: empty LLM response")
+		logCtx.Warn("AI investigation: model completion failed", slog.Any("err", err))
 		return
 	}
 
-	msg := resp.Assistant.Content
+	msg := pigmodel.ReplyText(reply)
+	if msg == "" {
+		logCtx.Warn("AI investigation: empty model reply")
+		return
+	}
 	now := time.Now().UTC()
 	ev := &model.Event{
 		IncidentID:  incident.ID,
@@ -285,9 +292,10 @@ func (i *Investigator) runOne(incident *model.Incident) {
 		logCtx.Warn("AI investigation: persist event failed", slog.Any("err", err))
 		return
 	}
+	usage := pigmodel.ReplyUsage(reply)
 	logCtx.Info("AI investigation: initial diagnosis written",
-		slog.Int("prompt_tokens", resp.Usage.PromptTokens),
-		slog.Int("completion_tokens", resp.Usage.CompletionTokens),
+		slog.Int("prompt_tokens", usage.Input),
+		slog.Int("completion_tokens", usage.Output),
 		slog.Int("response_chars", len(msg)),
 	)
 }

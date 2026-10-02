@@ -10,6 +10,23 @@
 # ADR-005 枢轴备注：iam 下只剩 user 子域（org/membership 已删）；data 目录
 # 由 mysql/ 重命名为 sqlite/。组件 glob 使用 `**`，无需逐级更新。
 
+# 决策 74 起，这份文件多了一条不变式，由 `make module-check` 强制：
+#
+#   **每一条 mayDependOn 都必须有至少一个真实 import 在用它。**
+#
+# 原因是这份文件的授权是组件粒度的。`manager_biz: mayDependOn
+# [manager_service]` 说的是「biz 整棵树可以看 service 整棵树」——作为
+# 架构陈述这是对的，但一旦某条边**只是因为某一个文件需要**才被加进来，
+# 它就顺带授权了之后所有同类导入，而没有任何东西会提醒：授权加上去的
+# 那天它有用，-import 被删掉之后它就成了一条永久静默的口子。
+#
+# 决策 74 之前，本文件有 104 条这样的授权，一条 import 都没有。删掉它们
+# 之后 go-arch-lint 仍然零告警（它对自己的配置是权威），而这份文件第一次
+# 变成了对代码的陈述，而不是一份没人行使过的权限清单。
+#
+# 越权方向另有一层：模块内「层与层」的逆向边（biz → service、model →
+# data 之类）由 modulecheck 的 layerInversion 台账逐文件记名，理由写在
+# 台账里。组件粒度在这里不成立，因为记组件等于没记。
 version: 3
 workdir: .
 
@@ -133,6 +150,25 @@ components:
   oxcore_wire:   { in: core/wire/** }
   oxpig_model:   { in: core/pig/pigmodel/** }
   oxpig_agent:   { in: core/pig/pigagent/** }
+  # oxpig_ai is the re-export surface for PiG's message and stream
+  # vocabulary (决策 67). It exists because the alternative was every host
+  # file importing github.com/MichaelKinsy/PiG/ai directly, which the module
+  # graph forbids — and the tempting fix, widening that rule, trades a real
+  # invariant for a quieter build. Every declaration in it is a type alias,
+  # so a caller that builds a pigai.Message hands PiG an ai.Message: a name
+  # is added, not a shape. Adding an entry here is a claim that PiG's
+  # definition of the concept is OpsKeeper's too, which is why the list is
+  # short and written out by hand.
+  oxpig_ai:      { in: core/pig/pigai/** }
+  # oxpig_coding embeds PiG's `coding` SDK — Services, Runtime, Session. It
+  # is the agent path; oxpig_model is the one-shot completion path. The two
+  # are separate components because their lifetimes are: a Runtime is
+  # process-wide and owns the extension runner, a Completer is per-call.
+  oxpig_coding:  { in: core/pig/pigcoding/** }
+  # The tool-schema bridge and the scripted test stub. Both are leaves over
+  # oxpig_model with no OpsKeeper dependency of their own.
+  oxpig_tools:   { in: core/pig/pigtools/** }
+  oxpig_test:    { in: core/pig/pigtest/** }
   oxpig_rpc:     { in: core/pig/pigrpc/** }
   oxedge_pigsup:    { in: core/edge/pigsupervisor/** }
   oxedge_policygate: { in: core/edge/policygate/** }
@@ -173,44 +209,61 @@ deps:
 
   # ---------------- iam BC ----------------
   iam_server:
-    # !!! 已知债务：arch-lint 的 mayDependOn 是组件粒度白名单，同组件新增同类导入不会再报警。
-    # 每条都对应真实违例文件，manager/iam 迁移到 core/manager 时随条目一起删除：
-    #   - manager_biz: core/manager/iam/server/http.go 复用 manager/biz/audit
-    #   - manager_model: core/manager/iam/server/http.go 复用 manager/model/audit
-    #   - manager_server: core/manager/iam/server/http.go 复用 manager/server/middleware
+    # 这三条是**跨 BC** 越界，由 modulecheck 的 exceptions 台账逐个 import
+    # 路径记名并写了理由（决策 35：审计链故意放在 manager 的 biz 层，
+    # 作为 HLD-010 每一行必须经过的唯一咽喉）。决策 74 之前这里写着
+    # 「已知债务：mayDependOn 是组件粒度白名单，同组件新增同类导入不会
+    # 再报警」——那句话现在只对了一半：
+    #   - 越界本身有台账：modulecheck 的 exceptions 是 import 路径粒度的，
+    #     新增一条跨 BC 导入是红的（记名，不是整目录放行）；
+    #   - 但白名单仍是组件粒度，所以这三条一旦不再被任何文件使用，
+    #     go-arch-lint 不会提醒。决策 74 加的 dead-grant 检查补上了这一半：
+    #     没有 import 的授权一律报出来要求删除。
+    # 对应文件：core/manager/iam/server/http.go 复用 manager 的
+    # biz/audit、model/audit、server/middleware。
     mayDependOn:
-      - api
       - iam_biz
       - iam_model
       - iam_service
       - manager_biz
       - manager_model
       - manager_server
-      - oxcore_domain
-      - oxcore_ports
-      - oxcore_wire
       - shared_pkg
-      - oxfloor
   iam_service:
     # 关键：service 不得直接依赖 iam_data（必须走 biz）
-    mayDependOn: [iam_biz, iam_model, shared_pkg, api, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
+    mayDependOn: [iam_biz, iam_model]
   iam_biz:
     # !!! 已知债务：arch-lint 的 mayDependOn 是组件粒度白名单，同组件新增同类导入不会再报警。
     # 每条都对应真实违例文件，manager/iam 迁移到 core/manager 时随条目一起删除：
     #   - iam_data: core/manager/iam/biz/sso/service.go 直接 import iam/data/sso（biz 越过端口拿实现）
-    mayDependOn: [iam_data, iam_model, oxcore_domain, oxcore_ports, oxcore_wire, shared_dataguard, shared_pkg, oxfloor]
+    mayDependOn: [iam_data, iam_model, shared_dataguard, shared_pkg]
   iam_data:
-    mayDependOn: [iam_biz, iam_model, shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
+    mayDependOn: [iam_biz, iam_model, shared_pkg]
   iam_model:
-    mayDependOn: [shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
-
+    # No project grants: nothing in this component imports another
+    # project component today.
+    #
+    # `anyVendorDeps` rather than `anyProjectDeps` is the whole point.
+    # The schema refuses a rule with an empty mayDependOn and no flags
+    # at all, and the two flags are opposites: anyProjectDeps opens
+    # this component to every other project component, which is the
+    # exact hole this file is here to close. anyVendorDeps says the
+    # opposite — this component may reach third-party libraries (the
+    # repository already allows that globally) and may reach no project
+    # component whatsoever.
+    #
+    # Before decision 74 these components carried dozens of grants that
+    # no import used, so arch-lint was reporting a boundary far wider
+    # than the one the code had. Deleting the unused grants is what
+    # turns the file back into a statement about the architecture
+    # rather than a list of permissions nobody exercised.
+    anyVendorDeps: true
   # ---------------- manager BC ----------------
   manager_server:
     # !!! 已知债务：arch-lint 的 mayDependOn 是组件粒度白名单，同组件新增同类导入不会再报警。
     # 每条都对应真实违例文件，manager/iam 迁移到 core/manager 时随条目一起删除：
     #   - iam_model: core/manager/server/imbridge/http.go 复用 iam/model
     mayDependOn:
-      - api
       - iam_model
       - manager_biz
       - manager_model
@@ -218,7 +271,12 @@ deps:
       - manager_service
       - oxcore_domain
       - oxcore_ports
-      - oxcore_wire
+      # 决策 67：query_translate 端点直接发一次补全（不建 Session），
+      # http.go 读回 stored-ledger 的用量。这两处与控制面其他调用方看到
+      # 的是同一套 PiG 类型，所以授权与 biz 层相同——HTTP 层没有第二个
+      # 词汇可用，也不该有。
+      - oxpig_ai
+      - oxpig_model
       - shared_agentteams
       - shared_control
       - shared_dataguard
@@ -226,19 +284,28 @@ deps:
       - oxfloor
   manager_service:
     mayDependOn:
-      - api
       - manager_biz
       - manager_model
       - manager_service
       - oxcore_domain
       - oxcore_ports
-      - oxcore_wire
       - shared_pkg
       - oxfloor
   # manager_biz 额外允许 pigagent/pigwire：内核的宿主绑定（决策 30）必须
   # 拿到 PiG 的事件与内核类型，而 core/pig 不能反向依赖根模块——所以这层
   # 适配只能落在根模块里。这是"PiG 变更收口到一个模块"与"core/pig 不
   # 依赖根模块"两条规则交叉后的唯一落点。
+  #
+  # 决策 67 把这个落点从"根模块自己 import PiG"改成"根模块 import
+  # core/pig 的 re-export"。manager_biz 现在多三个允许项：
+  #   - oxpig_model: 一次补全的请求与回复就是 PiG 的 ai 类型（决策 67）
+  #   - oxpig_ai:    同样的原因，只是通过 alias 面。两者都不是"顺手加的"
+  #     例外，而是删掉了 ports.LLMRequest/LLMResponse 之后的直接后果：
+  #     控制面不再有第二套模型词汇可写。
+  #   - oxpig_coding: 装配层之外，biz 不建 Session，所以这里只授权
+  #     manager_biz 自身没有用到的部分是为了让"控制面知道 PiG 词汇"这条
+  #     规则保持组件粒度可读——真要在 biz 里建 Session，应该先讨论把它
+  #     提到 chatruntime，而不是靠白名单放行。
   manager_biz:
     # !!! 已知债务：arch-lint 的 mayDependOn 是组件粒度白名单，同组件新增同类导入不会再报警。
     # 每条都对应真实违例文件，manager/iam 迁移到 core/manager 时随条目一起删除：
@@ -253,7 +320,13 @@ deps:
       - oxcore_ports
       - oxcore_wire
       - oxpig_agent
-      - oxpig_wire
+      - oxpig_ai
+      - oxpig_model
+      # pigtools 是宿主治理记录（ToolSchema：class / origin / when_to_use）
+      # 到模型可见声明（ai.ToolSchema）的唯一桥。放在 core/pig 而不是
+      # 控制面，是因为模型的工具 schema 是 PiG 的类型，而"哪些工具有风险"
+      # 是 OpsKeeper 的——桥本身必须同时知道两边。
+      - oxpig_tools
       - shared_control
       - shared_dataguard
       - shared_knowledge
@@ -264,14 +337,11 @@ deps:
     mayDependOn:
       - manager_biz
       - manager_model
-      - oxcore_domain
-      - oxcore_ports
-      - oxcore_wire
       - shared_knowledge
       - shared_pkg
       - oxfloor
   manager_model:
-    mayDependOn: [shared_pkg, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
+    mayDependOn: [oxfloor]
 
   # ---------------- edge module (was the edgeagent BC) ----------------
   # These four components are the node plane's own layers. They no longer
@@ -279,12 +349,28 @@ deps:
   # that reaches the control plane; what is left for these rules is the
   # intra-module direction, which the toolchain does not check.
   oxedge_service:
-    mayDependOn: [oxedge_biz, oxedge_model, oxedge_runtime, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
+    mayDependOn: [oxedge_biz, oxfloor]
   oxedge_biz:
-    mayDependOn: [oxedge_model, oxedge_runtime, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
+    mayDependOn: [oxedge_model, oxedge_runtime, oxcore_ports, oxcore_wire, oxfloor]
   oxedge_model:
-    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
-
+    # No project grants: nothing in this component imports another
+    # project component today.
+    #
+    # `anyVendorDeps` rather than `anyProjectDeps` is the whole point.
+    # The schema refuses a rule with an empty mayDependOn and no flags
+    # at all, and the two flags are opposites: anyProjectDeps opens
+    # this component to every other project component, which is the
+    # exact hole this file is here to close. anyVendorDeps says the
+    # opposite — this component may reach third-party libraries (the
+    # repository already allows that globally) and may reach no project
+    # component whatsoever.
+    #
+    # Before decision 74 these components carried dozens of grants that
+    # no import used, so arch-lint was reporting a boundary far wider
+    # than the one the code had. Deleting the unused grants is what
+    # turns the file back into a statement about the architecture
+    # rather than a list of permissions nobody exercised.
+    anyVendorDeps: true
   # ---------------- OpsKeeper 2.0 module direction ----------------
   # core is the root of the new graph: it may not depend on anything, not
   # even on shared_pkg. A contract that reaches into infrastructure forces
@@ -323,21 +409,54 @@ deps:
   # rule to. scripts/modulecheck covers that half, across every module,
   # discovered from the go.mod files rather than from a list.
   oxpig_model:
-    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxpig_agent]
+    mayDependOn: [oxcore_domain, oxcore_ports]
   oxpig_agent:
     mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxpig_model]
+  # pigai is aliases over PiG's ai package and nothing else. The list is its
+  # own name and nothing else: it reaches no OpsKeeper package, which is what
+  # makes it safe for every other component to import without a cycle. (The
+  # tool requires a non-empty list; a self-reference is how "depends on
+  # nothing" is written.)
+  oxpig_ai:
+    mayDependOn: [oxpig_ai]
+  # pigcoding is the embedding layer. It reaches PiG's coding/ai/agent
+  # packages and the core contracts, and it depends on pigmodel for the
+  # request/registry vocabulary a Session's caller already speaks.
+  oxpig_coding:
+    # No project grants: nothing in this component imports another
+    # project component today.
+    #
+    # `anyVendorDeps` rather than `anyProjectDeps` is the whole point.
+    # The schema refuses a rule with an empty mayDependOn and no flags
+    # at all, and the two flags are opposites: anyProjectDeps opens
+    # this component to every other project component, which is the
+    # exact hole this file is here to close. anyVendorDeps says the
+    # opposite — this component may reach third-party libraries (the
+    # repository already allows that globally) and may reach no project
+    # component whatsoever.
+    #
+    # Before decision 74 these components carried dozens of grants that
+    # no import used, so arch-lint was reporting a boundary far wider
+    # than the one the code had. Deleting the unused grants is what
+    # turns the file back into a statement about the architecture
+    # rather than a list of permissions nobody exercised.
+    anyVendorDeps: true
+  oxpig_tools:
+    mayDependOn: [oxcore_ports]
+  oxpig_test:
+    mayDependOn: [oxcore_domain, oxpig_model]
   # pigrpc adapts the node agent's RPC client. It is the only place a
   # supervisor-adjacent component is allowed to learn that a node agent is
   # a `pig --mode rpc` subprocess.
   oxpig_rpc:
-    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire]
+    mayDependOn: [oxcore_ports]
 
   # edge is the node plane. It depends on core's contracts and nothing else
   # internal: a node that reached the control plane could grow a second
   # source of truth for identity and approval, which is exactly the split
   # the module graph exists to keep.
   oxedge_pigsup:
-    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire]
+    mayDependOn: [oxcore_ports]
   # The node's policy gate. It reaches contracts and nothing else: an
   # allow-list that could import an implementation is an allow-list that
   # can be edited by the thing it is meant to constrain.
@@ -363,7 +482,7 @@ deps:
   # internal implementation, or a plugin would inherit OpsKeeper's whole
   # dependency graph.
   oxplugin_sdk:
-    mayDependOn: [oxcore_domain, oxcore_wire]
+    mayDependOn: [oxcore_domain]
 
   # harness is the evaluation plane. It depends on the contract layer and
   # on nothing else internal: a golden-case corpus that could import an
@@ -371,23 +490,59 @@ deps:
   # dependency graph. The model call it needs arrives as ports.Completer,
   # injected by the caller.
   oxharness_schema:
-    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire]
+    # No project grants: nothing in this component imports another
+    # project component today.
+    #
+    # `anyVendorDeps` rather than `anyProjectDeps` is the whole point.
+    # The schema refuses a rule with an empty mayDependOn and no flags
+    # at all, and the two flags are opposites: anyProjectDeps opens
+    # this component to every other project component, which is the
+    # exact hole this file is here to close. anyVendorDeps says the
+    # opposite — this component may reach third-party libraries (the
+    # repository already allows that globally) and may reach no project
+    # component whatsoever.
+    #
+    # Before decision 74 these components carried dozens of grants that
+    # no import used, so arch-lint was reporting a boundary far wider
+    # than the one the code had. Deleting the unused grants is what
+    # turns the file back into a statement about the architecture
+    # rather than a list of permissions nobody exercised.
+    anyVendorDeps: true
   oxharness_injector:
-    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxharness_injector, oxharness_schema]
+    mayDependOn: [oxharness_injector, oxharness_schema]
+  # 决策 67：harness 从"只依赖 core + 标准库"放宽到"依赖 core + core/pig"。
+  # 放宽的理由不是方便——judge 收到的是 PiG 的 *AssistantMessage 并从内容块
+  # 里读文本，在 harness 外面再声明一个单方法接口、背后放一个手写的响应结构，
+  # 只会得到第二套词汇，而 PiG 的消息类型照样得 import。真正保住的是
+  # "不引入 provider SDK"这条属性：pigmodel 是契约不是客户端，而 PiG 本身
+  # 仍然只被 core/pig 这一个模块命名（harness 走 pigai alias，不出现任何
+  # github.com/MichaelKinsy/PiG 的 import path）。
   oxharness_judge:
-    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxharness_schema]
+    mayDependOn: [oxpig_ai, oxpig_model]
   oxharness_runner:
     mayDependOn:
-      - oxcore_domain
-      - oxcore_ports
-      - oxcore_wire
-      - oxharness_injector
       - oxharness_judge
-      - oxharness_leaderboard
+      - oxpig_model
       - oxharness_schema
   oxharness_leaderboard:
-    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxharness_schema]
-
+    # No project grants: nothing in this component imports another
+    # project component today.
+    #
+    # `anyVendorDeps` rather than `anyProjectDeps` is the whole point.
+    # The schema refuses a rule with an empty mayDependOn and no flags
+    # at all, and the two flags are opposites: anyProjectDeps opens
+    # this component to every other project component, which is the
+    # exact hole this file is here to close. anyVendorDeps says the
+    # opposite — this component may reach third-party libraries (the
+    # repository already allows that globally) and may reach no project
+    # component whatsoever.
+    #
+    # Before decision 74 these components carried dozens of grants that
+    # no import used, so arch-lint was reporting a boundary far wider
+    # than the one the code had. Deleting the unused grants is what
+    # turns the file back into a statement about the architecture
+    # rather than a list of permissions nobody exercised.
+    anyVendorDeps: true
   # ---------------- 共享 ----------------
   shared_pkg:
     # 不得依赖任何 BC（业务无关）。允许依赖契约层——契约层本身与业务无关，
@@ -402,24 +557,24 @@ deps:
     # oxedge_policygate 仍在：清单校验要读闸门的决策类型，才不会对"批准"
     # 有一套自己的理解。
     mayDependOn:
-      - oxcore_domain
-      - oxcore_ports
-      - oxcore_wire
-      - oxplugin_sdk
       - shared_pkg
       - oxfloor
 
   # 控制面里唯一绑定 PiG 适配层与 LLM 底座的包（决策 66）。
-  # 方向是 llmpig → shared_pkg：它用底座的词表实现同一个 llm.Client，
-  # 底座不反过来认识它。
+  # 方向是 llmpig → shared_pkg：shared_pkg 现在只剩 provider 配置与预算，
+  # 模型调用本身完全在 core/pig 那边，底座不反过来认识它。
+  #
+  # 决策 67 给了它 oxpig_coding：llmpig.Sync 把控制面的 provider 表发布进
+  # PiG 的 ModelRegistry，所以它是"设置表 → agent 运行时"这条边上唯一
+  # 同时知道两边的包。这不是绕过边界，而是边界本身——凭据从设置表进
+  # PiG 的模型注册表，中间没有第二个存储。
   shared_llmpig:
     mayDependOn:
       - oxcore_domain
-      - oxcore_ports
-      - oxcore_wire
+      - oxpig_ai
+      - oxpig_coding
       - oxpig_model
       - shared_pkg
-      - oxfloor
 
   # ---------------- 装配层 ----------------
   # cmd/opskeeper 装配 iam + manager，cmd/opskeeper-edge 装配 edge；
@@ -428,9 +583,7 @@ deps:
   # 注意 cmd 是唯一被允许同时看到两个平面的地方——这正是装配层的定义。
   cmd:
     mayDependOn:
-      - api
       - oxedge_biz
-      - oxedge_model
       - oxedge_runtime
       - oxedge_service
       - iam_biz
@@ -466,6 +619,8 @@ deps:
       - oxcore_ports
       - oxcore_wire
       - oxpig_model
+      - oxpig_ai
+      - oxpig_coding
       - oxpig_agent
       - oxpig_rpc
       - oxpig_wire
@@ -473,7 +628,6 @@ deps:
       - oxedge_policygate
       - oxedge_gatesocket
       - oxedge_toolbroker
-      - oxplugin_sdk
       - oxharness_schema
       - oxharness_runner
       - oxharness_leaderboard
@@ -482,7 +636,7 @@ deps:
   # 这些组件此前没有 deps 条目，于是每一次合法 import 都报一条 warning。
   # 规则不变：底座与运行时不得依赖任何 BC，只允许依赖契约层和自己。
   oxedge_runtime:
-    mayDependOn: [oxedge_runtime, oxedge_model, oxcore_domain, oxcore_ports, oxcore_wire, oxfloor]
+    mayDependOn: [oxedge_runtime, oxfloor]
   oxharness_projection:
     mayDependOn: [oxharness_judge]
   oxharness_vocabulary:
@@ -492,21 +646,26 @@ deps:
   scripts:
     mayDependOn: [shared_agentteams]
   shared_agentteams:
-    mayDependOn: [shared_pkg, oxfloor]
+    mayDependOn: [oxfloor]
   shared_dataguard:
-    mayDependOn: [shared_dataguard, shared_pkg, oxfloor]
+    mayDependOn: [shared_dataguard, shared_pkg]
   shared_knowledge:
-    mayDependOn: [shared_knowledge, shared_pkg, oxfloor]
+    mayDependOn: [shared_knowledge, shared_pkg]
   shared_middleware:
-    mayDependOn: [oxcore_ports, shared_knowledge, shared_middleware, shared_pkg, oxfloor]
+    mayDependOn: [oxcore_ports, shared_knowledge, shared_middleware, shared_pkg]
   shared_migrate:
     mayDependOn: [shared_migrate]
+  # The genai span decorator reads the reply's own usage off PiG's type, so
+  # it needs the same two components every other model caller does. It is a
+  # decorator over pigmodel.Completer, not a second client: it adds no
+  # provider knowledge of its own, which is why it is allowed to see the
+  # vocabulary at all.
   shared_observability:
-    mayDependOn: [shared_pkg, oxfloor]
+    mayDependOn: [oxpig_ai, oxpig_model]
   oxfloor:
     # 不得依赖任何 BC。core 契约层 + sdk 是它的全部 opskeeper 依赖；
     # 其余是 yaml / prometheus / geminio 这类第三方库。
-    mayDependOn: [oxfloor, oxcore_domain, oxcore_ports, oxcore_wire, oxplugin_sdk]
+    mayDependOn: [oxfloor, oxcore_domain, oxcore_wire, oxplugin_sdk]
 
 commonComponents: []
 

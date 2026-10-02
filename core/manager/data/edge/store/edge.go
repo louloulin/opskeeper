@@ -173,6 +173,22 @@ func (r *Repo) SetAgentVersion(ctx context.Context, id uint64, version string) e
 	return nil
 }
 
+// SetPigVersion records the PiG agent build the node reports on its
+// heartbeat. It mirrors SetAgentVersion's contract — the caller filters
+// empty and unchanged values — and for the same reason: blanking the
+// column on a node that stopped reporting would destroy the last version
+// an operator can still compare a release against.
+func (r *Repo) SetPigVersion(ctx context.Context, id uint64, version string) error {
+	res := r.db.WithContext(ctx).Model(&model.Edge{}).Where("id = ?", id).Update("pig_version", version)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errs.ErrNotFound
+	}
+	return nil
+}
+
 // Delete soft-deletes an edge (gorm's DeletedAt). Subsequent Get/List hide
 // the row.
 func (r *Repo) Delete(ctx context.Context, id uint64) error {

@@ -88,26 +88,101 @@ func TestTheReadOnlyPackageCoversTheHostProbeFamily(t *testing.T) {
 	}
 }
 
-func TestAHostCaseIsCoveredByTheShippedPackages(t *testing.T) {
-	// The end-to-end property: a golden case the fleet is supposed to
-	// pass, scored against the fleet that ships. host/cpu-spike's
-	// expectations are all host-family, and the read-only package serves
-	// that family, so it must come out complete.
+func TestAHostCaseIsCoveredOnlyByTheToolsTheFleetActuallyShips(t *testing.T) {
+	// This test used to assert that host/cpu-spike's three host-family
+	// expectations were all covered, and it passed, and it was wrong.
+	//
+	// The join compared families, the read-only package serves the host
+	// family, and so host.host_processes counted as covered by a fleet that
+	// ships no tool by that name or any other: the package's host reads are
+	// host_lsof, host_read_journal, host_strace and the rest, and asking a
+	// node to enumerate its processes was not among them. The assertion was
+	// a statement about a prefix, wearing the costume of a statement about
+	// a capability.
+	//
+	// What is true, and what is asserted now: exactly one of the three is
+	// served, through an alias rather than a literal name, and the other two
+	// are reported as gaps with a reason that names the method.
 	plugins := shippedPlugins(t)
 	cov := CoverageOf("host/cpu-spike",
 		[]string{"host.host_load", "host.host_processes", "host.top_cpu_procs"}, plugins)
-	if !cov.Complete() {
-		t.Errorf("host/cpu-spike is not covered by the shipped fleet: uncovered=%v\n%s",
-			cov.Uncovered, CoverageReason(cov.Uncovered[0]))
+
+	if want := []string{"host.host_processes", "host.top_cpu_procs"}; !equalStrings(cov.Uncovered, want) {
+		t.Errorf("uncovered = %v, want %v", cov.Uncovered, want)
 	}
-	if len(cov.Packages) == 0 {
-		t.Error("the case is complete but names no package that covers it")
+	if want := []string{"host.host_load"}; !equalStrings(cov.Covered, want) {
+		t.Errorf("covered = %v, want %v", cov.Covered, want)
 	}
-	for _, name := range cov.Packages {
-		if name != readOnlyProfile && name != observabilityProfile {
-			t.Errorf("unexpected package %q covers a host-family case", name)
+	if len(cov.Reasons) != len(cov.Uncovered) {
+		t.Fatalf("Reasons has %d entries for %d uncovered expectations", len(cov.Reasons), len(cov.Uncovered))
+	}
+	// The reason has to name the method that is missing. A reason that
+	// named only the family would send a reader to package the wrong tool,
+	// which is the failure this rewrite exists to make impossible.
+	for _, r := range cov.Reasons {
+		if !strings.Contains(r, "host_processes") && !strings.Contains(r, "top_cpu_procs") {
+			t.Errorf("reason %q does not name the method it is explaining", r)
 		}
 	}
+	if want := []string{observabilityProfile}; !equalStrings(cov.Packages, want) {
+		t.Errorf("packages = %v, want %v — host load is the observability package's, "+
+			"and the alias is what points at it", cov.Packages, want)
+	}
+}
+
+func TestAVocabularyDifferenceIsAnAliasAndNotAFamilyGuess(t *testing.T) {
+	// host.host_load is the one expectation in the suite that ships under
+	// a different name than the case uses, and the alias is what makes that
+	// visible rather than accidental.
+	//
+	// Without the entry it would read as a gap, which would be a false
+	// negative — and a report that cries wolf about a capability the fleet
+	// genuinely has is the reason the family-level join was replaced rather
+	// than merely tightened. The direction of the error matters: a coverage
+	// report that under-claims is corrected by adding a line; one that
+	// over-claims is believed.
+	plugins := shippedPlugins(t)
+	cov := CoverageOf("host/cpu-spike", []string{"host.host_load"}, plugins)
+	if !cov.Complete() {
+		t.Errorf("host.host_load is served by %s and read as a gap: uncovered=%v",
+			ExpectationAliases["host.host_load"], cov.Uncovered)
+	}
+}
+
+func TestEveryAliasPointsAtAToolSomePackageShips(t *testing.T) {
+	// An alias is a claim that a capability ships under another name. If
+	// the target is not shipped, the entry is claiming coverage for
+	// something no node can run — the exact false green this file was
+	// rewritten to remove, re-introduced through a side door.
+	//
+	// This is why redis.kill_client is not aliased to the adapter's
+	// redis.client_kill. That is a real rename and it will need an entry
+	// the day a package ships the write, but until then the honest line is
+	// that no package offers it.
+	shipped := map[string]bool{}
+	for _, p := range shippedPlugins(t) {
+		for _, tool := range p.Manifest.Spec.Tools {
+			shipped[tool.Name] = true
+		}
+	}
+	for expectation, target := range ExpectationAliases {
+		if !shipped[target] {
+			t.Errorf("ExpectationAliases maps %q to %q, which no shipped package declares; "+
+				"the alias claims coverage for a tool no node can run", expectation, target)
+		}
+	}
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // middlewareProfile is the package that made the six middleware families
@@ -207,9 +282,21 @@ func TestCoverageIsDeterministic(t *testing.T) {
 	}
 }
 
+// TestTheCoverageOfARealCaseFileIsWhatTheFileSays reads an actual case.yaml
+// so the expectations under test are the ones the harness will run, not a
+// fixture that drifted from them.
+//
+// It asserted that host/cpu-spike came out complete. It does not, and the
+// reason it did is the reason the join changed: the parse below picks up
+// every dotted expectation in the file, including the remediation lines,
+// and the family-level join credited host.kill_process — a tool the fleet
+// has never shipped — to the read-only package's host_dmesg.
+//
+// The assertion now is the one worth keeping. The parse is still reading
+// the real file, and the result must still match that file exactly; what
+// changed is that "not coverable" is an acceptable answer and "coverable
+// for the wrong reason" is not.
 func TestTheCoverageOfARealCaseFileIsWhatTheFileSays(t *testing.T) {
-	// Reads an actual case.yaml so the expectations under test are the
-	// ones the harness will run, not a fixture that drifted from them.
 	casesDir := filepath.Join(repoRoot(t), "core", "harness", "cases", "host", "cpu-spike")
 	raw, err := os.ReadFile(filepath.Join(casesDir, "case.yaml"))
 	if err != nil {
@@ -230,9 +317,114 @@ func TestTheCoverageOfARealCaseFileIsWhatTheFileSays(t *testing.T) {
 		t.Fatalf("parsed only %v out of the case file; the extraction is wrong, not the case", expectations)
 	}
 	cov := CoverageOf("host/cpu-spike", expectations, shippedPlugins(t))
-	if !cov.Complete() {
-		t.Errorf("the shipped fleet cannot serve host/cpu-spike: uncovered=%v", cov.Uncovered)
+
+	// Every expectation in the file is accounted for exactly once. A join
+	// that dropped one would report a smaller gap list and look tidier.
+	if got, want := len(cov.Covered)+len(cov.Uncovered), len(expectations); got != want {
+		t.Fatalf("the join accounted for %d of %d expectations: covered=%v uncovered=%v",
+			got, want, cov.Covered, cov.Uncovered)
 	}
+	if cov.Complete() {
+		t.Errorf("host/cpu-spike came out covered by %v, but the fleet ships no tool for "+
+			"host.kill_process, host.host_processes or host.top_cpu_procs; a complete result "+
+			"here means the join has started guessing again", cov.Packages)
+	}
+	// The parse above is deliberately broader than the harness loader: it
+	// takes every dotted name in the file, so the prerequisite
+	// host.test_user_ssh_accessible arrives here too and is reported as a
+	// gap. That is harmless for what this test is checking — the join must
+	// account for what it was given and must not guess — and the loader
+	// that the report itself runs does scope the block properly
+	// (cmd/opskeeper-eval reads Expect.RootCauseLines and
+	// Expect.RemediationOptions). What matters is that the four real
+	// expectations land the way the shipped tools say they should: one
+	// covered through its alias, three not covered at all.
+	if want := []string{"host.host_processes", "host.kill_process", "host.test_user_ssh_accessible", "host.top_cpu_procs"}; !equalStrings(cov.Uncovered, want) {
+		t.Errorf("uncovered = %v, want %v", cov.Uncovered, want)
+	}
+	if want := []string{"host.host_load"}; !equalStrings(cov.Covered, want) {
+		t.Errorf("covered = %v, want %v", cov.Covered, want)
+	}
+}
+
+// TestNoShippedCaseIsReportedAsCoveredWhileAMethodIsMissing is the alarm
+// for the specific regression this file was rewritten for.
+//
+// The family-level join reported twenty of twenty cases covered. The number
+// was produced by inferring a capability from a shared prefix, and it stayed
+// at twenty of twenty while the fleet served none of the twenty, because
+// every case names a remediation and no shipped package is anything but
+// read-only. Nothing about the number would have moved when that changed.
+//
+// So the invariant is pinned: a case that names a method nothing ships is
+// not complete. It holds today for all twenty, and it is written so that
+// packaging pg.kill_session — which is the work that should move it —
+// fails this test rather than passing it.
+func TestNoShippedCaseIsReportedAsCoveredWhileAMethodIsMissing(t *testing.T) {
+	plugins := shippedPlugins(t)
+	casesDir := filepath.Join(repoRoot(t), "core", "harness", "cases")
+	var complete, incomplete int
+	err := filepath.Walk(casesDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || info.Name() != "case.yaml" {
+			return err
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		cov := CoverageOf(info.Name(), expectationsIn(string(raw)), plugins)
+		if cov.Complete() {
+			complete++
+			return nil
+		}
+		incomplete++
+		for i, u := range cov.Uncovered {
+			if i >= len(cov.Reasons) || cov.Reasons[i] == "" {
+				t.Errorf("%s: %s is uncovered with no reason; an unexplained gap is the one "+
+					"failure this report exists to prevent", info.Name(), u)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk cases: %v", err)
+	}
+	if complete+incomplete == 0 {
+		t.Fatal("no case files were walked; the coverage alarm is not watching anything")
+	}
+	if complete != 0 {
+		t.Errorf("%d of %d cases report as fully covered. That is not automatically wrong — "+
+			"packaging the writes will make it true — but it must be a consequence of tools "+
+			"being shipped, so check that each of those cases has a real tool behind it before "+
+			"accepting the number", complete, complete+incomplete)
+	}
+	t.Logf("%d/%d cases incomplete against the shipped fleet", incomplete, complete+incomplete)
+}
+
+// expectationsIn is the expectation extraction the harness case files need:
+// the dotted names inside the expect block, which is where root_cause_lines
+// and remediation_options live.
+func expectationsIn(raw string) []string {
+	var out []string
+	inside := false
+	for _, line := range strings.Split(raw, "\n") {
+		if strings.HasPrefix(line, "expect:") {
+			inside = true
+			continue
+		}
+		if inside && line != "" && !strings.HasPrefix(line, " ") {
+			break
+		}
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "- ") {
+			continue
+		}
+		value := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
+		if strings.Contains(value, ".") && !strings.Contains(value, " ") {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func TestEveryCaseFamilyIsEitherPackagedOrNamedAsADeliberateGap(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
 // fakeEdgeRepo is an in-memory edge.Repo for registry tests.
@@ -65,6 +65,7 @@ func (r *fakeEdgeRepo) UpdateRoles(_ context.Context, _ uint64, _ uint8) error  
 func (r *fakeEdgeRepo) UpdateName(_ context.Context, _ uint64, _ string) error      { return nil }
 func (r *fakeEdgeRepo) SetDeviceID(_ context.Context, _ uint64, _ uint64) error     { return nil }
 func (r *fakeEdgeRepo) SetAgentVersion(_ context.Context, _ uint64, _ string) error { return nil }
+func (r *fakeEdgeRepo) SetPigVersion(_ context.Context, _ uint64, _ string) error   { return nil }
 func (r *fakeEdgeRepo) Delete(_ context.Context, _ uint64) error                    { return nil }
 func (r *fakeEdgeRepo) Count(_ context.Context) (int64, error)                      { return int64(len(r.byID)), nil }
 
@@ -208,7 +209,7 @@ func TestCallerErrorPropagates(t *testing.T) {
 // schemaNames extracts the registered tool names. Used by tests that
 // want to assert presence/absence by name rather than raw count, so
 // adding a tool doesn't break unrelated tests.
-func schemaNames(s []llm.ToolSchema) []string {
+func schemaNames(s []ports.ToolSchema) []string {
 	out := make([]string, 0, len(s))
 	for _, x := range s {
 		out = append(out, x.Name)

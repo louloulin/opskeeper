@@ -182,8 +182,8 @@ func TestInvestigatedWorker_HappyPath(t *testing.T) {
 		},
 	}
 
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, validRootCauseJSONFor("host_cpu", 2, 2))
+	fc := newFakeCompleter()
+	fc.setResponse(0, validRootCauseJSONFor("host_cpu", 2, 2))
 	caller := NewLLMCaller(fc, WithLogger(silentInvestigatedLogger()))
 
 	worker, err := NewInvestigatedPhaseWorker(caller, toolset, loader, silentInvestigatedLogger())
@@ -228,8 +228,8 @@ func TestInvestigatedWorker_HappyPath(t *testing.T) {
 	if _, ok := exec.RawOutputs["root_cause_json"].(*RootCauseJSON); !ok {
 		t.Errorf("RawOutputs[root_cause_json] missing or wrong type: %T", exec.RawOutputs["root_cause_json"])
 	}
-	if fc.CallCount() != 1 {
-		t.Errorf("FakeLLMClient.CallCount = %d, want 1", fc.CallCount())
+	if fc.callCount() != 1 {
+		t.Errorf("fakeCompleter.CallCount = %d, want 1", fc.callCount())
 	}
 
 	verdict, err := worker.Verifier(context.Background(), exec)
@@ -258,7 +258,7 @@ func TestInvestigatedWorker_PlannerUsesMCPInvestigationInput(t *testing.T) {
 		Target:       "redis:cache",
 	}}
 	worker, err := NewInvestigatedPhaseWorker(
-		NewLLMCaller(NewFakeLLMClient(), WithLogger(silentInvestigatedLogger())),
+		NewLLMCaller(newFakeCompleter(), WithLogger(silentInvestigatedLogger())),
 		toolset,
 		loader,
 		silentInvestigatedLogger(),
@@ -314,7 +314,7 @@ func TestInvestigatedWorker_ToolFailure(t *testing.T) {
 			ResourceType: "host",
 		},
 	}
-	fc := NewFakeLLMClient()
+	fc := newFakeCompleter()
 	caller := NewLLMCaller(fc, WithLogger(silentInvestigatedLogger()))
 
 	worker, err := NewInvestigatedPhaseWorker(caller, toolset, loader, silentInvestigatedLogger())
@@ -343,8 +343,8 @@ func TestInvestigatedWorker_ToolFailure(t *testing.T) {
 		t.Errorf("Planner error should mention investigator.Investigate; got: %v", err)
 	}
 	// LLM 必须没被调用（Planner fail-fast，副作用为 0）。
-	if fc.CallCount() != 0 {
-		t.Errorf("FakeLLMClient.CallCount = %d, want 0 (planner rejected before LLM call)", fc.CallCount())
+	if fc.callCount() != 0 {
+		t.Errorf("fakeCompleter.CallCount = %d, want 0 (planner rejected before LLM call)", fc.callCount())
 	}
 }
 
@@ -369,9 +369,9 @@ func TestInvestigatedWorker_SchemaInvalidFallsBack(t *testing.T) {
 			ResourceType: "host",
 		},
 	}
-	fc := NewFakeLLMClient()
+	fc := newFakeCompleter()
 	// 故意返回缺 root_cause_object 字段的 JSON，触发 schema 校验失败。
-	fc.SetResponse(0, rootCauseJSONWithoutRootCause())
+	fc.setResponse(0, rootCauseJSONWithoutRootCause())
 	caller := NewLLMCaller(fc, WithLogger(silentInvestigatedLogger()))
 
 	worker, err := NewInvestigatedPhaseWorker(caller, toolset, loader, silentInvestigatedLogger())

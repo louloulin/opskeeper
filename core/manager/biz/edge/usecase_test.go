@@ -209,6 +209,12 @@ type fakeRepo struct {
 	mu     sync.Mutex
 	byID   map[uint64]*model.Edge
 	nextID uint64
+	// pigVersionWrites counts SetPigVersion calls, so a test can assert
+	// that an unchanged version costs no write. The field exists because
+	// the heartbeat is periodic and a version is a build constant: an
+	// unguarded update would write that constant on every ping of every
+	// node forever.
+	pigVersionWrites int
 }
 
 func newFakeRepo() *fakeRepo {
@@ -338,6 +344,18 @@ func (r *fakeRepo) SetAgentVersion(_ context.Context, id uint64, v string) error
 		return errs.ErrNotFound
 	}
 	e.AgentVersion = v
+	return nil
+}
+
+func (r *fakeRepo) SetPigVersion(_ context.Context, id uint64, v string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.byID[id]
+	if !ok || e.DeletedAt != nil {
+		return errs.ErrNotFound
+	}
+	e.PigVersion = v
+	r.pigVersionWrites++
 	return nil
 }
 
@@ -619,7 +637,7 @@ func TestHandleHeartbeatBumpsLinkedDeviceLastSeen(t *testing.T) {
 	// A heartbeat must refresh the DEVICE last_seen too, not just the edge —
 	// otherwise a continuously-connected edge leaves Device.LastSeenAt frozen
 	// at the register time.
-	if err := uc.HandleHeartbeat(ctx, res.Edge.ID, time.Now().UTC()); err != nil {
+	if err := uc.HandleHeartbeat(ctx, res.Edge.ID, time.Now().UTC(), ""); err != nil {
 		t.Fatalf("HandleHeartbeat: %v", err)
 	}
 	if devices.onlineCalls != 2 {
@@ -729,7 +747,7 @@ func TestHandleHeartbeatBumpsLastSeen(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	ts := time.Date(2026, 4, 23, 12, 0, 0, 0, time.UTC)
-	if err := uc.HandleHeartbeat(ctx, res.Edge.ID, ts); err != nil {
+	if err := uc.HandleHeartbeat(ctx, res.Edge.ID, ts, ""); err != nil {
 		t.Fatalf("HandleHeartbeat: %v", err)
 	}
 	after, err := uc.Get(ctx, res.Edge.ID)

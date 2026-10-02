@@ -46,13 +46,18 @@ plugin, and the plugin ecosystem dies on first contact with upstream churn.
           (contracts, stdlib only)
         ^        ^         ^        ^
         |        |         |        |
-      pig      edge     harness    sdk
- (PiG adapter) (node)  (evaluation) (third-party
-                                   plugin surface)
-        ^        ^
+      pig      edge      sdk
+ (PiG adapter) (node) (third-party
+        ^        ^     plugin surface)
         |        |
       floor (shared infrastructure) -> core, sdk
    (config, log, manifest, metrics, transport, skills)
+
+   harness (evaluation) -> core, pig
+      the LLM judge reads its reply off PiG's own message type, so it
+      takes a pigmodel.Completer rather than a harness-local interface
+      over a hand-rolled response (decision 67). It still reaches no
+      provider SDK: pigmodel is a contract, not a client.
 
    manager (control plane) -> core, pig, floor
 ```
@@ -80,7 +85,7 @@ repository.
 | `manager` | `core/manager/` | Control plane | `core` (including `core/pig`), `sdk`, and any vendor (`AnyVendor`) |
 | `edge` | `core/edge/` | Node plane (agent, collectors, tools, sandbox) | `core`, `floor`, `prometheus`, `gopsutil`, `x/sync`, `yaml.v3` |
 | `floor` | `core/floor/` | Infrastructure both planes share | `core`, `sdk`, `prometheus`, `geminio`, `yaml.v3` |
-| `harness` | `core/harness/` | Evaluation | `core` |
+| `harness` | `core/harness/` | Evaluation | `core`, `core/pig` (widened by decision 67 — see the graph above) |
 | `sdk` | `sdk/` | Third-party plugin surface | `core`, `yaml.v3` |
 
 The root module is now only the assembly layer: `cmd/`, `scripts/`, `tests/`
@@ -316,16 +321,38 @@ budget — so the same kernel serves the control plane, a background
 investigator, and a per-node `pig` process with different policies and no
 code changes.
 
-All of it has landed: `pigmodel` (settings → PiG providers and models, with
-per-request credential injection so an admin edit lands on the next call
-without a restart), `pigagent` in full — the tool adapter, the SSE event
-mapper, the run state that enforces host policy, and the kernel that drives
-PiG's `agent.Agent` — and `core/manager/pkg/llm` itself, which now runs on
-`pigmodel` behind the `OPSKEEPER_LLM_BACKEND=pig` switch. eino is gone from
-`go.mod`/`go.sum` and from the code; the assembly layer selects the kernel with
-`OPSKEEPER_AGENT_KERNEL=pig`. The section below is kept because the plan's
-"zero caller changes" claim was wrong when it was written, and the rewrite it
-actually took is worth remembering.
+All of it has landed, and then went one step further (decision 67). `pigmodel`
+is now the *only* place OpsKeeper calls a model: settings → PiG providers and
+models, with per-request credential injection so an admin edit lands on the
+next call without a restart. `pigagent` is in full — the tool adapter, the SSE
+event mapper, the run state that enforces host policy, and the kernel that
+drives PiG's `agent.Agent`. `pigcoding` embeds PiG's `coding` SDK
+(`Services` → `Runtime` → `Session`) and owns the model registry the control
+plane publishes providers into, and `pigai` is the alias surface that lets
+every other module name PiG's message types without importing PiG.
+
+The kernel drives `agent.Agent` rather than a `coding.Session` on purpose.
+PiG exposes the agent at two altitudes, and they are not interchangeable:
+`agent.Agent` takes the four hooks a control plane has to own — `OnEvent`
+for streaming, `OnMessagePersist` for the transcript, `BeforeToolCall` for
+the policy gate, `FinishTurn` for the budget — while
+`coding.SessionStartOptions` exposes `BeforeToolCall` and `ExtraTools` and
+none of the other three. A `coding.Session` would have had to be taken apart
+to get them back. The `coding` SDK is still load-bearing one level down: it
+owns the `Services` container and `ModelRegistry` every model resolution
+passes through, and it carries the full `Session` path for hosts that want
+one.
+
+What disappeared with decision 67 is worth listing, because it is the point:
+`ports.LLMRequest` / `LLMResponse` / `Conversation` / `Message` / `Usage` /
+`Agent` / `TurnResult`, the whole `pkg/llm` client stack (`Client`, `MultiClient`,
+`Router`, `Wire`, `Metrics`, `Noop`), and `llmpig`'s `pigclient.go` /
+`pigregistry.go`. There is no `OPSKEEPER_LLM_BACKEND` switch any more — there
+is one backend. eino and go-openai are gone from `go.mod`/`go.sum` and from the
+code; the assembly layer selects the kernel with `OPSKEEPER_AGENT_KERNEL=pig`.
+The section below is kept because the plan's "zero caller changes" claim was
+wrong when it was written, and the rewrite it actually took is worth
+remembering.
 
 ### Four defects the test suite found
 

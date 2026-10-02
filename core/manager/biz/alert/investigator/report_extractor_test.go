@@ -7,22 +7,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
+// fakeSummarizer stands in for the extraction call. It keeps the request it
+// was handed so a test can assert the extractor pinned the model the
+// deployment configured — the failure this exists to catch is a silent fall
+// back to the cluster default, which produces a plausible report scored
+// against a different model than the operator chose.
 type fakeSummarizer struct {
-	resp    *llm.ChatResp
+	resp    *pigai.AssistantMessage
 	err     error
-	lastReq llm.ChatReq
+	lastReq pigmodel.Request
 	calls   int
 }
 
-func (f *fakeSummarizer) Chat(_ context.Context, req llm.ChatReq) (*llm.ChatResp, error) {
+func (f *fakeSummarizer) Complete(_ context.Context, req pigmodel.Request) (*pigai.AssistantMessage, error) {
 	f.calls++
 	f.lastReq = req
 	return f.resp, f.err
 }
+
+// replyOf builds the settled assistant turn a summarizer would return.
+func replyOf(text string) *pigai.AssistantMessage {
+	reply := pigmodel.AssistantTurn(text)
+	reply.StopReason = pigai.StopReasonStop
+	return &reply
+}
+
+var _ LLMSummarizer = (*fakeSummarizer)(nil)
 
 // fakeRelatedQuerier returns canned related rows + records what the
 // caller asked for so tests can assert window/limit got passed.
@@ -156,10 +172,7 @@ func TestExtractStructured_SummarizerNil(t *testing.T) {
 // store *_json strings.
 func TestExtractStructured_ParsesValid(t *testing.T) {
 	conf := 0.85
-	sum := &fakeSummarizer{resp: &llm.ChatResp{
-		Assistant: llm.Message{
-			Role: "assistant",
-			Content: `{
+	sum := &fakeSummarizer{resp: replyOf(`{
   "root_cause": "PID 8821 saturated CPU on pg-replica-7",
   "affected_window": "2026-05-19T03:42:15Z/2026-05-19T03:48:30Z",
   "pinpoint_target": {"device_id": 42, "pid": 8821, "service": "postgres"},
@@ -171,9 +184,7 @@ func TestExtractStructured_ParsesValid(t *testing.T) {
   ],
   "suggested_actions": [{"label": "kill query", "danger": "high"}],
   "confidence": 0.85
-}`,
-		},
-	}}
+}`)}
 	uc := &Usecase{
 		summarizer: sum,
 		cfg: Config{
@@ -215,8 +226,8 @@ func TestExtractStructured_ParsesValid(t *testing.T) {
 	if !ok || len(domains) != 4 {
 		t.Fatalf("observed_domains = %#v, want four domains", factors["observed_domains"])
 	}
-	if sum.lastReq.Model != "glm-4-air" {
-		t.Errorf("model = %q, want glm-4-air", sum.lastReq.Model)
+	if sum.lastReq.Selection.Model != "glm-4-air" {
+		t.Errorf("model = %q, want glm-4-air", sum.lastReq.Selection.Model)
 	}
 }
 
@@ -239,9 +250,7 @@ func TestBuildConfidenceFactorsInfersLegacyEvidenceDomains(t *testing.T) {
 }
 
 func TestExtractStructured_EmptyModelUsesRouterDefault(t *testing.T) {
-	sum := &fakeSummarizer{resp: &llm.ChatResp{
-		Assistant: llm.Message{Role: "assistant", Content: `{"root_cause":"router default"}`},
-	}}
+	sum := &fakeSummarizer{resp: replyOf(`{"root_cause":"router default"}`)}
 	uc := &Usecase{
 		summarizer: sum,
 		cfg:        Config{SummarizerTimeout: time.Second},
@@ -254,8 +263,9 @@ func TestExtractStructured_EmptyModelUsesRouterDefault(t *testing.T) {
 	if sum.calls != 1 {
 		t.Fatalf("summarizer calls = %d, want 1", sum.calls)
 	}
-	if sum.lastReq.Provider != "" || sum.lastReq.Model != "" {
-		t.Fatalf("summarizer request = provider %q model %q, want empty router defaults", sum.lastReq.Provider, sum.lastReq.Model)
+	if sum.lastReq.Selection.Provider != "" || sum.lastReq.Selection.Model != "" {
+		t.Fatalf("summarizer selection = provider %q model %q, want the empty selection that resolves to the cluster default",
+			sum.lastReq.Selection.Provider, sum.lastReq.Selection.Model)
 	}
 }
 
@@ -281,9 +291,7 @@ func TestExtractStructured_LLMError(t *testing.T) {
 // TestExtractStructured_BadJSON — model ignores the system prompt and
 // replies with prose. Fall back the same way.
 func TestExtractStructured_BadJSON(t *testing.T) {
-	sum := &fakeSummarizer{resp: &llm.ChatResp{
-		Assistant: llm.Message{Role: "assistant", Content: "I think the cause is..."},
-	}}
+	sum := &fakeSummarizer{resp: replyOf("I think the cause is...")}
 	uc := &Usecase{summarizer: sum, cfg: Config{SummarizerModel: "glm-4-air", SummarizerTimeout: time.Second}}
 	fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 1}, "narrative body", 0, "")
 	if fields.RootCause != "narrative body" {
@@ -308,9 +316,7 @@ func TestExtractStructured_ConfidenceClamp(t *testing.T) {
 	}
 	for _, tc := range cases {
 		raw := tc.raw
-		sum := &fakeSummarizer{resp: &llm.ChatResp{
-			Assistant: llm.Message{Role: "assistant",
-				Content: `{"root_cause":"x","confidence":` + fmtFloat(raw) + `}`}}}
+		sum := &fakeSummarizer{resp: replyOf(`{"root_cause":"x","confidence":` + fmtFloat(raw) + `}`)}
 		uc := &Usecase{summarizer: sum, cfg: Config{SummarizerModel: "m", SummarizerTimeout: time.Second}}
 		fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 1}, "narr", 0, "")
 		if fields.Confidence == nil {

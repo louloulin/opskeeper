@@ -9,7 +9,7 @@
 //	  2. Executor 成功：Plan.Meta["detected_event"] → ExecResult.RawOutputs
 //	     + SideEffect
 //	  3. Verifier 成功：完整 DetectedEvent → Verdict{OK: true, Confidence: 0.95}
-//	  4. Planner LLM 失败：FakeLLMClient.SetError → wrapped error
+//	  4. Planner LLM 失败：fakeCompleter.SetError → wrapped error
 //	  5. Planner schema-invalid：LLM 返回缺字段 JSON →
 //	     stub DetectedEvent → Verifier OK=false（Reasons 含 schema_invalid）
 //	  6. Verifier schema-invalid reasons 包含所有缺失字段
@@ -53,8 +53,8 @@ func validDetectedEventJSON(alertID, severity, resource string) string {
 func TestDetectedPhaseWorker_Planner_Success(t *testing.T) {
 	t.Parallel()
 
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, validDetectedEventJSON("pg-lrtx-001", "critical", "pg"))
+	fc := newFakeCompleter()
+	fc.setResponse(0, validDetectedEventJSON("pg-lrtx-001", "critical", "pg"))
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	w := NewDetectedPhaseWorker(caller,
@@ -72,8 +72,8 @@ func TestDetectedPhaseWorker_Planner_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Planner returned err = %v, want nil", err)
 	}
-	if fc.CallCount() != 1 {
-		t.Errorf("FakeLLMClient.CallCount = %d, want 1", fc.CallCount())
+	if fc.callCount() != 1 {
+		t.Errorf("fakeCompleter.CallCount = %d, want 1", fc.callCount())
 	}
 
 	raw, ok := plan.Meta[metaKeyDetectedEvent]
@@ -117,7 +117,7 @@ func TestDetectedPhaseWorker_Planner_Success(t *testing.T) {
 		t.Errorf("Steps[0].Args[alert_id] = %v, want %q", step.Args["alert_id"], "pg-lrtx-001")
 	}
 
-	up := fc.LastUserPrompt()
+	up := fc.lastUser()
 	if !strings.Contains(up, "rule_based_severity: warning") {
 		t.Errorf("user prompt missing rule-based severity hint; got: %q", up)
 	}
@@ -129,8 +129,8 @@ func TestDetectedPhaseWorker_Planner_Success(t *testing.T) {
 func TestDetectedPhaseWorker_Planner_FillsEmptyRawPayload(t *testing.T) {
 	t.Parallel()
 
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, `{"alert_id":"pg-lrtx-empty","severity":"critical","resource":"pg","raw_payload":"","detected_at":"2026-08-12T00:00:00Z","labelsetkey":"pg"}`)
+	fc := newFakeCompleter()
+	fc.setResponse(0, `{"alert_id":"pg-lrtx-empty","severity":"critical","resource":"pg","raw_payload":"","detected_at":"2026-08-12T00:00:00Z","labelsetkey":"pg"}`)
 	w := NewDetectedPhaseWorker(
 		NewLLMCaller(fc, WithLogger(silentLogger())),
 		WithDetectedLogger(silentLogger()),
@@ -159,8 +159,8 @@ func TestDetectedPhaseWorker_Planner_FillsEmptyRawPayload(t *testing.T) {
 func TestDetectedPhaseWorker_Planner_NormalizesEmptyDetectedAt(t *testing.T) {
 	t.Parallel()
 
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, `{"alert_id":"pg-lrtx-empty-time","severity":"critical","resource":"pg","raw_payload":"","detected_at":"","labelsetkey":"pg"}`)
+	fc := newFakeCompleter()
+	fc.setResponse(0, `{"alert_id":"pg-lrtx-empty-time","severity":"critical","resource":"pg","raw_payload":"","detected_at":"","labelsetkey":"pg"}`)
 	fixed := fixedClock(time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC))
 	w := NewDetectedPhaseWorker(
 		NewLLMCaller(fc, WithLogger(silentLogger())),
@@ -187,8 +187,8 @@ func TestDetectedPhaseWorker_Planner_NormalizesEmptyDetectedAt(t *testing.T) {
 func TestDetectedPhaseWorker_Planner_NormalizesInvalidDetectedAt(t *testing.T) {
 	t.Parallel()
 
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, `{"alert_id":"pg-lrtx-invalid-time","severity":"critical","resource":"pg","raw_payload":"","detected_at":"detected_at_value","labelsetkey":"pg"}`)
+	fc := newFakeCompleter()
+	fc.setResponse(0, `{"alert_id":"pg-lrtx-invalid-time","severity":"critical","resource":"pg","raw_payload":"","detected_at":"detected_at_value","labelsetkey":"pg"}`)
 	fixed := fixedClock(time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC))
 	w := NewDetectedPhaseWorker(
 		NewLLMCaller(fc, WithLogger(silentLogger())),
@@ -226,7 +226,7 @@ func TestDetectedPhaseWorker_Executor_Success(t *testing.T) {
 		DetectedAt:  time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC),
 		Labelsetkey: "pg",
 	}
-	w := NewDetectedPhaseWorker(NewLLMCaller(NewFakeLLMClient(), WithLogger(silentLogger())),
+	w := NewDetectedPhaseWorker(NewLLMCaller(newFakeCompleter(), WithLogger(silentLogger())),
 		WithDetectedLogger(silentLogger()),
 	)
 	plan := Plan{Meta: map[string]any{metaKeyDetectedEvent: detect}}
@@ -267,7 +267,7 @@ func TestDetectedPhaseWorker_Verifier_OK(t *testing.T) {
 		RawPayload: `{"k":"v"}`,
 		DetectedAt: time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC),
 	}
-	w := NewDetectedPhaseWorker(NewLLMCaller(NewFakeLLMClient(), WithLogger(silentLogger())),
+	w := NewDetectedPhaseWorker(NewLLMCaller(newFakeCompleter(), WithLogger(silentLogger())),
 		WithDetectedLogger(silentLogger()),
 	)
 	res := ExecResult{RawOutputs: map[string]any{metaKeyDetectedEvent: detect}}
@@ -293,9 +293,9 @@ func TestDetectedPhaseWorker_Verifier_OK(t *testing.T) {
 func TestDetectedPhaseWorker_Planner_LLMError(t *testing.T) {
 	t.Parallel()
 
-	fc := NewFakeLLMClient()
-	fc.SetError(0, errors.New("ChatCompletion: context deadline exceeded"))
-	fc.SetError(1, errors.New("ChatCompletion: context deadline exceeded"))
+	fc := newFakeCompleter()
+	fc.setError(0, errors.New("ChatCompletion: context deadline exceeded"))
+	fc.setError(1, errors.New("ChatCompletion: context deadline exceeded"))
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	w := NewDetectedPhaseWorker(caller, WithDetectedLogger(silentLogger()))
@@ -321,8 +321,8 @@ func TestDetectedPhaseWorker_Planner_LLMError(t *testing.T) {
 	if errors.Is(err, ErrSchemaInvalid) {
 		t.Errorf("Planner wrapped ErrSchemaInvalid for a transient error; that sentinel is reserved for schema failures")
 	}
-	if fc.CallCount() != 2 {
-		t.Errorf("FakeLLMClient.CallCount = %d, want 2 (1 original + 1 retry)", fc.CallCount())
+	if fc.callCount() != 2 {
+		t.Errorf("fakeCompleter.CallCount = %d, want 2 (1 original + 1 retry)", fc.callCount())
 	}
 }
 
@@ -332,8 +332,8 @@ func TestDetectedPhaseWorker_Planner_LLMError(t *testing.T) {
 func TestDetectedPhaseWorker_SchemaInvalid(t *testing.T) {
 	t.Parallel()
 
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, `{"alert_id":"pg-lrtx-001"}`)
+	fc := newFakeCompleter()
+	fc.setResponse(0, `{"alert_id":"pg-lrtx-001"}`)
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	w := NewDetectedPhaseWorker(caller,
@@ -350,8 +350,8 @@ func TestDetectedPhaseWorker_SchemaInvalid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Planner returned err = %v, want nil (Planner degrades to stub on ErrSchemaInvalid)", err)
 	}
-	if fc.CallCount() != 1 {
-		t.Errorf("FakeLLMClient.CallCount = %d, want 1 (schema errors are not retried)", fc.CallCount())
+	if fc.callCount() != 1 {
+		t.Errorf("fakeCompleter.CallCount = %d, want 1 (schema errors are not retried)", fc.callCount())
 	}
 
 	raw, ok := plan.Meta[metaKeyDetectedEvent]
@@ -415,7 +415,7 @@ func TestDetectedPhaseWorker_Verifier_RejectsBadSeverity(t *testing.T) {
 		RawPayload: `{"k":"v"}`,
 		DetectedAt: time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC),
 	}
-	w := NewDetectedPhaseWorker(NewLLMCaller(NewFakeLLMClient(), WithLogger(silentLogger())),
+	w := NewDetectedPhaseWorker(NewLLMCaller(newFakeCompleter(), WithLogger(silentLogger())),
 		WithDetectedLogger(silentLogger()),
 	)
 	res := ExecResult{RawOutputs: map[string]any{metaKeyDetectedEvent: detect}}
@@ -440,7 +440,7 @@ func TestDetectedPhaseWorker_Verifier_RejectsBadSeverity(t *testing.T) {
 func TestDetectedPhaseWorker_Verifier_MissingMeta(t *testing.T) {
 	t.Parallel()
 
-	w := NewDetectedPhaseWorker(NewLLMCaller(NewFakeLLMClient(), WithLogger(silentLogger())),
+	w := NewDetectedPhaseWorker(NewLLMCaller(newFakeCompleter(), WithLogger(silentLogger())),
 		WithDetectedLogger(silentLogger()),
 	)
 	verdict, err := w.Verifier(context.Background(), ExecResult{})
@@ -463,7 +463,7 @@ func TestDetectedPhaseWorker_Verifier_MissingMeta(t *testing.T) {
 func TestDetectedPhaseWorker_Verifier_WrongType(t *testing.T) {
 	t.Parallel()
 
-	w := NewDetectedPhaseWorker(NewLLMCaller(NewFakeLLMClient(), WithLogger(silentLogger())),
+	w := NewDetectedPhaseWorker(NewLLMCaller(newFakeCompleter(), WithLogger(silentLogger())),
 		WithDetectedLogger(silentLogger()),
 	)
 	res := ExecResult{RawOutputs: map[string]any{metaKeyDetectedEvent: "not-a-detected-event"}}
@@ -488,7 +488,7 @@ func TestDetectedPhaseWorker_Verifier_WrongType(t *testing.T) {
 func TestDetectedPhaseWorker_Executor_RejectsMissingMeta(t *testing.T) {
 	t.Parallel()
 
-	w := NewDetectedPhaseWorker(NewLLMCaller(NewFakeLLMClient(), WithLogger(silentLogger())),
+	w := NewDetectedPhaseWorker(NewLLMCaller(newFakeCompleter(), WithLogger(silentLogger())),
 		WithDetectedLogger(silentLogger()),
 	)
 	_, err := w.Executor(context.Background(), Plan{})
@@ -505,7 +505,7 @@ func TestDetectedPhaseWorker_Executor_RejectsMissingMeta(t *testing.T) {
 func TestDetectedPhaseWorker_Executor_RejectsWrongType(t *testing.T) {
 	t.Parallel()
 
-	w := NewDetectedPhaseWorker(NewLLMCaller(NewFakeLLMClient(), WithLogger(silentLogger())),
+	w := NewDetectedPhaseWorker(NewLLMCaller(newFakeCompleter(), WithLogger(silentLogger())),
 		WithDetectedLogger(silentLogger()),
 	)
 	_, err := w.Executor(context.Background(), Plan{Meta: map[string]any{
@@ -626,7 +626,7 @@ func TestNewDetectedPhaseWorker_NilCallerPanics(t *testing.T) {
 func TestNewDetectedPhaseWorker_Options(t *testing.T) {
 	t.Parallel()
 
-	fc := NewFakeLLMClient()
+	fc := newFakeCompleter()
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	fixedNow := time.Date(2026, 8, 12, 8, 0, 0, 0, time.UTC)
 
@@ -659,7 +659,7 @@ func TestNewDetectedPhaseWorker_Options(t *testing.T) {
 func TestDetectedPhaseWorker_VerifierTimeoutMs(t *testing.T) {
 	t.Parallel()
 
-	w := NewDetectedPhaseWorker(NewLLMCaller(NewFakeLLMClient(), WithLogger(silentLogger())),
+	w := NewDetectedPhaseWorker(NewLLMCaller(newFakeCompleter(), WithLogger(silentLogger())),
 		WithDetectedLogger(silentLogger()),
 	)
 	if got := w.VerifierTimeoutMs(); got != DetectedPhaseVerifierTimeoutMs {
@@ -674,7 +674,7 @@ func TestDetectedPhaseWorker_VerifierTimeoutMs(t *testing.T) {
 func TestDetectedPhaseWorker_Phase(t *testing.T) {
 	t.Parallel()
 
-	w := NewDetectedPhaseWorker(NewLLMCaller(NewFakeLLMClient(), WithLogger(silentLogger())),
+	w := NewDetectedPhaseWorker(NewLLMCaller(newFakeCompleter(), WithLogger(silentLogger())),
 		WithDetectedLogger(silentLogger()),
 	)
 	if got := w.Phase(); got != PhaseDetected {
@@ -727,8 +727,8 @@ func TestDetectedPhaseWorker_SchemaIsValid(t *testing.T) {
 func TestDetectedPhaseWorker_FullPipeline(t *testing.T) {
 	t.Parallel()
 
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, validDetectedEventJSON("redis-oom-77", "error", "redis"))
+	fc := newFakeCompleter()
+	fc.setResponse(0, validDetectedEventJSON("redis-oom-77", "error", "redis"))
 
 	caller := NewLLMCaller(fc, WithLogger(silentLogger()))
 	w := NewDetectedPhaseWorker(caller,
@@ -759,7 +759,7 @@ func TestDetectedPhaseWorker_FullPipeline(t *testing.T) {
 	if !verdict.OK {
 		t.Errorf("Verdict.OK = false, want true; Reasons=%v", verdict.Reasons)
 	}
-	if got := fc.CallCount(); got != 1 {
+	if got := fc.callCount(); got != 1 {
 		t.Errorf("CallCount = %d, want 1", got)
 	}
 }
@@ -822,8 +822,8 @@ func TestDetectedPhaseWorker_BuildDetectionPrompts(t *testing.T) {
 func TestDetectedPhaseWorker_EstimatedCost(t *testing.T) {
 	t.Parallel()
 
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, validDetectedEventJSON("pg-lrtx-001", "warning", "pg"))
+	fc := newFakeCompleter()
+	fc.setResponse(0, validDetectedEventJSON("pg-lrtx-001", "warning", "pg"))
 
 	caller := NewLLMCaller(fc,
 		WithLogger(silentLogger()),
@@ -842,12 +842,12 @@ func TestDetectedPhaseWorker_EstimatedCost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Planner err = %v", err)
 	}
-	// CostUSD is 0 because FakeLLMClient returns 0 usage; the
+	// CostUSD is 0 because fakeCompleter returns 0 usage; the
 	// assertion validates that the Planner surfaces the LLMCaller
 	// telemetry rather than computing it correctly (the cost
 	// estimator is exercised in llm_caller_test.go).
 	if plan.EstimatedCost.Tokens != 0 {
-		t.Errorf("EstimatedCost.Tokens = %d, want 0 (FakeLLMClient omits usage)", plan.EstimatedCost.Tokens)
+		t.Errorf("EstimatedCost.Tokens = %d, want 0 (fakeCompleter omits usage)", plan.EstimatedCost.Tokens)
 	}
 }
 

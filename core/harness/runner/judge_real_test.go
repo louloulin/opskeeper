@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/core/ports"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
 // recordingCompleter stands in for a provider. It keeps what it was asked
@@ -18,18 +20,23 @@ type recordingCompleter struct {
 	calls   int
 }
 
-func (c *recordingCompleter) Complete(_ context.Context, req ports.LLMRequest) (*ports.LLMResponse, error) {
+func (c *recordingCompleter) Complete(_ context.Context, req pigmodel.Request) (*pigai.AssistantMessage, error) {
 	c.calls++
+	// Every message, not just the user turn: a judge that was handed the
+	// run's evidence as tool-result blocks and ignored them would still
+	// leave a plausible-looking transcript here.
 	for _, m := range req.Messages {
-		c.seen += m.Content + "\n"
+		c.seen += pigmodel.MessageText(m) + "\n"
 	}
 	if c.err != nil {
 		return nil, c.err
 	}
-	return &ports.LLMResponse{Content: c.content}, nil
+	reply := pigmodel.AssistantTurn(c.content)
+	reply.StopReason = pigai.StopReasonStop
+	return &reply, nil
 }
 
-var _ ports.Completer = (*recordingCompleter)(nil)
+var _ pigmodel.Completer = (*recordingCompleter)(nil)
 
 func hasFlag(flags []string, want string) bool {
 	for _, f := range flags {

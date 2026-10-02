@@ -41,6 +41,63 @@ type PromptRequest struct {
 	Selection domain.ModelSelection
 }
 
+// Conversation limits.
+//
+// A node agent multiplexes conversations inside one process, so an
+// unbounded Open is a request for the control plane to hold an unbounded
+// amount of one node's state — and a console that reconnects in a loop, or
+// an operator who leaves forty investigations open, is enough to get there
+// without any bug being involved at all.
+//
+// Two caps rather than one, because they bound different things. The
+// per-edge cap contains a single node: one misbehaving agent cannot ask the
+// manager to hold more than its share. The fleet cap contains the manager:
+// however the conversations are distributed, the process holds a bounded
+// number of handles, sinks and relays. A per-edge cap alone would not, and
+// a fleet cap alone would let one node consume the whole budget.
+const (
+	// DefaultMaxSessionsPerEdge is the per-node conversation budget.
+	DefaultMaxSessionsPerEdge = 32
+
+	// DefaultMaxSessionsTotal is the whole-fleet budget.
+	DefaultMaxSessionsTotal = 512
+)
+
+// ErrFleetFull is the sentinel a LimitError unwraps to.
+//
+// It exists so a caller can branch on "the cap was reached" without parsing
+// a message, and so the HTTP layer can answer 429 without knowing anything
+// about conversations.
+var ErrFleetFull = errors.New("nodefleet: conversation limit reached")
+
+// LimitError reports which cap refused a conversation, and by how much.
+//
+// The numbers are in the error rather than only in a log line because the
+// operator who hits this is the one who has to decide what to close, and
+// "edge 42 has 32 of 32 conversations open" is an instruction while
+// "internal error" is a ticket for someone else.
+type LimitError struct {
+	// Scope is "edge" or "fleet".
+	Scope string
+	// EdgeID is the node, meaningful when Scope is "edge".
+	EdgeID uint64
+	// Open is how many conversations were already open in that scope.
+	Open int
+	// Limit is the cap that was reached.
+	Limit int
+}
+
+func (e *LimitError) Error() string {
+	if e.Scope == "edge" {
+		return fmt.Sprintf("nodefleet: edge %d already has %d of %d conversations open", e.EdgeID, e.Open, e.Limit)
+	}
+	return fmt.Sprintf("nodefleet: the fleet already has %d of %d conversations open", e.Open, e.Limit)
+}
+
+// Unwrap lets errors.Is(err, ErrFleetFull) answer without a type assertion
+// at every call site.
+func (e *LimitError) Unwrap() error { return ErrFleetFull }
+
 // Fleet holds one agent handle per open conversation and routes to it.
 //
 // It is the control plane's view of the node agent estate. It starts and
@@ -52,6 +109,11 @@ type PromptRequest struct {
 // stream, and the tunnel's inbound event path all touch it at once.
 type Fleet struct {
 	dial Dialer
+
+	// perEdge and total are the caps from Options, resolved once so that
+	// Open does not re-derive the defaults on a conversation-opening path.
+	perEdge int
+	total   int
 
 	mu sync.RWMutex
 	// sessions maps edge id to that node's open conversations. A node has
@@ -87,6 +149,17 @@ type session struct {
 type Options struct {
 	// Dial opens command channels to nodes. Required.
 	Dial Dialer
+
+	// MaxSessionsPerEdge bounds the conversations open on one node. Zero
+	// selects DefaultMaxSessionsPerEdge; a negative value is refused,
+	// because "unlimited" spelled as -1 is the kind of option that reaches
+	// production through a typo in an environment variable.
+	MaxSessionsPerEdge int
+
+	// MaxSessions bounds the conversations open across the fleet. Zero
+	// selects DefaultMaxSessionsTotal, with the same refusal for a
+	// negative value.
+	MaxSessions int
 }
 
 // New returns an empty Fleet.
@@ -94,8 +167,30 @@ func New(opts Options) (*Fleet, error) {
 	if opts.Dial == nil {
 		return nil, errors.New("nodefleet: Dial is required")
 	}
-	return &Fleet{dial: opts.Dial, sessions: make(map[uint64]map[string]*session)}, nil
+	perEdge, total := opts.MaxSessionsPerEdge, opts.MaxSessions
+	if perEdge < 0 {
+		return nil, fmt.Errorf("nodefleet: MaxSessionsPerEdge is %d; use 0 for the default", perEdge)
+	}
+	if total < 0 {
+		return nil, fmt.Errorf("nodefleet: MaxSessions is %d; use 0 for the default", total)
+	}
+	if perEdge == 0 {
+		perEdge = DefaultMaxSessionsPerEdge
+	}
+	if total == 0 {
+		total = DefaultMaxSessionsTotal
+	}
+	return &Fleet{
+		dial:     opts.Dial,
+		perEdge:  perEdge,
+		total:    total,
+		sessions: make(map[uint64]map[string]*session),
+	}, nil
 }
+
+// Limits reports the resolved caps, for a fleet view and for tests that
+// would otherwise have to reach into the struct.
+func (f *Fleet) Limits() (perEdge, total int) { return f.perEdge, f.total }
 
 // Open registers a conversation and returns the handle to drive it.
 //
@@ -126,6 +221,20 @@ func (f *Fleet) Open(req PromptRequest, sink ports.EventSink) (*TunelledProcess,
 		// operator can read.
 		_ = existing
 		return nil, fmt.Errorf("nodefleet: session %q is already open on edge %d", req.SessionID, req.EdgeID)
+	}
+	// The caps are checked here, inside the same critical section as the
+	// insert, and not a line earlier. A check before the lock would let
+	// two consoles opening the last two slots both read "31 of 32" and
+	// both insert, which is the failure a cap exists to prevent and the
+	// one shape of it that only appears under concurrency — so the test
+	// for it has to be concurrent too.
+	if n := len(f.sessions[req.EdgeID]); n >= f.perEdge {
+		f.mu.Unlock()
+		return nil, &LimitError{Scope: "edge", EdgeID: req.EdgeID, Open: n, Limit: f.perEdge}
+	}
+	if n := f.countLocked(); n >= f.total {
+		f.mu.Unlock()
+		return nil, &LimitError{Scope: "fleet", Open: n, Limit: f.total}
 	}
 	f.sessions[req.EdgeID][req.SessionID] = s
 	f.mu.Unlock()
@@ -277,6 +386,16 @@ func (f *Fleet) CloseAll() {
 func (f *Fleet) SessionCount() int {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
+	return f.countLocked()
+}
+
+// countLocked totals the open conversations. Callers hold f.mu.
+//
+// It is a helper rather than an inline loop because Open needs the total
+// under the write lock and SessionCount needs it under the read lock, and
+// two copies of a counter that both have to stay right is one more thing to
+// keep in step than the four lines it saves.
+func (f *Fleet) countLocked() int {
 	n := 0
 	for _, byID := range f.sessions {
 		n += len(byID)

@@ -30,10 +30,11 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/harness/judge"
 	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
 	"github.com/vincent-wuhan/opskeeper/core/harness/vocabulary"
-	"github.com/vincent-wuhan/opskeeper/core/ports"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
@@ -197,7 +198,7 @@ func buildJudge(mode, provider, model string) (judge.Judge, string, error) {
 // The provider catalog comes from llm.ProviderConfigFor rather than from a
 // table written here, so the eval tool cannot end up pointed at a
 // different endpoint or default model than the server under evaluation.
-func resolveCompleter(provider, model string) (ports.Completer, error) {
+func resolveCompleter(provider, model string) (pigmodel.Completer, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
@@ -213,13 +214,21 @@ func resolveCompleter(provider, model string) (ports.Completer, error) {
 	if model != "" {
 		p.Model = model
 	}
-	// A single-provider router rather than a bare client, so the request
-	// travels the same provider-routing path it travels in the server. The
-	// fallback is a no-op client: a request that somehow arrives without a
-	// provider must fail with ErrNoAPIKey rather than quietly reach some
-	// other provider this process happens to have credentials for.
-	fallback := llm.New(llm.Config{}, nil, nil)
-	return llm.Completer(llm.NewMultiClient([]llm.ProviderConfig{p}, p.ID, fallback)), nil
+	// Exactly one provider is registered, and it is the default. The eval
+	// tool has no settings table to read, so this is the static source
+	// rather than the catalog adapter the server uses — but the resolution
+	// above it is PiG's, and so is the wire call, so a score produced here
+	// is comparable with one the server's own judge would produce.
+	return pigmodel.NewRegistry(pigmodel.StaticSettings(
+		[]pigmodel.ProviderConfig{{
+			ID:           domain.ProviderID(p.ID),
+			APIKey:       p.APIKey,
+			BaseURL:      p.BaseURL,
+			Models:       append([]string(nil), p.Models...),
+			DefaultModel: p.Model,
+		}},
+		domain.ProviderID(p.ID),
+	)), nil
 }
 
 // pickProvider resolves which provider to score with.

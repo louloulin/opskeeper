@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
 // silentCritiqueLogger 把所有日志输出丢到 io.Discard，让单测输出干净。
@@ -83,7 +83,7 @@ func newSampleRootCauseJSON() *RootCauseJSON {
 
 // newTestCritiquedWorker 构造一个挂上 fake LLM + fake 上游 loader 的 worker。
 // fakeLLM 由 caller 包入 NewLLMCaller；上游 RootCauseJSON 由 loader 提供。
-func newTestCritiquedWorker(t *testing.T, fakeLLM *FakeLLMClient, rc *RootCauseJSON, rcErr error) (*CritiquedPhaseWorker, *FakeLLMClient) {
+func newTestCritiquedWorker(t *testing.T, fakeLLM *fakeCompleter, rc *RootCauseJSON, rcErr error) (*CritiquedPhaseWorker, *fakeCompleter) {
 	t.Helper()
 	caller := NewLLMCaller(fakeLLM, WithLogger(silentCritiqueLogger()))
 	loader := &fakeRootCauseLoader{rc: rc, err: rcErr}
@@ -104,8 +104,8 @@ func newTestCritiquedWorker(t *testing.T, fakeLLM *FakeLLMClient, rc *RootCauseJ
 // Plan，Meta 里 critique_dimensions 字段断言 + Executor + Verifier 全部 OK。
 func TestCritiquedPlanner_Success(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, `{"accuracy":0.85,"completeness":0.9,"actionability":0.7}`)
+	fc := newFakeCompleter()
+	fc.setResponse(0, `{"accuracy":0.85,"completeness":0.9,"actionability":0.7}`)
 
 	w, fcPtr := newTestCritiquedWorker(t, fc, newSampleRootCauseJSON(), nil)
 
@@ -188,8 +188,8 @@ func TestCritiquedPlanner_Success(t *testing.T) {
 	}
 
 	// LLM 必须只被调用一次。
-	if got := fcPtr.CallCount(); got != 1 {
-		t.Errorf("FakeLLMClient.CallCount = %d, want 1", got)
+	if got := fcPtr.callCount(); got != 1 {
+		t.Errorf("fakeCompleter.CallCount = %d, want 1", got)
 	}
 }
 
@@ -197,10 +197,10 @@ func TestCritiquedPlanner_Success(t *testing.T) {
 // wrap；不应把 ErrSchemaInvalid 串进去（避免混 retry 路径和 schema 路径）。
 func TestCritiquedPlanner_LLMError(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
+	fc := newFakeCompleter()
 	// 给两次失败迫使 MaxRetries=1 全部耗尽；error 是 timeout 类。
-	fc.SetError(0, errors.New("ChatCompletion: context deadline exceeded"))
-	fc.SetError(1, errors.New("ChatCompletion: context deadline exceeded"))
+	fc.setError(0, errors.New("ChatCompletion: context deadline exceeded"))
+	fc.setError(1, errors.New("ChatCompletion: context deadline exceeded"))
 
 	w, _ := newTestCritiquedWorker(t, fc, newSampleRootCauseJSON(), nil)
 
@@ -226,8 +226,8 @@ func TestCritiquedPlanner_LLMError(t *testing.T) {
 // actionability 字段 → LLMCaller 内部 schema 校验失败 → wrapped ErrSchemaInvalid。
 func TestCritiquedPlanner_SchemaInvalid_MissingField(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, `{"accuracy":0.85,"completeness":0.9}`) // missing actionability
+	fc := newFakeCompleter()
+	fc.setResponse(0, `{"accuracy":0.85,"completeness":0.9}`) // missing actionability
 
 	w, _ := newTestCritiquedWorker(t, fc, newSampleRootCauseJSON(), nil)
 
@@ -251,8 +251,8 @@ func TestCritiquedPlanner_SchemaInvalid_MissingField(t *testing.T) {
 // 该用例隐式验证 llm_caller_schema.go 已支持 minimum/maximum bound。
 func TestCritiquedPlanner_SchemaInvalid_OutOfRange(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, `{"accuracy":0.85,"completeness":0.9,"actionability":1.5}`)
+	fc := newFakeCompleter()
+	fc.setResponse(0, `{"accuracy":0.85,"completeness":0.9,"actionability":1.5}`)
 
 	w, _ := newTestCritiquedWorker(t, fc, newSampleRootCauseJSON(), nil)
 
@@ -275,8 +275,8 @@ func TestCritiquedPlanner_SchemaInvalid_OutOfRange(t *testing.T) {
 // → Planner 拒绝（ErrPlanInvalid wrap）。
 func TestCritiquedPlanner_UpstreamLoadError(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, `{"accuracy":0.85,"completeness":0.9,"actionability":0.7}`)
+	fc := newFakeCompleter()
+	fc.setResponse(0, `{"accuracy":0.85,"completeness":0.9,"actionability":0.7}`)
 
 	dbErr := errors.New("db connection refused")
 	w, _ := newTestCritiquedWorker(t, fc, nil, dbErr)
@@ -299,8 +299,8 @@ func TestCritiquedPlanner_UpstreamLoadError(t *testing.T) {
 	if errors.Is(err, ErrSchemaInvalid) {
 		t.Errorf("err = %v, want NOT ErrSchemaInvalid (upstream IO is not schema)", err)
 	}
-	if fc.CallCount() != 0 {
-		t.Errorf("FakeLLMClient.CallCount = %d, want 0 (LLM must not be called when upstream load fails)", fc.CallCount())
+	if fc.callCount() != 0 {
+		t.Errorf("fakeCompleter.CallCount = %d, want 0 (LLM must not be called when upstream load fails)", fc.callCount())
 	}
 }
 
@@ -333,7 +333,7 @@ func TestCritiquedPlanner_NilCaller(t *testing.T) {
 // 部 sanity check（防 Plan.Meta 被外部篡改的场景）。
 func TestCritiquedVerifier_BoundsFailDirect(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
+	fc := newFakeCompleter()
 	w, _ := newTestCritiquedWorker(t, fc, newSampleRootCauseJSON(), nil)
 
 	badDims := &CritiqueDimensions{
@@ -371,7 +371,7 @@ func TestCritiquedVerifier_BoundsFailDirect(t *testing.T) {
 // → Verifier 直接返回 OK=false + "missing_critique_dimensions"。
 func TestCritiquedVerifier_MissingDims(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
+	fc := newFakeCompleter()
 	w, _ := newTestCritiquedWorker(t, fc, newSampleRootCauseJSON(), nil)
 
 	res := ExecResult{
@@ -395,7 +395,7 @@ func TestCritiquedVerifier_MissingDims(t *testing.T) {
 // 字段；自定义 VerifierMs 时优先。
 func TestCritiquedVerifierTimeoutMs_Override(t *testing.T) {
 	t.Parallel()
-	caller := NewLLMCaller(NewFakeLLMClient(), WithLogger(silentCritiqueLogger()))
+	caller := NewLLMCaller(newFakeCompleter(), WithLogger(silentCritiqueLogger()))
 	w := NewCritiquedPhaseWorker(caller, WithCritiqueLogger(silentCritiqueLogger()))
 	if got := w.VerifierTimeoutMs(); got != critiquedPhaseVerifierTimeoutMs {
 		t.Errorf("VerifierTimeoutMs = %d, want %d", got, critiquedPhaseVerifierTimeoutMs)
@@ -408,8 +408,8 @@ func TestCritiquedVerifierTimeoutMs_Override(t *testing.T) {
 // LLM 调用就出 Plan，验证 fake LLM 的 "happy path no retry" 契约。
 func TestCritiqued_EndToEnd_NoRetryOnSuccess(t *testing.T) {
 	t.Parallel()
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, `{"accuracy":0.8,"completeness":0.8,"actionability":0.8}`)
+	fc := newFakeCompleter()
+	fc.setResponse(0, `{"accuracy":0.8,"completeness":0.8,"actionability":0.8}`)
 
 	w, fcPtr := newTestCritiquedWorker(t, fc, newSampleRootCauseJSON(), nil)
 	in := PlanInput{
@@ -420,7 +420,7 @@ func TestCritiqued_EndToEnd_NoRetryOnSuccess(t *testing.T) {
 	if _, err := w.Planner(context.Background(), in); err != nil {
 		t.Fatalf("Planner err: %v", err)
 	}
-	if got := fcPtr.CallCount(); got != 1 {
+	if got := fcPtr.callCount(); got != 1 {
 		t.Errorf("CallCount = %d, want 1 (happy path no retry)", got)
 	}
 }
@@ -428,5 +428,5 @@ func TestCritiqued_EndToEnd_NoRetryOnSuccess(t *testing.T) {
 // 用到的 import 防止 unused warning（errors / time / llm 等）。
 var (
 	_ = errors.New
-	_ = llm.ChatReq{}
+	_ = pigmodel.Request{}
 )

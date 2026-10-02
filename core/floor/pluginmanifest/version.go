@@ -73,6 +73,32 @@ func MeetsMinPigVersion(minPigVersion, pigVersion string) (bool, string) {
 		"PiG")
 }
 
+// CheckVersions runs both axes of the compatibility matrix, in the order
+// Review runs them, and answers with the same step and the same sentence.
+//
+// It exists so the control plane can ask the question before it starts a
+// release rather than finding out node by node. That is only safe if both
+// sides get the same answer, and "the same answer" is a property that
+// cannot be maintained by two implementations agreeing today — it has to
+// be one implementation called twice. So Review calls this, and so does the
+// manager's pre-flight, and a change to the wording or the ordering lands
+// in both at once.
+//
+// The ordering is load-bearing and is the node's, not the manager's: the
+// edge build is checked first because a node too old to run the package at
+// all is the more actionable answer, and because a node that fails both is
+// fixed by the same upgrade in most fleets, so naming the edge first sends
+// the operator to the component that will actually clear the refusal.
+func CheckVersions(minEdgeVersion, minPigVersion, nodeVersion, pigVersion string) (ok bool, step, reason string) {
+	if ok, reason := MeetsMinEdgeVersion(minEdgeVersion, nodeVersion); !ok {
+		return false, StepVersion, reason
+	}
+	if ok, reason := MeetsMinPigVersion(minPigVersion, pigVersion); !ok {
+		return false, StepAgentVersion, reason
+	}
+	return true, "", ""
+}
+
 // meetsVersion runs one axis and converts the domain-layer refusal into the
 // node's operator-facing wording.
 //

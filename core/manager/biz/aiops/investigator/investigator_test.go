@@ -12,23 +12,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
 	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
-// fakeLLM stubs llm.Client; returns the canned content on Chat.
+// fakeLLM stubs the PiG completer; returns the canned content.
+//
+// It records the transcript and the pinned model rather than just counting
+// calls, because the two ways this path can be wrong are both silent: sending
+// the right prompt to the wrong model, and sending a prompt with the evidence
+// missing. A counter catches neither.
 type fakeLLM struct {
 	mu        sync.Mutex
 	content   string
 	err       error
 	calls     int
-	gotMsgs   []llm.Message
+	gotMsgs   []pigai.Message
 	delay     time.Duration
 	gotModels []string
 }
 
-func (f *fakeLLM) Chat(ctx context.Context, req llm.ChatReq) (*llm.ChatResp, error) {
+func (f *fakeLLM) Complete(ctx context.Context, req pigmodel.Request) (*pigai.AssistantMessage, error) {
 	if f.delay > 0 {
 		select {
 		case <-time.After(f.delay):
@@ -38,16 +45,16 @@ func (f *fakeLLM) Chat(ctx context.Context, req llm.ChatReq) (*llm.ChatResp, err
 	}
 	f.mu.Lock()
 	f.calls++
-	f.gotMsgs = append([]llm.Message(nil), req.Messages...)
-	f.gotModels = append(f.gotModels, req.Model)
+	f.gotMsgs = append([]pigai.Message(nil), req.Messages...)
+	f.gotModels = append(f.gotModels, req.Selection.Model)
 	f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &llm.ChatResp{
-		Assistant: llm.Message{Role: "assistant", Content: f.content},
-		Usage:     llm.Usage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150},
-	}, nil
+	reply := pigmodel.AssistantTurn(f.content)
+	reply.Usage = pigai.Usage{Input: 100, Output: 50, TotalTokens: 150}
+	reply.StopReason = pigai.StopReasonStop
+	return &reply, nil
 }
 
 // fakeTools stubs ToolInvoker; returns a canned bundle.
@@ -166,14 +173,14 @@ func TestInvestigateAsyncWritesEvent(t *testing.T) {
 	if len(llmFake.gotMsgs) != 2 {
 		t.Fatalf("expected 2 messages (system+user), got %d", len(llmFake.gotMsgs))
 	}
-	if llmFake.gotMsgs[0].Role != "system" {
-		t.Errorf("msg[0].role=%q, want system", llmFake.gotMsgs[0].Role)
+	if _, ok := llmFake.gotMsgs[0].(pigai.SystemMessage); !ok {
+		t.Errorf("msg[0]=%T, want pigai.SystemMessage", llmFake.gotMsgs[0])
 	}
-	if !strings.Contains(llmFake.gotMsgs[0].Content, "OpsKeeper AIOps") {
-		t.Errorf("system prompt doesn't mention OpsKeeper AIOps: %q", llmFake.gotMsgs[0].Content)
+	if !strings.Contains(pigmodel.MessageText(llmFake.gotMsgs[0]), "OpsKeeper AIOps") {
+		t.Errorf("system prompt doesn't mention OpsKeeper AIOps: %q", pigmodel.MessageText(llmFake.gotMsgs[0]))
 	}
-	if llmFake.gotMsgs[1].Role != "user" {
-		t.Errorf("msg[1].role=%q, want user", llmFake.gotMsgs[1].Role)
+	if _, ok := llmFake.gotMsgs[1].(pigai.UserMessage); !ok {
+		t.Errorf("msg[1]=%T, want pigai.UserMessage", llmFake.gotMsgs[1])
 	}
 }
 
@@ -241,11 +248,11 @@ func TestInvestigateAsyncNilSafety(t *testing.T) {
 	inv.Close()                                  // must not panic
 }
 
-// TestInvestigateAsyncSkipsOnNoAPIKey: ErrNoAPIKey from llm.Chat is
+// TestInvestigateAsyncSkipsOnNoAPIKey: a resolution failure from Complete is
 // treated as benign (LLM disabled at runtime); no event written, no
 // noisy WARN.
 func TestInvestigateAsyncSkipsOnNoAPIKey(t *testing.T) {
-	llmFake := &fakeLLM{err: llm.ErrNoAPIKey}
+	llmFake := &fakeLLM{err: pigmodel.ErrNotConfigured}
 	toolsFake := &fakeTools{bundle: json.RawMessage(`{"incident":{"id":1}}`)}
 	writer := &fakeWriter{}
 
@@ -256,7 +263,7 @@ func TestInvestigateAsyncSkipsOnNoAPIKey(t *testing.T) {
 	inv.Close()
 
 	if got := len(writer.snapshot()); got != 0 {
-		t.Errorf("expected 0 events on ErrNoAPIKey, got %d", got)
+		t.Errorf("expected 0 events when the model is unconfigured, got %d", got)
 	}
 }
 

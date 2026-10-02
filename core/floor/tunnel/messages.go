@@ -278,6 +278,24 @@ type HeartbeatRequest struct {
 	Ts          int64              `json:"ts"` // unix seconds
 	StatusFlags map[string]string  `json:"status_flags,omitempty"`
 	Plugins     []PluginHealthWire `json:"plugins,omitempty"`
+	// PigVersion is the PiG agent build this node hosts, already reduced
+	// to the comparable form (the release line, with PiG's composite
+	// "+upstream" suffix stripped). It rides the heartbeat rather than
+	// register_edge for the same reason the plugin health does, and the
+	// reason is that this value moves after the handshake: a node that
+	// upgrades its agent, or that restarts onto a different binary, would
+	// otherwise leave the control plane holding the version it had at
+	// connect time forever. The heartbeat is already a periodic,
+	// best-effort report of "what this node currently is", so the
+	// version belongs on it by construction.
+	//
+	// It is the *node's own* answer — the same value its install-time
+	// Review compares a package's min_pig_version against — rather than
+	// whatever the running process last printed. That is deliberate: a
+	// pre-flight that reported one version and a node that decided on
+	// another is the exact disagreement the compatibility matrix exists
+	// to make impossible.
+	PigVersion string `json:"pig_version,omitempty"`
 }
 
 // PluginHealthWire is one plugin's runtime health on the heartbeat wire.

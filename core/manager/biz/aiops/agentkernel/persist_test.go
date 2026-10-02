@@ -124,7 +124,7 @@ func TestPersistAssistantRowCarriesModelAndUsage(t *testing.T) {
 	repo := &fakeRepo{}
 	p := newTestPersister(t, repo)
 
-	usage := ports.Usage{InputTokens: 7, OutputTokens: 3}
+	usage := ports.TranscriptUsage{InputTokens: 7, OutputTokens: 3}
 	err := p.Persist(context.Background(), "s-1", ports.AgentMessage{
 		Role: "assistant", Content: "the db is healthy", Model: "glm-4.7", Usage: &usage,
 	})

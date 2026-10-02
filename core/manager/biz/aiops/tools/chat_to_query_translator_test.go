@@ -6,25 +6,32 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
+// fakeLLM stands in for a provider. It records the request it was handed
+// rather than only counting it, so a test can assert the translator built
+// the transcript it meant to build — the failure this fake exists to catch
+// is a translator that sends the right answer's worth of context to the
+// wrong question.
 type fakeLLM struct {
 	calls    int
 	respBody string
 	respErr  error
-	gotReq   llm.ChatReq
+	gotReq   pigmodel.Request
 }
 
-func (f *fakeLLM) Chat(_ context.Context, req llm.ChatReq) (*llm.ChatResp, error) {
+func (f *fakeLLM) Complete(_ context.Context, req pigmodel.Request) (*pigai.AssistantMessage, error) {
 	f.calls++
 	f.gotReq = req
 	if f.respErr != nil {
 		return nil, f.respErr
 	}
-	return &llm.ChatResp{
-		Assistant: llm.Message{Role: "assistant", Content: f.respBody},
-	}, nil
+	reply := pigmodel.AssistantTurn(f.respBody)
+	reply.StopReason = pigai.StopReasonStop
+	return &reply, nil
 }
 
 type fakeFetcher struct {
@@ -84,8 +91,9 @@ func TestTranslator_HappyPath(t *testing.T) {
 		t.Errorf("LLM calls=%d, want 1", llm.calls)
 	}
 	// System prompt should embed the catalog.
-	if !strings.Contains(llm.gotReq.Messages[0].Content, "node_cpu_seconds_total") {
-		t.Errorf("prompt missing metric catalog: %q", llm.gotReq.Messages[0].Content)
+	system := pigmodel.MessageText(llm.gotReq.Messages[0])
+	if !strings.Contains(system, "node_cpu_seconds_total") {
+		t.Errorf("prompt missing metric catalog: %q", system)
 	}
 }
 

@@ -18,6 +18,18 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
+// usagePtr returns a pointer to a copy, or nil when there is nothing to
+// record. The indirection is what the stored row needs — a nil Usage is how
+// the host tells "this assistant turn reported no accounting" apart from
+// "this assistant turn reported zero tokens" — and returning a pointer to a
+// shared zero value would collapse the two.
+func usagePtr(u ports.TranscriptUsage) *ports.TranscriptUsage {
+	if u == (ports.TranscriptUsage{}) {
+		return nil
+	}
+	return &u
+}
+
 // toPortsMessage translates one settled PiG message. model is the resolved
 // model id for the turn, stamped only onto assistant rows so the console can
 // attribute an answer to the model that produced it.
@@ -47,16 +59,7 @@ func toPortsMessage(msg agent.AgentMessage, model string) ports.AgentMessage {
 			}
 		}
 		out.Content = text
-		if u := msg.Assistant.ObserveUsage(); u != nil {
-			usage := ports.Usage{
-				InputTokens:      u.Input,
-				OutputTokens:     u.Output,
-				CacheReadTokens:  u.CacheRead,
-				CacheWriteTokens: u.CacheWrite,
-				CostUSD:          u.Cost.Total,
-			}
-			out.Usage = &usage
-		}
+		out.Usage = usagePtr(UsageOf(msg.Assistant))
 		if out.Content == "" && len(out.ToolCalls) == 0 {
 			// Neither text nor a call: nothing to persist, and most
 			// providers reject an empty assistant turn on replay.

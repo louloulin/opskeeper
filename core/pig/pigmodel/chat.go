@@ -1,46 +1,113 @@
-// chat.go runs one completion and owns every conversion between OpsKeeper's
-// transcript vocabulary and PiG's.
+// chat.go is the one place OpsKeeper calls a model, and it speaks PiG's
+// vocabulary because there is no second one.
 //
-// It exists so the PiG boundary is a boundary rather than a convention. A
-// caller that built a transcript itself would hold ai.TranscriptContext, and
-// holding that type is holding a PiG API: the next PiG release that renames a
-// content block would then break that caller at compile time, which is the
-// repository-wide rebuild this module was created to prevent. The host names
-// a request in ports vocabulary; this file is the only place the two shapes
-// meet.
+// Before this file was rewritten, OpsKeeper carried a parallel set of model
+// types — ports.LLMRequest, ports.LLMResponse, ports.Conversation,
+// ports.LLMMessage — and converted them into ai.* on every call. That layer
+// bought one thing: callers could name a request without importing PiG. It
+// cost far more than that. Every field had to be declared twice, and every
+// conversion was a place a tool_call id or a thinking block could be dropped
+// silently: the symptom of a bad conversion is a model that quietly stops
+// calling tools, not an error. There is no OpsKeeper-shaped request type here
+// now. A caller that wants a completion builds ai.Message values, hands them
+// over, and reads an *ai.AssistantMessage back.
 //
-// The conversions are total and they are checked, not assumed. PiG validates a
-// transcript before a provider sees it, and it validates the parts operations
-// depend on: a tool result with no tools in the request, or tool arguments
-// that are not a JSON object, is refused as a malformed request. A
-// conversion bug therefore surfaces here, naming the message index, instead
-// of as a provider 400 the console cannot explain.
+// The type surface this file adds is therefore small on purpose: Request says
+// which model and carries a transcript that is already PiG's; the Reply
+// helpers read the two things every caller wants off a reply. Anything more
+// would be a second vocabulary wearing a PiG hat.
 package pigmodel
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/MichaelKinsy/PiG/ai"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
-// Complete resolves a request to a model, runs it, and returns the reply in
-// ports vocabulary.
+// Request is one model call.
 //
-// A nil model or a provider that returns no stream is an error rather than an
-// empty reply: every caller of this function bills the request or reports a
-// turn to an operator, and both are lies told about a call that never
-// happened.
-func (r *Registry) Complete(ctx context.Context, req ports.LLMRequest) (*ports.LLMResponse, error) {
+// Every field except Selection is already PiG's, so a caller with a
+// transcript from a previous turn, from persistence, or from a tool result
+// has nothing to translate. Selection stays an OpsKeeper value because
+// "which of our configured providers" is a host question PiG has no answer
+// to — PiG resolves a model from its own config, and OpsKeeper resolves
+// models from the admin settings table.
+type Request struct {
+	// Selection pins the model. An empty selection resolves to the cluster
+	// default provider's default model.
+	Selection domain.ModelSelection
+	// SystemPrompt is folded into a leading system message by
+	// ai.NormalizeContext. Leave it empty when the caller already carries
+	// the system turn in Messages; passing both produces two system
+	// messages, which providers concatenate in an unspecified order.
+	SystemPrompt string
+	// Messages is the transcript, oldest first. It is ai.Context.Messages,
+	// not a port type, and every value in it is a PiG message union member.
+	Messages []ai.Message
+	// Tools are the model-facing tool declarations. Host governance fields
+	// — class, origin, when_to_use — are not here: see ToolSchemas for the
+	// bridge from the host catalogue to this slice.
+	Tools []ai.ToolSchema
+	// SessionID is the opaque prompt-cache key forwarded to the provider.
+	// It must never be a user or tenant identifier: providers key their
+	// cache on it and it is echoed on the wire.
+	SessionID string
+	// Tune adjusts the resolved stream options after the registry has
+	// filled in the per-request credential, the model cost and the default
+	// session id. It is the seam for the knobs a single call needs —
+	// temperature, thinking level, max tokens, tool choice — without every
+	// caller having to learn the full ai.StreamOptions surface.
+	//
+	// Nil is the common case.
+	Tune func(*ai.StreamOptions)
+}
+
+// Completer is the model port every other package takes by injection.
+//
+// It is one method on purpose. A judge, a translator and a phase worker all
+// want exactly "this transcript, give me the reply", and the moment a port
+// grows an Available or a Resolve alongside it, everything that only wanted
+// a completion is also being asked to answer questions about provider
+// configuration it has no use for. That is why the registry satisfies this
+// interface and why nothing else has to know it is a registry.
+type Completer interface {
+	Complete(ctx context.Context, req Request) (*ai.AssistantMessage, error)
+}
+
+// Compile-time proof the registry is the completer every host wires.
+var _ Completer = (*Registry)(nil)
+
+// Complete resolves the request to a model, runs it, and returns PiG's own
+// settled reply.
+//
+// A nil model, a provider that returns no stream, and a stream that settles
+// with no choices are all errors rather than empty replies. Every caller of
+// this function either bills the request or reports a turn to an operator,
+// and all three are lies told about a call that never happened.
+func (r *Registry) Complete(ctx context.Context, req Request) (*ai.AssistantMessage, error) {
 	model, opts, err := r.Model(ctx, req.Selection)
 	if err != nil {
 		return nil, fmt.Errorf("pigmodel: resolve model: %w", err)
 	}
 
-	transcript, err := BuildTranscript(req)
+	// A request that pinned its own cache key wins over the registry's
+	// provider-scoped default: the caller is the only party that knows
+	// whether two calls belong in the same cache bucket.
+	if req.SessionID != "" {
+		opts.SessionID = req.SessionID
+	}
+	if req.Tune != nil {
+		req.Tune(&opts)
+	}
+
+	transcript, err := r.Transcript(req)
 	if err != nil {
 		return nil, err
 	}
@@ -49,140 +116,82 @@ func (r *Registry) Complete(ctx context.Context, req ports.LLMRequest) (*ports.L
 	if err != nil {
 		return nil, fmt.Errorf("pigmodel: chat completion: %w", err)
 	}
-
-	settled, err := drainAssistant(stream)
-	if err != nil {
-		return nil, err
-	}
-
-	return assistantFromPiG(settled)
+	return Settle(stream, ctx)
 }
 
-// BuildTranscript converts a port request into PiG's normalized transcript.
+// Transcript normalises a request into PiG's provider-facing transcript.
 //
-// Exported because a caller that needs to inspect what would be sent — the
-// prompt a run is about to issue, for a dry run or an audit row — must be able
-// to ask without issuing the call. It is exported rather than reached through
-// a getter so that the type it would return never appears in this package's
-// API at all: the returned value is what a caller renders, never what it
-// stores.
-func BuildTranscript(req ports.LLMRequest) (ai.TranscriptContext, error) {
-	msgs := make([]ai.Message, 0, len(req.Messages))
-	for i, m := range req.Messages {
-		converted, err := messageToPiG(m)
-		if err != nil {
-			return ai.TranscriptContext{}, fmt.Errorf("pigmodel: message[%d]: %w", i, err)
-		}
-		msgs = append(msgs, converted)
-	}
-
-	tools := make([]ai.ToolSchema, 0, len(req.Tools))
-	for i, t := range req.Tools {
-		params, err := decodeSchema(t.Parameters)
-		if err != nil {
-			return ai.TranscriptContext{}, fmt.Errorf("pigmodel: tool[%d] %q parameters: %w", i, t.Name, err)
-		}
-		tools = append(tools, ai.ToolSchema{
-			Name:        t.Name,
-			Description: t.Description,
-			Parameters:  params,
-		})
-	}
-
-	return ai.NormalizeContext(ai.Context{Messages: msgs, Tools: tools}), nil
+// It is exported because a caller that needs to inspect what would be sent —
+// a dry run, an audit row, a test asserting the exact prompt — must be able
+// to ask without issuing the call. Returning ai.TranscriptContext rather than
+// a renderable string is deliberate: the type cannot be constructed outside
+// PiG, so exporting a function that returns it hands out a value a caller can
+// only forward, never fabricate.
+func (r *Registry) Transcript(req Request) (ai.TranscriptContext, error) {
+	return NewTranscript(req)
 }
 
-// messageToPiG maps one message across the boundary.
-func messageToPiG(m ports.LLMMessage) (ai.Message, error) {
-	switch m.Role {
-	case "system":
-		return ai.SystemMessage{Content: ai.SystemText(m.Content)}, nil
-
-	case "user":
-		return ai.UserMessage{Content: ai.UserText(m.Content)}, nil
-
-	case "assistant":
-		msg := ai.AssistantMessage{}
-		if m.Content != "" {
-			msg.Content = append(msg.Content, ai.TextContent{Text: m.Content})
-		}
-		for _, tc := range m.ToolCalls {
-			args, err := decodeToolArguments(tc.Arguments)
-			if err != nil {
-				return nil, fmt.Errorf("tool call %q: %w", tc.Name, err)
+// NewTranscript builds a provider-facing transcript from a Request.
+//
+// ai.TranscriptContext keeps a validation error private — it has no Err
+// accessor, by design, because a transcript either normalises or it does not
+// exist. So the error is recovered here: NormalizeContext returns a context
+// whose Messages() is nil, and a request that went in with messages and
+// comes out with none failed validation. Catching it here means the caller
+// learns which request was malformed instead of sending a provider a
+// transcript the provider will reject with a 400 that names no message
+// index.
+func NewTranscript(req Request) (ai.TranscriptContext, error) {
+	// Two system messages is not a shape PiG refuses — it prepends the
+	// SystemPrompt and leaves the caller's own system turn in place, and
+	// providers concatenate the two in an order none of them specify. The
+	// result is a model that was told two personas and obeyed whichever one
+	// landed second, which is the hardest class of bug to diagnose from a
+	// transcript: nothing failed, and the system prompt in the log looks
+	// exactly like the one that was sent. Rejecting it here costs one
+	// branch; recovering from it costs an afternoon.
+	if req.SystemPrompt != "" {
+		for _, msg := range req.Messages {
+			if _, ok := msg.(ai.SystemMessage); ok {
+				return ai.TranscriptContext{}, errors.New(
+					"pigmodel: Request carries both SystemPrompt and a system message; " +
+						"keep the persona in exactly one of them")
 			}
-			msg.Content = append(msg.Content, ai.ToolCall{
-				ID:        tc.ID,
-				Name:      tc.Name,
-				Arguments: args,
-			})
 		}
-		return msg, nil
-
-	case "tool":
-		if m.ToolCallID == "" {
-			// An orphaned tool result cannot be correlated to the call it
-			// answers. Providers reject the transcript, and the resulting
-			// error names no message index — so it is caught here, where it
-			// can.
-			return nil, fmt.Errorf("tool result for %q has no tool call id", m.ToolName)
-		}
-		return ai.ToolResultMessage{
-			ToolCallID: m.ToolCallID,
-			ToolName:   m.ToolName,
-			Content:    []ai.ToolResultMessageContent{ai.TextContent{Text: m.Content}},
-		}, nil
 	}
-	return nil, fmt.Errorf("unknown role %q", m.Role)
+
+	transcript := ai.NormalizeContext(ai.Context{
+		SystemPrompt: req.SystemPrompt,
+		Messages:     req.Messages,
+		Tools:        req.Tools,
+	})
+	if len(transcript.Messages()) == 0 && len(req.Messages) > 0 {
+		return ai.TranscriptContext{}, fmt.Errorf(
+			"pigmodel: transcript of %d message(s) was refused as malformed; "+
+				"a tool result with no matching tool call, or tool arguments that are not a JSON object, "+
+				"is the usual cause", len(req.Messages))
+	}
+	return transcript, nil
 }
 
-// decodeToolArguments turns a stored argument blob into PiG's JSON object.
-//
-// Absent arguments become an empty object rather than a null: PiG validates
-// that the field is an object, and "no arguments" is a legal object while
-// null is not.
-func decodeToolArguments(raw json.RawMessage) (ai.JsonObject, error) {
-	if len(raw) == 0 {
-		return ai.JsonObject{}, nil
-	}
-	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("arguments are not a JSON object: %w", err)
-	}
-	if out == nil {
-		return ai.JsonObject{}, nil
-	}
-	return ai.JsonObject(out), nil
-}
-
-// decodeSchema validates a caller-supplied JSON Schema and returns it in the
-// map form PiG's tool schema carries. An empty schema becomes
-// object-with-no-properties, which is what a parameterless tool means.
-func decodeSchema(raw json.RawMessage) (map[string]any, error) {
-	if len(raw) == 0 {
-		return map[string]any{"type": "object", "properties": map[string]any{}}, nil
-	}
-	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, err
-	}
-	if out == nil {
-		return map[string]any{"type": "object", "properties": map[string]any{}}, nil
-	}
-	return out, nil
-}
-
-// drainAssistant consumes a PiG stream to its terminal message.
+// Settle drains a PiG stream to its terminal message.
 //
 // Streaming has no consumer on this path: the contract is one complete
-// assistant turn, so the deltas are deliberately discarded rather than
-// forwarded. PiG's stream already applies backpressure by dropping frames for
-// a slow reader, so draining without work is cheap.
-func drainAssistant(stream *ai.AssistantMessageEventStream) (*ai.AssistantMessage, error) {
+// assistant turn, so deltas are discarded rather than forwarded. PiG's stream
+// already applies backpressure by dropping frames for a slow reader, so
+// draining without work is cheap.
+func Settle(stream *ai.AssistantMessageEventStream, ctx context.Context) (*ai.AssistantMessage, error) {
 	if stream == nil {
 		return nil, fmt.Errorf("pigmodel: provider returned no stream")
 	}
-	settled, err := stream.ResultContext(context.Background())
+	// The caller's context, not a fresh Background: a cancelled turn must
+	// stop waiting on a provider that will never answer. Draining under
+	// Background would keep the caller's goroutine alive until the provider's
+	// own read timeout fires.
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	settled, err := stream.ResultContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("pigmodel: chat completion: %w", err)
 	}
@@ -192,67 +201,219 @@ func drainAssistant(stream *ai.AssistantMessageEventStream) (*ai.AssistantMessag
 	return settled, nil
 }
 
-// assistantFromPiG maps the settled message back onto the port vocabulary.
-func assistantFromPiG(msg *ai.AssistantMessage) (*ports.LLMResponse, error) {
-	out := &ports.LLMResponse{StopReason: ports.StopEndTurn}
+// ReplyText is the reply's text, with every text block concatenated in the
+// order the model emitted them.
+//
+// A reply that asked for tools and said nothing returns "", which is correct:
+// a tool-only turn is the normal shape of an agent step, and treating its
+// silence as an error would fail every turn that begins by acting.
+func ReplyText(msg *ai.AssistantMessage) string {
+	if msg == nil {
+		return ""
+	}
+	var b []byte
 	for _, block := range msg.Content {
-		switch b := block.(type) {
-		case ai.TextContent:
-			out.Content += b.Text
-		case ai.ToolCall:
-			args, err := json.Marshal(b.Arguments)
-			if err != nil {
-				return nil, fmt.Errorf("pigmodel: encode tool call %q arguments: %w", b.Name, err)
-			}
-			out.ToolCalls = append(out.ToolCalls, ports.ToolCall{
-				ID:   b.ID,
-				Name: b.Name,
-				// An absent argument set is a parameterless call, which
-				// is an empty object rather than absent JSON: the host
-				// stores this blob and replays it verbatim.
-				Arguments: nonNullJSON(args),
-			})
+		if text, ok := block.(ai.TextContent); ok {
+			b = append(b, text.Text...)
 		}
-		// Other block kinds (thinking, images, provider-specific content)
-		// are dropped rather than mapped to a guess. The tool executor
-		// reads only text and tool calls; synthesising content for the
-		// rest would put text into the transcript the model never said.
 	}
-	if len(out.ToolCalls) > 0 {
-		out.StopReason = ports.StopToolUse
-	}
-	out.Usage = usageFromPiG(msg)
-	return out, nil
+	return string(b)
 }
 
-// nonNullJSON keeps a marshalled empty object from becoming the four bytes
-// "null". json.Marshal of a nil map is null, and a stored null argument set
-// replays as a request PiG refuses.
-func nonNullJSON(b []byte) json.RawMessage {
-	if len(b) == 0 || string(b) == "null" {
+// MessageText renders any message in a transcript as plain text.
+//
+// It is here, once, because "what did this message say" has four different
+// answers depending on which of PiG's four message types you are holding, and
+// PiG's own ai.ContentText is generic over the *content* unions rather than
+// over ai.Message. Every call site that grew its own type switch grew its own
+// idea of what to do with a content shape it did not recognise — silently
+// dropping it — which is exactly the failure a judge or a replay path cannot
+// afford: the block it dropped is the one the model actually read.
+//
+// Text blocks join with newlines so a multi-block message stays readable in a
+// log line. Non-text blocks (images) contribute nothing rather than a
+// placeholder: this is for prompts and diagnostics, not for re-encoding.
+func MessageText(msg ai.Message) string {
+	switch m := msg.(type) {
+	case nil:
+		return ""
+	case ai.SystemMessage:
+		return systemContentText(m.Content)
+	case ai.UserMessage:
+		return userContentText(m.Content)
+	case ai.AssistantMessage:
+		return ReplyText(&m)
+	case ai.ToolResultMessage:
+		return toolResultText(m.Content)
+	default:
+		return ""
+	}
+}
+
+func systemContentText(content ai.SystemContent) string {
+	switch c := content.(type) {
+	case ai.SystemText:
+		return string(c)
+	case ai.SystemTextBlocks:
+		var out []string
+		for _, block := range c {
+			out = append(out, block.Text)
+		}
+		return strings.Join(out, "\n")
+	default:
+		return ""
+	}
+}
+
+func userContentText(content ai.UserContent) string {
+	switch c := content.(type) {
+	case ai.UserText:
+		return string(c)
+	case ai.UserContentBlocks:
+		var out []string
+		for _, block := range c {
+			if text, ok := block.(ai.TextContent); ok {
+				out = append(out, text.Text)
+			}
+		}
+		return strings.Join(out, "\n")
+	default:
+		return ""
+	}
+}
+
+func toolResultText(content []ai.ToolResultMessageContent) string {
+	var out []string
+	for _, block := range content {
+		if text, ok := block.(ai.TextContent); ok {
+			out = append(out, text.Text)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// ReplyToolCalls returns the tool invocations the model asked for.
+//
+// The returned slice is freshly allocated, so a caller may sort or filter it
+// without disturbing the reply. A reply with no tool calls returns nil rather
+// than an empty slice, so "the model did not ask for anything" is a nil
+// check and not a length check against a zero that has to be told apart from
+// a provider that returned nothing at all.
+func ReplyToolCalls(msg *ai.AssistantMessage) []ai.ToolCall {
+	if msg == nil {
+		return nil
+	}
+	var calls []ai.ToolCall
+	for _, block := range msg.Content {
+		if call, ok := block.(ai.ToolCall); ok {
+			calls = append(calls, call)
+		}
+	}
+	return calls
+}
+
+// ReplyUsage is the reply's token accounting, or a zero Usage when the
+// provider reported none.
+//
+// A zero is honest rather than estimated. A caller that meters spend records
+// what the provider said; inventing a number from a character count would put
+// a fabricated figure in the same column as a billed one, and the two are
+// then indistinguishable forever.
+func ReplyUsage(msg *ai.AssistantMessage) ai.Usage {
+	if msg == nil {
+		return ai.Usage{}
+	}
+	return msg.ObserveUsage()
+}
+
+// UsageOf folds a settled reply into the stored-ledger shape.
+//
+// It is the ai-side twin of pigagent.UsageOf, and the two cannot be one
+// function: a loop reply carries a streaming view that only
+// agent.AssistantMessage knows how to observe, while a one-shot completion
+// is a plain ai.AssistantMessage. Sharing the *mapping* rather than the
+// function is what matters — the same six fields, the same choice of
+// provider-reported total over the sum, the same refusal to estimate.
+//
+// The nil-message case is the same in both: a caller that got no reply bills
+// nothing, and a zero row says exactly that.
+func UsageOf(msg *ai.AssistantMessage) ports.TranscriptUsage {
+	if msg == nil {
+		return ports.TranscriptUsage{}
+	}
+	observed := msg.ObserveUsage()
+	return ports.TranscriptUsage{
+		InputTokens:      observed.Input,
+		OutputTokens:     observed.Output,
+		CacheReadTokens:  observed.CacheRead,
+		CacheWriteTokens: observed.CacheWrite,
+		ReportedTotal:    observed.TotalTokens,
+		CostUSD:          observed.Cost.Total,
+	}
+}
+
+// SystemTurn builds the system message a Request's transcript opens with.
+//
+// It is a constructor rather than a literal because the literal is
+// three fields wide and the third — Timestamp — is not something a caller
+// should be inventing. PiG stamps timestamps when it persists a message; a
+// caller setting one by hand is copying a time it did not observe.
+func SystemTurn(text string) ai.Message {
+	return ai.SystemMessage{Content: ai.SystemText(text)}
+}
+
+// UserTurn builds one user message.
+func UserTurn(text string) ai.Message {
+	return ai.UserMessage{Content: ai.UserText(text)}
+}
+
+// AssistantTurn builds an assistant message carrying text and, optionally,
+// the tool calls it requested.
+//
+// Keeping the tool calls on the same message is not a convenience. A
+// transcript that replays an assistant's text without its tool calls and then
+// carries the tool results anyway is an orphan: strict providers reject the
+// whole turn, and lenient ones attribute the result to the wrong call.
+func AssistantTurn(text string, calls ...ai.ToolCall) ai.AssistantMessage {
+	msg := ai.AssistantMessage{}
+	if text != "" {
+		msg.Content = append(msg.Content, ai.TextContent{Text: text})
+	}
+	for _, call := range calls {
+		msg.Content = append(msg.Content, call)
+	}
+	return msg
+}
+
+// ToolTurn builds the tool-result message that answers one tool call.
+//
+// callID is required and is not defaulted: a result whose call id does not
+// match a call in the transcript is rejected by every provider, and the
+// rejection names no message index. An empty id here would surface as a 400
+// on a later turn, far from the line that produced it.
+func ToolTurn(callID, name, text string) ai.Message {
+	return ai.ToolResultMessage{
+		ToolCallID: callID,
+		ToolName:   name,
+		Content:    []ai.ToolResultMessageContent{ai.TextContent{Text: text}},
+	}
+}
+
+// ArgumentsJSON renders a tool call's arguments as the bytes a host stores or
+// a log line shows.
+//
+// An absent argument set is a parameterless call, which is the empty object
+// rather than the four bytes "null": a persisted null replays as a request
+// the provider refuses, and a null in an audit row reads as "the model asked
+// for something with no arguments" when it meant "the model asked for
+// nothing at all".
+func ArgumentsJSON(args ai.JsonObject) json.RawMessage {
+	if len(args) == 0 {
 		return json.RawMessage(`{}`)
 	}
-	return json.RawMessage(b)
-}
-
-// usageFromPiG converts PiG's token accounting.
-//
-// PiG reports input, output, and cache separately, and a provider-reported
-// total that need not equal their sum. All of it is carried across: the
-// total goes to ReportedTotal rather than being recomputed, because reasoning
-// tokens are billed inside the provider's total and appear in neither input
-// nor output, so recomputing would under-report the bill.
-func usageFromPiG(msg *ai.AssistantMessage) ports.Usage {
-	// ObserveUsage already answers a nil message with a zero Usage, so a
-	// provider that reported nothing at all lands here as an honest zero
-	// rather than as a guess.
-	u := msg.ObserveUsage()
-	return ports.Usage{
-		InputTokens:      u.Input,
-		OutputTokens:     u.Output,
-		CacheReadTokens:  u.CacheRead,
-		CacheWriteTokens: u.CacheWrite,
-		ReportedTotal:    u.TotalTokens,
-		CostUSD:          u.Cost.Total,
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return nil
 	}
+	return json.RawMessage(raw)
 }

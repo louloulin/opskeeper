@@ -87,7 +87,7 @@ func (m *Mapper) Iteration() int {
 // message, which the run state folds as the turn proceeds. The mapper is
 // handed the running total rather than reading PiG types, which keeps the
 // frame construction free of provider accounting.
-func (m *Mapper) SetUsage(u ports.Usage, model string) {
+func (m *Mapper) SetUsage(u ports.TranscriptUsage, model string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.usage = wire.UsageFrame{

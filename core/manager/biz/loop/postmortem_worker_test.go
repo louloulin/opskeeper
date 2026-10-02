@@ -3,9 +3,9 @@
 // 测试覆盖（llm-worker-integration 批次 2 / subagent 9）：
 //
 //	PostmortemPhaseWorker
-//	  1. 成功：FakeLLMClient 给 valid PostmortemContent +
+//	  1. 成功：fakeCompleter 给 valid PostmortemContent +
 //	     fake GitArtifactSink → commitSHA 断言（用 SyntheticPostmortemCommitSHA 对照）
-//	  2. LLM 失败：FakeLLMClient.SetError（4xx，non-transient）
+//	  2. LLM 失败：fakeCompleter.SetError（4xx，non-transient）
 //	     → wrapped error，无 git commit 调用
 //	  3. schema-invalid：缺 markdown 字段 → ErrSchemaInvalid wrap
 //	  4. GitArtifactSink 失败：fake 返回 error → wrapped +
@@ -97,7 +97,7 @@ func (f *fakeGitSink) callCount() int { return int(f.calls.Load()) }
 // --- helpers -------------------------------------------------------------
 
 // fullPostmortemJSON returns a JSON document that matches
-// PostmortemContentSchema. Used as FakeLLMClient response in the
+// PostmortemContentSchema. Used as fakeCompleter response in the
 // happy path test.
 func fullPostmortemJSON(t *testing.T) string {
 	t.Helper()
@@ -180,8 +180,8 @@ func TestNewPostmortemPhaseWorker_RequiresDeps(t *testing.T) {
 		wantErrSubstring string
 	}{
 		{"nil caller", nil, &fakeGitSink{}, &fakeUpstreamLoader{}, "caller"},
-		{"nil gitSink", NewLLMCaller(NewFakeLLMClient(), WithLogger(silentPostmortemLogger())), nil, &fakeUpstreamLoader{}, "gitSink"},
-		{"nil inputs", NewLLMCaller(NewFakeLLMClient(), WithLogger(silentPostmortemLogger())), &fakeGitSink{}, nil, "inputs"},
+		{"nil gitSink", NewLLMCaller(newFakeCompleter(), WithLogger(silentPostmortemLogger())), nil, &fakeUpstreamLoader{}, "gitSink"},
+		{"nil inputs", NewLLMCaller(newFakeCompleter(), WithLogger(silentPostmortemLogger())), &fakeGitSink{}, nil, "inputs"},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -200,7 +200,7 @@ func TestNewPostmortemPhaseWorker_RequiresDeps(t *testing.T) {
 
 // --- Test 2: Happy path — LLM returns valid content + git commit -------
 
-// TestPostmortemWorker_HappyPath：FakeLLMClient 返回 valid PostmortemContent
+// TestPostmortemWorker_HappyPath：fakeCompleter 返回 valid PostmortemContent
 // JSON（schema 通过），fake GitArtifactSink 返回合成 SHA，commitSHA
 // 必须等于 SyntheticPostmortemCommitSHA(incidentID, body)。
 func TestPostmortemWorker_HappyPath(t *testing.T) {
@@ -208,8 +208,8 @@ func TestPostmortemWorker_HappyPath(t *testing.T) {
 	incidentID := "INC-001"
 	inputs := upstreamInputsFor(incidentID)
 
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, fullPostmortemJSON(t))
+	fc := newFakeCompleter()
+	fc.setResponse(0, fullPostmortemJSON(t))
 
 	gitSink := &fakeGitSink{} // sha defaults to synthetic
 	loader := &fakeUpstreamLoader{inputs: inputs}
@@ -245,8 +245,8 @@ func TestPostmortemWorker_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Executor err: %v", err)
 	}
-	if fc.CallCount() != 1 {
-		t.Errorf("LLM CallCount = %d, want 1 (no retry on happy path)", fc.CallCount())
+	if fc.callCount() != 1 {
+		t.Errorf("LLM CallCount = %d, want 1 (no retry on happy path)", fc.callCount())
 	}
 	if gitSink.callCount() != 1 {
 		t.Errorf("gitSink callCount = %d, want 1", gitSink.callCount())
@@ -313,17 +313,17 @@ func TestPostmortemWorker_HappyPath(t *testing.T) {
 	}
 }
 
-// --- Test 3: LLM fails (FakeLLMClient.SetError) → wrapped --------------
+// --- Test 3: LLM fails (fakeCompleter.SetError) → wrapped --------------
 
-// TestPostmortemWorker_LLMFails：FakeLLMClient.SetError 给出 4xx-style
+// TestPostmortemWorker_LLMFails：fakeCompleter.SetError 给出 4xx-style
 // non-transient error；LLMCaller 立刻 fail-fast；Executor 把错误包成
 // "loop: postmortem LLM call: ..."，且不调 git commit。
 func TestPostmortemWorker_LLMFails(t *testing.T) {
 	t.Parallel()
 	incidentID := "INC-LLM-FAIL"
 
-	fc := NewFakeLLMClient()
-	fc.SetError(0, errors.New("ChatCompletion: unexpected status 401 Unauthorized"))
+	fc := newFakeCompleter()
+	fc.setError(0, errors.New("ChatCompletion: unexpected status 401 Unauthorized"))
 
 	gitSink := &fakeGitSink{}
 	loader := &fakeUpstreamLoader{inputs: upstreamInputsFor(incidentID)}
@@ -345,8 +345,8 @@ func TestPostmortemWorker_LLMFails(t *testing.T) {
 	if !strings.Contains(err.Error(), "401") {
 		t.Errorf("err = %v, want mention of '401'", err)
 	}
-	if fc.CallCount() != 1 {
-		t.Errorf("LLM CallCount = %d, want 1 (4xx is permanent, no retry)", fc.CallCount())
+	if fc.callCount() != 1 {
+		t.Errorf("LLM CallCount = %d, want 1 (4xx is permanent, no retry)", fc.callCount())
 	}
 	if gitSink.callCount() != 0 {
 		t.Errorf("gitSink callCount = %d, want 0 (LLM failed before git commit)", gitSink.callCount())
@@ -355,7 +355,7 @@ func TestPostmortemWorker_LLMFails(t *testing.T) {
 
 // --- Test 4: schema-invalid (LLM missing required field) → ErrSchemaInvalid
 
-// TestPostmortemWorker_SchemaInvalid：FakeLLMClient 返回的 JSON 缺
+// TestPostmortemWorker_SchemaInvalid：fakeCompleter 返回的 JSON 缺
 // markdown 字段；LLMCaller.Call 立刻返回 wrapped ErrSchemaInvalid，
 // Executor 把错误包成 "loop: postmortem LLM call: ..."，且不调 git commit。
 func TestPostmortemWorker_SchemaInvalid(t *testing.T) {
@@ -371,8 +371,8 @@ func TestPostmortemWorker_SchemaInvalid(t *testing.T) {
 	  "remediation_taken": "ok",
 	  "lessons_learned": "ok"
 	}`
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, missingMarkdown)
+	fc := newFakeCompleter()
+	fc.setResponse(0, missingMarkdown)
 
 	gitSink := &fakeGitSink{}
 	loader := &fakeUpstreamLoader{inputs: upstreamInputsFor(incidentID)}
@@ -394,8 +394,8 @@ func TestPostmortemWorker_SchemaInvalid(t *testing.T) {
 	if !strings.Contains(err.Error(), "markdown") {
 		t.Errorf("err = %v, want mention of failing field 'markdown'", err)
 	}
-	if fc.CallCount() != 1 {
-		t.Errorf("LLM CallCount = %d, want 1 (schema-invalid does NOT retry)", fc.CallCount())
+	if fc.callCount() != 1 {
+		t.Errorf("LLM CallCount = %d, want 1 (schema-invalid does NOT retry)", fc.callCount())
 	}
 	if gitSink.callCount() != 0 {
 		t.Errorf("gitSink callCount = %d, want 0 (schema-invalid before git commit)", gitSink.callCount())
@@ -404,7 +404,7 @@ func TestPostmortemWorker_SchemaInvalid(t *testing.T) {
 
 // --- Test 5: GitArtifactSink fails → wrapped + side-effect kind -------
 
-// TestPostmortemWorker_GitSinkFails：FakeLLMClient 返回 valid content，
+// TestPostmortemWorker_GitSinkFails：fakeCompleter 返回 valid content，
 // 但 fake GitArtifactSink 返回 error。Executor 必须仍然返回 ExecResult
 // (不 fail)，但 side-effect 多一条 kind="git_commit_failed"，commit_err
 // 必须非 nil。
@@ -412,8 +412,8 @@ func TestPostmortemWorker_GitSinkFails(t *testing.T) {
 	t.Parallel()
 	incidentID := "INC-GIT-FAIL"
 
-	fc := NewFakeLLMClient()
-	fc.SetResponse(0, fullPostmortemJSON(t))
+	fc := newFakeCompleter()
+	fc.setResponse(0, fullPostmortemJSON(t))
 
 	commitErr := errors.New("git: push to remote failed: 503 Service Unavailable")
 	gitSink := &fakeGitSink{err: commitErr}
@@ -513,7 +513,7 @@ func TestPostmortemWorker_VerifierRejectsShortMarkdown(t *testing.T) {
 		RawOutputs: map[string]any{"postmortem_content": &short},
 	}
 	w := newPostmortemWorkerFor(t,
-		NewLLMCaller(NewFakeLLMClient(), WithLogger(silentPostmortemLogger())),
+		NewLLMCaller(newFakeCompleter(), WithLogger(silentPostmortemLogger())),
 		&fakeGitSink{},
 		&fakeUpstreamLoader{inputs: upstreamInputsFor("INC-SHORT")},
 	)
@@ -563,7 +563,7 @@ func TestSyntheticPostmortemCommitSHA_DeterministicAndLen(t *testing.T) {
 func TestPostmortemWorker_VerifierTimeoutMs(t *testing.T) {
 	t.Parallel()
 	w := newPostmortemWorkerFor(t,
-		NewLLMCaller(NewFakeLLMClient(), WithLogger(silentPostmortemLogger())),
+		NewLLMCaller(newFakeCompleter(), WithLogger(silentPostmortemLogger())),
 		&fakeGitSink{},
 		&fakeUpstreamLoader{inputs: upstreamInputsFor("X")},
 	)

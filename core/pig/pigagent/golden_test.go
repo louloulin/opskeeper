@@ -44,7 +44,7 @@ var updateGolden = flag.Bool("update-golden", false,
 func agentScript(t *testing.T) []wire.StreamEvent {
 	t.Helper()
 	m := newTestMapper()
-	m.SetUsage(ports.Usage{
+	m.SetUsage(ports.TranscriptUsage{
 		InputTokens: 1200, OutputTokens: 340, CacheReadTokens: 800, CostUSD: 0.031,
 	}, "gpt-5.6")
 

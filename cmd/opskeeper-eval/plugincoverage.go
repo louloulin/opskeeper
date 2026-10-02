@@ -23,22 +23,26 @@ import (
 // unpassable. This subcommand prints the join, names the reason for every
 // gap, and can fail a build on it.
 //
-// The honest state of the repository today is in the report itself, and it
-// is not the state this command was written for. It was written while the
-// middleware cases (pg / redis / k8s / mq) had no package at all, because
-// those adapters live in the control plane as BaseTools. They have one now
-// — opskeeper-sre-middleware — so the report reads 20/20. The command is
-// kept as the check that has to stay true, not as a description of a gap:
-// the day a case names a family the fleet stopped shipping, this is what
-// says so, and it says it before a leaderboard does.
+// The join is on the tool, not the family, and that changed what this
+// command says about the repository. It used to compare a case's family
+// against the families the packages serve, and it read 20/20: every case
+// fully covered by the shipped fleet. That number was an artifact. The
+// read-only packages ship pg.lock_waits, so pg.kill_session counted as
+// covered by it, and the same inference hid every other remediation
+// expectation in the suite — which is to say it hid every write the fleet
+// has deliberately not shipped yet. Zero of the twenty cases were actually
+// coverable.
+//
+// The report now says so, and says which method is missing rather than
+// which family, because "0/20" is a number somebody argues with and
+// "pg.kill_session is not packaged" is a package somebody writes.
 
 type coverageFlags struct {
-	casesDir      string
-	pluginsDir    string
-	filter        string
-	failOnGap     bool
-	failIfPartial bool
-	jsonOut       bool
+	casesDir   string
+	pluginsDir string
+	filter     string
+	failOnGap  bool
+	jsonOut    bool
 }
 
 func cmdPluginCoverage(_ context.Context, args []string) error {
@@ -120,13 +124,31 @@ func emitCoverageText(out *os.File, plugins []pluginmanifest.Plugin, reports []p
 		}
 		fmt.Fprintf(out, "uncovered: %d\n", len(r.Uncovered))
 		for _, u := range r.Uncovered {
-			fmt.Fprintf(out, "        %-28s %s\n", u, pluginmanifest.CoverageReason(u))
+			fmt.Fprintf(out, "        %-28s %s\n", u, reasonFor(r, u))
 		}
 	}
 	fmt.Fprintf(out, "\n%d/%d cases fully covered by the shipped plugin fleet\n", complete, total)
 	if complete < total {
-		fmt.Fprintf(out, "\nThe gaps above are structural: a case whose family no package serves scores zero\n"+
-			"on every run, and the leaderboard reports that as the agent being bad.\n")
+		// Every case here names a remediation as well as a diagnosis, and a
+		// case whose remediation no package ships cannot be passed by any
+		// agent, however good. Saying so is the entire point of the command:
+		// the leaderboard reports the same run as a zero and calls it the
+		// agent's score.
+		//
+		// What is missing is not phase D's B3 batch — that is restart_service
+		// and the config changes, and the repair package ships all five of
+		// those. What is missing is the middleware write half: the adapters
+		// have implemented pg.kill_session and k8s.drain and the rest for a
+		// long time, and no package has ever declared them. The case files
+		// are ahead of the fleet, not the other way round, and each line
+		// above names a tool that could be packaged rather than a case that
+		// ought to be deleted.
+		fmt.Fprintf(out, "\nThe gaps above are structural, not model failures. A case naming a\n"+
+			"remediation no package ships scores zero on every run, and a leaderboard\n"+
+			"reads that as the agent being bad.\n\n"+
+			"Every shipped package is read-only, and these are the middleware writes:\n"+
+			"the control plane's adapters already implement them, so each line above\n"+
+			"names a tool that could be packaged rather than a case that ought to go.\n")
 	}
 }
 
@@ -145,13 +167,30 @@ func emitCoverageJSON(out *os.File, plugins []pluginmanifest.Plugin, reports []p
 	for _, r := range reports {
 		jr := jsonReport{CaseID: r.CaseID, Complete: r.Complete(), Packages: r.Packages, Uncovered: r.Uncovered}
 		for _, u := range r.Uncovered {
-			jr.Reasons = append(jr.Reasons, pluginmanifest.CoverageReason(u))
+			jr.Reasons = append(jr.Reasons, reasonFor(r, u))
 		}
 		body.Cases = append(body.Cases, jr)
 	}
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
 	return enc.Encode(body)
+}
+
+// reasonFor is the method-level reason for one uncovered expectation.
+//
+// CaseCoverage computes these where the fleet is known, which is the only
+// place the answer can distinguish "this family ships, this method does
+// not" from "this family is the control plane's". The fallback keeps the
+// report total if a reason is ever missing rather than dropping the line:
+// an unexplained gap is the one failure mode this whole command exists to
+// prevent, and it should not be reachable by a slice index.
+func reasonFor(r pluginmanifest.CaseCoverage, uncovered string) string {
+	for i, u := range r.Uncovered {
+		if u == uncovered && i < len(r.Reasons) {
+			return r.Reasons[i]
+		}
+	}
+	return pluginmanifest.CoverageReason(uncovered)
 }
 
 func pluginNames(plugins []pluginmanifest.Plugin) []string {

@@ -26,7 +26,7 @@ import (
 type runState struct {
 	mapper *Mapper
 	sink   ports.EventSink
-	deps   ports.AgentDeps
+	deps   Deps
 	k      *Kernel
 	req    ports.AgentRequest
 
@@ -39,7 +39,7 @@ type runState struct {
 
 	// usage accumulates token spend across the turn so the done frame
 	// reports a turn total rather than leaving the console to sum frames.
-	usage ports.Usage
+	usage ports.TranscriptUsage
 	// model is the resolved model's identity, echoed into the done frame so
 	// a cost line in the console names the model that incurred it.
 	model string
@@ -171,17 +171,9 @@ func (r *runState) foldUsage(msg agent.AgentMessage) {
 	if asst == nil {
 		return
 	}
-	u := asst.ObserveUsage()
-	if u == nil {
-		return
-	}
-	r.usage.InputTokens += u.Input
-	r.usage.OutputTokens += u.Output
-	r.usage.CacheReadTokens += u.CacheRead
-	r.usage.CacheWriteTokens += u.CacheWrite
-	r.usage.CostUSD += u.Cost.Total
 	// The mapper owns the frame, so the running total is published to it
 	// here rather than read back from the run state when done is built.
+	r.usage.Add(UsageOf(asst))
 	r.mapper.SetUsage(r.usage, r.model)
 }
 
@@ -370,13 +362,13 @@ func (r *runState) record(entry ports.AuditEntry) {
 // was exhausted *by* that answer.
 func (r *runState) finishTurn(ctx context.Context, turn agent.AgentTurnContext) (*agent.AgentTurnDecision, error) {
 	if r.budgetExhausted {
-		r.stopped = ports.TurnToolBudget
+		r.stopped = TurnToolBudget
 		return &agent.AgentTurnDecision{Action: agent.AgentTurnEnd}, nil
 	}
 	if r.deps.Budget != nil {
 		if allowed, _ := r.deps.Budget.Allow(ctx, r.req.SessionID); !allowed {
 			r.budgetExhausted = true
-			r.stopped = ports.TurnToolBudget
+			r.stopped = TurnToolBudget
 			return &agent.AgentTurnDecision{Action: agent.AgentTurnEnd}, nil
 		}
 	}
@@ -386,18 +378,19 @@ func (r *runState) finishTurn(ctx context.Context, turn agent.AgentTurnContext) 
 }
 
 // result builds the turn outcome from the messages the run returned.
-func (r *runState) result(messages []agent.AgentMessage) *ports.TurnResult {
-	res := &ports.TurnResult{
+func (r *runState) result(messages []agent.AgentMessage) *TurnResult {
+	res := &TurnResult{
 		Iterations: r.mapper.Iteration(),
 		Usage:      r.usage,
 		Stopped:    r.stopped,
 	}
 	if res.Stopped == "" {
-		res.Stopped = ports.TurnEndTurn
+		res.Stopped = TurnEndTurn
 	}
 	// The last assistant message is the turn's answer.
 	for i := len(messages) - 1; i >= 0; i-- {
 		if asst := messages[i].Assistant; asst != nil {
+			res.Reply = asst
 			res.Content = ai.ContentText(asst.Content)
 			break
 		}

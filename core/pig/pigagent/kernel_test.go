@@ -101,8 +101,8 @@ func TestKernelRunsATextOnlyTurn(t *testing.T) {
 	sink := &collectSink{}
 	k, err := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps: func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) {
-			return ports.AgentDeps{Tools: staticBag{}}, nil
+		Deps: func(context.Context, ports.AgentRequest) (Deps, error) {
+			return Deps{Tools: staticBag{}}, nil
 		},
 		Now: fixedClock(),
 	})
@@ -115,8 +115,8 @@ func TestKernelRunsATextOnlyTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Stopped != ports.TurnEndTurn {
-		t.Errorf("stopped = %q, want %q", res.Stopped, ports.TurnEndTurn)
+	if res.Stopped != TurnEndTurn {
+		t.Errorf("stopped = %q, want %q", res.Stopped, TurnEndTurn)
 	}
 	if !strings.Contains(res.Content, "The database is healthy.") {
 		t.Errorf("content = %q, want the model's answer", res.Content)
@@ -158,8 +158,8 @@ func TestKernelRecordsNoToolCallsForATextTurn(t *testing.T) {
 	model := newFauxModel(t, textStep("all clear"))
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps: func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) {
-			return ports.AgentDeps{Tools: staticBag{}, Audit: audit}, nil
+		Deps: func(context.Context, ports.AgentRequest) (Deps, error) {
+			return Deps{Tools: staticBag{}, Audit: audit}, nil
 		},
 		Now: fixedClock(),
 	})
@@ -179,7 +179,7 @@ func TestKernelRunsAReadOnlyToolRoundTrip(t *testing.T) {
 	tool := classTool("get_topology", domain.ClassRead)
 	audit := &recordingAudit{}
 	gate := &recordingGate{decide: grantFor("")}
-	deps := ports.AgentDeps{
+	deps := Deps{
 		Tools: staticBag{tools: []ports.Tool{tool}},
 		Gate:  gate,
 		Audit: audit,
@@ -191,7 +191,7 @@ func TestKernelRunsAReadOnlyToolRoundTrip(t *testing.T) {
 	sink := &collectSink{}
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps:   func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) { return deps, nil },
+		Deps:   func(context.Context, ports.AgentRequest) (Deps, error) { return deps, nil },
 		Now:    fixedClock(),
 	})
 
@@ -232,7 +232,7 @@ func TestKernelAllowsAGrantedMutatingTool(t *testing.T) {
 	}, out: "restarted"}
 	audit := &recordingAudit{}
 	gate := &recordingGate{decide: grantFor("CHG-9")}
-	deps := ports.AgentDeps{Tools: staticBag{tools: []ports.Tool{tool}}, Gate: gate, Audit: audit}
+	deps := Deps{Tools: staticBag{tools: []ports.Tool{tool}}, Gate: gate, Audit: audit}
 	model := newFauxModel(t,
 		toolStep("restart_service", map[string]any{"service": "web"}),
 		textStep("web is back up."),
@@ -240,7 +240,7 @@ func TestKernelAllowsAGrantedMutatingTool(t *testing.T) {
 	sink := &collectSink{}
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps:   func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) { return deps, nil },
+		Deps:   func(context.Context, ports.AgentRequest) (Deps, error) { return deps, nil },
 		Now:    fixedClock(),
 	})
 
@@ -277,7 +277,7 @@ func TestKernelBlocksAMutatingToolWhenDenied(t *testing.T) {
 	gate := &recordingGate{decide: func(ports.ApprovalRequest) (ports.Decision, error) {
 		return ports.Decision{Decision: ports.ApprovalDenied, Note: "change freeze"}, nil
 	}}
-	deps := ports.AgentDeps{Tools: staticBag{tools: []ports.Tool{tool}}, Gate: gate, Audit: audit}
+	deps := Deps{Tools: staticBag{tools: []ports.Tool{tool}}, Gate: gate, Audit: audit}
 	model := newFauxModel(t,
 		toolStep("restart_service", map[string]any{"service": "web"}),
 		textStep("I could not restart web; the change is frozen."),
@@ -285,7 +285,7 @@ func TestKernelBlocksAMutatingToolWhenDenied(t *testing.T) {
 	sink := &collectSink{}
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps:   func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) { return deps, nil },
+		Deps:   func(context.Context, ports.AgentRequest) (Deps, error) { return deps, nil },
 		Now:    fixedClock(),
 	})
 
@@ -328,7 +328,7 @@ func TestKernelBlocksAMutatingToolWithNoGate(t *testing.T) {
 		Name: "delete_volume", Class: domain.ClassDestructive,
 		Parameters: json.RawMessage(`{"type":"object"}`),
 	}, out: "deleted"}
-	deps := ports.AgentDeps{Tools: staticBag{tools: []ports.Tool{tool}}, Audit: &recordingAudit{}}
+	deps := Deps{Tools: staticBag{tools: []ports.Tool{tool}}, Audit: &recordingAudit{}}
 	model := newFauxModel(t,
 		toolStep("delete_volume", map[string]any{"name": "vol-1"}),
 		textStep("I did not delete the volume."),
@@ -336,7 +336,7 @@ func TestKernelBlocksAMutatingToolWithNoGate(t *testing.T) {
 	sink := &collectSink{}
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps:   func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) { return deps, nil },
+		Deps:   func(context.Context, ports.AgentRequest) (Deps, error) { return deps, nil },
 		Now:    fixedClock(),
 	})
 
@@ -375,7 +375,7 @@ func TestRunRejectsAnEmptySessionID(t *testing.T) {
 	model := newFauxModel(t, textStep("hi"))
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps:   func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) { return ports.AgentDeps{}, nil },
+		Deps:   func(context.Context, ports.AgentRequest) (Deps, error) { return Deps{}, nil },
 	})
 	if _, err := k.Run(context.Background(), ports.AgentRequest{UserText: "hi"}); err == nil {
 		t.Error("a turn with no session id was accepted: the console could not scope the frames")
@@ -388,8 +388,8 @@ func TestRunSurfacesDepsFailure(t *testing.T) {
 	model := newFauxModel(t, textStep("hi"))
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps: func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) {
-			return ports.AgentDeps{}, errors.New("tool registry unavailable")
+		Deps: func(context.Context, ports.AgentRequest) (Deps, error) {
+			return Deps{}, errors.New("tool registry unavailable")
 		},
 	})
 	_, err := k.Run(context.Background(), ports.AgentRequest{SessionID: "s-1", UserText: "hi"})
@@ -401,7 +401,7 @@ func TestRunSurfacesDepsFailure(t *testing.T) {
 func TestRunSurfacesModelFailure(t *testing.T) {
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{err: errors.New("no provider configured for opus")},
-		Deps:   func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) { return ports.AgentDeps{}, nil },
+		Deps:   func(context.Context, ports.AgentRequest) (Deps, error) { return Deps{}, nil },
 	})
 	_, err := k.Run(context.Background(), ports.AgentRequest{SessionID: "s-1", UserText: "hi"})
 	if err == nil || !strings.Contains(err.Error(), "no provider configured") {
@@ -415,7 +415,7 @@ func TestRunPassesTheSelectionThrough(t *testing.T) {
 	resolver.model = model
 	k, _ := NewKernel(KernelOptions{
 		Models: resolver,
-		Deps:   func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) { return ports.AgentDeps{}, nil },
+		Deps:   func(context.Context, ports.AgentRequest) (Deps, error) { return Deps{}, nil },
 		Now:    fixedClock(),
 	})
 	sel := domain.ModelSelection{Provider: domain.ProviderAnthropic, Model: "claude-opus-5"}
@@ -433,7 +433,7 @@ func TestRunReleasesTheSessionSlot(t *testing.T) {
 	model := newFauxModel(t, textStep("one"), textStep("two"))
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps:   func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) { return ports.AgentDeps{}, nil },
+		Deps:   func(context.Context, ports.AgentRequest) (Deps, error) { return Deps{}, nil },
 		Now:    fixedClock(),
 	})
 	for i, text := range []string{"first", "second"} {
@@ -459,8 +459,8 @@ func TestRunRefusesOverlappingTurnsOnOneSession(t *testing.T) {
 	)
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps: func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) {
-			return ports.AgentDeps{Tools: staticBag{tools: []ports.Tool{tool}}}, nil
+		Deps: func(context.Context, ports.AgentRequest) (Deps, error) {
+			return Deps{Tools: staticBag{tools: []ports.Tool{tool}}}, nil
 		},
 		Now: fixedClock(),
 	})
@@ -497,7 +497,7 @@ func TestRunProducesNoFramesWithoutASink(t *testing.T) {
 	model := newFauxModel(t, textStep("hi"))
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps:   func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) { return ports.AgentDeps{}, nil },
+		Deps:   func(context.Context, ports.AgentRequest) (Deps, error) { return Deps{}, nil },
 		Now:    fixedClock(),
 	})
 	if _, err := k.Run(context.Background(), ports.AgentRequest{SessionID: "s-1", UserText: "hi"}); err != nil {
@@ -512,7 +512,7 @@ func TestAbortAndSteerRequireALiveSession(t *testing.T) {
 	model := newFauxModel(t, textStep("hi"))
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps:   func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) { return ports.AgentDeps{}, nil },
+		Deps:   func(context.Context, ports.AgentRequest) (Deps, error) { return Deps{}, nil },
 	})
 	if err := k.Abort(context.Background(), "nope"); err != nil {
 		t.Errorf("Abort on an unknown session = %v, want nil: aborting nothing is not an error", err)
@@ -526,7 +526,7 @@ func TestNotifyRejectsAWorkerWithNoLiveParent(t *testing.T) {
 	model := newFauxModel(t, textStep("hi"))
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps:   func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) { return ports.AgentDeps{}, nil },
+		Deps:   func(context.Context, ports.AgentRequest) (Deps, error) { return Deps{}, nil },
 	})
 	// Delivering a notification to a settled parent would put a frame in
 	// front of nobody.
@@ -539,7 +539,7 @@ func TestCloseIsSafeWithNoSessions(t *testing.T) {
 	model := newFauxModel(t, textStep("hi"))
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps:   func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) { return ports.AgentDeps{}, nil },
+		Deps:   func(context.Context, ports.AgentRequest) (Deps, error) { return Deps{}, nil },
 	})
 	if err := k.Close(); err != nil {
 		t.Errorf("Close on an idle kernel = %v", err)
@@ -550,7 +550,7 @@ func TestSpawnRequiresASessionID(t *testing.T) {
 	model := newFauxModel(t, textStep("hi"))
 	k, _ := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps:   func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) { return ports.AgentDeps{}, nil },
+		Deps:   func(context.Context, ports.AgentRequest) (Deps, error) { return Deps{}, nil },
 	})
 	if _, err := k.Spawn(context.Background(), ports.AgentRequest{UserText: "hi"}); err == nil {
 		t.Error("a worker with no session id was accepted: its terminal state would have nowhere to report")

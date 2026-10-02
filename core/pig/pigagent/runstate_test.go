@@ -128,7 +128,7 @@ func (s *collectSink) ofType(t wire.StreamEventType) []wire.StreamEvent {
 
 // harness builds a runState over the given policy. Tests use it so each
 // case only has to state the part it is actually about.
-func harness(t *testing.T, deps ports.AgentDeps) (*runState, *collectSink) {
+func harness(t *testing.T, deps Deps) (*runState, *collectSink) {
 	t.Helper()
 	sink := &collectSink{}
 	k := &Kernel{opts: KernelOptions{Now: fixedClock()}}
@@ -153,7 +153,7 @@ func classTool(name string, class domain.ToolClass) ports.Tool {
 
 func TestReadOnlyCallBypassesTheGateEntirely(t *testing.T) {
 	gate := &recordingGate{decide: grantFor("approved")}
-	r, _ := harness(t, ports.AgentDeps{
+	r, _ := harness(t, Deps{
 		Tools: staticBag{tools: []ports.Tool{classTool("get_topology", domain.ClassRead)}},
 		Gate:  gate,
 	})
@@ -176,7 +176,7 @@ func TestReadOnlyClassIsTheOnlyClassThatBypasses(t *testing.T) {
 	} {
 		t.Run("class="+string(class), func(t *testing.T) {
 			gate := &recordingGate{decide: grantFor("")}
-			r, _ := harness(t, ports.AgentDeps{
+			r, _ := harness(t, Deps{
 				Tools: staticBag{tools: []ports.Tool{classTool("mutate", class)}},
 				Gate:  gate,
 			})
@@ -193,7 +193,7 @@ func TestReadOnlyClassIsTheOnlyClassThatBypasses(t *testing.T) {
 // --- the fail-closed invariant ------------------------------------------
 
 func TestMutatingCallWithNoGateIsBlocked(t *testing.T) {
-	r, _ := harness(t, ports.AgentDeps{
+	r, _ := harness(t, Deps{
 		Tools: staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
 		// No Gate: the host forgot to wire approvals.
 	})
@@ -212,7 +212,7 @@ func TestUnregisteredToolIsTreatedAsDestructive(t *testing.T) {
 	// on the assumption that a plugin would self-report safely is exactly
 	// the failure mode the gate exists to prevent.
 	gate := &recordingGate{decide: grantFor("")}
-	r, _ := harness(t, ports.AgentDeps{
+	r, _ := harness(t, Deps{
 		Tools: staticBag{tools: []ports.Tool{classTool("known_read", domain.ClassRead)}},
 		Gate:  gate,
 	})
@@ -233,7 +233,7 @@ func TestUnregisteredToolIsTreatedAsDestructive(t *testing.T) {
 
 func TestGrantMatchingDigestAllows(t *testing.T) {
 	gate := &recordingGate{decide: grantFor("change ticket CHG-1")}
-	r, sink := harness(t, ports.AgentDeps{
+	r, sink := harness(t, Deps{
 		Tools: staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
 		Gate:  gate,
 	})
@@ -270,7 +270,7 @@ func TestGrantForDifferentArgumentsIsRefused(t *testing.T) {
 			Decision:  ports.ApprovalGranted,
 		}, nil
 	}}
-	r, sink := harness(t, ports.AgentDeps{
+	r, sink := harness(t, Deps{
 		Tools: staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
 		Gate:  gate,
 	})
@@ -308,7 +308,7 @@ func TestAGrantWithoutTheBindingDigestIsRefused(t *testing.T) {
 	gate := &recordingGate{decide: func(req ports.ApprovalRequest) (ports.Decision, error) {
 		return ports.Decision{RequestID: req.ID, Digest: "", Decision: ports.ApprovalGranted}, nil
 	}}
-	r, sink := harness(t, ports.AgentDeps{
+	r, sink := harness(t, Deps{
 		Tools: staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
 		Gate:  gate,
 	})
@@ -335,7 +335,7 @@ func TestTheRequestCarriesTheDigestTheDecisionMustEcho(t *testing.T) {
 		got = req
 		return ports.Decision{RequestID: req.ID, Digest: req.Digest, Decision: ports.ApprovalGranted}, nil
 	}}
-	r, _ := harness(t, ports.AgentDeps{
+	r, _ := harness(t, Deps{
 		Tools: staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
 		Gate:  gate,
 	})
@@ -356,7 +356,7 @@ func TestDenialBlocks(t *testing.T) {
 	gate := &recordingGate{decide: func(req ports.ApprovalRequest) (ports.Decision, error) {
 		return ports.Decision{RequestID: req.ID, Decision: ports.ApprovalDenied, Note: "change freeze"}, nil
 	}}
-	r, sink := harness(t, ports.AgentDeps{
+	r, sink := harness(t, Deps{
 		Tools: staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
 		Gate:  gate,
 	})
@@ -388,7 +388,7 @@ func TestGateErrorsMapToDistinctCodes(t *testing.T) {
 			gate := &recordingGate{decide: func(ports.ApprovalRequest) (ports.Decision, error) {
 				return ports.Decision{}, &ports.GateError{Reason: tc.reason, Err: errors.New("upstream")}
 			}}
-			r, _ := harness(t, ports.AgentDeps{
+			r, _ := harness(t, Deps{
 				Tools: staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
 				Gate:  gate,
 			})
@@ -408,7 +408,7 @@ func TestUnknownGateErrorStillBlocks(t *testing.T) {
 	gate := &recordingGate{decide: func(ports.ApprovalRequest) (ports.Decision, error) {
 		return ports.Decision{}, errors.New("the ledger is unreachable")
 	}}
-	r, _ := harness(t, ports.AgentDeps{
+	r, _ := harness(t, Deps{
 		Tools: staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
 		Gate:  gate,
 	})
@@ -420,7 +420,7 @@ func TestUnknownGateErrorStillBlocks(t *testing.T) {
 
 func TestApprovalRequestCarriesHostDerivedBlastRadius(t *testing.T) {
 	gate := &recordingGate{decide: grantFor("")}
-	r, _ := harness(t, ports.AgentDeps{
+	r, _ := harness(t, Deps{
 		Tools: staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
 		Gate:  gate,
 	})
@@ -448,7 +448,7 @@ func TestApprovalRequestCarriesHostDerivedBlastRadius(t *testing.T) {
 
 func TestApprovalRequestCopiesArguments(t *testing.T) {
 	gate := &recordingGate{decide: grantFor("")}
-	r, _ := harness(t, ports.AgentDeps{
+	r, _ := harness(t, Deps{
 		Tools: staticBag{tools: []ports.Tool{classTool("apply_config", domain.ClassWrite)}},
 		Gate:  gate,
 	})
@@ -499,7 +499,7 @@ func TestEveryRefusalPathEmitsTheSameDecisionVocabulary(t *testing.T) {
 	for name, tc := range paths {
 		t.Run(name, func(t *testing.T) {
 			gate := &recordingGate{decide: tc.decide}
-			r, sink := harness(t, ports.AgentDeps{
+			r, sink := harness(t, Deps{
 				Tools: staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
 				Gate:  gate,
 			})
@@ -522,7 +522,7 @@ func TestEveryRefusalPathEmitsTheSameDecisionVocabulary(t *testing.T) {
 
 func TestGrantPathEmitsGrant(t *testing.T) {
 	gate := &recordingGate{decide: grantFor("CHG-1")}
-	r, sink := harness(t, ports.AgentDeps{
+	r, sink := harness(t, Deps{
 		Tools: staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
 		Gate:  gate,
 	})
@@ -539,7 +539,7 @@ func TestGrantPathEmitsGrant(t *testing.T) {
 func TestBudgetRefusalBlocksAndLatches(t *testing.T) {
 	budget := &countingBudget{limit: 0, why: "daily spend cap reached"}
 	tool := classTool("get_topology", domain.ClassRead)
-	r, _ := harness(t, ports.AgentDeps{Tools: staticBag{tools: []ports.Tool{tool}}, Budget: budget})
+	r, _ := harness(t, Deps{Tools: staticBag{tools: []ports.Tool{tool}}, Budget: budget})
 
 	first := r.beforeToolCall(context.Background(), "tc-1", "get_topology", json.RawMessage(`{}`))
 	if !first.Block {
@@ -563,7 +563,7 @@ func TestLatchedBudgetShortCircuitsBeforeTheGate(t *testing.T) {
 	// Once the budget is spent the turn is over, so the approval queue
 	// must not fill with requests nobody will act on.
 	gate := &recordingGate{decide: grantFor("")}
-	r, _ := harness(t, ports.AgentDeps{
+	r, _ := harness(t, Deps{
 		Tools:  staticBag{tools: []ports.Tool{classTool("restart_service", domain.ClassDestructive)}},
 		Gate:   gate,
 		Budget: &countingBudget{limit: 0},
@@ -577,7 +577,7 @@ func TestLatchedBudgetShortCircuitsBeforeTheGate(t *testing.T) {
 }
 
 func TestFinishTurnEndsOnBudget(t *testing.T) {
-	r, _ := harness(t, ports.AgentDeps{Budget: &countingBudget{limit: 0, why: "cap"}})
+	r, _ := harness(t, Deps{Budget: &countingBudget{limit: 0, why: "cap"}})
 	decision, err := r.finishTurn(context.Background(), agent.AgentTurnContext{})
 	if err != nil {
 		t.Fatalf("finishTurn: %v", err)
@@ -585,15 +585,15 @@ func TestFinishTurnEndsOnBudget(t *testing.T) {
 	if decision == nil || decision.Action != agent.AgentTurnEnd {
 		t.Fatal("finishTurn continued a turn with no budget left")
 	}
-	if r.stopped != ports.TurnToolBudget {
-		t.Errorf("stopped = %q, want %q so the console explains the ending", r.stopped, ports.TurnToolBudget)
+	if r.stopped != TurnToolBudget {
+		t.Errorf("stopped = %q, want %q so the console explains the ending", r.stopped, TurnToolBudget)
 	}
 }
 
 func TestFinishTurnLeavesAHealthyTurnAlone(t *testing.T) {
 	// Returning a decision here would end every turn after the first round
 	// trip; nil is how the loop learns to continue.
-	r, _ := harness(t, ports.AgentDeps{Budget: &countingBudget{limit: 10}})
+	r, _ := harness(t, Deps{Budget: &countingBudget{limit: 10}})
 	decision, err := r.finishTurn(context.Background(), agent.AgentTurnContext{})
 	if err != nil || decision != nil {
 		t.Errorf("finishTurn = (%v, %v), want (nil, nil)", decision, err)
@@ -604,7 +604,7 @@ func TestFinishTurnLeavesAHealthyTurnAlone(t *testing.T) {
 
 func TestAuditRecordsSuccessAndBlockAndError(t *testing.T) {
 	audit := &recordingAudit{}
-	r, _ := harness(t, ports.AgentDeps{
+	r, _ := harness(t, Deps{
 		Tools: staticBag{tools: []ports.Tool{classTool("get_topology", domain.ClassRead)}},
 		Audit: audit,
 	})
@@ -654,7 +654,7 @@ func TestAuditRecordsSuccessAndBlockAndError(t *testing.T) {
 
 func TestAuditIsOptional(t *testing.T) {
 	// A host may run without a ledger configured; the turn must still work.
-	r, _ := harness(t, ports.AgentDeps{Tools: staticBag{}})
+	r, _ := harness(t, Deps{Tools: staticBag{}})
 	// The empty result is the "leave the call as it is" instruction: a hook
 	// with no ledger must not rewrite the tool's own output.
 	got := r.afterToolCall(context.Background(), "tc-1", "t", json.RawMessage(`{}`), agent.AgentToolResult{})
@@ -666,7 +666,7 @@ func TestAuditIsOptional(t *testing.T) {
 // --- classification and digests ----------------------------------------
 
 func TestClassOfReadsTheToolBag(t *testing.T) {
-	r, _ := harness(t, ports.AgentDeps{Tools: staticBag{tools: []ports.Tool{
+	r, _ := harness(t, Deps{Tools: staticBag{tools: []ports.Tool{
 		classTool("a", domain.ClassRead),
 		classTool("b", domain.ClassWrite),
 		classTool("c", domain.ClassDestructive),
@@ -731,15 +731,15 @@ func TestToolSummaryAndTarget(t *testing.T) {
 // --- result assembly ----------------------------------------------------
 
 func TestResultDefaultsToEndTurn(t *testing.T) {
-	r, _ := harness(t, ports.AgentDeps{})
+	r, _ := harness(t, Deps{})
 	r.mapper.TurnStarted()
 
 	res := r.result([]agent.AgentMessage{
 		{User: &agent.UserMessage{Role: "user"}},
 		{Assistant: &agent.AssistantMessage{Content: []ai.AssistantContentBlock{ai.TextContent{Text: "final answer"}}}},
 	})
-	if res.Stopped != ports.TurnEndTurn {
-		t.Errorf("stopped = %q, want %q", res.Stopped, ports.TurnEndTurn)
+	if res.Stopped != TurnEndTurn {
+		t.Errorf("stopped = %q, want %q", res.Stopped, TurnEndTurn)
 	}
 	if res.Content != "final answer" {
 		t.Errorf("content = %q, want the last assistant message", res.Content)
@@ -750,23 +750,23 @@ func TestResultDefaultsToEndTurn(t *testing.T) {
 }
 
 func TestResultPreservesAnExplicitStopReason(t *testing.T) {
-	r, _ := harness(t, ports.AgentDeps{})
-	r.stopped = ports.TurnToolBudget
-	if got := r.result(nil).Stopped; got != ports.TurnToolBudget {
+	r, _ := harness(t, Deps{})
+	r.stopped = TurnToolBudget
+	if got := r.result(nil).Stopped; got != TurnToolBudget {
 		t.Errorf("stopped = %q, want the budget reason preserved", got)
 	}
 }
 
 func TestResultWithNoMessages(t *testing.T) {
-	r, _ := harness(t, ports.AgentDeps{})
-	if res := r.result(nil); res.Content != "" || res.Stopped != ports.TurnEndTurn {
+	r, _ := harness(t, Deps{})
+	if res := r.result(nil); res.Content != "" || res.Stopped != TurnEndTurn {
 		t.Errorf("result = %+v, want an empty end_turn", res)
 	}
 }
 
 func TestOnEventFoldsUsageAndEmits(t *testing.T) {
 	audit := &recordingAudit{}
-	r, sink := harness(t, ports.AgentDeps{Tools: staticBag{tools: []ports.Tool{classTool("t", domain.ClassRead)}}, Audit: audit})
+	r, sink := harness(t, Deps{Tools: staticBag{tools: []ports.Tool{classTool("t", domain.ClassRead)}}, Audit: audit})
 	r.model = "test-model"
 
 	r.onEvent(agent.TurnStartEvent{})
@@ -793,7 +793,7 @@ func TestOnEventFoldsUsageAndEmits(t *testing.T) {
 func TestOnEventStopsOnAFailedSink(t *testing.T) {
 	// A console that has gone away is not retried against; the kernel is
 	// torn down through its context instead.
-	r, _ := harness(t, ports.AgentDeps{})
+	r, _ := harness(t, Deps{})
 	r.sink = failingSink{after: 1}
 	r.onEvent(agent.TurnStartEvent{})
 	if r.mapper.seq > 1 {

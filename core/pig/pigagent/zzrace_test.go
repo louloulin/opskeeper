@@ -27,8 +27,8 @@ func TestRaceTwoParallelTools(t *testing.T) {
 	sink := &collectSink{}
 	k, err := NewKernel(KernelOptions{
 		Models: &fauxResolver{model: model},
-		Deps: func(context.Context, ports.AgentRequest) (ports.AgentDeps, error) {
-			return ports.AgentDeps{Tools: staticBag{tools: []ports.Tool{
+		Deps: func(context.Context, ports.AgentRequest) (Deps, error) {
+			return Deps{Tools: staticBag{tools: []ports.Tool{
 				&fakeTool{schema: ports.ToolSchema{Name: "a", Class: domain.ClassRead, Parameters: json.RawMessage(`{"type":"object"}`)}, out: "A"},
 				&fakeTool{schema: ports.ToolSchema{Name: "b", Class: domain.ClassRead, Parameters: json.RawMessage(`{"type":"object"}`)}, out: "B"},
 			}}}, nil

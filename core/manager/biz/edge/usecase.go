@@ -421,12 +421,32 @@ func hashFingerprint(seed string) string {
 // reconnect time — the device list / query_devices then showed a host as
 // "last seen hours ago" while its edge heartbeat was seconds fresh, and any
 // last_seen freshness filter ("offline > N hours") was unusable.
-func (u *Usecase) HandleHeartbeat(ctx context.Context, edgeID uint64, ts time.Time) error {
+//
+// pigVersion is the PiG agent build the node reports, already in comparable
+// form. It is best-effort in the same way the device mirror below is, and
+// for a sharper reason: a write failure here must not cost the node its
+// liveness signal. The heartbeat's primary job is "this node is alive", and
+// a node that gets an error back starts counting toward the tunnel-stuck
+// threshold and eventually restarts itself. Losing a version field is not
+// worth a process restart, so the failure is logged and the heartbeat
+// succeeds.
+func (u *Usecase) HandleHeartbeat(ctx context.Context, edgeID uint64, ts time.Time, pigVersion string) error {
 	if u.repo == nil {
 		return errs.ErrNotWiredYet
 	}
 	if err := u.repo.UpdateStatus(ctx, edgeID, model.StatusOnline, ts); err != nil {
 		return err
+	}
+	// Only the PiG axis, and only when it actually moved. An empty value
+	// means "this build does not report one" and must leave the last known
+	// good version standing: an operator comparing a release against the
+	// fleet is better served by a version that is an hour old than by a
+	// blank that reads as "cannot tell" on every node at once.
+	if v := strings.TrimSpace(pigVersion); v != "" {
+		if err := u.setPigVersion(ctx, edgeID, v); err != nil && u.log != nil {
+			u.log.Warn("heartbeat: pig version write failed",
+				"edge_id", edgeID, "pig_version", v, "err", err)
+		}
 	}
 	// Best-effort device mirror: a stale device last_seen must not fail the
 	// heartbeat. MarkOnline sets online=true + bumps last_seen_at, which is
@@ -440,6 +460,27 @@ func (u *Usecase) HandleHeartbeat(ctx context.Context, edgeID uint64, ts time.Ti
 		}
 	}
 	return nil
+}
+
+// setPigVersion writes the PiG axis, skipping the update when the stored
+// value already matches.
+//
+// The read-before-write is not an optimisation. The heartbeat is periodic
+// and the version is a build constant, so an unguarded Update would issue
+// a write on every single heartbeat of every single node forever, all of
+// them setting a column to the value it already holds — turning a passive
+// liveness ping into a write-amplifying one against the busiest table in
+// the fleet. The one query it costs only happens when the value actually
+// moved, which is to say on upgrade.
+func (u *Usecase) setPigVersion(ctx context.Context, edgeID uint64, version string) error {
+	edge, err := u.repo.GetByID(ctx, edgeID)
+	if err != nil {
+		return err
+	}
+	if edge.PigVersion == version {
+		return nil
+	}
+	return u.repo.SetPigVersion(ctx, edgeID, version)
 }
 
 // HandleOffline flips an edge's status to offline. Called from the

@@ -54,13 +54,21 @@ spec:
   # therefore the review surface — every name is a thing somebody agreed
   # this package may read.
   #
-  # The list is generated (by internal/middleware/toolset's tests) from the
-  # same registration the host dispatches through, and
+  # The list is generated from the same registration the host dispatches
+  # through, and two tests keep the three copies of this list in agreement:
   # TestTheMiddlewareProfilesDeclaredToolsAreExactlyWhatItShipsToTheModel
-  # fails the moment this file and the shipped toolset disagree. So it
+  # (core/floor/pluginmanifest) fails the moment this file and the
+  # extension's generated toolset disagree, and
+  # TestToolsetMatchesTheAdapters (core/manager/middleware/toolset) fails
+  # the moment that toolset and the adapter registrations disagree. So it
   # cannot quietly become a menu of tools whose implementations no longer
   # exist, and an adapter that gains a read tool shows up here as a diff
   # rather than as a capability that appeared on every node.
+  #
+  # The first of those two tests did not exist when this paragraph was
+  # written — the comment named a guard that was never installed, and on
+  # the widest package in the fleet. It is installed now, and this file is
+  # no longer the only place that says so.
   #
   # The declared class is a claim, not the decision: the host re-derives it
   # from the adapter and refuses any call whose observed class is worse.

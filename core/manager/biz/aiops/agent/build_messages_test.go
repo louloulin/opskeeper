@@ -4,10 +4,46 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
 	"github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
 func sp(s string) *string { return &s }
+
+// asstAt reads the assistant turn at index i.
+//
+// buildMessages returns PiG's own message union now, so a test that wants to
+// know "what did the model ask for" type-asserts rather than reading a struct
+// field. The assertion is the point: a replay that produced a tool result
+// without its call has to fail here, not three provider round trips later as
+// an HTTP 400 naming no message.
+func asstAt(t *testing.T, out []pigai.Message, i int) pigai.AssistantMessage {
+	t.Helper()
+	msg, ok := out[i].(pigai.AssistantMessage)
+	if !ok {
+		t.Fatalf("out[%d] = %T, want pigai.AssistantMessage", i, out[i])
+	}
+	return msg
+}
+
+// ptrTo lets an assertion helper hand a value to a function that reads a
+// reply. ReplyToolCalls does not need a pointer semantically — it only walks
+// the content blocks — but its signature is the one the production call sites
+// use, and a test passing a different shape would stop exercising the nil
+// case that shape exists to handle.
+func ptrTo(msg pigai.AssistantMessage) *pigai.AssistantMessage { return &msg }
+
+// toolResultIDAt reads the tool-result turn at index i.
+func toolResultIDAt(t *testing.T, out []pigai.Message, i int) (string, string) {
+	t.Helper()
+	msg, ok := out[i].(pigai.ToolResultMessage)
+	if !ok {
+		t.Fatalf("out[%d] = %T, want pigai.ToolResultMessage", i, out[i])
+	}
+	return msg.ToolCallID, msg.ToolName
+}
 
 // TestBuildMessages_ToolCallReplay covers the v0.7.170 fix:
 // assistant turns with content=NULL but populated ToolCalls must
@@ -36,25 +72,22 @@ func TestBuildMessages_ToolCallReplay(t *testing.T) {
 	if len(out) != 8 {
 		t.Fatalf("len(out) = %d, want 8", len(out))
 	}
-	if out[0].Role != "system" {
-		t.Errorf("out[0].Role = %q, want system", out[0].Role)
+	if _, ok := out[0].(pigai.SystemMessage); !ok {
+		t.Errorf("out[0] = %T, want pigai.SystemMessage", out[0])
 	}
-	asst := out[4]
-	if asst.Role != aiops.RoleAssistant {
-		t.Fatalf("out[4].Role = %q, want assistant", asst.Role)
+	asst := asstAt(t, out, 4)
+	if text := pigmodel.ReplyText(&asst); text != "" {
+		t.Errorf("assistant tool-call turn content = %q, want empty", text)
 	}
-	if asst.Content != "" {
-		t.Errorf("assistant tool-call turn content = %q, want empty", asst.Content)
+	calls := pigmodel.ReplyToolCalls(&asst)
+	if len(calls) != 1 || calls[0].ID != "call_abc" {
+		t.Errorf("assistant tool calls = %+v, want one with id=call_abc", calls)
 	}
-	if len(asst.ToolCalls) != 1 || asst.ToolCalls[0].ID != "call_abc" {
-		t.Errorf("assistant.ToolCalls = %+v, want one with id=call_abc", asst.ToolCalls)
+	if got := string(pigmodel.ArgumentsJSON(calls[0].Arguments)); got != `{}` {
+		t.Errorf("tool call arguments = %q, want {}", got)
 	}
-	if string(asst.ToolCalls[0].Args) != `{}` {
-		t.Errorf("assistant.ToolCalls[0].Args = %q, want {}", string(asst.ToolCalls[0].Args))
-	}
-	tool := out[5]
-	if tool.Role != aiops.RoleTool || tool.ToolCallID != "call_abc" {
-		t.Errorf("tool message position/id wrong: %+v", tool)
+	if id, name := toolResultIDAt(t, out, 5); id != "call_abc" || name != "query_devices" {
+		t.Errorf("tool message id/name = %q/%q, want call_abc/query_devices", id, name)
 	}
 }
 
@@ -81,19 +114,22 @@ func TestBuildMessages_ToolCallReplay_BackcompatPairByOrder(t *testing.T) {
 	if len(out) != 5 {
 		t.Fatalf("len(out) = %d, want 5", len(out))
 	}
-	asst := out[1]
-	if len(asst.ToolCalls) != 2 {
-		t.Fatalf("assistant.ToolCalls = %d entries, want 2", len(asst.ToolCalls))
+	calls := pigmodel.ReplyToolCalls(ptrTo(asstAt(t, out, 1)))
+	if len(calls) != 2 {
+		t.Fatalf("assistant tool calls = %d entries, want 2", len(calls))
 	}
-	if asst.ToolCalls[0].ID != "legacy_call_1" || asst.ToolCalls[1].ID != "legacy_call_2" {
-		t.Errorf("pairing failed: got ids %q,%q", asst.ToolCalls[0].ID, asst.ToolCalls[1].ID)
+	if calls[0].ID != "legacy_call_1" || calls[1].ID != "legacy_call_2" {
+		t.Errorf("pairing failed: got ids %q,%q", calls[0].ID, calls[1].ID)
 	}
-	if asst.ToolCalls[0].Name != "tool_a" || asst.ToolCalls[1].Name != "tool_b" {
-		t.Errorf("names = %q,%q", asst.ToolCalls[0].Name, asst.ToolCalls[1].Name)
+	if calls[0].Name != "tool_a" || calls[1].Name != "tool_b" {
+		t.Errorf("names = %q,%q", calls[0].Name, calls[1].Name)
 	}
 	// tool messages also kept
-	if out[2].ToolCallID != "legacy_call_1" || out[3].ToolCallID != "legacy_call_2" {
-		t.Errorf("tool order/id wrong")
+	if id, _ := toolResultIDAt(t, out, 2); id != "legacy_call_1" {
+		t.Errorf("out[2] tool call id = %q, want legacy_call_1", id)
+	}
+	if id, _ := toolResultIDAt(t, out, 3); id != "legacy_call_2" {
+		t.Errorf("out[3] tool call id = %q, want legacy_call_2", id)
 	}
 }
 
@@ -116,9 +152,9 @@ func TestBuildMessages_ToolCallReplay_UnresolvableDropsAssistantAndTools(t *test
 	if len(out) != 2 {
 		t.Fatalf("len(out) = %d, want 2 (u1 + u2)", len(out))
 	}
-	for _, m := range out {
-		if m.Role != aiops.RoleUser {
-			t.Errorf("unexpected %s in output: %+v", m.Role, m)
+	for i, m := range out {
+		if _, ok := m.(pigai.UserMessage); !ok {
+			t.Errorf("out[%d] = %T, want pigai.UserMessage", i, m)
 		}
 	}
 }
@@ -139,11 +175,13 @@ func TestBuildMessages_ToolCallArgsRoundtrip(t *testing.T) {
 		{ID: "t1", Role: aiops.RoleTool, Content: sp(`{}`), ToolCallID: sp("c1"), ToolName: sp("n")},
 	}
 	out := a.buildMessages(history)
-	if len(out[1].ToolCalls) != 1 {
+	calls := pigmodel.ReplyToolCalls(ptrTo(asstAt(t, out, 1)))
+	if len(calls) != 1 {
 		t.Fatalf("missing tool_call")
 	}
 	var probe any
-	if err := json.Unmarshal(out[1].ToolCalls[0].Args, &probe); err != nil {
-		t.Fatalf("args not valid JSON: %v (raw=%q)", err, string(out[1].ToolCalls[0].Args))
+	raw := pigmodel.ArgumentsJSON(calls[0].Arguments)
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		t.Fatalf("args not valid JSON: %v (raw=%q)", err, string(raw))
 	}
 }

@@ -1,3 +1,23 @@
+// The turn record: what a host stores, what a kernel replays.
+//
+// This file is the *persistence* half of the agent contract and nothing
+// else. It holds no model vocabulary. OpsKeeper used to also declare
+// ports.LLMRequest, ports.LLMResponse and ports.Conversation here — a second
+// set of message, request and usage types sitting one package away from
+// PiG's own. Every call went through a translation between them, and a
+// translation that drops a tool_call id does not fail: the model simply
+// stops calling tools, and the cause is a line of code that looked fine.
+// Those types are gone. A caller that wants a model call builds
+// ai.Message values and reads an *ai.AssistantMessage back, in
+// core/pig/pigmodel. What is left here is the part PiG has no opinion
+// about: which role may reach which tool, what the console was shown, and
+// what the operator has to be able to read back out of the database
+// tomorrow.
+//
+// The split is the reason the names here say "transcript". ports.AgentMessage
+// is a row. ai.Message is a wire type. They are not the same thing and must
+// never be made the same thing: the row outlives the provider, survives a
+// migration, and is what an incident review reads.
 package ports
 
 import (
@@ -9,6 +29,10 @@ import (
 )
 
 // AgentRequest is one user turn handed to the agent kernel.
+//
+// The kernel does not compose the prompt from this; it is handed the pieces
+// the host already decided, so a replacement kernel cannot change what an
+// operator's persona or role policy says.
 type AgentRequest struct {
 	SessionID string
 	UserID    uint64
@@ -49,15 +73,14 @@ type AgentRequest struct {
 	MaxIterations int
 }
 
-// AgentMessage is one prior turn in the conversation, expressed in the
-// vocabulary every kernel already has.
+// AgentMessage is one row of a stored conversation.
 //
-// The shape is deliberately minimal. Tool definitions, arguments and results
-// are carried as opaque JSON strings rather than typed structures: the host
-// stores what the provider said, and a kernel that needs a richer form
-// decodes it. Typing them here would force every kernel to agree on a
-// provider wire format, which is precisely the coupling the kernel boundary
-// exists to prevent.
+// The shape is deliberately minimal. Tool arguments and results are carried
+// as opaque JSON bytes rather than typed structures: the host stores what
+// the provider said, and a kernel that needs a richer form decodes it.
+// Typing them here would force the store to agree on a provider wire
+// format, which is precisely the coupling this boundary exists to prevent —
+// and it would mean re-writing every stored row the day PiG renames a field.
 //
 // Exactly one of the role-specific fields is set. A message with none set
 // carries no information and a kernel should skip it — silently dropping a
@@ -89,7 +112,7 @@ type AgentMessage struct {
 	// could not hand them on would force the host to re-ask the provider or
 	// to show every turn as unattributed.
 	Model string
-	Usage *Usage
+	Usage *TranscriptUsage
 }
 
 // AgentToolCall is one tool invocation an assistant asked for.
@@ -104,78 +127,80 @@ type AgentToolCall struct {
 	Arguments []byte
 }
 
-// TurnResult is the settled outcome of one turn.
-type TurnResult struct {
-	// Content is the final assistant text.
-	Content string
-	// Iterations counts how many model round trips the turn consumed.
-	Iterations int
-	// Usage aggregates the turn across every model call it made.
-	Usage Usage
-	// Stopped reports why the loop ended: "end_turn", "max_iterations",
-	// "tool_budget", "cancelled", or "error".
-	Stopped string
-	// Err is non-nil only when Stopped is "error".
-	Err error
-}
-
-// Stop reasons for a turn.
-const (
-	TurnEndTurn       = "end_turn"
-	TurnMaxIterations = "max_iterations"
-	TurnToolBudget    = "tool_budget"
-	TurnCancelled     = "cancelled"
-	TurnError         = "error"
-)
-
-// Agent is the agent-loop port.
+// TranscriptUsage is the token accounting written to a row.
 //
-// The kernel owns the ReAct loop: model call, tool dispatch, repeat until
-// the model stops asking for tools or a cap is hit. It owns nothing else.
-// Persistence, streaming, audit, and approval are injected as the ports on
-// AgentDeps, which is what lets one kernel serve the control plane, a
-// background investigator, and a per-node pig process with different
-// policies and no code changes.
-type Agent interface {
-	// Run settles one turn. It blocks until the turn completes, the context
-	// is cancelled, or a cap is reached. Emitted frames go to the sink
-	// supplied on the request context.
-	Run(ctx context.Context, req AgentRequest) (*TurnResult, error)
-	// Steer injects a message into a turn already in flight, the way a
-	// supervisor redirects a running investigation. It returns
-	// ErrNotRunning when no turn is active for the session.
-	Steer(ctx context.Context, sessionID, text string) error
-	// Abort cancels the in-flight turn for a session. It is idempotent and
-	// safe to call when nothing is running.
-	Abort(ctx context.Context, sessionID string) error
-	// Spawn starts a background worker with its own tool bag and system
-	// prompt. The returned id is used with Steer, Abort, and Notify.
-	Spawn(ctx context.Context, req AgentRequest) (string, error)
-	// Notify reports a worker's terminal state to the parent turn, which
-	// renders it as a task_notification frame.
-	Notify(ctx context.Context, workerID, status, summary string) error
+// It is a storage record, not a model type, and the difference is not
+// cosmetic. ai.Usage carries provider-specific extras — reasoning tokens,
+// a one-hour cache-write counter, a cost breakdown in five currencies — and
+// those are a property of the provider that produced them, not of the
+// ledger. Pinning a row to them would mean re-writing stored history the day
+// a provider is added, and a column set that grows a field per provider
+// stops being a ledger and starts being a copy of a wire type.
+//
+// Only the four numbers an operator is actually charged on are kept.
+type TranscriptUsage struct {
+	InputTokens  int
+	OutputTokens int
+	// CacheReadTokens and CacheWriteTokens are stored separately from
+	// InputTokens because providers bill them at different rates, and a
+	// ledger that folds them in cannot answer "what did cache save".
+	CacheReadTokens  int
+	CacheWriteTokens int
+	// ReportedTotal is the total the provider itself reported, when it
+	// reported one. Zero means "the provider was silent".
+	//
+	// It exists because the sum above is not always the number that was
+	// billed. Reasoning models bill reasoning tokens, and several providers
+	// fold those into the total without naming them in either input or
+	// output, so Input+Output under-reports. Recomputing the provider's own
+	// number would quietly change the bill, which is the one number in this
+	// struct a caller must not second-guess.
+	ReportedTotal int
+	// CostUSD is the reply's computed cost, as the provider priced it.
+	//
+	// It is advisory and is labelled as such wherever it is shown: OpsKeeper
+	// does not own the price table, so a provider that misprices a model
+	// writes a wrong number here. It is stored anyway because "which model
+	// is expensive" is the question an operator actually asks, and token
+	// counts alone do not answer it across a catalogue with different
+	// per-token rates.
+	CostUSD float64
 }
 
-// AgentDeps are the host services a kernel must use. A kernel that reaches
-// for anything else is bypassing the host's policy and audit guarantees.
-type AgentDeps struct {
-	// Tools is the tool bag for this turn, already filtered by role and
-	// profile. The kernel must not widen it.
-	Tools ToolBag
-	// Audit records every tool call, block, and failure.
-	Audit AuditSink
-	// Gate is the sole path for a gated call to execute. A kernel that
-	// finds no gate must refuse every non-read tool rather than run it.
-	Gate ApprovalGate
-	// Model is the synchronous completion path used by the loop.
-	Model Chat
-	// Budget is consulted before each model call. Returning false ends the
-	// turn with TurnToolBudget.
-	Budget BudgetChecker
-	// Recorder observes each admitted tool call from admission to settle.
-	// It is how the console's tool table is populated without the kernel
-	// knowing its schema. Optional: nil records nothing.
-	Recorder ToolCallRecorder
+// Total returns the number of tokens the row consumed, counting cache reads
+// and writes as input.
+//
+// A provider-reported total wins over the sum. The sum is the fallback for
+// providers that report no total at all, and is a lower bound rather than an
+// estimate when the provider was silent about reasoning tokens.
+func (u TranscriptUsage) Total() int {
+	if u.ReportedTotal != 0 {
+		return u.ReportedTotal
+	}
+	return u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
+}
+
+// Add folds one provider reply's accounting into the running total.
+//
+// It is here rather than at each call site because getting it wrong is
+// invisible: a turn total that under-reports by the cache component still
+// looks like a number. The provider's own total is preferred whenever it
+// reported one, for the same reason TranscriptUsage.Total does.
+func (u *TranscriptUsage) Add(next TranscriptUsage) {
+	if u == nil {
+		return
+	}
+	u.InputTokens += next.InputTokens
+	u.OutputTokens += next.OutputTokens
+	u.CacheReadTokens += next.CacheReadTokens
+	u.CacheWriteTokens += next.CacheWriteTokens
+	u.CostUSD += next.CostUSD
+	if next.ReportedTotal != 0 {
+		// A run of calls with a reported total reports the sum of the
+		// reports, which is the bill. Mixing that with the fallback sum
+		// for silent calls would produce a number belonging to neither.
+		u.ReportedTotal += next.ReportedTotal
+	}
 }
 
 // BudgetChecker reports whether spend may continue.

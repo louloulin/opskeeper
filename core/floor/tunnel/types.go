@@ -67,8 +67,8 @@ func (c ClientConfig) resolvedTLSCA() string {
 
 // Client is the edge-side tunnel interface.
 type Client interface {
-	// Dial establishes the connection with exponential backoff on
-	// retries. Returns only after the first successful connect (or
+	// Dial establishes the connection, retrying on a jittered exponential
+	// backoff. Returns only after the first successful connect (or
 	// ctx cancel). Subsequent disconnects are handled transparently
 	// by the underlying geminio RetryEnd.
 	Dial(ctx context.Context) error

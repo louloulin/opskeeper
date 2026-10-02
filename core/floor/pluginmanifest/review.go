@@ -265,21 +265,22 @@ func Review(root string, trust *TrustStore, pol Policy) Decision {
 	// fact about the package, and because a package that fails admission
 	// should be reported as an admission refusal — the more actionable of
 	// the two — even when it would also have failed here.
-	if ok, reason := MeetsMinEdgeVersion(p.Manifest.Spec.Install.MinEdgeVersion, pol.NodeVersion); !ok {
-		decision.Step = StepVersion
+	if ok, step, reason := CheckVersions(
+		p.Manifest.Spec.Install.MinEdgeVersion,
+		p.Manifest.Spec.Install.MinPigVersion,
+		pol.NodeVersion, pol.PigVersion,
+	); !ok {
+		decision.Step = step
 		decision.Reason = reason
 		return decision
 	}
-
-	// Step 5: the agent's own compatibility. A node can run an edge build
-	// new enough for a package and still be launching an agent too old to
-	// load its extensions — the two are upgraded on different cadences —
-	// so this is checked after, not folded into, the edge version.
-	if ok, reason := MeetsMinPigVersion(p.Manifest.Spec.Install.MinPigVersion, pol.PigVersion); !ok {
-		decision.Step = StepAgentVersion
-		decision.Reason = reason
-		return decision
-	}
+	// Both halves of the compatibility matrix are inside CheckVersions,
+	// for the reason that function exists: the control plane's pre-flight
+	// and this review have to agree, and two copies of the same two-axis
+	// check are two answers waiting to diverge. They are also checked in
+	// the node's order rather than the manager's — the edge build first,
+	// because a node too old to run the package at all is the more
+	// actionable answer and the more likely one to clear on one upgrade.
 
 	decision.Allowed = true
 	decision.Step = StepSignature

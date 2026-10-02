@@ -10,7 +10,10 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
 func TestClientChatRecordsGenAIAttributes(t *testing.T) {
@@ -21,16 +24,15 @@ func TestClientChatRecordsGenAIAttributes(t *testing.T) {
 	defer restore()
 
 	client := NewClient(fakeLLMClient{})
-	resp, err := client.Chat(context.Background(), llm.ChatReq{
-		Provider: "openai",
-		Model:    "test-model",
-		Messages: make([]llm.Message, 2),
+	resp, err := client.Complete(context.Background(), pigmodel.Request{
+		Selection: domain.ModelSelection{Provider: "openai", Model: "test-model"},
+		Messages:  []pigai.Message{pigmodel.SystemTurn("be terse"), pigmodel.UserTurn("hi")},
 	})
 	if err != nil {
-		t.Fatalf("Chat: %v", err)
+		t.Fatalf("Complete: %v", err)
 	}
-	if resp.Usage.TotalTokens != 3 {
-		t.Fatalf("unexpected response: %+v", resp)
+	if got := pigmodel.ReplyUsage(resp).TotalTokens; got != 3 {
+		t.Fatalf("usage total = %d, want 3", got)
 	}
 
 	spans := recorder.Ended()
@@ -50,14 +52,16 @@ func TestClientChatRecordsGenAIAttributes(t *testing.T) {
 	}
 }
 
+// fakeLLMClient reports a known token count so the span assertion below can
+// check that the decorator forwarded the provider's own accounting rather
+// than a number it made up.
 type fakeLLMClient struct{}
 
-func (fakeLLMClient) Chat(_ context.Context, _ llm.ChatReq) (*llm.ChatResp, error) {
-	return &llm.ChatResp{Usage: llm.Usage{
-		PromptTokens:     1,
-		CompletionTokens: 2,
-		TotalTokens:      3,
-	}}, nil
+func (fakeLLMClient) Complete(_ context.Context, _ pigmodel.Request) (*pigai.AssistantMessage, error) {
+	reply := pigmodel.AssistantTurn("ok")
+	reply.Usage = pigai.Usage{Input: 1, Output: 2, TotalTokens: 3}
+	reply.StopReason = pigai.StopReasonStop
+	return &reply, nil
 }
 
 func TestStartRAGRecordsOperation(t *testing.T) {

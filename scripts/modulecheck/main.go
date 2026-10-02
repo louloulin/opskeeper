@@ -26,6 +26,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"go/parser"
 	"go/token"
@@ -491,6 +492,27 @@ var layerDebt = map[string]string{
 	"core/manager/biz/audit/usecase.go":                      "same edge: the audit use case names the store it persists through",
 	"core/manager/biz/edge/changeevent/usecase.go":           "names edgestore.ChangeEventRepoIface, an interface that is declared in data rather than in biz",
 	"core/manager/biz/loop/contractloader/contractloader.go": "is an adapter over *loopstore.ContractRepoDB; its whole job is the edge it is on, but the type should be an interface it declares",
+}
+
+// layerInversion is the debt that points the *other* way: a layer importing
+// one above itself. layerDebt covers the sideways edge (service and biz both
+// reaching down into data); this covers the upward one (biz reaching up into
+// service, model reaching down into data), which no rule in this file
+// looked at until .go-arch-lint.yml got a reader.
+//
+// The yml is where these edges actually survive the build, because its
+// grants are component-granular. `manager_biz: mayDependOn: [manager_service]`
+// is a true and reasonable statement about the architecture — until one
+// file needs it, at which point it is a licence for the next one too. That
+// is the whole reason this ledger is keyed by file: naming the component
+// would close nothing.
+//
+// These are debts, not decisions, and the same rule applies as for
+// layerDebt — an entry disappears when the edge is gone, and
+// TestTheLayerInversionLedgerIsCurrent refuses an entry that has gone stale
+// or a file that no longer exists.
+var layerInversion = map[string]string{
+	"core/manager/biz/imbridge/adapter.go": "holds *svcaiops.Service and calls CreateSession / PostMessageStreamWithOpts on it; the IM bridge is a use case reaching into the HTTP layer. Fixing it means moving the Caller and CreateSessionInput DTOs out of service, which is why it is listed rather than quietly left to the component-granular grant",
 }
 
 // bcDir returns the directory whose service/, biz/ and data/ subdirectories
@@ -1064,6 +1086,17 @@ func check(root string) ([]string, error) {
 			return nil, err
 		}
 	}
+
+	// The yml is a gate too, and until now it was the only one in the
+	// repository with no reader. Its grants are component-granular, so a
+	// grant added for one import quietly authorises every import after it —
+	// which is how an upward edge nobody named became a file that compiles.
+	archViolations, err := checkArchLint(root)
+	if err != nil && !errors.Is(err, errNoArchLintConfig) {
+		return nil, err
+	}
+	violations = append(violations, archViolations...)
+	sort.Strings(violations)
 	return violations, nil
 }
 

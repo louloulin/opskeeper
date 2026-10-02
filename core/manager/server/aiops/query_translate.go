@@ -11,7 +11,7 @@
 //
 // Backend protections:
 //   - 120-second timeout — project-wide unification floor for any LLM
-//     call (see core/manager/pkg/llm/client.go::defaultTimeout). Originally
+//     call. Originally
 //     6 s tuned for a Haiku-class default; bumped to 20 s once the
 //     cluster default moved to DeepSeek; finally unified at 120 s with
 //     the rest of the LLM-call sites so a slow reasoning model can
@@ -33,9 +33,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
 const queryTranslateTimeout = 120 * time.Second
@@ -147,23 +149,27 @@ func (h *Handler) queryTranslate(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), queryTranslateTimeout)
 	defer cancel()
 
-	resp, err := h.llmClient.Chat(ctx, llm.ChatReq{
-		Messages: []llm.Message{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userPrompt},
+	reply, err := h.llmClient.Complete(ctx, pigmodel.Request{
+		Messages: []pigai.Message{
+			pigmodel.SystemTurn(systemPrompt),
+			pigmodel.UserTurn(userPrompt),
 		},
-		Temperature: 0.1, // deterministic-ish; we want a precise query
+		// Near-deterministic: the user is asking for a query, and a
+		// differently-sampled answer is a differently-typed query they
+		// then have to debug instead of run.
+		Tune: func(o *pigai.StreamOptions) { o.Temperature = 0.1 },
 	})
 	if err != nil {
 		http.Error(w, "llm: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	parsed, perr := parseTranslateOutput(resp.Assistant.Content)
+	answer := pigmodel.ReplyText(reply)
+	parsed, perr := parseTranslateOutput(answer)
 	if perr != nil {
 		// Wrap raw output in the response so the caller can decide
 		// whether to surface it; the SPA shows a "翻译失败：..." hint
 		// and lets the user click 重试 or just type.
-		http.Error(w, "parse: "+perr.Error()+" raw="+truncate(resp.Assistant.Content, 200), http.StatusBadGateway)
+		http.Error(w, "parse: "+perr.Error()+" raw="+truncate(answer, 200), http.StatusBadGateway)
 		return
 	}
 	parsed.Dialect = dialect

@@ -80,8 +80,14 @@ func (s *Service) HandleRegister(ctx context.Context, edgeID uint64, info tunnel
 
 // HandleHeartbeat is the tunnel-side entrypoint for the heartbeat RPC.
 // Thin passthrough to biz.Usecase.HandleHeartbeat.
-func (s *Service) HandleHeartbeat(ctx context.Context, edgeID uint64, ts time.Time) error {
-	return s.uc.HandleHeartbeat(ctx, edgeID, ts)
+//
+// pigVersion is the PiG agent build the node reports alongside its liveness
+// ping. It travels with the heartbeat rather than with register_edge
+// because it is the one version on a node that legitimately changes after
+// the handshake: the edge is upgraded, the process restarts, and from the
+// next heartbeat on the control plane knows what the node actually hosts.
+func (s *Service) HandleHeartbeat(ctx context.Context, edgeID uint64, ts time.Time, pigVersion string) error {
+	return s.uc.HandleHeartbeat(ctx, edgeID, ts, pigVersion)
 }
 
 // PluginHealth returns the last-reported per-plugin runtime health for one

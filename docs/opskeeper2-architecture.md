@@ -111,7 +111,7 @@
 
 ---
 
-## 四、三条设计主线（架构的全部争议点都在这里）
+## 四、设计主线（架构的全部争议点都在这里）
 
 ### 4.1 事件翻译发生在「节点」，不是「控制面」
 
@@ -204,6 +204,829 @@ edge 主进程
 独立进程让插件崩溃、内存泄漏、`bash` 误执行都止步于子进程；
 pig 与插件还能独立于 opskeeper 发版热更（复用现有 `fetch_package`/`apply_package` 通道）。
 
+### 4.5 AI 层说 PiG 的话：没有第二套模型词汇（决策 67）
+
+这是 B 阶段收口之后剩下的那一层，也是「彻底改成 PiG 风格」与「加个适配层」
+真正分开的地方。
+
+**改造前，模型调用有两套词：**
+
+```go
+// core/ports —— OpsKeeper 自己的
+type LLMRequest struct { Model, Provider string; Messages []Message; ... }
+type LLMResponse struct { Content string; Usage Usage; ... }
+
+// core/manager/pkg/llm —— 另一个
+type Client interface { Chat(ctx, ChatReq) (*ChatResp, error) }
+type ChatReq struct { Model, Provider string; Temperature float64; Messages []Message }
+```
+
+**改造后，只有一套：**
+
+```go
+// core/pig/pigmodel —— PiG 的 ai 类型，别名以外没有任何东西
+type Request struct {
+    Selection domain.ModelSelection   // 「用我们配置里的哪个模型」是宿主问题
+    Messages  []ai.Message            // 已经是 PiG 的
+    Tools     []ai.ToolSchema
+    Tune      func(*ai.StreamOptions)
+}
+type Completer interface {
+    Complete(ctx, Request) (*ai.AssistantMessage, error)
+}
+```
+
+被删掉的是 `ports.LLMRequest` / `LLMResponse` / `Conversation` / `Message`、
+`pkg/llm` 的 `Client` / `MultiClient` / `Router` / `Wire` / `Metrics`，
+以及 `llmpig` 里的 `pigclient.go` / `pigregistry.go`。**这一层当初买到的
+只有一件事**——调用方可以在不 import PiG 的前提下描述一次请求；**它付出的
+代价是每个字段写两遍、每次调用做一次转换、而每次转换都是一个可以静默丢掉
+`tool_call` id 或 thinking block 的地方。症状不是报错，是模型悄悄不再调用
+工具。**
+
+**四条留下来的硬约束：**
+
+| 约束 | 为什么 OpsKeeper 必须自己扛 |
+|---|---|
+| **模型白名单在宿主**（`pigcoding.ErrNoSuchModel`） | PiG 对未列出的 slug 是放开的——对 CLI 合理，对一个多租户平台的成本与合规管控不合理 |
+| **凭据不进 `auth.json`** | 服务器没有交互式登录；`NewAuthStorage` 还会强制创建一个空的 `auth.json`（0600）。设置表 → `ModelRegistry.SetProvider`，轮换即重注册，无缓存可失效 |
+| **`TranscriptUsage` ≠ `ai.Usage`** | 前者是存储行（4 个 token 数 + provider 上报总数 + 成本），后者是 provider 线格式（含 reasoning / cacheWrite1h / 五项 cost）。合并意味着每加一个 provider 就要重写全部历史行 |
+| **每请求 temperature 走 `Tune`** | `StreamOptions.APIKey` 是每请求注入的，registry 填完凭据之后 `Tune` 才跑——抽取器要 0、翻译器要 0.1、judge 要 0，理由各自不同 |
+
+**`pigcoding` 做什么、不做什么**（这是它与「适配层」的分界线）：
+
+```
+做：  决定 PiG 状态放哪   —— 私有 agent 目录（不写 ~/.pig）、内存 session log（不写 .pig/sessions）
+      决定生命周期       —— 一 Runtime/Services 进程级；close 顺序严格：Session → Runtime → Services
+      re-export 类型     —— alias，零运行时行为
+不做： 不定义任何 OpsKeeper 形状的 request/response
+```
+
+**为什么 `core/pig/pigai` 这个 alias 面是必需的**：PiG 只允许被 `core/pig`
+一个模块 import（`modulecheck` 强制）。宿主需要 `ai.Message`，如果直接 import
+`PiG/ai`，闸门会失败；而**放宽闸门比造 alias 更糟**——它拿一条真不变量换一次
+安静的构建，账单在 PiG 下次改内容块时到达。所以宿主写 `pigai.Message`，
+它是 `ai.Message` 的**同一个类型**，不是翻译。加进这个列表的每一项都是一句
+声明：「PiG 对这个概念的定义就是 OpsKeeper 的定义」——所以名单是手写且短的。
+
+**`harness` 的依赖被有意放宽**（`core/harness` → `core/pig`）。judge 收到的是
+`*pigai.AssistantMessage` 并从内容块读文本，在 harness 外面再声明一个单方法
+接口、背后放一个手写响应结构，买不到任何东西：PiG 的消息类型照样得 import，
+只是躲在第二套词汇后面，而那套词汇每次 PiG 改形状都要跟着改一次。真正保住
+的属性是**不引入 provider SDK**——`pigmodel` 是契约不是客户端。
+
+### 4.6 控制面下发的 prompt 不是命令：RPC 的斜杠劫持（决策 68）
+
+**这是通读 PiG SDK 文档时挖出来的、生产可达、且阶段 D 会放大的缺陷。**
+
+`pig --mode rpc` 的 `prompt` 指令**不是提交文本的方式**。在接纳一个 turn
+之前，agent 会先问自己的命令目录「这条消息是不是斜杠命令」
+（`cmd/pig/rpc_mode.go:634`，解析在 `extensionCommand`
+`cmd/pig/rpc_mode.go:121-141`）。判据是纯词法的：**首字节是 `/`，且第一个
+token 匹配任一已加载扩展命令的 invocation name**。命中就执行命令，turn
+根本不发生——操作员看到的是一条命令在跑，不是一次排查，而且**响应里没有
+任何东西说明这次请求被改读了**。
+
+第二个门更窄但同类：`ExpandSkillCommand`
+（`internal/codingagent/skills.go:267-270`）把开头的 `/skill:<name>`
+改写成该 skill 的正文。
+
+**为什么这是生产可达的，而不是理论风险**：`ports.AgentProcess.Prompt`
+的契约写的是「一次用户 turn」，控制平面也确实照做——控制台文本从
+`nodeagent.Service` 经 `nodefleet.Fleet` 原样下发到 agent
+（`core/manager/biz/nodeagent/service.go:253`）。**整条路径都不知道目的地
+有命令派发器。** 而文本不只有操作员口语：告警、日志片段、RCA 上下文都以
+来源系统的原样开头，运维数据里首字符是 `/` 很常见——文件路径、URL、
+label selector。任何一个被粘贴进会话，就差一次碰撞。
+
+**而且碰撞面随插件生态增长**：每个扩展注册的命令都是可匹配的名字，触发前缀
+集合等于第三方包愿意发布什么。这是**阶段 D 的东西漏进了阶段 C 的数据
+路径**——错误的发现顺序。
+
+**为什么中和而不是拒绝**：拒绝更安全，但是错的。文本是合法的——
+「/var/log 快满了」就是操作员真会打的东西；而这里防的失败是**沉默**，不是
+恶意。拒绝一条合法消息只会教会操作员去改写自己的输入，而他们下一步就是
+把斜杠删掉，那恰好毁掉排查需要的证据。
+
+**做法**：`core/pig/pigrpc` 的 `Prompt` 与 `Steer` 都过
+`sanitizePrompt`——首字节是 `/` 就前置一个空格。两个门都测首字节，所以一
+个空格同时废掉两个；模型看到的是一行带前导空格的文本，没有推理依赖它，而
+操作员的原话完整到达。改写**在流上发一个 `opskeeper_prompt_rewritten`
+帧**再提交 turn，所以通知排在被改写 turn 产生的事件之前。通知**不是日志行**：
+`ports.ProcessEvent` 的契约明说词汇是开放的、未知类型照转发，所以审计拿到
+的是已经在记录的那条流，payload 带**原文**——「无害的粘贴」和「第三方插件试图
+截获 turn」只有靠原文才能区分。
+
+**无条件生效，不是开关**：控制平面没有任何「用 agent 的命令语言说话」的
+功能，所以走到这一层的首字符斜杠，按构造就不是命令。留一个关掉守卫的选项
+只是把危害重新打开的开关。
+
+**顺带修正的一处文档漂移**：`llmpig/doc.go` 与 `module-architecture.md`
+此前都写「一个 turn 是 `pigcoding.Session`」。不是。PiG 把 agent 暴露在两个
+高度上，而它们**不可互换**：`agent.Agent` 接受控制平面必须自己拥有的四个钩子
+（`OnEvent` 流式、`OnMessagePersist` 落库、`BeforeToolCall` 策略闸门、
+`FinishTurn` 预算、`DefaultStreamFn` 每请求凭据），而
+`coding.SessionStartOptions` 只暴露 `BeforeToolCall` 与 `ExtraTools`，另外
+三个一个都没有。内核直接嵌 `agent.Agent` 是必需的，不是偏好。`coding` SDK
+仍然承重，在下一层：它拥有 `Services` 容器与每次模型解析都要经过的
+`ModelRegistry`。
+
+### 4.7 覆盖报告按方法 join，不按家族（决策 69）
+
+**`plugin-coverage` 曾经报 20/20。实际是 0/20。**
+
+旧 join 把 case 期望的**家族**（`pg.lock_waits` → `pg`）和插件包声明的
+**家族集合**比对。而只读包发了 `pg.lock_waits`，于是 `pg.kill_session`
+被判为「已覆盖」——**舰队里从来没有任何节点跑过这个工具**。20 个 case 每个
+都同时命名诊断与补救，所以每一个补救期望都被这样抹平：真实覆盖是
+**44/80 期望、0/20 case 完整**，而报告说的是满分。
+
+**为什么这类假绿特别危险**：它不会在舰队发生变化时移动。舰队从「什么都不发」
+变成「发了写工具」，报告仍然是 20/20；反过来舰队删掉一个工具，它仍然是
+20/20。**一个对输入变化不敏感的指标不是指标，是一个装饰。**
+
+**修法是精确 join，不是更严的启发式**：期望按工具名匹配，或经
+`ExpectationAliases` 指向真正提供它的那个工具。两条都是精确的——这里不
+从共享前缀推断任何能力。别名表刻意只有两条，且两条的目标都是**今天某个包
+真的发了的工具**：
+
+- `host.host_load` → `get_host_load`（可观测包；节点没有理由为了知道自己
+  的负载去连一个 host-exporter）
+- `git-artifact.LinkK8sImage` → `git.find_runtime_link`（linker 的 API 名
+  是被测能力，包发的是承载它的适配器）
+
+`redis.kill_client` **故意不在表里**。它确实对应适配器的
+`redis.client_kill`，是真实改名——但在某个包真的发出这个写工具之前，
+别名它等于宣称一个没有节点能跑的能力覆盖了，正是这次要消灭的假绿，
+从侧门又进来了。诚实的报告行是「没有包提供它」。
+
+**别名必须是双向被测的**：`TestEveryAliasPointsAtAToolSomePackageShips`
+断言每个别名的目标确实被某个包声明。这条断言存在的原因就是上一段。
+
+**缺口报告也从家族级升到方法级**，并且三种原因不再被折叠（这是旧代码
+把它们混为一谈的地方）：
+1. 「家族有人服务，但没有这个方法」→ 要不要打包，是个决策；
+2. 「这个家族是控制面的适配器，没有包提供」→ 已经有人做过的决策；
+3. 「没有任何包服务这个家族」→ 有人给不存在的工具写了 case，是 bug。
+
+`CaseCoverage.Reasons` 与 `Uncovered` **并行排序**（一起排序再拆开），
+因为理由是读者唯一会据此行动的部分，理由挂错行会把人引去打包错的工具。
+
+**顺带补上的一处虚假守卫**：middleware 包（53 个工具，全舰队最大）的
+`pig-ops.yaml` 注释声称有
+`TestTheMiddlewareProfilesDeclaredToolsAreExactlyWhatItShipsToTheModel` 守着
+「声明 == 实际」，并引用了一个不存在的路径
+（`internal/middleware/toolset`）。**那个测试不存在**——注释是一个没有装上的
+守卫，而它守的偏偏是最宽的一个包。现在装上了（`middleware_profile_test.go`，
+7 项），并附带 L1 / 无审批 / 全 read / 只读 scope / 不写审计链 / 只装 edge /
+有序唯一七条断言。
+
+**33 个缺口不是 B3 未做**。计划里 B3 的定义是「`restart_service`、服务重启、
+配置变更」，修复包五个工具已经覆盖。缺口全部来自 golden case 要求了计划
+从未要求过的中间件写操作（`pg.kill_session`、`k8s.drain`、`kafka.restart_broker`、
+`redis.flushdb`……）——**适配器早就实现了它们**，只是没有包声明它们。
+所以这是 **case 跑在舰队前面**，不是计划落后。报告现在能一字不差地说出
+是哪 33 个方法，因为那才是能据此写包的信息。
+
+### 4.8 profile 是天花板，但没有人写下它装什么（决策 70）
+
+**金融 profile 装不上它存在的理由。**
+
+`ProfileFinance` 授予 `host.write`，`Intent` 写明理由是「重启单台主机上的单个
+unit 是这个机队最需要自动化的操作」。而全目录里**唯一**使用 `host.write`
+的是 `opskeeper-sre-repair`——**它同时还需要 `alert.write`**（包里的
+`apply_config_change` 提交已确认的告警规则草稿）。finance 没有授予
+`alert.write`。于是：
+
+- `sdk.Admit` 在 finance 下**拒绝**修复包；
+- finance 的 `NotGranted` 写的是「k8s.exec, db.write, mq.write」，
+  **没有提到 alert.write**——被拒的操作员会被告知一个不相干的 scope；
+- 每个字段单独看都自洽，整份 profile 却回答不了自己任何一句话。
+
+**为什么一直没被发现**：9 个 profile 测试**全部在测 profile 自身**（层级、
+半径、策略、措辞），**没有一个把 profile 和实际插件目录放进同一个断言**。
+天花板是对的，组合根本不存在，所以「这个机队到底装哪些包」这个问题在整个
+系统里没有任何地方回答。
+
+**修法是补上「组合」这一半**。`Profile` 新增 `Composes`：这个 profile 安装
+的包集合，有序、去重、被测试对着真实目录校验。于是三件事同时变成可证的：
+
+| 断言 | 抓住的失败 |
+|---|---|
+| 组合里的包必须真实存在 | 模板第一次用就失败（装机时、生产上、事故中） |
+| **组合里的包必须真的被该 profile 准入** | 文档描述了一个搭不出来的部署 |
+| **被拒的 scope 必须在 `NotGranted` 里点名** | 操作员被告知一个不相干的 scope |
+| 没有 profile 组合的包 = 永不上机 | 包能加载、能签名、能灰度，然后从未被执行 |
+| finance 组合 ⊆ saas 组合 | 两个 profile 悄悄对调 |
+
+**修的是 profile，不是测试。** finance 现在也授予 `alert.write`，理由写进
+`Intent`：修复包把「重启 unit」和「提交告警规则草稿」捆在一起，只给一个
+scope 会让旗舰包在唯一为它而设的部署里装不上；而这两个 scope **都不触及
+交易状态**——一个重启 systemd unit，一个改规则何时触发。层级仍是 L2、
+半径仍是 pod、仍需人工审批，**爆炸半径没有变宽一分钱**。
+
+**这三条测试是承重的，不是装饰。** 我把修复回退后重跑，三个测试从三个
+独立角度同时失败：
+
+```
+--- FAIL: TestEveryComposedPackageIsActuallyAdmittedByItsProfile
+      finance composes opskeeper-sre-repair but admits it with nothing
+--- FAIL: TestEveryProfileNamesEveryScopeItRefusesToGrant
+      finance refuses "alert.write" to a shipped package but its
+      NotGranted ("k8s.exec, db.write, mq.write") does not name it
+--- FAIL: TestTheFinanceProfileCanActuallyRunTheRepairItExistsFor
+      not granted: alert.write
+```
+
+一个在修复前后都绿的测试什么都没证明，所以这一步是必须做的。
+
+### 4.9 兼容矩阵：让管理侧预检与节点裁决是同一个函数（决策 71）
+
+**E 闸门的后半句「版本矩阵兼容性检查」此前只有算术，没有出口。**
+
+`MeetsMinEdgeVersion` / `MeetsMinPigVersion` 实现完整、措辞考究，但**只被
+`cmd/opskeeper-edge` 调用**——也就是只有节点会拒绝。这本身是**设计**，
+`version.go` 写得很清楚：「manager 可以要一个包，只有节点能说自己跑不跑得了」。
+真正缺的是：操作员在**开始发布之前**问不出这个问题。
+
+于是一个混合机队的现实是：滚动发布打到 3 台旧节点上，操作员看三波失败，
+再从失败日志里读出控制台本该一次告诉他的事——那 3 台是 0.7.2，这个包要
+0.8.0。
+
+**做法是投影，不是第二个裁决。** 新增 `pluginmanifest.CheckVersions`，
+把两条轴按节点的顺序跑一遍；`Review` 改成调它。管理侧的 `Evaluate` 也调它。
+**两侧不可能分歧，是因为根本没有第二份实现可以存在**——这不是靠测试维持的
+性质，是靠结构。
+
+> 两份各自正确的两轴检查，是两个等待分叉的答案。
+
+**`Review` 的重构本身是被证明行为不变的**：仓库里原有的 11 项版本测试
+（节点说不出版本 → `StepVersion`、只升级 edge 不能清掉 agent 步……）在重构
+后全绿。另外新增一张 8 行等价表，对每组 (包要求, 节点版本) 同时跑 `Review`
+和 `CheckVersions`，断言 allowed / step / reason 三者全等——四种可能分叉的
+情形（两轴都失败、只有 agent 旧、只有 edge 旧、都不旧）各占一行。
+
+**矩阵是管理侧唯一的新概念**：`Matrix{Hostable, Refused}` 分区而不是一个
+带 flag 的列表，因为两者回答的是不同问题——「几个节点能装」和「我先修什么」。
+拒绝行携带**节点自己会说的那句拒绝理由**，所以操作员在控制台和在节点上读到
+的是同一句话，不是两句今天碰巧一致的话。
+
+**三条 fail-closed，都是这个端点最容易犯、代价最大的错**：
+
+| 情形 | 行为 | 理由 |
+|---|---|---|
+| 节点报不出版本 | **拒绝**，不计入 hostable | 未报告 ≠ 已知良好。计入会把它送进第一波金丝雀，在发布中失败 |
+| 管理侧没接版本快照 | **503**，不返回空矩阵 | 这个端点存在的意义就是拦住一次坏发布；静默成功是最坏的失败 |
+| 快照读取失败 | **报错**，不返回空矩阵 | 「机队是空的」和「读不到机队」是不同答案，塌缩成一个空矩阵会让操作员把发布发向虚空 |
+
+**一个刻意的限制，以及它为什么不是缺陷**：管理侧**不持有 manifest**——
+发布带的是 URL、摘要和签名，节点自己去取包、自己验签、自己审查。所以矩阵的
+requirement 来自调用方，并由 `Matrix` **原样回显**在响应里：问错问题的人拿到
+的是**看得见的**错答案，不是一个貌似合理的。
+
+**我特意没有把 requirement 塞进 `PluginSpec` 送进节点**。那会让节点用控制面
+的声明代替它从签名清单里读到的值——直接削弱签名模型。一个更方便的 API 换掉
+一条安全性质，不做。
+
+**agent 轴目前是空的，且是决定**。控制面不缓存 PiG agent 版本：
+`Fleet.Health` 是逐节点实时 RPC，每次操作员打开页面就问一遍每个节点，是把读
+变成故障的最短路径。所以这一轴**不猜**——`CheckVersions` 对读不出的版本
+fail closed，说的是「无法判断」而不是「太旧」。现有包**没有一个声明
+`min_pig_version`**，所以今天没有节点因此被拒；哪天有包开始声明，它会被
+全机队拒绝并给出诚实理由——这是正确行为，也是「控制面需要健康缓存了」的
+可见信号。**决策 73 补上了这个缓存，且刻意没有走轮询路线**（见 4.11）。
+
+### 4.10 SDK 原文学习：两处缺口，和一个已经存在的调度层（决策 72）
+
+决策 67 定了「AI 层说 PiG 的话」，决策 68 顺手修正了一处文档漂移——**turn 跑在
+`pigagent.Kernel`（`agent.Agent` 之上）而不是 `pigcoding.Session`**。这一轮把
+PiG SDK 文档与 `coding` 源码逐行对过，结论是：**这个选择当时是对的，但它现在
+欠着两笔账，而其中一笔的上游答案已经自己长出来了。**
+
+**先说 SDK 到底是什么。** 它是三层，不是「一个 API」：
+
+```
+coding.Services      进程级共享依赖：settings、认证、模型注册表、路径
+      ↓
+coding.Runtime       拥有扩展进程，创建 Session
+      ↓
+coding.Session       一个会话：Send / Prompt / Steer / FollowUp / Abort
+                     Events() 事件流 · Entries() 追加式日志 · SetModel
+```
+
+官方明确要求「不是 Go 程序、或需要进程边界时才用 `pig --mode rpc`」。OpsKeeper
+的**节点面**已经走了 rpc（阶段 C 的 `PigSupervisor`），**控制面**走的是进程内
+`coding`——两者都合法，因为它们是两种不同的嵌入方式，不是一个该被消灭的错。
+
+**账一：`MaxTurns` 在 `coding` 里没有接线。**
+
+```go
+// agent/agent.go:565 —— 0 = unlimited, as upstream, which has no turn cap
+MaxTurns int
+// agent/agent_loop.go:159 —— 注释自称 "A pig-only safety cap"
+if limit := r.a.opts.MaxTurns; limit > 0 && r.turnIndex >= limit {
+// coding/session.go:391 —— NewAgent 的 37 行 options 里没有这一项
+```
+
+`pigagent.Kernel` 传了 `MaxTurns`，所以控制面今天有 `defaultMaxIterations = 30`
+和 persona 的 `MaxTurns` 覆盖。**换成 `coding.Session` 这两个上限会静默消失**，
+而症状不是报错——是一个在生产节点上无限循环查中间件的 agent。补法是 PiG 自己的
+动作：`BeforeToolCall` 钩子数轮次，到顶调 `Session.RequestAbort()`，让 SDK 自己
+停；`SessionStartOptions.BeforeToolCall` 是现成字段。不做「让模型自己收手」那种
+软上限。
+
+**账二：`OnMessagePersist` 挂不上去。**
+
+```go
+// agent/agent.go:1329-1335 —— 构造后只有工具前后两个钩子
+func (a *Agent) AddBeforeToolCallHook(h BeforeToolCallHook)
+func (a *Agent) AddAfterToolCallHook(h AfterToolCallHook)
+// 没有 SetOnMessagePersist
+```
+
+现在每条 assistant 行是在 `OnMessagePersist` 里落库的，**行 id 在落库那一刻生成
+并回填到 SSE 帧**，控制台的气泡就是靠它绑定���。SDK 路径的等价物是
+`SessionManager`（`coding/session_manager.go:12` = `icodingagent.Session`，追加式
+日志，不是消息快照）。改从 `Entries()` 读回意味着 **id 分配时机从「消息产生时」
+变成「turn 结束后」**，SSE 帧的 `message_id` 与控制台气泡的绑定时序会变——这是
+B 阶段验收闸门「SSE 帧 golden 逐帧一致」直接命中的改动。
+
+**所以这一轮没有动控制面的 turn。** 两个缺口都真实、都能补，但补法会改帧契约，
+而帧契约是前端零改动承诺的锚点。正确顺序是：先定 id 时序（要么行 id 改由
+`SessionManager` 的 entry id 承载并接受帧变化，要么维持「产生时分配」而从
+`Entries()` 做增量回填），再换驱动。这不是一个可以在没有结论的情况下顺手做的
+重构。
+
+**账三：真正的发现——调度层上游已经有了。**
+
+PiG 最新提交 `f36a17c` 加入 `piglets/company`（`pig-cmd`），它做的正是计划 §二
+里 OpsKeeper 自己要画的那张图：
+
+| OpsKeeper 2.0 计划里的东西 | `pig-cmd` 里的对应物 |
+|---|---|
+| 每节点一个基于 pig 的运维 Agent | 一个 `pig-cmd` 节点，`company.yaml` 定义 roster / 预算 / 组织策略 |
+| 协调者 + 7 个 Worker persona | coordinator 模型调 `delegate_task(agent, objective, max_tokens)`，委派只允许一层 |
+| 节点 Agent 独立进程、崩溃不拖垮节点 | **一个 session 就是一个 virtual actor**，actor 重启就是进程重启，状态是 pig 自己写的 JSONL |
+| 爆炸半径 / 成本治理 | `--max-total-tokens` / `--max-cost` / `--max-concurrent`，且是**常量而非配置**（编码的是观察到的失败模式） |
+| 跨节点 agent.prompt / agent.state 路由 | `/v1/run` `/v1/delegate` `/v1/status` 控制面 + `--cluster` 的 session-owner 路由 |
+| 未来接别的 Agent 生态 | **A2A**（JSON-RPC 2.0 over HTTP，protocolVersion 1.0），远端专家与本地专家同一套记账 |
+
+它的设计立场值得直接抄进 OpsKeeper：**「Go 层只准入、路由、记账、恢复，从不决定
+怎么拆任务——那是协调者模型的决定，所以没有会漂移的编排代码。」** 这正是决策 67
+「不写第二套编排词汇」的同一条线。
+
+**它同时回答了被搁置的 protoactor 问题**：`--cluster` 就是官方实现，挂在
+`internal/mesh`，用 Proto.Actor Cluster，session id 就是集群身份，零迁移零交接。
+而且上游的结论与我们一致——**先做核心**：`spikes/clusterpreview` 明确写着
+「Not shipped behavior; nothing imports this module」，Cluster 上游自己标 Alpha，
+多机是 Phase 3。OpsKeeper 保持「跳过 protoactor、先补核心功能」是对的，现在
+还多了个理由：**不用自己写，它在 `pig-cmd --cluster` 里，而且是个 piglet——
+`pig-cmd` 不 import 任何 PiG Go 包。**
+
+**对计划的影响（不改架构方向，改的是自研量）**：`pig-cmd` 是 Piglet 而非 Stock
+PiG（D85 记为 inert capability），所以 OpsKeeper 要么把它当外部进程编排（跟节点
+agent 同级，走已有 tunnel/RPC 面），要么 fork 它改造成运维语义。**前者是默认
+选择**——它已经满足「不 import 任何 PiG 包」这条 OpsKeeper 对第三方最看重的
+性质。计划 §四 D 阶段因此少一项自研、多一项集成验证。
+
+---
+
+### 4.11 agent 轴的答案：让节点自己说，而不是让控制面去问（决策 73）
+
+决策 71 把 `CheckVersions` 变成一个函数，矩阵两侧共用它，于是只剩一个真问题：
+**控制面从哪里得到节点的 PiG 版本**。当时的答案是「没有」，并写下了为什么不能
+轮询 `Fleet.Health`。这一条把那个「没有」补上了。
+
+**为什么是心跳，不是 register_edge**。第一反应是把版本塞进已有的
+`RegisterEdgeRequest`——它已经带着 `AgentVersion`，加一个字段是同构的。但
+**AgentVersion 之所以在 register 上报，正是因为它在握手之后不再变；pig 版本
+不是**。节点升级 → 进程重启到新二进制 → 从此以后一直在心跳。握手时抓的值会
+永久冻结在节点**启动时**的构建上，恰好是操作员做发布决策时最不想要的那个数。
+心跳本来就是「我当前是什么」的周期性自述（插件健康已经这么捎带），版本属于它
+是构造上的必然，不是新增机制。
+
+```
+node ──heartbeat{edge_id, ts, plugins[], pig_version}──► manager
+                                                       └─► edges.pig_version
+                                                            └─► 兼容矩阵（一次查询，零 tunnel 流量）
+```
+
+**上报的是节点自己的答案，不是运行中进程打印的版本**。取值是 `pigSelfVersion()`
+——和安装期 `Review` 判 `min_pig_version` 用的是同一个值。预检用一个版本、
+节点用另一个版本裁决，正是兼容矩阵存在的意义所要消除的分歧。supervisor 的
+`Health().Version` 更贴近「此刻跑的是什么」，但它一旦与 `pigSelfVersion()`
+不一致（换过 PATH 上的二进制、升级失败后回滚），矩阵就会和节点自己的裁决对
+不上——**用一个更「准」的数换一个会撒谎的答案，不做**。
+
+**三条不做默认值的理由，逐条对应一个真实故障方向**：
+
+| 若这样实现 | 后果 |
+|---|---|
+| 空版本写入空串 | 某一拍丢包 → 全机队 `min_pig_version` 包被拒，看起来像全域不兼容而不是一列空了 |
+| 未变化也写 | 心跳 30s/节点/全机队，永远把一个常量列写成它已有的值；`edges` 同时承载所有 liveness 时间戳 |
+| 读不出来就默认兼容 | 把「控制面没接上」变成一次静默的全绿放行——而这是唯一决定 agent 能否加载插件扩展的那一轴 |
+
+**写失败不回传给节点**。心跳对节点的契约是 liveness，节点收到 error 会累加
+连续失败并最终自杀重启。用一次进程重启换一列版本字段是反向交易——liveness 撑
+起节点上所有其他功能，这一列只是发布页面的便利。**读-比-写**守卫是让这一列
+保持被动的唯一办法：一次查询只在版本真的动了（升级）时才发生。
+
+**测试按失效方向逐条钉，且逐个回退实现验证过承重**：
+
+| 失效方向 | 测试 |
+|---|---|
+| 空值抹掉最后已知版本 | `TestANodeThatStopsReportingDoesNotLoseTheVersionItLastReported`（三种「空」形态） |
+| 未变化仍每次写 | `TestAnUnchangedPigVersionDoesNotWriteOnEveryHeartbeat`（50 次心跳 0 写，且升级仍落地） |
+| 写失败拖垮心跳 | `TestAFailedPigVersionWriteDoesNotCostTheNodeItsHeartbeat` |
+| 线上字段名漂移 | `TestTheHeartbeatCarriesTheConfiguredPigVersionOnTheWire`（绕 `map[string]any` 断言 `pig_version`——两端同结构解码会让错 tag 也「通过」） |
+| 从错误列取值 | `TestTheCompatibilityInventoryReadsBothVersionAxesOffTheEdgeRow` |
+| 迁移没建列 | `TestMigrateCreatesAPigVersionColumnDistinctFromTheAgentVersion`（查 `pragma_table_info`） |
+
+### 4.12 第二个闸门第一次有了读者（决策 74）
+
+A 阶段只剩的那条债：`.go-arch-lint.yml` 是仓库里**唯一一处以组件为单位**授予
+跨树权限的地方，而**没有任何东西读它**。modulecheck 读模块表和代码，go-arch-lint
+读这份 yml——但 yml 自己不被检查。
+
+**组件粒度为什么在这里是问题**。`manager_biz: mayDependOn: [manager_service]`
+说的是「biz 整棵树可以看 service 整棵树」。作为架构陈述这是对的。一旦某条边
+**只是因为某一个文件需要**才被加进来，它就顺带授权了之后所有同类导入：
+
+- 那条 import 被删掉后，授权还在，**永久静默**；
+- 下一个同类 import 加进来时，**不会有任何东西变红**。
+
+yml 自己在第 20 行写着这句话（「已知债务：arch-lint 的 mayDependOn 是组件粒度
+白名单，同组件新增同类导入不会再报警」）——**债务被写下来了，但没有被关掉**。
+
+**做法：给 modulecheck 一个 yml 读取器，两条不变式。**（决策 77 后来补上第三条，
+把这两条从「各管一头」变成对称的一对；下表保持决策 74 当时的记录。）
+
+| 不变式 | 回答的问题 | 今天的违规数 |
+|---|---|---|
+| **每条授权都必须在用** | 有没有没人行使的权限？ | **104** |
+| **每条逆向边都必须记名到文件** | 有没有跨层倒边没人命名？ | **1** |
+
+第一条把 yml 从「权限清单」变回「对代码的陈述」。**104 条授权里没有一条有
+真实 import 在用**——删掉之后 `make arch-lint-run` 仍然零告警。**这是本轮最
+重要的验证**：提议删除的是我的检查器，裁决的是 go-arch-lint 自己。两个工具
+独立确认同一份配置，不靠我的检查器自证。
+
+第二条记的是**逆向边**：biz → service、model → data 这类指向自己上方层次的
+import。这条规则以前根本不存在。写第一版时它当场抓到了一个活的、无人知晓的
+倒边——
+
+```
+core/manager/biz/imbridge/adapter.go  →  core/manager/service/aiops
+```
+
+一个 use case 持有 HTTP 层的具体 service。modulecheck 的层规则只管
+service→data 和 biz→data，管不到这一条；yml 的组件授权放它过去。**它不是
+「暂时还没发现」，是「没有任何闸门会看这里」。**
+
+**逆向边为什么写成清单而不是算层级**。层不是全序：data 与 biz 是**并列**的
+（biz 声明接口、data 实现它），所以 data → biz 是正确方向，只有反向才是债。
+用 rank 函数会把这个方向也一起报错。`upwardEdges` 因此是一条写出来的清单，
+`data → biz` 缺席——它由另一条规则管着，重复写只会让两处漂移。
+
+**两个在实现里撞上、并且决定了设计的问题**（都是「检查器自己错了」而不是
+「代码错了」）：
+
+1. **`filepath.Walk(".")` 的根目录 base 名就是 `"."`**，被自己的 dot-dir 规则
+   整棵树跳过。失败是**静默且彻底**的：遍历正常结束、每个组件看起来都不导入
+   任何东西、104 条授权全被报成死的。**方向和真问题正好相反**——它会诱使人
+   去删除配置。为此专门写了 `TestTheWalkVisitsTheTreeWhenTheRootIsADot`。
+2. **import 路径没有尾斜杠**。组件声明为 `core/edge/service/**`，而
+   `core/edge/service` 目录自身的 import 是不带尾斜杠的裸路径。只匹配树形
+   会让那个包不属于任何组件，**63 条 cmd 的授权因此被误报为死的**——其中包括
+   `cmd/opskeeper-edge/main.go:37` 明确 import 的 `core/edge/service`。
+   **如果照着那份报告执行，会删掉架构文件三分之一的授权。** 这也是为什么
+   「死授权」这条规则的删除建议必须由 go-arch-lint 复核，而不能由检查器自己
+   拍板。
+
+**台账与既有惯例一致**：`layerInversion` 按文件记名并写理由，
+`TestTheLayerInversionLedgerIsCurrent` 双向守卫（条目失效即报错、文件不存在
+即报错），和 `layerDebt` 同一套约定——因为它们守的是同一条边界的两侧。
+
+**四个变异验证承重**：
+
+| 回退 | 结果 |
+|---|---|
+| 还原 dot-root 跳过 bug | ❌ dot-root 回归测试红 |
+| 删掉死授权检查 | ❌ `TestADeadGrantIsReported` 红 |
+| 删掉逆向边检查 | ❌ `TestAnUplistedUpwardEdgeIsReported` 红 |
+| 真实仓库自检 | ✅ 零违规（35 tests 全绿） |
+
+------
+
+### 4.13 SDK 文档复读：一次把「待决」变成「已决」的核对（决策 75）
+
+决策 72 读的是源码，72 留下的 A/B/C 悬着。这一轮读的是官方 SDK 页
+（`pi-in-go.dev/docs/latest/sdk/`），目的是一件很窄但很致命的事：**核对
+「latest 文档」和「我们锁定的 v0.3.0」是不是同一个东西。** 如果文档描述的
+API 在 v0.3.0 上不存在，那么所有照着文档做的规划都是空中楼阁——而 v0.3.0 是
+PiG 明确要求 pin 的版本（「Pin an exact release or commit when you embed it」）。
+
+核对结果：**一致，且顺带查出一处必须更正的记账。**
+
+| 文档里的能力 | v0.3.0 源码位置 |
+|---|---|
+| `coding.NewServices` / `NewRuntime` | `coding/services.go:96` / `coding/runtime.go:125` |
+| `ai.NewFauxProvider` | `ai/faux.go:121`（签名是 `NewFauxProvider(FauxConfig)`，不是裸构造） |
+| `coding.NewInMemorySessionManager` | `coding/session_manager.go:15` |
+| `coding.NewInMemorySettingsManager` | `coding/settings.go:7` |
+| `coding.CreateModelRuntime` | `coding/model_runtime_create.go:29` |
+| `ObserveEvents` | `ai/stream_observation.go:337` |
+| `SetScopedModels` | `coding/session_scoped_models.go:29` |
+| `CreateAgentSessionRuntime`（工厂式 Session 替换） | **不存在**；v0.3.0 只有 `Session.SetRebindSession`（`coding/session_extension_replacement.go:14`） |
+
+最后一行是这一轮唯一对不上的地方，而它恰好是最有用的一行：它说明**官方文档已经
+跑到 v0.3.0 前面去了**。所以本节能给出的结论只能是「v0.3.0 上有这些」，不能是
+「PiG 有这些」——这个区分就是「锁定版本」这条纪律买到的东西。
+
+**一处更正：账二的理由是错的，结论碰巧是对的。**
+
+决策 72 账二写的是「`agent` 包构造后只有 Before/After 两个钩子，没有
+`SetOnMessagePersist`」。前半句对、结论对，**理由错**。钩子是一个字段，不是
+构造后的 setter：
+
+```go
+// agent/agent.go:565 / 650
+MaxTurns        int // 0 = unlimited, as upstream, which has no turn cap
+OnMessagePersist func(AgentMessage) error
+```
+
+`pigagent.Kernel` 正是靠这两个字段活着的：
+
+```go
+// core/pig/pigagent/kernel.go:173-183
+ag := agent.NewAgent(agent.AgentOptions{
+    Model:           model,
+    MaxTurns:        maxTurns,
+    OnEvent:         gate.onEvent,
+    OnMessagePersist: func(msg agent.AgentMessage) error { return gate.persist(msg) },
+    BeforeToolCall:  []agent.BeforeToolCallHook{gate.beforeToolCall},
+    ...
+```
+
+所以真正的缺口窄得多、也硬得多：**`coding.SessionStartOptions` 里没有
+`OnMessagePersist` 字段**（`coding/runtime.go` 的结构体里没有），而
+`coding.NewSession` 用它自己的持久化把这个接线点占掉了——
+`internal/codingagent/session.go:633` 的注释自己承认 OnMessagePersist 是
+「single persistence」入口。
+
+为什么这个更正要紧：原来说法暗示「PiG 没有这个能力，我们只能从 `Entries()`
+反推」。更正后的事实是「**能力在，面板没开**」。这句话直接决定了下一段。
+
+**待决的 A/B/C 收敛为 C，而且是被证据收敛的。**
+
+| 选项 | 裁决 | 依据 |
+|---|---|---|
+| A：行 id 改由 entry id 承载 | ❌ **不可实现** | `type SessionManager = icodingagent.Session`（`coding/session_manager.go:12`）是**类型别名到具体结构体**，不是接口。Go 里别名无法被我们的类型满足，注入自有日志这条路在 v0.3.0 上不存在，除非 fork PiG |
+| B：从 `Entries()` 增量回填 | ❌ **没有动机** | `OnMessagePersist` 在 `agent.Agent` 层可用且 `Kernel` 已在用它分配行 id 并回填 SSE 帧。「等 turn 结束再反推」是纯粹自找的退化 |
+| C：维持 `Kernel`，`pigcoding` 限定在设置与模型目录 | ✅ **成立** | 换过去会同时丢掉 turn 上限和行 id 时序，而这两样都是 B 阶段闸门要验的东西 |
+
+A 的出局是这一轮最实质的收获：它把一个**看起来开放**的选项关掉了，关掉的理由是
+一个类型别名——三行源码，一锤定音。
+
+**账一（`MaxTurns` 不在 `SessionStartOptions`）随之自动作废。** C 成立意味着
+Kernel 一直带着 `MaxTurns`，控制面的 `defaultMaxIterations = 30` 和 persona 上限
+都在。仍然记一笔，只是为了不让下一个读源码的人重新发现一遍。
+
+**`SessionStartOptions` 的完整字段 vs 我们 `pigcoding.Start` 暴露的字段。**
+差异里有几个和 OpsKeeper 隔离模型直接相关，值得记下来但**现在不动**：
+
+- `AllowedTools` / `ExcludedTools` / `ActiveBuiltinTools`：Session 层的工具
+  白/黑名单。我们今天在 Kernel 侧用 `BeforeToolCall` 逐次裁决，那是**裁决**不是
+  **面**——一个越权工具仍然会被放进工具表，只是每次调用被拒。这三个字段是第二道
+  防线。但**不能当唯一防线**：一旦靠它们，面板一开，审批裁决就得整体搬家。所以
+  记为 `pigcoding.Start` 的待补字段。
+- `SkipExtensionTools`：控制面 Session 应当默认置位。与决策 74 记的那条活的
+  倒边（`biz/imbridge` 持有 `service/aiops.Service`）是同一个方向的问题：控制面
+  不该被节点插件影响。
+- `ResourceLoader` / `SystemPromptResources`：与决策 67「能力清单由
+  `before_agent_start` 注入」同一条线。我们目前自己组装 `SystemPromptSections`，
+  PiG 也有资源加载器这条正路。
+
+**两个能直接用、且正好落在闸门上的能力。**
+
+其一，`ai.NewFauxProvider(FauxConfig)`（`ai/faux.go:121`）——官方文档说它
+「把每个排队的响应按正常事件生命周期流出」。核对下来 **Kernel 的测试早就在用它跑
+真实 turn 了**（`core/pig/pigagent/kernel_test.go` 的 `newFauxModel` /
+`fauxResolver`），文档这一条对我们的边际价值只剩一件事，而且这件事不小：
+`ai.splitByTokenSize` 用 `math/rand` 在 `MinTokenSize` 与 `MaxTokenSize` 之间抽
+分块宽度，所以**流式帧序列天生不可复现**。`Min == Max` 时 `rand.IntN(1)` 是唯一
+不随机的取值，golden 才有可能存在。§4.14 记的就是用上这个事实之后立刻查出的
+一个真缺陷。
+
+其二，`coding.CreateModelRuntime(ctx, opts)`（`coding/model_runtime_create.go:29`）
+能不建 Session 就查模型、刷目录。`llmpig` 现在自己维护 catalogue
+（`core/pig/pigcoding/provider.go` 的 `providerConfig` / `slugsOf`）。换不换属于
+「控制面要不要多依赖一层 `coding`」的同一笔账，**与本节结论一致：不换**，记为
+候选。
+
+**不变的部分。** 文档原话仍然成立：「不是 Go 程序、或需要进程边界时才用
+`pig --mode rpc`」——阶段 C 的 `PigSupervisor` 不动。另外记下一条对 SSE 有价值
+但暂时兑现不了的语义：`AssistantMessageEventStream.Result` 与事件迭代**独立**
+完成并保住终结消息的身份（`ai/stream_observation.go:337` 的 `ObserveEvents`
+配套）。等控制面真的在 Session 路径上流式时它才有用。
+
+**对进度的影响。** 本轮不改运行时代码，§六 的百分比不动（A 100% / B 100% /
+C 90% / D 95% / E 95%）。变的是两件事：一个「待决」变成「已决」，以及 B 阶段
+闸门补上了它真正缺的那一半（§4.14）。**待决清单因此从五项降到四项。**
+
+
+### 4.14 补上闸门缺的另一半，以及一个自己差点报错的教训（决策 76）
+
+决策 75 的核对把「B 阶段闸门已通过」这句话重新看了一遍，然后发现它**只对了一半**。
+
+**闸门实际由两个测试扛着，它们各自只覆盖一半。** `golden_test.go` 把 Mapper 钉在
+一份**手写的** `agent.AgentEvent` 脚本上，逐帧比字节；`kernel_test.go` 通过
+`ai.NewFauxProvider` 跑**真实**的 PiG 事件流，但只断言「有没有 `tool_end` 帧」
+这类存在性。**没有任何一个测试把两者钉在一起**——而这次迁移的全部风险恰恰就在
+接缝上。手写脚本对「PiG 实际吐了什么」一个字都没说：它不能发现
+`message_update` 与 `message_end` 之间多了一种事件，不能发现 tool call 的参数以
+delta 到达而 mapper 没转发，也不能发现 usage 跑到了另一个帧上。
+
+**先解决可复现性。** `ai.splitByTokenSize` 在 `MinTokenSize` 与 `MaxTokenSize`
+之间用 `math/rand` 抽分块宽度，所以真实流的 delta 数量天生不稳定。`Min == Max`
+时 `rand.IntN(1)` 是唯一不随机的取值——这是把「随机」变成「可钉」的那把钥匙。
+变异验证：去掉这两个字段，golden **连跑 6 次全红**；加回去，全绿。
+
+**为什么不逐帧钉 delta 的边界。** delta 边界是 provider 的分词器，不是我们的
+契约：控制台在 `assistant_end` 重绘整轮，4 字节一块和整段一次到达都是对的。钉边界
+会让这个 golden 变成 PiG 分词器的绊线，而不是 mapper 的绊线，失败时给出一份没人
+能行动的 diff。所以 `coalesceDeltas` 合并连续 delta，钉的是**帧的种类、顺序与
+载荷**。为了不让合并把丢失也一起吞掉，`TestStreamDeltasReassembleTheAnswer` 另外
+断言拼回来的文本等于 `assistant_end` 的内容：掉一个 chunk 会变成内容不符，而不是
+一条悄悄变短的 golden。
+
+**查出来的东西，和我一开始读错的地方。** golden 一生成就出现了三条空内容的
+`assistant_end`：
+
+```
+002 assistant_end pending=0 id="" ""      <- 运维自己那句提问
+003 assistant_end pending=1 id="" ""      <- 模型的 tool call（这条是对的）
+007 assistant_end pending=0 id="" ""      <- 又一次，提问
+```
+
+`agent_loop.go:112-116` 为**每一条 prompt 消息**发一对
+`MessageStartEvent` / `MessageEndEvent`，`appendMessage` 对 **tool result** 也发
+一对；`summarize()` 读到「没有文本、没有 tool call 的消息」，mapper 就渲染成一个
+已结束的 assistant 气泡。**我据此写下了一条「每个 turn 多一个空气泡」的缺陷，并
+准备记成待决项。**
+
+**那是错的，而错得有价值。** 顺着帧往上游走，`chatruntime.kernelSink` 就是两者
+之间的那道折叠：它**直接丢弃** `assistant_start` 与 `assistant_delta`（注释原文
+「emitting either would show a phantom empty bubble」），并且每个 session **只保留
+最新的一个** `assistant_end`（`kernelsink.go`，规则本身由
+`TestASecondAssistantEndSupersedesTheFirst` 钉住）。所以控制台每轮看到的是**恰好
+一个**已落库的气泡。**kernel 的帧流不是控制台的帧流**，中间有折叠；那些空帧是这条
+规则的输入，不是运维会看到的输出。
+
+真正缺的不是修复，是**写下这件事**。手写脚本只喂过「带 assistant 消息」的
+`message_end`，所以真实流的形状从未暴露；一个不知道有折叠的人读这份 golden，会
+报一个不存在的 bug——**我刚刚就是那个人**。所以注释写进了
+`streamgolden_test.go`，让下一个读者不必重新走一遍这条路。这条比一个假缺陷值钱：
+它记的是「我们自己的两层适配之间有一道折叠，而折叠规则只以注释形式存在过」。
+
+**三条变异验证（逐个改坏再改回）**
+
+| 变异 | 结果 |
+|---|---|
+| 去掉 `Min/MaxTokenSize` 固定 | ❌ golden 连跑 6 次全红 |
+| mapper 丢弃 text delta | ❌ golden + delta 重装 + 覆盖检查 三红 |
+| mapper 把 blocked 报成 error | ❌ golden 红（覆盖检查不红，因为 blocked 判定在其后覆盖） |
+
+最后一行值得留着：它说明**覆盖检查不是承重的那一道**，golden 才是。有一道测试
+能顶住、另一道顶不住，是正常分工；把两者当成互相印证才是误读。
+
+**本轮新增**：`core/pig/pigagent/streamgolden_test.go`（3 个测试）+
+`testdata/stream-turn.golden`。闸门跑法不变，仍然不依赖网络与真实 provider。
+**待决清单没有因为这一轮变长**——多出来的那一项在核实后不成立，已就地撤掉。
+
+---
+
+### 4.15 读者补上了对称的另一半：授权与依赖（决策 77）
+
+路线图把「arch-lint 债务清单的守卫」列为下一件欠账，理由是「同一个组件里新加
+一条越层 import 不会再报警」。**这个定位是错的**，而错的方式值得写下来。
+
+**先说它错在哪。** 决策 74 已经让 modulecheck 读 `.go-arch-lint.yml` 了，而且
+`TestTheLayerInversionLedgerIsCurrent` 就在 `scripts/modulecheck/archlint_test.go`
+里——清单是活的，会因为条目失效而报错。所以缺的不是「时效性守卫」。
+
+**真正缺的是对称。** 决策 74 的两条不变式各看一头：
+
+| 不变式 | 问的问题 |
+|---|---|
+| 每条授权都必须在用 | 有没有没人行使的权限？ |
+| 每条逆向边都必须记名到文件 | 有没有跨层倒边没人命名？ |
+
+**没有任何一条问「这条实际存在的依赖被授权了吗」。** 一次真实发生的跨组件 import，
+如果导入方没有对应授权，modulecheck 一声不吭——而 go-arch-lint 会报。两条不变量
+各自都是对的，合起来漏掉的正是它们之间的那一格。
+
+**这个洞最该先被堵上的位置，恰好是决策 74 刚刚造出来的那五个组件。**
+`iam_model`、`oxedge_model`、`oxpig_coding`、`oxharness_schema`、
+`oxharness_leaderboard` 的授权被清空后，改用 `anyVendorDeps: true` 表达
+「不依赖任何项目组件」。这五个组件从那天起就处在洞的正上方：给它们加一条跨组件
+import，这个工具不会响。
+
+**为什么不让 go-arch-lint 一个人管。** 它确实会报。理由不是「多一道保险」，而是
+**两条闸门必须同时跑才拦得住一个错误的代价太高**：`make module-check` 是一条
+Makefile 目标，`make arch-lint-run` 是另一条；只挂一条的那个总会在某次「先跑快的
+那个」里被跳过。而且 modulecheck 的两条不变式**把授权当成需要解释的东西**（要么
+有人用、要么记名到文件），go-arch-lint 只回答允不允许——同一个 yml，两种深度。
+
+**落法。** `checkArchLint` 加第三条：遍历真实存在的边（`edges`，文件粒度），
+凡是没被 `mayDependOn` 授权、也不在 `layerInversion` 里的，报出来。**`layerInversion`
+在这里是一种授权而不是一种容忍**：被记名到文件意味着有人看过这条边。
+
+**顺带解决了一件事：重复报告。** 逆向边同时满足检查 1 和检查 3 的条件——它既缺
+`layerInversion` 记名，又缺 `mayDependOn` 授权。两条都报，同一个错误给两个不同的
+建议修法，而人只会读一遍。所以把「这条边是不是逆向」抽成 `isUpwardEdge` 供两条
+检查共用，检查 3 跳过它。**两条检查对同一个问题的判断必须一致**，否则一个只在一
+半配置下工作的组件会被放过。
+
+**真实树的答案是零违规。** 这本身是个结果：决策 74 删掉 104 条死授权之后，剩下
+的每一条边都还能对上自己的授权。这条检查的价值不在于它今天抓到了什么，而在于
+**它让「每条边都被解释」从一个愿望变成一个断言**。
+
+**三条变异验证**
+
+| 变异 | 结果 |
+|---|---|
+| 摘掉检查 3 整段 | ❌ 两个方向性测试红 |
+| 检查 3 不再跳过逆向边 | ❌ `TestAnUpwardEdgeIsReportedOnceNotTwice` 红 |
+| 真实树自检 | ✅ 零违规（modulecheck 39 tests 全绿） |
+
+其中第一条**第一次跑时只红了一个测试**：另一个方向性测试本来指向 `data → service`，
+而那是逆向边，被检查 1 抢先报了，所以它在检查 3 被删掉的情况下依然绿。这正是
+「测试看起来像覆盖、其实不是」的典型——把它改成 `data → biz`（**规定方向**，
+`upwardEdges` 故意不含它）之后，两个方向才各自只能被对应的检查抓住。
+
+---
+
+### 4.16 一个节点不是掉线才丢隧道：它是被自己的退避表打死的（决策 78）
+
+计划 §六 把 C 阶段剩下的一项写成「NodeFleet 的连接规模：每 edge 常驻 RPC 流，需做
+**连接池上限、心跳重连、风暴抑制**」。这一条查下来，三项里有一项是**真的缺**，
+而且缺的方式正好是那种在单机开发环境里永远看不见的。
+
+**已有的部分**：`core/floor/tunnel/client.go` 的 `Dial` 已经是指数退避，
+1s → 2s → 4s → … 封顶 60s，日志里写着 `tunnel: dial failed; will retry`。
+心跳重连也已经有（geminio 的 `RetryEnd` 透明重连 + `reconnectCallbacks` 让节点
+在重连后重新 `register_edge`）。**缺的只有抖动。**
+
+**为什么没有抖动是致命的，而不是「不够好」。** 指数退避是教科书形状，而它对一
+支**节点队伍**恰恰是错的：每个节点从同一个失败里算出同一个等待，所以控制面重启
+之后，全部边在同一毫秒发起重连；如果这时控制面还没就绪，60 秒后它们**再次**同时
+发起——而且因为都到了封顶，间隔全部相等，这个同步**永远不会散开**。
+
+**封顶本来是保险，恰恰是它让同步变成永久的**：在封顶以下，间隔本身会随翻倍而
+自然拉开；到了封顶，所有间隔重新相等。所以修法不是调参数，是让等待**被抽出来**
+而不是被算出来：上限（单个节点最坏多久能回来）保留，分布交给抖动。
+
+**取 full jitter 而不是 half jitter。** half jitter（上限的一半 + 随机的一半）把
+分布砍掉一半，低端还留着一个所有节点一起跨过的地板；full jitter 让两个同时失败
+的节点在真正无关的时刻回来，这正是要的。抽到 0 不是忙等——它只是省掉一次 sleep，
+而它前面那次拨号是真实网络操作，本来就要时间。
+
+**一个看起来等价、其实不行的实现。** 从「上一次 wait」里抽而不是从「ceiling」里
+抽，读起来完全一样，但连续的小随机数会把调度表一路拉回 1s，节点就以 1s 的频率
+永远重试——而那正是封顶要防的频率。`TestTheCeilingDoesNotShrinkAfterASmallDraw`
+用一个「永远返回 0」的抖动打这个洞，40 次之后 ceiling 必须还在 60s。
+
+**接线也是被测的，这是本条最花力气的地方。** 抽出 `dialBackoff` 之后，
+「调度是抖的」和「`Dial` 用了这个调度」是**两个不同的断言**，而只有前者是关于这
+个文件的。第一次写的 herd 测试直接调 `fullJitter`，于是它在「把 `wait := b.jitter
+(ceiling)` 改成 `wait := ceiling`」这个变异下**依然全绿**——它测的是一个辅助函数，
+不是行为。改法是让断言穿过 `next()`，并且为此给 `Dial` 开了一个 `sleep` 接缝：
+对着一台没人监听的端口（`127.0.0.1:1`）跑真实的 `Dial`，把每次等待读回来，
+5 次重试在 1 毫秒内跑完。于是 8 秒的 ceiling 也能在单测里被断言。
+
+**这一条自己踩了两次同样的坑，值得写下来**：
+1. herd 测试测的是辅助函数 → 变异下不红 → 改成穿过 `next()`。
+2. 方向性测试（决策 77）指向 `data → service`，那是逆向边，被检查 1 抢先报了，
+   于是它在检查 3 被删掉时依然绿 → 改成规定的 `data → biz` 方向。
+两次都是**测试看起来像覆盖、其实不是**。判据是「删掉被测的那段代码，哪个测试会
+红」，不是「测试读起来是否在测那件事」。
+
+**六条变异验证**
+
+| 变异 | 结果 |
+|---|---|
+| `wait := ceiling`（不抖动） | ❌ 3 个测试红（含 herd） |
+| 从上一次 wait 抽（ceiling 缩水） | ❌ ceiling 不缩水测试红 |
+| 封顶改成 10 分钟 | ❌ ceiling 曲线测试红 |
+| `Dial` 不用 `dialBackoff`，写死 30s | ❌ 两个 Dial 接线测试红 |
+| `Dial` 忽略注入的 jitter | ❌ pinned 曲线测试红 |
+| 真实树自检 | ✅ `core/floor/tunnel` 20 tests 全绿（其中 8 条是本轮新增的退避测试） |
+
+**这一条没有改变架构，只把一个已经写好的退避循环从「单机正确」变成「队伍正确」。**
+C 阶段的连接规模三项里，**风暴抑制已完成**；剩下的是**连接池上限**（`Fleet.Open`
+目前对每条边的常驻会话数没有上界），记在「待决的大动作」之外，作为下一项。
+
 ---
 
 ## 五、插件契约：为什么「插件即 PiG Package」
@@ -256,13 +1079,17 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 
 | 阶段 | 权重 | 完成度 | 判据与剩余 |
 |---|---|---|---|
-| A 模块化地基 | 20% | **98%** | 13 个模块落地、`internal/` 清空、`modulecheck` + `go-arch-lint` 两个闸门可执行且非空转、共享底座的两条反向边已清并由 `floorIsolation` 钉住（决策 66）。剩下 2% 是一条已记账的**债务**（arch-lint 债务清单缺守卫），不是缺失的功能 |
-| B PiG 适配层 | 20% | **100%** | `pigmodel` / `pigagent` / `pigrpc` / `pigwire` 四件套齐、eino 与 go-openai 清零、`llm.Client` 换实现并接线、内核接缝（决策 32/33）打开、契约套件 `core/pig/pigcontract` 落地（决策 64）、**PiG 已换成固定 tag 并在发布条件下被验证**（决策 65）。剩下的不是缺口，是维护：契约要跟着上游新增能力补 |
+| A 模块化地基 | 20% | **100%** | 13 个模块落地、`internal/` 清空、`modulecheck` + `go-arch-lint` 两个闸门可执行且非空转、共享底座的两条反向边已清并由 `floorIsolation` 钉住（决策 66）、**两个闸门之间的最后一处不对称已消除：`.go-arch-lint.yml` 有了读者，104 条无人行使的授权已删，逆向边按文件记名**（决策 74）。A 阶段无剩余项 |
+| B PiG 适配层 | 20% | **100%** | `pigmodel` / `pigagent` / `pigrpc` / `pigwire` 四件套齐、eino 与 go-openai 清零、内核接缝（决策 32/33）打开、契约套件 `core/pig/pigcontract` 落地（决策 64）、**PiG 已换成固定 tag 并在发布条件下被验证**（决策 65）、**AI 层已原生化：第二套模型词汇全部删除，宿主直接用 PiG 的 `ai` 类型**（决策 67，见 §4.5）。剩下的不是缺口，是维护：契约要跟着上游新增能力补 |
 | C 节点 Agent | 20% | **90%** | `pig --mode rpc` 运维 profile + supervisor + `policygate` + 7 个 `agent.*` 隧道方法 + `NodeFleet` + 只读 piglet，三个剧本在新拓扑下通过。剩下：MCP 运行时（PiG 的 `mcp` 只是声明）、连接池上限与风暴抑制的规模验证 |
-| D 插件生态 | 25% | **90%** | B1/B2/B3 全部闭环（18 + 12 + 53 + 5 个工具）、审核流水线（签名 → 清单 → 准入 → 灰度 → 回滚）、运输通道 6 条路由、`sdk` 三个发布物。剩下：能力声明从"家族"升级到"逐方法"、更多插件迁移、容器格式导入器的覆盖面 |
-| E 生态治理 | 15% | **85%** | 兼容矩阵（edge 轴 × PiG 轴）、金融 / SaaS 两个 profile 模板、插件 × golden case 覆盖报告。剩下：插件市场前端页面、版本矩阵可视化、发布流程自动化 |
+| D 插件生态 | 25% | **95%** | B1/B2/B3 全部闭环（18 + 12 + 53 + 5 个工具）、审核流水线（签名 → 清单 → 准入 → 灰度 → 回滚）、运输通道 6 条路由、`sdk` 三个发布物、**能力声明已从「家族」升级到「逐方法」，四个包的「声明 == 实际」全部有守卫**（决策 69）。剩下：容器格式导入器的覆盖面、更多插件迁移 |
+| E 生态治理 | 15% | **95%** | 兼容矩阵（edge 轴 × PiG 轴）、金融 / SaaS 两个 profile 模板、profile × 实际目录的组合校验（决策 70）、**发布前兼容矩阵 API，管理侧预检与节点裁决共用 `CheckVersions`**（决策 71）、插件 × golden case 覆盖报告、发布全链路（Start/List/Status/Advance/Halt/Rollback）。**兼容矩阵 agent 轴不再是「无法判断」：节点随心跳自报 PiG 构建，控制面一次查询读取（决策 73）**。剩下：插件市场前端页面、兼容矩阵前端页面、发布流程的定时/触发自动化 |
 
-加权合计 ≈ **92.9%**（20×0.98 + 20×1.00 + 20×0.90 + 25×0.90 + 15×0.85）。
+加权合计 ≈ **96.0%**（20×1.00 + 20×1.00 + 20×0.90 + 25×0.95 + 15×0.95）。
+
+**A 阶段到此 100%，且它是唯一「完成」而不是「差最后一点」的阶段**——计划 §五
+对 A 的三条验收（模块化 + 全量测试绿 + arch-lint 拦住逆向依赖）现在都由**两个
+互相独立的闸门**分别守着，其中一个在本轮之前是空转的。
 
 **这个数最容易被误读的地方**：C 与 D 的 90% 里，"能跑通"和"能上生产"之间
 差的是规模验证与运维面（插件市场 UI、连接规模、发布自动化），不是核心链路。
@@ -272,16 +1099,16 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 | 模块 | 结果 |
 |---|---|
 | 根模块 `go test ./... -count=1` | **18 包 ok / 0 failed**——`internal/` 已清空（决策 63），根模块只剩 `cmd/`、`scripts/`、`tests/` 与 web 的 Go 工具包，全部是装配层与测试 |
-| `core` | 全部 ok（2 包） |
-| `core/pig` | 全部 ok（6 包，含契约套件 `pigcontract`） |
+| `core` | 全部 ok（3 包） |
+| `core/pig` | 全部 ok（10 包，含契约套件 `pigcontract`、`pigcoding` 的 7 个离线端到端用例、决策 67 新增的 `pigai` re-export 面与 `pigtools` 桥） |
 | `core/edge` | 全部 ok（26 包）——`internal/edgeagent` 的 62 个文件整体迁入（决策 61），原有的 pigsupervisor/policygate/gatesocket/toolbroker/agentprofile 与它同模块 |
 | `core/floor` | 全部 ok（9 包，6 个有测试）——`spill_helper` 的 3 个用例在这里被修好（见决策 60） |
 | `core/harness` | 全部 ok（13 包） |
 | `sdk` | 全部 ok（1 包） |
-| `core/manager` | **全部 ok（222 包，`-race` 亦 ok）**——控制面基础设施（决策 62）之后，`biz`/`data`/`model`/`server`/`service` 与 `iam` 也在这一轮迁入（决策 63）。1100 个 Go 文件，其中 413 个测试文件 |
+| `core/manager` | **全部 ok（223 包）**——控制面基础设施（决策 62）之后，`biz`/`data`/`model`/`server`/`service` 与 `iam` 也在这一轮迁入（决策 63）。1100 个 Go 文件，其中 413 个测试文件 |
 | 5 个 extension 模块 | 各 1 包，全部 ok |
 
-13 个目录（根模块 + 7 个已拆模块 + 5 个 extension）串行跑完：**303 包 ok / 0 failed**。四次搬迁（决策 60/61/62/63）前后总数一次没变，说明搬的是位置，不是测试；变的只是包落在哪个模块里——根模块 113 → 18，`core/manager` 50 → 222。`core/floor/skill/builtin` 的三个
+13 个目录（根模块 + 7 个已拆模块 + 5 个 extension）串行跑完：**308 包 ok / 0 failed**。四次搬迁（决策 60/61/62/63）前后总数一次没变，说明搬的是位置，不是测试；变的只是包落在哪个模块里——根模块 113 → 18，`core/manager` 50 → 223。`core/floor/skill/builtin` 的三个
 `TestTruncateOrSpill_*` 曾长期在 `/var/tmp` 存在但不可写的机器上失败——降级判据写在
 `MkdirAll` 而不是写入上，所以那条降级路径从未生效；决策 60 顺手修好了它（测试一直是
 对的，代码不是）。
@@ -2026,18 +2853,28 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
   决策 66 把共享底座剩下的两条反向边清掉，并让它们不再会长回来。
   代码侧没有已知的未完成项。A 阶段**剩下的是债务而不是缺口**，只剩一条，
   见下面 arch-lint 那一项。
-- **B 阶段已收口，但"发布条件"目前只对外部依赖是真的 tag**。PiG 与
+- **B 阶段已收口，包括决策 67 的 AI 原生化**。`ports.LLMRequest` /
+  `ports.LLMResponse` / `ports.Conversation` / `ports.Usage` / `ports.Agent` /
+  `ports.TurnResult` 全部删除；`pkg/llm` 只剩 `ProviderConfig` 与预算；
+  `llmpig` 变成"设置表 → PiG ModelRegistry"的单向发布器
+  （`Sync.Publish` / `CatalogView`），不再持有第二套 client。
+  **这一轮顺带修掉一个真实的 nil 解引用**：`agent.AssistantMessage.ObserveUsage()`
+  在 provider 未上报用量时返回 `nil`，而三处调用点都直接解引用——
+  本地模型与中断的 turn 正好走这条路径。现由 `pigagent.UsageOf` /
+  `pigmodel.UsageOf` 各自在归属的包里收口。
+  剩下的不是"发布条件"问题，而是下面这一条。
+- **"发布条件"目前只对外部依赖是真的 tag**。PiG 与
   `extensions/sdk` 已经是 `v0.3.0`；`core` / `edge` / `floor` / `harness` /
   `manager` / `pig` / `sdk` 七个兄弟模块之间仍是 `v0.0.0` + 相对 `replace`
   （决策 60/62/65 的设计如此）。要把这一层也变成真 tag，需要先给七个模块
   打 v0.x 版本并把 replace 换成版本号——那是一次**发布动作**，不是代码动作，
   也不该在没有版本号的仓库里硬做。
-- **arch-lint 的 white-list 粒度问题（决策 58 第 3 步的已知代价）**。
-  `mayDependOn` 是组件粒度：账本里为 `manager_biz → manager_data` 开了口子之后，
-  **同一个组件**里新加一条 `manager_biz → manager_data/新store` 不会再报警。
-  modulecheck 的 `layerDebt` 有 `TestTheLayerDebtLedgerIsCurrent` 守着（文件删了或
-  债务还清就报错），arch-lint 这一份**没有对应的守卫**——这是当前两个闸门之间的
-  一处不对称，修法是给 modulecheck 加一条"arch-lint 债务文件清单"检查。
+- ~~**arch-lint 的 white-list 粒度问题**~~ **已完成（决策 74）**。
+  `mayDependOn` 是组件粒度，账本里开一个口子之后同组件新增同类导入不会报警，
+  而且**没有任何东西读这份 yml**。决策 74 给 modulecheck 加了 yml 读取器和两条
+  不变式：**每条授权都必须有真实 import 在用**（当场删掉 104 条，go-arch-lint
+  复核零告警）、**每条逆向边都必须记名到文件**（当场抓到一个活的、无人知晓的
+  `imbridge → service` 倒边）。见 4.12。
 - ~~**`internal/pkg → core/pig` 的反向边（deepScan 独立复现）**~~
   ✅ 已完成（决策 66）。`pigsettings.go` / `pigregistry.go` / `pigclient.go`
   搬进 `core/manager/llmpig`，`web_search` 的六个包级 setter 换成不可变构造
@@ -2308,10 +3145,11 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
    `core/manager/llmpig`、`web_search` 的六个包级 setter 换成不可变构造 +
    `skill.Replace`，并由 `modulecheck` 的 `floorIsolation` 与 arch-lint 的
    `shared_llmpig` 组件钉住，不再靠人记。
-2. **arch-lint 债务清单的守卫**。`layerDebt` 有 `TestTheLayerDebtLedgerIsCurrent`
-   守着（账还清了就必须删条目），arch-lint 那份 `mayDependOn` 白名单没有
-   对应的守卫：同一个组件里新加一条越层 import 不会再报警。修法是让
-   modulecheck 把 arch-lint 的债务文件清单也读进来做同样的检查。
+2. ~~**arch-lint 债务清单的守卫**~~ ✅ 已完成，但**问题定位与当初写的不一样**
+   （决策 77）。当初以为缺的是「债务清单的时效性守卫」，实际上决策 74 已经
+   给了 `TestTheLayerInversionLedgerIsCurrent`，清单是活的。真正缺的是**对称性**：
+   读者问「每条授权有没有人在用」，没人问「每条实际依赖有没有被授权」。详见
+   §4.15。
 3. **MCP 运行时**（D 阶段的可选加速器）。PiG 的 `mcp` 只是声明，没有
    JSON-RPC 客户端、没有握手、没有把 MCP server 接进 agent 工具集的桥。
    当前 65 个工具走 extension toolset 已端到端跑通（带鉴权、审计、白名单、
@@ -2586,6 +3424,31 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
   在协议上无法执行**：管理器没有旧版本的 URL，而 `Install` 需要它。
 
 ### 待决的大动作
+
+- ~~**控制面的 turn 要不要从 `pigagent.Kernel` 换到 `pigcoding.Session`**~~
+  **已决：维持 `Kernel`（决策 75，选项 C）。** 决策 72 把它挂起来是因为两个缺口，
+  这一轮把其中一个的理由更正了、另一个坐实了：
+  - **账二的理由错了**。`agent.AgentOptions.OnMessagePersist` 是个**字段**
+    （`agent/agent.go:650`），不是构造后的 setter——`pigagent.Kernel` 正在用它分配
+    行 id 并回填 SSE 帧（`core/pig/pigagent/kernel.go:181`）。真正的缺口只是
+    `coding.SessionStartOptions` 没有这个字段，而 `coding.NewSession` 用自己的
+    持久化占住了接线点。**能力在，面板没开。**
+  - **选项 A 不可实现**。`type SessionManager = icodingagent.Session`
+    （`coding/session_manager.go:12`）是**类型别名到具体结构体**，不是接口，我们
+    注入不进去。所以「行 id 改由 entry id 承载」除非 fork PiG，否则没有路。
+  - **选项 B 因此没有动机**。`OnMessagePersist` 可用，行 id 时序不必退化成
+    「turn 结束后反推」。
+  - **账一随之作废**。`MaxTurns` 确实不在 `SessionStartOptions` 里，但 Kernel
+    一直带着它，`defaultMaxIterations = 30` 与 persona 上限都在。
+  换句话说：换过去要同时丢掉 turn 上限和行 id 时序，而这两样都是 B 阶段闸门
+  「SSE 帧 golden 逐帧一致」要验的东西。`pigcoding` 留在设置与模型目录
+  （今天 `llmpig` 就是这么用的）。详见 §4.13。
+- **`pig-cmd` 是集成还是 fork**（决策 72）。`piglets/company` 已经是计划 §二
+  那张图的可运行实现，且作为 piglet **不 import 任何 PiG Go 包**——正好是
+  OpsKeeper 评估第三方时最看重的那条性质。默认选择是**当外部进程集成**：与节点
+  agent 同级，走已有 tunnel / RPC 面，OpsKeeper 只做运维语义（profile、审批、
+  审计）那部分宿主职责。fork 的唯一理由是它的 roster 与预算语义要变成 OpsKeeper
+  的 profile 与爆炸半径——在那之前是过早优化。
 
 - ~~**机械式模块迁移只剩最后一块**~~ **已完成（决策 63）**：`internal/manager`
   + `internal/iam` → `core/manager`，`internal/` 已删除，13 个模块目录

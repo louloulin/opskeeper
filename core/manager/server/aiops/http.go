@@ -34,6 +34,8 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 	svc "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
 // AIOpsService is the narrow service contract the handler depends on.
@@ -97,7 +99,7 @@ type Handler struct {
 	catalog    ModelCatalog
 	agents     AgentLister
 	userAgents UserAgentManager
-	llmClient  llm.Client // for /v1/aiops/query-translate; nil = endpoint 503
+	llmClient  pigmodel.Completer // for /v1/aiops/query-translate; nil = endpoint 503
 }
 
 // NewHandler builds the handler. mentions / catalog may be nil; see
@@ -114,7 +116,7 @@ func (h *Handler) SetModelCatalog(c ModelCatalog) { h.catalog = c }
 // SetLLMClient wires the LLM client used by /v1/aiops/query-translate
 // (the natural-language → LogQL/TraceQL/PromQL helper). Optional —
 // when nil the endpoint returns 503 and the SPA hides the ✨ button.
-func (h *Handler) SetLLMClient(c llm.Client) { h.llmClient = c }
+func (h *Handler) SetLLMClient(c pigmodel.Completer) { h.llmClient = c }
 
 // SetAgentLister wires the chatruntime AgentRegistry post-construction
 // so /v1/agents can list loaded personas. Nil is allowed; the endpoint
@@ -864,12 +866,24 @@ func toPostMessageResp(sessionID string, reply *agent.Reply) postMessageResp {
 		SessionID:        sessionID,
 		AssistantMessage: asst,
 		ToolCalls:        tcs,
-		Usage: usageDTO{
-			PromptTokens:     reply.Usage.PromptTokens,
-			CompletionTokens: reply.Usage.CompletionTokens,
-			TotalTokens:      reply.Usage.TotalTokens,
-		},
-		Iterations: reply.Iterations,
+		Usage:            usageDTOOf(reply.Usage),
+		Iterations:       reply.Iterations,
+	}
+}
+
+// usageDTOOf projects the stored ledger row onto the three numbers the
+// console's usage bar renders.
+//
+// The fold is deliberate: the console has always shown one "prompt" number,
+// and the ledger keeps cache reads and writes apart because the *invoice*
+// prices them differently. Counting them as input here is what makes a turn
+// that read a large cached context look like the context it actually used —
+// the alternative reports a near-zero prompt for the session's biggest turn.
+func usageDTOOf(u ports.TranscriptUsage) usageDTO {
+	return usageDTO{
+		PromptTokens:     u.InputTokens + u.CacheReadTokens + u.CacheWriteTokens,
+		CompletionTokens: u.OutputTokens,
+		TotalTokens:      u.Total(),
 	}
 }
 

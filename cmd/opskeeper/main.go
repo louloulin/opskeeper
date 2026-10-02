@@ -37,6 +37,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/config"
@@ -102,7 +103,9 @@ import (
 	managertopologydata "github.com/vincent-wuhan/opskeeper/core/manager/data/topology/store"
 	managermodelalert "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 
-	"github.com/vincent-wuhan/opskeeper/core/ports"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigagent"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigcoding"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 
 	managerbizaiops "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
 	aiopsagent "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
@@ -702,27 +705,12 @@ func main() {
 		}()
 	}
 
-	// LLM client. Resolver lets admin edits to system_settings take effect
-	// on the next Chat call (cache TTL = 60s) without a manager restart.
-	// Empty resolver fields fall back to cfg.OpenAI.
-	llmResolver := newLLMResolver(settingSvc)
-	openaiClient := llm.NewWithResolver(
-		llm.Config{APIKey: cfg.OpenAI.APIKey, Model: cfg.OpenAI.Model, BaseURL: cfg.OpenAI.BaseURL},
-		llmResolver,
-		nil, // BudgetChecker wired in Phase 2
-		reg,
-	)
-
-	// Multi-provider router (ChatInput model selector). The OpenAI
-	// sub-client uses the resolver-aware path so admin edits keep taking
-	// effect; the other providers (Anthropic / Zhipu / Gemini /
-	// DeepSeek / Kimi) seed from env here and then read live values via
-	// the LLMSettingsResolver wired below, so /settings/llm edits
-	// propagate within ~60s. A provider with empty APIKey is silently
-	// dropped from the catalog so it never appears in the SPA selector.
-	providerCfgs := llm.ProviderConfigsFrom(cfg)
-
-	llmRouter := llm.NewMultiClient(providerCfgs, cfg.LLM.Default, openaiClient)
+	// The model stack is assembled further down, once the settings resolver
+	// exists. There is deliberately nothing here: the previous shape built a
+	// hand-rolled OpenAI-compatible client and a multi-provider router at
+	// this point in the file, and both are gone. Every model call in the
+	// process now goes through PiG's provider stack, and the only thing
+	// OpsKeeper still owns is the policy around the call.
 
 	// Seed per-provider LLM settings rows from env on first boot so the
 	// 设置 → 集成 → LLM 模型 page has something to show out of the box.
@@ -838,66 +826,95 @@ func main() {
 		},
 	}
 	llmSettingsResolver := managerbizsetting.NewLLMSettingsResolver(settingSvc, llmEnvDefaults, cfg.LLM.Default)
-	llmRouter.SetProvidersResolver(llmSettingsResolver)
 
-	// LLM backend selection. The default is the self-contained HTTP path
-	// (core/manager/pkg/llm/wire.go). OPSKEEPER_LLM_BACKEND=pig routes every
-	// provider through PiG's provider stack instead: PiG carries the
-	// compatibility table (which endpoints want max_tokens vs
-	// max_completion_tokens, which need a non-standard auth path), its
-	// retry/backoff, and its native Anthropic/Google adapters, none of
-	// which the hand-rolled HTTP client replicates.
+	// ---------------------------------------------------------------------
+	// The model plane. One stack, and it is PiG's.
+	// ---------------------------------------------------------------------
 	//
-	// The switch is deliberately a per-deployment choice with an env
-	// escape hatch rather than a silent replacement: the two paths differ
-	// in retry behaviour and error text, and an operator rolling either
-	// direction must be able to say which one is live. Unrecognised
-	// values keep the HTTP path — never silently pick the less-tested
-	// one.
+	// Two objects, because PiG exposes two entry points and they have
+	// genuinely different lifetimes.
 	//
-	// One path stays HTTP even with the switch on: the router's fallback
-	// client, used only when a request names no provider AND the catalog
-	// has no default. That branch is reachable only when the cluster has
-	// literally no credential — the settings resolver also falls back to
-	// the env-seeded keys, so any usable key makes the catalog non-empty
-	// and the request routes through PiG — and it ends in ErrNoAPIKey
-	// either way. Rebuilding the fallback through PiG would change nothing
-	// observable, so it is left as the plain client it already is.
-	pigRegistry := llmpig.NewRegistry(llmpig.NewSettingsSource(llmSettingsResolver), log)
-	// Close the registry's cached provider transports on the way out. Without
-	// this a rolling restart leaks one connection pool per provider until the
-	// process exits — invisible in dev, a slow fd leak in production.
+	// pigRuntime is the agent side. One coding.Services + coding.Runtime for
+	// the life of the process: it owns the model registry that sessions
+	// resolve against, the extension runner, and the cancellation state
+	// every session inherits. OpsKeeper configures it to keep all of that
+	// in process — a private agent directory instead of ~/.pig, and an
+	// in-memory session log instead of .pig/sessions — because a manager
+	// pod that silently wrote session transcripts to an ephemeral
+	// container filesystem, or read a developer's home directory, is not a
+	// deployment anyone can reason about.
+	//
+	// modelRegistry is the one-shot side. Report extractors, the query
+	// translator, the semantic deduper and the harness judge send a single
+	// completion with no agent loop, so they take a pigmodel.Completer and
+	// never construct a session at all.
+	//
+	// Both read the same system_settings.llm.* rows through the same
+	// adapter, so a key rotation is visible to both on the next request and
+	// the chat surface can never disagree with the report pipeline about
+	// which models exist. Credentials are registered into PiG's
+	// ModelRegistry rather than written to auth.json: there is no
+	// interactive login on a server, and re-registering on change is what
+	// makes an admin's edit take effect without a restart.
+	pigRuntime, err := pigcoding.NewRuntime(pigcoding.RuntimeOptions{
+		AgentDir:     pigAgentDir(log),
+		CWD:          ".",
+		AbortContext: rootCtx,
+	})
+	if err != nil {
+		// Without a runtime there is no agent, and the console would
+		// answer every chat with a bare 500. Failing the boot says why.
+		log.Error("pig: cannot start the agent runtime", slog.Any("err", err))
+		os.Exit(1)
+	}
+	// Close order matters and is the reverse of construction: sessions
+	// first (the kernel's own defer), then the runtime, then the settings
+	// manager it was built from. Closing the runtime also releases the
+	// provider transports it opened.
 	defer func() {
-		if cerr := pigRegistry.Close(); cerr != nil {
+		if cerr := pigRuntime.Close(); cerr != nil {
+			log.Warn("pig: closing the agent runtime", slog.Any("err", cerr))
+		}
+	}()
+
+	llmSync := llmpig.NewSync(pigRuntime, llmSettingsResolver, log)
+	// Publish at boot so a session started in the first second of the
+	// process resolves a model. A failure is a warning, not a fatal: the
+	// settings table may still be migrating, and a manager that refuses to
+	// boot over it would turn a read error into an outage.
+	publishCtx, publishCancel := context.WithTimeout(rootCtx, 30*time.Second)
+	if perr := llmSync.Publish(publishCtx); perr != nil {
+		log.Warn("llm: initial provider publish failed; models resolve once settings are readable",
+			slog.Any("err", perr))
+	} else {
+		log.Info("llm: provider catalog published into the PiG model registry",
+			slog.Int("models", len(pigRuntime.Catalogue())))
+	}
+	publishCancel()
+
+	// The console's model picker and the settings-save invalidation hook.
+	// Both read the same catalog the runtime was published from, so the
+	// operator can never be offered a model the next request cannot use.
+	modelView := llmpig.NewCatalogView(llmSync, llmSettingsResolver)
+
+	// The one-shot completion path. pigmodel.Registry caches a provider's
+	// transport (so a rotation does not re-dial) but re-reads the
+	// credentials, base URL and model list on every request, which is what
+	// makes an admin edit visible without the Invalidate hook above.
+	modelRegistry := pigmodel.NewRegistry(llmpig.SettingsSource(llmSettingsResolver))
+	// Close the cached transports on the way out. Without this a rolling
+	// restart leaks one connection pool per provider until the process
+	// exits — invisible in dev, a slow fd leak in production.
+	defer func() {
+		if cerr := modelRegistry.Close(); cerr != nil {
 			log.Warn("llm: closing pig provider transports", slog.Any("err", cerr))
 		}
 	}()
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("OPSKEEPER_LLM_BACKEND")), "pig") {
-		llmRouter.SetSubClientFactory(func(cfg llm.ProviderConfig) llm.Client {
-			// The factory ignores the per-provider coordinates on purpose:
-			// the registry resolves provider, base URL, and key from live
-			// settings on every call, so an admin edit applies without a
-			// router rebuild. The config is still what tells the router
-			// which providers exist for the picker.
-			if strings.TrimSpace(cfg.APIKey) == "" {
-				// Preserve the picker contract: a provider with no usable
-				// credential anywhere is not offered. The registry would
-				// otherwise report it as "configured" the moment a row
-				// exists, even with an empty key.
-				return nil
-			}
-			return pigRegistry.Client()
-		})
-		log.Info("llm: backend=pig (PiG provider stack); providers routed through the settings-backed registry")
-	} else {
-		log.Info("llm: backend=http (self-contained OpenAI-compatible wire)")
-	}
 
-	// All downstream agent/investigator wiring takes the router so a
-	// per-request Provider override flows through; absent that, behaviour
-	// matches the legacy single-provider path (router falls back to
-	// openaiClient when no providers are configured).
-	llmClient := llm.Client(otelgenai.NewClient(llmRouter))
+	// Every downstream consumer takes a Completer, so a per-request
+	// provider/model pin in domain.ModelSelection is all any of them needs
+	// to know about model selection.
+	llmClient := otelgenai.NewClient(modelRegistry)
 
 	// manager/edge biz + service + server.
 	edgeRepo := manageredgedata.NewRepo(db)
@@ -1129,7 +1146,7 @@ func main() {
 	// passing probe means the skill itself will work.
 	webSearchProbe := managerbizsetting.NewWebSearchProbe(managerbizsetting.NewWebSearchResolver(settingSvc))
 	integrationHandler = managerserverintegration.NewHandler(grafanaSvc, promTester, lokiProbe, tempoProbe, webSearchProbe)
-	integrationHandler.SetLLMRouter(llmRouter)
+	integrationHandler.SetLLMRouter(modelView)
 
 	// Prom-backed metric read handler (PR-F replacement for the MySQL
 	// fast path). When prom is disabled the handler still installs but
@@ -1272,7 +1289,11 @@ func main() {
 	pluginReleaseHandler := managerserverplugin.NewHandler(nil)
 	pluginFleet := &edgeInventoryFleet{svc: edgeSvc}
 	pluginReleaseMgr := managersvcplugin.NewManager(pluginFleet, managersvcplugin.NewNodeFleet(fbClient),
-		log.With(slog.String("comp", "plugin-release")))
+		log.With(slog.String("comp", "plugin-release"))).
+		// The compatibility matrix reads the same edge inventory the
+		// release does, so a matrix and a release are looking at one
+		// snapshot of the fleet rather than two taken at different moments.
+		WithVersions(&edgeVersionInventory{svc: edgeSvc})
 	pluginReleaseHandler.SetService(pluginReleaseMgr)
 
 	if err := managersvcfb.Install(rootCtx, fbClient, managersvcfb.Wiring{
@@ -1653,9 +1674,9 @@ func main() {
 	)
 
 	if kernel.UsesChatRuntime() {
-		rt, rterr := buildAIOpsRuntime(rootCtx, cfg, llmClient, llmRouter, toolsReg, aiopsRepo, fbClient, edgeUC, deviceUC, reg, log, bootstrapSkillReg, bootstrapAgentReg, llmSettingsResolver, kernelWiring{
+		rt, rterr := buildAIOpsRuntime(rootCtx, cfg, llmClient, toolsReg, aiopsRepo, fbClient, edgeUC, deviceUC, reg, log, bootstrapSkillReg, bootstrapAgentReg, llmSettingsResolver, kernelWiring{
 			Kernel: kernel,
-			Models: pigRegistry,
+			Models: modelRegistry,
 			Gate:   kernelGate,
 			Audit:  auditUC,
 		})
@@ -1771,7 +1792,7 @@ func main() {
 	// Provider catalog → /v1/aiops/models. The router has the canonical
 	// list; the handler reads from it via a narrow interface so wiring
 	// stays one-way.
-	aiopsHandler.SetModelCatalog(llmRouter)
+	aiopsHandler.SetModelCatalog(modelView)
 	// LLM client for /v1/aiops/query-translate (NL → LogQL/TraceQL/PromQL).
 	// Optional helper — endpoint 503s when nil; SPA hides the ✨ button.
 	aiopsHandler.SetLLMClient(llmClient)
@@ -1824,7 +1845,7 @@ func main() {
 	// investigatorChain so each new-fire fans out to both. Either side
 	// can be nil — the chain skips nil.
 	var legacyInv managerbizalert.Investigator
-	if hasConfiguredLLMProvider(llmRouter) {
+	if llmSync.Default() != "" {
 		legacy := aiopsinvestigator.New(
 			llmClient,
 			toolsReg,
@@ -1932,7 +1953,7 @@ func main() {
 			log,
 		).
 			WithDeliverer(reportDelivererShim{channels: alertRepo, router: notifyRouter}).
-			WithReadyCheck(reportLLMReady(llmSettingsResolver))
+			WithReadyCheck(reportLLMReady(llmSync))
 		reportSchedulerReady = true
 		log.Info("report: generator wired")
 	} else {
@@ -2097,16 +2118,16 @@ func main() {
 		aiopstools.DefaultVerifyRecoveryConfig(),
 	)
 	// LLMCaller 注入 5 phase worker（llm-worker-integration）。
-	// llmRouter 在 main.go 上面已构造（line ~701）。
+	// llmClient 是 main.go 上面的 PiG completer（见模型平面装配块）。
 	var loopLLMCaller managerbizloop.LLMCaller
-	if llmRouter != nil {
+	if llmClient != nil {
 		loopLLMOptions := []managerbizloop.Option{
 			managerbizloop.WithLogger(log.With(slog.String("comp", "loop-llm"))),
 		}
 		if strings.Contains(cfg.OpenAI.Model, "qwen3") {
 			loopLLMOptions = append(loopLLMOptions, managerbizloop.WithQwenNoThink())
 		}
-		loopLLMCaller = managerbizloop.NewLLMCaller(llmRouter, loopLLMOptions...)
+		loopLLMCaller = managerbizloop.NewLLMCaller(llmClient, loopLLMOptions...)
 	}
 	// 修复动作派发：把 approved phase 的 RemediationOption 真正打到工具上。
 	//
@@ -3512,18 +3533,6 @@ func (r hitlRecoveryAuditRepo) CompleteReservedProposal(ctx context.Context, pro
 	return r.repo.CompleteRecoveryExecution(ctx, proposalID, success, resultJSON, time.Now().UTC())
 }
 
-// llmResolverFunc is a tiny adapter from biz/setting.Service to the
-// llm.Resolver seam. Keeping it here (rather than in pkg/llm) avoids a
-// pkg/llm -> manager/biz/setting import that would invert the layer
-// direction.
-type llmResolverFunc struct {
-	svc *managerbizsetting.Service
-}
-
-func newLLMResolver(svc *managerbizsetting.Service) *llmResolverFunc {
-	return &llmResolverFunc{svc: svc}
-}
-
 // pluginEndpointResolver implements edgebiz.EndpointResolver: maps a
 // plugin name to the URL the edge subprocess should push to. Two-tier
 // resolution:
@@ -3636,27 +3645,6 @@ func (a edgeAuthAdapter) AuthenticateEdge(ctx context.Context, accessKey, secret
 	return sess.EdgeID, nil
 }
 
-// Resolve implements llm.Resolver. Empty fields tell the LLM client to
-// fall back to its env-seeded cfg.OpenAI values.
-func (r *llmResolverFunc) Resolve(ctx context.Context) (string, string, string, error) {
-	if r == nil || r.svc == nil {
-		return "", "", "", nil
-	}
-	apiKey, _, err := r.svc.Get(ctx, settingmodel.CategoryLLM, settingmodel.KeyOpenAIAPIKey)
-	if err != nil {
-		return "", "", "", err
-	}
-	model, _, err := r.svc.Get(ctx, settingmodel.CategoryLLM, settingmodel.KeyOpenAIModel)
-	if err != nil {
-		return "", "", "", err
-	}
-	baseURL, _, err := r.svc.Get(ctx, settingmodel.CategoryLLM, settingmodel.KeyOpenAIBaseURL)
-	if err != nil {
-		return "", "", "", err
-	}
-	return apiKey, model, baseURL, nil
-}
-
 // firstNonEmpty returns the first non-empty string from its arguments,
 // falling back to "" if all are empty. Used at the LLM provider wiring
 // site to layer "config → env default → hard-coded default" without
@@ -3686,67 +3674,51 @@ func dedupeModels(vals ...string) []string {
 	return out
 }
 
-func knownLLMProviderIDs() []string {
-	return []string{
-		llm.ProviderOpenAI,
-		llm.ProviderAnthropic,
-		llm.ProviderZhipu,
-		llm.ProviderGemini,
-		llm.ProviderDeepSeek,
-		llm.ProviderKimi,
-		llm.ProviderCustom,
+// pigAgentDir picks the PiG configuration directory for this process.
+//
+// It holds no secret. OpsKeeper injects credentials into PiG's model
+// registry rather than performing a login, so the only thing PiG ever
+// writes here is the empty auth.json it creates on startup — the directory
+// is agent *configuration*, not a key store.
+//
+// OPSKEEPER_PIG_HOME is honoured so an operator debugging "which model did
+// the agent actually pick" can look at the directory rather than at a log
+// line. The fallback is a per-process temp directory rather than a fixed
+// path: two managers on one host must not share an agent directory, and a
+// fixed path under the working directory would be picked up by whatever
+// build artefact happened to be deployed there.
+func pigAgentDir(log *slog.Logger) string {
+	if dir := strings.TrimSpace(os.Getenv("OPSKEEPER_PIG_HOME")); dir != "" {
+		return dir
 	}
+	dir, err := os.MkdirTemp("", "opskeeper-pig-")
+	if err != nil {
+		// Not fatal, and not worth failing a boot over: NewRuntime creates
+		// the directory anyway, and a process that cannot make a temp dir
+		// is going to fail on its database long before it fails here.
+		log.Warn("pig: no temp dir for the agent configuration; falling back to ./.pig",
+			slog.Any("err", err))
+		return filepath.Join(".", ".pig")
+	}
+	log.Debug("pig: agent configuration directory", slog.String("dir", dir))
+	return dir
 }
 
-func reportLLMReady(resolver *managerbizsetting.LLMSettingsResolver) func(context.Context) error {
-	return func(ctx context.Context) error {
-		if resolver == nil {
+// reportLLMReady reports whether a report can actually be generated.
+//
+// It asks the Sync — the same published state an unpinned turn resolves
+// against — rather than re-deriving a default from the settings rows. A
+// readiness probe that computed its own answer was a second implementation
+// of "the default", and two implementations drift: the probe reported green
+// while the first report of the day failed, which is the worst possible split
+// because the operator sees the green one.
+func reportLLMReady(sync *llmpig.Sync) func(context.Context) error {
+	return func(context.Context) error {
+		if sync == nil || sync.Default() == "" {
 			return fmt.Errorf("%w: LLM provider not configured", errs.ErrNotWiredYet)
 		}
-		providers, resolvedDefault, err := resolver.ResolveProviders(ctx)
-		if err != nil {
-			return fmt.Errorf("resolve LLM providers: %w", err)
-		}
-		if id, _ := pickProviderDefault(providers, resolvedDefault); id != "" {
-			return nil
-		}
-		return fmt.Errorf("%w: LLM provider not configured", errs.ErrNotWiredYet)
+		return nil
 	}
-}
-
-type llmProviderCatalog interface {
-	Providers() []llm.ProviderInfo
-}
-
-func hasConfiguredLLMProvider(catalog llmProviderCatalog) bool {
-	return catalog != nil && len(catalog.Providers()) > 0
-}
-
-// pickProviderDefault mirrors llm.MultiClient's catalog default:
-// use the configured default when it names an available provider, otherwise
-// pick the first configured provider by stable provider id. Background graph
-// workers, including reports, rely on this to match /v1/aiops/models.
-func pickProviderDefault(providers []llm.ProviderConfig, preferred string) (string, string) {
-	preferred = strings.TrimSpace(preferred)
-	available := make([]llm.ProviderConfig, 0, len(providers))
-	for _, p := range providers {
-		if strings.TrimSpace(p.ID) == "" || strings.TrimSpace(p.APIKey) == "" {
-			continue
-		}
-		available = append(available, p)
-	}
-	if preferred != "" {
-		for _, p := range available {
-			if p.ID == preferred {
-				return p.ID, p.Model
-			}
-		}
-	}
-	sort.Slice(available, func(i, j int) bool { return available[i].ID < available[j].ID })
-	if len(available) > 0 {
-		return available[0].ID, available[0].Model
-	}
-	return "", ""
 }
 
 // dedupeModels returns vals with empty strings dropped and duplicates
@@ -4059,10 +4031,10 @@ type kernelWiring struct {
 	// one — including the retired "graph" spelling, which no longer has a
 	// graph under it but does still mean "use chatruntime.Runtime".
 	Kernel managersvcaiops.Kernel
-	// Models is the settings-backed registry the LLM client already uses.
-	// The kernel resolves through the same cache so a provider's transport
-	// and its prompt-cache session id are shared, not duplicated.
-	Models *llmpig.Registry
+	// Models is the settings-backed registry the one-shot completer already
+	// uses. The kernel resolves through the same object so a provider's
+	// transport and its prompt-cache session id are shared, not duplicated.
+	Models *pigmodel.Registry
 	// Gate decides whether a mutating call may run.
 	Gate *agentkernel.DeferredGate
 	// Audit receives the gate's decisions. The same ledger the rest of the
@@ -4132,8 +4104,7 @@ func appendUniqueToolNames(names []string, extra ...string) []string {
 func buildAIOpsRuntime(
 	ctx context.Context,
 	cfg *config.Config,
-	llmClient llm.Client,
-	llmRouter *llm.MultiClient,
+	llmClient pigmodel.Completer,
 	toolsReg *aiopstools.Registry,
 	sessions managerbizaiops.SessionRepo,
 	fbClient *managersvcfb.Client,
@@ -4259,11 +4230,7 @@ func buildAIOpsRuntime(
 	}
 
 	// 5. Stitch the runtime.
-	// ctx + llmRouter are reserved for future runtime hooks (e.g.
-	// per-call provider catalog refresh). Reference them so unused-
-	// param lints stay quiet across edits.
 	_ = ctx
-	_ = llmRouter
 	// Coordinator-only redirect stubs (see redirect_stub.go). They
 	// catch hallucinated tool names so the LLM gets a "use AgentTool
 	// to dispatch" hint instead of crashing the graph with
@@ -4290,7 +4257,7 @@ func buildAIOpsRuntime(
 	// and every MCP server are bolted on after this function returns. It
 	// runs in main() once the bag has stopped changing, which is the first
 	// moment it can see cloud_bash and friends.
-	var agentKernel ports.Agent
+	var agentKernel pigagent.Agent
 	if wiring.Kernel.UsesChatRuntime() {
 		var runtimeRef *aiopschatruntime.Runtime
 		var kernelBudget agentkernel.TokenBudget
@@ -4301,7 +4268,7 @@ func buildAIOpsRuntime(
 			kernelBudget = dailyBudget
 		}
 		k, kerr := newAgentKernel(agentKernelInput{
-			Models:     wiring.Models.Registry(),
+			Models:     wiring.Models,
 			Gate:       wiring.Gate,
 			Sessions:   sessions,
 			Audit:      wiring.Audit,
@@ -5112,26 +5079,26 @@ func (s flowAgentRunner) RunAgent(ctx context.Context, persona, prompt string) (
 	return w.Result, nil
 }
 
-// flowLLMRunner implements bizflow.LLMRunner over the routing llm.Client
-// — one chat completion, no tools, no agent loop. Provider/Model left
-// empty so the call follows the configured default (DefaultResolver),
-// same as the report extractor / RCA summarizer.
-type flowLLMRunner struct{ client llm.Client }
+// flowLLMRunner implements bizflow.LLMRunner over the PiG completer — one
+// completion, no tools, no agent loop. The selection is left empty so the
+// call follows the configured default provider, the same answer the report
+// extractor and the RCA summarizer get.
+type flowLLMRunner struct{ client pigmodel.Completer }
 
 func (s flowLLMRunner) RunLLM(ctx context.Context, system, user string) (string, error) {
 	if s.client == nil {
 		return "", fmt.Errorf("llm client not configured")
 	}
-	msgs := make([]llm.Message, 0, 2)
+	msgs := make([]pigai.Message, 0, 2)
 	if strings.TrimSpace(system) != "" {
-		msgs = append(msgs, llm.Message{Role: "system", Content: system})
+		msgs = append(msgs, pigmodel.SystemTurn(system))
 	}
-	msgs = append(msgs, llm.Message{Role: "user", Content: user})
-	resp, err := s.client.Chat(ctx, llm.ChatReq{Messages: msgs})
+	msgs = append(msgs, pigmodel.UserTurn(user))
+	reply, err := s.client.Complete(ctx, pigmodel.Request{Messages: msgs})
 	if err != nil {
 		return "", err
 	}
-	return resp.Assistant.Content, nil
+	return pigmodel.ReplyText(reply), nil
 }
 
 // imSenderShim implements aiopstools.IMSender (the send_im_message tool seam)
@@ -5902,6 +5869,58 @@ func (a deploymentHealthAdapter) Health(ctx context.Context) (managerserverversi
 // one without the package.
 type edgeInventoryFleet struct {
 	svc *managersvcedge.Service
+}
+
+// edgeVersionInventory is the compatibility matrix's only input.
+//
+// Both axes are the node's own self-reports, read from the row it last
+// registered or heartbeated — columns the control plane already keeps, so
+// the matrix costs one query and no tunnel traffic. That last part is the
+// whole design: nodefleet.Fleet.Health is a live per-node RPC, and asking
+// every node every time an operator opens a page is how a read becomes an
+// outage. So neither version is polled; both are reported.
+//
+// The PiG axis rides the heartbeat rather than register_edge, and that is
+// not a detail. It is the one version on a node that changes after the
+// handshake: an upgraded edge restarts onto a new binary and keeps
+// heartbeating, and a value captured at connect time would have frozen at
+// the old build forever — the matrix would cheerfully clear a package
+// against a node that had already moved. The heartbeat is already the
+// node's periodic "this is what I currently am" report, so the version
+// belongs on it by construction rather than by a second mechanism.
+//
+// A node that reports no PiG version — an edge predating the field, or a
+// build that declines to — leaves the column empty, and
+// pluginmanifest.CheckVersions fails closed on it: the node says it
+// "cannot tell", which is the truth rather than a verdict nobody earned.
+// No shipped package declares min_pig_version yet, so that refusal costs
+// nothing today; it becomes the correct answer the moment one does.
+type edgeVersionInventory struct {
+	svc *managersvcedge.Service
+}
+
+// NodeVersions implements managersvcplugin.Versions.
+func (v *edgeVersionInventory) NodeVersions(ctx context.Context) ([]managersvcplugin.NodeVersions, error) {
+	if v == nil || v.svc == nil {
+		return nil, fmt.Errorf("the edge service is not wired")
+	}
+	edges, err := v.svc.List(ctx, managerbizedge.ListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]managersvcplugin.NodeVersions, 0, len(edges))
+	for _, e := range edges {
+		if e == nil {
+			continue
+		}
+		out = append(out, managersvcplugin.NodeVersions{
+			NodeID:      e.ID,
+			Name:        e.Name,
+			EdgeVersion: e.AgentVersion,
+			PigVersion:  e.PigVersion,
+		})
+	}
+	return out, nil
 }
 
 func (f *edgeInventoryFleet) EdgeIDs(ctx context.Context) ([]uint64, error) {

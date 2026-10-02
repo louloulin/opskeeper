@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/ports"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
 // LLMJudge 是真实 LLM 评分 Judge（路径 A / llm-worker-integration，Design Doc §7）。
@@ -20,17 +22,17 @@ import (
 //     本 judge 不输出
 //   - LLM 调用失败（timeout / API 5xx / schema-invalid / 越界）→ fallback 到
 //     HeuristicJudge，JudgesUsed 标记为 "llm-fallback-heuristic"
-//   - 只依赖 core/ports.Completer 抽象层（"要一次补全"这一个方法）
+//   - 只依赖 pigmodel.Completer 抽象层（"要一次补全"这一个方法）
 //   - 单一 ScoreInput 形态：Judge 接口规定的 (Case, AgentResponse)
 type LLMJudge struct {
-	llmClient ports.Completer
+	llmClient pigmodel.Completer
 	fallback  Judge
 	log       *slog.Logger
 }
 
 // NewLLMJudge 创建 LLMJudge。fallback 不能为 nil（用于 LLM 不可用时降级）；
 // log 允许为 nil（默认 slog.Default()）。
-func NewLLMJudge(llmClient ports.Completer, fallback Judge, log *slog.Logger) *LLMJudge {
+func NewLLMJudge(llmClient pigmodel.Completer, fallback Judge, log *slog.Logger) *LLMJudge {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -62,23 +64,28 @@ func (j *LLMJudge) Score(ctx context.Context, c *Case, r *AgentResponse) (*Score
 	}
 
 	prompt := buildLLMJudgePrompt(c, r)
-	resp, err := j.llmClient.Complete(ctx, ports.LLMRequest{
-		Messages: ports.Conversation{
-			{Role: "system", Content: llmJudgeSystemPrompt},
-			{Role: "user", Content: prompt},
+	reply, err := j.llmClient.Complete(ctx, pigmodel.Request{
+		Messages: []pigai.Message{
+			pigmodel.SystemTurn(llmJudgeSystemPrompt),
+			pigmodel.UserTurn(prompt),
 		},
+		// A judge re-reads the same transcript every run. Two different
+		// samples of it are two different scores for the same agent
+		// behaviour, and a leaderboard that moves when nobody changed
+		// the agent is a leaderboard nobody trusts.
+		Tune: func(o *pigai.StreamOptions) { o.Temperature = 0 },
 	})
 	if err != nil {
 		j.log.WarnContext(ctx, "llm judge: chat call failed, fallback to heuristic",
 			slog.String("error", err.Error()))
 		return j.fallbackAndMark(ctx, c, r, "llm chat failed: "+err.Error())
 	}
-	if resp == nil {
+	if reply == nil {
 		j.log.WarnContext(ctx, "llm judge: nil response, fallback to heuristic")
 		return j.fallbackAndMark(ctx, c, r, "llm chat returned nil response")
 	}
 
-	acc, perr := parseLLMJudgeAccuracy(resp.Content)
+	acc, perr := parseLLMJudgeAccuracy(pigmodel.ReplyText(reply))
 	if perr != nil {
 		j.log.WarnContext(ctx, "llm judge: parse failed, fallback to heuristic",
 			slog.String("error", perr.Error()))

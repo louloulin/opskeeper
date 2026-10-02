@@ -156,6 +156,13 @@ func main() {
 	agent := edgebiz.NewAgent(client, collector, edgebiz.Config{
 		MetricsInterval: cfg.Edge.CollectorInterval,
 		AgentVersion:    version,
+		// The same value install-time admission compares
+		// min_pig_version against, so the control plane's pre-flight and
+		// this node's own verdict can never be looking at two different
+		// numbers for the same node. pigSelfVersion is not free: it reads
+		// the operator's override first and only then falls back to the
+		// linked release line, which is the same order the installer uses.
+		PigVersion:      pigSelfVersion(),
 		UpgradeStageDir: stageDir,
 	}, log)
 

@@ -118,3 +118,60 @@ func (s *staticSource) DefaultProvider(_ context.Context) (domain.ProviderID, bo
 func normalizeBaseURL(raw string) string {
 	return strings.TrimRight(strings.TrimSpace(raw), "/")
 }
+
+// StaticSettings returns a SettingsSource over a fixed provider list.
+//
+// It exists for the processes that have no settings table to read: the eval
+// command, a contract test, a one-shot CLI. The control plane does not use
+// it — there, an operator's edit has to land on the next request, and a
+// source that can only be rebuilt by hand cannot promise that.
+//
+// The slice is copied, so a caller that keeps mutating its own array after
+// the call cannot change what the registry resolves against. defaultID may
+// be empty, in which case DefaultProvider falls back to the first configured
+// provider, matching what a catalog with no configured default means.
+func StaticSettings(providers []ProviderConfig, defaultID domain.ProviderID) SettingsSource {
+	snapshot := make(map[domain.ProviderID]ProviderConfig, len(providers))
+	order := make([]domain.ProviderID, 0, len(providers))
+	for _, p := range providers {
+		if _, dup := snapshot[p.ID]; dup {
+			continue
+		}
+		snapshot[p.ID] = p
+		order = append(order, p.ID)
+	}
+	return &staticSettings{
+		byID:  snapshot,
+		order: order,
+		deflt: defaultID,
+	}
+}
+
+type staticSettings struct {
+	byID  map[domain.ProviderID]ProviderConfig
+	order []domain.ProviderID
+	deflt domain.ProviderID
+}
+
+// DefaultProvider implements SettingsSource.
+func (s *staticSettings) DefaultProvider(context.Context) (domain.ProviderID, bool) {
+	if s.deflt != "" {
+		if p, ok := s.byID[s.deflt]; ok && p.Configured() {
+			return s.deflt, true
+		}
+	}
+	for _, id := range s.order {
+		if s.byID[id].Configured() {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// ProviderConfig implements SettingsSource.
+func (s *staticSettings) ProviderConfig(_ context.Context, id domain.ProviderID) (ProviderConfig, bool) {
+	p, ok := s.byID[id]
+	return p, ok
+}
+
+var _ SettingsSource = (*staticSettings)(nil)

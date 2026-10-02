@@ -283,7 +283,7 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 		if in.Ts == 0 {
 			ts = time.Now().UTC()
 		}
-		if err := w.EdgeUC.HandleHeartbeat(rpcCtx, canonicalEdgeID, ts); err != nil {
+		if err := w.EdgeUC.HandleHeartbeat(rpcCtx, canonicalEdgeID, ts, in.PigVersion); err != nil {
 			log.Warn("frontierbound: HandleHeartbeat",
 				slog.Uint64("edge_id", canonicalEdgeID),
 				slog.Uint64("transport_edge_id", edgeID),

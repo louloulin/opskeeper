@@ -5,7 +5,7 @@
 // Each worker would otherwise re-implement the same five concerns:
 //
 //  1. Prompt rendering (system + user message pair).
-//  2. Provider-agnostic LLM call (goes through core/manager/pkg/llm.Client).
+//  2. One model call, through the PiG completer.
 //  3. JSON extraction from prose-wrapped model output.
 //  4. Schema validation of the extracted JSON.
 //  5. Cost / token / latency telemetry.
@@ -14,8 +14,8 @@
 // prevents drift (e.g. one worker quietly skipping retry on transient
 // errors while another silently double-charges a token budget).
 //
-// Phase workers MUST hold an LLMCaller, never an *llm.Client or any
-// provider SDK API. The orchestrator wires a single LLMCaller
+// Phase workers MUST hold an LLMCaller, never a model completer or any
+// provider SDK API directly. The orchestrator wires a single LLMCaller
 // at startup and shares it across all workers; bypassing the seam
 // re-introduces the duplication this abstraction exists to remove.
 //
@@ -34,12 +34,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
+
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
 // LLMCaller is the unified entry point phase workers use to invoke the
-// LLM. Phase workers MUST NOT call core/manager/pkg/llm or any provider SDK
-// directly.
+// model. Phase workers MUST NOT reach for a model completer or any provider
+// SDK directly.
 //
 // Failure semantics (see Call for the full matrix):
 //
@@ -101,8 +104,11 @@ type CallOutput struct {
 	// safe to unmarshal into a typed struct.
 	Raw json.RawMessage
 
-	// TokensIn / TokensOut reflect the Usage reported by core/manager/pkg/llm
-	// on the call that produced Raw. Populated on success only.
+	// TokensIn / TokensOut are the input and output tokens PiG reported for
+	// the call that produced Raw. Populated on success only. They come from
+	// PiG's own usage record rather than from a re-typed copy of it, so a
+	// provider that starts reporting a cache component cannot silently stop
+	// being counted here.
 	TokensIn  int
 	TokensOut int
 
@@ -144,12 +150,13 @@ var ErrSchemaUnparseable = errors.New("llm_caller: caller schema unparseable")
 // stall the orchestrator control loop.
 const defaultCallTimeoutMs = 60_000
 
-// llmCaller is the production LLMCaller backed by an llm.Client from
-// core/manager/pkg/llm. It is safe to share across goroutines: the wrapped
-// llm.Client is already concurrency-safe, and llmCaller holds no
-// mutable state of its own outside the constructor-supplied logger.
+// llmCaller is the production LLMCaller backed by a PiG model completer.
+//
+// It is safe to share across goroutines: the completer is, and llmCaller
+// holds no mutable state of its own outside the constructor-supplied
+// logger.
 type llmCaller struct {
-	client llm.Client
+	client pigmodel.Completer
 	// qwenNoThink appends Qwen3's soft switch to user prompts.
 	qwenNoThink bool
 
@@ -180,12 +187,12 @@ func WithQwenNoThink() Option {
 	return func(c *llmCaller) { c.qwenNoThink = true }
 }
 
-// NewLLMCaller wires a LLMCaller backed by an llm.Client.
+// NewLLMCaller wires a LLMCaller backed by a model completer.
 //
-// The client MUST be non-nil; passing nil is a programming error and
-// will panic on first Call. Construct the client via core/manager/pkg/llm
-// .New(cfg, budget, reg) so workers stay decoupled from SDK choices.
-func NewLLMCaller(client llm.Client, opts ...Option) LLMCaller {
+// The completer MUST be non-nil; passing nil is a programming error and
+// will panic on first Call. Composition happens in cmd/opskeeper, so the
+// phase workers stay decoupled from which runtime answers.
+func NewLLMCaller(client pigmodel.Completer, opts ...Option) LLMCaller {
 	if client == nil {
 		// Fail loudly — silently substituting a noop client would mask
 		// misconfiguration until the first phase fails at runtime, and
@@ -271,10 +278,10 @@ func (c *llmCaller) Call(ctx context.Context, in CallInput) (CallOutput, error) 
 
 		callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
 		start := time.Now()
-		resp, err := c.client.Chat(callCtx, llm.ChatReq{
-			Messages: []llm.Message{
-				{Role: "system", Content: in.SystemPrompt},
-				{Role: "user", Content: userPrompt},
+		reply, err := c.client.Complete(callCtx, pigmodel.Request{
+			Messages: []pigai.Message{
+				pigmodel.SystemTurn(in.SystemPrompt),
+				pigmodel.UserTurn(userPrompt),
 			},
 		})
 		cancel()
@@ -282,7 +289,7 @@ func (c *llmCaller) Call(ctx context.Context, in CallInput) (CallOutput, error) 
 			lastErr = err
 			if !isTransient(err) {
 				// Permanent failure (auth, budget) — fail fast with no retry.
-				return CallOutput{}, fmt.Errorf("llm_caller: chat failed: %w", err)
+				return CallOutput{}, fmt.Errorf("llm_caller: completion failed: %w", err)
 			}
 			continue
 		}
@@ -290,7 +297,7 @@ func (c *llmCaller) Call(ctx context.Context, in CallInput) (CallOutput, error) 
 		// Parse model output to JSON. Failure here means the model did
 		// not produce JSON; treat as schema-invalid (the contract was
 		// implicit in the request for JSON).
-		raw, perr := extractJSON(resp.Assistant.Content)
+		raw, perr := extractJSON(pigmodel.ReplyText(reply))
 		if perr != nil {
 			return CallOutput{}, fmt.Errorf("%w: %v", ErrSchemaInvalid, perr)
 		}
@@ -310,11 +317,12 @@ func (c *llmCaller) Call(ctx context.Context, in CallInput) (CallOutput, error) 
 
 		// Success. Build telemetry.
 		latencyMs := int(time.Since(start) / time.Millisecond)
-		cost := c.costFunc("", resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
+		usage := pigmodel.ReplyUsage(reply)
+		cost := c.costFunc("", usage.Input, usage.Output)
 		return CallOutput{
 			Raw:       raw,
-			TokensIn:  resp.Usage.PromptTokens,
-			TokensOut: resp.Usage.CompletionTokens,
+			TokensIn:  usage.Input,
+			TokensOut: usage.Output,
 			CostUSD:   cost,
 			LatencyMs: latencyMs,
 		}, nil
@@ -322,7 +330,7 @@ func (c *llmCaller) Call(ctx context.Context, in CallInput) (CallOutput, error) 
 
 	// All retries exhausted. Wrap with attempt count so the worker
 	// Verifier can include "after N retries" in its Reasons.
-	return CallOutput{}, fmt.Errorf("llm_caller: chat failed after %d retries: %w", maxRetries, lastErr)
+	return CallOutput{}, fmt.Errorf("llm_caller: completion failed after %d retries: %w", maxRetries, lastErr)
 }
 
 // isTransient decides whether an error is worth retrying. Only timeout,
@@ -344,6 +352,19 @@ func isTransient(err error) bool {
 	}
 	if errors.Is(err, context.Canceled) {
 		// Canceled is NOT transient — the caller asked us to give up.
+		return false
+	}
+	if errors.Is(err, llm.ErrBudgetExceeded) {
+		// Out of budget is not a fault. Retrying spends another call
+		// against a cap that is already reached, so every retry converts
+		// one clear refusal into a timeout an operator then has to
+		// diagnose.
+		return false
+	}
+	if errors.Is(err, pigmodel.ErrNotConfigured) || errors.Is(err, pigmodel.ErrNoFallback) {
+		// Nobody has configured this provider. Retrying cannot configure
+		// it, and the backoff schedule would turn an operator-actionable
+		// error into a generic "failed after N retries".
 		return false
 	}
 	s := strings.ToLower(err.Error())

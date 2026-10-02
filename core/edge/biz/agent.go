@@ -63,6 +63,19 @@ type Config struct {
 	// AgentVersion is reported on register_edge (optional).
 	AgentVersion string
 
+	// PigVersion is the comparable PiG agent build this node hosts,
+	// reported on every heartbeat. Optional: a node that leaves it
+	// empty is a node the control plane cannot answer the PiG axis for,
+	// and it says so rather than guessing.
+	//
+	// It is a plain string rather than a callback because it is a build
+	// constant, not a reading: the answer changes when the operator
+	// upgrades the node, which restarts the process that holds it. What
+	// it must not do is default to something, because a defaulted axis
+	// turns "cannot tell" into "compatible" on the one comparison that
+	// decides whether an agent can load a package's extensions.
+	PigVersion string
+
 	// UpgradeStageDir is where agent_upgrade stages downloaded binaries.
 	// Default /var/lib/opskeeper-edge/.upgrade. Empty disables the
 	// MethodAgentUpgrade handler entirely (useful for dev where systemd
@@ -477,6 +490,11 @@ func (a *Agent) heartbeatLoop(ctx context.Context) error {
 					EdgeID:  a.EdgeID(),
 					Ts:      time.Now().Unix(),
 					Plugins: plugins,
+					// Read under the same lock the plugin snapshot is
+					// read under, and for the same reason: cfg is
+					// immutable after NewAgent in practice, but the
+					// heartbeat goroutine must not depend on that.
+					PigVersion: strings.TrimSpace(a.cfg.PigVersion),
 				}, nil)
 			cancel()
 			if err != nil {

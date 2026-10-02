@@ -45,6 +45,19 @@ type Edge struct {
 	// agents that decline to report. Used by the SPA's Edges page so
 	// operators can audit version drift across the fleet at a glance.
 	AgentVersion string `gorm:"size:32;not null;default:'';column:agent_version"`
+	// PigVersion is the PiG agent build this node hosts, self-reported on
+	// the heartbeat. It is a column of its own rather than a second value
+	// folded into AgentVersion because the two are upgraded on different
+	// cadences and on different schedules: the edge binary and the pig it
+	// launches can be a release apart for as long as an operator leaves
+	// them, and a compatibility matrix that collapsed them would answer
+	// "is this node new enough" for whichever one happened to be edited
+	// last.
+	//
+	// Empty means the node has not reported one — an edge predating the
+	// field, or a build that declines to. Callers must treat empty as
+	// "cannot tell" and fail closed; see pluginmanifest.CheckVersions.
+	PigVersion string `gorm:"size:32;not null;default:'';column:pig_version"`
 	// DeviceID is the convenience pointer to the host Device (the device
 	// this edge is running on). Source of truth is the edge_devices
 	// junction (Type=Host); this field is kept synchronised by the

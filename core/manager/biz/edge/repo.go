@@ -45,6 +45,11 @@ type Repo interface {
 	// (semver-ish, e.g. "0.7.43"). Updated on register_edge whenever
 	// the value changes — empty inputs are filtered upstream.
 	SetAgentVersion(ctx context.Context, id uint64, version string) error
+	// SetPigVersion records the PiG agent build the node self-reports on
+	// the heartbeat (comparable form, e.g. "0.3.0"). Updated whenever the
+	// value changes — empty and unchanged inputs are filtered by the
+	// usecase before they reach here.
+	SetPigVersion(ctx context.Context, id uint64, version string) error
 	Delete(ctx context.Context, id uint64) error // soft delete
 	Count(ctx context.Context) (int64, error)
 }

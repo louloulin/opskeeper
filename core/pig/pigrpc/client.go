@@ -236,24 +236,37 @@ func (c *Client) live(op string) (*rpcclient.RpcClient, error) {
 }
 
 // Prompt sends a user turn and returns once it is accepted.
+//
+// The text passes through guardPrompt first. The agent behind this client
+// treats a leading "/" as a request to run a command rather than to open an
+// investigation, and the control plane has no feature that means it, so the
+// text is neutralised here — after the liveness check, because a notice
+// about a turn that was never submitted is noise. See promptguard.go.
 func (c *Client) Prompt(ctx context.Context, text string) error {
 	client, err := c.live("prompt")
 	if err != nil {
 		return err
 	}
-	if err := client.Prompt(text, nil); err != nil {
+	if err := client.Prompt(c.guardPrompt("prompt", text), nil); err != nil {
 		return fmt.Errorf("pigrpc: prompt: %w", err)
 	}
 	return nil
 }
 
 // Steer injects a message into the turn already running.
+//
+// Guarded for the same reason Prompt is, and it matters more here. A steer
+// that names a command is not reinterpreted but refused outright — the
+// agent answers "Extension command cannot be queued" (PiG
+// cmd/pig/rpc_admission.go:141-142) — so an un-neutralised leading slash
+// fails the operator's correction of a running investigation instead of
+// delivering it.
 func (c *Client) Steer(ctx context.Context, text string) error {
 	client, err := c.live("steer")
 	if err != nil {
 		return err
 	}
-	if err := client.Steer(text, nil); err != nil {
+	if err := client.Steer(c.guardPrompt("steer", text), nil); err != nil {
 		return fmt.Errorf("pigrpc: steer: %w", err)
 	}
 	return nil

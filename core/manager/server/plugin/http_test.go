@@ -32,9 +32,11 @@ type fakeService struct {
 	advance     func(name string) (bool, release.Status, error)
 	halt        func(name, reason string) (release.Status, error)
 	rollback    func(name string) (release.Status, error)
+	compat      func(req release.Requirement) (release.Matrix, error)
 	lastStart   release.StartRequest
 	lastHalt    string
 	lastHaltWhy string
+	lastCompat  release.Requirement
 }
 
 func (f *fakeService) Start(_ context.Context, req release.StartRequest) (release.Status, error) {
@@ -57,6 +59,18 @@ func (f *fakeService) Halt(name, reason string) (release.Status, error) {
 
 func (f *fakeService) Rollback(_ context.Context, name string) (release.Status, error) {
 	return f.rollback(name)
+}
+
+// Compatibility defaults to refusing nothing so a test that is about
+// something else does not have to script it — the zero Service has to be
+// usable, and a fake whose every method panics is a fake that gets
+// half-scripted and then read as coverage.
+func (f *fakeService) Compatibility(_ context.Context, req release.Requirement) (release.Matrix, error) {
+	f.lastCompat = req
+	if f.compat == nil {
+		return release.Matrix{Requirement: req}, nil
+	}
+	return f.compat(req)
 }
 
 // asRole stands in for the auth middleware, which every route here sits

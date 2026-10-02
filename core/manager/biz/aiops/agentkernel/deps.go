@@ -57,12 +57,12 @@ func (h Host) Provider() (pigagent.DepsProvider, error) {
 	// The bag is not resolved here: which tools a turn reaches depends on
 	// the request (role, session, write gate), so resolving it eagerly would
 	// hand every turn the first caller's view.
-	return func(ctx context.Context, req ports.AgentRequest) (ports.AgentDeps, error) {
+	return func(ctx context.Context, req ports.AgentRequest) (pigagent.Deps, error) {
 		tools, err := h.ToolsFor(ctx, req)
 		if err != nil {
-			return ports.AgentDeps{}, err
+			return pigagent.Deps{}, err
 		}
-		return ports.AgentDeps{
+		return pigagent.Deps{
 			Tools:    tools,
 			Audit:    h.Audit,
 			Gate:     h.Gate,

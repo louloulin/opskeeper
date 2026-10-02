@@ -26,7 +26,7 @@ import (
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	topologybiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
 // Caller is the narrow seam this package needs from the frontierbound SDK
@@ -149,7 +149,7 @@ type Registry struct {
 	// llmClient is the chat_to_query translator's LLM dependency. nil-safe:
 	// when nil the chat_to_query tool isn't registered. Wired from
 	// cmd/main.go after the LLM client exists.
-	llmClient llm.Client
+	llmClient LLMClient
 	// tplStore feeds the chat_to_query translation cache. nil-safe.
 	tplStore TemplateSink
 	// chatToQueryExec is the prom/log/trace client fan-out executor.
@@ -178,7 +178,7 @@ func (r *Registry) SetPageStore(p PageStore) { r.pageStore = p }
 
 // SetChatToQueryLLM wires the LLM client consumed by chat_to_query.
 // Call from cmd/main.go once the LLM client is constructed. nil-safe.
-func (r *Registry) SetChatToQueryLLM(c llm.Client) { r.llmClient = c }
+func (r *Registry) SetChatToQueryLLM(c LLMClient) { r.llmClient = c }
 
 // SetChatToQueryTemplateStore wires the query-template cache consumed
 // by chat_to_query. nil-safe.
@@ -431,12 +431,16 @@ func (r *Registry) Register(t Tool) {
 	r.tools[t.Name] = t
 }
 
-// Schemas returns the tool schemas in the llm.ToolSchema shape. Order is
-// unspecified (map iteration).
-func (r *Registry) Schemas() []llm.ToolSchema {
-	out := make([]llm.ToolSchema, 0, len(r.tools))
+// Schemas returns the tool schemas in the shape a model is shown.
+//
+// Order is unspecified because the source is a map, and a tool bag whose
+// order changed between two identical calls would make prompt caching stop
+// working for no reason an operator could see. Callers that need a stable
+// order — the prompt builder, mostly — sort what they get.
+func (r *Registry) Schemas() []ports.ToolSchema {
+	out := make([]ports.ToolSchema, 0, len(r.tools))
 	for _, t := range r.tools {
-		out = append(out, llm.ToolSchema{
+		out = append(out, ports.ToolSchema{
 			Name:        t.Name,
 			Description: t.Description,
 			Parameters:  t.Schema,

@@ -2,11 +2,22 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
 
-// InMemoryBudget is an MVP BudgetChecker with a single global per-UTC-day
+// ErrBudgetExceeded is returned when a request would push today's spend past
+// the cap.
+//
+// It is a named error rather than a bool so a call site can tell "this
+// deployment is out of budget" from "this model call failed", which are
+// different problems with different fixes: the first is a conversation with
+// an operator, the second is a retry.
+var ErrBudgetExceeded = errors.New("llm: budget exceeded")
+
+// InMemoryBudget caps token spend for a deployment with a single global
+// per-UTC-day
 // token cap. Good enough for private MVP (single tenant); switch to the
 // MySQL/sqlite `usage_daily` table when the agent runs for real users.
 //
@@ -49,13 +60,25 @@ func (b *InMemoryBudget) Check(ctx context.Context, userID uint64, estPromptToke
 	return nil
 }
 
-// Record adds usage.TotalTokens to the current UTC-day bucket.
-func (b *InMemoryBudget) Record(ctx context.Context, userID uint64, usage Usage) error {
+// Record adds a settled reply's billed token count to the current UTC-day
+// bucket.
+//
+// It takes the count rather than a usage struct on purpose. The only
+// question this package asks of a model reply is "how many tokens was that",
+// and taking a struct means picking which of the five numbers a provider
+// reports is the bill — a decision that belongs to the caller, which has
+// the reply in hand and knows whether the provider reported a total. A
+// negative count is clamped to zero rather than credited: a provider that
+// mis-reports a negative total should not buy back yesterday's spend.
+func (b *InMemoryBudget) Record(ctx context.Context, userID uint64, tokens int) error {
 	_ = ctx
 	_ = userID
+	if tokens <= 0 {
+		return nil
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.used[b.dayKey()] += usage.TotalTokens
+	b.used[b.dayKey()] += tokens
 	return nil
 }
 

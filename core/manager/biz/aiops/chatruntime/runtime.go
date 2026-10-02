@@ -4,7 +4,7 @@
 // based on the OPSKEEPER_AGENT_KERNEL feature flag (default = legacy).
 //
 // It is HOST-ONLY by design: the loop itself lives in the agent kernel
-// (core/pig/pigagent, reached through ports.Agent). Everything below is
+// (core/pig/pigagent, reached through pigagent.Agent). Everything below is
 // host concern — identity, skills, prompts, persistence, policy — and
 // none of it is kernel-specific.
 //
@@ -24,7 +24,7 @@
 //  5. User-message persistence (chat_messages role=user). Mirrors the
 //     legacy "persist before LLM call" invariant from agent.go so a
 //     downstream crash leaves the user turn on disk.
-//  6. Kernel turn — runKernelTurn drives the ports.Agent kernel with
+//  6. Kernel turn — runKernelTurn drives the pigagent.Agent kernel with
 //     a kernelSink translating kernel events into SSE frames, and an
 //     agentkernel.Persister writing assistant + tool rows. Audit,
 //     metrics and budget gating are installed as host decorators on
@@ -49,6 +49,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigagent"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
@@ -57,7 +58,6 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
 	aiopsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 )
 
 // Mention mirrors the legacy agent.Mention shape so chatruntime can
@@ -172,7 +172,7 @@ type Request struct {
 // through the same DTO without translation losses.
 type Reply struct {
 	Message    *aiopsmodel.Message
-	Usage      llm.Usage
+	Usage      ports.TranscriptUsage
 	Iterations int
 	ToolCalls  []*aiopsmodel.ToolCall
 }
@@ -199,7 +199,7 @@ type Config struct {
 	// vocabulary — and delegating the loop itself is the whole point of
 	// the seam. A runtime with no kernel has nothing to run a turn on, so
 	// NewRuntime refuses rather than silently answering nothing.
-	Kernel ports.Agent
+	Kernel pigagent.Agent
 
 	// ToolBag is the pre-decorated BaseTool list the kernel exposes
 	// to the LLM. cmd/opskeeper/main.go assembles this once via

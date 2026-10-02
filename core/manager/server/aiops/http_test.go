@@ -15,9 +15,9 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 	svc "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
 // fakeService implements AIOpsService.
@@ -152,7 +152,7 @@ func TestPostMessageHappyPath(t *testing.T) {
 			Content:   &content,
 			CreatedAt: startedAt,
 		},
-		Usage:      llm.Usage{PromptTokens: 11, CompletionTokens: 7, TotalTokens: 18},
+		Usage:      ports.TranscriptUsage{InputTokens: 8, OutputTokens: 7, CacheReadTokens: 3},
 		Iterations: 2,
 		ToolCalls: []*model.ToolCall{{
 			ToolName:  "get_host_load",

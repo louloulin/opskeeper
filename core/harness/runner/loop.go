@@ -25,7 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/vincent-wuhan/opskeeper/core/ports"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -392,7 +392,7 @@ type LoopDeps struct {
 	Judge        judge.Judge
 	// LLMClient 注入 LLMJudge（llm-worker-integration）。nil Judge +
 	// nil LLMClient → heuristic fallback；nil Judge + LLMClient → LLMJudge。
-	LLMClient ports.Completer
+	LLMClient pigmodel.Completer
 }
 
 // LoopOrchestrator is the narrow seam runner uses to drive the

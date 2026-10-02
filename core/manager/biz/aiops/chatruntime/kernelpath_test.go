@@ -8,10 +8,11 @@ import (
 	"testing"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigagent"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
-// scriptedKernel is a ports.Agent that answers with a canned result. It
+// scriptedKernel is a pigagent.Agent that answers with a canned result. It
 // records the request so a test can prove the runtime handed it the turn the
 // host composed — the history, the prompt, the selection — rather than
 // letting the kernel re-derive any of it.
@@ -23,7 +24,7 @@ type scriptedKernel struct {
 	// queue two schema.Messages now queues two strings.
 	replies []string
 	idx     int
-	result  *ports.TurnResult
+	result  *pigagent.TurnResult
 	err     error
 	// onRun, when set, runs before the canned result is returned. The fake
 	// has no loop, so a test that needs frames a loop would have produced
@@ -37,7 +38,7 @@ func newScriptedKernel(replies ...string) *scriptedKernel {
 	return &scriptedKernel{replies: replies}
 }
 
-func (k *scriptedKernel) Run(ctx context.Context, req ports.AgentRequest) (*ports.TurnResult, error) {
+func (k *scriptedKernel) Run(ctx context.Context, req ports.AgentRequest) (*pigagent.TurnResult, error) {
 	k.mu.Lock()
 	k.requests = append(k.requests, req)
 	k.mu.Unlock()
@@ -53,7 +54,7 @@ func (k *scriptedKernel) Run(ctx context.Context, req ports.AgentRequest) (*port
 		return k.result, nil
 	}
 	if len(k.replies) == 0 {
-		return &ports.TurnResult{Stopped: ports.TurnEndTurn}, nil
+		return &pigagent.TurnResult{Stopped: pigagent.TurnEndTurn}, nil
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -61,7 +62,7 @@ func (k *scriptedKernel) Run(ctx context.Context, req ports.AgentRequest) (*port
 	if k.idx < len(k.replies)-1 {
 		k.idx++
 	}
-	return &ports.TurnResult{Content: out, Stopped: ports.TurnEndTurn}, nil
+	return &pigagent.TurnResult{Content: out, Stopped: pigagent.TurnEndTurn}, nil
 }
 
 func (k *scriptedKernel) Steer(context.Context, string, string) error { return nil }
@@ -91,7 +92,7 @@ func (k *scriptedKernel) lastRequest(t *testing.T) ports.AgentRequest {
 	return k.requests[len(k.requests)-1]
 }
 
-var _ ports.Agent = (*scriptedKernel)(nil)
+var _ pigagent.Agent = (*scriptedKernel)(nil)
 
 // TestWithAKernelTheTurnRunsOnItAndNoChatModelIsRequired is the seam's whole
 // point. ChatModel is deliberately nil: on this configuration the eino graph
@@ -100,11 +101,11 @@ var _ ports.Agent = (*scriptedKernel)(nil)
 func TestWithAKernelTheTurnRunsOnItAndNoChatModelIsRequired(t *testing.T) {
 	sess := &model.Session{ID: "s1", UserID: 7}
 	store := newMemSessions(sess)
-	kernel := &scriptedKernel{result: &ports.TurnResult{
+	kernel := &scriptedKernel{result: &pigagent.TurnResult{
 		Content:    "the replica lag is 4s",
 		Iterations: 2,
-		Usage:      ports.Usage{InputTokens: 10, OutputTokens: 5, CacheReadTokens: 3},
-		Stopped:    ports.TurnEndTurn,
+		Usage:      ports.TranscriptUsage{InputTokens: 10, OutputTokens: 5, CacheReadTokens: 3},
+		Stopped:    pigagent.TurnEndTurn,
 	}}
 
 	rt, err := NewRuntime(Config{Sessions: store, Kernel: kernel})
@@ -143,11 +144,17 @@ func TestWithAKernelTheTurnRunsOnItAndNoChatModelIsRequired(t *testing.T) {
 	if reply.Iterations != 2 {
 		t.Fatalf("iterations = %d, want the kernel's count", reply.Iterations)
 	}
-	// Cache reads are folded into the prompt count: the operator's console
-	// has one "prompt" number, and reporting a turn that read a large cached
-	// context as having sent almost nothing would be wrong.
-	if reply.Usage.PromptTokens != 13 || reply.Usage.CompletionTokens != 5 {
-		t.Fatalf("usage = %+v, want cache-read folded into prompt", reply.Usage)
+	// The runtime hands the ledger row through untouched: cache reads stay
+	// a separate column rather than being folded into input here. The fold
+	// into the console's single "prompt" number is the DTO layer's job
+	// (server/aiops.usageDTOOf), because it is a display decision and
+	// folding it here would make the stored row disagree with the column an
+	// operator sums when reconciling an invoice.
+	if reply.Usage.InputTokens != 10 || reply.Usage.OutputTokens != 5 || reply.Usage.CacheReadTokens != 3 {
+		t.Fatalf("usage = %+v, want input 10 / output 5 / cache-read 3 kept apart", reply.Usage)
+	}
+	if reply.Usage.Total() != 18 {
+		t.Fatalf("usage total = %d, want 18", reply.Usage.Total())
 	}
 
 	req := kernel.lastRequest(t)
@@ -187,9 +194,9 @@ func TestWithAKernelTheTurnRunsOnItAndNoChatModelIsRequired(t *testing.T) {
 func TestAKernelCapIsReportedAsAnApology(t *testing.T) {
 	sess := &model.Session{ID: "s1", UserID: 7}
 	store := newMemSessions(sess)
-	kernel := &scriptedKernel{result: &ports.TurnResult{
+	kernel := &scriptedKernel{result: &pigagent.TurnResult{
 		Content: "half an answer",
-		Stopped: ports.TurnMaxIterations,
+		Stopped: pigagent.TurnMaxIterations,
 	}}
 	rt, err := NewRuntime(Config{Sessions: store, Kernel: kernel})
 	if err != nil {
