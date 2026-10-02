@@ -2,6 +2,7 @@ package telemetrywal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -376,6 +377,51 @@ func TestTheDrainLoopWakesOnANudge(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("the drain loop did not stop on context cancel")
+	}
+}
+
+// TestARowThisBuildCannotReadIsNotAcked is the regression for a defect the
+// first version of the drain shipped with. A row that does not parse was
+// turned into an empty batch and handed to the sender; the sender is a
+// no-op for an empty batch, so the row was acked and lost. The unreadable
+// row is now carried as a short count, and a short count with no error is
+// a failed drain, so every row — readable and unreadable alike — stays.
+//
+// The test writes at the spool level rather than through Record, because
+// the only way to get an unreadable row is to write one this build cannot
+// produce: a payload that is not a Batch.
+func TestARowThisBuildCannotReadIsNotAcked(t *testing.T) {
+	w, _ := newWAL(t, Options{})
+	ctx := context.Background()
+
+	// One good row, then one the Batch decoder will refuse.
+	if err := w.Record(ctx, pointBatch("s1")); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := w.spool.Record(ctx, ClassSamples, json.RawMessage(`"not a batch"`)); err != nil {
+		t.Fatalf("Record unreadable: %v", err)
+	}
+	if err := w.Record(ctx, pointBatch("s2")); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	sent := 0
+	_, err := w.Drain(ctx, func() bool { return true }, func(_ context.Context, batches []Batch) (int, error) {
+		sent += len(batches)
+		return len(batches), nil
+	})
+	if err == nil {
+		t.Fatal("a drain holding a row this build cannot read succeeded; the row was acked and lost")
+	}
+	if sent != 0 {
+		t.Errorf("sent %d batches from a batch that was partly unreadable; the readable rows must wait too", sent)
+	}
+	n, err := w.spool.Len()
+	if err != nil {
+		t.Fatalf("Len: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("spool holds %d rows after a failed drain, want 3 — nothing may be acked", n)
 	}
 }
 

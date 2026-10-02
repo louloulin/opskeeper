@@ -3311,9 +3311,22 @@ buffer，而是**先把「追加一行、封顶、按序回放」抽成一个原
 | 6 | changewatcher 坏行不进 batch 却算进 ack 数 | 文件头的坏行让节点永远回放不了（活锁） | `decodeEvents` 返回 `(batch, decoded)` 两个数 |
 | 7 | 限流把健康节点的延迟也加上 | 每个样本慢一个 interval | 见 4.37.3 第 1 条 |
 | 8 | autonomy 工具的 claim 没有 argv 被拒 | `host_autonomy_run` 每次都被拒 | 决策 98 已修（提交在 `da70386`） |
+| 9 | `decode` 把读不懂的行变成空 batch，注释却写着「行留在盘上」 | 空 batch 在 sender 里是 no-op，于是**行被 ack 并丢失**——注释与代码说的是反话 | `decode` 返回 `(batches, unreadable)`，短计数即失败 drain |
 
 第 4 条是本轮最有价值的发现：它不会崩、不会报错，只会在**正确的时机**吞掉一行，
 而「ack 时正好有新行写入」在单机测试里几乎不会自发发生。
+
+第 9 条是同一种气质：`decode` 原来对读不懂的行返回一个 `Batch{Source:"unreadable"}`，
+并靠注释声称「sender 会因此失败，行会留在盘上」。这个依赖从来没有成立过——
+sender 是 `pushBatch`，一个既无 `HostPoint` 又无 `Samples` 的 batch 是一个返回
+`nil` 的 no-op，于是那行被 ack、被丢掉。**注释说的和代码做的是反话**，而没有任何
+一条测试问过它。修法是让 `decode` 把「有几行读不懂」当返回值交出去，靠泵已有的
+那条规则（短计数 + nil error = sender bug → 失败 drain）让全部行留下。
+
+代价要说清楚：读不懂的行在文件头，drain 会被它**卡住**。这个卡是**可自愈**的
+——该行的 class 有保质期，sweep 到点就把它淘汰，节点自己恢复。一个会自己结束的
+长响声比一个丢行的短沉默好。这条不是理论：把修复回退掉，新增的测试会红
+（`sent 2 batches … spool holds 1 rows, want 3`）。
 
 #### 4.37.5 交付物与闸门
 
@@ -3329,9 +3342,9 @@ buffer，而是**先把「追加一行、封顶、按序回放」抽成一个原
 | 闸门 | `core/edge/spool/spool_test.go`（21）、`core/edge/telemetrywal/wal_test.go`（11）、`core/edge/changewatcher/tunnel_wal_test.go`（5） | 断连写入 / 恢复回放 / 容量丢最旧 / 分级丢弃（`TracesGoBeforeMetrics`）/ 过期淘汰 / `Ack` 不丢并发写 / 一次 tick 一批 / 坏行不卡头 |
 
 **回归确认**：8 个模块 `GOWORK=off` 分别 build + vet + test 全绿，合计
-**5456 项**（`. 307 / core 57 / core/edge 464 / core/pig 318 / core/manager 3710 /
+**5457 项**（`. 307 / core 57 / core/edge 465 / core/pig 318 / core/manager 3710 /
 core/harness 214 / sdk 63 / core/floor 323`）；`spool`、`telemetrywal`、
-`autonomy`、`changewatcher`、`biz` 五个包 `-race -count=2` 共 **272 项**；
+`autonomy`、`changewatcher`、`biz` 五个包 `-race -count=2` 共 **274 项**；
 五道 make 闸门（`module-check` / `module-standalone-check` / `eval-gates` /
 `eval-coverage` / `plugin-extension-build-check`）全部 exit 0，plugin 能力覆盖
 仍是 **0/20**（安全回归未破坏）；`gofmt -l cmd core sdk` 为空。

@@ -328,7 +328,27 @@ func (w *WAL) ensurePump(reachable func() bool, send Sender) (*spool.Pump, error
 		Log:       w.log,
 		Reachable: reachable,
 		Send: func(ctx context.Context, rows []spool.Row) (int, error) {
-			return send(ctx, decode(rows))
+			batches, unreadable := decode(rows)
+			if unreadable > 0 {
+				// Leave every row — readable or not — for the next
+				// drain. The honest answer to "how many did the center
+				// get" is zero when part of the batch was never
+				// offered, and the count-short-of-batch rule makes
+				// that a failed drain rather than a partial ack.
+				//
+				// This is a wedge, and it is survivable rather than
+				// permanent: the unreadable row sits at the head of
+				// the log and the drain cannot get past it, but its
+				// class horizon still applies — the sweep drops it
+				// once the class ages out — so the node resumes on
+				// its own. A long loud stall that clears itself beats
+				// a short quiet one that loses the row.
+				w.log.Warn("telemetry: the write-ahead log holds rows this build cannot read; leaving them for a reader that can",
+					slog.Int("unreadable", unreadable),
+					slog.Int("rows", len(rows)))
+				return 0, fmt.Errorf("telemetrywal: %d of %d rows are unreadable by this build", unreadable, len(rows))
+			}
+			return send(ctx, batches)
 		},
 	})
 	if err != nil {
@@ -365,20 +385,35 @@ func (w *WAL) Run(ctx context.Context, reachable func() bool, send Sender) error
 // Close releases the file.
 func (w *WAL) Close() error { return w.spool.Close() }
 
-func decode(rows []spool.Row) []Batch {
+// decode turns spool rows back into batches, and says which rows it could
+// not read.
+//
+// The second return value is the whole point. A row that does not parse is
+// a row from a build that is not this one — a downgrade, or a format the
+// caller changed. It must not be sent, because there is nothing to send,
+// but it must also not be acked: an unreadable row is still a row, and
+// discarding it turns "this node has telemetry I cannot read" into "this
+// node sent me nothing", which is precisely the silent loss the WAL exists
+// to prevent.
+//
+// The earlier shape of this function returned a sentinel `Batch{Source:
+// "unreadable"}` and relied on the sender failing on it. That reliance was
+// never real: the sender is `pushBatch`, and a batch with no HostPoint and
+// no Samples is a no-op that returns nil, so the row was acked and lost.
+// The comment said the rows stay on disk; the code acked them. Carrying the
+// count here makes the two agree, and the pump's rule — a count short of
+// len(rows) with a nil error is a sender bug — turns a short count into a
+// failed drain that leaves every row in place.
+func decode(rows []spool.Row) ([]Batch, int) {
 	out := make([]Batch, 0, len(rows))
+	unreadable := 0
 	for _, r := range rows {
 		var b Batch
 		if err := json.Unmarshal(r.Payload, &b); err != nil {
-			// A row this build cannot read is a row from a future one.
-			// Dropping it silently would make the drain look like it
-			// delivered it, so the batch is forwarded empty and the
-			// send below fails the whole drain — the rows stay on disk
-			// rather than being acked unread.
-			out = append(out, Batch{Source: "unreadable"})
+			unreadable++
 			continue
 		}
 		out = append(out, b)
 	}
-	return out
+	return out, unreadable
 }
