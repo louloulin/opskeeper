@@ -228,6 +228,17 @@ arch-lint-run: ## 不安装、直接用 go run 跑 go-arch-lint（首次需要�
 module-check: ## 校验 OpsKeeper 2.0 模块边界（唯一 PiG 导入点 / core 无基础设施依赖）
 	go run ./scripts/modulecheck .
 
+# modulecheck stops at the module and go-arch-lint stops at the layer, and
+# inside core/manager neither can see a domain: the arch-lint components are
+# named after layers (manager_biz, manager_model, ...), so biz/alert
+# importing biz/loop is manager_biz -> manager_biz and every rule allows it.
+# Seven pairs of domains in the tree already reach each other both ways.
+# This gate makes those edges declared, and a new one red.
+.PHONY: domain-check
+domain-check: ## 校验 control plane 的域边界（55 个域 / 50 条声明边 / 7 对已知环）
+	go run ./scripts/domaincheck .
+	go test ./scripts/domaincheck/ -count=1
+
 # The root `make test` no longer reaches core/harness: it is a separate Go
 # module now, and that separation is the point. Anything that wants the
 # whole repository tested has to say so explicitly, or the golden-case
