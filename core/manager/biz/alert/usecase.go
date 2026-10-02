@@ -119,6 +119,10 @@ type Usecase struct {
 	// workflowDispatcher is optional; nil-safe. main.go injects the flow
 	// dispatcher so a fired alert can auto-start matching workflows.
 	workflowDispatcher WorkflowDispatcher
+	// correlator is optional; nil-safe. It answers "does this firing belong
+	// to a story somebody already opened?" so the alert path does not have
+	// to know whose story it is. See correlate.go (decision 113).
+	correlator FiringCorrelator
 }
 
 func NewUsecase(repo Repo, log *slog.Logger) *Usecase {
@@ -133,6 +137,14 @@ func NewUsecase(repo Repo, log *slog.Logger) *Usecase {
 // RecordFiring nil-checks before dispatch.
 func (u *Usecase) SetInvestigator(inv Investigator) {
 	u.investigator = inv
+}
+
+// SetFiringCorrelator wires the owner of pre-opened stories. main.go
+// injects the demo scenario usecase, which is the only implementation today.
+// Safe to leave unset: every firing is then ingested by the ordinary dedupe
+// path.
+func (u *Usecase) SetFiringCorrelator(c FiringCorrelator) {
+	u.correlator = c
 }
 
 // SetWorkflowDispatcher wires the alert→workflow dispatcher (HLD-016).
@@ -186,13 +198,6 @@ func (u *Usecase) GetIncident(ctx context.Context, id uint64) (*model.Incident, 
 		return nil, fmt.Errorf("%w: incident id must be positive", errs.ErrInvalid)
 	}
 	return u.repo.GetIncidentByID(ctx, id)
-}
-
-func (u *Usecase) CorrelateDemoScenario(ctx context.Context, fingerprint string, labels map[string]string) (*model.Incident, bool, error) {
-	if u == nil || u.repo == nil {
-		return nil, false, errs.ErrNotWiredYet
-	}
-	return u.repo.CorrelateDemoScenario(ctx, fingerprint, labels)
 }
 
 func (u *Usecase) AckIncident(ctx context.Context, id, operatorUserID uint64, note string) error {

@@ -58,13 +58,13 @@ func (u *Usecase) IngestAlertmanager(ctx context.Context, in AlertmanagerWebhook
 			summary = fmt.Sprintf("Alertmanager alert %s is firing", name)
 		}
 		dedupeKey := alertmanagerDedupeKey(name, alert.Fingerprint, alert.Labels)
-		correlatedIncident, isDemoScenario, err := u.CorrelateDemoScenario(ctx, alert.Fingerprint, alert.Labels)
+		correlatedIncident, ownedByStory, err := u.correlateFiring(ctx, alert.Fingerprint, alert.Labels)
 		if err != nil {
 			return nil, err
 		}
-		if isDemoScenario {
+		if ownedByStory {
 			if correlatedIncident == nil || strings.TrimSpace(correlatedIncident.DedupeKey) == "" {
-				return nil, fmt.Errorf("%w: demo scenario incident has no dedupe key", errs.ErrConflict)
+				return nil, fmt.Errorf("%w: correlated incident has no dedupe key", errs.ErrConflict)
 			}
 			dedupeKey = correlatedIncident.DedupeKey
 		}
@@ -90,7 +90,12 @@ func (u *Usecase) IngestAlertmanager(ctx context.Context, in AlertmanagerWebhook
 		if err := u.recordWebhookReceipt(ctx, firing.Incident, alert); err != nil {
 			return nil, err
 		}
-		if isDemoScenario && u.investigator != nil {
+		// A firing that belongs to a pre-opened story lands on an incident
+		// that already exists, so the proactive investigation is dispatched
+		// on the same path as any other firing. Today the only owner of such
+		// a story is the demo scenario (decision 113), so this is the old
+		// "isDemoScenario" branch with the demo removed from the name.
+		if ownedByStory && u.investigator != nil {
 			u.investigator.InvestigateAsync(firing.Incident)
 		}
 		result.Accepted++

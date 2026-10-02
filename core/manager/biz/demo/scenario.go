@@ -158,10 +158,15 @@ type Usecase struct {
 	expectedReplayProfile string
 	workflowPublisher     WorkflowPublisher
 	archiveWriter         ArchiveEventWriter
-	archiveTenantID       string
-	clock                 Clock
-	executionLocks        map[string]*sync.Mutex
-	executionLocksGuard   sync.Mutex
+	// correlations answers the alert domain's "is this firing part of a
+	// running scenario?" question. Optional; nil-safe. See correlate.go
+	// (decision 113) — the demo used to be reached from the alert store
+	// instead, which made the two domains mutually dependent.
+	correlations        FiringCorrelationRepository
+	archiveTenantID     string
+	clock               Clock
+	executionLocks      map[string]*sync.Mutex
+	executionLocksGuard sync.Mutex
 }
 
 func NewUsecase(scenarios ScenarioRepository, incidents IncidentRepository, fixtures PoolFixtureRepository) *Usecase {

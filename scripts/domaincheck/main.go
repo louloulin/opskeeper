@@ -117,14 +117,13 @@ var edges = map[edge]string{
 	{"aiopsconfig", "alert"}: "the agent's settings endpoints resolve alert configuration through the alert service",
 
 	{"alert", "aiops"}: "an alert's investigation is driven by the agent's chat runtime; the alert domain asks the agent rather than embedding a second runtime",
-	{"alert", "demo"}:  "the demo seeds alerts, so it writes the real alert model rather than a fixture of it",
 	{"alert", "edge"}:  "an alert is raised against a node, and acknowledging it has to update that node's state",
 
 	{"chatdiagnose", "aiops"}: "chat diagnosis runs on the agent's chat runtime",
 	{"chatdiagnose", "audit"}: "promoting a chat into an investigation is an operator action and belongs in the chain",
 	{"chatdiagnose", "loop"}:  "promoting a chat hands the work to the loop domain, which owns the investigation",
 
-	{"demo", "alert"}: "the demo seeds alert rows through the alert model",
+	{"demo", "alert"}: "the scenario seeds and narrates real incident rows, so it writes the production alert model rather than a fixture of it. The alert side asks the scenario whether it owns a firing through a correlator port instead of importing it back (decision 113)",
 
 	{"edge", "device"}: "the edge register flow resolves, creates and updates the host Device behind a node (biz/edge, server/edge). One direction only: a device deletion reaches the edge identities through a revoker the composition root injects rather than by importing them (decision 112)",
 
@@ -195,7 +194,6 @@ var cycles = map[[2]string]string{
 	{"aiops", "alert"}:       "the agent raises alerts and the alert domain asks the agent to investigate them; cutting this means alerts dispatch an investigation id instead of calling a runtime",
 	{"aiops", "hitl"}:        "the agent requests a human and the approval policy names agent remediations; cutting this means the policy reads a remediation descriptor rather than the agent's vocabulary",
 	{"aiops", "loop"}:        "the agent kernel drives the loop and the loop builds the agent's prompts; this is the largest cycle in the tree and the reason the registry seam (decision 104) exists",
-	{"alert", "demo"}:        "the demo seeds alerts and the alert model is what a seeded row must satisfy; cutting this means the demo stops writing the production model",
 	{"chatdiagnose", "loop"}: "a chat is promoted into the loop and the loop dispatches chats; cutting this means the promotion is an event rather than a call",
 	{"loop", "report"}:       "the loop produces a report and a report is produced from a loop investigation; cutting this means the report domain subscribes rather than being called",
 }

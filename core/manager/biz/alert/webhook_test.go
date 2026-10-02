@@ -63,12 +63,14 @@ func TestAlertmanagerCorrelatesActiveDemoScenario(t *testing.T) {
 	}
 	repo.incidents[incident.ID] = incident
 	repo.byDedupe[incident.DedupeKey] = incident
-	repo.scenarios[incident.DedupeKey] = &fakeDemoScenario{
+	correlator := newFakeCorrelator(repo)
+	correlator.scenarios[incident.DedupeKey] = &fakeDemoScenario{
 		incidentID: incident.ID, fingerprint: "aaaaaaaaaaaaaaaa", poolManifest: "manifest-1",
 		status: "awaiting_alert", idempotencyKey: "final-demo",
 	}
 	investigator := &webhookFakeInvestigator{}
 	uc := NewUsecase(repo, nil)
+	uc.SetFiringCorrelator(correlator)
 	uc.SetInvestigator(investigator)
 	startedAt := time.Date(2026, 9, 18, 8, 0, 0, 0, time.UTC)
 
@@ -88,8 +90,8 @@ func TestAlertmanagerCorrelatesActiveDemoScenario(t *testing.T) {
 	if len(repo.incidents) != 1 || repo.incidents[42].ID != incident.ID {
 		t.Fatalf("incident identity changed: %+v", repo.incidents)
 	}
-	if repo.scenarios[incident.DedupeKey].status != "alert_correlated" {
-		t.Fatalf("scenario status = %q; want alert_correlated", repo.scenarios[incident.DedupeKey].status)
+	if correlator.scenarios[incident.DedupeKey].status != "alert_correlated" {
+		t.Fatalf("scenario status = %q; want alert_correlated", correlator.scenarios[incident.DedupeKey].status)
 	}
 	if !hasEventType(repo.events, model.EventTypeAlertReceived) {
 		t.Fatalf("alert.received event missing: %+v", repo.events)
@@ -107,11 +109,13 @@ func TestAlertmanagerDoesNotCreateDuplicateDemoIncident(t *testing.T) {
 	}
 	repo.incidents[incident.ID] = incident
 	repo.byDedupe[incident.DedupeKey] = incident
-	repo.scenarios[incident.DedupeKey] = &fakeDemoScenario{
+	correlator := newFakeCorrelator(repo)
+	correlator.scenarios[incident.DedupeKey] = &fakeDemoScenario{
 		incidentID: incident.ID, fingerprint: "bbbbbbbbbbbbbbbb", poolManifest: "manifest-2",
 		status: "awaiting_alert", idempotencyKey: "repeat-demo",
 	}
 	uc := NewUsecase(repo, nil)
+	uc.SetFiringCorrelator(correlator)
 	payload := AlertmanagerWebhookInput{Alerts: []AlertmanagerAlert{{
 		Status: "firing", Fingerprint: "bbbbbbbbbbbbbbbb", StartsAt: time.Now().UTC(),
 		Labels: map[string]string{
@@ -135,7 +139,9 @@ func TestAlertmanagerDoesNotCreateDuplicateDemoIncident(t *testing.T) {
 
 func TestUnrelatedAlertKeepsNormalIngestPath(t *testing.T) {
 	repo := newFakeRepo()
+	correlator := newFakeCorrelator(repo)
 	uc := NewUsecase(repo, nil)
+	uc.SetFiringCorrelator(correlator)
 
 	_, err := uc.IngestAlertmanager(context.Background(), AlertmanagerWebhookInput{Alerts: []AlertmanagerAlert{{
 		Status: "firing", Fingerprint: "unrelated", StartsAt: time.Now().UTC(),
@@ -144,11 +150,61 @@ func TestUnrelatedAlertKeepsNormalIngestPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IngestAlertmanager: %v", err)
 	}
-	if repo.correlateCalls != 1 {
-		t.Fatalf("correlate calls = %d; want 1", repo.correlateCalls)
+	if correlator.calls != 1 {
+		t.Fatalf("correlate calls = %d; want 1", correlator.calls)
 	}
 	if len(repo.incidents) != 1 || repo.incidents[1].DedupeKey != "alertmanager:unrelated" {
 		t.Fatalf("normal incident path changed: %+v", repo.incidents)
+	}
+}
+
+// TestIngestAlertmanagerWithoutCorrelatorIngestsNormally pins the "not wired"
+// answer: before decision 113 the recognition logic was compiled into the
+// alert store, so a platform with no demo still ran that query on every
+// firing. Now the query only happens if somebody answered a claim, and
+// "nobody wired a correlator" has to behave exactly like "nothing matched".
+func TestIngestAlertmanagerWithoutCorrelatorIngestsNormally(t *testing.T) {
+	repo := newFakeRepo()
+	uc := NewUsecase(repo, nil)
+
+	result, err := uc.IngestAlertmanager(context.Background(), AlertmanagerWebhookInput{Alerts: []AlertmanagerAlert{{
+		Status: "firing", Fingerprint: "standalone", StartsAt: time.Now().UTC(),
+		Labels: map[string]string{
+			"alertname": "PGConnectionPoolSaturation", "instance": "opskeeper-demo-node-metrics:8095",
+			"job": "opsk", "pool_manifest_id": "manifest-nobody-owns",
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("IngestAlertmanager: %v", err)
+	}
+	if result.Accepted != 1 || len(repo.incidents) != 1 {
+		t.Fatalf("accepted = %d, incidents = %d; want 1, 1", result.Accepted, len(repo.incidents))
+	}
+	// Even the demo's exact label triple must not be claimed by anyone.
+	if got := repo.incidents[1].DedupeKey; got != "alertmanager:standalone" {
+		t.Fatalf("dedupe key = %q; want the ordinary alertmanager path", got)
+	}
+}
+
+// TestCorrelatorErrorStopsIngest makes sure the port is not swallowed: a
+// correlator that cannot answer must not let the firing through as if nobody
+// had claimed it, because the pre-opened incident is the dedupe target.
+func TestCorrelatorErrorStopsIngest(t *testing.T) {
+	repo := newFakeRepo()
+	correlator := newFakeCorrelator(repo)
+	correlator.fail = errors.New("scenario store unreachable")
+	uc := NewUsecase(repo, nil)
+	uc.SetFiringCorrelator(correlator)
+
+	_, err := uc.IngestAlertmanager(context.Background(), AlertmanagerWebhookInput{Alerts: []AlertmanagerAlert{{
+		Status: "firing", Fingerprint: "boom", StartsAt: time.Now().UTC(),
+		Labels: map[string]string{"alertname": "PGConnectionPoolSaturation", "severity": "critical"},
+	}}})
+	if err == nil {
+		t.Fatal("IngestAlertmanager err = nil; want the correlator's error")
+	}
+	if len(repo.incidents) != 0 {
+		t.Fatalf("incidents = %d; want 0 — a firing must not be ingested past a failed correlation", len(repo.incidents))
 	}
 }
 

@@ -1536,13 +1536,23 @@ func main() {
 			log.Error("demo repair preview executor config invalid", slog.Any("err", err))
 			os.Exit(1)
 		}
+		demoRepo := managerdemodata.NewRepo(db)
 		demoScenarioUsecase := managerbizdemo.NewUsecaseWithPreviewWorkflow(
-			managerdemodata.NewRepo(db), alertRepo, managerbizdemo.NewPoolFixtureClient(poolFixtureURL, poolFixtureToken),
+			demoRepo, alertRepo, managerbizdemo.NewPoolFixtureClient(poolFixtureURL, poolFixtureToken),
 			repairPreviewRepository,
 			expectedReplayProfile,
 			workflowPublisher,
 		)
 		demoScenarioUsecase.SetPreviewExecutor(previewExecutor)
+		// Decision 113: the alert ingest path asks "does this firing belong
+		// to a running scenario?" through a port, and the scenario owner
+		// answers. The connection is made here, at the composition root,
+		// and only when the demo is actually configured — which is exactly
+		// when the hardcoded branch in the alert store used to find rows.
+		// Both halves of the dependency are set together so a half-wired
+		// scenario (a usecase with no storage) is impossible.
+		demoScenarioUsecase.SetFiringCorrelationRepository(demoRepo)
+		alertUC.SetFiringCorrelator(demoScenarioUsecase)
 		archiveTenantID := strings.TrimSpace(os.Getenv("OPSKEEPER_DEFAULT_INCIDENT_TENANT_ID"))
 		if archiveTenantID == "" {
 			archiveTenantID = "1"

@@ -54,28 +54,70 @@ func (f *fakeNotifier) SendVia(_ context.Context, msg notify.Message, sender not
 type fakeRepo struct {
 	now func() time.Time
 
-	incidents      map[uint64]*model.Incident
-	byDedupe       map[string]*model.Incident
-	nextID         uint64
-	silences       []*model.Silence
-	channels       map[string]*model.Channel
-	rules          map[string]*model.Rule
-	deliveries     []*model.Delivery
-	events         []*model.Event
-	scenarios      map[string]*fakeDemoScenario
-	correlateCalls int
-	createIncErr   error
-	bumpCalls      int
-	reopenCalls    int
-	notifiedCalls  map[uint64]time.Time
+	incidents     map[uint64]*model.Incident
+	byDedupe      map[string]*model.Incident
+	nextID        uint64
+	silences      []*model.Silence
+	channels      map[string]*model.Channel
+	rules         map[string]*model.Rule
+	deliveries    []*model.Delivery
+	events        []*model.Event
+	createIncErr  error
+	bumpCalls     int
+	reopenCalls   int
+	notifiedCalls map[uint64]time.Time
 }
 
+// fakeDemoScenario stands for "a story that was opened before the firing
+// arrived". Today the only real one is the pg-pool-exhaustion demo scenario,
+// so the double keeps that name.
 type fakeDemoScenario struct {
 	incidentID     uint64
 	fingerprint    string
 	poolManifest   string
 	status         string
 	idempotencyKey string
+}
+
+// fakeCorrelator is the FiringCorrelator double. It used to be a method on
+// fakeRepo, which is what the alert repository interface exposed before
+// decision 113: the ingest path reached into the store to ask a question
+// about somebody else's data. As a separate collaborator the same logic is
+// injected instead, and a test can leave it out entirely.
+type fakeCorrelator struct {
+	repo      *fakeRepo
+	scenarios map[string]*fakeDemoScenario
+	calls     int
+	fail      error
+}
+
+func newFakeCorrelator(repo *fakeRepo) *fakeCorrelator {
+	return &fakeCorrelator{repo: repo, scenarios: map[string]*fakeDemoScenario{}}
+}
+
+func (c *fakeCorrelator) CorrelateFiring(_ context.Context, fingerprint string, labels map[string]string) (*model.Incident, bool, error) {
+	c.calls++
+	if c.fail != nil {
+		return nil, false, c.fail
+	}
+	for _, scenario := range c.scenarios {
+		fingerprintMatch := fingerprint != "" && scenario.fingerprint == fingerprint
+		labelMatch := labels != nil &&
+			labels["alertname"] == "PGConnectionPoolSaturation" &&
+			labels["instance"] == "opskeeper-demo-node-metrics:8095" &&
+			labels["job"] == "opsk" &&
+			labels["pool_manifest_id"] == scenario.poolManifest
+		if !fingerprintMatch && !labelMatch {
+			continue
+		}
+		if fingerprint != "" {
+			scenario.fingerprint = fingerprint
+		}
+		scenario.status = "alert_correlated"
+		incident := c.repo.incidents[scenario.incidentID]
+		return incident, incident != nil, nil
+	}
+	return nil, false, nil
 }
 
 func newFakeRepo() *fakeRepo {
@@ -85,7 +127,6 @@ func newFakeRepo() *fakeRepo {
 		channels:      map[string]*model.Channel{},
 		rules:         map[string]*model.Rule{},
 		notifiedCalls: map[uint64]time.Time{},
-		scenarios:     map[string]*fakeDemoScenario{},
 	}
 }
 
@@ -318,28 +359,6 @@ func (r *fakeRepo) BumpIncidentFiring(_ context.Context, id uint64, firedAt time
 	i.Value = value
 	i.Threshold = threshold
 	return nil
-}
-
-func (r *fakeRepo) CorrelateDemoScenario(_ context.Context, fingerprint string, labels map[string]string) (*model.Incident, bool, error) {
-	r.correlateCalls++
-	for _, scenario := range r.scenarios {
-		fingerprintMatch := fingerprint != "" && scenario.fingerprint == fingerprint
-		labelMatch := labels != nil &&
-			labels["alertname"] == "PGConnectionPoolSaturation" &&
-			labels["instance"] == "opskeeper-demo-node-metrics:8095" &&
-			labels["job"] == "opsk" &&
-			labels["pool_manifest_id"] == scenario.poolManifest
-		if !fingerprintMatch && !labelMatch {
-			continue
-		}
-		if fingerprint != "" {
-			scenario.fingerprint = fingerprint
-		}
-		scenario.status = "alert_correlated"
-		incident := r.incidents[scenario.incidentID]
-		return incident, incident != nil, nil
-	}
-	return nil, false, nil
 }
 
 func (r *fakeRepo) ReopenIncident(_ context.Context, id uint64, firedAt time.Time, summary string, value, threshold *float64) error {
