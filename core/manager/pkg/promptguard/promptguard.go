@@ -1,5 +1,20 @@
 // Package promptguard marks content the platform did not write.
 //
+// It lives on the shared floor rather than beside the agent because three
+// bounded contexts fence untrusted text and only one of them is the agent:
+// biz/loop wraps the correlated group and the investigator toolset before
+// they reach a model, and it could only do that by importing the agent's
+// copy. That import was half of the aiops <-> loop cycle (decision 117),
+// and the fix is the same shape decision 109 used for the audit row: a
+// security primitive that several contexts must share belongs below the
+// contexts, not inside whichever one happened to write it first.
+//
+// Nothing here is agent vocabulary. The package imports nothing but the
+// standard library, it holds no usecase, no repository and no configuration,
+// and it cannot be reached back from: what it can do is label a block and
+// put a fence around it. Whether a given block should have been trusted in
+// the first place is not a question this package answers.
+//
 // The plan's phase-2 item is one sentence: alert text, log lines and
 // repository/PR text are fed to the model as data and must be marked as
 // untrusted, because anyone who can write a log line can write an instruction.

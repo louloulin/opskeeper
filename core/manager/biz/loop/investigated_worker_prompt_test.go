@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/promptguard"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promptguard"
 )
 
 // fencedBlockAfter returns the first block that follows heading in doc. It is

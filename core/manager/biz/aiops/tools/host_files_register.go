@@ -3,10 +3,10 @@ package tools
 import (
 	"log/slog"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/promptguard"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promptguard"
 )
 
 // AppendHostFilesTools registers the three edge-scope host_files

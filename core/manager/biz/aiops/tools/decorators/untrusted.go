@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/promptguard"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promptguard"
 )
 
 // UntrustedOutput wraps a tool whose result is text written outside this

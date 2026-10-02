@@ -2,6 +2,8 @@ package promptguard
 
 import (
 	"fmt"
+	"go/parser"
+	"go/token"
 	"strconv"
 	"strings"
 	"testing"
@@ -281,5 +283,37 @@ func TestManyBlocksInOneDocumentParseIndependently(t *testing.T) {
 	}
 	if seen != 5 {
 		t.Fatalf("parsed %d of 5 blocks", seen)
+	}
+}
+
+// TestTheFenceCannotReachThePlatform is the package's central claim made
+// executable, and it is the same shape as pkg/audit's
+// TestThePortCannotReachTheLedger.
+//
+// This package moved down to the shared floor in decision 117 so that
+// biz/loop could fence a correlated group without importing the agent
+// kernel. What makes that move safe is not the file layout, it is that the
+// fence cannot do anything except draw a fence: it holds no configuration,
+// reaches no repository and names no bounded context. The moment it imports
+// one, every context that fences untrusted text inherits that context's
+// vocabulary, and the floor stops being a floor.
+//
+// So the claim is read out of the source rather than assumed. The imports
+// this package is allowed are the standard library's and nothing else, which
+// is a stronger bound than pkg/audit needs.
+func TestTheFenceCannotReachThePlatform(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "promptguard.go", nil, parser.ImportsOnly)
+	if err != nil {
+		t.Fatalf("parse promptguard.go: %v", err)
+	}
+	if len(file.Imports) == 0 {
+		t.Fatal("no imports were scraped; the AST walk is broken, not the package")
+	}
+	for _, imp := range file.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		if strings.Contains(path, "opskeeper") {
+			t.Errorf("promptguard.go imports %s: a shared-floor fence that names a bounded context is not on the floor", path)
+		}
 	}
 }

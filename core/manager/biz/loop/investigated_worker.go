@@ -25,6 +25,11 @@
 //   - InvestigatorToolset / CorrelatedGroupLoader 是本包内定义的
 //     narrow interface；concrete 实现由 cmd/main.go 在 Day 5 集成时
 //     注入（aiops/tools.InvestigatorTool + loop_contract.LoadCorrelatedGroup）。
+//
+// 这段声明直到决策 117 才是真的：这个文件的 import 块里曾有
+// biz/aiops/promptguard——和上面两行是同一种自欺，注释列出了它打算怎么不越界，
+// 于是读者以为剩下的部分也守住了。围栏原语已下沉到 pkg/promptguard（与决策 109
+// 把审计行形状下沉到 pkg/audit 同一形状），现在 biz/loop 对 aiops 零 import。
 package loop
 
 import (
@@ -36,7 +41,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/promptguard"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promptguard"
 )
 
 // investigatedOutputSchema 是给 LLMCaller.Call 的 OutputSchema。

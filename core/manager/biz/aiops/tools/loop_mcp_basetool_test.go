@@ -1,4 +1,4 @@
-package loop_test
+package tools_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	aiopstoolsdec "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
 	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
@@ -17,7 +18,7 @@ import (
 
 func TestMCPBaseTools_RunThroughStandardDecoratorChain(t *testing.T) {
 	service := &recordingMCPToolService{}
-	baseTools := loopbiz.NewMCPBaseTools(context.Background(), service)
+	baseTools := aiopstools.NewMCPBaseTools(context.Background(), service)
 	if len(baseTools) != 3 {
 		t.Fatalf("tool count = %d, want 3", len(baseTools))
 	}

@@ -115,7 +115,6 @@ import (
 
 	aiopsinvestigator "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/investigator"
 	managerbizaiopsmentions "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/mentions"
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/promptguard"
 	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	aiopstoolsdec "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
@@ -162,6 +161,7 @@ import (
 	settingmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/setting"
 	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
 	mcpclient "github.com/vincent-wuhan/opskeeper/core/manager/pkg/mcpclient"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promptguard"
 	managerserverimbridge "github.com/vincent-wuhan/opskeeper/core/manager/server/imbridge"
 	managerserverknowledge "github.com/vincent-wuhan/opskeeper/core/manager/server/knowledge"
 	managerwebshellserver "github.com/vincent-wuhan/opskeeper/core/manager/server/webshell"
@@ -2680,7 +2680,7 @@ func main() {
 	}
 	wrappedLoopMCPTools := make([]aiopstoolsbase.BaseTool, 0)
 	wrappedMCPTools := make(map[string]aiopstoolsbase.BaseTool)
-	for _, tool := range managerbizloop.NewMCPBaseTools(rootCtx, loopMCPAdapter) {
+	for _, tool := range aiopstools.NewMCPBaseTools(rootCtx, loopMCPAdapter) {
 		wrapped := aiopstoolsdec.Wrap(tool, loopMCPDeps)
 		wrappedLoopMCPTools = append(wrappedLoopMCPTools, wrapped)
 		if info, infoErr := wrapped.Info(rootCtx); infoErr == nil && info != nil {

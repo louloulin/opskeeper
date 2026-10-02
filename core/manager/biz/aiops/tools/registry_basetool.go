@@ -4,8 +4,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/promptguard"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promptguard"
 )
 
 // envIntDefault parses an env-var-string into an int. Returns def when

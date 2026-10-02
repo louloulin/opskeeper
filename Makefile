@@ -153,8 +153,8 @@ crystallize-check: ## 结晶：晋升 / 退役 / 拒绝不可用输入 / 草稿�
 # inside blocks a payload cannot close.
 .PHONY: promptguard-check
 promptguard-check: ## 外来文本进模型前带 nonce 围栏（prompt injection 一条）
-	go test ./core/manager/biz/aiops/promptguard/ -count=1 -run \
-		'TestABodyContainingTheClosingMarkerCannotCloseTheBlock|TestAMarkerWithAStaleIDCannotCloseThisBlock|TestEveryBlockGetsAFreshID|TestMarkerVariantsAreEscaped|TestParseRejectsWhatIsNotABlock|TestTheInstructionNamesTheTagTheFencerWrites'
+	go test ./core/manager/pkg/promptguard/ -count=1 -run \
+		'TestABodyContainingTheClosingMarkerCannotCloseTheBlock|TestAMarkerWithAStaleIDCannotCloseThisBlock|TestEveryBlockGetsAFreshID|TestMarkerVariantsAreEscaped|TestParseRejectsWhatIsNotABlock|TestTheInstructionNamesTheTagTheFencerWrites|TestTheFenceCannotReachThePlatform'
 	go test ./core/manager/biz/aiops/tools/decorators/ -count=1 -run \
 		'TestTheResultIsFencedWithTheToolsOwnName|TestAnAdversarialResultCannotCloseTheFence|TestAnErrorIsNotFenced|TestInfoPassesThrough'
 	go test ./core/manager/biz/aiops/tools/ -count=1 -run \
