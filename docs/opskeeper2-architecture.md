@@ -545,7 +545,7 @@ func (a *Agent) AddAfterToolCallHook(h AfterToolCallHook)
 ```
 
 现在每条 assistant 行是在 `OnMessagePersist` 里落库的，**行 id 在落库那一刻生成
-并回填到 SSE 帧**，控制台的气泡就是靠它绑定���。SDK 路径的等价物是
+并回填到 SSE 帧**，控制台的气泡就是靠它绑定消息。SDK 路径的等价物是
 `SessionManager`（`coding/session_manager.go:12` = `icodingagent.Session`，追加式
 日志，不是消息快照）。改从 `Entries()` 读回意味着 **id 分配时机从「消息产生时」
 变成「turn 结束后」**，SSE 帧的 `message_id` 与控制台气泡的绑定时序会变——这是
@@ -1153,6 +1153,84 @@ names a tool that could be packaged」，把结论指向「去打包」。这句
 「经审批可达」也算作已覆盖——那会改 harness 的语义（case 判分要不要区分
 「走节点 agent」与「走闭环审批」），属于 §六 D 阶段的范围决策，不在闸门
 口径里顺手改掉。
+
+---
+
+### 4.19 节点 Agent 页面，顺带修掉一个跨全站的错误信封缺陷（决策 81）
+
+路线图 §七 第 4 条写着「插件市场与节点 Agent 两个页面」，其中**节点 Agent
+页此前完全不存在**：后端 9 条 `/v1/node-agents/*` 路由与测试都在，前端没有
+客户端、没有页面、没有入口。本轮把它建起来了，但真正值得记的不是页面本身
+——是它逼出来的两个缺陷，两个都不在节点 Agent 这条路上。
+
+**一、`client.ts` 只读扁平的错误信封，两个 2.0 handler 的错误码全站丢失。**
+
+控制面的错误体有两种形状，而且**两种都还在线上**：
+
+| 形状 | 写出方 |
+|---|---|
+| `{"error": "…", "code": "…"}` | marketplace / skill / monitor / alert / topology 等既有 handler |
+| `{"error": {"message": "…", "code": "…"}}` | `nodeagent/http.go` 的 `writeErr`、`plugin/http.go`（两者都是 2.0 新写的） |
+
+而 `web/src/api/client.ts` 只认扁平的：`typeof obj.error === 'string'` 才取
+message，`obj.code` 才取 code。喂进嵌套体时 `obj.error` 是 object，两条都落空，
+于是 **429 变成一句 `HTTP 429`**，错误码整个丢掉。
+
+这不是装饰性的缺口。错误码正是页面区分「哪种拒绝」的依据，而**已有页面就在
+按它分支**：`Tasks.tsx` 匹配 `not-wired-yet`，`marketplace.ts` 匹配
+`invalid-argument`，本轮的节点 Agent 页匹配 `conversation_limit` 与
+`not_streaming`。最后一个尤其要命——它决定文案是「去关掉一个会话」还是
+「稍后重试」，而后者会把运维引到唯一无效的那个动作上（节点的会话不会自己关闭）。
+修法是加 `readErrorEnvelope` 同时读两种形状，扁平的先查（它更老更常见，
+同时带两者的 handler 是 bug 不是形状）。
+
+**二、`attachStream` 不把 `signal` 交给 `fetch`，改为取消 reader。**
+
+页面一渲染就崩：`RequestInit: Expected signal ("AbortSignal {}") to be an
+instance of AbortSignal`。查下来是 **jsdom 的 `AbortController` 与 vitest 下
+的 fetch 不是同一个 realm**——这不是页面 bug（浏览器里两者同源），但它挡住了
+测试。修法没有去对齐 realm，而是换掉那个惯用法：**响应头已经拿到了，要停的
+只剩 body 流，所以 `reader.cancel()` 才是精确的仪器**——它立刻解开挂起的
+`read()` 并断开连接，而把 signal 挂到 Request 上是对一个请求早已离开的阶段
+挥更重的锤子。顺带 signal 不再跨进 `fetch`，realm 问题自然消失。
+
+顺带发现同形问题：`scrollIntoView` 在 jsdom 里不存在，页面一有气泡就整页崩。
+加了可选调用——跟随滚动是锦上添花，渲染不是。
+
+**三、三条断言是「像覆盖但不是」，已按规矩处理。**
+
+- 「挂流前不能发消息」原本只断言 textarea 禁用。变异验证（M6：去掉 Send
+  按钮自己的 `!attached` 守卫）**抓不到**——因为 textarea 禁用时 `input`
+  恒为空，`!input.trim()` 已经把按钮禁掉了。两个守卫同时成立，不等于覆盖了
+  任何一个。补了一条**可达**的用例：流在输入途中断掉（operator 打到一半，
+  节点的 agent 进程没了），此时 `input` 非空而 `attached` 已为 false，
+  M6 才抓得住。断流的时刻由测试持有 `ReadableStream` 的 controller 显式
+  触发，不用定时器——一个主题是「此刻什么可用」的测试不能让主题由调度决定。
+- M7（去掉 `onError` 里的 `setAttached(false)`）**仍然抓不到**，原因是
+  `onClose` 也会清 `attached`。这是**真实冗余**（流报错和流正常关闭两条路
+  都会让控制台脱钩，属于该有的双保险），所以这条断言只声称它真正证明的那句
+  话——「断流之后发送被禁用」——没有声称是哪条内部路径做的。不降级，因为
+  表述本来就没有越界。
+- 「delta 累积」原本也没被覆盖。已有两条都发 `assistant_end`，而它按设计
+  覆盖累积值，所以把 `b.content + chunk` 改成 `chunk` **两条都照样绿**——
+  测的是一个恰好被终帧掩盖的分支。而「发了若干 delta、终帧永不到达」是
+  流式最常见的情形（`wire/events.go` 明说非流式产出方可以省略终帧），
+  只读终帧的页面会在每一次这样的轮次里显示一个空气泡。补的用例断言
+  **一个元素同时含两半**——分开断言即便第二个 delta 覆盖了第一个也会通过，
+  而那正是 bug：运维会读到一句从未被说出口的话。
+
+其余 7 条变异（M1–M6、M8–M10）全部被抓；M7 是真实冗余，见上。
+
+**四、页面本身。** `web/src/api/nodeAgents.ts` + `web/src/pages/NodeAgents.tsx`
++ 路由 `/node-agents` + 侧边栏入口（在「助理」下面而不是里面：节点 Agent 是
+**正在跑的** agent，助理是**能装什么**的目录，两者回答不同问题）。9 个用例，
+全量前端 **11 文件 / 80 测试**通过，`vite build` 通过。
+
+页面上有两块是**专门为了不说谎**而存在的，砍掉它们这个页面就只是个聊天 UI：
+**丢帧计数**（背压丢帧和「agent 不说话了」在界面上长得一模一样，而
+`listSessions` 是这个数字唯一存在的地方）与**节点健康与 agent 状态分列**
+（`degraded` + 非零重启数是 supervisor 已经放弃重启的样子，一个只显示
+"running" 的页面会在整个这段时间里报健康）。
 
 ---
 
@@ -3285,9 +3363,17 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
    JSON-RPC 客户端、没有握手、没有把 MCP server 接进 agent 工具集的桥。
    当前 65 个工具走 extension toolset 已端到端跑通（带鉴权、审计、白名单、
    回归），所以要不要补 MCP 是"接不接第三方 MCP 生态"的产品问题，不是债。
-4. **插件市场与节点页面的前端**（E 阶段唯一纯前端工作）。
-   `/v1/marketplace/*`（7 条）与 `/v1/plugins/releases`（6 条）已经有后端与
-   测试，Web 控制台还没有"插件市场"和"节点 Agent"两个页面。
+4. **插件市场与节点页面的前端**（E 阶段唯一纯前端工作）——**一半完成**。
+   - ✅ **节点 Agent 页**（决策 81）：`web/src/api/nodeAgents.ts` +
+     `pages/NodeAgents.tsx` + 路由 `/node-agents` + 侧边栏入口，9 个用例，
+     7 条变异验证抓到。顺带修掉 `client.ts` 读不懂嵌套错误信封（两个 2.0
+     handler 的错误码此前在全站丢失，`Tasks` / `marketplace` 的分支都受影响）。
+   - ❌ **插件市场页**：`/v1/plugins/releases` 的 6 条已有页面
+     （`/admin/plugins`），但 2.0 插件生态这一侧仍缺——**导入器没有客户端**
+     （`POST /v1/marketplace/import`，决策 55 落的入口，前端从未调用过），
+     也没有把「节点上装了什么 / 哪些包可装 / 兼容矩阵」放在一起的目录视图。
+     存量技能市场是另一回事：`/settings/marketplace` 已于 2026-05-19 退役并
+     折进 `/skills?tab=install`，它服务的是 skill pack，不是 PiG package。
 
 ### D 阶段续：把声明变成实现
 

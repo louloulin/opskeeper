@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -246,4 +247,66 @@ func TestImport_RefusesSomethingThatIsNotAContainer(t *testing.T) {
 	if len(ents) != 0 {
 		t.Errorf("a refused import left %v behind", ents)
 	}
+}
+
+// The report's JSON keys are part of the console's contract, and this test
+// is the only thing holding them.
+//
+// The other tests in this file decode the response into a struct that
+// carries the same tags, so a renamed tag would satisfy them perfectly —
+// both sides would move together and the suite would stay green while the
+// console silently read `undefined`. Decoding into a map instead means the
+// expected names are written out by hand and a rename has nothing to move
+// with.
+//
+// The naming itself is the point. LoadWarning, embedded one field away,
+// already answers `path`/`reason`/`code`; a Report without tags answered
+// `Name`/`Decisions` beside it. Two conventions inside one JSON object is
+// not a style question, it is a second contract for the console to hold.
+func TestImport_AnswersTheReportInTheSameNamingAsTheWarningsBesideIt(t *testing.T) {
+	root := t.TempDir()
+	h := NewHandler(stubSvc{})
+	h.SetImporter(pluginimport.Import, root)
+
+	rec := importRequest(t, newRouter(h), "acme-tools.zip", claudeArchive(t, "acme-tools"), adminCtx())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, rec.Body.String())
+	}
+
+	// dest is the route's own field and was always tagged; the report is
+	// embedded beside it, which is exactly why the two could disagree.
+	for _, key := range []string{
+		"dest", "kind", "name", "version", "description",
+		"skills", "agents", "prompts", "mcp", "extensions",
+		"decisions", "warnings",
+	} {
+		if _, ok := body[key]; !ok {
+			t.Errorf("response has no %q key; keys present: %v", key, keysOf(body))
+		}
+	}
+
+	decisions, _ := body["decisions"].([]any)
+	if len(decisions) == 0 {
+		t.Fatalf("decisions = %v, want at least the tool list to be undecided", body["decisions"])
+	}
+	first, _ := decisions[0].(map[string]any)
+	for _, key := range []string{"field", "question", "why"} {
+		if _, ok := first[key]; !ok {
+			t.Errorf("decision has no %q key; keys present: %v", key, keysOf(first))
+		}
+	}
+}
+
+func keysOf(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

@@ -12,12 +12,17 @@ import { request } from './client';
 // and rendering the two the same way is how an operator ends up restarting
 // a release that is simply waiting.
 
+// `string & Record<never, never>` is the standard spelling of "these four
+// literals, but any other string is still allowed and still keeps its
+// editor completion". It is spelled with Record rather than `{}` because
+// `{}` means "any non-nullish value" to the type system and to the linter
+// alike, and the whole point of the intersection is that it is NOT that.
 export type ReleaseNodeState =
   | 'installed'
   | 'refused'
   | 'failed'
   | 'pending'
-  | (string & {});
+  | (string & Record<never, never>);
 
 export interface PluginInfo {
   name: string;
@@ -107,4 +112,70 @@ export async function haltRelease(name: string, reason: string): Promise<Release
 
 export async function rollbackRelease(name: string): Promise<ReleaseStatus> {
   return request<ReleaseStatus>('POST', `/plugins/releases/${encodeURIComponent(name)}/rollback`);
+}
+
+/**
+ * Verdict is one node's answer in the compatibility matrix.
+ *
+ * There is no third state: a node that has not reported a version it can be
+ * compared against is `hostable: false`, and `reason` says so. Counting it
+ * as hostable would put it in the first canary wave and fail there, where
+ * the failure costs a wave and a rollback rather than a table row.
+ */
+export interface CompatibilityVerdict {
+  node_id: number;
+  name?: string;
+  edge_version?: string;
+  pig_version?: string;
+  hostable: boolean;
+  /**
+   * Which axis refused: 'version' (the edge build) or 'agent_version' (the
+   * PiG the node runs). The same values the node's own review step reports,
+   * so an operator reading "this node runs edge 0.7.2" here and the same
+   * sentence on the node is reading one message rather than two that
+   * happen to agree today.
+   */
+  step?: 'version' | 'agent_version' | '';
+  reason?: string;
+}
+
+/** CompatibilityMatrix answers "which of my nodes can host this package".
+ *
+ *  `hostable` and `refused` partition the fleet rather than sitting in one
+ *  list behind a flag, so the page cannot accidentally render a refusal as
+ *  a pending row. */
+export interface CompatibilityMatrix {
+  plugin: string;
+  version: string;
+  min_edge_version?: string;
+  min_pig_version?: string;
+  hostable: CompatibilityVerdict[];
+  refused: CompatibilityVerdict[];
+}
+
+/** getCompatibility asks the pre-flight question for one package.
+ *
+ *  The requirement is supplied by the caller rather than read from a
+ *  manifest the manager holds — a release carries a URL, a digest and a
+ *  signature, and the node fetches and reviews the package itself. The
+ *  matrix echoes what it was asked, so asking about the wrong requirement
+ *  produces a visibly wrong answer rather than a plausible one.
+ *
+ *  A manager with no version snapshot answers `not-wired`, and that error
+ *  has to stay an error all the way to the console: rendering it as an
+ *  empty matrix would tell an operator their whole fleet is ready when the
+ *  control plane simply cannot tell. */
+export async function getCompatibility(
+  name: string,
+  req: { version?: string; min_edge_version?: string; min_pig_version?: string }
+): Promise<CompatibilityMatrix> {
+  const qs = new URLSearchParams();
+  if (req.version) qs.set('version', req.version);
+  if (req.min_edge_version) qs.set('min_edge_version', req.min_edge_version);
+  if (req.min_pig_version) qs.set('min_pig_version', req.min_pig_version);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return request<CompatibilityMatrix>(
+    'GET',
+    `/plugins/${encodeURIComponent(name)}/compatibility${suffix}`
+  );
 }

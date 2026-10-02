@@ -75,39 +75,47 @@ type Options struct {
 //
 // These are reported rather than guessed. A converter that filled them in
 // would be claiming to have reviewed code it only read the names of.
+// The JSON names are declared rather than left to Go's field names because
+// this struct is embedded in an HTTP response. Without tags the route would
+// answer `{"Field": ..., "Question": ...}` while the LoadWarning slice
+// right beside it answers `{"path": ..., "reason": ...}` — two naming
+// conventions inside one JSON object, which is a contract the console has
+// to be taught the shape of rather than read. Snake_case matches every other
+// DTO the console parses. Nothing consumed this response before the import
+// page, so there is no wire compatibility to preserve.
 type Decision struct {
 	// Field is the manifest path, e.g. "spec.tools".
-	Field string
+	Field string `json:"field"`
 	// Question is what has to be answered.
-	Question string
+	Question string `json:"question"`
 	// Why is the answer not derivable — which is what makes this a
 	// decision rather than a missing value.
-	Why string
+	Why string `json:"why"`
 }
 
 // Report is what an import produced.
 type Report struct {
 	// Kind is the container form that was recognised.
-	Kind chatruntime.ContainerKind
+	Kind chatruntime.ContainerKind `json:"kind"`
 	// Name, Version and Description are carried across from the source.
-	Name        string
-	Version     string
-	Description string
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Description string `json:"description"`
 	// Skills and Agents are the package-relative paths written.
-	Skills []string
-	Agents []string
+	Skills []string `json:"skills"`
+	Agents []string `json:"agents"`
 	// Prompts, MCP and Extensions are the other resource counts, kept
 	// rather than the paths: nobody reviews a count, and a report that
 	// listed forty identical extension paths would be skimmed past.
-	Prompts   int
-	MCP       int
-	Extension int
+	Prompts   int `json:"prompts"`
+	MCP       int `json:"mcp"`
+	Extension int `json:"extensions"`
 	// Decisions is what remains undecided. It is never empty for a
 	// container that carried no governance, which is all of them.
-	Decisions []Decision
+	Decisions []Decision `json:"decisions"`
 	// Warnings are the loader's own non-fatal findings, carried through
 	// so an import does not quietly drop a parse failure.
-	Warnings []chatruntime.LoadWarning
+	Warnings []chatruntime.LoadWarning `json:"warnings"`
 }
 
 // Import converts one container into a package.
