@@ -3617,7 +3617,7 @@ case resp.Accepted + resp.Rejected >= len(rows):
 | P1-5 | 工具级资源配额缺失 | ✅ **已关** | `sdk/manifest.go:292` 校验 `spec.tools[].limits`（负值拒绝）；强制点 `core/edge/toolbroker/server.go:141-143/391/417`（未声明也有默认上限）；`budget_test.go` 6 条 |
 | 1.3 | 幂等与栅栏（论文 2607.14166 三探针） | ✅ **已关** | `core/edge/policygate/fence_test.go` 9 条，正对三个探针：同一幂等键提交八次只执行一次（:25）、租约内可收租约外不可（:129）、会话内第二个写调用**等待而非排队**（:173，即兄弟分支不被绕过）、读不被挂起的审批挡住（:220）、拒绝在窗口内有效且后来的「同意」能清掉先前的「不」（:346） |
 | P2-6 | 工具语义鸿沟（工具注册表 + 语义检索） | ✅ **已关**（决策 104 更新本行） | 新包 `core/manager/biz/aiops/toolregistry`（`Entry` 值类型 + 唯一适配点 `EntryFromToolInfo` + `Catalogue.Search` 相关性排序 + `Fuse`/`RRFConstant` 混合检索接缝，18 条测试）；`ToolSearch` 的 keyword 分支从「按注册顺序截断」改为按相关性排序，`select:` 与响应 JSON 形状一字未动（§4.42） |
-| P2-7 | 成本无结晶机制 | ❌ **未做** | `grep -rni crystalliz --include=*.go core/` **零命中** |
+| P2-7 | 成本无结晶机制 | ⚠️ **机制已做，生产端未接线**（决策 106 更新本行） | 新包 `core/manager/biz/aiops/crystallize`（53 条测试）：`Ledger.Record` 按「连续第一次就通过」的 streak 晋升、反证即退役，`DraftFor` 用**同一个** `pluginmanifest.Validate` 自检后产出草稿包；`make crystallize-check` 是闸门。缺的是**证据采集**：平台今天不记录修复的 argv，`Execution`/`TrialOf` 是那个缺口被写成的类型（§4.44.7） |
 | P2-8 | eval 只看最终答案（要三维） | ✅ **已关**（决策 105 更新本行） | 新文件 `core/harness/judge/diagnostic.go`：`DiagnosticAxes` 按 Localization × Identification × Reason 打分，两个 judge（启发式 / LLM）在成功路径共用同一组轴；`reason` 读轨迹面而非结论面；`axes` 子命令 + `make eval-axes` 是「三个轴都声明过」的闸门；顺带修掉 schema 加载器静默丢注入参数的真实缺陷（§4.43） |
 | P2-9 | manager 单体化（27 万行 + iam 反向依赖） | ⚠️ **部分** | 行数已核实：`core/manager` **1104 个文件 / 275,602 行**（比方案写的 27 万还多）；`iam → manager` 三条审计路径仍在 `scripts/modulecheck/main.go:543-545` 的 `exceptions` 台账里，注释写明「a future split must resolve rather than inherit」 |
 | P2-10 | 无多集群联邦 | ❌ **未做** | `grep -rni 'federation\|multi-cluster' --include=*.go core/ cmd/` 只命中 `core/manager/middleware/adapter/k8s/client.go:259` 的一句注释 |
@@ -3737,13 +3737,13 @@ env**。
 | D 插件生态 | 25% | 95% | 四个包 + 审核流水线 + 两条覆盖轴 |
 | 0 边缘交付闭环 | — | 代码 100% / 验收未做 | 0.1–0.3 全关（上表 + 决策 103 关掉 0.2 第二句），0.4 缺 Docker 与真 key |
 | 1 离线与有限自治 | — | 100%（本地） | 决策 97/98/99/100/101；剩 `Seq` 去重 |
-| 2 生态与治理 | — | 50% | 决策 104 关掉 6（注册表）、决策 105 关掉 8（eval 三维化）；配额在决策 96 就已关掉，本行早前未同步；7/10 未做，9 部分 |
+| 2 生态与治理 | — | 58% | 决策 104 关掉 6（注册表）、决策 105 关掉 8（eval 三维化）、决策 106 落掉 7 的机制（生产端接线未做，按半条计）；配额在决策 96 就已关掉，本行早前未同步；10 未做，9 部分 |
 | 3 瘦身与联邦 | — | 5% | 9/10 未动 |
 
-加权合计 **≈55%**（决策 105 更新本行：阶段 2 从 33% 记为 50%——eval 三维化本轮
-关闭，决策 104 关掉的 6 与决策 96 关掉的配额仍算数；四阶段等比
-(65 + 100 + 50 + 5) / 4 = 55）。**阶段 0 与阶段 1 的代码侧可以记为完成，
-但那不等于计划完成**：阶段 2 的六条里三条已闭、三条未动，而剩下的三条正好
+加权合计 **≈57%**（决策 106 更新本行：阶段 2 从 50% 记为 58%——结晶机制关掉 P2-7
+的一半，另一半是平台还没有记录修复的 argv，见 §4.44.7；四阶段等比
+(65 + 100 + 58 + 5) / 4 = 57）。**阶段 0 与阶段 1 的代码侧可以记为完成，
+但那不等于计划完成**：阶段 2 的六条里三条半已闭、两条半未动，而剩下的正好
 是方案里「插件生态开放、成本可控」这一格的全部内容。
 
 ---
@@ -4133,6 +4133,141 @@ DiagnosticReasonFloor  = 0.5   // 推理面合格线
 
 剩下的三条：MCP 对外协议面、成本结晶、prompt injection 标注。
 
+> 后续：**决策 106 把成本结晶关掉了一半**（机制已落地、生产端接线未做），本表两行
+> 随之推进到 **58%（3.5/6）** / **≈57%**，见 §4.44.8。
+
+### 4.44 决策 106：成本结晶——把反复验证过的修复写成声明，阶段 2 的第 7 条
+
+方案 P2-7 的原文是「已被反复验证的修复模式自动晋升为确定性 runbook 插件，证据驱动
+升降级（论文 2607.07052）」。这一轮把**机制**做出来了，并且把「生产端还缺什么」
+写清楚——缺的那一半不是含糊的「待集成」，而是一个具体的、有名字的缺口，见
+§4.44.7。
+
+#### 4.44.1 论文依据（已核实，不是转述）
+
+`https://arxiv.org/abs/2607.07052`（*Progressive Crystallization: Turning Agent
+Exploration into Deterministic, Lower-Cost Workflows in Production*）摘要原文：
+
+> every execution requires full LLM inference, even for previously solved problems
+> … a three-stage execution taxonomy, from fully agent-orchestrated to hybrid to
+> fully deterministic workflows, together with an **evidence-based promotion
+> mechanism** that converts repeatedly validated agent behaviors into cheaper and
+> more reproducible deterministic workflows, while **automatically demoting
+> workflows that regress** … increased deterministic execution from 0% to 45% over
+> eight months, reduced per-incident agent costs by more than 70%
+
+三件事直接决定了本轮的形状：**证据驱动的晋升**、**回归即自动降级**、以及最终产物是
+一段**确定性工作流**而不是一段更聪明的提示词。论文的第三级在本平台里只有一种落地
+形式——插件 manifest 的 `autonomy` 块：节点拿它去比对一个指标、执行一条字面 argv，
+中间没有模型。
+
+#### 4.44.2 三条不变量，每条都对应一组测试
+
+`core/manager/biz/aiops/crystallize`（新包，53 条测试）：
+
+| 不变量 | 它排除的失败 | 代表性测试 |
+|---|---|---|
+| 晋升是关于**重复**的主张，不是关于**一次好结果** | 一次成功的修复是一个轶事；用它写出的 runbook 是一条来不及撤回的重启规则 | `TestThreeCleanVerificationsPromoteAPattern`、`TestTwoCleanVerificationsAreNotEnough`、`TestTheStreakCountsConsecutiveVerificationsNotTotals` |
+| **不发明**任何字段 | 声明里的 argv / trigger / reach / ttl 全部必须在真实运行里被观察到；证据说不全的模式**带理由挂起**，绝不用一个看起来合理的默认值补上 | `TestAnUnusableTrialChangesNothing`（11 种残缺输入）、`TestAPatternWhoseGrantsDisagreedIsHeld`、`TestTrialOfIgnoresARunThatNeverVerified` |
+| 晋升**不是准入** | 产物是一份草稿包，走和其他包完全相同的审核与签名通道；这个包没有安装任何东西的权力 | `TestTheDraftIsPinnedAndUnsigned`、`TestADraftRefusesToOverwriteAPackage` |
+
+#### 4.44.3 升降级规则
+
+`Ledger.Record` 一次一条 `Trial`，返回 `held / promoted / kept / retired / ignored`：
+
+| 事件 | 对 streak | 对已晋升的模式 | 判据 |
+|---|---|---|---|
+| `verified`（第一次就通过） | +1 | `kept` | 只有它能推进 streak |
+| `verified_with_retry`（回滚后第二次才通过） | 归零 | **`retired`** | 声明里没有第二次尝试；需要第二次说明它单独不足以恢复服务 |
+| `failed` / `rolled_back` | 归零 | **`retired`** | 反证 |
+| `rejected`（人拒绝执行） | 不动 | 不动 | 拒绝是关于「现在不做」，不是关于这个修复对不对 |
+| 结构不可用的 trial | 记录为零 | 记录为零 | `ErrUnusable`，且**不创建模式**——生产者的 bug 不是证据 |
+
+`verified_with_retry` 被读成反证而不是弱支持，是本轮与「把 Passed 当通过」的全部
+区别：`loop.VerifiedDelta` 的 `Passed` 对「一次就过」和「回滚两次才过」都是 true，
+只有 `RetryCount` 能区分，而后者不配得到一条 runbook（`TestOutcomeOfReadsTheVerificationContract`）。
+
+#### 4.44.4 草稿是**同一个**校验器的产物
+
+`DraftFor` 组出 `domain.PluginManifest` 后，用 `pluginmanifest.Validate` 自检，
+失败即报错——所以「这个包生成的草稿装不上」在写的时候就暴露，而不是在安装路径上
+变成一个没人能解释的拒绝。为此给 `core/floor/pluginmanifest` 加了一个导出的
+`Validate`：`Load` 需要磁盘上的目录，而生产者在有目录之前就需要同一个判断；
+**同一个调用被暴露而不是被复制**，两者因此不可能对「什么叫可准入」产生分歧。
+
+端到端由 `TestTheEmittedDeclarationIsOneAPackageCanLoad` 钉住：把草稿写进临时目录，
+用控制面准入包时用的那个 `pluginmanifest.Load` 读回来，检查名字、target 与 ttl。
+`TestTheValidatorTheEmitterUsesHasTeeth` 是它的另一半——同一个校验器必须真的会拒绝
+一个坏 manifest（读类型的自治动作、没有 argv 的声明、没有版本号的包）。
+
+派生规则全部是「照观察写」：
+
+| 字段 | 从哪来 |
+|---|---|
+| argv / tool / trigger | 观察到的执行事实，逐字节复制 |
+| blast_radius | 晋升时冻结的人类授权；之后再宽的授权**不会**改窄或改宽已签的声明 |
+| ttl | 观察到的最短授权，再被 `Policy.MaxTTL`（默认 30m）截短 |
+| safety_level | destructive → L3，write → L2（推不出来就不推：read 直接不晋升） |
+| required_scopes | `Policy` 的输入，不是推导：账本看见的是跑过的工具，从来不是它用过的凭据 |
+| 包名 / 动作名 | 由模式指纹派生，稳定的同时保证两个不同模式不会撞名 |
+
+#### 4.44.5 不做的事，以及为什么
+
+- **不泛化**。自治声明的 argv 是字面向量，节点逐字节比对，占位符在装载时就被拒
+  （`domain.ArgvValid` 拒绝 `{`、`}`）。所以一条 runbook 只对它被验证过的那个
+  target 成立。把一台主机上的重启推广到整个机队是审核时另写一个包的决定，不是这个
+  包可以从一台主机的历史里推断的事。这也正是 target 进入模式标识的原因
+  （`TestADifferentTargetIsADifferentRunbook`）。
+- **不裁决**。证据给了两个不同 reach 时，账本不选窄的那个——它挂起并说出为什么
+  （`TestAPatternWhoseGrantsDisagreedIsHeld`）。
+- **不安装**。草稿 `install.strategy: pin`、`metadata.signature` 为空
+  （签名是宿主的记录），`approval.required: true`。
+
+#### 4.44.6 闸门与反向验证
+
+`make crystallize-check` 跑六条头条不变量（晋升、退役、拒绝不可用输入、拒绝覆盖
+已有包、从真实契约装配、草稿能过真实校验器）。
+
+| 反向验证 | 结果 |
+|---|---|
+| 把晋升判定改成提前一次（`streak < n-1`） | `TestThreeCleanVerificationsPromoteAPattern` 红：`second verification = promoted, want held: two is a coincidence` |
+| 关掉退役分支（`if false && s.promoted`） | `TestARollbackRetiresAPromotedPattern` 红：`rollback on a promoted pattern = held, want retired`；`TestAVerificationThatTookTwoAttemptsIsContradictingEvidence` 同红 |
+| 让 emitter 发出 ttl=0 的声明 | 3 条红（含 `TestTheEmittedDeclarationIsOneAPackageCanLoad`）——自检把「发不出去的草稿」挡在返回之前 |
+| 删掉 emitter 的自检调用 | **仍然是绿的**。如实记录：它是一张给未来改动的网，今天没有测试能拉响它；补偿是 `TestTheValidatorTheEmitterUsesHasTeeth` 证明这张网本身有牙 |
+
+`core/manager` 全量 `go test ./...` = **3801 条 / 226 个包**；`core/floor` =
+**324 条 / 10 个包**（含新增的 `Validate`）；`make module-check`、`make arch-lint-run`
+通过；`make eval-gates` 仍是 `diagnosis 16/20`、`remediation 0/20`
+（没有为凑覆盖开放写通道）。
+
+#### 4.44.7 诚实记录：机制已落地，生产端还差一个**具体的**字段
+
+这是本轮最重要的一句话，也是不能含糊的地方：**今天平台不记录修复的 argv。**
+闭环的 `ApprovalDecision` 里有 skill_id / target / resource_type / verify_metrics，
+`recovery.execute` 按 `parameters.command`（restart_service / kill_process / noop）
+**按工具名分发**，`host_restart_service` 再从参数里拼出设备与服务——没有任何一处
+落下一个字面向量。而自治声明里唯一被执行的东西恰恰是那条 argv。
+
+所以「自动晋升」缺的不是一段接线代码，而是**一处证据采集**：修复执行时那个被人类
+批准的 argv 必须被记下来，才有东西可以晋升。本包把这条缺口写成了类型
+（`Execution{Tool, Class, Argv, Trigger, BlastRadius, TTL}`）和一个装配点
+（`TrialOf(at, incidentID, rootCause, verifiedDelta, remediation, execution)`），
+并让它在拿不到执行事实时返回 `false`——**宁可不记，也不记一条猜出来的**。
+
+因此这一条按**半条**计：机制、闸门、论文里的升降级语义都在；把
+`recovery.execute` 的批准负载变成 `Execution` 并让 recovered/postmortem worker
+调用 `Ledger.Record` 的那一步没做，做了也只是把空值接进去。这是本轮明确留下的
+下一步，而不是一个被含糊掉的「后续集成」。
+
+#### 4.44.8 进度修订
+
+| 项 | 之前 | 之后 |
+|---|---|---|
+| 阶段 2 生态与治理 | 50%（3/6） | **58%**（3.5/6：结晶机制已落地并自带闸门，生产端接线未做，按半条计） |
+| 加权合计（四阶段等比） | ≈55% | **≈57%**（(65 + 100 + 58 + 5) / 4 = 57） |
+
+阶段 2 剩下的：MCP 对外协议面、prompt injection 标注，以及本条的接线另一半。
+
 ---
 
 ## 六、当前实现进度
@@ -4169,11 +4304,11 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 |---|---|---|
 | 0 边缘交付闭环（P0） | **65%** | **三条** P0 都是「代码意图已写、实现路径从未跑过」：`cmd/opskeeper-edge/agent.go:209-212` 的 `Env` 只有两个 socket，`dist/build-edge-bundle.sh:38-49` 与 `deploy/Dockerfile.opskeeper-edge` 都不含 `pig`，`Makefile` 没有任何 `build-pig*` 目标。**已实测可行**：从 `core/pig` 构建 `github.com/MichaelKinsy/PiG/cmd/pig` 退出码 0（71 MB）。方案的「注入 `OPENAI_BASE_URL`」**不成立**（PiG 无此变量），正确路径是 `models.json` 自定义 provider + `PIG_CODING_AGENT_DIR`（§4.28.1）。**本轮新发现的第三条 P0 比前两条都严重：节点上的插件扩展编译不过**（`GOWORK=off` 实测报 `unknown revision core/v0.0.0`，且无 `go.sum`）——补齐 pig 与凭据之后节点仍然零工具（§4.28.8）。**决策 91 已关掉其中的第三条**：`core/wire` 内联进每个打包扩展、`go.mod` 删掉未发布的 `core v0.0.0`、只留 PiG SDK 一条 require，8 个打包扩展在 `GOWORK=off CGO_ENABLED=0` 下实测 8/8 构建通过，并新增「按节点的方式构建」这条**实测会红**的闸门（§4.29）。**决策 92 关掉了第二条**：`make build-pig-all` 从 `core/pig` + `GOWORK=off` 构建并**被每个 `build-edge-<arch>` 依赖**，两处 bundle 清单、`dist/package.sh`、`install-edge.sh`（含 `pig --version` 自检）、`Dockerfile.opskeeper-edge`、env 模板全部接通，六个位置各有断言（`core/floor/delivery`，6 条测试，**实测会红**）。**决策 93 关掉了 P0-1 的节点侧**：节点有了完整的凭据链（`OPSKEEPER_EDGE_AGENT_CONFIG_DIR` + `models.json` 的 `"$VAR"` 引用 + `PIG_CODING_AGENT_DIR`），并**对着真 `pig` 二进制验证**了三条（能解析 / 无凭据则拒绝 / 无 scope 则找不到）。本轮还查出方案 10 条清单里没有的第四条：**`DefaultAgentDir()` 在 `$HOME` 未设置时丢弃错误、返回相对路径 `.pig/agent`，被 agent 按 Cwd（即插件包根）解析**——凭据会落进签名插件内容里（§4.31.1）。**决策 94 关掉了 P0-1 的 manager 侧**：`core/manager/server/llmgw` 提供 `POST /v1/chat/completions`（流式 + 非流式）与 `GET /v1/models`，鉴权**复用隧道凭据对**（零新存储、零 schema 迁移、轮换即现有 `UpdateSecretHash`，§4.31.5），节点能选 model 不能选 provider；真 `pig` 二进制端到端抓出两处形状错误——`content` 实际是 string **或** parts 数组的联合类型（按 string 建模会拒绝真 agent 的每一个请求，而 18 条单元测试全绿）、大整数必须 `UseNumber` 才能活过 `>2^53`（§4.32）。**决策 95 把方案 0.1 剩下的三项职责与限流补齐**：每日 token 上限复用**同一个** `llm.InMemoryBudget` 实例（两份账 = 集群能花掉两倍上限）、每 edge 一个令牌桶超限 429、调用方的 `max_completion_tokens` 真正生效（之前被解析后丢弃）；顺带修掉 **429 之前被报成 400**（`writeError` 自带的 switch 对预算与限流哨兵没有分支）与一处 typed nil panic（§4.33）。剩下的不是 P0，是验收本身：方案 0.4 的 `make compose-up` 真实对话需要 Docker 与真 provider key；**决策 96 关掉了 per-tool 配额**（§4.28.4 判定的阶段 0 阻塞项）：清单里声明 `limits`、执行器 metadata 里也声明、两侧漂移由 `sdk.Check` 报错，**强制点在 tool broker**——节点上所有工具调用的唯一通道，因此覆盖将来任何一个第三方工具（没声明也有 1 MiB 默认上限，`skill.Spill` 从一段**零调用点的死代码**里搬出来并修好 0644 权限、24 小时回收与路径注入）。九个高基数读工具各有紧于默认值的上限与墙钟（§4.34）。剩下的**只有方案 0.4 的真实验收**：`make compose-up` 后一台 edge 完成一次真实对话、节点上可见独立 pig 进程、`/etc/opskeeper-edge` 无云厂商密钥——前两条已由 `core/floor/delivery` 与 `tests/agentgateway` 覆盖了可离线覆盖的部分，真 provider key 那一条本机不具备。**这一条是实测的而非推测**：`which docker` 有二进制，`docker info` 退出码 1（daemon 未运行），即容器从未在本机跑过。**0.2 的隧道下发（决策 103 已关）**：方案要求 `GatewayURL` / `TokenRef` **由隧道配置下发，而非硬编码 env**。决策 103 把它做成心跳应答的两个非机密字段（`agent_base_url` + `agent_model`），节点在自己的 env 沉默时采纳、env 非空时 env 胜——形状与 `pluginEndpointResolver` / `TunnelConfigFetcher` 逐字同形，没有新造凭据。**但「轮换 token 即逐台重启」这一条并没有被它修掉，也不该由它修**：token 仍是节点的隧道凭据对，轮换语义本来就与隧道一致（`UpdateSecretHash`）。见 §4.40.3 与 §4.41 |
 | 1 离线与有限自治（P1） | **100%** | **决策 98 关掉了方案 1.2（自治白名单）**：清单里签一份固定 argv 列表，节点只在中心失联超过阈值且**触发器实测成立**时执行它，执行的是声明的 argv、宿主派生幂等键、**先消费后执行**、两阶段落盘审计（`core/edge/autonomy` 41 项 + 装配根 10 项端到端，§4.36）。**13 条具名加载期拒绝**堵住清单侧（argv 含元字符、半径超 single-ns、TTL 超 6h、工具未声明、工具是 read、`offline_after` 低于 30s…）。**决策 99 关掉了方案 1.1（遥测本地 spool）**：先把「追加一行、封顶、按序回放」抽成 `core/edge/spool` 原语（只依赖标准库），再让遥测（`core/edge/telemetrywal`）、变更事件（`changewatcher/tunnel_sink.go`）、自治审计三个用户各自只声明自己的策略——**两份日志、一套丢弃表**（trace 先丢 > metric 30m 保质期 > change event 无保质期）；`Send(ctx, rows) (int, error)` 一个签名同时满足审计的「全有或全无」与遥测的「部分前进」；回放限流 100 行/5s 且**只有满批才限流**；本轮由测试抓出 8 个真实缺陷，其中 `Ack` 的读改写分锁会吞掉并发写入的行（§4.37）。**决策 100 修掉了回放路上的一处数据丢失**：`Accepted=0`（中心还没准备好）原被当成「永久拒绝」，于是断连攒下的积压**在恢复后第一条消息里被 ack 丢弃**——日志扛过了断网、死在握手的样子上；中心侧 `push_prom_samples` 的三条丢弃路径还爱说谎（返回 `Accepted=n`），一并改成「能放报写入数、放不下报 0」。现在 `Accepted=0` 读作「还没有」，批次留在盘上。**决策 101 关掉了审计回放传输**（§4.39）：`agent.audit.replay` 隧道方法 + `AutonomyAuditRow` 契约、中心 `RecordAutonomyReplay`（**整批形状校验在前、逐行 `EmitWithID` 在后**，所以一次重试不产生重复）补 HMAC 链、`buildAutonomy` 接上并启动 `autonomy.Pump`；节点把中心的回答读成三种动作（传输失败/还没收下 → 留住重试；形状拒绝 → 计数跳过不重试；全收 → ack），未进链的行由 `autonomyHealth.ReplayRefused` 上报。接线抓出**两处实现错误**并各有实测会红的回归：① handler 的 `bindEdgeTransport` 会按 body 改绑 transport，一个已绑 42 的连接推送 7 就能把 42 的自愈历史写进 7 的账（`TestInstall_AutonomyReplay_TrustsTheTransportEdgeID` 实测 `edge = 7, want 42`）；② 节点 sender 用 `Accepted+Rejected >= len(rows)` 判断「已交代」，多报一个数就会 ack 掉整批（`TestAutonomyReplaySender_ACountItCannotExplainIsRetried` 实测变红，改为 `== len(rows)`）。顺带修掉一处既有缺陷：`.go-arch-lint.yml` 里 `oxedge_spool` 写成 `mayDependOn: []`，go-arch-lint 的 spec 校验因此**拒绝运行整份文件**——决策 99（`8fefe7b`）之后 `make arch-lint-run` 一次也没通过过，已按同文件既有写法改为 `anyVendorDeps: true`（§4.39.6）。**阶段 1 的代码侧到此完整**，唯一剩下的是遥测回放需要中心**按 `Seq` 去重**（at-least-once 的另一半，目前 `host_metrics_raw` 是自增 `id` + 非唯一索引、`change_events` 无 `ON CONFLICT`、`promwrite` 无去重键，所以做到了「不丢」还没做到「不重」） |
-| 2 生态与治理加固（P2） | **50%** | 工具注册表：**决策 104 关掉**——`core/manager/biz/aiops/toolregistry`（`Entry` 值类型、唯一适配点 `EntryFromToolInfo`、`Catalogue.Search` 相关性排序、`Filter` 按声明元数据查能力、`Fuse`/`RRFConstant` 混合检索接缝，18 条测试），`ToolSearch` 的 keyword 分支改为排序、`select:` 与响应形状未动（§4.42）；per-tool 配额：**决策 96 已关**（`sdk/manifest.go` 校验 `spec.tools[].limits`，强制点 `core/edge/toolbroker`），本行此前已过期；MCP 兼容层：运行时已有（决策 85），但**无对外 MCP 协议面**；成本结晶：`grep crystalliz` 零命中；eval 三维化：**决策 105 关掉**——`core/harness/judge/diagnostic.go` 的 `DiagnosticAxes` 按 Localization × Identification × Reason 打分、`reason` 读轨迹面、`Overall` 未动，`make eval-axes` 20/20（§4.43）；prompt injection 标注：无 |
+| 2 生态与治理加固（P2） | **58%** | 工具注册表：**决策 104 关掉**——`core/manager/biz/aiops/toolregistry`（`Entry` 值类型、唯一适配点 `EntryFromToolInfo`、`Catalogue.Search` 相关性排序、`Filter` 按声明元数据查能力、`Fuse`/`RRFConstant` 混合检索接缝，18 条测试），`ToolSearch` 的 keyword 分支改为排序、`select:` 与响应形状未动（§4.42）；per-tool 配额：**决策 96 已关**（`sdk/manifest.go` 校验 `spec.tools[].limits`，强制点 `core/edge/toolbroker`），本行此前已过期；MCP 兼容层：运行时已有（决策 85），但**无对外 MCP 协议面**；成本结晶：**决策 106 落掉机制**——`core/manager/biz/aiops/crystallize` 按连续第一次就通过的 streak 晋升、反证即退役，草稿用真实的 `pluginmanifest.Validate` 自检（53 条测试、`make crystallize-check`）；**平台仍不记录修复的 argv，生产端接线未做**（§4.44）；eval 三维化：**决策 105 关掉**——`core/harness/judge/diagnostic.go` 的 `DiagnosticAxes` 按 Localization × Identification × Reason 打分、`reason` 读轨迹面、`Overall` 未动，`make eval-axes` 20/20（§4.43）；prompt injection 标注：无 |
 | 3 控制面瘦身与联邦（P3） | **5%** | `iam → manager` 反向依赖仍在 `scripts/modulecheck/main.go:548-556` 的 `exceptions` 台账里（决策 35 的已知例外，注释已写明「未来拆分必须解决它」）；manager 27.3 万行（实测 `find core/manager -name '*.go' \| xargs wc -l`）；无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档） |
 
-加权合计 ≈ **55%**（决策 105 更新：阶段 2 从 33% 记为 50%，
-四阶段等比 65 / 100 / 50 / 5 的均值 55）。**这个数字
+加权合计 ≈ **57%**（决策 106 更新：阶段 2 从 50% 记为 58%，
+四阶段等比 65 / 100 / 58 / 5 的均值 57）。**这个数字
 仍然不是好消息，但阶段 0 与阶段 1 的形状都变了**：三条 P0 **全部关掉**（决策 91、92、93+94），
 四条涉及的位置现在都有断言，且方案 0.1 的五项职责（凭据解析、预算拦截、转发、
 usage 计量、429 限流）全部落地（决策 95）。阶段 0 剩下的**不是难，是一件需要外部条件的事**：方案 0.4 的真实对话验收

@@ -48,6 +48,14 @@ func (p Plugin) Targets() domain.Targets { return p.Manifest.Spec.Targets }
 // RunsOn reports whether the plugin targets t.
 func (p Plugin) RunsOn(t domain.DeploymentTarget) bool { return p.Manifest.Spec.Targets.Has(t) }
 
+// Validate checks a manifest without a directory to read it from.
+//
+// Load is the admission path and it needs a package on disk; a producer needs
+// the same judgement before a directory exists, because a draft that will not
+// load is not a draft. Exposing the same call rather than describing it is
+// what keeps the two from disagreeing about what is admissible.
+func Validate(m domain.PluginManifest) error { return sdk.Validate(m) }
+
 // Load reads, parses, and validates one plugin directory.
 func Load(root string) (Plugin, error) {
 	m, err := sdk.Load(root)

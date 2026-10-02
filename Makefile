@@ -133,6 +133,18 @@ eval-vocabulary: ## golden case 能力期望 vs 本构建真实词表（哪些 c
 eval-axes: ## golden case 是否声明了三个诊断轴（能测才算数）
 	go run ./cmd/opskeeper-eval axes --fail-on-unmeasured-axis
 
+# Crystallization is the cost half of the plugin story: a fix that has been
+# verified on its own several times does not need a model the next time, and
+# the record that says so is the autonomy block of a package. The invariants
+# that matter cannot be checked by reading a manifest after the fact — a
+# promoted pattern has to be able to load, a retired one has to disappear, and
+# a trial that is not evidence has to change nothing — so the gate runs them.
+.PHONY: crystallize-check
+crystallize-check: ## 结晶：晋升 / 退役 / 拒绝不可用输入 / 草稿能过真实校验器
+	go test ./core/manager/biz/aiops/crystallize/ -count=1 -run \
+		'TestTheEmittedDeclarationIsOneAPackageCanLoad|TestThreeCleanVerificationsPromoteAPattern|TestARollbackRetiresAPromotedPattern|TestADraftRefusesToOverwriteAPackage|TestAnUnusableTrialChangesNothing|TestTrialOfBuildsATrialTheLedgerAccepts'
+	@echo "crystallize-check: promotion, retirement, refusal and load-through-admission are green"
+
 # ----------------------------------------------------------------------------
 # lint
 # ----------------------------------------------------------------------------
