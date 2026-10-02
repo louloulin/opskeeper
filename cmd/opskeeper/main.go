@@ -2661,55 +2661,6 @@ func main() {
 		Limiter:    aiopstoolsdec.NewTokenBucketLimiter(0),
 		Registerer: reg,
 	}
-	mcpBaseBag := toolsReg.BuildBaseTools()
-	mcpBaseBag = aiopstools.AppendHostFilesTools(mcpBaseBag, fbClient, edgeUC, deviceUC, log)
-	mcpBaseTools := make([]mcpclient.Tool, 0)
-	for _, tool := range mcpBaseBag.AllTools() {
-		if tool == nil {
-			continue
-		}
-		info, err := tool.Info(rootCtx)
-		if err != nil {
-			log.Warn("loop: inspect MCP BaseTool metadata", slog.Any("err", err))
-			continue
-		}
-		if info == nil || info.Name == "" {
-			continue
-		}
-		wrapped := aiopstoolsdec.Wrap(tool, mcpBaseDeps)
-		wrappedMCPTools[info.Name] = wrapped
-		mcpBaseTools = append(mcpBaseTools, mcpclient.Tool{
-			Name:        info.Name,
-			Description: info.Description,
-			InputSchema: info.Parameters,
-		})
-	}
-	invokeLoopMCPTool := func(ctx context.Context, tenantID, name string, arguments json.RawMessage) (json.RawMessage, error) {
-		tool, exists := wrappedMCPTools[name]
-		if !exists {
-			return nil, managerbizloop.ErrMCPToolNotFound
-		}
-		output, err := tool.InvokableRun(ctx, string(arguments), aiopstoolsbase.WithTenant(tenantID))
-		if err != nil {
-			return nil, err
-		}
-		return json.RawMessage(output), nil
-	}
-	if err := mcpHandler.SetLoopTools(loopMCPAdapter, mcpBaseTools, invokeLoopMCPTool); err != nil {
-		log.Error("loop: MCP adapter init", slog.Any("err", err))
-		os.Exit(1)
-	}
-	mcpHandler.SetAuditEmitter(auditUC)
-	toolClasses := make(map[string]string, len(wrappedMCPTools))
-	for name, tool := range wrappedMCPTools {
-		info, err := tool.Info(rootCtx)
-		if err != nil || info == nil {
-			log.Error("loop: inspect MCP tool metadata", slog.String("tool", name), slog.Any("err", err))
-			os.Exit(1)
-		}
-		toolClasses[info.Name] = info.Class
-	}
-	mcpHandler.SetLoopToolMetadata(toolClasses)
 	// HLD-018 + flow: MCP tools are schema-typed callables, so they're
 	// first-class deterministic flow nodes (unlike SKILL.md skills). Wire a
 	// LIVE source into the flow palette + dispatcher now that mcpUC exists —
@@ -2890,6 +2841,70 @@ func main() {
 	} else {
 		toolsReg.SetPageStore(pageStore)
 	}
+	// The MCP surface is assembled HERE, not where mcpHandler was built.
+	// Everything that changes what the registry yields — SetHostBashProposer,
+	// SetCloudBashProposer, SetIMSender, SetPageStore — runs after the handler
+	// exists, so a list assembled earlier is a snapshot of an earlier
+	// platform: cloud_bash, send_im_message and serve_page end up in the
+	// registry and in /skills while the MCP tools/list never hears of them.
+	// The chat tool bag had the identical defect (see the comment below) and
+	// gets the identical treatment: read the registry once, at the point where
+	// it is complete. Visibility is still decided per caller by the handler
+	// (tool class -> casbin action, worker role -> MCPAuthorizer), so moving
+	// the assembly changes what exists, not who may call it.
+	mcpBaseBag := toolsReg.BuildBaseTools()
+	mcpBaseBag = aiopstools.AppendHostFilesTools(mcpBaseBag, fbClient, edgeUC, deviceUC, log)
+	mcpBaseTools := make([]mcpclient.Tool, 0)
+	for _, tool := range mcpBaseBag.AllTools() {
+		if tool == nil {
+			continue
+		}
+		info, err := tool.Info(rootCtx)
+		if err != nil {
+			log.Warn("loop: inspect MCP BaseTool metadata", slog.Any("err", err))
+			continue
+		}
+		if info == nil || info.Name == "" {
+			continue
+		}
+		wrapped := aiopstoolsdec.Wrap(tool, mcpBaseDeps)
+		wrappedMCPTools[info.Name] = wrapped
+		mcpBaseTools = append(mcpBaseTools, mcpclient.Tool{
+			Name:        info.Name,
+			Description: info.Description,
+			InputSchema: info.Parameters,
+		})
+	}
+	invokeLoopMCPTool := func(ctx context.Context, tenantID, name string, arguments json.RawMessage) (json.RawMessage, error) {
+		tool, exists := wrappedMCPTools[name]
+		if !exists {
+			return nil, managerbizloop.ErrMCPToolNotFound
+		}
+		output, err := tool.InvokableRun(ctx, string(arguments), aiopstoolsbase.WithTenant(tenantID))
+		if err != nil {
+			return nil, err
+		}
+		return json.RawMessage(output), nil
+	}
+	if err := mcpHandler.SetLoopTools(loopMCPAdapter, mcpBaseTools, invokeLoopMCPTool); err != nil {
+		log.Error("loop: MCP adapter init", slog.Any("err", err))
+		os.Exit(1)
+	}
+	mcpHandler.SetAuditEmitter(auditUC)
+	toolClasses := make(map[string]string, len(wrappedMCPTools))
+	for name, tool := range wrappedMCPTools {
+		info, err := tool.Info(rootCtx)
+		if err != nil || info == nil {
+			log.Error("loop: inspect MCP tool metadata", slog.String("tool", name), slog.Any("err", err))
+			os.Exit(1)
+		}
+		toolClasses[info.Name] = info.Class
+	}
+	mcpHandler.SetLoopToolMetadata(toolClasses)
+	log.Info("mcp: host tool surface assembled",
+		slog.Int("tools", len(mcpBaseTools)),
+		slog.Int("loop_tools", len(wrappedLoopMCPTools)),
+		slog.Int("classified", len(toolClasses)))
 	// The chat runtime's tool bag was compiled far above (line ~1274)
 	// BEFORE the cloud_bash proposer existed, so that BuildBaseTools didn't
 	// yield cloud_bash. SetCloudBashProposer fixes /v1/skills and any FRESH

@@ -3738,14 +3738,15 @@ env**。
 | D 插件生态 | 25% | 95% | 四个包 + 审核流水线 + 两条覆盖轴 |
 | 0 边缘交付闭环 | — | 代码 100% / 验收未做 | 0.1–0.3 全关（上表 + 决策 103 关掉 0.2 第二句），0.4 缺 Docker 与真 key |
 | 1 离线与有限自治 | — | 100%（本地） | 决策 97/98/99/100/101；剩 `Seq` 去重 |
-| 2 生态与治理 | — | 67% | 决策 104 关掉 6（注册表）、决策 105 关掉 8（eval 三维化）、决策 107 关掉 prompt injection 一条、决策 106 落掉 7 的机制（生产端接线未做，按半条计）；配额在决策 96 就已关掉，本行早前未同步；10 未做，9 部分；MCP 对外协议面未做 |
+| 2 生态与治理 | — | 92% | 决策 104 关掉 6（注册表）、决策 105 关掉 8（eval 三维化）、决策 107 关掉 prompt injection 一条、决策 108 关掉 MCP 兼容层、决策 106 落掉 7 的机制（生产端接线未做，按半条计）；配额在决策 96 就已关掉，本行早前未同步；10 未做，9 部分 |
 | 3 瘦身与联邦 | — | 5% | 9/10 未动 |
 
-加权合计 **≈59%**（决策 107 更新本行：阶段 2 从 58% 升到 67%——prompt injection
-是六条里完整的一条；四阶段等比 (65 + 100 + 67 + 5) / 4 = 59.25）。**阶段 0 与
-阶段 1 的代码侧可以记为完成，但那不等于计划完成**：阶段 2 的六条里四条已闭、
-一条半在动（结晶机制已落地而生产端接线未做）、一条未动（MCP 对外协议面），
-而剩下的正好是方案里「插件生态开放、成本可控」这一格的全部内容。
+加权合计 **≈65%**（决策 108 更新本行：阶段 2 从 58% 升到 92%——决策 107 的
+prompt injection 与决策 108 的 MCP 兼容层各是六条里完整的一条；四阶段等比
+(65 + 100 + 91.7 + 5) / 4 = 65.4）。**阶段 0 与阶段 1 的代码侧可以记为完成，
+但那不等于计划完成**：阶段 2 的六条里五条半已闭，剩下的一半是结晶机制的生产端
+接线（机制已落地、闸门已绿，缺的是平台记录修复 argv 的那一步，见 §4.44.7）。
+这一格剩下的内容与方案原文「插件生态开放、成本可控」相比，少的是成本那半边。
 
 ---
 
@@ -4399,10 +4400,133 @@ proposal shim 补挂——**对话里最常被调用的两个命令工具恰好�
 
 | 项 | 之前 | 之后 |
 |---|---|---|
-| 阶段 2 生态与治理 | 58%（3.5/6） | **67%（4/6）**——prompt injection 是完整一条 |
-| 加权合计（四阶段等比） | ≈57% | **≈59%**（(65 + 100 + 67 + 5) / 4 = 59.25） |
+| 阶段 2 生态与治理 | 58%（3.5/6） | **75%（4.5/6）**——prompt injection 是完整一条 |
+| 加权合计（四阶段等比） | ≈57% | **≈61%**（(65 + 100 + 75 + 5) / 4 = 61.25） |
 
-阶段 2 剩下的：MCP 对外协议面，以及 §4.44.7 那条生产端接线。
+阶段 2 剩下的：§4.44.7 那条生产端接线。
+
+---
+
+### 4.46 决策 108：把 /api/v1/mcp 做成一个真正的 MCP 端点——阶段 2 的最后一条
+
+方案原文：
+
+> **MCP 兼容层**：对外用 MCP 协议兼容而非私有协议（云厂商已在把运维能力 MCP
+> 化）；对内自建网关做授权与审计，不直连公网 MCP（论文 2609.19100 证明远程 MCP
+> 是中心化信任点）。
+
+后半句在仓库里早就是事实（`biz/mcp` + `mcpclient` + 审计 + 审批），前半句这一轮
+才成立。两条合起来是一个方向上的不对称，也是这一条的唯一设计：**OpsKeeper 对外
+是 MCP server；对内不是任何公网 MCP 的代理**。
+
+#### 4.46.1 先量：一个「运行时已有」的端点，缺的是**能被客户端用起来**
+
+决策 85 更正过「MCP 运行时一直都在」——那说的是 OpsKeeper 作为 MCP **客户端**的
+那一半（`mcpclient` + `biz/mcp` + `tools.MCPTool` + 启动期发现）。这一条问的是反
+过来的那一半：别人作为客户端，能不能真的用 OpsKeeper。逐条读代码、逐条量：
+
+| # | 读到的 | 后果 |
+|---|---|---|
+| 1 | `jsonRPC` 要求 `X-Opskeeper-Version: v1`，缺失即 400 | 第三方 MCP 客户端不会发这个头，**本仓库自己的 `pkg/mcpclient` 也不发** |
+| 2 | `initialize` 写死 `protocolVersion: "2025-03-26"`，而 `pkg/mcpclient.ProtocolVersion = "2024-11-05"` | 每次握手都答一个客户端没要过的版本；规范允许客户端因此断开 |
+| 3 | `ping` 落到 default 分支 → `-32601` | 规范里的保活工具被答成「方法不存在」 |
+| 4 | 只认 `notifications/initialized` | 别的通知（含 `notifications/cancelled`）被答成坏请求 |
+| 5 | 工具清单紧跟在 `mcpHandler := managerservermcp.NewHandler(...)` 之后组装，而 `SetHostBashProposer` / `SetCloudBashProposer` / `SetIMSender` / `SetPageStore` 都在这条语句**后面** | `cloud_bash` / `send_im_message` / `serve_page` 在注册表里、在 `/skills` 里，**MCP `tools/list` 里没有** |
+| 6 | `tools/list` 一次返回全部 | 插件舰队长大以后一帧装不下 |
+| 7 | 除代码注释外没有文档 | 谁能连、怎么连、能调什么，只有读过代码的人知道 |
+
+第 1 条是这一轮最值得记的：**本仓库自己的 MCP 客户端连不上本仓库自己的 MCP 服务端。**
+它不是推出来的——`TestOurOwnClientCanDriveOurOwnServer` 把真客户端（`pkg/mcpclient`）
+指向真 handler（`httptest` 起的真 HTTP），修复前第一发就死在
+`mcp: HTTP 400 ... code -32002`。这条测试因此不是「顺手加的覆盖」，它是这一条的
+**测量工具**：兼容性是关于客户端的断言，而只有客户端能证伪它。
+
+#### 4.46.2 改了什么，以及每一条为什么是这个形状
+
+| 改动 | 形状 | 为什么不是别的形状 |
+|---|---|---|
+| 版本头由必填改为可选 | `X-Opskeeper-Version` 缺失 → 按 v1 处理；**只拒绝明确声明的其它值** | 这个头是本集群自己的发布标记，不是 MCP 的一部分。去掉「必填」不是去掉护栏：唯一能表达的东西是「我是 v2 客户端」，而这一点仍然被拒。真正的门是 Bearer |
+| `initialize` 按客户端要的版本作答 | 客户端要 `2024-11-05`（`pkg/mcpclient` 声明的那版）就回它；要一个本端点没有的就回本端点最新的 | 握手的意义就是取交集。回一个客户端没提过的版本，等于告诉它「我们的共同语言不是你选的那个」——而这一句 `mcpclient.ProtocolVersion` 早就写着，只是服务端从没读过 |
+| `ping` 返回 `{}` | 规范定义的保活工具，两边都可以发 | 把健康检查答成「方法不存在」，会让一个健康的服务端看起来是坏的 |
+| `notifications/` 前缀一律 202 无 body | 不再枚举通知名 | 枚举就是跟着规范版本走；前缀是规范里稳定的那一半。通知本来就不带 id、不应答 |
+| `tools/list` 分页，页大小 200 | 有下一页才给 `nextCursor`；`cursor` 解析失败是 `-32602` | 一次返回全部在今天的规模下是对的（这也是默认值取得大的原因：忽略 cursor 的客户端仍然看得见全部工具）；但目录随插件舰队增长，一帧装不下是迟早的事。非法 cursor 必须报错而不是静默回到第一页——后者看起来像进展，实际会丢掉客户端还没列到的那些工具 |
+| 工具面改在接线末尾组装 | `main.go` 里把 MCP 工具清单的组装从 handler 创建处搬到审批流的四个 seam 接完之后 | 见 §4.46.3 |
+| 新增 `docs/mcp-surface.md` | 端点、鉴权头、方法表、可见性规则、边界、最小客户端、已知偏差 | 「对外协议面」如果不能被外部按文档接入，就只是内部接口 |
+
+`initialize` 的应答里多了一个 `instructions` 字段，内容是**边界**而不是功能表：
+工具集合按调用者身份过滤、每次调用写审计链、写操作在工具内部排队等人工批准（走
+MCP 不绕过那条队列）、本端点不代理公网 MCP server。之所以写成边界，是因为「能调
+什么」客户端可以自己 `tools/list` 问出来，而「不会被怎么用」它问不出来。
+
+#### 4.46.3 组装点：和聊天 bag 同一个坑，同一个修法
+
+第 5 条不是笔误，它在同一份文件里已经被写过一次。`main.go` 里 `SetPageStore`
+之后（也就是新的组装点旁边）留着上一轮的一段自白：
+
+> The chat runtime's tool bag was compiled far above (line ~1274) **BEFORE the
+> cloud_bash proposer existed**, so that BuildBaseTools didn't yield cloud_bash.
+> … Bolt it onto the live bag here …
+
+那一次是对话 bag 缺 `cloud_bash`，修法是「在接线末尾再挂一次」；这一次是 MCP 的
+`tools/list` 缺同三个工具，根因一模一样——**把「读注册表」这件事放在了「注册表
+定型之前」**。同一个坑的第二处脚印能留到现在，说明这类缺陷的检测面不能靠读代码。
+
+修法是同一个方向的更彻底版本：不做「挂第二次」，而是把组装点挪到注册表定型的
+那一刻（`SetPageStore` 之后、`invBag` 旁边），于是 `/skills`、流程编排、MCP 三处
+读的是同一份清单、同一个时刻。可见性一点没放松——`tools/list` 与 `tools/call` 走
+的仍是同一套判断（工具类别 → Casbin 动作、Worker 身份 → `MCPAuthorizer`），挪动
+组装点改变的是「存在哪些工具」，不是「谁可以调」。
+
+`core/manager/biz/aiops/tools/registry_late_deps_test.go` 把这个坑本身钉成了测试：
+一个在 seam 接上之前组装的 bag 里**必须没有** `cloud_bash` / `send_im_message` /
+`serve_page`，接上之后**必须都有**；`host_bash` 作为对照组，两侧都必须有（它的门
+是隧道三元组，不是晚接的 seam）。这条测试的价值不在于它能防止今天的回归，而在于
+它把「组装时刻是有语义的」这句话写进了可执行的地方——下次有人想把组装点提前，
+红的是它。
+
+#### 4.46.4 边界：不直连公网 MCP，写操作照旧排队
+
+- `mcp_call` 与启动期从外部 MCP server 发现的那批工具**不在** MCP 面里。`mcp_call`
+  是本平台的 MCP 客户端，把它暴露出去就等于让这个端点变成公网 MCP 的代理，正是
+  方案点名不做的事。
+- 写与破坏性工具（`cloud_bash`、`restart_service`、`recovery.execute` …）在工具
+  内部排队等人工批准。经 MCP 进来不绕过那条队列，也没有第二条放行路径。
+- 审计在平台侧写；MCP 调用者拿到的是自己的 receipt（`X-Opskeeper-Audit-ID` 头 +
+  content 里内嵌的同一个 id），没有写入口。
+
+#### 4.46.5 闸门与反向验证
+
+`make mcp-surface-check`：真客户端打真 handler 的端到端一条，加上协议面八条，加上
+「晚接 seam」一条。
+
+反向验证（都真跑过）：
+
+- **把版本头改回必填**（`v != "" && v != "v1"` → `v != "v1"`）→
+  `TestOurOwnClientCanDriveOurOwnServer` 与
+  `TestAStockMCPClientWithoutTheFleetVersionHeaderIsAccepted` 实测变红，前者的
+  失败信息就是那句 `mcp: HTTP 400: ... -32002`——**兼容性缺陷被自己的客户端抓出来**。
+- **把 `negotiateProtocolVersion` 改回返回常量 `2025-03-26`** → 同样两条变红
+  （`server negotiated "2025-03-26", our own client asked for "2024-11-05"` 与
+  `protocolVersion = 2025-03-26, want the revision the client asked for`）。
+
+数量：`core/manager/server/mcp` 的 test 函数从 23 条到 **34 条**（协议面 10 条 +
+真客户端端到端 1 条），`core/manager/biz/aiops/tools` 新增 1 条；`core/manager`
+全量 **3841 passed / 227 packages**。节点侧未改动，闸门全部重跑：`make module-check`
+仍是 `all module boundaries hold`、`make arch-lint-run` 仍是 `OK - No warnings found`、
+`make eval-gates` 仍是 `diagnosis 16/20` / `remediation 0/20`、
+`make module-standalone-check` 退出码 0（8 模块 `GOWORK=off`）、根模块
+`go test ./...` 329 passed / 19 packages。
+
+#### 4.46.6 进度修订
+
+| 项 | 之前 | 之后 |
+|---|---|---|
+| 阶段 2 生态与治理 | 75%（4.5/6） | **92%（5.5/6）**——MCP 兼容层是完整一条；剩下的一半是 §4.44.7 的生产端接线 |
+| 加权合计（四阶段等比） | ≈61% | **≈65%**（(65 + 100 + 91.7 + 5) / 4 = 65.4） |
+
+同时更正决策 107 那一段的一处算术：prompt injection 是六条里完整的一条，阶段 2
+当时应从 58%（3.5/6）升到 **75%（4.5/6）**，而不是 67%（4/6）——即「一条完整」被
+写成了「半条」。§4.45.6 与 §六 的数字已按此更正。
 
 ---
 
@@ -4440,11 +4564,11 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 |---|---|---|
 | 0 边缘交付闭环（P0） | **65%** | **三条** P0 都是「代码意图已写、实现路径从未跑过」：`cmd/opskeeper-edge/agent.go:209-212` 的 `Env` 只有两个 socket，`dist/build-edge-bundle.sh:38-49` 与 `deploy/Dockerfile.opskeeper-edge` 都不含 `pig`，`Makefile` 没有任何 `build-pig*` 目标。**已实测可行**：从 `core/pig` 构建 `github.com/MichaelKinsy/PiG/cmd/pig` 退出码 0（71 MB）。方案的「注入 `OPENAI_BASE_URL`」**不成立**（PiG 无此变量），正确路径是 `models.json` 自定义 provider + `PIG_CODING_AGENT_DIR`（§4.28.1）。**本轮新发现的第三条 P0 比前两条都严重：节点上的插件扩展编译不过**（`GOWORK=off` 实测报 `unknown revision core/v0.0.0`，且无 `go.sum`）——补齐 pig 与凭据之后节点仍然零工具（§4.28.8）。**决策 91 已关掉其中的第三条**：`core/wire` 内联进每个打包扩展、`go.mod` 删掉未发布的 `core v0.0.0`、只留 PiG SDK 一条 require，8 个打包扩展在 `GOWORK=off CGO_ENABLED=0` 下实测 8/8 构建通过，并新增「按节点的方式构建」这条**实测会红**的闸门（§4.29）。**决策 92 关掉了第二条**：`make build-pig-all` 从 `core/pig` + `GOWORK=off` 构建并**被每个 `build-edge-<arch>` 依赖**，两处 bundle 清单、`dist/package.sh`、`install-edge.sh`（含 `pig --version` 自检）、`Dockerfile.opskeeper-edge`、env 模板全部接通，六个位置各有断言（`core/floor/delivery`，6 条测试，**实测会红**）。**决策 93 关掉了 P0-1 的节点侧**：节点有了完整的凭据链（`OPSKEEPER_EDGE_AGENT_CONFIG_DIR` + `models.json` 的 `"$VAR"` 引用 + `PIG_CODING_AGENT_DIR`），并**对着真 `pig` 二进制验证**了三条（能解析 / 无凭据则拒绝 / 无 scope 则找不到）。本轮还查出方案 10 条清单里没有的第四条：**`DefaultAgentDir()` 在 `$HOME` 未设置时丢弃错误、返回相对路径 `.pig/agent`，被 agent 按 Cwd（即插件包根）解析**——凭据会落进签名插件内容里（§4.31.1）。**决策 94 关掉了 P0-1 的 manager 侧**：`core/manager/server/llmgw` 提供 `POST /v1/chat/completions`（流式 + 非流式）与 `GET /v1/models`，鉴权**复用隧道凭据对**（零新存储、零 schema 迁移、轮换即现有 `UpdateSecretHash`，§4.31.5），节点能选 model 不能选 provider；真 `pig` 二进制端到端抓出两处形状错误——`content` 实际是 string **或** parts 数组的联合类型（按 string 建模会拒绝真 agent 的每一个请求，而 18 条单元测试全绿）、大整数必须 `UseNumber` 才能活过 `>2^53`（§4.32）。**决策 95 把方案 0.1 剩下的三项职责与限流补齐**：每日 token 上限复用**同一个** `llm.InMemoryBudget` 实例（两份账 = 集群能花掉两倍上限）、每 edge 一个令牌桶超限 429、调用方的 `max_completion_tokens` 真正生效（之前被解析后丢弃）；顺带修掉 **429 之前被报成 400**（`writeError` 自带的 switch 对预算与限流哨兵没有分支）与一处 typed nil panic（§4.33）。剩下的不是 P0，是验收本身：方案 0.4 的 `make compose-up` 真实对话需要 Docker 与真 provider key；**决策 96 关掉了 per-tool 配额**（§4.28.4 判定的阶段 0 阻塞项）：清单里声明 `limits`、执行器 metadata 里也声明、两侧漂移由 `sdk.Check` 报错，**强制点在 tool broker**——节点上所有工具调用的唯一通道，因此覆盖将来任何一个第三方工具（没声明也有 1 MiB 默认上限，`skill.Spill` 从一段**零调用点的死代码**里搬出来并修好 0644 权限、24 小时回收与路径注入）。九个高基数读工具各有紧于默认值的上限与墙钟（§4.34）。剩下的**只有方案 0.4 的真实验收**：`make compose-up` 后一台 edge 完成一次真实对话、节点上可见独立 pig 进程、`/etc/opskeeper-edge` 无云厂商密钥——前两条已由 `core/floor/delivery` 与 `tests/agentgateway` 覆盖了可离线覆盖的部分，真 provider key 那一条本机不具备。**这一条是实测的而非推测**：`which docker` 有二进制，`docker info` 退出码 1（daemon 未运行），即容器从未在本机跑过。**0.2 的隧道下发（决策 103 已关）**：方案要求 `GatewayURL` / `TokenRef` **由隧道配置下发，而非硬编码 env**。决策 103 把它做成心跳应答的两个非机密字段（`agent_base_url` + `agent_model`），节点在自己的 env 沉默时采纳、env 非空时 env 胜——形状与 `pluginEndpointResolver` / `TunnelConfigFetcher` 逐字同形，没有新造凭据。**但「轮换 token 即逐台重启」这一条并没有被它修掉，也不该由它修**：token 仍是节点的隧道凭据对，轮换语义本来就与隧道一致（`UpdateSecretHash`）。见 §4.40.3 与 §4.41 |
 | 1 离线与有限自治（P1） | **100%** | **决策 98 关掉了方案 1.2（自治白名单）**：清单里签一份固定 argv 列表，节点只在中心失联超过阈值且**触发器实测成立**时执行它，执行的是声明的 argv、宿主派生幂等键、**先消费后执行**、两阶段落盘审计（`core/edge/autonomy` 41 项 + 装配根 10 项端到端，§4.36）。**13 条具名加载期拒绝**堵住清单侧（argv 含元字符、半径超 single-ns、TTL 超 6h、工具未声明、工具是 read、`offline_after` 低于 30s…）。**决策 99 关掉了方案 1.1（遥测本地 spool）**：先把「追加一行、封顶、按序回放」抽成 `core/edge/spool` 原语（只依赖标准库），再让遥测（`core/edge/telemetrywal`）、变更事件（`changewatcher/tunnel_sink.go`）、自治审计三个用户各自只声明自己的策略——**两份日志、一套丢弃表**（trace 先丢 > metric 30m 保质期 > change event 无保质期）；`Send(ctx, rows) (int, error)` 一个签名同时满足审计的「全有或全无」与遥测的「部分前进」；回放限流 100 行/5s 且**只有满批才限流**；本轮由测试抓出 8 个真实缺陷，其中 `Ack` 的读改写分锁会吞掉并发写入的行（§4.37）。**决策 100 修掉了回放路上的一处数据丢失**：`Accepted=0`（中心还没准备好）原被当成「永久拒绝」，于是断连攒下的积压**在恢复后第一条消息里被 ack 丢弃**——日志扛过了断网、死在握手的样子上；中心侧 `push_prom_samples` 的三条丢弃路径还爱说谎（返回 `Accepted=n`），一并改成「能放报写入数、放不下报 0」。现在 `Accepted=0` 读作「还没有」，批次留在盘上。**决策 101 关掉了审计回放传输**（§4.39）：`agent.audit.replay` 隧道方法 + `AutonomyAuditRow` 契约、中心 `RecordAutonomyReplay`（**整批形状校验在前、逐行 `EmitWithID` 在后**，所以一次重试不产生重复）补 HMAC 链、`buildAutonomy` 接上并启动 `autonomy.Pump`；节点把中心的回答读成三种动作（传输失败/还没收下 → 留住重试；形状拒绝 → 计数跳过不重试；全收 → ack），未进链的行由 `autonomyHealth.ReplayRefused` 上报。接线抓出**两处实现错误**并各有实测会红的回归：① handler 的 `bindEdgeTransport` 会按 body 改绑 transport，一个已绑 42 的连接推送 7 就能把 42 的自愈历史写进 7 的账（`TestInstall_AutonomyReplay_TrustsTheTransportEdgeID` 实测 `edge = 7, want 42`）；② 节点 sender 用 `Accepted+Rejected >= len(rows)` 判断「已交代」，多报一个数就会 ack 掉整批（`TestAutonomyReplaySender_ACountItCannotExplainIsRetried` 实测变红，改为 `== len(rows)`）。顺带修掉一处既有缺陷：`.go-arch-lint.yml` 里 `oxedge_spool` 写成 `mayDependOn: []`，go-arch-lint 的 spec 校验因此**拒绝运行整份文件**——决策 99（`8fefe7b`）之后 `make arch-lint-run` 一次也没通过过，已按同文件既有写法改为 `anyVendorDeps: true`（§4.39.6）。**阶段 1 的代码侧到此完整**，唯一剩下的是遥测回放需要中心**按 `Seq` 去重**（at-least-once 的另一半，目前 `host_metrics_raw` 是自增 `id` + 非唯一索引、`change_events` 无 `ON CONFLICT`、`promwrite` 无去重键，所以做到了「不丢」还没做到「不重」） |
-| 2 生态与治理加固（P2） | **67%** | 工具注册表：**决策 104 关掉**——`core/manager/biz/aiops/toolregistry`（`Entry` 值类型、唯一适配点 `EntryFromToolInfo`、`Catalogue.Search` 相关性排序、`Filter` 按声明元数据查能力、`Fuse`/`RRFConstant` 混合检索接缝，18 条测试），`ToolSearch` 的 keyword 分支改为排序、`select:` 与响应形状未动（§4.42）；per-tool 配额：**决策 96 已关**（`sdk/manifest.go` 校验 `spec.tools[].limits`，强制点 `core/edge/toolbroker`），本行此前已过期；MCP 兼容层：运行时已有（决策 85），但**无对外 MCP 协议面**；成本结晶：**决策 106 落掉机制**——`core/manager/biz/aiops/crystallize` 按连续第一次就通过的 streak 晋升、反证即退役，草稿用真实的 `pluginmanifest.Validate` 自检（53 条测试、`make crystallize-check`）；**平台仍不记录修复的 argv，生产端接线未做**（§4.44）；eval 三维化：**决策 105 关掉**——`core/harness/judge/diagnostic.go` 的 `DiagnosticAxes` 按 Localization × Identification × Reason 打分、`reason` 读轨迹面、`Overall` 未动，`make eval-axes` 20/20（§4.43）；prompt injection 标注：**决策 107 关掉**——`core/manager/biz/aiops/promptguard` 每次渲染现抽 nonce、`Parse` 只认 id 匹配的闭合标签，`core/manager/biz/aiops/tools/untrusted_sources.go` 用 `ToolName*` 常量列出「输出是外来文本」的闭集并由 `MarkUntrustedOutput` 一处适配，四处接线（含 `main.go` 后挂的 `host_bash`/`cloud_bash`）；**`buildInvestigatedPrompt` 的三个块与 system 里的 `Instruction()` 同源**，`make promptguard-check` 是闸门（§4.45） |
+| 2 生态与治理加固（P2） | **92%** | 工具注册表：**决策 104 关掉**——`core/manager/biz/aiops/toolregistry`（`Entry` 值类型、唯一适配点 `EntryFromToolInfo`、`Catalogue.Search` 相关性排序、`Filter` 按声明元数据查能力、`Fuse`/`RRFConstant` 混合检索接缝，18 条测试），`ToolSearch` 的 keyword 分支改为排序、`select:` 与响应形状未动（§4.42）；per-tool 配额：**决策 96 已关**（`sdk/manifest.go` 校验 `spec.tools[].limits`，强制点 `core/edge/toolbroker`），本行此前已过期；MCP 兼容层：**决策 108 关掉**——`/api/v1/mcp` 现在是一个真正的 MCP 端点：版本头由必填改为可选（缺失＝普通 MCP 客户端）、`initialize` 按客户端要的版本作答、`ping` 与 `notifications/*` 按规范应答、`tools/list` 可分页，工具面改在接线末尾组装（`cloud_bash`/`send_im_message`/`serve_page` 此前对 MCP 不可见），`docs/mcp-surface.md` 是对外契约；`make mcp-surface-check` 让本仓库自己的 `pkg/mcpclient` 用真 HTTP 打真 handler（§4.46）；成本结晶：**决策 106 落掉机制**——`core/manager/biz/aiops/crystallize` 按连续第一次就通过的 streak 晋升、反证即退役，草稿用真实的 `pluginmanifest.Validate` 自检（53 条测试、`make crystallize-check`）；**平台仍不记录修复的 argv，生产端接线未做**（§4.44）；eval 三维化：**决策 105 关掉**——`core/harness/judge/diagnostic.go` 的 `DiagnosticAxes` 按 Localization × Identification × Reason 打分、`reason` 读轨迹面、`Overall` 未动，`make eval-axes` 20/20（§4.43）；prompt injection 标注：**决策 107 关掉**——`core/manager/biz/aiops/promptguard` 每次渲染现抽 nonce、`Parse` 只认 id 匹配的闭合标签，`core/manager/biz/aiops/tools/untrusted_sources.go` 用 `ToolName*` 常量列出「输出是外来文本」的闭集并由 `MarkUntrustedOutput` 一处适配，四处接线（含 `main.go` 后挂的 `host_bash`/`cloud_bash`）；**`buildInvestigatedPrompt` 的三个块与 system 里的 `Instruction()` 同源**，`make promptguard-check` 是闸门（§4.45） |
 | 3 控制面瘦身与联邦（P3） | **5%** | `iam → manager` 反向依赖仍在 `scripts/modulecheck/main.go:548-556` 的 `exceptions` 台账里（决策 35 的已知例外，注释已写明「未来拆分必须解决它」）；manager 27.3 万行（实测 `find core/manager -name '*.go' \| xargs wc -l`）；无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档） |
 
-加权合计 ≈ **59%**（决策 107 更新：阶段 2 从 58% 记为 67%，
-四阶段等比 65 / 100 / 67 / 5 的均值 59）。**这个数字
+加权合计 ≈ **65%**（决策 108 更新：阶段 2 从 58% 记为 92%，
+四阶段等比 65 / 100 / 91.7 / 5 的均值 65.4）。**这个数字
 仍然不是好消息，但阶段 0 与阶段 1 的形状都变了**：三条 P0 **全部关掉**（决策 91、92、93+94），
 四条涉及的位置现在都有断言，且方案 0.1 的五项职责（凭据解析、预算拦截、转发、
 usage 计量、429 限流）全部落地（决策 95）。阶段 0 剩下的**不是难，是一件需要外部条件的事**：方案 0.4 的真实对话验收

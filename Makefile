@@ -163,6 +163,20 @@ promptguard-check: ## 外来文本进模型前带 nonce 围栏（prompt injectio
 		'TestTheInvestigatedPromptMarksItsForeignBlocks|TestPayloadTextCannotCloseTheInvestigatedFence'
 	@echo "promptguard-check: per-render markers, closed-list table, shipped bag and investigated prompt are green"
 
+# "MCP compatible" is a claim about a *client*, and a claim only a client can
+# test. The gate therefore drives pkg/mcpclient — the client this repository
+# ships — against the real handler over a real HTTP round trip, and pins the
+# four things the claim rests on: a stock client with no fleet header is
+# accepted, the handshake answers the revision it asked for, ping is the empty
+# utility the spec defines, and the tools a caller sees are the tools it may
+# call (including the three whose seams are set last).
+.PHONY: mcp-surface-check
+mcp-surface-check: ## MCP 对外协议面：握手、保活、分页、可见性
+	go test ./core/manager/server/mcp/ -count=1 -run \
+		'TestOurOwnClientCanDriveOurOwnServer|TestPingIsTheEmptyReplyTheSpecDefines|TestInitializeEchoesTheRevisionTheClientAskedFor|TestInitializeStatesTheBoundary|TestEveryNotificationIsAcceptedWithoutABody|TestAStockMCPClientWithoutTheFleetVersionHeaderIsAccepted|TestAStatedForeignVersionIsStillRefused|TestToolsListPagesAndHandsBackACursor|TestAnUnparseableCursorIsAnErrorNotAPageOneRestart'
+	go test ./core/manager/biz/aiops/tools/ -count=1 -run 'TestAToolWhoseSeamIsSetLaterIsAbsentUntilItIsSet'
+	@echo "mcp-surface-check: handshake, keepalive, pagination, visibility and the late-seam trap are green"
+
 # ----------------------------------------------------------------------------
 # lint
 # ----------------------------------------------------------------------------

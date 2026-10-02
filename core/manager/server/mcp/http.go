@@ -60,6 +60,11 @@ type Handler struct {
 	authz       CasbinAuthorizer
 	audit       AuditEmitter
 	toolClasses map[string]string
+
+	// toolsPageSize is how many tools one tools/list page carries. Zero
+	// means mcpToolsPageSizeDefault; a test sets it small so the cursor
+	// path is exercised by a catalogue it can actually hold.
+	toolsPageSize int
 }
 
 // NewHandler builds the handler.
@@ -275,6 +280,106 @@ func (h *Handler) test(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, testResp{Tools: tools, Count: len(tools)})
 }
 
+// mcpProtocolVersions are the MCP revisions this endpoint answers, newest
+// first. The first entry is what a client that names no revision is told, and
+// it is the revision this endpoint already claimed. pkg/mcpclient.ProtocolVersion
+// is the revision OpsKeeper itself advertises when it is the *client*, and it
+// is listed here so that the handshake between our own client and our own
+// server is an intersection rather than a mismatch: before decision 108 the
+// server answered a hardcoded 2025-03-26 while the client asked for
+// 2024-11-05, which is exactly the disagreement a handshake exists to settle.
+var mcpProtocolVersions = []string{"2025-03-26", mcpclient.ProtocolVersion}
+
+// mcpInstructions is the InitializeResult `instructions` field: the one place
+// a client is told, before it can call anything, what this server is and what
+// it refuses to be. It is written as a boundary statement rather than a
+// feature list because the boundary is the part a client cannot discover by
+// calling tools/list.
+const mcpInstructions = "OpsKeeper is the control plane of an operations platform. The tools listed here are the platform's own operational tools as seen by this caller: the visible set is filtered by the caller's identity, every call is written to the audit chain, and write or destructive tools queue for human approval inside the tool itself — arriving over MCP does not bypass that queue. This endpoint does not proxy public MCP servers; external systems are reached through servers registered and reviewed on the platform side."
+
+// mcpToolsPageSizeDefault is the page size used when a handler names none.
+// It is larger than any catalogue this platform ships today, so a client that
+// ignores nextCursor still sees every tool it has — the mechanism exists for
+// the fleet this surface is meant to grow with, not to shrink today's answer.
+const mcpToolsPageSizeDefault = 200
+
+// negotiateProtocolVersion answers with the client's own revision when this
+// endpoint implements it, and with this endpoint's newest revision otherwise.
+// Echoing the client's version is the whole point of the handshake; the spec
+// lets a client disconnect when the server names a revision it never asked
+// for, so the intersection is the only answer that keeps an existing client
+// working without a change on its side.
+func negotiateProtocolVersion(requested string) string {
+	for _, v := range mcpProtocolVersions {
+		if requested == v {
+			return v
+		}
+	}
+	return mcpProtocolVersions[0]
+}
+
+func initializeResult(params json.RawMessage) map[string]any {
+	requested := ""
+	if len(params) > 0 {
+		var p struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		_ = json.Unmarshal(params, &p)
+		requested = p.ProtocolVersion
+	}
+	return map[string]any{
+		"protocolVersion": negotiateProtocolVersion(requested),
+		"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
+		"serverInfo":      map[string]any{"name": "opskeeper", "version": "v1"},
+		"instructions":    mcpInstructions,
+	}
+}
+
+// toolsListParams is the MCP `tools/list` request params. The cursor is
+// opaque to the client by design; here it is the decimal offset of the next
+// page, and since this server is the only thing that ever writes one, nothing
+// else can be mistaken for it.
+type toolsListParams struct {
+	Cursor string `json:"cursor,omitempty"`
+}
+
+// pageTools slices the already-filtered catalogue and returns the cursor for
+// the page after this one (empty when this is the last page). A cursor that
+// does not parse is an error rather than a silent restart at page one: a
+// client that has lost its place must be told, not quietly re-shown tools it
+// has already listed.
+func (h *Handler) pageTools(tools []mcpclient.Tool, params json.RawMessage) ([]mcpclient.Tool, string, *jsonRPCError) {
+	offset := 0
+	if len(params) > 0 {
+		var p toolsListParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, "", &jsonRPCError{Code: -32602, Message: "invalid params"}
+		}
+		if p.Cursor != "" {
+			n, err := strconv.Atoi(p.Cursor)
+			if err != nil || n < 0 {
+				return nil, "", &jsonRPCError{Code: -32602, Message: "invalid cursor"}
+			}
+			offset = n
+		}
+	}
+	if offset >= len(tools) {
+		return []mcpclient.Tool{}, "", nil
+	}
+	end := offset + h.pageSize()
+	if end >= len(tools) {
+		return tools[offset:], "", nil
+	}
+	return tools[offset:end], strconv.Itoa(end), nil
+}
+
+func (h *Handler) pageSize() int {
+	if h.toolsPageSize > 0 {
+		return h.toolsPageSize
+	}
+	return mcpToolsPageSizeDefault
+}
+
 type jsonRPCRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
@@ -301,7 +406,14 @@ type toolsCallParams struct {
 }
 
 func (h *Handler) jsonRPC(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Opskeeper-Version") != "v1" {
+	// X-Opskeeper-Version is this fleet's own revision marker: our services
+	// set it so a v2 rollout can refuse a v1 peer. A stock MCP client has
+	// never heard of it, so an absent header means "a plain MCP client" and is
+	// answered as v1; only a *stated* other version is refused. Requiring the
+	// header made /v1/mcp unreachable for every MCP client except our own
+	// callers — including, as the loopback test in this package caught,
+	// pkg/mcpclient, which is our own client.
+	if v := r.Header.Get("X-Opskeeper-Version"); v != "" && v != "v1" {
 		writeMCPJSON(w, http.StatusBadRequest, jsonRPCResponse{
 			JSONRPC: "2.0",
 			Error:   &jsonRPCError{Code: -32002, Message: "X-Opskeeper-Version must be v1"},
@@ -333,17 +445,28 @@ func (h *Handler) jsonRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch request.Method {
-	case "notifications/initialized":
+	// JSON-RPC notifications carry no id and get no response: 202 with an
+	// empty body is the transport-level "received", and answering one with a
+	// result would be a protocol error. The spec names
+	// notifications/initialized and notifications/cancelled; anything else
+	// under the same prefix is accepted the same way, so that a newer
+	// client's notification cannot be reported to it as a bad request.
+	if strings.HasPrefix(request.Method, "notifications/") {
 		w.Header().Set("X-Opskeeper-Version", "v1")
 		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	switch request.Method {
+	case "ping":
+		// The spec's keepalive utility: either side may send it and an empty
+		// result is the entire reply. Answering method-not-found — which is
+		// what this endpoint did before decision 108 — tells a health-checking
+		// client that a healthy server is broken.
+		writeMCPResult(w, request.ID, map[string]any{}, nil)
 	case "initialize":
 		w.Header().Set("Mcp-Session-Id", uuid.NewString())
-		writeMCPResult(w, request.ID, map[string]any{
-			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
-			"serverInfo":      map[string]any{"name": "opskeeper", "version": "v1"},
-		}, nil)
+		writeMCPResult(w, request.ID, initializeResult(request.Params), nil)
 	case "tools/list":
 		caller, _ := callerFromRequest(r)
 		claimed, err := workerIdentityFromRequest(r)
@@ -377,7 +500,16 @@ func (h *Handler) jsonRPC(w http.ResponseWriter, r *http.Request) {
 				tools = append(tools, tool)
 			}
 		}
-		writeMCPResult(w, request.ID, map[string]any{"tools": tools}, nil)
+		page, next, perr := h.pageTools(tools, request.Params)
+		if perr != nil {
+			writeMCPResult(w, request.ID, nil, perr)
+			return
+		}
+		result := map[string]any{"tools": page}
+		if next != "" {
+			result["nextCursor"] = next
+		}
+		writeMCPResult(w, request.ID, result, nil)
 	case "tools/call":
 		// self-health observability: capture tool name + worker role +
 		// wall-clock latency for every call, regardless of outcome.
