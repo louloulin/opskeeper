@@ -158,14 +158,28 @@ func cmdJudge(ctx context.Context, args []string) error {
 
 type scoreSummary struct {
 	RCAAccuracy *float64 `json:"rca_accuracy,omitempty"`
-	Flagged     bool     `json:"flagged"`
-	FlagReason  string   `json:"flag_reason,omitempty"`
+	// 三个诊断轴进摘要，是因为它们回答的问题和 rca_accuracy 不同：一个
+	// outcome 高而 trace 不落地的 run，在只看 rca 的摘要里和真的诊断长得
+	// 一模一样。缺省（omitempty）表示这个 case 没声明该轴，不是 0 分。
+	Localization   *float64 `json:"localization,omitempty"`
+	Identification *float64 `json:"identification,omitempty"`
+	Reason         *float64 `json:"reason,omitempty"`
+	Flagged        bool     `json:"flagged"`
+	FlagReason     string   `json:"flag_reason,omitempty"`
 }
 
 func summarize(s *judge.Score) scoreSummary {
 	out := scoreSummary{Flagged: s.Flagged, FlagReason: s.FlagReason}
-	if v, ok := s.Dimensions["rca_accuracy"]; ok {
-		out.RCAAccuracy = &v
+	for key, target := range map[string]**float64{
+		"rca_accuracy":                &out.RCAAccuracy,
+		judge.DimensionLocalization:   &out.Localization,
+		judge.DimensionIdentification: &out.Identification,
+		judge.DimensionReason:         &out.Reason,
+	} {
+		if v, ok := s.Dimensions[key]; ok {
+			value := v
+			*target = &value
+		}
 	}
 	return out
 }
@@ -300,6 +314,12 @@ func loadAgentResponse(path string) (*judge.AgentResponse, error) {
 }
 
 func judgeCaseOf(c *schema.Case) *judge.Case {
+	// The three diagnostic axes travel with the judge case rather than being
+	// computed here, because both the heuristic and the LLM judge have to
+	// score them and a number only one path produces is a number a
+	// leaderboard averages over half its rows. The derivation itself is in
+	// axes.go, which is the single place "where the fault is" is defined.
+	expectations := diagnosticExpectationsOf(c)
 	return &judge.Case{
 		ID:                   c.ID,
 		ExpectedRootCause:    c.Expect.RootCauseLines,
@@ -307,5 +327,7 @@ func judgeCaseOf(c *schema.Case) *judge.Case {
 		ExpectedDetectSec:    c.Expect.TimeToDetect,
 		ExpectedRemediateSec: c.Expect.TimeToRemediate,
 		NoCollateralDamage:   c.Rubric.NoCollateralDamage,
+		ExpectedLocus:        expectations.Locus,
+		ExpectedFaultType:    expectations.FaultType,
 	}
 }

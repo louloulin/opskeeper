@@ -214,14 +214,16 @@ func (c *Case) parseAndValidate() error {
 		return errors.New("prerequisites list is empty")
 	}
 
-	// inject 步骤数至少 1
-	injectTypes := extractListItems(c.raw, "inject", "type")
-	if len(injectTypes) == 0 {
+	// inject 步骤数至少 1。type / duration / params 一起解析——这三个
+	// 字段的去向是 injector.FromSchemaStep，而它消费全部三个。
+	c.Inject = parseInjectSteps(c.raw)
+	if len(c.Inject) == 0 {
 		return errors.New("inject must have at least one step")
 	}
-	c.Inject = make([]InjectStep, len(injectTypes))
-	for i, t := range injectTypes {
-		c.Inject[i] = InjectStep{Type: t}
+	for i, step := range c.Inject {
+		if step.Type == "" {
+			return fmt.Errorf("inject step %d has no type", i)
+		}
 	}
 
 	// expect.root_cause_lines / remediation_options 格式校验
@@ -392,47 +394,221 @@ func extractList(raw, key string) []string {
 	return result
 }
 
-// extractListItems 在 inject 列表下提取每个 step 的 type 字段。
+// parseInjectSteps 解析 inject 列表的每个 step：type、duration、params。
 //
-// 输入 YAML 格式：
+// 为什么不是只提 type（它此前做的就是这件事）：schema.InjectStep 是
+// injector.FromSchemaStep 的输入，而后者消费三个字段。只填 type 的结果是
+// Params 一直为 nil、Duration 一直为空串——corpus 里写下的 cores: 4 /
+// table: orders / message_count: 100000 在加载时全部被丢掉，注入器拿到的是
+// 一个空 map，而 FromSchemaStep 还会因为 time.ParseDuration("") 直接报错。
+// 一条从来跑不通的装配路径与一条被静默削弱的注入路径，都不是"暂时够用"。
 //
-//	inject:
-//	  - type: foo
-//	    duration: 300s
-//	  - type: bar
+// 支持的语法范围与这个文件其余部分一致：一层键值对，值是标量、带引号的
+// 字符串或行内列表（tables: [orders]）。更深的结构（params 之下再嵌 map）
+// 不支持，也不猜——那一层被忽略，而不是被拼进上一层，因为把
+// `limit_memory_mb` 和它所属的容器名混成同级，会造出一个从来不存在过的参数。
+func parseInjectSteps(raw string) []InjectStep {
+	block, ok := blockUnderKey(raw, "inject")
+	if !ok {
+		return nil
+	}
+	var steps [][]string
+	for _, line := range block {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- ") {
+			steps = append(steps, []string{line})
+			continue
+		}
+		if len(steps) == 0 {
+			continue
+		}
+		steps[len(steps)-1] = append(steps[len(steps)-1], line)
+	}
+	out := make([]InjectStep, 0, len(steps))
+	for _, lines := range steps {
+		out = append(out, parseInjectStep(lines))
+	}
+	return out
+}
+
+// blockUnderKey returns the lines nested under a top-level key, stopping when
+// the indentation falls back to the key's own level.
 //
-// 输出：["foo", "bar"]
-func extractListItems(raw, listKey, itemKey string) []string {
-	var result []string
-	prefix := listKey + ":"
+// The stopping rule is the one extractList already learned the hard way: a
+// sibling key at the same level ends the block, and a rule that only stopped
+// on unindented lines would swallow the next key's contents into this one.
+func blockUnderKey(raw, key string) ([]string, bool) {
 	lines := strings.Split(raw, "\n")
-	inList := false
+	keyIndent := 0
+	start := -1
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, key+":") {
+			keyIndent = indentOf(line)
+			start = index + 1
+			break
+		}
+	}
+	if start < 0 {
+		return nil, false
+	}
+	var block []string
+	for _, line := range lines[start:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			block = append(block, line)
+			continue
+		}
+		if indentOf(line) <= keyIndent {
+			break
+		}
+		block = append(block, line)
+	}
+	return block, true
+}
+
+// parseInjectStep reads one "- type: ..." step and its continuation lines.
+func parseInjectStep(lines []string) InjectStep {
+	step := InjectStep{}
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		content := trimmed
+		if strings.HasPrefix(content, "- ") {
+			content = strings.TrimSpace(content[2:])
+		}
+		key, value, ok := splitYAMLPair(content)
+		if !ok {
+			continue
+		}
+		switch key {
+		case "type":
+			if step.Type == "" {
+				step.Type = value
+			}
+		case "duration":
+			if step.Duration == "" {
+				step.Duration = value
+			}
+		case "params":
+			step.Params = parseParamBlock(lines[index+1:], indentOf(line))
+		}
+	}
+	return step
+}
+
+// parseParamBlock reads the flat key/value lines one level under "params:".
+//
+// Only the level directly under params is read. A deeper line is a structure
+// this parser does not model, and skipping it is deliberate: attributing it to
+// the level above would invent a parameter the case never declared.
+func parseParamBlock(lines []string, paramsIndent int) map[string]interface{} {
+	childIndent := -1
+	out := make(map[string]interface{})
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if !inList {
-			if strings.HasPrefix(trimmed, prefix) {
-				inList = true
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := indentOf(line)
+		if indent <= paramsIndent {
+			break
+		}
+		if childIndent < 0 {
+			childIndent = indent
+		}
+		if indent != childIndent {
+			continue
+		}
+		key, value, ok := splitYAMLPair(trimmed)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(value) == "" {
+			// A key with no value on the line is the head of a nested
+			// structure this parser does not model. Recording it as an empty
+			// string would invent a parameter, and inventing one is worse
+			// than not reporting it: a consumer reads the map as the case's
+			// declared parameters.
+			continue
+		}
+		out[key] = parseParamValue(value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// splitYAMLPair splits "key: value" on the first colon that is not inside a
+// quoted run, so `key: "session:active:user_42"` keeps its value intact.
+func splitYAMLPair(line string) (string, string, bool) {
+	var quote byte
+	for index := 0; index < len(line); index++ {
+		char := line[index]
+		if quote != 0 {
+			if char == quote {
+				quote = 0
 			}
 			continue
 		}
-		// 列表结束：遇到顶级（无缩进）的新字段
-		if len(line) > 0 && line[0] != ' ' && line[0] != '\t' && !strings.HasPrefix(trimmed, "- ") && strings.Contains(line, ":") {
-			break
-		}
-		// "- type: foo" 形式
-		if strings.HasPrefix(trimmed, "- ") {
-			item := strings.TrimSpace(trimmed[2:])
-			// item 可能是 "type: foo" 或 "duration: 300s" 或 "params:" 等
-			if strings.HasPrefix(item, itemKey+":") {
-				v := strings.TrimSpace(item[len(itemKey)+1:])
-				v = strings.Trim(v, `"'`)
-				if v != "" {
-					result = append(result, v)
-				}
+		switch char {
+		case '"', '\'':
+			quote = char
+		case ':':
+			key := strings.TrimSpace(line[:index])
+			if key == "" {
+				return "", "", false
 			}
+			return key, strings.TrimSpace(line[index+1:]), true
 		}
 	}
-	return result
+	return "", "", false
+}
+
+// parseParamValue reads a scalar, a quoted string, or an inline list.
+//
+// Numbers come back as int rather than float when they are whole, because a
+// parameter like `sessions: 5` read back as "5" is a different string from the
+// one the case file wrote for anything that compares it.
+func parseParamValue(value string) interface{} {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+		inner := strings.TrimSpace(value[1 : len(value)-1])
+		if inner == "" {
+			return []interface{}{}
+		}
+		items := strings.Split(inner, ",")
+		out := make([]interface{}, 0, len(items))
+		for _, item := range items {
+			item = strings.Trim(strings.TrimSpace(item), `"'`)
+			if item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	}
+	if len(value) >= 2 {
+		first, last := value[0], value[len(value)-1]
+		if (first == '"' || first == '\'') && last == first {
+			return value[1 : len(value)-1]
+		}
+	}
+	if index := strings.Index(value, " #"); index >= 0 {
+		value = strings.TrimSpace(value[:index])
+	}
+	if number, err := strconv.Atoi(value); err == nil {
+		return number
+	}
+	if number, err := strconv.ParseFloat(value, 64); err == nil {
+		return number
+	}
+	return value
 }
 
 // Suite 是一组 case 的集合。

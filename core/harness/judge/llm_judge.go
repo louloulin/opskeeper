@@ -92,7 +92,7 @@ func (j *LLMJudge) Score(ctx context.Context, c *Case, r *AgentResponse) (*Score
 		return j.fallbackAndMark(ctx, c, r, "schema-invalid: "+perr.Error())
 	}
 
-	return &Score{
+	score := &Score{
 		Overall: acc,
 		Dimensions: map[string]float64{
 			"rca_accuracy": acc,
@@ -100,7 +100,12 @@ func (j *LLMJudge) Score(ctx context.Context, c *Case, r *AgentResponse) (*Score
 		JudgesUsed: []string{"llm"},
 		Reasoning:  fmt.Sprintf("LLM judge scored rca_accuracy=%.3f", acc),
 		ComputedAt: time.Now(),
-	}, nil
+	}
+	// 三个诊断轴在这条路径上也由规则算，不问模型：它们是"答案里有没有
+	// 这个资源名/故障名/这些观测"的核对，而模型的判断严格劣于 substring。
+	// 两个 judge 因此带着同一组轴，差异只留在判断成分更重的 rca_accuracy。
+	applyDiagnostic(score, c, r)
+	return score, nil
 }
 
 // fallbackAndMark 调用 fallback judge 并把 JudgesUsed 改成 "llm-fallback-heuristic"。

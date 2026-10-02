@@ -39,6 +39,8 @@ opskeeper-eval vocabulary                           # golden case 的能力期�
 opskeeper-eval vocabulary --fail-on-gap              # CI：有结构上无法满足的 case 即非零退出
 opskeeper-eval vocabulary --json                    # 机器可读
 opskeeper-eval vocabulary --kind-map kinds.json     # 校验 kind 映射文件是否陈旧
+opskeeper-eval axes                                 # 每个 case 声明的三个诊断轴
+opskeeper-eval axes --fail-on-unmeasured-axis        # CI：有 case 测不出某个轴即非零退出
 
 # 闭环最后一环：生产契约 → judge 可评分的响应
 opskeeper-eval project --contract rc.json --kind-map kinds.json --out resp.json
@@ -145,6 +147,59 @@ vocabulary`。四个能力来源按"谁拥有这个能力"的顺序被咨询：
 > 比整张能力表，得到的是"全都不满足"，而一个"全都不满足"的闸门和一个正常
 > 工作的闸门**长得一模一样**：都打印数字、都非零退出。因此
 > `TestACaseWhoseSymbolsTheAdaptersRegisterIsReportedServable` 把方向钉死。
+
+---
+
+## 二.7、诊断轴闸门（axes）
+
+**问题**：`plugin-coverage` 与 `vocabulary` 问的都是"这个 case 能不能被服务"。
+再往前还有一层：**这个 case 能不能被测量**。judge 从这一批起按
+**Localization × Identification × Reason** 打分（arXiv:2606.29193），而一个
+case 没声明的轴不会产生数字——"没测到"在产物里和"0 分"长得一模一样。
+
+**三个轴问的三件事**（论文原文：*where the fault occurs* / *what type of fault
+it is* / *whether the reasoning trace is grounded in relevant evidence*）：
+
+| 轴 | 问什么 | 读哪一面 | 从 case 的什么派生 |
+|---|---|---|---|
+| `localization` | 故障在**哪里** | 结论（root cause + remediation） | case id 的资源族（`pg/lock-waits` → `pg`）+ 注入参数里的身份值（`table: orders`、`namespace: test`） |
+| `identification` | 故障是**什么类型** | 结论 | case id 的故障段分词（`lock-waits` → `["lock","waits"]`） |
+| `reason` | 推理**有没有落到证据上** | **tool call 轨迹**（名字 + 参数 + 结果） | `expect.root_cause_lines` —— 语料要求 agent 必须做出的观测 |
+
+**为什么不用模型判这三个**：它们是"答案里有没有这个资源名/故障名/这些观测"
+的核对。模型的判断严格劣于一次 substring 比较，所以 LLM judge 与 heuristic
+judge 带的是同一组数字，两者之间的差异只留在判断成分更重的 `rca_accuracy`。
+
+**为什么 `reason` 读轨迹而不是读答案**：这正是三维与只看最终答案的分界线。
+一份结论完全正确、tool call 一条没有的回答，在四个过程维度上是满分，和真做过
+诊断的回答无法区分；加上这个轴之后它会被 `Flagged` 进人工复评队列：
+
+```
+overall=1.00  localization=0.50  identification=1.00  reason=0.00
+flagged: the answer scores 1.00 but the reasoning trace is ungrounded (reason=0.00)
+```
+
+**判据与阈值**（`core/harness/judge/diagnostic.go`）：`Overall >= 0.7` 且
+`reason <= 0.5` 才触发 flag。两个下界各自是一条陈述：结论不对的回答本来就该
+证据单薄，全 flag 会淹掉真正要看的队列；而一半要求观测缺失之后，结论已经不再
+被"agent 实际看过的东西"支撑。
+
+**为什么不动 `Overall`**：重排权重会静默作废已存下来的每一个分数和由它们画出的
+leaderboard 对比，而语料还没有跑出足以支撑新权重的分布。所以这一批改变的是
+**判决**（flag），不是总分。
+
+**`--fail-on-unmeasured-axis`**：语料里每个 case 都必须能测出三个轴。今天的
+真实结果是 **20/20 可测量**，其中 **5 个的 locus 只有资源族**（注入发生在
+"那台主机"/"那个副本"上，case 里没有更窄的名字）。这 5 个在输出里带 `~`：
+
+```
+$ opskeeper-eval axes
+cases: 20   coarsened locus (family only): 5   unmeasured: 0
+~ host/cpu-spike             locus=[host] type=[cpu spike] evidence=3
+  pg/lock-waits              locus=[pg orders] type=[lock waits] evidence=2
+```
+
+`~` 是**报出来**而不是补一个注入器从没用过的名字：粗的轴看得见，编的名字看不出来。
 
 ---
 
@@ -304,13 +359,22 @@ opskeeper-eval validate --case pg/long-running-tx
 
 ### 5.2 评分维度
 
-每个 case 由 judge 在以下 5 维度独立打分（0-1）：
+`judge.Score.Dimensions` 里的每个维度都是 0-1。**四个过程维度**：
 
-1. **rca_accuracy** — 根因工具是否用对
-2. **time_to_detect** — 检测时长（vs rubric 阈值）
-3. **time_to_remediate** — 修复时长（vs rubric 阈值）
-4. **collateral_damage** — 副作用（kill 错 session 等）
-5. **rubric_compliance** — 与 case 定义的一致性
+1. **rca_accuracy** — 根因符号命中比例（`AgentResponse.RootCause` vs `expect.root_cause_lines`）
+2. **time_efficiency** — 检测时长 vs `expect.time_to_detect`（不超时满分，3 倍线性衰减到 0）
+3. **remediation_quality** — 修复动作命中比例
+4. **collateral_safety** — `rubric.no_collateral_damage` 为真且响应带 errors → 0，否则 1
+
+**三个诊断轴**（arXiv:2606.29193，见 §二.7）：
+
+5. **localization** — 结论有没有说出故障所在的资源（case 的族 + 注入参数身份值）
+6. **identification** — 结论有没有说出故障的类型（case id 的故障段分词）
+7. **reason** — **tool call 轨迹**里有没有语料要求的那些观测
+
+`Overall` 仍是前四个的加权（0.4 / 0.2 / 0.3 / 0.1）；三个轴不参与它，但
+`Overall >= 0.7` 且 `reason <= 0.5` 会把这次评分 `Flagged` 进人工复评。
+**case 没声明的轴不出现在 `Dimensions` 里**——缺省表示"没测过"，不是 0 分。
 
 ### 5.3 一致性校验
 

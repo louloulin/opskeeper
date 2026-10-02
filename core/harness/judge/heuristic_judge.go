@@ -44,7 +44,7 @@ func (j *HeuristicJudge) Score(ctx context.Context, c *Case, r *AgentResponse) (
 		safety = 0.0
 	}
 	overall := clamp(0.4*rca + 0.2*tEff + 0.3*rem + 0.1*safety)
-	return &Score{
+	score := &Score{
 		Overall: overall,
 		Dimensions: map[string]float64{
 			"rca_accuracy":        rca,
@@ -54,7 +54,11 @@ func (j *HeuristicJudge) Score(ctx context.Context, c *Case, r *AgentResponse) (
 		},
 		JudgesUsed: []string{"heuristic-v1"},
 		ComputedAt: time.Now(),
-	}, nil
+	}
+	// 三个诊断轴由规则算出，与四个过程维度同源：Localization 与
+	// Identification 读结论，Reason 读 tool call 轨迹。见 diagnostic.go。
+	applyDiagnostic(score, c, r)
+	return score, nil
 }
 
 // matchRatio 计算 actual 中命中 expected 的比例（双向匹配）。

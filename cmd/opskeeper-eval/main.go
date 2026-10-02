@@ -72,6 +72,8 @@ func main() {
 		err = cmdVocabulary(ctx, args)
 	case "project":
 		err = cmdProject(ctx, args)
+	case "axes":
+		err = cmdAxes(ctx, args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n\n", sub)
 		printUsage()
@@ -102,6 +104,9 @@ SUBCOMMANDS:
                    （哪些 case 连结构上都无法满足——这类 case 的分数不是 agent 的成绩）
   project          把生产的 RootCauseJSON 契约投影成 judge.AgentResponse
                    project --contract rc.json --kind-map kinds.json --out resp.json
+  axes             列出每个 case 声明的三个诊断轴（Localization × Identification
+                   × Reason），并报出哪些 case 的 locus 退化成资源族
+                   opskeeper-eval axes --fail-on-unmeasured-axis
 
 FLAGS:
   --version    输出版本

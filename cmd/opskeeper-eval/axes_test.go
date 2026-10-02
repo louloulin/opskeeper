@@ -1,0 +1,260 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/vincent-wuhan/opskeeper/core/harness/judge"
+	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
+)
+
+const shippedCasesDir = "../../core/harness/cases"
+
+// runAxesIn runs the subcommand into a temp file and decodes its JSON.
+func runAxesIn(t *testing.T, f axesFlags) (axesReport, error) {
+	t.Helper()
+	f.jsonOut = true
+	path := filepath.Join(t.TempDir(), "out.txt")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	runErr := runAxes(f, file)
+	body, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	var report axesReport
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &report); err != nil {
+			t.Fatalf("decode axes report: %v (raw=%s)", err, body)
+		}
+	}
+	return report, runErr
+}
+
+// TestEveryShippedCaseDeclaresTheThreeAxes is the gate. The judge scores
+// Localization × Identification × Reason, and a case that declares nothing for
+// one of them produces no number for it — an axis a leaderboard then silently
+// averages over nothing. Every shipped case has to be measurable, so a case
+// added tomorrow with an id the derivation cannot read fails here.
+func TestEveryShippedCaseDeclaresTheThreeAxes(t *testing.T) {
+	report, err := runAxesIn(t, axesFlags{casesDir: shippedCasesDir})
+	if err != nil {
+		t.Fatalf("axes: %v", err)
+	}
+	if report.Total != 20 {
+		t.Fatalf("total = %d, want the 20 shipped cases", report.Total)
+	}
+	for _, item := range report.Cases {
+		if len(item.Locus) == 0 {
+			t.Errorf("%s declares no locus, so localization cannot be measured", item.CaseID)
+		}
+		if len(item.FaultType) == 0 {
+			t.Errorf("%s declares no fault type, so identification cannot be measured", item.CaseID)
+		}
+		if len(item.Evidence) == 0 {
+			t.Errorf("%s declares no expected observations, so reason cannot be measured", item.CaseID)
+		}
+	}
+	if report.Unmeasured != 0 {
+		t.Errorf("%d cases are unmeasurable", report.Unmeasured)
+	}
+}
+
+func TestTheLocusComesFromIdentityParametersNotKnobs(t *testing.T) {
+	c := &schema.Case{
+		ID: "pg/lock-waits",
+		Inject: []schema.InjectStep{{
+			Type: "pg.inject_lock_chain",
+			Params: map[string]interface{}{
+				"table": "orders",
+				// Knobs must not become loci: no correct answer repeats "4",
+				// so requiring it would fail answers for saying the right
+				// thing.
+				"cores":       4,
+				"target_load": 98,
+			},
+		}},
+		Expect: schema.Expect{RootCauseLines: []string{"pg.lock_waits"}},
+	}
+	got := diagnosticExpectationsOf(c)
+	if !containsToken(got.Locus, "orders") || !containsToken(got.Locus, "pg") {
+		t.Fatalf("locus = %v, want the table and the family", got.Locus)
+	}
+	if containsToken(got.Locus, "4") || containsToken(got.Locus, "98") {
+		t.Errorf("a knob became a locus: %v", got.Locus)
+	}
+	if got.Thin {
+		t.Errorf("locus with a named table reported as coarsened: %v", got.Locus)
+	}
+}
+
+func TestATwoCharacterFamilyIsNotDropped(t *testing.T) {
+	// "pg" and "mq" are exactly the tokens the minimum-length rule exists to
+	// drop from prose, and dropping the family would leave those five cases
+	// with no locus at all.
+	for _, id := range []string{"pg/lock-waits", "mq/broker-down"} {
+		family := strings.SplitN(id, "/", 2)[0]
+		got := diagnosticExpectationsOf(&schema.Case{
+			ID:     id,
+			Expect: schema.Expect{RootCauseLines: []string{family + ".something"}},
+		})
+		if !containsToken(got.Locus, family) {
+			t.Errorf("%s: family %q missing from locus %v", id, family, got.Locus)
+		}
+	}
+}
+
+func TestACoarsenedLocusIsReportedRatherThanFabricated(t *testing.T) {
+	got := diagnosticExpectationsOf(&schema.Case{
+		ID: "redis/memory-burst",
+		Inject: []schema.InjectStep{{
+			Type:   "redis.inject_memory_burst",
+			Params: map[string]interface{}{"maxmemory_mb": 1024, "fill_percent": 99},
+		}},
+		Expect: schema.Expect{RootCauseLines: []string{"redis.memory_usage"}},
+	})
+	if len(got.Locus) != 1 || got.Locus[0] != "redis" {
+		t.Fatalf("locus = %v, want the family alone", got.Locus)
+	}
+	if !got.Thin {
+		t.Error("a family-only locus was not reported as coarsened")
+	}
+}
+
+func TestAFlowListParameterIsALocus(t *testing.T) {
+	got := diagnosticExpectationsOf(&schema.Case{
+		ID: "pg/long-running-tx",
+		Inject: []schema.InjectStep{{
+			Type:   "pg.begin_txn_hold",
+			Params: map[string]interface{}{"tables": []interface{}{"orders"}},
+		}},
+		Expect: schema.Expect{RootCauseLines: []string{"pg.long_running_txns"}},
+	})
+	if !containsToken(got.Locus, "orders") {
+		t.Errorf("locus = %v, want the table from the inline list", got.Locus)
+	}
+}
+
+// TestAnUnreadableFaultSegmentFailsTheGate pins the failure mode the gate
+// exists for: a case whose fault segment is too short to be a word yields no
+// identification tokens, and a run of it would score an identification axis
+// that does not exist.
+func TestAnUnreadableFaultSegmentFailsTheGate(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "case.yaml", `id: pg/ab
+description: a synthetic case whose fault segment is too short to be a word
+severity: P2
+prerequisites:
+  - pg.cluster reachable
+inject:
+  - type: pg.inject_lock_chain
+    duration: 180s
+    params:
+      table: orders
+expect:
+  time_to_detect: 60
+  time_to_remediate: 120
+  root_cause_lines:
+    - pg.lock_waits
+  remediation_options:
+    - pg.kill_session
+`)
+	report, err := runAxesIn(t, axesFlags{casesDir: dir, failUnmeasured: true})
+	if err == nil {
+		t.Fatalf("gate accepted an unmeasurable case: %+v", report.Cases)
+	}
+	if report.Unmeasured != 1 {
+		t.Errorf("unmeasured = %d, want 1", report.Unmeasured)
+	}
+}
+
+func TestTheSummaryCarriesTheThreeAxes(t *testing.T) {
+	two := 0.5
+	score := &judge.Score{
+		Overall: 0.9,
+		Dimensions: map[string]float64{
+			judge.DimensionLocalization:   1,
+			judge.DimensionIdentification: 1,
+			judge.DimensionReason:         two,
+		},
+	}
+	summary := summarize(score)
+	if summary.Localization == nil || summary.Identification == nil || summary.Reason == nil {
+		t.Fatalf("summary dropped an axis: %+v", summary)
+	}
+	if *summary.Reason != two {
+		t.Errorf("reason = %v, want %v", *summary.Reason, two)
+	}
+	// Absence is not zero: a case that declares no locus must not report a
+	// localization of 0 in the artifact a person reads.
+	if summary.RCAAccuracy != nil {
+		t.Errorf("rca_accuracy invented: %v", *summary.RCAAccuracy)
+	}
+	bare := summarize(&judge.Score{Overall: 0.9, Dimensions: map[string]float64{}})
+	if bare.Localization != nil || bare.Identification != nil || bare.Reason != nil {
+		t.Errorf("unmeasured axes reported as numbers: %+v", bare)
+	}
+}
+
+func TestJudgeCaseOfCarriesTheDerivedAxes(t *testing.T) {
+	caseObj, err := schema.NewLoader(shippedCasesDir).LoadByID("pg/lock-waits")
+	if err != nil {
+		t.Fatalf("load pg/lock-waits: %v", err)
+	}
+	judgeCase := judgeCaseOf(caseObj)
+	if len(judgeCase.ExpectedLocus) == 0 {
+		t.Fatal("the judge case carries no locus")
+	}
+	if len(judgeCase.ExpectedFaultType) == 0 {
+		t.Fatal("the judge case carries no fault type")
+	}
+}
+
+// TestARealCaseScoresTheAxesAndFlagsAnUngroundedAnswer is the end-to-end
+// statement of why the axes exist: a run of a shipped case whose conclusion is
+// perfect and whose trace is empty is, by the outcome dimensions alone,
+// indistinguishable from a real diagnosis — and is now flagged for review.
+func TestARealCaseScoresTheAxesAndFlagsAnUngroundedAnswer(t *testing.T) {
+	caseObj, err := schema.NewLoader(shippedCasesDir).LoadByID("pg/lock-waits")
+	if err != nil {
+		t.Fatalf("load pg/lock-waits: %v", err)
+	}
+	response := &judge.AgentResponse{
+		RootCause:    append([]string(nil), caseObj.Expect.RootCauseLines...),
+		Remediations: append([]string(nil), caseObj.Expect.RemediationOptions...),
+	}
+	score, err := judge.NewHeuristicJudge().Score(context.Background(), judgeCaseOf(caseObj), response)
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if score.Dimensions[judge.DimensionIdentification] != 1.0 {
+		t.Errorf("identification = %v, want 1.0 (the answer names the fault)",
+			score.Dimensions[judge.DimensionIdentification])
+	}
+	if score.Dimensions[judge.DimensionReason] != 0.0 {
+		t.Errorf("reason = %v, want 0.0 (no tool call made the observations)",
+			score.Dimensions[judge.DimensionReason])
+	}
+	if score.Overall < judge.DiagnosticOutcomeFloor {
+		t.Fatalf("fixture is not a good outcome: overall=%v", score.Overall)
+	}
+	if !score.Flagged {
+		t.Error("a perfect conclusion with an empty trace was not flagged for review")
+	}
+}
+
+func containsToken(tokens []string, want string) bool {
+	for _, token := range tokens {
+		if token == want {
+			return true
+		}
+	}
+	return false
+}

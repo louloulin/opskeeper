@@ -111,8 +111,8 @@ test-e2e-live: ## E2E live mode（用 tests/e2e/secrets.local.env 打通真实�
 # expectation; vocabulary asks whether the *system* can serve it at all.
 # Neither subsumes the other, and today both report large gaps — which is
 # only useful if the numbers are reproducible rather than remembered.
-.PHONY: eval-gates eval-vocabulary eval-coverage
-eval-gates: eval-coverage eval-vocabulary
+.PHONY: eval-gates eval-vocabulary eval-coverage eval-axes
+eval-gates: eval-coverage eval-vocabulary eval-axes
 
 # The joint verdict (a case is covered only when a package serves BOTH its
 # root causes and its remediations) is 0/20 and always will be, because every
@@ -126,6 +126,12 @@ eval-coverage: ## golden case 能力期望 vs 插件包能力（哪些 case 没�
 
 eval-vocabulary: ## golden case 能力期望 vs 本构建真实词表（哪些 case 结构上无法满足）
 	go run ./cmd/opskeeper-eval vocabulary
+
+# judge 从本批起按 Localization × Identification × Reason 打分（2606.29193）。
+# 一个 case 没声明的轴不产生数字，而"没测到"在读者眼里和 0 分没有区别——
+# 所以语料里每个 case 都必须能测出三个轴。这条闸门盯的是这个，不是分数。
+eval-axes: ## golden case 是否声明了三个诊断轴（能测才算数）
+	go run ./cmd/opskeeper-eval axes --fail-on-unmeasured-axis
 
 # ----------------------------------------------------------------------------
 # lint

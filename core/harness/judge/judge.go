@@ -27,8 +27,13 @@ import (
 
 // Score 是 judge 输出的评分结果。
 type Score struct {
-	Overall    float64            `json:"overall"`
-	Dimensions map[string]float64 `json:"dimensions"` // rca_accuracy / time_efficiency / remediation_quality / collateral_safety
+	Overall float64 `json:"overall"`
+	// Dimensions holds the four process dims
+	// (rca_accuracy / time_efficiency / remediation_quality / collateral_safety)
+	// plus the three diagnostic axes when the case declares them
+	// (localization / identification / reason). An axis the case says nothing
+	// about is absent rather than zero — see diagnostic.go.
+	Dimensions map[string]float64 `json:"dimensions"`
 	Flagged    bool               `json:"flagged"`
 	FlagReason string             `json:"flag_reason,omitempty"`
 	Reasoning  string             `json:"reasoning,omitempty"`
@@ -81,6 +86,22 @@ type Case struct {
 	ExpectedRemediateSec int
 	RCAThreshold         float64
 	NoCollateralDamage   bool
+
+	// ExpectedLocus is the set of resource identities the case's fault
+	// happened to — the "where" of the Localization axis. Populated by the
+	// caller from the case's own declaration (the eval CLI derives it from
+	// the case id's family segment plus the injection's identity parameters);
+	// the judge does not read a case file and does not guess.
+	//
+	// Empty means the case declared no locus, and the axis is then absent from
+	// Score.Dimensions rather than 0.
+	ExpectedLocus []string
+
+	// ExpectedFaultType is the fault's own name, tokenized — the "what" of the
+	// Identification axis ("lock waits" is ["lock", "waits"]).
+	//
+	// Empty means the case declared no type, and the axis is absent.
+	ExpectedFaultType []string
 }
 
 // ComputeResponseHash 计算 AgentResponse 哈希（缓存 key 的一部分）。
