@@ -3,11 +3,17 @@ package main
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 
+	managerbizaiops "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
 	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	managersvcaiops "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigagent"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigcoding"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 
 // TestEveryRegisteredMutatingToolHasADeclaredApprovalOwner is the drift
@@ -93,3 +99,103 @@ func TestTheDeclarationListHasNoDuplicates(t *testing.T) {
 		seen[n] = true
 	}
 }
+
+// TestTheSelectedDriverDecidesWhichKernelIsBuilt is the wiring gate for the
+// two PiG drivers (decision 86).
+//
+// The assembly point is where a driver stops being a type and becomes a
+// deployment, and every way that can go wrong is invisible from inside
+// core/pig: a Kernel built when the operator asked for a Session, a Session
+// built from a runtime the process never created, a driver selection that
+// silently falls back to the default. None of those fail a unit test in the
+// module that owns the type, because the module has no opinion about which
+// one an operator asked for.
+//
+// The test asserts the concrete type, not the behaviour, and that is
+// deliberate. Behavioural equality between the two is already held by the
+// differential golden in core/pig/pigagent; what is unproven here is that
+// the value in the env var reaches the constructor.
+func TestTheSelectedDriverDecidesWhichKernelIsBuilt(t *testing.T) {
+	rt, err := pigcoding.NewRuntime(pigcoding.RuntimeOptions{
+		AgentDir: t.TempDir(),
+		CWD:      t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	models := &pigmodel.Registry{}
+	base := agentKernelInput{
+		Models:     models,
+		Gate:       agentkernel.NewDeferredGate(nil, selfSettledToolNames()),
+		Sessions:   &stubSessions{},
+		PiGRuntime: rt,
+	}
+
+	t.Run("pig builds the bare loop", func(t *testing.T) {
+		in := base
+		in.Driver = managersvcaiops.KernelPig
+		got, err := newAgentKernel(in)
+		if err != nil {
+			t.Fatalf("newAgentKernel: %v", err)
+		}
+		if _, ok := got.(*pigagent.Kernel); !ok {
+			t.Fatalf("driver %q built %T, want *pigagent.Kernel", in.Driver, got)
+		}
+	})
+
+	t.Run("pig-sdk builds the session driver", func(t *testing.T) {
+		in := base
+		in.Driver = managersvcaiops.KernelPigSDK
+		got, err := newAgentKernel(in)
+		if err != nil {
+			t.Fatalf("newAgentKernel: %v", err)
+		}
+		if _, ok := got.(*pigagent.SessionKernel); !ok {
+			t.Fatalf("driver %q built %T, want *pigagent.SessionKernel", in.Driver, got)
+		}
+	})
+
+	// A nil runtime has to be refused, and the refusal has to NAME the
+	// driver. NewSessionKernel already rejects one, so asserting only "an
+	// error came back" would pass against a check that says nothing an
+	// operator can act on — and the message is the only reason the outer
+	// check exists at all.
+	t.Run("pig-sdk refuses a missing runtime and says which driver wanted it", func(t *testing.T) {
+		in := base
+		in.Driver = managersvcaiops.KernelPigSDK
+		in.PiGRuntime = nil
+		_, err := newAgentKernel(in)
+		if err == nil {
+			t.Fatal("newAgentKernel accepted the session driver with no PiG runtime")
+		}
+		if !strings.Contains(err.Error(), string(managersvcaiops.KernelPigSDK)) {
+			t.Fatalf("error %q does not name the driver that needed a runtime; an operator reading the boot log "+
+				"cannot tell a wiring mistake from a constructor bug", err)
+		}
+	})
+
+	// The converse: the bare loop must not care. It predates the runtime and
+	// a nil here is the normal case for every deployment that has not opted
+	// in, so requiring one would make the default configuration fail.
+	t.Run("pig ignores the runtime", func(t *testing.T) {
+		in := base
+		in.Driver = managersvcaiops.KernelPig
+		in.PiGRuntime = nil
+		if _, err := newAgentKernel(in); err != nil {
+			t.Fatalf("newAgentKernel refused the bare loop over a nil runtime: %v", err)
+		}
+	})
+}
+
+// stubSessions satisfies SessionRepo by embedding it.
+//
+// Nothing calls through it: this test asserts which kernel the assembly
+// builds, and the persister's own behaviour is covered where it lives, in
+// agentkernel. Embedding rather than implementing keeps this file from
+// becoming a second copy of a twenty-method interface — and the breakage
+// that copy would cause on every added method is the reason it is not
+// written. A nil embedded interface also makes an accidental call panic
+// rather than quietly succeed against nothing.
+type stubSessions struct{ managerbizaiops.SessionRepo }

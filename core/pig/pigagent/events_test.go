@@ -2,6 +2,7 @@ package pigagent
 
 import (
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -429,4 +430,80 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// TestFramesFromTheRunStateAndTheMapperDoNotCollide is the regression test
+// for a real data race, and it is written to fail without the race detector
+// so it keeps failing on a build where -race is not enabled.
+//
+// The mapper has two callers. The event stream arrives on the agent's loop
+// goroutine and takes the lock for the whole switch. The run state writes
+// approval cards, error frames and worker tiles from a tool's own goroutine,
+// while the loop is still emitting. Both increment the same sequence
+// counter, because the console orders frames by it and a card that lands
+// with the same number as the tool it belongs to renders in the wrong place
+// with nothing to indicate why.
+//
+// The unsynchronised version passed every functional test in this package.
+// Two goroutines doing a read-modify-write on one int64 do not reliably
+// collide; they collide often enough to be found by `go test -race` and
+// rarely enough that no assertion on a single turn would ever see it. So
+// this test does what a functional test cannot: it puts the two callers in
+// genuine contention, many times over, and requires the result to be a
+// permutation of 1..n with no repeats and no holes.
+func TestFramesFromTheRunStateAndTheMapperDoNotCollide(t *testing.T) {
+	const rounds = 200
+	const perRound = 64
+
+	for round := 0; round < rounds; round++ {
+		m := NewMapper(MapperOptions{SessionID: "s-1", Now: fixedClock()})
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		seqs := make([]int64, 0, 3*perRound)
+
+		// The event-stream caller, going through Map.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			local := make([]int64, 0, perRound)
+			for i := 0; i < perRound; i++ {
+				m.TurnStarted()
+				local = append(local, m.Map(agent.TurnStartEvent{})[0].Seq)
+			}
+			mu.Lock()
+			seqs = append(seqs, local...)
+			mu.Unlock()
+		}()
+
+		// The run-state caller, going straight to the frame builders.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			local := make([]int64, 0, 2*perRound)
+			for i := 0; i < perRound; i++ {
+				local = append(local, m.Approval(ApprovalProjection{RequestID: "r"}).Seq)
+				local = append(local, m.ApprovalResolved("r", "granted", "").Seq)
+			}
+			mu.Lock()
+			seqs = append(seqs, local...)
+			mu.Unlock()
+		}()
+
+		wg.Wait()
+
+		if len(seqs) != 3*perRound {
+			t.Fatalf("round %d: collected %d frames, want %d", round, len(seqs), 3*perRound)
+		}
+		seen := make(map[int64]bool, len(seqs))
+		for _, s := range seqs {
+			if s < 1 || s > int64(3*perRound) {
+				t.Fatalf("round %d: sequence %d is outside 1..%d; the counter was read and written without synchronisation",
+					round, s, 3*perRound)
+			}
+			if seen[s] {
+				t.Fatalf("round %d: sequence %d was handed out twice; the console orders by it, so a duplicate renders out of place", round, s)
+			}
+			seen[s] = true
+		}
+	}
 }

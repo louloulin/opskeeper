@@ -131,12 +131,11 @@ func (s *collectSink) ofType(t wire.StreamEventType) []wire.StreamEvent {
 func harness(t *testing.T, deps Deps) (*runState, *collectSink) {
 	t.Helper()
 	sink := &collectSink{}
-	k := &Kernel{opts: KernelOptions{Now: fixedClock()}}
 	return &runState{
 		mapper: NewMapper(MapperOptions{SessionID: "s-1", Now: fixedClock()}),
 		sink:   sink,
 		deps:   deps,
-		k:      k,
+		host:   runHost{now: fixedClock()},
 		req:    ports.AgentRequest{SessionID: "s-1"},
 	}, sink
 }

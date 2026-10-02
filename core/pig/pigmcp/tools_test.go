@@ -61,7 +61,7 @@ func (f *fakeCatalogue) called() []string {
 
 func oneTool() ports.MCPTool {
 	return ports.MCPTool{
-		Name:        "grafana__query_dashboard",
+		Name:        "mcp__grafana__query_dashboard",
 		Server:      "grafana",
 		Tool:        "query_dashboard",
 		Description: "Run a dashboard query.",
@@ -84,7 +84,7 @@ func TestTheCatalogueDecidesTheToolSet(t *testing.T) {
 		t.Fatalf("got %d tools, want 1", len(tools))
 	}
 	tool := tools[0]
-	if tool.Name() != "grafana__query_dashboard" {
+	if tool.Name() != "mcp__grafana__query_dashboard" {
 		t.Errorf("name = %q, want the composed name the catalogue published", tool.Name())
 	}
 	if tool.Schema().Description != "Run a dashboard query." {
@@ -125,7 +125,7 @@ func TestExecuteAddressesTheToolByItsComposedName(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("catalogue called %v, want exactly once", got)
 	}
-	if !strings.HasPrefix(got[0], "grafana__query_dashboard ") {
+	if !strings.HasPrefix(got[0], "mcp__grafana__query_dashboard ") {
 		t.Errorf("catalogue received %q, want the composed name", got[0])
 	}
 	if !strings.Contains(got[0], `"q":"p99"`) {
@@ -154,7 +154,7 @@ func TestAFailedCallIsAnErrorRatherThanAnApology(t *testing.T) {
 	// The name has to be in the message: the model is the one reading it,
 	// and "grafana is down" without the tool is ambiguous when the turn
 	// called three of them.
-	if !strings.Contains(err.Error(), "grafana__query_dashboard") {
+	if !strings.Contains(err.Error(), "mcp__grafana__query_dashboard") {
 		t.Errorf("error %q does not name the tool", err)
 	}
 }
@@ -190,7 +190,7 @@ func scriptedModel(t *testing.T) *ai.Model {
 	t.Helper()
 	return newFauxModel(t,
 		ai.FauxStaticStep(ai.FauxResponse{
-			Content:    []ai.FauxContentBlock{ai.FauxToolCall("grafana__query_dashboard", map[string]any{"q": "p99"}, "tc-1")},
+			Content:    []ai.FauxContentBlock{ai.FauxToolCall("mcp__grafana__query_dashboard", map[string]any{"q": "p99"}, "tc-1")},
 			StopReason: "toolUse",
 		}),
 		ai.FauxStaticStep(ai.FauxResponse{
@@ -271,7 +271,7 @@ func TestTheHostGateBlocksAnMCPToolCall(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	if blocked != "grafana__query_dashboard" {
+	if blocked != "mcp__grafana__query_dashboard" {
 		t.Errorf("the gate saw %q; an MCP tool that the gate cannot see is a second door", blocked)
 	}
 	if calls := cat.called(); len(calls) != 0 {

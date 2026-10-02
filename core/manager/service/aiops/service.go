@@ -73,6 +73,25 @@ const (
 	// end state of the 2.0 plan: same runtime, same SSE frames, no eino
 	// in the loop.
 	KernelPig Kernel = "pig"
+	// KernelPigSDK is KernelPig driving PiG's own coding.Session instead of
+	// a bare agent.Agent (decision 86).
+	//
+	// It is a separate value rather than a replacement for "pig" on purpose.
+	// The two drivers share their mapper, their policy gate, their prompt
+	// assembly and their tool adapters, and a differential golden holds them
+	// to the same console frames and the same transcript rows — but they are
+	// not the same process shape. The Session carries an extension runner
+	// and a session log, which means a PiG package can contribute tools and
+	// lifecycle hooks to a control-plane turn, and it means a session
+	// occupies a runtime until it closes. An operator who wants the
+	// capability should be able to turn it on and turn it back off without
+	// a rebuild, and a value that silently swapped underneath the old
+	// spelling would take that choice away.
+	//
+	// The spelling is "pig-sdk" rather than "session" because what a reader
+	// needs to know at the env var is that this is the embedded-SDK driver;
+	// "session" would read as a topic rather than a driver.
+	KernelPigSDK Kernel = "pig-sdk"
 )
 
 // ParseKernel normalises a string env value into a Kernel. Empty or
@@ -83,6 +102,8 @@ func ParseKernel(s string) Kernel {
 		return KernelGraph
 	case "pig":
 		return KernelPig
+	case "pig-sdk", "pig_sdk", "sdk":
+		return KernelPigSDK
 	default:
 		return KernelLegacy
 	}
@@ -93,7 +114,25 @@ func ParseKernel(s string) Kernel {
 // for-loop does not. Callers branch on this instead of enumerating the
 // values, so a fourth runtime-backed kernel does not need a second edit.
 func (k Kernel) UsesChatRuntime() bool {
-	return k == KernelGraph || k == KernelPig
+	return k == KernelGraph || k == KernelPig || k == KernelPigSDK
+}
+
+// UsesPiGSession reports whether the kernel drives a coding.Session.
+//
+// It is separate from UsesChatRuntime because the two answer different
+// questions. UsesChatRuntime says "the chat turns run through
+// chatruntime.Runtime instead of the legacy for-loop", which every PiG
+// kernel does. This one says "the loop underneath is PiG's Session", which
+// is what decides whether the process needs a *pigcoding.Runtime threaded
+// into the assembly and whether a PiG package's lifecycle hooks can reach
+// the turn at all.
+//
+// A caller that branched on UsesChatRuntime to decide the second question
+// would hand the Session driver a nil runtime and fail at the first turn
+// rather than at boot, which is the shape of bug this split exists to
+// prevent.
+func (k Kernel) UsesPiGSession() bool {
+	return k == KernelPigSDK
 }
 
 // Service bundles the agent + session repo. Handlers call into it with the

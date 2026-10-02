@@ -1474,6 +1474,375 @@ Go 会把它序列化成 `null`，而 JS 里 `null` 最自然的读法是「字�
 
 ---
 
+### 4.23 MCP 运行时一直都在，缺的是第三条路——以及一次真实的命名分叉（决策 85）
+
+上一轮结尾把两件事挂在那里：内核换不换（决策 84 已拆掉理由），以及 MCP 运行时。
+后者此前的记述是「**缺口**：PiG 的 `mcp` 只是声明，没有 JSON-RPC 客户端、没有
+握手、没有把 MCP server 接进 agent 工具集的桥」。这一轮去写它，第一步就撞上
+了事实错误。
+
+**一、它一直都在。查了五处，全是完整的。**
+
+| 位置 | 是什么 |
+|---|---|
+| `core/manager/pkg/mcpclient/client.go` | stdlib-only 的 MCP 客户端：`Initialize` / `ListTools` / `CallTool` / `TextContent` / SSE 解包 |
+| `core/manager/biz/mcp/usecase.go` | 注册 CRUD、凭据解析与 header 模板展开、连接探测、`ToolsCacheJSON` 回写 |
+| `core/manager/server/mcp/http.go` | `/v1/mcp/servers` 全套 admin 面（HLD-018） |
+| `core/manager/biz/aiops/tools/mcp_basetool.go` | 一个 MCP 工具 = 一个 `basetool.BaseTool`，`MCPToolClass` 按动词推断风险等级，trusted 与否决定同步还是入审批 |
+| `cmd/opskeeper/main.go:2878` | **启动期发现**：连每个 enabled server，`tools/list`，把每个工具挂进聊天工具袋 |
+
+连审批执行器都注册了（`main.go:2748`，`mcp_call`）。所以「65 个工具走
+extension toolset」不是 MCP 的替代方案，而是**并行的另一条路**。
+
+此前的记述错在一个推理跳步：它观察到「PiG 没有 MCP 运行时」，于是写成了
+「所以要从零写一个」。这两句之间隔着 OpsKeeper 自己那一套，而没人去核实它。
+本轮改正了三处正文（B2 注、路线图第 3 条、假设清单）。
+
+**二、那真正缺的是什么。**
+
+`basetool.BaseTool` 是 OpsKeeper 自己的形状。决策 84 定的方向是控制面内核换成
+`coding.Session`，而那之后工具必须是 `agent.AgentTool`。**这就是第三条路**：
+PiG 原生的 MCP 接入。所以本轮补的是它，不是「从零写 MCP 运行时」：
+
+```
+core/ports/mcp.go          MCPCatalogue 端口 + 命名规则（wire 契约，零依赖）
+   ↑ 实现                              ↑ 消费
+core/manager/biz/mcp/      Usecase.Tools / Call      core/pig/pigmcp/  → []agent.AgentTool
+（读探测缓存，不重连）                                 （不持端点、不持凭据）
+```
+
+端口必须落在 `core/ports` 是模块方向逼出来的：`core/pig` 是唯一能 import PiG
+的模块且**不能** import manager，两边要看见同一份契约只有这一种形状。
+
+**三、这一轮抓到的真 bug：同一个能力，两个名字。**
+
+我先按 `model.Server.Name` 的注释把命名写成了 `<server>__<tool>`。生产里的
+权威实现是 `tools.MCPToolName`，它产出 **`mcp__<server>__<tool>`，而且两边
+都做 sanitize**（小写、非字母数字一律变下划线）。
+
+那条注释是**过时的**（现已改）。它同时是错误认知的源头：注释说
+`github__create_issue`，代码说 `mcp__github__create_issue`，而读者只有打开
+`mcp_basetool.go` 才知道该信哪个。这就是本文件里唯一一个**我自己踩中**的坑，
+也是为什么它值得写下来而不是直接改掉：
+
+- 目录给出的名字是**模型会调的名字**，执行方接受的名字是**会跑的名字**。
+- 两者不一致时，同一个 Grafana 查询在模型手里是两个名字，其中一个谁也不执行，
+  而且**没有任何诊断会提到这件事**。
+- 修法不是把两处改一致，是把规则**收进 `core/ports.ComposeMCPToolName`**，
+  让 `tools.MCPToolName` 改为转调。规则只有一份，两边不可能再分叉。
+
+**四、sanitize 不是免费的，它带来两个必须处理的后果。**
+
+| 后果 | 处理 |
+|---|---|
+| `"My-Server"` → `my_server`，服务器收到 `my_server` 会答「没有这个工具」 | `Call` 经**探测缓存**把工具名还原成服务器自己的拼写再发出去 |
+| `"My-Server"` 与 `"my_server"` 是两个不同字符串，DB 唯一索引都收，却都 compose 成 `mcp__my_server__*` | 目录侧**碰撞检测**并拒绝，报错点名两个服务器 |
+
+第一版我把碰撞检测当成死代码删掉了（当时认为服务器名校验已经排除了它）。
+加上 sanitize 之后它重新变成可达——**同一个判断在两个不同的规则下得到了相反
+的结论**，这正是规则必须收在一处的又一个理由。
+
+**五、闸门没有被绕开，而且是被测出来的。**
+
+`core/pig/pigmcp` 里**没有端点、没有 header、没有 token、没有连接池**，只有一个
+`ports.MCPCatalogue` 引用。工具进的是 session 的普通工具袋，因此
+`BeforeToolCall` 照常对它生效。这条不写在注释里就算数：
+
+- `TestAnUngatedMCPToolCallReachesTheCatalogueAndTheTranscript`——真实
+  `agent.Agent` 循环 + 脚本化假模型，无闸门，目录被调到一次，答案进对话。
+- `TestTheHostGateBlocksAnMCPToolCall`——同一个循环加 `BeforeToolCall`，断言
+  闸门看见了 `mcp__grafana__query_dashboard`，且**目录一次都没被调到**。
+
+一条会绕过闸门的桥会保住本仓库其余所有保证，同时还是一个洞，所以这条必须有测试。
+
+**六、这一轮没有做的。**
+
+`pigmcp` 已就位但**尚未接进任何装配点**。`main.go:2878` 的启动期发现仍然直接
+产 `basetool.BaseTool`，聊天工具袋里现在只有那一条路。要让 MCP 同时出现在
+PiG 原生的 session 工具袋里，需要在决策 84 的内核切换里一起接——在那之前
+这两条路服务于两个不同的内核，接上去只会产出两份同能力工具。**这也是本轮
+只补桥不接线的原因**：桥是内核切换的前置，不是它的替代。
+
+**验证**：`go build ./...` 通过；`gofmt` 干净；`core/ports`、`core/manager/biz/mcp`、
+`core/manager/biz/aiops/...`、`core/pig/...` 共 25 个包全绿；`go test -race`
+三包无竞态；`modulecheck` 边界成立；**19 条变异全部被抓**（含 3 条专门打命名
+分叉：丢前缀、sanitize 不小写、执行方绕开共享规则）。
+
+其中两条值得单列，因为它们**先漏了、补测试后才抓到**：契约测试只证明两边
+**一致**，证明不了**一致的拼写没变过**——两边转调同一个函数后，删掉 `mcp__`
+前缀它照样通过。补的是 `core/ports` 里的**字面量钉死测试**：这个字符串是对
+模型、对控制台、对存量 transcript 的 wire 契约，改它会让运行中的部署上每一个
+MCP 工具名一起变。
+
+### 4.24 两个内核并存：SDK 驱动落地，以及三处「以为知道、其实不知道」（决策 86）
+
+§4.22 推翻了决策 75 的结论、定了方向，本节把内核真正换掉，并把换的过程中
+撞见的三个事实记下来——它们的共同点是：**每一条在写代码前都显得已经清楚了**。
+
+#### 4.24.1 为什么是两个内核，不是一个
+
+新增 `pigagent.SessionKernel`（`core/pig/pigagent/session_kernel.go`），驱动
+`coding.Session`；`pigagent.Kernel` 保留，驱动 `agent.Agent`。两者实现同一个
+`Agent` 端口，共用 `Mapper`、`runState`、`buildPrompt`、`NewAdapters`。
+
+保留 `Kernel` 的理由不是保守，是它有 SDK 覆盖不到的位置：单元测试、不能持有
+扩展进程的后台 worker、根本不需要 turn 的报表查询。`SessionKernel` 的存在
+理由也不是「更完整」，而是**一个 PiG package 里的插件认得 `coding.Session`**：
+扩展 runner、session log、`turn_end` 边界、steering 队列、abort signal 都在
+那儿，对着 `agent.Agent` 写的东西一样也拿不到。
+
+不变量因此变成可测的：**两个驱动对同一脚本必须产出逐帧相同的控制台帧、相同的
+账本行、相同的 transcript 行。**
+
+#### 4.24.2 共享的与不共享的
+
+共享：帧词汇（`Mapper`）、整套策略闸门（`runState`：审批 / 预算 / 审计 /
+recorder / 用量折叠）、prompt 组装、工具适配器。这些都不知道底下跑的是哪个
+循环，复制其中任何一个都等于给控制台的 wire 契约再写一份第二实现。
+
+为此把 `runState.k *Kernel` 拆成 `runHost{persist, now}`——`runState` 只用到
+这两个值，让它与循环选择彻底解耦。
+
+**不共享**：`FinishTurn`。`agent.Agent` 直接接受这个钩子，`coding.Session` 没有
+这个面板，因为 `Session.installAgentBoundaryHooks` 自己装了一个并会包裹
+`previous`；覆写会连带删掉每个 PiG package 生命周期都依赖的扩展 `turn_end`
+边界。`agent` 包里也没有 `AddFinishTurnHook`——只有 `AddBeforeToolCallHook` 与
+`AddAfterToolCallHook` 是追加语义。所以轮次上限落在 `BeforeToolCall` 上，走
+`pigcoding.TurnBudget`。**这条是本轮唯一被允许的帧差异**，见 4.24.4。
+
+`SessionStartOptions` 也没有 `AfterToolCall` 面板，只有 `BeforeToolCall`。审计
+写进 `BeforeToolCall` 会把随后被拒的调用也记成已执行，包装进工具又会把宿主
+职责塞进控制台正在渲染的那个工具里。因此新增 `pigcoding.Session` 三个面板：
+
+| 面板 | 底层 | 为什么必须暴露 |
+|---|---|---|
+| `Run(ctx, opening)` | `RunAgentPrompt` | 宿主要自己组装对话（历史窗口、脱敏、丢弃过期工具批次） |
+| `Acknowledge(ev)` | `coding.AcknowledgeEvent` | 不应答内部 barrier 的话每轮都会**死锁** |
+| `AddAfterToolCallHook(h)` | `Session.Agent().AddAfterToolCallHook` | SDK 面板缺失，且只能追加不能替换 |
+
+#### 4.24.3 三处「以为知道、其实不知道」
+
+**其一：`start` 回调不是钩子，是那次运行本身。**
+`RunAgentPrompt(ctx, start)` 的 `start` 必须执行底层运行（PiG 自己是
+`agent.BeginSendMessages(ctx, msgs).Run()`）。我第一版让它只
+`return buildPrompt(req), nil`，编译通过、测试通过、`Run` 返回 nil error——
+**一帧都没出**。回合静默结算为空。`pigcoding.Session.Run` 因此收成消息切片
+而不是透传回调：`Session.Agent()` 是这个包存在的意义，不该让调用方去碰。
+
+**其二：Session 会把系统提示回灌成一条 transcript 消息。**
+`SystemPrompt` 在 SDK 路径上落成一条 system entry，循环照例为它开/关一次
+生命周期，于是多出一帧空 `assistant_end` 和一行 `system` transcript。
+`Mapper` 之前把**每一条** `MessageEndEvent` 都渲染成 assistant 气泡——bare
+`agent.Agent` 从不产生 system 消息，所以这条路径一直是死的。修在
+`Mapper`：system 消息不出帧；consumer 侧同样不落库。**两处都要改**：只过滤
+帧会留下一行控制台渲染不出来的记录，只过滤行会留下一个背后无内容的气泡。
+
+**其三：审批卡相对 agent 帧的位置不是契约。**
+`beforeToolCall` 跑在工具自己的 goroutine 上，直接写 sink（它要同步地问人一个
+决定，没法排队）；agent 产生的帧走另一条路——bare loop 是内联 `OnEvent`，SDK
+driver 多一跳转发 goroutine。两条路之间**没有顺序**。
+
+我一度断言了这个顺序并写成了测试：单独跑反复通过，**把本包其他测试一起编进来
+之后每次都失败**。pass three 原本按到达顺序比较每个调用的帧，同样六次里挂一次。
+两处都改成比较集合。这条写在这里，是因为「作者机器上绿的 golden」正是 golden
+最该防的事故。
+
+#### 4.24.4 唯一被允许的帧差异：轮次上限
+
+| | 机制 | 终态 |
+|---|---|---|
+| `Kernel` | `agent.AgentOptions.MaxTurns` | `ErrMaxTurnsReached` → `failTurn` → 失败回合 |
+| `SessionKernel` | `pigcoding.TurnBudget`（`BeforeToolCall`） | 模型被拒后**用已有证据作答**，回合正常结束，`Stopped = max_iterations` |
+
+`SessionKernel` 在结算时读 `sess.Budget().Spent()` 并回填
+`TurnMaxIterations`，因为 `chatruntime/kernelpath.go:181` 正是按这个值决定要不要
+道歉——把「跑太久」报成 `end_turn`，等于让操作员把一次被截断的排查读成完整结论。
+两边对控制台是同一件事，只是 SDK 这条更好。
+
+#### 4.24.5 顺带修掉一个真实数据竞争
+
+`Mapper.Approval()` / `Error()` / `Notification()` 从工具 goroutine 调用时
+**没有持锁**，而 `Map()` 持锁——两者写同一个 `m.seq++`。表现是两张卡拿到同一个
+序号，控制台按序号排序，于是卡片渲染在工具之前或不渲染，**没有任何报错**。
+`go test -race` 在 Session driver 跑带审批的工具调用时抓到。
+
+修法是拆出 `frameLocked`，`Map()` 用它、外部调用者用会加锁的 `frame`。回归
+测试 `TestFramesFromTheRunStateAndTheMapperDoNotCollide` 刻意写成**不依赖
+-race 也能失败**：200 轮 × 3×64 帧的并发争用，要求序号是 `1..n` 的一个排列。
+去掉锁后它在第 39 轮命中。
+
+#### 4.24.6 接线：驱动成为部署选项
+
+`SessionKernel` 已接进装配点，驱动由 `OPSKEEPER_AGENT_KERNEL` 选择：
+
+| 值 | 驱动 | 运行时 |
+|---|---|---|
+| `pig` | `pigagent.Kernel`（`agent.Agent`） | 不需要 |
+| `pig-sdk`（别名 `pig_sdk` / `sdk`） | `pigagent.SessionKernel`（`coding.Session`） | 需要进程级 `*pigcoding.Runtime` |
+
+**为什么新增一个值而不是改掉 `pig`。** 两个驱动共享 mapper、策略闸门、
+prompt 组装与工具适配器，差分 golden 也把它们按住了——但它们不是同一个进程
+形状。Session 带着扩展 runner 与 session log，意味着一个 PiG package 可以给
+控制面回合贡献工具与生命周期钩子，也意味着一回合会占住一个 runtime 直到关闭。
+操作员应当能开、也能关，而一个在旧拼写下静默换掉行为的值会把这个选择拿走。
+
+`newAgentKernel` 现在返回 `pigagent.Agent` 接口。**宿主绑定（工具袋解析、
+账本、闸门、预算、persister）对两个驱动完全相同**——决定「一个回合是不是
+OpsKeeper 的回合」的一切都发生在循环之外，而驱动只换底下的那一层。
+
+两个判定谓词刻意分开：
+
+- `UsesChatRuntime()`：回合是否走 chatruntime 而不是 legacy for-loop——两个
+  PiG 驱动都是。
+- `UsesPiGSession()`：底下的循环是不是 `coding.Session`——只有它需要 runtime。
+
+用前者回答后者的问题，会给 Session 驱动一个 nil runtime。
+
+**piG runtime 是穿线进去的，不是这里新建的。** 两个 runtime 就是两个扩展
+runner，插件装进 A 却由 B 驱动的回合执行，看起来和「插件加载了但什么也没做」
+一模一样。
+
+#### 4.24.7 `pigmcp` 去哪：控制面**不**接
+
+决策 85 留下的桥**没有**接进控制面，这是结论而不是搁置。
+
+控制面的 MCP 已经通过 `aiopstools.MCPTool`（`basetool.BaseTool`）挂在
+chatruntime 的工具袋上，换成 Session 驱动后它经 `NewAdapters` 原样进
+`pigcoding.Start.Tools`——**分类、闸门、审计、审批全部照旧**。再把 `pigmcp`
+接进同一个 session，同一份能力会有两个名字、两条执行路径，而其中一条没有
+宿主记账。这正是决策 85 自己标注的「产出两份同能力工具」。
+
+`pigmcp` 的位置是**节点侧**：那里跑的是 `pig --mode rpc`，插件是 PiG package，
+MCP 由 PiG 自己配置、不在 OpsKeeper 的库里。它的桥形状（只持有 catalogue，
+不持有端点/凭据/连接池）对那个场景是对的，对控制面是多余的。
+
+因为没有任何单测能跨这条边界（`core/pig` 不能 import manager，根模块不能
+import PiG），这个结论拆成两侧各自钉死：
+
+| 位置 | 断言 |
+|---|---|
+| `core/pig/pigagent` | `TestAnMCPToolIsClassifiedAndGatedLikeAnyOther`：`mcp__grafana__query_dashboard`（read）**不弹审批卡**并执行；`mcp__k8s__delete_pod`（destructive）在无闸门时**被拒且不执行** |
+| `core/manager/biz/aiops/tools` | `TestAnMCPToolAnnouncesTheComposedNameAndAnInferredClass`：wire 名是 `mcp__<server>__<tool>`、类由动词推断、未知动词 → destructive、空 schema 仍是 JSON object |
+
+两个方向都要断言。往宽松错了 = 代理执行了未审批的 MCP 变更；往严格错了 =
+每次看仪表盘都弹卡，操作员会学会无脑点通过——**和没有审批是一样的结果**。
+
+read 那一侧断言的是「**没有**卡」而不是「有结果」：只看结果的测试分不清
+「自由执行」和「被一个恰好总是同意的闸门放行」。
+
+#### 4.24.8 验证与已知缺口
+
+**验证**：`go build ./...` 通过；8 个模块 `go test -count=1` 全绿；
+`modulecheck` 边界成立（`.go-arch-lint.yml` 显式授权 `oxpig_agent →
+oxpig_coding`，单向，反向由模块图禁止）；`go test -race` 全 `core/pig` 加
+`chatruntime` 无竞态。
+
+**变异验证，分四组**：
+
+| 组 | 变异 | 结果 |
+|---|---|---|
+| SDK 驱动 | mapper 的 system 过滤、consumer 的 system 落库、策略闸门钩子、预算 stop reason、审计钩子体、tool-result 落库、barrier 应答、序号锁 | 8/8 抓 |
+| 接线 | `pig-sdk` 解析成裸循环、驱动分支被摘掉、nil runtime 被容忍、`UsesPiGSession` 扩大 | 4/4 抓 |
+| MCP 契约 | 未知动词变 read、wire 名丢前缀 | 2/2 抓 |
+| 帧序号 | 序号计数器不再前进 | 抓 |
+| **SDK 语义契约** | 见 §4.24.11 | **9/9 抓** |
+
+#### 4.24.9 差分 golden 的盲区，以及它被证伪的次数
+
+**差分比较只看「分歧」**。两个驱动**共有**的回归对它按构造是不可见的——而这不是
+理论担忧，是实测的：把 mapper 里的 `tool_start` 帧删掉（**一行**，在两个驱动
+共用的代码里），本文件的差分闸门**全绿**，`TestStreamGoldenMatchesTheConsoleContract`
+转红。控制台会丢掉它渲染的每一个工具调用，而差分闸门报「完美一致」，因为两个
+驱动确实一致。
+
+所以 `stream-golden` 的绝对 golden 与本文件的差分 golden **互不可替**：
+绝对的那个钉住「帧是什么」，但它无法告诉你「第二个驱动产出同样的帧」；
+差分的那个覆盖前者看不见的一半。**成对才构成闸门。**
+
+同一批变异还证伪了我自己两次断言，值得逐条记下：
+
+1. **审批卡的位置。** 我断言了它并写成测试，单独跑反复通过，**把本包其他测试
+   编进来后每次失败**。已改为比较集合。
+2. **nil runtime 检查的理由。** 我写的是「否则会静默结算空回合」，变异把检查
+   摘掉后测试仍通过——因为 `NewSessionKernel` 本来就在构造时拒绝。**注释里的
+   理由比代码更自信。** 检查保留的理由改成它真正提供的价值（错误信息点名驱动），
+   测试随之改为断言信息。
+
+还有两次是我自己的锚点没落在测试真正读取的位置：`afterToolCall` 的变异两次都
+是**编译错误**而不是行为失败（第一次把 `json` 引用删没了），而序号测试第一版
+断言「连续 1..n」，实际帧流是 `coalesceDeltas` 合并过的——**断言的是一个不
+存在的要求**。
+
+#### 4.24.10 自我更正与已知缺口
+
+**关于 C 阶段**：写下这一节时我一度以为 C 阶段尚未实现，准备把「PigSupervisor
+与 NodeFleet 还没接」记成 B 阶段的剩余项。核对装配点时发现是错的——
+`nodefleet.New` 在 `cmd/opskeeper/main.go:1250`，`pigsupervisor.New` 在
+`cmd/opskeeper-edge/agent.go:215`，两条都已接线；`nodefleet/e2e/` 的三个剧本
+也接在真 Fleet + 真 policygate + 真 pigwire 上跑。**C 阶段是 95%，不是 0。**
+记在这里而不是悄悄改掉，因为「核对之前先写下结论」正是这类文档里最贵的错误
+类型——它不会以编译错误的形式出现。
+
+**一条变异存活**：`afterToolCall` 里的 `isBlocked` 分支删掉后观测结果不变
+——blocked 行由 `onEvent` 那条路径写入。这是既有冗余，不在本轮范围内，但事件
+审查时值得知道审计行有两个来源。
+
+**已知的既有偶发失败**（与本轮无关，未能复现）：全量扫描中 `core/edge` 出现过
+一次、`core/manager/data/chatdiagnose/store` 的两个 SQLite 用例出现过一次
+失败；两者所在模块本轮未改动，随后各 20+ 次串行与并发重跑（含刻意加载）均未
+复现。记在这里而不是当作「全绿」——偶发的红和稳定的红在闸门里不是同一件事。
+
+**B 阶段剩余**：无。`coding` 的形状由 `pigcontract/contract.go` 钉住，类型系统
+表达不了的语义由 `pigcontract/session_contract_test.go` 钉住（§4.24.11），两者
+合起来覆盖了控制面实际用到的 API 面。往后只剩**跟随上游新增能力增量补钉**，不是
+缺口。
+
+---
+
+#### 4.24.11 SDK 语义契约：形状钉不住的四种假设
+
+`contract.go` 钉的是形状——名字还在不在、字段还在不在。它钉不住的是**名字没变
+但含义变了**的漂移，而那恰恰是能安静地走进生产的漂移：一次空帧、一个永不触发
+的策略钩子、一次被当成内部标记丢掉的真实帧。
+
+于是有了 `core/pig/pigcontract/session_contract_test.go`。它不是复述
+`pigcoding` 的行为，而是**在真的 `coding.Session` 上、拿 PiG 的 faux provider 驱动
+真实的 turn**，断言四条我们真正依赖的假设：
+
+| # | 假设 | 断言的是什么 | 假设错了会怎样 |
+|---|---|---|---|
+| 1 | `AddBeforeToolCallHook` **追加**，`SetFinishTurn` **替换** | 两次追加后按序跑成 `[first, second]`；两次设置后 getter 是第二个且第一个不再运行 | 轮次上限若走 finish-turn，会在某条构造路径上被静默关掉——turn 无闸门 |
+| 2 | `AcknowledgeEvent` **只**应答 barrier，且 barrier **只在有人调 `FlushEvents` 时才存在** | 无 `FlushEvents` 的 turn 里 claimed == 0；调了则**先阻塞后释放** | 消费端漏应答 = 每次 turn 挂死；反过来若上游开始无条件发 marker，控制台每一帧都被当标记丢掉 |
+| 3 | `NoSession` **只**丢文件 | `ID() != ""` 且 `Path() == ""` 且有内存消息 | 连 id 一起丢 → 一次会话散成互不相干的行 |
+| 4 | `SkipBuiltinTools` **只**删 PiG 自带工具 | 跳过后的工具集是未跳过集的子集，且**不含** `bash/read/write/edit` 字面量；调用方自己的工具仍在 | 修法写成「清空整个注册表」也能过第 4 条的前半句——所以后半句断言调用方工具存活 |
+
+**变异方式是真改上游**：把 `v0.3.0` 从 module cache 复制到 `/tmp`，在 `go.work`
+里临时 `replace` 过去，逐条把 PiG 改坏，看测试是否转红。共 9 条：
+
+| 变异 | 抓它的测试 |
+|---|---|
+| `AddBeforeToolCallHook` 改成替换 | 假设 1 |
+| `SetFinishTurn` 只保留第一个 | 假设 1（getter 半） |
+| `SetFinishTurn` 改成链式叠加（getter 仍报最后一个） | 假设 1（行为半） |
+| `AcknowledgeEvent` 对所有事件返回 true | 假设 2 |
+| `FlushEvents` 不等待直接返回 | 假设 2 |
+| `NoSession` 连 id 一起清空 | 假设 3 |
+| `SkipBuiltinTools` 变成空操作 | 假设 4 |
+| `SkipBuiltinTools` 连调用方工具一起清 | 假设 4（后半句） |
+
+9/9 全抓。**第 3 条变异是刻意设计的**：链式叠加时 getter 依然返回最后安装的那个，
+只靠 getter 的测试会全绿——所以那个测试必须**两半都断言**，而这正是
+§4.24.9 说的「两个闸门互不可替」在单个测试内部的同一个道理。
+
+**关于 fixture 的一个坑**（第一版全部超时，值得记）：`Session.Events()`
+的 channel **只在 Session 关闭时关闭**，不在 turn 结束时关闭。等 channel 关闭来
+判定「这一轮的事件我全看过了」会永远等下去。正确的边界是 `agent.TurnEndEvent`。
+现在 `eventTap` 把这个形状写死了：常驻 goroutine 消费到 Session 结束，用
+`TurnEndEvent` 作为 settle 信号——**和 `SessionKernel` 的真实消费循环同构**。
+
+
+---
+
 ---
 
 ## 五、插件契约：为什么「插件即 PiG Package」
@@ -1527,8 +1896,8 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 | 阶段 | 权重 | 完成度 | 判据与剩余 |
 |---|---|---|---|
 | A 模块化地基 | 20% | **100%** | 13 个模块落地、`internal/` 清空、`modulecheck` + `go-arch-lint` 两个闸门可执行且非空转、共享底座的两条反向边已清并由 `floorIsolation` 钉住（决策 66）、**两个闸门之间的最后一处不对称已消除：`.go-arch-lint.yml` 有了读者，104 条无人行使的授权已删，逆向边按文件记名**（决策 74）。A 阶段无剩余项 |
-| B PiG 适配层 | 20% | **90%** | `pigmodel` / `pigagent` / `pigrpc` / `pigwire` 四件套齐、eino 与 go-openai 清零、内核接缝（决策 32/33）打开、契约套件 `core/pig/pigcontract` 落地（决策 64）、**PiG 已换成固定 tag 并在发布条件下被验证**（决策 65）、**AI 层已原生化：第二套模型词汇全部删除，宿主直接用 PiG 的 `ai` 类型**（决策 67，见 §4.5）。**决策 84 把这个 100% 重新打开：控制面的 turn 仍跑在 `pigagent.Kernel`（自研装配 + `ports` 平行形状）而不是文档里的 `coding.Session`，「彻底改成 pig 风格」这一条尚未完成**。决策 75 当年判「维持 Kernel」的两条理由已在 §4.22 被逐条推翻，方向已定、内核未换，剩三步（拆 Mapper/ports 形状、行 id 改由 `TurnEndEvent` 分配并重验 SSE golden、四处装配重接）。另：契约要跟着上游新增能力补 |
-| C 节点 Agent | 20% | **95%** | `pig --mode rpc` 运维 profile + supervisor + `policygate` + 7 个 `agent.*` 隧道方法 + `NodeFleet` + 只读 piglet，三个剧本在新拓扑下通过；连接规模三项（连接池上限 / 心跳重连 / 风暴抑制）已全部落地（决策 78/79）。剩下：**只有 MCP 运行时**，而它是产品问题不是欠账——65 个工具已走 extension toolset 端到端跑通，PiG 的 `mcp` 至今只是声明 |
+| B PiG 适配层 | 20% | **90%** | `pigmodel` / `pigagent` / `pigrpc` / `pigwire` 四件套齐、eino 与 go-openai 清零、内核接缝（决策 32/33）打开、契约套件 `core/pig/pigcontract` 落地（决策 64）、**PiG 已换成固定 tag 并在发布条件下被验证**（决策 65）、**AI 层已原生化：第二套模型词汇全部删除，宿主直接用 PiG 的 `ai` 类型**（决策 67，见 §4.5）。**决策 84 把这个 100% 重新打开：控制面的 turn 仍跑在 `pigagent.Kernel`（自研装配 + `ports` 平行形状）而不是文档里的 `coding.Session`，「彻底改成 pig 风格」这一条尚未完成**。决策 75 当年判「维持 Kernel」的两条理由已在 §4.22 被逐条推翻，方向已定、内核未换，剩三步（拆 Mapper/ports 形状、行 id 改由 `TurnEndEvent` 分配并重验 SSE golden、四处装配重接）。**决策 86 落地了 SDK 驱动**：`pigagent.SessionKernel` 跑 `coding.Session`，与 `Kernel` 并存、共用 `Mapper`/`runState`/`buildPrompt`/`NewAdapters`，逐帧 golden + 逐行 transcript 的差分闸门已绿（见 §4.24）。**决策 86 已完成接线**：驱动由 `OPSKEEPER_AGENT_KERNEL` 选，`pig` 走裸循环、`pig-sdk` 走 `coding.Session`，`newAgentKernel` 返回 `Agent` 接口且宿主绑定对两者相同（§4.24.6）。`pigmcp` **判定不接控制面**（控制面的 MCP 已经过 `basetool` 路径到达 Session driver，再接会产出两份同能力工具），其位置是节点侧 `pig --mode rpc`（§4.24.7）。顺带修掉一个真实数据竞争（`Mapper` 序号计数器在工具 goroutine 上无锁）。**B 阶段剩余**：契约套件要跟着 PiG 上游新增能力补 |
+| C 节点 Agent | 20% | **95%** | `pig --mode rpc` 运维 profile + supervisor + `policygate` + 7 个 `agent.*` 隧道方法 + `NodeFleet` + 只读 piglet，三个剧本在新拓扑下通过；连接规模三项（连接池上限 / 心跳重连 / 风暴抑制）已全部落地（决策 78/79）。**决策 85 更正了此处的「剩下」**：MCP 运行时**一直都在**（`mcpclient` + `biz/mcp` + `tools.MCPTool` + 启动期发现），此前把「PiG 没有」误记成「我们没有」。本轮补的第三条路 `core/pig/pigmcp`（PiG 原生工具形状）**已就位，且已判定不接控制面**：控制面的 MCP 已经过 `basetool` 路径到达 Session driver，再接会产出两份同能力工具；它的位置是节点侧 `pig --mode rpc`（§4.24.7）。详见 §4.23 |
 | D 插件生态 | 25% | **95%** | B1/B2/B3 全部闭环（18 + 12 + 53 + 5 个工具）、审核流水线（签名 → 清单 → 准入 → 灰度 → 回滚）、运输通道 6 条路由、`sdk` 三个发布物、**能力声明已从「家族」升级到「逐方法」，四个包的「声明 == 实际」全部有守卫**（决策 69）。剩下：容器格式导入器的覆盖面、更多插件迁移 |
 | E 生态治理 | 15% | **95%** | 兼容矩阵（edge 轴 × PiG 轴）、金融 / SaaS 两个 profile 模板、profile × 实际目录的组合校验（决策 70）、**发布前兼容矩阵 API，管理侧预检与节点裁决共用 `CheckVersions`**（决策 71）、插件 × golden case 覆盖报告、发布全链路（Start/List/Status/Advance/Halt/Rollback）。**兼容矩阵 agent 轴不再是「无法判断」：节点随心跳自报 PiG 构建，控制面一次查询读取（决策 73）**。剩下：插件市场前端页面、兼容矩阵前端页面、发布流程的定时/触发自动化 |
 
@@ -3349,16 +3718,20 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
   是另一回事。按名字判定的那条轴是
   `loopActionExecutability`（只认精确符号，当前 0 缺口）。把包的能力声明从
   "家族"升级到"逐方法"是 `sdk` 的后续能力，见决策 59 末段。
-- **B2 原本计划走 MCP，PiG 不支持，已改为 extension toolset**：PiG 的 `mcp`
-  包类型**只是声明**——PiG 全仓中所有 MCP 引用都在
+- **B2 的 MCP 载体，本仓库早就自己写了一套**（决策 85 更正了此前的记述）：
+  PiG 的 `mcp` 包类型确实**只是声明**——全仓 MCP 引用都在
   `coding/packagecontent/packagecontent.go` 与 `cmd/pig/package_*.go`
-  （解析/校验/清单），**没有** JSON-RPC 客户端、**没有** `initialize` /
-  `tools/list` 握手、**没有**把声明的 MCP server 接进 agent 工具集的桥。
-  所以「可观测栈 → MCP server」在当前 PiG 上需要一个从零写的 MCP 运行时，
-  而 upcall 通道已经端到端跑通 65 个工具（12 可观测 + 53 中间件）且带鉴权、
-  审计、白名单与回归（`runMiddlewareTool` 的读写分界见决策 59）。
-  这是基于「PiG 是什么」的事实修正，不是对计划意图的重新解释；
-  补一个 MCP 客户端是后续独立决策，不是本包依赖的假设。
+  （解析/校验/清单），没有 JSON-RPC 客户端、没有握手、没有桥。**但这句话
+  只关于 PiG。** OpsKeeper 侧一直有一套完整的 MCP 运行时：
+  `core/manager/pkg/mcpclient`（stdlib-only 的 `initialize` / `tools/list` /
+  `tools/call` + SSE 解包）、`biz/mcp`（注册 CRUD + 凭据解析 + 探测 +
+  `ToolsCacheJSON` 回写）、`tools.MCPTool`（一个 MCP 工具 = 一个
+  `basetool.BaseTool`，带 `MCPToolClass` 风险分级与审批入队）、以及
+  `cmd/opskeeper/main.go:2878` 的启动期发现（连每个 enabled server，把工具
+  挂进聊天工具袋）。
+  此前把「PiG 没有」直接写成「我们没有」，是这一条被记成缺口的唯一原因——
+  而 upcall 通道那 65 个工具（12 可观测 + 53 中间件）是**并行的另一条**路，
+  不是替代品。两条都在，见 §4.23。
 - **可观测覆盖的真实边界**：`opskeeper-sre-observability` 的 12 个 upcall 工具
   **不含** K8s 对象与消息队列——它读的是控制面已采集的指标 / 日志 / trace /
   代码仓库 / 审计历史，K8s 只在指标层面出现。控制面 registry 里现在**有**
@@ -3601,10 +3974,12 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
    给了 `TestTheLayerInversionLedgerIsCurrent`，清单是活的。真正缺的是**对称性**：
    读者问「每条授权有没有人在用」，没人问「每条实际依赖有没有被授权」。详见
    §4.15。
-3. **MCP 运行时**（D 阶段的可选加速器）。PiG 的 `mcp` 只是声明，没有
-   JSON-RPC 客户端、没有握手、没有把 MCP server 接进 agent 工具集的桥。
-   当前 65 个工具走 extension toolset 已端到端跑通（带鉴权、审计、白名单、
-   回归），所以要不要补 MCP 是"接不接第三方 MCP 生态"的产品问题，不是债。
+3. ~~**MCP 运行时**~~ **此前记为缺口，决策 85 更正：它一直存在。**
+   `mcpclient` + `biz/mcp` + `tools.MCPTool` + 启动期发现是完整的一整套，
+   65 个工具的 extension toolset 是**并行的另一条**路而非替代品。真正缺的
+   是**第三条路**：PiG 原生的那条（`core/pig/pigmcp`，本轮新增），因为
+   `basetool.BaseTool` 形状在控制面内核换成 `coding.Session` 之后接不上。
+   详见 §4.23。
 4. **插件市场与节点页面的前端**（E 阶段唯一纯前端工作）——**一半完成**。
    - ✅ **节点 Agent 页**（决策 81）：`web/src/api/nodeAgents.ts` +
      `pages/NodeAgents.tsx` + 路由 `/node-agents` + 侧边栏入口，9 个用例，
@@ -4024,9 +4399,10 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
 
 - PiG 继续跟踪 Pi 0.87.1；插件契约以 Pi 为准，PiG 特有能力（fused/cellpack）
   只用于官方插件。
-- **PiG 的 `mcp` 包类型当前只是声明，不是运行时**。这是本计划中唯一一处
-  载体被事实修正的地方（可观测栈原计划走 MCP server）。若后续决定自建
-  MCP 客户端，它是一个独立的新决策，不应被当作已有能力来规划。
+- **PiG 的 `mcp` 包类型当前只是声明，不是运行时**；OpsKeeper 侧的 MCP 运行时
+  是自建的（`mcpclient` + `biz/mcp` + `tools.MCPTool`，决策 85）。命名规则由
+  `core/ports.ComposeMCPToolName` 单点定义并被 `core/pig/pigmcp` 共用，
+  两侧名字不一致过一次，那是本文件里唯一一个已被测试钉死的教训。
 - RAG、遥测采集、审计链不插件化，长期保留在宿主。
 - Web 控制台不重写。已加「插件发布」页（`/admin/plugins`）；
   「插件市场」页沿用已有 `/skills?tab=install`（`settings/Marketplace.tsx`）

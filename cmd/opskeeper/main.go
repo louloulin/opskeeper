@@ -1682,10 +1682,11 @@ func main() {
 
 	if kernel.UsesChatRuntime() {
 		rt, rterr := buildAIOpsRuntime(rootCtx, cfg, llmClient, toolsReg, aiopsRepo, fbClient, edgeUC, deviceUC, reg, log, bootstrapSkillReg, bootstrapAgentReg, llmSettingsResolver, kernelWiring{
-			Kernel: kernel,
-			Models: modelRegistry,
-			Gate:   kernelGate,
-			Audit:  auditUC,
+			Kernel:     kernel,
+			Models:     modelRegistry,
+			Gate:       kernelGate,
+			Audit:      auditUC,
+			PiGRuntime: pigRuntime,
 		})
 		if rterr != nil {
 			log.Warn("aiops runtime build failed — falling back to legacy kernel", slog.Any("err", rterr))
@@ -4047,6 +4048,14 @@ type kernelWiring struct {
 	// Audit receives the gate's decisions. The same ledger the rest of the
 	// control plane writes to.
 	Audit *managerbizaudit.Usecase
+	// PiGRuntime is the process-wide PiG container, required only by the
+	// SDK driver (KernelPigSDK). It is threaded rather than constructed
+	// here so that the runtime the sessions come from is provably the same
+	// one the model catalogue was published into and the same one an
+	// operator's plugins were loaded through. A second container would be
+	// a second extension runner, and a plugin that loaded into it would be
+	// invisible to a turn driven by the first.
+	PiGRuntime *pigcoding.Runtime
 }
 
 // buildAIOpsRuntime builds the chatruntime.Runtime when
@@ -4281,6 +4290,8 @@ func buildAIOpsRuntime(
 			Audit:      wiring.Audit,
 			Budget:     kernelBudget,
 			Model:      cfg.OpenAI.Model,
+			Driver:     wiring.Kernel,
+			PiGRuntime: wiring.PiGRuntime,
 			Logger:     log.With(slog.String("comp", "agentkernel")),
 			Registerer: reg,
 			// Same ceiling the graph path uses; a persona may lower it.
@@ -4299,6 +4310,7 @@ func buildAIOpsRuntime(
 		agentKernel = k
 		log.Info("aiops: agent kernel=pig (PiG loop)",
 			slog.String("selected", string(wiring.Kernel)),
+			slog.Bool("session_driver", wiring.Kernel.UsesPiGSession()),
 			slog.Int("settled_mutating_tools", len(wiring.Gate.Declared())))
 	}
 

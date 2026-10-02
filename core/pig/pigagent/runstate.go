@@ -16,6 +16,25 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/wire"
 )
 
+// runHost is the slice of a kernel that per-turn policy state needs: where
+// a settled message is written, and what "now" means.
+//
+// It exists because the policy state outlives the choice of loop. OpsKeeper
+// runs turns through two drivers — agent.Agent directly, and a
+// coding.Session — and both must produce the same frames, the same ledger
+// rows and the same transcript rows. Holding a *Kernel in the run state
+// would have made the second driver either duplicate every hook or depend
+// on a kernel it never constructed; holding the two values it actually
+// reads means the policy is written once and both drivers inherit it.
+//
+// Neither field is policy. Persist is the host's write path and Now is a
+// clock, and a kernel that supplied a different one of either would be
+// changing what the host records rather than how the loop runs.
+type runHost struct {
+	persist Persister
+	now     func() time.Time
+}
+
 // runState carries the host policy for one turn and is where the kernel
 // actually enforces it: every tool call passes through beforeToolCall, and
 // every call and refusal passes through afterToolCall.
@@ -27,7 +46,7 @@ type runState struct {
 	mapper *Mapper
 	sink   ports.EventSink
 	deps   Deps
-	k      *Kernel
+	host   runHost
 	req    ports.AgentRequest
 
 	// mu guards blocked. PiG runs the sibling tool calls of one assistant
@@ -181,10 +200,10 @@ func (r *runState) foldUsage(msg agent.AgentMessage) {
 // failure fails the run the same way a throwing listener would upstream: a
 // turn whose transcript was not recorded must not be reported as a success.
 func (r *runState) persist(msg agent.AgentMessage) error {
-	if r.k.opts.Persist == nil {
+	if r.host.persist == nil {
 		return nil
 	}
-	return r.k.opts.Persist.Persist(context.Background(), r.req.SessionID, toPortsMessage(msg, r.model))
+	return r.host.persist.Persist(context.Background(), r.req.SessionID, toPortsMessage(msg, r.model))
 }
 
 // beforeToolCall is the host's policy gate. It runs before every tool
@@ -241,7 +260,7 @@ func (r *runState) beforeToolCall(ctx context.Context, toolCallID, toolName stri
 		// radius is used until the host policy widens it.
 		BlastRadius: domain.RadiusNone,
 		Target:      toolTarget(args),
-		ExpiresAt:   r.k.opts.Now().Add(approvalTTL),
+		ExpiresAt:   r.host.now().Add(approvalTTL),
 	}
 	_ = r.sink.Emit(ctx, r.mapper.Approval(ApprovalProjection{
 		RequestID:   req.ID,
@@ -350,7 +369,7 @@ func (r *runState) record(entry ports.AuditEntry) {
 	if r.deps.Audit == nil {
 		return
 	}
-	entry.At = r.k.opts.Now().UTC()
+	entry.At = r.host.now().UTC()
 	entry.Actor = "agent:" + r.req.SessionID
 	_ = r.deps.Audit.Record(context.Background(), entry)
 }

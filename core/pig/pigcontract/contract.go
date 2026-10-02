@@ -328,6 +328,128 @@ var (
 	_ string = coding.UpstreamVersion
 )
 
+// ── coding: the embedded SDK the control plane drives its turns on ─────────
+//
+// This is the largest single block of PiG surface OpsKeeper depends on, and
+// it arrived with the SDK driver (decision 86): the control plane builds a
+// coding.Session per turn and runs the whole agent loop inside it. Before
+// that, the control plane used agent.Agent directly and this file pinned two
+// version strings for "coding".
+//
+// Every field below is one pigcoding.Runtime sets or a SessionKernel sets.
+// They are pinned by field, not by type, because the interesting drift is a
+// field being renamed or its type widened — the shapes still compile under
+// a type alias, and the failure would surface as a session that quietly
+// keeps a file on disk instead of failing to start.
+
+var (
+	// The container. CWD and AgentDir are required by pigcoding and are set
+	// to deployment-owned paths; ProjectTrusted is pinned because it is the
+	// one field whose value is a security decision rather than a path.
+	_ func(coding.ServicesOptions) (*coding.Services, error) = coding.NewServices
+	_ func(coding.RuntimeOptions) (*coding.Runtime, error)   = coding.NewRuntime
+	_                                                        = coding.ServicesOptions{
+		CWD:             "",
+		AgentDir:        "",
+		SessionManager:  nil,
+		SettingsManager: nil,
+		ProjectTrusted:  nil,
+	}
+
+	_ = coding.RuntimeOptions{
+		Services:      nil,
+		AbortContext:  nil,
+		NewExtensions: nil,
+	}
+
+	// Model resolution. BuildModel is the allowlist-gated entry point
+	// pigcoding.Runtime wraps, and the spec string is the wire form an
+	// operator reads in the settings table.
+	_ func(string, *coding.Services) (*ai.Model, error) = coding.BuildModel
+	_                                                   = coding.ScopedModel{}
+
+	// In-memory settings and session logs. These are what make a server
+	// stateless on disk, and they are the reason a deployment can run the
+	// control plane and the node agent out of one state directory without
+	// either writing into an operator's home.
+	_ func(coding.Settings) *coding.SettingsManager = coding.NewInMemorySettingsManager
+	_ func(string) (*coding.SessionManager, error)  = coding.NewInMemorySessionManager
+)
+
+// The session start panel, with every field SessionKernel sets.
+//
+// The two that are not obvious are pinned here for the same reason they are
+// set: NoSession because OpsKeeper's own session table is the transcript of
+// record, and SkipBuiltinTools because an operations agent's capabilities
+// are its own catalogue — PiG's read/write/edit/bash tools are a
+// general-purpose filesystem editor, and on a production node they are an
+// attack surface nobody asked for.
+var _ = coding.SessionStartOptions{
+	Model:                nil,
+	SystemPrompt:         "",
+	SystemPromptSections: nil,
+	BeforeToolCall:       nil,
+	ExtraTools:           nil,
+	AllowedTools:         nil,
+	ExcludedTools:        nil,
+	NoTools:              "",
+	SkipBuiltinTools:     false,
+	SkipExtensionTools:   false,
+	NoSession:            false,
+	SessionID:            "",
+	ThinkingLevel:        ai.ThinkingOff,
+	ScopedModels:         nil,
+	SessionManager:       nil,
+	SessionDir:           "",
+	CWDOverride:          nil,
+	ResumePath:           "",
+}
+
+// The methods a turn calls.
+//
+// These are call-shaped pins: the body type-checks and never runs, which is
+// what lets the method's existence and argument list be pinned without this
+// file naming PiG's unexported and structural return types. RunAgentPrompt
+// is here rather than Session.Send because the host assembles the opening
+// transcript itself — it applies the history window, drops superseded tool
+// batches and redacts what a viewer may not read.
+var _ = func(rt *coding.Runtime, s *coding.Session, ctx context.Context, ag *agent.Agent) {
+	_, _ = rt.New(coding.SessionStartOptions{})
+	_ = rt.Close()
+
+	_, _ = s.RunAgentPrompt(ctx, func(context.Context) ([]agent.AgentMessage, error) { return nil, nil })
+	_ = s.Events()
+	_, _ = s.Send(ctx, "")
+	_ = s.Steer(ctx, "", nil, nil)
+	_ = s.Abort(ctx)
+	_ = s.WaitForIdle(ctx)
+	_ = s.Messages()
+	_ = s.ID()
+	_ = s.Close()
+	_ = s.Agent()
+
+	run, _ := ag.BeginSendMessages(ctx, nil)
+	_, _ = run.Run()
+
+	// The two hook families OpsKeeper installs. Both are APPEND. The
+	// difference from SetFinishTurn is the reason the round cap could not
+	// use it, and contract_test.go holds that behaviour rather than this
+	// shape: see the finish-turn pin there.
+	_ = ag.AddBeforeToolCallHook
+	_ = ag.AddAfterToolCallHook
+
+	// The barrier a Session's Events consumer must answer, or the run
+	// waits at the turn boundary and the turn hangs.
+	var _ func(agent.AgentEvent) bool = coding.AcknowledgeEvent
+}
+
+// The hook result the policy gate returns, field by field.
+//
+// Terminate is the one that is easy to lose and expensive to lose: it is
+// what makes a spent round cap stop the loop rather than let the model try
+// again forever.
+var _ = agent.ToolCallHookResult{Block: false, Reason: "", Terminate: false, Args: nil}
+
 // ── coding/piglet: the profile parser the node's security posture rests on ─
 //
 // The piglet file is what removes PiG's own bash/edit/write tools from a node

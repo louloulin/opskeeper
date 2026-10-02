@@ -410,8 +410,19 @@ deps:
   # discovered from the go.mod files rather than from a list.
   oxpig_model:
     mayDependOn: [oxcore_domain, oxcore_ports]
+  # oxpig_coding joins the list for SessionKernel (decision 86), which drives
+  # a turn through coding.Session instead of agent.Agent. The two drivers
+  # share the mapper, the policy gate, the prompt assembly and the tool
+  # adapters, so the second one is a file in this component rather than a
+  # parallel one — splitting them would have meant two policies to keep in
+  # step, which is the exact failure the shared runState exists to prevent.
+  #
+  # The arrow is one-way and the module graph enforces it: oxpig_coding
+  # grants no project dependency at all (anyVendorDeps below), so pigcoding
+  # cannot reach back into pigagent. That is what lets the agent component
+  # depend on the embedding layer without creating a cycle.
   oxpig_agent:
-    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxpig_model]
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxpig_model, oxpig_coding]
   # pigai is aliases over PiG's ai package and nothing else. The list is its
   # own name and nothing else: it reaches no OpsKeeper package, which is what
   # makes it safe for every other component to import without a cycle. (The

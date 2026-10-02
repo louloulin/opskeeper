@@ -13,7 +13,9 @@ import (
 	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	managersvcaiops "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigagent"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigcoding"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
@@ -92,6 +94,20 @@ type agentKernelInput struct {
 	Registerer prometheus.Registerer
 	// MaxIterations caps tool rounds per turn when a request does not.
 	MaxIterations int
+	// Driver says which PiG driver to build. Required and not defaulted:
+	// choosing a loop is an operator decision, and a zero value that
+	// silently picked one would make the env var optional in the only place
+	// it matters.
+	Driver managersvcaiops.Kernel
+	// PiGRuntime is the process-wide PiG container. Required when Driver is
+	// KernelPigSDK and ignored otherwise.
+	//
+	// It is the same runtime the rest of the process already holds, not a
+	// second one. Two runtimes would mean two extension runners, and a
+	// package loaded through one would be invisible to a turn driven by the
+	// other — which would look exactly like a plugin that loads and does
+	// nothing.
+	PiGRuntime *pigcoding.Runtime
 	// AfterAssistantRow receives the committed assistant row id. Required in
 	// practice: without it the console bubble is keyed on a synthetic id and
 	// is replaced rather than updated on the next history load.
@@ -99,7 +115,15 @@ type agentKernelInput struct {
 }
 
 // newAgentKernel builds the kernel and the host binding it runs against.
-func newAgentKernel(in agentKernelInput) (*pigagent.Kernel, error) {
+//
+// It returns the Agent port rather than a concrete kernel because there are
+// two, and a caller that named one would have to branch again the next time
+// a third appears. The host binding below is identical for both — the same
+// tool bag resolution, the same ledger, the same gate, the same budget, the
+// same persister — because the only thing the driver changes is the loop
+// underneath, and everything that makes a turn a *OpsKeeper* turn happens
+// outside it.
+func newAgentKernel(in agentKernelInput) (pigagent.Agent, error) {
 	if in.Models == nil {
 		return nil, fmt.Errorf("aiops kernel: no model resolver")
 	}
@@ -138,12 +162,45 @@ func newAgentKernel(in agentKernelInput) (*pigagent.Kernel, error) {
 	if maxTurns <= 0 {
 		maxTurns = pigagent.DefaultMaxIterations
 	}
+	// The bare loop and the SDK driver differ in exactly one respect an
+	// operator can act on, and it is where the turn ends. The bare loop
+	// takes a hard cap as an agent option and PiG enforces it by returning
+	// an error, so a turn that ran long is reported to the console as a
+	// failure. The Session has no such field, so the cap is a
+	// BeforeToolCall budget: the model is refused its next tool, told why,
+	// and gets to answer from the evidence it already has — and the kernel
+	// reports max_iterations rather than letting it read as end_turn. Same
+	// ceiling, same operator-facing fact, and the second one is the better
+	// of the two. The differential golden in core/pig/pigagent holds every
+	// other frame to byte equality.
+	sessionTimeout := 30 * time.Minute
+	if in.Driver.UsesPiGSession() {
+		if in.PiGRuntime == nil {
+			// Failing here rather than at the first turn: a nil runtime
+			// would otherwise produce an empty turn with no error, which is
+			// the one failure mode an operator cannot diagnose from a log.
+			return nil, fmt.Errorf("aiops kernel: driver %q needs the process PiG runtime", in.Driver)
+		}
+		return pigagent.NewSessionKernel(pigagent.SessionKernelOptions{
+			Runtime:        in.PiGRuntime,
+			Models:         in.Models,
+			Deps:           provider,
+			Persist:        persister,
+			MaxIterations:  maxTurns,
+			SessionTimeout: sessionTimeout,
+			// PiG's working directory becomes the session's. The runtime is
+			// already anchored at a state directory the deployment owns (see
+			// pigRuntimeOptions), so a tool with a relative path resolves
+			// inside OpsKeeper's own tree rather than in whatever directory
+			// the process happened to be started from.
+		})
+	}
 	return pigagent.NewKernel(pigagent.KernelOptions{
 		Models:         in.Models,
 		Deps:           provider,
 		Persist:        persister,
 		MaxIterations:  maxTurns,
-		SessionTimeout: 30 * time.Minute,
+		SessionTimeout: sessionTimeout,
 	})
 }
 

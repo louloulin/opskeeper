@@ -279,6 +279,99 @@ func (s *Session) ID() string {
 	return s.sess.ID()
 }
 
+// Run drives one turn from a caller-supplied opening transcript.
+//
+// This is PiG's RunAgentPrompt, exposed rather than hidden because
+// OpsKeeper's turn is not a string. The host composes the conversation
+// itself — it applies the history window, drops superseded tool batches and
+// redacts what a viewer may not read — so the messages the loop opens from
+// are a control-plane decision that PiG must not be asked to re-derive. The
+// obvious alternative, Send, takes a string and starts from an empty
+// transcript, which would quietly move the transcript policy upstream of
+// the audit and redaction code that owns it.
+//
+// PiG takes a callback here rather than a message slice, and this method
+// keeps the callback inside the boundary rather than passing it through. The
+// callback is not a hook — it is the low-level run that seeds the turn, and
+// it has to be built against the session's own loop or the run never starts
+// and the turn settles empty. A caller cannot build one without reaching
+// through Session.Agent(), which is the one thing this package exists to
+// stop them doing. Everything the callback form would let a caller vary —
+// pre-run compaction checks, seeding from a custom message or from queued
+// input — is something OpsKeeper does not do, because it runs with
+// NoSession and therefore has no prior assistant to compact.
+//
+// The Events consumer must be draining and acknowledging while this blocks.
+// RunAgentPrompt waits for that consumer at each turn boundary, so a caller
+// that has not started one deadlocks rather than merely losing frames.
+//
+// An empty opening is a caller error and not a silent no-op: the loop would
+// have nothing to answer, and a provider would bill for the attempt.
+func (s *Session) Run(ctx context.Context, opening []AgentMessage) ([]AgentMessage, error) {
+	if s == nil || s.sess == nil {
+		return nil, ErrClosed
+	}
+	if len(opening) == 0 {
+		return nil, errors.New("pigcoding: Run requires an opening message")
+	}
+	return s.sess.RunAgentPrompt(ctx, func(runCtx context.Context) ([]agent.AgentMessage, error) {
+		run, err := s.sess.Agent().BeginSendMessages(runCtx, opening)
+		if err != nil {
+			return nil, err
+		}
+		return run.Run()
+	})
+}
+
+// Acknowledge reports whether an event is PiG's internal barrier and, if
+// so, releases the run that is waiting on it.
+//
+// A consumer calls this on every event and skips the ones it returns true
+// for. The barrier is not a wire event: it carries no delta, no tool call
+// and no usage, and serialising one would put a frame in the console's
+// stream that corresponds to nothing the model did. Skipping the call
+// instead is not survivable either — the run waits at that barrier before
+// it settles, so a consumer that filters events without acknowledging
+// them turns every turn into a hang.
+//
+// The method is nil-safe on a nil Session so a consumer loop can ack
+// unconditionally and let the closed case surface as a closed channel.
+func (s *Session) Acknowledge(ev AgentEvent) bool {
+	if s == nil || s.sess == nil {
+		return false
+	}
+	return coding.AcknowledgeEvent(ev)
+}
+
+// AddAfterToolCallHook appends a hook that sees every settled tool call.
+//
+// It exists because SessionStartOptions has no AfterToolCall panel — only
+// BeforeToolCall. The panel it does have would work for neither purpose:
+// running the audit write inside BeforeToolCall would record calls that
+// were subsequently refused, and running it inside a tool wrapper would
+// put a host concern inside the tool the console shows.
+//
+// The hook is appended, not installed. agent.Agent.SetFinishTurn and its
+// siblings replace, and PiG's own Session already calls AddAfterToolCallHook
+// for its extension bridge — so an append is the only operation here that
+// cannot silently discard a hook somebody else depends on. It must be
+// called before the first Send: PiG reads the hook list when the loop runs,
+// and a hook added mid-turn applies to the rounds after that one.
+func (s *Session) AddAfterToolCallHook(h AfterToolCallHook) error {
+	if s == nil || s.sess == nil {
+		return ErrClosed
+	}
+	if h == nil {
+		return errors.New("pigcoding: AddAfterToolCallHook requires a hook")
+	}
+	// Session.Agent is PiG's own accessor for the loop this Session drives.
+	// Reaching through it is the only way to add a hook after construction,
+	// and it is why this method exists rather than a Start field: a field
+	// would have been the cleaner design, and PiG does not have one.
+	s.sess.Agent().AddAfterToolCallHook(h)
+	return nil
+}
+
 // Close releases the session.
 //
 // Closing a session with a turn still in flight cancels it. That is the

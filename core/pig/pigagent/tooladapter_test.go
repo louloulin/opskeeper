@@ -26,11 +26,20 @@ type fakeTool struct {
 	// cancelCtx makes Invoke return a context error, standing in for a
 	// cancelled run.
 	cancelCtx bool
+	// calls counts invocations. gotArgs alone cannot answer "did this tool
+	// run at all", because a tool called with empty arguments leaves it
+	// indistinguishable from one that was never called — and "the gate
+	// refused it, so it did not run" is the assertion that matters.
+	calls int
 }
+
+// Calls reports how many times the tool was invoked.
+func (f *fakeTool) Calls() int { return f.calls }
 
 func (f *fakeTool) Schema() ports.ToolSchema { return f.schema }
 
 func (f *fakeTool) Invoke(ctx context.Context, args json.RawMessage) (string, error) {
+	f.calls++
 	f.gotArgs = args
 	f.gotToolCallID = ports.ToolCallIDFromContext(ctx)
 	if f.cancelCtx && ctx.Err() == nil {

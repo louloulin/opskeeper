@@ -34,6 +34,15 @@ func TestKernelEnvParsing(t *testing.T) {
 		{"pig_lower", "pig", true, managersvcaiops.KernelPig},
 		{"pig_upper", "PIG", true, managersvcaiops.KernelPig},
 		{"pig_padded", "  pig  ", true, managersvcaiops.KernelPig},
+		{"pig_sdk_lower", "pig-sdk", true, managersvcaiops.KernelPigSDK},
+		{"pig_sdk_upper", "PIG-SDK", true, managersvcaiops.KernelPigSDK},
+		{"pig_sdk_underscore", "pig_sdk", true, managersvcaiops.KernelPigSDK},
+		{"sdk_alias", "sdk", true, managersvcaiops.KernelPigSDK},
+		// The bare spelling must keep meaning the bare loop. An operator who
+		// has been running "pig" through a cutover must not find that a
+		// PiG upgrade silently moved them onto a driver that opens a
+		// session per turn.
+		{"pig_is_not_the_sdk_driver", "pig", true, managersvcaiops.KernelPig},
 		{"garbage", "this-is-not-a-kernel", true, managersvcaiops.KernelLegacy},
 	}
 	for _, c := range cases {
@@ -56,5 +65,38 @@ func TestKernelEnvParsing(t *testing.T) {
 				t.Errorf("ParseKernel(env=%q,set=%v) = %q, want %q", c.envVal, c.setEnv, got, c.want)
 			}
 		})
+	}
+}
+
+// TestTheDriverPredicatesAnswerDifferentQuestions keeps the two "which
+// driver" helpers from collapsing into one.
+//
+// UsesChatRuntime and UsesPiGSession look redundant and are not. The first
+// asks whether chat turns bypass the legacy for-loop, which every PiG kernel
+// does. The second asks whether the loop underneath is a coding.Session,
+// which decides whether the assembly has a *pigcoding.Runtime to hand it.
+//
+// A caller that used the first to answer the second would give the Session
+// driver a nil runtime. That is why the failure is asserted here rather than
+// left to the nil check in newAgentKernel: the nil check protects the
+// process, this test protects the question.
+func TestTheDriverPredicatesAnswerDifferentQuestions(t *testing.T) {
+	cases := []struct {
+		kernel      managersvcaiops.Kernel
+		wantRuntime bool
+		wantSession bool
+	}{
+		{managersvcaiops.KernelLegacy, false, false},
+		{managersvcaiops.KernelGraph, true, false},
+		{managersvcaiops.KernelPig, true, false},
+		{managersvcaiops.KernelPigSDK, true, true},
+	}
+	for _, c := range cases {
+		if got := c.kernel.UsesChatRuntime(); got != c.wantRuntime {
+			t.Errorf("%q.UsesChatRuntime() = %v, want %v", c.kernel, got, c.wantRuntime)
+		}
+		if got := c.kernel.UsesPiGSession(); got != c.wantSession {
+			t.Errorf("%q.UsesPiGSession() = %v, want %v", c.kernel, got, c.wantSession)
+		}
 	}
 }

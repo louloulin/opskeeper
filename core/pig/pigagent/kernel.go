@@ -116,6 +116,17 @@ func NewKernel(opts KernelOptions) (*Kernel, error) {
 	return &Kernel{opts: opts, sessions: make(map[string]*session)}, nil
 }
 
+// runHost is the kernel's contribution to a turn's policy state.
+//
+// It is a method rather than a field so the defaults are applied once, at
+// construction, and both drivers read the same resolved values. A driver
+// that passed k.opts straight through would hand the run state an
+// un-defaulted clock on the day someone fills KernelOptions.Now with a nil
+// to mean "give me the real one".
+func (k *Kernel) runHost() runHost {
+	return runHost{persist: k.opts.Persist, now: k.opts.Now}
+}
+
 // Run settles one turn.
 func (k *Kernel) Run(ctx context.Context, req ports.AgentRequest) (*TurnResult, error) {
 	if req.SessionID == "" {
@@ -165,7 +176,7 @@ func (k *Kernel) Run(ctx context.Context, req ports.AgentRequest) (*TurnResult, 
 	// The stream options carry the per-request credential, so the same
 	// StreamFn works for every provider and a key rotation between the
 	// agent's construction and its first request is still observed.
-	gate := &runState{mapper: mapper, sink: sink, deps: deps, k: k, req: req}
+	gate := &runState{mapper: mapper, sink: sink, deps: deps, host: k.runHost(), req: req}
 	if model != nil {
 		gate.model = model.ID
 	}
@@ -204,7 +215,7 @@ func (k *Kernel) Run(ctx context.Context, req ports.AgentRequest) (*TurnResult, 
 	prompt := buildPrompt(req)
 	run, err := ag.BeginSendMessages(turnCtx, prompt)
 	if err != nil {
-		return k.failTurn(mapper, sink, fmt.Errorf("pigagent: begin turn: %w", err), true)
+		return failTurn(mapper, sink, fmt.Errorf("pigagent: begin turn: %w", err), true)
 	}
 
 	messages, runErr := run.Run()
@@ -213,7 +224,7 @@ func (k *Kernel) Run(ctx context.Context, req ports.AgentRequest) (*TurnResult, 
 	k.mu.Unlock()
 
 	if runErr != nil {
-		return k.failTurn(mapper, sink, runErr, errors.Is(runErr, context.DeadlineExceeded))
+		return failTurn(mapper, sink, runErr, errors.Is(runErr, context.DeadlineExceeded))
 	}
 
 	return gate.result(messages), nil
@@ -223,7 +234,14 @@ func (k *Kernel) Run(ctx context.Context, req ports.AgentRequest) (*TurnResult, 
 //
 // The frame is emitted before returning so the console sees a failure even
 // when the caller only inspects the returned error.
-func (k *Kernel) failTurn(m *Mapper, sink ports.EventSink, err error, retryable bool) (*TurnResult, error) {
+//
+// It is a free function rather than a method because both drivers end a
+// turn this way, and a method on Kernel would have made SessionKernel reach
+// for a kernel it never built in order to report its own failure. It reads
+// nothing from a kernel: the mapper holds the frame sequence and the sink
+// is the console, and both belong to the turn rather than to the loop that
+// happened to drive it.
+func failTurn(m *Mapper, sink ports.EventSink, err error, retryable bool) (*TurnResult, error) {
 	code := "agent_error"
 	if errors.Is(err, context.DeadlineExceeded) {
 		code = "turn_timeout"

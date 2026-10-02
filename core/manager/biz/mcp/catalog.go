@@ -181,26 +181,73 @@ func (u *Usecase) Call(ctx context.Context, name string, args map[string]any) (s
 		}
 	}
 
-	// Matched on the SANITISED server name, because that is what the wire
-	// name was composed from. A server registered as "My-Server" appears to
-	// the model as mcp__my_server__*, and a resolver that looked for the
-	// raw registration would answer "no such tool" for every call to a
-	// tool it had itself just published.
-	prefix := ""
+	server, tool, ok := resolveMCPName(servers, name)
+	if !ok {
+		return "", fmt.Errorf("%w: %s", ports.ErrNoSuchMCPTool, name)
+	}
+	// The tool half came off a SANITISED name, and a server does not know
+	// its tools by the sanitised spelling: it published "list datasources"
+	// and will answer "no such tool" to "list_datasources". The probe
+	// snapshot is the only place both spellings exist, so the round trip
+	// goes through it.
+	//
+	// Falling back to the wire spelling is deliberate for a server with no
+	// snapshot. It cannot have published the name, so the caller reached it
+	// some other way, and refusing would break a direct tools/call for a
+	// name that happens to need no sanitising — which is most of them.
+	return u.CallTool(ctx, server, ownToolName(servers, server, tool, name), args)
+}
+
+// ownToolName maps a sanitised tool segment back to the spelling the server
+// published, using the probe snapshot.
+func ownToolName(servers []*model.Server, server, sanitized, wireName string) string {
 	for _, s := range servers {
-		p := ports.SanitizeMCPSegment(s.Name) + ports.MCPToolSeparator
-		if strings.HasPrefix(name, p) && len(p) > len(prefix) {
-			prefix = p
+		if s.Name != server {
+			continue
+		}
+		cached, err := decodeToolCache(s)
+		if err != nil {
+			return sanitized
+		}
+		for _, t := range cached {
+			if ports.ComposeMCPToolName(s.Name, t.Name) == wireName {
+				return t.Name
+			}
 		}
 	}
-	if prefix == "" {
-		return "", fmt.Errorf("%w: %s", ports.ErrNoSuchMCPTool, name)
+	return sanitized
+}
+
+// resolveMCPName maps a wire name back to the registered server and the
+// server's own tool name.
+//
+// It matches on the SANITISED server name including the mcp__ prefix, because
+// that is what the wire name was composed from. A server registered as
+// "My-Server" appears to the model as mcp__my_server__*, and a resolver that
+// looked for the raw registration would answer "no such tool" for every call
+// to a tool it had itself just published.
+//
+// The longest matching prefix wins. The caller has already refused a
+// deployment whose server names overlap, so this cannot be ambiguous here;
+// the comparison exists so that the choice is a property of the names rather
+// than of the order the repository happened to return them in.
+func resolveMCPName(servers []*model.Server, name string) (server, tool string, ok bool) {
+	best := -1
+	for _, s := range servers {
+		p := ports.MCPToolNamePrefix + ports.SanitizeMCPSegment(s.Name) + ports.MCPToolSeparator
+		if strings.HasPrefix(name, p) && len(p) > best {
+			best = len(p)
+			server = s.Name
+		}
 	}
-	tool := name[len(prefix):]
+	if best < 0 {
+		return "", "", false
+	}
+	tool = name[best:]
 	if tool == "" {
-		return "", fmt.Errorf("%w: %s", ports.ErrNoSuchMCPTool, name)
+		return "", "", false
 	}
-	return u.CallTool(ctx, serverOf(servers, name), tool, args)
+	return server, tool, true
 }
 
 // decodeToolCache reads a server's probe snapshot.
@@ -242,17 +289,6 @@ func decodeToolCache(s *model.Server) ([]mcpclient.Tool, error) {
 // add a scan, and a scan that can never fire is worse than none: it reads as
 // the thing standing between a deployment and two servers answering for each
 // other, while the name rule is.
-// serverOf names the registered server a sanitised wire name belongs to.
-func serverOf(servers []*model.Server, name string) string {
-	prefix := ports.MCPToolNamePrefix
-	for _, s := range servers {
-		if p := ports.MCPToolNamePrefix + ports.SanitizeMCPSegment(s.Name) + ports.MCPToolSeparator; strings.HasPrefix(name, p) && len(p) > len(prefix) {
-			prefix = p
-		}
-	}
-	return strings.TrimSuffix(strings.TrimSuffix(prefix, ports.MCPToolSeparator), ports.MCPToolNamePrefix)
-}
-
 func validServerName(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("mcp server has no name")

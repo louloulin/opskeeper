@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/mcp"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
@@ -168,7 +169,7 @@ func TestToolsComposesFromTheProbeSnapshot(t *testing.T) {
 		t.Fatalf("Tools: %v", err)
 	}
 
-	want := []string{"grafana__list_datasources", "grafana__query_dashboard"}
+	want := []string{"mcp__grafana__list_datasources", "mcp__grafana__query_dashboard"}
 	if len(tools) != len(want) {
 		t.Fatalf("got %d tools (%v), want %d", len(tools), names(tools), len(want))
 	}
@@ -189,30 +190,73 @@ func TestToolsComposesFromTheProbeSnapshot(t *testing.T) {
 	}
 }
 
-// TestToolsRefusesAnUnaddressableToolName is the anti-silent-loss property.
-//
-// A third-party server is free to publish a tool name the model cannot be
-// given. Dropping it would leave an operator with a green probe, a healthy
-// server and an agent that quietly lacks a capability — the one failure that
-// cannot be diagnosed from outside the process.
-func TestToolsRefusesAnUnaddressableToolName(t *testing.T) {
+// TestAToolNameIsSanitisedRatherThanRefused pins the behaviour the executing
+// registry has always had. "list datasources" becomes list_datasources and
+// works; a catalogue that refused it would offer the model a different set of
+// tools than the registry executes, which is the failure the shared naming
+// rule exists to prevent.
+func TestAToolNameIsSanitisedRatherThanRefused(t *testing.T) {
 	repo := newFakeRepo()
 	addServer(t, repo, "grafana", []map[string]any{
 		toolEntry("list datasources", "Has a space in it."),
+		toolEntry("get/dashboards", "Has a slash in it."),
 	}, true)
 
 	uc := NewUsecase(repo, nil, nil)
-	_, err := uc.Tools(context.Background())
-	if err == nil {
-		t.Fatal("Tools accepted a tool name the model cannot address")
+	tools, err := uc.Tools(context.Background())
+	if err != nil {
+		t.Fatalf("Tools refused a name the registry would have served: %v", err)
 	}
-	// The message has to name the server and the tool, or the operator is
-	// left with a failure and no way to find its cause.
-	for _, want := range []string{"grafana", "list datasources"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %q", err, want)
+	want := []string{"mcp__grafana__get_dashboards", "mcp__grafana__list_datasources"}
+	if len(tools) != len(want) {
+		t.Fatalf("got %v, want %v", names(tools), want)
+	}
+	for i := range want {
+		if tools[i].Name != want[i] {
+			t.Errorf("tool %d is %q, want %q", i, tools[i].Name, want[i])
 		}
 	}
+	// The server's own name is carried unsanitised, because that is what
+	// Call has to hand back to the server.
+	if tools[0].Tool != "get/dashboards" {
+		t.Errorf("Tool = %q, want the server's own spelling so Call can address it", tools[0].Tool)
+	}
+}
+
+// TestToolsRefusesTwoNamesThatSanitiseToTheSameOne is the cost of
+// sanitisation, and it is a cost worth paying for. "My-Server" and
+// "my_server" are different strings the database is happy to store, and both
+// compose to mcp__my_server__*; within one server "list datasources" and
+// "list-datasources" do the same. Left alone, one of the pair answers for the
+// other and no diagnostic anywhere says so.
+func TestToolsRefusesTwoNamesThatSanitiseToTheSameOne(t *testing.T) {
+	t.Run("across servers", func(t *testing.T) {
+		repo := newFakeRepo()
+		addServer(t, repo, "My-Server", []map[string]any{toolEntry("q", "One.")}, true)
+		addServer(t, repo, "my_server", []map[string]any{toolEntry("q", "Two.")}, true)
+
+		uc := NewUsecase(repo, nil, nil)
+		_, err := uc.Tools(context.Background())
+		if err == nil {
+			t.Fatal("Tools offered two servers that sanitise to the same wire name")
+		}
+		if !strings.Contains(err.Error(), "mcp__my_server__q") {
+			t.Errorf("error %q does not name the colliding tool", err)
+		}
+	})
+
+	t.Run("within one server", func(t *testing.T) {
+		repo := newFakeRepo()
+		addServer(t, repo, "grafana", []map[string]any{
+			toolEntry("list datasources", "One."),
+			toolEntry("list-datasources", "Two."),
+		}, true)
+
+		uc := NewUsecase(repo, nil, nil)
+		if _, err := uc.Tools(context.Background()); err == nil {
+			t.Fatal("Tools offered two tools of one server that sanitise to the same name")
+		}
+	})
 }
 
 // TestToolsRefusesTwoServersOfferingTheSameName covers the one way two
@@ -247,8 +291,8 @@ func TestTheSeparatorInsideAToolNameIsHarmless(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
-	if len(tools) != 1 || tools[0].Name != "a__b__c" || tools[0].Tool != "b__c" {
-		t.Fatalf("got %+v, want one tool named a__b__c whose server-side name is b__c", tools)
+	if len(tools) != 1 || tools[0].Name != "mcp__a__b__c" || tools[0].Tool != "b__c" {
+		t.Fatalf("got %+v, want one tool named mcp__a__b__c whose server-side name is b__c", tools)
 	}
 }
 
@@ -338,8 +382,28 @@ func TestAToolWithNoDeclaredSchemaIsAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Tools rejected a tool with no declared schema: %v", err)
 	}
-	if len(tools) != 1 || tools[0].Name != "grafana__list_datasources" {
+	if len(tools) != 1 || tools[0].Name != "mcp__grafana__list_datasources" {
 		t.Fatalf("got %v, want the no-argument tool", names(tools))
+	}
+}
+
+// TestAToolWithNoNameIsRefused covers the one name sanitisation cannot fix.
+// An empty name composes to a wire name that ends in the separator, which is
+// indistinguishable from a server called "grafana_" and answers to nothing.
+func TestAToolWithNoNameIsRefused(t *testing.T) {
+	repo := newFakeRepo()
+	id := addServer(t, repo, "grafana", nil, true)
+	setCache(t, repo, id, mustJSON(t, []map[string]any{
+		{"name": "   ", "description": "d", "inputSchema": json.RawMessage(`{"type":"object"}`)},
+	}))
+
+	uc := NewUsecase(repo, nil, nil)
+	_, err := uc.Tools(context.Background())
+	if err == nil {
+		t.Fatal("Tools published a tool with no name")
+	}
+	if !strings.Contains(err.Error(), "grafana") {
+		t.Errorf("error %q does not name the server to re-probe", err)
 	}
 }
 
@@ -366,7 +430,7 @@ func TestTheToolFilterIsApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
-	if len(tools) != 1 || tools[0].Name != "grafana__query_dashboard" {
+	if len(tools) != 1 || tools[0].Name != "mcp__grafana__query_dashboard" {
 		t.Fatalf("got %v, want only the grafana tool; the filter is not the last word on what a caller sees", names(tools))
 	}
 }
@@ -387,8 +451,8 @@ func TestCallReachesTheServerTheNameBelongsTo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
-	if len(tools) != 1 || tools[0].Name != "a__b__c" {
-		t.Fatalf("composed %v, want a__b__c", names(tools))
+	if len(tools) != 1 || tools[0].Name != "mcp__a__b__c" {
+		t.Fatalf("composed %v, want mcp__a__b__c", names(tools))
 	}
 
 	out, err := uc.Call(context.Background(), tools[0].Name, map[string]any{"q": "up"})
@@ -430,7 +494,7 @@ func TestCallRefusesAnAmbiguousDeployment(t *testing.T) {
 
 	uc := NewUsecase(repo, nil, nil)
 	for i := 0; i < 20; i++ {
-		_, err := uc.Call(context.Background(), "a__b__c", nil)
+		_, err := uc.Call(context.Background(), "mcp__a__b__c", nil)
 		if err == nil {
 			t.Fatalf("call %d was answered; a deployment whose server names overlap has no single right answer", i)
 		}
@@ -451,7 +515,7 @@ func TestCallReportsAMissingToolAsAbsentNotBroken(t *testing.T) {
 	addServer(t, repo, "retired", []map[string]any{toolEntry("old", "x")}, false)
 
 	uc := NewUsecase(repo, nil, nil)
-	for _, name := range []string{"retired__old", "never_registered__tool", "__leading", "trailing__"} {
+	for _, name := range []string{"mcp__retired__old", "mcp__never__tool", "mcp____leading", "mcp__trailing__"} {
 		if _, err := uc.Call(context.Background(), name, nil); !errors.Is(err, ports.ErrNoSuchMCPTool) {
 			t.Errorf("Call(%q) error = %v, want ErrNoSuchMCPTool", name, err)
 		}
@@ -467,12 +531,113 @@ func TestCallSurfacesAToolLevelErrorAsAFailure(t *testing.T) {
 	setEndpoint(t, repo, id, fake.start(t))
 
 	uc := NewUsecase(repo, nil, nil)
-	_, err := uc.Call(context.Background(), "grafana__q", nil)
+	_, err := uc.Call(context.Background(), "mcp__grafana__q", nil)
 	if err == nil {
 		t.Fatal("Call reported success for a tool that returned isError")
 	}
 	if errors.Is(err, ports.ErrNoSuchMCPTool) {
 		t.Error("a tool-level failure was reported as an absent tool; the caller would never retry it")
+	}
+}
+
+// TestTheCatalogueNamesMatchTheExecutingRegistry is the test this whole file
+// most needs, and it exists because the divergence was real.
+//
+// The names the catalogue publishes are the names the model will call, and
+// the names the executing registry accepts are the names that run. An earlier
+// version of this catalogue composed "<server>__<tool>" while
+// tools.MCPToolName had always produced "mcp__<server>__<tool>" with both
+// halves sanitised — so the same Grafana query had two names, and the one the
+// catalogue offered was the one nothing executed.
+//
+// Reading tools.MCPToolName from a test in this package is deliberate. The two
+// live in the same module and can see each other; the rule now lives in
+// core/ports precisely so the SDK-shaped surface in core/pig, which cannot
+// import either of them, composes the same string. This test is what keeps
+// the delegation honest.
+func TestTheCatalogueNamesMatchTheExecutingRegistry(t *testing.T) {
+	// Only names this deployment would actually publish. A server or tool
+	// name that is refused outright has no wire name to compare, and
+	// refusing them is covered by the tests that name the rule.
+	cases := []struct{ server, tool string }{
+		{"grafana", "query_dashboard"},
+		{"My-Server", "list datasources"},
+		{"k8s", "get/pods"},
+		{"UPPER", "MiXeD Case"},
+		{"trailing-", "x"},
+		{"dots.and.dashes", "a b/c:d"},
+		{"9", "0"},
+	}
+	repo := newFakeRepo()
+	for _, tc := range cases {
+		id := addServer(t, repo, tc.server, []map[string]any{toolEntry(tc.tool, "d")}, true)
+		setCache(t, repo, id, mustJSON(t, []map[string]any{
+			{"name": tc.tool, "description": "d", "inputSchema": json.RawMessage(`{"type":"object"}`)},
+		}))
+	}
+
+	uc := NewUsecase(repo, nil, nil)
+	tools, err := uc.Tools(context.Background())
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+	if len(tools) != len(cases) {
+		t.Fatalf("got %d tools, want %d: %v", len(tools), len(cases), names(tools))
+	}
+	for _, tool := range tools {
+		if want := aiopstools.MCPToolName(tool.Server, tool.Tool); tool.Name != want {
+			t.Errorf("catalogue publishes %q; the registry executes %q — one capability, two names",
+				tool.Name, want)
+		}
+	}
+}
+
+// TestAServerNameThatSanitisesToNothingUsableIsRefused covers the far end of
+// the same rule. A registration of Chinese characters sanitises to a row of
+// underscores, which is not a name — and a row of underscores contains the
+// separator, so it is ambiguous as well. The message has to say which server,
+// because from the console the name looks fine.
+func TestAServerNameThatSanitisesToNothingUsableIsRefused(t *testing.T) {
+	repo := newFakeRepo()
+	addServer(t, repo, "带中文", []map[string]any{toolEntry("tool", "d")}, true)
+
+	uc := NewUsecase(repo, nil, nil)
+	_, err := uc.Tools(context.Background())
+	if err == nil {
+		t.Fatal("Tools accepted a server whose name sanitises to separators only")
+	}
+	if !strings.Contains(err.Error(), "带中文") {
+		t.Errorf("error %q does not name the server to rename", err)
+	}
+}
+
+// TestACallResolvesAServerRegisteredWithPunctuation covers the sanitisation
+// round trip. The name the model holds is not the name the operator typed, and
+// the resolver has to bridge the two or every call to a hyphenated server
+// answers "no such tool".
+func TestACallResolvesAServerRegisteredWithPunctuation(t *testing.T) {
+	fake := &fakeMCP{}
+	repo := newFakeRepo()
+	id := addServer(t, repo, "My-Server", []map[string]any{toolEntry("list datasources", "d")}, true)
+	setEndpoint(t, repo, id, fake.start(t))
+
+	uc := NewUsecase(repo, nil, nil)
+	tools, err := uc.Tools(context.Background())
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("got %v, want one tool", names(tools))
+	}
+	if tools[0].Name != "mcp__my_server__list_datasources" {
+		t.Fatalf("published %q, want the sanitised wire name", tools[0].Name)
+	}
+	if _, err := uc.Call(context.Background(), tools[0].Name, nil); err != nil {
+		t.Fatalf("Call could not resolve a name this catalogue published: %v", err)
+	}
+	// The server must be asked for its own spelling, not the sanitised one.
+	if len(fake.calls) != 1 || fake.calls[0] != "list datasources" {
+		t.Errorf("server received %v, want its own tool name", fake.calls)
 	}
 }
 

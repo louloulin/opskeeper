@@ -105,13 +105,39 @@ func (m *Mapper) next() int64 {
 	return m.seq
 }
 
-func (m *Mapper) frame(t wire.StreamEventType) wire.StreamEvent {
+// frameLocked builds a frame with its sequence number. The caller holds
+// m.mu.
+func (m *Mapper) frameLocked(t wire.StreamEventType) wire.StreamEvent {
 	return wire.StreamEvent{
 		Type:      t,
 		SessionID: m.sessionID,
 		Iteration: m.iteration,
 		Seq:       m.next(),
 	}
+}
+
+// frame builds a frame from outside the event mapper, taking the lock.
+//
+// The two forms exist because the mapper has two callers with different
+// locking contracts. Map runs under m.mu for the whole switch, so it uses
+// frameLocked. Approval, ApprovalResolved, Error and Notification are
+// called by the run state — from a tool's own goroutine, at the moment the
+// policy gate asks a human for a decision — and they reach the same counter
+// and the same pending count.
+//
+// They are not the same kind of caller and the difference is not academic:
+// the run state writes frames from every tool goroutine at once, while the
+// agent's events arrive on the loop's. A single unsynchronised m.seq++ read
+// and written by both produces two frames carrying the same number, and
+// the console orders by that number — so the failure is a card that renders
+// before the tool it belongs to, or not at all, with no error anywhere.
+//
+// This was a live race, not a theoretical one, and the race detector found
+// it the moment a gated tool call ran under a Session driver.
+func (m *Mapper) frame(t wire.StreamEventType) wire.StreamEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.frameLocked(t)
 }
 
 // TurnStarted advances the turn counter. It is called once per assistant
@@ -137,7 +163,7 @@ func (m *Mapper) Map(ev agent.AgentEvent) []wire.StreamEvent {
 		// The console opens a bubble on assistant_start and leaves it open
 		// through the deltas. PendingToolCalls is zero here: the model has
 		// not asked for tools yet.
-		f := m.frame(wire.StreamAssistantStart)
+		f := m.frameLocked(wire.StreamAssistantStart)
 		f.Assistant = &wire.AssistantFrame{Content: ""}
 		return []wire.StreamEvent{f}
 
@@ -150,16 +176,34 @@ func (m *Mapper) Map(ev agent.AgentEvent) []wire.StreamEvent {
 		if !ok || delta.Delta == "" {
 			return nil
 		}
-		f := m.frame(wire.StreamAssistantDelta)
+		f := m.frameLocked(wire.StreamAssistantDelta)
 		f.Assistant = &wire.AssistantFrame{Content: delta.Delta}
 		return []wire.StreamEvent{f}
 
 	case agent.MessageEndEvent:
+		// A system message is not something the assistant said, and a frame
+		// claiming otherwise is an empty bubble the console would open and
+		// then have to supersede. Only the Session driver produces these:
+		// coding.SessionStartOptions.SystemPrompt lands in the transcript as
+		// a system entry, and the loop opens and closes its lifecycle like
+		// any other message. The bare agent.Agent takes the same prompt as
+		// configuration and never emits it, so this path was dead until the
+		// SDK driver existed and would have been a difference between the two
+		// that looked like a console regression.
+		//
+		// Tool results are a different case and are deliberately NOT
+		// filtered here. PiG settles a tool result as a message of its own,
+		// so suppressing those would remove the empty assistant_end frames
+		// the console's kernelSink supersede rule is built on. The rule
+		// needs them; a system message needs nothing.
+		if e.Message.System != nil {
+			return nil
+		}
 		// The assistant message has settled. Its tool calls become the
 		// pending count the console renders next to the bubble.
 		text, calls := summarize(e.Message)
 		m.pending += calls
-		f := m.frame(wire.StreamAssistantEnd)
+		f := m.frameLocked(wire.StreamAssistantEnd)
 		f.Assistant = &wire.AssistantFrame{
 			Content:          text,
 			PendingToolCalls: m.pending,
@@ -172,7 +216,7 @@ func (m *Mapper) Map(ev agent.AgentEvent) []wire.StreamEvent {
 			m.pending--
 		}
 		m.toolCalls++
-		f := m.frame(wire.StreamToolStart)
+		f := m.frameLocked(wire.StreamToolStart)
 		f.Tool = &wire.ToolFrame{
 			ToolCallID: e.ToolCallID,
 			Name:       e.ToolName,
@@ -183,7 +227,7 @@ func (m *Mapper) Map(ev agent.AgentEvent) []wire.StreamEvent {
 		return []wire.StreamEvent{f}
 
 	case agent.ToolExecutionUpdateEvent:
-		f := m.frame(wire.StreamToolUpdate)
+		f := m.frameLocked(wire.StreamToolUpdate)
 		f.Tool = &wire.ToolFrame{
 			ToolCallID: e.ToolCallID,
 			Name:       e.ToolName,
@@ -207,7 +251,7 @@ func (m *Mapper) Map(ev agent.AgentEvent) []wire.StreamEvent {
 		if ms < 0 {
 			ms = 0
 		}
-		f := m.frame(wire.StreamToolEnd)
+		f := m.frameLocked(wire.StreamToolEnd)
 		f.Tool = &wire.ToolFrame{
 			ToolCallID: e.ToolCallID,
 			Name:       e.ToolName,
@@ -223,7 +267,7 @@ func (m *Mapper) Map(ev agent.AgentEvent) []wire.StreamEvent {
 		// The run is over. Usage is accumulated across the turn so the
 		// console does not have to sum per-message frames.
 		usage := m.usage
-		frame := m.frame(wire.StreamDone)
+		frame := m.frameLocked(wire.StreamDone)
 		frame.Done = &wire.DoneFrame{
 			Iterations: m.iteration,
 			ToolCalls:  m.toolCalls,
