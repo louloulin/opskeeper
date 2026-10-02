@@ -4,11 +4,13 @@
 // Anthropic's harness convention so the LLM's training prior on the
 // "select:..." vs keyword form carries straight over.
 //
-// The tool is pure-read against an in-memory tool list — no external
-// I/O, no per-call allocation worth tracing. We deliberately keep the
-// implementation small; the heavy lifting (toolbag partitioning) lives
-// in toolbag.go and the Registry decides whether to register it at
-// all.
+// The tool is pure-read against the tool set the turn already holds — no
+// external I/O. Keyword queries are answered by
+// core/manager/biz/aiops/toolregistry, which ranks by relevance rather
+// than walking the slice; "select:" stays an exact-name lookup here
+// because in that form the caller already knows the name it wants. The
+// heavy lifting (toolbag partitioning) lives in toolbag.go, and the
+// Registry decides whether to register ToolSearch at all.
 package tools
 
 import (
@@ -18,6 +20,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/toolregistry"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
@@ -174,10 +177,17 @@ func (t *ToolSearchTool) InvokableRun(ctx context.Context, argsJSON string, _ ..
 }
 
 // matchTools applies the query against the tool universe. select:
-// prefix → exact-name match (CSV-split). Otherwise substring keyword
-// match over name + description + when_to_use. Stable order: input
-// order is preserved (no scoring / fuzzy ranking in v1; the LLM
-// usually has a clear name in mind).
+// prefix → exact-name match (CSV-split), preserving the input order so
+// the result is reproducible. Otherwise the keyword path adapts each
+// tool's metadata into a toolregistry catalogue and returns its ranked
+// hits.
+//
+// Ranking instead of a slice walk is the whole point of the catalogue:
+// the previous version stopped at max_results, so a query matching
+// fifty tools returned whichever five happened to be registered first,
+// and two tools equally able to answer were separated only by their
+// position. The catalogue also drops the "no scoring / fuzzy ranking"
+// limitation the old comment admitted.
 func matchTools(ctx context.Context, all []basetool.BaseTool, query string, maxResults int) []toolSearchEntry {
 	q := strings.TrimSpace(query)
 	out := make([]toolSearchEntry, 0, maxResults)
@@ -212,34 +222,43 @@ func matchTools(ctx context.Context, all []basetool.BaseTool, query string, maxR
 		return out
 	}
 
-	// Keyword match: lower-case substring over (name, description,
-	// when_to_use). Multi-token queries require ALL tokens to match
-	// somewhere across the haystack — keeps "find files" from
-	// matching every read-only tool.
-	tokens := splitNonEmpty(strings.ToLower(q), " ")
-	if len(tokens) == 0 {
-		return out
-	}
+	// Keyword match, ranked. The catalogue keeps the old predicate —
+	// every whitespace token must appear as a substring in name,
+	// description or when_to_use — but orders by relevance (name beats
+	// when_to_use beats description, weighted by how rare a term is)
+	// and breaks ties by name, so the same query yields the same order
+	// in two processes.
+	//
+	// The catalogue is rebuilt per call: `all` is the turn's already
+	// persona-filtered set, and a cache keyed on it would have to be
+	// invalidated on exactly the events the toolbag is rebuilt on.
+	// Adapting a few dozen tools is not worth that risk. The infos are
+	// collected in the same pass because Entry deliberately carries no
+	// Parameters and the response must return full schemas.
+	entries := make([]toolregistry.Entry, 0, len(all))
+	infos := make(map[string]*basetool.ToolInfo, len(all))
 	for _, tool := range all {
-		if len(out) >= maxResults {
-			break
-		}
 		info, err := tool.Info(ctx)
 		if err != nil || info == nil {
 			continue
 		}
-		hay := strings.ToLower(info.Name + "\n" + info.Description + "\n" + info.WhenToUse)
-		matched := true
-		for _, tok := range tokens {
-			if !strings.Contains(hay, tok) {
-				matched = false
-				break
-			}
-		}
-		if !matched {
+		entry, ok := toolregistry.EntryFromToolInfo(info)
+		if !ok {
 			continue
 		}
-		out = append(out, toolSearchEntryFromInfo(info))
+		if _, dup := infos[entry.Name]; dup {
+			// Two tools answering to one wire name is a bag defect, but
+			// it must not turn into two identical rows in the response;
+			// the first registration wins, as it did for select:.
+			continue
+		}
+		entries = append(entries, entry)
+		infos[entry.Name] = info
+	}
+	for _, hit := range toolregistry.NewCatalogue(entries).Search(q, maxResults) {
+		if info, ok := infos[hit.ToolName()]; ok {
+			out = append(out, toolSearchEntryFromInfo(info))
+		}
 	}
 	return out
 }

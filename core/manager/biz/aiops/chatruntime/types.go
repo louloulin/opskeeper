@@ -34,10 +34,11 @@ const (
 )
 
 // Policy is the per-request capability gate. The HTTP layer / agent
-// persona constructs a Policy; ChatRuntime feeds it into ToolRegistry.Build
-// and SkillRegistry.Resolve. PR-2 only defines the data shape — the
-// actual filtering logic lives in skill_registry.go (and a future
-// tool_registry.go in PR-3).
+// persona constructs a Policy; ChatRuntime feeds it into the skill and
+// tool registries — SkillRegistry.Resolve for the skill side, and the
+// catalogue in core/manager/biz/aiops/toolregistry for tool retrieval.
+// This file only defines the data shape; the filtering predicates live in
+// skill_registry.go and in toolregistry's Catalogue.Filter.
 type Policy struct {
 	// AllowedClasses lists which ToolClass values are permitted.
 	// ["*"] means unrestricted. Empty defaults to read-only (matches

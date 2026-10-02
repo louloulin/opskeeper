@@ -263,3 +263,75 @@ func TestToolSearch_KeywordMultiTokenAllMustMatch(t *testing.T) {
 		t.Errorf("find_outlier_edges should not match (no 'files' token)")
 	}
 }
+
+// TestToolSearch_KeywordRanksByRelevanceNotRegistrationOrder is the
+// regression for the defect this change exists to remove: the keyword
+// path used to walk the tool slice and stop at max_results, so the
+// schemas a model got back were the first-registered matches rather
+// than the best ones. Here an unrelated tool that merely says "file" in
+// its description is registered ahead of the tool whose *name* is about
+// files; with max_results=1 the old code returned the unrelated one.
+func TestToolSearch_KeywordRanksByRelevanceNotRegistrationOrder(t *testing.T) {
+	weak := newStub("alpha_report", "a generic file report")
+	strong := newStub("host_find_large_files", "list the large files on a host")
+	bag := &stubBagProvider{all: []basetool.BaseTool{weak, strong}}
+	ts := NewToolSearchTool(bag, nil)
+
+	out, err := ts.InvokableRun(context.Background(), `{"query":"file","max_results":1}`)
+	if err != nil {
+		t.Fatalf("InvokableRun: %v", err)
+	}
+	resp := decodeToolSearchResp(t, out)
+	if len(resp.Tools) != 1 {
+		t.Fatalf("got %d tools, want 1: %s", len(resp.Tools), out)
+	}
+	if resp.Tools[0].Name != "host_find_large_files" {
+		t.Errorf("the name match must outrank the description match, got %s", resp.Tools[0].Name)
+	}
+}
+
+// TestToolSearch_KeywordRankBreaksTiesByName pins the tie-break. Two
+// tools that match a query equally must always come back in the same
+// order, otherwise the same request yields different tool lists in two
+// processes and a bug report cannot be reproduced.
+func TestToolSearch_KeywordRankBreaksTiesByName(t *testing.T) {
+	bag := &stubBagProvider{all: []basetool.BaseTool{
+		newStub("host_zeta_file", "file probe"),
+		newStub("host_alpha_file", "file probe"),
+	}}
+	ts := NewToolSearchTool(bag, nil)
+
+	out, err := ts.InvokableRun(context.Background(), `{"query":"file"}`)
+	if err != nil {
+		t.Fatalf("InvokableRun: %v", err)
+	}
+	resp := decodeToolSearchResp(t, out)
+	if len(resp.Tools) != 2 {
+		t.Fatalf("got %d tools, want 2: %s", len(resp.Tools), out)
+	}
+	if resp.Tools[0].Name != "host_alpha_file" || resp.Tools[1].Name != "host_zeta_file" {
+		t.Errorf("equal scores must be ordered by name, got %s then %s",
+			resp.Tools[0].Name, resp.Tools[1].Name)
+	}
+}
+
+// TestToolSearch_KeywordSearchesOnlyThePersonaFilteredSet confirms the
+// ranking runs on the turn's already-narrowed set. Search must not widen
+// what a persona can see: a query matching a redacted tool must not
+// surface it just because the catalogue was built from the full bag.
+func TestToolSearch_KeywordSearchesOnlyThePersonaFilteredSet(t *testing.T) {
+	allowed := newStub("host_stat_file", "stat a file")
+	redacted := newStub("host_delete_file", "delete a file")
+	bag := &stubBagProvider{all: []basetool.BaseTool{allowed, redacted}}
+	ts := NewToolSearchTool(bag, nil)
+
+	ctx := basetool.WithFilteredTools(context.Background(), []basetool.BaseTool{allowed})
+	out, err := ts.InvokableRun(ctx, `{"query":"file"}`)
+	if err != nil {
+		t.Fatalf("InvokableRun: %v", err)
+	}
+	resp := decodeToolSearchResp(t, out)
+	if len(resp.Tools) != 1 || resp.Tools[0].Name != "host_stat_file" {
+		t.Fatalf("search must stay inside the filtered set, got %+v", resp.Tools)
+	}
+}

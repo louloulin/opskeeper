@@ -3616,7 +3616,7 @@ case resp.Accepted + resp.Rejected >= len(rows):
 | P1-4 | 无遥测本地 spool | ✅ **已关** | 同上；`Accepted=0` 读作「还没收下」（§4.38），审计回传补 HMAC 链（§4.39） |
 | P1-5 | 工具级资源配额缺失 | ✅ **已关** | `sdk/manifest.go:292` 校验 `spec.tools[].limits`（负值拒绝）；强制点 `core/edge/toolbroker/server.go:141-143/391/417`（未声明也有默认上限）；`budget_test.go` 6 条 |
 | 1.3 | 幂等与栅栏（论文 2607.14166 三探针） | ✅ **已关** | `core/edge/policygate/fence_test.go` 9 条，正对三个探针：同一幂等键提交八次只执行一次（:25）、租约内可收租约外不可（:129）、会话内第二个写调用**等待而非排队**（:173，即兄弟分支不被绕过）、读不被挂起的审批挡住（:220）、拒绝在窗口内有效且后来的「同意」能清掉先前的「不」（:346） |
-| P2-6 | 工具语义鸿沟（工具注册表 + 语义检索） | ❌ **未做** | `grep -rli toolregistry core/` 只命中 `core/manager/biz/aiops/chatruntime/types.go:37` 的**一句注释**（自陈在 PR-3）；**不存在 `tool_registry.go`** |
+| P2-6 | 工具语义鸿沟（工具注册表 + 语义检索） | ✅ **已关**（决策 104 更新本行） | 新包 `core/manager/biz/aiops/toolregistry`（`Entry` 值类型 + 唯一适配点 `EntryFromToolInfo` + `Catalogue.Search` 相关性排序 + `Fuse`/`RRFConstant` 混合检索接缝，18 条测试）；`ToolSearch` 的 keyword 分支从「按注册顺序截断」改为按相关性排序，`select:` 与响应 JSON 形状一字未动（§4.42） |
 | P2-7 | 成本无结晶机制 | ❌ **未做** | `grep -rni crystalliz --include=*.go core/` **零命中** |
 | P2-8 | eval 只看最终答案（要三维） | ❌ **未做** | `grep -rn 'Localization\|Identification' --include=*.go core/harness/` **零命中**；`judge.Score` 仍是过程四维 |
 | P2-9 | manager 单体化（27 万行 + iam 反向依赖） | ⚠️ **部分** | 行数已核实：`core/manager` **1104 个文件 / 275,602 行**（比方案写的 27 万还多）；`iam → manager` 三条审计路径仍在 `scripts/modulecheck/main.go:543-545` 的 `exceptions` 台账里，注释写明「a future split must resolve rather than inherit」 |
@@ -3737,12 +3737,14 @@ env**。
 | D 插件生态 | 25% | 95% | 四个包 + 审核流水线 + 两条覆盖轴 |
 | 0 边缘交付闭环 | — | 代码 100% / 验收未做 | 0.1–0.3 全关（上表 + 决策 103 关掉 0.2 第二句），0.4 缺 Docker 与真 key |
 | 1 离线与有限自治 | — | 100%（本地） | 决策 97/98/99/100/101；剩 `Seq` 去重 |
-| 2 生态与治理 | — | 15% | 6/7/8/10 全未做，9 部分 |
+| 2 生态与治理 | — | 33% | 决策 104 关掉 6（注册表）；配额已由决策 96 关掉，本行此前未同步；7/8/10 未做，9 部分 |
 | 3 瘦身与联邦 | — | 5% | 9/10 未动 |
 
-加权合计仍为 **≈46%**（四阶段等比 65/100/15/5 的均值 46.25%）。**阶段 0 与
-阶段 1 的代码侧可以记为完成，但那不等于计划完成**：阶段 2 的四条一条没动，
-而它们正好是方案里「插件生态开放、成本可控」这一格的全部内容。
+加权合计 **≈51%**（决策 104 更新本行：阶段 2 从 15% 记为 33%——工具注册表本轮
+关闭、per-tool 配额在决策 96 就已关闭而本行当时没同步；四阶段等比
+(65 + 100 + 33 + 5) / 4 = 50.75）。**阶段 0 与阶段 1 的代码侧可以记为完成，
+但那不等于计划完成**：阶段 2 的六条里两条已闭、四条未动，而剩下的四条正好
+是方案里「插件生态开放、成本可控」这一格的全部内容。
 
 ---
 
@@ -3855,6 +3857,134 @@ docker 内部种子地址，不约束「必须是 manager 自己的主机」）�
 
 ---
 
+### 4.42 决策 104：工具注册表与相关性检索——阶段 2 的第 6 条
+
+方案 2-6 的原话是「工具语义鸿沟：工具平铺给模型，缺工具注册表与语义检索」。
+§4.40.1 给这一行的证据曾经是：`grep -rli toolregistry core/` 只命中
+`core/manager/biz/aiops/chatruntime/types.go:37` 的一句注释——「见 PR-3 的
+tool_registry.go」，一句从写下那天起就没有对应文件的注释。本轮把它补上，且是
+**按缺陷补的，不是按文件名补的**。
+
+#### 4.42.1 旧实现错在哪：一个被注释承认、被插件增长放大的缺陷
+
+`ToolSearch` 的关键词分支（`core/manager/biz/aiops/tools/tool_search_tool.go`）
+原文的形状是：
+
+```go
+for _, tool := range all {
+    if len(out) >= maxResults { break }
+    ... // 每个 token 都要 substring 命中
+    out = append(out, toolSearchEntryFromInfo(info))
+}
+```
+
+两条判据，都不是读代码时的猜测：
+
+1. **命中按注册顺序截断。** 一句 query 命中 50 个工具时，模型拿到的 5 份
+   schema 是**先注册的那 5 个**；两个同样能回答问题的工具之间，唯一区别是它们
+   在切片里的位置。
+2. **这件事被代码自己写出来了。** `matchTools` 的注释写着「Stable order:
+   input order is preserved (no scoring / fuzzy ranking in v1; the LLM usually
+   has a clear name in mind)」。**v1 的这条权衡在 88 个工具下成立、在几百个
+   工具下不成立**，而插件化只会让工具数往上涨。
+
+匹配谓词本身没错，错的是**命中之后谁排在前面**。所以这次只改排序，不改谓词。
+
+#### 4.42.2 新包 `core/manager/biz/aiops/toolregistry`：一个目录，三种问法
+
+| 导出面 | 用途 |
+|---|---|
+| `Entry{Name, Description, WhenToUse, Class, Origin}` | **值类型**。控制台、规划器、将来的 MCP 面要问「这个部署会做什么」，而它们手上没有（也不该构造）一个 `BaseTool` |
+| `EntryFromToolInfo(*basetool.ToolInfo) (Entry, bool)` | **唯一的 BaseTool 适配点**。模型搜到的目录与控制台渲染的能力清单因此不可能是两份略有差异的名单 |
+| `Catalogue.Search(query, limit) []Hit` | 相关性检索；`Hit{Entry, Score, Matched}` 把分数与命中的词一起交出去 |
+| `Catalogue.Entries()` / `Filter(pred)` | 按 class / origin 查能力，用谓词而不是新造一门查询语言 |
+| `Fuse(lists ...[]Ranked) []Hit` + `RRFConstant = 60` | 混合检索接缝：词法排序是 `Search`，第二路排序由调用方给（将来的向量检索），两路按**名次**融合 |
+
+三个刻意的决定，都写在包注释里：
+
+- **`Entry` 不持有 `BaseTool`。** 接口会强迫每个只想「问一个名字」的调用方
+  先伪造一个工具实例。
+- **`Score` 与 `Matched` 导出。** 一个操作员无法追问的排序，在它错的时候与
+  随机顺序无法区分。
+- **`Fuse` 不复用事件召回（`core/manager/control/incident/memory.go`）的
+  tie-break。** 只共用常量与公式：那一边的优先序是 `runbook:` / `knowledge:`
+  的证据策略，与一个工具名毫无关系。共享常量是复用，共享 tie-break 是范畴错误。
+
+#### 4.42.3 匹配语义逐字保留：一次改动只改一件事
+
+`Search` 的谓词与旧实现**逐字相同**：query 按空白切分、小写，每个 token 都
+必须作为 substring 出现在 name / description / when_to_use 里。为什么不顺手
+「改进」它：
+
+- 改排序 + 放宽谓词同时发生的话，**回归与改进就分不出来**——旧断言只能告诉我
+  们「结果变了」，不能告诉我们哪一处变成了哪一种。
+- 分词粒度**刻意停在「空白」**，不引入分词器。具体后果是中文：一个没有空格的
+  query（「查错误日志」）仍然是**一个** token，按整串 substring 命中，不会被
+  切成单字。把中文拆成单字的 tokenizer 会把一句精确短语变成一串松散的「或」，
+  那是拿召回换噪声。（`Search` 用 `strings.Fields`，旧实现是
+  `strings.Split(q, " ")`，差别只在于 tab/换行现在也算分隔符。）
+
+排序是三部分组成，每一部分都能指着一条测试：
+
+- **字段权重（取最强，不累加）**：name = 3.0 > when_to_use = 2.0 >
+  description = 1.0。累加会让一段啰嗦的 description 压过「名字就是要找的那个
+  东西」的工具。
+- **IDF**（`log(1 + docs/df)`）：压掉 `query` / `get` 这类到处都是的词。没有它，
+  排序就退化成「谁命中的词多」。
+- **并列按 name 字典序**：分数撞车是兄弟工具家族的常态（`query_promql` 与
+  `query_logql` 都带 `query`）。顺序必须**稳定**，否则同一个请求在两次进程里
+  给出不同的工具清单，一份 bug 报告就没法复现。
+
+#### 4.42.4 接线：只动 keyword 分支
+
+`ToolSearch.matchTools` 的 `select:` 分支**未改**——那个形状里调用方已经知道
+名字，精确匹配 + 保持输入顺序才是对的答案。改动只落在 keyword 分支：把本轮已
+persona 过滤后的工具集（`basetool.FilteredToolsFromContext`，空则回退
+`AllTools()`）适配成目录，交给 `Catalogue.Search`，再按下标回填完整 schema。
+
+- **响应 JSON 形状一字未动**（`{"query":…,"tools":[{name, description,
+  when_to_use, class, parameters}]}`）。这既是 LLM 的训练先验，也是既有 10 条
+  测试的断言面；改形状与改排序是两件事。
+- **目录每次调用重建。** `all` 是这一轮已经按 persona 过滤过的集合，缓存它就
+  要在 toolbag 重建的同一批事件上失效；适配几十个工具不值得冒这个风险。
+- **`Entry` 不带 `Parameters`**，所以 `ToolInfo` 在同一趟里按名字留存用于回填；
+  顺手按名字去重（同名工具是 bag 的缺陷，但不能变成响应里两行一模一样的 schema）。
+
+#### 4.42.5 这不是策略层：一个方向上的不对称
+
+目录**排序**、并按**声明出来的元数据**过滤；它从不判断一个调用方**被允许**够到
+什么。一轮能用哪个 bag 由角色、persona 与写入闸门在上游决定，检索只在这条已经
+收窄的集合上跑。因此这里的一个缺陷能**藏起**一个工具，永远不能**交出去**一个。
+这条不对称正是它可以是一个排序库、而不是一道闸门的原因。
+
+#### 4.42.6 闸门
+
+| 断言 | 测试 | 反向验证 |
+|---|---|---|
+| 名字命中压过 description 命中；`max_results=1` 时返回的是对的那个（旧实现回归） | `ToolSearch_KeywordRanksByRelevanceNotRegistrationOrder` | 把 keyword 分支换回旧循环 → `got alpha_report`，实测红 |
+| 同分按 name 字典序，与注册顺序无关 | `ToolSearch_KeywordRankBreaksTiesByName` | 旧循环 → `got host_zeta_file then host_...`，实测红 |
+| 检索不越出这一轮 persona 过滤后的集合 | `ToolSearch_KeywordSearchesOnlyThePersonaFilteredSet` | — |
+| 目录本身：排序 / IDF / 多 token 合取 / 空格式中文短语 / 无名条目丢弃 / `Entries` 返回副本 / 权重序 / RRF 融合 | `core/manager/biz/aiops/toolregistry/toolregistry_test.go`（18 条） | — |
+
+**未动的东西也是判据**：`tool_search_tool_test.go` 既有 10 条一条未改；
+`make eval-coverage` 仍是 `diagnosis 16/20` / `remediation 0/20`（本轮没有为凑
+覆盖开放任何写通道）。
+
+#### 4.42.7 进度修订
+
+§六 那张表里阶段 2 的 15% 是决策 102 的数。本轮之后，行内点名的六件事有两件
+已闭（工具注册表 = 本轮；per-tool 配额 = 决策 96，那一行当时已过期）：
+
+| 项 | 之前 | 之后 |
+|---|---|---|
+| 阶段 2 生态与治理 | 15% | **33%**（2/6） |
+| 加权合计（四阶段等比） | ≈46% | **≈51%**（(65+100+33+5)/4 = 50.75） |
+
+剩下的四条（MCP 对外协议面、成本结晶、eval 三维化、prompt injection 标注）一条
+未动。所以这不是「阶段 2 快完了」，是「阶段 2 的**第一件**做完了」。
+
+---
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -3889,10 +4019,11 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 |---|---|---|
 | 0 边缘交付闭环（P0） | **65%** | **三条** P0 都是「代码意图已写、实现路径从未跑过」：`cmd/opskeeper-edge/agent.go:209-212` 的 `Env` 只有两个 socket，`dist/build-edge-bundle.sh:38-49` 与 `deploy/Dockerfile.opskeeper-edge` 都不含 `pig`，`Makefile` 没有任何 `build-pig*` 目标。**已实测可行**：从 `core/pig` 构建 `github.com/MichaelKinsy/PiG/cmd/pig` 退出码 0（71 MB）。方案的「注入 `OPENAI_BASE_URL`」**不成立**（PiG 无此变量），正确路径是 `models.json` 自定义 provider + `PIG_CODING_AGENT_DIR`（§4.28.1）。**本轮新发现的第三条 P0 比前两条都严重：节点上的插件扩展编译不过**（`GOWORK=off` 实测报 `unknown revision core/v0.0.0`，且无 `go.sum`）——补齐 pig 与凭据之后节点仍然零工具（§4.28.8）。**决策 91 已关掉其中的第三条**：`core/wire` 内联进每个打包扩展、`go.mod` 删掉未发布的 `core v0.0.0`、只留 PiG SDK 一条 require，8 个打包扩展在 `GOWORK=off CGO_ENABLED=0` 下实测 8/8 构建通过，并新增「按节点的方式构建」这条**实测会红**的闸门（§4.29）。**决策 92 关掉了第二条**：`make build-pig-all` 从 `core/pig` + `GOWORK=off` 构建并**被每个 `build-edge-<arch>` 依赖**，两处 bundle 清单、`dist/package.sh`、`install-edge.sh`（含 `pig --version` 自检）、`Dockerfile.opskeeper-edge`、env 模板全部接通，六个位置各有断言（`core/floor/delivery`，6 条测试，**实测会红**）。**决策 93 关掉了 P0-1 的节点侧**：节点有了完整的凭据链（`OPSKEEPER_EDGE_AGENT_CONFIG_DIR` + `models.json` 的 `"$VAR"` 引用 + `PIG_CODING_AGENT_DIR`），并**对着真 `pig` 二进制验证**了三条（能解析 / 无凭据则拒绝 / 无 scope 则找不到）。本轮还查出方案 10 条清单里没有的第四条：**`DefaultAgentDir()` 在 `$HOME` 未设置时丢弃错误、返回相对路径 `.pig/agent`，被 agent 按 Cwd（即插件包根）解析**——凭据会落进签名插件内容里（§4.31.1）。**决策 94 关掉了 P0-1 的 manager 侧**：`core/manager/server/llmgw` 提供 `POST /v1/chat/completions`（流式 + 非流式）与 `GET /v1/models`，鉴权**复用隧道凭据对**（零新存储、零 schema 迁移、轮换即现有 `UpdateSecretHash`，§4.31.5），节点能选 model 不能选 provider；真 `pig` 二进制端到端抓出两处形状错误——`content` 实际是 string **或** parts 数组的联合类型（按 string 建模会拒绝真 agent 的每一个请求，而 18 条单元测试全绿）、大整数必须 `UseNumber` 才能活过 `>2^53`（§4.32）。**决策 95 把方案 0.1 剩下的三项职责与限流补齐**：每日 token 上限复用**同一个** `llm.InMemoryBudget` 实例（两份账 = 集群能花掉两倍上限）、每 edge 一个令牌桶超限 429、调用方的 `max_completion_tokens` 真正生效（之前被解析后丢弃）；顺带修掉 **429 之前被报成 400**（`writeError` 自带的 switch 对预算与限流哨兵没有分支）与一处 typed nil panic（§4.33）。剩下的不是 P0，是验收本身：方案 0.4 的 `make compose-up` 真实对话需要 Docker 与真 provider key；**决策 96 关掉了 per-tool 配额**（§4.28.4 判定的阶段 0 阻塞项）：清单里声明 `limits`、执行器 metadata 里也声明、两侧漂移由 `sdk.Check` 报错，**强制点在 tool broker**——节点上所有工具调用的唯一通道，因此覆盖将来任何一个第三方工具（没声明也有 1 MiB 默认上限，`skill.Spill` 从一段**零调用点的死代码**里搬出来并修好 0644 权限、24 小时回收与路径注入）。九个高基数读工具各有紧于默认值的上限与墙钟（§4.34）。剩下的**只有方案 0.4 的真实验收**：`make compose-up` 后一台 edge 完成一次真实对话、节点上可见独立 pig 进程、`/etc/opskeeper-edge` 无云厂商密钥——前两条已由 `core/floor/delivery` 与 `tests/agentgateway` 覆盖了可离线覆盖的部分，真 provider key 那一条本机不具备。**这一条是实测的而非推测**：`which docker` 有二进制，`docker info` 退出码 1（daemon 未运行），即容器从未在本机跑过。**0.2 的隧道下发（决策 103 已关）**：方案要求 `GatewayURL` / `TokenRef` **由隧道配置下发，而非硬编码 env**。决策 103 把它做成心跳应答的两个非机密字段（`agent_base_url` + `agent_model`），节点在自己的 env 沉默时采纳、env 非空时 env 胜——形状与 `pluginEndpointResolver` / `TunnelConfigFetcher` 逐字同形，没有新造凭据。**但「轮换 token 即逐台重启」这一条并没有被它修掉，也不该由它修**：token 仍是节点的隧道凭据对，轮换语义本来就与隧道一致（`UpdateSecretHash`）。见 §4.40.3 与 §4.41 |
 | 1 离线与有限自治（P1） | **100%** | **决策 98 关掉了方案 1.2（自治白名单）**：清单里签一份固定 argv 列表，节点只在中心失联超过阈值且**触发器实测成立**时执行它，执行的是声明的 argv、宿主派生幂等键、**先消费后执行**、两阶段落盘审计（`core/edge/autonomy` 41 项 + 装配根 10 项端到端，§4.36）。**13 条具名加载期拒绝**堵住清单侧（argv 含元字符、半径超 single-ns、TTL 超 6h、工具未声明、工具是 read、`offline_after` 低于 30s…）。**决策 99 关掉了方案 1.1（遥测本地 spool）**：先把「追加一行、封顶、按序回放」抽成 `core/edge/spool` 原语（只依赖标准库），再让遥测（`core/edge/telemetrywal`）、变更事件（`changewatcher/tunnel_sink.go`）、自治审计三个用户各自只声明自己的策略——**两份日志、一套丢弃表**（trace 先丢 > metric 30m 保质期 > change event 无保质期）；`Send(ctx, rows) (int, error)` 一个签名同时满足审计的「全有或全无」与遥测的「部分前进」；回放限流 100 行/5s 且**只有满批才限流**；本轮由测试抓出 8 个真实缺陷，其中 `Ack` 的读改写分锁会吞掉并发写入的行（§4.37）。**决策 100 修掉了回放路上的一处数据丢失**：`Accepted=0`（中心还没准备好）原被当成「永久拒绝」，于是断连攒下的积压**在恢复后第一条消息里被 ack 丢弃**——日志扛过了断网、死在握手的样子上；中心侧 `push_prom_samples` 的三条丢弃路径还爱说谎（返回 `Accepted=n`），一并改成「能放报写入数、放不下报 0」。现在 `Accepted=0` 读作「还没有」，批次留在盘上。**决策 101 关掉了审计回放传输**（§4.39）：`agent.audit.replay` 隧道方法 + `AutonomyAuditRow` 契约、中心 `RecordAutonomyReplay`（**整批形状校验在前、逐行 `EmitWithID` 在后**，所以一次重试不产生重复）补 HMAC 链、`buildAutonomy` 接上并启动 `autonomy.Pump`；节点把中心的回答读成三种动作（传输失败/还没收下 → 留住重试；形状拒绝 → 计数跳过不重试；全收 → ack），未进链的行由 `autonomyHealth.ReplayRefused` 上报。接线抓出**两处实现错误**并各有实测会红的回归：① handler 的 `bindEdgeTransport` 会按 body 改绑 transport，一个已绑 42 的连接推送 7 就能把 42 的自愈历史写进 7 的账（`TestInstall_AutonomyReplay_TrustsTheTransportEdgeID` 实测 `edge = 7, want 42`）；② 节点 sender 用 `Accepted+Rejected >= len(rows)` 判断「已交代」，多报一个数就会 ack 掉整批（`TestAutonomyReplaySender_ACountItCannotExplainIsRetried` 实测变红，改为 `== len(rows)`）。顺带修掉一处既有缺陷：`.go-arch-lint.yml` 里 `oxedge_spool` 写成 `mayDependOn: []`，go-arch-lint 的 spec 校验因此**拒绝运行整份文件**——决策 99（`8fefe7b`）之后 `make arch-lint-run` 一次也没通过过，已按同文件既有写法改为 `anyVendorDeps: true`（§4.39.6）。**阶段 1 的代码侧到此完整**，唯一剩下的是遥测回放需要中心**按 `Seq` 去重**（at-least-once 的另一半，目前 `host_metrics_raw` 是自增 `id` + 非唯一索引、`change_events` 无 `ON CONFLICT`、`promwrite` 无去重键，所以做到了「不丢」还没做到「不重」） |
-| 2 生态与治理加固（P2） | **15%** | 工具注册表：`grep toolregistry` 只命中注释（`chatruntime/types.go:37-40` 自陈在 PR-3），**不存在 `tool_registry.go`**；per-tool 配额：`PluginSpec` 无 limits 字段（单是高基数只读工具就已经是阶段 0 阻塞项）；MCP 兼容层：运行时已有（决策 85），但**无对外 MCP 协议面**；成本结晶：`grep crystalliz` 零命中；eval 三维化：`judge.Score` 是过程四维，不是 Localization × Identification × Reason；prompt injection 标注：无 |
+| 2 生态与治理加固（P2） | **33%** | 工具注册表：**决策 104 关掉**——`core/manager/biz/aiops/toolregistry`（`Entry` 值类型、唯一适配点 `EntryFromToolInfo`、`Catalogue.Search` 相关性排序、`Filter` 按声明元数据查能力、`Fuse`/`RRFConstant` 混合检索接缝，18 条测试），`ToolSearch` 的 keyword 分支改为排序、`select:` 与响应形状未动（§4.42）；per-tool 配额：**决策 96 已关**（`sdk/manifest.go` 校验 `spec.tools[].limits`，强制点 `core/edge/toolbroker`），本行此前已过期；MCP 兼容层：运行时已有（决策 85），但**无对外 MCP 协议面**；成本结晶：`grep crystalliz` 零命中；eval 三维化：`judge.Score` 是过程四维，不是 Localization × Identification × Reason；prompt injection 标注：无 |
 | 3 控制面瘦身与联邦（P3） | **5%** | `iam → manager` 反向依赖仍在 `scripts/modulecheck/main.go:548-556` 的 `exceptions` 台账里（决策 35 的已知例外，注释已写明「未来拆分必须解决它」）；manager 27.3 万行（实测 `find core/manager -name '*.go' \| xargs wc -l`）；无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档） |
 
-加权合计 ≈ **46%**（四阶段等比：65 / 100 / 15 / 5 的均值 46.25%）。**这个数字
+加权合计 ≈ **51%**（决策 104 更新：阶段 2 从 15% 记为 33%，
+四阶段等比 65 / 100 / 33 / 5 的均值 50.75）。**这个数字
 仍然不是好消息，但阶段 0 与阶段 1 的形状都变了**：三条 P0 **全部关掉**（决策 91、92、93+94），
 四条涉及的位置现在都有断言，且方案 0.1 的五项职责（凭据解析、预算拦截、转发、
 usage 计量、429 限流）全部落地（决策 95）。阶段 0 剩下的**不是难，是一件需要外部条件的事**：方案 0.4 的真实对话验收
