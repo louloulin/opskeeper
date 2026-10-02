@@ -96,7 +96,23 @@ func loadNodeAgentConfig() nodeAgentConfig {
 // metrics, still serves its own skill RPCs, and still answers agent.state
 // and agent.health with an explanation. An edge that refuses to boot
 // because the AI is down would take the telemetry with it.
-func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConfig, version string, log *slog.Logger) (bridge *edgebiz.AgentBridge, stop func(), err error) {
+func startNodeAgent(
+	ctx context.Context,
+	client tunnel.Client,
+	cfg nodeAgentConfig,
+	version string,
+	// agent is the tunnel-side agent. It is passed in rather than built
+	// here because the heartbeat and the collector that live on it are two
+	// of the three inputs the autonomy arbiter needs, and a second agent
+	// built in this function would be a second heartbeat and a second
+	// opinion about whether the control plane is there.
+	agent *edgebiz.Agent,
+	// runner executes a declared action when the arbiter allows it. It is
+	// built by main so the autonomy path runs through the same sandbox the
+	// bash tool does.
+	runner autonomyRunner,
+	log *slog.Logger,
+) (bridge *edgebiz.AgentBridge, stop func(), err error) {
 	// Admit the packages before anything starts. A package that fails
 	// validation is a boot error the operator has to fix, not a warning
 	// that scrolls past: starting the agent without it would produce a
@@ -227,6 +243,38 @@ func startNodeAgent(ctx context.Context, client tunnel.Client, cfg nodeAgentConf
 	log.Info("node agent tool allow-list built",
 		slog.Int("tools", registry.Len()),
 		slog.Any("names", registry.Names()))
+
+	// Autonomy is built from the same admitted manifests and in the same
+	// place, so a package cannot be in the allow-list and missing from the
+	// self-heal declarations, or the other way round. It returns nil when
+	// nothing asked for autonomy, which is the state of every package that
+	// ships today, and nil is not a failure.
+	autonomyStack, err := buildAutonomy(ctx, admitted, agent, runner, cfg.Cwd, log)
+	if err != nil {
+		// A package that asked for autonomy on a node that cannot hold the
+		// audit spool is refused, not downgraded. Autonomy without a record
+		// is a self-heal nobody can audit, which is the whole thing the
+		// control plane signs for.
+		return nil, nil, fmt.Errorf("edge agent autonomy: %w", err)
+	}
+	if autonomyStack != nil {
+		// The counters are in the boot log because the first question
+		// anybody asks a node that did not self-heal is "did it think it
+		// was allowed to", and an answer that is only in memory is an
+		// answer nobody has.
+		log.Info("node autonomy health", slog.Any("health", autonomyStack.Health()))
+		priorStop := stop
+		stop = func() {
+			// Closing the spool first flushes and releases the file the
+			// arbiter writes through. A node that is restarted mid-outage
+			// has to leave its decisions readable by the process that comes
+			// after it.
+			if err := autonomyStack.spool.Close(); err != nil {
+				log.Warn("autonomy audit spool did not close cleanly", slog.Any("err", err))
+			}
+			priorStop()
+		}
+	}
 
 	// The gate, the socket, the bridge and the supervisor reference each
 	// other, and the cycle is broken in one place rather than spread across

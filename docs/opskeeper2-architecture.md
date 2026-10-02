@@ -3133,6 +3133,123 @@ operator 被展示过的那个 digest 上。**真正缺的那一条恰好是探�
 
 ---
 
+### 4.36 决策 98：方案 1.2 自治白名单——控制面失联时机器能做什么，以及为什么答案这么小
+
+决策 97 打开了做这件事的前提。本轮实现它，判定与实现的取舍如下。
+
+#### 4.36.1 判定与实现的四条取舍
+
+| 方案原文 | 实现 | 理由 |
+|---|---|---|
+| 自治白名单写在插件清单里 | ✅ `domain.AutonomyPolicy` + `PluginSpec.Autonomy` | 白名单必须与插件一起被签名，否则它就是配置而非授权 |
+| 中心失联超过阈值才生效 | ✅ `AutonomyPolicy.OfflineAfter`，宿主地板 30s | 一个 4 秒的断链不是事故；tunnel 重连正是一串 4 秒 |
+| 动作可带「触发条件」 | ⚠️ **收紧为闭集 `metric_above`，且必须实测成立** | 表达式语言在这里的失败模式是「算错了但看起来对」 |
+| 节点失联时自行执行并上报 | ⚠️ **执行已落地，回放未启动** | manager 侧还没有回传路由，启动泵只会每 5s 刷错误日志 |
+
+#### 4.36.2 判定顺序就是安全性
+
+```
+模型调用 host_autonomy_run(action, target, window)
+        │
+        ▼
+  claim.Action 为空？ ──────────────► defer（不是自治请求）
+        │ 否
+        ▼
+  本节点声明过这个动作名？ ──否──► defer（闸门才是未声明调用的裁决者）
+        │ 是
+        ▼
+  中心可达 / 失联未过阈值？ ─是───► defer（有人能问，就有人能答）
+        │ 中心已失联足够久
+        ▼
+  ┌──────────── 以下全部是「拒绝」，不可降级执行 ────────────┐
+  │ 触发器未实测成立（含「本节点测不了」）                │ refuse
+  │ claim 携带的 argv ≠ 声明的 argv（逐元素）             │ refuse
+  │ target / window 缺失，幂等键无法派生                   │ refuse
+  │ blast radius 超出本节点上限                            │ refuse
+  │ TTL 自 InstalledAt 起已过期                            │ refuse
+  │ 幂等键已消费（重放）                                   │ refuse
+  └─────────────────────────────────────────────────────┘
+        │ 全部通过
+        ▼
+  先消费幂等键 → 写「已决定」行 → 执行**声明的** argv → 写「已完成」行
+```
+
+前三步是 `defer`，之后全部是 `refuse`。**这条分界线是本节最关键的设计**：
+`defer` 的语义是「这不是我的事，去问人」，因此一个畸形的 claim 在中心在线时
+被交给人而不是被拒；`refuse` 的语义是「有人想跳过人，所以不许，且不许换个
+路径再来」。把 `refuse` 降级成 `defer` 会让一次越权尝试变成一次人工审批请求，
+那是整个设计里最容易写错、后果又最难在测试里看出来的错。
+
+#### 4.36.3 触发器是条件，不是注释
+
+这是本轮最实质的收紧。方案写「动作可带触发条件」，实现把它变成
+`Detector` 接口上的一个必须为真的判断：
+
+- `TriggerMetricAbove` 是**闭集**。加一种 kind 要改 `core/domain/autonomy.go`
+  与节点的 detector，走与任何能力一样的评审。
+- 判定者是 `ValueDetector`——节点**自己**最后一次采样到的值。谁都不能替节点
+  声称「阈值已越过」：提出请求的一方恰恰是最不该被采信的一方，所以宿主工具
+  的 `Claim.Trigger` 是可选的，权威是探测器。
+- **测不到就拒绝**（fail-closed）。指标管道死掉与「一切正常」不是同一件事，
+  把它读成后者会让一台坏掉的节点在没人看管时执行自愈。
+
+新增的 `core/edge/autonomy/autonomy_test.go:TestAClaimWithNoArgvRunsTheDeclaration`
+同时钉住一个**接线层的真缺陷**：宿主工具的参数里根本没有 argv（这是它的形状，
+也是它安全的原因），而仲裁器原先要求 claim 必须逐元素携带 argv，于是
+`host_autonomy_run` 走真路径时**每一次都被拒**。判据改为「携带则必须等于声明，
+未携带则用声明」——因为 `Perform` 执行的本来就是 `d.Action.Argv`，空 argv
+不构成任何放宽，而带错 argv 的 claim 仍然逐条拒绝（表格测试四条）。
+
+#### 4.36.4 自治动作是「事先签好字的普通命令」
+
+`core/edge/cmdpolicy/sandbox.go:ExecArgv` 与 `core/edge/bash/handlers.go:NewSandbox`
+让自治与 bash **共用同一个 sandbox**：二进制白名单、路径校验、网络主机白名单、
+擦洗过的环境、墙钟、输出上限，一次都不重写。如果自治有自己的执行器，就会有
+两份白名单，而它们漂移的那一天，签过字的 argv 会跑在一条没人评审过的规则下。
+
+`argv` 是**列表**不是字符串，这是全部：`systemctl restart orders-api` 与
+`systemctl restart postgres` 之间的差别由清单签名，而不是由模型的一次引号处理
+决定。`host_autonomy_run` 的三个参数里没有任何一个能装下命令。
+
+#### 4.36.5 审计 spool：现在本地，回放未启动
+
+`core/edge/autonomy/spool.go` 是 JSONL 追加 + `Ack` 原子重写：0600/0700 权限、
+拒绝 symlink、拒绝已被 group/world 可读的文件、有限容量丢最旧（保留 100 行）、
+半行跳过。写两阶段（`decided` / `completed`）意味着「自愈开始了但没写结果」
+在盘上留下的是**一条记录**而不是一个空洞。
+
+`Pump` 已实现并按方案四条测试覆盖（限流默认 100 行/5s、ack 全有或全无），
+**但没有在 `buildAutonomy` 里启动**：manager 侧还没有
+`agent.autonomy.replay` 路由，一个永远发不出去的泵会在节点余生里每 5 秒
+刷一次错误。行留在本地，健康行报告积压数（`autonomyHealth.Spooled`），
+不丢也不假装。**待办是传输层，不是泵**。
+
+#### 4.36.6 落地清单与闸门
+
+| 层 | 位置 | 内容 |
+|---|---|---|
+| 契约 | `core/domain/autonomy.go`（新） | `AutonomyPolicy` / `AutonomyAction` / `AutonomyTrigger`；`Duration` 用 Text 接口（core 零依赖，yaml.v3 与 encoding/json 都认） |
+| 加载期校验 | `sdk/manifest.go`（`validateAutonomy`） | 13 条具名拒绝：argv 非列表/含元字符/为空、半径超 single-ns、TTL 超 6h、常量幂等键、未知 trigger、工具未声明、工具是 read、`offline_after` 低于 30s、有阈值无动作、两个动作同工具… |
+| 机制 | `core/edge/autonomy/`（新） | `autonomy.go`（判定四问 + Registry）/ `execute.go`（跑声明的 argv）/ `spool.go` / `pump.go` |
+| 观测 | `core/edge/biz/agent.go` | `linkState`（心跳观测 online/offlineSince）、`metricIndex`（每指标保留最大值）、`LinkReach()` / `MetricValue()` |
+| 执行 | `core/edge/cmdpolicy/sandbox.go` | `ExecArgv(ctx, argv)`——不经 shell，保留全部既有约束 |
+| 工具 | `core/floor/skill/builtin/autonomy_run.go`（新） | `host_autonomy_run`，`ClassDangerous`，参数只有 `action/target/window`；`AutonomyRunner` 是本地接口（floor 不得 import edge/autonomy） |
+| 接线 | `cmd/opskeeper-edge/autonomy.go`（新） | `buildAutonomy` 四输入装配；无 autonomy 声明返回 `(nil, nil)`，不是错误 |
+| 闸门 | `cmd/opskeeper-edge/autonomy_test.go`（新） | **10 个端到端用例**：在线 defer / 阈值未到 defer / 1 秒抖动 defer / 失联+越阈 run 且 runner 收到声明 argv / 未声明动作 defer / 命令行无法表达 / 重放 refuse / 无法测量 refuse / spool 两阶段 3 行且 0600 / 无声明则无栈无 spool |
+| 闸门 | `core/edge/autonomy/*_test.go` | 41 项；`-race -count=2` 82 项 |
+| 闸门 | `sdk/autonomy_test.go` | 63 项（含 12 条具名拒绝子测试 + 「无 autonomy 块不受影响」回归） |
+
+**回归确认**：`make plugin-extension-build-check` 与 `make eval-coverage` 之后
+plugin 能力覆盖仍是 **0/20**（diagnosis 16/20、remediation 0/20）——自治工具
+在每个节点都注册，但**只有清单点名时闸门才肯派发它**，所以今天任何一个包
+的自治能力都还是零。这正是 4.36.1 那张表的最后一行要的。
+
+阶段 1 从 **30% 记为 65%**，加权合计从 ≈29% 记为 **≈37%**。1.2 已完成，
+尾巴是回放传输（manager 侧路由 + 中心审计链补写）；1.1（遥测本地 spool）
+**未动**，它现在是阶段 1 剩下的全部。
+
+---
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -3166,11 +3283,11 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 | 阶段 | 完成度 | 判据与剩余 |
 |---|---|---|
 | 0 边缘交付闭环（P0） | **65%** | **三条** P0 都是「代码意图已写、实现路径从未跑过」：`cmd/opskeeper-edge/agent.go:209-212` 的 `Env` 只有两个 socket，`dist/build-edge-bundle.sh:38-49` 与 `deploy/Dockerfile.opskeeper-edge` 都不含 `pig`，`Makefile` 没有任何 `build-pig*` 目标。**已实测可行**：从 `core/pig` 构建 `github.com/MichaelKinsy/PiG/cmd/pig` 退出码 0（71 MB）。方案的「注入 `OPENAI_BASE_URL`」**不成立**（PiG 无此变量），正确路径是 `models.json` 自定义 provider + `PIG_CODING_AGENT_DIR`（§4.28.1）。**本轮新发现的第三条 P0 比前两条都严重：节点上的插件扩展编译不过**（`GOWORK=off` 实测报 `unknown revision core/v0.0.0`，且无 `go.sum`）——补齐 pig 与凭据之后节点仍然零工具（§4.28.8）。**决策 91 已关掉其中的第三条**：`core/wire` 内联进每个打包扩展、`go.mod` 删掉未发布的 `core v0.0.0`、只留 PiG SDK 一条 require，8 个打包扩展在 `GOWORK=off CGO_ENABLED=0` 下实测 8/8 构建通过，并新增「按节点的方式构建」这条**实测会红**的闸门（§4.29）。**决策 92 关掉了第二条**：`make build-pig-all` 从 `core/pig` + `GOWORK=off` 构建并**被每个 `build-edge-<arch>` 依赖**，两处 bundle 清单、`dist/package.sh`、`install-edge.sh`（含 `pig --version` 自检）、`Dockerfile.opskeeper-edge`、env 模板全部接通，六个位置各有断言（`core/floor/delivery`，6 条测试，**实测会红**）。**决策 93 关掉了 P0-1 的节点侧**：节点有了完整的凭据链（`OPSKEEPER_EDGE_AGENT_CONFIG_DIR` + `models.json` 的 `"$VAR"` 引用 + `PIG_CODING_AGENT_DIR`），并**对着真 `pig` 二进制验证**了三条（能解析 / 无凭据则拒绝 / 无 scope 则找不到）。本轮还查出方案 10 条清单里没有的第四条：**`DefaultAgentDir()` 在 `$HOME` 未设置时丢弃错误、返回相对路径 `.pig/agent`，被 agent 按 Cwd（即插件包根）解析**——凭据会落进签名插件内容里（§4.31.1）。**决策 94 关掉了 P0-1 的 manager 侧**：`core/manager/server/llmgw` 提供 `POST /v1/chat/completions`（流式 + 非流式）与 `GET /v1/models`，鉴权**复用隧道凭据对**（零新存储、零 schema 迁移、轮换即现有 `UpdateSecretHash`，§4.31.5），节点能选 model 不能选 provider；真 `pig` 二进制端到端抓出两处形状错误——`content` 实际是 string **或** parts 数组的联合类型（按 string 建模会拒绝真 agent 的每一个请求，而 18 条单元测试全绿）、大整数必须 `UseNumber` 才能活过 `>2^53`（§4.32）。**决策 95 把方案 0.1 剩下的三项职责与限流补齐**：每日 token 上限复用**同一个** `llm.InMemoryBudget` 实例（两份账 = 集群能花掉两倍上限）、每 edge 一个令牌桶超限 429、调用方的 `max_completion_tokens` 真正生效（之前被解析后丢弃）；顺带修掉 **429 之前被报成 400**（`writeError` 自带的 switch 对预算与限流哨兵没有分支）与一处 typed nil panic（§4.33）。剩下的不是 P0，是验收本身：方案 0.4 的 `make compose-up` 真实对话需要 Docker 与真 provider key；**决策 96 关掉了 per-tool 配额**（§4.28.4 判定的阶段 0 阻塞项）：清单里声明 `limits`、执行器 metadata 里也声明、两侧漂移由 `sdk.Check` 报错，**强制点在 tool broker**——节点上所有工具调用的唯一通道，因此覆盖将来任何一个第三方工具（没声明也有 1 MiB 默认上限，`skill.Spill` 从一段**零调用点的死代码**里搬出来并修好 0644 权限、24 小时回收与路径注入）。九个高基数读工具各有紧于默认值的上限与墙钟（§4.34）。剩下的**只有方案 0.4 的真实验收**：`make compose-up` 后一台 edge 完成一次真实对话、节点上可见独立 pig 进程、`/etc/opskeeper-edge` 无云厂商密钥——前两条已由 `core/floor/delivery` 与 `tests/agentgateway` 覆盖了可离线覆盖的部分，真 provider key 那一条本机不具备（无 Docker、无 key）|
-| 1 离线与有限自治（P1） | **30%** | **决策 97 关掉了方案 1.3（幂等与栅栏）**：同一调用并发重复提交合并为一张卡、一次批准恰好一次执行（`ClaimReceipt` 消费式）、授予有可注入租约、审批挂起期间同会话兄弟排队、**读调用不被栅栏阻塞**、关闭对话释放孤儿、拒绝栅栏防「立刻重问」且不误伤兄弟（§4.35）。已有的一半：changewatcher 内存批量缓冲（`tunnel_sink.go:16-52`，drop-oldest + 可观测计数）、tunnel full-jitter 重连（决策 78）。缺的一半：`metricsLoop` 连内存缓冲都没有（`agent.go:529-615`，失败只 log）、无落盘 WAL、无 replay、无 `core/edge/autonomy`（1.2，且**必须以决策 97 的幂等键为前提**才开始，否则等于给自治装上重试风暴的引擎）；`PluginSpec` 的 `limits` 已由决策 96 补上，不在本项剩余里。方案的 autonomy 设计与「审批裁决权在宿主」不冲突，但**必须以「宿主代码 + 中心签名策略 + 只读先行」三个前提重写**（§4.28.6） |
+| 1 离线与有限自治（P1） | **65%** | **决策 98 关掉了方案 1.2（自治白名单）**：清单里签一份固定 argv 列表，节点只在中心失联超过阈值且**触发器实测成立**时执行它，执行的是声明的 argv、宿主派生幂等键、**先消费后执行**、两阶段落盘审计（`core/edge/autonomy` 41 项 + 装配根 10 项端到端，§4.36）。**13 条具名加载期拒绝**堵住清单侧（argv 含元字符、半径超 single-ns、TTL 超 6h、工具未声明、工具是 read、`offline_after` 低于 30s…）。审计 spool 本地保留（0600/0700、丢最旧、半行跳过），**回放泵已实现但未启动**——manager 侧还没有 `agent.autonomy.replay` 路由，启动只会刷错误日志（待办是传输层）。决策 97 的幂等键是它的前提，现已具备。剩下的是 1.1（遥测本地 spool）：`metricsLoop`（`agent.go:529-615`）失败只 log、无落盘 WAL、无 replay、无分级丢弃；changewatcher 已有内存缓冲（`tunnel_sink.go:16-52`） |
 | 2 生态与治理加固（P2） | **15%** | 工具注册表：`grep toolregistry` 只命中注释（`chatruntime/types.go:37-40` 自陈在 PR-3），**不存在 `tool_registry.go`**；per-tool 配额：`PluginSpec` 无 limits 字段（单是高基数只读工具就已经是阶段 0 阻塞项）；MCP 兼容层：运行时已有（决策 85），但**无对外 MCP 协议面**；成本结晶：`grep crystalliz` 零命中；eval 三维化：`judge.Score` 是过程四维，不是 Localization × Identification × Reason；prompt injection 标注：无 |
 | 3 控制面瘦身与联邦（P3） | **5%** | `iam → manager` 反向依赖仍在 `scripts/modulecheck/main.go:548-556` 的 `exceptions` 台账里（决策 35 的已知例外，注释已写明「未来拆分必须解决它」）；manager 27.3 万行（实测 `find core/manager -name '*.go' \| xargs wc -l`）；无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档） |
 
-加权合计 ≈ **29%**（四阶段等比：65 / 30 / 15 / 5 的均值 28.75%）。**这个数字
+加权合计 ≈ **37%**（四阶段等比：65 / 65 / 15 / 5 的均值 37.5%）。**这个数字
 仍然不是好消息，但阶段 0 的形状变了**：三条 P0 **全部关掉**（决策 91、92、93+94），
 四条涉及的位置现在都有断言，且方案 0.1 的五项职责（凭据解析、预算拦截、转发、
 usage 计量、429 限流）全部落地（决策 95）。阶段 0 剩下的**不是难，是一件需要外部条件的事**：方案 0.4 的真实对话验收
@@ -5276,6 +5393,26 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
    - ℹ️ 存量技能市场是另一回事：`/settings/marketplace` 已于 2026-05-19
      退役并折进 `/skills?tab=install`，它服务的是 skill pack，不是 PiG
      package，不计入上面这条。
+
+### 阶段 1 收口：离线与有限自治
+
+分布式改造方案的四条里，1.3（幂等与栅栏）由决策 97 关闭，1.2（自治白名单）由
+决策 98 关闭（§4.36）。**阶段 1 现在只剩 1.1 一条**，按依赖顺序：
+
+1. **1.1 遥测本地 spool**（阶段 1 剩余的全部）。`metricsLoop`
+   （`core/edge/biz/agent.go`）失败只 log，连内存缓冲都没有；需要落盘 WAL、
+   恢复回放、分级丢弃与回放限流。**可以复用决策 98 刚写的 `autonomy.Spool`
+   的四条性质**（0600/0700、拒绝 symlink 与已放宽权限的文件、有限容量丢最旧、
+   半行跳过、`Ack` 原子重写）——两次 spool 不该有两种语义。changewatcher 侧
+   的内存批量缓冲（`tunnel_sink.go:16-52`）是该走这条路的另一半。
+2. **1.2 的尾巴：回放传输**。`autonomy.Pump` 已实现并有测试，但 manager 侧
+   还没有 `agent.autonomy.replay` 路由，所以没启动。落地顺序是：隧道方法 →
+   中心侧接收 → **审计链补写**（节点 spool 的行回传后由中心补 HMAC 链，否则
+   节点本地记录永远只是节点自己的说法）→ 限流与积压可观测 → 然后才在
+   `buildAutonomy` 里接上泵。**先接泵再修路由，会得到一个每 5 秒刷一次错误
+   的节点。**
+3. **阶段 0 唯一剩余项**需要外部条件：`make compose-up` 后一台 edge 完成一次
+   真实对话（要 Docker 与真 provider key，本机不具备）。
 
 ### D 阶段续：把声明变成实现
 

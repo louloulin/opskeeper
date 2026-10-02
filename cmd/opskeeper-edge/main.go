@@ -135,7 +135,16 @@ func main() {
 	// continues on any soft failure (operator yaml override parse
 	// error, missing binaries) — cmdpolicy.Sandbox.Decide just
 	// rejects calls cleanly with a Reason the LLM can read.
-	if err := edgebash.Register(client, log); err != nil {
+	//
+	// The sandbox is built once and used twice: by the bash handler below,
+	// and by the autonomy runner that a signed package may install. One
+	// sandbox on one host is one policy; two would be two answers to
+	// "what may this node run", and the day they disagree the signed argv
+	// is running under whichever rule nobody reviewed.
+	sandbox, err := edgebash.NewSandbox(log)
+	if err != nil {
+		log.Warn("bash sandbox unavailable; capability disabled", slog.Any("err", err))
+	} else if err := edgebash.RegisterWithSandbox(client, sandbox, log); err != nil {
 		log.Warn("bash register failed; capability disabled", slog.Any("err", err))
 	}
 
@@ -174,7 +183,8 @@ func main() {
 	// thing a node cannot be redeployed to get back quickly.
 	agentLog := log.With(slog.String("comp", "node-agent"))
 	nodeCfg := loadNodeAgentConfig()
-	agentBridge, stopNodeAgent, err := startNodeAgent(egCtx, client, nodeCfg, version, agentLog)
+	agentBridge, stopNodeAgent, err := startNodeAgent(egCtx, client, nodeCfg, version, agent,
+		autonomyRunner{sandbox: sandbox}, agentLog)
 	if err != nil {
 		log.Warn("node agent unavailable; the node runs without an AI agent", slog.Any("err", err))
 	} else {

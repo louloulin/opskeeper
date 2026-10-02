@@ -124,7 +124,115 @@ type Agent struct {
 	// in the composition root rather than anything this package should be
 	// able to see. Guarded by mu for the same reason pluginHealthFn is.
 	pluginInstaller ports.PluginInstaller
+
+	// link tracks whether the control plane is answering.
+	//
+	// The heartbeat is the witness, and nothing else is: a TCP socket that
+	// has not failed yet says the network stack accepted a write, not that
+	// the manager is there. It matters because the autonomy arbiter's whole
+	// question is "is the center reachable, and if not since when", and an
+	// answer of "the socket looks fine" is exactly the answer that would
+	// let a node keep waiting for a human who is not coming.
+	link linkState
+
+	// latest holds the most recent value of each metric the node scraped.
+	//
+	// It is here rather than in the arbiter because the node is the only
+	// thing that scrapes: an autonomy trigger has to be measured against
+	// this host's own readings, and a trigger evaluated against a cached
+	// value from the control plane is a trigger that works exactly when
+	// the link is fine and not when it is needed.
+	latest metricIndex
 }
+
+// linkState is the control plane's reachability as the heartbeat sees it.
+type linkState struct {
+	mu sync.Mutex
+	// online is the last thing the heartbeat observed. It starts true
+	// because the agent does not get here until Dial returned.
+	online bool
+	// offlineSince is when the last healthy link ended. Zero while the
+	// link is healthy, and also zero when the node has never had one —
+	// which the arbiter reads as "no outage has been established", the
+	// direction that runs nothing.
+	offlineSince time.Time
+}
+
+func (l *linkState) observe(ok bool, now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	switch {
+	case ok && !l.online:
+		// The link came back. The offline window is over and the moment it
+		// started is no longer interesting to anything.
+		l.online = true
+		l.offlineSince = time.Time{}
+	case ok:
+		l.online = true
+	case !ok && l.online:
+		// The first failure starts the clock. Later failures do not
+		// restart it, or a node in a brown-out would keep resetting the
+		// window and never reach any threshold.
+		l.online = false
+		l.offlineSince = now
+	}
+}
+
+func (l *linkState) reach() (bool, time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.online, l.offlineSince
+}
+
+// metricIndex remembers the newest value of every metric name the node
+// scraped.
+type metricIndex struct {
+	mu     sync.RWMutex
+	values map[string]float64
+}
+
+// observe records one scrape round.
+//
+// Where a metric carries labels — one series per mount, per device, per
+// core — the highest value wins. That is the reading that means "something
+// on this host is in the state the action is declared for", and it is the
+// direction that acts. The opposite choice, the mean, would average a full
+// disk and an empty one into a number that triggers nothing, and a
+// self-heal that silently never fires is worse than one that fires on the
+// worst series: the action's reach is a declared argv against one target,
+// so the cost of a false positive is bounded by what was signed.
+func (m *metricIndex) observe(samples []tunnel.PromSample) {
+	if len(samples) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.values == nil {
+		// Lazily, because an Agent is also built directly in tests and a
+		// nil map here is a panic on the first scrape rather than a
+		// missing reading.
+		m.values = make(map[string]float64, len(samples))
+	}
+	for _, s := range samples {
+		if cur, ok := m.values[s.Name]; !ok || s.Value > cur {
+			m.values[s.Name] = s.Value
+		}
+	}
+}
+
+func (m *metricIndex) lookup(name string) (float64, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.values[name]
+	return v, ok
+}
+
+// LinkReach reports whether the control plane is answering, and when it
+// stopped. It is the autonomy arbiter's only input about the outside world.
+func (a *Agent) LinkReach() (online bool, offlineSince time.Time) { return a.link.reach() }
+
+// MetricValue returns the node's most recent reading of a named metric.
+func (a *Agent) MetricValue(name string) (float64, bool) { return a.latest.lookup(name) }
 
 // SetPluginHealthFn wires the plugin-health provider used by the heartbeat
 // loop. Safe to call after Run has started — the heartbeat goroutine reads
@@ -171,13 +279,18 @@ func NewAgent(client tunnel.Client, collector Collector, cfg Config, log *slog.L
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Agent{
+	a := &Agent{
 		client:           client,
 		collector:        collector,
 		cfg:              cfg,
 		log:              log,
 		upgradeRequested: make(chan struct{}, 1),
 	}
+	// The link is up: an Agent is only constructed after Dial returned, and
+	// a node that believes it is offline before its first heartbeat would
+	// start an outage clock nobody has declared.
+	a.link.online = true
+	return a
 }
 
 // New is retained for backwards compatibility with the Phase 1 wiring
@@ -498,6 +611,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) error {
 				}, nil)
 			cancel()
 			if err != nil {
+				a.link.observe(false, time.Now())
 				consecutiveFail++
 				a.log.Warn("agent: heartbeat failed",
 					slog.Int("consecutive_fail", consecutiveFail),
@@ -509,6 +623,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) error {
 				}
 				continue
 			}
+			a.link.observe(true, time.Now())
 			consecutiveFail = 0
 		}
 	}
@@ -550,6 +665,7 @@ func (a *Agent) metricsLoop(ctx context.Context) error {
 				// CollectAll may still return a partial slice on error.
 			}
 			for _, out := range outs {
+				a.latest.observe(out.Samples)
 				a.pushOne(ctx, out)
 			}
 		}

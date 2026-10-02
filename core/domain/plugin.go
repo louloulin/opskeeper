@@ -177,6 +177,17 @@ type PluginSpec struct {
 	Audit          AuditPolicy    `json:"audit" yaml:"audit"`
 	Approval       ApprovalPolicy `json:"approval,omitempty" yaml:"approval,omitempty"`
 	Install        InstallPolicy  `json:"install,omitempty" yaml:"install,omitempty"`
+	// Autonomy is what this package may do with no human present, while
+	// the control plane is unreachable. It is the only field in the
+	// manifest that can produce a mutating call nobody approved, and it is
+	// therefore the one that says the most about a package: a package with
+	// an empty block here is a package that behaves identically whether or
+	// not the network is up.
+	//
+	// It is a *block*, not a flag. The actions are enumerated, so review is
+	// a reading of concrete argv rather than an assessment of an intent,
+	// and a package cannot acquire autonomy by being trusted.
+	Autonomy AutonomyPolicy `json:"autonomy,omitempty" yaml:"autonomy,omitempty"`
 }
 
 // ToolDecl is one tool a plugin declares it will register with the agent.

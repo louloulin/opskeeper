@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -139,7 +140,131 @@ func validateSpec(m domain.PluginManifest) error {
 	if err := validateTools(m); err != nil {
 		return err
 	}
+	if err := validateAutonomy(m); err != nil {
+		return err
+	}
 	return validateGovernance(m)
+}
+
+// validateAutonomy checks the package's request to act without a human.
+//
+// Every check here is a load error rather than a runtime refusal. The
+// asymmetry is the point: a manifest that fails admission is found by the
+// person who submitted it, before it reaches a node, while the same
+// manifest installed anyway would surface as a self-heal that never fires
+// at 03:00 — which is discovered by the incident it was meant to prevent.
+//
+// The rules are the ones the plan states, and each has a failure it closes:
+//
+//   - argv is a non-empty bounded vector with nothing in it that only
+//     means something to a shell. A string here would be a program.
+//   - the reach is pod or narrower. A namespace is an outage with steps.
+//   - the TTL is positive and inside the host's cap.
+//   - the idempotency key is a template the node can derive, so the key a
+//     claim is checked against is one the host produced.
+//   - the action names a tool the package actually declares. An autonomy
+//     action aimed at an undeclared tool is a request for a capability the
+//     package's inventory says it does not have.
+func validateAutonomy(m domain.PluginManifest) error {
+	policy := m.Spec.Autonomy
+	if err := validateAutonomyPolicy(policy); err != nil {
+		return err
+	}
+	if len(policy.Actions) == 0 {
+		return nil
+	}
+
+	// The action's tool has to be in the inventory, and it has to be a tool
+	// this package may run at all. Autonomy is a different *timing* for a
+	// capability, never a different capability.
+	declared := make(map[string]domain.ToolDecl, len(m.Spec.Tools))
+	for _, t := range m.Spec.Tools {
+		declared[t.Name] = t
+	}
+	for i, a := range policy.Actions {
+		field := fmt.Sprintf("spec.autonomy.actions[%d]", i)
+		tool, ok := declared[a.Tool]
+		if !ok {
+			return fieldErr(field+".tool",
+				fmt.Sprintf("%q is not in this package's tool inventory, so this action may not name it", a.Tool))
+		}
+		if tool.Class == domain.ClassRead {
+			return fieldErr(field+".tool",
+				fmt.Sprintf("%q is a read, which needs no autonomy: reads run without a human either way", a.Tool))
+		}
+	}
+	return nil
+}
+
+// validateAutonomyPolicy checks the block's own shape.
+func validateAutonomyPolicy(policy domain.AutonomyPolicy) error {
+	if time.Duration(policy.OfflineAfter) != 0 {
+		if !policy.OfflineAfter.Valid() {
+			return fieldErr("spec.autonomy.offline_after",
+				`must be a positive duration such as "2m"`)
+		}
+		if time.Duration(policy.OfflineAfter) < domain.MinAutonomyOfflineAfter {
+			return fieldErr("spec.autonomy.offline_after",
+				fmt.Sprintf("must be at least %s: a threshold at or below the tunnel's reconnect cycle fires the whole list on every blip",
+					domain.MinAutonomyOfflineAfter))
+		}
+	}
+	if len(policy.Actions) == 0 {
+		if time.Duration(policy.OfflineAfter) != 0 {
+			return fieldErr("spec.autonomy.offline_after",
+				"declares a threshold with no actions to run under it")
+		}
+		return nil
+	}
+
+	seenName := make(map[string]struct{}, len(policy.Actions))
+	seenTool := make(map[string]struct{}, len(policy.Actions))
+	for i, a := range policy.Actions {
+		field := fmt.Sprintf("spec.autonomy.actions[%d]", i)
+		if a.Name == "" {
+			return fieldErr(field+".name", "is required")
+		}
+		if _, dup := seenName[a.Name]; dup {
+			return fieldErr(field+".name", fmt.Sprintf("duplicates an earlier action named %q", a.Name))
+		}
+		seenName[a.Name] = struct{}{}
+		if a.Tool == "" {
+			return fieldErr(field+".tool", "is required: an action with no tool is a shell command")
+		}
+		if _, dup := seenTool[a.Tool]; dup {
+			return fieldErr(field+".tool",
+				fmt.Sprintf("drives %q, which an earlier action already drives; two actions on one tool are one grant wearing two names", a.Tool))
+		}
+		seenTool[a.Tool] = struct{}{}
+		if !a.Trigger.Valid() {
+			return fieldErr(field+".trigger",
+				fmt.Sprintf("needs a host-evaluated kind (only %q exists) and, for it, a metric name", domain.TriggerMetricAbove))
+		}
+		if !a.ArgvValid() {
+			return fieldErr(field+".argv",
+				"must be a non-empty list of literal arguments; a shell string, an empty element or a shell metacharacter is refused")
+		}
+		if !a.BlastRadius.Valid() {
+			return fieldErr(field+".blast_radius", fmt.Sprintf("unknown radius %q", a.BlastRadius))
+		}
+		if a.BlastRadius.Rank() > domain.RadiusSingleNS.Rank() {
+			return fieldErr(field+".blast_radius",
+				fmt.Sprintf("%q is wider than the %s an edge self-heal may reach; autonomy that can take a namespace down is an outage, not a heal",
+					a.BlastRadius, domain.RadiusSingleNS))
+		}
+		if !a.TTL.Valid() {
+			return fieldErr(field+".ttl", `must be a positive duration such as "30m"`)
+		}
+		if time.Duration(a.TTL) > domain.MaxAutonomyTTL {
+			return fieldErr(field+".ttl",
+				fmt.Sprintf("must be at most %s", domain.MaxAutonomyTTL))
+		}
+		if !domain.KeyTemplateValid(a.IdempotencyKey) {
+			return fieldErr(field+".idempotency_key",
+				`must be a template with {{target}} and/or {{window}}, e.g. "restart:{{target}}:{{window}}"; a constant key is spent by the first run`)
+		}
+	}
+	return nil
 }
 
 // validateTools checks the declared tool inventory.

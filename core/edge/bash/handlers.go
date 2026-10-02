@@ -24,6 +24,7 @@ package bash
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -47,6 +48,39 @@ const DefaultPolicyOverridePath = "/etc/opskeeper-edge/bash-policy.yaml"
 // in practice — DefaultReadOnly always succeeds; this is here for
 // symmetry with host_files.Register).
 func Register(client tunnel.Client, log *slog.Logger) error {
+	sandbox, err := NewSandbox(log)
+	if err != nil {
+		return err
+	}
+	return RegisterWithSandbox(client, sandbox, log)
+}
+
+// RegisterWithSandbox installs the handler on a sandbox the caller already
+// built.
+//
+// It exists so the node can hand the *same* sandbox to the autonomy runner.
+// Two sandboxes on one host are two policies, and the question they would
+// answer differently is exactly the one that matters: whether the argv a
+// human signed off on is allowed to run.
+func RegisterWithSandbox(client tunnel.Client, sandbox *cmdpolicy.Sandbox, log *slog.Logger) error {
+	if sandbox == nil {
+		return errors.New("bash: no sandbox to register")
+	}
+	client.RegisterHandler(tunnel.MethodBashExec, makeHandler(sandbox, log))
+	return nil
+}
+
+// NewSandbox builds the node's one sandbox: the default read-only policy,
+// the operator's YAML override if there is one, and the host_files path
+// validator.
+//
+// It is exported because there is a second caller. A node acting on its own
+// while the control plane is unreachable runs its declared argv through this
+// same sandbox rather than a private one, and the reason is not tidiness —
+// two sandboxes on one host are two policies, and the moment they disagree
+// the question "what may this node run?" has two answers, one of which is
+// whichever one the caller happened to build.
+func NewSandbox(log *slog.Logger) (*cmdpolicy.Sandbox, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -76,12 +110,6 @@ func Register(client tunnel.Client, log *slog.Logger) error {
 		pathValidator = nil
 	}
 
-	sandbox := &cmdpolicy.Sandbox{
-		Policy:        policy,
-		PathValidator: pathValidator,
-		Logger:        log,
-	}
-
 	log.Info("bash: sandbox ready",
 		slog.String("policy", "read-only"),
 		slog.Int("allowed_bins", len(policy.Bins())),
@@ -89,8 +117,11 @@ func Register(client tunnel.Client, log *slog.Logger) error {
 		slog.Int("network_host_allowlist", len(policy.NetworkHostAllowlist)),
 	)
 
-	client.RegisterHandler(tunnel.MethodBashExec, makeHandler(sandbox, log))
-	return nil
+	return &cmdpolicy.Sandbox{
+		Policy:        policy,
+		PathValidator: pathValidator,
+		Logger:        log,
+	}, nil
 }
 
 // makeHandler is split out so tests can wire a sandbox directly without

@@ -83,8 +83,25 @@ func (s *Sandbox) Decide(cmd string) Decision {
 	if !d.Allow {
 		return d
 	}
-	// Path validation across all segments.
-	for segIdx, seg := range d.Segments {
+	if reason := s.screenSegments(d.Segments); reason != "" {
+		return Decision{Allow: false, Reason: reason, Segments: d.Segments}
+	}
+	return d
+}
+
+// screenSegments applies the two per-segment checks a command passes no
+// matter where its argv came from: absolute paths go through the path
+// validator, and a network-capable binary's target host goes through the
+// allow-list.
+//
+// It is a separate function because there are now two ways into the
+// sandbox — a parsed shell line and a declared argv vector — and a
+// protection that only one of them gets is a protection the other has
+// quietly outgrown. An autonomy action is the case that makes this matter:
+// its argv comes from a signed manifest and never passed through the shell
+// parser, which is exactly why it must not also skip the screening.
+func (s *Sandbox) screenSegments(segments [][]string) string {
+	for segIdx, seg := range segments {
 		for argIdx, a := range seg {
 			if argIdx == 0 {
 				continue // argv[0] is the binary; resolved separately
@@ -96,16 +113,11 @@ func (s *Sandbox) Decide(cmd string) Decision {
 				continue
 			}
 			if err := s.PathValidator.ValidatePath(a); err != nil {
-				return Decision{
-					Allow:    false,
-					Reason:   fmt.Sprintf("segment %d arg %d: %s", segIdx, argIdx, err.Error()),
-					Segments: d.Segments,
-				}
+				return fmt.Sprintf("segment %d arg %d: %s", segIdx, argIdx, err.Error())
 			}
 		}
 	}
-	// Network host check for ClassNetwork segments.
-	for segIdx, seg := range d.Segments {
+	for segIdx, seg := range segments {
 		if len(seg) == 0 {
 			continue
 		}
@@ -120,15 +132,77 @@ func (s *Sandbox) Decide(cmd string) Decision {
 			continue
 		}
 		if !hostAllowed(host, s.Policy.NetworkHostAllowlist) {
-			return Decision{
-				Allow: false,
-				Reason: fmt.Sprintf("segment %d: network target %q not in allowlist (set network_host_allowlist to permit)",
-					segIdx, host),
-				Segments: d.Segments,
-			}
+			return fmt.Sprintf("segment %d: network target %q not in allowlist (set network_host_allowlist to permit)",
+				segIdx, host)
 		}
 	}
-	return d
+	return ""
+}
+
+// ExecArgv runs an already-separated argument vector, with no shell between
+// the caller and the process.
+//
+// It exists for one caller: a node acting on its own while the control
+// plane is unreachable. Every protection Exec applies is applied here —
+// the binary allow-list, the path validator, the network host allow-list,
+// the scrubbed environment, the per-call timeout and the output caps — and
+// one is deliberately absent: the shell grammar. There is no string to
+// parse, so there is no quoting to get wrong, no metacharacter to
+// misjudge, and no way for a manifest to become a different program than
+// the one a human read.
+//
+// The argv is used as given. It is not re-quoted, split or joined, because
+// each of those is a place where a vector could become a line, and the whole
+// point of this path is that it does not.
+func (s *Sandbox) ExecArgv(ctx context.Context, argv []string) (*ShellResult, error) {
+	if s == nil || s.Policy == nil {
+		return &ShellResult{Allowed: false, Reason: "cmdpolicy: sandbox not configured"}, nil
+	}
+	if len(argv) == 0 {
+		return &ShellResult{Allowed: false, Reason: "cmdpolicy: empty argv"}, nil
+	}
+	// The binary has to be one the policy already resolves, exactly as for
+	// a parsed command: an argv vector naming a binary the node does not
+	// allow is refused rather than resolved.
+	if s.Policy.Lookup(argv[0]) == nil {
+		return &ShellResult{
+			Allowed: false,
+			Reason:  fmt.Sprintf("cmdpolicy: binary %q is not in the allow-list", argv[0]),
+		}, nil
+	}
+	if reason := s.screenSegments([][]string{argv}); reason != "" {
+		return &ShellResult{Allowed: false, Reason: reason}, nil
+	}
+
+	timeout := s.Policy.Timeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	start := time.Now()
+
+	stdout, stderr, exitCode, truncated, err := s.runPipeline(cctx, [][]string{argv})
+	dur := time.Since(start)
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return &ShellResult{
+			Allowed: true, Stdout: stdout, Stderr: "cmdpolicy: command timed out",
+			ExitCode: -1, Truncated: truncated, DurationMs: dur.Milliseconds(),
+		}, nil
+	case err != nil:
+		// A binary that could not be started is reported as a non-zero
+		// exit carrying the reason, so a caller reading only the result
+		// still learns that nothing ran.
+		return &ShellResult{
+			Allowed: true, Stdout: stdout, Stderr: err.Error(),
+			ExitCode: -1, Truncated: truncated, DurationMs: dur.Milliseconds(),
+		}, nil
+	}
+	return &ShellResult{
+		Allowed: true, Stdout: stdout, Stderr: stderr,
+		ExitCode: exitCode, Truncated: truncated, DurationMs: dur.Milliseconds(),
+	}, nil
 }
 
 // Exec runs cmd. Returns ShellResult with Allowed=false + Reason on

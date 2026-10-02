@@ -185,6 +185,10 @@ components:
   oxedge_policygate: { in: core/edge/policygate/** }
   oxedge_gatesocket: { in: core/edge/gatesocket/** }
   oxedge_toolbroker: { in: core/edge/toolbroker/** }
+  # 决策 98：节点自治仲裁器。它是本仓唯一一个「可以在没有人同意的情况下
+  # 执行命令」的组件，所以它的依赖面被压到只有契约层：能加进来的东西越少，
+  # 越不会有人在半年后往里面加一个「顺手」的执行路径。
+  oxedge_autonomy: { in: core/edge/autonomy/** }
   oxpig_wire:       { in: core/pig/pigwire/** }
   oxplugin_sdk:     { in: sdk/** }
   oxharness_schema:    { in: core/harness/schema/** }
@@ -508,6 +512,11 @@ deps:
   # could decide could approve its own calls.
   oxedge_toolbroker:
     mayDependOn: [oxcore_wire, oxfloor]
+  # 仲裁器只依赖契约层。刻意不给 oxfloor（skill/spill 那一侧）：自治动作的
+  # argv 由调用方的 Runner 执行，本包不持有任何执行能力，持有执行能力的地
+  # 方才需要被约束。
+  oxedge_autonomy:
+    mayDependOn: [oxcore_domain]
   # pigwire translates PiG's stream into the frozen SSE frames. It reaches
   # the contract layer only - the translation is the whole component.
   oxpig_wire:
@@ -621,6 +630,10 @@ deps:
       - oxedge_biz
       - oxedge_runtime
       - oxedge_service
+      # 决策 98：cmd 是节点面唯一的装配根，自治仲裁器要拿到三样只有这里同时
+      # 知道的东西——已准入的清单、agent 的心跳/采集器、以及节点那个
+      # sandbox。让仲裁器自己去找这三样，就等于让它变成节点面本身。
+      - oxedge_autonomy
       - iam_biz
       - iam_data
       - iam_model
