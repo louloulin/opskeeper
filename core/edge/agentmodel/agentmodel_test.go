@@ -324,3 +324,74 @@ func pigBinaryForTest(t *testing.T) string {
 		runtime.GOOS, runtime.GOARCH)
 	return ""
 }
+
+// An operator who pinned an endpoint on a host made a host-specific choice,
+// and the cluster-wide default must not silently undo it. This is the same
+// precedence TunnelConfigFetcher applies to plugin endpoints — env over
+// tunnel — applied to the one other endpoint a node has.
+func TestTheEnvironmentBeatsTheManagersAnswer(t *testing.T) {
+	env := Config{
+		BaseURL: "https://pinned.example.com/v1",
+		Token:   "pinned-token",
+		Model:   "pinned-model",
+		Dir:     "/pinned/dir",
+	}
+	resolved, ok := Resolve(env, true,
+		Answer{BaseURL: "https://cluster.example.com/v1", Model: "cluster-model"},
+		"access:secret", "/adopted/dir")
+	if !ok {
+		t.Fatal("a configured node reported no configuration")
+	}
+	if resolved.BaseURL != env.BaseURL || resolved.Model != env.Model || resolved.Token != env.Token || resolved.Dir != env.Dir {
+		t.Errorf("the manager's answer overrode the environment: got %+v, want %+v", resolved, env)
+	}
+}
+
+// A node with no endpoint of its own adopts the manager's, and the credential
+// it adopts is its own tunnel pair — the same secret the gateway
+// authenticates, not a second one to rotate.
+func TestASilentEnvironmentAdoptsTheManagersAnswer(t *testing.T) {
+	resolved, ok := Resolve(Config{}, false,
+		Answer{BaseURL: "https://cluster.example.com/v1/", Model: " cluster-model "},
+		"access:secret", "/adopted/dir")
+	if !ok {
+		t.Fatal("a node with only the manager's answer reported no configuration")
+	}
+	if resolved.BaseURL != "https://cluster.example.com/v1" {
+		t.Errorf("BaseURL = %q, want the trailing slash trimmed", resolved.BaseURL)
+	}
+	if resolved.Model != "cluster-model" {
+		t.Errorf("Model = %q, want it trimmed", resolved.Model)
+	}
+	if resolved.Token != "access:secret" {
+		t.Errorf("the adopted credential is not the node's own tunnel pair")
+	}
+	if resolved.Dir != "/adopted/dir" {
+		t.Errorf("Dir = %q, want the node-owned scope", resolved.Dir)
+	}
+}
+
+// An empty answer is a manager with no public URL, not a directive to point
+// the agent at a relative path. The node must stay exactly as it was.
+func TestAnEmptyAnswerLeavesTheNodeUnconfigured(t *testing.T) {
+	resolved, ok := Resolve(Config{}, false, Answer{}, "access:secret", "/dir")
+	if ok {
+		t.Errorf("an empty answer configured the node: %+v", resolved)
+	}
+	if resolved.BaseURL != "" || resolved.Dir != "" {
+		t.Errorf("an empty answer produced a partial configuration: %+v", resolved)
+	}
+}
+
+// The scope has one definition and one default, whether it is reached through
+// the environment path or the adoption path.
+func TestTheConfigurationDirectoryHasOneDefault(t *testing.T) {
+	t.Setenv(ConfigDirEnv, "")
+	if got := DirFromEnv(); got != DefaultConfigDir {
+		t.Errorf("DirFromEnv() = %q, want the default %q", got, DefaultConfigDir)
+	}
+	t.Setenv(ConfigDirEnv, "/custom/dir")
+	if got := DirFromEnv(); got != "/custom/dir" {
+		t.Errorf("DirFromEnv() = %q, want the operator's value", got)
+	}
+}

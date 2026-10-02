@@ -225,3 +225,46 @@ func TestTheReleaseTarballRefusesToShipWithoutTheAgent(t *testing.T) {
 			"the tarball would be built and the node would have no agent")
 	}
 }
+
+// The model endpoint is named once by the manager and reaches the node on the
+// tunnel; it is not written into every host's environment by hand.
+//
+// This is the plan's 0.2 second sentence, and every link is a file another
+// change could drop without failing anything that runs today: an empty
+// heartbeat response type compiles, an edge that never reads the answer
+// compiles, and a manager that never fills it compiles. The test is what makes
+// the chain a fact rather than four intentions, which is the same reason the
+// links above it exist.
+//
+// The credential is deliberately absent from the wire, and that absence is the
+// property under test as much as the presence of the two fields: the node
+// presents its own tunnel pair to the gateway, so a token field here would be
+// a second credential to rotate for no gain.
+func TestTheModelEndpointIsNamedByTheManagerAndTravelsOnTheTunnel(t *testing.T) {
+	mustContain(t, "core/floor/tunnel/messages.go", "the manager must be able to name the "+
+		"endpoint and the model on the beat the node already sends",
+		"AgentBaseURL string",
+		"AgentModel string",
+		"type HeartbeatResponse struct {")
+	mustContain(t, "core/manager/service/frontierbound/handlers.go", "the manager must actually "+
+		"fill the answer it just gained a field for",
+		"ModelEndpoint ModelEndpointResolver",
+		"w.ModelEndpoint.AgentEndpoint(rpcCtx)")
+	mustContain(t, "cmd/opskeeper/main.go", "the manager's answer must come from the same public "+
+		"URL and default model the gateway serves",
+		"modelEndpointResolver{publicURL: cfg.PublicURL, models: modelRegistry}",
+		"ModelEndpoint: modelEndpoint,")
+	mustContain(t, "core/edge/biz/agent.go", "the node must read the answer off the heartbeat "+
+		"instead of discarding it",
+		"var answer tunnel.HeartbeatResponse",
+		"&answer",
+		"a.modelAnswerFn")
+	mustContain(t, "cmd/opskeeper-edge/agent.go", "the node must apply the answer to the scope "+
+		"the agent reads at spawn",
+		"agent.SetModelAnswerFn(adopter.adopt)",
+		"adopter.envOverlay()")
+	mustContain(t, "core/edge/agentmodel/agentmodel.go", "the precedence rule must live in one "+
+		"place: the operator's environment beats the cluster default",
+		"func Resolve(env Config, envSet bool, answer Answer",
+		"if envSet {")
+}

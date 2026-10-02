@@ -90,7 +90,39 @@ type Wiring struct {
 	// pump keeps the rows on disk, which loses nothing and is visible on
 	// the node's health line.
 	AutonomyReplay AutonomyReplayRecorder
-	Log            *slog.Logger
+	// ModelEndpoint names the model endpoint a node's agent should use. It
+	// is the manager's half of the plan's 0.2: the destination and the
+	// model slug are named here rather than written into every host's env
+	// by hand, and they reach the node on the heartbeat the node already
+	// sends.
+	//
+	// Optional. When nil the heartbeat carries no endpoint, which is the
+	// correct answer for a manager with no public URL configured: a node
+	// keeps whatever it had rather than being pointed at a relative path.
+	ModelEndpoint ModelEndpointResolver
+	Log           *slog.Logger
+}
+
+// ModelEndpointResolver answers "which model endpoint should a node's agent
+// use" once per heartbeat.
+//
+// It returns a base URL and a model slug and nothing else. There is
+// deliberately no credential in the return: the gateway authenticates a
+// node's existing tunnel credential pair, so the only secret on this path is
+// the one the node already holds. A token field here would be a second
+// credential to rotate, and the plan's own acceptance criterion — no cloud
+// provider key on the node — is satisfied without it.
+//
+// The error-free signature is deliberate. A resolver that cannot name an
+// endpoint should answer with empty strings, exactly as a manager with no
+// public URL does: a heartbeat is a best-effort liveness report, and
+// failing the whole beat over a model-catalogue read would turn a
+// configuration gap into a fleet-wide "node offline".
+type ModelEndpointResolver interface {
+	// AgentEndpoint returns the OpenAI-compatible root (suffix included,
+	// e.g. https://host/v1) and the default model slug. Either may be
+	// empty.
+	AgentEndpoint(ctx context.Context) (baseURL, model string)
 }
 
 // AutonomyReplayRecorder turns a batch of a node's self-heal rows into
@@ -351,7 +383,15 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 			}
 			w.EdgeUC.RecordPluginHealth(canonicalEdgeID, items)
 		}
-		return json.Marshal(tunnel.HeartbeatResponse{})
+		// The manager's answer, named here so the node does not have to
+		// be hand-provisioned per host. Non-secret by construction — a
+		// URL and a model slug — because the node sends its own tunnel
+		// credential to the gateway. See ModelEndpointResolver.
+		var out tunnel.HeartbeatResponse
+		if w.ModelEndpoint != nil {
+			out.AgentBaseURL, out.AgentModel = w.ModelEndpoint.AgentEndpoint(rpcCtx)
+		}
+		return json.Marshal(out)
 	}); err != nil {
 		return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodHeartbeat, err)
 	}

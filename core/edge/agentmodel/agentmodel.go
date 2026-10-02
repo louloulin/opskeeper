@@ -158,10 +158,7 @@ type modelsModel struct {
 func ConfigFromEnv() (Config, bool, error) {
 	baseURL := strings.TrimSpace(os.Getenv(BaseURLEnv))
 	token := strings.TrimSpace(os.Getenv(TokenEnv))
-	dir := strings.TrimSpace(os.Getenv(ConfigDirEnv))
-	if dir == "" {
-		dir = DefaultConfigDir
-	}
+	dir := DirFromEnv()
 
 	switch {
 	case baseURL == "" && token == "":
@@ -187,6 +184,79 @@ func ConfigFromEnv() (Config, bool, error) {
 		Model:   strings.TrimSpace(os.Getenv(ModelEnv)),
 		Dir:     dir,
 	}, true, nil
+}
+
+// DirFromEnv is the node-owned agent scope, defaulted.
+//
+// It is exported separately from ConfigFromEnv because the directory is
+// needed by callers that are not deciding whether the *environment*
+// configured a model — the adoption path below, which fills the same scope
+// from the manager's answer. Two copies of the default would be two answers
+// to "where does the agent's configuration live", and only one of them
+// would survive an edit to DefaultConfigDir.
+func DirFromEnv() string {
+	if dir := strings.TrimSpace(os.Getenv(ConfigDirEnv)); dir != "" {
+		return dir
+	}
+	return DefaultConfigDir
+}
+
+// Answer is what the manager said on the heartbeat, reduced to the two
+// fields this package acts on.
+//
+// It is a local type rather than tunnel.HeartbeatResponse on purpose: the
+// decision below is pure, and keeping it a pure function of plain strings is
+// what lets it be tested without a tunnel, a manager, or a broker. The edge
+// command is the one place that knows both shapes and maps between them,
+// which is the same seam the plugin config fetcher uses.
+type Answer struct {
+	// BaseURL is the OpenAI-compatible root, suffix included — the same
+	// string an operator would put in BaseURLEnv.
+	BaseURL string
+	// Model is the slug the cluster serves by default. Empty lets the
+	// endpoint's own default stand.
+	Model string
+}
+
+// Resolve is the single answer to "which model endpoint is this node on".
+//
+// There are two sources now — the node's own environment and the manager's
+// heartbeat answer — and two places computing this would be how a node ends
+// up authenticated against one endpoint while its console reports another.
+// So there is one function, and it is total: it returns the configuration to
+// use and whether the node has one at all.
+//
+// Precedence, and why:
+//
+//   - The environment wins. An operator who set BaseURLEnv on a host made a
+//     deliberate, host-specific choice, and a cluster-wide default must not
+//     silently override it. This is the same rule — env over tunnel — that
+//     TunnelConfigFetcher applies to plugin endpoints, applied to the one
+//     other endpoint a node has.
+//   - The manager's answer is used only when the environment is silent, and
+//     only when it actually names a base URL. An empty answer means "this
+//     manager has no public URL" and leaves the node exactly as it was
+//     rather than pointing it at a relative path.
+//
+// The credential is passed in rather than read here. On the environment path
+// it is the operator's token; on the manager path it is the node's existing
+// tunnel credential pair, which is the same secret the gateway authenticates
+// and therefore not a second one to rotate. Either way this package resolves
+// an endpoint, it does not hold a credential store.
+func Resolve(env Config, envSet bool, answer Answer, credential, dir string) (Config, bool) {
+	if envSet {
+		return env, true
+	}
+	baseURL := strings.TrimSpace(answer.BaseURL)
+	if baseURL == "" {
+		return Config{}, false
+	}
+	return Config{
+		BaseURL: strings.TrimRight(baseURL, "/"),
+		Token:   credential,
+		Model:   strings.TrimSpace(answer.Model),
+		Dir:     dir,
+	}, true
 }
 
 // Write materialises the agent scope and returns its path.

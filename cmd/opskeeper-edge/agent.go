@@ -56,6 +56,25 @@ type nodeAgentConfig struct {
 	MaxCrashAttempts int
 	// RestartBackoff is the first restart delay.
 	RestartBackoff time.Duration
+	// AccessKey and SecretKey are the node's tunnel credential pair, which
+	// is also the gateway's credential — one secret, one thing to rotate.
+	// They are set from the node's own configuration rather than read again
+	// here, so "which credential does this node present" has one source.
+	//
+	// They are used only to build the model endpoint an adopted answer
+	// resolves to; the credential itself is still never written to disk
+	// (see agentmodel). Empty disables adopting the manager's answer.
+	AccessKey string
+	SecretKey string
+}
+
+// credential renders the pair as the gateway's Authorization value wants it.
+// It is not logged anywhere and never reaches a file.
+func (c nodeAgentConfig) credential() string {
+	if c.AccessKey == "" || c.SecretKey == "" {
+		return ""
+	}
+	return c.AccessKey + ":" + c.SecretKey
 }
 
 // defaultAgentPackageDir is the read-only profile every node starts with.
@@ -80,6 +99,12 @@ func loadNodeAgentConfig() nodeAgentConfig {
 		Model:            os.Getenv("OPSKEEPER_EDGE_AGENT_MODEL"),
 		MaxCrashAttempts: 5,
 		RestartBackoff:   pigsupervisor.DefaultRestartBackoff,
+		// The tunnel pair, which the gateway also authenticates. Read here
+		// rather than threaded in as a parameter because loadNodeAgentConfig
+		// is already the single reader of this node's agent environment,
+		// and a second reader would be the place the two drift apart.
+		AccessKey: os.Getenv("OPSKEEPER_EDGE_ACCESS_KEY"),
+		SecretKey: os.Getenv("OPSKEEPER_EDGE_SECRET_KEY"),
 	}
 }
 
@@ -227,6 +252,23 @@ func startNodeAgent(
 			slog.String("set", agentmodel.BaseURLEnv))
 	}
 
+	// The adoption path: when the environment was silent, the manager's
+	// heartbeat answer fills the same scope later. It writes into the same
+	// agentEnv the factory reads, so an adopted endpoint reaches the agent
+	// through exactly the mechanism a boot-time one does — there is no
+	// second way for the process to learn where its model lives.
+	//
+	// The credential is the node's own tunnel pair, and that is the whole
+	// point of the design: the gateway authenticates this pair, so the
+	// answer from the manager carries no secret and the node has no second
+	// token to rotate. Empty disables adoption; see modelAdopter.
+	adopter := &modelAdopter{
+		env:        agentEnv,
+		credential: cfg.credential(),
+		dir:        agentmodel.DirFromEnv(),
+		log:        log,
+	}
+
 	// The allow-list is built from the same manifests that were just
 	// admitted, and is built before the agent starts. Nothing reaches the
 	// gate later than this: a tool the host did not bind at boot is
@@ -305,6 +347,19 @@ func startNodeAgent(
 	// The agent holds no transcript across its own death, and pretending
 	// otherwise would drop the turn's output without saying so.
 	factory := func() ports.AgentProcess {
+		// The overlay is read here, at spawn time, rather than captured
+		// above: an endpoint adopted from the manager must reach the next
+		// process, and the supervisor respawns through this same closure.
+		// Reading it here is what makes adoption survive the restart it
+		// triggers — a captured copy would restart the agent onto the old
+		// configuration and the loop would never converge.
+		spawnEnv := make(map[string]string, len(agentEnv)+2)
+		for key, value := range agentEnv {
+			spawnEnv[key] = value
+		}
+		for key, value := range adopter.envOverlay() {
+			spawnEnv[key] = value
+		}
 		return pigrpc.New(pigrpc.Options{
 			Binary:   cfg.Binary,
 			Cwd:      cfg.Cwd,
@@ -327,7 +382,7 @@ func startNodeAgent(
 			// for the same reason: the agent is told where to send a
 			// request, never how to answer one. It holds no provider key
 			// of its own and no way to reach one that was not named here.
-			Env: agentEnv,
+			Env: spawnEnv,
 		})
 	}
 	sup, err := pigsupervisor.New(pigsupervisor.Config{
@@ -339,6 +394,17 @@ func startNodeAgent(
 	if err != nil {
 		return nil, nil, fmt.Errorf("edge agent supervisor: %w", err)
 	}
+	// The adopter restarts through this supervisor once the manager names
+	// an endpoint. The reference is set after construction because the
+	// factory needs the adopter and the supervisor needs the factory; the
+	// cycle is broken by this one late assignment.
+	adopter.sup = sup
+	// Subscribe the adopter to the manager's heartbeat answer. It is
+	// registered unconditionally: even a node that configured its endpoint
+	// by hand wants the answer recorded for the next time the environment
+	// is not there, and the precedence rule lives in agentmodel.Resolve
+	// rather than in this wiring.
+	agent.SetModelAnswerFn(adopter.adopt)
 	// The supervisor's own loop ends with ctx, but the agent process it
 	// supervises is a child of this binary and does not. Without an
 	// explicit stop, an edge shutting down for an upgrade would leave a

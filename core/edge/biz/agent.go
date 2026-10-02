@@ -149,6 +149,19 @@ type Agent struct {
 	// by mu so the heartbeat goroutine reads it race-free.
 	pluginHealthFn func() []tunnel.PluginHealthWire
 
+	// modelAnswerFn, when set, receives the manager's answer from each
+	// heartbeat: which model endpoint this deployment wants this node's
+	// agent to use. Optional and wired post-construction
+	// (SetModelAnswerFn) for the same reason pluginHealthFn is.
+	//
+	// It is a callback rather than a field the agent writes, because the
+	// agent having an opinion about where credentials live is the coupling
+	// core/edge/agentmodel exists to prevent. The heartbeat's job is to
+	// carry the answer back; deciding what to do with it belongs to the
+	// composition root, which is the only place that knows whether the
+	// node's environment already said something.
+	modelAnswerFn func(tunnel.HeartbeatResponse)
+
 	// agentBridge serves the manager's agent.* commands against this node's
 	// PiG process. Optional and wired post-construction (SetAgentBridge)
 	// for the same reason as pluginHealthFn: the supervisor is built in main
@@ -290,6 +303,20 @@ func (a *Agent) MetricValue(name string) (float64, bool) { return a.latest.looku
 func (a *Agent) SetPluginHealthFn(fn func() []tunnel.PluginHealthWire) {
 	a.mu.Lock()
 	a.pluginHealthFn = fn
+	a.mu.Unlock()
+}
+
+// SetModelAnswerFn wires the callback the heartbeat invokes with the
+// manager's endpoint answer.
+//
+// It is called on every heartbeat, including when the answer is empty, so
+// the callback must be cheap and idempotent: the common case is "the manager
+// said the same thing as last time", and re-writing a file per beat would be
+// the kind of work a 30-second timer should not do. See the edge command's
+// implementation for how it avoids that.
+func (a *Agent) SetModelAnswerFn(fn func(tunnel.HeartbeatResponse)) {
+	a.mu.Lock()
+	a.modelAnswerFn = fn
 	a.mu.Unlock()
 }
 
@@ -697,6 +724,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) error {
 				plugins = healthFn()
 			}
 			rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			var answer tunnel.HeartbeatResponse
 			err := a.client.Call(rctx, tunnel.MethodHeartbeat,
 				tunnel.HeartbeatRequest{
 					EdgeID:  a.EdgeID(),
@@ -707,7 +735,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) error {
 					// immutable after NewAgent in practice, but the
 					// heartbeat goroutine must not depend on that.
 					PigVersion: strings.TrimSpace(a.cfg.PigVersion),
-				}, nil)
+				}, &answer)
 			cancel()
 			if err != nil {
 				a.link.observe(false, time.Now())
@@ -724,6 +752,17 @@ func (a *Agent) heartbeatLoop(ctx context.Context) error {
 			}
 			a.link.observe(true, time.Now())
 			consecutiveFail = 0
+			// Read under the lock and only after the link is known good:
+			// an answer from a failed call is the zero value, and acting
+			// on it would clear a node's endpoint because of a dropped
+			// packet. The callback decides precedence (env wins); this
+			// loop only guarantees it sees a *successful* answer.
+			a.mu.RLock()
+			answerFn := a.modelAnswerFn
+			a.mu.RUnlock()
+			if answerFn != nil {
+				answerFn(answer)
+			}
 		}
 	}
 }

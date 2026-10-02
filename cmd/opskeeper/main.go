@@ -37,6 +37,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
 	"golang.org/x/sync/errgroup"
 
@@ -1015,6 +1016,21 @@ func main() {
 		fmt.Fprintf(os.Stderr, "llm gateway: %v\n", err)
 		os.Exit(1)
 	}
+	// modelEndpointResolver names the endpoint a node's agent should use.
+	//
+	// It reads the same default the gateway's own GET /v1/models reads, so
+	// the catalogue a node can discover and the endpoint it is told to use
+	// cannot disagree. That is the plan's 0.2 second sentence: the manager
+	// names the destination and the model slug, and the node picks them up
+	// on the heartbeat it already sends instead of every host's env being
+	// written by hand.
+	//
+	// The URL is cfg.PublicURL + the gateway's own base path, exactly as
+	// pluginEndpointResolver builds the Loki/Tempo push URLs. The suffix is
+	// not decoration: the agent resolves a custom provider's baseUrl as the
+	// completions root, so without /v1 the request would land one segment
+	// too high and 404 on a manager that is otherwise perfectly healthy.
+	modelEndpoint := modelEndpointResolver{publicURL: cfg.PublicURL, models: modelRegistry}
 	edgeSvc := managersvcedge.New(edgeUC, nil, log)
 
 	// Plugin runtime config storage. UC notifier
@@ -1380,6 +1396,11 @@ func main() {
 		// records what the fleet did during the outage. The node's own
 		// spool is its account; this is what makes it evidence.
 		AutonomyReplay: managersvcfb.NewAutonomyReplay(auditUC),
+		// ModelEndpoint is how a node learns which model endpoint to use
+		// without being hand-provisioned. Non-secret: the node presents
+		// its own tunnel credential pair to the gateway, so this answer
+		// carries only a URL and a slug.
+		ModelEndpoint: modelEndpoint,
 		// DeviceResolver wires the post-split edge_id → device_id
 		// resolution path (push pipeline). The biz junction repo is the
 		// source of truth.
@@ -3621,6 +3642,41 @@ func (r hitlRecoveryAuditRepo) CompleteReservedProposal(ctx context.Context, pro
 // service name (loki, tempo, prometheus, grafana) — i.e. has no dot
 // and no port-without-host — as a marker that the admin hasn't
 // overridden the seed and we should fall through to PublicURL.
+// modelEndpointResolver implements the manager half of the plan's 0.2:
+// name the model endpoint once, cluster-wide, instead of provisioning each
+// host's environment by hand.
+//
+// It is a sibling of pluginEndpointResolver and reads the same two inputs
+// that one does — the manager's own public URL and a resolved model slug —
+// so a node is pointed at the gateway the console's model picker already
+// believes is the cluster default. When either is unknown it returns empty
+// strings rather than guessing: an empty answer is the node's signal to
+// leave its own configuration alone, which is the correct behaviour for a
+// manager that has no public URL yet.
+type modelEndpointResolver struct {
+	publicURL string
+	models    *pigmodel.Registry
+}
+
+// AgentEndpoint returns the base URL (suffix included) and the default model
+// slug. Both may be empty; see the type comment.
+func (r modelEndpointResolver) AgentEndpoint(ctx context.Context) (string, string) {
+	if r.publicURL == "" {
+		return "", ""
+	}
+	model := ""
+	if r.models != nil {
+		// The cluster default, resolved exactly as GET /v1/models resolves
+		// it. A failure here is not an error the heartbeat should carry: a
+		// node that cannot learn the slug still gets the endpoint and uses
+		// the endpoint's own default, which is a working deployment.
+		if resolved, _, err := r.models.Model(ctx, domain.ModelSelection{}); err == nil && resolved != nil {
+			model = resolved.ID
+		}
+	}
+	return strings.TrimRight(r.publicURL, "/") + "/v1", model
+}
+
 type pluginEndpointResolver struct {
 	publicURL string
 	loki      *managerbizsetting.LokiResolver

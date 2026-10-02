@@ -329,9 +329,50 @@ type PluginTargetHealthWire struct {
 	UpdatedAt     int64  `json:"updated_at,omitempty"`
 }
 
-// HeartbeatResponse is empty but kept as a typed value so callers can
-// evolve the payload without changing the Call signature.
-type HeartbeatResponse struct{}
+// HeartbeatResponse carries what the manager tells a node on each beat.
+//
+// It is no longer empty. The heartbeat is the one periodic, best-effort
+// report a node makes about itself, so it is also the natural place for the
+// manager to answer a question the node cannot answer alone — which model
+// endpoint this deployment wants that node to use. The plan's 0.2 second
+// sentence is exactly this: the node's model endpoint is named by the
+// manager and reaches the node over the tunnel, rather than being written
+// into every host's env by hand.
+//
+// What rides here is deliberately *not* a credential. The shape mirrors the
+// plugin data plane (see pluginEndpointResolver in the manager's main):
+// the manager names the destination, and the node presents its own existing
+// tunnel credential pair to it. So the fields below are a URL and a model
+// slug, both of which are safe in a log and safe on a wire that is already
+// the node's authenticated channel. There is no token field and there will
+// not be one: a second credential is a second thing to forget to revoke,
+// and the node already has one the manager issues and checks.
+//
+// Contract for the edge side (mirrored in agentmodel.Adopt):
+//   - the manager always sets AgentBaseURL to its own public gateway root,
+//     so a node the operator never hand-provisioned still has a model;
+//   - the node treats the manager's answer as *lower* priority than its own
+//     environment, so an operator who pinned an endpoint by hand keeps it;
+//   - the value takes effect without a restart because the agent re-reads
+//     models.json per request — see agentmodel for why that is safe.
+type HeartbeatResponse struct {
+	// AgentBaseURL is the OpenAI-compatible *root* a node's agent should
+	// talk to, e.g. https://opskeeper.example.com/v1 — the same string an
+	// operator would put in OPSKEEPER_EDGE_AGENT_BASE_URL, suffix
+	// included. Sending the fully-formed root rather than a bare origin
+	// is what makes the env and the tunnel interchangeable, and that is
+	// what lets "env wins over tunnel" be a one-line rule instead of a
+	// comparison between two differently-shaped values.
+	//
+	// Empty means "this manager has no public URL configured" and is a
+	// valid answer: the node then writes nothing and keeps whatever it
+	// had, rather than being pointed at a relative path.
+	AgentBaseURL string `json:"agent_base_url,omitempty"`
+	// AgentModel is the model slug the cluster serves by default. Empty
+	// lets the endpoint's own default stand, which is the same meaning it
+	// has in the node's env contract.
+	AgentModel string `json:"agent_model,omitempty"`
+}
 
 // ---------------------------------------------------------------------
 // push_host_metrics (edge -> cloud)
