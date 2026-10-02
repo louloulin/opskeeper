@@ -81,6 +81,12 @@ spec:
     - { name: k8s.cluster_info, class: read }
     - { name: k8s.connect, class: read }
     - { name: k8s.deployment_status, class: read }
+    # describe_pod was filed as a soft write and re-filed as a diagnostic
+    # read: it GETs a pod and GETs its events and changes nothing. The old
+    # grade cost the node fleet the ability to diagnose a failed
+    # deployment, because a node package ships L0 and L1 and nothing
+    # above them.
+    - { name: k8s.describe_pod,       class: read }
     - { name: k8s.events, class: read }
     - { name: k8s.node_list, class: read }
     - { name: k8s.pod_list, class: read }

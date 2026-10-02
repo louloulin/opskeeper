@@ -232,6 +232,26 @@ var tools = []toolSpec{
 	},
 
 	{
+		Name:        "k8s.describe_pod",
+		Label:       "k8s.describe_pod",
+		Description: "生成 Pod 详细诊断报告（状态 + 容器 + 最近事件）",
+		Parameters: `{
+  "properties": {
+    "namespace": {
+      "type": "string"
+    },
+    "pod": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "pod"
+  ],
+  "type": "object"
+}`,
+	},
+
+	{
 		Name:        "k8s.events",
 		Label:       "k8s.events",
 		Description: "K8s events（默认只看 Warning，最新优先）",

@@ -42,7 +42,18 @@ type coverageFlags struct {
 	pluginsDir string
 	filter     string
 	failOnGap  bool
-	jsonOut    bool
+	// failOnUnrecordedDiagnoseGap fails the build when a case's ROOT CAUSE
+	// half is not served AND nobody has written down why not.
+	//
+	// It is the flag worth wiring into CI, and the "unrecorded" half is
+	// what makes it usable. A gate that failed on every recorded gap would
+	// be permanently red from the day it was written, and a permanently
+	// red gate stops being read — which is how the joint verdict became
+	// 0/20 for months without anybody noticing that it had stopped
+	// measuring anything. The ledger is the tolerance, so this fires on the
+	// regression and not on the backlog.
+	failOnUnrecordedDiagnoseGap bool
+	jsonOut                     bool
 }
 
 func cmdPluginCoverage(_ context.Context, args []string) error {
@@ -52,6 +63,8 @@ func cmdPluginCoverage(_ context.Context, args []string) error {
 	fs.StringVar(&f.pluginsDir, "plugins-dir", "plugins/pig-ops", "插件包目录")
 	fs.StringVar(&f.filter, "filter", "", "只检查匹配的 case（如 host/ 或 pg/）")
 	fs.BoolVar(&f.failOnGap, "fail-on-gap", false, "存在未被覆盖的 case 期望时以非零码退出")
+	fs.BoolVar(&f.failOnUnrecordedDiagnoseGap, "fail-on-unrecorded-diagnose-gap", false,
+		"存在未登记理由的诊断缺口时以非零码退出（回归闸门；已登记的历史缺口不算）")
 	fs.BoolVar(&f.jsonOut, "json", false, "输出 JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -82,11 +95,14 @@ func runPluginCoverage(f coverageFlags, out *os.File) error {
 
 	reports := make([]pluginmanifest.CaseCoverage, 0, len(cases))
 	for _, c := range cases {
-		// The expectations that matter are both halves: a case that can
+		// Both halves are joined, and they are kept apart. A case that can
 		// diagnose but not remediate is as unpassable as one that can do
-		// neither, and counting only root causes would hide the second.
-		expectations := append(append([]string{}, c.Expect.RootCauseLines...), c.Expect.RemediationOptions...)
-		reports = append(reports, pluginmanifest.CoverageOf(c.ID, expectations, plugins))
+		// neither, so the joint verdict has to count both — but the joint
+		// verdict is 0/20 for every shipped case and always will be, and a
+		// number that cannot move is blind to the fleet losing a tool. The
+		// split is what makes the diagnosis half measurable, and the
+		// measurement is what makes this a gate rather than a report.
+		reports = append(reports, pluginmanifest.CoverageOfCase(c.ID, c.Expect.RootCauseLines, c.Expect.RemediationOptions, plugins))
 	}
 
 	if f.jsonOut {
@@ -94,14 +110,27 @@ func runPluginCoverage(f coverageFlags, out *os.File) error {
 	}
 	emitCoverageText(out, plugins, reports)
 
-	gaps := 0
+	gaps, unrecorded := 0, []string{}
 	for _, r := range reports {
 		if !r.Complete() {
 			gaps++
 		}
+		for _, want := range r.Diagnose.Uncovered {
+			if _, owned := pluginmanifest.ExplainDiagnosisGap(want); !owned {
+				unrecorded = append(unrecorded, r.CaseID+": "+want)
+			}
+		}
 	}
+	// The joint gate first, so a caller who asked for both gets the older,
+	// stricter answer and does not have to read the report to find out which
+	// flag fired.
 	if f.failOnGap && gaps > 0 {
 		return fmt.Errorf("%d of %d cases name capabilities no plugin package provides", gaps, len(reports))
+	}
+	if f.failOnUnrecordedDiagnoseGap && len(unrecorded) > 0 {
+		sort.Strings(unrecorded)
+		return fmt.Errorf("%d root causes are served by no package and recorded in no ledger: %s",
+			len(unrecorded), strings.Join(unrecorded, ", "))
 	}
 	return nil
 }
@@ -109,25 +138,65 @@ func runPluginCoverage(f coverageFlags, out *os.File) error {
 func emitCoverageText(out *os.File, plugins []pluginmanifest.Plugin, reports []pluginmanifest.CaseCoverage) {
 	fmt.Fprintf(out, "Plugin capability coverage\n")
 	fmt.Fprintf(out, "  packages: %d (%s)\n", len(plugins), strings.Join(pluginNames(plugins), ", "))
-	total, complete := 0, 0
+	total, complete, diagnosable, remediable := 0, 0, 0, 0
 	for _, r := range reports {
 		total++
-		mark := "GAP "
 		if r.Complete() {
-			mark = "ok  "
 			complete++
 		}
+		if r.Diagnosable() {
+			diagnosable++
+		}
+		if r.Remediable() {
+			remediable++
+		}
+		// The per-case line follows the DIAGNOSIS axis, not the joint one.
+		// Printing "GAP" for a case the fleet diagnoses perfectly would
+		// bury the one line a reader needs: the root cause nobody packaged.
+		mark := "GAP "
+		if r.Diagnosable() {
+			mark = "ok  "
+		}
 		fmt.Fprintf(out, "  %s %-28s", mark, r.CaseID)
-		if r.Complete() {
-			fmt.Fprintf(out, "served by %s\n", strings.Join(r.Packages, ", "))
+		if r.Diagnosable() {
+			fmt.Fprintf(out, "diagnosed by %s\n", strings.Join(r.Packages, ", "))
 			continue
 		}
-		fmt.Fprintf(out, "uncovered: %d\n", len(r.Uncovered))
-		for _, u := range r.Uncovered {
-			fmt.Fprintf(out, "        %-28s %s\n", u, reasonFor(r, u))
+		fmt.Fprintf(out, "undiagnosed: %d\n", len(r.Diagnose.Uncovered))
+		for i, u := range r.Diagnose.Uncovered {
+			reason := pluginmanifest.CoverageReason(u)
+			if i < len(r.Diagnose.Reasons) {
+				reason = r.Diagnose.Reasons[i]
+			}
+			// OWNED marks a gap somebody wrote down, and the reason printed
+			// is the one they wrote rather than the join's mechanical
+			// "this family is served by X" — the recorded reason is the part
+			// that says whether the gap is still the right answer. It is also
+			// the difference between "this is the backlog" and "the fleet
+			// regressed", and the report is the only place a CI log reader
+			// sees either.
+			mark := "GAP  "
+			if recorded, owned := pluginmanifest.ExplainDiagnosisGap(u); owned {
+				mark = "OWNED"
+				reason = recorded
+			}
+			fmt.Fprintf(out, "        %s %-28s %s\n", mark, u, reason)
 		}
 	}
-	fmt.Fprintf(out, "\n%d/%d cases fully covered by the shipped plugin fleet\n", complete, total)
+	fmt.Fprintf(out, "\ndiagnosis axis:   %d/%d cases a node's packages can fully diagnose\n", diagnosable, total)
+	fmt.Fprintf(out, "remediation axis: %d/%d cases a node's packages can fully remediate\n", remediable, total)
+	fmt.Fprintf(out, "joint (passable): %d/%d\n", complete, total)
+	if diagnosable < total {
+		// The diagnosis half is the half that is supposed to be green, and
+		// every gap printed above is a regression rather than a decision: a
+		// case whose root cause no package serves is a case the node's
+		// agent cannot investigate, whatever the remediation story is.
+		fmt.Fprintf(out, "\nThe gaps above are DIAGNOSIS gaps, which is the axis that is meant\n"+
+			"to be complete. A root cause no package serves is a node agent that\n"+
+			"cannot investigate this case at all. OWNED lines are recorded in\n"+
+			"pluginmanifest.DiagnosisGaps with their reason; a GAP line is not,\n"+
+			"and --fail-on-unrecorded-diagnose-gap fails the build on those.\n")
+	}
 	if complete < total {
 		// Every case here names a remediation as well as a diagnosis, and a
 		// case whose remediation no package ships cannot be passed by any
@@ -170,19 +239,48 @@ func emitCoverageText(out *os.File, plugins []pluginmanifest.Plugin, reports []p
 }
 
 func emitCoverageJSON(out *os.File, plugins []pluginmanifest.Plugin, reports []pluginmanifest.CaseCoverage) error {
-	type jsonReport struct {
-		CaseID    string   `json:"case_id"`
-		Complete  bool     `json:"complete"`
-		Packages  []string `json:"packages"`
+	type jsonAxis struct {
+		Covered   []string `json:"covered,omitempty"`
 		Uncovered []string `json:"uncovered"`
 		Reasons   []string `json:"reasons,omitempty"`
 	}
+	type jsonReport struct {
+		CaseID    string   `json:"case_id"`
+		Complete  bool     `json:"complete"`
+		Diagnose  bool     `json:"diagnosable"`
+		Remediate bool     `json:"remediable"`
+		Packages  []string `json:"packages"`
+		Uncovered []string `json:"uncovered"`
+		Reasons   []string `json:"reasons,omitempty"`
+		// The two axes are reported in full alongside the union, because a
+		// consumer that only reads `uncovered` inherits exactly the blind
+		// spot this split exists to close.
+		DiagnoseAxis  jsonAxis `json:"diagnose_axis"`
+		RemediateAxis jsonAxis `json:"remediate_axis"`
+	}
 	body := struct {
-		Packages []string     `json:"packages"`
-		Cases    []jsonReport `json:"cases"`
+		Packages     []string     `json:"packages"`
+		Cases        []jsonReport `json:"cases"`
+		Diagnosable  int          `json:"diagnosable_cases"`
+		Remediable   int          `json:"remediable_cases"`
+		FullyCovered int          `json:"fully_covered_cases"`
 	}{Packages: pluginNames(plugins)}
 	for _, r := range reports {
-		jr := jsonReport{CaseID: r.CaseID, Complete: r.Complete(), Packages: r.Packages, Uncovered: r.Uncovered}
+		if r.Diagnosable() {
+			body.Diagnosable++
+		}
+		if r.Remediable() {
+			body.Remediable++
+		}
+		if r.Complete() {
+			body.FullyCovered++
+		}
+		jr := jsonReport{
+			CaseID: r.CaseID, Complete: r.Complete(), Packages: r.Packages, Uncovered: r.Uncovered,
+			Diagnose: r.Diagnosable(), Remediate: r.Remediable(),
+			DiagnoseAxis:  jsonAxis{Covered: r.Diagnose.Covered, Uncovered: r.Diagnose.Uncovered, Reasons: r.Diagnose.Reasons},
+			RemediateAxis: jsonAxis{Covered: r.Remediate.Covered, Uncovered: r.Remediate.Uncovered, Reasons: r.Remediate.Reasons},
+		}
 		for _, u := range r.Uncovered {
 			jr.Reasons = append(jr.Reasons, reasonFor(r, u))
 		}

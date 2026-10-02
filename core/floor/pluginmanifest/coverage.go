@@ -167,6 +167,7 @@ var toolCapabilities = map[string]string{
 	"k8s.cluster_info":          CapK8s,
 	"k8s.connect":               CapK8s,
 	"k8s.deployment_status":     CapK8s,
+	"k8s.describe_pod":          CapK8s,
 	"k8s.events":                CapK8s,
 	"k8s.node_list":             CapK8s,
 	"k8s.pod_list":              CapK8s,
@@ -258,11 +259,61 @@ type CaseCoverage struct {
 	// packaged because every shipped package is read-only" is a package
 	// somebody writes.
 	Reasons []string
+
+	// Diagnose and Remediate are the same report split along the case
+	// file's own seam, and they exist because collapsing them destroys the
+	// only signal this command produces.
+	//
+	// A case names two different things: the root causes it expects the
+	// agent to *find*, and the remediation it expects the agent to
+	// *propose*. The fleet serves the first and, by construction, not the
+	// second — a node's package is read-only because the approval queue
+	// that makes a write safe lives on the other side of the tunnel. So the
+	// joint verdict is 0/20 and always will be, and a gate that only reads
+	// the joint verdict cannot tell a healthy fleet from a fleet that has
+	// lost query_promql: both say "0/20". A number that cannot go up cannot
+	// catch a regression, and a regression gate that cannot catch a
+	// regression is a comment.
+	//
+	// Split, the diagnosis axis is a real measurement that moves when the
+	// fleet changes, and it is the one worth failing a build on.
+	Diagnose CaseAxis
+	// Remediate is the write half. It is reported, and it is not a gate:
+	// the answer is meant to be no.
+	Remediate CaseAxis
 }
 
+// CaseAxis is one half of a case's expectations and the packages' answer
+// to it.
+type CaseAxis struct {
+	// Covered is the subset of this half's expectations some package serves.
+	Covered []string
+	// Uncovered is the rest, sorted.
+	Uncovered []string
+	// Reasons parallels Uncovered.
+	Reasons []string
+}
+
+// Complete reports whether this half is fully served. A half with no
+// expectations is vacuously complete — a case that asks for nothing cannot
+// be underserved — and that is what makes the joint verdict below equal
+// the old single-axis answer rather than a stricter one.
+func (a CaseAxis) Complete() bool { return len(a.Uncovered) == 0 }
+
+// Diagnosable reports whether a node's packages can find everything this
+// case expects to be found.
+func (c CaseCoverage) Diagnosable() bool { return c.Diagnose.Complete() }
+
+// Remediable reports whether a node's packages can propose everything this
+// case expects to be proposed.
+func (c CaseCoverage) Remediable() bool { return c.Remediate.Complete() }
+
 // Complete reports whether every expectation the case names is served by
-// some package.
-func (c CaseCoverage) Complete() bool { return len(c.Uncovered) == 0 }
+// some package — both halves. For a shipped case that is the passability
+// question, and the answer is 0/20 for a reason that is a design decision
+// rather than a backlog item. Use Diagnosable to ask whether the fleet
+// regressed.
+func (c CaseCoverage) Complete() bool { return c.Diagnosable() && c.Remediable() }
 
 // CapabilityPrefix extracts the resource family from a harness expectation
 // like "pg.lock_waits" or "host.host_load".
@@ -386,7 +437,26 @@ func contains(haystack []string, needle string) bool {
 // the one that serves it. Both are exact: nothing here infers a capability
 // from a shared prefix.
 func CoverageOf(caseID string, expectations []string, plugins []Plugin) CaseCoverage {
+	// A caller that hands over one flat list is not saying which half of the
+	// case each name belongs to, so both axes get the same answer rather
+	// than one of them being quietly reported as empty. That keeps every
+	// existing call site's meaning exactly what it was: the verdict is the
+	// verdict, and the split is opt-in through CoverageOfCase.
+	axis := coverAxis(expectations, indexFleet(plugins))
+	return assembleCoverage(caseID, CaseCoverage{Diagnose: axis, Remediate: axis}, indexFleet(plugins))
+}
+
+// CoverageOfCase joins a case's two halves separately, which is the form
+// the regression gate uses.
+func CoverageOfCase(caseID string, rootCauses, remediations []string, plugins []Plugin) CaseCoverage {
 	idx := indexFleet(plugins)
+	return assembleCoverage(caseID, CaseCoverage{
+		Diagnose:  coverAxis(rootCauses, idx),
+		Remediate: coverAxis(remediations, idx),
+	}, idx)
+}
+
+func coverAxis(expectations []string, idx fleetIndex) CaseAxis {
 	// Reasons is kept as a parallel slice, so the two have to be sorted as
 	// one list. Sorting Uncovered on its own would leave every reason
 	// describing a different expectation than the line it is printed under,
@@ -398,27 +468,120 @@ func CoverageOf(caseID string, expectations []string, plugins []Plugin) CaseCove
 		reason      string
 	}
 	var gaps []gap
-	out := CaseCoverage{CaseID: caseID}
-	pkgs := map[string]bool{}
+	var axis CaseAxis
 	for _, want := range expectations {
-		if _, name, ok := ToolServing(want, idx.byTool); ok {
-			out.Covered = append(out.Covered, want)
-			pkgs[name] = true
+		if _, _, ok := ToolServing(want, idx.byTool); ok {
+			axis.Covered = append(axis.Covered, want)
 			continue
 		}
 		gaps = append(gaps, gap{expectation: want, reason: explainGap(want, idx)})
 	}
 	sort.Slice(gaps, func(i, j int) bool { return gaps[i].expectation < gaps[j].expectation })
 	for _, g := range gaps {
-		out.Uncovered = append(out.Uncovered, g.expectation)
-		out.Reasons = append(out.Reasons, g.reason)
+		axis.Uncovered = append(axis.Uncovered, g.expectation)
+		axis.Reasons = append(axis.Reasons, g.reason)
+	}
+	sort.Strings(axis.Covered)
+	return axis
+}
+
+// assembleCoverage joins the two axes back into the flat fields the report
+// has always printed, so a reader who only wants the joint verdict and a
+// caller that only reads Uncovered both keep working unchanged.
+func assembleCoverage(caseID string, out CaseCoverage, idx fleetIndex) CaseCoverage {
+	out.CaseID = caseID
+	pkgs := map[string]bool{}
+	// De-duplicated, because the two halves overlap by design: a name the
+	// legacy flat call reports once must not appear twice in the union, and
+	// a case that genuinely names the same expectation on both sides is
+	// still one uncovered line on the report.
+	seenCovered := map[string]bool{}
+	for _, axis := range []CaseAxis{out.Diagnose, out.Remediate} {
+		for _, want := range axis.Covered {
+			if seenCovered[want] {
+				continue
+			}
+			seenCovered[want] = true
+			if _, name, _ := ToolServing(want, idx.byTool); name != "" {
+				pkgs[name] = true
+			}
+			out.Covered = append(out.Covered, want)
+		}
+	}
+	// Uncovered and Reasons are de-duplicated as aligned pairs, never one
+	// without the other: a reason printed under the wrong expectation is
+	// the one mistake this report cannot make.
+	seenGap := map[string]bool{}
+	for _, axis := range []CaseAxis{out.Diagnose, out.Remediate} {
+		for i, want := range axis.Uncovered {
+			if seenGap[want] {
+				continue
+			}
+			seenGap[want] = true
+			out.Uncovered = append(out.Uncovered, want)
+			if i < len(axis.Reasons) {
+				out.Reasons = append(out.Reasons, axis.Reasons[i])
+			}
+		}
 	}
 	for name := range pkgs {
 		out.Packages = append(out.Packages, name)
 	}
 	sort.Strings(out.Packages)
 	sort.Strings(out.Covered)
+	sort.Strings(out.Uncovered)
 	return out
+}
+
+// DiagnosisGaps names the root causes no shipped package serves, each with
+// the reason it is not served.
+//
+// It is a ledger rather than a tolerance because the diagnosis axis is the
+// half of the coverage report that is supposed to be complete, and a gate
+// over a number nobody is allowed to own is a gate nobody reads. Sixteen of
+// the twenty shipped cases are fully diagnosable by the fleet today; the
+// five expectations below are the exceptions, and each is here because
+// somebody looked at it and wrote down why it is still open.
+//
+// The direction of the test matters as much as the contents. A root cause
+// that appears here and then gets packaged is a stale entry, and a stale
+// entry is worse than no entry: it reads as "somebody decided this is fine"
+// at exactly the moment nobody is looking at that tool any more. Both
+// directions are tested, so a fix that lands without its decision being
+// retired fails.
+var DiagnosisGaps = map[string]string{
+	// Two names for one missing capability. The host adapter is excluded
+	// from node packages as a family, and for a written reason: it executes
+	// as root on whatever host the control plane was pointed at, so its
+	// reads answer about that host rather than about the node the agent is
+	// running on. A node learns about itself through the read-only
+	// package's own probes (host_lsof, host_read_journal, host_strace, …)
+	// and through get_host_load, which is why host.host_load is covered and
+	// these two are not.
+	//
+	// host.top_cpu_procs is also a rename: the adapter's own name for the
+	// same read is host.top_processes. It is deliberately not aliased,
+	// because an alias would report the capability as covered by a tool no
+	// node has — the same reason redis.kill_client is not aliased to
+	// redis.client_kill.
+	"host.host_processes": "the host family is excluded from node packages: the adapter executes as root on whatever host the control plane was pointed at, so its reads answer about that host rather than about the node the agent runs on. A node's own view is the read-only package's probes and get_host_load",
+	"host.top_cpu_procs":  "same as host.host_processes, and additionally a rename: the adapter calls this read host.top_processes. Not aliased, because an alias would claim coverage from a tool no node ships",
+	"host.host_files":     "no read equivalent exists on either side. The adapter's host.old_log_files answers a narrower question (which old logs) and is excluded with the rest of the host family, and nothing anywhere reads a file inventory for a node",
+
+	// The two below name a capability nothing in this build implements,
+	// which makes them a decision about the corpus or the tool name rather
+	// than a packaging backlog item. They are recorded so the diagnosis
+	// axis can be a gate today, and they stay visible so the decision cannot
+	// be lost by going unrecorded.
+	"redis.hot_keys":          "no implementation of this name exists anywhere in this build, packaged or otherwise: the case asks for it and no adapter registers it. Undecided whether the tool name or the corpus is the thing that is wrong",
+	"kafka.rebalance_history": "Kafka exposes the CURRENT consumer assignment and no history of it. Answering this needs a collector that stores successive DescribeGroups results, which is a collector's job and not a broker client's; undecided",
+}
+
+// ExplainDiagnosisGap returns the recorded reason an expectation is an
+// owned gap rather than an unexplained one.
+func ExplainDiagnosisGap(expectation string) (string, bool) {
+	reason, ok := DiagnosisGaps[expectation]
+	return reason, ok
 }
 
 // explainGap says why one expectation is not served.

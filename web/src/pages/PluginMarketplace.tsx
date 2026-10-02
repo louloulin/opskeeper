@@ -171,7 +171,37 @@ function ImportResult({ report }: { report: ImportResponse }) {
         <Chip dense>{tr(`${report.prompts} 提示词`, `${report.prompts} prompt(s)`)}</Chip>
         <Chip dense>{tr(`${report.mcp} MCP`, `${report.mcp} MCP`)}</Chip>
         <Chip dense>{tr(`${report.extensions} 扩展`, `${report.extensions} extension(s)`)}</Chip>
+        {/* The last two classes are counted rather than omitted for the
+            same reason the first five are: an uncounted class is a class
+            nobody can tell is missing. Both were dropped by an earlier
+            converter without an error, and the report read identically
+            either way. */}
+        <Chip dense>{tr(`${report.themes} 主题`, `${report.themes} theme(s)`)}</Chip>
+        <Chip dense>
+          {tr(
+            `${report.agent_environments} 运行环境`,
+            `${report.agent_environments} agent environment(s)`
+          )}
+        </Chip>
       </div>
+
+      {/* A container that selected its resources by manifest is the one
+          case where the converted package serves a different SET than the
+          one that was uploaded, so it is called out here rather than left
+          to be found in the decisions list further down. */}
+      {report.source_manifest?.declares_resources ? (
+        <p className="text-[11px] text-amber-600/90">
+          {tr(
+            `源容器的 package.json 用清单声明了 ${(
+              report.source_manifest.classes ?? []
+            ).join('、')}；转换后的包没有清单，改为按约定目录发现，因此会多出一些资源。`,
+            `The source declared ${
+              (report.source_manifest.classes ?? []).join(', ') ||
+              'its resources'
+            } by manifest. The converted package has no manifest and discovers by convention, so it will serve a superset.`
+          )}
+        </p>
+      ) : null}
 
       {report.skills.length > 0 ? (
         <ul className="space-y-0.5 text-[11px] text-zinc-500">

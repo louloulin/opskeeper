@@ -446,6 +446,12 @@ func (a *Adapter) dispatch(ctx context.Context, op string, p params) (int, strin
 // same verb as `scale` — but it takes a node out of the scheduler's pool and
 // the pods on it are not moved, so it is graded with the writes that change
 // where workloads can run. `rollout_status` reads, and reads at L0.
+//
+// Blast radius also cuts the other way, and that is the half this function
+// used to get wrong: a tool that reads but *synthesises* is still a read.
+// Grading `describe_pod` as a soft write bought no safety and cost the node
+// package a diagnostic tool, because the node package ships L0 and L1 and
+// nothing above it.
 func (a *Adapter) OpRiskLevel(op string) adapter.RiskLevel {
 	switch op {
 	case "scale", "rollout_undo", "rolling_restart", "rollout_restart", "resize_pvc":
@@ -472,10 +478,16 @@ func (a *Adapter) OpRiskLevel(op string) adapter.RiskLevel {
 // Twenty-three tools, grouped by the risk ladder they sit on:
 //
 //   - L0 (6)：cluster_info / node_list / pod_list / deployment_status / rollout_status / pvc_list
-//   - L1 (6)：rollout_history / pod_logs / events / top_nodes / top_pods / pvc_usage
-//   - L2 (1)：describe_pod
+//   - L1 (7)：rollout_history / pod_logs / events / top_nodes / top_pods / pvc_usage / describe_pod
 //   - L3 (8)：scale / rollout_undo / rolling_restart / cordon / uncordon / drain / evict_pod / resize_pvc
 //   - L4 (2)：exec_into_pod / cleanup_logs
+//
+// There is no L2 tool here, and that is the point rather than an
+// observation. This adapter has nothing between "reads" and "changes where
+// workloads run", and the L2 band exists for tools that write without
+// changing the blast radius — an analyse, a plan, a cached report. The one
+// tool that was filed there was doing two GETs, and the filing cost the
+// node fleet the ability to diagnose a failed deployment.
 //
 // Two of those grades need justifying, because they are the only tools here
 // that run a program rather than make a request. `k8s.pvc_usage` runs a fixed
@@ -518,8 +530,19 @@ func RegisterTools(reg *registry.Registry, a *Adapter) error {
 		// unknown, never empty.
 		makeTool("k8s.pvc_usage", adapter.RiskL1Diagnostic, "测量 PVC 文件系统真实用量（找到挂载该 claim 的 Running Pod，在其挂载点执行 df）。测不到时返回 measured=false 与原因，不返回 0",
 			map[string]string{"pvc": "string!", "namespace": "string"}, readOp(a, runPVCUsage)),
-		// L2 软写（生成诊断报告，不变更集群资源）
-		makeTool("k8s.describe_pod", adapter.RiskL2SoftWrite, "生成 Pod 详细诊断报告（状态 + 容器 + 最近事件）",
+		// L1 诊断读取。
+		//
+		// It was L2 — "soft write, generate a report" — and that grade was
+		// wrong by this file's own stated rule, which is that the mapping is
+		// by blast radius and not by what the output looks like. describe_pod
+		// GETs a pod and GETs its events; there is no third request and
+		// nothing in the cluster changes. The grade it carried had a real
+		// cost that no approval was ever going to justify: L2 is above the
+		// cut the node package ships, so a node's agent could not see the
+		// tool at all, and the k8s/deployment-failed case became a case no
+		// node fleet could diagnose. A read graded as a write costs the
+		// read-only half of the fleet an incident class.
+		makeTool("k8s.describe_pod", adapter.RiskL1Diagnostic, "生成 Pod 详细诊断报告（状态 + 容器 + 最近事件）",
 			map[string]string{"pod": "string!", "namespace": "string"}, readOp(a, runDescribePodTool)),
 		// L3 写操作（需审批）
 		makeTool("k8s.scale", adapter.RiskL3HardWrite, "调整 Deployment 副本数",

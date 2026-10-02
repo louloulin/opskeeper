@@ -22,6 +22,7 @@
 package pluginimport
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -36,22 +37,26 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 )
 
-// resourceDirs are the package directories copied across, and the legacy
-// directory each one comes from.
+// resourceDirs is the flattened view of domain.PackageResources: every
+// legacy spelling, in the order PiG declares the classes, each paired with
+// the package directory it is written to.
 //
-// `commands` is the only remap: PiG names that resource class `prompts`,
-// and a converter that left the old name in place would produce a package
-// whose commands are silently undiscoverable — which looks exactly like a
-// plugin that shipped nothing.
-var resourceDirs = []struct{ legacy, packaged string }{
-	{"skills", "skills"},
-	{"agents", "agents"},
-	{"commands", "prompts"},
-	{"prompts", "prompts"},
-	{"mcp", "mcp"},
-	{"extensions", "extensions"},
-	{"hooks", "hooks"},
-}
+// The list is derived rather than written out, and that is the whole point of
+// this converter having a coverage gate. A hand-written list here is a list
+// somebody has to remember to update, and the failure is not an error — an
+// unrecognised directory is simply not copied, so the package loads, reviews
+// clean, and arrives on the node missing that resource class. A derived list
+// can only fall behind PiG, and core/pig/pigcontract has the test that says
+// so against the upstream constants.
+var resourceDirs = func() []struct{ legacy, packaged string } {
+	var out []struct{ legacy, packaged string }
+	for _, r := range domain.PackageResources {
+		for _, legacy := range r.LegacyNames {
+			out = append(out, struct{ legacy, packaged string }{legacy: legacy, packaged: r.Kind})
+		}
+	}
+	return out
+}()
 
 // Options configures an import.
 type Options struct {
@@ -93,6 +98,36 @@ type Decision struct {
 	Why string `json:"why"`
 }
 
+// SourceManifest is a read of a container's own package.json.
+//
+// PiG discovers a package's resources from its manifest when the manifest
+// declares them, and from the conventional directories when it does not.
+// Those two are mutually exclusive: a package.json carrying a "pi" block
+// suppresses convention discovery for every Pi class, so a package whose
+// manifest declares one skill and has a skills/ directory with nine loads
+// exactly one.
+//
+// That is why this is reported rather than carried across. A converted
+// package has no manifest, so it discovers by convention — which is a
+// superset of what a declaring manifest selects, and therefore the safe
+// direction. Copying the manifest instead would import its *suppression*:
+// every class it left undeclared would stop loading on the node, silently,
+// and the operator would be looking at a package that shipped nine skills
+// and serves one.
+type SourceManifest struct {
+	// Present is whether a package.json was there at all.
+	Present bool `json:"present"`
+	// Declares is whether it carried a resource-declaring block ("pi" or
+	// "pig"). A package.json with neither is npm metadata and nothing more.
+	Declares bool `json:"declares_resources"`
+	// Classes is every resource class either block named, sorted.
+	Classes []string `json:"classes,omitempty"`
+	// Entries maps a class to the paths it declared. It is the list a
+	// reviewer needs, because it is the difference between the resources
+	// the container served and the ones the converted package will find.
+	Entries map[string][]string `json:"entries,omitempty"`
+}
+
 // Report is what an import produced.
 type Report struct {
 	// Kind is the container form that was recognised.
@@ -104,12 +139,25 @@ type Report struct {
 	// Skills and Agents are the package-relative paths written.
 	Skills []string `json:"skills"`
 	Agents []string `json:"agents"`
-	// Prompts, MCP and Extensions are the other resource counts, kept
-	// rather than the paths: nobody reviews a count, and a report that
-	// listed forty identical extension paths would be skimmed past.
-	Prompts   int `json:"prompts"`
-	MCP       int `json:"mcp"`
-	Extension int `json:"extensions"`
+	// The other resource classes are counts rather than paths: nobody
+	// reviews a count, and a report that listed forty identical extension
+	// paths would be skimmed past.
+	//
+	// Themes and AgentEnvironments are here for the same reason the classes
+	// they count are copied at all. They are the two an earlier version of
+	// this converter did not know about, and a class it did not know about
+	// was a class it dropped without saying so — the report read exactly
+	// the same whether the container had shipped a theme or not.
+	Prompts           int `json:"prompts"`
+	MCP               int `json:"mcp"`
+	Extension         int `json:"extensions"`
+	Themes            int `json:"themes"`
+	AgentEnvironments int `json:"agent_environments"`
+	// SourceManifest is what the container's own package.json said about
+	// where its resources live. It is reported and deliberately not copied;
+	// see readSourceManifest for why copying it would be worse than
+	// dropping it.
+	SourceManifest SourceManifest `json:"source_manifest"`
 	// Decisions is what remains undecided. It is never empty for a
 	// container that carried no governance, which is all of them.
 	Decisions []Decision `json:"decisions"`
@@ -173,6 +221,11 @@ func Import(opts Options) (*Report, error) {
 	defer func() { _ = os.RemoveAll(staging) }()
 
 	report := &Report{Kind: kind, Warnings: result.Warnings}
+	if m, err := readSourceManifest(source); err != nil {
+		return nil, err
+	} else {
+		report.SourceManifest = m
+	}
 	report.Name = nameOf(result, source)
 	report.Version = versionOf(result)
 	report.Description = descriptionOf(result)
@@ -199,17 +252,121 @@ func Import(opts Options) (*Report, error) {
 	return report, nil
 }
 
+// readSourceManifest reads the container's own package.json, if it has one.
+//
+// It reads rather than copies, and the shape it returns says why. A `pi`
+// block is PiG's "these are the only resources this package has" and a `pig`
+// block is the same claim for hooks, MCP servers and agent environments;
+// carrying either across would carry the suppression with it, and the
+// converted package would load fewer resources than the container did.
+//
+// A package.json with neither block is npm metadata, and is reported as
+// present but not declaring — which is a different fact, because an
+// extension that needs its dependencies installed is a decision a reviewer
+// has to make and this converter is not going to make it by copying a file
+// that may carry a postinstall script.
+func readSourceManifest(source string) (SourceManifest, error) {
+	out := SourceManifest{}
+	raw, err := os.ReadFile(filepath.Join(source, "package.json"))
+	if os.IsNotExist(err) {
+		return out, nil
+	}
+	if err != nil {
+		return out, fmt.Errorf("pluginimport: read package.json: %w", err)
+	}
+	out.Present = true
+
+	var doc struct {
+		PI *struct {
+			Extensions *[]string `json:"extensions"`
+			Skills     *[]string `json:"skills"`
+			Prompts    *[]string `json:"prompts"`
+			Themes     *[]string `json:"themes"`
+		} `json:"pi"`
+		Pig *struct {
+			Hooks             *[]string `json:"hooks"`
+			MCPServers        *[]string `json:"mcpServers"`
+			AgentEnvironments *[]string `json:"agentEnvironments"`
+		} `json:"pig"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		// A package.json this converter cannot read is reported rather than
+		// refused: refusing would block an import of a container whose
+		// resources are all discoverable by convention anyway, and the
+		// operator is better served by a package plus a question than by an
+		// error about a file the package does not need.
+		out.Entries = map[string][]string{}
+		out.Classes = []string{"(unreadable package.json)"}
+		// Declares is true even though nothing was read. It means "this
+		// manifest may have declared resources and the converter could not
+		// find out", which is the one state in which silence would be
+		// worst: the package loads by convention and serves a superset, and
+		// only somebody reading this field learns that the superset was
+		// never a decision anybody made.
+		out.Declares = true
+		return out, nil
+	}
+	if doc.PI == nil && doc.Pig == nil {
+		return out, nil
+	}
+	out.Declares = true
+	out.Entries = map[string][]string{}
+	add := func(kind string, entries *[]string) {
+		if entries == nil {
+			return
+		}
+		out.Classes = append(out.Classes, kind)
+		out.Entries[kind] = append([]string(nil), *entries...)
+	}
+	if doc.PI != nil {
+		add("extensions", doc.PI.Extensions)
+		add("skills", doc.PI.Skills)
+		add("prompts", doc.PI.Prompts)
+		add("themes", doc.PI.Themes)
+	}
+	if doc.Pig != nil {
+		add("hooks", doc.Pig.Hooks)
+		// PiG spells the class "mcp" and the manifest key "mcpServers".
+		// The report uses the class name, because that is what a reader
+		// compares against the package directory it will be looking for.
+		add("mcp", doc.Pig.MCPServers)
+		add("agent-environments", doc.Pig.AgentEnvironments)
+	}
+	sort.Strings(out.Classes)
+	return out, nil
+}
+
 // copyResources copies every recognised resource directory across.
+//
+// The written set is tracked rather than inferred from the report counters,
+// because two legacy spellings can name one class (`commands` and `prompts`
+// are both PiG's `prompts`) and the second one must not clobber the first.
+// It used to be inferred, via `report.Prompts > 0`, which happened to work
+// only because `commands` was the sole remap and the sole class whose count
+// was written before the check.
+//
+// A collision is now a reported warning rather than a silent skip. The
+// container shipped two directories for one class, the converter carried one
+// of them, and the operator is entitled to know which. Silently preferring
+// one is the failure this file exists to prevent, just one level up from the
+// directory the files came from.
 func copyResources(source, staging string, report *Report) error {
+	written := map[string]string{}
 	for _, dir := range resourceDirs {
 		from := filepath.Join(source, dir.legacy)
 		if _, err := os.Stat(from); err != nil {
 			// A container is not required to have every resource class.
-			// The two that are remapped share a destination, so the
-			// second is skipped rather than allowed to clobber the first.
 			continue
 		}
-		if dir.legacy == "prompts" && report.Prompts > 0 {
+		if previous, taken := written[dir.packaged]; taken {
+			report.Warnings = append(report.Warnings, chatruntime.LoadWarning{
+				Path: filepath.Join(source, dir.legacy),
+				Code: "resource_directory_collides",
+				Reason: fmt.Sprintf(
+					"%s and %s both name PiG's %q class, so only %s was copied; "+
+						"merge the two by hand and re-import if the second directory held anything",
+					previous, dir.legacy, dir.packaged, previous),
+			})
 			continue
 		}
 		to := filepath.Join(staging, dir.packaged)
@@ -217,6 +374,7 @@ func copyResources(source, staging string, report *Report) error {
 		if err != nil {
 			return fmt.Errorf("pluginimport: copy %s: %w", dir.legacy, err)
 		}
+		written[dir.packaged] = dir.legacy
 		switch dir.packaged {
 		case "skills":
 			report.Skills = relFiles(staging, to)
@@ -228,6 +386,10 @@ func copyResources(source, staging string, report *Report) error {
 			report.MCP = n
 		case "extensions":
 			report.Extension = n
+		case "themes":
+			report.Themes = n
+		case "agent-environments":
+			report.AgentEnvironments = n
 		}
 	}
 	return nil
@@ -535,6 +697,21 @@ func decisionsFor(result *chatruntime.LoadResult, report *Report) []Decision {
 			Question: fmt.Sprintf("Do the %d extension(s) run in-process, and do they need credentials to do it?", report.Extension),
 			Why: "An extension runs with the node's privileges. Whether it is safe as " +
 				"third-party code depends on what it does, not on how it was packaged.",
+		})
+	}
+	if report.SourceManifest.Declares {
+		out = append(out, Decision{
+			Field: "package.json (" + strings.Join(report.SourceManifest.Classes, ", ") + ")",
+			Question: fmt.Sprintf(
+				"The container declared its %s by manifest. The converted package has none, "+
+					"so it discovers them by convention instead — which finds MORE than the "+
+					"declaration selected. Are those extra resources intended to be served?",
+				strings.Join(report.SourceManifest.Classes, " and ")),
+			Why: "PiG loads only what a manifest with a resource block declares, and that " +
+				"block suppresses convention discovery for every class it governs. Copying it " +
+				"across would carry the suppression; dropping it discovers a superset. Neither " +
+				"is the same set the container served, and only a person knows which of the " +
+				"two the container meant.",
 		})
 	}
 	if len(result.Warnings) > 0 {

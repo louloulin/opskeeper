@@ -165,6 +165,16 @@ components:
   # are separate components because their lifetimes are: a Runtime is
   # process-wide and owns the extension runner, a Completer is per-call.
   oxpig_coding:  { in: core/pig/pigcoding/** }
+  # oxpig_mcp is PiG's native MCP tool shape: a ports.MCPCatalogue turned
+  # into agent.AgentTool values. It is a leaf with no importer, and that is
+  # decision 85's verdict rather than an oversight — the control plane's MCP
+  # already reaches the session through the basetool path, so composing this
+  # one too would produce two tools of the same capability and only one of
+  # them gated. Its position is the node's `pig --mode rpc`. It is its own
+  # component so that "nothing imports it" is a fact this file states, not a
+  # fact nobody checked: a future wiring that reaches it has to add the grant
+  # and say so.
+  oxpig_mcp:     { in: core/pig/pigmcp/** }
   # The tool-schema bridge and the scripted test stub. Both are leaves over
   # oxpig_model with no OpsKeeper dependency of their own.
   oxpig_tools:   { in: core/pig/pigtools/** }
@@ -453,6 +463,12 @@ deps:
     # rather than a list of permissions nobody exercised.
     anyVendorDeps: true
   oxpig_tools:
+    mayDependOn: [oxcore_ports]
+  # pigmcp talks to the contract layer only: it needs ports.MCPCatalogue and
+  # the JSON Schema vocabulary that comes with it, and deliberately needs
+  # nothing else. In particular it may not reach oxpig_agent — a bridge that
+  # could build a session could register its own tools outside the gate.
+  oxpig_mcp:
     mayDependOn: [oxcore_ports]
   oxpig_test:
     mayDependOn: [oxcore_domain, oxpig_model]

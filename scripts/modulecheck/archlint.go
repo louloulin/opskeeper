@@ -365,6 +365,10 @@ func checkArchLint(root string) ([]string, error) {
 	excludes, broken := archLintExcludes(cfg)
 
 	var violations []string
+	// unattached collects Go files no component in the yml claims. They are
+	// gathered during the walk and reported after it, so the message order
+	// does not depend on where in the tree the file sits.
+	var unattached []string
 	for _, expr := range broken {
 		violations = append(violations, fmt.Sprintf(
 			".go-arch-lint.yml: excludeFiles entry %q is not a valid regexp; it is being treated as "+
@@ -437,6 +441,17 @@ func checkArchLint(root string) ([]string, error) {
 		}
 		from := archLintComponentOf(cfg, names, rel)
 		if from == "" {
+			// A file no component claims is a file no mayDependOn rule
+			// constrains, and go-arch-lint refuses to run when it finds
+			// one ("not attached to any component"). This checker used to
+			// read past it, so the one gate that runs without installing
+			// a binary was blind to exactly the mistake the other gate
+			// names: core/pig/pigmcp landed with no component, and nothing
+			// said so until somebody ran the linter by hand. The two gates
+			// answer the same question or the softer one is decoration.
+			unattached = append(unattached, fmt.Sprintf(
+				".go-arch-lint.yml: %s is not attached to any component, so no "+
+					"mayDependOn rule constrains it; add it to a component in that file", rel))
 			return nil
 		}
 		for _, imp := range importsOf(path) {
@@ -560,6 +575,18 @@ func checkArchLint(root string) ([]string, error) {
 				"saying why this one file needs it",
 			e.File, e.From, e.Imp, e.To, e.To, e.From))
 	}
+	// 4. Every Go file must belong to a component.
+	//
+	// This is the check that makes the two gates answer the same question.
+	// A file outside every component is invisible to checks 1-3 — they all
+	// start from a component — so a package can arrive, take an import that
+	// no rule permits, and be reported by nothing until someone remembers
+	// to run go-arch-lint, which is a binary this environment does not
+	// install. Reading the yml here means the enforced target says what the
+	// optional one would have said.
+	sort.Strings(unattached)
+	violations = append(violations, unattached...)
+
 	return violations, nil
 }
 

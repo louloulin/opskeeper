@@ -334,3 +334,214 @@ func TestSymlinksAreNotFollowed(t *testing.T) {
 func quote(s string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
 }
+
+// ── resource coverage: the two classes a converter used to drop ─────────────
+
+// TestEveryResourceClassSurvivesTheConversion is the importer's half of the
+// coverage gate, and it walks the same table core/pig/pigcontract walks
+// against PiG's own constants.
+//
+// The two classes that were missing are `themes` and
+// `agent-environments`. Neither is a capability gap — an import that dropped
+// them produced a package that loaded cleanly, reviewed clean, and arrived
+// on the node without them. The report read the same either way, so the only
+// evidence of the loss was a theme that did not apply. A silent drop is
+// worse than a refusal, because a refusal is visible and a drop is not.
+func TestEveryResourceClassSurvivesTheConversion(t *testing.T) {
+	source := claudeContainer(t)
+	for _, dir := range domain.PackageResources {
+		// The class's own spelling plus its first legacy name, because a
+		// container may use either and both have to land in the same place.
+		names := append([]string(nil), dir.LegacyNames...)
+		for _, name := range names {
+			write(t, source, filepath.ToSlash(filepath.Join(name, "sample.md")), "# "+dir.Kind+"\n")
+		}
+	}
+
+	dest := filepath.Join(t.TempDir(), "converted")
+	report, err := Import(Options{Source: source, Dest: dest})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	counts := map[string]int{
+		"prompts":            report.Prompts,
+		"mcp":                report.MCP,
+		"extensions":         report.Extension,
+		"themes":             report.Themes,
+		"agent-environments": report.AgentEnvironments,
+	}
+	for kind, n := range counts {
+		dir := filepath.Join(dest, kind)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Errorf("%s was not carried across: %v", kind, err)
+			continue
+		}
+		if len(entries) != n {
+			t.Errorf("%s: the report says %d and the package holds %d", kind, n, len(entries))
+		}
+		if n == 0 {
+			t.Errorf("%s: nothing was copied and the report does not say so", kind)
+		}
+	}
+}
+
+// TestTheTwoSpellingsOfOneClassAreReportedRatherThanSilentlyMerged covers
+// the case the old `report.Prompts > 0` check handled by accident.
+//
+// A container with both `commands/` and `prompts/` has two directories for
+// one Pi class. Copying both would have them merge into one destination,
+// where the second clobbers files of the first by name. Copying one and
+// saying nothing leaves the operator with a package that is missing half of
+// what the container shipped and no indication of which half.
+func TestTheTwoSpellingsOfOneClassAreReportedRatherThanSilentlyMerged(t *testing.T) {
+	source := claudeContainer(t)
+	write(t, source, "prompts/acme-note.md", "the other spelling of the same note\n")
+
+	dest := filepath.Join(t.TempDir(), "converted")
+	report, err := Import(Options{Source: source, Dest: dest})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	var found bool
+	for _, w := range report.Warnings {
+		if w.Code != "resource_directory_collides" {
+			continue
+		}
+		found = true
+		if !strings.Contains(w.Reason, "prompts") {
+			t.Errorf("the collision warning does not name the class it is about: %q", w.Reason)
+		}
+	}
+	if !found {
+		t.Fatalf("a container with two directories for one class produced no warning.\n%+v", report.Warnings)
+	}
+}
+
+// ── the source's own manifest ───────────────────────────────────────────────
+
+// TestAPiBlockIsReportedAndNotCopied is about a conversion that would
+// otherwise make the package serve LESS than the container did.
+//
+// PiG loads only what a manifest carrying a `pi` block declares, and that
+// block suppresses convention discovery for every class it governs. A
+// container that declares one skill out of the nine in its skills/ directory
+// serves one. Copy that manifest across and the converted package still
+// serves one — but now it also cannot find the eight the declaration left
+// out, and the report gives no reason. Drop it and the converted package
+// serves nine, which is a superset and therefore visible to a reviewer
+// rather than invisible to one.
+func TestAPiBlockIsReportedAndNotCopied(t *testing.T) {
+	source := claudeContainer(t)
+	write(t, source, "package.json", `{
+	  "name": "acme-tools",
+	  "version": "1.4.0",
+	  "pi": {"skills": ["skills/acme-diagnose"], "themes": ["themes/dark.json"]}
+	}`)
+
+	dest := filepath.Join(t.TempDir(), "converted")
+	report, err := Import(Options{Source: source, Dest: dest})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	if !report.SourceManifest.Present || !report.SourceManifest.Declares {
+		t.Fatalf("a package.json with a pi block was not recognised: %+v", report.SourceManifest)
+	}
+	if want := []string{"skills", "themes"}; !sameStrings(report.SourceManifest.Classes, want) {
+		t.Errorf("declared classes = %v, want %v", report.SourceManifest.Classes, want)
+	}
+	if got := report.SourceManifest.Entries["skills"]; len(got) != 1 || got[0] != "skills/acme-diagnose" {
+		t.Errorf("the declared entry was not carried into the report: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "package.json")); err == nil {
+		t.Error("the source's package.json was copied into the package; its pi block would " +
+			"suppress convention discovery for every class it does not declare")
+	}
+
+	var asked bool
+	for _, d := range report.Decisions {
+		if strings.HasPrefix(d.Field, "package.json (") {
+			asked = true
+			if !strings.Contains(d.Question, "skills") {
+				t.Errorf("the decision does not name the classes at stake: %q", d.Question)
+			}
+		}
+	}
+	if !asked {
+		t.Errorf("a container that declared its resources by manifest produced no decision.\n%+v", report.Decisions)
+	}
+}
+
+// TestAPackageJSONWithNoResourceBlockIsNotADeclaration separates the two
+// facts a package.json can carry, because they need different answers.
+//
+// npm metadata with no `pi` and no `pig` block does not govern discovery at
+// all. Reporting it as "declares resources" would send a reviewer looking
+// for a suppression that is not there.
+func TestAPackageJSONWithNoResourceBlockIsNotADeclaration(t *testing.T) {
+	source := claudeContainer(t)
+	write(t, source, "package.json", `{"name":"acme-tools","version":"1.4.0","dependencies":{"left-pad":"^1.0.0"}}`)
+
+	dest := filepath.Join(t.TempDir(), "converted")
+	report, err := Import(Options{Source: source, Dest: dest})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if !report.SourceManifest.Present {
+		t.Error("a package.json was there and the report says it was not")
+	}
+	if report.SourceManifest.Declares {
+		t.Errorf("npm metadata was read as a resource declaration: %+v", report.SourceManifest)
+	}
+	for _, d := range report.Decisions {
+		if strings.HasPrefix(d.Field, "package.json (") {
+			t.Errorf("npm metadata produced a resource decision: %+v", d)
+		}
+	}
+}
+
+// TestAnUnreadablePackageJSONIsReportedRatherThanRefused keeps one bad file
+// from blocking an import whose resources are all discoverable anyway.
+//
+// The alternative — refusing — hands the operator an error about a file the
+// converted package does not need, in exchange for a guarantee nobody asked
+// for. The report is where that belongs.
+func TestAnUnreadablePackageJSONIsReportedRatherThanRefused(t *testing.T) {
+	source := claudeContainer(t)
+	write(t, source, "package.json", "{ this is not json")
+
+	dest := filepath.Join(t.TempDir(), "converted")
+	report, err := Import(Options{Source: source, Dest: dest})
+	if err != nil {
+		t.Fatalf("Import refused a container over an unreadable package.json: %v", err)
+	}
+	if !report.SourceManifest.Present {
+		t.Error("the unreadable package.json was not reported as present")
+	}
+	if !report.SourceManifest.Declares {
+		t.Error("an unreadable package.json is not a known non-declaration; the reviewer has to " +
+			"be told the question could not be answered")
+	}
+	if _, err := os.Stat(dest); err != nil {
+		t.Errorf("the package was not written: %v", err)
+	}
+}
+
+// sameStrings compares two string slices. Written here rather than imported
+// because the two lists this file compares are short and their ORDER is part
+// of what is being asserted: the declared classes come back sorted, and a
+// set comparison would stop noticing if that ever stopped being true.
+func sameStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}

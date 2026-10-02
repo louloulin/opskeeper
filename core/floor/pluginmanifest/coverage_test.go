@@ -537,3 +537,159 @@ func TestTheGitArtifactFamilyIsServedByAPackage(t *testing.T) {
 		t.Errorf("%q is both packaged and on the gap list", CapGitArtifact)
 	}
 }
+
+// rootCausesIn extracts ONLY the root_cause_lines block of a case file.
+//
+// The other extractor in this file takes every dotted name under expect:,
+// which includes the remediation list and the prerequisites. That is the
+// right input for a test about the joint verdict and the wrong one here: the
+// diagnosis axis is a statement about what the agent must be able to FIND,
+// and folding the remediation half into it would put every write back into
+// the number this gate is trying to make mean something.
+func rootCausesIn(raw string) []string {
+	var out []string
+	inside := false
+	for _, line := range strings.Split(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "root_cause_lines:") {
+			inside = true
+			continue
+		}
+		if inside {
+			// The block ends at the next key at any indentation, which is
+			// what keeps remediation_options out of it.
+			if trimmed != "" && !strings.HasPrefix(trimmed, "- ") && !strings.HasPrefix(trimmed, "#") {
+				break
+			}
+			if strings.HasPrefix(trimmed, "- ") {
+				out = append(out, strings.TrimSpace(strings.TrimPrefix(trimmed, "- ")))
+			}
+		}
+	}
+	return out
+}
+
+// walkCaseFiles is the one place this file knows how to find the corpus, so
+// the two tests below cannot disagree about which cases exist.
+func walkCaseFiles(t *testing.T, visit func(caseID, path string, raw []byte)) {
+	t.Helper()
+	casesDir := filepath.Join(repoRoot(t), "core", "harness", "cases")
+	seen := 0
+	err := filepath.Walk(casesDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || info.Name() != "case.yaml" {
+			return err
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		id := filepath.ToSlash(strings.TrimPrefix(strings.TrimPrefix(path, casesDir+string(filepath.Separator)), string(filepath.Separator)))
+		id = strings.TrimSuffix(id, "/case.yaml")
+		visit(id, path, raw)
+		seen++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk cases: %v", err)
+	}
+	if seen == 0 {
+		t.Fatal("no case files were walked; this gate is watching nothing")
+	}
+}
+
+// TestTheDiagnosisAxisIsEitherCompleteOrAnOwnedGap is the gate the coverage
+// report was missing.
+//
+// The report's joint verdict is 0/20 for every shipped case and always will
+// be, because every case names a remediation and no node package ships a
+// write. A number that cannot move cannot catch a regression, and for a
+// while this one was the only thing standing between a package that quietly
+// lost a tool and a fleet that quietly could not diagnose anything.
+//
+// So the diagnosis half is checked on its own, and the only way for a root
+// cause to be missing is to be named in DiagnosisGaps with a reason. The
+// test that produced the first such gap is worth recording: k8s.describe_pod
+// was filed as a soft write, which is above the cut a node package ships, so
+// a node's agent could not see a tool that only ever issued two GETs — and
+// the joint report said "0/20" before and after, identically.
+func TestTheDiagnosisAxisIsEitherCompleteOrAnOwnedGap(t *testing.T) {
+	plugins := shippedPlugins(t)
+	walkCaseFiles(t, func(caseID, _ string, raw []byte) {
+		roots := rootCausesIn(string(raw))
+		if len(roots) == 0 {
+			t.Errorf("%s declares no root_cause_lines; a case with no root cause cannot be "+
+				"scored on the diagnosis axis and is silently exempt from this gate", caseID)
+			return
+		}
+		cov := CoverageOfCase(caseID, roots, nil, plugins)
+		if cov.Diagnosable() {
+			return
+		}
+		for _, want := range cov.Diagnose.Uncovered {
+			if reason, owned := ExplainDiagnosisGap(want); !owned {
+				t.Errorf("%s names root cause %s and no shipped package serves it, and it is "+
+					"not in DiagnosisGaps. Either package the tool, or record the gap with its "+
+					"reason — an unrecorded gap is a regression this gate cannot see", caseID, want)
+			} else if reason == "" {
+				t.Errorf("DiagnosisGaps[%s] has an empty reason; an entry that says nothing is "+
+					"indistinguishable from a tolerance", want)
+			}
+		}
+	})
+}
+
+// TestTheDiagnosisGapLedgerHasNoStaleEntries is the other direction, and it
+// is the one that keeps the first test honest.
+//
+// A ledger that is only ever added to becomes a list of things that used to
+// be true. The moment host.top_processes ships in a node package, the entry
+// for host.top_cpu_procs stops describing the world and starts describing a
+// decision nobody made any more — which is how a coverage gate ends up
+// explaining away the regression it was built to catch.
+func TestTheDiagnosisGapLedgerHasNoStaleEntries(t *testing.T) {
+	plugins := shippedPlugins(t)
+	actual := map[string]string{}
+	walkCaseFiles(t, func(caseID, _ string, raw []byte) {
+		cov := CoverageOfCase(caseID, rootCausesIn(string(raw)), nil, plugins)
+		for _, want := range cov.Diagnose.Uncovered {
+			actual[want] = caseID
+		}
+	})
+	for name, reason := range DiagnosisGaps {
+		if _, still := actual[name]; !still {
+			why := ""
+			if caseID, found := actual[name]; found {
+				why = caseID
+			}
+			t.Errorf("DiagnosisGaps names %s, but no shipped case currently fails on it (%s). "+
+				"Either the capability is served now — delete the entry — or the case stopped "+
+				"asking for it, which is a corpus change somebody should make deliberately. "+
+				"Its recorded reason was: %s", name, why, reason)
+		}
+	}
+}
+
+// TestTheDiagnosisAxisHoldsAtSixteen pins the number the two tests above
+// imply, so that a package change moves this line in the diff rather than
+// turning up one day in a report nobody reads.
+//
+// It is a count rather than a boolean on purpose. "Every gap is owned" is
+// satisfied just as well by a fleet that serves nothing, because nothing
+// would be left to own. Pinning the count is what distinguishes a gate from
+// a rubber stamp.
+func TestTheDiagnosisAxisHoldsAtSixteen(t *testing.T) {
+	const want = 16
+	plugins := shippedPlugins(t)
+	diagnosable, total := 0, 0
+	walkCaseFiles(t, func(caseID, _ string, raw []byte) {
+		total++
+		if CoverageOfCase(caseID, rootCausesIn(string(raw)), nil, plugins).Diagnosable() {
+			diagnosable++
+		}
+	})
+	if diagnosable != want {
+		t.Errorf("diagnosis axis is %d/%d, want %d/%d. A drop means a package lost a tool a "+
+			"case needs; a rise means a gap was closed and DiagnosisGaps has a stale entry.",
+			diagnosable, total, want, total)
+	}
+}

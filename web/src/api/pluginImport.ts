@@ -57,8 +57,33 @@ export interface ImportReport {
   prompts: number;
   mcp: number;
   extensions: number;
+  /** The two resource classes a converter used to drop without saying so.
+   *  A class that is not counted is a class nobody can tell is missing,
+   *  which is why these are on the wire at all rather than inferred from
+   *  the absence of a problem. */
+  themes: number;
+  agent_environments: number;
+  /** What the container's own package.json said about where its resources
+   *  live. It is reported and deliberately not copied across — see the
+   *  Go side for why. */
+  source_manifest: SourceManifest;
   decisions: ImportDecision[];
   warnings: LoadWarning[];
+}
+
+/** SourceManifest is a read of a container's own package.json.
+ *
+ *  `declares_resources` is the field that matters. When it is true the
+ *  container selected its resources by manifest, PiG suppresses
+ *  convention discovery for every class that manifest governs, and the
+ *  converted package — which has no manifest — therefore serves MORE than
+ *  the container did. That is the safe direction and it is still a change,
+ *  so it arrives as one of the decisions rather than as a footnote. */
+export interface SourceManifest {
+  present: boolean;
+  declares_resources: boolean;
+  classes?: string[];
+  entries?: Record<string, string[]>;
 }
 
 export interface ImportResponse extends ImportReport {

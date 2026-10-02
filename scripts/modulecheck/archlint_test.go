@@ -290,6 +290,56 @@ func TestTheWalkVisitsTheTreeWhenTheRootIsADot(t *testing.T) {
 	}
 }
 
+// A file outside every component is invisible to the rest of this file,
+// which is why it has to be reported by name before anything else runs.
+//
+// Without this the checker says nothing about a package that landed with no
+// component: checks 1-3 all start from `from == ""` and skip, so the file is
+// exempt from every rule while looking exactly like a file that follows
+// them. That is not hypothetical — core/pig/pigmcp arrived that way, and
+// only the hand-run linter noticed.
+func TestAFileNoComponentClaimsIsReported(t *testing.T) {
+	root := archLintFixture(t, twoLayerYml, map[string]string{
+		"core/manager/biz/incident/usecase.go": "package incident\n",
+		"core/manager/nowhere/orphan.go":       "package nowhere\n\nimport \"github.com/vincent-wuhan/opskeeper/core/manager/service/incident\"\n\nvar _ = incident.New\n",
+	})
+	got, err := checkArchLint(root)
+	if err != nil {
+		t.Fatalf("checkArchLint: %v", err)
+	}
+	if !containsSubstring(got, "core/manager/nowhere/orphan.go is not attached to any component") {
+		t.Fatalf("a file no component claims was not reported; got %v", got)
+	}
+	// And the import it took is reported by nothing else, which is the
+	// whole reason this check exists rather than being left to the linter:
+	// the file is outside the graph those checks walk.
+	for _, v := range got {
+		if strings.Contains(v, "orphan.go") && !strings.Contains(v, "not attached to any component") {
+			t.Errorf("an unattached file produced a second, different violation: %s", v)
+		}
+	}
+}
+
+// The negative half. A check that fires on every file is as useless as one
+// that fires on none, and only this case tells the two apart: a tree whose
+// files are all claimed must produce no unattached report even while it
+// produces others.
+func TestEveryFileInsideAComponentIsNotReportedAsUnattached(t *testing.T) {
+	root := archLintFixture(t, twoLayerYml, map[string]string{
+		"core/manager/biz/incident/usecase.go": "package incident\n",
+		"core/manager/data/incident/store.go":  "package incident\n",
+	})
+	got, err := checkArchLint(root)
+	if err != nil {
+		t.Fatalf("checkArchLint: %v", err)
+	}
+	for _, v := range got {
+		if strings.Contains(v, "not attached to any component") {
+			t.Fatalf("a file inside a component was reported unattached: %s", v)
+		}
+	}
+}
+
 // The ledger has to be maintained, or it becomes a list of permissions
 // nobody can tell apart from live ones — the same bargain layerDebt makes.
 func TestTheLayerInversionLedgerIsCurrent(t *testing.T) {

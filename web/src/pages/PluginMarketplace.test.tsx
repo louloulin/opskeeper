@@ -56,6 +56,9 @@ const REPORT = {
   prompts: 1,
   mcp: 0,
   extensions: 0,
+  themes: 0,
+  agent_environments: 0,
+  source_manifest: { present: false, declares_resources: false },
   decisions: [
     { field: 'spec.tools', question: 'Which tools may this package call?', why: 'the container declares none' },
     { field: 'safety_level', question: 'How dangerous is it?', why: 'not derivable from a file list' },
@@ -353,5 +356,60 @@ describe('PluginMarketplacePage', () => {
     // hidden, and a package with no digest is rendered without a gap.
     expect(screen.getByText('sha256:abcdef0123456789')).toBeInTheDocument();
     expect(screen.getByText('0.4.1')).toBeInTheDocument();
+  });
+});
+
+// A container that selected its resources by manifest is the one conversion
+// whose result is a different SET of resources rather than a different
+// quality of the same set, so the page has to say so above the fold. The
+// two counts are here for the narrower reason: an uncounted class is a
+// class nobody can tell is missing, which is exactly how `themes` and
+// `agent-environments` went missing from a report that read identically.
+describe('PluginMarketplacePage resource accounting', () => {
+  const withReport = (patch: Record<string, unknown>) => {
+    server.use(
+      ...baseHandlers(),
+      http.post('/api/v1/marketplace/import', () =>
+        HttpResponse.json({ ...REPORT, ...patch })
+      )
+    );
+  };
+
+  beforeEach(() => {
+    localStorage.setItem('opskeeper-locale', 'en-US');
+  });
+
+  it('counts the two classes an earlier converter dropped', async () => {
+    withReport({ themes: 2, agent_environments: 1 });
+    await convert();
+    expect(await screen.findByText(/2 theme\(s\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 agent environment\(s\)/i)).toBeInTheDocument();
+  });
+
+  it('says so when the source declared its resources by manifest', async () => {
+    withReport({
+      source_manifest: {
+        present: true,
+        declares_resources: true,
+        classes: ['skills', 'themes'],
+        entries: { skills: ['skills/triage/SKILL.md'] },
+      },
+    });
+    await convert();
+    // The superset is a change to what the node will serve, so it is stated
+    // rather than left to the decisions list — a reviewer skimming for the
+    // undecided questions is exactly who would otherwise miss it.
+    expect(await screen.findByText(/discovers by convention/i)).toBeInTheDocument();
+  });
+
+  it('says nothing about a manifest that declared nothing', async () => {
+    withReport({
+      source_manifest: { present: true, declares_resources: false },
+    });
+    await convert();
+    // The report has rendered once its first decision is on screen, which
+    // is the same moment the resource line and the callout would have been.
+    await screen.findByText('spec.tools');
+    expect(screen.queryByText(/discovers by convention/i)).not.toBeInTheDocument();
   });
 });

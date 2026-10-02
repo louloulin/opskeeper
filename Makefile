@@ -114,8 +114,15 @@ test-e2e-live: ## E2E live mode（用 tests/e2e/secrets.local.env 打通真实�
 .PHONY: eval-gates eval-vocabulary eval-coverage
 eval-gates: eval-coverage eval-vocabulary
 
+# The joint verdict (a case is covered only when a package serves BOTH its
+# root causes and its remediations) is 0/20 and always will be, because every
+# shipped case names a remediation and no node package ships a write on
+# purpose. A number that cannot move cannot catch a regression, so the gate
+# is wired to the diagnosis axis instead: it moves when the fleet changes,
+# and it is red today only for the four cases whose gaps are recorded with
+# their reasons in core/floor/pluginmanifest.DiagnosisGaps.
 eval-coverage: ## golden case 能力期望 vs 插件包能力（哪些 case 没有插件能服务）
-	go run ./cmd/opskeeper-eval plugin-coverage
+	go run ./cmd/opskeeper-eval plugin-coverage --fail-on-unrecorded-diagnose-gap
 
 eval-vocabulary: ## golden case 能力期望 vs 本构建真实词表（哪些 case 结构上无法满足）
 	go run ./cmd/opskeeper-eval vocabulary
