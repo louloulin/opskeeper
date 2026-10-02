@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/promptguard"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 
@@ -256,6 +257,11 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	}
 
 	out = append(out, r.externalBaseTools...)
+
+	// Mark the tools whose output is written outside this platform before
+	// the bag is built, so every path that reads the bag — the chat runtime,
+	// the console, the MCP surface — sees the same fenced strings.
+	out = markUntrustedOutputs(out, promptguard.NewFencer())
 
 	threshold := envIntDefault("OPSKEEPER_TOOLBAG_DEFERRAL_THRESHOLD", defaultDeferralThreshold)
 	bag := NewToolBag(out, threshold)

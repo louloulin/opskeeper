@@ -145,6 +145,24 @@ crystallize-check: ## 结晶：晋升 / 退役 / 拒绝不可用输入 / 草稿�
 		'TestTheEmittedDeclarationIsOneAPackageCanLoad|TestThreeCleanVerificationsPromoteAPattern|TestARollbackRetiresAPromotedPattern|TestADraftRefusesToOverwriteAPackage|TestAnUnusableTrialChangesNothing|TestTrialOfBuildsATrialTheLedgerAccepts'
 	@echo "crystallize-check: promotion, retirement, refusal and load-through-admission are green"
 
+# Marking foreign text as untrusted is a security claim, and a claim that
+# nothing checks is a comment. The gate pins the four things the claim rests
+# on: the marker an attacker would need to forge is drawn per render, a table
+# (not a call site) says which tools are foreign, the shipped bag fences
+# exactly that table, and the investigated prompt puts its three payloads
+# inside blocks a payload cannot close.
+.PHONY: promptguard-check
+promptguard-check: ## 外来文本进模型前带 nonce 围栏（prompt injection 一条）
+	go test ./core/manager/biz/aiops/promptguard/ -count=1 -run \
+		'TestABodyContainingTheClosingMarkerCannotCloseTheBlock|TestAMarkerWithAStaleIDCannotCloseThisBlock|TestEveryBlockGetsAFreshID|TestMarkerVariantsAreEscaped|TestParseRejectsWhatIsNotABlock|TestTheInstructionNamesTheTagTheFencerWrites'
+	go test ./core/manager/biz/aiops/tools/decorators/ -count=1 -run \
+		'TestTheResultIsFencedWithTheToolsOwnName|TestAnAdversarialResultCannotCloseTheFence|TestAnErrorIsNotFenced|TestInfoPassesThrough'
+	go test ./core/manager/biz/aiops/tools/ -count=1 -run \
+		'TestTheTableHasNoBlankOrDuplicateRows|TestLookupAgreesWithTheTable|TestMarkUntrustedOutputs|TestEveryNameInTheTableIsFencedInTheShippedBag|TestTheShippedBagFencesRatherThanJustWraps'
+	go test ./core/manager/biz/loop/ -count=1 -run \
+		'TestTheInvestigatedPromptMarksItsForeignBlocks|TestPayloadTextCannotCloseTheInvestigatedFence'
+	@echo "promptguard-check: per-render markers, closed-list table, shipped bag and investigated prompt are green"
+
 # ----------------------------------------------------------------------------
 # lint
 # ----------------------------------------------------------------------------

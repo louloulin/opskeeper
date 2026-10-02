@@ -3,6 +3,8 @@ package tools
 import (
 	"log/slog"
 
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/promptguard"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
@@ -35,8 +37,12 @@ func AppendHostFilesTools(bag *ToolBag, c Caller, e *edgebiz.Usecase, d *deviceb
 	if log == nil {
 		log = slog.Default()
 	}
-	bag.Append(NewFindLargeFilesTool(c, e, d, log))
-	bag.Append(NewDuSummaryTool(c, e, d, log))
-	bag.Append(NewStatFileTool(c, e, d, log))
+	// The three host_files tools read a host's own files: on a compromised
+	// host that content is an attacker's text, so it is marked on the way to
+	// the model like every other foreign source in untrusted_sources.go.
+	fencer := promptguard.NewFencer()
+	bag.Append(decorators.MarkUntrusted(NewFindLargeFilesTool(c, e, d, log), promptguard.KindTool, fencer))
+	bag.Append(decorators.MarkUntrusted(NewDuSummaryTool(c, e, d, log), promptguard.KindTool, fencer))
+	bag.Append(decorators.MarkUntrusted(NewStatFileTool(c, e, d, log), promptguard.KindTool, fencer))
 	return bag
 }

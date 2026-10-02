@@ -115,6 +115,7 @@ import (
 
 	aiopsinvestigator "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/investigator"
 	managerbizaiopsmentions "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/mentions"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/promptguard"
 	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	aiopstoolsdec "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
@@ -2923,9 +2924,14 @@ func main() {
 			Limiter:    aiopstoolsdec.NewTokenBucketLimiter(0),
 			Registerer: reg,
 		}
+		// host_bash and cloud_bash return a host's own output: on a host someone
+		// else controls that text is theirs, so it goes to the model fenced, by
+		// the same table BuildBaseTools marks from (the tools here are bolted on
+		// after the bag was built).
+		chatFencer := promptguard.NewFencer()
 		chatRT.AppendToolBag([]aiopstoolsbase.BaseTool{
-			aiopstoolsdec.Wrap(aiopstools.NewBashToolWithProposer(fbClient, edgeUC, deviceUC, hostBashProposerShim{uc: approvalUC}, log), cbDeps),
-			aiopstoolsdec.Wrap(aiopstools.NewCloudBashTool(cloudBashProposerShim{uc: approvalUC}, log), cbDeps),
+			aiopstoolsdec.Wrap(aiopstools.MarkUntrustedOutput(aiopstools.NewBashToolWithProposer(fbClient, edgeUC, deviceUC, hostBashProposerShim{uc: approvalUC}, log), chatFencer), cbDeps),
+			aiopstoolsdec.Wrap(aiopstools.MarkUntrustedOutput(aiopstools.NewCloudBashTool(cloudBashProposerShim{uc: approvalUC}, log), chatFencer), cbDeps),
 			aiopstoolsdec.Wrap(aiopstools.NewInstallSkillTool(installSkillProposerShim{uc: approvalUC}, log), cbDeps),
 			aiopstoolsdec.Wrap(aiopstools.NewServePageTool(pageStore, log), quickDeps),
 			aiopstoolsdec.Wrap(aiopstools.NewSendIMMessageTool(imSenderShim{channels: alertRepo, router: notifyRouter}, log), quickDeps),
