@@ -25,7 +25,21 @@ type fakeClient struct {
 
 	onRegisterEdge func(req tunnel.RegisterEdgeRequest) tunnel.RegisterEdgeResponse
 
+	// pushAccepted scripts what the center says about a telemetry push.
+	// It exists because "Accepted is the number the center actually
+	// stored" is the contract the drain is built on, and a fake that
+	// always says zero cannot tell retry from discard apart.
+	pushAccepted pushScript
+
 	closed atomic.Bool
+}
+
+// pushScript is what a fake center answers to a push. Zero values mean
+// "accepted nothing", which is the retry signal.
+type pushScript struct {
+	hostMetricAccepted uint32
+	promAccepted       int
+	err                error
 }
 
 func newFakeClient() *fakeClient {
@@ -65,7 +79,17 @@ func (f *fakeClient) Call(ctx context.Context, method string, req, resp any) err
 		b, _ := json.Marshal(out)
 		return json.Unmarshal(b, resp)
 	}
-	return nil
+	if resp != nil {
+		switch method {
+		case tunnel.MethodPushHostMetrics:
+			b, _ := json.Marshal(tunnel.PushHostMetricsResponse{Accepted: f.pushAccepted.hostMetricAccepted})
+			_ = json.Unmarshal(b, resp)
+		case tunnel.MethodPushPromSamples:
+			b, _ := json.Marshal(tunnel.PushPromSamplesResponse{Accepted: f.pushAccepted.promAccepted})
+			_ = json.Unmarshal(b, resp)
+		}
+	}
+	return f.pushAccepted.err
 }
 
 // OnReconnect is a no-op in the fake — these tests never trigger a

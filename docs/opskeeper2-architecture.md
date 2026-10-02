@@ -3349,15 +3349,17 @@ core/harness 214 / sdk 63 / core/floor 323`）；`spool`、`telemetrywal`、
 `eval-coverage` / `plugin-extension-build-check`）全部 exit 0，plugin 能力覆盖
 仍是 **0/20**（安全回归未破坏）；`gofmt -l cmd core sdk` 为空。
 
-#### 4.37.6 还没做完的：回放传输
+#### 4.37.6 回放传输：遥测侧的「中心说什么才算送达」
 
-本地侧到此完整，但**回放还没有中心侧的接收方能签字**。两处都复用现有通道，
-这是刻意的设计而不是省事：
+本地侧到此完整，但**回放还没有中心侧的接收方能签字**。遥测这一半由决策 100
+关掉（§4.38）；审计那一半仍然缺 `agent.autonomy.replay` 路由：
 
 - 遥测回放的 `drainBatches` 重发的是与 live path **完全相同**的
   `push_host_metrics` / `push_prom_samples` 调用，因此不需要新 wire 方法——
-  新方法就是新的回滚点。代价是 manager 侧要能接受**迟到的批次**，并靠行里的
-  `Seq` 去重（at-least-once 的另一半）。
+  新方法就是新的回滚点。**决策 100 修掉了这条路上的一个数据丢失缺陷**：
+  `Accepted=0` 被当成「永久拒绝」，于是断连期间攒下的积压**在恢复后的第一条
+  消息里被丢弃**——日志扛过了断网，却死在握手的样子上。现在 `Accepted=0`
+  读作「还没有」，批次留在盘上；部分接受才跳过并计数。
 - 审计回放还缺 `agent.autonomy.replay` 隧道方法 → 中心接收 → **审计链补写**
   （节点 spool 的行回传后由中心补 HMAC 链，否则节点本地记录永远只是节点自己
   的说法）→ 限流与积压可观测 → 然后才在 `buildAutonomy` 里启动
@@ -3368,8 +3370,95 @@ core/harness 214 / sdk 63 / core/floor 323`）；`spool`、`telemetrywal`、
 
 ---
 
-阶段 1 从 **65% 记为 100%**，加权合计从 ≈37% 记为 **≈46%**。1.1 的本地侧
-已完整，留下的回放传输是 1.1 与 1.2 共用的同一条尾巴。
+### 4.38 决策 100：中心说「一个都没收下」时，节点不该以为已经送到了
+
+决策 99 让节点在断连时先落盘，于是问题从「怎么不丢」变成了「什么时候可以
+当作已经送到」。这一轮把那个判断做对，并查出它此前**是对**的——方向上对，
+方向上恰好是丢数据。
+
+#### 4.38.1 三种句子，此前被读成一句
+
+中心对一次遥测推送的回应有两种可用信号：RPC 层返回 error，或者返回体里
+`Accepted` 与发送条数的关系。它们其实是**三种**意思，而旧代码只有两个桶：
+
+| 中心说的话 | 含义 | 旧代码 | 新代码 |
+|---|---|---|---|
+| `err != nil` | 传输失败 | 留在盘上重试 ✅ | 留在盘上重试 |
+| `Accepted == 0` | **还没能收下**（未 register / 无 host junction / prom 未接） | ❌ 当成永久拒绝，ack 丢弃 | **留在盘上**，下一个 drain 重试 |
+| `0 < Accepted < sent` | 收了一部分，其余不收 | 计数跳过 ✅ | 计数跳过 |
+| `Accepted == sent` | 全部收下 | ack ✅ | ack |
+
+第二行是本轮的全部。`Accepted=0` 与「部分拒绝」被压进同一个 `Accepted < sent`
+分支，于是**一个还没准备好的中心，看起来和一个明确拒绝的中心一模一样**。
+这里不是「有则更好」：断连期间攒的每一行都只在这一条路径上，而它在恢复后的
+第一条消息里就被 ack 掉了。**日志扛过了断网，却死在握手的样子上。**
+
+#### 4.38.2 中心侧也说了谎：三条丢弃路径返回 `Accepted=n`
+
+修边之前先修中心。`frontierbound` 的 `push_prom_samples` 有三条路径是「收下了
+但没地方放」——未 register、prom ingester 未接、host junction 缺失——它们**都
+返回 `Accepted=n`**，而 `n` 是收到的条数，不是写下的条数。
+
+```go
+// 旧
+if w.PromIngester == nil {
+    return json.Marshal(tunnel.PushPromSamplesResponse{Accepted: n})
+}
+```
+
+配一句注释「so the edge does not retry」。这句注释在**热路径**上是对的——旧节点
+没有盘，重试等于原地打转——但它把「这份数据不存在」说成了「这份数据收到了」，
+而任何一个先落盘的节点都会照着这句话把行删掉。`push_host_metrics` 的两条路径
+返回 `Accepted=0`，意思对，但当时没人读得出来。
+
+中心侧改成：**能放就报实际写入数，放不下就报 0**。prom-disabled 这一类
+「以后也不会好」的形状仍是 0，只是从「安静地假装收到」变成「拒绝，并在
+`telemetryRejected` 上计数」。
+
+#### 4.38.3 为什么部分接受是跳过而不是重试
+
+同一段逻辑里两个方向看起来矛盾，各自的理由不同：
+
+- `Accepted == 0` → **重试**，因为中心说的是「现在不行」；
+- `0 < Accepted < sent` → **跳过并计数**，因为中心说的是「就到这里了」。
+
+一个「不 ack 全部就不前进」的发送者会因为一行永久坏行把队列卡死（决策 99
+已论证）；反过来一个「0 也照样 ack」的发送者会丢积压（本轮）。两个方向都
+不 ack 到账，是同一个原则的两面：**ack 的数量是中心确实拥有的数量。**
+
+遥测这一侧刻意做成**全有或全无**（部分接受也整体不 ack，只计数）——因为一个
+存了一半的批次没有干净的重试，猜哪一半比丢一条或再问一次都更差。
+
+#### 4.38.4 反过来说，中心对遥测**不去重**
+
+local spool 的设计是 at-least-once，靠中心按 `Seq` 去重。这一半**还没做**，而
+本轮把重试做得更真之后，它是一个真实的前置条件而不是理论提醒：
+
+- `host_metrics_raw` 的主键是自增 `id`，去重索引是 `(edge_id, ts)` 的**非唯一**
+  索引；`ChangeEventRepo.BatchInsert` 是 `CreateInBatches`，没有 `ON CONFLICT`；
+  `promwrite` 写进 Prom 的样本更是没有去重键，迟到重发会生成重复点。
+- 所以「让中心能收下迟到批次」目前只做到了**不丢**，还没做到**不重**。阶段 1
+  的遥测回放要真正闭合，还需要一个按 `(edge_id, 序号)` 去重的落地方式。本轮
+  诚实地把它留在待办，而不是靠「反正 Prom 会自己处理」蒙混过去。
+
+#### 4.38.5 落地清单与闸门
+
+| 层 | 位置 | 内容 |
+|---|---|---|
+| 中心 | `core/manager/service/frontierbound/handlers.go` | `push_host_metrics` 两条 defer 路径返回 0（注释改为「deferred」，不是「dropped」）；`push_prom_samples` 三条路径从 `Accepted=n` 改为 `Accepted=0` |
+| 节点 | `core/edge/biz/agent.go` | `pushBatch` 收集 `pointSent/pointAccepted` 与 `sampleSent/sampleAccepted`；`0 == accepted` 返回 error（留在盘上），`0 < accepted < sent` 计数跳过 |
+| 测试（中心） | `core/manager/service/frontierbound/handlers_test.go` | `fakeMetricIngester` 可计数/可失败；新增 3 条：defer 报 0、接受数跟随 ingester、ingester 报错是 RPC error；prom-disabled 改为断言 `Accepted=0` |
+| 测试（节点） | `core/edge/biz/agent_replay_accept_test.go`（新）+ `export_test.go`（新） | 4 条：可重试拒绝保住积压、部分拒绝前进且计数、全接受报满、传输失败停在原地 |
+| 闸门 | `-race` | `biz` 的 31 项与 `frontierbound` 的 30 项全绿 |
+
+**回归确认**：把节点侧那三行守卫删掉，`TestARetryableRefusalKeepsTheBacklog`
+立刻变红（`a drain the center placed nothing of was reported as delivered`），
+已实测。
+
+---
+
+阶段 1 从 **100% 记为 100%**（本地侧）并新增一条**待办**：遥测回放的**按
+`Seq` 去重**。加权合计保持 **≈46%**。
 
 ---
 
@@ -3406,7 +3495,7 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 | 阶段 | 完成度 | 判据与剩余 |
 |---|---|---|
 | 0 边缘交付闭环（P0） | **65%** | **三条** P0 都是「代码意图已写、实现路径从未跑过」：`cmd/opskeeper-edge/agent.go:209-212` 的 `Env` 只有两个 socket，`dist/build-edge-bundle.sh:38-49` 与 `deploy/Dockerfile.opskeeper-edge` 都不含 `pig`，`Makefile` 没有任何 `build-pig*` 目标。**已实测可行**：从 `core/pig` 构建 `github.com/MichaelKinsy/PiG/cmd/pig` 退出码 0（71 MB）。方案的「注入 `OPENAI_BASE_URL`」**不成立**（PiG 无此变量），正确路径是 `models.json` 自定义 provider + `PIG_CODING_AGENT_DIR`（§4.28.1）。**本轮新发现的第三条 P0 比前两条都严重：节点上的插件扩展编译不过**（`GOWORK=off` 实测报 `unknown revision core/v0.0.0`，且无 `go.sum`）——补齐 pig 与凭据之后节点仍然零工具（§4.28.8）。**决策 91 已关掉其中的第三条**：`core/wire` 内联进每个打包扩展、`go.mod` 删掉未发布的 `core v0.0.0`、只留 PiG SDK 一条 require，8 个打包扩展在 `GOWORK=off CGO_ENABLED=0` 下实测 8/8 构建通过，并新增「按节点的方式构建」这条**实测会红**的闸门（§4.29）。**决策 92 关掉了第二条**：`make build-pig-all` 从 `core/pig` + `GOWORK=off` 构建并**被每个 `build-edge-<arch>` 依赖**，两处 bundle 清单、`dist/package.sh`、`install-edge.sh`（含 `pig --version` 自检）、`Dockerfile.opskeeper-edge`、env 模板全部接通，六个位置各有断言（`core/floor/delivery`，6 条测试，**实测会红**）。**决策 93 关掉了 P0-1 的节点侧**：节点有了完整的凭据链（`OPSKEEPER_EDGE_AGENT_CONFIG_DIR` + `models.json` 的 `"$VAR"` 引用 + `PIG_CODING_AGENT_DIR`），并**对着真 `pig` 二进制验证**了三条（能解析 / 无凭据则拒绝 / 无 scope 则找不到）。本轮还查出方案 10 条清单里没有的第四条：**`DefaultAgentDir()` 在 `$HOME` 未设置时丢弃错误、返回相对路径 `.pig/agent`，被 agent 按 Cwd（即插件包根）解析**——凭据会落进签名插件内容里（§4.31.1）。**决策 94 关掉了 P0-1 的 manager 侧**：`core/manager/server/llmgw` 提供 `POST /v1/chat/completions`（流式 + 非流式）与 `GET /v1/models`，鉴权**复用隧道凭据对**（零新存储、零 schema 迁移、轮换即现有 `UpdateSecretHash`，§4.31.5），节点能选 model 不能选 provider；真 `pig` 二进制端到端抓出两处形状错误——`content` 实际是 string **或** parts 数组的联合类型（按 string 建模会拒绝真 agent 的每一个请求，而 18 条单元测试全绿）、大整数必须 `UseNumber` 才能活过 `>2^53`（§4.32）。**决策 95 把方案 0.1 剩下的三项职责与限流补齐**：每日 token 上限复用**同一个** `llm.InMemoryBudget` 实例（两份账 = 集群能花掉两倍上限）、每 edge 一个令牌桶超限 429、调用方的 `max_completion_tokens` 真正生效（之前被解析后丢弃）；顺带修掉 **429 之前被报成 400**（`writeError` 自带的 switch 对预算与限流哨兵没有分支）与一处 typed nil panic（§4.33）。剩下的不是 P0，是验收本身：方案 0.4 的 `make compose-up` 真实对话需要 Docker 与真 provider key；**决策 96 关掉了 per-tool 配额**（§4.28.4 判定的阶段 0 阻塞项）：清单里声明 `limits`、执行器 metadata 里也声明、两侧漂移由 `sdk.Check` 报错，**强制点在 tool broker**——节点上所有工具调用的唯一通道，因此覆盖将来任何一个第三方工具（没声明也有 1 MiB 默认上限，`skill.Spill` 从一段**零调用点的死代码**里搬出来并修好 0644 权限、24 小时回收与路径注入）。九个高基数读工具各有紧于默认值的上限与墙钟（§4.34）。剩下的**只有方案 0.4 的真实验收**：`make compose-up` 后一台 edge 完成一次真实对话、节点上可见独立 pig 进程、`/etc/opskeeper-edge` 无云厂商密钥——前两条已由 `core/floor/delivery` 与 `tests/agentgateway` 覆盖了可离线覆盖的部分，真 provider key 那一条本机不具备（无 Docker、无 key）|
-| 1 离线与有限自治（P1） | **100%** | **决策 98 关掉了方案 1.2（自治白名单）**：清单里签一份固定 argv 列表，节点只在中心失联超过阈值且**触发器实测成立**时执行它，执行的是声明的 argv、宿主派生幂等键、**先消费后执行**、两阶段落盘审计（`core/edge/autonomy` 41 项 + 装配根 10 项端到端，§4.36）。**13 条具名加载期拒绝**堵住清单侧（argv 含元字符、半径超 single-ns、TTL 超 6h、工具未声明、工具是 read、`offline_after` 低于 30s…）。**决策 99 关掉了方案 1.1（遥测本地 spool）**：先把「追加一行、封顶、按序回放」抽成 `core/edge/spool` 原语（只依赖标准库），再让遥测（`core/edge/telemetrywal`）、变更事件（`changewatcher/tunnel_sink.go`）、自治审计三个用户各自只声明自己的策略——**两份日志、一套丢弃表**（trace 先丢 > metric 30m 保质期 > change event 无保质期）；`Send(ctx, rows) (int, error)` 一个签名同时满足审计的「全有或全无」与遥测的「部分前进」；回放限流 100 行/5s 且**只有满批才限流**；本轮由测试抓出 8 个真实缺陷，其中 `Ack` 的读改写分锁会吞掉并发写入的行（§4.37）。**阶段 1 的代码侧到此完整**，唯一剩下的是 1.1 与 1.2 共用的**回放传输**：遥测回放复用现有 `push_host_metrics` / `push_prom_samples`（中心需按 `Seq` 去重、接受迟到批次），审计回放仍需 `agent.autonomy.replay` 路由 + 中心审计链补写，**所以 `autonomy.Pump` 仍故意未启动**——先接泵再修路由只会得到一个每 5 秒刷错误的节点 |
+| 1 离线与有限自治（P1） | **100%** | **决策 98 关掉了方案 1.2（自治白名单）**：清单里签一份固定 argv 列表，节点只在中心失联超过阈值且**触发器实测成立**时执行它，执行的是声明的 argv、宿主派生幂等键、**先消费后执行**、两阶段落盘审计（`core/edge/autonomy` 41 项 + 装配根 10 项端到端，§4.36）。**13 条具名加载期拒绝**堵住清单侧（argv 含元字符、半径超 single-ns、TTL 超 6h、工具未声明、工具是 read、`offline_after` 低于 30s…）。**决策 99 关掉了方案 1.1（遥测本地 spool）**：先把「追加一行、封顶、按序回放」抽成 `core/edge/spool` 原语（只依赖标准库），再让遥测（`core/edge/telemetrywal`）、变更事件（`changewatcher/tunnel_sink.go`）、自治审计三个用户各自只声明自己的策略——**两份日志、一套丢弃表**（trace 先丢 > metric 30m 保质期 > change event 无保质期）；`Send(ctx, rows) (int, error)` 一个签名同时满足审计的「全有或全无」与遥测的「部分前进」；回放限流 100 行/5s 且**只有满批才限流**；本轮由测试抓出 8 个真实缺陷，其中 `Ack` 的读改写分锁会吞掉并发写入的行（§4.37）。**决策 100 修掉了回放路上的一处数据丢失**：`Accepted=0`（中心还没准备好）原被当成「永久拒绝」，于是断连攒下的积压**在恢复后第一条消息里被 ack 丢弃**——日志扛过了断网、死在握手的样子上；中心侧 `push_prom_samples` 的三条丢弃路径还爱说谎（返回 `Accepted=n`），一并改成「能放报写入数、放不下报 0」。现在 `Accepted=0` 读作「还没有」，批次留在盘上。**阶段 1 的代码侧到此完整**，剩下的两条：① 遥测回放需要中心**按 `Seq` 去重**（at-least-once 的另一半，目前 `host_metrics_raw` 是自增 `id` + 非唯一索引、`change_events` 无 `ON CONFLICT`、`promwrite` 无去重键，所以做到了「不丢」还没做到「不重」）；② 审计回放仍需 `agent.autonomy.replay` 路由 + 中心审计链补写，**所以 `autonomy.Pump` 仍故意未启动**——先接泵再修路由只会得到一个每 5 秒刷错误的节点 |
 | 2 生态与治理加固（P2） | **15%** | 工具注册表：`grep toolregistry` 只命中注释（`chatruntime/types.go:37-40` 自陈在 PR-3），**不存在 `tool_registry.go`**；per-tool 配额：`PluginSpec` 无 limits 字段（单是高基数只读工具就已经是阶段 0 阻塞项）；MCP 兼容层：运行时已有（决策 85），但**无对外 MCP 协议面**；成本结晶：`grep crystalliz` 零命中；eval 三维化：`judge.Score` 是过程四维，不是 Localization × Identification × Reason；prompt injection 标注：无 |
 | 3 控制面瘦身与联邦（P3） | **5%** | `iam → manager` 反向依赖仍在 `scripts/modulecheck/main.go:548-556` 的 `exceptions` 台账里（决策 35 的已知例外，注释已写明「未来拆分必须解决它」）；manager 27.3 万行（实测 `find core/manager -name '*.go' \| xargs wc -l`）；无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档） |
 

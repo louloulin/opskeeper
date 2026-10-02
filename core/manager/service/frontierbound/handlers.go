@@ -341,17 +341,21 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 		}
 		if canonicalEdgeID == 0 {
 			// Edge hasn't completed register_edge yet (race on first
-			// connect). Silent drop - edge will retry once the binding
-			// is set up. Letting transport ID through would create
-			// ghost edge_id labels in Prom (v0.7.39 fix).
+			// connect). Drop for now; Accepted=0 is what tells the edge
+			// this batch is still its responsibility. Letting transport
+			// ID through would create ghost edge_id labels in Prom
+			// (v0.7.39 fix).
 			return json.Marshal(tunnel.PushHostMetricsResponse{Accepted: 0})
 		}
 		deviceID := resolveDeviceID(rpcCtx, w.DeviceResolver, canonicalEdgeID)
 		if deviceID == 0 {
 			// Host junction missing - drop rather than write edge_id as a
-			// bogus device_id label (issue #96). Accepted=0 lets the edge
-			// retry; the link is created by register_edge.
-			log.Warn("frontierbound: push_host_metrics dropped - device_id unresolved (edge_devices host junction missing; edge needs to (re)register)",
+			// bogus device_id label (issue #96). Accepted=0 is a *retry
+			// signal*, not a discard: a node that cached this point in its
+			// write-ahead log keeps it until register_edge lands. This is
+			// the difference between "the center refused it" and "the
+			// center could not place it yet".
+			log.Warn("frontierbound: push_host_metrics deferred - device_id unresolved (edge_devices host junction missing; edge needs to (re)register)",
 				slog.Uint64("edge_id", canonicalEdgeID),
 				slog.Uint64("transport_edge_id", edgeID),
 				slog.Int("n", len(in.Points)),
@@ -440,34 +444,42 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 		}
 		n := len(in.Samples)
 		if canonicalEdgeID == 0 {
-			// Edge hasn't completed register_edge yet. Silent drop to
+			// Edge hasn't completed register_edge yet. Drop for now to
 			// avoid leaking the raw transport ID as edge_id label
-			// (v0.7.39 fix).
-			return json.Marshal(tunnel.PushPromSamplesResponse{Accepted: n})
+			// (v0.7.39 fix). Accepted=0: a node with a write-ahead log
+			// keeps the batch and tries again once the binding lands.
+			log.Debug("frontierbound: push_prom_samples deferred (no canonical edge yet)",
+				slog.Uint64("transport_edge_id", edgeID),
+				slog.String("source", in.Source),
+				slog.Int("n", n),
+			)
+			return json.Marshal(tunnel.PushPromSamplesResponse{Accepted: 0})
 		}
 		if w.PromIngester == nil {
-			// Prom disabled / not wired. Quiet drop, return Accepted=n so the
-			// edge does not retry. We still log at DEBUG for diagnosis.
-			log.Debug("frontierbound: push_prom_samples dropped (prom disabled)",
+			// Prom disabled / not wired. The node must not keep retrying
+			// data this deployment has no store for, so it is refused:
+			// Accepted=0 with a reason the edge counts as a rejection.
+			log.Debug("frontierbound: push_prom_samples refused (prom disabled)",
 				slog.Uint64("edge_id", canonicalEdgeID),
 				slog.Uint64("transport_edge_id", edgeID),
 				slog.String("source", in.Source),
 				slog.Int("n", n),
 			)
-			return json.Marshal(tunnel.PushPromSamplesResponse{Accepted: n})
+			return json.Marshal(tunnel.PushPromSamplesResponse{Accepted: 0})
 		}
 		deviceID := resolveDeviceID(rpcCtx, w.DeviceResolver, canonicalEdgeID)
 		if deviceID == 0 {
 			// Host junction missing - drop rather than pollute the TSDB
-			// with edge_id-as-device_id (issue #96). Accepted=n so the
-			// edge does not spin-retry; the link lands on register_edge.
-			log.Warn("frontierbound: push_prom_samples dropped - device_id unresolved (edge_devices host junction missing; edge needs to (re)register)",
+			// with edge_id-as-device_id (issue #96). Accepted=0 is a retry
+			// signal: the link lands on register_edge and the node's log
+			// still holds the batch until then.
+			log.Warn("frontierbound: push_prom_samples deferred - device_id unresolved (edge_devices host junction missing; edge needs to (re)register)",
 				slog.Uint64("edge_id", canonicalEdgeID),
 				slog.Uint64("transport_edge_id", edgeID),
 				slog.String("source", in.Source),
 				slog.Int("n", n),
 			)
-			return json.Marshal(tunnel.PushPromSamplesResponse{Accepted: n})
+			return json.Marshal(tunnel.PushPromSamplesResponse{Accepted: 0})
 		}
 		if err := w.PromIngester.Push(rpcCtx, deviceID, in.Source, in.Samples); err != nil {
 			log.Warn("frontierbound: prom ingest push",

@@ -844,16 +844,25 @@ func (a *Agent) drainBatches(ctx context.Context, batches []telemetrywal.Batch) 
 	return len(batches), nil
 }
 
-// pushBatch emits one batch's two halves and reports only what can be
-// retried.
+// pushBatch emits one batch's two halves and reports how much of it the
+// center now has for good.
 //
-// A nil error means the batch will never be accepted by a later attempt
-// either — it either went out, or the center refused it and said so. An
-// error means the transport failed and the whole batch stays on disk.
+// The report is an error when nothing landed, whatever the reason. A
+// transport failure and a center that accepted none of the rows are the
+// same instruction to the caller — leave the batch in the log and try
+// again — and collapsing them here means drainBatches has one rule to
+// apply instead of a taxonomy it would eventually get wrong. The
+// distinction that *does* matter is handled below: a partial acceptance is
+// not a reason to retry, because the center has already said it will not
+// take the rest.
 func (a *Agent) pushBatch(ctx context.Context, b telemetrywal.Batch) error {
 	// 1) legacy fast path: push_host_metrics with one point, but only
 	// for the selected host source. Component scrape targets should not
 	// populate dashboard/alert fast-path rows.
+	var (
+		pointSent, pointAccepted   int
+		sampleSent, sampleAccepted int
+	)
 	if b.HostPoint != nil {
 		rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		var resp tunnel.PushHostMetricsResponse
@@ -866,35 +875,66 @@ func (a *Agent) pushBatch(ctx context.Context, b telemetrywal.Batch) error {
 		if err != nil {
 			return err
 		}
-		if resp.Accepted < 1 {
-			a.telemetryRejected.Add(1)
-			a.log.Warn("agent: host metric point refused by the center; it will not be retried",
-				slog.String("source", b.Source))
-		}
+		pointSent, pointAccepted = 1, int(resp.Accepted)
 	}
 
 	// 2) open-set rich path: push_prom_samples
-	if len(b.Samples) == 0 {
-		return nil
+	if len(b.Samples) > 0 {
+		rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		var resp tunnel.PushPromSamplesResponse
+		err := a.client.Call(rctx, tunnel.MethodPushPromSamples,
+			tunnel.PushPromSamplesRequest{
+				EdgeID:  a.EdgeID(),
+				Source:  b.Source,
+				Samples: b.Samples,
+			}, &resp)
+		cancel()
+		if err != nil {
+			return err
+		}
+		sampleSent, sampleAccepted = len(b.Samples), int(resp.Accepted)
 	}
-	rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	var resp tunnel.PushPromSamplesResponse
-	err := a.client.Call(rctx, tunnel.MethodPushPromSamples,
-		tunnel.PushPromSamplesRequest{
-			EdgeID:  a.EdgeID(),
-			Source:  b.Source,
-			Samples: b.Samples,
-		}, &resp)
-	cancel()
-	if err != nil {
-		return err
+
+	// A batch is durable only when the center says it took all of it.
+	//
+	// "Accepted < sent" and "Accepted == 0" are two different sentences,
+	// and the difference is whether a retry is worth anything:
+	//
+	//   - Accepted == 0 means the center placed none of it and is still
+	//     waiting to be able to — register_edge has not landed, the host
+	//     junction is missing, the prom ingester is not wired yet. Every
+	//     one of those is a state a later attempt can find changed, so the
+	//     honest report is "nothing landed", which this returns as an
+	//     error. The pump then leaves the batch in the log and the next
+	//     drain tries again. Without this branch the batch is acked and
+	//     gone — which is exactly the silent loss the write-ahead log was
+	//     installed to prevent, and it would be reintroduced by the very
+	//     node that went to the trouble of logging first.
+	//   - 0 < Accepted < sent means the center took part of it and will
+	//     never take the rest: retrying is a node asking the same question
+	//     forever. The un-taken part is counted as rejected (a metric, not
+	//     a queue wedge) and the batch is allowed to move on.
+	//
+	// The center decides which sentence it is saying by what it returns;
+	// this side only refuses to guess. It is deliberately all-or-nothing
+	// on a partial ack for the same reason the audit log is: a batch that
+	// was half stored has no clean retry, and guessing which half is worse
+	// than either losing one sample or asking once more.
+	if pointAccepted+sampleAccepted == 0 && pointSent+sampleSent > 0 {
+		return fmt.Errorf("agent: the center accepted none of %d telemetry rows (point %d/%d, samples %d/%d); the batch stays in the log",
+			pointSent+sampleSent, pointAccepted, pointSent, sampleAccepted, sampleSent)
 	}
-	if int(resp.Accepted) < len(b.Samples) {
-		a.telemetryRejected.Add(uint64(len(b.Samples) - int(resp.Accepted)))
+	if pointAccepted < pointSent {
+		a.telemetryRejected.Add(uint64(pointSent - pointAccepted))
+		a.log.Warn("agent: host metric point refused by the center; it will not be retried",
+			slog.String("source", b.Source))
+	}
+	if sampleAccepted < sampleSent {
+		a.telemetryRejected.Add(uint64(sampleSent - sampleAccepted))
 		a.log.Warn("agent: samples refused by the center; the batch will not be retried",
 			slog.String("source", b.Source),
-			slog.Int("sent", len(b.Samples)),
-			slog.Int("accepted", resp.Accepted))
+			slog.Int("sent", sampleSent),
+			slog.Int("accepted", sampleAccepted))
 	}
 	return nil
 }

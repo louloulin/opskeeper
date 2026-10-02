@@ -36,12 +36,19 @@ func (f *fakePromIngester) Push(_ context.Context, edgeID uint64, source string,
 	return f.wantErr
 }
 
-// fakeMetricIngester is a minimal stub for the existing MetricIngester
-// requirement of Install. push_host_metrics tests aren't run here.
-type fakeMetricIngester struct{}
+// fakeMetricIngester counts pushes and can be told to fail, which is what
+// the push_host_metrics tests need in order to prove the handler forwards
+// before it claims success.
+type fakeMetricIngester struct {
+	pushCnt int
+	gotN    int
+	wantErr error
+}
 
-func (f *fakeMetricIngester) Push(_ context.Context, _ uint64, _ []tunnel.HostMetricPoint) error {
-	return nil
+func (f *fakeMetricIngester) Push(_ context.Context, _ uint64, points []tunnel.HostMetricPoint) error {
+	f.pushCnt++
+	f.gotN = len(points)
+	return f.wantErr
 }
 
 // fakeDeviceResolver resolves edge_id -> device_id. By default it returns
@@ -94,6 +101,18 @@ func installAndDispatch(t *testing.T, w Wiring) (*fakeService, geminio.RPC) {
 		t.Fatalf("push_prom_samples not registered")
 	}
 	return fs, rpc
+}
+
+// rpcFor returns a registered reverse-call handler by method. The install
+// helper returns the prom one because most tests need it; the metrics
+// tests reach into the same service for theirs.
+func rpcFor(t *testing.T, fs *fakeService, method string) geminio.RPC {
+	t.Helper()
+	rpc, ok := fs.rpcs[method]
+	if !ok {
+		t.Fatalf("%s not registered", method)
+	}
+	return rpc
 }
 
 func TestInstall_PushPromSamples_HappyPath(t *testing.T) {
@@ -209,11 +228,17 @@ func TestInstall_PushPromSamples_DropsWhenDeviceUnresolved(t *testing.T) {
 	}
 }
 
-func TestInstall_PushPromSamples_NilIngesterSilentlyAccepts(t *testing.T) {
-	// Wiring.PromIngester == nil => Prom disabled.
+func TestInstall_PushPromSamples_NoIngesterRefusesRatherThanPretends(t *testing.T) {
+	// Wiring.PromIngester == nil => Prom disabled in this deployment. The
+	// honest answer to the node is "accepted none": the old code returned
+	// Accepted=n (a lie that made the node ack and discard the samples).
+	// A node with a write-ahead log counts Accepted=0 as a refusal and
+	// stops retrying — which is correct, because a store that is not wired
+	// will not appear on a later attempt either.
 	_, rpc := installAndDispatch(t, Wiring{PromIngester: nil, Log: slog.Default()})
 
 	body, _ := json.Marshal(tunnel.PushPromSamplesRequest{
+		EdgeID: 1,
 		Source: "embedded",
 		Samples: []tunnel.PromSample{
 			{Name: "a", Value: 1, TsMs: 1},
@@ -223,14 +248,99 @@ func TestInstall_PushPromSamples_NilIngesterSilentlyAccepts(t *testing.T) {
 	rsp := &fakeResp{}
 	rpc(context.Background(), &fakeReq{data: body, clientID: 1}, rsp)
 	if rsp.err != nil {
-		t.Errorf("expected silent accept, got err = %v", rsp.err)
+		t.Errorf("expected a defined response, got err = %v", rsp.err)
 	}
 	var out tunnel.PushPromSamplesResponse
 	if err := json.Unmarshal(rsp.data, &out); err != nil {
 		t.Fatalf("decode resp: %v", err)
 	}
+	if out.Accepted != 0 {
+		t.Errorf("Accepted = %d, want 0 (refusal); a non-zero answer here is the silent loss", out.Accepted)
+	}
+}
+
+// TestPushHostMetrics_ADeferredBatchIsReportedAsNothingAccepted is the
+// regression for the one path where replayed telemetry was destroyed by
+// the handshake rather than the transport.
+//
+// Before this, a node that had cached points during an outage would send
+// its backlog, be told Accepted=0 because register_edge had not landed
+// yet, and *discard the batch* — the log had been installed for exactly
+// this outage and the retention it bought was one round trip. The
+// center's zero is now read as "not yet", which keeps the rows; this test
+// pins the zero so the reading cannot silently change back.
+func TestPushHostMetrics_ADeferredBatchIsReportedAsNothingAccepted(t *testing.T) {
+	mi := &fakeMetricIngester{}
+	fs, _ := installAndDispatch(t, Wiring{
+		MetricIngester: mi,
+		DeviceResolver: &fakeDeviceResolver{err: errors.New("no host junction")},
+		Log:            slog.Default(),
+	})
+	rpc := rpcFor(t, fs, tunnel.MethodPushHostMetrics)
+	body, _ := json.Marshal(tunnel.PushHostMetricsRequest{
+		EdgeID: 7,
+		Points: []tunnel.HostMetricPoint{{Ts: 1, CPUPct: 1}},
+	})
+	rsp := &fakeResp{}
+	rpc(context.Background(), &fakeReq{data: body, clientID: 1}, rsp)
+	if rsp.err != nil {
+		t.Fatalf("a deferral must not be an RPC error: %v", rsp.err)
+	}
+	if mi.pushCnt != 0 {
+		t.Fatalf("the ingester was called for an unplaceable batch")
+	}
+	var out tunnel.PushHostMetricsResponse
+	if err := json.Unmarshal(rsp.data, &out); err != nil {
+		t.Fatalf("decode resp: %v", err)
+	}
+	if out.Accepted != 0 {
+		t.Errorf("Accepted = %d, want 0 — a non-zero answer makes the node discard its cached backlog", out.Accepted)
+	}
+}
+
+// TestPushHostMetrics_TheAcceptedCountFollowsTheIngester is the other half:
+// when the center *can* place a batch, the count must come from having
+// written it, not from having received it.
+func TestPushHostMetrics_TheAcceptedCountFollowsTheIngester(t *testing.T) {
+	mi := &fakeMetricIngester{}
+	fs, _ := installAndDispatch(t, Wiring{MetricIngester: mi, Log: slog.Default()})
+	rpc := rpcFor(t, fs, tunnel.MethodPushHostMetrics)
+	body, _ := json.Marshal(tunnel.PushHostMetricsRequest{
+		EdgeID: 9,
+		Points: []tunnel.HostMetricPoint{{Ts: 1, CPUPct: 1}, {Ts: 2, CPUPct: 2}},
+	})
+	rsp := &fakeResp{}
+	rpc(context.Background(), &fakeReq{data: body, clientID: 9}, rsp)
+	if rsp.err != nil {
+		t.Fatalf("rpc returned error: %v", rsp.err)
+	}
+	if mi.pushCnt != 1 || mi.gotN != 2 {
+		t.Fatalf("ingester pushCnt=%d gotN=%d, want 1/2", mi.pushCnt, mi.gotN)
+	}
+	var out tunnel.PushHostMetricsResponse
+	if err := json.Unmarshal(rsp.data, &out); err != nil {
+		t.Fatalf("decode resp: %v", err)
+	}
 	if out.Accepted != 2 {
-		t.Errorf("Accepted = %d, want 2 (silent accept)", out.Accepted)
+		t.Errorf("Accepted = %d, want 2", out.Accepted)
+	}
+}
+
+// TestPushHostMetrics_AnIngesterErrorIsAnRPCError keeps the third sentence
+// distinct: a store that failed is a transport-shaped failure, so the
+// node retries rather than being told the data was refused.
+func TestPushHostMetrics_AnIngesterErrorIsAnRPCError(t *testing.T) {
+	mi := &fakeMetricIngester{wantErr: errors.New("db down")}
+	fs, _ := installAndDispatch(t, Wiring{MetricIngester: mi, Log: slog.Default()})
+	rpc := rpcFor(t, fs, tunnel.MethodPushHostMetrics)
+	body, _ := json.Marshal(tunnel.PushHostMetricsRequest{
+		EdgeID: 3,
+		Points: []tunnel.HostMetricPoint{{Ts: 1, CPUPct: 1}},
+	})
+	rsp := &fakeResp{}
+	rpc(context.Background(), &fakeReq{data: body, clientID: 3}, rsp)
+	if rsp.err == nil {
+		t.Fatalf("an ingester failure must reach the node as an error so it retries")
 	}
 }
 
