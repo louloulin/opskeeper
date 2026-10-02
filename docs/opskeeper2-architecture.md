@@ -4965,6 +4965,35 @@ junction 本来就是它的事），但「这些身份必须和我一起消失�
   体积那一半照旧敞着。**这一条是纯依赖方向修正，零行数收益**——它买的是「这两块现在能
   独立演进」这个事实，不是体积。
 
+#### 4.50.5 顺手量的一件事：剩下 6 对环按「接缝数」排，和按行数排完全是两个顺序
+
+切掉第一对之后，把剩下 6 对的**生产 import** 逐条数了一遍（`_test.go` 按既有规则不计）：
+
+| 环 | 域规模（生产行） | **生产 import 数** | 涉及文件 / 目录 | 接缝在哪 |
+|---|---|---|---|---|
+| `aiops ↔ alert` | 41,264 + 13,186 | **16** | 11 / 2 | `biz/aiops` 10 条、`biz/alert` 1 条——最分散 |
+| `aiops ↔ loop` | 41,264 + 15,055 | **5** | 5 / 2 | `crystallize/evidence.go`、`investigator/worker_output.go`、`verify_recovery_basetool.go` → `biz/loop`；`loop/investigated_worker.go` → `aiops/promptguard`、`loop/mcp_basetool.go` → `aiops/tools/basetool` |
+| `aiops ↔ hitl` | 41,264 + 2,696 | **4** | 3 / 3 | `tools/decorators/pause_point.go`、`tools/recovery_execute_basetool.go`、`data/hitl/store/migrate_data.go` |
+| `alert ↔ demo` | 13,186 + 2,332 | **3** | 3 / 3 | `biz/demo/scenario.go`、`data/demo/store.go` → `model/alert`；`data/alert/store/repo.go` → `model/demo` |
+| `chatdiagnose ↔ loop` | 4,273 + 15,055 | **3** | 3 / 2 | `chatdiagnose/{service.go,orchestrator_adapter.go}` → `biz/loop`；`loop/postmortem_worker.go` → `model/chatdiagnose` |
+| `loop ↔ report` | 15,055 + 5,077 | **3** | 3 / 2 | `loop/gitsink/gitsink.go` → `biz/report`；`report/{postmortem.go,postmortem_sink.go}` → `biz/loop` |
+
+**这修正了 §4.49.2 留给后人的话**。那里写 `aiops ↔ loop` 是「本仓最大的一处」——
+按**域行数**它确实最大（41k vs 15k），但**工作量由接缝数决定，不由行数决定**：
+它是 6 对里第 5 小的（5 条 import / 5 个文件，每条都看得见名字）。真正最贵的是
+`aiops ↔ alert` 的 16 条，且 10 条挤在 `biz/aiops` 一个目录里——**那才是应该放在
+最后的**。把最大的环当成下一个目标，是拿体积当难度。
+
+按接缝数排出来的下一个目标是三对 3 条的：`alert ↔ demo`、`chatdiagnose ↔ loop`、
+`loop ↔ report`，每对都只需要动 3 个文件。
+
+顺带量出一件与环无关、但更刺眼的事：**`data/alert/store/repo.go`（生产告警存储）
+import 了 `model/demo`**，并在识别到 demo 告警时推进 `demo_scenario_runs` 状态机
+（`ScenarioStatusStarting` … `ScenarioStatusVerifying`）。生产持久化层知道 demo 的
+存在，这不是环，是**方向就不对**：告警存储不该知道「有个演示」。它同时是
+`alert ↔ demo` 环的其中一条边，所以处理这一对环时绕不开——**这是一个决策，不是清理**
+（demo 场景推进也许该由 demo 自己订阅告警事件）。
+
 ---
 
 ## 六、当前实现进度
