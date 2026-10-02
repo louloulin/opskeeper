@@ -235,9 +235,18 @@ module-check: ## 校验 OpsKeeper 2.0 模块边界（唯一 PiG 导入点 / core
 # Seven pairs of domains in the tree already reach each other both ways.
 # This gate makes those edges declared, and a new one red.
 .PHONY: domain-check
-domain-check: ## 校验 control plane 的域边界（55 个域 / 49 条声明边 / 6 对已知环）
+domain-check: ## 校验 control plane 的域边界（55 个域 / 42 条声明边 / 0 对环，决策 118 起）
 	go run ./scripts/domaincheck .
 	go test ./scripts/domaincheck/ -count=1
+
+# Report only, never a gate: a name-based reachability walk cannot see
+# interface satisfaction, reflection, cgo or go:linkname, so a red build on
+# its output would train people to add "trust me" comments. The number it
+# prints is the size of the wire-it-up-or-delete-it backlog, which is what
+# stage 3 needs before choosing between cutting volume and splitting it.
+deadcode-report: ## 报出生产代码里只有测试引用的符号（报告，不闸门）
+	go run ./scripts/deadcode . core core/edge core/pig core/manager core/floor core/harness sdk
+	go test ./scripts/deadcode/ -count=1
 
 # The root `make test` no longer reaches core/harness: it is a separate Go
 # module now, and that separation is the point. Anything that wants the

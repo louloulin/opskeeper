@@ -111,5 +111,7 @@ plugins/opskeeper-teamharness/eval/reports/
 .dist/
 .docker-gocache/
 
-# Stray local binary from `go build ./scripts/modulecheck`
+# Stray local binaries from `go build ./scripts/<tool>`
 /modulecheck
+/deadcode
+/domaincheck
