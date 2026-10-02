@@ -31,11 +31,9 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
-	auditmw "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
 	release "github.com/vincent-wuhan/opskeeper/core/manager/service/plugin"
 )
 
@@ -300,7 +298,7 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 		// a package reaches the fleet without a decision on record is who
 		// tried, and an audit trail that only records the attempts that
 		// succeeded cannot answer it.
-		auditRelease(r, auditmodel.ActionPluginReleaseStart, req.Plugin, auditmodel.StatusFailure, err, map[string]any{
+		auditRelease(r, auditport.ActionPluginReleaseStart, req.Plugin, auditport.StatusFailure, err, map[string]any{
 			"version":  req.Version,
 			"strategy": req.Strategy,
 			"nodes":    req.Nodes,
@@ -308,7 +306,7 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditRelease(r, auditmodel.ActionPluginReleaseStart, st.Plugin, auditmodel.StatusSuccess, nil, map[string]any{
+	auditRelease(r, auditport.ActionPluginReleaseStart, st.Plugin, auditport.StatusSuccess, nil, map[string]any{
 		"version":  st.Version,
 		"strategy": req.Strategy,
 		"nodes":    req.Nodes,
@@ -356,7 +354,7 @@ func (h *Handler) advance(w http.ResponseWriter, r *http.Request) {
 	}
 	moved, st, err := h.svc.Advance(r.Context(), releaseName(r))
 	if err != nil {
-		auditRelease(r, auditmodel.ActionPluginReleaseAdvance, releaseName(r), auditmodel.StatusFailure, err, nil)
+		auditRelease(r, auditport.ActionPluginReleaseAdvance, releaseName(r), auditport.StatusFailure, err, nil)
 		writeErr(w, err)
 		return
 	}
@@ -371,7 +369,7 @@ func (h *Handler) advance(w http.ResponseWriter, r *http.Request) {
 	// to simply have not answered — so stamping it with an error code
 	// would teach an operator reading the trail to page someone at 3am
 	// for a release that is waiting, which is the normal case.
-	status := auditmodel.StatusSuccess
+	status := auditport.StatusSuccess
 	payload := map[string]any{
 		"wave":    st.Wave,
 		"waves":   st.Waves,
@@ -381,10 +379,10 @@ func (h *Handler) advance(w http.ResponseWriter, r *http.Request) {
 		"summary": st.Summary,
 	}
 	if !moved {
-		status = auditmodel.StatusFailure
+		status = auditport.StatusFailure
 		payload["blocked"] = "the current wave is not accounted for; the release did not move"
 	}
-	auditRelease(r, auditmodel.ActionPluginReleaseAdvance, st.Plugin, status, nil, payload)
+	auditRelease(r, auditport.ActionPluginReleaseAdvance, st.Plugin, status, nil, payload)
 	writeJSON(w, http.StatusOK, advanceResp{Moved: moved, Status: st})
 }
 
@@ -408,7 +406,7 @@ func (h *Handler) halt(w http.ResponseWriter, r *http.Request) {
 	}
 	st, err := h.svc.Halt(releaseName(r), reason)
 	if err != nil {
-		auditRelease(r, auditmodel.ActionPluginReleaseHalt, releaseName(r), auditmodel.StatusFailure, err, nil)
+		auditRelease(r, auditport.ActionPluginReleaseHalt, releaseName(r), auditport.StatusFailure, err, nil)
 		writeErr(w, err)
 		return
 	}
@@ -416,7 +414,7 @@ func (h *Handler) halt(w http.ResponseWriter, r *http.Request) {
 	// generic "halted". It is the only field in this row that explains
 	// *why*, and the person reading it is usually not the person who
 	// typed it.
-	auditRelease(r, auditmodel.ActionPluginReleaseHalt, st.Plugin, auditmodel.StatusSuccess, nil, map[string]any{
+	auditRelease(r, auditport.ActionPluginReleaseHalt, st.Plugin, auditport.StatusSuccess, nil, map[string]any{
 		"version": st.Version,
 		"reason":  reason,
 		"wave":    st.Wave,
@@ -436,7 +434,7 @@ func (h *Handler) rollback(w http.ResponseWriter, r *http.Request) {
 		// names the nodes that still hold the package, and an operator
 		// needs that list even though the call failed.
 		if st.Plugin != "" {
-			auditRelease(r, auditmodel.ActionPluginReleaseRollback, st.Plugin, auditmodel.StatusFailure, err, map[string]any{
+			auditRelease(r, auditport.ActionPluginReleaseRollback, st.Plugin, auditport.StatusFailure, err, map[string]any{
 				"version": st.Version,
 				"pending": st.Pending,
 				"failed":  st.Failed,
@@ -450,7 +448,7 @@ func (h *Handler) rollback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditRelease(r, auditmodel.ActionPluginReleaseRollback, st.Plugin, auditmodel.StatusSuccess, nil, map[string]any{
+	auditRelease(r, auditport.ActionPluginReleaseRollback, st.Plugin, auditport.StatusSuccess, nil, map[string]any{
 		"version": st.Version,
 		"summary": st.Summary,
 	})
@@ -485,9 +483,9 @@ func auditRelease(r *http.Request, action, plugin, status string, cause error, p
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	ev := bizaudit.Event{
+	ev := auditport.Event{
 		Action:       action,
-		ResourceType: auditmodel.ResourcePlugin,
+		ResourceType: auditport.ResourcePlugin,
 		ResourceID:   plugin,
 		ResourceName: plugin,
 		Status:       status,
@@ -502,7 +500,7 @@ func auditRelease(r *http.Request, action, plugin, status string, cause error, p
 		ev.ErrorCode = code
 		ev.ErrorMessage = cause.Error()
 	}
-	auditmw.SetAuditEvent(r, ev)
+	auditport.SetAuditEvent(r, ev)
 }
 
 // errNotWired is what an endpoint says before the tunnel exists.

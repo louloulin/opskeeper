@@ -161,6 +161,9 @@ const (
 
 	ActionAgentTeamsTokenIssue = auditport.ActionAgentTeamsTokenIssue
 
+	ActionMCPToolCall      = auditport.ActionMCPToolCall
+	ActionMCPToolAuthorize = auditport.ActionMCPToolAuthorize
+
 	ResourceUser     = auditport.ResourceUser
 	ResourceDevice   = auditport.ResourceDevice
 	ResourceIncident = auditport.ResourceIncident
@@ -177,4 +180,5 @@ const (
 	ResourceAuth     = auditport.ResourceAuth
 	ResourcePlugin   = auditport.ResourcePlugin
 	ResourceEdge     = auditport.ResourceEdge
+	ResourceMCPTool  = auditport.ResourceMCPTool
 )

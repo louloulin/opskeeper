@@ -18,10 +18,10 @@ import (
 
 	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	auditbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
 	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
+	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/mcpclient"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
@@ -860,10 +860,10 @@ func (a *allowCasbinTool) AllowAnyOrg(_ context.Context, _ uint64, _, action str
 }
 
 type recordingAuditEmitter struct {
-	events []auditbiz.Event
+	events []auditport.Event
 }
 
-func (e *recordingAuditEmitter) Emit(_ context.Context, event auditbiz.Event) {
+func (e *recordingAuditEmitter) Emit(_ context.Context, event auditport.Event) {
 	e.events = append(e.events, event)
 }
 

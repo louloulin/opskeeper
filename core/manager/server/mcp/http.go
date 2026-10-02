@@ -30,8 +30,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
-	auditbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/mcp"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
@@ -677,15 +677,15 @@ func (h *Handler) emitAuthorizationDenied(r *http.Request, caller tenantctx.Tena
 			"role":      caller.AgentTeams.Role,
 		}
 	}
-	h.audit.Emit(r.Context(), auditbiz.Event{
+	h.audit.Emit(r.Context(), auditport.Event{
 		UserID:       &userID,
 		UserEmail:    caller.Email,
 		Role:         role,
-		Action:       "mcp_tool_authorize",
-		ResourceType: "mcp_tool",
+		Action:       auditport.ActionMCPToolAuthorize,
+		ResourceType: auditport.ResourceMCPTool,
 		ResourceID:   tool,
 		ResourceName: tool,
-		Status:       "denied",
+		Status:       auditport.StatusDenied,
 		ErrorCode:    "authorization_denied",
 		ErrorMessage: denyErr.Error(),
 		RequestID:    r.Header.Get("X-Request-ID"),

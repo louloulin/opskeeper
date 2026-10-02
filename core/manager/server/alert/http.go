@@ -15,12 +15,10 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/alert/investigator"
-	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
-	auditmw "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
 	svc "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 )
 
@@ -483,13 +481,13 @@ func stripWhitespace(s string) string {
 }
 
 func (h *Handler) ackIncident(w http.ResponseWriter, r *http.Request) {
-	h.mutateIncident(w, r, auditmodel.ActionIncidentAck, func(ctx context.Context, caller svc.Caller, id uint64, in svc.IncidentMutationInput) (*svc.Incident, error) {
+	h.mutateIncident(w, r, auditport.ActionIncidentAck, func(ctx context.Context, caller svc.Caller, id uint64, in svc.IncidentMutationInput) (*svc.Incident, error) {
 		return h.incidents.AcknowledgeIncident(ctx, caller, id, in)
 	})
 }
 
 func (h *Handler) resolveIncident(w http.ResponseWriter, r *http.Request) {
-	h.mutateIncident(w, r, auditmodel.ActionIncidentResolve, func(ctx context.Context, caller svc.Caller, id uint64, in svc.IncidentMutationInput) (*svc.Incident, error) {
+	h.mutateIncident(w, r, auditport.ActionIncidentResolve, func(ctx context.Context, caller svc.Caller, id uint64, in svc.IncidentMutationInput) (*svc.Incident, error) {
 		return h.incidents.ResolveIncident(ctx, caller, id, in)
 	})
 }
@@ -568,12 +566,12 @@ func (h *Handler) silenceIncident(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionIncidentSilence,
-		ResourceType: auditmodel.ResourceIncident,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionIncidentSilence,
+		ResourceType: auditport.ResourceIncident,
 		ResourceID:   strconv.FormatUint(id, 10),
 		ResourceName: item.RuleName,
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 		Payload:      map[string]any{"until": req.Until, "reason": req.Reason},
 	})
 	writeJSON(w, http.StatusOK, item)
@@ -600,12 +598,12 @@ func (h *Handler) mutateIncident(w http.ResponseWriter, r *http.Request, action 
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
+	auditport.SetAuditEvent(r, auditport.Event{
 		Action:       action,
-		ResourceType: auditmodel.ResourceIncident,
+		ResourceType: auditport.ResourceIncident,
 		ResourceID:   strconv.FormatUint(id, 10),
 		ResourceName: item.RuleName,
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 		Payload:      map[string]any{"note": req.Note},
 	})
 	writeJSON(w, http.StatusOK, item)
@@ -667,12 +665,12 @@ func (h *Handler) createChannel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionChannelCreate,
-		ResourceType: auditmodel.ResourceChannel,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionChannelCreate,
+		ResourceType: auditport.ResourceChannel,
 		ResourceID:   strconv.FormatUint(item.ID, 10),
 		ResourceName: item.Name,
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 		Payload:      map[string]any{"type": req.Type, "enabled": req.Enabled},
 	})
 	writeJSON(w, http.StatusCreated, item)
@@ -704,12 +702,12 @@ func (h *Handler) updateChannel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionChannelUpdate,
-		ResourceType: auditmodel.ResourceChannel,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionChannelUpdate,
+		ResourceType: auditport.ResourceChannel,
 		ResourceID:   strconv.FormatUint(id, 10),
 		ResourceName: item.Name,
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 	})
 	writeJSON(w, http.StatusOK, item)
 }
@@ -728,11 +726,11 @@ func (h *Handler) deleteChannel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionChannelDelete,
-		ResourceType: auditmodel.ResourceChannel,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionChannelDelete,
+		ResourceType: auditport.ResourceChannel,
 		ResourceID:   strconv.FormatUint(id, 10),
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -804,12 +802,12 @@ func (h *Handler) createRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionRuleCreate,
-		ResourceType: auditmodel.ResourceRule,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionRuleCreate,
+		ResourceType: auditport.ResourceRule,
 		ResourceID:   strconv.FormatUint(item.ID, 10),
 		ResourceName: item.Name,
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 		Payload:      map[string]any{"kind": req.Kind, "severity": req.Severity, "enabled": req.Enabled},
 	})
 	writeJSON(w, http.StatusCreated, item)
@@ -835,12 +833,12 @@ func (h *Handler) updateRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionRuleUpdate,
-		ResourceType: auditmodel.ResourceRule,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionRuleUpdate,
+		ResourceType: auditport.ResourceRule,
 		ResourceID:   strconv.FormatUint(id, 10),
 		ResourceName: item.Name,
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 	})
 	writeJSON(w, http.StatusOK, item)
 }
@@ -865,12 +863,12 @@ func (h *Handler) setRuleEnabled(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionRuleUpdate,
-		ResourceType: auditmodel.ResourceRule,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionRuleUpdate,
+		ResourceType: auditport.ResourceRule,
 		ResourceID:   strconv.FormatUint(id, 10),
 		ResourceName: item.Name,
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 		Payload:      map[string]any{"enabled": req.Enabled},
 	})
 	writeJSON(w, http.StatusOK, item)
@@ -912,11 +910,11 @@ func (h *Handler) deleteRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionRuleDelete,
-		ResourceType: auditmodel.ResourceRule,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionRuleDelete,
+		ResourceType: auditport.ResourceRule,
 		ResourceID:   strconv.FormatUint(id, 10),
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }

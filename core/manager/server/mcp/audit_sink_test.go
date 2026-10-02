@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
-	auditbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
@@ -68,14 +68,14 @@ func TestAuditSink_ReturnsDurableAuditID(t *testing.T) {
 
 type recordingSyncAuditEmitter struct {
 	id     uint64
-	events []auditbiz.Event
+	events []auditport.Event
 }
 
-func (e *recordingSyncAuditEmitter) Emit(_ context.Context, event auditbiz.Event) {
+func (e *recordingSyncAuditEmitter) Emit(_ context.Context, event auditport.Event) {
 	e.events = append(e.events, event)
 }
 
-func (e *recordingSyncAuditEmitter) EmitWithID(ctx context.Context, event auditbiz.Event) (uint64, error) {
+func (e *recordingSyncAuditEmitter) EmitWithID(ctx context.Context, event auditport.Event) (uint64, error) {
 	e.Emit(ctx, event)
 	return e.id, nil
 }

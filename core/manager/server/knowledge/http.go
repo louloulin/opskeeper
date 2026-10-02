@@ -30,14 +30,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
+	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/docextract"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
-	auditmw "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
 )
 
 // Service is the narrow biz surface the handler depends on.
@@ -539,12 +537,12 @@ func (h *Handler) createRepo(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionRepoCreate,
-		ResourceType: auditmodel.ResourceRepo,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionRepoCreate,
+		ResourceType: auditport.ResourceRepo,
 		ResourceID:   strconv.FormatUint(row.ID, 10),
 		ResourceName: row.URL,
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 		Payload:      map[string]any{"branch": req.Branch},
 	})
 	writeJSON(w, http.StatusCreated, toRepoDTO(row))
@@ -561,12 +559,12 @@ func (h *Handler) syncRepo(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionRepoSync,
-		ResourceType: auditmodel.ResourceRepo,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionRepoSync,
+		ResourceType: auditport.ResourceRepo,
 		ResourceID:   strconv.FormatUint(id, 10),
 		ResourceName: row.URL,
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 		Payload:      map[string]any{"file_count": row.FileCount},
 	})
 	writeJSON(w, http.StatusOK, toRepoDTO(row))
@@ -580,11 +578,11 @@ func (h *Handler) syncVault(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionRepoSync,
-		ResourceType: auditmodel.ResourceRepo,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionRepoSync,
+		ResourceType: auditport.ResourceRepo,
 		ResourceName: "builtin://vault",
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 		Payload:      map[string]any{"file_count": indexed, "source": source},
 	})
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -604,11 +602,11 @@ func (h *Handler) deleteRepo(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionRepoDelete,
-		ResourceType: auditmodel.ResourceRepo,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionRepoDelete,
+		ResourceType: auditport.ResourceRepo,
 		ResourceID:   strconv.FormatUint(id, 10),
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }

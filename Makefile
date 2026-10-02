@@ -184,16 +184,22 @@ mcp-surface-check: ## MCP 对外协议面：握手、保活、分页、可见性
 # drives the tests that read those artifacts directly, not a grep: the
 # import walk, the grant walk, the closed vocabulary, and the end-to-end
 # path from a handler's SetAuditEvent to the row the writer persists.
+#
+# Since decision 110 the gate also covers the module as a whole: the port
+# has to be the only way to *name* a row, so the writer itself is reachable
+# from a table of declared holders, each with the reason it holds one. That
+# table is the difference between a boundary and a convention — it is how
+# the next domain that reaches for the writer finds out before review.
 .PHONY: audit-port-check
 audit-port-check: ## 审计端口：iam 不再反向依赖 manager，词表闭合，行照常落库
 	go test ./core/manager/iam/server/ -count=1 -run \
 		'TestThisContextReachesNothingAboveItself|TestEveryAuditRowThisContextEmitsIsNamedThroughThePort|TestTheArchitectureRulesGrantThisContextNothingAboveIt'
 	go test ./core/manager/pkg/audit/ -count=1 -run \
-		'TestTheSlotSurvivesEveryContextRewrap|TestOutsideAMiddlewareChainNothingIsRemembered|TestThePortCannotReachTheLedger|TestTheVocabularyIsWellFormed'
+		'TestTheSlotSurvivesEveryContextRewrap|TestOutsideAMiddlewareChainNothingIsRemembered|TestThePortCannotReachTheLedger|TestTheVocabularyIsWellFormed|TestOnlyTheThroatHoldsTheWriter|TestNoDomainOutsideTheListsReachesTheWriter'
 	go test ./core/manager/model/audit/ -count=1 -run 'TestTheReExportCoversTheWholeVocabulary'
 	go test ./core/manager/server/middleware/ -count=1 -run \
 		'TestTheRowAHandlerAsksForIsTheRowTheLedgerGets|TestAnUnannotatedRequestIsNotAudited|TestAFailingRequestIsAuditedAsAFailure'
-	@echo "audit-port-check: the port is BC-free, the vocabulary is closed, the grant is gone and rows still land"
+	@echo "audit-port-check: the port is BC-free, the vocabulary is closed, only the declared holders reach the writer, the grant is gone and rows still land"
 
 # ----------------------------------------------------------------------------
 # lint

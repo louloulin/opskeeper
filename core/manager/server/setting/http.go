@@ -14,12 +14,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	bizsetting "github.com/vincent-wuhan/opskeeper/core/manager/biz/setting"
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
-	auditmw "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
 )
 
 // SettingService is the narrow surface the handler depends on. The
@@ -111,11 +109,11 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	} else if len(hint) > 64 {
 		hint = hint[:64] + "…"
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionSettingUpdate,
-		ResourceType: auditmodel.ResourceSetting,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionSettingUpdate,
+		ResourceType: auditport.ResourceSetting,
 		ResourceID:   category + "/" + key,
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 		Payload:      map[string]any{"category": category, "key": key, "sensitive": sensitive, "value_hint": hint},
 	})
 	// Return the freshly-masked row so the UI can update its cell without
@@ -181,11 +179,11 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	auditmw.SetAuditEvent(r, bizaudit.Event{
-		Action:       auditmodel.ActionSettingDelete,
-		ResourceType: auditmodel.ResourceSetting,
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionSettingDelete,
+		ResourceType: auditport.ResourceSetting,
 		ResourceID:   category + "/" + key,
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }

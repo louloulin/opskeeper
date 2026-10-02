@@ -11,16 +11,16 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
-	auditbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 )
 
 type AuditEmitter interface {
-	Emit(ctx context.Context, event auditbiz.Event)
+	Emit(ctx context.Context, event auditport.Event)
 }
 
 type SyncAuditEmitter interface {
-	EmitWithID(ctx context.Context, event auditbiz.Event) (uint64, error)
+	EmitWithID(ctx context.Context, event auditport.Event) (uint64, error)
 }
 
 type AuditSink struct {
@@ -97,15 +97,15 @@ func (s *AuditSink) OnToolStart(ctx context.Context, event decorators.ToolStartE
 		}
 	}
 	correlationID := newAuditCorrelationID()
-	auditEvent := auditbiz.Event{
+	auditEvent := auditport.Event{
 		UserID:       &userID,
 		UserEmail:    "",
 		Role:         role,
-		Action:       "mcp_tool_call",
-		ResourceType: "mcp_tool",
+		Action:       auditport.ActionMCPToolCall,
+		ResourceType: auditport.ResourceMCPTool,
 		ResourceID:   event.ToolName,
 		ResourceName: event.ToolName,
-		Status:       "success",
+		Status:       auditport.StatusSuccess,
 		RequestID:    correlationID,
 		Payload: map[string]any{
 			"phase":            "start",
@@ -137,13 +137,13 @@ func (s *AuditSink) OnToolEnd(ctx context.Context, correlationID string, event d
 	if s == nil || s.emitter == nil || correlationID == "" {
 		return errors.New("mcp audit sink is not configured")
 	}
-	status := "success"
+	status := auditport.StatusSuccess
 	if event.Err != nil {
-		status = "failure"
+		status = auditport.StatusFailure
 	}
-	s.emitter.Emit(ctx, auditbiz.Event{
-		Action:       "mcp_tool_call",
-		ResourceType: "mcp_tool",
+	s.emitter.Emit(ctx, auditport.Event{
+		Action:       auditport.ActionMCPToolCall,
+		ResourceType: auditport.ResourceMCPTool,
 		ResourceID:   "mcp",
 		Status:       status,
 		ErrorCode:    auditErrorCode(event.Err),

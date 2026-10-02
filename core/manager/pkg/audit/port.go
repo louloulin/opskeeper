@@ -176,6 +176,23 @@ const (
 	// asking "who minted an agent token on my tenant" is asking a
 	// different question from "who logged in".
 	ActionAgentTeamsTokenIssue = "agentteams_token_issue"
+
+	// The MCP surface's two rows, which were being written as inline
+	// literals by server/mcp.
+	//
+	// They are worth a place in the closed list for a reason the operator
+	// feedback of 2026-05-20 did not cover. That cleanup was about sprawl:
+	// CRUD verbs and state-transition flavours multiplying into dozens of
+	// near-identical filter entries. These two are the opposite — an
+	// inbound tool call and a *refused* inbound tool call are the two
+	// questions an operator asks first about an MCP deployment ("who is
+	// calling my tools" and "who was stopped"), and until they were named
+	// here a denied call was in the same table as a successful one with
+	// nothing but a payload to tell them apart. Note that a denial also
+	// needs its own action, not a status: the two are queried separately
+	// and folding them would make one of them a payload scan.
+	ActionMCPToolCall      = "mcp_tool_call"
+	ActionMCPToolAuthorize = "mcp_tool_authorize"
 )
 
 // ResourceType buckets used in the resource_type column. Same flat-list
@@ -202,6 +219,11 @@ const (
 	// a string, which is how every other edge-scoped row in this table
 	// already identifies itself.
 	ResourceEdge = "edge"
+
+	// ResourceMCPTool names a tool reached over the MCP endpoint. The
+	// resource id is the tool name the caller asked for, which is what an
+	// operator searches for when a tenant claims a tool "does not exist".
+	ResourceMCPTool = "mcp_tool"
 )
 
 // contextKey points to a mutable *slot in the request context.
