@@ -108,7 +108,7 @@ var edges = map[edge]string{
 	{"aiops", "audit"}:      "the agent kernel's LedgerWriter writes agent actions (tool calls, turns) into the same chain an operator reads",
 	{"aiops", "device"}:     "an alert names a device and a tool call resolves it to a machine; the agent needs the device vocabulary to say which one",
 	{"aiops", "edge"}:       "the agent's tools address nodes through the edge domain; there is no second worth having notion of 'which node'",
-	{"aiops", "hitl"}:       "an investigation that needs a human hands the request to the human-in-the-loop domain instead of blocking on a channel of its own",
+	{"aiops", "hitl"}:       "an investigation that needs a human hands the request to the human-in-the-loop domain instead of blocking on a channel of its own. One direction only since decision 116: the hitl side had reached back into aiops solely through a migration-and-dual-write window that was never wired and has expired, so the cycle is gone while these three imports stay",
 	{"aiops", "loop"}:       "the investigation loop is the agent's own driver and lives in aiops/loop",
 	{"aiops", "skill"}:      "host skills are executed as tools, so the agent's tool bag is assembled from the skill registry",
 	{"aiops", "topology"}:   "correlation answers 'what is related to this' from the topology domain instead of a private graph",
@@ -135,9 +135,6 @@ var edges = map[edge]string{
 
 	{"grafana", "monitor"}: "grafana monitors are configured from the monitor model",
 	{"grafana", "setting"}: "grafana's endpoint and credentials are platform settings",
-
-	{"hitl", "aiops"}:    "an approval's target is often an agent remediation, so the policy names the agent vocabulary",
-	{"hitl", "approval"}: "HITL is the approval domain's policy layer and the two share one model",
 
 	{"imbridge", "aiops"}: "the IM bridge delivers an agent finding into a chat channel, so it formats the agent's output",
 	{"imbridge", "iam"}:   "the bridge attributes a message to a user, and a model is the one thing two contexts are meant to agree on rather than copy",
@@ -190,7 +187,6 @@ func pair(a, b string) [2]string {
 // change to cut it.
 var cycles = map[[2]string]string{
 	{"aiops", "alert"}: "the agent raises alerts and the alert domain asks the agent to investigate them; cutting this means alerts dispatch an investigation id instead of calling a runtime",
-	{"aiops", "hitl"}:  "the agent requests a human and the approval policy names agent remediations; cutting this means the policy reads a remediation descriptor rather than the agent's vocabulary",
 	{"aiops", "loop"}:  "the agent kernel drives the loop and the loop builds the agent's prompts; this is the largest cycle in the tree and the reason the registry seam (decision 104) exists",
 }
 
