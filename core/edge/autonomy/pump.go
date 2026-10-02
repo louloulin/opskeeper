@@ -2,29 +2,34 @@ package autonomy
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/vincent-wuhan/opskeeper/core/edge/spool"
 )
 
-// Sender delivers spooled rows to the control plane.
+// Sender delivers spooled decisions to the control plane.
 //
 // It is an interface because the tunnel is not this package's business: the
-// pump's job is "when the link is back, hand the rows over, slowly", and the
-// link's job is how to get them there. A node that has been offline for a
-// week has an interesting story to tell, and a node that tells it in one
+// pump's job is "when the link is back, hand the rows over, slowly", and
+// the link's job is how to get them there. A node that has been offline for
+// a week has an interesting story to tell, and a node that tells it in one
 // request is a node the center cannot tell apart from an attack.
 //
-// The rate limit below is not politeness. Replaying a week of decisions in a
+// The rate limit is not politeness. Replaying a week of decisions in a
 // single burst lands on the same endpoint as every other node's reconnect at
 // the same moment, and the audit chain that is supposed to record what the
 // fleet did during the outage is exactly the thing that goes down under it.
+//
+// The pump itself is the shared one, for the same reason the spool is: the
+// questions — does the link answer, may we drain now, is a partial delivery
+// a delivery — have one set of answers, and this node has three spools that
+// all need them.
 const (
 	// DefaultReplayBatch is how many rows go up per drain.
-	DefaultReplayBatch = 100
+	DefaultReplayBatch = spool.DefaultBatch
 	// DefaultReplayInterval is how often a drain may happen.
-	DefaultReplayInterval = 5 * time.Second
+	DefaultReplayInterval = spool.DefaultInterval
 )
 
 // Sender is the control-plane side of a replay.
@@ -60,16 +65,11 @@ type PumpOptions struct {
 	Log *slog.Logger
 }
 
-// Pump replays a spool once the control plane is reachable again.
+// Pump replays the audit spool once the control plane is reachable again.
 type Pump struct {
-	spool   *Spool
-	sender  Sender
-	link    Link
-	batch   int
-	every   time.Duration
-	now     func() time.Time
-	log     *slog.Logger
-	lastRun time.Time
+	inner *spool.Pump
+	send  Sender
+	log   *slog.Logger
 }
 
 // NewPump returns a Pump.
@@ -82,24 +82,34 @@ func NewPump(opts PumpOptions) (*Pump, error) {
 	case opts.Link == nil:
 		return nil, &ConfigError{Field: "Link", Reason: "is required: replaying into a closed tunnel loses rows"}
 	}
-	p := &Pump{
-		spool:  opts.Spool,
-		sender: opts.Sender,
-		link:   opts.Link,
-		batch:  opts.Batch,
-		every:  opts.Interval,
-		now:    opts.Now,
-		log:    opts.Log,
+	p := &Pump{send: opts.Sender, log: opts.Log}
+	inner, err := spool.NewPump(spool.PumpOptions{
+		Spool:     opts.Spool.Spool,
+		Batch:     opts.Batch,
+		Interval:  opts.Interval,
+		Now:       opts.Now,
+		Log:       opts.Log,
+		Reachable: func() bool { return opts.Link.Reach().Online },
+		// All-or-nothing, and deliberately: an audit chain with a hole in
+		// it is worse than one that arrives late, so this sender never
+		// reports partial progress even when the tunnel told it which half
+		// it took. There is no "which half" — the sender is a tunnel call
+		// whose failure is a failure.
+		Send: func(ctx context.Context, raw []spool.Row) (int, error) {
+			rows, err := decodeRows(raw)
+			if err != nil {
+				return 0, err
+			}
+			if err := p.send.Send(ctx, rows); err != nil {
+				return 0, err
+			}
+			return len(rows), nil
+		},
+	})
+	if err != nil {
+		return nil, &ConfigError{Field: "Pump", Reason: err.Error()}
 	}
-	if p.batch <= 0 {
-		p.batch = DefaultReplayBatch
-	}
-	if p.every <= 0 {
-		p.every = DefaultReplayInterval
-	}
-	if p.now == nil {
-		p.now = time.Now
-	}
+	p.inner = inner
 	return p, nil
 }
 
@@ -110,35 +120,7 @@ func NewPump(opts PumpOptions) (*Pump, error) {
 // link down, interval not elapsed, nothing spooled — returns zero and is
 // not an error, because the common case is a node that is simply not
 // supposed to be talking to anyone.
-func (p *Pump) DrainOnce(ctx context.Context) (int, error) {
-	if !p.link.Reach().Online {
-		return 0, nil
-	}
-	now := p.now()
-	if !p.lastRun.IsZero() && now.Sub(p.lastRun) < p.every {
-		return 0, nil
-	}
-
-	rows, err := p.spool.Peek(p.batch)
-	if err != nil {
-		return 0, err
-	}
-	if len(rows) == 0 {
-		return 0, nil
-	}
-	if err := p.sender.Send(ctx, rows); err != nil {
-		// Nothing is acked. The rows stay, and the next drain tries them
-		// again in the same order — a partially delivered chain is not a
-		// chain, so the ack is all-or-nothing.
-		p.logf("autonomy replay failed", "rows", len(rows), "error", err)
-		return 0, fmt.Errorf("autonomy: replay %d rows: %w", len(rows), err)
-	}
-	if err := p.spool.Ack(len(rows)); err != nil {
-		return 0, err
-	}
-	p.lastRun = now
-	return len(rows), nil
-}
+func (p *Pump) DrainOnce(ctx context.Context) (int, error) { return p.inner.DrainOnce(ctx) }
 
 // Run drains on a ticker until the context ends.
 //
@@ -146,31 +128,7 @@ func (p *Pump) DrainOnce(ctx context.Context) (int, error) {
 // has just come back from an outage has rows the operator is waiting to
 // read, and making them wait five seconds for no reason is the difference
 // between a story and a mystery.
-func (p *Pump) Run(ctx context.Context) error {
-	ticker := time.NewTicker(p.every)
-	defer ticker.Stop()
-	for {
-		if _, err := p.DrainOnce(ctx); err != nil && ctx.Err() == nil {
-			// A failed drain is logged and retried; it is not fatal,
-			// because the only thing that ends this loop is the node
-			// stopping or the link going away again.
-			if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-				p.logf("autonomy replay will be retried", "error", err)
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
+func (p *Pump) Run(ctx context.Context) error { return p.inner.Run(ctx) }
 
 // Pending reports how many rows are waiting to go.
-func (p *Pump) Pending() (int, error) { return p.spool.Len() }
-
-func (p *Pump) logf(msg string, args ...any) {
-	if p.log != nil {
-		p.log.Error(msg, args...)
-	}
-}
+func (p *Pump) Pending() (int, error) { return p.inner.Pending() }

@@ -162,9 +162,28 @@ func main() {
 	if stageDir == "" {
 		stageDir = "/var/lib/opskeeper-edge/.upgrade"
 	}
+	// Telemetry write-ahead log. Same systemd-install layout as the
+	// upgrade stage and the plugin work dir, with the same escape hatch,
+	// and the same reason: a node that cannot write here still starts and
+	// still heartbeats — it just loses samples while the link is down,
+	// which the agent logs rather than hides.
+	telemetryWALDir := os.Getenv("OPSKEEPER_EDGE_TELEMETRY_WAL_DIR")
+	if telemetryWALDir == "" {
+		telemetryWALDir = "/var/lib/opskeeper-edge/telemetry"
+	}
+
+	// The change watcher's durable log gets its own directory, because the
+	// two logs are graded by one policy table and stored in two files, and
+	// an operator who clears "the log" should not have to guess which.
+	changeEventWALDir := os.Getenv("OPSKEEPER_EDGE_CHANGE_EVENT_WAL_DIR")
+	if changeEventWALDir == "" {
+		changeEventWALDir = "/var/lib/opskeeper-edge/changes"
+	}
 	agent := edgebiz.NewAgent(client, collector, edgebiz.Config{
-		MetricsInterval: cfg.Edge.CollectorInterval,
-		AgentVersion:    version,
+		MetricsInterval:   cfg.Edge.CollectorInterval,
+		AgentVersion:      version,
+		TelemetryWALDir:   telemetryWALDir,
+		ChangeEventWALDir: changeEventWALDir,
 		// The same value install-time admission compares
 		// min_pig_version against, so the control plane's pre-flight and
 		// this node's own verdict can never be looking at two different

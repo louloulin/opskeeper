@@ -9,12 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 
 	"github.com/vincent-wuhan/opskeeper/core/edge/changewatcher"
 	skilldispatch "github.com/vincent-wuhan/opskeeper/core/edge/skill"
+	"github.com/vincent-wuhan/opskeeper/core/edge/telemetrywal"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
@@ -81,6 +83,32 @@ type Config struct {
 	// MethodAgentUpgrade handler entirely (useful for dev where systemd
 	// isn't available — manager will see "method not found").
 	UpgradeStageDir string
+
+	// TelemetryWALDir is where the node's telemetry write-ahead log
+	// lives. Empty turns the log off.
+	//
+	// Off is not a small difference: with no directory the agent samples
+	// and pushes in one step, and a push that fails loses that sample,
+	// which is what the plan's 1.1 is about. It is a legitimate setting
+	// for a development node and a wrong one for a fleet, so the
+	// production wiring sets it and the empty case is documented as the
+	// old behaviour rather than as a default.
+	TelemetryWALDir string
+	// TelemetryDrainInterval bounds how often the log is drained.
+	// Default telemetrywal.DefaultInterval. Raising it trades recovery
+	// latency for a gentler load on the center.
+	TelemetryDrainInterval time.Duration
+
+	// ChangeEventWALDir is where the change watcher's durable log lives.
+	// Empty turns it off, which means a failed flush loses the batch —
+	// the behaviour this node shipped with for years, and the one the
+	// plan's 1.1 is about.
+	//
+	// It is a separate directory from the telemetry log because the two
+	// are graded by the same table and stored in different files, and
+	// sharing one directory would mean an operator who clears "the log"
+	// has to guess which of the two they are clearing.
+	ChangeEventWALDir string
 }
 
 // Agent is the edge run-loop. It owns the tunnel.Client, periodic
@@ -102,6 +130,18 @@ type Agent struct {
 	// systemd run ExecStartPre and swap the binary on restart. Buffered
 	// to size 1 so the handler never blocks on a closed-channel race.
 	upgradeRequested chan struct{}
+
+	// telemetryRejected counts rows the center refused outright. A node
+	// whose rejected count climbs is a node whose collector and the
+	// center's expectations have drifted, and it is the one number in
+	// this file that says "the log is working and the data is wrong".
+	telemetryRejected atomic.Uint64
+
+	// wal is the telemetry write-ahead log. Optional: a node with no
+	// TelemetryWALDir pushes straight at the tunnel, which is the
+	// pre-1.1 behaviour and is why this is a pointer and not a zero
+	// value.
+	wal *telemetrywal.WAL
 
 	// pluginHealthFn, when set, returns the current per-plugin health to
 	// piggyback on each heartbeat. Wired post-construction (SetPluginHealthFn)
@@ -176,6 +216,16 @@ func (l *linkState) observe(ok bool, now time.Time) {
 		l.online = false
 		l.offlineSince = now
 	}
+}
+
+// online is the heartbeat's last word, for callers that only need the
+// yes or the no. It is the same witness LinkReach reports, so a node
+// cannot tell its autonomy arbiter it is connected while telling its
+// telemetry drain it is not.
+func (l *linkState) isOnline() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.online
 }
 
 func (l *linkState) reach() (bool, time.Time) {
@@ -290,6 +340,27 @@ func NewAgent(client tunnel.Client, collector Collector, cfg Config, log *slog.L
 	// a node that believes it is offline before its first heartbeat would
 	// start an outage clock nobody has declared.
 	a.link.online = true
+	if cfg.TelemetryWALDir != "" {
+		wal, err := telemetrywal.Open(telemetrywal.Options{
+			Dir:      cfg.TelemetryWALDir,
+			Interval: cfg.TelemetryDrainInterval,
+			Log:      log.With(slog.String("comp", "telemetrywal")),
+		})
+		if err != nil {
+			// Loud, and then carry on. A node that refuses to start
+			// because its log directory is not writable would take
+			// metrics, the tunnel and every RPC with it, and the WAL
+			// exists to stop losing data — not to become the most
+			// fragile thing on the node. The consequence is exactly the
+			// old behaviour plus this line, which is the trade a
+			// misconfigured directory should get.
+			log.Error("telemetry write-ahead log unavailable; falling back to direct push, and samples lost while the link is down are lost",
+				slog.String("dir", cfg.TelemetryWALDir),
+				slog.Any("err", err))
+		} else {
+			a.wal = wal
+		}
+	}
 	return a
 }
 
@@ -363,6 +434,25 @@ func (a *Agent) Run(ctx context.Context) error {
 	eg.Go(func() error { return a.heartbeatLoop(egCtx) })
 	eg.Go(func() error { return a.metricsLoop(egCtx) })
 
+	// The telemetry drain. It is a sibling of the sampling loop rather
+	// than part of it, because the two have opposite shapes: sampling is
+	// paced by the collector and must not be delayed by the network,
+	// while draining is paced by what the center can absorb. Folding them
+	// together would mean every slow push also delayed the next sample,
+	// which is how a node ends up sampling less often because the center
+	// is busy.
+	//
+	// The link predicate is the same witness the autonomy arbiter reads,
+	// so a node cannot believe it is disconnected for one subsystem and
+	// connected for another.
+	if a.wal != nil {
+		eg.Go(func() error { return a.wal.Run(egCtx, a.link.isOnline, a.drainBatches) })
+		// The log is closed on the way out rather than left to the
+		// process: a deferred close is what makes the last rows durable
+		// when a systemd stop lands mid-tick.
+		defer func() { _ = a.wal.Close() }()
+	}
+
 	// Relay the agent's output to the manager. This returns immediately;
 	// the relay is on its own goroutine inside the bridge. A node whose
 	// agent is not up yet still serves agent.state and agent.health, so
@@ -380,12 +470,21 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	// 5. 边缘 changewatcher (journald / dockerd / packagemgr) → TunnelSink → manager.
 	// 启动失败仅 log warn, 不阻塞 agent (fail-soft: changewatcher 是 opt-in 能力).
-	tunSink := changewatcher.NewTunnelSink(a.client, a.log, changewatcher.TunnelSinkSinkConfig{})
+	tunSink := changewatcher.NewTunnelSink(a.client, a.log, changewatcher.TunnelSinkSinkConfig{
+		WALDir: a.cfg.ChangeEventWALDir,
+	})
 	watcher := changewatcher.New(tunSink, a.log)
 	watcherStop := watcher.Start(egCtx)
 	eg.Go(func() error { tunSink.Run(egCtx); return nil })
 	// 进程退出前 Close 强制 flush 残余事件.
-	defer func() { _ = tunSink.Close(); watcherStop() }()
+	defer func() {
+		_ = tunSink.Close()
+		// The event log's file handle is released on the same path, so a
+		// systemd stop does not leave a node that has written its last
+		// row and cannot read it back.
+		_ = tunSink.CloseLog()
+		watcherStop()
+	}()
 	// One extra goroutine watches the upgrade-staged signal — return a
 	// sentinel error (NOT nil) so errgroup.WithContext cancels egCtx and
 	// the heartbeat / metrics loops unwind. Returning nil leaves the
@@ -641,19 +740,33 @@ const tunnelStuckThreshold = 5
 // returns this error so systemd (Restart=always) respawns the process.
 var errTunnelStuck = errors.New("tunnel stuck: heartbeat failed N times")
 
-// metricsLoop samples the collector every MetricsInterval and fans out
-// the result to the legacy push_host_metrics path and the new
-// push_prom_samples path. One push per source — multi-target scrape
-// produces one push_host_metrics + one push_prom_samples per target.
+// metricsLoop samples the collector every MetricsInterval and hands each
+// result to the write-ahead log, which is what sends it.
 //
-// On either push failure, the corresponding output is dropped and the
-// next tick retries with fresh data; we deliberately do not buffer
-// open-set samples on the edge because Prometheus remote_write expects
-// timely delivery and stale samples are useless.
+// The order is the whole of the plan's 1.1. This used to push straight at
+// the tunnel, and a push that failed lost the sample: the loop logged it
+// and the next tick produced a fresh one. For a dashboard that is
+// invisible — a missing point is indistinguishable from a quiet host. For
+// an investigation it is not, because the question an operator asks at
+// 09:00 is "what did this node look like at 03:00", and the machine that
+// knew was the machine that could not reach anybody.
+//
+// The old comment here said that open-set samples are deliberately not
+// buffered because "Prometheus remote_write expects timely delivery and
+// stale samples are useless". Both halves of that are true and the
+// conclusion drawn from them was wrong. Staleness is real, and the answer
+// to it is a horizon — a row that is half an hour old is dropped because
+// the store would refuse it anyway, not because every row should be
+// dropped whenever the link is down. A node that loses a whole outage
+// because it resolved staleness by discarding data is not being careful
+// about staleness, it is discarding data.
+//
+// Sampling never blocks on the log. If the log cannot take a row, the row
+// is lost and the loss is logged loudly: turning a telemetry problem into
+// an availability problem is not a trade this loop is allowed to make.
 func (a *Agent) metricsLoop(ctx context.Context) error {
 	t := time.NewTicker(a.cfg.MetricsInterval)
 	defer t.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -666,67 +779,124 @@ func (a *Agent) metricsLoop(ctx context.Context) error {
 			}
 			for _, out := range outs {
 				a.latest.observe(out.Samples)
-				a.pushOne(ctx, out)
+				if a.wal == nil {
+					// No log configured: the pre-1.1 path, push and
+					// lose it on failure. Kept because a development
+					// node with no data directory should still produce
+					// metrics, not refuse to.
+					if err := a.pushBatch(ctx, toBatch(out)); err != nil {
+						a.log.Warn("agent: push failed; this sample is gone",
+							slog.String("source", out.Source),
+							slog.Any("err", err))
+					}
+					continue
+				}
+				if err := a.wal.Record(ctx, toBatch(out)); err != nil {
+					a.log.Error("agent: telemetry log write failed; this sample is gone",
+						slog.String("source", out.Source),
+						slog.Any("err", err))
+				}
+			}
+			if a.wal != nil {
+				// The nudge is what keeps a healthy node's latency at one
+				// loop turn rather than one drain interval. The interval
+				// still bounds the rate; this only removes the wait.
+				a.wal.Nudge()
 			}
 		}
 	}
 }
 
-// pushOne emits one CollectorOutput's two halves (HostPoint and Samples)
-// to cloud. Errors are logged but never propagate — the next tick is
-// the only retry strategy here.
-func (a *Agent) pushOne(ctx context.Context, out CollectorOutput) {
+// toBatch converts a collection result into what the log stores.
+//
+// The stored shape is the shape the two push methods already take, because
+// the drain has to re-issue the same calls the live path issues. A log that
+// introduced its own envelope on the way back would need a new wire
+// method, and a new wire method is something the manager has to be able to
+// roll back.
+func toBatch(out CollectorOutput) telemetrywal.Batch {
+	b := telemetrywal.Batch{Source: out.Source, Samples: out.Samples}
+	if out.HostPointValid {
+		point := out.HostPoint
+		b.HostPoint = &point
+	}
+	return b
+}
+
+// drainBatches is the write-ahead log's sender: it takes a batch of stored
+// rows and puts them on the wire, reporting how many the center now has.
+//
+// The stop condition is what makes this safe to run forever. A transport
+// failure stops the drain and leaves everything in place, because the next
+// attempt will probably work. A *rejection* does not: the center has
+// already said it will not take those samples, and retrying them at the
+// drain interval would be a node asking the same question forever. So a
+// rejected batch is counted, passed over, and the drain moves on — the
+// alternative is a single permanently-refusable row wedging the queue and
+// the node going quiet for good, which is the exact failure the log was
+// installed to prevent.
+func (a *Agent) drainBatches(ctx context.Context, batches []telemetrywal.Batch) (int, error) {
+	for i, b := range batches {
+		if err := a.pushBatch(ctx, b); err != nil {
+			return i, err
+		}
+	}
+	return len(batches), nil
+}
+
+// pushBatch emits one batch's two halves and reports only what can be
+// retried.
+//
+// A nil error means the batch will never be accepted by a later attempt
+// either — it either went out, or the center refused it and said so. An
+// error means the transport failed and the whole batch stays on disk.
+func (a *Agent) pushBatch(ctx context.Context, b telemetrywal.Batch) error {
 	// 1) legacy fast path: push_host_metrics with one point, but only
 	// for the selected host source. Component scrape targets should not
 	// populate dashboard/alert fast-path rows.
-	if out.HostPointValid {
-		rctx1, cancel1 := context.WithTimeout(ctx, 15*time.Second)
-		var resp1 tunnel.PushHostMetricsResponse
-		err := a.client.Call(rctx1, tunnel.MethodPushHostMetrics,
+	if b.HostPoint != nil {
+		rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		var resp tunnel.PushHostMetricsResponse
+		err := a.client.Call(rctx, tunnel.MethodPushHostMetrics,
 			tunnel.PushHostMetricsRequest{
 				EdgeID: a.EdgeID(),
-				Points: []tunnel.HostMetricPoint{out.HostPoint},
-			}, &resp1)
-		cancel1()
+				Points: []tunnel.HostMetricPoint{*b.HostPoint},
+			}, &resp)
+		cancel()
 		if err != nil {
-			a.log.Warn("agent: push_host_metrics failed",
-				slog.String("source", out.Source),
-				slog.Any("err", err),
-			)
-		} else {
-			a.log.Debug("agent: pushed host metrics",
-				slog.String("source", out.Source),
-				slog.Int("accepted", int(resp1.Accepted)),
-			)
+			return err
+		}
+		if resp.Accepted < 1 {
+			a.telemetryRejected.Add(1)
+			a.log.Warn("agent: host metric point refused by the center; it will not be retried",
+				slog.String("source", b.Source))
 		}
 	}
 
 	// 2) open-set rich path: push_prom_samples
-	if len(out.Samples) == 0 {
-		return
+	if len(b.Samples) == 0 {
+		return nil
 	}
-	rctx2, cancel2 := context.WithTimeout(ctx, 15*time.Second)
-	var resp2 tunnel.PushPromSamplesResponse
-	err := a.client.Call(rctx2, tunnel.MethodPushPromSamples,
+	rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	var resp tunnel.PushPromSamplesResponse
+	err := a.client.Call(rctx, tunnel.MethodPushPromSamples,
 		tunnel.PushPromSamplesRequest{
 			EdgeID:  a.EdgeID(),
-			Source:  out.Source,
-			Samples: out.Samples,
-		}, &resp2)
-	cancel2()
+			Source:  b.Source,
+			Samples: b.Samples,
+		}, &resp)
+	cancel()
 	if err != nil {
-		a.log.Warn("agent: push_prom_samples failed",
-			slog.String("source", out.Source),
-			slog.Int("samples", len(out.Samples)),
-			slog.Any("err", err),
-		)
-		return
+		return err
 	}
-	a.log.Debug("agent: pushed prom samples",
-		slog.String("source", out.Source),
-		slog.Int("samples", len(out.Samples)),
-		slog.Int("accepted", resp2.Accepted),
-	)
+	if int(resp.Accepted) < len(b.Samples) {
+		a.telemetryRejected.Add(uint64(len(b.Samples) - int(resp.Accepted)))
+		a.log.Warn("agent: samples refused by the center; the batch will not be retried",
+			slog.String("source", b.Source),
+			slog.Int("sent", len(b.Samples)),
+			slog.Int("accepted", resp.Accepted))
+	}
+	return nil
 }
 
 // noopCollector is used when the Phase 1 New() constructor is still in

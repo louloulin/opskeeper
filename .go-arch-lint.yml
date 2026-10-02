@@ -189,6 +189,16 @@ components:
   # 执行命令」的组件，所以它的依赖面被压到只有契约层：能加进来的东西越少，
   # 越不会有人在半年后往里面加一个「顺手」的执行路径。
   oxedge_autonomy: { in: core/edge/autonomy/** }
+  # 决策 99：节点上唯一的落盘缓冲原语。自治审计、遥测 WAL、变更事件三处共用
+  # 一份实现，所以它必须是这三条路径里依赖面最小的一个——只依赖标准库。
+  # 谁往里面加一个「顺手」的 import，这个组件就会长出一条谁也没评审过的边，
+  # 而它下面是节点唯一一份没有备份的本地数据。
+  oxedge_spool:       { in: core/edge/spool/** }
+  # 决策 99：遥测写前日志。它是节点唯一一份「写下来是为了以后再发」的数据，
+  # 而写下来这件事本身没有第二个可去的地方——所以它只允许看见落盘原语与
+  # 线上类型，不得直接 import 隧道客户端。发不发是装配根的决定，不是这里
+  # 的决定；一个能自己发出去的 WAL 会在装配根不知道的时候把数据送出去。
+  oxtelemetry_wal:   { in: core/edge/telemetrywal/** }
   oxpig_wire:       { in: core/pig/pigwire/** }
   oxplugin_sdk:     { in: sdk/** }
   oxharness_schema:    { in: core/harness/schema/** }
@@ -366,7 +376,7 @@ deps:
   oxedge_service:
     mayDependOn: [oxedge_biz, oxfloor]
   oxedge_biz:
-    mayDependOn: [oxedge_model, oxedge_runtime, oxcore_ports, oxcore_wire, oxfloor]
+    mayDependOn: [oxedge_model, oxedge_runtime, oxcore_ports, oxcore_wire, oxfloor, oxtelemetry_wal]
   oxedge_model:
     # No project grants: nothing in this component imports another
     # project component today.
@@ -512,11 +522,25 @@ deps:
   # could decide could approve its own calls.
   oxedge_toolbroker:
     mayDependOn: [oxcore_wire, oxfloor]
-  # 仲裁器只依赖契约层。刻意不给 oxfloor（skill/spill 那一侧）：自治动作的
-  # argv 由调用方的 Runner 执行，本包不持有任何执行能力，持有执行能力的地
-  # 方才需要被约束。
+  # 仲裁器只依赖契约层与落盘缓冲。刻意不给 oxfloor（skill/spill 那一侧）：
+  # 自治动作的 argv 由调用方的 Runner 执行，本包不持有任何执行能力，持有
+  # 执行能力的地方才需要被约束。
+  #
+  # 决策 99 之后多出的 oxedge_spool 边只通向一个纯文件原语，不通向任何执行
+  # 能力——能加进来的东西越少，越不会有人在半年后往里面加一条「顺手就能跑起来」
+  # 的路径。
   oxedge_autonomy:
-    mayDependOn: [oxcore_domain]
+    mayDependOn: [oxcore_domain, oxedge_spool]
+  # 落盘缓冲只依赖标准库：文件、json、时间。这不是「暂时还没用到别的」，而是
+  # 这个组件存在的理由——它下面躺着节点唯一一份没有副本的本地数据，依赖面越小，
+  # 它能被拉去做什么就越可预测。
+  oxedge_spool:
+    mayDependOn: []
+  oxtelemetry_wal:
+    # 只到落盘原语与线上契约。刻意不给 oxedge_runtime / oxedge_biz：日志不该
+    # 知道 agent 怎么采样、也不该自己调隧道。少两条边，就少两个「顺手在这里
+    # 直接发出去」的机会。
+    mayDependOn: [oxedge_spool, oxfloor]
   # pigwire translates PiG's stream into the frozen SSE frames. It reaches
   # the contract layer only - the translation is the whole component.
   oxpig_wire:
@@ -684,7 +708,15 @@ deps:
   # 这些组件此前没有 deps 条目，于是每一次合法 import 都报一条 warning。
   # 规则不变：底座与运行时不得依赖任何 BC，只允许依赖契约层和自己。
   oxedge_runtime:
-    mayDependOn: [oxedge_runtime, oxfloor]
+    # 决策 99 之后多出两条边，都是给 changewatcher 的落盘日志用的：
+    #
+    #   oxedge_spool     落盘原语本身
+    #   oxtelemetry_wal  只为了那张分级丢弃策略表——两个日志问的是同一个
+    #                    问题（「满了先丢哪个」），两份答案就是两个没人能
+    #                    同时看见的答案。策略表住在 telemetrywal 是因为
+    #                    它本来就是节点遥测的词汇表，而落盘原语保持通用：
+    #                    以后还会有第三、第四个用户，它们不该继承遥测词汇。
+    mayDependOn: [oxedge_runtime, oxfloor, oxedge_spool, oxtelemetry_wal]
   oxharness_projection:
     mayDependOn: [oxharness_judge]
   oxharness_vocabulary:

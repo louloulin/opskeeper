@@ -305,8 +305,16 @@ func TestAFailedReplayKeepsItsRows(t *testing.T) {
 // gone, the outage is over and nobody is reading the log.
 func TestTheSpoolDropsItsOldestRowsWhenItFills(t *testing.T) {
 	// A cap small enough that a few hundred rows overflow it, and large
-	// enough that the floor of a hundred rows still fits.
-	s := newSpool(t, 32*1024)
+	// enough that the floor of a hundred rows still fits inside it.
+	//
+	// The second half of that sentence is load-bearing, and it was learned
+	// the hard way. The cap used to be 32 KiB, which happened to fit 100
+	// rows of the old line format to the byte — and stopped fitting the
+	// moment the row grew an envelope. A floor that overruns the cap is
+	// not a generous floor, it is a full disk, so the cap is now the hard
+	// bound and this test uses a number with room in it rather than a
+	// number that happens to work today.
+	s := newSpool(t, 64*1024)
 	ctx := context.Background()
 	for i := 0; i < 2000; i++ {
 		if err := s.Record(ctx, row(fmt.Sprintf("key-%04d", i), ResultOK)); err != nil {
@@ -317,7 +325,7 @@ func TestTheSpoolDropsItsOldestRowsWhenItFills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if info.Size() > 32*1024 {
+	if info.Size() > 64*1024 {
 		t.Errorf("size = %d, want it inside the cap", info.Size())
 	}
 	rows, err := s.Peek(0)
@@ -342,7 +350,7 @@ func TestTheSpoolDropsItsOldestRowsWhenItFills(t *testing.T) {
 // reader can parse is a spool that has silently lost everything, including
 // the rows it kept.
 func TestTheSpoolIsReadableAfterCompaction(t *testing.T) {
-	s := newSpool(t, 32*1024)
+	s := newSpool(t, 64*1024)
 	ctx := context.Background()
 	for i := 0; i < 2000; i++ {
 		if err := s.Record(ctx, row(fmt.Sprintf("key-%04d", i), ResultOK)); err != nil {
