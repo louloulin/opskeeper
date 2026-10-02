@@ -80,7 +80,35 @@ type Wiring struct {
 	// toolset that needs no round trip should not go down with the half
 	// that does.
 	AgentTools AgentToolRunner
-	Log        *slog.Logger
+	// AutonomyReplay receives the audit rows a node wrote while it was
+	// disconnected and re-ran on its own, so the control plane's chain
+	// records what the fleet did during the outage.
+	//
+	// Optional, and nil is the state of every fleet that runs today's
+	// packages: a node whose manifests declare no autonomy never produces
+	// a row. When it is nil the handler does not install and the node's
+	// pump keeps the rows on disk, which loses nothing and is visible on
+	// the node's health line.
+	AutonomyReplay AutonomyReplayRecorder
+	Log            *slog.Logger
+}
+
+// AutonomyReplayRecorder turns a batch of a node's self-heal rows into
+// entries in the control plane's audit chain.
+//
+// It returns how many rows it took and how many it refused, plus an error
+// for the case the node must retry. The three outcomes map onto three
+// different things the node should do, and collapsing them is how a
+// backlog is lost:
+//
+//   - err != nil: the chain could not be written (database down, chain
+//     contention). The node keeps the whole batch and asks again.
+//   - rejected > 0: rows the chain will never take because their *shape*
+//     is wrong — a missing action, an unknown phase. Retrying is a node
+//     asking the same question forever, so these are counted and passed.
+//   - accepted: rows now in the chain for good. The node acks these.
+type AutonomyReplayRecorder interface {
+	RecordAutonomyReplay(ctx context.Context, edgeID uint64, rows []tunnel.AutonomyAuditRow) (accepted, rejected int, err error)
 }
 
 // AgentToolRunner runs one control-plane tool for a node's agent.
@@ -388,10 +416,30 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 			if err := json.Unmarshal(body, &in); err != nil {
 				return nil, fmt.Errorf("push_change_events: decode: %w", err)
 			}
+			// The transport's binding wins whenever it exists, which on a
+			// real connection it always does: EdgeOnline resolved it from
+			// the access key before the node could push anything. A body
+			// that names a different edge is therefore not a re-binding
+			// request, it is a claim the node cannot make — and this is the
+			// one handler where believing it would write one host's
+			// self-heal history under another host's name, into a ledger
+			// that is supposed to be evidence.
+			//
+			// A transport with *no* binding yet is the first-connect race,
+			// and there the body's id is accepted as the binding, exactly
+			// as push_host_metrics accepts it. The alternative — deferring
+			// forever because the handshake has not landed — is what
+			// Accepted=0 below already covers.
 			canonicalEdgeID := c.canonicalizeEdgeID(edgeID)
-			if in.EdgeID != 0 {
+			switch {
+			case canonicalEdgeID == 0 && in.EdgeID != 0:
 				canonicalEdgeID = in.EdgeID
 				c.bindEdgeTransport(edgeID, canonicalEdgeID)
+			case canonicalEdgeID != 0 && in.EdgeID != 0 && in.EdgeID != canonicalEdgeID:
+				log.Warn("frontierbound: autonomy replay named an edge the transport did not authenticate as; using the transport's binding",
+					slog.Uint64("edge_id", canonicalEdgeID),
+					slog.Uint64("transport_edge_id", edgeID),
+					slog.Uint64("claimed_edge_id", in.EdgeID))
 			}
 			if canonicalEdgeID == 0 {
 				// Edge hasn't completed register_edge yet; accept but record 0,
@@ -551,6 +599,85 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 			return []byte(`{}`), nil
 		}); err != nil {
 			return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodAgentEvent, err)
+		}
+	}
+
+	// agent.audit.replay: a node handing over the self-heal decisions it
+	// made while the control plane was away, so the center's chain can
+	// record them.
+	//
+	// The transport's edge id wins over the body's, exactly as it does on
+	// agent.event: the connection authenticated as one node, and a batch
+	// that claimed another node's id would otherwise let one host write
+	// self-heal history onto another host's ledger entry.
+	//
+	// A response with Accepted=0 and no error is not a failure it can act
+	// on — the node treats a partial accept as "the chain took this much"
+	// and keeps the rest — so the handler only returns an error when the
+	// whole store is unreachable, which is the node's signal to hold
+	// everything and retry.
+	if w.AutonomyReplay != nil {
+		if err := c.Register(ctx, tunnel.MethodAgentAuditReplay, func(rpcCtx context.Context, edgeID uint64, body []byte) ([]byte, error) {
+			var in tunnel.AutonomyAuditReplayRequest
+			if err := json.Unmarshal(body, &in); err != nil {
+				// A body this manager cannot parse is the node's bug, and
+				// it will be the same body next time. Answer with a
+				// refusal count rather than an RPC error so the node does
+				// not wedge its backlog on one malformed row.
+				log.Warn("frontierbound: agent.audit.replay decode failed",
+					slog.Uint64("edge_id", edgeID), slog.Any("err", err))
+				return json.Marshal(tunnel.AutonomyAuditReplayResponse{
+					Accepted: 0, Rejected: 0, Reason: "malformed replay body",
+				})
+			}
+			// The transport's binding wins whenever it exists, which on a
+			// real connection it always does: EdgeOnline resolved it from
+			// the access key before the node could push anything. A body
+			// that names a different edge is therefore not a re-binding
+			// request, it is a claim the node cannot make — and this is the
+			// one handler where believing it would write one host's
+			// self-heal history under another host's name, into a ledger
+			// that is supposed to be evidence.
+			//
+			// A transport with *no* binding yet is the first-connect race,
+			// and there the body's id is accepted as the binding, exactly
+			// as push_host_metrics accepts it. The alternative — deferring
+			// forever because the handshake has not landed — is what
+			// Accepted=0 below already covers.
+			canonicalEdgeID := c.canonicalizeEdgeID(edgeID)
+			switch {
+			case canonicalEdgeID == 0 && in.EdgeID != 0:
+				canonicalEdgeID = in.EdgeID
+				c.bindEdgeTransport(edgeID, canonicalEdgeID)
+			case canonicalEdgeID != 0 && in.EdgeID != 0 && in.EdgeID != canonicalEdgeID:
+				log.Warn("frontierbound: autonomy replay named an edge the transport did not authenticate as; using the transport's binding",
+					slog.Uint64("edge_id", canonicalEdgeID),
+					slog.Uint64("transport_edge_id", edgeID),
+					slog.Uint64("claimed_edge_id", in.EdgeID))
+			}
+			if canonicalEdgeID == 0 {
+				// Not registered yet. Accepted=0 makes the node keep the
+				// rows and try again once the binding lands, which is the
+				// same handshake the metrics path uses.
+				log.Debug("frontierbound: agent.audit.replay deferred (no canonical edge yet)",
+					slog.Uint64("transport_edge_id", edgeID),
+					slog.Int("rows", len(in.Rows)))
+				return json.Marshal(tunnel.AutonomyAuditReplayResponse{Accepted: 0})
+			}
+			accepted, rejected, err := w.AutonomyReplay.RecordAutonomyReplay(rpcCtx, canonicalEdgeID, in.Rows)
+			if err != nil {
+				log.Warn("frontierbound: autonomy replay failed; the node will retry",
+					slog.Uint64("edge_id", canonicalEdgeID),
+					slog.Int("rows", len(in.Rows)),
+					slog.Any("err", err))
+				return nil, fmt.Errorf("agent.audit.replay: %w", err)
+			}
+			return json.Marshal(tunnel.AutonomyAuditReplayResponse{
+				Accepted: accepted,
+				Rejected: rejected,
+			})
+		}); err != nil {
+			return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodAgentAuditReplay, err)
 		}
 	}
 

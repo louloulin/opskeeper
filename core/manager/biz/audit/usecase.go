@@ -8,7 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	store "github.com/vincent-wuhan/opskeeper/core/manager/data/audit/store"
@@ -194,6 +196,133 @@ func (u *Usecase) EmitWithID(ctx context.Context, ev Event) (uint64, error) {
 // misconfiguration has exactly one answer everywhere it is asked.
 func (u *Usecase) chainEnabled() bool {
 	return u != nil && u.chain != nil && u.chain.Enabled() && u.chainStore != nil
+}
+
+// AutonomyReplayRow is one self-heal decision as it arrives from a node.
+//
+// It is the manager's own shape rather than core/floor/tunnel's, for the
+// same reason every other biz type here is: the biz layer agrees with the
+// domain, and the transport type agrees with the wire. The frontierbound
+// adapter converts, which keeps a wire change from rippling into the audit
+// ledger's vocabulary.
+type AutonomyReplayRow struct {
+	At        time.Time
+	Action    string
+	Package   string
+	Tool      string
+	Target    string
+	Argv      []string
+	Kind      string
+	Metric    string
+	Threshold float64
+	Key       string
+	Verdict   string
+	Reason    string
+	Phase     string
+	Result    string
+	ExitCode  int
+}
+
+// AutonomyReplayResult reports how a batch was taken.
+type AutonomyReplayResult struct {
+	Accepted int
+	Rejected int
+}
+
+// RecordAutonomyReplay writes a node's self-heal rows into the chain.
+//
+// This is the "补写中心审计链" half of the plan's
+// line: the node writes its decisions locally before they run, and this is
+// where they enter the tamper-evident ledger. Every row goes through
+// EmitWithID, which is the only path that both chain-stamps and reports an
+// ID, so a replayed row is not a second-class entry — it is the same kind of
+// record as one written live by the console.
+//
+// Shape is checked for the **whole batch before any row is written**, and
+// storage then writes the whole batch or fails the whole batch. Both halves
+// are deliberate:
+//
+//   - Checking first means a batch that contains a row the chain cannot
+//     store writes *nothing*. If it wrote a prefix and then failed, the
+//     node's all-or-nothing pump would resend the whole prefix and the
+//     chain — which is append-only and has no dedupe key — would record
+//     those rows twice. Verifying before the first append is what keeps a
+//     retry free of duplicates.
+//   - Rejecting the whole batch on shape rather than the bad row alone is
+//     the same reasoning: a node's own arbiter writes rows that always
+//     carry an action and a phase, so a malformed row is a bug in the
+//     sender rather than data to salvage, and stopping the batch is the
+//     loud outcome an operator can act on.
+//
+// A caller with no chain configured still records: the rows land in the
+// audit_logs table unchained, exactly as any other row would in a
+// deployment with no HMAC key. Losing a node's self-heal history because
+// nobody configured a key would be the worse failure.
+func (u *Usecase) RecordAutonomyReplay(ctx context.Context, edgeID uint64, rows []AutonomyReplayRow) (AutonomyReplayResult, error) {
+	if len(rows) == 0 {
+		return AutonomyReplayResult{}, nil
+	}
+	// Shape pass, before anything is written.
+	for _, r := range rows {
+		if r.Action == "" || r.Phase == "" {
+			u.log.Warn("audit: autonomy replay batch refused for shape; nothing written",
+				slog.Uint64("edge_id", edgeID),
+				slog.String("action", r.Action),
+				slog.String("phase", r.Phase),
+				slog.Int("rows", len(rows)))
+			return AutonomyReplayResult{Rejected: len(rows)}, nil
+		}
+	}
+	var res AutonomyReplayResult
+	for _, r := range rows {
+		status := model.StatusSuccess
+		if r.Verdict != "run" {
+			// A refusal or a deferral is recorded, not dropped: "the node
+			// considered self-healing and decided not to" is exactly what
+			// an investigator wants when asking why an outage was not
+			// mitigated. Denied is the honest status for both.
+			status = model.StatusDenied
+		}
+		_, err := u.EmitWithID(ctx, Event{
+			Role:         "edge",
+			Action:       model.ActionAutonomyExecute,
+			ResourceType: model.ResourceEdge,
+			ResourceID:   strconv.FormatUint(edgeID, 10),
+			ResourceName: r.Package,
+			Status:       status,
+			// The actor is the node, not a user. UserEmail is left empty
+			// rather than invented: an operator reading the row should see
+			// "a node did this", and a synthetic address would make it look
+			// like a person.
+			RequestID: r.Key,
+			Payload: map[string]any{
+				"at":             r.At.UTC().Format(time.RFC3339Nano),
+				"action":         r.Action,
+				"package":        r.Package,
+				"tool":           r.Tool,
+				"target":         r.Target,
+				"argv":           r.Argv,
+				"trigger_kind":   r.Kind,
+				"trigger_metric": r.Metric,
+				"threshold":      r.Threshold,
+				"key":            r.Key,
+				"verdict":        r.Verdict,
+				"reason":         r.Reason,
+				"phase":          r.Phase,
+				"result":         r.Result,
+				"exit_code":      r.ExitCode,
+				// The origin is explicit because this row was not written
+				// by a console operator, and a reader who does not know
+				// that would look for the user who approved it.
+				"origin": "node_autonomy",
+			},
+		})
+		if err != nil {
+			return res, fmt.Errorf("audit: record autonomy replay for edge %d: %w", edgeID, err)
+		}
+		res.Accepted++
+	}
+	return res, nil
 }
 
 // List is the read path for the admin UI.

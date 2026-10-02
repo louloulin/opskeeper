@@ -56,6 +56,23 @@ const (
 	// MethodAgentState, which asks the *process*; this asks the thing
 	// that keeps it alive.
 	MethodAgentHealth = "agent.health"
+	// MethodAgentAuditReplay is edge → manager: the node hands over the
+	// decisions it made on its own while the control plane was away, so
+	// the center's tamper-evident chain can record them.
+	//
+	// It exists because of a sentence in the plan — "每次自治执行写本地审计
+	// spool；隧道恢复后回传，补写中心审计链" — and the half that matters is
+	// the clause after the semicolon. A row that lives only on the node
+	// that made the decision is the node's own account of what it did; the
+	// chain is what makes it evidence. Without this route the spool is a
+	// local diary, and a node whose disk dies takes its self-heal history
+	// with it.
+	//
+	// The node is the sender, so the direction is edge → manager. That is
+	// the same direction as MethodPushHostMetrics, and for the same
+	// reason: the manager cannot pull a batch out of a node it cannot
+	// reach, and the whole point is that the node comes back.
+	MethodAgentAuditReplay = "agent.audit.replay"
 )
 
 // AgentPromptRequest is the wire body for MethodAgentPrompt.
@@ -277,4 +294,82 @@ type AgentDecideResponse struct {
 	Applied bool   `json:"applied"`
 	Code    string `json:"code,omitempty"`
 	Error   string `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------
+// agent.audit.replay (edge -> manager)
+// ---------------------------------------------------------------------
+
+// AutonomyAuditRow is one self-heal decision as the node recorded it.
+//
+// It mirrors core/edge/autonomy.Row field-for-field rather than sharing the
+// type, because core/floor/tunnel is the wire and the wire must not import
+// the node's autonomy package any more than it imports the node's spool.
+// The duplication is the same one every other message in this file already
+// carries, and it is what lets the two sides change shape independently on
+// either side of a version boundary.
+type AutonomyAuditRow struct {
+	// At is when the node wrote the row. The center stamps its own
+	// OccurredAt and keeps this in the payload: the chain's timestamp
+	// must be the time the record entered the chain, and the node's time
+	// is the fact being recorded.
+	At        time.Time `json:"at"`
+	Action    string    `json:"action"`
+	Package   string    `json:"package"`
+	Tool      string    `json:"tool"`
+	Target    string    `json:"target"`
+	Argv      []string  `json:"argv"`
+	Kind      string    `json:"trigger_kind"`
+	Metric    string    `json:"trigger_metric,omitempty"`
+	Threshold float64   `json:"trigger_threshold,omitempty"`
+	Key       string    `json:"idempotency_key"`
+	Verdict   string    `json:"verdict"`
+	Reason    string    `json:"reason,omitempty"`
+	Phase     string    `json:"phase"`
+	Result    string    `json:"result,omitempty"`
+	ExitCode  int       `json:"exit_code,omitempty"`
+}
+
+// AutonomyAuditReplayRequest is one batch of the node's self-heal rows.
+//
+// EdgeID scopes the batch on a shared manager connection, exactly as it does
+// on the metrics and change-event pushes. The manager binds it to the
+// authenticated edge identity rather than trusting it, so a compromised node
+// cannot attribute its decisions to another.
+type AutonomyAuditReplayRequest struct {
+	EdgeID uint64             `json:"edge_id,omitempty"`
+	Rows   []AutonomyAuditRow `json:"rows"`
+}
+
+// AutonomyAuditReplayResponse reports how the chain took the batch.
+//
+// The two counts are what the node acks its spool against, and the pair
+// they form is deliberately not three states but two:
+//
+//   - accepted == len(rows): the chain has all of it. The node may forget
+//     the batch.
+//   - accepted == 0, rejected > 0: the batch was refused **whole** for
+//     shape. Nothing was written. The refusal is not retried — the rows
+//     will have the same shape next time — so the node counts them,
+//     passes them, and logs it.
+//
+// There is no partial accept, and that is the design rather than an
+// omission. The chain is an ordered append-only ledger with no dedupe key,
+// and the node's pump retries a batch all-or-nothing. If the center wrote
+// a prefix and then failed, the node would resend that prefix and the
+// chain would record it twice — so a batch is written whole or not at
+// all, and the center's answer only ever describes those two outcomes.
+//
+// The *third* answer a node has to distinguish is the one where the
+// numbers (0, 0) arrive with no error, which means the manager could not
+// place the rows yet — an unregistered edge, or a body it could not read.
+// Decision 100's rule applies here unchanged: "took none" is not "refused
+// all", and the node keeps the batch and asks again.
+type AutonomyAuditReplayResponse struct {
+	Accepted int `json:"accepted"`
+	// Rejected counts rows the center refused for shape (a missing action,
+	// an unknown phase). It is always either 0 or len(rows); see above.
+	Rejected int `json:"rejected"`
+	// Reason explains a non-zero Rejected count for the node's log.
+	Reason string `json:"reason,omitempty"`
 }

@@ -534,8 +534,16 @@ deps:
   # 落盘缓冲只依赖标准库：文件、json、时间。这不是「暂时还没用到别的」，而是
   # 这个组件存在的理由——它下面躺着节点唯一一份没有副本的本地数据，依赖面越小，
   # 它能被拉去做什么就越可预测。
+  # `mayDependOn: []` 不表达「谁都不许依赖」。go-arch-lint 的 spec 校验会
+  # 把它读成配置错误并**拒绝运行整份文件**——上面那段注释（「用省略规则来
+  # 表达『什么都不依赖』」）说的正是这件事，而决策 99 落地时这里写反了。
+  # 后果不是一条规则失效，是 `make arch-lint-run` 从 8fefe7b 起一次也没跑
+  # 通过：本应由它拦住的越界，那几天一条都没被拦住。
+  #
+  # anyVendorDeps 是文档给出的写法，也是 oxedge_model 等组件已经在用的写法：
+  # 允许第三方库（.go-arch-lint.yml 全局本就允许），不允许任何本项目组件。
   oxedge_spool:
-    mayDependOn: []
+    anyVendorDeps: true
   oxtelemetry_wal:
     # 只到落盘原语与线上契约。刻意不给 oxedge_runtime / oxedge_biz：日志不该
     # 知道 agent 怎么采样、也不该自己调隧道。少两条边，就少两个「顺手在这里

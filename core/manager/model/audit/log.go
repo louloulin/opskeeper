@@ -172,6 +172,19 @@ const (
 	ActionPluginReleaseAdvance  = "plugin_release_advance"
 	ActionPluginReleaseHalt     = "plugin_release_halt"
 	ActionPluginReleaseRollback = "plugin_release_rollback"
+
+	// Autonomy execution. One row per decision the node made on its own
+	// while the control plane was unreachable, written locally before the
+	// action ran and replayed into this chain when the link came back.
+	//
+	// It is a single action with the phase in the payload rather than two
+	// (started / finished) because the phase is the same decision seen
+	// twice, and an operator filtering "what did this node do to itself"
+	// wants both halves in one list. The idempotency key that the node
+	// consumed also travels in the payload, which is what lets an
+	// investigator match a node's self-heal to the approval that would
+	// have covered it.
+	ActionAutonomyExecute = "autonomy_execute"
 )
 
 // ResourceType buckets used in the resource_type column. Same flat-list
@@ -194,4 +207,8 @@ const (
 	// ResourcePlugin names a plugin release. The resource id is the
 	// package name, which is what an operator searches for.
 	ResourcePlugin = "plugin"
+	// ResourceEdge names a node. The resource id is the numeric edge id as
+	// a string, which is how every other edge-scoped row in this table
+	// already identifies itself.
+	ResourceEdge = "edge"
 )

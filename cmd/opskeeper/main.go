@@ -1374,6 +1374,12 @@ func main() {
 		// AgentTools lets a node's agent ask the control plane to run the
 		// tools the node cannot: the topology graph and the alert rules.
 		AgentTools: agentTools,
+		// AutonomyReplay is where a node hands over the decisions it made
+		// on its own while the control plane was away, so the chain here —
+		// the tamper-evident one, whose key never leaves this process —
+		// records what the fleet did during the outage. The node's own
+		// spool is its account; this is what makes it evidence.
+		AutonomyReplay: managersvcfb.NewAutonomyReplay(auditUC),
 		// DeviceResolver wires the post-split edge_id → device_id
 		// resolution path (push pipeline). The biz junction repo is the
 		// source of truth.

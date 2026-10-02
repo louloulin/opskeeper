@@ -249,7 +249,7 @@ func startNodeAgent(
 	// self-heal declarations, or the other way round. It returns nil when
 	// nothing asked for autonomy, which is the state of every package that
 	// ships today, and nil is not a failure.
-	autonomyStack, err := buildAutonomy(ctx, admitted, agent, runner, cfg.Cwd, log)
+	autonomyStack, err := buildAutonomy(ctx, client, admitted, agent, runner, cfg.Cwd, log)
 	if err != nil {
 		// A package that asked for autonomy on a node that cannot hold the
 		// audit spool is refused, not downgraded. Autonomy without a record
@@ -263,6 +263,16 @@ func startNodeAgent(
 		// was allowed to", and an answer that is only in memory is an
 		// answer nobody has.
 		log.Info("node autonomy health", slog.Any("health", autonomyStack.Health()))
+		// The replay loop shares the node's context, so it stops when the
+		// node stops and not a moment later. It drains once immediately:
+		// a node that has just come back from an outage has rows the
+		// operator is waiting to read, and the pump's own interval governs
+		// the *rate* of the backlog rather than the first row of it.
+		go func() {
+			if err := autonomyStack.pump.Run(ctx); err != nil && ctx.Err() == nil {
+				log.Warn("autonomy replay pump stopped early", slog.Any("err", err))
+			}
+		}()
 		priorStop := stop
 		stop = func() {
 			// Closing the spool first flushes and releases the file the

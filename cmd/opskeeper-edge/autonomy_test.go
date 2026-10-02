@@ -75,6 +75,16 @@ type fakeObservations struct {
 	since    time.Time
 	values   map[string]float64
 	linkCall int
+	edgeID   uint64
+}
+
+// EdgeID is what register_edge established. Tests that do not set it get
+// zero, which is the honest value for a node that has not registered: the
+// center answers "took none of it" and the pump keeps the rows.
+func (f *fakeObservations) EdgeID() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.edgeID
 }
 
 func (f *fakeObservations) LinkReach() (bool, time.Time) {
@@ -134,7 +144,7 @@ func (r *recordingRunner) runs() [][]string {
 func newAutonomyStack(t *testing.T, plugins []pluginmanifest.Plugin, obs autonomyObservations, runner autonomy.Runner) *autonomyStack {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	stack, err := buildAutonomy(context.Background(), plugins, obs, runner, t.TempDir(), log)
+	stack, err := buildAutonomy(context.Background(), &fakeTunnel{}, plugins, obs, runner, t.TempDir(), log)
 	if err != nil {
 		t.Fatalf("buildAutonomy: %v", err)
 	}
@@ -429,7 +439,7 @@ func TestBuildAutonomyIsAbsentWhenNobodyDeclaredIt(t *testing.T) {
 	runner := &recordingRunner{}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	stack, err := buildAutonomy(context.Background(), []pluginmanifest.Plugin{plain}, obs, runner, t.TempDir(), log)
+	stack, err := buildAutonomy(context.Background(), &fakeTunnel{}, []pluginmanifest.Plugin{plain}, obs, runner, t.TempDir(), log)
 	if err != nil {
 		t.Fatalf("buildAutonomy on a package with no autonomy block: %v", err)
 	}

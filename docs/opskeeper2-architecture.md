@@ -3211,18 +3211,20 @@ operator 被展示过的那个 digest 上。**真正缺的那一条恰好是探�
 `systemctl restart postgres` 之间的差别由清单签名，而不是由模型的一次引号处理
 决定。`host_autonomy_run` 的三个参数里没有任何一个能装下命令。
 
-#### 4.36.5 审计 spool：现在本地，回放未启动
+#### 4.36.5 审计 spool：本地记录，回放已接（决策 101）
 
 `core/edge/autonomy/spool.go` 是 JSONL 追加 + `Ack` 原子重写：0600/0700 权限、
 拒绝 symlink、拒绝已被 group/world 可读的文件、有限容量丢最旧（保留 100 行）、
 半行跳过。写两阶段（`decided` / `completed`）意味着「自愈开始了但没写结果」
 在盘上留下的是**一条记录**而不是一个空洞。
 
-`Pump` 已实现并按方案四条测试覆盖（限流默认 100 行/5s、ack 全有或全无），
-**但没有在 `buildAutonomy` 里启动**：manager 侧还没有
+`Pump` 已实现并按方案四条测试覆盖（限流默认 100 行/5s、ack 全有或全无）。
+决策 98 时它**故意没有在 `buildAutonomy` 里启动**——manager 侧还没有
 `agent.autonomy.replay` 路由，一个永远发不出去的泵会在节点余生里每 5 秒
-刷一次错误。行留在本地，健康行报告积压数（`autonomyHealth.Spooled`），
-不丢也不假装。**待办是传输层，不是泵**。
+刷一次错误。**决策 101 补上了路由与中心侧的链补写**（§4.39），泵现在随节点
+context 启动：断连时行留在本地（健康行报告积压数 `autonomyHealth.Spooled`），
+隧道恢复后限流回传，由中心 `EmitWithID` 补 HMAC 链。未进链的行由
+`autonomyHealth.ReplayRefused` 计数。
 
 #### 4.36.6 落地清单与闸门
 
@@ -3338,7 +3340,7 @@ sender 是 `pushBatch`，一个既无 `HostPoint` 又无 `Samples` 的 batch 是
 | 变更事件 | `core/edge/changewatcher/tunnel_sink.go` | `WALDir` / `WALBytes`、`CloseLog()` / `Pending()`；`flushBatch` 先 `replayOne` 再凑新批；`deliver` = 记 → `callOnce` → `Ack` |
 | autonomy 薄化 | `core/edge/autonomy/spool.go` | `type Spool struct{ *spool.Spool }`、`ClassAudit`、`Record/Peek/Replay` 解码回 `autonomy.Row`；**既有 41 项测试全部保留通过**（只改了一处字节上限常量与一条注释） |
 | 装配 | `cmd/opskeeper-edge/main.go` | `OPSKEEPER_EDGE_TELEMETRY_WAL_DIR`（默认 `/var/lib/opskeeper-edge/telemetry`）、`OPSKEEPER_EDGE_CHANGE_EVENT_WAL_DIR`（默认 `/var/lib/opskeeper-edge/changes`） |
-| arch-lint | `.go-arch-lint.yml` | 新增 `oxedge_spool`（`mayDependOn: []`）与 `oxtelemetry_wal`；`oxedge_autonomy` / `oxedge_biz` / `oxedge_runtime` 各自补授权 |
+| arch-lint | `.go-arch-lint.yml` | 新增 `oxedge_spool` 与 `oxtelemetry_wal`；`oxedge_autonomy` / `oxedge_biz` / `oxedge_runtime` 各自补授权。**`oxedge_spool` 当初写成 `mayDependOn: []` 是一个真实缺陷**：go-arch-lint 的 spec 校验会因此拒绝运行整份文件，于是 `make arch-lint-run` 自 `8fefe7b` 起从未通过。决策 101 改为 `anyVendorDeps: true`（§4.39.6） |
 | 闸门 | `core/edge/spool/spool_test.go`（21）、`core/edge/telemetrywal/wal_test.go`（11）、`core/edge/changewatcher/tunnel_wal_test.go`（5） | 断连写入 / 恢复回放 / 容量丢最旧 / 分级丢弃（`TracesGoBeforeMetrics`）/ 过期淘汰 / `Ack` 不丢并发写 / 一次 tick 一批 / 坏行不卡头 |
 
 **回归确认**：8 个模块 `GOWORK=off` 分别 build + vet + test 全绿，合计
@@ -3352,7 +3354,7 @@ core/harness 214 / sdk 63 / core/floor 323`）；`spool`、`telemetrywal`、
 #### 4.37.6 回放传输：遥测侧的「中心说什么才算送达」
 
 本地侧到此完整，但**回放还没有中心侧的接收方能签字**。遥测这一半由决策 100
-关掉（§4.38）；审计那一半仍然缺 `agent.autonomy.replay` 路由：
+关掉（§4.38），审计那一半由决策 101 关掉（§4.39）：
 
 - 遥测回放的 `drainBatches` 重发的是与 live path **完全相同**的
   `push_host_metrics` / `push_prom_samples` 调用，因此不需要新 wire 方法——
@@ -3360,13 +3362,16 @@ core/harness 214 / sdk 63 / core/floor 323`）；`spool`、`telemetrywal`、
   `Accepted=0` 被当成「永久拒绝」，于是断连期间攒下的积压**在恢复后的第一条
   消息里被丢弃**——日志扛过了断网，却死在握手的样子上。现在 `Accepted=0`
   读作「还没有」，批次留在盘上；部分接受才跳过并计数。
-- 审计回放还缺 `agent.autonomy.replay` 隧道方法 → 中心接收 → **审计链补写**
-  （节点 spool 的行回传后由中心补 HMAC 链，否则节点本地记录永远只是节点自己
-  的说法）→ 限流与积压可观测 → 然后才在 `buildAutonomy` 里启动
-  `autonomy.Pump`。
+- ~~审计回放还缺 `agent.autonomy.replay` 隧道方法 → 中心接收 → **审计链补写**~~
+  ✅ 已完成（决策 101，§4.39）：契约 `MethodAgentAuditReplay` + `AutonomyAuditRow`，
+  中心 `RecordAutonomyReplay` 整批校验后逐行 `EmitWithID` 补 HMAC 链，
+  `buildAutonomy` 接上并启动 `autonomy.Pump`，`autonomyHealth.ReplayRefused`
+  报告未进链的行。接线过程抓出两处实现错误（transport 绑定被 body 覆盖、
+  节点把「计数够大」当成「已交代」），都有实测会红的回归。
 
-**先接泵再修路由，会得到一个每 5 秒刷一次错误的节点。** 行留在本地、健康行报告
-积压数（`autonomyHealth.Spooled`、`TunnelSink.Pending()`），不丢也不假装。
+**审计回放这一侧闭环；只剩遥测回放的按 `Seq` 去重（at-least-once 的另一半）。**
+积压可观测：`autonomyHealth.Spooled` / `autonomyHealth.ReplayRefused`、
+`TunnelSink.Pending()`，不丢也不假装。
 
 ---
 
@@ -3457,8 +3462,146 @@ local spool 的设计是 at-least-once，靠中心按 `Seq` 去重。这一半**
 
 ---
 
-阶段 1 从 **100% 记为 100%**（本地侧）并新增一条**待办**：遥测回放的**按
-`Seq` 去重**。加权合计保持 **≈46%**。
+### 4.39 决策 101：审计回放传输——阶段 1 的最后一条尾巴，以及两处只有接线才会暴露的错误
+
+决策 98 写下的那句话是「每次自治执行写本地审计 spool；隧道恢复后回传，补写
+中心审计链」。前两轮把分号左边做完了：行先落盘、断连时也不丢。**分号右边一直
+没写**，于是那句子里真正有价值的一半一直是空的——**留在节点上的行，只是节点
+对自己做过什么的说法。**
+
+这一轮补上分号右边：`agent.audit.replay` 隧道方法、中心侧的审计链补写、
+节点侧接上 `autonomy.Pump`。接线过程中查出**两处实现错误**，两处都只在真实
+的端到端路径上才现形。
+
+#### 4.39.1 为什么「节点自己的说法」不算证据
+
+审计链的价值不在「有记录」，而在「记录进的是一个谁也改不了、谁也补不了的
+序列」。`EmitWithID` 是唯一既打链戳又返回行 ID 的路径；`AppendChained` 在
+中心自己手里做 compare-and-swap。**节点没有链的密钥**——`OPSKEEPER_AUDIT_HMAC_KEY`
+只在 manager 进程里。
+
+所以节点把行回传、由中心补写，不是「多一份副本」，是把**节点单方面的事实**
+换成**链上的事实**。一台磁盘坏掉的节点，如果它的自愈历史只在那块盘上，那么
+「中心当时是断的」这句话就同时是「没有任何独立证据能证明它做了什么」。
+
+#### 4.39.2 全有或全无，是链的性质决定的，不是性能取舍
+
+中心侧的 `RecordAutonomyReplay` 做两件事，顺序是刻意的：
+
+1. **先整批做形状校验**（缺 action / 缺 phase → 整批拒绝、`Rejected=len(rows)`、
+   一行都不写）；
+2. 再逐行走 `EmitWithID`。
+
+第一步不能省成「边写边校验」。节点的泵是全有或全无的（`autonomy.Sender.Send`
+只返回 error，返回 nil 即整批 ack），如果中心写了前缀再失败，节点会重发整个
+前缀——而**链是 append-only 且没有去重键**，于是前缀被记两遍。先校验再写，
+是让**一次重试不产生重复**的唯一办法。
+
+同理，形状不合格的行**整批**拒绝而不是只拒那一条：节点的 arbiter 写下的行必然
+带 action 与 phase，一条坏行说明发送方有 bug；整批停下是运维能据以行动的那个
+响亮结果，只挑坏行丢弃反而会把 bug 藏起来。
+
+#### 4.39.3 接线暴露的第一处错误：`canonicalizeEdgeID` 与 `bindEdgeTransport` 的顺序
+
+中心侧 handler 的第一版照抄了 `push_host_metrics` 的写法：
+
+```go
+canonicalEdgeID := c.canonicalizeEdgeID(edgeID)
+if in.EdgeID != 0 {
+    canonicalEdgeID = in.EdgeID
+    c.bindEdgeTransport(edgeID, canonicalEdgeID)
+}
+```
+
+遥测路径上这段没问题——它写的是 Prometheus 序列，认错 edge 最多脏一条 label。
+审计路径上它是**串改账本**：`bindEdgeTransport` 会在 `transportToEdgeID` 里
+把 transport 的绑定**改写成 body 说的那个 edge**，于是一个已经绑到 42 的连接，
+推送一个 7，就把 42 的行写进了 7 的账。
+
+测试 `TestInstall_AutonomyReplay_TrustsTheTransportEdgeID` 抓住了它：先按
+`register_edge` 的方式把 transport 900 绑到 42，再让同一个 transport 声称
+自己是 7，断言链上写的是 42 而不是 7。第一版返回 7，测试红。
+
+改成：**只有在 transport 尚无绑定**（首连竞争）时才接受 body 的 edge id 作为
+绑定；已有绑定时，body 里不同的 id 只记一条 Warn，写链用的是 transport 绑定的
+那个。这既保住了首连竞争（决策 100 的 `Accepted=0` 覆盖了「还没绑上」），也
+堵住了「用别人的名字写自己的事」。
+
+#### 4.39.4 接线暴露的第二处错误：`Accepted+Rejected >= len(rows)`
+
+节点侧 sender 的第一版把「中心已给出结论」判成：
+
+```go
+case resp.Accepted + resp.Rejected >= len(rows):
+```
+
+意图是「只要够数就算全交代了」。但 `>` 这个口子意味着**中心报了比批次还多，
+或者报了一个无法解释的组合**（1 接受 + 3 拒绝 对 2 行）时，节点会 ack 整批。
+节点 ack 的依据必须是「中心对**这一批**给出了结论」，不是「它的数字够大」。
+改成 `== len(rows)`。
+
+同一个 switch 里还有一条三年后会被踩的反向错：`(0, 0)` 必须走
+**「中心还没准备好，留住重试」**，而不是落进默认分支里当普通错误——决策 100
+的语义在审计路径上同样成立。现在 `(0, 0)` 有独立分支，错误信息也写明「批次
+留在盘上」。
+
+顺带更正了 `core/floor/tunnel/agent.go` 里 `AutonomyAuditReplayResponse` 的
+注释：它原先写着「partial accept 意味着链收了前缀的前缀」，与中心实际实现的
+「整批或零」不符。**注释与代码说的不是一件事，下一个读它的人就会按注释去写
+一个不存在的分支。**
+
+#### 4.39.5 节点的三种读法
+
+中心能给的回答，节点必须读成三种互不相同的动作：
+
+| 中心的回答 | 含义 | 节点的动作 |
+|---|---|---|
+| `err != nil` | 隧道又断了 | 保留整批，下个 drain 重试 |
+| `Accepted == 0 && Rejected == 0` | **还没能收下**（未 register） | 保留整批，重试（决策 100 的语义） |
+| `Accepted == 0 && Rejected == n` | 形状不合格，**永远收不下** | 计数、跳过、Warn——不能把整个队列卡在这一条上 |
+| `Accepted == n` | 全部进链 | ack |
+| 其他 | 这个 build 看不懂 | 保留整批（猜哪一半收了，是丢行的开始） |
+
+第四行是本轮接线时才确认的：**「形状拒绝」必须跳过而不是重试**，理由与决策 99
+的遥测路径完全一致——重试就是节点同一句话问一辈子，而后面本来没问题的行会
+一起烂在那个队头。跳过的行没有消失：`autonomyHealth.ReplayRefused` 计数上报，
+日志 Warn 写明原因。**唯一不会做的是假装它们已经进链了。**
+
+#### 4.39.6 落地清单与闸门
+
+| 层 | 位置 | 内容 |
+|---|---|---|
+| 契约 | `core/floor/tunnel/agent.go` | `MethodAgentAuditReplay`（edge → manager）、`AutonomyAuditRow`（trigger 摊平为 `trigger_kind/metric/threshold`）、`AutonomyAuditReplayRequest/Response`；Response 注释更正为「整批或零」 |
+| 中心（链） | `core/manager/biz/audit/usecase.go` | `RecordAutonomyReplay`：整批形状校验在前，逐行 `EmitWithID` 在后；`Verdict != "run"` → `StatusDenied`；payload 带 `origin: node_autonomy` |
+| 中心（模型） | `core/manager/model/audit/log.go` | `ActionAutonomyExecute`、`ResourceEdge` |
+| 中心（handler） | `core/manager/service/frontierbound/handlers.go` | `agent.audit.replay` 注册；transport 绑定优先于 body 的 edge id；`canonicalEdgeID==0` → `Accepted=0`（节点重试）；链不可达 → RPC error |
+| 中心（适配） | `core/manager/service/frontierbound/autonomyreplay.go`（新） | `AutonomyReplay` 把 wire 行转成 biz 行——biz 注释预告的「frontierbound 适配器转换」在这里落地 |
+| 中心（装配） | `cmd/opskeeper/main.go` | `AutonomyReplay: managersvcfb.NewAutonomyReplay(auditUC)` |
+| 节点 | `cmd/opskeeper-edge/autonomy.go` | `autonomyReplaySender`（三种读法）、`buildAutonomy` 接收 `tunnel.Client` 并构建 pump、`autonomyHealth.ReplayRefused` |
+| 节点（装配） | `cmd/opskeeper-edge/agent.go` | pump 随节点 context 启动（`go autonomyStack.pump.Run(ctx)`），spool 先于 supervisor 关闭 |
+| 闸门（中心） | `core/manager/biz/audit/replay_test.go`（新） | 5 条：逐行入链且带链戳、整批形状拒绝不写任何行、refuse → Denied、无链也记录、空批次不写 |
+| 闸门（中心） | `core/manager/service/frontierbound/autonomyreplay_test.go`（新） | 7 条：无 recorder 不注册、未绑定 defer 报 0、body 的 edge id 建绑定、transport 绑定优先（抓到了 4.39.3 的错误）、计数透传、链失败是 RPC error、不可解析的 body 不无限重试 |
+| 闸门（节点） | `cmd/opskeeper-edge/autonomy_replay_test.go`（新） | 8 条：全收、`(0,0)` 留住、形状拒绝计数不重试、传输失败留住、`(1,0)` 对 2 行重试（抓到了 4.39.4 的错误）、空批次不发、装好的 pump 与真实 spool 行的顺序（decided → completed） |
+
+**回归确认**：把 4.39.4 的 `== len(rows)` 改回 `>= len(rows)`，
+`TestAutonomyReplaySender_ACountItCannotExplainIsRetried` 立刻变红；把
+4.39.3 的守卫改回第一版，`TestInstall_AutonomyReplay_TrustsTheTransportEdgeID`
+立刻变红（`edge = 7, want 42`）。均已实测。
+
+**顺带修的既有缺陷**：`.go-arch-lint.yml` 里 `oxedge_spool` 写成
+`mayDependOn: []`，而 go-arch-lint 的 spec 校验把空列表读成配置错误并**拒绝
+运行整份文件**——从决策 99（8fefe7b）落地那刻起 `make arch-lint-run` 就没
+跑通过一次。已按同文件里 `oxedge_model` 等组件的既有写法改为 `anyVendorDeps: true`
+（允许第三方库、不允许任何本项目组件），现在 `OK - No warnings found`。
+
+---
+
+阶段 1 的最后一条尾巴关闭。链路完整：节点断连 → 自治执行两阶段落盘 →
+隧道恢复 → `agent.audit.replay` → 中心 `EmitWithID` 补 HMAC 链 → 节点按
+中心计数 ack / 计数跳过。**剩下的唯一一条是遥测回放的按 `Seq` 去重**
+（at-least-once 的另一半）——所以阶段 1 的代码侧记为 100%，但**这一条留在
+待办里，不是「已完成」**。加权合计不变（阶段 1 此前已按 100% 计入），
+仍为 **≈46%**。
 
 ---
 
@@ -3495,7 +3638,7 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 | 阶段 | 完成度 | 判据与剩余 |
 |---|---|---|
 | 0 边缘交付闭环（P0） | **65%** | **三条** P0 都是「代码意图已写、实现路径从未跑过」：`cmd/opskeeper-edge/agent.go:209-212` 的 `Env` 只有两个 socket，`dist/build-edge-bundle.sh:38-49` 与 `deploy/Dockerfile.opskeeper-edge` 都不含 `pig`，`Makefile` 没有任何 `build-pig*` 目标。**已实测可行**：从 `core/pig` 构建 `github.com/MichaelKinsy/PiG/cmd/pig` 退出码 0（71 MB）。方案的「注入 `OPENAI_BASE_URL`」**不成立**（PiG 无此变量），正确路径是 `models.json` 自定义 provider + `PIG_CODING_AGENT_DIR`（§4.28.1）。**本轮新发现的第三条 P0 比前两条都严重：节点上的插件扩展编译不过**（`GOWORK=off` 实测报 `unknown revision core/v0.0.0`，且无 `go.sum`）——补齐 pig 与凭据之后节点仍然零工具（§4.28.8）。**决策 91 已关掉其中的第三条**：`core/wire` 内联进每个打包扩展、`go.mod` 删掉未发布的 `core v0.0.0`、只留 PiG SDK 一条 require，8 个打包扩展在 `GOWORK=off CGO_ENABLED=0` 下实测 8/8 构建通过，并新增「按节点的方式构建」这条**实测会红**的闸门（§4.29）。**决策 92 关掉了第二条**：`make build-pig-all` 从 `core/pig` + `GOWORK=off` 构建并**被每个 `build-edge-<arch>` 依赖**，两处 bundle 清单、`dist/package.sh`、`install-edge.sh`（含 `pig --version` 自检）、`Dockerfile.opskeeper-edge`、env 模板全部接通，六个位置各有断言（`core/floor/delivery`，6 条测试，**实测会红**）。**决策 93 关掉了 P0-1 的节点侧**：节点有了完整的凭据链（`OPSKEEPER_EDGE_AGENT_CONFIG_DIR` + `models.json` 的 `"$VAR"` 引用 + `PIG_CODING_AGENT_DIR`），并**对着真 `pig` 二进制验证**了三条（能解析 / 无凭据则拒绝 / 无 scope 则找不到）。本轮还查出方案 10 条清单里没有的第四条：**`DefaultAgentDir()` 在 `$HOME` 未设置时丢弃错误、返回相对路径 `.pig/agent`，被 agent 按 Cwd（即插件包根）解析**——凭据会落进签名插件内容里（§4.31.1）。**决策 94 关掉了 P0-1 的 manager 侧**：`core/manager/server/llmgw` 提供 `POST /v1/chat/completions`（流式 + 非流式）与 `GET /v1/models`，鉴权**复用隧道凭据对**（零新存储、零 schema 迁移、轮换即现有 `UpdateSecretHash`，§4.31.5），节点能选 model 不能选 provider；真 `pig` 二进制端到端抓出两处形状错误——`content` 实际是 string **或** parts 数组的联合类型（按 string 建模会拒绝真 agent 的每一个请求，而 18 条单元测试全绿）、大整数必须 `UseNumber` 才能活过 `>2^53`（§4.32）。**决策 95 把方案 0.1 剩下的三项职责与限流补齐**：每日 token 上限复用**同一个** `llm.InMemoryBudget` 实例（两份账 = 集群能花掉两倍上限）、每 edge 一个令牌桶超限 429、调用方的 `max_completion_tokens` 真正生效（之前被解析后丢弃）；顺带修掉 **429 之前被报成 400**（`writeError` 自带的 switch 对预算与限流哨兵没有分支）与一处 typed nil panic（§4.33）。剩下的不是 P0，是验收本身：方案 0.4 的 `make compose-up` 真实对话需要 Docker 与真 provider key；**决策 96 关掉了 per-tool 配额**（§4.28.4 判定的阶段 0 阻塞项）：清单里声明 `limits`、执行器 metadata 里也声明、两侧漂移由 `sdk.Check` 报错，**强制点在 tool broker**——节点上所有工具调用的唯一通道，因此覆盖将来任何一个第三方工具（没声明也有 1 MiB 默认上限，`skill.Spill` 从一段**零调用点的死代码**里搬出来并修好 0644 权限、24 小时回收与路径注入）。九个高基数读工具各有紧于默认值的上限与墙钟（§4.34）。剩下的**只有方案 0.4 的真实验收**：`make compose-up` 后一台 edge 完成一次真实对话、节点上可见独立 pig 进程、`/etc/opskeeper-edge` 无云厂商密钥——前两条已由 `core/floor/delivery` 与 `tests/agentgateway` 覆盖了可离线覆盖的部分，真 provider key 那一条本机不具备（无 Docker、无 key）|
-| 1 离线与有限自治（P1） | **100%** | **决策 98 关掉了方案 1.2（自治白名单）**：清单里签一份固定 argv 列表，节点只在中心失联超过阈值且**触发器实测成立**时执行它，执行的是声明的 argv、宿主派生幂等键、**先消费后执行**、两阶段落盘审计（`core/edge/autonomy` 41 项 + 装配根 10 项端到端，§4.36）。**13 条具名加载期拒绝**堵住清单侧（argv 含元字符、半径超 single-ns、TTL 超 6h、工具未声明、工具是 read、`offline_after` 低于 30s…）。**决策 99 关掉了方案 1.1（遥测本地 spool）**：先把「追加一行、封顶、按序回放」抽成 `core/edge/spool` 原语（只依赖标准库），再让遥测（`core/edge/telemetrywal`）、变更事件（`changewatcher/tunnel_sink.go`）、自治审计三个用户各自只声明自己的策略——**两份日志、一套丢弃表**（trace 先丢 > metric 30m 保质期 > change event 无保质期）；`Send(ctx, rows) (int, error)` 一个签名同时满足审计的「全有或全无」与遥测的「部分前进」；回放限流 100 行/5s 且**只有满批才限流**；本轮由测试抓出 8 个真实缺陷，其中 `Ack` 的读改写分锁会吞掉并发写入的行（§4.37）。**决策 100 修掉了回放路上的一处数据丢失**：`Accepted=0`（中心还没准备好）原被当成「永久拒绝」，于是断连攒下的积压**在恢复后第一条消息里被 ack 丢弃**——日志扛过了断网、死在握手的样子上；中心侧 `push_prom_samples` 的三条丢弃路径还爱说谎（返回 `Accepted=n`），一并改成「能放报写入数、放不下报 0」。现在 `Accepted=0` 读作「还没有」，批次留在盘上。**阶段 1 的代码侧到此完整**，剩下的两条：① 遥测回放需要中心**按 `Seq` 去重**（at-least-once 的另一半，目前 `host_metrics_raw` 是自增 `id` + 非唯一索引、`change_events` 无 `ON CONFLICT`、`promwrite` 无去重键，所以做到了「不丢」还没做到「不重」）；② 审计回放仍需 `agent.autonomy.replay` 路由 + 中心审计链补写，**所以 `autonomy.Pump` 仍故意未启动**——先接泵再修路由只会得到一个每 5 秒刷错误的节点 |
+| 1 离线与有限自治（P1） | **100%** | **决策 98 关掉了方案 1.2（自治白名单）**：清单里签一份固定 argv 列表，节点只在中心失联超过阈值且**触发器实测成立**时执行它，执行的是声明的 argv、宿主派生幂等键、**先消费后执行**、两阶段落盘审计（`core/edge/autonomy` 41 项 + 装配根 10 项端到端，§4.36）。**13 条具名加载期拒绝**堵住清单侧（argv 含元字符、半径超 single-ns、TTL 超 6h、工具未声明、工具是 read、`offline_after` 低于 30s…）。**决策 99 关掉了方案 1.1（遥测本地 spool）**：先把「追加一行、封顶、按序回放」抽成 `core/edge/spool` 原语（只依赖标准库），再让遥测（`core/edge/telemetrywal`）、变更事件（`changewatcher/tunnel_sink.go`）、自治审计三个用户各自只声明自己的策略——**两份日志、一套丢弃表**（trace 先丢 > metric 30m 保质期 > change event 无保质期）；`Send(ctx, rows) (int, error)` 一个签名同时满足审计的「全有或全无」与遥测的「部分前进」；回放限流 100 行/5s 且**只有满批才限流**；本轮由测试抓出 8 个真实缺陷，其中 `Ack` 的读改写分锁会吞掉并发写入的行（§4.37）。**决策 100 修掉了回放路上的一处数据丢失**：`Accepted=0`（中心还没准备好）原被当成「永久拒绝」，于是断连攒下的积压**在恢复后第一条消息里被 ack 丢弃**——日志扛过了断网、死在握手的样子上；中心侧 `push_prom_samples` 的三条丢弃路径还爱说谎（返回 `Accepted=n`），一并改成「能放报写入数、放不下报 0」。现在 `Accepted=0` 读作「还没有」，批次留在盘上。**决策 101 关掉了审计回放传输**（§4.39）：`agent.audit.replay` 隧道方法 + `AutonomyAuditRow` 契约、中心 `RecordAutonomyReplay`（**整批形状校验在前、逐行 `EmitWithID` 在后**，所以一次重试不产生重复）补 HMAC 链、`buildAutonomy` 接上并启动 `autonomy.Pump`；节点把中心的回答读成三种动作（传输失败/还没收下 → 留住重试；形状拒绝 → 计数跳过不重试；全收 → ack），未进链的行由 `autonomyHealth.ReplayRefused` 上报。接线抓出**两处实现错误**并各有实测会红的回归：① handler 的 `bindEdgeTransport` 会按 body 改绑 transport，一个已绑 42 的连接推送 7 就能把 42 的自愈历史写进 7 的账（`TestInstall_AutonomyReplay_TrustsTheTransportEdgeID` 实测 `edge = 7, want 42`）；② 节点 sender 用 `Accepted+Rejected >= len(rows)` 判断「已交代」，多报一个数就会 ack 掉整批（`TestAutonomyReplaySender_ACountItCannotExplainIsRetried` 实测变红，改为 `== len(rows)`）。顺带修掉一处既有缺陷：`.go-arch-lint.yml` 里 `oxedge_spool` 写成 `mayDependOn: []`，go-arch-lint 的 spec 校验因此**拒绝运行整份文件**——决策 99（`8fefe7b`）之后 `make arch-lint-run` 一次也没通过过，已按同文件既有写法改为 `anyVendorDeps: true`（§4.39.6）。**阶段 1 的代码侧到此完整**，唯一剩下的是遥测回放需要中心**按 `Seq` 去重**（at-least-once 的另一半，目前 `host_metrics_raw` 是自增 `id` + 非唯一索引、`change_events` 无 `ON CONFLICT`、`promwrite` 无去重键，所以做到了「不丢」还没做到「不重」） |
 | 2 生态与治理加固（P2） | **15%** | 工具注册表：`grep toolregistry` 只命中注释（`chatruntime/types.go:37-40` 自陈在 PR-3），**不存在 `tool_registry.go`**；per-tool 配额：`PluginSpec` 无 limits 字段（单是高基数只读工具就已经是阶段 0 阻塞项）；MCP 兼容层：运行时已有（决策 85），但**无对外 MCP 协议面**；成本结晶：`grep crystalliz` 零命中；eval 三维化：`judge.Score` 是过程四维，不是 Localization × Identification × Reason；prompt injection 标注：无 |
 | 3 控制面瘦身与联邦（P3） | **5%** | `iam → manager` 反向依赖仍在 `scripts/modulecheck/main.go:548-556` 的 `exceptions` 台账里（决策 35 的已知例外，注释已写明「未来拆分必须解决它」）；manager 27.3 万行（实测 `find core/manager -name '*.go' \| xargs wc -l`）；无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档） |
 
@@ -5609,26 +5752,26 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
 ### 阶段 1 收口：离线与有限自治
 
 分布式改造方案的四条里，1.3（幂等与栅栏）由决策 97 关闭，1.2（自治白名单）由
-决策 98 关闭（§4.36），1.1（遥测本地 spool）由决策 99 关闭（§4.37）。
-**阶段 1 的本地侧到此完整**，只剩一条尾巴——而且它是 1.1 与 1.2 **共用**的同一条：
+决策 98 关闭（§4.36），1.1（遥测本地 spool）由决策 99 关闭（§4.37），
+回放传输的中心侧由决策 100（遥测）与决策 101（审计）关闭。
+**阶段 1 到此完整**，只剩一条与 1.1 有关的待办：
 
 1. ~~**1.1 遥测本地 spool**~~ ✅ 已完成（决策 99）。落盘、回放、分级丢弃、
    回放限流四项全部落地，且不是照抄两份：`core/edge/spool` 是原语，
    `telemetrywal` 与 `changewatcher` 是两个用户，自治审计是第三个。
    `metricsLoop` 现在是「先落盘，drain 是唯一发送者」；无 WAL 时保留旧的直接
    push 路径，开发机不受影响。changewatcher 的批次级耐久日志同样落地。
-2. **1.1 与 1.2 的尾巴：回放传输**（阶段 1 剩下的全部）。本地侧写完了，但
-   还没有中心侧的接收方能签字：
+2. ~~**1.1 与 1.2 的尾巴：回放传输**~~ ✅ 已完成。本地侧写完，中心侧也接上了：
    - **遥测回放**走的是与 live path **完全相同**的 `push_host_metrics` /
      `push_prom_samples`，**不需要新 wire 方法**（新方法就是新的回滚点）。
-     代价是 manager 侧要能接受**迟到的批次**，并靠行里的 `Seq` 去重
-     ——at-least-once 的另一半今天还没写。
-   - **审计回放**还需要 `agent.autonomy.replay` 隧道方法 → 中心接收 →
-     **审计链补写**（节点 spool 的行回传后由中心补 HMAC 链，否则节点本地记录
-     永远只是节点自己的说法）→ 限流与积压可观测 → 然后才在 `buildAutonomy`
-     里接上 `autonomy.Pump`。**先接泵再修路由，会得到一个每 5 秒刷一次错误
-     的节点。** 行留在本地、健康行报告积压数
-     （`autonomyHealth.Spooled`、`TunnelSink.Pending()`），不丢也不假装。
+     manager 侧能接受**迟到的批次**；`Accepted=0` 读作「还没收下」，批次留在
+     盘上（决策 100，§4.38）。**唯一剩下的**是**按 `Seq` 去重**——at-least-once
+     的另一半还没写（阶段 1 的最后一条待办）。
+   - ~~**审计回放**还需要 `agent.autonomy.replay` 隧道方法 → 中心接收 →
+     **审计链补写**~~ ✅ 已完成（决策 101，§4.39）：隧道方法 + 中心链补写 +
+     节点侧启动 `autonomy.Pump` 全部落地。节点断连时两阶段落盘，恢复后限流
+     回传，中心 `EmitWithID` 补 HMAC 链，节点按中心计数 ack / 计数跳过。
+     未进链的行由 `autonomyHealth.ReplayRefused` 上报，不丢也不假装。
 3. **阶段 0 唯一剩余项**需要外部条件：`make compose-up` 后一台 edge 完成一次
    真实对话（要 Docker 与真 provider key，本机不具备）。
 

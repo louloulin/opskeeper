@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/edge/autonomy"
 	"github.com/vincent-wuhan/opskeeper/core/edge/cmdpolicy"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/floor/skill/builtin"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // The node's self-heal capability, assembled.
@@ -47,6 +49,15 @@ type autonomyObservations interface {
 	LinkReach() (online bool, offlineSince time.Time)
 	// MetricValue returns this host's most recent reading of a metric.
 	MetricValue(name string) (value float64, ok bool)
+	// EdgeID is this node's control-plane identity, as register_edge last
+	// established it. It is read at send time rather than captured when the
+	// stack is built, because the stack is built before the tunnel has
+	// registered and the batch that matters is the one sent after it has.
+	//
+	// A zero means "not registered yet", which the center answers with
+	// "took none of it" — the sentence the pump reads as "keep the rows
+	// and try again", which is exactly right.
+	EdgeID() uint64
 }
 
 // autonomyLink reads the control plane's reachability from the agent.
@@ -119,11 +130,130 @@ func (t autonomyTool) PerformAutonomy(ctx context.Context, action, target, windo
 	}, nil
 }
 
+// autonomyReplaySender hands one batch of the node's own decisions to the
+// control plane, which appends them to the tamper-evident audit chain.
+//
+// It is the transport half of the plan's "隧道恢复后回传，补写中心审计链". The
+// policy half — when to drain, how much per drain, and that a batch is all
+// or nothing — already lives in autonomy.Pump and in core/edge/spool, and
+// this type deliberately adds none of its own. A sender that reordered,
+// batched differently, or decided which rows were worth sending would be a
+// second policy about a chain whose whole value is that its order was not
+// anybody's convenience.
+//
+// The refusals are the interesting half, because there are three answers
+// the center can give and they mean three different things to the node:
+//
+//   - The call itself fails: the tunnel is down again. Error, keep the
+//     batch, retry.
+//   - The center took none of it and refused none of it: nobody there can
+//     place the rows yet — the node has not registered, so the manager has
+//     no identity to file them under. This is decision 100's sentence, and
+//     reading it as a permanent refusal is how a backlog dies in the first
+//     message after a reconnect. Error, keep the batch, retry.
+//   - The center refused some rows for shape. Retrying is the node asking
+//     the same question forever, so those rows are counted and passed over
+//     — the same rule the telemetry path uses, and for the same reason: a
+//     single permanently-refusable row must not wedge a queue that is
+//     otherwise fine. It is loud, it is counted, and it is on the node's
+//     health line, because the rows that go this way are rows that will
+//     never be evidence.
+type autonomyReplaySender struct {
+	client tunnel.Client
+	edgeID func() uint64
+	log    *slog.Logger
+	// refused counts rows the center will never take. It is a counter
+	// rather than a log line because a node that has been replaying for an
+	// hour should not have to be grepped to find out whether it has been
+	// throwing rows away.
+	refused *atomic.Uint64
+}
+
+// Send delivers rows in order, or reports that the batch has to come again.
+func (s autonomyReplaySender) Send(ctx context.Context, rows []autonomy.Row) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	req := tunnel.AutonomyAuditReplayRequest{
+		EdgeID: s.edgeID(),
+		Rows:   make([]tunnel.AutonomyAuditRow, 0, len(rows)),
+	}
+	for _, r := range rows {
+		req.Rows = append(req.Rows, autonomyAuditRow(r))
+	}
+	var resp tunnel.AutonomyAuditReplayResponse
+	if err := s.client.Call(ctx, tunnel.MethodAgentAuditReplay, req, &resp); err != nil {
+		// A transport failure and a refused batch must not collapse into
+		// one branch: one is retried, the other is not. The pump's
+		// contract is that a returned error keeps the whole batch.
+		return fmt.Errorf("autonomy replay: send %d rows: %w", len(rows), err)
+	}
+	switch {
+	case resp.Accepted+resp.Rejected == len(rows):
+		if resp.Rejected > 0 {
+			s.refused.Add(uint64(resp.Rejected))
+			s.log.Warn("the center refused autonomy rows for shape; they will not be retried",
+				slog.Int("accepted", resp.Accepted),
+				slog.Int("rejected", resp.Rejected),
+				slog.String("reason", resp.Reason))
+		}
+		return nil
+	case resp.Accepted == 0 && resp.Rejected == 0:
+		// Decision 100: "took none of it" is not "refused all of it". The
+		// center is not ready to place these rows — usually because the
+		// node has not registered yet — and the honest instruction is to
+		// keep them.
+		return fmt.Errorf("autonomy replay: the center accepted none of %d rows; the batch stays on disk", len(rows))
+	default:
+		// A count that is neither "all" nor "none" is a center this build
+		// does not understand. Guessing which half it took is how rows are
+		// lost; keeping the whole batch costs one more round trip.
+		return fmt.Errorf("autonomy replay: the center reported %d accepted and %d rejected of %d rows",
+			resp.Accepted, resp.Rejected, len(rows))
+	}
+}
+
+// autonomyAuditRow converts the arbiter's row into the wire shape.
+//
+// The trigger is flattened rather than nested, because the wire type is
+// shared with the center and a nested struct there would be a second place
+// for the trigger vocabulary to drift. Unknown-kind triggers do not occur —
+// the Registry refuses a manifest whose kind nobody implements — so the
+// kind is copied verbatim and the center records it as it was declared.
+func autonomyAuditRow(r autonomy.Row) tunnel.AutonomyAuditRow {
+	return tunnel.AutonomyAuditRow{
+		At:        r.At,
+		Action:    r.Action,
+		Package:   r.Package,
+		Tool:      r.Tool,
+		Target:    r.Target,
+		Argv:      r.Argv,
+		Kind:      string(r.Trigger.Kind),
+		Metric:    r.Trigger.Metric,
+		Threshold: r.Trigger.Threshold,
+		Key:       r.Key,
+		Verdict:   r.Verdict,
+		Reason:    r.Reason,
+		Phase:     r.Phase,
+		Result:    r.Result,
+		ExitCode:  r.ExitCode,
+	}
+}
+
 // autonomyStack is what a node with autonomy installed holds.
 type autonomyStack struct {
 	registry *autonomy.Registry
 	arbiter  *autonomy.Arbiter
 	spool    *autonomy.Spool
+	// pump is the replay loop. It is built here and started by the caller,
+	// because "the stack exists" and "the node is running" are two
+	// different moments: buildAutonomy runs before the tunnel registers,
+	// and a pump started here would race the registration it depends on.
+	pump *autonomy.Pump
+	// refused counts rows the center took one look at and would not keep.
+	// It is read by Health so the number exists even when nobody is
+	// reading logs.
+	refused *atomic.Uint64
 }
 
 // buildAutonomy assembles the stack, or returns nil when no installed
@@ -134,6 +264,7 @@ type autonomyStack struct {
 // line in every node's boot log about a capability nobody asked for.
 func buildAutonomy(
 	ctx context.Context,
+	client tunnel.Client,
 	admitted []pluginmanifest.Plugin,
 	obs autonomyObservations,
 	runner autonomy.Runner,
@@ -172,29 +303,34 @@ func buildAutonomy(
 		spool.Close()
 		return nil, err
 	}
-	// The replay pump is NOT started here, and that is a decision rather
-	// than an omission.
+	// The replay pump: the rows go to the center's audit chain once there
+	// is a center to take them.
 	//
-	// The manager side has no method for it yet: there is no route to send
-	// a batch of autonomy rows over, and a pump whose every drain fails
-	// would spend the rest of the node's life logging that at five-second
-	// intervals. The rows stay on disk, which loses nothing and is
-	// visible: the health line below reports how many are waiting.
-	//
-	// When the route lands, this is where the pump is built and started —
-	// autonomy.NewPump already exists, is rate-limited, acks all-or-nothing
-	// and is tested against all four cases the plan names. The only piece
-	// missing is the transport, and building a sender that cannot send is
-	// how a node ends up with a replay loop that has never worked.
-	log.Info("node autonomy audit spool is local only until the control plane grows a replay route",
-		slog.String("path", spool.Path()))
+	// It is built here and started by the caller, which is the same split
+	// the telemetry WAL uses. The split is not cosmetic: this function
+	// runs before the tunnel has registered, and a pump that started now
+	// would immediately drain into a manager that cannot yet place the
+	// rows. The sender handles that case correctly — it reads "took none"
+	// as "keep them" — but a loop that begins with a guaranteed failure is
+	// a loop whose boot log says something is wrong when nothing is.
+	refused := &atomic.Uint64{}
+	pump, err := autonomy.NewPump(autonomy.PumpOptions{
+		Spool:  spool,
+		Sender: autonomyReplaySender{client: client, edgeID: obs.EdgeID, log: log, refused: refused},
+		Link:   autonomyLink{agent: obs},
+		Log:    log,
+	})
+	if err != nil {
+		spool.Close()
+		return nil, fmt.Errorf("autonomy replay pump: %w", err)
+	}
 
 	builtin.SetAutonomyRunner(autonomyTool{arbiter: arbiter, runner: runner})
 	log.Info("node autonomy is installed",
 		slog.Int("actions", len(registry.Actions())),
 		slog.Duration("offline_after", registry.OfflineAfter()),
 		slog.String("spool", spool.Path()))
-	return &autonomyStack{registry: registry, arbiter: arbiter, spool: spool}, nil
+	return &autonomyStack{registry: registry, arbiter: arbiter, spool: spool, pump: pump, refused: refused}, nil
 }
 
 // autonomyHealth is the shape a node's health page renders, so the numbers
@@ -207,6 +343,12 @@ type autonomyHealth struct {
 	Replays   uint64   `json:"replays"`
 	SpoolPath string   `json:"spool_path,omitempty"`
 	Spooled   int      `json:"spooled,omitempty"`
+	// ReplayRefused is rows the center refused after the outage. It is
+	// separate from Refused, which is the arbiter turning down an action:
+	// one means "the node decided not to act", the other means "the node
+	// acted and the record of it was not accepted", and an operator
+	// reading only one of them would draw the wrong conclusion.
+	ReplayRefused uint64 `json:"replay_refused,omitempty"`
 }
 
 func (s *autonomyStack) Health() autonomyHealth {
@@ -216,6 +358,9 @@ func (s *autonomyStack) Health() autonomyHealth {
 	h := autonomyHealth{SpoolPath: s.spool.Path()}
 	stats := s.arbiter.Snapshot()
 	h.Deferred, h.Run, h.Refused, h.Replays = stats.Deferred, stats.Run, stats.Refused, stats.Replays
+	if s.refused != nil {
+		h.ReplayRefused = s.refused.Load()
+	}
 	for _, a := range s.registry.Actions() {
 		h.Actions = append(h.Actions, a.Name)
 	}
