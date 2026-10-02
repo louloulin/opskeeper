@@ -211,6 +211,15 @@ type Gate struct {
 
 	mu      sync.Mutex
 	pending map[string]*request
+	// byKey is the idempotency index: the key of one exact call to the
+	// request answering it, live or decided-but-still-remembered. See
+	// fence.go.
+	byKey map[string]*request
+	// denials are the refusals still inside their window, so a call that
+	// was refused cannot immediately re-ask. See fence.go.
+	denials map[string]denial
+	// fences serialise a session's approval-requiring calls. See fence.go.
+	fences map[string]*fenceFor
 	// receipts are the grants a human made that the broker still has to
 	// collect. See [Gate.ClaimReceipt].
 	receipts map[string]time.Time
@@ -228,7 +237,12 @@ type Gate struct {
 type request struct {
 	req    ports.ApprovalRequest
 	digest string
-	actor  string
+	// key is the idempotency key of the call this request answers. It is
+	// stored rather than recomputed because the arguments the request was
+	// built from are the ones the operator was shown, and recomputing
+	// would be a second answer to "which call is this".
+	key   string
+	actor string
 	// session is the conversation this call came from. It is gate
 	// bookkeeping rather than part of the operator-facing request, but it
 	// is what lets a closed conversation take its queue with it.
@@ -267,6 +281,9 @@ func New(opts Options) (*Gate, error) {
 		ttl:        opts.TTL,
 		receiptTTL: opts.ReceiptTTL,
 		pending:    make(map[string]*request),
+		byKey:      make(map[string]*request),
+		denials:    make(map[string]denial),
+		fences:     make(map[string]*fenceFor),
 		receipts:   make(map[string]time.Time),
 	}, nil
 }
@@ -299,7 +316,85 @@ func (g *Gate) Admit(ctx context.Context, c Call) (Outcome, string, error) {
 		return Allowed, "", nil
 	}
 
+	// The three fences, in the order a caller meets them. A call that is
+	// already refused does not get to wait for a human first: the human
+	// already answered this exact question, and asking again is how a "no"
+	// becomes something the loop can retry until it gets a "yes".
+	key := keyOf(c)
+	now := g.now()
+	if remembered, ok := g.rememberedDenial(key, now); ok {
+		outcome, reason := denialOutcome(remembered.reason)
+		g.countDenied()
+		g.record(ctx, ports.ActionApprovalDeny, c, "denied", reason, map[string]any{
+			"repeated": true,
+			"reason":   reason,
+		})
+		return outcome, reason, nil
+	}
+
 	digest := Digest(c)
+
+	// A duplicate submission joins the request already in flight rather than
+	// raising a second card. This is the idempotency the plan's stage-1 item
+	// asks for, and it is keyed on the call rather than on a caller-supplied
+	// token: a token the agent mints is a token it can mint again, and a
+	// fence keyed on it is a fence with a key the fencer chooses.
+	//
+	// Only a *live* request is joined. A card that has been answered is not
+	// this submission's answer: a node that restarted orders-api at 09:00
+	// must be able to ask again at 10:00, and a join that outlived the card
+	// would make the fence a policy nobody wrote. A refusal is the one answer
+	// that does carry — see the denial index above.
+	joinLive := func() (Outcome, string, bool) {
+		live, ok := g.joinPending(key)
+		if !ok {
+			return Allowed, "", false
+		}
+		outcome, reason := g.wait(ctx, live)
+		g.settle(ctx, c, live, digest, outcome, reason, true)
+		return outcome, reason, true
+	}
+	if outcome, reason, done := joinLive(); done {
+		return outcome, reason, nil
+	}
+
+	// The session fence: while one approval-requiring call is waiting, this
+	// session's other approval-requiring calls wait behind it rather than
+	// joining the operator's queue. Reads are exempt, and deliberately: a
+	// human deciding about a restart should not also be freezing the reads
+	// that would tell the agent what to do next.
+	var held *fenceFor
+	if fence := g.admitFence(c.SessionID); fence != nil {
+		reason, refused, promoted := g.awaitFence(ctx, c.SessionID, fence)
+		if refused {
+			g.countDenied()
+			g.record(ctx, ports.ActionApprovalDeny, c, "denied", reason, map[string]any{
+				"fenced_behind": true,
+			})
+			return Denied, reason, nil
+		}
+		// The call came out of the queue holding the fence, if the slot was
+		// still free when it woke. The mint below must not take a second
+		// hold on a session it is already serialising.
+		if promoted {
+			held = fence
+		}
+		// The refusal index is re-read rather than assumed: the call this one
+		// was queued behind may have just been refused, and a refusal this
+		// call is the same call for must still apply. A duplicate, by
+		// contrast, is caught by the claim below, which re-checks the index
+		// under the lock that mints the card.
+		if remembered, ok := g.rememberedDenial(key, g.now()); ok {
+			outcome, reason := denialOutcome(remembered.reason)
+			g.countDenied()
+			g.record(ctx, ports.ActionApprovalDeny, c, "denied", reason, map[string]any{
+				"repeated": true,
+				"reason":   reason,
+			})
+			return outcome, reason, nil
+		}
+	}
+
 	// The class the call was actually judged as. It is not always the one
 	// the caller guessed, and an approval that displayed the guess would
 	// be showing an operator a class nobody enforced.
@@ -315,57 +410,123 @@ func (g *Gate) Admit(ctx context.Context, c Call) (Outcome, string, error) {
 		Target:      c.Target,
 		ExpiresAt:   g.now().Add(g.ttl),
 	}
-	pending := &request{req: req, digest: digest, actor: c.Actor, session: c.SessionID, resolved: make(chan struct{})}
+	pending := &request{
+		req:      req,
+		digest:   digest,
+		key:      key,
+		actor:    c.Actor,
+		session:  c.SessionID,
+		resolved: make(chan struct{}),
+	}
 
+	// The claim. Everything that makes a second card impossible happens in
+	// one critical section: the id is minted, the request is entered in the
+	// map, the key is entered in the index, and the call is entered in its
+	// session's fence — or, if the key is already answered by a live
+	// request, none of that happens and this submission joins instead.
+	//
+	// Splitting it is what the first version of this got wrong. The check
+	// and the write were separate, so eight concurrent submissions of one
+	// call all read an empty index in the same instant and all minted; and
+	// moving the check after the fence was not enough either, because by the
+	// time a queued submission woke, the card it was queued behind had been
+	// decided and was no longer live. One section, checked under the lock
+	// that writes, is the only shape where the index and the queue cannot
+	// disagree.
+	//
 	// The id is the only handle an operator's decision has, so two live
-	// requests must never share one: a collision would let the second
-	// call overwrite the first in the map, and the operator's decision
-	// would then silently apply to whichever call the map happened to
-	// hold. Minting again is the only safe response, and a mint source
-	// that cannot produce a fresh id fails the call rather than admitting
-	// it under someone else's.
+	// requests must never share one: a collision would let the second call
+	// overwrite the first in the map, and the operator's decision would then
+	// silently apply to whichever call the map happened to hold. Minting again
+	// is the only safe response, and a mint source that cannot produce a
+	// fresh id fails the call rather than admitting it under someone else's.
+	var joined *request
 	g.mu.Lock()
-	var collided bool
-	for attempt := 0; attempt < maxRequestIDAttempts; attempt++ {
-		req.ID = g.newID()
-		if _, clash := g.pending[req.ID]; !clash {
-			break
+	if live, ok := g.byKey[key]; ok {
+		if p, live2 := g.pending[live.req.ID]; live2 {
+			joined = p
+		} else {
+			// The request resolved between the index and the map. The map is
+			// the truth, and this is the one place they can be seen to
+			// disagree.
+			delete(g.byKey, key)
 		}
-		collided = attempt == maxRequestIDAttempts-1
 	}
-	if collided {
-		g.mu.Unlock()
-		g.countBlocked()
-		g.record(ctx, ports.ActionToolBlocked, c, "refused", "could not mint a unique approval id", nil)
-		return Blocked, "could not mint a unique approval id", nil
+	if joined == nil {
+		var collided bool
+		for attempt := 0; attempt < maxRequestIDAttempts; attempt++ {
+			pending.req.ID = g.newID()
+			if _, clash := g.pending[pending.req.ID]; !clash {
+				break
+			}
+			collided = attempt == maxRequestIDAttempts-1
+		}
+		if collided {
+			g.mu.Unlock()
+			g.countBlocked()
+			g.record(ctx, ports.ActionToolBlocked, c, "refused", "could not mint a unique approval id", nil)
+			return Blocked, "could not mint a unique approval id", nil
+		}
+		g.pending[pending.req.ID] = pending
+		if key != "" {
+			g.byKey[key] = pending
+		}
+		// The call occupies its session's fence for as long as it is
+		// waiting, and releases it whatever the outcome: a call still
+		// holding the fence after it resolved is a conversation that never
+		// answers again.
+		if held == nil {
+			held = g.enterFenceLocked(c.SessionID, pending.req.ExpiresAt)
+		}
 	}
-	pending.req.ID = req.ID
-	g.pending[req.ID] = pending
 	g.mu.Unlock()
 
+	// The duplicate is answered by the request it joined, and the fence it
+	// may have been promoted into is released on the way out.
+	defer g.leaveFence(c.SessionID, held)
+	if joined != nil {
+		outcome, reason := g.wait(ctx, joined)
+		g.settle(ctx, c, joined, digest, outcome, reason, true)
+		return outcome, reason, nil
+	}
+
 	g.record(ctx, ports.ActionApprovalRequest, c, "pending", req.Summary, map[string]any{
-		"request_id":   req.ID,
+		"request_id":   pending.req.ID,
 		"digest":       digest,
 		"blast_radius": string(req.BlastRadius),
 		"expires_at":   req.ExpiresAt.UTC().Format(time.RFC3339),
 	})
 	g.push(c.SessionID, wire.ApprovalFrame{
-		RequestID:   req.ID,
+		RequestID:   pending.req.ID,
 		Digest:      digest,
 		Tool:        c.ToolName,
 		Class:       string(effective),
-		Summary:     c.Summary,
+		Summary:     req.Summary,
 		BlastRadius: string(req.BlastRadius),
 		Target:      c.Target,
 		ExpiresAt:   req.ExpiresAt.UTC().Format(time.RFC3339),
 	})
 
 	outcome, reason := g.wait(ctx, pending)
+	g.settle(ctx, c, pending, digest, outcome, reason, false)
+	return outcome, reason, nil
+}
+
+// settle records the decision, mints or refuses the receipt, and pushes the
+// closing frame.
+//
+// It is shared by the two ways a call can reach a decision — it was the only
+// submission, or it joined one already in flight — because the ledger must
+// not be able to tell the difference. A join that produced a different audit
+// shape would make "how many times was this call submitted" unanswerable,
+// which is the question the whole mechanism exists to make answerable.
+func (g *Gate) settle(
+	ctx context.Context, c Call, pending *request,
+	digest string, outcome Outcome, reason string, joined bool,
+) {
 	switch outcome {
 	case Allowed:
-		g.mu.Lock()
-		g.granted++
-		g.mu.Unlock()
+		g.countGranted()
 		// A human said yes to this exact call. The broker is about to be
 		// asked to run it, and the broker is host code the agent cannot
 		// reach — so this receipt is what lets it tell a granted call from
@@ -374,30 +535,36 @@ func (g *Gate) Admit(ctx context.Context, c Call) (Outcome, string, error) {
 		// human in the loop, which is the exact failure the second check
 		// exists to prevent.
 		g.grant(c)
+		// A later "yes" clears an earlier "no" for the same call, so a
+		// refusal cannot outlive the question it answered.
+		g.forgetDenial(pending.key)
 		g.record(ctx, ports.ActionApprovalGrant, c, "allowed", pending.decision.DecidedBy, map[string]any{
-			"request_id": req.ID,
+			"request_id": pending.req.ID,
 			"decided_by": pending.decision.DecidedBy,
 			"note":       pending.decision.Note,
+			"joined":     joined,
 		})
 	case Denied:
-		g.mu.Lock()
-		g.denied++
-		g.mu.Unlock()
+		g.countDenied()
+		// The refusal is remembered so the loop that produced the question
+		// cannot simply ask it again. Without this, "denied" and "try once
+		// more" are the same state and the only difference is latency.
+		g.rememberDenial(pending.key, reason, g.now())
 		g.record(ctx, ports.ActionApprovalDeny, c, "denied", reason, map[string]any{
-			"request_id": req.ID,
+			"request_id": pending.req.ID,
 			"reason":     reason,
+			"joined":     joined,
 		})
 	}
 	g.push(c.SessionID, wire.ApprovalFrame{
-		RequestID: req.ID,
+		RequestID: pending.req.ID,
 		Digest:    digest,
 		Tool:      c.ToolName,
-		Class:     string(effective),
-		Summary:   c.Summary,
+		Class:     string(pending.req.Class),
+		Summary:   pending.req.Summary,
 		Decision:  approvalDecisionWord(outcome),
 		Note:      reason,
 	})
-	return outcome, reason, nil
 }
 
 // policyFor resolves the policy for a caller.
@@ -438,6 +605,17 @@ func (g *Gate) wait(ctx context.Context, pending *request) (Outcome, string) {
 	timer := time.NewTimer(remaining)
 	defer timer.Stop()
 
+	// Already decided before this call started waiting — the idempotency
+	// path hands over a request the operator answered a moment ago. That
+	// answer is the answer; the expiry branch below is not consulted,
+	// because a zero remaining time would otherwise make the two ready at
+	// once and let the timer win the race and report a grant as a timeout.
+	select {
+	case <-pending.resolved:
+		return pendingOutcome(pending), pendingReason(pending)
+	default:
+	}
+
 	select {
 	case <-pending.resolved:
 		// The decision here arrived either through resolve, which verified
@@ -473,6 +651,27 @@ func (g *Gate) wait(ctx context.Context, pending *request) (Outcome, string) {
 		})
 		return Denied, "no decision within " + g.ttl.String()
 	}
+}
+
+// pendingOutcome and pendingReason read a resolved request's answer.
+//
+// A decision carries its own wording, and this is where the gate's own
+// wording lives for the two exits that never had a human write a note.
+func pendingOutcome(pending *request) Outcome {
+	if pending.decision.Decision == ports.ApprovalGranted {
+		return Allowed
+	}
+	return Denied
+}
+
+func pendingReason(pending *request) string {
+	if pendingOutcome(pending) == Allowed {
+		return ""
+	}
+	if pending.decision.Note != "" {
+		return pending.decision.Note
+	}
+	return "denied by operator"
 }
 
 // Decide applies a human's answer.
@@ -524,7 +723,18 @@ func (g *Gate) resolve(id string, d ports.Decision) error {
 		return err
 	}
 	delete(g.pending, id)
+	// The decision and the instant it was written are both recorded under
+	// this lock, before the request is released. A duplicate arriving in
+	// the next moment reads the answer and the window it belongs to as one
+	// consistent fact; a decision written after the unlock could be read
+	// alongside a zero window and be mistaken for a request that never
+	// got one.
+	pending.decision = d
 	g.mu.Unlock()
+	// The index is released here, outside the lock that held the map, and
+	// only for the entry that still points at this request: a call that has
+	// already claimed the key must not lose its registration.
+	g.unindexPending(pending)
 	g.finish(pending, d)
 	return nil
 }
@@ -541,6 +751,10 @@ func (g *Gate) closePending(id string, d ports.Decision) {
 	pending, ok := g.pending[id]
 	if ok {
 		delete(g.pending, id)
+		// The same reasoning as resolve: a refusal is written under the lock
+		// that removed the request, so a duplicate arriving in the next
+		// moment cannot read a decision that is not there yet.
+		pending.decision = d
 	}
 	g.mu.Unlock()
 	if !ok {
@@ -548,6 +762,7 @@ func (g *Gate) closePending(id string, d ports.Decision) {
 		// already ran; either way the operator's answer stands.
 		return
 	}
+	g.unindexPending(pending)
 	g.finish(pending, d)
 }
 
@@ -608,9 +823,14 @@ func (g *Gate) DropSession(sessionID string) int {
 	}
 	g.mu.Unlock()
 	for _, p := range doomed {
+		g.unindexPending(p)
 		p.decision = ports.Decision{RequestID: p.req.ID, Decision: ports.ApprovalDenied, Note: "the conversation was closed"}
 		close(p.resolved)
 	}
+	// The fence goes last, after the requests it was holding are released:
+	// a waiter that woke first and re-entered would otherwise be closed
+	// out again by a fence that is already on its way out.
+	g.dropSessionFences(sessionID)
 	return len(doomed)
 }
 
@@ -640,6 +860,21 @@ func (g *Gate) Snapshot() Stats {
 		Denied:  g.denied,
 		Expired: g.expired,
 	}
+}
+
+// countDenied and countGranted are the two halves of a human decision, kept
+// beside the read and block counters so a stat that means something has its
+// increment next to the others that mean the same kind of thing.
+func (g *Gate) countDenied() {
+	g.mu.Lock()
+	g.denied++
+	g.mu.Unlock()
+}
+
+func (g *Gate) countGranted() {
+	g.mu.Lock()
+	g.granted++
+	g.mu.Unlock()
 }
 
 func (g *Gate) countBlocked() {

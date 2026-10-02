@@ -2914,6 +2914,103 @@ usage 归集写在「completion served」那一行，带 `edge_id` 与三个 tok
 以及 §4.28.4 记的 per-tool 配额（`PluginSpec` 无 `limits`），它挡的是**今天就在
 只读包里**的 `host_dmesg` / `host_grep_file`，按 §4.28.5 的判断属阶段 0 阻塞项。
 
+### 4.34 决策 96：工具级资源配额——方案 0.1 之外的阶段 0 阻塞项，以及一段死代码的证词
+
+§4.28.4 判定「per-tool 配额缺失」**成立，且是阶段 0 的阻塞项而不是阶段 2 的加固项**：
+`host_dmesg` / `host_grep_file` / `host_sosreport` 今天就在只读包里，任何一个都能把
+PB 级文本倒进 context。本节把它关掉。
+
+#### 4.34.1 先说那段死代码，因为它比缺口本身更能说明问题
+
+`core/floor/skill/builtin/spill_helper.go` 里有一个常量、一个函数和三条测试，
+文件头写着「适用于所有 builtin skill 的 Execute 函数」。**实测：零个调用点。**
+
+```
+$ grep -rln "truncateOrSpill" --include="*.go" core/
+core/floor/skill/builtin/spill_helper.go
+core/floor/skill/builtin/spill_helper_test.go
+```
+
+所以 1 MiB 这个数字**早就存在**、早就有人认为它是对的、它的测试一直是绿的，
+而节点上体积最大的那批工具**一条都没有接**。§4.28.4 说「配额的正确落法是在
+`pig-ops.yaml` 声明、在宿主的工具执行侧强制」——现在补上的不只是强制，
+还有那句「机制写好了不等于机制在跑」。
+
+因此这一节的做法不是「加一个配额系统」，而是**三件事同时做**，
+少一件就回到今天的状态：
+
+1. **清单里声明**（`spec.tools[].limits`）——评审能看见的表面；
+2. **执行器自己的 metadata 里也声明**（`skill.Metadata.Limits`）——代码需要知道；
+3. **两侧不一致时构建检查报错**（`sdk.Registry.Check`）——只存在于一个文件里的
+   上限，是作者以为有、节点没有的那个。
+
+#### 4.34.2 强制点在 tool broker，因为那是工具唯一的手
+
+`core/edge/toolbroker` 是节点上**所有**工具调用的唯一通道：agent 进程里的扩展只是
+路由，skill 与上翻调用都从这里出去。这条性质是既有设计（决策里「宿主是唯一能真正
+拒绝的位置」的落点），所以上限加在这里覆盖的是**将来任何一个第三方工具**，
+而不是今天这批 builtin。
+
+- **没声明也有上限。** `skill.DefaultMaxOutputBytes`（1 MiB，就是那段死代码里的数字）
+  在查表时应用。一个「只有包声明了才存在的上限」不是上限，是包可以选择的加入项，
+  而最容易淹没 context 的恰恰是没人想起去限的那几个工具。
+- **超时按工具声明。** 全局 5 分钟对 `host_sosreport` 是对的，对其余全部是错的；
+  两者是同一类工具，所以这个数只能是**按工具**的。
+- **超限不是失败，是被替换。** 在 JSON 文档中间按字节切开会产生模型无法解析的东西，
+  而解析失败读起来像「工具坏了」而不是「工具被截断了」。所以超限的回复被**整条替换**
+  成一份通知：多大、上限多少、完整内容落在哪里（0600，只保留 24 小时）。
+
+**这一条是被测试抓出来的，不是我想出来的**：第一条 broker 测试用 512 字节上限，
+结果通知本身带 1 KB 预览 = 1603 字节，**上限对自己的替换失效**。
+一个只约束别人回复的数字不是上限。所以预览现在被两次封顶（一次是「尝一口」该多大，
+一次是信封还剩多少），而**连通知都放不下的上限**（< 约 320 字节）走的是**拒绝**
+而不是数据——上限约束的是工具交给模型的**结果**，而拒绝是宿主自己的话。
+
+#### 4.34.3 `limits.memory` 没有做，理由写在这里
+
+方案写的是 `limits.memory` 与 `limits.output_bytes` 两个字段。落地的是后者，
+**不是**因为前者不重要，而是因为它在这套架构里**不可执行**：skill 跑在 edge 进程内，
+等这份声明被读到的时候，分配已经发生了。要真的约束内存，skill 必须跑在一个能被
+从外部杀掉的地方——子进程 + rlimit——那是阶段 1 的 sandbox，不是清单上的一个字段。
+
+**声明一个当前谁都不执行的字段，比不声明更糟**：它读起来像保证，而它是假的。
+本仓库过去几个决策删掉的正是这种形状（`pigrpc.Options.Env` 里不存在的变量、
+`skill_meta.yaml` 里没人读的能力声明）。所以这里只留能强制的那一个，
+并把「memory 要在子进程隔离之后才可写」写进 `ToolLimits` 的注释里。
+
+#### 4.34.4 落地清单与闸门
+
+| 层 | 位置 | 内容 |
+|---|---|---|
+| 契约 | `core/domain/plugin.go` | `ToolLimits{OutputBytes, TimeoutSeconds}` + `Valid()`（负数非法） |
+| 校验 | `sdk/manifest.go` | 负上限在**装载时**拒绝，这是节点还没跑起来前唯一能告诉包「你的清单错了」的时刻 |
+| SDK | `sdk/register.go` | `RegisterWithLimits`、`Limits`、`ToolDecls` 渲染、`Check` 比对漂移 |
+| 执行器 | `core/floor/skill/types.go` + 9 个 builtin | 每个高基数读工具都声明了紧于默认值的上限与墙钟 |
+| 强制 | `core/edge/toolbroker/server.go` | 每工具超时 + 输出上限 + 通知替换 + spill |
+| 机制 | `core/floor/skill/spill.go` | 从死代码里搬出来并修好：0600、24 小时回收、工具名不可变成路径、目录可注入 |
+| 接线 | `cmd/opskeeper-edge/agent.go` | broker 从**同一个** registry 读 class 和 limits |
+| 闸门 | `core/floor/pluginmanifest/limits_test.go` | 9 个高基数工具在**两处**都声明了且相等（实测会红） |
+
+顺带修好的既有缺陷（都不是风格问题）：
+
+- **spill 文件是 0644**。一段内核环形缓冲、命令行、日志行落到 `/var/tmp` 且全局可读，
+  在有第二个本地账号的机器上等于把 agent 被允许读的东西发给了它。
+- **spill 永不回收**。`spillRetention = 24h`，且只删本机制自己写的文件——
+  按时间扫目录会删掉 `/var/tmp` 里别人的东西，而真实主机上它不 exclusively 属于我们。
+- **工具名可以变成路径**。名字来自清单，因此 `../../etc/evil` 现在会被清洗。
+
+#### 4.34.5 进度影响
+
+阶段 0 从 **50% 记为 65%**，加权合计从 ≈20% 记为 **≈24%**。
+剩下的**只有一件事，且它不是代码**：方案 0.4 的验收——`make compose-up` 之后一台
+edge 完成一次真实对话并返回流式输出、节点上 `ps` 可见独立 pig 进程、
+`/etc/opskeeper-edge` 下无任何云厂商密钥。前两条已由 `core/floor/delivery` 与
+`tests/agentgateway` 分别覆盖了能离线覆盖的部分，**真 provider key 那一条不能**，
+本机没有 Docker 也没有 key。
+
+至此阶段 0 的每一条代码路径都已落地并有闸门，阶段 0 与阶段 1 的边界上只剩
+「跑一次真的」。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
@@ -2947,6 +3044,92 @@ opskeeper-sre-readonly/                 # 插件根
 `spec.tools` 是本次改造新增的关键字段：它把「插件能做什么」从隐式
 （代码里注册了什么就是什么）变成显式清单，使「能力声明与实际工具集一致」
 成为可自动校验的验收项。
+
+### 4.35 决策 97：幂等与栅栏——方案 1.3，以及三个只有并发测试能发现的实现错误
+
+方案 1.3 问的是三件事：同一幂等键的重复提交只执行一次、批准后有租约、
+审批挂起期间同会话的兄弟调用被阻塞。`policygate` 本来已经满足其中两条的
+一半——授予的收据只能领一次（`ClaimReceipt` 消费而非读取），决策绑定在
+operator 被展示过的那个 digest 上。**真正缺的那一条恰好是探针最先撞上的
+一条**：没有任何东西阻止**同一个调用**被再次提交，也没有任何东西记得它已经被拒绝过。
+
+#### 4.35.1 它防的不是崩溃，是两件更难看的事
+
+第一种失败不产生错误：一个学会了「同一个 restart 提交三次就有三张卡」的模型，
+配上一位批准了第一张、却无从知道另外两张是同一个问题的运维。第二种更糟：
+人类说「不」，agent 立刻用**一模一样的参数**再问一次，于是第二张卡看起来
+像一次全新的决策，而不是一次已经被做过的拒绝的重复。
+
+三道机制，各自关一扇门：`byKey`（幂等索引）、`denials`（拒绝栅栏）、
+`fences`（会话栅栏）。前两者在 `fence.go`，第三个也是。
+
+#### 4.35.2 幂等必须是一个临界区，不是「先查后写」
+
+第一版把 `joinPending`（查）与写入索引拆成两步，八个并发的相同调用在同一个
+瞬间全部读到空索引、全部铸卡——**闸门塌回它原来的样子**。改成「先过栅栏再查」也不够：
+被栅栏排队的重复调用醒来时，它排队等的那张卡**已经被裁决掉了**，
+于是每一个都去铸自己的一张。三种写法都错，正确的形状只有一种：
+
+> **查与写在同一把锁里。** 铸 id、进 map、进索引、进会话栅栏——
+> 四步一个临界区；命中活跃请求则四步全不做，改为 join。
+
+这样「索引与队列不一致」在结构上不可能出现，而不是靠运气。`_test.go` 里
+`TestTheSameCallSubmittedEightTimesIsOneQuestionAndOneExecution` 是这条的守卫：
+8 个并发相同调用 → 1 张卡 → 8 次提交都拿到同一个「准」→ 但 `ClaimReceipt`
+**恰好成功一次**。最后这半句是容易漏的：一次批准必须等于一次执行，
+另外 7 次在 broker 处被拒（fail-closed）。
+
+#### 4.35.3 栅栏里有两个只有并发测试能发现的错误
+
+- **开栅栏时不清零 `expiresAt`**。等待者在入队时快照了自己的上界；
+  但被「有人抢到了槽位、我再等一轮」弹回去的等待者会**重读**这个字段，
+  读到零值 → `remaining = 0` → 定时器立刻响 → 一个正要被放行的槽位
+  报成「等待超时」。现在清零发生在桶真正被丢弃之前，且零上界表示
+  「前面没有可超时的卡」——只等信号，而信号不是可选的。
+- **`releaseFenceLocked` 在还有等待者时不开门**。`queued > 0` 的判断
+  让桶活着，但也让 `open` 永远闭着：**真死锁**。现在开门只看 `waiting`，
+  丢弃桶才看两个计数。
+
+#### 4.35.4 等待者必须**被提升**为持有者，否则串行化在交接处断掉
+
+醒来就直接铸卡的等待者，会在「释放」与「醒来」之间的那几微秒里让另一个
+调用铸出并排的第二张卡。`awaitFence` 因此在**同一把锁**下把队列位置转成
+持有者身份（`queued--` / `waiting++` / 换一条新 `open`），槽位已被抢走就
+重新排队而不是并排进去。交接是串行的延续，不是它的终点。
+
+#### 4.35.5 两条既有测试必须改，而且**改的是测试不是契约**
+
+| 测试 | 原契约 | 现在为什么必须变 |
+|---|---|---|
+| `TestConcurrentCallsEachGetTheirOwnRequest` | 8 个**完全相同**的并发调用各拿一张卡 | 「各拿一张」正是要关掉的失败。改为 8 个**不同会话**的相同调用（digest 相同、会话不同）——这才是栅栏必须分开的那一对 |
+| `TestACallIsRefusedRatherThanAdmittedUnderALiveRequestsHandle` | 第二次调用同会话，撞 id 失败 | 它现在先被**会话栅栏**挡住，永远到不了铸 id。改为换一个 `SessionID`（栅栏是按会话的），原意——不能共用一个活着的 request 句柄——不变 |
+
+#### 4.35.6 刻意**不做**的两件事，都写了理由
+
+- **不记住「准」**。join 只合并**仍然活跃**的卡；卡一裁决，索引与 map 一起清掉，
+  同一调用随时可以再问。理由是一条边界：**栅栏不是策略**。一个把批准
+  永远记住的闸门，等于替运维写了一条他没写过的规则（09:00 重启过，
+  10:00 就不许再问）。拒绝是唯一的例外——它需要自己那份索引，
+  `TestARefusalSurvivesTheLoopThatProducedTheQuestion` 与
+  `TestARefusalLapsesWithItsWindowAndALaterYesClearsAnEarlierNo` 钉住两端。
+- **不收紧 `DefaultReceiptTTL`**。方案写的是「5 秒内执行、10 秒后拒绝」。
+  但授予与执行之间隔着**模型的一次推理往返**，不是一次函数调用：
+  把租约压到 10 秒，代价是运维点了「准」而工具在第 12 秒才跑、于是被拒。
+  默认值仍是 2 分钟，行为本身由 `TestAGrantIsCollectableInsideItsLeaseAndNotAfterIt`
+  用注入的 10 秒租约 + 假时钟钉住（9 秒可领、11 秒不可领）。
+
+#### 4.35.7 落地清单与闸门
+
+| 层 | 位置 | 内容 |
+|---|---|---|
+| 契约 | `policygate/request.go`（`gate.go`） | `key`、`resolvedAt` 的取舍；claim 一个临界区四步 |
+| 机制 | `core/edge/policygate/fence.go` | `byKey` / `denials` / `fences` 三件套 |
+| 接线 | `resolve` / `closePending` / `DropSession` | 三条移除路径都释放索引与会话栅栏 |
+| 闸门 | `core/edge/policygate/fence_test.go` | 8 个内核级用例：一次批准一次执行 / 租约两端 / 兄弟排队 / 读不被栅栏 / 关闭对话释放孤儿 / 拒绝不被兄弟误伤 / 拒绝会过期 / 后来的「准」清掉先前的「不」 |
+
+阶段 1 从 **10% 记为 30%**，加权合计从 ≈24% 记为 **≈29%**。方案 1.3 关闭；
+1.1（遥测本地 spool）与 1.2（自治白名单）**未动**，且 1.2 仍然必须先做
+1.3 才开始——一个没有幂等键的动作级白名单，是在给自治装上重试风暴的引擎。
 
 ---
 
@@ -2982,17 +3165,16 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 
 | 阶段 | 完成度 | 判据与剩余 |
 |---|---|---|
-| 0 边缘交付闭环（P0） | **50%** | **三条** P0 都是「代码意图已写、实现路径从未跑过」：`cmd/opskeeper-edge/agent.go:209-212` 的 `Env` 只有两个 socket，`dist/build-edge-bundle.sh:38-49` 与 `deploy/Dockerfile.opskeeper-edge` 都不含 `pig`，`Makefile` 没有任何 `build-pig*` 目标。**已实测可行**：从 `core/pig` 构建 `github.com/MichaelKinsy/PiG/cmd/pig` 退出码 0（71 MB）。方案的「注入 `OPENAI_BASE_URL`」**不成立**（PiG 无此变量），正确路径是 `models.json` 自定义 provider + `PIG_CODING_AGENT_DIR`（§4.28.1）。**本轮新发现的第三条 P0 比前两条都严重：节点上的插件扩展编译不过**（`GOWORK=off` 实测报 `unknown revision core/v0.0.0`，且无 `go.sum`）——补齐 pig 与凭据之后节点仍然零工具（§4.28.8）。**决策 91 已关掉其中的第三条**：`core/wire` 内联进每个打包扩展、`go.mod` 删掉未发布的 `core v0.0.0`、只留 PiG SDK 一条 require，8 个打包扩展在 `GOWORK=off CGO_ENABLED=0` 下实测 8/8 构建通过，并新增「按节点的方式构建」这条**实测会红**的闸门（§4.29）。**决策 92 关掉了第二条**：`make build-pig-all` 从 `core/pig` + `GOWORK=off` 构建并**被每个 `build-edge-<arch>` 依赖**，两处 bundle 清单、`dist/package.sh`、`install-edge.sh`（含 `pig --version` 自检）、`Dockerfile.opskeeper-edge`、env 模板全部接通，六个位置各有断言（`core/floor/delivery`，6 条测试，**实测会红**）。**决策 93 关掉了 P0-1 的节点侧**：节点有了完整的凭据链（`OPSKEEPER_EDGE_AGENT_CONFIG_DIR` + `models.json` 的 `"$VAR"` 引用 + `PIG_CODING_AGENT_DIR`），并**对着真 `pig` 二进制验证**了三条（能解析 / 无凭据则拒绝 / 无 scope 则找不到）。本轮还查出方案 10 条清单里没有的第四条：**`DefaultAgentDir()` 在 `$HOME` 未设置时丢弃错误、返回相对路径 `.pig/agent`，被 agent 按 Cwd（即插件包根）解析**——凭据会落进签名插件内容里（§4.31.1）。**决策 94 关掉了 P0-1 的 manager 侧**：`core/manager/server/llmgw` 提供 `POST /v1/chat/completions`（流式 + 非流式）与 `GET /v1/models`，鉴权**复用隧道凭据对**（零新存储、零 schema 迁移、轮换即现有 `UpdateSecretHash`，§4.31.5），节点能选 model 不能选 provider；真 `pig` 二进制端到端抓出两处形状错误——`content` 实际是 string **或** parts 数组的联合类型（按 string 建模会拒绝真 agent 的每一个请求，而 18 条单元测试全绿）、大整数必须 `UseNumber` 才能活过 `>2^53`（§4.32）。**决策 95 把方案 0.1 剩下的三项职责与限流补齐**：每日 token 上限复用**同一个** `llm.InMemoryBudget` 实例（两份账 = 集群能花掉两倍上限）、每 edge 一个令牌桶超限 429、调用方的 `max_completion_tokens` 真正生效（之前被解析后丢弃）；顺带修掉 **429 之前被报成 400**（`writeError` 自带的 switch 对预算与限流哨兵没有分支）与一处 typed nil panic（§4.33）。剩下的不是 P0，是验收本身：方案 0.4 的 `make compose-up` 真实对话需要 Docker 与真 provider key；per-tool 配额（`PluginSpec` 无 `limits`）挡的是**今天就在只读包里**的 `host_dmesg` / `host_grep_file`，按 §4.28.5 属阶段 0 阻塞项|
-| 1 离线与有限自治（P1） | **10%** | 已有的一半：changewatcher 内存批量缓冲（`tunnel_sink.go:16-52`，drop-oldest + 可观测计数）、tunnel full-jitter 重连（决策 78）。缺的一半：`metricsLoop` 连内存缓冲都没有（`agent.go:529-615`，失败只 log）、无落盘 WAL、无 replay、无 `core/edge/autonomy`、无动作级幂等键、`PluginSpec` 无 `limits` 字段。方案的 autonomy 设计与「审批裁决权在宿主」不冲突，但**必须以「宿主代码 + 中心签名策略 + 只读先行」三个前提重写**（§4.28.6） |
+| 0 边缘交付闭环（P0） | **65%** | **三条** P0 都是「代码意图已写、实现路径从未跑过」：`cmd/opskeeper-edge/agent.go:209-212` 的 `Env` 只有两个 socket，`dist/build-edge-bundle.sh:38-49` 与 `deploy/Dockerfile.opskeeper-edge` 都不含 `pig`，`Makefile` 没有任何 `build-pig*` 目标。**已实测可行**：从 `core/pig` 构建 `github.com/MichaelKinsy/PiG/cmd/pig` 退出码 0（71 MB）。方案的「注入 `OPENAI_BASE_URL`」**不成立**（PiG 无此变量），正确路径是 `models.json` 自定义 provider + `PIG_CODING_AGENT_DIR`（§4.28.1）。**本轮新发现的第三条 P0 比前两条都严重：节点上的插件扩展编译不过**（`GOWORK=off` 实测报 `unknown revision core/v0.0.0`，且无 `go.sum`）——补齐 pig 与凭据之后节点仍然零工具（§4.28.8）。**决策 91 已关掉其中的第三条**：`core/wire` 内联进每个打包扩展、`go.mod` 删掉未发布的 `core v0.0.0`、只留 PiG SDK 一条 require，8 个打包扩展在 `GOWORK=off CGO_ENABLED=0` 下实测 8/8 构建通过，并新增「按节点的方式构建」这条**实测会红**的闸门（§4.29）。**决策 92 关掉了第二条**：`make build-pig-all` 从 `core/pig` + `GOWORK=off` 构建并**被每个 `build-edge-<arch>` 依赖**，两处 bundle 清单、`dist/package.sh`、`install-edge.sh`（含 `pig --version` 自检）、`Dockerfile.opskeeper-edge`、env 模板全部接通，六个位置各有断言（`core/floor/delivery`，6 条测试，**实测会红**）。**决策 93 关掉了 P0-1 的节点侧**：节点有了完整的凭据链（`OPSKEEPER_EDGE_AGENT_CONFIG_DIR` + `models.json` 的 `"$VAR"` 引用 + `PIG_CODING_AGENT_DIR`），并**对着真 `pig` 二进制验证**了三条（能解析 / 无凭据则拒绝 / 无 scope 则找不到）。本轮还查出方案 10 条清单里没有的第四条：**`DefaultAgentDir()` 在 `$HOME` 未设置时丢弃错误、返回相对路径 `.pig/agent`，被 agent 按 Cwd（即插件包根）解析**——凭据会落进签名插件内容里（§4.31.1）。**决策 94 关掉了 P0-1 的 manager 侧**：`core/manager/server/llmgw` 提供 `POST /v1/chat/completions`（流式 + 非流式）与 `GET /v1/models`，鉴权**复用隧道凭据对**（零新存储、零 schema 迁移、轮换即现有 `UpdateSecretHash`，§4.31.5），节点能选 model 不能选 provider；真 `pig` 二进制端到端抓出两处形状错误——`content` 实际是 string **或** parts 数组的联合类型（按 string 建模会拒绝真 agent 的每一个请求，而 18 条单元测试全绿）、大整数必须 `UseNumber` 才能活过 `>2^53`（§4.32）。**决策 95 把方案 0.1 剩下的三项职责与限流补齐**：每日 token 上限复用**同一个** `llm.InMemoryBudget` 实例（两份账 = 集群能花掉两倍上限）、每 edge 一个令牌桶超限 429、调用方的 `max_completion_tokens` 真正生效（之前被解析后丢弃）；顺带修掉 **429 之前被报成 400**（`writeError` 自带的 switch 对预算与限流哨兵没有分支）与一处 typed nil panic（§4.33）。剩下的不是 P0，是验收本身：方案 0.4 的 `make compose-up` 真实对话需要 Docker 与真 provider key；**决策 96 关掉了 per-tool 配额**（§4.28.4 判定的阶段 0 阻塞项）：清单里声明 `limits`、执行器 metadata 里也声明、两侧漂移由 `sdk.Check` 报错，**强制点在 tool broker**——节点上所有工具调用的唯一通道，因此覆盖将来任何一个第三方工具（没声明也有 1 MiB 默认上限，`skill.Spill` 从一段**零调用点的死代码**里搬出来并修好 0644 权限、24 小时回收与路径注入）。九个高基数读工具各有紧于默认值的上限与墙钟（§4.34）。剩下的**只有方案 0.4 的真实验收**：`make compose-up` 后一台 edge 完成一次真实对话、节点上可见独立 pig 进程、`/etc/opskeeper-edge` 无云厂商密钥——前两条已由 `core/floor/delivery` 与 `tests/agentgateway` 覆盖了可离线覆盖的部分，真 provider key 那一条本机不具备（无 Docker、无 key）|
+| 1 离线与有限自治（P1） | **30%** | **决策 97 关掉了方案 1.3（幂等与栅栏）**：同一调用并发重复提交合并为一张卡、一次批准恰好一次执行（`ClaimReceipt` 消费式）、授予有可注入租约、审批挂起期间同会话兄弟排队、**读调用不被栅栏阻塞**、关闭对话释放孤儿、拒绝栅栏防「立刻重问」且不误伤兄弟（§4.35）。已有的一半：changewatcher 内存批量缓冲（`tunnel_sink.go:16-52`，drop-oldest + 可观测计数）、tunnel full-jitter 重连（决策 78）。缺的一半：`metricsLoop` 连内存缓冲都没有（`agent.go:529-615`，失败只 log）、无落盘 WAL、无 replay、无 `core/edge/autonomy`（1.2，且**必须以决策 97 的幂等键为前提**才开始，否则等于给自治装上重试风暴的引擎）；`PluginSpec` 的 `limits` 已由决策 96 补上，不在本项剩余里。方案的 autonomy 设计与「审批裁决权在宿主」不冲突，但**必须以「宿主代码 + 中心签名策略 + 只读先行」三个前提重写**（§4.28.6） |
 | 2 生态与治理加固（P2） | **15%** | 工具注册表：`grep toolregistry` 只命中注释（`chatruntime/types.go:37-40` 自陈在 PR-3），**不存在 `tool_registry.go`**；per-tool 配额：`PluginSpec` 无 limits 字段（单是高基数只读工具就已经是阶段 0 阻塞项）；MCP 兼容层：运行时已有（决策 85），但**无对外 MCP 协议面**；成本结晶：`grep crystalliz` 零命中；eval 三维化：`judge.Score` 是过程四维，不是 Localization × Identification × Reason；prompt injection 标注：无 |
 | 3 控制面瘦身与联邦（P3） | **5%** | `iam → manager` 反向依赖仍在 `scripts/modulecheck/main.go:548-556` 的 `exceptions` 台账里（决策 35 的已知例外，注释已写明「未来拆分必须解决它」）；manager 27.3 万行（实测 `find core/manager -name '*.go' \| xargs wc -l`）；无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档） |
 
-加权合计 ≈ **20%**（四阶段等比：50 / 10 / 15 / 5 的均值 20%）。**这个数字
+加权合计 ≈ **29%**（四阶段等比：65 / 30 / 15 / 5 的均值 28.75%）。**这个数字
 仍然不是好消息，但阶段 0 的形状变了**：三条 P0 **全部关掉**（决策 91、92、93+94），
 四条涉及的位置现在都有断言，且方案 0.1 的五项职责（凭据解析、预算拦截、转发、
-usage 计量、429 限流）全部落地（决策 95）。阶段 0 剩下的不是难，是两件需要
-**外部条件**的事：方案 0.4 的真实对话验收要 Docker 与真 provider key，
-per-tool 配额要动 `PluginSpec` 的 schema。**决策 90 的全部意义就是证明这个落差
+usage 计量、429 限流）全部落地（决策 95）。阶段 0 剩下的**不是难，是一件需要外部条件的事**：方案 0.4 的真实对话验收
+要 Docker 与真 provider key。**决策 90 的全部意义就是证明这个落差
 是可见、可测、可关的**
 ——§4.28.8 说明若只按方案自己的清单做它关不掉，§4.29 / §4.30 则证明关掉两条之后，
 剩下的能被逐条指认，而且每一条都自带「实测会红」的闸门。

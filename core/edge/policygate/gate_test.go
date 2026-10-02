@@ -3,6 +3,7 @@ package policygate
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -497,17 +498,23 @@ func TestALedgerRowNamesTheTargetAndTheClass(t *testing.T) {
 func TestConcurrentCallsEachGetTheirOwnRequest(t *testing.T) {
 	// A node runs several investigations at once. Two calls sharing one
 	// request would mean one operator's decision silently covering both.
+	//
+	// The conversations differ while the call does not — same tool, same
+	// arguments, eight sessions — because that is the pair the fence has to
+	// keep apart. The idempotency key includes the session precisely so
+	// this case does not collapse; the collapse it does perform is covered
+	// in fence_test.go, and it is the same conversation asking twice.
 	h := newHarness(t, scripted(true, true), time.Hour)
 	const n = 8
 	outcomes := make(chan Outcome, n)
 	for i := 0; i < n; i++ {
-		go func() {
+		go func(i int) {
 			o, _, _ := h.gate.Admit(context.Background(), Call{
-				SessionID: "s-1", ToolName: "restart_service",
+				SessionID: fmt.Sprintf("s-%d", i), ToolName: "restart_service",
 				Class: domain.ClassDestructive, Actor: "op-1",
 			})
 			outcomes <- o
-		}()
+		}(i)
 	}
 	waitFor(t, "all the requests", func() bool { return len(h.gate.Pending("")) == n })
 
@@ -738,7 +745,14 @@ func TestACallIsRefusedRatherThanAdmittedUnderALiveRequestsHandle(t *testing.T) 
 
 	// Every id the mint source can produce is taken, so this one fails
 	// closed instead of overwriting.
-	outcome, reason, err := colliding.Admit(context.Background(), writeCall())
+	//
+	// It comes from another conversation on purpose. A second call in the
+	// same conversation never reaches the mint at all: the session fence
+	// holds it behind the first card, which is the behaviour under test in
+	// fence_test.go and not this one.
+	second := writeCall()
+	second.SessionID = "s-2"
+	outcome, reason, err := colliding.Admit(context.Background(), second)
 	if err != nil {
 		t.Fatalf("Admit: %v", err)
 	}
