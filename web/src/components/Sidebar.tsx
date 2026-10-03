@@ -33,6 +33,7 @@ import {
   Share2,
   Plug,
   Package,
+  Sparkles,
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { AgentBadge } from './AgentBadge';
@@ -426,6 +427,11 @@ export function Sidebar() {
               is the way packages get IN, which is an agent concern; the
               release console that puts them on hosts stays under Admin. */}
           <SidebarNavItem to="/plugins" icon={Package} label={tr('插件市场', 'Plugins')} />
+          {/* 自愈规则 sits beside the marketplace because it is the other
+              way a package can be born: the marketplace takes one IN, and
+              this page is where the platform asks a human to let it write
+              one OUT of its own history. */}
+          <SidebarNavItem to="/crystallized" icon={Sparkles} label={tr('自愈规则', 'Runbooks')} />
           <SidebarNavItem to="/workflows" icon={Route} label={tr('工作流', 'Workflows')} />
           <SidebarNavItem to="/skills" icon={Wrench} label={tr('技能', 'Skills')} />
           <SidebarNavItem to="/mcp" icon={Plug} label="MCP" />
