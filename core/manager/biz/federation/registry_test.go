@@ -345,8 +345,8 @@ func TestAcknowledgingAVersionTheRootNeverIssuedIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatalf("a version this root never issued was accepted as an acknowledgement")
 	}
-	if !strings.Contains(err.Error(), "never issued") {
-		t.Errorf("refusal = %v, want it to say the version was never issued", err)
+	if !errors.Is(err, ErrUnknownVersion) {
+		t.Errorf("refusal = %v, want it to wrap ErrUnknownVersion so the HTTP layer can answer 409 without matching on text", err)
 	}
 	m, _ := r.Member(id)
 	if m.Acknowledged != 0 {

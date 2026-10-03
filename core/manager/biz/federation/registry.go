@@ -20,6 +20,12 @@ var (
 	// ErrNotEnrolled means no child has been provisioned for that identity.
 	ErrNotEnrolled = errors.New("federation: no child is enrolled for that cluster")
 
+	// ErrUnknownVersion means a child acknowledged a version this root
+	// never issued. It is a conflict rather than an internal error because
+	// it means one of the two sides is wrong about the numbering, and
+	// whose fault that is decides what an operator does next.
+	ErrUnknownVersion = errors.New("federation: acknowledged a version this root never issued")
+
 	// ErrRefused is what Authenticate returns for every failed hello,
 	// whether the cluster is unknown or the token is wrong.
 	//
@@ -313,8 +319,8 @@ func (r *Registry) Acknowledge(id federation.ClusterID, out federation.Outcome) 
 	// overwriting the root's own ledger with the child's version would
 	// hide that instead of surfacing it.
 	if out.Version > m.HighestIssued {
-		return fmt.Errorf("federation: cluster %q acknowledged version %d, which this root never issued (highest is %d)",
-			id, out.Version, m.HighestIssued)
+		return fmt.Errorf("%w: cluster %q acknowledged %d, highest issued is %d",
+			ErrUnknownVersion, id, out.Version, m.HighestIssued)
 	}
 	m.Acknowledged = out.Version
 	m.LastAck = out
