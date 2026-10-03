@@ -3,9 +3,11 @@ package tools
 import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/chat2query"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/configchange"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/database"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/metriccatalog"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	"os"
@@ -91,7 +93,7 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	// 3: query_promql — gated on Prom client.
 	if r.promQuery != nil {
 		out = append(out, NewQueryPromQLTool(r.promQuery, r.log))
-		out = append(out, NewListMetricCatalogTool(r.promQuery, r.log))
+		out = append(out, metriccatalog.NewListMetricCatalogTool(r.promQuery, r.log))
 	}
 	// 3a: list_database_sources — configured databasemetrics /
 	// database-tagged custommetrics inventory, no PromQL.
@@ -168,8 +170,8 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	// The apply implementation also requires confirmed=true and an admin caller.
 	if r.configManager != nil {
 		out = append(out,
-			NewDraftConfigChangeTool(r.configManager, r.log),
-			NewApplyConfigChangeTool(r.configManager, r.log),
+			configchange.NewDraftConfigChangeTool(r.configManager, r.log),
+			configchange.NewApplyConfigChangeTool(r.configManager, r.log),
 		)
 	}
 

@@ -6,10 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/configchange"
 	"time"
 
 	alertdraft "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/alertdraft"
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
@@ -20,8 +20,8 @@ const (
 )
 
 type AlertRulePort interface {
-	PreviewRule(ctx context.Context, caller aiopstools.ConfigCaller, in RuleInput, lookbackSeconds int) (*PreviewResult, error)
-	CreateRule(ctx context.Context, caller aiopstools.ConfigCaller, in RuleInput) (*Rule, error)
+	PreviewRule(ctx context.Context, caller configchange.ConfigCaller, in RuleInput, lookbackSeconds int) (*PreviewResult, error)
+	CreateRule(ctx context.Context, caller configchange.ConfigCaller, in RuleInput) (*Rule, error)
 }
 
 type RuleCondition struct {
@@ -98,7 +98,7 @@ func NewAlertRuleManager(alertSvc AlertRulePort) *AlertRuleManager {
 	}
 }
 
-func (a *AlertRuleManager) DraftAlertRuleConfig(ctx context.Context, caller aiopstools.ConfigCaller, in aiopstools.AlertRuleConfigArgs) (*aiopstools.ConfigDraft, error) {
+func (a *AlertRuleManager) DraftAlertRuleConfig(ctx context.Context, caller configchange.ConfigCaller, in configchange.AlertRuleConfigArgs) (*configchange.ConfigDraft, error) {
 	if a.alert == nil {
 		return nil, errs.ErrNotWiredYet
 	}
@@ -123,9 +123,9 @@ func (a *AlertRuleManager) DraftAlertRuleConfig(ctx context.Context, caller aiop
 		return nil, err
 	}
 	if validationHasErrors(validation) {
-		return &aiopstools.ConfigDraft{
-			Kind:       aiopstools.ConfigResultKindValidationFailed,
-			Domain:     aiopstools.ConfigDomainAlertRule,
+		return &configchange.ConfigDraft{
+			Kind:       configchange.ConfigResultKindValidationFailed,
+			Domain:     configchange.ConfigDomainAlertRule,
 			Action:     compiled.Action,
 			Summary:    "alert rule draft validation failed: " + compiled.Summary,
 			Preview:    preview,
@@ -144,7 +144,7 @@ func (a *AlertRuleManager) DraftAlertRuleConfig(ctx context.Context, caller aiop
 	if err != nil {
 		return nil, err
 	}
-	payload, draftHash, err := aiopstools.AlertRuleConfigDraftPayloadForID(compiled.Action, compiled.Rule, draftID)
+	payload, draftHash, err := configchange.AlertRuleConfigDraftPayloadForID(compiled.Action, compiled.Rule, draftID)
 	if err != nil {
 		return nil, err
 	}
@@ -155,9 +155,9 @@ func (a *AlertRuleManager) DraftAlertRuleConfig(ctx context.Context, caller aiop
 		Hash:      draftHash,
 		ExpiresAt: a.drafts.expiresAt(alertRuleDraftTTL),
 	})
-	return &aiopstools.ConfigDraft{
-		Kind:               aiopstools.ConfigResultKindDraft,
-		Domain:             aiopstools.ConfigDomainAlertRule,
+	return &configchange.ConfigDraft{
+		Kind:               configchange.ConfigResultKindDraft,
+		Domain:             configchange.ConfigDomainAlertRule,
 		Action:             compiled.Action,
 		Summary:            compiled.Summary,
 		Payload:            payload,
@@ -167,29 +167,29 @@ func (a *AlertRuleManager) DraftAlertRuleConfig(ctx context.Context, caller aiop
 		Scope:              alertRuleScopeSummary(compiled.Rule),
 		ConfirmationPrompt: alertRuleConfirmationPrompt(compiled.Rule),
 		Rollback:           "可在 Alerts 规则列表中禁用或继续编辑该规则。",
-		ApplyTool:          aiopstools.ToolNameApplyConfigChange,
+		ApplyTool:          configchange.ToolNameApplyConfigChange,
 		DraftHash:          draftHash,
 	}, nil
 }
 
-func alertRuleScopeSummary(rule aiopstools.AlertRuleConfigInput) *aiopstools.ConfigScopeSummary {
+func alertRuleScopeSummary(rule configchange.AlertRuleConfigInput) *configchange.ConfigScopeSummary {
 	switch rule.ScopeType {
 	case "host":
-		return &aiopstools.ConfigScopeSummary{
+		return &configchange.ConfigScopeSummary{
 			Type:       "host",
 			Label:      "主机级",
 			Reason:     "命中后会关联到具体设备，适合主机资源、系统日志以及在设备上采集的数据库实例指标。",
 			ChangeHint: "如果要改成全局汇总，可以回复“改成全局”。",
 		}
 	case "monitoring_pipeline":
-		return &aiopstools.ConfigScopeSummary{
+		return &configchange.ConfigScopeSummary{
 			Type:       "monitoring_pipeline",
 			Label:      "平台自身",
 			Reason:     "用于监控平台采集、存储或告警链路自身的健康状态。",
 			ChangeHint: "如果要改成业务告警范围，可以回复要修改的范围。",
 		}
 	default:
-		return &aiopstools.ConfigScopeSummary{
+		return &configchange.ConfigScopeSummary{
 			Type:       "global",
 			Label:      "全局",
 			Reason:     "命中后不会绑定到单台设备，适合服务级、SLO、Trace 或明确按整体汇总的规则。",
@@ -198,7 +198,7 @@ func alertRuleScopeSummary(rule aiopstools.AlertRuleConfigInput) *aiopstools.Con
 	}
 }
 
-func alertRuleConfirmationPrompt(rule aiopstools.AlertRuleConfigInput) string {
+func alertRuleConfirmationPrompt(rule configchange.AlertRuleConfigInput) string {
 	scope := alertRuleScopeSummary(rule)
 	if scope == nil || scope.Label == "" {
 		return "请确认是否应用这条告警规则草案。"
@@ -252,7 +252,7 @@ func samplePreviewSamples(in []PreviewSample, limit int) []PreviewSample {
 	return out
 }
 
-func (a *AlertRuleManager) ApplyAlertRuleConfig(ctx context.Context, caller aiopstools.ConfigCaller, in aiopstools.AlertRuleApplyArgs) (*aiopstools.ConfigApplyResult, error) {
+func (a *AlertRuleManager) ApplyAlertRuleConfig(ctx context.Context, caller configchange.ConfigCaller, in configchange.AlertRuleApplyArgs) (*configchange.ConfigApplyResult, error) {
 	if a.alert == nil {
 		return nil, errs.ErrNotWiredYet
 	}
@@ -295,13 +295,13 @@ func (a *AlertRuleManager) ApplyAlertRuleConfig(ctx context.Context, caller aiop
 	}
 	lease.commit()
 	applied = true
-	return &aiopstools.ConfigApplyResult{
-		Kind:       aiopstools.ConfigResultKindApply,
-		Domain:     aiopstools.ConfigDomainAlertRule,
+	return &configchange.ConfigApplyResult{
+		Kind:       configchange.ConfigResultKindApply,
+		Domain:     configchange.ConfigDomainAlertRule,
 		Action:     action,
 		Status:     "applied",
 		ResourceID: rule.ID,
-		Resource: &aiopstools.ConfigTarget{
+		Resource: &configchange.ConfigTarget{
 			ID:   rule.ID,
 			Name: rule.Name,
 			Type: rule.Kind,
@@ -311,7 +311,7 @@ func (a *AlertRuleManager) ApplyAlertRuleConfig(ctx context.Context, caller aiop
 	}, nil
 }
 
-func toAlertRuleInput(in aiopstools.AlertRuleConfigInput) RuleInput {
+func toAlertRuleInput(in configchange.AlertRuleConfigInput) RuleInput {
 	in = alertdraft.NormalizeRuleConfigInput(in)
 	enabled := true
 	if in.Enabled != nil {
@@ -372,7 +372,7 @@ type alertRuleDraftRecord struct {
 
 type alertRuleDraftStore interface {
 	put(rec alertRuleDraftRecord)
-	beginApply(caller aiopstools.ConfigCaller, action string, rule aiopstools.AlertRuleConfigInput, draftID, draftHash string) (alertRuleDraftApplyLease, error)
+	beginApply(caller configchange.ConfigCaller, action string, rule configchange.AlertRuleConfigInput, draftID, draftHash string) (alertRuleDraftApplyLease, error)
 	expiresAt(ttl time.Duration) time.Time
 }
 

@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/configchange"
 	"strings"
 	"testing"
 
 	alertdraft "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/alertdraft"
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 	managersvcalert "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 )
@@ -43,8 +43,8 @@ func (f *fakeAlertRuleService) CreateRule(_ context.Context, _ managersvcalert.C
 }
 
 func TestNormalizeAlertRuleConfigInputCanonicalizesHostMetricAliases(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
-		Conditions: []aiopstools.AlertRuleCondition{
+	in := configchange.AlertRuleConfigInput{
+		Conditions: []configchange.AlertRuleCondition{
 			{Metric: "cpu_usage_percent", Operator: ">", Threshold: 30},
 		},
 	}
@@ -84,7 +84,7 @@ func TestNormalizeAlertRuleConfigInputCanonicalizesHostMetricAliases(t *testing.
 }
 
 func TestNormalizeAlertRuleConfigInputRewritesSimpleMetricRawExpr(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"expr": "cpu_usage_percent > 30 and disk_used_pct > 50 and mem_pct > 50",
@@ -119,7 +119,7 @@ func TestNormalizeAlertRuleConfigInputRewritesSimpleMetricRawExpr(t *testing.T) 
 }
 
 func TestNormalizeAlertRuleConfigInputKeepsRealMetricRawPromQL(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"expr": `sum by (device_id) (rate(node_cpu_seconds_total{mode!="idle"}[5m])) > 0.8`,
@@ -139,7 +139,7 @@ func TestNormalizeAlertRuleConfigInputKeepsRealMetricRawPromQL(t *testing.T) {
 }
 
 func TestNormalizeAlertRuleConfigInputMergesSelectorIntoRawExpr(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"expr":            `(mysql_global_status_threads_connected / mysql_global_variables_max_connections) * 100 > 80`,
@@ -163,7 +163,7 @@ func TestNormalizeAlertRuleConfigInputMergesSelectorIntoRawExpr(t *testing.T) {
 }
 
 func TestNormalizeAlertRuleConfigInputMovesTopLevelForIntoRawSpec(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		For:  "10m",
 		Spec: map[string]interface{}{
@@ -181,11 +181,11 @@ func TestNormalizeAlertRuleConfigInputMovesTopLevelForIntoRawSpec(t *testing.T) 
 }
 
 func TestNormalizeAlertRuleConfigInputMovesTopLevelDurationsIntoThresholdConditions(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind:   "metric_threshold",
 		Window: "5m",
 		For:    "15m",
-		Conditions: []aiopstools.AlertRuleCondition{
+		Conditions: []configchange.AlertRuleCondition{
 			{Metric: "cpu_pct", Operator: ">", Threshold: 80},
 			{Metric: "mem_pct", Operator: ">", Threshold: 90, For: "20m"},
 		},
@@ -204,7 +204,7 @@ func TestNormalizeAlertRuleConfigInputMovesTopLevelDurationsIntoThresholdConditi
 }
 
 func TestNormalizeAlertRuleConfigInputDropsIncompleteNotifyPolicy(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInput(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInput(configchange.AlertRuleConfigInput{
 		Kind:           "metric_raw",
 		NotifyMinFires: 1,
 		Spec: map[string]interface{}{
@@ -217,7 +217,7 @@ func TestNormalizeAlertRuleConfigInputDropsIncompleteNotifyPolicy(t *testing.T) 
 }
 
 func TestNormalizeAlertRuleConfigInputMergesSelectorWithoutTouchingPromQLSyntax(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"expr":            `sum by (device_id) (rate(node_network_receive_bytes_total[5m])) > 1024`,
@@ -235,7 +235,7 @@ func TestNormalizeAlertRuleConfigInputMergesSelectorWithoutTouchingPromQLSyntax(
 }
 
 func TestNormalizeAlertRuleConfigInputMergesExistingSelector(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"expr":     `sum(rate(opskeeper_http_requests_total{code=~"5.."}[5m])) / sum(rate(opskeeper_http_requests_total[5m])) > 0.05`,
@@ -256,7 +256,7 @@ func TestNormalizeAlertRuleConfigInputMergesExistingSelector(t *testing.T) {
 }
 
 func TestNormalizeAlertRuleConfigInputReplacesConflictingExistingSelector(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"expr":     `sum(rate(opskeeper_http_requests_total{job="old",code=~"5.."}[5m])) > 0`,
@@ -276,7 +276,7 @@ func TestNormalizeAlertRuleConfigInputReplacesConflictingExistingSelector(t *tes
 }
 
 func TestNormalizeAlertRuleConfigInputRewritesFriendlyHostMetricSelectorPromQL(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"expr": `disk_used_pct{mountpoint="/"} > 88`,
@@ -303,7 +303,7 @@ func TestNormalizeAlertRuleConfigInputRewritesFriendlyHostMetricSelectorPromQL(t
 }
 
 func TestNormalizeAlertRuleConfigInputHostMetricSpecBecomesThreshold(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"metric":    "cpu",
@@ -325,7 +325,7 @@ func TestNormalizeAlertRuleConfigInputHostMetricSpecBecomesThreshold(t *testing.
 }
 
 func TestNormalizeAlertRuleConfigInputBuildsRawMetricFromExactMetricName(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"metric":          "redis_connected_clients",
@@ -357,7 +357,7 @@ func TestNormalizeAlertRuleConfigInputBuildsRawMetricFromExactMetricName(t *test
 }
 
 func TestNormalizeAlertRuleConfigInputBuildsRawMetricWithMatcherArray(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"metric":          "mysql_global_status_threads_connected",
@@ -384,7 +384,7 @@ func TestNormalizeAlertRuleConfigInputBuildsRawMetricWithMatcherArray(t *testing
 }
 
 func TestNormalizeAlertRuleConfigInputBuildsRawMetricWithSelectorMap(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"metric":          "mysql_global_status_threads_running",
@@ -408,9 +408,9 @@ func TestNormalizeAlertRuleConfigInputBuildsRawMetricWithSelectorMap(t *testing.
 
 func TestDraftAlertRuleConfigIncludesMatchingDraftHash(t *testing.T) {
 	adapter := NewAlertRuleManager(managersvcalert.NewStub())
-	draft, err := adapter.DraftAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{}, aiopstools.AlertRuleConfigArgs{
+	draft, err := adapter.DraftAlertRuleConfig(context.Background(), configchange.ConfigCaller{}, configchange.AlertRuleConfigArgs{
 		Action: "create",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			Kind: "trace_latency",
 			Spec: map[string]interface{}{
 				"service":      "checkout",
@@ -425,9 +425,9 @@ func TestDraftAlertRuleConfigIncludesMatchingDraftHash(t *testing.T) {
 		t.Fatalf("DraftHash should be populated")
 	}
 	var payload struct {
-		DraftID string                          `json:"draft_id"`
-		Action  string                          `json:"action"`
-		Rule    aiopstools.AlertRuleConfigInput `json:"rule"`
+		DraftID string                            `json:"draft_id"`
+		Action  string                            `json:"action"`
+		Rule    configchange.AlertRuleConfigInput `json:"rule"`
 	}
 	if err := json.Unmarshal(draft.Payload, &payload); err != nil {
 		t.Fatalf("unmarshal draft payload: %v", err)
@@ -435,7 +435,7 @@ func TestDraftAlertRuleConfigIncludesMatchingDraftHash(t *testing.T) {
 	if payload.DraftID == "" {
 		t.Fatalf("payload draft_id should be populated")
 	}
-	want, err := aiopstools.AlertRuleConfigDraftHashForID(payload.Action, payload.Rule, payload.DraftID)
+	want, err := configchange.AlertRuleConfigDraftHashForID(payload.Action, payload.Rule, payload.DraftID)
 	if err != nil {
 		t.Fatalf("AlertRuleConfigDraftHash() error = %v", err)
 	}
@@ -446,21 +446,21 @@ func TestDraftAlertRuleConfigIncludesMatchingDraftHash(t *testing.T) {
 
 func TestNewAlertRuleManagerNilServiceReturnsNotWired(t *testing.T) {
 	adapter := NewAlertRuleManager(nil)
-	_, err := adapter.DraftAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{}, aiopstools.AlertRuleConfigArgs{})
+	_, err := adapter.DraftAlertRuleConfig(context.Background(), configchange.ConfigCaller{}, configchange.AlertRuleConfigArgs{})
 	if !errors.Is(err, errs.ErrNotWiredYet) {
 		t.Fatalf("DraftAlertRuleConfig() error = %v, want ErrNotWiredYet", err)
 	}
 }
 
-func applyArgsFromDraft(t *testing.T, draft *aiopstools.ConfigDraft) aiopstools.AlertRuleApplyArgs {
+func applyArgsFromDraft(t *testing.T, draft *configchange.ConfigDraft) configchange.AlertRuleApplyArgs {
 	t.Helper()
 	if draft == nil {
 		t.Fatal("draft is nil")
 	}
 	var payload struct {
-		DraftID string                          `json:"draft_id"`
-		Action  string                          `json:"action"`
-		Rule    aiopstools.AlertRuleConfigInput `json:"rule"`
+		DraftID string                            `json:"draft_id"`
+		Action  string                            `json:"action"`
+		Rule    configchange.AlertRuleConfigInput `json:"rule"`
 	}
 	if err := json.Unmarshal(draft.Payload, &payload); err != nil {
 		t.Fatalf("unmarshal draft payload: %v", err)
@@ -468,7 +468,7 @@ func applyArgsFromDraft(t *testing.T, draft *aiopstools.ConfigDraft) aiopstools.
 	if payload.DraftID == "" || draft.DraftHash == "" {
 		t.Fatalf("draft missing id/hash: id=%q hash=%q", payload.DraftID, draft.DraftHash)
 	}
-	return aiopstools.AlertRuleApplyArgs{
+	return configchange.AlertRuleApplyArgs{
 		Action:    payload.Action,
 		Rule:      payload.Rule,
 		DraftID:   payload.DraftID,
@@ -480,7 +480,7 @@ func applyArgsFromDraft(t *testing.T, draft *aiopstools.ConfigDraft) aiopstools.
 func TestApplyAlertRuleConfigRejectsUnissuedDraft(t *testing.T) {
 	fake := &fakeAlertRuleService{}
 	adapter := NewAlertRuleManager(fake)
-	rule := aiopstools.AlertRuleConfigInput{
+	rule := configchange.AlertRuleConfigInput{
 		RuleKey:  "trace_latency_checkout",
 		Kind:     "trace_latency",
 		Name:     "Trace latency checkout",
@@ -491,12 +491,12 @@ func TestApplyAlertRuleConfigRejectsUnissuedDraft(t *testing.T) {
 		},
 	}
 	draftID := "forged-draft"
-	draftHash, err := aiopstools.AlertRuleConfigDraftHashForID("create", rule, draftID)
+	draftHash, err := configchange.AlertRuleConfigDraftHashForID("create", rule, draftID)
 	if err != nil {
 		t.Fatalf("AlertRuleConfigDraftHashForID() error = %v", err)
 	}
 
-	_, err = adapter.ApplyAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{UserID: 7, Role: "admin"}, aiopstools.AlertRuleApplyArgs{
+	_, err = adapter.ApplyAlertRuleConfig(context.Background(), configchange.ConfigCaller{UserID: 7, Role: "admin"}, configchange.AlertRuleApplyArgs{
 		Action:    "create",
 		Rule:      rule,
 		DraftID:   draftID,
@@ -516,10 +516,10 @@ func TestApplyAlertRuleConfigRejectsUnissuedDraft(t *testing.T) {
 func TestApplyAlertRuleConfigConsumesDraftOnce(t *testing.T) {
 	fake := &fakeAlertRuleService{}
 	adapter := NewAlertRuleManager(fake)
-	caller := aiopstools.ConfigCaller{UserID: 7, Role: "admin"}
-	draft, err := adapter.DraftAlertRuleConfig(context.Background(), caller, aiopstools.AlertRuleConfigArgs{
+	caller := configchange.ConfigCaller{UserID: 7, Role: "admin"}
+	draft, err := adapter.DraftAlertRuleConfig(context.Background(), caller, configchange.AlertRuleConfigArgs{
 		Action: "create",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			RuleKey:  "trace_latency_checkout",
 			Kind:     "trace_latency",
 			Name:     "Trace latency checkout",
@@ -552,10 +552,10 @@ func TestApplyAlertRuleConfigConsumesDraftOnce(t *testing.T) {
 func TestApplyAlertRuleConfigKeepsDraftRetryableAfterCreateFailure(t *testing.T) {
 	fake := &fakeAlertRuleService{createErr: errs.ErrInvalid}
 	adapter := NewAlertRuleManager(fake)
-	caller := aiopstools.ConfigCaller{UserID: 7, Role: "admin"}
-	draft, err := adapter.DraftAlertRuleConfig(context.Background(), caller, aiopstools.AlertRuleConfigArgs{
+	caller := configchange.ConfigCaller{UserID: 7, Role: "admin"}
+	draft, err := adapter.DraftAlertRuleConfig(context.Background(), caller, configchange.AlertRuleConfigArgs{
 		Action: "create",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			RuleKey:  "trace_latency_checkout",
 			Kind:     "trace_latency",
 			Name:     "Trace latency checkout",
@@ -585,9 +585,9 @@ func TestApplyAlertRuleConfigKeepsDraftRetryableAfterCreateFailure(t *testing.T)
 
 func TestDraftAlertRuleConfigReturnsValidationFailedForStructuralSkippedPreview(t *testing.T) {
 	adapter := NewAlertRuleManager(managersvcalert.NewStub())
-	got, err := adapter.DraftAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{}, aiopstools.AlertRuleConfigArgs{
+	got, err := adapter.DraftAlertRuleConfig(context.Background(), configchange.ConfigCaller{}, configchange.AlertRuleConfigArgs{
 		Action: "create",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			RuleKey:  "trace_latency_missing_service",
 			Kind:     "trace_latency",
 			Name:     "Trace latency missing service",
@@ -600,7 +600,7 @@ func TestDraftAlertRuleConfigReturnsValidationFailedForStructuralSkippedPreview(
 	if err != nil {
 		t.Fatalf("DraftAlertRuleConfig() error = %v", err)
 	}
-	if got.Kind != aiopstools.ConfigResultKindValidationFailed {
+	if got.Kind != configchange.ConfigResultKindValidationFailed {
 		t.Fatalf("Kind = %q, want validation failed", got.Kind)
 	}
 	if got.DraftHash != "" || len(got.Payload) != 0 {
@@ -620,10 +620,10 @@ func TestAlertPreviewSkipBlockingCoversMissingTraceService(t *testing.T) {
 
 func TestApplyAlertRuleConfigAllowsEnvironmentOnlySkippedPreview(t *testing.T) {
 	adapter := NewAlertRuleManager(managersvcalert.NewStub())
-	caller := aiopstools.ConfigCaller{Role: "admin"}
-	draft, err := adapter.DraftAlertRuleConfig(context.Background(), caller, aiopstools.AlertRuleConfigArgs{
+	caller := configchange.ConfigCaller{Role: "admin"}
+	draft, err := adapter.DraftAlertRuleConfig(context.Background(), caller, configchange.AlertRuleConfigArgs{
 		Action: "create",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			RuleKey:  "trace_latency_checkout",
 			Kind:     "trace_latency",
 			Name:     "Trace latency checkout",
@@ -647,7 +647,7 @@ func TestApplyAlertRuleConfigAllowsEnvironmentOnlySkippedPreview(t *testing.T) {
 }
 
 func TestNormalizeAlertRuleConfigInputBuildsRawPredicateForCollectedMetricName(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Spec: map[string]interface{}{
 			"metric":    "custom_app_queue_depth",
 			"operator":  ">=",
@@ -667,7 +667,7 @@ func TestNormalizeAlertRuleConfigInputBuildsRawPredicateForCollectedMetricName(t
 }
 
 func TestNormalizeAlertRuleConfigInputDropsImplicitSourceIdentityFromCollectedMetricSelector(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"metric":    "custom_app_queue_depth",
@@ -688,7 +688,7 @@ func TestNormalizeAlertRuleConfigInputDropsImplicitSourceIdentityFromCollectedMe
 }
 
 func TestNormalizeAlertRuleConfigInputPreservesExplicitCollectedMetricSourceSelector(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"metric":          "custom_app_queue_depth",
@@ -715,7 +715,7 @@ func TestNormalizeAlertRuleConfigInputPreservesExplicitCollectedMetricSourceSele
 }
 
 func TestNormalizeAlertRuleConfigInputDropsImplicitSourceIdentityFromCollectedMetricRawExpr(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"expr": `custom_app_queue_depth{queue="payments",device_id="5",opskeeper_source="custom:queue",job="queue-exporter",instance="127.0.0.1:9100"} >= 100`,
@@ -730,7 +730,7 @@ func TestNormalizeAlertRuleConfigInputDropsImplicitSourceIdentityFromCollectedMe
 }
 
 func TestNormalizeAlertRuleConfigInputDropsImplicitSourceIdentityFromArbitraryMetricRawExpr(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"expr": `rate(prometheus_http_requests_total{handler="/api/v1/query",job="prometheus",instance="localhost:9090"}[5m]) > 10`,
@@ -745,7 +745,7 @@ func TestNormalizeAlertRuleConfigInputDropsImplicitSourceIdentityFromArbitraryMe
 }
 
 func TestNormalizeAlertRuleConfigInputPreservesExplicitSourceIdentityInRawExpr(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"source_explicit": true,
@@ -761,7 +761,7 @@ func TestNormalizeAlertRuleConfigInputPreservesExplicitSourceIdentityInRawExpr(t
 }
 
 func TestNormalizeAlertRuleConfigInputDoesNotInventExprForInvalidMetricName(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"metric":    "not a valid metric()",
@@ -793,7 +793,7 @@ func TestNormalizeAlertRuleConfigInputNormalizesNaturalLanguageScope(t *testing.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := alertdraft.NormalizeRuleConfigInput(aiopstools.AlertRuleConfigInput{
+			got := alertdraft.NormalizeRuleConfigInput(configchange.AlertRuleConfigInput{
 				Kind:      "metric_raw",
 				ScopeType: tt.in,
 				Spec: map[string]interface{}{
@@ -808,7 +808,7 @@ func TestNormalizeAlertRuleConfigInputNormalizesNaturalLanguageScope(t *testing.
 }
 
 func TestNormalizeAlertRuleConfigInputDropsImplicitMongoIdentityMatchersWithoutRewritingPromQL(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"expr": `(max by (device_id, opskeeper_source) (mongodb_ss_connections{conn_type="active",device_id="2",opskeeper_source="db:mongo-test"}) / (max by (device_id, opskeeper_source) (mongodb_ss_connections{conn_type="active",device_id="2",opskeeper_source="db:mongo-test"}) + max by (device_id, opskeeper_source) (mongodb_ss_connections{conn_type="available",device_id="2",opskeeper_source="db:mongo-test"}))) * 100 > 80`,
@@ -832,7 +832,7 @@ func TestNormalizeAlertRuleConfigInputDropsImplicitMongoIdentityMatchersWithoutR
 }
 
 func TestNormalizeAlertRuleConfigInputPreservesExplicitDatabaseSourceSelector(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"source_explicit": true,
@@ -855,7 +855,7 @@ func TestNormalizeAlertRuleConfigInputPreservesExplicitDatabaseSourceSelector(t 
 }
 
 func TestNormalizeAlertRuleConfigInputForRequestDropsModelClaimedExplicitDatabaseSource(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"source_explicit": true,
@@ -883,7 +883,7 @@ func TestNormalizeAlertRuleConfigInputForRequestDropsModelClaimedExplicitDatabas
 }
 
 func TestNormalizeAlertRuleConfigInputForRequestPreservesUserSpecifiedDatabaseSource(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"source_explicit": true,
@@ -903,7 +903,7 @@ func TestNormalizeAlertRuleConfigInputForRequestPreservesUserSpecifiedDatabaseSo
 }
 
 func TestNormalizeAlertRuleConfigInputDropsImplicitDatabaseSourceSelector(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"selector": `opskeeper_source="db:mongo-test"`,
@@ -925,7 +925,7 @@ func TestNormalizeAlertRuleConfigInputDropsImplicitDatabaseSourceSelector(t *tes
 }
 
 func TestNormalizeAlertRuleConfigInputDropsImplicitMongoSourceFromConnectionUsageExpr(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"expr": `(max by (device_id, opskeeper_source) (mongodb_ss_connections{conn_type="active", opskeeper_source="db:mongo-test", service="mongo-test"}) / (max by (device_id, opskeeper_source) (mongodb_ss_connections{conn_type="active", opskeeper_source="db:mongo-test", service="mongo-test"}) + max by (device_id, opskeeper_source) (mongodb_ss_connections{conn_type="available", opskeeper_source="db:mongo-test", service="mongo-test"}))) * 100 > 80`,
@@ -948,7 +948,7 @@ func TestNormalizeAlertRuleConfigInputDropsImplicitMongoSourceFromConnectionUsag
 }
 
 func TestNormalizeAlertRuleConfigInputDropsImplicitDatabaseServiceSelector(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"metric":    "mongodb_ss_connections",
@@ -972,7 +972,7 @@ func TestNormalizeAlertRuleConfigInputDropsImplicitDatabaseServiceSelector(t *te
 }
 
 func TestNormalizeAlertRuleConfigInputPreservesExplicitDatabaseServiceSelector(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"source_explicit": true,
@@ -992,7 +992,7 @@ func TestNormalizeAlertRuleConfigInputPreservesExplicitDatabaseServiceSelector(t
 }
 
 func TestNormalizeAlertRuleConfigInputDropsImplicitDatabaseSourceFromCatalogSelector(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"metric":      "mongodb_ss_connections",
@@ -1016,7 +1016,7 @@ func TestNormalizeAlertRuleConfigInputDropsImplicitDatabaseSourceFromCatalogSele
 }
 
 func TestNormalizeAlertRuleConfigInputKeepsNonIdentitySelectorWhenSourceLeaks(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"metric":      "pg_stat_database_numbackends",
@@ -1042,7 +1042,7 @@ func TestNormalizeAlertRuleConfigInputKeepsNonIdentitySelectorWhenSourceLeaks(t 
 }
 
 func TestNormalizeAlertRuleConfigInputDropsLeakedDatabaseSourceFromRawExpr(t *testing.T) {
-	in := aiopstools.AlertRuleConfigInput{
+	in := configchange.AlertRuleConfigInput{
 		Kind: "metric_raw",
 		Spec: map[string]interface{}{
 			"expr": `redis_connected_clients{device_id="7",opskeeper_source="db:redis-test",job="redis",instance="127.0.0.1:9121"} > 50`,
@@ -1064,16 +1064,16 @@ func TestNormalizeAlertRuleConfigInputDropsLeakedDatabaseSourceFromRawExpr(t *te
 func TestNormalizeAlertRuleConfigInputDefaultsAllSupportedKinds(t *testing.T) {
 	tests := []struct {
 		name   string
-		in     aiopstools.AlertRuleConfigInput
-		assert func(t *testing.T, got aiopstools.AlertRuleConfigInput)
+		in     configchange.AlertRuleConfigInput
+		assert func(t *testing.T, got configchange.AlertRuleConfigInput)
 	}{
 		{
 			name: "metric_anomaly",
-			in: aiopstools.AlertRuleConfigInput{
+			in: configchange.AlertRuleConfigInput{
 				Kind: "anomaly",
 				Spec: map[string]interface{}{"metric": "memory"},
 			},
-			assert: func(t *testing.T, got aiopstools.AlertRuleConfigInput) {
+			assert: func(t *testing.T, got configchange.AlertRuleConfigInput) {
 				if got.Kind != "metric_anomaly" || got.Spec["metric"] != "mem_pct" || got.Spec["method"] != "zscore" || got.Spec["baseline_window"] != "1h" {
 					t.Fatalf("got = %#v, want canonical metric_anomaly defaults", got)
 				}
@@ -1081,11 +1081,11 @@ func TestNormalizeAlertRuleConfigInputDefaultsAllSupportedKinds(t *testing.T) {
 		},
 		{
 			name: "metric_forecast",
-			in: aiopstools.AlertRuleConfigInput{
+			in: configchange.AlertRuleConfigInput{
 				Kind: "forecast",
 				Spec: map[string]interface{}{"metric": "disk_available"},
 			},
-			assert: func(t *testing.T, got aiopstools.AlertRuleConfigInput) {
+			assert: func(t *testing.T, got configchange.AlertRuleConfigInput) {
 				if got.Kind != "metric_forecast" || got.Spec["metric"] != "disk_avail_bytes" || got.Spec["fit_window"] != "1h" || got.Spec["operator"] != "<=" {
 					t.Fatalf("got = %#v, want metric_forecast defaults", got)
 				}
@@ -1096,11 +1096,11 @@ func TestNormalizeAlertRuleConfigInputDefaultsAllSupportedKinds(t *testing.T) {
 		},
 		{
 			name: "metric_burn_rate",
-			in: aiopstools.AlertRuleConfigInput{
+			in: configchange.AlertRuleConfigInput{
 				Kind: "burn_rate",
 				Spec: map[string]interface{}{"sli": `sum(rate(http_requests_total{code!~"5.."}[$window])) / sum(rate(http_requests_total[$window]))`},
 			},
-			assert: func(t *testing.T, got aiopstools.AlertRuleConfigInput) {
+			assert: func(t *testing.T, got configchange.AlertRuleConfigInput) {
 				burns, ok := got.Spec["burns"].([]interface{})
 				if got.Kind != "metric_burn_rate" || got.Spec["slo"] != float64(99.9) || !ok || len(burns) != 2 {
 					t.Fatalf("got = %#v, want metric_burn_rate defaults", got)
@@ -1109,11 +1109,11 @@ func TestNormalizeAlertRuleConfigInputDefaultsAllSupportedKinds(t *testing.T) {
 		},
 		{
 			name: "log_match",
-			in: aiopstools.AlertRuleConfigInput{
+			in: configchange.AlertRuleConfigInput{
 				Kind: "log",
 				Spec: map[string]interface{}{"pattern": "(?i)error|panic"},
 			},
-			assert: func(t *testing.T, got aiopstools.AlertRuleConfigInput) {
+			assert: func(t *testing.T, got configchange.AlertRuleConfigInput) {
 				if got.Kind != "log_match" || got.ScopeType != "global" || got.Spec["stream_selector"] != alertdraft.DefaultJournaldLogSelector || got.Spec["line_filter"] != "(?i)error|panic" || got.Spec["operator"] != ">=" || got.Spec["threshold"] != float64(1) {
 					t.Fatalf("got = %#v, want log_match defaults", got)
 				}
@@ -1121,11 +1121,11 @@ func TestNormalizeAlertRuleConfigInputDefaultsAllSupportedKinds(t *testing.T) {
 		},
 		{
 			name: "log_volume",
-			in: aiopstools.AlertRuleConfigInput{
+			in: configchange.AlertRuleConfigInput{
 				Kind: "log_volume",
 				Spec: map[string]interface{}{"operator": ">", "threshold": 3},
 			},
-			assert: func(t *testing.T, got aiopstools.AlertRuleConfigInput) {
+			assert: func(t *testing.T, got configchange.AlertRuleConfigInput) {
 				if got.ScopeType != "global" || got.Spec["ratio_op"] != ">" || got.Spec["ratio_threshold"] != float64(3) {
 					t.Fatalf("got = %#v, want log_volume ratio aliases", got)
 				}
@@ -1133,11 +1133,11 @@ func TestNormalizeAlertRuleConfigInputDefaultsAllSupportedKinds(t *testing.T) {
 		},
 		{
 			name: "trace_latency",
-			in: aiopstools.AlertRuleConfigInput{
+			in: configchange.AlertRuleConfigInput{
 				Kind: "latency",
 				Spec: map[string]interface{}{"service": "checkout", "threshold": 750},
 			},
-			assert: func(t *testing.T, got aiopstools.AlertRuleConfigInput) {
+			assert: func(t *testing.T, got configchange.AlertRuleConfigInput) {
 				if got.Kind != "trace_latency" || got.Spec["threshold_ms"] != float64(750) || got.Spec["quantile"] != "p95" {
 					t.Fatalf("got = %#v, want trace_latency defaults", got)
 				}
@@ -1145,11 +1145,11 @@ func TestNormalizeAlertRuleConfigInputDefaultsAllSupportedKinds(t *testing.T) {
 		},
 		{
 			name: "trace_error_rate",
-			in: aiopstools.AlertRuleConfigInput{
+			in: configchange.AlertRuleConfigInput{
 				Kind: "error_rate",
 				Spec: map[string]interface{}{"service": "checkout", "threshold": 2.5},
 			},
-			assert: func(t *testing.T, got aiopstools.AlertRuleConfigInput) {
+			assert: func(t *testing.T, got configchange.AlertRuleConfigInput) {
 				if got.Kind != "trace_error_rate" || got.Spec["threshold_pct"] != 2.5 || got.Spec["operator"] != ">=" {
 					t.Fatalf("got = %#v, want trace_error_rate defaults", got)
 				}
@@ -1177,12 +1177,12 @@ func TestNormalizeAlertRuleConfigInputDefaultsAllSupportedKinds(t *testing.T) {
 func TestNormalizeAlertRuleConfigInputCanonicalizesClosedSetPromQLAliases(t *testing.T) {
 	tests := []struct {
 		name       string
-		in         aiopstools.AlertRuleConfigInput
+		in         configchange.AlertRuleConfigInput
 		wantMetric string
 	}{
 		{
 			name: "anomaly cpu promql",
-			in: aiopstools.AlertRuleConfigInput{
+			in: configchange.AlertRuleConfigInput{
 				Kind: "metric_anomaly",
 				Spec: map[string]interface{}{
 					"metric": `100 - (avg by (device_id)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)`,
@@ -1192,7 +1192,7 @@ func TestNormalizeAlertRuleConfigInputCanonicalizesClosedSetPromQLAliases(t *tes
 		},
 		{
 			name: "forecast filesystem avail",
-			in: aiopstools.AlertRuleConfigInput{
+			in: configchange.AlertRuleConfigInput{
 				Kind: "metric_forecast",
 				Spec: map[string]interface{}{
 					"metric": "node_filesystem_avail_bytes",
@@ -1212,7 +1212,7 @@ func TestNormalizeAlertRuleConfigInputCanonicalizesClosedSetPromQLAliases(t *tes
 }
 
 func TestNormalizeAlertRuleConfigInputRewritesFilesystemAvailablePercentForecastExpr(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInput(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInput(configchange.AlertRuleConfigInput{
 		Kind: "metric_forecast",
 		Spec: map[string]interface{}{
 			"expr":            `(node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100`,
@@ -1240,7 +1240,7 @@ func TestNormalizeAlertRuleConfigInputRewritesFilesystemAvailablePercentForecast
 }
 
 func TestNormalizeAlertRuleConfigInputForRequestRewritesFilesystemAvailablePercentForecastMetric(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInputForRequest(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInputForRequest(configchange.AlertRuleConfigInput{
 		Kind: "metric_forecast",
 		Spec: map[string]interface{}{
 			"metric":          "node_filesystem_avail_bytes",
@@ -1265,7 +1265,7 @@ func TestNormalizeAlertRuleConfigInputForRequestRewritesFilesystemAvailablePerce
 }
 
 func TestNormalizeAlertRuleConfigInputRewritesGuessedJournaldJobSelector(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInput(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInput(configchange.AlertRuleConfigInput{
 		Kind: "log_match",
 		Spec: map[string]interface{}{
 			"stream_selector": `{job=~".*journal.*"}`,
@@ -1278,7 +1278,7 @@ func TestNormalizeAlertRuleConfigInputRewritesGuessedJournaldJobSelector(t *test
 }
 
 func TestNormalizeAlertRuleConfigInputCoercesLogMonitoringPipelineScopeToGlobal(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInput(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInput(configchange.AlertRuleConfigInput{
 		Kind:      "log_match",
 		ScopeType: "monitoring_pipeline",
 		Spec: map[string]interface{}{
@@ -1292,7 +1292,7 @@ func TestNormalizeAlertRuleConfigInputCoercesLogMonitoringPipelineScopeToGlobal(
 }
 
 func TestNormalizeAlertRuleConfigInputRewritesGuessedJournaldJobSelectorAndKeepsKnownLabels(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInput(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInput(configchange.AlertRuleConfigInput{
 		Kind: "log_match",
 		Spec: map[string]interface{}{
 			"stream_selector": `{job=~".*journal.*",level="6",unit="opskeeper.service",app="guessed"}`,
@@ -1306,7 +1306,7 @@ func TestNormalizeAlertRuleConfigInputRewritesGuessedJournaldJobSelectorAndKeeps
 }
 
 func TestNormalizeAlertRuleConfigInputNormalizesLogOperatorAndLineFilter(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInput(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInput(configchange.AlertRuleConfigInput{
 		Kind: "log_match",
 		Spec: map[string]interface{}{
 			"stream_selector": `{opskeeper_source=~"journald(:.*)?"}`,
@@ -1324,7 +1324,7 @@ func TestNormalizeAlertRuleConfigInputNormalizesLogOperatorAndLineFilter(t *test
 }
 
 func TestNormalizeAlertRuleConfigInputMovesLogLabelFilterChainIntoSelector(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInput(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInput(configchange.AlertRuleConfigInput{
 		Kind: "log_match",
 		Spec: map[string]interface{}{
 			"stream_selector": `{opskeeper_source="journald"}`,
@@ -1342,7 +1342,7 @@ func TestNormalizeAlertRuleConfigInputMovesLogLabelFilterChainIntoSelector(t *te
 }
 
 func TestNormalizeAlertRuleConfigInputForRequestMovesExplicitLogLabelIntoSelector(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInputForRequest(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInputForRequest(configchange.AlertRuleConfigInput{
 		Kind: "log_match",
 		Spec: map[string]interface{}{
 			"stream_selector": `{opskeeper_source="journald"}`,
@@ -1363,7 +1363,7 @@ func TestNormalizeAlertRuleConfigInputForRequestMovesExplicitLogLabelIntoSelecto
 }
 
 func TestNormalizeAlertRuleConfigInputMapsJournaldPriorityAndDropsUnknownLogLabels(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInputForRequest(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInputForRequest(configchange.AlertRuleConfigInput{
 		Kind: "log_match",
 		Spec: map[string]interface{}{
 			"stream_selector": `{opskeeper_source="journald",PRIORITY="6",app="guessed"}`,
@@ -1378,7 +1378,7 @@ func TestNormalizeAlertRuleConfigInputMapsJournaldPriorityAndDropsUnknownLogLabe
 }
 
 func TestNormalizeAlertRuleConfigInputMovesLogLabelPrefixRegexIntoSelector(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInputForRequest(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInputForRequest(configchange.AlertRuleConfigInput{
 		Kind: "log_match",
 		Spec: map[string]interface{}{
 			"stream_selector": `{opskeeper_source="journald"}`,
@@ -1396,7 +1396,7 @@ func TestNormalizeAlertRuleConfigInputMovesLogLabelPrefixRegexIntoSelector(t *te
 }
 
 func TestNormalizeAlertRuleConfigInputMovesLogLabelAlternationRegexIntoSelector(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInputForRequest(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInputForRequest(configchange.AlertRuleConfigInput{
 		Kind: "log_match",
 		Spec: map[string]interface{}{
 			"stream_selector": `{opskeeper_source=~"journald(:.*)?"}`,
@@ -1414,7 +1414,7 @@ func TestNormalizeAlertRuleConfigInputMovesLogLabelAlternationRegexIntoSelector(
 }
 
 func TestNormalizeAlertRuleConfigInputRewritesGuessedJournaldJobSelectorForLogVolume(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInput(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInput(configchange.AlertRuleConfigInput{
 		Kind: "log_volume",
 		Spec: map[string]interface{}{
 			"stream_selector": `{job=~".*journal.*",level!="7"}`,
@@ -1428,7 +1428,7 @@ func TestNormalizeAlertRuleConfigInputRewritesGuessedJournaldJobSelectorForLogVo
 }
 
 func TestNormalizeAlertRuleConfigInputNormalizesLogVolumeLineFilter(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInput(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInput(configchange.AlertRuleConfigInput{
 		Kind: "log_volume",
 		Spec: map[string]interface{}{
 			"stream_selector": `{job=~".*journal.*"}`,
@@ -1450,7 +1450,7 @@ func TestNormalizeAlertRuleConfigInputNormalizesLogVolumeLineFilter(t *testing.T
 }
 
 func TestNormalizeAlertRuleConfigInputPreservesExplicitLogSelector(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInput(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInput(configchange.AlertRuleConfigInput{
 		Kind: "log_match",
 		Spec: map[string]interface{}{
 			"stream_selector": `{unit="nginx.service"}`,
@@ -1463,7 +1463,7 @@ func TestNormalizeAlertRuleConfigInputPreservesExplicitLogSelector(t *testing.T)
 }
 
 func TestNormalizeAlertRuleConfigInputNormalizesBurnRateFixedRangeToWindow(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInput(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInput(configchange.AlertRuleConfigInput{
 		Kind: "metric_burn_rate",
 		Spec: map[string]interface{}{
 			"sli": `sum(rate(http_requests_total{code!~"5.."}[5m])) / sum(rate(http_requests_total[5m]))`,
@@ -1476,7 +1476,7 @@ func TestNormalizeAlertRuleConfigInputNormalizesBurnRateFixedRangeToWindow(t *te
 }
 
 func TestNormalizeAlertRuleConfigInputNormalizesBurnRateRatioSLOToPercent(t *testing.T) {
-	got := alertdraft.NormalizeRuleConfigInput(aiopstools.AlertRuleConfigInput{
+	got := alertdraft.NormalizeRuleConfigInput(configchange.AlertRuleConfigInput{
 		Kind: "metric_burn_rate",
 		Spec: map[string]interface{}{
 			"sli": `sum(rate(http_requests_total{code!~"5.."}[$window])) / sum(rate(http_requests_total[$window]))`,
@@ -1490,9 +1490,9 @@ func TestNormalizeAlertRuleConfigInputNormalizesBurnRateRatioSLOToPercent(t *tes
 
 func TestDraftAlertRuleConfigRejectsBurnRateWithoutWindowedSLI(t *testing.T) {
 	adapter := NewAlertRuleManager(managersvcalert.NewStub())
-	_, err := adapter.DraftAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{}, aiopstools.AlertRuleConfigArgs{
+	_, err := adapter.DraftAlertRuleConfig(context.Background(), configchange.ConfigCaller{}, configchange.AlertRuleConfigArgs{
 		Action: "create",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			RuleKey:  "burn_rate_no_window",
 			Kind:     "metric_burn_rate",
 			Name:     "Burn rate no window",

@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	tools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
 	middlewareregistry "github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	tools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -16,7 +17,6 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"

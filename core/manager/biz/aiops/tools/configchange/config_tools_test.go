@@ -1,4 +1,4 @@
-package tools
+package configchange
 
 import (
 	"context"

@@ -1,4 +1,4 @@
-package tools
+package metriccatalog
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
 )
 
@@ -386,16 +385,5 @@ func TestListMetricCatalogTool_RejectsEmptyMatchingRegex(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "must not match the empty string") {
 		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestRegistryRegistersMetricCatalogWithProm(t *testing.T) {
-	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
-	reg := NewRegistry(&fakeCaller{}, uc, nil, &fakePromQuerier{}, nil, nil, nil, slog.Default())
-	if !containsName(schemaNames(reg.Schemas()), ToolNameListMetricCatalog) {
-		t.Fatalf("closure registry missing %q: %v", ToolNameListMetricCatalog, schemaNames(reg.Schemas()))
-	}
-	if !containsName(toolInfoNames(t, reg.BuildBaseTools().AllTools()), ToolNameListMetricCatalog) {
-		t.Fatalf("BaseTool registry missing %q", ToolNameListMetricCatalog)
 	}
 }

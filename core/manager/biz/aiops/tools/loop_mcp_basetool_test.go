@@ -3,13 +3,13 @@ package tools_test
 import (
 	"context"
 	"encoding/json"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	aiopstoolsdec "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
 	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"

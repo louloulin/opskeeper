@@ -2,9 +2,9 @@ package aiopsconfig
 
 import (
 	"context"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/configchange"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/alertconfig"
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	managersvcalert "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 )
 
@@ -13,7 +13,7 @@ type alertRuleService interface {
 	CreateRule(ctx context.Context, caller managersvcalert.Caller, in managersvcalert.RuleInput) (*managersvcalert.Rule, error)
 }
 
-func NewAlertRuleManager(alertSvc alertRuleService) aiopstools.ConfigManager {
+func NewAlertRuleManager(alertSvc alertRuleService) configchange.ConfigManager {
 	if alertSvc == nil {
 		return alertconfig.NewAlertRuleManager(nil)
 	}
@@ -24,7 +24,7 @@ type alertRulePort struct {
 	alert alertRuleService
 }
 
-func (p alertRulePort) PreviewRule(ctx context.Context, caller aiopstools.ConfigCaller, in alertconfig.RuleInput, lookbackSeconds int) (*alertconfig.PreviewResult, error) {
+func (p alertRulePort) PreviewRule(ctx context.Context, caller configchange.ConfigCaller, in alertconfig.RuleInput, lookbackSeconds int) (*alertconfig.PreviewResult, error) {
 	res, err := p.alert.PreviewRule(ctx, toAlertServiceCaller(caller), toAlertServiceRuleInput(in), lookbackSeconds)
 	if err != nil {
 		return nil, err
@@ -32,7 +32,7 @@ func (p alertRulePort) PreviewRule(ctx context.Context, caller aiopstools.Config
 	return fromAlertServicePreview(res), nil
 }
 
-func (p alertRulePort) CreateRule(ctx context.Context, caller aiopstools.ConfigCaller, in alertconfig.RuleInput) (*alertconfig.Rule, error) {
+func (p alertRulePort) CreateRule(ctx context.Context, caller configchange.ConfigCaller, in alertconfig.RuleInput) (*alertconfig.Rule, error) {
 	rule, err := p.alert.CreateRule(ctx, toAlertServiceCaller(caller), toAlertServiceRuleInput(in))
 	if err != nil {
 		return nil, err
@@ -44,7 +44,7 @@ func (p alertRulePort) CreateRule(ctx context.Context, caller aiopstools.ConfigC
 	}, nil
 }
 
-func toAlertServiceCaller(c aiopstools.ConfigCaller) managersvcalert.Caller {
+func toAlertServiceCaller(c configchange.ConfigCaller) managersvcalert.Caller {
 	return managersvcalert.Caller{UserID: c.UserID, Role: c.Role}
 }
 

@@ -2,12 +2,12 @@ package alertconfig
 
 import (
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/configchange"
 	"math"
 	"regexp"
 	"strings"
 
 	alertdraft "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/alertdraft"
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 )
 
 const (
@@ -17,14 +17,14 @@ const (
 
 var metricRawTrailingComparisonRE = regexp.MustCompile(`^(.+?)\s*(==|!=|>=?|<=?)\s*([+-]?[0-9.]+(?:[eE][+-]?\d+)?)\s*$`)
 
-func validateAlertRuleDraft(rule aiopstools.AlertRuleConfigInput, requestText string, preview *PreviewResult) aiopstools.ConfigValidationResult {
-	var issues []aiopstools.ConfigValidationIssue
+func validateAlertRuleDraft(rule configchange.AlertRuleConfigInput, requestText string, preview *PreviewResult) configchange.ConfigValidationResult {
+	var issues []configchange.ConfigValidationIssue
 	if preview != nil && strings.TrimSpace(preview.SkippedReason) != "" {
 		severity := validationSeverityWarning
 		if alertdraft.ShouldBlockCreateOnPreviewSkip(preview.SkippedReason) {
 			severity = validationSeverityError
 		}
-		issues = append(issues, aiopstools.ConfigValidationIssue{
+		issues = append(issues, configchange.ConfigValidationIssue{
 			Severity:   severity,
 			Code:       "preview_skipped",
 			Message:    "告警规则预览未完成：" + preview.SkippedReason,
@@ -49,17 +49,17 @@ func validateAlertRuleDraft(rule aiopstools.AlertRuleConfigInput, requestText st
 			break
 		}
 	}
-	return aiopstools.ConfigValidationResult{Status: status, Issues: issues}
+	return configchange.ConfigValidationResult{Status: status, Issues: issues}
 }
 
-func validateMetricRawDraft(rule aiopstools.AlertRuleConfigInput, requestText string, preview *PreviewResult) []aiopstools.ConfigValidationIssue {
+func validateMetricRawDraft(rule configchange.AlertRuleConfigInput, requestText string, preview *PreviewResult) []configchange.ConfigValidationIssue {
 	expr := metricRawExpr(rule)
 	if strings.TrimSpace(expr) == "" {
 		return nil
 	}
-	var issues []aiopstools.ConfigValidationIssue
+	var issues []configchange.ConfigValidationIssue
 	if !hasMetricRawComparisonPredicate(expr) {
-		issues = append(issues, aiopstools.ConfigValidationIssue{
+		issues = append(issues, configchange.ConfigValidationIssue{
 			Severity:   validationSeverityError,
 			Code:       "metric_raw_predicate_missing",
 			Message:    "metric_raw 的 PromQL 必须是布尔告警谓词；裸数值序列会在返回任意样本时被规则引擎当成触发。",
@@ -69,7 +69,7 @@ func validateMetricRawDraft(rule aiopstools.AlertRuleConfigInput, requestText st
 	}
 	if lhs, threshold, ok := splitMetricRawComparison(expr); ok {
 		if preview != nil && strings.TrimSpace(preview.SkippedReason) == "" && noPreviewSignal(preview) && looksLikeArithmetic(lhs) {
-			issues = append(issues, aiopstools.ConfigValidationIssue{
+			issues = append(issues, configchange.ConfigValidationIssue{
 				Severity:   validationSeverityError,
 				Code:       "metric_raw_no_preview_series",
 				Message:    "PromQL 通过语法检查，但预览窗口内没有任何可评估序列；对带算术/比值的表达式，这通常表示 metric label 不匹配、分子缺失或 selector 过窄。",
@@ -81,7 +81,7 @@ func validateMetricRawDraft(rule aiopstools.AlertRuleConfigInput, requestText st
 		}
 	}
 	if mentionsSustained(requestText, rule.Name) && !hasSustainedPromQL(expr) {
-		issues = append(issues, aiopstools.ConfigValidationIssue{
+		issues = append(issues, configchange.ConfigValidationIssue{
 			Severity:   validationSeverityWarning,
 			Code:       "sustained_window_missing",
 			Message:    "用户描述包含“持续/连续”语义，但 metric_raw 表达式主要是即时谓词；当前引擎会在 PromQL 返回序列时立即触发。",
@@ -89,7 +89,7 @@ func validateMetricRawDraft(rule aiopstools.AlertRuleConfigInput, requestText st
 		})
 	}
 	if preview != nil && preview.FireCount > 100 {
-		issues = append(issues, aiopstools.ConfigValidationIssue{
+		issues = append(issues, configchange.ConfigValidationIssue{
 			Severity:   validationSeverityWarning,
 			Code:       "high_preview_fire_count",
 			Message:    fmt.Sprintf("预览窗口内命中 %d 次，创建后可能立即产生大量告警。", preview.FireCount),
@@ -102,13 +102,13 @@ func validateMetricRawDraft(rule aiopstools.AlertRuleConfigInput, requestText st
 	return issues
 }
 
-func validateLogMatchDraft(rule aiopstools.AlertRuleConfigInput) []aiopstools.ConfigValidationIssue {
+func validateLogMatchDraft(rule configchange.AlertRuleConfigInput) []configchange.ConfigValidationIssue {
 	stream := strings.ToLower(stringFromSpec(rule.Spec, "stream_selector", "selector"))
 	filter := strings.ToLower(stringFromSpec(rule.Spec, "line_filter", "filter"))
 	query := strings.TrimSpace(stringFromSpec(rule.Spec, "query"))
-	var issues []aiopstools.ConfigValidationIssue
+	var issues []configchange.ConfigValidationIssue
 	if query != "" && filter == "" {
-		issues = append(issues, aiopstools.ConfigValidationIssue{
+		issues = append(issues, configchange.ConfigValidationIssue{
 			Severity:   validationSeverityError,
 			Code:       "log_query_not_normalized",
 			Message:    "日志规则包含 query，但当前 evaluator 只执行 stream_selector + line_filter；直接保存 query 会被忽略。",
@@ -118,7 +118,7 @@ func validateLogMatchDraft(rule aiopstools.AlertRuleConfigInput) []aiopstools.Co
 	broadFilter := strings.Contains(filter, "error") || strings.Contains(filter, "panic") || strings.Contains(filter, "exception")
 	narrowStream := strings.Contains(stream, "unit=") || strings.Contains(stream, "service_name=") || strings.Contains(stream, "identifier=")
 	if broadFilter && !narrowStream {
-		issues = append(issues, aiopstools.ConfigValidationIssue{
+		issues = append(issues, configchange.ConfigValidationIssue{
 			Severity:   validationSeverityWarning,
 			Code:       "broad_log_match",
 			Message:    "日志规则使用了较泛的错误关键字，但 stream_selector 没有限定 unit/service/identifier，容易把 exporter 或系统噪声当成业务故障。",
@@ -128,7 +128,7 @@ func validateLogMatchDraft(rule aiopstools.AlertRuleConfigInput) []aiopstools.Co
 	return issues
 }
 
-func validatePreviewContract(rule aiopstools.AlertRuleConfigInput, preview *PreviewResult) []aiopstools.ConfigValidationIssue {
+func validatePreviewContract(rule configchange.AlertRuleConfigInput, preview *PreviewResult) []configchange.ConfigValidationIssue {
 	if preview == nil || preview.FireCount == 0 || strings.TrimSpace(preview.SkippedReason) != "" {
 		return nil
 	}
@@ -143,7 +143,7 @@ func validatePreviewContract(rule aiopstools.AlertRuleConfigInput, preview *Prev
 			return nil
 		}
 	}
-	return []aiopstools.ConfigValidationIssue{{
+	return []configchange.ConfigValidationIssue{{
 		Severity:   validationSeverityError,
 		Code:       "host_preview_missing_device_id",
 		Message:    "host 作用域规则的预览结果没有 device_id label；创建后命中也无法写入主机告警事件。",
@@ -151,7 +151,7 @@ func validatePreviewContract(rule aiopstools.AlertRuleConfigInput, preview *Prev
 	}}
 }
 
-func validateScopeConsistency(rule aiopstools.AlertRuleConfigInput, requestText string, preview *PreviewResult) []aiopstools.ConfigValidationIssue {
+func validateScopeConsistency(rule configchange.AlertRuleConfigInput, requestText string, preview *PreviewResult) []configchange.ConfigValidationIssue {
 	if strings.ToLower(strings.TrimSpace(rule.ScopeType)) != "global" {
 		return nil
 	}
@@ -161,7 +161,7 @@ func validateScopeConsistency(rule aiopstools.AlertRuleConfigInput, requestText 
 	if !previewHasDeviceIDLabel(preview) {
 		return nil
 	}
-	return []aiopstools.ConfigValidationIssue{{
+	return []configchange.ConfigValidationIssue{{
 		Severity:   validationSeverityWarning,
 		Code:       "host_scope_recommended",
 		Message:    "这条规则看起来是按主机维度命中的，但当前 scope_type=global；创建后告警能触发，不过不会作为设备告警关联到主机。",
@@ -169,7 +169,7 @@ func validateScopeConsistency(rule aiopstools.AlertRuleConfigInput, requestText 
 	}}
 }
 
-func metricRawExpr(rule aiopstools.AlertRuleConfigInput) string {
+func metricRawExpr(rule configchange.AlertRuleConfigInput) string {
 	return stringFromSpec(rule.Spec, "expr", "promql", "query")
 }
 
@@ -266,14 +266,14 @@ func looksLikeArithmetic(expr string) bool {
 	return strings.Contains(expr, "/") || strings.Contains(expr, "*") || strings.Contains(expr, "+") || strings.Contains(expr, "-")
 }
 
-func suspiciousMagnitudeIssue(preview *PreviewResult, threshold float64) (aiopstools.ConfigValidationIssue, bool) {
+func suspiciousMagnitudeIssue(preview *PreviewResult, threshold float64) (configchange.ConfigValidationIssue, bool) {
 	if preview == nil || len(preview.Samples) == 0 || math.Abs(threshold) > 1000 {
-		return aiopstools.ConfigValidationIssue{}, false
+		return configchange.ConfigValidationIssue{}, false
 	}
 	limit := math.Max(10000, math.Abs(threshold)*1000)
 	for _, sample := range preview.Samples {
 		if math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
-			return aiopstools.ConfigValidationIssue{
+			return configchange.ConfigValidationIssue{
 				Severity:   validationSeverityError,
 				Code:       "metric_raw_non_finite_value",
 				Message:    "PromQL 预览产生了 NaN/Inf，通常是分母为 0 或缺失数据造成的。",
@@ -281,7 +281,7 @@ func suspiciousMagnitudeIssue(preview *PreviewResult, threshold float64) (aiopst
 			}, true
 		}
 		if math.Abs(sample.Value) > limit {
-			return aiopstools.ConfigValidationIssue{
+			return configchange.ConfigValidationIssue{
 				Severity:   validationSeverityError,
 				Code:       "metric_raw_suspicious_magnitude",
 				Message:    fmt.Sprintf("PromQL 预览值 %.4g 远高于阈值 %.4g，量纲或分母很可能不正确。", sample.Value, threshold),
@@ -289,18 +289,18 @@ func suspiciousMagnitudeIssue(preview *PreviewResult, threshold float64) (aiopst
 			}, true
 		}
 	}
-	return aiopstools.ConfigValidationIssue{}, false
+	return configchange.ConfigValidationIssue{}, false
 }
 
-func sparseCounterMinRateIssue(expr string) (aiopstools.ConfigValidationIssue, bool) {
+func sparseCounterMinRateIssue(expr string) (configchange.ConfigValidationIssue, bool) {
 	lower := strings.ToLower(strings.ReplaceAll(expr, " ", ""))
 	if !strings.Contains(lower, "min_over_time(rate(") || !strings.Contains(lower, ")>0") {
-		return aiopstools.ConfigValidationIssue{}, false
+		return configchange.ConfigValidationIssue{}, false
 	}
 	if !(strings.Contains(lower, "_total") || strings.Contains(lower, "deadlock") || strings.Contains(lower, "error") || strings.Contains(lower, "fail")) {
-		return aiopstools.ConfigValidationIssue{}, false
+		return configchange.ConfigValidationIssue{}, false
 	}
-	return aiopstools.ConfigValidationIssue{
+	return configchange.ConfigValidationIssue{
 		Severity:   validationSeverityWarning,
 		Code:       "sparse_counter_min_rate",
 		Message:    "表达式对稀疏事件计数器使用 min_over_time(rate(...)) > 0，可能要求整个窗口持续增长，容易漏掉单次事件。",
@@ -326,7 +326,7 @@ func hasSustainedPromQL(expr string) bool {
 		strings.Contains(lower, "[") && strings.Contains(lower, ":")
 }
 
-func validationHasErrors(v aiopstools.ConfigValidationResult) bool {
+func validationHasErrors(v configchange.ConfigValidationResult) bool {
 	for _, issue := range v.Issues {
 		if issue.Severity == validationSeverityError {
 			return true
@@ -335,7 +335,7 @@ func validationHasErrors(v aiopstools.ConfigValidationResult) bool {
 	return false
 }
 
-func validationWarnings(v aiopstools.ConfigValidationResult) []string {
+func validationWarnings(v configchange.ConfigValidationResult) []string {
 	out := make([]string, 0, len(v.Issues))
 	for _, issue := range v.Issues {
 		if issue.Severity == validationSeverityWarning {
@@ -349,7 +349,7 @@ func validationWarnings(v aiopstools.ConfigValidationResult) []string {
 	return out
 }
 
-func validationErrorMessage(v aiopstools.ConfigValidationResult) string {
+func validationErrorMessage(v configchange.ConfigValidationResult) string {
 	out := make([]string, 0, len(v.Issues))
 	for _, issue := range v.Issues {
 		if issue.Severity != validationSeverityError {

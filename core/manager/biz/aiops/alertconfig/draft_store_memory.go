@@ -2,11 +2,11 @@ package alertconfig
 
 import (
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/configchange"
 	"strings"
 	"sync"
 	"time"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
@@ -39,7 +39,7 @@ func (s *memoryAlertRuleDraftStore) put(rec alertRuleDraftRecord) {
 	delete(s.applying, rec.ID)
 }
 
-func (s *memoryAlertRuleDraftStore) beginApply(caller aiopstools.ConfigCaller, action string, rule aiopstools.AlertRuleConfigInput, draftID, draftHash string) (alertRuleDraftApplyLease, error) {
+func (s *memoryAlertRuleDraftStore) beginApply(caller configchange.ConfigCaller, action string, rule configchange.AlertRuleConfigInput, draftID, draftHash string) (alertRuleDraftApplyLease, error) {
 	if s == nil {
 		return nil, fmt.Errorf("%w: alert rule draft store is not configured", errs.ErrInvalid)
 	}
@@ -51,7 +51,7 @@ func (s *memoryAlertRuleDraftStore) beginApply(caller aiopstools.ConfigCaller, a
 	if draftHash == "" {
 		return nil, fmt.Errorf("%w: draft_hash from config_draft is required before applying", errs.ErrInvalid)
 	}
-	expectedHash, err := aiopstools.AlertRuleConfigDraftHashForID(action, rule, draftID)
+	expectedHash, err := configchange.AlertRuleConfigDraftHashForID(action, rule, draftID)
 	if err != nil {
 		return nil, err
 	}

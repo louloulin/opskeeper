@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"log/slog"
 	"strings"
 	"testing"
 
 	managerbizaiops "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	managersvcaiops "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigagent"

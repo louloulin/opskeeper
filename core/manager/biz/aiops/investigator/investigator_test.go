@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"io"
 	"log/slog"
@@ -15,7 +16,6 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )

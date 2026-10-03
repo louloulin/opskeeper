@@ -3,10 +3,10 @@ package chatruntime
 import (
 	"context"
 	"fmt"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"sort"
 	"strings"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
 

@@ -3,22 +3,21 @@ package alertconfig
 import (
 	"context"
 	"encoding/json"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/configchange"
 	"strings"
 	"testing"
 	"time"
-
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 )
 
 type fakeAlertRulePort struct {
 	preview *PreviewResult
 }
 
-func (f fakeAlertRulePort) PreviewRule(context.Context, aiopstools.ConfigCaller, RuleInput, int) (*PreviewResult, error) {
+func (f fakeAlertRulePort) PreviewRule(context.Context, configchange.ConfigCaller, RuleInput, int) (*PreviewResult, error) {
 	return f.preview, nil
 }
 
-func (f fakeAlertRulePort) CreateRule(context.Context, aiopstools.ConfigCaller, RuleInput) (*Rule, error) {
+func (f fakeAlertRulePort) CreateRule(context.Context, configchange.ConfigCaller, RuleInput) (*Rule, error) {
 	return &Rule{ID: 1, Kind: "metric_raw", Name: "test"}, nil
 }
 
@@ -27,11 +26,11 @@ type mutableFakeAlertRulePort struct {
 	createCalls int
 }
 
-func (f *mutableFakeAlertRulePort) PreviewRule(context.Context, aiopstools.ConfigCaller, RuleInput, int) (*PreviewResult, error) {
+func (f *mutableFakeAlertRulePort) PreviewRule(context.Context, configchange.ConfigCaller, RuleInput, int) (*PreviewResult, error) {
 	return f.preview, nil
 }
 
-func (f *mutableFakeAlertRulePort) CreateRule(context.Context, aiopstools.ConfigCaller, RuleInput) (*Rule, error) {
+func (f *mutableFakeAlertRulePort) CreateRule(context.Context, configchange.ConfigCaller, RuleInput) (*Rule, error) {
 	f.createCalls++
 	return &Rule{ID: 1, Kind: "metric_raw", Name: "test"}, nil
 }
@@ -77,9 +76,9 @@ func TestDraftAlertRuleConfigReturnsValidationFailedForBlockingPreview(t *testin
 		preview: &PreviewResult{SkippedReason: "service 为空"},
 	})
 
-	got, err := manager.DraftAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{}, aiopstools.AlertRuleConfigArgs{
+	got, err := manager.DraftAlertRuleConfig(context.Background(), configchange.ConfigCaller{}, configchange.AlertRuleConfigArgs{
 		Action: "create",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			RuleKey:  "trace_latency_missing_service",
 			Kind:     "trace_latency",
 			Name:     "Trace latency missing service",
@@ -92,7 +91,7 @@ func TestDraftAlertRuleConfigReturnsValidationFailedForBlockingPreview(t *testin
 	if err != nil {
 		t.Fatalf("DraftAlertRuleConfig() error = %v", err)
 	}
-	if got.Kind != aiopstools.ConfigResultKindValidationFailed {
+	if got.Kind != configchange.ConfigResultKindValidationFailed {
 		t.Fatalf("Kind = %q, want validation failed", got.Kind)
 	}
 	if got.DraftHash != "" || len(got.Payload) != 0 || got.ApplyTool != "" {
@@ -114,9 +113,9 @@ func TestDraftAlertRuleConfigReturnsValidationFailedForSuspiciousMetricMagnitude
 		},
 	})
 
-	got, err := manager.DraftAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{}, aiopstools.AlertRuleConfigArgs{
+	got, err := manager.DraftAlertRuleConfig(context.Background(), configchange.ConfigCaller{}, configchange.AlertRuleConfigArgs{
 		Action: "create",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			RuleKey:  "redis_memory_usage_high",
 			Kind:     "metric_raw",
 			Name:     "Redis memory usage high",
@@ -129,7 +128,7 @@ func TestDraftAlertRuleConfigReturnsValidationFailedForSuspiciousMetricMagnitude
 	if err != nil {
 		t.Fatalf("DraftAlertRuleConfig() error = %v", err)
 	}
-	if got.Kind != aiopstools.ConfigResultKindValidationFailed {
+	if got.Kind != configchange.ConfigResultKindValidationFailed {
 		t.Fatalf("Kind = %q, want validation failed", got.Kind)
 	}
 	if got.Validation == nil || !validationIssueContains(*got.Validation, "metric_raw_suspicious_magnitude") {
@@ -142,9 +141,9 @@ func TestDraftAlertRuleConfigReturnsValidationFailedForMetricRawWithoutPredicate
 		preview: &PreviewResult{FireCount: 1441},
 	})
 
-	got, err := manager.DraftAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{}, aiopstools.AlertRuleConfigArgs{
+	got, err := manager.DraftAlertRuleConfig(context.Background(), configchange.ConfigCaller{}, configchange.AlertRuleConfigArgs{
 		Action: "create",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			RuleKey:  "mysql_slow_queries",
 			Kind:     "metric_raw",
 			Name:     "MySQL slow queries",
@@ -157,7 +156,7 @@ func TestDraftAlertRuleConfigReturnsValidationFailedForMetricRawWithoutPredicate
 	if err != nil {
 		t.Fatalf("DraftAlertRuleConfig() error = %v", err)
 	}
-	if got.Kind != aiopstools.ConfigResultKindValidationFailed {
+	if got.Kind != configchange.ConfigResultKindValidationFailed {
 		t.Fatalf("Kind = %q, want validation failed", got.Kind)
 	}
 	if got.DraftHash != "" || len(got.Payload) != 0 || got.ApplyTool != "" {
@@ -179,9 +178,9 @@ func TestDraftAlertRuleConfigReturnsValidationFailedForHostPreviewWithoutDeviceI
 		},
 	})
 
-	got, err := manager.DraftAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{}, aiopstools.AlertRuleConfigArgs{
+	got, err := manager.DraftAlertRuleConfig(context.Background(), configchange.ConfigCaller{}, configchange.AlertRuleConfigArgs{
 		Action: "create",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			RuleKey:   "host_rule_without_device",
 			Kind:      "metric_raw",
 			Name:      "Host rule without device",
@@ -195,7 +194,7 @@ func TestDraftAlertRuleConfigReturnsValidationFailedForHostPreviewWithoutDeviceI
 	if err != nil {
 		t.Fatalf("DraftAlertRuleConfig() error = %v", err)
 	}
-	if got.Kind != aiopstools.ConfigResultKindValidationFailed {
+	if got.Kind != configchange.ConfigResultKindValidationFailed {
 		t.Fatalf("Kind = %q, want validation failed", got.Kind)
 	}
 	if got.Validation == nil || !validationIssueContains(*got.Validation, "host_preview_missing_device_id") {
@@ -206,9 +205,9 @@ func TestDraftAlertRuleConfigReturnsValidationFailedForHostPreviewWithoutDeviceI
 func TestDraftAlertRuleConfigReturnsValidationFailedForIgnoredLogQuery(t *testing.T) {
 	manager := NewAlertRuleManager(fakeAlertRulePort{preview: &PreviewResult{}})
 
-	got, err := manager.DraftAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{}, aiopstools.AlertRuleConfigArgs{
+	got, err := manager.DraftAlertRuleConfig(context.Background(), configchange.ConfigCaller{}, configchange.AlertRuleConfigArgs{
 		Action: "create",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			RuleKey:  "log_query_ignored",
 			Kind:     "log_match",
 			Name:     "Log query ignored",
@@ -221,7 +220,7 @@ func TestDraftAlertRuleConfigReturnsValidationFailedForIgnoredLogQuery(t *testin
 	if err != nil {
 		t.Fatalf("DraftAlertRuleConfig() error = %v", err)
 	}
-	if got.Kind != aiopstools.ConfigResultKindValidationFailed {
+	if got.Kind != configchange.ConfigResultKindValidationFailed {
 		t.Fatalf("Kind = %q, want validation failed", got.Kind)
 	}
 	if got.Validation == nil || !validationIssueContains(*got.Validation, "log_query_not_normalized") {
@@ -232,9 +231,9 @@ func TestDraftAlertRuleConfigReturnsValidationFailedForIgnoredLogQuery(t *testin
 func TestApplyAlertRuleConfigRevalidatesBeforeCreate(t *testing.T) {
 	port := &mutableFakeAlertRulePort{preview: &PreviewResult{}}
 	manager := NewAlertRuleManager(port)
-	draft, err := manager.DraftAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{UserID: 1}, aiopstools.AlertRuleConfigArgs{
+	draft, err := manager.DraftAlertRuleConfig(context.Background(), configchange.ConfigCaller{UserID: 1}, configchange.AlertRuleConfigArgs{
 		Action: "create",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			RuleKey:   "host_rule_without_device",
 			Kind:      "metric_raw",
 			Name:      "Host rule without device",
@@ -249,8 +248,8 @@ func TestApplyAlertRuleConfigRevalidatesBeforeCreate(t *testing.T) {
 		t.Fatalf("DraftAlertRuleConfig() error = %v", err)
 	}
 	var payload struct {
-		DraftID string                          `json:"draft_id"`
-		Rule    aiopstools.AlertRuleConfigInput `json:"rule"`
+		DraftID string                            `json:"draft_id"`
+		Rule    configchange.AlertRuleConfigInput `json:"rule"`
 	}
 	if err := json.Unmarshal(draft.Payload, &payload); err != nil {
 		t.Fatalf("decode draft payload: %v", err)
@@ -263,7 +262,7 @@ func TestApplyAlertRuleConfigRevalidatesBeforeCreate(t *testing.T) {
 			Value:  1,
 		}},
 	}
-	_, err = manager.ApplyAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{UserID: 1}, aiopstools.AlertRuleApplyArgs{
+	_, err = manager.ApplyAlertRuleConfig(context.Background(), configchange.ConfigCaller{UserID: 1}, configchange.AlertRuleApplyArgs{
 		Action:    "create",
 		Rule:      payload.Rule,
 		DraftID:   payload.DraftID,
@@ -284,10 +283,10 @@ func TestDraftAlertRuleConfigAllowsWarningValidationWithDraftHash(t *testing.T) 
 		Series: []PreviewSeriesPoint{{Timestamp: now, Value: 20}},
 	}})
 
-	got, err := manager.DraftAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{}, aiopstools.AlertRuleConfigArgs{
+	got, err := manager.DraftAlertRuleConfig(context.Background(), configchange.ConfigCaller{}, configchange.AlertRuleConfigArgs{
 		Action:      "create",
 		RequestText: "如果 CPU 持续偏高就告警",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			RuleKey:  "cpu_high",
 			Kind:     "metric_raw",
 			Name:     "CPU sustained high",
@@ -300,7 +299,7 @@ func TestDraftAlertRuleConfigAllowsWarningValidationWithDraftHash(t *testing.T) 
 	if err != nil {
 		t.Fatalf("DraftAlertRuleConfig() error = %v", err)
 	}
-	if got.Kind != aiopstools.ConfigResultKindDraft || got.DraftHash == "" {
+	if got.Kind != configchange.ConfigResultKindDraft || got.DraftHash == "" {
 		t.Fatalf("got kind=%q hash=%q, want confirmable draft", got.Kind, got.DraftHash)
 	}
 	if got.Validation == nil || got.Validation.Status != "warning" {
@@ -320,10 +319,10 @@ func TestDraftAlertRuleConfigIncludesScopeConfirmation(t *testing.T) {
 		}},
 	}})
 
-	got, err := manager.DraftAlertRuleConfig(context.Background(), aiopstools.ConfigCaller{}, aiopstools.AlertRuleConfigArgs{
+	got, err := manager.DraftAlertRuleConfig(context.Background(), configchange.ConfigCaller{}, configchange.AlertRuleConfigArgs{
 		Action:      "create",
 		RequestText: "创建 PostgreSQL 连接使用率过高告警",
-		Rule: aiopstools.AlertRuleConfigInput{
+		Rule: configchange.AlertRuleConfigInput{
 			RuleKey:  "pg_connection_usage_high",
 			Kind:     "metric_raw",
 			Name:     "PostgreSQL connection usage high",
@@ -336,7 +335,7 @@ func TestDraftAlertRuleConfigIncludesScopeConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DraftAlertRuleConfig() error = %v", err)
 	}
-	if got.Kind != aiopstools.ConfigResultKindDraft {
+	if got.Kind != configchange.ConfigResultKindDraft {
 		t.Fatalf("Kind = %q, want draft", got.Kind)
 	}
 	if got.Scope == nil || got.Scope.Type != "host" || got.Scope.Label != "主机级" {
@@ -348,7 +347,7 @@ func TestDraftAlertRuleConfigIncludesScopeConfirmation(t *testing.T) {
 }
 
 func TestValidateAlertRuleDraftWarnsForGlobalHostScopedRule(t *testing.T) {
-	validation := validateAlertRuleDraft(aiopstools.AlertRuleConfigInput{
+	validation := validateAlertRuleDraft(configchange.AlertRuleConfigInput{
 		RuleKey:   "cpu_high",
 		Kind:      "metric_raw",
 		Name:      "CPU high",
@@ -371,7 +370,7 @@ func TestValidateAlertRuleDraftWarnsForGlobalHostScopedRule(t *testing.T) {
 }
 
 func TestValidateAlertRuleDraftWarnsForGlobalDatabaseRuleWithDeviceID(t *testing.T) {
-	validation := validateAlertRuleDraft(aiopstools.AlertRuleConfigInput{
+	validation := validateAlertRuleDraft(configchange.AlertRuleConfigInput{
 		RuleKey:   "pg_connection_usage_high",
 		Kind:      "metric_raw",
 		Name:      "PostgreSQL connection usage high",
@@ -424,7 +423,7 @@ func TestHasMetricRawComparisonPredicateIgnoresLabelMatchers(t *testing.T) {
 	}
 }
 
-func validationIssueContains(v aiopstools.ConfigValidationResult, code string) bool {
+func validationIssueContains(v configchange.ConfigValidationResult, code string) bool {
 	for _, issue := range v.Issues {
 		if issue.Code == code {
 			return true

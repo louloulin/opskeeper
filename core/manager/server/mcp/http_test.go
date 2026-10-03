@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,6 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
 	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"

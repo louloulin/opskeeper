@@ -36,12 +36,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"log/slog"
 	"sync"
 	"time"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
 

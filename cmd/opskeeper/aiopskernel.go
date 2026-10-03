@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/configchange"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"log/slog"
 	"time"
@@ -11,7 +13,6 @@ import (
 
 	managerbizaiops "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	managersvcaiops "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
@@ -56,7 +57,7 @@ func selfSettledToolNames() []string {
 		aiopstools.ToolNameRestartService,
 		// Requires an already-approved proposal id / a confirmed draft hash.
 		recovery.ToolNameRecoveryExecute,
-		aiopstools.ToolNameApplyConfigChange,
+		configchange.ToolNameApplyConfigChange,
 		// Coordination and output primitives: they change no infrastructure.
 		aiopstools.AgentToolName,
 		aiopstools.SendMessageToolName,

@@ -8,6 +8,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/database"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/metriccatalog"
 	"go/format"
 	"os"
 	"path/filepath"
@@ -81,9 +82,9 @@ func observabilityTools() []observabilityEntry {
 				info, err := database.NewListDatabaseSourcesTool(nil, nil, nil, nil).Info(ctx)
 				return infoOf(t, info, err)
 			}},
-		{ToolNameListMetricCatalog, "list_metric_catalog",
+		{metriccatalog.ToolNameListMetricCatalog, "list_metric_catalog",
 			func(t *testing.T, ctx context.Context) basetoolInfo {
-				info, err := NewListMetricCatalogTool(nil, nil).Info(ctx)
+				info, err := metriccatalog.NewListMetricCatalogTool(nil, nil).Info(ctx)
 				return infoOf(t, info, err)
 			}},
 		{ToolNameListRepoSources, "list_repo_sources",

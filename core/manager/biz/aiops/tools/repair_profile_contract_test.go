@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/configchange"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"path/filepath"
 	"runtime"
@@ -59,9 +60,9 @@ func controlPlaneRepairTools(t *testing.T) map[string]domain.ToolClass {
 		info func() (class domain.ToolClass, err error)
 	}{
 		{
-			ToolNameDraftConfigChange,
+			configchange.ToolNameDraftConfigChange,
 			func() (domain.ToolClass, error) {
-				info, err := NewDraftConfigChangeTool(nil, nil).Info(ctx)
+				info, err := configchange.NewDraftConfigChangeTool(nil, nil).Info(ctx)
 				if err != nil {
 					return domain.ClassUnknown, err
 				}
@@ -69,9 +70,9 @@ func controlPlaneRepairTools(t *testing.T) map[string]domain.ToolClass {
 			},
 		},
 		{
-			ToolNameApplyConfigChange,
+			configchange.ToolNameApplyConfigChange,
 			func() (domain.ToolClass, error) {
-				info, err := NewApplyConfigChangeTool(nil, nil).Info(ctx)
+				info, err := configchange.NewApplyConfigChangeTool(nil, nil).Info(ctx)
 				if err != nil {
 					return domain.ClassUnknown, err
 				}

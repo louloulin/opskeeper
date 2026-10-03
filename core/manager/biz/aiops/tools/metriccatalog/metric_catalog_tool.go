@@ -1,4 +1,4 @@
-package tools
+package metriccatalog
 
 import (
 	"context"
@@ -98,11 +98,11 @@ type MetricCatalogItem struct {
 }
 
 type ListMetricCatalogTool struct {
-	promQuery PromQuerier
+	promQuery toolcore.PromQuerier
 	log       *slog.Logger
 }
 
-func NewListMetricCatalogTool(p PromQuerier, log *slog.Logger) *ListMetricCatalogTool {
+func NewListMetricCatalogTool(p toolcore.PromQuerier, log *slog.Logger) *ListMetricCatalogTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -120,26 +120,22 @@ func (t *ListMetricCatalogTool) Info(_ context.Context) (*basetool.ToolInfo, err
 }
 
 func (t *ListMetricCatalogTool) InvokableRun(ctx context.Context, argsJSON string, _ ...basetool.InvokeOption) (string, error) {
-	runner := metricCatalogRunner{promQuery: t.promQuery, log: t.log}
-	out, err := runner.run(ctx, []byte(argsJSON))
+	runner := Runner{PromQuery: t.promQuery, Log: t.log}
+	out, err := runner.Run(ctx, []byte(argsJSON))
 	if err != nil {
 		return "", err
 	}
 	return string(out), nil
 }
 
-func (r *Registry) executeListMetricCatalog(ctx context.Context, args json.RawMessage) (ExecuteResult, error) {
-	runner := metricCatalogRunner{promQuery: r.promQuery, log: r.log}
-	out, err := runner.run(ctx, args)
-	if err != nil {
-		return ExecuteResult{}, err
-	}
-	return ExecuteResult{ResultJSON: out}, nil
-}
-
-type metricCatalogRunner struct {
-	promQuery PromQuerier
-	log       *slog.Logger
+// Runner is the single implementation of list_metric_catalog's work. It is
+// exported with exported fields for one reason: the parent tools package
+// constructs one to serve the node-side upcall, which cannot go through the
+// BaseTool bag. There is one implementation behind it, so a caller has
+// nothing to disagree with.
+type Runner struct {
+	PromQuery toolcore.PromQuerier
+	Log       *slog.Logger
 }
 
 type scoredMetricCatalogItem struct {
@@ -147,8 +143,8 @@ type scoredMetricCatalogItem struct {
 	score int
 }
 
-func (r metricCatalogRunner) run(ctx context.Context, args []byte) ([]byte, error) {
-	if r.promQuery == nil {
+func (r Runner) Run(ctx context.Context, args []byte) ([]byte, error) {
+	if r.PromQuery == nil {
 		return nil, fmt.Errorf("%s: prom query client not configured", ToolNameListMetricCatalog)
 	}
 	var in ListMetricCatalogArgs
@@ -179,7 +175,7 @@ func (r metricCatalogRunner) run(ctx context.Context, args []byte) ([]byte, erro
 
 	callCtx, cancel := context.WithTimeout(ctx, toolcore.QueryPromqlCallTimeout)
 	defer cancel()
-	res, err := r.promQuery.Query(callCtx, expr, time.Now())
+	res, err := r.PromQuery.Query(callCtx, expr, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("%s: dispatch: %w", ToolNameListMetricCatalog, err)
 	}

@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"io"
 	"log/slog"
@@ -116,7 +117,6 @@ import (
 
 	aiopsinvestigator "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/investigator"
 	managerbizaiopsmentions "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/mentions"
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	aiopstoolsdec "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
 	aiopshost "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"

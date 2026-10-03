@@ -20,9 +20,11 @@ import (
 	"fmt"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/chat2query"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/configchange"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/database"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/metriccatalog"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
@@ -104,7 +106,7 @@ type Registry struct {
 	pluginConfigs database.PluginConfigLister
 	// configManager feeds conversational configuration draft/apply tools.
 	// Wired from cmd/main.go after the alert service exists.
-	configManager ConfigManager
+	configManager configchange.ConfigManager
 
 	// cloudBashProposer wires the cloud_bash tool to the human approval
 	// inbox. Set post-construction (cmd/main.go) via SetCloudBashProposer;
@@ -225,7 +227,7 @@ func (r *Registry) SetPluginConfigLister(p database.PluginConfigLister) {
 // SetConfigManager wires the conversational configuration tools consumed by
 // the graph BaseTool registry. The legacy closure-style registry does not
 // expose these mutating flows.
-func (r *Registry) SetConfigManager(m ConfigManager) { r.configManager = m }
+func (r *Registry) SetConfigManager(m configchange.ConfigManager) { r.configManager = m }
 
 // NewRegistry builds a Registry and auto-registers the two MVP tools
 // (get_host_load, get_process_list). When promQuery / logQuery /
@@ -268,9 +270,9 @@ func NewRegistry(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Useca
 			Execute:     r.executeQueryPromQL,
 		})
 		r.Register(Tool{
-			Name:        ToolNameListMetricCatalog,
-			Description: ListMetricCatalogDescription,
-			Schema:      ListMetricCatalogSchema,
+			Name:        metriccatalog.ToolNameListMetricCatalog,
+			Description: metriccatalog.ListMetricCatalogDescription,
+			Schema:      metriccatalog.ListMetricCatalogSchema,
 			Execute:     r.executeListMetricCatalog,
 		})
 	}
