@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/floor/reporoot"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/database"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
@@ -166,18 +167,13 @@ func toolsetPath(t *testing.T) string {
 		t.Fatal("cannot locate this test's source file")
 	}
 	dir := filepath.Dir(file)
-	for i := 0; i < 12; i++ {
-		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
-			return filepath.Join(dir, "core", "pig", "extensions", "opskeeper-sre-observability", "tools.go")
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
+	// The shared tracked markers, not go.work: a clean clone has none, and
+	// this test failed outright there rather than skipping.
+	root, ok := reporoot.Find(dir, 12)
+	if !ok {
+		t.Fatalf("could not locate the repository root from %s", dir)
 	}
-	t.Fatal("could not locate the repository root (no go.work found)")
-	return ""
+	return filepath.Join(root, "core", "pig", "extensions", "opskeeper-sre-observability", "tools.go")
 }
 
 // renderToolset builds the file body from the live registry.

@@ -58,7 +58,8 @@ type Gate struct {
 	Why string
 }
 
-// Gates is every acceptance gate the plan promises runs, in the plan's order.
+// Gates is every acceptance gate the plan's section 6 promises runs, in the
+// plan's order.
 //
 // The list is written down here rather than derived from CI for the same
 // reason scripts/nodearch spells out its four targets: a gate derived from
@@ -90,6 +91,34 @@ func Gates() []Gate {
 	}
 }
 
+// DecisionGates are the gates a decision committed to CI after the plan was
+// written, each with the decision that owns it.
+//
+// They are kept in a second table rather than folded into Gates() because the
+// two answer different questions. Gates() is "did the plan's acceptance line
+// survive"; this is "did a decision that moved a gate into CI get walked
+// back". Merging them would make the first table stop meaning what its name
+// says, and the plan's four-gate line is quoted often enough that it has to
+// keep meaning it.
+//
+// broker-pin-check is here because decision 153 built it to own a property
+// nothing owned -- "the broker the acceptance tests is the broker that ships"
+// -- and a gate that only runs when somebody remembers to type it owns
+// nothing. It is also the gate this table caught skipping itself: until
+// decision 164 it asked for go.work, which CI does not have, so wiring it in
+// alone would have run a check that skipped.
+func DecisionGates() []Gate {
+	return []Gate{
+		{
+			Target: "broker-pin-check",
+			Why: "every file that names the frontier broker names one version, and the shipped " +
+				"spelling (v1.2.5) and the pulled spelling (1.2.5) agree; the release and the " +
+				"acceptance suite drifted to two versions once and each file stayed correct " +
+				"(decision 153)",
+		},
+	}
+}
+
 // NotInCI is what the plan's acceptance line names but CI deliberately does
 // not run, each with the reason.
 //
@@ -112,7 +141,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Printf("cigate: all %d plan acceptance gates are defined and invoked by CI\n", len(Gates()))
+	fmt.Printf("cigate: all %d acceptance gates (%d named by the plan, %d owned by a decision) are defined and invoked by CI\n",
+		len(allGates()), len(Gates()), len(DecisionGates()))
 }
 
 // check reports every gate that is not wired, so one run tells the whole
@@ -131,7 +161,7 @@ func check(root string) error {
 	invoked := invokedTargets(string(ci))
 
 	var problems []string
-	for _, g := range Gates() {
+	for _, g := range allGates() {
 		if !defined[g.Target] {
 			problems = append(problems, fmt.Sprintf(
 				"the Makefile no longer defines %q, so the promise below has nothing to run:\n      %s",
@@ -148,7 +178,7 @@ func check(root string) error {
 	// table says it matters and the Makefile disagrees. Reported, not fixed,
 	// because only a human knows which of the two is wrong.
 	for target := range invoked {
-		if _, exempt := SelfExempt[target]; isGate(target, Gates()) || exempt || !looksLikeGate(target) {
+		if _, exempt := SelfExempt[target]; isGate(target, allGates()) || exempt || !looksLikeGate(target) {
 			continue
 		}
 		problems = append(problems, fmt.Sprintf(
@@ -245,6 +275,16 @@ var SelfExempt = map[string]string{
 // scanning ci.yml, so one that is not in Gates() is worth a second look.
 func looksLikeGate(target string) bool {
 	return strings.HasSuffix(target, "-check") || target == "check"
+}
+
+// allGates is both tables, in the order they run: the plan's gates first,
+// then the decision-owned ones. Every rule that has to see the whole set --
+// the reverse-drift check and the report -- goes through here rather than
+// through either table, so a gate added to one is seen by the other's rules.
+func allGates() []Gate {
+	all := Gates()
+	all = append(all, DecisionGates()...)
+	return all
 }
 
 func isGate(target string, gates []Gate) bool {

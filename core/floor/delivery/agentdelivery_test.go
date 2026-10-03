@@ -5,36 +5,25 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vincent-wuhan/opskeeper/core/floor/reporoot"
 )
 
-// repoRoot walks up from the test's working directory to the repository root.
-//
-// It looks for the three things that only exist together at the root — the
-// Makefile, the VERSION file and the plugin tree — rather than for go.work.
-// go.work is a local file, gitignored on purpose, so a test that needed it
-// would pass on a developer machine and be skipped by definition everywhere
-// the answer matters.
+// repoRoot walks up from the test's working directory to the repository
+// root. This file used to carry its own marker walk; it now shares the one
+// in core/floor/reporoot, so every caller in the repository asks the same
+// question and there is one place that answers it.
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	for i := 0; i < 8; i++ {
-		_, makefile := os.Stat(filepath.Join(dir, "Makefile"))
-		_, version := os.Stat(filepath.Join(dir, "VERSION"))
-		_, packages := os.Stat(filepath.Join(dir, "plugins", "pig-ops"))
-		if makefile == nil && version == nil && packages == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
+	root, ok := reporoot.Find(dir, 8)
+	if !ok {
+		t.Fatalf("could not locate the repository root from %s", dir)
 	}
-	t.Fatal("could not locate the repository root from the test's working directory")
-	return ""
+	return root
 }
 
 func read(t *testing.T, parts ...string) string {

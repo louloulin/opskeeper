@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/vincent-wuhan/opskeeper/core/floor/reporoot"
 )
 
 // content is a whole repository, small enough to read, that passes. Every
@@ -18,6 +20,18 @@ var content = map[string]string{
 	"deploy/install/docker-compose.yml": "    image: singchia/frontier:v1.2.5\n",
 	"deploy/docker-compose.yml":         "    image: singchia/frontier:1.2.5\n",
 	"tests/e2e/testenv/frontier.go":     "const defaultFrontierImage = \"docker.io/singchia/frontier:1.2.5\"\n",
+}
+
+// repoRootDir is the directory the walk starts from: this package's own
+// directory, two levels below the repository root. "..", ".." was written
+// inline before; naming it makes the two tests above say the same thing.
+func repoRootDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	return dir
 }
 
 func writeTree(t *testing.T, files map[string]string) string {
@@ -36,9 +50,14 @@ func writeTree(t *testing.T, files map[string]string) string {
 }
 
 func TestTheRepositoryItselfAgrees(t *testing.T) {
-	root := filepath.Join("..", "..")
-	if _, err := os.Stat(filepath.Join(root, "go.work")); err != nil {
-		t.Skipf("not inside the opskeeper repository (%v)", root)
+	// The repository is found by markers that are tracked in git, not by
+	// go.work. go.work is gitignored, so a clean clone and CI have none --
+	// and this test used to skip itself there, which meant the one test
+	// that checks the pins against the tree that ships never ran anywhere
+	// it mattered.
+	root, ok := reporoot.Find(repoRootDir(t), 8)
+	if !ok {
+		t.Skipf("not inside the opskeeper repository (no root above %s)", repoRootDir(t))
 	}
 	if err := check(root); err != nil {
 		t.Fatalf("the repository's own broker pins disagree: %v", err)
@@ -160,9 +179,9 @@ func TestAMissingFileIsReportedRatherThanSkipped(t *testing.T) {
 // both discuss these tags, and a document that explains a version is not a
 // second place that decides one.
 func TestThePinTableCoversEveryFileThatNamesTheBroker(t *testing.T) {
-	root := filepath.Join("..", "..")
-	if _, err := os.Stat(filepath.Join(root, "go.work")); err != nil {
-		t.Skipf("not inside the opskeeper repository (%v)", root)
+	root, ok := reporoot.Find(repoRootDir(t), 8)
+	if !ok {
+		t.Skipf("not inside the opskeeper repository (no root above %s)", repoRootDir(t))
 	}
 	covered := map[string]bool{}
 	for _, p := range pins {

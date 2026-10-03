@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/vincent-wuhan/opskeeper/core/floor/reporoot"
 )
 
 func TestIncidentDatasets_FourPrototypes_AreComplete(t *testing.T) {
@@ -171,22 +173,21 @@ func mustTime() time.Time {
 
 // repoDeployDir returns the repository's deploy/ directory.
 //
-// It walks up to the workspace root rather than counting ".." levels: the
+// It walks up to the repository root rather than counting ".." levels: the
 // package lives in the manager module now, and a hardcoded depth is a
 // number that has to be re-derived by hand every time a tree moves. Two
 // tests here were written that way and broke on the move.
+//
+// The root is found by the shared tracked markers (core/floor/reporoot), not
+// by go.work: go.work is gitignored, so a clean clone and CI have none, and
+// these tests failed outright there rather than skipping.
 func repoDeployDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
 	require.NoError(t, err)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
-			return filepath.Join(dir, "deploy")
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatalf("no go.work above %s", dir)
-		}
-		dir = parent
+	root, ok := reporoot.Find(dir, 10)
+	if !ok {
+		t.Fatalf("no repository root above %s", dir)
 	}
+	return filepath.Join(root, "deploy")
 }

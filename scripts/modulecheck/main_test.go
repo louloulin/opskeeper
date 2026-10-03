@@ -930,3 +930,115 @@ func TestPiGBoundaryStillSkipsHiddenDirectories(t *testing.T) {
 		t.Errorf("violations = %v, want none: a hidden directory is not source", v)
 	}
 }
+
+// The repository-root sentinel rule. Eight suites used to ask for go.work,
+// which is gitignored; in a clean clone the question was false at every
+// level, and the callers failed or skipped green. The rule has to fire on a
+// new file that reintroduces the probe, in a test or not, and it has to stay
+// quiet on a file that names go.work in prose or as a non-probe string.
+func TestTheRootSentinelRuleFiresOnAGoWorkProbe(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	write("core/floor/thing/root_test.go", `package thing
+
+import ("os"; "path/filepath")
+
+var _ = os.Stat(filepath.Join("..", "..", "go.work"))
+`)
+
+	msgs, err := checkRootSentinel(root)
+	if err != nil {
+		t.Fatalf("checkRootSentinel: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("want exactly one violation, got %v", msgs)
+	}
+	if !strings.Contains(msgs[0], "core/floor/thing/root_test.go") {
+		t.Errorf("the finding does not name the offending file: %v", msgs)
+	}
+	if !strings.Contains(msgs[0], "reporoot.Find") {
+		t.Errorf("the finding does not say what to do instead: %v", msgs)
+	}
+}
+
+// The rule is not a blanket ban on the string. A file may mention go.work in
+// a comment or a message; only a probe is a defect. Otherwise every file that
+// explains the migration would be red.
+func TestTheRootSentinelRuleIgnoresProse(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	write("core/floor/thing/doc.go", `package thing
+
+// This package does not look for the go.work sentinel any more; see
+// core/floor/reporoot. A string that merely mentions the file, with no
+// quotes around it, is documentation rather than a probe.
+`)
+	msgs, err := checkRootSentinel(root)
+	if err != nil {
+		t.Fatalf("checkRootSentinel: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("prose about go.work was reported as a probe: %v", msgs)
+	}
+}
+
+// A violation in the walk root itself must be found. The walk root's base
+// name is "." when the Makefile invokes the checker, which starts with a dot;
+// a hidden-directory rule that did not exempt the root would skip the whole
+// tree and report success over a repository it never read.
+func TestTheRootSentinelRuleFindsAViolationAtTheWalkRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "probe_test.go"),
+		[]byte("package p\n\nvar _ = \"go.work\"\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Chdir(root)
+	msgs, err := checkRootSentinel(".")
+	if err != nil {
+		t.Fatalf("checkRootSentinel: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Errorf("violations = %v, want the probe at the walk root found", msgs)
+	}
+}
+
+// Every exemption carries a reason, and every exempt file exists. An
+// exemption for a file that is gone is a hole nobody will ever notice.
+func TestTheRootSentinelExemptionsAreLiveAndJustified(t *testing.T) {
+	for rel, why := range rootSentinelExempt {
+		if strings.TrimSpace(why) == "" {
+			t.Errorf("%s is exempt with no reason recorded", rel)
+		}
+		if _, err := os.Stat(filepath.Join("..", "..", filepath.FromSlash(rel))); err != nil {
+			t.Errorf("%s is exempt from the sentinel rule but does not exist: %v", rel, err)
+		}
+	}
+}
+
+// The real repository must be clean under this new rule. It is the same
+// statement the mutation tests above make, made against the tree that ships.
+func TestTheRepositoryHasNoGoWorkProbes(t *testing.T) {
+	msgs, err := checkRootSentinel(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("checkRootSentinel on the real tree: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("the real tree still probes for go.work: %v", msgs)
+	}
+}

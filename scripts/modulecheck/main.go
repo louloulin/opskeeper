@@ -32,6 +32,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1018,6 +1019,16 @@ func main() {
 	}
 	violations = append(violations, floorViolations...)
 
+	// The repository-root sentinel is a repo-wide statement about how a
+	// test finds its way to files outside its own module, so it gets the
+	// same repo-wide treatment as the other cross-module rules.
+	sentinelViolations, err := checkRootSentinel(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "modulecheck: "+err.Error())
+		os.Exit(2)
+	}
+	violations = append(violations, sentinelViolations...)
+
 	if len(violations) == 0 {
 		fmt.Println("modulecheck: all module boundaries hold")
 		return
@@ -1183,4 +1194,91 @@ func importsOf(path string) []string {
 		}
 	}
 	return out
+}
+
+// ── the repository-root sentinel rule ─────────────────────────────────
+//
+// A test that needs to read files outside its own module has to find the
+// repository root, and the obvious way to do that is to walk up looking for
+// a file that only the root has. Nine suites did exactly that, and eight of
+// them looked for `go.work` -- which is gitignored on purpose, because it is
+// the local development workspace. So in a clean clone and in CI the marker
+// was absent at every level, and the eight callers either failed outright
+// (five) or, worse, read "no marker" as "not this repository" and skipped
+// themselves green (two) in exactly the checkouts the gates existed for.
+//
+// The fix is core/floor/reporoot, which walks up by tracked markers. This
+// rule is the part that keeps it: naming go.work in a Go file as a
+// filesystem probe is a defect no matter which file does it, because the
+// answer it gets is different on a developer machine than it is everywhere
+// the answer matters. It is checked repo-wide, over test files too, because
+// the sentinel has only ever lived in tests.
+//
+// It reads files rather than the import graph: the offending pattern is a
+// string literal passed to os.Stat, so the import graph cannot see it.
+
+// rootSentinelExempt names the files that may contain the literal, with the
+// reason. An exclusion without a reason is indistinguishable from a hole
+// somebody forgot about, so the reason is checked by the unit tests.
+var rootSentinelExempt = map[string]string{
+	"scripts/modulecheck/main.go":      "this rule's own pattern and the prose that explains it",
+	"scripts/modulecheck/main_test.go": "the mutation fixtures and the test that proves the rule fires",
+}
+
+// checkRootSentinel reports every .go file that names go.work as a
+// filesystem probe.
+func checkRootSentinel(root string) ([]string, error) {
+	var violations []string
+	naming := regexp.MustCompile(`"go\.work"`)
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			// The walk root is "." when invoked the way the Makefile
+			// invokes it, and its base name starts with a dot; skipping
+			// it would silently check nothing, which is the same defect
+			// this rule exists to catch, one level up.
+			if path == root {
+				return nil
+			}
+			switch info.Name() {
+			case ".git", "node_modules", "vendor", "dist", "bin", "testdata":
+				return filepath.SkipDir
+			}
+			if strings.HasPrefix(info.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !naming.Match(raw) {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		rel = filepath.ToSlash(rel)
+		if _, exempt := rootSentinelExempt[rel]; exempt {
+			return nil
+		}
+		violations = append(violations, fmt.Sprintf(
+			"%s: names \"go.work\" as a filesystem probe; go.work is gitignored, so a "+
+				"clean clone and CI do not have one, and a test that looks for it fails "+
+				"or skips itself green there. Use core/floor/reporoot.Find, which walks "+
+				"up by tracked markers", rel))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(violations)
+	return violations, nil
 }

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/vincent-wuhan/opskeeper/core/floor/reporoot"
 )
 
 // One place opens the control plane's database.
@@ -181,9 +183,14 @@ func callsGormOpen(path string) bool {
 // isRepositoryRoot is the skip condition, pulled out so it can be tested
 // rather than asserted. A guard nobody has ever seen fail is a guard nobody
 // should trust to be keeping anything out.
+//
+// It asks the shared marker question (core/floor/reporoot) rather than
+// looking for go.work: go.work is gitignored, so in CI and in a release
+// build this predicate used to be false at the repository root itself, and
+// the gate below skipped itself green in exactly the checkouts it exists to
+// protect.
 func isRepositoryRoot(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, "go.work"))
-	return err == nil
+	return reporoot.IsRoot(dir)
 }
 
 func TestTheRepositoryGuardTellsThisRepositoryFromAnyOther(t *testing.T) {

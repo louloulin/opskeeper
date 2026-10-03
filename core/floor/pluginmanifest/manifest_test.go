@@ -7,30 +7,25 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/floor/reporoot"
 	"github.com/vincent-wuhan/opskeeper/sdk"
 )
 
 // repoRoot walks up from the test's working directory to the repository
-// root. The test lives at core/floor/pluginmanifest, so the plugin
-// directory is four levels up.
+// root, using markers that are tracked in git rather than go.work, which is
+// gitignored and absent from the checkout CI and a release build both use.
+// See core/floor/reporoot for why that distinction is the whole point.
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	for i := 0; i < 6; i++ {
-		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
+	root, ok := reporoot.Find(dir, 8)
+	if !ok {
+		t.Fatalf("could not locate the repository root from %s", dir)
 	}
-	t.Fatal("could not locate the repository root (no go.work found)")
-	return ""
+	return root
 }
 
 // TestShippedPluginsAreValid is the gate that keeps plugin governance from

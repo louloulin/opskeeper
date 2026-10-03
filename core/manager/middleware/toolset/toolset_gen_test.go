@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vincent-wuhan/opskeeper/core/floor/reporoot"
 	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
 	middlewareregistry "github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
@@ -445,25 +446,16 @@ func repoRoot(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	fallback := ""
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
-			return dir
-		}
-		if fallback == "" {
-			if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-				fallback = dir
-			}
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			if fallback != "" {
-				return fallback
-			}
-			t.Fatalf("no go.work above %s", dir)
-		}
-		dir = parent
+	// The shared tracked markers, not go.work: a clean clone has no
+	// go.work, and the old go.mod fallback would have stopped at
+	// core/manager -- a module directory, not the repository root -- and
+	// looked for the generated file under it, which is the "read a stale
+	// copy from the wrong tree" failure the comment above warns about.
+	root, ok := reporoot.Find(dir, 10)
+	if !ok {
+		t.Fatalf("no repository root above %s", dir)
 	}
+	return root
 }
 
 const generatedHeader = `// GENERATED FILE — do not edit.

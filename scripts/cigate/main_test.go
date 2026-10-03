@@ -30,7 +30,7 @@ func writeRepo(t *testing.T, makefile, ci string) string {
 func repoMakefile() string {
 	var b strings.Builder
 	b.WriteString(".PHONY: " + strings.Join(gateNames(), " ") + "\n")
-	for _, g := range Gates() {
+	for _, g := range allGates() {
 		b.WriteString(g.Target + ": ## does the thing\n\tgo run ./scripts/x .\n\n")
 	}
 	// A near-miss: a variable whose name contains a gate, and a target that
@@ -43,15 +43,15 @@ func repoMakefile() string {
 // repoCI is a ci.yml that runs every gate, each on its own step.
 func repoCI() string {
 	var b strings.Builder
-	for _, g := range Gates() {
+	for _, g := range allGates() {
 		b.WriteString("      - name: " + g.Target + "\n        run: make " + g.Target + "\n")
 	}
 	return b.String()
 }
 
 func gateNames() []string {
-	out := make([]string, 0, len(Gates()))
-	for _, g := range Gates() {
+	out := make([]string, 0, len(allGates()))
+	for _, g := range allGates() {
 		out = append(out, g.Target)
 	}
 	return out
@@ -64,7 +64,7 @@ func TestTheWiredRepositoryPasses(t *testing.T) {
 }
 
 func TestADroppedCIInvocationIsReported(t *testing.T) {
-	for _, g := range Gates() {
+	for _, g := range allGates() {
 		t.Run(g.Target, func(t *testing.T) {
 			ci := strings.Replace(repoCI(), "        run: make "+g.Target+"\n", "        run: make help\n", 1)
 			err := check(writeRepo(t, repoMakefile(), ci))
@@ -79,7 +79,7 @@ func TestADroppedCIInvocationIsReported(t *testing.T) {
 }
 
 func TestADroppedMakefileTargetIsReported(t *testing.T) {
-	for _, g := range Gates() {
+	for _, g := range allGates() {
 		t.Run(g.Target, func(t *testing.T) {
 			mk := strings.Replace(repoMakefile(), g.Target+": ## does the thing\n\tgo run ./scripts/x .\n\n", "", 1)
 			err := check(writeRepo(t, mk, repoCI()))
@@ -110,7 +110,7 @@ func TestAMentionIsNotAnInvocation(t *testing.T) {
 // The table has to carry a reason. A gate nobody can say why it matters is the
 // first one deleted, so an empty Why is a defect in the table itself.
 func TestEveryGateRecordsWhyItMatters(t *testing.T) {
-	for _, g := range Gates() {
+	for _, g := range allGates() {
 		if strings.TrimSpace(g.Target) == "" {
 			t.Error("a gate has no target")
 		}
@@ -207,5 +207,61 @@ func TestANonGateTargetIsNotReported(t *testing.T) {
 	ci := repoCI() + "        run: make test-e2e\n        run: make help\n"
 	if err := check(writeRepo(t, repoMakefile(), ci)); err != nil {
 		t.Fatalf("a workflow running non-gate targets was reported as drift: %v", err)
+	}
+}
+
+// The plan's own acceptance line names exactly four gates, and Gates() is the
+// table that answers "did that line survive". Folding a decision-owned gate
+// into it would make the count stop matching the plan, and the number is
+// quoted often enough that it has to keep matching.
+func TestGatesIsExactlyThePlansFour(t *testing.T) {
+	want := map[string]bool{
+		"module-check":            true,
+		"eval-gates":              true,
+		"module-standalone-check": true,
+		"domain-check":            true,
+	}
+	got := Gates()
+	if len(got) != len(want) {
+		t.Fatalf("Gates() has %d entries, want the plan's 4: %v", len(got), gateNames())
+	}
+	for _, g := range got {
+		if !want[g.Target] {
+			t.Errorf("Gates() contains %q, which the plan's acceptance line does not name", g.Target)
+		}
+	}
+}
+
+// Decision 153 built broker-pin-check to own the shipped-versus-tested broker
+// property, and decision 164 wired it into CI. If it drops out of the table,
+// the reverse-drift rule stops watching it the moment it also leaves ci.yml,
+// and the property goes back to having no owner.
+func TestBrokerPinCheckIsADecisionGateWithAReason(t *testing.T) {
+	var found bool
+	for _, g := range DecisionGates() {
+		if g.Target != "broker-pin-check" {
+			continue
+		}
+		found = true
+		if strings.TrimSpace(g.Why) == "" {
+			t.Error("broker-pin-check is a decision gate with no reason recorded")
+		}
+	}
+	if !found {
+		t.Fatal("broker-pin-check is not in DecisionGates(); the property decision 153 built has no owner in the gate table")
+	}
+}
+
+// A decision gate that is not wired is caught exactly like a plan gate. The
+// table split is about which promise a gate answers to, not about how strict
+// the wiring check is.
+func TestADroppedDecisionGateIsReported(t *testing.T) {
+	ci := strings.Replace(repoCI(), "        run: make broker-pin-check\n", "        run: make help\n", 1)
+	err := check(writeRepo(t, repoMakefile(), ci))
+	if err == nil {
+		t.Fatal("ci.yml no longer runs broker-pin-check, and the check passed")
+	}
+	if !strings.Contains(err.Error(), "broker-pin-check") {
+		t.Errorf("the report does not name the dropped decision gate: %v", err)
 	}
 }

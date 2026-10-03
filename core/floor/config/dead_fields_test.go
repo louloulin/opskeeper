@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vincent-wuhan/opskeeper/core/floor/reporoot"
 )
 
 // A configuration field is a promise to an operator.
@@ -199,9 +201,16 @@ func countReads(t *testing.T, path string, reads map[string]int) {
 	})
 }
 
+// isRepositoryRoot reports whether dir is the OpsKeeper repository root.
+//
+// It used to ask for go.work, which is gitignored and therefore absent from
+// exactly the checkouts where the question matters — CI and a release build.
+// "No go.work" then read as "not this repository" and the whole gate skipped
+// itself green. The markers it asks for now are tracked (see
+// core/floor/reporoot), so the answer is the same on a developer machine and
+// in a clean clone.
 func isRepositoryRoot(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, "go.work"))
-	return err == nil
+	return reporoot.IsRoot(dir)
 }
 
 func TestTheRepositoryGuardTellsThisRepositoryFromAnyOther(t *testing.T) {

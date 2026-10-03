@@ -11104,6 +11104,141 @@ make verify-plugins
 `cigate.NotInCI` 并附理由。它不是欠账，是刻意的分工；`make e2e-delivery-check`
 是它的入口。
 
+### 4.101 决策 164：九处测试拿一个被 gitignore 的文件当「我在不在仓库根」的哨兵，于是计划 §六 的验收门槛在 CI 的状态下是红的
+
+上一刀（§4.100）把四条门槛钉进了 `ci.yml`。这一刀是去**真跑**那条最贵的门槛
+（`make module-standalone-check`，计划 §六 原文：「6 个模块逐个脱离 workspace 也能
+build + test」）时撞上的：它在**干净 checkout 里是红的**，而在本地之所以一直是绿的，
+只因为开发机上恰好躺着 `go.work`。
+
+#### 4.101.1 起点：九处哨兵，以及它们为什么不诚实
+
+`go.work` 在 `.gitignore:40`。而九处测试用 `os.Stat(..., "go.work")` 当「我是不是在
+仓库根」的判据——这个判据在本地成立，在 CI 上恒假。它们分三类，后果完全不同：
+
+| 位置 | 行为 | 后果 |
+|---|---|---|
+| `scripts/brokerpin/main_test.go:40,164` | 哨兵假 → `t.Skip` | 静默跳过：测试**绿**，但什么都没证明 |
+| `core/manager/pkg/dbx/open_paths_test.go:185` | 同上 | 同上 |
+| `core/floor/config/dead_fields_test.go:203` | 同上 | 同上 |
+| `core/floor/pluginmanifest/manifest_test.go:23` | 哨兵假 → `t.Fatal` | 直接 FAIL |
+| `core/floor/config/dead_fields_test.go`（另一处） | 同上 | 直接 FAIL |
+| `core/manager/control/incident/dataset_test.go:183` | 同上 | 直接 FAIL |
+| `core/manager/middleware/toolset/toolset_gen_test.go:450` | 同上 | 直接 FAIL |
+| `core/manager/biz/aiops/tools/observability_toolset_test.go:170` | 同上 | 直接 FAIL |
+| `core/floor/delivery/agentdelivery_test.go:17` | 哨兵真 | **唯一一个写对的**（用 Makefile + VERSION + plugins/pig-ops） |
+
+**两类失败都坏，但坏的方向相反**：静默 skip 让覆盖率报表好看、让「这条测试存在」变成
+谎话；FAIL 让门槛红，于是最自然的动作是把门槛从 CI 里拿掉（§4.100 刚把这条路径封死）。
+也就是说，五处 FAIL 是 §4.100 那条决策在**动机上**的源头，只是当时没人看见。
+
+#### 4.101.2 实测：把 `go.work` 移走，再 `touch` 回来
+
+| 条件 | 结果 |
+|---|---|
+| 本地（`go.work` 在） | 全绿 |
+| `mv go.work /tmp/`，即干净 checkout | `core/floor` 9 处 FAIL、`core/manager` 4 个包 FAIL、`scripts/brokerpin` 2 处静默 skip |
+| 同上 + `touch go.work`（GOWORK=off 下它不参与解析） | 全绿 |
+
+第三行是关键反证：`go.work` 在这个场景里**不提供任何能力**（Go 明确忽略 GOWORK=off
+下的 workspace），它纯粹是一个存在性暗号。所以暗号放错地方就是唯一缺陷，别无解释。
+
+#### 4.101.3 顺带发现：CI 从未运行过一次
+
+```
+$ gh api repos/louloulin/opskeeper/actions/runs --jq .total_count
+0
+```
+
+`.github/workflows/ci.yml` 的触发条件是 `push: branches:[main]` + `pull_request`，
+而全部工作推在 `feature/pig` 上，远端一条 run 都没有。**这批红不是「CI 发现了没人修」，
+而是「CI 一次都没被人跑过」**。两者在进度汇报里含义完全不同：前者是欠账，后者是
+验收基础设施本身缺位。已作为独立待办记入 §4.101.8。
+
+#### 4.101.4 修法（一）：把哨兵换成一组**被 git 跟踪**的标记
+
+新增 `core/floor/reporoot`，一个 2.9K 的包，唯一的知识是「仓库根长什么样」：
+
+```go
+var Markers = []string{"Makefile", "VERSION", "plugins/pig-ops"}
+```
+
+三个标记全部 git tracked，且在全树里**只有根目录同时具备**——这一条不是断言，是
+`TestNoSecondCompleteMarkerSetExists` 全树 walk 证明出来的。三元组而非单文件，是因为
+`VERSION` 之类的名字别的树也可能凑巧有；`go.work` 曾经也满足「可作标记」，
+区别只在它**不在版本控制里**，于是本地成立、CI 恒假。
+
+`reporoot.Find(start, maxUp)` / `IsRoot(dir)` 提供唯一入口，八处调用方全部改用它。
+两处**独立写了同一件事**的 guard 测试（`dead_fields_test.go` 的
+`TestTheRepositoryGuardTellsThisRepositoryFromAnyOther` 与
+`open_paths_test.go` 的同名测试）现在指向同一份实现，不再各写各的判据。
+
+顺带清掉 `toolset_gen_test.go:450` 里那个会停在 `core/manager` 的 `go.mod` fallback——
+它和 `go.work` 哨兵是同一个坏模式（拿一个不保证唯一的文件当根判据）。
+
+#### 4.101.5 修法（二）：让这个坑再也不能被踩第二次
+
+`scripts/modulecheck` 新增 `checkRootSentinel(root)`：全树 walk，匹配字符串字面量
+`"go.work"`（正则 `"go\.work"`），在 `.git`/`node_modules`/`vendor`/`dist`/`bin`/
+`testdata` 与隐藏目录之外扫描，命中即红并**指名文件**。豁免名单 `rootSentinelExempt`
+只列 modulecheck 自身的两个文件——不是按名字跳过，是按**理由**跳过，理由写在代码里。
+
+踩到并修掉的一个坑：walk 起点自身 `path == root`，其 base 名是 `.`，会被
+「跳过隐藏目录」的规则判成隐藏目录而把**整棵树**跳过。实测变异（在 `scripts/brokerpin/`
+放一个含 `"go.work"` 字面量的 `.go`）一度不红，就是这个；豁免 walk root 本身后立刻红，
+删掉后恢复绿。
+
+#### 4.101.6 修法（三）：`cigate` 的门槛表分成「计划点的」与「决策有的」
+
+`broker-pin-check` 是决策 158 立的一条闸门，形状与 §六 的四条一模一样（Makefile 里定义
++ 被 CI 调用），但它**不在计划文本里**。把它硬塞进 `Gates()` 就是谎报「计划点了五条」。
+于是 `cigate` 拆成两张表：`Gates()`（计划点名的 4 条）与 `DecisionGates()`（决策立的
+1 条，各带 `Reason`），由 `allGates()` 合并供检查与输出共用，并接进 `ci.yml`：
+
+```yaml
+- name: Broker version pins agree
+  run: make broker-pin-check
+```
+
+诚实记下这里的一处次序问题：这条闸门**接进 CI 之前它自己会 skip**（就是 §4.101.1
+那两处 brokerpin）。修完之后它第一次在 CI 的状态下真的会跑。
+
+#### 4.101.7 验证（本轮实测）
+
+| 闸门 | 结果 |
+|---|---|
+| `make module-standalone-check`（`go.work` 移走 = CI 状态） | **全绿**：根 + core + core/edge + core/floor + core/harness + core/manager 178 包 + core/pig + 7 个扩展 + sdk，逐模块 build + test 通过 |
+| `make module-check`（含新 `checkRootSentinel`） | green；变异红、指名文件、删除后复绿 |
+| `make ci-gate-check` | `all 5 acceptance gates (4 named by the plan, 1 owned by a decision) are defined and invoked by CI` |
+| `make broker-pin-check` | `every place that names the broker names the same version` |
+| `make domain-check` | 58 域 / 43 边 / 0 环 |
+| `make eval-gates` | 退出 0 |
+| `GOWORK=off go test ./scripts/... -count=1` | brokerpin / cigate / cochange / deadcode / domaincheck / modulecheck / nodearch 全 ok |
+| `scripts/{modulecheck,cigate,brokerpin}` 单测 | 全绿（新增 5 + 3 条） |
+| gofmt | 本轮改动文件全干净 |
+
+计划 §六 的四条门槛**第一次在真实 clean checkout 下可执行且全绿**。
+
+#### 4.101.8 进度：仍不动百分比
+
+本轮**未新增任何产品能力**。关掉的是「计划 §六 的门槛在 CI 状态下是红的」以及
+「CI 一次都没运行过」这一条。按 §4.100.7 同样的纪律——给验收基础设施记账不涨分：
+
+| 阶段 | 之前 | 之后 | 依据 |
+|---|---|---|---|
+| 0 边缘交付闭环 | 80% | 80% | 未动 |
+| 1 离线与自治 | 100% | 100% | 未动 |
+| 2 生态与治理 | 96.7% | 96.7% | 未动 |
+| 3 控制面与联邦 | 79.7% | 79.7% | 未动 |
+
+加权 = **89.1%**（不变）。可以记的一条：§4.100.6 那张「四条全部有可执行证据」的表，
+在今天之前是**本机可执行**而已；现在才是**在 CI 的状态下可执行**。同一批数字，
+含义差一层。
+
+**独立待办（未做，诚实记下）**：`ci.yml` 的 `on: push` 只认 `main`，所以推
+`feature/pig` 不会触发它。要么改成 `on: push:` 全分支，要么靠 PR 事件——现状是
+两条都不触发，所以「0 runs」这件事本身不会自愈。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
