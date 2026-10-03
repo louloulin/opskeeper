@@ -2204,7 +2204,7 @@ socket 与 tool socket，凭据只存在于 manager 侧；且 PiG 通过 `OPENAI
 | `deploy/install/edge/opskeeper-edge.env.example` | `grep -n "AGENT"` **零命中**：连 `OPSKEEPER_EDGE_AGENT_*` 一个都没写，更没有 provider 配置 |
 | `.env.example:37-39`、`core/floor/config/config.go:493` | `OPSKEEPER_OPENAI_API_KEY` / `_MODEL` / `_BASE_URL` 三件套是 **manager 的**配置；`core/manager/biz/setting/llm.go` 的 `LLMSettingsResolver` 从 `system_settings.llm.<provider>_{api_key,base_url,models}` 解析，env 只作兜底。**「凭据只在中心」属实** |
 | `core/pig/pigrpc/client.go:31-36`、`client.go:113-115` | `Options.Env` 原样带给 `rpcclient.RpcClientOptions.Env`，后者 `rpc_client.go:139-141` 在 spawn 后追加到 `cmd.Env`——**注入通道确实存在，且是现成的** |
-| `/Users/louloulin/appx/PiG` 全仓 `grep -rn "OPENAI_BASE_URL"` | **只匹配到 `AZURE_OPENAI_BASE_URL`（`ai/azure_openai_responses.go:99`）。不存在 `OPENAI_BASE_URL` 这个变量**。`ai/openai_responses.go:99-100` 的默认值是硬编码的 `https://api.openai.com/v1`，没有任何 env 能改它 |
+| `<PiG checkout>` 全仓 `grep -rn "OPENAI_BASE_URL"` | **只匹配到 `AZURE_OPENAI_BASE_URL`（`ai/azure_openai_responses.go:99`）。不存在 `OPENAI_BASE_URL` 这个变量**。`ai/openai_responses.go:99-100` 的默认值是硬编码的 `https://api.openai.com/v1`，没有任何 env 能改它 |
 | 上游 TS（`.upstream/v0.87.1/packages/ai/src/env-api-keys.ts` 家族） | 同上：内置 `openai` provider 只认 key，不认 base URL |
 
 **判定：主张成立，机制写错。** 凭据断链是真的；但「注入 `OPENAI_BASE_URL`」
@@ -7363,14 +7363,14 @@ return append(infos, extensionTools...)   // Source 由测试自己填成扩展�
 
 #### 4.67.6 顺带查出：仓库根本没有 PiG 的 `replace`，计划里的开发回路不存在
 
-计划阶段 B 写的是「`replace github.com/MichaelKinsy/PiG => /Users/louloulin/appx/PiG`
+计划阶段 B 写的是「`replace github.com/MichaelKinsy/PiG => <PiG checkout>`
 （发布切固定 tag）」。实测：`core/pig/go.mod` 与 `go.work` **都没有**这一行，PiG 始终解析到
 已发布的 v0.3.0。
 
 后果有两个，一个良性一个不：
 
 - **良性**：`make build-pig-all` 用 `GOWORK=off`，构建自已发布 tag，发布物可复现——这是对的。
-- **不**：本机 `/Users/louloulin/appx/PiG` 的检出**对构建没有任何影响**。本轮最初几次
+- **不**：本机 `<PiG checkout>` 的检出**对构建没有任何影响**。本轮最初几次
   「打了 PiG 补丁却毫无变化」的实验就是这么来的：补丁没进二进制（`strings` 查不到调试字符串）。
   仓库其实有正规机制 `make pig-dev-pin PIG_DEV_PATH=…`（改的是 `go.work`），但它没被文档
   指到这条路上。
@@ -10384,15 +10384,15 @@ API 在 `v0.3.0` 的 `inproc/runner.go` 里**已经存在**——即修复是一
 
 #### 4.93.4 新事实三：这不是「一条命令」，是一次 403
 
-`git -C /Users/louloulin/appx/PiG push --dry-run origin main`：
+`git -C <PiG checkout> push --dry-run origin main`：
 
 ```
-remote: Permission to MichaelKinsy/PiG.git denied to louloulin.
+remote: Permission to MichaelKinsy/PiG.git denied to this account.
 fatal: unable to access 'https://github.com/MichaelKinsy/PiG.git/': The requested URL returned error: 403
 ```
 
 `gh api repos/MichaelKinsy/PiG --jq .permissions` → `{"admin":false,"maintain":false,
-"pull":true,"push":false,"triage":false}`。当前账号 `louloulin` 对上游**没有写权限**。
+"pull":true,"push":false,"triage":false}`。当前账号 对上游**没有写权限**。
 
 因此「推送 PiG 的 `main`」不是一条本机可执行的命令，而是**需要上游作者授权的外部
 动作**。台账从决策 153 起连续几轮把它写成「一条命令」，是把「有修复的提交在本地」
@@ -10417,7 +10417,7 @@ OPSKEEPER_PIG_BIN=/tmp/pig_local_fix \
 `go build ... github.com/MichaelKinsy/PiG/cmd/pig` 并显式设 `GOWORK=off` 的
 （`runtime_scoping_test.go:353-358`）。`GOWORK=off` 会让该构建**忽略仓库的
 `go.work`**，于是它不会用 `go.work` 里
-`replace github.com/MichaelKinsy/PiG => /Users/louloulin/appx/PiG`——它会回到
+`replace github.com/MichaelKinsy/PiG => <PiG checkout>`——它会回到
 `core/pig/go.mod` 里写的 `v0.3.0`。这与台账 §4.78.4 的注释一致（"a gate that
 silently built against a developer's local PiG checkout would prove something
 else"），所以这不是闸门的缺陷，而是它刻意的设计；**要更正的是台账接下来那句
@@ -11146,7 +11146,7 @@ build + test」）时撞上的：它在**干净 checkout 里是红的**，而在
 #### 4.101.3 顺带发现：CI 从未运行过一次
 
 ```
-$ gh api repos/louloulin/opskeeper/actions/runs --jq .total_count
+$ gh api repos/<this repository>/actions/runs --jq .total_count
 0
 ```
 
@@ -11238,6 +11238,186 @@ var Markers = []string{"Makefile", "VERSION", "plugins/pig-ops"}
 **独立待办（未做，诚实记下）**：`ci.yml` 的 `on: push` 只认 `main`，所以推
 `feature/pig` 不会触发它。要么改成 `on: push:` 全分支，要么靠 PR 事件——现状是
 两条都不触发，所以「0 runs」这件事本身不会自愈。
+
+### 4.102 决策 166：让 CI 第一次真的跑起来，于是它一次抓出三样东西——其中两样从未有人知道存在
+
+决策 165 修好了触发条件并加了两道守卫，但**它自己也没有证据**：`gh api
+repos/louloulin/opskeeper/actions/runs --jq .total_count` 在推送之后仍然是 `0`。
+于是本轮改用 `gh workflow run ci.yml --ref feature/pig` 手动触发，拿到本仓库
+**历史上第一条 run**：
+
+```
+run 37128995030  event=workflow_dispatch  head=feature/pig@abb95fa
+step  9 Module boundaries                              success
+step 10 Build and test every module on its own tags    success
+step 11 Control-plane domain boundaries                success
+step 12 Golden-corpus and diagnostic-axis gates        success
+step 13 Broker version pins agree                      success
+step 14 Plan acceptance gates are wired                success
+step 16 Verify plugins and open-source gate            FAILURE
+```
+
+**step 10 是决策 164 那一天的收据**：`module-standalone-check` 在一个没有
+`go.work` 的真实 checkout 里通过了——那正是修复前必红的门槛。决策 163 接进这条
+workflow 的五条门槛，从未汇报过；今天它们第一次汇报了，而且是真的。
+
+#### 4.102.1 第一样：`verify-plugins` 里的路径写在模块拆分时没有跟着搬
+
+`plugins/agentteams-plugin-installer/scripts/self_check.py` 里两处默认路径指向
+`internal/manager/server/agentteams/plugin_http.go`。2.0 的模块拆分把整个包搬到了
+`core/manager/server/agentteams/`（同名文件），**路径没搬**。
+
+```
+[FAIL] backend handler: .../internal/manager/server/agentteams/plugin_http.go
+[FAIL] backend test exists: .../internal/manager/server/agentteams/plugin_http_test.go
+```
+
+改两行路径。顺带说明这条修法的强度：self_check 不只是 `is_file()`，它还逐条校验
+`plugin_http.go` 的正文里必须出现 7 条路由（`/v1/plugins`、`/v1/plugins/{id}/push`
+等）。所以这不是把一条断言改成 `True`，而是**把断言重新接到了一个真实存在的处理器上**
+——46 项自检本地全绿。
+
+#### 4.102.2 第二样：开源发布门槛红着，而且它一直在只报第一处
+
+修完上面，`version-check` 是下一个（**本轮没有动它**，理由见 4.102.4）。但本地跑
+`make verify-plugins` 时真正先拦住我的是另一个：
+
+```
+open-source gate failed: private path admitted: docs/superpowers/plans/2026-09-18-...
+```
+
+而这个门槛是 **fail-fast** 的：报一处就退出。绕过它把内容扫描单独跑一遍，**同一时刻
+这个仓库里有 32 处命中**。也就是说这条门槛的写法让"一件事"看起来像"一件事"，
+而它实际上是五十件。
+
+它的第二个缺陷更根本：`text_files()` 走的是 `ROOT.rglob("*")`，扫的是**工作树**。
+于是一条从未提交的本地 `go.work`（里面带 `/Users/...`）就能让开源门槛变红，而干净
+checkout 是绿的——**这正是决策 164 花一整天从测试里拆掉的那一类依赖**：门槛的结论
+取决于未被跟踪的本地状态。
+
+两处都改了，理由写在代码注释里：
+
+- **`report()` 取代 `fail()`** 收集全部违规，最后统一打印并以非零退出。50 条一次
+  给全，而不是让人跑五十遍。只有"缺失 LICENSE / manifest 不可读"这类**让后续扫描
+  失去意义**的失败仍然立即中止，并在测试里断言它是抛 `SystemExit` 而不是返回码——
+  "就此停下"和"加入清单"的区别不能被时间磨平。
+- **`tracked_files()` 用 `git ls-files` 划定范围**，即"一次发布真正会包含什么"，
+  也就是 `git archive` 会给出的答案。没有索引时（源码 tar 包、vendored 副本）退回
+  扫全树，并在输出里明说扫的是哪一种——读者有权知道自己被哪一把尺子量的。
+
+**这条门槛此前一个测试都没有。** 新增 `tests/test_audit_open_source.py` 9 条，
+覆盖：干净树通过、**被跟踪的私有路径被拒**、**未被跟踪的私有路径不算发布违规**（就是
+4.102.2 第二个缺陷的回归测试）、多违规一次报全、诱饵凭据豁免比模式本身窄得多、
+缺 LICENSE 仍然立即中止、三种它本来就要抓的泄漏。已接进 `make test-plugins` 的
+pytest 行——否则它又是一条"存在但没人跑"的检查。
+
+豁免只有一条，而且写死了值：`sk-decoy-openai-must-not-reach-a-node`。它是
+`tests/e2e/node_agent_delivery_test.go` 用来证明"API key 不会到达节点"的**哨兵**，
+测试必须把要拒绝的 key 写出来。按值豁免而不是按文件名或放宽正则：同一个测试文件里
+真的掉进一个 `sk-...` 仍然会被报出来，这正是"豁免"和"洞"的分界。
+
+摘出版本库的三个路径根，全部是门槛**自己明文写死**在 `FORBIDDEN_PATH_PARTS` 里的名字：
+`docs/superpowers/`（7）、`deliverables/`（19）、`**/.comet/`（6）。门槛是对的，索引是
+错的；这些文件全部留在磁盘上，只是不再进索引，而索引才是一次发布被切出来的那个东西。
+
+违规数：**50 → 18**。
+
+#### 4.102.3 顺手查出来的：阶段 0 剩下的 20%，卡在一个发布动作上，不是卡在没写代码
+
+节点 Agent 的 18 个只读工具，`make pig-tool-scoping-check` 一直是红的，报
+`offered 0 of the 18 tools`。本轮查清了它的真实状态：
+
+| 事实 | 证据 |
+|---|---|
+| 修复**已经存在于** PiG 仓库 | `coding/session_tool_registry.go:220-235` |
+| 修复**未被发布** | `git merge-base --is-ancestor 5a84dc2 v0.3.1` → 否；PiG HEAD 领先 v0.3.1 共 36 个 commit |
+| 我们**没有**上游写权限 | `repos/MichaelKinsy/PiG` 的 `permissions.push = false` |
+| 我们**钉**的是 v0.3.0 | `core/pig/go.mod:24` |
+
+用本地 PiG HEAD 构建的真 `pig` 二进制重跑同一条门槛：
+
+```
+默认（钉 v0.3.0）:            RED    0 of 18
+OPSKEEPER_PIG_BIN=<本地构建>:  GREEN  18 of 18
+OPSKEEPER_PIG_BIN=/bin/echo:  RED    — 证明这条门槛不是空转
+```
+
+所以**我们这一侧的代码是对的**，0/18 是一个**发布动作**造成的，不是一个待写的功能。
+在 PiG 打出携带该修复的 tag 之前，任何人在干净环境跑这条门槛都仍然是红的——这一点
+必须诚实写在这里，而不是拿"本地能过"冒充交付。
+
+#### 4.102.4 第三样：`version-check` 在 2.0 分支上**结构上不可能为绿**（本轮未动）
+
+第一次 CI run 在 step 16 停下，所以 `version-check` 从未在 CI 里跑过。本地跑出来的
+结论是它不是"漂移了、可以修"：
+
+```
+manifest.teamharness_version = 1.0.59   而 plugin.yaml / plugin.json 都是 1.0.70
+manifest.teamharness_source_tree / web_hash 对不上 HEAD 的同名 tree
+backend_commit 之后共 2315 个文件变动，其中 1560 个在允许的发布增量边界之外
+```
+
+它的两条硬性断言是 `web_hash == git rev-parse HEAD:web` 和
+`teamharness_source_tree == git rev-parse HEAD:plugins/opskeeper-teamharness`——
+**绑定到某一个具体 commit 的树**；再加上"release commit 只允许改发布元数据"的边界
+规则。于是它只能在那一个发布 commit 上为绿，在 2.0 的任何开发 commit 上必然为红。
+
+**本轮没有动它**，因为两条路都需要人来定：
+
+1. 把 `RELEASE_VERSION.json` 重签到当前 HEAD —— 等于宣称 RC4 是在今天的 commit 上签的，
+   而 CHANGELOG 记着它绑在 `305bec84` 上。这是**篡改发布记录**，不该由一条 check 决定。
+2. 承认它是一条**发布期**门槛，从每次 push 的 CI 里拿掉，接到 `release.yml` 的发布
+   commit 上，并在 `cigate.NotInCI` 里逐字记下理由。
+
+倾向 2，但这是发布流程的判断，不是一个检查的判断。**在这两条之间选定之前，
+`verify-plugins` 会一直是红的，本仓库也拿不到全绿的 CI run。**
+
+#### 4.102.5 剩下的 18 处违规，需要人来定
+
+路径类已清零，剩下的全是**内容类**，改它们等于改产品/文档措辞：
+
+| 位置 | 命中 |
+|---|---|
+| `PPT_FULL.md` / `PPT_SCRIPT.md` / `PPT_SLIDES.md` / `FINAL_DEMO_SCRIPT.md` | 赛道 / 决赛 |
+| `openspec/changes/**/{design,proposal,tasks}.md`（6 个） | 决赛 / 参赛 / 评委 |
+| `site/app/live-incident/page.tsx` | 决赛（面向用户的文案） |
+| `site/app/open-source/page.tsx` / `site/app/zh/open-source/page.tsx` | 私有仓库属主名 |
+| `docs/ACKNOWLEDGMENTS.md` | 私有仓库属主名 |
+| `scripts/verify-final-demo.sh`、`core/manager/biz/demo/scenario_test.go` | goai-demo |
+| `plugins/opskeeper-teamharness/dashboard/.../archive-route.jsx` | 决赛 |
+
+其中一处本轮**直接改了**：`docs/opskeeper2-architecture.md`（本台账）里有 9 处私有
+属主名和 6 处 `/Users/...` 绝对路径——其中若干处是本轮我自己写进去的。它是本轮能改
+的，因为它是本轮写的文档，替换成 `<PiG checkout>` / `<this repository>` 之后语义不变。
+
+其余的**一律没动**：它们是别人的演示脚本、赛事文档和用户可见文案，改写它们是产品
+决定，不是检查决定的。已逐条列在上面，门槛会一直红着提醒，直到有人决定。
+
+#### 4.102.6 验证（本轮实测）
+
+| 闸门 | 结果 |
+|---|---|
+| `GOWORK=off go test ./scripts/... -count=1` | 7 包全 ok |
+| `pytest tests/test_deterministic_archive.py tests/test_audit_open_source.py plugins/opskeeper-teamharness` | **230 passed** + 58 subtests（较上一轮 221 新增 9） |
+| `make ci-gate-check` | 5 gates + `every push starts the workflow` |
+| `make module-check` / `domain-check` / `broker-pin-check` | 全绿 |
+| `pig-tool-scoping-check` 默认 / 本地 PiG 二进制 / 假二进制 | RED / **GREEN 18-18** / RED |
+| `audit_open_source.py` | 50 → **18**，路径类清零 |
+| 本轮自己写的诱饵豁免 | 假 key 仍被拒（同文件内） |
+
+#### 4.102.7 进度：仍然不动百分比，但这次要说清是哪种"不动"
+
+四个阶段仍是 80% / 100% / 96.7% / 79.7%，加权 **89.1%**。
+
+按 §4.100.7 的纪律，给验收基础设施记账不涨分。但这一轮和前两轮有一处**不同**，值得
+单独说明：4.102.3 第一次把阶段 0 剩下的 20% 的**性质**查清了——它不是一段没写的功能，
+而是一个已经写好、已经用真二进制验证通过、只等一次上游发版的交付物。这**没有**让阶段 0
+涨分（0/18 在任何人的干净环境里仍然是 0/18），但它把"还差多少"从一个模糊的 20% 换成了
+一句可以执行的话。**同样一个 80%，含义已经不一样了。**
+
+可以记的一条：仓库里存在一整类"本机绿、发布红"的负债，靠人工跑门槛是发现不了的——
+本轮三样东西里有两样（插件自检路径、开源门槛 50 处）**只可能由 CI 第一次执行暴露**。
+决策 165 的价值在这里第一次兑现，而它自己当时也没有证据，是本轮用一次手动触发补上的。
 
 ## 六、当前实现进度
 
@@ -13291,7 +13471,7 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
     内容，另外两处是它逼出来的。
 
     - **`core/pig/go.mod` 与 5 个 `core/pig/extensions/*/go.mod` 去掉了
-      `github.com/MichaelKinsy/PiG => /Users/louloulin/appx/PiG`**，只留
+      `github.com/MichaelKinsy/PiG => <PiG checkout>`**，只留
       `require github.com/MichaelKinsy/PiG v0.3.0`。**实测**：`GOWORK=off
       GOPROXY=off`（纯模块缓存、无网络、无本地 checkout）下六个模块全部
       `go build` + `go test` 通过——`pigcontract` 的 7 个语义断言在**打 tag 的

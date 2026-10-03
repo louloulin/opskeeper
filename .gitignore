@@ -111,6 +111,13 @@ plugins/opskeeper-teamharness/eval/reports/
 .dist/
 .docker-gocache/
 
+# Private working material. scripts/audit_open_source.py refuses a release
+# that ships any of these, so tracking one of them turns the open-source gate
+# red on every push; the gate was correct and the files were the violation.
+# They stay on disk -- this only takes them out of the index.
+/docs/superpowers/
+/docs/deliverables/
+
 # Stray local binaries from `go build ./scripts/<tool>`. One line per
 # incident is how this list got to three: the ignore rule does not stop the
 # build, and a checker that reads the tree does (scripts/modulecheck,

@@ -1,0 +1,209 @@
+"""Tests for the open-source release gate.
+
+The gate had no tests, which is how two defects in it survived: it stopped at
+the first violation, and it scanned the developer's working tree rather than
+the commit a release is cut from. Both are invisible to a person reading a
+red log -- a fail-fast gate reports one finding, and a tree scan fails on a
+machine for a file that a release would never contain.
+
+These tests build a throwaway repository, put material in it, and read the
+gate's verdict, because the only honest way to test a gate is to feed it
+something it should reject.
+"""
+from __future__ import annotations
+
+import importlib.util
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+AUDITOR_REL = Path("scripts/audit_open_source.py")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_auditor(root: Path):
+    """A fresh copy of the auditor, pointed at `root`.
+
+    The module resolves its own root at import time and caches the tracked
+    file set, so each case needs its own instance rather than a patched
+    global.
+    """
+    spec = importlib.util.spec_from_file_location("audit_open_source", REPO_ROOT / AUDITOR_REL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.ROOT = root
+    module.AUDITOR = AUDITOR_REL
+    module.tracked_files.cache_clear()
+    module.VIOLATIONS.clear()
+    return module
+
+
+def git(root: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+
+def scaffold(root: Path, *, commit: bool = True) -> None:
+    """A repository the auditor can accept apart from what a case adds.
+
+    The required files are real because check_required_files insists, and
+    ACKNOWLEDGMENTS is real because check_acknowledgments insists on three
+    strings in it. A test that failed on the scaffolding instead of on the
+    material it planted would be worthless.
+    """
+    (root / "scripts").mkdir(parents=True, exist_ok=True)
+    (root / AUDITOR_REL).write_text("# stand-in for the auditor\n", encoding="utf-8")
+    (root / "LICENSE").write_text("Apache-2.0\n", encoding="utf-8")
+    (root / "NOTICE.md").write_text("notice\n", encoding="utf-8")
+    (root / "TRADEMARK.md").write_text("trademark\n", encoding="utf-8")
+    (root / "RELEASE_VERSION.json").write_text(
+        '{"repository": "https://github.com/vincent-wuhan/opskeeper", "license": "Apache-2.0"}\n',
+        encoding="utf-8",
+    )
+    (root / "README.md").write_text("readme\n", encoding="utf-8")
+    acknowledgments = root / "docs" / "ACKNOWLEDGMENTS.md"
+    acknowledgments.parent.mkdir(parents=True, exist_ok=True)
+    acknowledgments.write_text(
+        "GoAI AgentTeams\nAgentTeams Dashboard\nOnGrid\nnot claims of code derivation\n",
+        encoding="utf-8",
+    )
+    (root / "docs" / "OPEN_SOURCE_GATE.md").write_text("gate\n", encoding="utf-8")
+    git(root, "init", "-q")
+    # Identity first: a commit with none fails, and it would fail for a
+    # reason that has nothing to do with the gate under test.
+    git(root, "config", "user.email", "gate@example.invalid")
+    git(root, "config", "user.name", "gate")
+    if commit:
+        git(root, "add", "-A")
+        git(root, "commit", "-qm", "scaffold", "--no-gpg-sign")
+
+
+def run(module) -> tuple[int, str, str]:
+    import io
+    import contextlib
+
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = module.main()
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_a_clean_repository_passes(tmp_path: Path) -> None:
+    scaffold(tmp_path)
+    code, out, err = run(load_auditor(tmp_path))
+    assert code == 0, err
+    assert "open-source gate passed" in out
+    # The scope is part of the answer: a reader has to know whether the gate
+    # judged the commit or the machine, because the two can differ.
+    assert "the tracked tree" in out
+
+
+def test_a_tracked_private_path_is_rejected(tmp_path: Path) -> None:
+    scaffold(tmp_path)
+    private = tmp_path / "docs" / "superpowers" / "plans" / "plan.md"
+    private.parent.mkdir(parents=True)
+    private.write_text("plan\n", encoding="utf-8")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "add", "--no-gpg-sign")
+
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 1
+    assert "docs/superpowers/plans/plan.md" in err
+
+
+def test_an_untracked_private_path_is_not_a_release_violation(tmp_path: Path) -> None:
+    """The defect this encodes.
+
+    A private note in a developer's working directory is not in the commit a
+    release is cut from. Failing the release gate on it means the gate
+    answers differently on two machines for the same commit, and it is the
+    same untracked-state dependency decision 164 removed from the test suite.
+    """
+    scaffold(tmp_path)
+    private = tmp_path / "docs" / "superpowers" / "notes.md"
+    private.parent.mkdir(parents=True)
+    private.write_text("notes\n", encoding="utf-8")
+
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 0, err
+
+
+def test_every_violation_is_reported_not_just_the_first(tmp_path: Path) -> None:
+    scaffold(tmp_path)
+    (tmp_path / "docs" / "superpowers").mkdir(parents=True)
+    (tmp_path / "docs" / "superpowers" / "a.md").write_text("a\n", encoding="utf-8")
+    (tmp_path / "docs" / "deliverables").mkdir(parents=True)
+    (tmp_path / "docs" / "deliverables" / "b.md").write_text("b\n", encoding="utf-8")
+    leaky = tmp_path / "leaky.md"
+    leaky.write_text("token ghp_" + "a" * 30 + "\n", encoding="utf-8")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "add", "--no-gpg-sign")
+
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 1
+    # Three independent violations. A fail-fast gate names one of them and
+    # sends the reader back to run it again.
+    assert "docs/superpowers/a.md" in err
+    assert "docs/deliverables/b.md" in err
+    assert "leaky.md" in err
+    assert "violation(s)" in err
+
+
+def test_the_decoy_sentinel_is_exempt_but_a_real_key_is_not(tmp_path: Path) -> None:
+    """The exemption has to be narrower than the pattern.
+
+    A test that proves no API key reaches a node has to name the key it
+    refuses to pass on. Exempting that one value is defensible; exempting
+    every credential-shaped string in every test file would delete the gate.
+    """
+    scaffold(tmp_path)
+    (tmp_path / "decoy.md").write_text(
+        "the sentinel is sk-decoy-openai-must-not-reach-a-node\n", encoding="utf-8"
+    )
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "decoy", "--no-gpg-sign")
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 0, err
+
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "leak_test.go").write_text(
+        'key := "sk-' + "b" * 40 + '"\n', encoding="utf-8"
+    )
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "leak", "--no-gpg-sign")
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 1
+    assert "leak_test.go" in err
+
+
+def test_a_missing_required_file_still_stops_immediately(tmp_path: Path) -> None:
+    """Some failures make the rest of the scan meaningless.
+
+    A missing LICENSE is a release that cannot ship at all; continuing would
+    produce a content report for a tree that is already disqualified.
+    """
+    scaffold(tmp_path)
+    (tmp_path / "LICENSE").unlink()
+    module = load_auditor(tmp_path)
+    # fail() raises rather than accumulating, so it surfaces as SystemExit and
+    # not as a return code. Asserting on the exception is what keeps the
+    # distinction between "stops here" and "joins the list" from eroding.
+    with pytest.raises(SystemExit) as raised:
+        module.main()
+    assert "missing required file: LICENSE" in str(raised.value)
+
+
+@pytest.mark.parametrize("pattern_fragment", ["louloulin", "/Users/alice/", "8.160.172.235"])
+def test_the_three_leaks_the_gate_exists_for(tmp_path: Path, pattern_fragment: str) -> None:
+    scaffold(tmp_path)
+    (tmp_path / "leak.md").write_text(pattern_fragment + "\n", encoding="utf-8")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "leak", "--no-gpg-sign")
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 1
+    assert "leak.md" in err
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__]))

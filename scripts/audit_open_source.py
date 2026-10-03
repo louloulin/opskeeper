@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -58,8 +60,77 @@ FORBIDDEN_PATTERNS = {
 }
 
 
+# DECOY_CREDENTIALS are credential-shaped strings that exist precisely so a
+# scanner can find them: a test that proves a node never receives an API key
+# has to name the key it is refusing to pass on, and the ledger documents that
+# test by quoting it. The value is therefore exempted by exact match rather
+# than by relaxing the pattern or by file name -- a real `sk-...` key dropped
+# into the same test file, or into the same document, is still reported, which
+# is the only property that makes this an exemption rather than a hole.
+DECOY_CREDENTIALS = {
+    "sk-decoy-openai-must-not-reach-a-node": (
+        "a sentinel, not a credential: tests/e2e/node_agent_delivery_test.go sets it "
+        "and then asserts no node process ever saw it"
+    ),
+}
+
+
+def report(message: str) -> None:
+    """Record one violation.
+
+    This used to raise, which meant the gate named the first thing it found
+    and stopped. With 25 violations across 18 files, "the first one" is not
+    an answer a person can act on -- it is a reason to run the auditor again
+    eighteen times, and it is why a red open-source gate sat here unnoticed
+    for as long as it did. Every violation is now collected and printed
+    together, and the exit status is still non-zero.
+    """
+    VIOLATIONS.append(message)
+
+
 def fail(message: str) -> None:
+    """Abort immediately, for the failures that make the rest meaningless.
+
+    A missing LICENSE or an unreadable manifest means the content scan would
+    be judging a tree that is already disqualified, so those keep stopping
+    the run rather than joining the list.
+    """
     raise SystemExit(f"open-source gate failed: {message}")
+
+
+VIOLATIONS: list[str] = []
+
+
+@lru_cache(maxsize=1)
+def tracked_files() -> frozenset[str] | None:
+    """The paths a release would actually contain, or None if unknowable.
+
+    The gate answers one question -- "does an open-source release built from
+    this commit carry private material" -- and that question is about the
+    index, not about whatever happens to sit in a developer's working
+    directory. Scanning the tree answered a different question, and answered
+    it badly in both directions: an untracked `go.work` holding a home
+    directory path failed the gate on one machine and passed on a clean
+    checkout, and the first tracked private path the gate did find was
+    reported alone, so the twenty-four behind it stayed invisible.
+
+    `git ls-files` is the same answer a `git archive` of the release commit
+    would give. When there is no index to ask -- a source tarball, a vendored
+    copy -- this returns None and the caller scans the tree instead, because
+    a tree that cannot be indexed still has to be auditable.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=ROOT,
+            capture_output=True,
+            check=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    paths = {entry for entry in result.stdout.decode("utf-8").split("\0") if entry}
+    return frozenset(paths) if paths else None
 
 
 def auditable(path: Path) -> bool:
@@ -85,16 +156,16 @@ def text_files() -> list[Path]:
     return files
 
 
-def check_paths() -> None:
+def check_paths(is_in_scope) -> None:
     for path in ROOT.rglob("*"):
         relative = path.relative_to(ROOT)
-        if not auditable(path):
+        if not auditable(path) or not is_in_scope(relative):
             continue
         if FORBIDDEN_PATH_PARTS.intersection(relative.parts):
-            fail(f"private path admitted: {relative}")
+            report(f"private path admitted: {relative}")
         lower_name = relative.name.lower()
         if re.search(r"(?:^|[-_])(?:lum|beny)[-_]\d+", lower_name):
-            fail(f"internal task filename admitted: {relative}")
+            report(f"internal task filename admitted: {relative}")
 
 
 def check_required_files() -> None:
@@ -119,9 +190,15 @@ def check_acknowledgments() -> None:
 
 
 def main() -> int:
-    check_paths()
+    tracked = tracked_files()
+    scope = "the tracked tree" if tracked is not None else "the whole working tree (no git index)"
+
+    def is_in_scope(relative: Path) -> bool:
+        return tracked is None or relative.as_posix() in tracked
+
+    check_paths(is_in_scope)
     check_required_files()
-    files = text_files()
+    files = [path for path in text_files() if is_in_scope(path)]
     if not files:
         fail("no auditable text files found")
 
@@ -131,14 +208,27 @@ def main() -> int:
             if label == "private user path" and relative.name.endswith("_test.go"):
                 continue
             match = pattern.search(content)
-            if match:
+            if match and match.group(0) not in DECOY_CREDENTIALS:
                 preview = match.group(0)[:120]
-                fail(f"{label} found in {relative}: {preview}")
+                report(f"{label} found in {relative}: {preview}")
         if re.search(r"ongrid", content, re.I) and relative not in ONGRID_ALLOWLIST:
-            fail(f"OnGrid outside compliance allowlist: {relative}")
+            report(f"OnGrid outside compliance allowlist: {relative}")
 
     check_acknowledgments()
-    print(f"open-source gate passed: {len(files)} text files audited")
+
+    if VIOLATIONS:
+        print(f"open-source gate failed: {len(VIOLATIONS)} violation(s) in {scope}", file=sys.stderr)
+        for violation in VIOLATIONS:
+            print(f"  - {violation}", file=sys.stderr)
+        print(
+            f"audited {len(files)} text files. Each line above is a file a release would "
+            f"ship. Removing a path from the index is not enough if the content is meant "
+            f"to stay out of the release -- see docs/OPEN_SOURCE_GATE.md.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"open-source gate passed: {len(files)} text files audited in {scope}")
     return 0
 
 

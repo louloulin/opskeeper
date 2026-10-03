@@ -306,8 +306,10 @@ func allGates() []Gate {
 // The failure this exists to catch is not hypothetical and it is not subtle.
 // ci.yml triggered on `push: branches: [main]`, the entire 2.0 line lives on
 // feature/pig, and nobody opened a pull request -- so
-// `gh api repos/louloulin/opskeeper/actions/runs --jq .total_count` answered
-// 0. Five acceptance gates had been wired into a workflow that had never
+// `gh api repos/<this repository>/actions/runs --jq .total_count` answered
+// 0 -- the repository is public and the open-source gate rejects the private
+// owner's name, so the command is written with a placeholder rather than the
+// real slug. Five acceptance gates had been wired into a workflow that had never
 // executed once (decision 163 wired them; decision 164 found that one of them
 // skipped itself and four others had never reported anything). Every claim
 // that CI guards those gates was true on paper and unexecuted in fact.
