@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -156,8 +157,30 @@ func (a *Agent) LastRootContact() time.Time {
 // it again. Flattening them into a transport error makes a rollout either
 // abandon a policy that was merely waiting for its files, or hammer one the
 // cluster will never accept.
-func (a *Agent) HandlePolicy(_ context.Context, req tunnel.ClusterPolicyRequest) tunnel.ClusterPolicyResponse {
-	out, err := a.recv.Apply(req.Bundle, req.StagedPath)
+func (a *Agent) HandlePolicy(ctx context.Context, req tunnel.ClusterPolicyRequest) tunnel.ClusterPolicyResponse {
+	staged, err := a.stage(ctx, req)
+	if err != nil {
+		// The tree could not be put where Apply can look for it. No
+		// contact with the policy itself has happened, so nothing is
+		// recorded against the version and the root may push it again.
+		//
+		// This is the same answer a push naming a path that is not there
+		// gets, and deliberately: both mean "not yet", and the root
+		// treats them identically. What differs is only which side of the
+		// channel had to do something first.
+		a.touch()
+		a.log.Warn("federation: policy tree not staged",
+			slog.String("cluster", a.cluster.ID.String()),
+			slog.Uint64("version", req.Bundle.Version),
+			slog.String("err", err.Error()),
+		)
+		return tunnel.ClusterPolicyResponse{
+			Outcome:   federation.Outcome{Version: req.Bundle.Version, Live: a.liveVersion(), At: a.now()},
+			Retryable: true,
+			Error:     err.Error(),
+		}
+	}
+	out, err := a.recv.Apply(req.Bundle, staged)
 	if err != nil {
 		// Any contact counts, even a refusal: the root is reachable, which
 		// is what LastRootContact is for.
@@ -184,6 +207,33 @@ func (a *Agent) HandlePolicy(_ context.Context, req tunnel.ClusterPolicyRequest)
 		slog.String("package", req.Bundle.PackageName+"@"+req.Bundle.PackageVersion),
 	)
 	return tunnel.ClusterPolicyResponse{Outcome: out}
+}
+
+// stage is where a push is turned into a path Apply can look at.
+//
+// The two halves of the wire are mutually exclusive, and this is where that
+// is enforced rather than documented: a push naming both is refused instead
+// of quietly resolving to whichever field was read first. A request whose
+// meaning depends on the reader is not a request, and tolerating it would
+// mean a root with a bug could point a child at one tree and sign it as
+// another.
+func (a *Agent) stage(ctx context.Context, req tunnel.ClusterPolicyRequest) (string, error) {
+	hasPath := strings.TrimSpace(req.StagedPath) != ""
+	hasSource := req.Source != nil && strings.TrimSpace(req.Source.URL) != ""
+	switch {
+	case hasPath && hasSource:
+		return "", fmt.Errorf("federation: the push names both a staged path and a source, and a tree has one origin")
+	case hasSource:
+		return a.store.Receive(ctx, req.Source, req.Bundle.Version)
+	default:
+		// Neither named. The empty path is passed through rather than
+		// refused here so that the receiver produces the answer, and it
+		// produces the right one: "not staged yet", which is retryable and
+		// records nothing. A root that has not finished staging the tree
+		// is a root whose push arrived first, and that is a normal event
+		// on a channel where the tree travels out of band.
+		return req.StagedPath, nil
+	}
 }
 
 // HandleState answers "what are you enforcing", with no root required.
@@ -215,6 +265,11 @@ func (a *Agent) selfDescription() federation.Cluster {
 	described := a.cluster
 	described.LastSeen = a.now()
 	return described
+}
+
+func (a *Agent) liveVersion() uint64 {
+	live, _ := a.recv.Live()
+	return live
 }
 
 func (a *Agent) touch() {

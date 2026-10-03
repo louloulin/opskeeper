@@ -127,15 +127,50 @@ type ClusterHelloResponse struct {
 // merely resembled it would be a place for the two to drift.
 type ClusterPolicyRequest struct {
 	Bundle federation.Bundle `json:"bundle"`
-	// StagedPath is where the child should look for the tree.
+	// StagedPath is where the child should look for the tree, when the
+	// tree is already on this machine.
 	//
-	// It is a path on the *child's* filesystem, because the tree travels
-	// the same out-of-band channel a plugin package already uses and this
-	// message is only its receipt. The child treats it as untrusted input
-	// and bounds it to its own staging area; a root that can name a path
-	// anywhere on the child's disk would be a remote file-write primitive
-	// wearing a policy's clothes.
+	// It is a path on the *child's* filesystem, and the child treats it
+	// as untrusted input bounded to its own staging area; a root that can
+	// name a path anywhere on the child's disk would be a remote
+	// file-write primitive wearing a policy's clothes.
+	//
+	// It is mutually exclusive with Source. Both naming a place is not a
+	// request with two hints, it is a request whose meaning depends on
+	// which field a reader happens to check first.
 	StagedPath string `json:"staged_path,omitempty"`
+	// Source is where the child should *fetch* the tree from.
+	//
+	// It is the shape tunnel.PluginInstallRequest already uses for a
+	// package, deliberately: a policy tree and a plugin package are both
+	// signed trees that travel out of band and arrive as a receipt, and a
+	// second spelling of that receipt would be a second thing to get
+	// wrong.
+	Source *PolicySource `json:"source,omitempty"`
+}
+
+// PolicySource is where a policy tree can be fetched from.
+//
+// The two fields are not redundant and the pairing is the point: URL says
+// where to get it and ArchiveSHA256 says whether what arrived is what was
+// offered. A source carrying a digest is a source whose corruption is
+// detected before anything is unpacked; a source without one is a request to
+// trust the transport, which for a file the root names and this child
+// promotes to live policy is not a trade worth making.
+//
+// Neither field is authorisation. Anyone who can reach a child can put a URL
+// in this message, and the answer to that is the one thing the whole channel
+// is built on: the tree is only ever promoted after pluginmanifest.VerifyDir
+// proves it carries a signature from a key this cluster trusts. The URL is
+// transport, the digest is integrity, and the signature is authority.
+type PolicySource struct {
+	// URL is an http, https or file URL. The scheme is checked by the
+	// child rather than trusted, because a source is attacker-supplied
+	// input in exactly the way StagedPath is.
+	URL string `json:"url"`
+	// ArchiveSHA256 is the hex digest of the archive as it is served.
+	// Lower hex, 64 characters.
+	ArchiveSHA256 string `json:"archive_sha256"`
 }
 
 // ClusterPolicyResponse is the child's verdict on one push.

@@ -52,6 +52,17 @@ var ErrPathOutsideStaging = errors.New("federation: staged path is outside this 
 type Store struct {
 	base string
 
+	// fetch is how a policy archive is pulled when a push names a source
+	// instead of a path already on this machine.
+	//
+	// It is a field rather than a direct call so that a deployment behind
+	// an authenticating proxy can supply its own transport, and so the
+	// tests can drive the whole fetch-verify-unpack path without a socket.
+	// NewStore always installs a working default; it is never nil, because
+	// a store that could be built without a way to receive a tree would
+	// answer every sourced push with a nil dereference.
+	fetch Fetcher
+
 	// mu serialises swaps, not reads. Two concurrent Switches would
 	// otherwise both build a temporary link and race to rename it, and
 	// whichever lost would have left a .next.<pid> file behind. It is not
@@ -78,7 +89,7 @@ func NewStore(base string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(abs, versionsDirName), 0o750); err != nil {
 		return nil, fmt.Errorf("federation: create the staging area: %w", err)
 	}
-	return &Store{base: abs}, nil
+	return &Store{base: abs, fetch: defaultFetch}, nil
 }
 
 // Base reports the store's root.

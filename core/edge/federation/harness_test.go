@@ -23,10 +23,60 @@ type fakeClient struct {
 	calls    map[string]int
 	// onCall answers an outgoing RPC. Nil means "accept and leave resp zero".
 	onCall func(method string, req any, resp any) error
+	// fetches answers the store's fetches by URL, and fetchErr is returned
+	// for a URL that is not in it. A test that wants a real transfer says
+	// what is at the URL; a test that wants a broken one says so
+	// explicitly rather than relying on a network being absent.
+	fetches  map[string][]byte
+	fetchErr error
+	// receiver is the one this child was assembled around, so a test can
+	// ask what it has decided without the assembly handing out a fifth
+	// value at every call site.
+	receiver *federation.Receiver
 }
 
 func newFakeClient() *fakeClient {
-	return &fakeClient{handlers: map[string]tunnel.Handler{}, calls: map[string]int{}}
+	return &fakeClient{
+		handlers: map[string]tunnel.Handler{},
+		calls:    map[string]int{},
+		fetches:  map[string][]byte{},
+	}
+}
+
+// serve is the store's Fetcher, reading from this client.
+//
+// It is installed by newChild rather than by each test, because the property
+// under test is that a sourced push works end to end — fetch, digest, unpack,
+// verify, promote — and a test that wired the fetcher itself would only be
+// testing the wiring.
+func (c *fakeClient) serve(_ context.Context, rawURL string) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if body, ok := c.fetches[rawURL]; ok {
+		return body, nil
+	}
+	if c.fetchErr != nil {
+		return nil, c.fetchErr
+	}
+	return nil, os.ErrNotExist
+}
+
+// fetchFor registers what is at a URL and returns the client, so a test reads
+// as one statement.
+func (c *fakeClient) fetchFor(rawURL string, body []byte) *fakeClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.fetches[rawURL] = body
+	return c
+}
+
+// receiverOf is the child's receiver, for asserting what it decided.
+func (c *fakeClient) receiverOf(t *testing.T) *federation.Receiver {
+	t.Helper()
+	if c.receiver == nil {
+		t.Fatalf("this client was not assembled by newChild and has no receiver")
+	}
+	return c.receiver
 }
 
 func (c *fakeClient) Dial(context.Context) error { return nil }
@@ -217,6 +267,8 @@ func newChild(t *testing.T, cluster string) (*Agent, *fakeClient, *Store, *plugi
 		t.Fatalf("NewReceiver: %v", err)
 	}
 	client := newFakeClient()
+	client.receiver = recv
+	store.fetch = client.serve
 	agent, err := NewAgent(client, recv, store,
 		federation.Cluster{ID: id, Name: "child", Version: "0.4.0", EdgeCount: 12},
 		"provisioning-token", nil)
