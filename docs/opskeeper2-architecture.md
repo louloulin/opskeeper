@@ -8938,7 +8938,12 @@ PiG 侧 `ScopeTools`（`coding/piglet/scope.go:50-52`）的
 「包里没声明的工具不再被提供」（这正是那条测试断言的），但**做不到**
 「只允许这些扩展」——ambient 来源（ambient top-level 目录、settings.json
 的 Packages）的工具会被**提供**，然后被 `core/edge/policygate` 拒绝。
-这是 PiG 侧缺口，写在 `extensionsBlock` 的注释里。补它要动 PiG。
+这是 PiG 侧缺口，写在 `extensionsBlock` 的注释里。补它要动 PiG——而且
+**不能顺手改**：`TestScopeToolsUsesExactAllowlists` 把 ambient 工具写进了
+`want`，那是 PiG 的文档化契约而非疏漏，`piglet.schema.json` 也没有任何
+「只允许这些扩展」的表达（§4.80.2）。
+
+被拒绝的位置是宿主 gate，那一层是否真的够强由 **§4.80** 的两条断言钉住。
 
 #### 4.79.5 验证
 
@@ -8965,6 +8970,85 @@ PiG 侧 `ScopeTools`（`coding/piglet/scope.go:50-52`）的
 本决策**不改任何进度百分比**：它关掉的是决策 141 留下的一个待决项，不是
 计划 §五里任何一条验收闸门。闸门仍红在同一处——PiG 未发带 `refresh()` 修复
 的 tag（§4.78.4）。
+
+### 4.80 决策 143：把「profile 放行、gate 拒绝」这条分层从注释变成断言
+
+#### 4.80.1 上一条决策留了一个没有证据的乐观
+
+决策 142 末尾把 PiG 的 `ScopeTools` 缺口记成「ambient 来源的工具会被提供、
+被 gate 拒绝」。那句话是**从代码读出来的推断，不是测出来的**——本仓里
+`core/edge/policygate` 有单测证明「未注册工具被拒绝」，`core/pig/pigprofile`
+有单测证明「manifest 删掉工具则不再提供」，但**没有任何一条测试把这两件事
+连起来**。
+
+这不是补测试的洁癖。整个 2.0 的安全模型就是建立在「profile 是弱层、gate 是
+强层」这个前提上的，而这个前提此前只有注释。如果哪次重构让 gate 对未知工具
+变宽松，或者让 profile 和 gate 读**不同的** admitted 集合，那么 ambient
+工具就会既被提供又被放行——**而这两处都不会让任何现有测试变红**。
+
+#### 4.80.2 为什么不改 PiG 的 `ScopeTools`
+
+先查了它能不能改，结论是不能顺手改：
+
+- `coding/piglet/scope.go:50-52` 的 `toolAllowed(nil, name)` 返回 `true`；
+- PiG 自己的 `TestScopeToolsUsesExactAllowlists` 把 `{Name: "ambient", Source:
+  "workspace-extension"}` 明确写进 `want`——**这是它的文档化契约**，不是疏漏；
+- `piglet.schema.json` 里 `extensions` 只有 `name/tools/origins`，**没有任何
+  「只允许这些扩展」的表达**。
+
+也就是说这条缺口要么改上游契约、要么加 schema 字段，都是 PiG 的设计决策，
+不是 opskeeper 能单方面消掉的。`ExtensionEntry.Tools` 用 `*[]string` 区分
+「全部」与「无」的设计说明这套语义是**刻意**的。
+
+所以正确的做法不是假装它不存在，而是证明**另一层确实是强的**。
+
+#### 4.80.3 两条断言
+
+新增 `cmd/opskeeper-edge/profiletwolayer_test.go`，全部从真实 `admitted` 切片
+驱动真实函数（`agentExtensions` / `manifestsOf` / `RegistryFromManifests` /
+`toolAuthorizer`），不用手写夹具：
+
+1. `TestTheGateRefusesAnUnadmittedToolEvenWithAnApprovalInHand`
+2. `TestTheProfileAndTheGateNameTheSameTools`
+
+第 1 条里**故意先把审批回执发下去**。`host_reboot` 是已注册 skill，call site
+会把它判成 destructive，于是宽松的 gate 本来能靠「需要审批」这条理由挡住；
+先把回执给它，剩下唯一挡在这条调用和执行之间的就只剩 allow-list 本身——
+也就是被测的那件东西。顺带钉住一条更有价值的性质：**审批买的是「运行一个已准入
+工具」的同意，买不到节点从未准入的工具**。
+
+#### 4.80.4 一次返工：架构闸门比我想的更对
+
+第一版测试里我 `import "github.com/MichaelKinsy/PiG/coding/piglet"`，直接调
+`piglet.ParseBytes` + `ScopeTools` 去断言「PiG 确实提供了 ambient 工具」。
+`make module-check` 立刻拦下：`cmd` 不得直接 import PiG。
+
+拦得对，而且**第一版那个断言本身方向就错了**：它是在 opskeeper 的测试套里
+重新证明一遍 PiG 已公开声明的契约——那是上游的测试该干的事，我们重写一遍
+只会漂移，还多背一条架构边。真正该被本仓证明的是**我们负责的那一半**：gate
+是否够强。改成不 import PiG 之后两条断言反而更直接（`Scopes` 的输出就是
+`Render` 要渲染的东西，`agentprofile` 自己的测试已经钉住这一点），modulecheck
+转绿。
+
+#### 4.80.5 变异验证
+
+| 变异 | 结果 |
+|---|---|
+| `rolePolicy.Permitted` 对未知工具放行（`binding = ClassRead` 兜底） | 红在第 1 条的 `permitted` 断言——正是它该红的地方，不是红在 reason 字符串上 |
+| `manifestsOf` 多塞一个 `host_reboot`（gate 比 profile 宽） | 红在第 2 条：`the gate permits [host_dmesg host_reboot] but the profile names [host_dmesg]` |
+
+第一次跑变异时第 1 条红在 `strings.Contains(reason, ...)` 上而不是 `permitted`
+上——因为被改宽松的 gate 把工具判成 read，而 call site 判成 destructive，
+于是它停在了「需要审批」。**这说明当时那条测试太弱**：一个只靠 reason 字符串
+区分的测试，会在 gate 变宽松之后先给出「拒绝」的样子。补上预置回执之后，
+同一个变异直接红在 `permitted` 上。测试强度是被变异逼出来的，不是想出来的。
+
+#### 4.80.6 结论
+
+本决策**不改进度百分比**：它不推进计划 §五任何一条验收闸门，关闭的是
+决策 142 自己写下的一句推断。ambient 工具在 PiG 侧**仍然会被提供给模型**
+（这是上游契约，改它要动 PiG），被拒绝的位置是宿主 gate——现在这一点有
+测试了。
 
 ## 六、当前实现进度
 
