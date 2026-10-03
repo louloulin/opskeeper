@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/database"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"go/format"
 	"os"
@@ -55,9 +56,9 @@ import (
 // is a diff more often than it is a reading.
 func observabilityTools() []observabilityEntry {
 	return []observabilityEntry{
-		{ToolNameAnalyzeDatabaseStatus, "analyze_database_status",
+		{database.ToolNameAnalyzeDatabaseStatus, "analyze_database_status",
 			func(t *testing.T, ctx context.Context) basetoolInfo {
-				info, err := NewAnalyzeDatabaseStatusTool(nil, nil, nil, nil, nil).Info(ctx)
+				info, err := database.NewAnalyzeDatabaseStatusTool(nil, nil, nil, nil, nil).Info(ctx)
 				return infoOf(t, info, err)
 			}},
 		{ToolNameGetEdgeSummary, "get_edge_summary",
@@ -75,9 +76,9 @@ func observabilityTools() []observabilityEntry {
 				info, err := NewGrepSourceTool(nil, nil).Info(ctx)
 				return infoOf(t, info, err)
 			}},
-		{ToolNameListDatabaseSources, "list_database_sources",
+		{database.ToolNameListDatabaseSources, "list_database_sources",
 			func(t *testing.T, ctx context.Context) basetoolInfo {
-				info, err := NewListDatabaseSourcesTool(nil, nil, nil, nil).Info(ctx)
+				info, err := database.NewListDatabaseSourcesTool(nil, nil, nil, nil).Info(ctx)
 				return infoOf(t, info, err)
 			}},
 		{ToolNameListMetricCatalog, "list_metric_catalog",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"math"
 	"regexp"
@@ -176,14 +177,14 @@ func (r metricCatalogRunner) run(ctx context.Context, args []byte) ([]byte, erro
 	selector := metricCatalogSelector(nameREString, in.Selector, exactLabels)
 	expr := fmt.Sprintf("count by (%s) ({%s})", strings.Join(metricCatalogGroupLabels(), ", "), selector)
 
-	callCtx, cancel := context.WithTimeout(ctx, queryPromqlCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, toolcore.QueryPromqlCallTimeout)
 	defer cancel()
 	res, err := r.promQuery.Query(callCtx, expr, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("%s: dispatch: %w", ToolNameListMetricCatalog, err)
 	}
 
-	items := aggregateMetricCatalog(instantValues(res), nameRE, exactLabels, includeSamples)
+	items := aggregateMetricCatalog(toolcore.InstantValues(res), nameRE, exactLabels, includeSamples)
 	tokens := metricCatalogQueryTokens(in.Query)
 	aliases := metricCatalogQueryAliases(in.Query)
 	scored := make([]scoredMetricCatalogItem, 0, len(items))
@@ -275,12 +276,12 @@ func metricCatalogPrometheusNameRegex(metricRegex string) string {
 }
 
 func metricCatalogSelector(nameRegex, selector string, labels map[string]string) string {
-	parts := []string{fmt.Sprintf(`__name__=~"%s"`, escapePromLabelValue(nameRegex))}
+	parts := []string{fmt.Sprintf(`__name__=~"%s"`, toolcore.EscapePromLabelValue(nameRegex))}
 	if s := normalizeMetricCatalogSelectorPart(selector); s != "" {
 		parts = append(parts, s)
 	}
 	if len(labels) > 0 {
-		parts = append(parts, labelSelector(labels))
+		parts = append(parts, toolcore.LabelSelector(labels))
 	}
 	return strings.Join(parts, ",")
 }
@@ -418,7 +419,7 @@ func normalizeMetricCatalogLabels(raw map[string]interface{}) map[string]string 
 	return out
 }
 
-func aggregateMetricCatalog(vals []promInstantValue, nameRE *regexp.Regexp, exactLabels map[string]string, includeSamples bool) []MetricCatalogItem {
+func aggregateMetricCatalog(vals []toolcore.PromInstantValue, nameRE *regexp.Regexp, exactLabels map[string]string, includeSamples bool) []MetricCatalogItem {
 	byName := map[string]*MetricCatalogItem{}
 	sampleCandidates := map[string]map[string]map[string]string{}
 	for _, row := range vals {

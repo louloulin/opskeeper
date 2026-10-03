@@ -43,10 +43,6 @@ type QueryPromQLArgs struct {
 	LookbackSeconds int    `json:"lookback_seconds,omitempty"`
 }
 
-// queryPromqlCallTimeout caps how long a single dispatch may wait. Same
-// rationale as the other tool timeouts.
-const queryPromqlCallTimeout = 30 * time.Second
-
 // executeQueryPromQL runs the PromQL range query and hands the raw Prom
 // response back to the LLM via ResultJSON. EdgeID is intentionally left
 // nil — query_promql is not bound to a specific edge.
@@ -74,7 +70,7 @@ func (r *Registry) executeQueryPromQL(ctx context.Context, args json.RawMessage)
 	start := end.Add(-time.Duration(in.LookbackSeconds) * time.Second)
 	step := toolcore.StepFor(in.LookbackSeconds)
 
-	callCtx, cancel := context.WithTimeout(ctx, queryPromqlCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, toolcore.QueryPromqlCallTimeout)
 	defer cancel()
 
 	res, err := r.promQuery.QueryRange(callCtx, in.Expr, start, end, step)

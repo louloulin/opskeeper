@@ -24,6 +24,16 @@ import (
 // The concrete *promquery.Client, *logquery.Client and *tracequery.Client
 // satisfy these unchanged. The interfaces exist so a test can inject a
 // fake without a live backend.
+// QueryPromqlCallTimeout caps how long a single PromQL dispatch may wait.
+//
+// It lives here, beside the querier interface, rather than next to the
+// tool that happens to be called query_promql. A timeout is a property of
+// the backend a dispatch goes to, and four callers ask that backend
+// questions: query_promql, the metric catalog, and the database analyzer.
+// Declaring it in any one of them made the other three reach sideways
+// into a file named after a tool they are not.
+const QueryPromqlCallTimeout = 30 * time.Second
+
 type PromQuerier interface {
 	// QueryRange asks for a range of points at the given resolution.
 	QueryRange(ctx context.Context, expr string, start, end time.Time, step time.Duration) (*promquery.InstantResult, error)

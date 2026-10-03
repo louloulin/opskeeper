@@ -64,7 +64,7 @@ func (t *QueryPromQLTool) Info(_ context.Context) (*basetool.ToolInfo, error) {
 // marshals the response back to a JSON string. The input/output shape
 // matches the closure executor (executeQueryPromQL in query_promql.go)
 // exactly — they consult the same QueryPromQLArgs / toolcore.StepFor /
-// queryPromqlCallTimeout — so the two paths return identical bytes for
+// toolcore.QueryPromqlCallTimeout — so the two paths return identical bytes for
 // equivalent inputs.
 //
 // opts are accepted but ignored: query_promql is tenant-agnostic and
@@ -99,7 +99,7 @@ func (t *QueryPromQLTool) InvokableRun(ctx context.Context, argsJSON string, _ .
 	// wrapper. When the wrapper IS present, whichever ctx deadline
 	// fires first wins — context.WithTimeout on a parent that already
 	// has a closer deadline keeps the closer one.
-	callCtx, cancel := context.WithTimeout(ctx, queryPromqlCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, toolcore.QueryPromqlCallTimeout)
 	defer cancel()
 
 	res, err := t.promQuery.QueryRange(callCtx, in.Expr, start, end, step)

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/chat2query"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/database"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
@@ -98,7 +99,7 @@ type Registry struct {
 	// pluginConfigs feeds database metrics source discovery. Wired
 	// post-construction from cmd/main.go because PluginConfigUC is built
 	// before chat runtime but after the registry's constructor deps.
-	pluginConfigs PluginConfigLister
+	pluginConfigs database.PluginConfigLister
 	// configManager feeds conversational configuration draft/apply tools.
 	// Wired from cmd/main.go after the alert service exists.
 	configManager ConfigManager
@@ -197,20 +198,20 @@ func (r *Registry) SetPoolRecoveryExecutor(recoverer PoolRecoveryExecutor) {
 // SetPluginConfigLister wires the plugin config source discovery seam used by
 // list_database_sources / analyze_database_status. Call after NewRegistry
 // (cmd/main.go).
-func (r *Registry) SetPluginConfigLister(p PluginConfigLister) {
+func (r *Registry) SetPluginConfigLister(p database.PluginConfigLister) {
 	r.pluginConfigs = p
 	if p != nil && r.edges != nil {
 		r.Register(Tool{
-			Name:        ToolNameListDatabaseSources,
-			Description: ListDatabaseSourcesDescription,
-			Schema:      ListDatabaseSourcesSchema,
+			Name:        database.ToolNameListDatabaseSources,
+			Description: database.ListDatabaseSourcesDescription,
+			Schema:      database.ListDatabaseSourcesSchema,
 			Execute:     r.executeListDatabaseSources,
 		})
 		if r.promQuery != nil {
 			r.Register(Tool{
-				Name:        ToolNameAnalyzeDatabaseStatus,
-				Description: AnalyzeDatabaseStatusDescription,
-				Schema:      AnalyzeDatabaseStatusSchema,
+				Name:        database.ToolNameAnalyzeDatabaseStatus,
+				Description: database.AnalyzeDatabaseStatusDescription,
+				Schema:      database.AnalyzeDatabaseStatusSchema,
 				Execute:     r.executeAnalyzeDatabaseStatus,
 			})
 		}
