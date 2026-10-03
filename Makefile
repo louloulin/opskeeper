@@ -323,6 +323,15 @@ split-cost: ## 给一份分组方案定价：跨组 import 语句数 + 被切断
 	@test -n "$(FILE)" || { echo 'usage: make split-cost FILE=docs/manager-split.proposed'; exit 2; }
 	go run ./scripts/domaincheck . -cut $(FILE)
 
+# The other half of what split-cost cannot say. That number prices a cut by
+# import edges, which say two packages must be BUILT together and say nothing
+# about whether anyone ever CHANGES them together. The proposal names three
+# missing facts and this reports on the one the history can answer.
+.PHONY: domain-cochange
+domain-cochange: ## 打印各域的独立改动率与共变对（不闸门；证据，不是裁决）
+	go run ./scripts/cochange/
+	go test ./scripts/cochange/ -count=1
+
 # The root `make test` no longer reaches core/harness: it is a separate Go
 # module now, and that separation is the point. Anything that wants the
 # whole repository tested has to say so explicitly, or the golden-case
