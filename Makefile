@@ -463,8 +463,18 @@ pig-dev-unpin: ## 撤销本地 PiG checkout 覆盖，回到固定 tag
 # 这个目标今天会红，红的原因在上游 PiG，不在本仓库。它不进 `make test`：
 # 一个长期红的测试只会训练所有人忽略红色。它也不该被删掉——它是这个缺陷
 # 唯一的可执行证据，上游修好后它会自己转绿。
+#
+# 它默认测的是**固定 tag**：pigBinary() 用 GOWORK=off 构建，于是 go.work 里
+# 的本地 replace 被绕过（这是刻意的，见 runtime_scoping_test.go 的注释）。
+# 因此 `make pig-dev-pin` 对本目标无效。今天唯一能让它转绿的方式是把带修复
+# 的二进制喂进来（§4.93.6）：
+#
+#     GOWORK=off go build -o /tmp/pig ./cmd/pig    # 在带修复的 PiG 目录里
+#     OPSKEEPER_PIG_BIN=/tmp/pig make pig-tool-scoping-check
+#
+# 上游发布含修复的 tag 之前，这条路是它唯一的绿灯来源。实测 18/18。
 .PHONY: pig-tool-scoping-check
-pig-tool-scoping-check: ## 真二进制验证节点 Agent 被提供了插件工具（当前因上游 PiG 缺陷为红）
+pig-tool-scoping-check: ## 真二进制验证节点 Agent 被提供了插件工具（默认红；OPSKEEPER_PIG_BIN=本地构建可转绿，见上）
 	go test -tags pigscoping -count=1 -timeout 10m ./core/pig/pigprofile/ \
 		-run TestTheNodeProfileActuallyOffersTheToolsItsPackagesDeclare
 

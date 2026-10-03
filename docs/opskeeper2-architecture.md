@@ -10344,6 +10344,140 @@ nginx.service"`，**和直接执行是同一件事**。变异的意图（引入 
 阶段 0 / 1 / 3 未动，外部阻塞不变（PiG 推送打 tag、跨网络 `Source.URL`、拆分方案
 批准）。
 
+### 4.93 决策 156：把 PiG 那条阻塞的形状量到字节——`v0.3.1` 已发布，但没有修复；且是一次 403
+
+#### 4.93.1 为什么这一轮去动上游那条线
+
+阶段 0 剩下的 20% 与 `make pig-tool-scoping-check` 全压在一句话上（§4.90.8）：
+「推送 PiG 的 `main` 并打 tag」。本方台账连着几轮把它写成「一条命令」。既然是一条
+命令，就先把它能不能执行的**前提**逐条量清楚——量出来的结果和台账里那句话不一样。
+
+#### 4.93.2 新事实一：上游已经发过 `v0.3.1`，它**不含**修复
+
+远端实查（`git ls-remote --tags origin 'v0.3*'`）：
+
+```
+refs/tags/v0.3.0        f144ac8   Release 0.3.0 (#84)              2026-09-29
+refs/tags/v0.3.1        5c9a635   Release 0.3.1: pin the extension SDK to v0.3.1 for module publication   2026-09-30
+refs/tags/extensions/sdk/v0.3.1   c2d4c32
+```
+
+也就是说**上游不是「还没发版」**——0.3.1 在 0.3.0 的第二天就发了。关键在下一条。
+
+#### 4.93.3 新事实二：修复不在 `v0.3.1` 里，且它是本地未推送的提交
+
+修复所在的提交是本地 `main` 的 `5a84dc2`（`feat(cluster): 实现跨节点会话的请求
+路由和延续判断`）。三种归属全部为否：
+
+- `git merge-base --is-ancestor 5a84dc2 v0.3.1` → **否**（5a84dc2 不在 v0.3.1 里）
+- `git merge-base --is-ancestor 5a84dc2 origin/main` → **否**
+- 远端 `origin/main` 头是 `f21cf4e`（`ci(npm): publish the tarball as a local path (#100)`），
+  不含该提交
+
+所以「打一个 tag」这条路是**空的**：上游唯一能打的基准 `origin/main` 本身就没有
+修复。台账此前记的「推送 `main` 并打 tag」隐含了「修复已在某个可发布的基底上」，
+这一条不成立。
+
+（附注：`5a84dc2` 改的是 `coding/session_tool_registry.go`，而 `ToolSourceInfo`
+API 在 `v0.3.0` 的 `inproc/runner.go` 里**已经存在**——即修复是一行纯 PiG 内部改动，
+不引入新 API。这一点在 §4.67/§4.78 已记。）
+
+#### 4.93.4 新事实三：这不是「一条命令」，是一次 403
+
+`git -C /Users/louloulin/appx/PiG push --dry-run origin main`：
+
+```
+remote: Permission to MichaelKinsy/PiG.git denied to louloulin.
+fatal: unable to access 'https://github.com/MichaelKinsy/PiG.git/': The requested URL returned error: 403
+```
+
+`gh api repos/MichaelKinsy/PiG --jq .permissions` → `{"admin":false,"maintain":false,
+"pull":true,"push":false,"triage":false}`。当前账号 `louloulin` 对上游**没有写权限**。
+
+因此「推送 PiG 的 `main`」不是一条本机可执行的命令，而是**需要上游作者授权的外部
+动作**。台账从决策 153 起连续几轮把它写成「一条命令」，是把「有修复的提交在本地」
+错读成了「这条命令能执行」。
+
+#### 4.93.5 新事实四：可执行的替代路径今天也是红的——但红在一个**独立**缺陷上
+
+把「不需要上游写权限」这条路（今天真的存在）走了一遍：用 `OPSKEEPER_PIG_BIN`
+把带修复的本地 `pig` 二进制喂给闸门（`runtime_scoping_test.go:349` 的官方钩子，
+台账 §4.78.4 记的用法）。
+
+```
+base/go-build...  /tmp/pig_local_fix  （从 /Users/louloulin/appx/PiG 本地 main 构建）
+OPSKEEPER_PIG_BIN=/tmp/pig_local_fix ... -run TestTheNodeProfileActuallyOffersTheToolsItsPackagesDeclare
+→ ok   github.com/vincent-wuhan/opskeeper/core/pig/pigprofile   1.250s   （18/18）
+```
+
+**这条结果同时暴露第二处独立缺陷**：闸门默认那条路（不带 `OPSKEEPER_PIG_BIN`）
+是用 `pigBinary()` 在**本机 `core/pig` 目录里**跑 `go build ... github.com/MichaelKinsy/PiG/cmd/pig`
+并显式设 `GOWORK=off` 的（`runtime_scoping_test.go:353-358`）。`GOWORK=off` 会让
+该构建**忽略仓库的 `go.work`**，于是它不会用 `go.work` 里
+`replace github.com/MichaelKinsy/PiG => /Users/louloulin/appx/PiG`——它会回到
+`core/pig/go.mod` 里写的 `v0.3.0`。这与台账 §4.78.4 的注释一致（"a gate that
+silently built against a developer's local PiG checkout would prove something
+else"），所以**闸门的行为是对的**；错的是台账接下来那句推论。
+
+#### 4.93.6 更正：`make pig-dev-pin` 不能解除这条阻塞；它误导了台账三轮
+
+`make pig-dev-pin PIG_DEV_PATH=<带修复的 PiG>` 只改 `go.work` 的 replace。而闸门
+的 `GOWORK=off` 恰好**绕过 go.work**，所以对本闸门**无效**。台账 §4.78.4 其实已经
+写明了这一点（"`make pig-dev-pin` 对它无效"），但 §4.90.8 与 §4.90.10 又把它记成
+「推送 main 打 tag 之后自己会转绿」，并把「有修复的提交在本地」当成了「上游可发布」。
+
+本轮把这件事落到可执行的坐标上：
+
+| 路径 | 今天可执行？ | 结果 |
+|---|---|---|
+| `git push origin main`（上游） | **否** | 403，需上游作者授权 |
+| 上游再发一个含修复的 tag | **否** | 远端基底 `origin/main` 不含修复 |
+| `make pig-dev-pin` + 闸门 | **否** | 闸门 `GOWORK=off`，绕过 go.work |
+| `OPSKEEPER_PIG_BIN=<本地构建>` + 闸门 | **是** | **18/18 绿**（本轮实测） |
+
+#### 4.93.7 这对「进度」意味着什么：87.9% 不动，但阻塞的分类变了
+
+阶段 0 仍记 80%，加权仍 **87.9%**——因为节点交付物今天仍跑在固定 tag 上，而固定
+tag 不含修复；`make pig-tool-scoping-check` 默认那条路仍 0/18。这一点没变。
+
+变的是阻塞的**性质**，而它影响下一步的处置：
+
+- 此前记法是「等一条本机命令（推送 + 打 tag）」，暗示阻塞在**本机可解**、只差执行；
+- 实测记法是「需要上游作者授权写权限，或本仓库自我承担 piglet 传递性重编译」。
+  前者不是本机可解，后者不是本机可做（需改 `go.mod` 里 piglet extensions 的
+  `require github.com/MichaelKinsy/PiG`，并重编四个 piglet，属另一条独立的、与
+  §4.95.7 的「三步」并列的线）。
+
+因此这一格诚实的读法从「压在一条命令上」改为「压在一次外部授权或一次传递性重
+编译上」——两者都不是本轮能代做的动作，但**前者不再有「一条命令」的假象**。
+
+#### 4.93.8 本轮改了什么代码
+
+**没有改一行产品代码。** 本轮只做三件可验证的事：
+
+1. 远端实查 tags 与 heads（`ls-remote`），得到 §4.93.2/4.93.3 的四条否定；
+2. 实跑 `git push --dry-run` 与 `gh api .permissions`，得到 §4.93.4 的 403；
+3. 实跑 `OPSKEEPER_PIG_BIN=<本地构建> ... -run TestTheNodeProfile...`，得到 18/18，
+   与前一轮默认路径的 0/18 形成对照，坐实「闸门默认路径测的是固定 tag」。
+
+产物是一个**可复现的证据包**，不是一行实现。这正是本轮的价值：它把一句被记了三轮
+的「一条命令」证伪，并给出四个路径里唯一今天可执行的那一个。
+
+#### 4.93.9 进度
+
+| 阶段 | 之前 | 之后 | 依据 |
+|---|---|---|---|
+| 0 边缘交付闭环 | 80% | 80% | 交付通路未变；节点工具面仍 0/18 |
+| 1 离线与自治 | 100% | 100% | 未动 |
+| 2 生态与治理 | 91.7% | 91.7% | 未动（决策 155 的余量未再推进） |
+| 3 控制面与联邦 | 79.7% | 79.7% | 未动 |
+
+加权 = (80 + 100 + 91.7 + 79.7) / 4 = **87.9%**。
+
+阶段 0 剩下的 20% 里，「能诊断」那一半的判据仍是节点 Agent 拿着 18 个工具，今天
+默认路径仍是 0/18。但它的**依赖项**从「一条本机命令」改记为「外部授权」，并附上
+今天唯一可执行的验证手段。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
