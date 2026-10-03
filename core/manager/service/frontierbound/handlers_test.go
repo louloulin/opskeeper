@@ -70,16 +70,19 @@ func (f *fakeDeviceResolver) LookupHostDevice(_ context.Context, edgeID uint64) 
 	return edgeID, nil
 }
 
-// installAndDispatch runs Install on a fakeService-backed Client, then
-// returns the registered RPC for `method`. Tests call it like a function.
-func installAndDispatch(t *testing.T, w Wiring) (*fakeService, geminio.RPC) {
+// installWith runs Install on a fakeService-backed Client and hands back
+// both halves: the fake service, whose rpcs and lifecycle callbacks the
+// tests drive, and the client, whose own surface (OnEdgeOffline) some tests
+// need. The defaults below are what Install insists on; a test that cares
+// about one of them sets it first.
+func installWith(t *testing.T, w Wiring) (*fakeService, *Client) {
 	t.Helper()
 	fs := newFakeService()
 	c := newWithService(fs, slog.Default())
 
 	// Install requires non-nil EdgeAuthn / EdgeUC; supply zero-value
 	// usecase + a tiny authn proxy. We don't dispatch register_edge etc
-	// in this test, so internal nil-deref is fine.
+	// in these tests, so internal nil-deref is fine.
 	if w.EdgeAuthn == nil {
 		w.EdgeAuthn = (&edgebiz.AccessKeyAuthenticator{})
 	}
@@ -93,14 +96,21 @@ func installAndDispatch(t *testing.T, w Wiring) (*fakeService, geminio.RPC) {
 		// Default: a present 1:1 junction so push tests reach the ingester.
 		w.DeviceResolver = &fakeDeviceResolver{}
 	}
+	if w.Log == nil {
+		w.Log = slog.Default()
+	}
 	if err := Install(context.Background(), c, w); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	rpc, ok := fs.rpcs[tunnel.MethodPushPromSamples]
-	if !ok {
-		t.Fatalf("push_prom_samples not registered")
-	}
-	return fs, rpc
+	return fs, c
+}
+
+// installAndDispatch is installWith plus the handler most of these tests
+// dispatch: push_prom_samples.
+func installAndDispatch(t *testing.T, w Wiring) (*fakeService, geminio.RPC) {
+	t.Helper()
+	fs, _ := installWith(t, w)
+	return fs, rpcFor(t, fs, tunnel.MethodPushPromSamples)
 }
 
 // rpcFor returns a registered reverse-call handler by method. The install

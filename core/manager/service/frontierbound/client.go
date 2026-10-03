@@ -55,6 +55,56 @@ type Client struct {
 	mu                sync.RWMutex
 	transportToEdgeID map[uint64]uint64
 	edgeIDToTransport map[uint64]uint64
+
+	// offlineMu guards offlineHooks, which is a separate concern from the
+	// transport maps: hooks are registered before Install runs and read
+	// after, while the maps change on every dial.
+	offlineMu    sync.Mutex
+	offlineHooks []func(edgeID uint64)
+}
+
+// OnEdgeOffline registers a callback for every caller that goes away.
+//
+// It exists because frontierbound.Install already registers the one
+// EdgeOffline callback the broker accepts, and a second registration would
+// silently replace the first — taking the offline bookkeeping with it. So
+// this is a list, and Install fans out to it. The edgeID handed to a hook is
+// the opaque transport number, not a canonical edge id, because a hook that
+// has to guess is a hook that will guess wrong.
+func (c *Client) OnEdgeOffline(fn func(edgeID uint64)) {
+	if fn == nil {
+		return
+	}
+	c.offlineMu.Lock()
+	defer c.offlineMu.Unlock()
+	c.offlineHooks = append(c.offlineHooks, fn)
+}
+
+// notifyEdgeOffline fans out to the registered hooks.
+//
+// A hook that panics is contained rather than allowed to take the broker's
+// callback down with it: the hooks run inside the lifecycle notification the
+// broker is waiting on, so one misbehaving subscriber would then keep every
+// other node from being marked offline. It is logged rather than swallowed —
+// a silently dropped hook is a binding that is never forgotten, which is the
+// failure this whole list exists to prevent.
+func (c *Client) notifyEdgeOffline(edgeID uint64) {
+	c.offlineMu.Lock()
+	hooks := append([]func(uint64){}, c.offlineHooks...)
+	c.offlineMu.Unlock()
+	for _, fn := range hooks {
+		func() {
+			defer func() {
+				if r := recover(); r != nil && c.log != nil {
+					c.log.Error("frontierbound: an edge-offline hook panicked",
+						slog.Uint64("edge_id", edgeID),
+						slog.Any("panic", r),
+					)
+				}
+			}()
+			fn(edgeID)
+		}()
+	}
 }
 
 // New dials the frontier broker and returns a ready Client.

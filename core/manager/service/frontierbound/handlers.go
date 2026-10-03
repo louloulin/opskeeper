@@ -100,7 +100,31 @@ type Wiring struct {
 	// correct answer for a manager with no public URL configured: a node
 	// keeps whatever it had rather than being pointed at a relative path.
 	ModelEndpoint ModelEndpointResolver
-	Log           *slog.Logger
+	// ClusterLink answers a child cluster's cluster.hello, which is how a
+	// cluster this root has provisioned gets a binding to the caller that
+	// proved it holds the provisioning token.
+	//
+	// Optional. When nil the method does not install and a child cluster's
+	// hello is never answered, which it reads as a root that will not
+	// speak to it — the same thing it would read from a root that was
+	// never told about it.
+	ClusterLink ClusterHelloHandler
+	Log         *slog.Logger
+}
+
+// ClusterHelloHandler answers tunnel.MethodClusterHello.
+//
+// It is declared here, in the package that dispatches, rather than beside the
+// implementation, so that the set of methods a dialer may reach is decided in
+// one place — and so that adding a second answer to the cluster channel shows
+// up as a change to this file rather than as something hidden in a domain
+// three directories away.
+type ClusterHelloHandler interface {
+	// HandleHello is handed the authenticated caller id and the raw body.
+	// That id is the transport's opaque number, already authenticated by
+	// GetEdgeID; it is not an edge id, and nothing downstream should
+	// treat it as one.
+	HandleHello(ctx context.Context, edgeID uint64, body []byte) ([]byte, error)
 }
 
 // ModelEndpointResolver answers "which model endpoint should a node's agent
@@ -267,6 +291,12 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 		// notifier and the unbind clears the mapping.
 		canonicalEdgeID := c.canonicalizeEdgeID(edgeID)
 		c.unbindTransport(edgeID)
+		// Subscribers get the transport id, not the canonical one. A
+		// cluster binding is keyed by the caller that proved its token,
+		// and that is the number the broker recycles; handing them a
+		// canonical edge id would make Forget miss every time the broker
+		// had not yet canonicalised the dial.
+		c.notifyEdgeOffline(edgeID)
 		log.Info("frontierbound: edge offline",
 			slog.Uint64("edge_id", canonicalEdgeID),
 			slog.Uint64("transport_edge_id", edgeID),
@@ -292,6 +322,15 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 	}
 
 	// register_edge: persist HostInfo + flip status=online.
+	// cluster.hello: a child cluster introducing itself. Registered here
+	// rather than in the link's own package so that the reachable method
+	// set is decided in one place.
+	if w.ClusterLink != nil {
+		if err := c.Register(ctx, tunnel.MethodClusterHello, w.ClusterLink.HandleHello); err != nil {
+			return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodClusterHello, err)
+		}
+	}
+
 	if err := c.Register(ctx, tunnel.MethodRegisterEdge, func(rpcCtx context.Context, edgeID uint64, body []byte) ([]byte, error) {
 		var in tunnel.RegisterEdgeRequest
 		if err := json.Unmarshal(body, &in); err != nil {

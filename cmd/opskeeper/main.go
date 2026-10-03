@@ -1385,6 +1385,18 @@ func main() {
 	pluginReleaseHandler.SetService(pluginReleaseMgr)
 	pluginReleaseHandler.SetInventory(pluginNodeFleet)
 
+	// The root side of the cluster channel. Built here rather than next to
+	// the routes because it needs the tunnel client, and mounted even when
+	// the tunnel is disabled: a root that has lost its way to its children
+	// still has to be able to say who it has enrolled and what it last sent
+	// them, or an operator's only view of a federation outage is a console
+	// with the page missing.
+	federation, err := newFederationWiring(fbClient, log.With(slog.String("comp", "federation")))
+	if err != nil {
+		log.Error("federation: wiring", slog.Any("err", err))
+		os.Exit(1)
+	}
+
 	if err := managersvcfb.Install(rootCtx, fbClient, managersvcfb.Wiring{
 		EdgeAuthn:      edgeAuthn,
 		EdgeUC:         edgeUC,
@@ -1416,7 +1428,12 @@ func main() {
 		// resolution path (push pipeline). The biz junction repo is the
 		// source of truth.
 		DeviceResolver: edgeDeviceRepo,
-		Log:            log.With(slog.String("comp", "frontierbound")),
+		// ClusterLink answers a child cluster's cluster.hello. The
+		// binding it makes is the only thing that lets a publish become
+		// a push, and it is checked on every publish — a token the root
+		// issued is not a binding until the holder has connected.
+		ClusterLink: federation.link,
+		Log:         log.With(slog.String("comp", "frontierbound")),
 	}); err != nil {
 		log.Error("frontierbound: install handlers", slog.Any("err", err))
 		os.Exit(1)
@@ -3358,6 +3375,11 @@ func main() {
 			integrationHandler.Register(protected)
 			marketplaceHandler.Register(protected)
 			pluginReleaseHandler.Register(protected)
+			// Every route here is admin: enrolment mints a credential
+			// that lets a remote process act for a cluster, and a
+			// publish puts new code onto hosts this root does not
+			// administer directly.
+			federation.handler.Register(protected)
 			secretHandler.Register(protected)
 			// /v1/mcp/servers 等 admin CRUD 仍走 protected（admin auth）
 			// /v1/mcp（Worker JSON-RPC 入口）/v1/state/*/v1/hitl/* 走 Bearer GatewayKey
