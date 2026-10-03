@@ -7502,6 +7502,138 @@ return append(infos, extensionTools...)   // Source 由测试自己填成扩展�
 3. **阶段 3**：manager 27 万行的限界上下文拆分是剩下最重的一块（权重 0.56），
    起点应从解除 `iam → manager` 的反向依赖切起（决策 38 登记的已知例外）。
 
+### 4.69 决策 132：去关计划的验收门槛原文，结果是**用来证明「节点没有云密钥」的那个夹具自己就是泄漏源**
+
+计划 §六 验收门槛最后一句写的是：
+
+> 节点上 `/etc/opskeeper-edge` 与进程环境经审计确认无云厂商密钥。
+
+这句话被拆成两半，而仓库只实现了第一半。决策 128 的 e2e 有一条
+`the node holds no provider credential`，它扫 `edge.ConfigDir` 里有没有
+manager 的 provider key 与节点自己的凭据对——扫的是**目录**。第二半
+（**进程环境**）没有任何断言，尽管这套设计恰恰是把凭据放进环境变量的：
+`OPSKEEPER_EDGE_AGENT_TOKEN` 就是一个引用，节点把它展开成
+`OPENAI_API_KEY` 交给 `pig`。环境是最可能藏密钥的地方，也是目录扫描看不见的地方。
+
+#### 4.69.1 顺着这条线查下去，漏的不是断言，是夹具
+
+要断言「进程环境里没有云厂商密钥」，先得能看见这个环境。第一步查
+`ps -Eww -p <pid>` 在 macOS 上能不能读别人进程的环境：
+
+```
+$ OPSKEEPER_PROBE_SECRET=hello-world sleep 8 & PID=$!
+$ ps eww -p $PID
+  PID   TT  STAT      TIME COMMAND
+31545   ??  SN     0:00.00 sleep 8          # 环境变量一个字都没有
+```
+
+读不到（macOS 不暴露 `/proc`，`ps e` 对非自己 exec 的进程一律拒绝）。
+于是改看**夹具构造了什么**——`testenv/edge.go` 把 `edgeEnv` 交给
+`exec.Command`，值来自 `mergedEnv(edgeEnv)`，而 `mergedEnv` 是：
+
+```go
+parent := os.Environ()
+clean := parent[:0]
+for _, kv := range parent {
+    if len(kv) >= 7 && kv[:7] == "OPSKEEPER_" { continue }   // 只挡了 OPSKEEPER_*
+    clean = append(clean, kv)
+}
+```
+
+**其余全部原样继承。** 于是：开发机或 CI runner 上 `export OPENAI_API_KEY=…`
+的话，e2e 拉起的 edge 进程**真的持有那个真实 provider 凭据**——而那条专门用来
+抓这件事的断言是**绿的**，因为它只扫目录、只找 manager 那个假 key
+（`fake-test-key`），继承来的真 key 换个变量名、换个值，落在环境里而不是目录里。
+
+**夹具就是泄漏源。** 一个用来证明「节点不持有云厂商密钥」的闸门，
+在有密钥的机器上把密钥亲手放到了节点上。
+
+#### 4.69.2 修法：按**形状**拒绝，不抄一份会过期的厂商名单
+
+PiG 从一长串变量里解析 provider 凭据（`OPENAI_API_KEY`、
+`ANTHROPIC_AUTH_TOKEN`、`AZURE_OPENAI_API_KEY`、`HF_TOKEN`、
+`GEMINI_API_KEY`、`GOOGLE_APPLICATION_CREDENTIALS`…）。把这份名单抄进测试夹具，
+就是抄一份「加一个厂商就错」的名单。所以按名字的**形状**拒绝，失败即封闭：
+
+```go
+var credentialShapedEnv = regexp.MustCompile(
+    `(?i)(api[_-]?key|secret|token|password|passwd|credential|private[_-]?key|proxy)|^aws_|^google_`)
+```
+
+`envMap` 在过滤之后才叠加，因此**永不被过滤**：节点自己的 tunnel 凭据对、
+manager 的假 provider key，都是夹具**故意**给的值，而 manager 正是应该持有
+密钥的那个进程。
+
+`proxy` 也在规则里，理由和「代理」无关：继承来的 `http_proxy` 常写成
+`scheme://user:password@host`，那是**伪装成 URL 的凭据**。这里的子进程
+不发代理请求，丢掉零成本。
+
+#### 4.69.3 新增的断言
+
+`the node's process environment holds no provider credential` 四层：
+
+| 层 | 断言 |
+|---|---|
+| 前置 | 三个诱饵**确实在测试进程自己的环境里**——否则后面全属空转 |
+| 构造 | 节点的 `Environ()` 里没有诱饵，也没有 `fake-test-key` |
+| 反向 | 节点**自己**的 tunnel 凭据对仍在环境里（否则它已经不是节点了） |
+| 运行期 | 有 `/proc` 时读 edge 与 `pig` 活进程的环境再查一遍；没有就**说出来** |
+
+诱饵按规则的三条臂各选一个：`OPENAI_API_KEY`（厂商名）、
+`ANTHROPIC_AUTH_TOKEN`（只有 token 那条臂能抓）、`AWS_SECRET_ACCESS_KEY`
+（名字里没有 key，靠 `^aws_`）。**故意不放** `OPSKEEPER_` 开头的诱饵：
+它会被更早的 `OPSKEEPER_` 配置隔离规则挡掉，区分不了这两条规则——
+第一版就犯了这个错，变异时它果然没红。
+
+失败信息只报**变量名**不报值：一个会把凭据打进测试日志的断言，
+是本仓库最不该存在的东西。
+
+#### 4.69.4 变异验证与实测
+
+关掉 scrub 重跑，e2e 当场红：
+
+```
+the node's environment carries "sk-decoy-openai-must-not-reach-a-node" as OPENAI_API_KEY
+the node's environment carries "anthropic-decoy-must-not-reach-a-node" as ANTHROPIC_AUTH_TOKEN
+the node's environment carries "aws-decoy-must-not-reach-a-node" as AWS_SECRET_ACCESS_KEY
+```
+
+三条臂各中一个，与设计一致。第一版诱饵里那个 `OPSKEEPER_ZHIPU_API_KEY`
+在这次变异里**没有**被报出来——它被更早的 `OPSKEEPER_` 规则挡掉了，
+这正是把它从诱饵表里删掉的理由。
+
+恢复后 `./tests/e2e/` 全量 29 个测试函数绿（74s，含真 manager / 真 edge /
+真 `pig` 子进程 / 真 frontier broker / 真 SSE）。另外单独验过规则的两侧：
+14 个凭据形状变量名全部拦下，17 个进程运行必需变量（`PATH` / `HOME` /
+`TMPDIR` / `LANG` / `SSH_AUTH_SOCK` / `DOCKER_HOST` / `GOPATH` …）全部放行。
+
+macOS 上运行期那一层会打印「此 OS 不展示别的进程的环境」，而不是静默通过——
+**跳过与通过在输出里必须长得不一样**。CI 跑 ubuntu，那一层会自动生效。
+
+#### 4.69.5 对台账的影响
+
+- **台账仍 84.0%**：这是把一条已写明的验收门槛从「只实现一半」补到「两侧都有
+  证据」，不是推进任何阶段的交付物。
+- 但它的性质与决策 131 不同：131 补的是**缺失的测试**，132 改的是**会误导结论的
+  测试基础设施**。在有密钥的开发机上，此前的 e2e 绿灯**不代表**「节点没有密钥」，
+  而阶段 0 的核心主张正是这一句。这类「闸门本身在说谎」的缺陷比缺闸门更贵。
+- 计划 §六 的验收门槛现在四条全部有可执行证据：`module-check` ✓、
+  `eval-gates` ✓、`module-standalone-check` ✓、节点无云厂商密钥 ✓（目录 + 环境）。
+
+#### 4.69.6 下一步
+
+1. **断网场景 e2e**（计划 §六 端到端第 2 条）：本轮已把可行性摸清并记在这里——
+   `testenv.StartEdge` 把 `OPSKEEPER_EDGE_COLLECTOR_MODE` 硬编码为 `off`，
+   需要提成 `EdgeOptions`；共享 frontier 是进程级单例，所以「拔网线」要用
+   **给这条 edge 单独挡一层可控 TCP 代理**（`Cut()` / `Heal()`），不能停容器；
+   manager 侧 `PromIngester` 在 e2e 里是接上的（`OPSKEEPER_PROM_ENABLED=true`），
+   但 `FakeProm` **只服务查询端点、不接 remote write**，所以回放要断言到
+   「WAL 排空」而不是「Prom 收到了」——除非给 `FakeProm` 补一个写入接收端。
+2. **跨架构 e2e**（第 3 条）：e2e 本身没有架构硬编码（`ps -eo pid=,args=` 两家
+   都支持），缺的是 CI runner。仓库 CI 目前只有一个 `ubuntu-24.04` job，
+   **e2e 根本不在 CI 里**。
+3. 阶段 2 剩下的半条（结晶机制生产端接线）与阶段 3 的 manager 拆分见 §4.68.5。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

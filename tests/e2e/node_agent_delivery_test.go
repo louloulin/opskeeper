@@ -94,6 +94,23 @@ func TestTheGatewayServesAStreamToANodeCredential(t *testing.T) {
 // here is precisely whether the real halves fit together, and a test that
 // replaces both halves cannot answer it.
 func TestNodeAgentDelivery(t *testing.T) {
+	// Decoys in the *test runner's* own environment, planted before a single
+	// process is spawned. The harness scrubs credential-shaped variables out
+	// of what it hands a child, and this is what proves it did: without a
+	// decoy, "the node has no provider key" would also be true on a machine
+	// that simply had none to leak, and a test that cannot fail is not a
+	// test. One decoy per arm of the shape rule, because three names that all
+	// happened to be caught by a single earlier filter would prove nothing
+	// about the other two: an exact vendor key, a token only the token arm
+	// catches, and a cloud prefix with no key in its name at all.
+	//
+	// An OpsKeeper-shaped one is deliberately absent from this list. It would
+	// be caught by the configuration-isolation filter that predates the
+	// credential one, so it cannot tell the two rules apart.
+	t.Setenv("OPENAI_API_KEY", "sk-decoy-openai-must-not-reach-a-node")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "anthropic-decoy-must-not-reach-a-node")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "aws-decoy-must-not-reach-a-node")
+
 	frontier := testenv.SharedFrontier(t)
 	env := testenv.Start(t, testenv.WithFrontier(frontier))
 	login := env.LoginAdmin()
@@ -149,6 +166,86 @@ func TestNodeAgentDelivery(t *testing.T) {
 		offenders := scanDirFor(t, edge.ConfigDir, providerKey, access, secret)
 		if len(offenders) > 0 {
 			t.Errorf("node agent scope holds credential material: %s", strings.Join(offenders, ", "))
+		}
+	})
+
+	t.Run("the node's process environment holds no provider credential", func(t *testing.T) {
+		// The plan's wording is "the node's /etc/opskeeper-edge and process
+		// environment are audited and found free of cloud vendor keys". The
+		// subtest above answers the first half. This one answers the second,
+		// which is the half that matters: the node is handed a credential in
+		// its environment by design (its own tunnel pair, expanded from a
+		// reference), so the environment is exactly where a provider key
+		// would be smuggled, and exactly where a directory scan cannot see.
+		//
+		// Three things are asserted, and the first is what keeps the other
+		// two honest: the decoys really are in this process's environment.
+		// If that stopped being true the rest of the subtest would pass
+		// vacuously, so it is checked rather than assumed.
+		for _, decoy := range []struct{ name, value string }{
+			{"OPENAI_API_KEY", "sk-decoy-openai-must-not-reach-a-node"},
+			{"ANTHROPIC_AUTH_TOKEN", "anthropic-decoy-must-not-reach-a-node"},
+			{"AWS_SECRET_ACCESS_KEY", "aws-decoy-must-not-reach-a-node"},
+		} {
+			if got := os.Getenv(decoy.name); got != decoy.value {
+				t.Fatalf("precondition: %s is %q in the test runner, want the decoy %q; "+
+					"without it this subtest cannot fail", decoy.name, got, decoy.value)
+			}
+		}
+
+		env := edge.Environ()
+		for _, needle := range []string{
+			"sk-decoy-openai-must-not-reach-a-node",
+			"anthropic-decoy-must-not-reach-a-node",
+			"aws-decoy-must-not-reach-a-node",
+			"fake-test-key", // the provider key the manager holds
+		} {
+			if offender := envHolding(env, needle); offender != "" {
+				t.Errorf("the node's environment carries %q as %s; a node that holds a provider "+
+					"credential can spend the operator's budget against their account", needle, offender)
+			}
+		}
+
+		// The one credential the node is supposed to have is still there.
+		// A scrub that took the tunnel pair with it would make every later
+		// assertion in this test meaningless, because the node would not be
+		// a node any more.
+		if envHolding(env, access+":"+secret) == "" {
+			t.Error("the node's own tunnel pair is missing from its environment; the harness " +
+				"scrubbed a credential the node is supposed to carry")
+		}
+
+		// Stronger, where the kernel will show it: the running process's own
+		// environment, for the node and for the agent it supervises. Skipped
+		// rather than faked on an OS that will not answer — see LiveEnviron.
+		checked := 0
+		for _, target := range append([]int{edge.PID()}, edge.AgentPIDs(t)...) {
+			if target == 0 {
+				continue
+			}
+			live, ok := testenv.LiveEnviron(target)
+			if !ok {
+				t.Logf("pid %d: this OS will not show another process's environment; "+
+					"the check above stands on what the harness constructed", target)
+				continue
+			}
+			checked++
+			for _, needle := range []string{
+				"sk-decoy-openai-must-not-reach-a-node",
+				"anthropic-decoy-must-not-reach-a-node",
+				"aws-decoy-must-not-reach-a-node",
+				"fake-test-key",
+			} {
+				if offender := envHolding(live, needle); offender != "" {
+					t.Errorf("the live process %d holds %q as %s", target, needle, offender)
+				}
+			}
+		}
+		if checked == 0 {
+			t.Log("no live process environment was readable on this platform; the constructed " +
+				"environment above is the evidence here")
+		} else {
+			t.Logf("read the live environment of %d process(es)", checked)
 		}
 	})
 
@@ -319,6 +416,24 @@ func containsFrame(frames []map[string]any, kind string) bool {
 		}
 	}
 	return false
+}
+
+// envHolding returns the name of the variable whose value contains needle,
+// or "" when none does.
+//
+// It reports the name rather than the value: a failure message that printed
+// the value would put a credential into the test log, which is the one place
+// this repository must never accumulate one.
+func envHolding(env []string, needle string) string {
+	if needle == "" {
+		return ""
+	}
+	for _, kv := range env {
+		if name, value, ok := strings.Cut(kv, "="); ok && strings.Contains(value, needle) {
+			return name
+		}
+	}
+	return ""
 }
 
 // scanDirFor returns the files under root that contain any needle.

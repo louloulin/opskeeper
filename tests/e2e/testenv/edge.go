@@ -45,6 +45,13 @@ type Edge struct {
 	// unpacked.
 	WorkDir string
 
+	// environ is the environment this node process was actually started
+	// with, kept so a test can assert on it. The plan's acceptance
+	// criterion is about the node's *process environment*, and a test that
+	// only reasons about the map it passed in would be asserting on its own
+	// input rather than on the process.
+	environ []string
+
 	cmd     *exec.Cmd
 	logBuf  *bytes.Buffer
 	stopped sync.Once
@@ -225,7 +232,8 @@ func StartEdge(t *testing.T, env *Env, bearer string, opts EdgeOptions) *Edge {
 
 	edge.logBuf = &bytes.Buffer{}
 	cmd := exec.Command(EdgeBinary(t))
-	cmd.Env = mergedEnv(edgeEnv)
+	edge.environ = mergedEnv(edgeEnv)
+	cmd.Env = edge.environ
 	cmd.Stdout = edge.logBuf
 	cmd.Stderr = edge.logBuf
 	if err := cmd.Start(); err != nil {
@@ -263,6 +271,46 @@ func (e *Edge) Logs() string {
 		return ""
 	}
 	return e.logBuf.String()
+}
+
+// PID is the node process's own pid, for checks that have to read the
+// kernel's view of it rather than the harness's.
+func (e *Edge) PID() int {
+	if e.cmd == nil || e.cmd.Process == nil {
+		return 0
+	}
+	return e.cmd.Process.Pid
+}
+
+// Environ returns the environment this node process was started with.
+//
+// It is the harness's own construction, so it answers "what did the node
+// inherit" exactly. For the stronger claim — what the running process
+// actually holds — use LiveEnviron, which is only available where the
+// operating system will show it to us.
+func (e *Edge) Environ() []string {
+	return append([]string(nil), e.environ...)
+}
+
+// LiveEnviron reads a running process's environment from the kernel.
+//
+// It returns ok=false where the OS will not show one process another
+// process's environment: Linux exposes /proc/<pid>/environ, and macOS does
+// not expose it at all — `ps e` is refused for a process you did not
+// exec, which is the correct default and not something to work around. The
+// caller is expected to say so out loud rather than quietly pass, because a
+// skipped check and a passing check must not look alike in the output.
+func LiveEnviron(pid int) (env []string, ok bool) {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
+	if err != nil {
+		return nil, false
+	}
+	for _, kv := range strings.Split(string(raw), "\x00") {
+		if kv != "" {
+			env = append(env, kv)
+		}
+	}
+	return env, len(env) > 0
 }
 
 // AgentPIDs returns the pids of `pig` processes this node started.

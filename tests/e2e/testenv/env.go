@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -572,15 +573,61 @@ func (e *Env) dumpLogs() {
 	e.t.Logf("=== manager logs ===\n%s\n=== end manager logs ===", e.logBuf.String())
 }
 
-// mergedEnv overlays envMap onto os.Environ() so the child inherits the
-// parent's PATH / HOME / proxy settings, then has its OPSKEEPER_* overridden.
+// credentialShapedEnv matches an inherited variable whose *name* says it may
+// be carrying a secret.
+//
+// It is a shape rule rather than a list of vendor names on purpose. PiG
+// resolves a provider credential from a long and growing set of variables —
+// OPENAI_API_KEY, ANTHROPIC_AUTH_TOKEN, HF_TOKEN, AZURE_OPENAI_API_KEY,
+// GEMINI_API_KEY, GOOGLE_APPLICATION_CREDENTIALS and more — and a copy of
+// that list in a test harness is a list that is wrong the day a provider is
+// added. A name rule fails closed instead: a variable that looks like a
+// credential does not reach a child, and the cost of being wrong is a
+// missing environment variable in a test child, not a key on a node.
+//
+// The rule is deliberately broad. Anything a spawned process needs in order
+// to run — PATH, HOME, TMPDIR, LANG, SSH_AUTH_SOCK, TERM — does not match it.
+//
+// "proxy" is in the rule for a reason that has nothing to do with the word
+// proxy: an inherited http_proxy is routinely written as
+// scheme://user:password@host, which is a credential wearing a URL as a
+// disguise. The children here make no proxied calls, so dropping it costs
+// nothing.
+var credentialShapedEnv = regexp.MustCompile(
+	`(?i)(api[_-]?key|secret|token|password|passwd|credential|private[_-]?key|proxy)|^aws_|^google_`)
+
+// mergedEnv builds a child environment: the parent's, minus OpsKeeper's own
+// configuration and minus anything credential-shaped, then envMap laid over
+// the top.
+//
+// The credential half is not hygiene, it is the harness keeping its own
+// promise. The acceptance criterion this repository has to demonstrate is
+// that a node's *process environment* holds no cloud vendor key, and the
+// process that starts the node is a `go test` binary running on whatever
+// machine the developer or CI runner happens to be. Before this rule, a
+// developer with OPENAI_API_KEY exported in their shell produced an e2e run
+// whose node genuinely held a real provider credential — and the test that
+// exists to catch exactly that reported green, because it only ever scanned
+// the node's config directory for the manager's own fake key. The harness
+// was the leak.
+//
+// envMap is applied last and is never scrubbed: the node's tunnel pair and
+// the manager's fake provider key are values the harness chose on purpose,
+// and the manager is exactly the process that is supposed to hold one.
 func mergedEnv(envMap map[string]string) []string {
 	parent := os.Environ()
-	// Strip any OPSKEEPER_* the test runner happens to have set — we want
-	// a clean slate so the test fully controls config.
 	clean := parent[:0]
 	for _, kv := range parent {
-		if len(kv) >= 7 && kv[:7] == "OPSKEEPER_" {
+		name, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		// Configuration isolation: anything the test runner set for
+		// OpsKeeper is dropped so the test fully controls config.
+		if strings.HasPrefix(name, "OPSKEEPER_") {
+			continue
+		}
+		if credentialShapedEnv.MatchString(name) {
 			continue
 		}
 		clean = append(clean, kv)
