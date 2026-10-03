@@ -283,7 +283,7 @@ func (t *CorrelateIncidentTool) InvokableRun(ctx context.Context, argsJSON strin
 
 // queryMetricPanel mirrors Registry.queryMetricPanel.
 func (t *CorrelateIncidentTool) queryMetricPanel(ctx context.Context, expr string, start, end time.Time) ([]metricSeries, error) {
-	step := stepFor(int(end.Sub(start).Seconds()))
+	step := toolcore.StepFor(int(end.Sub(start).Seconds()))
 	res, err := t.promQuery.QueryRange(ctx, expr, start, end, step)
 	if err != nil {
 		return nil, err

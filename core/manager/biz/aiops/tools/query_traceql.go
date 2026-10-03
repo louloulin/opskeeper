@@ -178,12 +178,3 @@ func (r *Registry) executeQueryTraceQL(ctx context.Context, args json.RawMessage
 	}
 	return ExecuteResult{ResultJSON: out}, nil
 }
-
-// TraceQuerier is the narrow surface the query_traceql executor needs from
-// the tracequery client. Declared here so tests can inject a fake.
-//
-// NOTE: this interface is what r.traceQuery is typed as. The concrete
-// *tracequery.Client satisfies it.
-type TraceQuerier interface {
-	SearchTraces(ctx context.Context, opts tracequery.SearchOptions) (*tracequery.SearchResult, error)
-}

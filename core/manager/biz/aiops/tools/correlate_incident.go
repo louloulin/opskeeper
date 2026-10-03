@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"math"
 	"sort"
@@ -376,7 +377,7 @@ func wrapPerEdge(expr string, edgeID *uint64) string {
 // and values as strings (Prom's wire format) so the LLM can reason without
 // secondary float parsing.
 func (r *Registry) queryMetricPanel(ctx context.Context, expr string, edgeID *uint64, start, end time.Time) ([]metricSeries, error) {
-	step := stepFor(int(end.Sub(start).Seconds()))
+	step := toolcore.StepFor(int(end.Sub(start).Seconds()))
 	res, err := r.promQuery.QueryRange(ctx, expr, start, end, step)
 	if err != nil {
 		return nil, err

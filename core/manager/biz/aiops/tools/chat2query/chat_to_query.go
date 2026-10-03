@@ -1,4 +1,4 @@
-package tools
+package chat2query
 
 import (
 	"context"

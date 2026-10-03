@@ -1,7 +1,8 @@
-package tools
+package chat2query
 
 import (
 	"context"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"strings"
 )
 
@@ -15,9 +16,9 @@ import (
 // is helpful but not required) and avoids cascading failures from a
 // misconfigured Prom into chat_to_query.
 type promCatalogFetcher struct {
-	prom  PromQuerier
-	log   LogQuerier
-	trace TraceQuerier
+	prom  toolcore.PromQuerier
+	log   toolcore.LogQuerier
+	trace toolcore.TraceQuerier
 }
 
 // FetchPromQLContext returns a short string listing the top metric
@@ -63,3 +64,13 @@ func (f *promCatalogFetcher) FetchTraceQLContext(_ context.Context, _ string) (s
 
 // Compile-time guard that promCatalogFetcher satisfies ContextFetcher.
 var _ ContextFetcher = (*promCatalogFetcher)(nil)
+
+// NewPromCatalogFetcher builds the production ContextFetcher from the
+// three queriers. It is exported for the same reason it exists: the
+// wiring in registry_basetool needs to hand a translator a fetcher, and
+// a type it cannot name is a type it cannot construct. The fields stay
+// unexported because picking which backend answers which dialect is this
+// package's business, not the wiring's.
+func NewPromCatalogFetcher(prom toolcore.PromQuerier, log toolcore.LogQuerier, trace toolcore.TraceQuerier) *promCatalogFetcher {
+	return &promCatalogFetcher{prom: prom, log: log, trace: trace}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"time"
 
@@ -62,7 +63,7 @@ func (t *QueryPromQLTool) Info(_ context.Context) (*basetool.ToolInfo, error) {
 // InvokableRun parses argsJSON, runs the PromQL range query, and
 // marshals the response back to a JSON string. The input/output shape
 // matches the closure executor (executeQueryPromQL in query_promql.go)
-// exactly — they consult the same QueryPromQLArgs / stepFor /
+// exactly — they consult the same QueryPromQLArgs / toolcore.StepFor /
 // queryPromqlCallTimeout — so the two paths return identical bytes for
 // equivalent inputs.
 //
@@ -85,13 +86,13 @@ func (t *QueryPromQLTool) InvokableRun(ctx context.Context, argsJSON string, _ .
 	if in.LookbackSeconds <= 0 {
 		in.LookbackSeconds = 300
 	}
-	if in.LookbackSeconds > maxQueryPromQLLookbackSeconds {
-		in.LookbackSeconds = maxQueryPromQLLookbackSeconds
+	if in.LookbackSeconds > toolcore.MaxQueryPromQLLookbackSeconds {
+		in.LookbackSeconds = toolcore.MaxQueryPromQLLookbackSeconds
 	}
 
 	end := time.Now()
 	start := end.Add(-time.Duration(in.LookbackSeconds) * time.Second)
-	step := stepFor(in.LookbackSeconds)
+	step := toolcore.StepFor(in.LookbackSeconds)
 
 	// Mirror the closure executor's per-call timeout so behaviour is
 	// identical when this tool is wired without the decorators.Timeout

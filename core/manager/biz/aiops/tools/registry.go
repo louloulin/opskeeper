@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/chat2query"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
@@ -120,11 +121,11 @@ type Registry struct {
 	// llmClient is the chat_to_query translator's LLM dependency. nil-safe:
 	// when nil the chat_to_query tool isn't registered. Wired from
 	// cmd/main.go after the LLM client exists.
-	llmClient LLMClient
+	llmClient chat2query.LLMClient
 	// tplStore feeds the chat_to_query translation cache. nil-safe.
-	tplStore TemplateSink
+	tplStore chat2query.TemplateSink
 	// chatToQueryExec is the prom/log/trace client fan-out executor.
-	chatToQueryExec Executor
+	chatToQueryExec chat2query.Executor
 
 	// externalBaseTools are composition-root adapters for capabilities owned
 	// by another bounded context. cmd/opskeeper owns the conversion.
@@ -149,15 +150,15 @@ func (r *Registry) SetPageStore(p PageStore) { r.pageStore = p }
 
 // SetChatToQueryLLM wires the LLM client consumed by chat_to_query.
 // Call from cmd/main.go once the LLM client is constructed. nil-safe.
-func (r *Registry) SetChatToQueryLLM(c LLMClient) { r.llmClient = c }
+func (r *Registry) SetChatToQueryLLM(c chat2query.LLMClient) { r.llmClient = c }
 
 // SetChatToQueryTemplateStore wires the query-template cache consumed
 // by chat_to_query. nil-safe.
-func (r *Registry) SetChatToQueryTemplateStore(s TemplateSink) { r.tplStore = s }
+func (r *Registry) SetChatToQueryTemplateStore(s chat2query.TemplateSink) { r.tplStore = s }
 
 // SetChatToQueryExec wires the prom/log/trace executor fan-out for
 // chat_to_query. nil-safe.
-func (r *Registry) SetChatToQueryExec(e Executor) { r.chatToQueryExec = e }
+func (r *Registry) SetChatToQueryExec(e chat2query.Executor) { r.chatToQueryExec = e }
 
 // AppendExternalBaseTool adds a tool assembled by the composition root.
 // Call it during startup before BuildBaseTools.

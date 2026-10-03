@@ -1,8 +1,9 @@
-package tools
+package chat2query
 
 import (
 	"context"
 	"encoding/json"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
@@ -15,9 +16,9 @@ import (
 // are passed by the manager's main.go wiring; nil is OK for signals
 // the operator hasn't enabled (in which case Run returns an error).
 type QueryExecutor struct {
-	Prom  PromQuerier
-	Logs  LogQuerier
-	Trace TraceQuerier
+	Prom  toolcore.PromQuerier
+	Logs  toolcore.LogQuerier
+	Trace toolcore.TraceQuerier
 }
 
 // Run executes the query against the appropriate backend and returns
@@ -32,7 +33,7 @@ func (e *QueryExecutor) Run(ctx context.Context, signal, expr string, lookback t
 		}
 		end := time.Now()
 		start := end.Add(-lookback)
-		step := stepFor(int(lookback.Seconds()))
+		step := toolcore.StepFor(int(lookback.Seconds()))
 		res, err := e.Prom.QueryRange(ctx, expr, start, end, step)
 		if err != nil {
 			return nil, err

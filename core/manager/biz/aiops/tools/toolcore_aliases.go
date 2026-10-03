@@ -18,6 +18,8 @@ type (
 	Tool          = toolcore.Tool
 	ToolBag       = toolcore.ToolBag
 	PromQuerier   = toolcore.PromQuerier
+	LogQuerier    = toolcore.LogQuerier
+	TraceQuerier  = toolcore.TraceQuerier
 )
 
 // Functions and values cannot be aliased, only re-bound. These are the

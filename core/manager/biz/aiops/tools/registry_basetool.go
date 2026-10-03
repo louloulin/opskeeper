@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/chat2query"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	"os"
@@ -249,13 +250,13 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	// silently omitted — operators can disable NL→Query entirely by
 	// not constructing the LLM client.
 	if r.llmClient != nil {
-		translator := NewTranslator(r.llmClient, "", &promCatalogFetcher{prom: r.promQuery, log: r.logQuery, trace: r.traceQuery})
-		validator := NewValidator(nil)
+		translator := chat2query.NewTranslator(r.llmClient, "", chat2query.NewPromCatalogFetcher(r.promQuery, r.logQuery, r.traceQuery))
+		validator := chat2query.NewValidator(nil)
 		exec := r.chatToQueryExec
 		if exec == nil {
-			exec = &QueryExecutor{Prom: r.promQuery, Logs: r.logQuery, Trace: r.traceQuery}
+			exec = &chat2query.QueryExecutor{Prom: r.promQuery, Logs: r.logQuery, Trace: r.traceQuery}
 		}
-		out = append(out, NewChatToQueryTool(translator, validator, r.tplStore, exec, r.log))
+		out = append(out, chat2query.NewChatToQueryTool(translator, validator, r.tplStore, exec, r.log))
 	}
 
 	out = append(out, r.externalBaseTools...)

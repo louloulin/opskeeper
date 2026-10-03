@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"time"
 )
 
@@ -46,34 +47,6 @@ type QueryPromQLArgs struct {
 // rationale as the other tool timeouts.
 const queryPromqlCallTimeout = 30 * time.Second
 
-const maxQueryPromQLLookbackSeconds = 7 * 24 * 3600
-
-// stepFor picks a sensible step size for a given lookback. The math
-// targets ~30 datapoints per range, capped at the Prom defaults.
-//   - <= 5min   -> 15s
-//   - <= 1h     -> 1m
-//   - <= 6h     -> 5m
-//   - <= 24h    -> 15m
-//   - <= 7d     -> 1h
-//   - else      -> 1h
-//
-// The model can override lookback but not step; that keeps the cost
-// envelope predictable.
-func stepFor(lookbackSeconds int) time.Duration {
-	switch {
-	case lookbackSeconds <= 300:
-		return 15 * time.Second
-	case lookbackSeconds <= 3600:
-		return time.Minute
-	case lookbackSeconds <= 6*3600:
-		return 5 * time.Minute
-	case lookbackSeconds <= 24*3600:
-		return 15 * time.Minute
-	default:
-		return time.Hour
-	}
-}
-
 // executeQueryPromQL runs the PromQL range query and hands the raw Prom
 // response back to the LLM via ResultJSON. EdgeID is intentionally left
 // nil — query_promql is not bound to a specific edge.
@@ -93,13 +66,13 @@ func (r *Registry) executeQueryPromQL(ctx context.Context, args json.RawMessage)
 	if in.LookbackSeconds <= 0 {
 		in.LookbackSeconds = 300 // 5 min
 	}
-	if in.LookbackSeconds > maxQueryPromQLLookbackSeconds {
-		in.LookbackSeconds = maxQueryPromQLLookbackSeconds
+	if in.LookbackSeconds > toolcore.MaxQueryPromQLLookbackSeconds {
+		in.LookbackSeconds = toolcore.MaxQueryPromQLLookbackSeconds
 	}
 
 	end := time.Now()
 	start := end.Add(-time.Duration(in.LookbackSeconds) * time.Second)
-	step := stepFor(in.LookbackSeconds)
+	step := toolcore.StepFor(in.LookbackSeconds)
 
 	callCtx, cancel := context.WithTimeout(ctx, queryPromqlCallTimeout)
 	defer cancel()

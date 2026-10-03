@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"sync"
 	"testing"
@@ -153,8 +154,8 @@ func TestStepFor(t *testing.T) {
 		{48 * 3600, time.Hour},
 	}
 	for _, c := range cases {
-		if got := stepFor(c.lb); got != c.step {
-			t.Errorf("stepFor(%d) = %v, want %v", c.lb, got, c.step)
+		if got := toolcore.StepFor(c.lb); got != c.step {
+			t.Errorf("toolcore.StepFor(%d) = %v, want %v", c.lb, got, c.step)
 		}
 	}
 }
