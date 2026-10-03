@@ -8621,6 +8621,147 @@ the opskeeper-gate and opskeeper-sre-middleware broker clients have diverged
 加权   = 84.0% 不变
 ```
 
+### 4.77 决策 140：把 §4.67 的「这是上游问题」从断言变成证明——我试了绕行路线，PiG 自己的解析器把它堵死了
+
+§4.76 留下的那条待办是「审计回传 e2e」。动手写它之前先问了那个决定性的问题：
+**节点的模型到底看得到工具吗？**
+
+答案：**一个都看不到**，而且这不是新发现——是 §4.67 记了两刀的那个红灯。跑一下：
+
+```
+make pig-tool-scoping-check
+  TestTheNodeProfileActuallyOffersTheToolsItsPackagesDeclare
+  the node agent was offered 0 of the 18 tools its admitted package declares.
+  missing: expand_topology, find_outlier_edges, find_topology_node, get_topology,
+           host_dmesg, host_grep_file, host_lsof, host_mtr, host_netns_inspect,
+           host_probe_dns, host_probe_http, host_probe_tcp, host_read_journal,
+           host_sosreport, host_strace, host_tail_file, host_traceroute,
+           query_alert_rules
+```
+
+**0 / 18。** 决策 138 新加的 `host_autonomy_run` 也在这个名单外——它会一样地消失。
+
+这一条的意义不在于「又红了一次」，而在于**它把整条节点工具链的交付状态钉死了**：
+
+- 决策 137 打开了宿主的闸门（自治请求能到达仲裁器）
+- 决策 138 让模型看得见这个工具（扩展编译、加载、在 `pig status` 里健康）
+- 而**模型看不见任何工具**，因为 PiG 在**上一层**把它们全减掉了
+
+三刀都在往前推，而真正拦住交付的是一条从来没人动的上游代码。
+
+#### 4.77.1 §4.67 说的「这是上游」现在有了确切坐标
+
+读 PiG 源码，缺陷在 `coding/piglet/main.go` 的 `convertTools`：
+
+```go
+source := ""
+switch s := t.SourceInfo.(type) {
+case string:
+    source = s
+case map[string]any:
+    if name, ok := s["name"].(string); ok {   // 键叫 path/source/scope/origin，没有 name
+        source = name
+    }
+}
+if source == "" {
+    source = "builtin"
+}
+```
+
+而 `t.SourceInfo` 的静态类型是 **struct**（`extension.SourceInfo{Path, Source, Scope, Origin, BaseDir}`，
+见 `coding/extension/extension.go:37`），由 `session_tool_registry.go:284` 以
+`entry.registration.SourceInfo` 填入。所以那个 type switch **两个分支都不会命中**，
+`source` 恒为 `""`，于是**每个工具都被判成 `builtin`**。
+
+`coding/piglet/scope.go:31-36` 里，`source == "builtin"` 的工具走
+`toolAllowed(piglet.BuiltinTools, tool.Name)`——也就是本仓库 profile 里的
+`tools: []`。**所以那个空列表减掉的不是宿主自己的 shell，是全部。**
+
+一行修复（本仓库无权改，在 PiG 那边）：
+
+```go
+source := t.SourceInfo.Source
+if source == "" {
+    source = t.Source
+}
+if source == "" {
+    source = "builtin"
+}
+```
+
+改完之后插件工具的 `source` 是扩展名，`scope.go` 走 `default:` 分支，
+`extensionTools[source]` 因为 profile 没点名任何扩展而 `toolAllowed(nil, …)` 为 true
+——**插件工具留下，shell 仍然被 `tools: []` 减掉**，正是 §4.67 原先设计的形状。
+
+#### 4.77.2 我试了绕行路线，并且它被 PiG 自己的解析器否决了
+
+本条的另一半是**试过在 opskeeper 侧修**。理由看起来很强：`scope.go` 对
+`source=="builtin"` 的工具查的是 `BuiltinTools`，而 `BuiltinTools` 就是 profile 的
+`tools:` 字段——那么把**已准入清单里的工具名**写进 `tools:`，它们就会被保留。
+
+这条路线在**纸面上**还更好：`tools: []` 是从一个「本来就太多」的默认值里做减法，
+而一份完整列表是**这个节点该给模型看的全部**——它和闸门 enforce 的那条不变量是同一条。
+
+我把它实现了一遍（profile 的 `tools:` 按清单并集渲染、按 manifest 准入清单生成、
+清单声明了 PiG 内置工具名就拒绝启动以免把 shell 交回模型、11 条测试全绿），
+然后被 PiG 的解析器挡住：
+
+```
+PiG refused the profile: tools[0] names unknown built-in tool "get_topology"
+```
+
+`coding/piglet/types.go:549-551` 对 `tools:` 的每一项做内置工具白名单校验。
+**`tools:` 只能写 PiG 的内置工具名**，它不是一张自由的白名单。
+
+于是这条路死了，而且死得干净：
+
+- 写 `tools: []` → 插件工具被一并减掉（现状）
+- 写 `tools: [<插件名>]` → **PiG 拒绝这个 profile**，节点起不来（比现状更糟）
+- 不带 `--piglet` → shell 回来了
+
+**三条路都试过了，opskeeper 侧没有第四个杠杆。** §4.67 那句「The fix is to read
+"source"; it is in PiG, not here」从**断言**升级为**证明**——区别在于，现在仓库里
+记着一条被尝试过并被证据否决的替代方案，而不是只有一句结论。
+
+（这一轮的代码已全部回退，工作区回到 09abede 的状态；实现留在
+`git stash` 里（`decision-139-probe-profile-rewrite`），等 PiG 修好之后可以直接捡回来
+——它就是修好之后节点 profile 该有的样子。）
+
+#### 4.77.3 顺带记下两个环境事实（都不是代码问题，但都挡了路）
+
+- **磁盘满**：460 GB 的卷只剩 749 MB。症状有两个：`go build` 链接器报
+  `/var/folders/… cannot create`，以及 colima 的 containerd
+  `meta.db: input/output error`。清理 Go 构建缓存后回到 2.6 GB 可用，但**构建期间
+  还在被本进程之外的东西吃掉**（2.6 GB → 1.3 GB），所以全量 `go build ./...` 在这台
+  机器上目前跑不完，只能按包编译。
+- **e2e 跑不了**：`tests/e2e` 需要 frontier broker 容器，而 `docker pull` 报
+  containerd 元数据库 I/O 错误。修它要重启 colima，**那会停掉正在运行的
+  `dataflare-*` 容器**，所以本刀没有动。
+
+因此「审计回传 e2e」这条剧本本刀**没有写成**：它需要的夹具已经查清（见
+§4.74.7 的零件清单 + §4.76 的包安装方式），但在 PiG 修好之前，**它写出来也一定是红的**——
+红在一个与被测代码无关的上游缺陷上。**一条已知会红且原因在别处的 e2e 不该被提交**，
+那只会训练所有人忽略 e2e 目录里的红（`pig-tool-scoping-check` 已经因为同样的理由被
+排除在 `make test` 之外）。
+
+#### 4.77.4 台账：84.0% 不动，而且这一条说明了「不动」的正确含义
+
+本刀没有改任何交付能力——它把一个**一直存在但没被量化**的阻塞从「一个红着的测试」
+变成「整条节点工具链 0/18，且已证明无法在本仓库内绕过」。
+
+```
+阶段 3 = 79.3% 不变
+加权   = 84.0% 不变
+```
+
+值得说的是**为什么这个 84.0% 高估了节点侧的真实状态**。第一把尺子（§六 上半张表）的
+D 阶段记的是 95%，判据是「B1/B2/B3 全部闭环（18 + 12 + 53 + 5 个工具）」——那些工具
+**都被声明、被打包、都被单元测试覆盖**，但**在节点上一个都没到达模型**。
+
+按本表「判据是验收闸门」的口径，那些闸门是绿的，所以不给 84.0% 扣分；按「节点上能不能
+用」的口径，节点的工具链今天是 0。**两把尺子都存在，而它们在这里分岔了。** 这不是本
+条造成的偏差，是本条第一次把它量出来。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
