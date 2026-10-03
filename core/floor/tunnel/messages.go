@@ -589,6 +589,18 @@ type ChangeEventWire struct {
 	Timestamp time.Time         `json:"timestamp"`
 	Severity  string            `json:"severity"` // info / notice / warn
 	Labels    map[string]string `json:"labels,omitempty"`
+
+	// Seq is the write-ahead log's row number for this event, which is the
+	// only thing that can tell a replay from a new arrival. A change event
+	// has no natural key: two genuine systemd restarts of the same unit in
+	// the same second can agree on every other field, so deduping on
+	// content would delete real events rather than duplicates.
+	//
+	// 0 means "this node sent the event without logging it first" — a node
+	// with no WAL, or one whose write failed. The center stores those
+	// without deduplicating, because it cannot. It is safe as a sentinel
+	// because the log's sequence starts at 1.
+	Seq uint64 `json:"seq,omitempty"`
 }
 
 // PushChangeEventsRequest is one batched push from the edge.

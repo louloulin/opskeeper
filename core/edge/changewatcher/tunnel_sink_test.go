@@ -18,6 +18,13 @@ type fakeClient struct {
 	err      error
 	callsCh  chan *tunnel.PushChangeEventsRequest
 	failNext atomic.Bool
+
+	// lostAck makes a call arrive at the center and then fail on the way
+	// back. That is not a contrived failure: it is the one that makes
+	// at-least-once logs necessary in the first place, and it is the only
+	// one a plain failNext cannot produce — that one keeps the event on
+	// disk without ever having reached anybody.
+	lostAck atomic.Bool
 }
 
 func newFakeClient() *fakeClient {
@@ -50,6 +57,9 @@ func (f *fakeClient) Call(ctx context.Context, method string, req, resp any) err
 	select {
 	case f.callsCh <- &cp:
 	default:
+	}
+	if f.lostAck.Swap(false) {
+		return errors.New("fake: the center took it and the answer was lost")
 	}
 	if r, ok := resp.(*tunnel.PushChangeEventsResponse); ok {
 		r.Accepted = uint32(len(in.Events))

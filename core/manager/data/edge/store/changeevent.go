@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
@@ -30,6 +31,13 @@ func NewChangeEventRepo(db *gorm.DB) *ChangeEventRepo {
 // standing up SQLite.
 type ChangeEventRepoIface interface {
 	BatchInsert(ctx context.Context, rows []edgemodel.ChangeEventRow) error
+
+	// StoredSeqs reports which of seqs the edge already has rows for. It is
+	// the read half of the replay contract: BatchInsert would refuse a
+	// duplicate anyway, and refusing is the wrong answer for a log that is
+	// at-least-once by design, so the caller filters first and the
+	// constraint stays as the backstop for the race in between.
+	StoredSeqs(ctx context.Context, edgeID uint64, seqs []uint64) ([]uint64, error)
 	ListByWindow(ctx context.Context, from, to time.Time, kind string, limit int) ([]edgemodel.ChangeEventRow, error)
 	ListByEdge(ctx context.Context, edgeID uint64, from, to time.Time, limit int) ([]edgemodel.ChangeEventRow, error)
 	DeleteOlderThan(ctx context.Context, ts time.Time) (int64, error)
@@ -54,7 +62,34 @@ func (r *ChangeEventRepo) BatchInsert(ctx context.Context, rows []edgemodel.Chan
 			rows[i].CreatedAt = now
 		}
 	}
-	return r.db.WithContext(ctx).CreateInBatches(rows, 100).Error
+	// ON CONFLICT DO NOTHING on (edge_id, seq), not a bare form, for the
+	// same reason the metric table's is named: a bare form would also
+	// swallow a collision on some other unique key and report success for a
+	// row that was never stored. Rows whose Seq is NULL are inserted —
+	// which is every event that was not replayed, and the reason this
+	// table has no natural key to fall back on.
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "edge_id"}, {Name: "seq"}},
+		DoNothing: true,
+	}).CreateInBatches(rows, 100).Error
+}
+
+// StoredSeqs implements ChangeEventRepoIface. An empty or all-zero input is
+// a no-op: a node that never replayed anything has nothing to ask about, and
+// turning that into a query would put a round trip in the path of every
+// ordinary push.
+func (r *ChangeEventRepo) StoredSeqs(ctx context.Context, edgeID uint64, seqs []uint64) ([]uint64, error) {
+	if edgeID == 0 || len(seqs) == 0 {
+		return nil, nil
+	}
+	var found []uint64
+	if err := r.db.WithContext(ctx).
+		Model(&edgemodel.ChangeEventRow{}).
+		Where("edge_id = ? AND seq IN ?", edgeID, seqs).
+		Pluck("seq", &found).Error; err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
 // ListByWindow returns events in [from, to] (inclusive), filtered by

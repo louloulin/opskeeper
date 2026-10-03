@@ -283,15 +283,36 @@ func (s *Spool) Path() string { return s.path }
 // because of it converts an availability problem into a correctness one.
 // The row is still written when there is room for it, and the cap keeps
 // "when there is room" true most of the time.
-func (s *Spool) Record(_ context.Context, class Class, payload any) error {
+//
+// Callers that need to name this row to somebody else want RecordSeq.
+func (s *Spool) Record(ctx context.Context, class Class, payload any) error {
+	_, err := s.RecordSeq(ctx, class, payload)
+	return err
+}
+
+// RecordSeq appends one row and reports the sequence number the envelope was
+// stamped with.
+//
+// The number matters to exactly one caller — the change-event sink, which
+// sends the same row again after a lost ack and needs the center to be able
+// to recognise it. That number is only useful if the sender knows it at the
+// moment of the write, which is why this is a second entry point rather than
+// a changed signature on Record: the other twenty-odd callers all write
+// `if err := s.Record(...); err != nil`, and making them all unpack a
+// sequence they do not use is how a useful return value becomes one nobody
+// reads.
+//
+// The sequence is rolled back on a failed write, so a gap in the numbers
+// means a row really was lost rather than an attempt that failed.
+func (s *Spool) RecordSeq(_ context.Context, class Class, payload any) (uint64, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("spool: encode a %s row: %w", class, err)
+		return 0, fmt.Errorf("spool: encode a %s row: %w", class, err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.f == nil {
-		return ErrClosed
+		return 0, ErrClosed
 	}
 	s.seq++
 	line, err := json.Marshal(envelope{Class: class, At: s.now().UTC(), Seq: s.seq, Payload: body})
@@ -301,13 +322,14 @@ func (s *Spool) Record(_ context.Context, class Class, payload any) error {
 		// thing. The sequence is rolled back anyway so a failed record
 		// does not leave a gap that looks like a lost row.
 		s.seq--
-		return fmt.Errorf("spool: frame a %s row: %w", class, err)
+		return 0, fmt.Errorf("spool: frame a %s row: %w", class, err)
 	}
 	line = append(line, '\n')
 	if _, err := s.f.Write(line); err != nil {
 		s.seq--
-		return fmt.Errorf("spool: append a %s row to %s: %w", class, s.path, err)
+		return 0, fmt.Errorf("spool: append a %s row to %s: %w", class, s.path, err)
 	}
+	stamped := s.seq
 	s.size += int64(len(line))
 	s.stats.Written++
 	s.stats.WrittenByClass[class]++
@@ -324,7 +346,10 @@ func (s *Spool) Record(_ context.Context, class Class, payload any) error {
 	case s.ages && now.Sub(s.lastSweep) >= s.sweep:
 		_ = s.compactLocked()
 	}
-	return nil
+	// stamped, not s.seq: compaction above can rewrite the file, and the
+	// number this row was *written* with is the one a replay will carry
+	// back, whatever happened to its neighbours afterwards.
+	return stamped, nil
 }
 
 // Peek returns up to n of the oldest rows without removing them.

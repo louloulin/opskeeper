@@ -493,7 +493,11 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 					rejected++
 					continue
 				}
-				rows = append(rows, changeeventbiz.ChangeEventRow{
+				// seq 0 is "this node never logged it", and the row stores
+				// NULL for that rather than 0. It has to be NULL: a unique
+				// index over (edge_id, seq) with 0 in it would make every
+				// ordinary event on a node collide with every other one.
+				row := changeeventbiz.ChangeEventRow{
 					EdgeID:    canonicalEdgeID,
 					Source:    e.Source,
 					Kind:      e.Kind,
@@ -502,7 +506,12 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 					Timestamp: e.Timestamp,
 					Severity:  e.Severity,
 					Labels:    changeeventbiz.MarshalLabels(e.Labels),
-				})
+				}
+				if e.Seq != 0 {
+					seq := e.Seq
+					row.Seq = &seq
+				}
+				rows = append(rows, row)
 			}
 			accepted, err := w.ChangeEventUC.BatchInsert(rpcCtx, rows)
 			if err != nil {

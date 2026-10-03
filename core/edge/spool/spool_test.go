@@ -814,3 +814,98 @@ func TestTheFloorYieldsToTheCap(t *testing.T) {
 		t.Error("the newest row is not the newest: compaction dropped the wrong end")
 	}
 }
+
+// TestRecordSeqHandsBackTheNumberTheRowWasStampedWith is the contract the
+// change-event sink depends on: the number it is told must be the number on
+// disk, because that is the number a replay will carry back.
+func TestRecordSeqHandsBackTheNumberTheRowWasStampedWith(t *testing.T) {
+	s, _ := newSpool(t, Options{})
+	ctx := context.Background()
+
+	var got []uint64
+	for i := 0; i < 3; i++ {
+		seq, err := s.RecordSeq(ctx, "event", map[string]int{"i": i})
+		if err != nil {
+			t.Fatalf("RecordSeq %d: %v", i, err)
+		}
+		got = append(got, seq)
+	}
+	for i, seq := range got {
+		if seq != uint64(i+1) {
+			t.Errorf("RecordSeq call %d returned %d, want %d", i, seq, i+1)
+		}
+	}
+
+	rows, err := s.Peek(0)
+	if err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if len(rows) != len(got) {
+		t.Fatalf("stored %d rows, want %d", len(rows), len(got))
+	}
+	for i, r := range rows {
+		if r.Seq != got[i] {
+			t.Errorf("row %d carries seq %d but RecordSeq said %d: a replay would be unrecognisable", i, r.Seq, got[i])
+		}
+	}
+}
+
+// TestTheSequenceDoesNotRestartAtOne pins the property the manager's
+// (edge_id, seq) unique index rests on across a restart. Seq resumes from
+// the highest value in the file, so a node that restarts mid-outage does not
+// start handing out numbers the center has already seen — which would look
+// exactly like a replay and get the node's new events silently dropped.
+func TestTheSequenceDoesNotRestartAtOne(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "spool", "rows.jsonl")
+	ctx := context.Background()
+
+	first, err := Open(Options{Path: path})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		if _, err := first.RecordSeq(ctx, "event", map[string]int{"i": i}); err != nil {
+			t.Fatalf("RecordSeq: %v", err)
+		}
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	second, err := Open(Options{Path: path})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer second.Close()
+	seq, err := second.RecordSeq(ctx, "event", map[string]int{"i": 99})
+	if err != nil {
+		t.Fatalf("RecordSeq after reopen: %v", err)
+	}
+	if seq != 5 {
+		t.Fatalf("after a reopen the first sequence is %d, want 5: the center would treat it as a replay", seq)
+	}
+}
+
+// TestAFailedWriteDoesNotConsumeASequenceNumber: a gap in the numbers reads
+// as a lost row to anyone auditing the log, and RecordSeq's whole value is
+// that the number it returns is the number on disk.
+func TestAFailedWriteDoesNotConsumeASequenceNumber(t *testing.T) {
+	s, _ := newSpool(t, Options{})
+	ctx := context.Background()
+
+	first, err := s.RecordSeq(ctx, "event", map[string]int{"i": 1})
+	if err != nil {
+		t.Fatalf("first RecordSeq: %v", err)
+	}
+	// A payload json cannot encode fails after the counter would have moved.
+	if _, err := s.RecordSeq(ctx, "event", make(chan int)); err == nil {
+		t.Fatal("recording an unencodable payload reported success")
+	}
+	next, err := s.RecordSeq(ctx, "event", map[string]int{"i": 2})
+	if err != nil {
+		t.Fatalf("third RecordSeq: %v", err)
+	}
+	if next != first+1 {
+		t.Errorf("the failed write consumed a number: %d then %d, want %d then %d", first, next, first, first+1)
+	}
+}

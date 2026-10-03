@@ -220,6 +220,7 @@ func RegisterManagerMetrics(reg *prometheus.Registry, log *slog.Logger) {
 	registerChangeEventMetrics()
 	ChangeEventsPushedTotal = registerOrExistingCounterVec(registerer, ChangeEventsPushedTotal, log)
 	ChangeEventsInsertedTotal = registerOrExistingCounterVec(registerer, ChangeEventsInsertedTotal, log)
+	ChangeEventsDedupedTotal = registerOrExistingCounter(registerer, ChangeEventsDedupedTotal, log, "change_events_deduped_total")
 	ChangeEventsQueryDuration = registerOrExistingHistogramVec(registerer, ChangeEventsQueryDuration, log)
 
 	// ---- ADR-026 self-obs ------------------------------------------------

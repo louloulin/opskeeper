@@ -42,18 +42,98 @@ func (u *Usecase) BatchInsert(ctx context.Context, events []ChangeEventRow) (int
 	if len(events) == 0 {
 		return 0, nil
 	}
-	if err := u.repo.BatchInsert(ctx, events); err != nil {
-		u.logger.Warn("changeevent: batch insert failed",
-			slog.Int("batch", len(events)),
-			slog.String("err", err.Error()))
-		return 0, err
+	fresh, duplicates := u.splitReplays(ctx, events)
+	if len(fresh) > 0 {
+		if err := u.repo.BatchInsert(ctx, fresh); err != nil {
+			u.logger.Warn("changeevent: batch insert failed",
+				slog.Int("batch", len(fresh)),
+				slog.Int("deduped", duplicates),
+				slog.String("err", err.Error()))
+			return 0, err
+		}
 	}
 	if prom.ChangeEventsInsertedTotal != nil {
-		for _, e := range events {
+		for _, e := range fresh {
 			prom.ChangeEventsInsertedTotal.WithLabelValues(e.Kind).Inc()
 		}
 	}
-	return len(events), nil
+	if duplicates > 0 && prom.ChangeEventsDedupedTotal != nil {
+		prom.ChangeEventsDedupedTotal.Add(float64(duplicates))
+	}
+	return len(fresh), nil
+}
+
+// splitReplays separates events the center already has from events it does
+// not, by the node's write-ahead log sequence.
+//
+// It reports only the count of new rows because that is the only number the
+// node can act on: a replayed event is already stored, so acknowledging it
+// is correct and ignoring it is the right thing to do. The previous
+// implementation returned len(events) unconditionally, which meant a node
+// that replayed a thousand events after a reconnect was told it had a
+// thousand fresh ones — and the per-kind insert counter counted them all,
+// so a flapping link looked exactly like a burst of activity.
+//
+// A deduped event is not an error and does not make the batch fail. That is
+// the whole point of the log: it is at-least-once, so "I have seen this one
+// before" is the expected answer for every row in a replay.
+func (u *Usecase) splitReplays(ctx context.Context, events []ChangeEventRow) (fresh []ChangeEventRow, duplicates int) {
+	seen := make(map[uint64]bool)
+	var want []uint64
+	for i := range events {
+		if events[i].Seq == nil {
+			continue // never replayed: nothing to compare, nothing to drop
+		}
+		if !seen[*events[i].Seq] {
+			seen[*events[i].Seq] = true
+			want = append(want, *events[i].Seq)
+		}
+	}
+	if len(want) == 0 {
+		return events, 0
+	}
+	// A batch can only be for one edge — the handler resolves it from the
+	// authenticated transport — but ask rather than assume, because a batch
+	// that somehow named two would be exactly the case where deduping on
+	// the wrong edge's rows would drop real events.
+	edgeID := events[0].EdgeID
+	for i := range events {
+		if events[i].EdgeID != edgeID {
+			u.logger.Warn("changeevent: batch mixes edges; storing it unfiltered",
+				slog.Uint64("edge_id", edgeID),
+				slog.Uint64("other_edge_id", events[i].EdgeID))
+			return events, 0
+		}
+	}
+	stored, err := u.repo.StoredSeqs(ctx, edgeID, want)
+	if err != nil {
+		// A lookup that fails must not turn into a silent loss, and it must
+		// not turn into a silent duplicate store either. Storing unfiltered
+		// is the safe direction: the unique index makes a repeat a no-op
+		// at the database, so the cost of guessing wrong here is at most a
+		// counter that over-reads by one batch.
+		u.logger.Warn("changeevent: could not look up replayed sequences; storing unfiltered",
+			slog.Uint64("edge_id", edgeID),
+			slog.Int("batch", len(events)),
+			slog.String("err", err.Error()))
+		return events, 0
+	}
+	if len(stored) == 0 {
+		return events, 0
+	}
+	have := make(map[uint64]bool, len(stored))
+	for _, seq := range stored {
+		have[seq] = true
+	}
+	fresh = make([]ChangeEventRow, 0, len(events))
+	for _, e := range events {
+		if e.Seq != nil && have[*e.Seq] {
+			duplicates++
+			continue
+		}
+		fresh = append(fresh, e)
+	}
+	return fresh, duplicates
 }
 
 // ListByWindow returns events in [from, to] filtered by kind.

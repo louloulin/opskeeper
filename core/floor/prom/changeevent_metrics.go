@@ -29,6 +29,15 @@ var (
 	//          unknown
 	ChangeEventsInsertedTotal *prometheus.CounterVec
 
+	// ChangeEventsDedupedTotal counts replayed change events the manager
+	// recognised and did not store a second time. A node's write-ahead log
+	// is at-least-once by design, so this is expected traffic after a
+	// reconnect, not an error — but it is the number that tells an
+	// operator whether a link is flapping, and hiding it inside
+	// ChangeEventsInsertedTotal is how a retry loop once looked like a
+	// burst of new events.
+	ChangeEventsDedupedTotal prometheus.Counter
+
 	// ChangeEventsQueryDuration observes query_change_events wall-clock
 	// latency when the edge source is involved. Edge-only because
 	// audit-only is already covered by the audit module's metrics.
@@ -54,6 +63,12 @@ func registerChangeEventMetrics() {
 			Help: "Manager-side change events persisted into edge_change_events.",
 		},
 		[]string{"kind"},
+	)
+	ChangeEventsDedupedTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "opskeeper_change_events_deduped_total",
+			Help: "Replayed change events recognised by (edge_id, seq) and not stored twice.",
+		},
 	)
 	ChangeEventsQueryDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{

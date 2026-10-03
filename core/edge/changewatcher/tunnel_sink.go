@@ -16,6 +16,16 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
+// sequencedEvent 是一个 ChangeEvent 加上写前日志打在它身上的行号。
+//
+// seq == 0 读作「这一条从未落过盘」, 于是中心无从判断它是新事件还是重放,
+// 只能照单全收。这是刻意的: 编不出键的时候存一份重复, 好过为了让键好看
+// 而把事件丢掉——而 seq 真的为 0 是不可能的, spool 的行号从 1 起。
+type sequencedEvent struct {
+	event ChangeEvent
+	seq   uint64
+}
+
 // DefaultSinkConfig 是 TunnelSink 的默认参数。测试可覆写。
 type DefaultSinkConfig struct {
 	BatchSize     int           // 单批最大事件数；默认 100
@@ -317,17 +327,30 @@ func (s *TunnelSink) replayOne(ctx context.Context) bool {
 // 落盘在推送之前，是因为推送正是会失败的那一步，而一个只在成功路径上留下
 // 记录的 sink 等于没有记录。ack 在推送之后，是因为 ack 的意思是「中心收到
 // 了」，而在那之前说这句话就是在撒谎。
-func (s *TunnelSink) deliver(ctx context.Context, batch []ChangeEvent) bool {
+func (s *TunnelSink) deliver(ctx context.Context, batch []sequencedEvent) bool {
 	if s.wal != nil {
-		for _, ev := range batch {
-			if err := s.wal.Record(ctx, telemetrywal.ClassEvent, ev); err != nil {
+		for i, item := range batch {
+			ev := item.event
+			// RecordSeq, not Record: the number the log stamps this row
+			// with is the only thing that lets the center recognise the
+			// same event when the ack is lost and the row comes round
+			// again. Sending the batch before reading those numbers back
+			// would be a dedup key nobody has.
+			seq, err := s.wal.RecordSeq(ctx, telemetrywal.ClassEvent, ev)
+			if err != nil {
 				// 落盘失败仍然推送：中心拿到总比中心拿不到强，而这一批
 				// 失去的是耐久性，不是数据。事件本身还在 channel 之外
 				// 吗？不在了——所以这里要喊得足够响。
+				//
+				// seq 保持 0，也就是「中心无从判断这是不是重放」，于是
+				// 中心只能照单全收。宁可存重复，也不能因为编不出键就
+				// 把这一条丢掉。
 				s.logger.Error("changewatcher: could not record a change event before sending it",
 					slog.Any("err", err),
 					slog.String("subject", ev.Subject))
+				continue
 			}
+			batch[i].seq = seq
 		}
 	}
 	if err := s.callOnce(ctx, batch); err != nil {
@@ -354,27 +377,27 @@ func (s *TunnelSink) deliver(ctx context.Context, batch []ChangeEvent) bool {
 // 解不出来的行不会进 batch，可它仍然占着文件头部的位置。不 ack 它，这一
 // 批后面的每一行都永远回放不了——一个节点在网络恢复之后再也不报变化
 // 事件，而症状是「没有错误」。
-func decodeEvents(rows []spool.Row) (batch []ChangeEvent, decoded int) {
-	batch = make([]ChangeEvent, 0, len(rows))
+func decodeEvents(rows []spool.Row) (batch []sequencedEvent, decoded int) {
+	batch = make([]sequencedEvent, 0, len(rows))
 	decoded = 0
 	for _, r := range rows {
 		var ev ChangeEvent
 		if err := json.Unmarshal(r.Payload, &ev); err != nil {
 			continue
 		}
-		batch = append(batch, ev)
+		batch = append(batch, sequencedEvent{event: ev, seq: r.Seq})
 		decoded++
 	}
 	return batch, decoded
 }
 
 // collectBatch 非阻塞地收集最多 n 个事件.
-func (s *TunnelSink) collectBatch(ctx context.Context, n int) []ChangeEvent {
-	batch := make([]ChangeEvent, 0, n)
+func (s *TunnelSink) collectBatch(ctx context.Context, n int) []sequencedEvent {
+	batch := make([]sequencedEvent, 0, n)
 	for i := 0; i < n; i++ {
 		select {
 		case ev := <-s.buf:
-			batch = append(batch, ev)
+			batch = append(batch, sequencedEvent{event: ev})
 		default:
 			return batch
 		}
@@ -383,12 +406,13 @@ func (s *TunnelSink) collectBatch(ctx context.Context, n int) []ChangeEvent {
 }
 
 // callOnce 把一批事件转成 wire 格式并通过 tunnel client 推送.
-func (s *TunnelSink) callOnce(parent context.Context, batch []ChangeEvent) error {
+func (s *TunnelSink) callOnce(parent context.Context, batch []sequencedEvent) error {
 	if len(batch) == 0 {
 		return nil
 	}
 	wire := make([]tunnel.ChangeEventWire, len(batch))
-	for i, ev := range batch {
+	for i, item := range batch {
+		ev := item.event
 		wire[i] = tunnel.ChangeEventWire{
 			Source:    string(ev.Source),
 			Kind:      string(ev.Kind),
@@ -397,6 +421,7 @@ func (s *TunnelSink) callOnce(parent context.Context, batch []ChangeEvent) error
 			Timestamp: ev.Timestamp,
 			Severity:  string(ev.Severity),
 			Labels:    ev.Labels,
+			Seq:       item.seq,
 		}
 	}
 	req := tunnel.PushChangeEventsRequest{Events: wire}
