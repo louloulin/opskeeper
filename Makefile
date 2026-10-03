@@ -488,23 +488,30 @@ pig-dev-unpin: ## 撤销本地 PiG checkout 覆盖，回到固定 tag
 # 转换里，单元测试只能用**手搓**的来源去喂它。于是它证明了「若运行时这样
 # 分类则 profile 正确」，而运行时并不这样分类（§4.67）。
 #
-# 这个目标今天会红，红的原因在上游 PiG，不在本仓库。它不进 `make test`：
-# 一个长期红的测试只会训练所有人忽略红色。它也不该被删掉——它是这个缺陷
-# 唯一的可执行证据，上游修好后它会自己转绿。
+# 它必须在 core/pig 目录里跑，而且必须 GOWORK=off：go.work 是不入库的本地文件
+# （.gitignore 第 40 行），CI 里没有它，于是从仓库根跑 `go test ./core/pig/...`
+# 会以「目录不在主模块内」失败——决策 164 记的正是这个形状（broker-pin-check
+# 要 go.work，接线之后在 CI 里静默跳过）。从模块目录跑则只用该模块自己的
+# go.mod/go.sum，与 `make module-standalone-check` 走的是同一条路。
 #
-# 它默认测的是**固定 tag**：pigBinary() 用 GOWORK=off 构建，于是 go.work 里
-# 的本地 replace 被绕过（这是刻意的，见 runtime_scoping_test.go 的注释）。
-# 因此 `make pig-dev-pin` 对本目标无效。今天唯一能让它转绿的方式是把带修复
-# 的二进制喂进来（§4.93.6）：
+# 它测的是**固定 tag**：pigBinary() 用 GOWORK=off 构建，于是 go.work 里的
+# 本地 replace 被绕过（这是刻意的，见 runtime_scoping_test.go 的注释），
+# 因此 `make pig-dev-pin` 对本目标无效——这条性质本身是判据：修好上游之前
+# 它必须是红的，而能靠本地未推送的提交把它弄绿，等于什么也没测。
 #
-#     GOWORK=off go build -o /tmp/pig ./cmd/pig    # 在带修复的 PiG 目录里
+# 它长期是红的（只读包 0/18，红在上游 PiG 的工具来源缺陷，§4.67），于是它既
+# 不在 `make test` 也不在 CI 里——一个长期红又没人跑的闸门，等于没有闸门。
+# PiG v0.4.0 带上修复之后它自己转绿，本轮把它登记成 CI 决策闸门
+# （scripts/cigate 的 DecisionGates），并把问题从「第一个包」扩到**全部已发布
+# 包**：实测 5 个包 / 90 个声明工具全部被提供。扩问之后当场抓出读取器的一个真
+# 缺陷——它把 autonomy 包的签名动作当成工具（§4.104.4）。
+#
+# 仍可喂进一个本地构建的二进制做对照实验（不影响上面那条性质）：
+#
 #     OPSKEEPER_PIG_BIN=/tmp/pig make pig-tool-scoping-check
-#
-# 上游发布含修复的 tag 之前，这条路是它唯一的绿灯来源。实测 18/18。
 .PHONY: pig-tool-scoping-check
-pig-tool-scoping-check: ## 真二进制验证节点 Agent 被提供了插件工具（默认红；OPSKEEPER_PIG_BIN=本地构建可转绿，见上）
-	go test -tags pigscoping -count=1 -timeout 10m ./core/pig/pigprofile/ \
-		-run TestTheNodeProfileActuallyOffersTheToolsItsPackagesDeclare
+pig-tool-scoping-check: ## 真二进制验证节点 Agent 被提供了插件工具（CI 决策闸门，实测 5 包 / 90 工具）
+	cd core/pig && GOWORK=off go test -tags pigscoping -count=1 -timeout 15m ./pigprofile/
 
 # ----------------------------------------------------------------------------
 # proto

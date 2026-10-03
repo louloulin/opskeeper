@@ -171,9 +171,11 @@ proves the delivery path and says nothing about answer quality.
 It also says nothing about whether the node's agent was offered any tools.
 A node can hold a correct profile, a signed package, a gate, an allow-list
 and an audit ledger and still be handed an agent that may not call
-anything — that is the current state of `make pig-tool-scoping-check`,
-which is the only gate that asks. Run it before reading a green delivery
-gate as "the node can diagnose".
+anything — which is what `make pig-tool-scoping-check` is the only gate
+that asks, and what it answered "no" to for months (0 of 18 tools, an
+upstream provenance defect) before PiG v0.4.0 fixed it. It now runs on
+every push; run it yourself before reading a green delivery gate as "the
+node can diagnose".
 
 The split exists because the two questions are different. Everything else in
 this directory replaces the transport (an in-process loopback) and the agent

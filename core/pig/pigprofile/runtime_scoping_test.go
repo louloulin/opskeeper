@@ -17,14 +17,20 @@ package pigprofile
 // read-only package, and a fake model that records exactly which tools the
 // runtime offered.
 //
-// It is behind a build tag because it is red on the pinned PiG, and a red
-// test in `make test` trains everyone to ignore red. Run it explicitly:
+// It stays behind a build tag for cost, not for redness: it builds a real
+// 70 MB pig binary inside the test, and `make test` runs on every module on
+// every push. It is a decision gate in CI instead (scripts/cigate, see
+// `make ci-gate-check`), which is the arrangement that actually keeps it
+// honest -- a tag that only a human remembers to type owns nothing, and
+// that is how it sat red at 0/18 for months (decision 168).
 //
 //	make pig-tool-scoping-check
 //
-// The failure it reports today is an upstream defect, not a mistake in this
-// repository's profile; see docs/opskeeper2-architecture.md §4.67 for the
-// one-line fix and why no profile can work around it.
+// It was red for a reason that was not ours: PiG's tool-provenance
+// conversion wrote `source` where it read `name`, so every extension tool
+// was misfiled as a built-in and the node profile stripped it (decision
+// 129, docs/opskeeper2-architecture.md §4.67). PiG shipped the fix in
+// v0.4.0; no profile can work around it, and none tries.
 
 import (
 	"context"
@@ -51,6 +57,12 @@ import (
 // diagnosis toolset, which is the set of tools the plan's §3.3 table calls
 // "✅ 可插件化" and the only toolset a node may run without a human.
 const readonlyPackageRel = "../../../plugins/pig-ops/opskeeper-sre-readonly"
+
+// shippedPackagesRel is the directory a node's packages are installed from.
+// The fleet question is asked over whatever is actually shipped, not over a
+// list written down next to the question -- a hand-written list is a list
+// that stops being true.
+const shippedPackagesRel = "../../../plugins/pig-ops"
 
 func TestTheNodeProfileActuallyOffersTheToolsItsPackagesDeclare(t *testing.T) {
 	pkg, err := filepath.Abs(readonlyPackageRel)
@@ -90,10 +102,123 @@ func TestTheNodeProfileActuallyOffersTheToolsItsPackagesDeclare(t *testing.T) {
 			"registered at, so the agent was offered the host's built-ins and none "+
 			"of the node's plugins. The unit tests could not see it because they "+
 			"read the profile's text, and the text had said what they wanted.\n\n"+
-			"This gate builds the agent with GOWORK=off against the pinned PiG tag, "+
-			"so it stays red until PiG ships a release carrying fix 1. See §4.78.",
+			"Both fixes are in: fix 2 here, fix 1 in PiG v0.4.0. So this gate is "+
+			"no longer waiting for anything. A red now means one of three things, "+
+			"and they need different answers: the pinned PiG lost fix 1 again, "+
+			"the profile stopped admitting the package's own scope, or a package "+
+			"shipped tools no extension registers. See §4.104.",
 			len(offered), len(declared), strings.Join(missing, ", "))
 	}
+}
+
+// TestTheManifestReaderKnowsADeclaredToolFromASignedAction is the control on
+// the reader the two runtime gates above are built out of. Both of them
+// compare a manifest's tool list against a real agent, so a reader that
+// returned an empty list, or the wrong list, would make them agree on
+// nothing -- and the fleet gate proved that by reporting a signed self-heal
+// as an unrunnable tool.
+//
+// The assertions are on the two shapes the manifests actually contain: the
+// read-only package's multi-line `- name:` tool entries, and the autonomy
+// package's `autonomy.actions`, which is a list of `name:` entries that is
+// not a tool list.
+func TestTheManifestReaderKnowsADeclaredToolFromASignedAction(t *testing.T) {
+	readonly, err := filepath.Abs(readonlyPackageRel)
+	if err != nil {
+		t.Fatalf("resolve read-only package: %v", err)
+	}
+	tools := declaredToolNames(t, readonly)
+	if len(tools) < 10 {
+		t.Fatalf("the read-only package read as %d tools (%v); the reader is not seeing the "+
+			"tool list and every gate built on it would pass on nothing", len(tools), tools)
+	}
+	if !contains(tools, "get_topology") {
+		t.Errorf("the read-only package's tools do not include get_topology (%v)", tools)
+	}
+
+	autonomy, err := filepath.Abs(shippedPackagesRel + "/opskeeper-sre-autonomy")
+	if err != nil {
+		t.Fatalf("resolve autonomy package: %v", err)
+	}
+	signed := declaredToolNames(t, autonomy)
+	if len(signed) != 1 || signed[0] != "host_autonomy_run" {
+		t.Fatalf("the autonomy package's tools read as %v; it declares exactly one tool, and "+
+			"its autonomy actions are signed commands rather than tools", signed)
+	}
+	if contains(signed, "restart_orders") {
+		t.Error("the reader counted a signed autonomy action as a tool; that is the bug this " +
+			"test exists for")
+	}
+}
+
+// TestEveryShippedPackageIsOfferedItsDeclaredTools widens the question from
+// the first package a node admits to all of them.
+//
+// The gate above answers "can a node use the read-only diagnosis set", which
+// is the set the plan's table marks as the only one a node may run without a
+// human -- and therefore the one most likely to be healthy while everything
+// else is not. A fleet that admits five packages has five profiles, five
+// admission decisions and five manifests, and the defect this gate exists
+// for was never specific to the read-only one: it lived in the tool
+// provenance every package shares.
+//
+// The number the failure reports is per package rather than a fleet total on
+// purpose. A total lets five healthy packages pay for a sixth that offers
+// nothing, which is the same mistake the plan's §6 gate list warns about --
+// the number quoted often enough has to be the one that moves.
+func TestEveryShippedPackageIsOfferedItsDeclaredTools(t *testing.T) {
+	root, err := filepath.Abs(shippedPackagesRel)
+	if err != nil {
+		t.Fatalf("resolve shipped packages: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read %s: %v", root, err)
+	}
+	var found, declaredTotal int
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pkg := filepath.Join(root, entry.Name())
+		if _, err := os.Stat(filepath.Join(pkg, "pig-ops.yaml")); err != nil {
+			continue
+		}
+		found++
+		t.Run(entry.Name(), func(t *testing.T) {
+			declared := declaredToolNames(t, pkg)
+			if len(declared) == 0 {
+				t.Fatal("the package declares no tools, so this gate has nothing to assert")
+			}
+			declaredTotal += len(declared)
+			offered := offeredToolNames(t, pkg)
+			if missing := missingFrom(offered, declared); len(missing) > 0 {
+				t.Fatalf("the node agent was offered %d of the %d tools this package declares.\n"+
+					"missing: %s\n\n"+
+					"The model cannot call a tool it was never shown. Everything the node "+
+					"holds -- profile, signature, gate, allow-list, audit ledger -- is real, "+
+					"and the agent still cannot use any of it. See the sibling test for the "+
+					"two defects that produced this state and §4.104 for what a red means now.",
+					len(offered), len(declared), strings.Join(missing, ", "))
+			}
+			// The converse, for the same reason the sibling test asserts it:
+			// a package that became *more* capable is the failure this gate
+			// would otherwise report as health.
+			for _, name := range offered {
+				if !contains(declared, name) {
+					t.Errorf("the runtime offered %q, which this package's manifest never "+
+						"declared; the manifest is the review surface, so a tool reaching the "+
+						"model without being listed means a package gained capability that "+
+						"nobody accepted", name)
+				}
+			}
+		})
+	}
+	if found == 0 {
+		t.Fatalf("no package with a manifest under %s; the gate would pass on nothing", root)
+	}
+	t.Logf("checked %d shipped packages and %d declared tools against a real agent binary",
+		found, declaredTotal)
 }
 
 // TestAToolRemovedFromTheReviewSurfaceIsRemovedFromTheMenu is the property
@@ -311,7 +436,6 @@ func offeredToolNames(t *testing.T, pkg string) []string {
 	return offered
 }
 
-
 // profileFor is the node's profile for one package: every extension the
 // package declares, held to the tools its manifest declared.
 //
@@ -342,6 +466,14 @@ func profileFor(t *testing.T, pkg string) []agentprofile.Extension {
 	return out
 }
 
+// builtOnce makes the agent build once per test binary. A gate that asks
+// the same question of six packages must not build a 70 MB binary six
+// times, and the second build is not free just because the first was.
+var builtOnce sync.Once
+
+// builtPath is where that one binary lives.
+var builtPath string
+
 // pigBinary builds the agent the way a release builds it, or uses one the
 // caller already built.
 func pigBinary(t *testing.T) string {
@@ -349,21 +481,47 @@ func pigBinary(t *testing.T) string {
 	if pre := os.Getenv("OPSKEEPER_PIG_BIN"); pre != "" {
 		return pre
 	}
-	out := filepath.Join(t.TempDir(), "pig")
-	cmd := exec.Command("go", "build", "-o", out, "github.com/MichaelKinsy/PiG/cmd/pig")
-	cmd.Dir = ".."
-	// The workspace is off on purpose: a release builds the agent from the
-	// pinned tag, and a gate that silently built against a developer's
-	// local PiG checkout would prove something else.
-	cmd.Env = append(os.Environ(), "GOWORK=off")
-	if combined, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build pig: %v\n%s", err, combined)
+	builtOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "pig-gate-")
+		if err != nil {
+			builtPath = "mkdtemp failed: " + err.Error()
+			return
+		}
+		out := filepath.Join(dir, "pig")
+		cmd := exec.Command("go", "build", "-o", out, "github.com/MichaelKinsy/PiG/cmd/pig")
+		cmd.Dir = ".."
+		// The workspace is off on purpose: a release builds the agent from the
+		// pinned tag, and a gate that silently built against a developer's
+		// local PiG checkout would prove something else.
+		cmd.Env = append(os.Environ(), "GOWORK=off")
+		if combined, err := cmd.CombinedOutput(); err != nil {
+			builtPath = "build failed: " + err.Error() + "\n" + string(combined)
+			return
+		}
+		builtPath = out
+	})
+	if strings.HasPrefix(builtPath, "mkdtemp failed") || strings.HasPrefix(builtPath, "build failed") {
+		t.Fatalf("build pig: %s", builtPath)
 	}
-	return out
+	return builtPath
 }
 
 // declaredToolNames reads the tool names a package's governance manifest
 // declares, which is the node's own allow-list.
+//
+// It is section-aware, and it has to be: the autonomy package's manifest
+// holds a second list of `name:` entries under `autonomy.actions` -- the
+// self-heal actions a person signed -- and a reader that counted those as
+// tools would ask the agent to be offered a tool that no extension has ever
+// registered. That is not a hypothetical: the fleet-wide test below found
+// exactly that, on `restart_orders`, and the failure it reported -- "the
+// node agent cannot run its own signed self-heal" -- was entirely the
+// reader's.
+//
+// The same reader also builds the profile the gate runs against, so a
+// miscount would have put a nonexistent tool into the node's allow-list and
+// then complained that the node did not have it. One mistake, two wrong
+// answers.
 func declaredToolNames(t *testing.T, pkg string) []string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(pkg, "pig-ops.yaml"))
@@ -371,22 +529,39 @@ func declaredToolNames(t *testing.T, pkg string) []string {
 		t.Fatalf("read manifest: %v", err)
 	}
 	var names []string
+	// key is the mapping key a list item belongs to, and keyIndent is that
+	// key's own indentation: YAML puts a sequence under the key whose
+	// indentation it continues, so the item's own indent is the evidence.
+	key, keyIndent := "", -1
 	for _, line := range strings.Split(string(raw), "\n") {
-		// The manifests write their tool list in both shapes — `- name: x`
-		// and `- { name: x, class: read }` — and a reader that understood
-		// only one of them would report an empty list and quietly turn this
-		// gate into a no-op.
 		if comment := strings.IndexByte(line, '#'); comment >= 0 {
 			line = line[:comment]
 		}
-		// A list item, not any line that happens to name something: the
-		// manifest's own metadata block carries a `name:` too, and
-		// counting it would make the gate assert on a tool that does not
-		// exist.
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "- ") {
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "- ") && !strings.HasPrefix(trimmed, "- ") {
+			// A mapping key at a shallower indentation is the section the
+			// following list items belong to. Keys deeper than the current
+			// one belong to the item being read, and are ignored on purpose:
+			// a list item written across several lines (`- name: x` then
+			// `  class: read`) must not retarget the reader.
+			if colon := strings.Index(trimmed, ":"); colon > 0 && !strings.HasPrefix(trimmed, "- ") {
+				if k := strings.TrimSpace(trimmed[:colon]); k != "" {
+					key, keyIndent = k, indent
+				}
+			}
+			continue
+		}
+		if key != "tools" || indent <= keyIndent {
+			continue
+		}
+		// The manifests write their tool list in both shapes -- `- name: x`
+		// and `- { name: x, class: read }` -- and a reader that understood
+		// only one of them would report a short list and quietly weaken this
+		// gate into a partial one.
 		marker := strings.Index(trimmed, "name:")
 		if marker < 0 {
 			continue
