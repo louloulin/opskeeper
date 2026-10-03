@@ -643,7 +643,11 @@ func Load() (*Config, error) {
 	c.DB.DBName = getEnv("OPSKEEPER_DB_NAME", "")
 	c.DB.SSLMode = getEnv("OPSKEEPER_DB_SSLMODE", "disable")
 	if c.DB.Host != "" {
-		c.DB.DSN = buildMySQLDSN(c.DB)
+		dsn, err := buildMySQLDSN(c.DB)
+		if err != nil {
+			return nil, err
+		}
+		c.DB.DSN = dsn
 	}
 	c.DB.Pool.MaxOpen = getEnvInt("OPSKEEPER_DB_POOL_MAX_OPEN", 25)
 	c.DB.Pool.MaxIdle = getEnvInt("OPSKEEPER_DB_POOL_MAX_IDLE", 5)
@@ -656,16 +660,79 @@ func Load() (*Config, error) {
 // fields populated by the platform-base-ha Helm chart. The shape matches the
 // example embedded in the legacy OPSKEEPER_DB_DSN default so callers can swap
 // seamlessly between the two env-var strategies.
-func buildMySQLDSN(d DBConfig) string {
+//
+// SSLMode is spelled in libpq's vocabulary because that is what the Helm
+// chart's values file and every Postgres-shaped deployment already use, and
+// it is translated through mysqlTLSParam rather than pasted into the DSN.
+// Pasting it is what this function used to do, and it is worth recording why
+// that was a real bug rather than a cosmetic one: go-sql-driver accepts
+// exactly `false`, `true`, `skip-verify`, `preferred` and registered custom
+// names, so the default value of this field — "disable" — produced a DSN the
+// driver refused with "invalid value / unknown config name: disable". The
+// manager then exited at boot on the Helm path, on the path the chart
+// documents, with an error that names neither the field nor the fix.
+//
+// The error is returned rather than defaulted because an operator who typed
+// an sslmode that does not exist is asking a question this code cannot
+// answer, and a silent fallback to plaintext would answer it in the most
+// expensive direction available.
+func buildMySQLDSN(d DBConfig) (string, error) {
 	host := d.Host
 	if d.Port != 0 {
 		host = net.JoinHostPort(d.Host, strconv.Itoa(d.Port))
 	}
 	params := "parseTime=true&charset=utf8mb4&loc=Local"
-	if d.SSLMode != "" {
-		params += "&tls=" + d.SSLMode
+	tlsParam, err := mysqlTLSParam(d.SSLMode)
+	if err != nil {
+		return "", err
 	}
-	return fmt.Sprintf("%s:%s@tcp(%s)/%s?%s", d.User, d.Password, host, d.DBName, params)
+	if tlsParam != "" {
+		params += "&tls=" + tlsParam
+	}
+	return fmt.Sprintf("%s:%s@tcp(%s)/%s?%s", d.User, d.Password, host, d.DBName, params), nil
+}
+
+// mysqlTLSParam translates a libpq sslmode into the value go-sql-driver
+// accepts for its `tls` parameter.
+//
+// The mapping is not cosmetic, and two rows in it are load-bearing:
+//
+//   - `require` maps to **skip-verify**, not to `true`. In libpq, `require`
+//     means "encrypt the connection but do not verify the server's
+//     certificate", which is what the Postgres deployments behind this chart
+//     actually ask for. Mapping it to `true` would be *stronger* than the
+//     operator's request and would fail closed against the self-signed
+//     certificates those deployments use — a silent change of policy
+//     dressed as a translation.
+//   - `verify-ca` and `verify-full` both map to `true`. The driver's `true`
+//     verifies against the system roots and sets ServerName from the host,
+//     so the two Postgres modes collapse here, and the difference between
+//     them (whether the hostname is checked) is carried by ServerName
+//     rather than by a separate parameter.
+//
+// The driver's own spellings are accepted too. They are not what the chart
+// writes, but an operator who already worked around the bug above by setting
+// `OPSKEEPER_DB_SSLMODE=skip-verify` must not be broken by the fix.
+func mysqlTLSParam(sslMode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(sslMode)) {
+	case "", "disable":
+		return "", nil
+	case "allow", "prefer":
+		return "preferred", nil
+	case "require":
+		return "skip-verify", nil
+	case "verify-ca", "verify-full":
+		return "true", nil
+	case "false":
+		return "", nil
+	case "true", "skip-verify", "preferred":
+		return strings.ToLower(strings.TrimSpace(sslMode)), nil
+	default:
+		return "", fmt.Errorf(
+			"config: OPSKEEPER_DB_SSLMODE=%q is not an sslmode this build speaks; "+
+				"use one of disable, allow, prefer, require, verify-ca, verify-full "+
+				"(or the driver's own false, true, skip-verify, preferred)", sslMode)
+	}
 }
 
 // getEnvBool parses a boolean env var. Accepts the usual strconv.ParseBool

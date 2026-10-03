@@ -57,9 +57,37 @@ func dedupeRaw(db *gorm.DB) error {
 	if !m.HasTable(&model.HostMetric{}) {
 		return nil // nothing has ever been written; there is nothing to repair
 	}
-	res := db.Exec(`DELETE FROM host_metrics_raw
+	return dedupeTable(db, "host_metrics_raw")
+}
+
+// dedupeTable is dedupeRaw with the table named, so the statement can be
+// exercised against a scratch table on a real MySQL instead of against the
+// deployment's own metrics. That test is the only one that can catch a
+// dialect the SQLite suite accepts and MySQL does not, and it needs a table
+// it is allowed to delete every row of.
+func dedupeTable(db *gorm.DB, table string) error {
+	// The subquery is wrapped in a derived table, and that is not style. The
+	// flat form — `id NOT IN (SELECT MIN(id) FROM host_metrics_raw ...)` —
+	// is a parse error in MySQL: "You can't specify target table for update
+	// in FROM clause" (1093). It is accepted by SQLite and by Postgres,
+	// which is why it survived: this migration has only ever been tested
+	// against an in-memory SQLite, so the one dialect the deployment
+	// actually runs was the one nobody ran.
+	//
+	// The failure was not immediate either. dedupeRaw returns early when
+	// the table does not exist yet, so the first boot composes the schema
+	// and never reaches this statement; it is the *second* boot that
+	// collapses the rows and dies. A deployment that had only ever been
+	// started once looked fine.
+	//
+	// The derived table is the portable spelling: MySQL materialises it
+	// before the delete, Postgres accepts the alias, and SQLite is
+	// unchanged from what it used to do.
+	res := db.Exec(`DELETE FROM ` + table + `
 		WHERE id NOT IN (
-			SELECT MIN(id) FROM host_metrics_raw GROUP BY edge_id, ts
+			SELECT id FROM (
+				SELECT MIN(id) AS id FROM ` + table + ` GROUP BY edge_id, ts
+			) AS survivors
 		)`)
 	if res.Error != nil {
 		return fmt.Errorf("collapse duplicate host_metrics_raw rows: %w", res.Error)

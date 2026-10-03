@@ -90,7 +90,13 @@ func TestDatabaseFieldsEnvOverride(t *testing.T) {
 		t.Errorf("DB.Pool.ConnMaxLifetime = %v, want 5m", cfg.DB.Pool.ConnMaxLifetime)
 	}
 	// DSN must be re-composed from discrete fields, not the legacy default.
-	want := "opskeeper_app:s3cret@tcp(db.internal:3307)/opskeeper_prod?parseTime=true&charset=utf8mb4&loc=Local&tls=require"
+	//
+	// The tls value is the driver's own spelling, not the sslmode: this
+	// assertion used to expect "tls=require", which go-sql-driver refuses
+	// with "invalid value / unknown config name", so the case it claimed
+	// to cover — the Helm chart's database — could not boot. libpq's
+	// `require` is "encrypt, do not verify", which is skip-verify here.
+	want := "opskeeper_app:s3cret@tcp(db.internal:3307)/opskeeper_prod?parseTime=true&charset=utf8mb4&loc=Local&tls=skip-verify"
 	if cfg.DB.DSN != want {
 		t.Errorf("DB.DSN = %q\nwant  %q", cfg.DB.DSN, want)
 	}
@@ -108,8 +114,12 @@ func TestDatabaseDSNSpecialSSLMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !strings.Contains(cfg.DB.DSN, "tls=verify-full") {
-		t.Errorf("DSN missing tls=verify-full: %q", cfg.DB.DSN)
+	// verify-full verifies against the system roots; the driver's `true`
+	// is that, and the hostname is checked because ServerName comes from
+	// the DSN's host. It used to expect "tls=verify-full" verbatim, which
+	// is a libpq value the driver does not know.
+	if !strings.Contains(cfg.DB.DSN, "tls=true") {
+		t.Errorf("DSN missing tls=true: %q", cfg.DB.DSN)
 	}
 }
 
