@@ -1,17 +1,17 @@
 package main
 
 import (
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"reflect"
 	"testing"
 	"time"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 func TestRecoveryApprovalQueryFromRequest_PreservesApprovedExecution(t *testing.T) {
 	now := time.Date(2026, 8, 26, 0, 48, 8, 0, time.UTC)
-	request := aiopstools.RecoveryProposalRequest{
+	request := recovery.RecoveryProposalRequest{
 		ProposalID: "proposal-id",
 		SessionID:  "incident-id",
 		Kind:       hitlmodel.KindAgentTeams,

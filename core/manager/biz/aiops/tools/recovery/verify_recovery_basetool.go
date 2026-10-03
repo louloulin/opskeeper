@@ -35,7 +35,7 @@
 //   - retry_count 持久化走 RecoveryStateStore 接口；Day 3 阶段
 //     用 in-memory 实现，Day 4 migration 把 incident_recovery_state
 //     表建起来后切到 DB-backed 实现。orchestrator 不感知具体存储。
-package tools
+package recovery
 
 import (
 	"context"

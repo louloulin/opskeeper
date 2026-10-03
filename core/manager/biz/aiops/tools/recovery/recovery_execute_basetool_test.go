@@ -1,4 +1,4 @@
-package tools
+package recovery
 
 import (
 	"context"
@@ -103,6 +103,16 @@ func newRecoveryExecuteToolFor(dispatcher basetool.BaseTool, audit MutatingPropo
 	return tool
 }
 
+// restartServiceToolName is the tool a real recovery.execute dispatches to.
+//
+// A literal rather than the constant from the parent tools package. The
+// parent owns the real restart_service tool; this cluster only needs a name
+// to hand a fake dispatcher and assert it comes back out the other side.
+// Reaching sideways for the parent's constant would make the parent's
+// tool set a dependency of this cluster's tests, which is the coupling
+// this extraction exists to remove.
+const restartServiceToolName = "restart_service"
+
 type fakePreviewGate struct{ err error }
 
 func (gate fakePreviewGate) Eligible(context.Context, string, string, string, string, string) error {
@@ -110,7 +120,7 @@ func (gate fakePreviewGate) Eligible(context.Context, string, string, string, st
 }
 
 func TestRecoveryExecuteTool_Info(t *testing.T) {
-	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: ToolNameRestartService, class: "write"}, newFakeAuditRepo())
+	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: restartServiceToolName, class: "write"}, newFakeAuditRepo())
 	info, err := tool.Info(context.Background())
 	if err != nil {
 		t.Fatalf("Info: %v", err)
@@ -158,7 +168,7 @@ func TestRecoveryExecuteTool_HappyRestartService(t *testing.T) {
 	audit.approve["inc-42"] = true
 
 	dispatcher := &fakeDispatcher{
-		name:     ToolNameRestartService,
+		name:     restartServiceToolName,
 		class:    "write",
 		respBody: `{"device_id":7,"service":"nginx","restarted":true,"mocked":true,"started_at":"2026-08-21T10:00:00Z","ended_at":"2026-08-21T10:00:05Z"}`,
 	}
@@ -234,7 +244,7 @@ func TestRecoveryExecuteTool_HappyRestartService(t *testing.T) {
 func TestRecoveryExecuteTool_HappyNoop(t *testing.T) {
 	audit := newFakeAuditRepo()
 	audit.approve["inc-77"] = true
-	dispatcher := &fakeDispatcher{name: ToolNameRestartService}
+	dispatcher := &fakeDispatcher{name: restartServiceToolName}
 	tool := newRecoveryExecuteToolFor(dispatcher, audit)
 
 	args := `{
@@ -270,7 +280,7 @@ func TestRecoveryExecuteTool_HappyNoop(t *testing.T) {
 
 func TestRecoveryExecuteTool_MissingProposal(t *testing.T) {
 	audit := newFakeAuditRepo() // empty — no approved proposals
-	dispatcher := &fakeDispatcher{name: ToolNameRestartService}
+	dispatcher := &fakeDispatcher{name: restartServiceToolName}
 	tool := newRecoveryExecuteToolFor(dispatcher, audit)
 
 	args := `{
@@ -300,7 +310,7 @@ func TestRecoveryExecuteTool_MissingProposal(t *testing.T) {
 func TestRecoveryExecuteTool_SkipAuditBypassesOfflineCaller(t *testing.T) {
 	audit := newFakeAuditRepo() // no approvals — gate would block
 	dispatcher := &fakeDispatcher{
-		name:     ToolNameRestartService,
+		name:     restartServiceToolName,
 		class:    "write",
 		respBody: `{"device_id":3,"service":"redis","restarted":true}`,
 	}
@@ -329,7 +339,7 @@ func TestRecoveryExecuteTool_SkipAuditBypassesOfflineCaller(t *testing.T) {
 func TestRecoveryExecuteTool_AgentTeamsRejectsSkipAudit(t *testing.T) {
 	audit := newFakeAuditRepo()
 	audit.approve["inc-agentteams"] = true
-	dispatcher := &fakeDispatcher{name: ToolNameRestartService}
+	dispatcher := &fakeDispatcher{name: restartServiceToolName}
 	tool := newRecoveryExecuteToolFor(dispatcher, audit)
 	ctx := tenantctx.With(context.Background(), tenantctx.Tenant{
 		AgentTeams: &tenantctx.AgentTeamsIdentity{
@@ -371,7 +381,7 @@ func TestRecoveryExecuteTool_ReservesExactProposalAndCompletesExecuted(t *testin
 			PreviewRunID: "run-preview-1", PreviewCandidateID: "candidate-a",
 		},
 	}
-	dispatcher := &fakeDispatcher{name: ToolNameRestartService}
+	dispatcher := &fakeDispatcher{name: restartServiceToolName}
 	tool := newRecoveryExecuteToolFor(dispatcher, audit)
 	ctx := tenantctx.With(context.Background(), tenantctx.Tenant{
 		AgentTeams: &tenantctx.AgentTeamsIdentity{
@@ -418,7 +428,7 @@ func TestRecoveryExecuteTool_RejectsProposalForDifferentActionOrResource(t *test
 		SessionID:  "inc-exact", Kind: "agentteams_hitl",
 		Action: "noop", Resource: "host:worker-1",
 	}
-	dispatcher := &fakeDispatcher{name: ToolNameRestartService}
+	dispatcher := &fakeDispatcher{name: restartServiceToolName}
 	tool := newRecoveryExecuteToolFor(dispatcher, audit)
 
 	args := `{
@@ -440,7 +450,7 @@ func TestRecoveryExecuteTool_RejectsProposalForDifferentActionOrResource(t *test
 
 func TestRecoveryExecuteTool_AgentTeamsRequiresApprovedProposal(t *testing.T) {
 	audit := newFakeAuditRepo()
-	dispatcher := &fakeDispatcher{name: ToolNameRestartService}
+	dispatcher := &fakeDispatcher{name: restartServiceToolName}
 	tool := newRecoveryExecuteToolFor(dispatcher, audit)
 	ctx := tenantctx.With(context.Background(), tenantctx.Tenant{
 		AgentTeams: &tenantctx.AgentTeamsIdentity{
@@ -471,7 +481,7 @@ func TestRecoveryExecuteTool_AgentTeamsRequiresApprovedProposal(t *testing.T) {
 
 func TestRecoveryExecuteTool_AgentTeamsRequiresPreviewBindings(t *testing.T) {
 	audit := newFakeAuditRepo()
-	dispatcher := &fakeDispatcher{name: ToolNameRestartService}
+	dispatcher := &fakeDispatcher{name: restartServiceToolName}
 	tool := newRecoveryExecuteToolFor(dispatcher, audit)
 	ctx := tenantctx.With(context.Background(), tenantctx.Tenant{
 		AgentTeams: &tenantctx.AgentTeamsIdentity{TenantID: "tenant-a", Service: "agentteams", Role: "repairer"},
@@ -496,7 +506,7 @@ func TestRecoveryExecuteTool_AgentTeamsRequiresPreviewBindings(t *testing.T) {
 func TestRecoveryExecuteTool_AgentTeamsPreviewGateRunsBeforeReservation(t *testing.T) {
 	audit := newFakeAuditRepo()
 	audit.approve["inc-agentteams"] = true
-	dispatcher := &fakeDispatcher{name: ToolNameRestartService}
+	dispatcher := &fakeDispatcher{name: restartServiceToolName}
 	tool := NewRecoveryExecuteTool(dispatcher, nil, audit, nil)
 	tool.SetRepairPreviewGate(fakePreviewGate{err: errors.New("candidate rejected")})
 	ctx := tenantctx.With(context.Background(), tenantctx.Tenant{
@@ -522,7 +532,7 @@ func TestRecoveryExecuteTool_AgentTeamsPreviewGateRunsBeforeReservation(t *testi
 func TestRecoveryExecuteTool_AuditLookupError(t *testing.T) {
 	audit := newFakeAuditRepo()
 	audit.errOn["inc-flake"] = errs.ErrEdgeOffline
-	dispatcher := &fakeDispatcher{name: ToolNameRestartService}
+	dispatcher := &fakeDispatcher{name: restartServiceToolName}
 	tool := newRecoveryExecuteToolFor(dispatcher, audit)
 
 	args := `{
@@ -543,7 +553,7 @@ func TestRecoveryExecuteTool_AuditLookupError(t *testing.T) {
 }
 
 func TestRecoveryExecuteTool_MissingIncidentID(t *testing.T) {
-	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: ToolNameRestartService}, newFakeAuditRepo())
+	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: restartServiceToolName}, newFakeAuditRepo())
 	_, err := tool.InvokableRun(context.Background(), `{"skill_id":"x","target":"host-1","resource_type":"host","parameters":{"command":"noop"}}`)
 	if err == nil || !strings.Contains(err.Error(), "incident_id") {
 		t.Errorf("expected incident_id error, got %v", err)
@@ -551,7 +561,7 @@ func TestRecoveryExecuteTool_MissingIncidentID(t *testing.T) {
 }
 
 func TestRecoveryExecuteTool_MissingSkillID(t *testing.T) {
-	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: ToolNameRestartService}, newFakeAuditRepo())
+	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: restartServiceToolName}, newFakeAuditRepo())
 	_, err := tool.InvokableRun(context.Background(), `{"incident_id":"i","target":"host-1","resource_type":"host","parameters":{"command":"noop"}}`)
 	if err == nil || !strings.Contains(err.Error(), "skill_id") {
 		t.Errorf("expected skill_id error, got %v", err)
@@ -559,7 +569,7 @@ func TestRecoveryExecuteTool_MissingSkillID(t *testing.T) {
 }
 
 func TestRecoveryExecuteTool_MissingTarget(t *testing.T) {
-	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: ToolNameRestartService}, newFakeAuditRepo())
+	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: restartServiceToolName}, newFakeAuditRepo())
 	_, err := tool.InvokableRun(context.Background(), `{"incident_id":"i","skill_id":"x","resource_type":"host","parameters":{"command":"noop"}}`)
 	if err == nil || !strings.Contains(err.Error(), "target") {
 		t.Errorf("expected target error, got %v", err)
@@ -567,7 +577,7 @@ func TestRecoveryExecuteTool_MissingTarget(t *testing.T) {
 }
 
 func TestRecoveryExecuteTool_MissingResourceType(t *testing.T) {
-	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: ToolNameRestartService}, newFakeAuditRepo())
+	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: restartServiceToolName}, newFakeAuditRepo())
 	_, err := tool.InvokableRun(context.Background(), `{"incident_id":"i","skill_id":"x","target":"host-1","parameters":{"command":"noop"}}`)
 	if err == nil || !strings.Contains(err.Error(), "resource_type") {
 		t.Errorf("expected resource_type error, got %v", err)
@@ -575,7 +585,7 @@ func TestRecoveryExecuteTool_MissingResourceType(t *testing.T) {
 }
 
 func TestRecoveryExecuteTool_MissingParameters(t *testing.T) {
-	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: ToolNameRestartService}, newFakeAuditRepo())
+	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: restartServiceToolName}, newFakeAuditRepo())
 	_, err := tool.InvokableRun(context.Background(), `{"incident_id":"i","skill_id":"x","target":"host-1","resource_type":"host"}`)
 	if err == nil || !strings.Contains(err.Error(), "parameters") {
 		t.Errorf("expected parameters error, got %v", err)
@@ -585,7 +595,7 @@ func TestRecoveryExecuteTool_MissingParameters(t *testing.T) {
 func TestRecoveryExecuteTool_MissingCommand(t *testing.T) {
 	audit := newFakeAuditRepo()
 	audit.approve["i"] = true
-	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: ToolNameRestartService}, audit)
+	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: restartServiceToolName}, audit)
 	_, err := tool.InvokableRun(context.Background(), `{"incident_id":"i","skill_id":"x","target":"host-1","resource_type":"host","parameters":{}}`)
 	if err == nil || !strings.Contains(err.Error(), "command") {
 		t.Errorf("expected command-required error, got %v", err)
@@ -595,7 +605,7 @@ func TestRecoveryExecuteTool_MissingCommand(t *testing.T) {
 func TestRecoveryExecuteTool_UnknownCommand(t *testing.T) {
 	audit := newFakeAuditRepo()
 	audit.approve["i"] = true
-	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: ToolNameRestartService}, audit)
+	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: restartServiceToolName}, audit)
 	_, err := tool.InvokableRun(context.Background(), `{"incident_id":"i","skill_id":"x","target":"host-1","resource_type":"host","parameters":{"command":"rm_rf"}}`)
 	if err == nil || !strings.Contains(err.Error(), "unknown parameters.command") {
 		t.Errorf("expected unknown-command error, got %v", err)
@@ -605,7 +615,7 @@ func TestRecoveryExecuteTool_UnknownCommand(t *testing.T) {
 func TestRecoveryExecuteTool_RestartMissingDeviceID(t *testing.T) {
 	audit := newFakeAuditRepo()
 	audit.approve["i"] = true
-	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: ToolNameRestartService}, audit)
+	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: restartServiceToolName}, audit)
 	_, err := tool.InvokableRun(context.Background(), `{"incident_id":"i","proposal_id":"55555555-5555-4555-8555-555555555555","skill_id":"x","target":"host-1","resource_type":"host","parameters":{"command":"restart_service","service":"nginx"}}`)
 	if err == nil || !strings.Contains(err.Error(), "device_id") {
 		t.Errorf("expected device_id error, got %v", err)
@@ -615,7 +625,7 @@ func TestRecoveryExecuteTool_RestartMissingDeviceID(t *testing.T) {
 func TestRecoveryExecuteTool_RestartMissingService(t *testing.T) {
 	audit := newFakeAuditRepo()
 	audit.approve["i"] = true
-	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: ToolNameRestartService}, audit)
+	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: restartServiceToolName}, audit)
 	_, err := tool.InvokableRun(context.Background(), `{"incident_id":"i","proposal_id":"55555555-5555-4555-8555-555555555555","skill_id":"x","target":"host-1","resource_type":"host","parameters":{"command":"restart_service","device_id":1}}`)
 	if err == nil || !strings.Contains(err.Error(), "service") {
 		t.Errorf("expected service error, got %v", err)
@@ -626,7 +636,7 @@ func TestRecoveryExecuteTool_DispatcherError(t *testing.T) {
 	audit := newFakeAuditRepo()
 	audit.approve["i"] = true
 	dispatcher := &fakeDispatcher{
-		name:    ToolNameRestartService,
+		name:    restartServiceToolName,
 		respErr: errs.ErrEdgeOffline,
 	}
 	tool := newRecoveryExecuteToolFor(dispatcher, audit)
@@ -640,7 +650,7 @@ func TestRecoveryExecuteTool_DispatcherError(t *testing.T) {
 }
 
 func TestRecoveryExecuteTool_BadArgsJSON(t *testing.T) {
-	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: ToolNameRestartService}, newFakeAuditRepo())
+	tool := newRecoveryExecuteToolFor(&fakeDispatcher{name: restartServiceToolName}, newFakeAuditRepo())
 	_, err := tool.InvokableRun(context.Background(), `{not json`)
 	if err == nil || !strings.Contains(err.Error(), "bad args") {
 		t.Errorf("expected bad-args error, got %v", err)
@@ -654,7 +664,7 @@ func TestAppendRecoveryExecuteTool_NilDepsReturnsUnchanged(t *testing.T) {
 	// Nil audit repo (with dispatcher wired) also keeps slice unchanged —
 	// production wiring must NOT register the tool without an audit
 	// seam.
-	if got := AppendRecoveryExecuteTool(nil, &fakeDispatcher{name: ToolNameRestartService}, nil, nil, nil); got != nil {
+	if got := AppendRecoveryExecuteTool(nil, &fakeDispatcher{name: restartServiceToolName}, nil, nil, nil); got != nil {
 		t.Errorf("nil auditRepo should keep slice unchanged, got len=%d", len(got))
 	}
 }
@@ -703,7 +713,7 @@ func TestRecoveryExecuteTool_KillProcessUsesExactApprovedTarget(t *testing.T) {
 			"f4b1c0a19d3e5f7a": json.RawMessage(`{"status":"terminated","owned_process_count":0}`),
 		},
 	}
-	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: ToolNameRestartService}, terminator, audit, nil)
+	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: restartServiceToolName}, terminator, audit, nil)
 	tool.SetRepairPreviewGate(fakePreviewGate{})
 	ctx := tenantctx.With(context.Background(), tenantctx.Tenant{
 		AgentTeams: &tenantctx.AgentTeamsIdentity{
@@ -751,7 +761,7 @@ func TestRecoveryExecuteTool_KillProcessRejectsTargetMismatchBeforeReservation(t
 	terminator := &fakeHostFixtureTerminator{statuses: map[string]host.HostFixtureStatus{
 		"f4b1c0a19d3e5f7a": {ManifestID: "f4b1c0a19d3e5f7a", IncidentID: "host-cpu", Resource: "host:fixture", Status: "running"},
 	}}
-	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: ToolNameRestartService}, terminator, audit, nil)
+	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: restartServiceToolName}, terminator, audit, nil)
 	args := `{
 		"incident_id":"host-cpu","proposal_id":"88888888-8888-4888-8888-888888888888",
 		"skill_id":"x","target":"host:other","resource_type":"host",
@@ -805,7 +815,7 @@ func TestRecoveryExecuteTool_ResizePoolUsesExactApprovedTargetAndNewProbe(t *tes
 		result: json.RawMessage(`{"status":"recovered","recovery_probe":{"status":"success"}}`),
 	}
 	recoverer.status.FailedProbe.Status = "failed"
-	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: ToolNameRestartService}, nil, audit, nil)
+	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: restartServiceToolName}, nil, audit, nil)
 	tool.SetPoolRecoveryExecutor(recoverer)
 	args := `{
 		"incident_id":"pg-pool",
@@ -842,7 +852,7 @@ func TestRecoveryExecuteTool_ResizePoolRejectsMissingFailedProbeBeforeReservatio
 			Resource: "pg:pool-fixture", Status: "running",
 		},
 	}
-	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: ToolNameRestartService}, nil, audit, nil)
+	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: restartServiceToolName}, nil, audit, nil)
 	tool.SetPoolRecoveryExecutor(recoverer)
 	args := `{
 		"incident_id":"pg-pool","proposal_id":"99999999-9999-4999-9999-999999999999",
@@ -860,7 +870,7 @@ func TestRecoveryExecuteTool_ResizePoolRejectsMissingFailedProbeBeforeReservatio
 
 func TestRecoveryExecuteTool_KillProcessRejectsMissingTerminatorBeforeReservation(t *testing.T) {
 	audit := newFakeAuditRepo()
-	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: ToolNameRestartService}, nil, audit, nil)
+	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: restartServiceToolName}, nil, audit, nil)
 	args := `{
 		"incident_id":"host-cpu",
 		"skill_id":"x","target":"host:fixture","resource_type":"host",
@@ -878,7 +888,7 @@ func TestRecoveryExecuteTool_KillProcessRejectsMissingTerminatorBeforeReservatio
 func TestRecoveryExecuteTool_KillProcessAlwaysRequiresProposal(t *testing.T) {
 	audit := newFakeAuditRepo()
 	terminator := &fakeHostFixtureTerminator{}
-	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: ToolNameRestartService}, terminator, audit, nil)
+	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: restartServiceToolName}, terminator, audit, nil)
 	args := `{
 		"incident_id":"host-cpu",
 		"skill_id":"x","target":"host:fixture","resource_type":"host",

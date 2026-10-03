@@ -23,7 +23,7 @@
 //     "noop" 用于演练 / 单元测试。其它 command 直接拒绝。
 //   - 返回 envelope 严格使用 schema_version=v1，与 verify_recovery 同
 //     shape；LLM 与 orchestrator 反向校验都共用同一个 RevDelta 解析。
-package tools
+package recovery
 
 import (
 	"bytes"

@@ -13,7 +13,7 @@
 //   - NewDryRunMetricQuerier 给 dry-run 一个返回合成值的 querier，
 //     让 recovered phase 在 metric 抓取层"软失败"时不阻塞整个
 //     七阶段流水线（verifier 仍能产出 VerifiedDelta）。
-package tools
+package recovery
 
 import (
 	"context"

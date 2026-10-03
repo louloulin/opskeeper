@@ -3,11 +3,11 @@ package loop_test
 import (
 	"context"
 	"encoding/json"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"log/slog"
 	"testing"
 	"time"
 
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
@@ -36,19 +36,19 @@ func TestMCPAdapter_VerifyInvokesRealRecoveryToolFromApprovalState(t *testing.T)
 		t.Fatal(err)
 	}
 
-	state := aiopstools.NewInMemoryRecoveryStateStore()
+	state := recovery.NewInMemoryRecoveryStateStore()
 	if _, err := state.Increment(context.Background(), "pg.long_running_tx"); err != nil {
 		t.Fatal(err)
 	}
-	tool := aiopstools.NewVerifyRecoveryTool(
-		aiopstools.NewDryRunMetricQuerier(),
+	tool := recovery.NewVerifyRecoveryTool(
+		recovery.NewDryRunMetricQuerier(),
 		state,
 		slog.New(slog.DiscardHandler),
-		aiopstools.DefaultVerifyRecoveryConfig(),
+		recovery.DefaultVerifyRecoveryConfig(),
 	)
 	adapter := loopbiz.NewMCPAdapter(
 		nil,
-		aiopstools.VerifyRecoveryCallerAdapter{Tool: tool},
+		recovery.VerifyRecoveryCallerAdapter{Tool: tool},
 		loopbiz.NewContractMCPRecoveryContextLoader(contracts),
 	)
 
@@ -134,19 +134,19 @@ func TestMCPAdapter_InvestigatePersistsRootCauseForVerify(t *testing.T) {
 		t.Fatal("investigate did not persist root_cause_json")
 	}
 
-	state := aiopstools.NewInMemoryRecoveryStateStore()
+	state := recovery.NewInMemoryRecoveryStateStore()
 	if _, err := state.Increment(context.Background(), "pg.long_running_tx"); err != nil {
 		t.Fatal(err)
 	}
-	verifyTool := aiopstools.NewVerifyRecoveryTool(
-		aiopstools.NewDryRunMetricQuerier(),
+	verifyTool := recovery.NewVerifyRecoveryTool(
+		recovery.NewDryRunMetricQuerier(),
 		state,
 		slog.New(slog.DiscardHandler),
-		aiopstools.DefaultVerifyRecoveryConfig(),
+		recovery.DefaultVerifyRecoveryConfig(),
 	)
 	verifier := loopbiz.NewMCPAdapter(
 		nil,
-		aiopstools.VerifyRecoveryCallerAdapter{Tool: verifyTool},
+		recovery.VerifyRecoveryCallerAdapter{Tool: verifyTool},
 		loopbiz.NewContractMCPRecoveryContextLoader(contracts),
 	)
 	verified, err := verifier.Invoke(context.Background(), "tenant-loop", loopbiz.ToolNameVerify, json.RawMessage(`{

@@ -6,6 +6,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/database"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	"os"
 	"strconv"
@@ -208,7 +209,7 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	// path the production tunnel uses.
 	if r.caller != nil && r.edges != nil && r.devices != nil && r.recoveryAuditRepo != nil {
 		dispatcher := NewRestartServiceTool(r.caller, r.edges, r.devices, r.log)
-		recoveryTool := NewRecoveryExecuteTool(dispatcher, r.hostFixtureTerminator, r.recoveryAuditRepo, r.log)
+		recoveryTool := recovery.NewRecoveryExecuteTool(dispatcher, r.hostFixtureTerminator, r.recoveryAuditRepo, r.log)
 		recoveryTool.SetPoolRecoveryExecutor(r.poolRecoveryExecutor)
 		recoveryTool.SetRepairPreviewGate(r.repairPreviewGate)
 		out = append(out, recoveryTool)

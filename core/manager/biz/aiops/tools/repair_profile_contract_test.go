@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -78,9 +79,9 @@ func controlPlaneRepairTools(t *testing.T) map[string]domain.ToolClass {
 			},
 		},
 		{
-			ToolNameRecoveryExecute,
+			recovery.ToolNameRecoveryExecute,
 			func() (domain.ToolClass, error) {
-				info, err := NewRecoveryExecuteTool(nil, nil, nil, nil).Info(ctx)
+				info, err := recovery.NewRecoveryExecuteTool(nil, nil, nil, nil).Info(ctx)
 				if err != nil {
 					return domain.ClassUnknown, err
 				}
@@ -88,9 +89,9 @@ func controlPlaneRepairTools(t *testing.T) map[string]domain.ToolClass {
 			},
 		},
 		{
-			ToolNameVerifyRecovery,
+			recovery.ToolNameVerifyRecovery,
 			func() (domain.ToolClass, error) {
-				info, err := NewVerifyRecoveryTool(nil, nil, nil, VerifyRecoveryConfig{}).Info(ctx)
+				info, err := recovery.NewVerifyRecoveryTool(nil, nil, nil, recovery.VerifyRecoveryConfig{}).Info(ctx)
 				if err != nil {
 					return domain.ClassUnknown, err
 				}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"log/slog"
 	"time"
 
@@ -54,7 +55,7 @@ func selfSettledToolNames() []string {
 		// reviewer worker for mutating tools without a deterministic policy).
 		aiopstools.ToolNameRestartService,
 		// Requires an already-approved proposal id / a confirmed draft hash.
-		aiopstools.ToolNameRecoveryExecute,
+		recovery.ToolNameRecoveryExecute,
 		aiopstools.ToolNameApplyConfigChange,
 		// Coordination and output primitives: they change no infrastructure.
 		aiopstools.AgentToolName,

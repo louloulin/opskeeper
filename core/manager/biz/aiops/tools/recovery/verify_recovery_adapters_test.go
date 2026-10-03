@@ -8,7 +8,7 @@
 //  5. auth 头：构造 querier with auth token → httptest.Server 验证 Authorization: Bearer <token> 头
 //
 // 不引入新依赖（httptest / io / strings / net/http 都是 stdlib）。
-package tools
+package recovery
 
 import (
 	"context"

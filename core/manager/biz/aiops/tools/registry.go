@@ -23,6 +23,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/database"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
 	"log/slog"
@@ -87,16 +88,16 @@ type Registry struct {
 	// nil-safe: when unset the recovery.execute BaseTool is omitted from
 	// BuildBaseTools — production wiring must set this via
 	// SetRecoveryAuditRepo so the gate is live. The repo only needs to
-	// satisfy the narrow MutatingProposalAuditRepo seam; tests inject an
+	// satisfy the narrow recovery.MutatingProposalAuditRepo seam; tests inject an
 	// in-memory fake.
-	recoveryAuditRepo MutatingProposalAuditRepo
+	recoveryAuditRepo recovery.MutatingProposalAuditRepo
 	repairPreviewGate repairpreview.Gate
 	// hostFixtureTerminator is the narrow case-owned kill_process seam.
 	// nil keeps restart_service usable and makes kill_process fail closed.
 	hostFixtureTerminator host.HostProcessTerminator
 	// poolRecoveryExecutor is the narrow case-owned resize_pool seam.
 	// nil keeps restart_service/kill_process usable and resize_pool fail closed.
-	poolRecoveryExecutor PoolRecoveryExecutor
+	poolRecoveryExecutor recovery.PoolRecoveryExecutor
 	// pluginConfigs feeds database metrics source discovery. Wired
 	// post-construction from cmd/main.go because PluginConfigUC is built
 	// before chat runtime but after the registry's constructor deps.
@@ -179,12 +180,14 @@ func (r *Registry) SetAuditLister(a alerting.AuditLister) { r.auditLister = a }
 // query_change_events. Optional; nil = audit-only results.
 func (r *Registry) SetEdgeChangeLister(e alerting.EdgeChangeLister) { r.edgeChangeLister = e }
 
-// SetRecoveryAuditRepo wires the narrow MutatingProposalAuditRepo seam
+// SetRecoveryAuditRepo wires the narrow recovery.MutatingProposalAuditRepo seam
 // consumed by recovery.execute. Call after NewRegistry (cmd/main.go);
 // nil disables the recovery.execute BaseTool from BuildBaseTools —
 // the gate is the whole point of the tool, so production wiring should
 // always supply a real repo.
-func (r *Registry) SetRecoveryAuditRepo(repo MutatingProposalAuditRepo) { r.recoveryAuditRepo = repo }
+func (r *Registry) SetRecoveryAuditRepo(repo recovery.MutatingProposalAuditRepo) {
+	r.recoveryAuditRepo = repo
+}
 
 func (r *Registry) SetRepairPreviewGate(gate repairpreview.Gate) { r.repairPreviewGate = gate }
 
@@ -192,7 +195,7 @@ func (r *Registry) SetHostFixtureTerminator(terminator host.HostProcessTerminato
 	r.hostFixtureTerminator = terminator
 }
 
-func (r *Registry) SetPoolRecoveryExecutor(recoverer PoolRecoveryExecutor) {
+func (r *Registry) SetPoolRecoveryExecutor(recoverer recovery.PoolRecoveryExecutor) {
 	r.poolRecoveryExecutor = recoverer
 }
 

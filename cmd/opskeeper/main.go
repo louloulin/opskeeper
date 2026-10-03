@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1518,7 +1519,7 @@ func main() {
 			log.Error("pool fixture client config requires both URL and token")
 			os.Exit(1)
 		}
-		toolsReg.SetPoolRecoveryExecutor(aiopstools.NewPoolFixtureClient(poolFixtureURL, poolFixtureToken))
+		toolsReg.SetPoolRecoveryExecutor(recovery.NewPoolFixtureClient(poolFixtureURL, poolFixtureToken))
 	}
 	demoAPIToken := strings.TrimSpace(os.Getenv("OPSKEEPER_DEMO_API_TOKEN"))
 	if poolFixtureURL != "" && poolFixtureToken != "" && demoAPIToken != "" {
@@ -2209,23 +2210,23 @@ func main() {
 	// loop-recovery-integration: RecoveryStateStoreDB satisfies both
 	// loop.RecoveryStateStore and aiops/tools.RecoveryStateStore (same shape).
 	var _ managerbizloop.RecoveryStateStore = loopRecoveryStateStore
-	var _ aiopstools.RecoveryStateStore = loopRecoveryStateStore
+	var _ recovery.RecoveryStateStore = loopRecoveryStateStore
 	// loop-recovery-integration: DB-backed RecoveryStateStore when
 	// sqlDB != nil (retry_count multi-instance shared); InMemory fallback
 	// for DB-less dry-run / CI.
-	var verifyStateStore aiopstools.RecoveryStateStore
+	var verifyStateStore recovery.RecoveryStateStore
 	if loopRecoveryStateStore != nil {
 		verifyStateStore = loopRecoveryStateStore
 	} else {
-		verifyStateStore = aiopstools.NewInMemoryRecoveryStateStore()
+		verifyStateStore = recovery.NewInMemoryRecoveryStateStore()
 	}
 	// VerifyRecoveryTool — default VerifyRecoveryConfig + dry-run
 	// MetricQuerier (production-side querier lands with metric adapter).
-	verifyRecoveryTool := aiopstools.NewVerifyRecoveryTool(
-		aiopstools.NewDryRunMetricQuerier(),
+	verifyRecoveryTool := recovery.NewVerifyRecoveryTool(
+		recovery.NewDryRunMetricQuerier(),
 		verifyStateStore,
 		log.With(slog.String("comp", "verify-recovery")),
-		aiopstools.DefaultVerifyRecoveryConfig(),
+		recovery.DefaultVerifyRecoveryConfig(),
 	)
 	// LLMCaller 注入 5 phase worker（llm-worker-integration）。
 	// llmClient 是 main.go 上面的 PiG completer（见模型平面装配块）。
@@ -2378,7 +2379,7 @@ func main() {
 	if loopRecoveryStateStore != nil {
 		loopStateStoreForWorkers = loopRecoveryStateStore
 	} else {
-		loopStateStoreForWorkers = aiopstools.NewInMemoryRecoveryStateStore()
+		loopStateStoreForWorkers = recovery.NewInMemoryRecoveryStateStore()
 	}
 	if sqlDB != nil {
 		loopCorrelatedGroupLoader = managerbizloop.NewCorrelatedGroupLoaderAdapter(
@@ -2404,7 +2405,7 @@ func main() {
 	loopWorkers, err := managerbizloop.DefaultPhaseWorkerFactory(managerbizloop.PhaseWorkerDeps{
 		// loop-repository-integration + loop-recovery-integration + agentteams-opskeeper-integration:
 		// all narrow deps on real adapters when DB available.
-		VerifyCaller:                aiopstools.VerifyRecoveryCallerAdapter{Tool: verifyRecoveryTool},
+		VerifyCaller:                recovery.VerifyRecoveryCallerAdapter{Tool: verifyRecoveryTool},
 		StateStore:                  loopStateStoreForWorkers,
 		ApprovedRefLoader:           approvedDecisionLoader,
 		FlowRunner:                  managerbizloop.NoopFlowRunner{},
@@ -2449,7 +2450,7 @@ func main() {
 	}
 	loopMCPAdapter := managerbizloop.NewMCPAdapter(
 		loopOrchestrator,
-		aiopstools.VerifyRecoveryCallerAdapter{Tool: verifyRecoveryTool},
+		recovery.VerifyRecoveryCallerAdapter{Tool: verifyRecoveryTool},
 		managerbizloop.NewContractMCPRecoveryContextLoader(loopContractRepo),
 	)
 	// Chatdiagnose orchestrator adapter wraps loop.Orchestrator so the
@@ -2497,7 +2498,7 @@ func main() {
 	loopHTTPHandler, err := managerserverloop.NewHandler(
 		loopOrchestrator,
 		loopEventRepo,
-		aiopstools.VerifyRecoveryCallerAdapter{Tool: verifyRecoveryTool},
+		recovery.VerifyRecoveryCallerAdapter{Tool: verifyRecoveryTool},
 	)
 	if err != nil {
 		log.Error("loop: http handler init", slog.Any("err", err))
@@ -3744,7 +3745,7 @@ func (t transcriptReader) ListMessages(
 }
 
 func recoveryApprovalQueryFromRequest(
-	request aiopstools.RecoveryProposalRequest,
+	request recovery.RecoveryProposalRequest,
 	now time.Time,
 ) managerdatahitlstore.RecoveryApprovalQuery {
 	return managerdatahitlstore.RecoveryApprovalQuery{
@@ -3758,7 +3759,7 @@ func recoveryApprovalQueryFromRequest(
 	}
 }
 
-func (r hitlRecoveryAuditRepo) ReserveApprovedProposal(ctx context.Context, request aiopstools.RecoveryProposalRequest) error {
+func (r hitlRecoveryAuditRepo) ReserveApprovedProposal(ctx context.Context, request recovery.RecoveryProposalRequest) error {
 	return r.repo.ReserveApprovedForRecovery(
 		ctx,
 		recoveryApprovalQueryFromRequest(request, time.Now().UTC()),
