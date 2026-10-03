@@ -7417,6 +7417,91 @@ return append(infos, extensionTools...)   // Source 由测试自己填成扩展�
    阶段 0 的 0.4 才谈得上「带工具的真实对话」。
 4. 在此之前，**工具调用的 e2e 不要写**——它必然红，而红的理由与交付通路无关。
 
+### 4.68 决策 131：计划 §6 安全专项的「节点令牌越权」此前只是一句话，补成七条探针——并先证明它们会红
+
+上一轮把阶段 0 的剩余工作让给了上游 PiG，于是本轮去查计划 §6 的安全专项清单。
+四项里三项当场就有闸门：
+
+| §6 要求 | 闸门 | 状态 |
+|---|---|---|
+| 栅栏语义三用例 | `core/edge/autonomy/autonomy_test.go`（幂等 / blast_radius） | 已有 |
+| 自治动作逃逸 | `TestTheRunnerIsGivenTheDeclaredArgvAndNotTheClaimed`（篡改 argv）、`TestAClaimForSomethingNotDeclaredDefers`（超 blast_radius）、`TestAReplayIsRefused`（重放幂等键） | 已有 |
+| `plugin-coverage` 0/20 是预期值 | `TestTheShippedOpsPigletIsReadOnly` + `make eval-coverage` | 已有 |
+| **节点令牌越权：节点 A 的令牌不能用于节点 B 的推理** | —— | **无** |
+
+第四项一条都没有。`tests/agentgateway` 里那个假鉴权器看上去像覆盖（它确实会拒
+错误凭据），但它是 e2e 自己的替身，证明的是「链路能通」；真正持有 argon2id 验签和
+60 秒凭据缓存的 `AccessKeyAuthenticator`，以及唯一把身份转成钱的
+`core/manager/server/llmgw`，两边都没有交叉节点的用例。
+
+#### 4.68.1 威胁模型：accessKey 那一半**不是秘密**
+
+这套方案里节点持有的是 `accessKey:secretKey`。accessKey 会出现在建节点的日志行
+（`edge created ... "access_key_id", ak`）里，也会出现在节点每一次请求的
+`Authorization` 头里——它是**寻址**，不是凭证。全部重量压在 secret 那一半上：
+它只能被自己满足。
+
+所以「A 的令牌不能用于 B 的推理」这句话的真正含义不是「A 的凭据会被拒绝」——
+那是一行断言，`TestEveryCredentialFailureIsOneUnanswerableRefusal` 早就有了。
+真正的含义是：**A 手上有的东西，能不能被变成 B 的身份**。而这一问必须由两个地方
+各自回答，缺一不可：
+
+- `core/manager/biz/edge` 决定「凭据 → EdgeID」，并且为了避开 argon2id 的 64 MiB
+  单次开销，给成功对缓存 60 秒；
+- `core/manager/server/llmgw` 决定「EdgeID → 限流桶 / 日志行 / 账单」，是集群通向
+  付费 provider 的唯一路径。
+
+#### 4.68.2 七条探针
+
+新增 `core/manager/biz/edge/authn_test.go`（真 argon2id、真缓存、真 repo）与
+`core/manager/server/llmgw/nodeidentity_test.go`（真网关 handler + 真限流器）：
+
+| 探针 | 钉住的性质 | 今天 |
+|---|---|---|
+| `TestAMixedPairIsRefusedInBothOrders` | A 的 accessKey + B 的 secret，双向都拒，且被拒时必须解析为** nobody**（非零 EdgeID 在这里就是「被信任成了谁」） | 绿 |
+| `TestAWarmedCacheDoesNotTurnAnAccessKeyIntoABearerToken` | A 成功认证一次把缓存热了之后，混合凭对、截断、延长、空 secret 依然全拒 | 绿 |
+| `TestARotatedSecretStopsWorkingAtTheCacheTTLAndNotBefore` | 缓存键必须含 secret；过期条目不再服务；`authCacheTTL == 60s` 这个「吊销窗口」与文档同源 | 绿 |
+| `TestNothingANodeSaysCanNameTheNodeThatIsCalling` | 四个伪造身份位（4 个头 + query + body 三个字段）同时指向 B 时，限流器被问的仍然只有 A | 绿 |
+| `TestOneNodesAllowanceCannotBeSpentOnAnothers` | A 打空自己的桶并自称 B：A 仍 429、B 仍 200 | 绿 |
+| `TestAMixedPairIsRefusedBeforeTheModelIsReached` | 伪造凭据时 **provider 调用次数必须是 0**——事后再拒也已经花了钱、也已经记在了没问过问题的节点上 | 绿 |
+| `TestAnAnonymousRequestNeverReachesTheModel` | 无头 / 半截 / 空 secret / 错误 scheme 五种匿名请求，同样 0 次调用 | 绿 |
+
+第一条的注释里写了它为什么不断言 404 而断言「解析为 nobody」：`Authenticate` 的
+失败路径全部塌缩成 `ErrUnauthorized` 是**有意的**（区分「没这个节点」和「secret 错」
+就是一台枚举机），但塌缩的是错误，不是身份。
+
+#### 4.68.3 三次变异：绿色的探针必须先被证明会红
+
+新增测试如果一上来就绿，它证明不了什么——它可能只是把现状抄了一遍。所以逐个破坏
+被保护的性质，确认对应探针转红，再恢复：
+
+| 变异 | 探针的反应 | 暴露的真实风险 |
+|---|---|---|
+| 缓存键从 `sha256(ak + ":" + sk)` 改成 `sha256(ak)` | `TestAWarmedCache…` 红：连**空 secret** 都被放行 | 缓存一热，A 的 accessKey 立刻变成 60 秒的万能通行证；accessKey 是日志里明文的东西 |
+| 网关优先信任 `X-Opskeeper-Edge-Id` 头 | 两条网关探针红：A 花光额度却以 B 的名义被服务（200），B 反而被 A 的消费锁死（429） | 这就是「A 的令牌用于 B 的推理」的字面形态：一个节点花掉全机队的预算，而 429 什么也说明不了 |
+| 网关对任何请求都返回 EdgeID 11 | 混合凭据与匿名两条红：provider 被调用 6 次 | 端点变成「有 URL 的发钥匙机」 |
+
+第二条的失败输出值得原样留着：它同时给出「越权得逞」和「无辜节点被牵连」两个症状，
+而只有后者会被人当成 bug 报上来。
+
+三次变异全部恢复，`go test -race` 绿，工作树除两个新文件外干净。
+
+#### 4.68.4 对台账与计划的影响
+
+- **台账仍不动（84.0%）**：这是补测试计划里明列的必备项，不是推进任何一个阶段的
+  交付物；把它算成进度会让 84% 变得比它更不诚实。
+- **计划 §6「安全专项（必须进 CI）」现在四项齐全**，且都不需要 build tag，会被
+  `make test` 正常跑到——与 §4.67 那两条长期红的上游探针不同，这些是常绿的。
+- 阶段 0 的 0.4 仍被上游 `convertTools` 挡住，本轮没有碰它，也没有绕它。
+
+#### 4.68.5 下一步
+
+1. **上游**：等 PiG 发 v0.3.2，用 `OPSKEEPER_PIG_BIN` 跑双绿判定（§4.67.9）。
+2. **本仓库**：计划 §6 端到端还差「跨架构：amd64 与 arm64 各跑一次完整 e2e」，
+   目前 e2e 只构建 darwin/arm64，这是下一个不被上游挡住的具体缺口。
+3. **阶段 3**：manager 27 万行的限界上下文拆分是剩下最重的一块（权重 0.56），
+   起点应从解除 `iam → manager` 的反向依赖切起（决策 38 登记的已知例外）。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
