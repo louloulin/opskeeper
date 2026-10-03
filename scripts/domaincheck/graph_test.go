@@ -121,6 +121,59 @@ func TestADomainOfOnePackageSaysThereIsNothingUnderItToSplit(t *testing.T) {
 	}
 }
 
+func reportVerdict(t *testing.T, g *domainGraph, body string) string {
+	t.Helper()
+	grouping, _, err := loadGrouping(groupingFile(t, body))
+	if err != nil {
+		t.Fatalf("load the grouping: %v", err)
+	}
+	var buf bytes.Buffer
+	g.printCutVerdict(&buf, grouping)
+	return buf.String()
+}
+
+func TestAGroupThatIsOnePackageIsReportedAsARename(t *testing.T) {
+	// A group holding a single package has not been split. The domain
+	// name is new and the code is where it was, and saying so is cheaper
+	// than a week of moving files to find out.
+	sources := world(sizedFixture("biz/alpha", 900), sizedFixture("biz/beta", 100))
+	out := reportVerdict(t, buildGraph(sources, testRules()),
+		"one = alpha\n")
+	if !strings.Contains(out, "a name, not a split") {
+		t.Errorf("a one-package group should be called a rename:\n%s", out)
+	}
+}
+
+func TestAGroupIsJudgedAgainstItsOwnSizeNotTheTrees(t *testing.T) {
+	// The bug this locks: a catch-all "everything else" group holds most
+	// of the tree, so a tree-wide share reads about 80% and washes out
+	// the group that is actually the problem. Each group is therefore
+	// priced against itself.
+	sources := world(
+		sizedFixture("biz/alpha", 9000),
+		sizedFixture("biz/alpha/sub", 10),
+		sizedFixture("biz/beta", 500),
+	)
+	out := reportVerdict(t, buildGraph(sources, testRules()),
+		"big = alpha\nrest = beta\n")
+	if !strings.Contains(out, "is biz/alpha") {
+		t.Errorf("the dominant package inside a group should be named:\n%s", out)
+	}
+	if !strings.Contains(out, "of the group is biz/alpha") {
+		t.Errorf("the share should be of the group, not of the tree:\n%s", out)
+	}
+}
+
+func TestAGroupSpreadAcrossManyPackagesIsNotCalledARename(t *testing.T) {
+	// The marking has to be earned. A wide group is a group.
+	sources := world(sizedFixture("biz/alpha", 300), sizedFixture("biz/beta", 200))
+	out := reportVerdict(t, buildGraph(sources, testRules()),
+		"wide = alpha, beta\n")
+	if strings.Contains(out, "a name, not a split") {
+		t.Errorf("a two-package group is not a rename:\n%s", out)
+	}
+}
+
 func TestTheReportSeesEveryEdgeTheGateWouldForbid(t *testing.T) {
 	// One undeclared import is one edge. If buildGraph dropped or invented
 	// edges relative to check(), the two tools would answer "how tangled is

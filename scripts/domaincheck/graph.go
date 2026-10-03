@@ -103,6 +103,30 @@ func buildGraph(sources []source, r rules) *domainGraph {
 	return g
 }
 
+// totalLines is the size of the whole tree, tests excluded. It is the
+// denominator every share in this file is measured against.
+func (g *domainGraph) totalLines() int {
+	n := 0
+	for _, v := range g.lines {
+		n += v
+	}
+	return n
+}
+
+// sizeOfDomain is the lines and the package count behind one domain. The
+// package count is not decoration: a domain of 400 lines in one package
+// and a domain of 400 lines in forty are both small, and only one of them
+// has anything to take apart.
+func (g *domainGraph) sizeOfDomain(d string) (lines, pkgs int) {
+	lines = g.lines[d]
+	for _, p := range g.pkgs {
+		if p.domain == d {
+			pkgs++
+		}
+	}
+	return lines, pkgs
+}
+
 // printSize reports the other axis: not what depends on what, but how much
 // code there is to move.
 //
@@ -508,13 +532,18 @@ func (g *domainGraph) printCut(w io.Writer, grouping map[string]string, order []
 	fmt.Fprintf(w, "\nproposed split: %d groups\n", len(order))
 	for _, name := range order {
 		var members []string
+		lines, pkgs := 0, 0
 		for d, gname := range grouping {
 			if gname == name {
 				members = append(members, d)
+				dl, dp := g.sizeOfDomain(d)
+				lines += dl
+				pkgs += dp
 			}
 		}
 		sort.Strings(members)
-		fmt.Fprintf(w, "  %-14s %2d domains: %s\n", name, len(members), strings.Join(members, " "))
+		fmt.Fprintf(w, "  %-14s %2d domains  %6d lines  %2d packages: %s\n",
+			name, len(members), lines, pkgs, strings.Join(members, " "))
 	}
 	if len(unassigned) > 0 {
 		fmt.Fprintf(w, "\n  %d domain(s) the grouping does not mention: %s\n",
@@ -541,4 +570,75 @@ func (g *domainGraph) printCut(w io.Writer, grouping map[string]string, order []
 	fmt.Fprintln(w, "  forbidden and it is not cheap: each one is a seam somebody has to hold open.")
 	fmt.Fprintln(w, "  Weight is the number of import statements behind it, so a crossing edge worth 25")
 	fmt.Fprintln(w, "  is a different proposition from one worth 1.")
+
+	g.printCutVerdict(w, grouping)
+}
+
+// printCutVerdict is the second price on a split, and the one the edge
+// count cannot give.
+//
+// Cutting edges and moving code are different events. A grouping can
+// sever forty imports and leave every package exactly where it was: the
+// seams are new, the review is longer, and the thing on the other side of
+// the wall is the same code under a new name. What separates that from a
+// real split is concentration — a group whose largest package is most of
+// its lines has not been decomposed, it has been relabelled.
+//
+// So the price is asked per group, against the group's own size, rather
+// than against the tree. A tree-wide share would be answered by whatever
+// catch-all group the author wrote, and that answer is always about 100%.
+func (g *domainGraph) printCutVerdict(w io.Writer, grouping map[string]string) {
+	total := g.totalLines()
+	if total == 0 {
+		return
+	}
+	type groupSize struct {
+		name  string
+		lines int
+		pkgs  int
+		big   string
+		bigN  int
+	}
+	gs := map[string]*groupSize{}
+	for pkg, p := range g.pkgs {
+		gname := grouping[p.domain]
+		if gname == "" {
+			continue
+		}
+		s := gs[gname]
+		if s == nil {
+			s = &groupSize{name: gname}
+			gs[gname] = s
+		}
+		s.lines += p.lines
+		s.pkgs++
+		if p.lines > s.bigN {
+			s.big, s.bigN = pkg, p.lines
+		}
+	}
+
+	names := make([]string, 0, len(gs))
+	for n := range gs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	fmt.Fprintln(w, "\n  the second price — what is actually inside each group:")
+	fmt.Fprintln(w, "  Edge count says how many seams the split opens. Line count says how much")
+	fmt.Fprintln(w, "  code has to move. A group that is one package has been renamed, not split.")
+	for _, n := range names {
+		s := gs[n]
+		share := 0.0
+		if s.lines > 0 {
+			share = 100 * float64(s.bigN) / float64(s.lines)
+		}
+		note := ""
+		if s.pkgs == 1 {
+			note = "  <- one package: a name, not a split"
+		} else if share >= 50 {
+			note = fmt.Sprintf("  <- %.0f%% of the group is %s", share, s.big)
+		}
+		fmt.Fprintf(w, "  %-14s %6d lines  %5.1f%% of tree  %2d packages  largest %-24s %5.1f%%%s\n",
+			s.name, s.lines, 100*float64(s.lines)/float64(total), s.pkgs, s.big, share, note)
+	}
 }
