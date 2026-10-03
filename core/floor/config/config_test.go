@@ -8,7 +8,7 @@ import (
 func TestLoadDefaults(t *testing.T) {
 	// Clear all OPSKEEPER_* vars so we test defaults deterministically.
 	vars := []string{
-		"OPSKEEPER_HTTP_ADDR", "OPSKEEPER_METRICS_ADDR", "OPSKEEPER_TUNNEL_ADDR",
+		"OPSKEEPER_HTTP_ADDR", "OPSKEEPER_METRICS_ADDR",
 		"OPSKEEPER_DB_DIALECT", "OPSKEEPER_DB_DSN", "OPSKEEPER_DB_PATH",
 		"OPSKEEPER_JWT_SECRET", "OPSKEEPER_JWT_ACCESS_TTL", "OPSKEEPER_JWT_REFRESH_TTL",
 		"OPSKEEPER_OPENAI_API_KEY", "OPSKEEPER_OPENAI_MODEL", "OPSKEEPER_OPENAI_BASE_URL",
@@ -39,9 +39,6 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.MetricsAddr != ":9100" {
 		t.Errorf("MetricsAddr default = %q, want :9100", cfg.MetricsAddr)
-	}
-	if cfg.TunnelAddr != ":40012" {
-		t.Errorf("TunnelAddr default = %q, want :40012", cfg.TunnelAddr)
 	}
 	if cfg.DB.Dialect != "mysql" {
 		t.Errorf("DB.Dialect default = %q, want mysql", cfg.DB.Dialect)

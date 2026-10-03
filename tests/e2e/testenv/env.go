@@ -137,7 +137,6 @@ func Start(t *testing.T, opts ...Option) *Env {
 	managerEnv := map[string]string{
 		"OPSKEEPER_HTTP_ADDR":           fmt.Sprintf("127.0.0.1:%d", port),
 		"OPSKEEPER_METRICS_ADDR":        fmt.Sprintf("127.0.0.1:%d", metricsPort),
-		"OPSKEEPER_TUNNEL_ADDR":         "127.0.0.1:0", // disabled in practice; never dialed from e2e
 		"OPSKEEPER_DB_DIALECT":          "mysql",
 		"OPSKEEPER_DB_DSN":              dsn,
 		"OPSKEEPER_JWT_SECRET":          "test-jwt-secret-" + randomSuffix(),

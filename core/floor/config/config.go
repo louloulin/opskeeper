@@ -22,7 +22,6 @@ import (
 type Config struct {
 	HTTPAddr    string
 	MetricsAddr string
-	TunnelAddr  string
 
 	// PublicURL is the canonical https URL operators use to reach this
 	// manager from outside the docker network. Used to compose data
@@ -498,7 +497,6 @@ func Load() (*Config, error) {
 	c := &Config{
 		HTTPAddr:    getEnv("OPSKEEPER_HTTP_ADDR", ":8080"),
 		MetricsAddr: getEnv("OPSKEEPER_METRICS_ADDR", ":9100"),
-		TunnelAddr:  getEnv("OPSKEEPER_TUNNEL_ADDR", ":40012"),
 		PublicURL:   getEnv("OPSKEEPER_PUBLIC_URL", ""),
 		Logs:        LogsConfig{URL: getEnv("OPSKEEPER_LOG_QUERY_URL", "http://loki:3100")},
 		Traces:      TracesConfig{URL: getEnv("OPSKEEPER_TRACE_QUERY_URL", "http://tempo:3200")},

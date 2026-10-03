@@ -4,9 +4,14 @@
 #
 # NOTE on ports:
 #   The edge agent does NOT accept inbound traffic in normal operation — it
-#   dials the cloud tunnel (TUNNEL_ADDR) as a client. The EXPOSE 9101 below is
-#   ONLY for the agent's own local /metrics endpoint, useful for local debug
-#   (e.g. `curl localhost:9101/metrics`). Production deployments can ignore it.
+#   dials the cloud tunnel as a client, and the address it dials is
+#   OPSKEEPER_EDGE_CLOUD_ADDR. (There used to be a second variable,
+#   OPSKEEPER_TUNNEL_ADDR, that looked like it configured this and was read
+#   by nothing; it is gone as of decision 152. If you find it in an old env
+#   file it is a no-op, and the address is still Edge.CloudAddr.)
+#   The EXPOSE 9101 below is ONLY for the agent's own local /metrics
+#   endpoint, useful for local debug (e.g. `curl localhost:9101/metrics`).
+#   Production deployments can ignore it.
 
 ARG VERSION=dev
 
