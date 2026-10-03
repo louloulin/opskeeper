@@ -9050,6 +9050,67 @@ PiG 侧 `ScopeTools`（`coding/piglet/scope.go:50-52`）的
 （这是上游契约，改它要动 PiG），被拒绝的位置是宿主 gate——现在这一点有
 测试了。
 
+### 4.81 决策 144：一条挂了很久的过期缺口，和它暴露的真正问题
+
+#### 4.81.1 「待决的大动作」里有一条不是缺口
+
+台账的「文档补齐」条目要求更新 `docs/module-architecture.md`，把
+`policygate` / `gatesocket` / 准入信使 / `spec.tools` / `harness` 写进去。
+去核实，发现**这五项早已全部在册**：
+
+| 条目要求写的 | 文档实际位置 |
+|---|---|
+| `spec.tools` 是 allow-list 而非摘要 | `## Plugin governance` → 第 287 行「`spec.tools` is the allow-list, not a summary」 |
+| `policygate` / `gatesocket` / 信使 | `## The node plane's two sockets`，含三者分表与「两个检查读同一份 registry 就是这里全部的纵深防御」 |
+| 准入信使 | `### The courier is a policy extension, not a toolset` |
+| `harness` | 依赖图与模块表（`core`, `pig`，决策 67 加宽） |
+
+写得不只是「有」，而是精确到「`opskeeper-gate` 注册零个工具；它监听
+`tool_call` 把调用送到宿主 gate socket；profile 故意用 `tools: []` 命名它，
+因为对那个唯一横在每次调用前面的扩展，『它以后注册什么』不是该承诺的东西」。
+
+**所以这条不是缺口，是一条过期记录。** 它记下时这些内容确实不在，文档后来
+补上了，这条却没跟着删。
+
+#### 4.81.2 为什么一条过期记录值得单独一个决策
+
+不是因为文档工作本身有价值，而是因为**「待决的大动作」是这份台账里最容易被
+当真的部分**——它列的都是「还没做、且看起来该做」的事。一条早就完成的条目
+长期挂在那里，代价不是浪费几分钟，是**让人以为文档没写完而去重写一遍**，
+或者更糟：以为某处缺了防护而去加一层。
+
+这份台账对已完成的条目有明确写法（`~~删除线~~` + 「已完成（决策 N）」），
+本条**没有按那个写法处理过**，所以它一直以「未完成」的形态存在。已按约定
+改写并标为已完成，理由与证据一并留在原位。
+
+#### 4.81.3 真正缺的不是内容，是框架
+
+核实过程中发现文档有一处**实质缺口**，而且缺的正是决策 142/143 建立的结论。
+
+原文把 piglet profile 描述成 allow-list 的「第二份精确副本」——这句话本身
+没错（profile 对**它点名的**扩展确实是精确的），但紧跟着没有任何一句说明
+**它不是安全边界**。一个读者顺着读下来，很容易得出「profile 在执行
+allow-list」这个**方向相反**的结论。
+
+而事实是：profile 决定工具是否被**提供给模型**，`policygate` 决定它是否
+**被允许运行**。PiG 对未点名扩展放行是上游公开契约，没有「只允许这些扩展」
+的表达；真正兜住的是宿主 gate，它 fail-closed，且**审批也买不到节点从未准入
+的工具**。两层读同一个 admitted 集合，这才让「多提供」无害。
+
+已在 `### spec.tools is the allow-list, not a summary` 之后补一小节
+（**The profile is a review surface, not the boundary**），并指明那两条测试
+在哪。判据是：读者若只看这一节就动手改 profile 的生成逻辑，得到的应当是
+「先去看 gate 有多强」，而不是「把 profile 做得更严」。
+
+#### 4.81.4 验证
+
+本决策只改文档，无代码变更，因此**不跑闸门**（跑一遍只会得到与上一提交相同
+的结果，那不是证据）。核对方式是把台账要求的五项逐条 grep 到具体小节标题，
+结果列在 §4.81.1 的表里——**没有一项是「大致写了」，每一项都能指到行**。
+
+本决策**不改进度百分比**：它关闭的是一条过期记录，并补上一处文档框架缺口，
+两者都不推进计划 §五 的任何一条验收闸门。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -11670,12 +11731,24 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
 - **审计端口**：`iam/server` 为了写审计行而 import `manager/{biz,model}/audit`
   （决策 38 登记的例外）。决策 35 把审计链放在 manager 的唯一咽喉上是对的，
   但代价是 iam 依赖 manager。要真正解开，需要一个两边都能依赖的审计端口。
-- 文档补齐：更新 `docs/module-architecture.md`，把 `policygate`/`gatesocket`/
-  准入信使/`spec.tools`/`harness` 写进去。
-  **arch-lint 不需要为它们新增条目**——`oxedge_policygate` 与 `oxedge_gatesocket`
-  与 `oxharness_*` 已在 `.go-arch-lint.yml` 里成对登记；
-  而 `core/pig/extensions/opskeeper-gate` 是**独立 go module**，它的边界由 Go
-  模块系统与 `scripts/modulecheck` 强制，再加一条 arch-lint 组件条目是重复覆盖。
+- ~~**文档补齐：更新 `docs/module-architecture.md`，把
+  `policygate`/`gatesocket`/准入信使/`spec.tools`/`harness` 写进去。~~
+  **已核实为过期记录（决策 144）**：这五项**早已全部在册**——
+  `spec.tools` 是 allow-list 而非摘要（`## Plugin governance`）、
+  三个安全组件的分表（`## The node plane's two sockets`，含「两个检查读同一份
+  registry 就是这里全部的纵深防御」）、信使为何是 policy 扩展而非工具集
+  （`### The courier is a policy extension`）、`harness` 在依赖图与模块表里
+  （`core`, `pig`，决策 67 加宽）。本条当年记下时它们确实不在，文档后来补上了，
+  **而这条记录没跟着删**——一条长期挂在「待决的大动作」里的过期缺口，会让人
+  以为文档没写完而重写一遍。
+  真正缺的不是这五项的内容，是**框架**：文档把 piglet profile 描述成 allow-list
+  的「第二份精确副本」，却没说它**不是**安全边界——而这恰恰是决策 142/143
+  用变异测试钉住的结论。已补（§4.81）。
+  **arch-lint 确实不需要为它们新增条目**（这一半原记录是对的）——
+  `oxedge_policygate` 与 `oxedge_gatesocket` 与 `oxharness_*` 已在
+  `.go-arch-lint.yml` 里成对登记；而 `core/pig/extensions/opskeeper-gate` 是
+  **独立 go module**，它的边界由 Go 模块系统与 `scripts/modulecheck` 强制，
+  再加一条 arch-lint 组件条目是重复覆盖。
 - **`.go-arch-lint.yml` 与 `scripts/modulecheck` 有意重复**：前者是给人读的
   声明，后者是会跑的。`go-arch-lint` 在本机没装，所以只有后者在生效；
   两者必须一起改（决策 38）。

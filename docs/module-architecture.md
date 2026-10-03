@@ -303,6 +303,23 @@ every tool the profile does not list. Writing the list instead of omitting it is
 what turns "this extension's tool set grew" from a capability that quietly
 appeared on every node into a diff a reviewer has to accept.
 
+**The profile is a review surface, not the boundary.** Reading the paragraph
+above as "the profile enforces the allow-list" inverts which layer actually
+holds. PiG scopes a tool by name, and for an extension the profile does not
+name it permits everything that extension registered — that is upstream's
+published contract, pinned by its own `TestScopeToolsUsesExactAllowlists`,
+which expects an ambient tool to survive. PiG offers no way to say "only these
+extensions". So a tool can be *offered* to the model without being *permitted*
+to run, and the profile is what decides the first half.
+
+The second half is decided by `policygate`, which is fail-closed: a tool no
+admitted manifest declares is refused, and an operator's approval cannot buy
+one the node never admitted. Both layers are fed from a single admitted set,
+which is what makes an over-offer harmless — a tool the profile over-offers is
+by construction a tool the gate has never heard of. Two tests in
+`cmd/opskeeper-edge/profiletwolayer_test.go` hold both halves in place; without
+them this paragraph is the only thing saying so.
+
 ### The courier is a policy extension, not a toolset
 
 `opskeeper-gate` (`core/pig/extensions/opskeeper-gate/`) registers no tools at
