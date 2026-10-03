@@ -9424,6 +9424,119 @@ TOP 里 `aiops↔loop 6`、`aiops↔mcp 6`、`aiops↔pkg 4`、`aiops↔plugin 4
   集中在某一段），那才是能改结论的证据。
 - 提案的**状态不变：已定价的候选，不是已批准的决定**。
 
+### 4.85 决策 148：e2e 跑不起来的那条诊断，两处都是错的
+
+#### 4.85.1 上一轮记下的原因
+
+§4.77.3 记的是：
+
+> **e2e 跑不了**：`tests/e2e` 需要 frontier broker 容器，而 `docker pull` 报
+> containerd 元数据库 I/O 错误。修它要重启 colima，**那会停掉正在运行的
+> `dataflare-*` 容器**，所以本刀没有动。
+
+同一条还把 containerd 的 I/O 错误归因于**磁盘满**（749 MB 可用）。两个结论：
+①是 frontier 镜像的问题；②修法是重启 colima，代价是停掉别人的容器。
+
+**两条都不成立。** 本轮实测把它们逐条拆开。
+
+#### 4.85.2 第一处错：损坏是引擎级的，与镜像无关，也与磁盘无关
+
+- 磁盘已经不是当时的状况：现在 **15 GiB 可用**（当时 749 MB）。
+- 但 colima 的 content store **仍然坏**：`docker images` 本身在 colima 上就报
+  `blob sha256:ccc6e83d… input/output error`。**列镜像都会失败，与拉哪个镜像无关**，
+  所以它不是「frontier 镜像损坏」。
+- 同一台机器上的 **Docker Desktop 是健康的**：`hello-world`、`redis:7-alpine`、
+  `bitnami/kubectl` 一次拉过；`mysql:8.0` 也一次拉过，而且它的 digest 正是
+  之前在 colima 上失败的那个 blob（`7dcddc01…`）——**同一个 blob，在健康引擎上
+  完好**。所以那也不是「这个镜像拉不下来」。
+- 结论：colima 里那一个 blob 是**持久的局部损坏**，与磁盘、镜像都无关；
+  而**它完全不必靠重启 colima 来绕开**——同机另一套引擎是好的，而 `make test-e2e`
+  本来就不覆盖 `DOCKER_HOST`，用的就是默认上下文（Docker Desktop）。
+
+#### 4.85.3 第二处错：真正的阻塞是镜像代理的 403，不是 I/O 错误
+
+换到健康引擎后跑全量 `make test-e2e`：**只有 2 条红，且两条是同一个原因**——
+`docker.io/singchia/frontier:1.2.5` 取不到，镜像代理
+`docker.m.daocloud.io` 对 `singchia` 整个命名空间返 **403 Forbidden**
+（不是 404、不是超时）。五条路都试过：
+
+| 路径 | 结果 |
+|---|---|
+| `singchia/frontier:1.2.5` / `:v1.2.4` / `:latest` | 403 Forbidden（代理对该命名空间一律拒绝） |
+| `m.daocloud.io/docker.io/singchia/frontier:1.2.5` | 403 Forbidden |
+| `ghcr.io/singchia/frontier:1.2.5` | not found |
+| 直连 `auth.docker.io` 取匿名 token | 网络不通 |
+| `~/frontier` 源码（`make docker-build-broker` 的输入） | 不存在 |
+
+**这个阻塞是外部资源，本仓改代码解不掉。** 它挡住的两条恰好是全仓最重的两条：
+
+- `TestNodeAgentDelivery` —— 方案 0.4 的验收闸门，也是阶段 0 最后那一项；
+- `TestANodeKeepsItsTelemetryThroughAnOutage` —— 阶段 1 遥测 spool 的端到端验证。
+
+其余 e2e 全部通过。**这本身是一条此前没写进台账的事实**：e2e 目录不是整体不可用，
+它是**精确地**被一个镜像挡住。
+
+#### 4.85.4 交付：让这个失败不再伪装成产品缺陷
+
+原来的失败长这样：
+
+```
+frontier.go:124: testenv: frontier container: create container: Error response
+from daemon: unknown: failed to resolve reference ... 403 Forbidden
+```
+
+一句话从容器创建调用里冒出来，读起来像**交付通路上的缺陷**。它不是：那一刻
+manager、节点、pig 子进程、隧道协议**一个都没跑过**。本轮新增
+`tests/e2e/testenv/frontier_image.go`，把失败**分类**：
+
+- `daemonRefusedImage(err)` 区分「镜像没拿到」与「镜像拿到了但 broker 不对」。
+  未识别的文本一律判 **false**——保持原错误、保持硬失败。往另一边猜，
+  就是把真缺陷重分类成「缺个依赖」然后不再有人看。
+- 消息带上三样缺一不可的东西：**是哪个镜像**（免得重拉错的那个）、
+  **产品代码一行没跑**（免得去 debug manager）、**接下来敲什么**
+  （`OPSKEEPER_E2E_FRONTIER_IMAGE=<ref>` 或让 registry 可达）。
+
+**它仍然报 FAIL，不改成 skip。** 交付闸门没交付却显示绿，比红更糟——本仓已经被
+那种形状咬过一次（`plugin-coverage` 曾经有一条永远不动的轴，一个不会动的数抓不住回归）。
+改的只是**人读到的那句话**，不是判决。
+
+#### 4.85.5 分类器为什么敢信：变异打的是反向那侧
+
+10 条子用例，**每一条都是这台机器上真实出现过的 daemon 输出**，不是照着匹配器编的。
+负例比正例重要，因为它们才是防止「broker 真坏了」被当成「缺镜像」放过去的东西：
+
+| 变异 | 红的断言 |
+|---|---|
+| 往标记表里加 `context deadline exceeded` | `broker started but never listened … = true, want false` |
+| 拆掉 blob 检查的 `blob &&` 前半 | `an unrelated io error … = true, want false` |
+
+第一条特意验证了那个**被刻意排除**的 tempting 项：`wait.ForLog` 的启动超时与
+「registry 慢」在文本上无法区分，猜错就把一个坏掉的 broker 变成一条 skip。
+
+#### 4.85.6 顺带记下两条已经过期的台账陈述
+
+1. **路线图 §七 第 8 项**「旧 `mq/kafka` + `mq/rabbitmq` 骨架的去向」——
+   `core/manager/middleware/adapter/skeleton_test.go` 的 `knownSkeletons`
+   **已经是空 map**，早就按「产品命名空间委托到中立 `mq.`」关掉了。
+2. **§九 表格**「中间件适配……尚未打包成插件包——`plugin-coverage` 现在报的
+   **18 个 GAP** 全部来自这一条」——实测诊断轴是 **16/20**，4 个 GAP **全部已登记**
+   在 `pluginmanifest.DiagnosisGaps` 且都是刻意的（host 家族语义不对：
+   适配器以 root 跑在控制面指着的那台机器上，它的读回答的是那台机器而不是节点；
+   另两个是明确标了「未裁决」的项）。18 → 4 是一次被漏记的口径变化。
+
+#### 4.85.7 进度：仍然不动，但阶段 0 的**性质**变了
+
+加权仍是 **84.1%**，四阶段仍是 65 / 100 / 91.7 / 79.7。本轮没有关掉任何一条
+验收闸门——`TestNodeAgentDelivery` 依然红着，方案 0.4 依然未完成。
+
+变的是**它卡在哪**：从「不知道，且修法要停别人的容器」变成
+「**一个外部镜像，两条出路，本仓无解**」。后者是可行动的，前者只会让人反复试。
+
+要真正推进阶段 0，需要其中一条（都不是代码能替代的）：
+- 给镜像代理配上 `singchia` 命名空间的凭据；
+- 或在任一可达 registry 上放一份 `frontier:1.2.5`，用
+  `OPSKEEPER_E2E_FRONTIER_IMAGE` 指过去。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -11740,14 +11853,14 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
      覆盖其余 7 个，取自 subject 证据项。**候选多于一个就拒绝并列出候选**。
      没有声明提取器的动作返回 `(nil, nil)`，把话留给 invoker 自己的缺参拒绝——
      解析器不该对它一无所知的动作声称有权威。
-8. ⏳ **旧 `mq/kafka` + `mq/rabbitmq` 骨架的去向**：两个包仍在，`kafka.` /
-   `rabbitmq.` 命名空间保留未动，与新的中立 `mq.` 并存。可选方案是让它们委托到
-   新包（一套实现、两个命名空间），或明确标为待删。**这是命名空间的治理决定，
-   不是技术障碍**。这 10 个工具是**当前唯一**还在报 `not_implemented` 的注册项，
-   已全部登记在 `core/manager/middleware/adapter/skeleton_test.go` 的
-   `knownSkeletons` 里并附了理由：这条守卫会拦住任何新增骨架，也会在这 10 条里
-   任何一条被实现后要求把它从清单里删掉。反过来说，能力闸门对这 10 个名字的
-   计数**今天仍然是虚高的**——它们是已知的、被点名的那一类虚高，不是未知的。
+8. ~~**旧 `mq/kafka` + `mq/rabbitmq` 骨架的去向**~~ ✅ 已完成，**而且早就完成了**
+   （决策 148 复核时才发现这一条一直挂着没过）。走的是**委托**那条路：产品命名空间
+   保留名字（注册表把一个名字绑到拥有它的资源类型上，这条规则值得留），实现通过
+   `mq.Delegate` 落到中立 `mq.` 那一套。`core/manager/middleware/adapter/
+   skeleton_test.go` 的 `knownSkeletons` **现在是空 map**——它曾有 10 条，守卫按
+   集合相等双向比对，所以那 10 条被实现的同时就被迫从清单里删掉了。**能力闸门对
+   这 10 个名字的虚高计数随之归零**，不存在「已知虚高」这一说。守卫本身还在，且
+   仍然是空转失败即红：新增任何骨架都会立刻挂。
 9. ~~**`git` 适配器仍是骨架**~~ ✅ 已完成（决策 45）：8 个工具全部真实
    （`connect` / `list_repos` / `commit_history` / `file_at_commit` / `blame` /
    `diff` / `search_code` + `find_runtime_link`），走 git CLI，只读，
@@ -12129,7 +12242,7 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
 | 告警规则 / 草稿 | ✅ 可插件化 | extension tool + command |
 | 拓扑图 | ✅ 可插件化 | extension tool |
 | 可观测栈（Prom/Loki/Tempo） | ✅ 可插件化 | extension tool（**已用**）；PiG 的 `mcp` 仅声明 |
-| 中间件适配（pg/redis/k8s/mq/git） | ✅ 可插件化 | 控制面 registry 里**真实存在**（`middleware-adapter` 100 个符号）；**尚未打包成插件包**——`plugin-coverage` 现在报的 18 个 GAP 全部来自这一条 |
+| 中间件适配（pg/redis/k8s/mq/git） | ✅ 可插件化 | 控制面 registry 里**真实存在**（`middleware-adapter` 100 个符号，骨架已清零，§4.85.6）；**打包形态已定**：**54 个工具全部 `class: read`**，随 `opskeeper-sre-middleware` 一个包下发，写工具**刻意不打包**——upcall 通道对任何 package 的非读工具一律拒绝，理由是审批队列只有一扇门。诊断轴实测 **16/20**，4 个 GAP **全部已登记**在 `pluginmanifest.DiagnosisGaps`（2 个 host 家族语义不对 + 2 个明确「未裁决」），闸门 `--fail-on-unrecorded-diagnose-gap` 因此是绿的（原文写「18 个 GAP 全部来自这一条」已过期） |
 | Web 控制台 | ❌ 不可 | 保留 manager 侧 |
 | 身份/租户/权限 | ❌ 不可 | 保留宿主 |
 | 审计 HMAC chain | ❌ 不可下放 | 宿主强制，插件只读 |

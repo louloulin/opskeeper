@@ -42,6 +42,11 @@ var (
 	frontierInst *Frontier
 	frontierBox  tc.Container
 	frontierErr  error
+	// frontierNoImage records that the failure was the daemon refusing the
+	// image, as opposed to a broker that started and then misbehaved. Only
+	// the former is an environment problem, and only the former may be
+	// reported in those words.
+	frontierNoImage bool
 )
 
 // sharedFrontier brings up one tunnel broker per `go test` process.
@@ -90,6 +95,7 @@ func sharedFrontier(t *testing.T) *Frontier {
 		})
 		if err != nil {
 			frontierErr = fmt.Errorf("frontier container: %w", err)
+			frontierNoImage = daemonRefusedImage(err)
 			return
 		}
 		host, err := container.Host(ctx)
@@ -114,6 +120,12 @@ func sharedFrontier(t *testing.T) *Frontier {
 		}
 	})
 	if frontierErr != nil {
+		if frontierNoImage {
+			// Still a failure. The delivery acceptance has not been
+			// delivered, and a red gate that says why is worth more than
+			// a green one that means nothing.
+			t.Fatal(frontierUnavailableMessage(frontierImage(), frontierErr))
+		}
 		t.Fatalf("testenv: %v", frontierErr)
 	}
 	return frontierInst
@@ -129,7 +141,14 @@ func SharedFrontier(t *testing.T) *Frontier { return sharedFrontier(t) }
 // is deliberate rather than an oversight. The v-prefixed tag does not
 // resolve through the registry mirror this machine is configured with, so
 // a harness pinned to it cannot start a broker at all; 1.2.5 is the tag
-// that is actually deployed and locally present.
+// that is actually deployed.
+//
+// It is NOT reliably obtainable either. The mirror in use answers 403 for
+// the whole singchia namespace, and a direct path to docker.io needs
+// credentials this harness does not have, so on a machine without a cached
+// copy the two delivery tests cannot run at all. That is an environment
+// precondition and it is reported as one (see frontier_image.go) rather
+// than as a failure of the thing under test.
 //
 // The divergence is stated here rather than papered over, because it is a
 // real discrepancy between what the repository asks for and what runs:
