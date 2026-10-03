@@ -1,4 +1,4 @@
-package tools
+package alerting
 
 import (
 	"context"
@@ -97,7 +97,7 @@ func (t *QueryIncidentsTool) InvokableRun(ctx context.Context, argsJSON string, 
 		f.DeviceID = &devID
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, queryIncidentsCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, QueryIncidentsCallTimeout)
 	defer cancel()
 	all, err := t.alertUC.ListIncidents(callCtx, f)
 	if err != nil {

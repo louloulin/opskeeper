@@ -4,57 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
+
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 )
 
-// ToolNameGetIncidentDetail is the stable wire name the LLM sees.
-const ToolNameGetIncidentDetail = "get_incident_detail"
-
-// GetIncidentDetailDescription pushes the model toward this tool when the
-// question is about a specific incident's history / timeline.
-const GetIncidentDetailDescription = "Return the full incident row plus its event timeline (firing, ack, resolve, notification_sent/failed). " +
-	"Use this whenever the question is about what happened on a specific incident id."
-
-// GetIncidentDetailSchema is the JSON Schema of the tool's argument object.
-var GetIncidentDetailSchema = json.RawMessage(`{
-  "type": "object",
-  "properties": {
-    "incident_id": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Numeric incident id from query_incidents."
-    }
-  },
-  "required": ["incident_id"]
-}`)
-
-// GetIncidentDetailArgs is the typed form of GetIncidentDetailSchema.
-type GetIncidentDetailArgs struct {
-	IncidentID uint64 `json:"incident_id"`
-}
-
-// IncidentEventRow is the trimmed event envelope embedded in the
-// incident detail timeline.
-type IncidentEventRow struct {
-	ID          uint64    `json:"id"`
-	EventType   string    `json:"event_type"`
-	StatusAfter string    `json:"status_after"`
-	Severity    string    `json:"severity"`
-	Title       string    `json:"title"`
-	Message     *string   `json:"message,omitempty"`
-	ActorType   string    `json:"actor_type"`
-	ActorID     *uint64   `json:"actor_id,omitempty"`
-	Reason      string    `json:"reason,omitempty"`
-	OccurredAt  time.Time `json:"occurred_at"`
-}
-
-const incidentDetailCallTimeout = 10 * time.Second
-
+// executeGetIncidentDetail stayed behind for the same reason as
+// executeQueryIncidents: it is the node-side upcall entry point, and a
+// Registry method cannot be lifted off its receiver. The batched BaseTool
+// that shares its name lives in the alerting cluster.
 func (r *Registry) executeGetIncidentDetail(ctx context.Context, args json.RawMessage) (ExecuteResult, error) {
 	if r.alertUC == nil {
 		return ExecuteResult{}, fmt.Errorf("get_incident_detail: alert usecase not configured")
 	}
-	var in GetIncidentDetailArgs
+	var in alerting.GetIncidentDetailArgs
 	if err := json.Unmarshal(args, &in); err != nil {
 		return ExecuteResult{}, fmt.Errorf("get_incident_detail: bad args: %w", err)
 	}
@@ -62,7 +24,7 @@ func (r *Registry) executeGetIncidentDetail(ctx context.Context, args json.RawMe
 		return ExecuteResult{}, fmt.Errorf("get_incident_detail: incident_id required")
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, incidentDetailCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, alerting.IncidentDetailCallTimeout)
 	defer cancel()
 
 	inc, err := r.alertUC.GetIncident(callCtx, in.IncidentID)
@@ -74,9 +36,9 @@ func (r *Registry) executeGetIncidentDetail(ctx context.Context, args json.RawMe
 		return ExecuteResult{}, fmt.Errorf("get_incident_detail: events: %w", err)
 	}
 
-	timeline := make([]IncidentEventRow, 0, len(events))
+	timeline := make([]alerting.IncidentEventRow, 0, len(events))
 	for _, ev := range events {
-		timeline = append(timeline, IncidentEventRow{
+		timeline = append(timeline, alerting.IncidentEventRow{
 			ID:          ev.ID,
 			EventType:   ev.EventType,
 			StatusAfter: ev.StatusAfter,

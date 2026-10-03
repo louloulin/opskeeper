@@ -6,92 +6,23 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
-// ToolNameQueryIncidents is the stable wire name the LLM sees.
-const ToolNameQueryIncidents = "query_incidents"
-
-// QueryIncidentsDescription pushes the model toward this tool whenever
-// the question is "how many / which incidents matched X".
-const QueryIncidentsDescription = "List OpsKeeper alert incidents filtered by severity, status, edge, rule_key and a since-window (in minutes). " +
-	"Use this for questions like '过去 24h 有几条 critical incident' or 'show open incidents on edge X'. " +
-	"Returns array of {id, title, severity, status, rule, edge_id, first_fired_at, last_fired_at}."
-
-// QueryIncidentsSchema is the JSON Schema of the tool's argument object.
-var QueryIncidentsSchema = json.RawMessage(`{
-  "type": "object",
-  "properties": {
-    "severity": {
-      "type": "string",
-      "enum": ["info", "warning", "critical"],
-      "description": "Filter by severity. Optional."
-    },
-    "status": {
-      "type": "string",
-      "enum": ["open", "acknowledged", "silenced", "resolved"],
-      "description": "Filter by lifecycle status. Optional."
-    },
-    "since_minutes": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Only return incidents whose last_fired_at is within the last N minutes. Default 1440 (24h)."
-    },
-    "edge_id": {
-      "type": "integer",
-      "description": "Filter to incidents on a specific edge. Optional."
-    },
-    "rule_key": {
-      "type": "string",
-      "description": "Filter by rule key (e.g. 'cpu_high'). Optional."
-    },
-    "limit": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 500,
-      "description": "Max rows returned (default 50)."
-    }
-  }
-}`)
-
-// QueryIncidentsArgs is the typed form of QueryIncidentsSchema.
-type QueryIncidentsArgs struct {
-	Severity     string `json:"severity,omitempty"`
-	Status       string `json:"status,omitempty"`
-	SinceMinutes int    `json:"since_minutes,omitempty"`
-	// DeviceID accepts both the new "device_id" key and the legacy
-	// "edge_id" so existing prompts keep working.
-	DeviceID uint64 `json:"device_id,omitempty"`
-	EdgeID   uint64 `json:"edge_id,omitempty"`
-	RuleKey  string `json:"rule_key,omitempty"`
-	Limit    int    `json:"limit,omitempty"`
-}
-
-// IncidentRow is the trimmed incident envelope returned by query_incidents.
-type IncidentRow struct {
-	ID             uint64     `json:"id"`
-	Title          string     `json:"title"`
-	Severity       string     `json:"severity"`
-	Status         string     `json:"status"`
-	Rule           string     `json:"rule"`
-	RuleName       string     `json:"rule_name"`
-	DeviceID       *uint64    `json:"device_id,omitempty"`
-	ScopeType      string     `json:"scope_type"`
-	FirstFiredAt   time.Time  `json:"first_fired_at"`
-	LastFiredAt    time.Time  `json:"last_fired_at"`
-	EventCount     uint64     `json:"event_count"`
-	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
-	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
-}
-
-const queryIncidentsCallTimeout = 15 * time.Second
-
+// executeQueryIncidents stayed behind while the tool itself moved to the
+// alerting cluster. A method cannot be lifted off its receiver, and this
+// one is the node-side entry point: the pig agent running on an edge
+// reaches query_incidents as an upcall through Registry
+// (agentToolUpcall.RunAgentTool), not as a BaseTool. Both paths now share
+// one wire identity and one timeout from alerting/identity.go, so they
+// cannot drift apart — which is the only reason leaving it is tolerable.
 func (r *Registry) executeQueryIncidents(ctx context.Context, args json.RawMessage) (ExecuteResult, error) {
 	if r.alertUC == nil {
 		return ExecuteResult{}, fmt.Errorf("query_incidents: alert usecase not configured")
 	}
-	var in QueryIncidentsArgs
+	var in alerting.QueryIncidentsArgs
 	if err := json.Unmarshal(args, &in); err != nil {
 		return ExecuteResult{}, fmt.Errorf("query_incidents: bad args: %w", err)
 	}
@@ -138,19 +69,19 @@ func (r *Registry) executeQueryIncidents(ctx context.Context, args json.RawMessa
 		f.DeviceID = &devID
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, queryIncidentsCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, alerting.QueryIncidentsCallTimeout)
 	defer cancel()
 	all, err := r.alertUC.ListIncidents(callCtx, f)
 	if err != nil {
 		return ExecuteResult{}, fmt.Errorf("query_incidents: list: %w", err)
 	}
 
-	rows := make([]IncidentRow, 0, len(all))
+	rows := make([]alerting.IncidentRow, 0, len(all))
 	for _, inc := range all {
 		if inc.LastFiredAt.Before(cutoff) {
 			continue
 		}
-		rows = append(rows, IncidentRow{
+		rows = append(rows, alerting.IncidentRow{
 			ID:             inc.ID,
 			Title:          inc.Title,
 			Severity:       inc.Severity,

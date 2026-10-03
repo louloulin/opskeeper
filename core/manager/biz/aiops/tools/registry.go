@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/chat2query"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
@@ -36,13 +37,13 @@ import (
 // dispatch RPCs to edges. It indexes tools by name. promQuery / logQuery /
 // traceQuery / alertUC are optional; when nil the corresponding query_* /
 // composite tool is not registered (graceful degradation for deployments
-// without that signal). alertUC is a narrow interface (AlertUsecase) so
+// without that signal). alertUC is a narrow interface (alerting.AlertUsecase) so
 // tests can inject a fake without standing up the full alert biz repo.
 type Registry struct {
 	caller     Caller
 	edges      *edgebiz.Usecase
 	devices    *devicebiz.Usecase
-	alertUC    AlertUsecase
+	alertUC    alerting.AlertUsecase
 	promQuery  PromQuerier
 	logQuery   LogQuerier
 	traceQuery TraceQuerier
@@ -76,10 +77,10 @@ type Registry struct {
 	// auditLister feeds query_change_events (HLD-013 Phase 2 — "what
 	// changed near T"). nil-safe: the tool isn't registered when unset.
 	// Wired post-construction from cmd/main.go via SetAuditLister.
-	auditLister AuditLister
+	auditLister alerting.AuditLister
 	// edgeChangeLister feeds the A.3 edge changewatcher side of
 	// query_change_events. nil-safe: the tool falls back to audit-only.
-	edgeChangeLister EdgeChangeLister
+	edgeChangeLister alerting.EdgeChangeLister
 	// recoveryAuditRepo feeds recovery.execute's mutating-proposal gate.
 	// nil-safe: when unset the recovery.execute BaseTool is omitted from
 	// BuildBaseTools — production wiring must set this via
@@ -170,11 +171,11 @@ func (r *Registry) AppendExternalBaseTool(tool basetool.BaseTool) {
 
 // SetAuditLister wires the audit query seam consumed by
 // query_change_events. Call after NewRegistry (cmd/main.go).
-func (r *Registry) SetAuditLister(a AuditLister) { r.auditLister = a }
+func (r *Registry) SetAuditLister(a alerting.AuditLister) { r.auditLister = a }
 
 // SetEdgeChangeLister wires the A.3 edge change lister for
 // query_change_events. Optional; nil = audit-only results.
-func (r *Registry) SetEdgeChangeLister(e EdgeChangeLister) { r.edgeChangeLister = e }
+func (r *Registry) SetEdgeChangeLister(e alerting.EdgeChangeLister) { r.edgeChangeLister = e }
 
 // SetRecoveryAuditRepo wires the narrow MutatingProposalAuditRepo seam
 // consumed by recovery.execute. Call after NewRegistry (cmd/main.go);
@@ -229,7 +230,7 @@ func (r *Registry) SetConfigManager(m ConfigManager) { r.configManager = m }
 // Callers may Register additional tools afterwards.
 func NewRegistry(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Usecase,
 	promQuery PromQuerier, logQuery LogQuerier, traceQuery TraceQuerier,
-	alertUC AlertUsecase,
+	alertUC alerting.AlertUsecase,
 	log *slog.Logger) *Registry {
 	r := &Registry{
 		caller:     caller,
@@ -319,21 +320,21 @@ func NewRegistry(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Useca
 	}
 	if alertUC != nil {
 		r.Register(Tool{
-			Name:        ToolNameQueryIncidents,
-			Description: QueryIncidentsDescription,
-			Schema:      QueryIncidentsSchema,
+			Name:        alerting.ToolNameQueryIncidents,
+			Description: alerting.QueryIncidentsDescription,
+			Schema:      alerting.QueryIncidentsSchema,
 			Execute:     r.executeQueryIncidents,
 		})
 		r.Register(Tool{
-			Name:        ToolNameGetIncidentDetail,
-			Description: GetIncidentDetailDescription,
-			Schema:      GetIncidentDetailSchema,
+			Name:        alerting.ToolNameGetIncidentDetail,
+			Description: alerting.GetIncidentDetailDescription,
+			Schema:      alerting.GetIncidentDetailSchema,
 			Execute:     r.executeGetIncidentDetail,
 		})
 		r.Register(Tool{
-			Name:        ToolNameQueryAlertRules,
-			Description: QueryAlertRulesDescription,
-			Schema:      QueryAlertRulesSchema,
+			Name:        alerting.ToolNameQueryAlertRules,
+			Description: alerting.QueryAlertRulesDescription,
+			Schema:      alerting.QueryAlertRulesSchema,
 			Execute:     r.executeQueryAlertRules,
 		})
 	}

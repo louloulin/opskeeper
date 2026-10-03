@@ -1,4 +1,4 @@
-package tools
+package alerting
 
 import (
 	"context"
@@ -64,7 +64,7 @@ func (t *QueryAlertRulesTool) InvokableRun(ctx context.Context, argsJSON string,
 		return "", fmt.Errorf("query_alert_rules: invalid kind %q", in.Kind)
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, queryAlertRulesCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, QueryAlertRulesCallTimeout)
 	defer cancel()
 	all, err := t.alertUC.ListRules(callCtx, "")
 	if err != nil {

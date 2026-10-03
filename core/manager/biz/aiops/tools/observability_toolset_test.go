@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"go/format"
 	"os"
@@ -89,9 +90,9 @@ func observabilityTools() []observabilityEntry {
 				info, err := NewListRepoSourcesTool(nil, nil).Info(ctx)
 				return infoOf(t, info, err)
 			}},
-		{ToolNameQueryChangeEvents, "query_change_events",
+		{alerting.ToolNameQueryChangeEvents, "query_change_events",
 			func(t *testing.T, ctx context.Context) basetoolInfo {
-				info, err := NewQueryChangeEventsTool(nil, nil, nil).Info(ctx)
+				info, err := alerting.NewQueryChangeEventsTool(nil, nil, nil).Info(ctx)
 				return infoOf(t, info, err)
 			}},
 		{ToolNameQueryLogQL, "query_logql",

@@ -68,21 +68,10 @@ const correlateIncidentTimeout = 60 * time.Second
 // the noisiest panels (logs, then traces) before re-marshalling.
 const correlateMaxResponseBytes = 100 * 1024 // 100 KB
 
-// AlertUsecase is the narrow surface this and the other alert-flavoured
-// tools (query_incidents / query_alert_rules / get_incident_detail /
-// get_edge_summary / get_topology) need from the manager/alert biz layer.
-// *alertbiz.Usecase satisfies it; tests inject a fake.
-//
-// Declared once here so registry.alertUC can stay a single field across
-// the whole package — the test seam wins over a tighter per-tool
-// interface, since most of these methods are read-only and trivial to
-// satisfy.
-type AlertUsecase interface {
-	GetIncident(ctx context.Context, id uint64) (*alertmodel.Incident, error)
-	ListIncidents(ctx context.Context, f alertbiz.IncidentFilter) ([]*alertmodel.Incident, error)
-	ListEvents(ctx context.Context, incidentID uint64, limit int) ([]*alertmodel.Event, error)
-	ListRules(ctx context.Context, scopeType string) ([]*alertmodel.Rule, error)
-}
+// alerting.AlertUsecase now lives in the alerting cluster, next to the four tools
+// that own it. It used to be declared here, which was the wrong home: the
+// one method in this file that needed it was the exception, not the rule.
+// Registry and the remaining call sites reference alerting.AlertUsecase.
 
 // correlateIncidentBundle is the shape we hand back to the LLM. JSON tags
 // are wire-stable; field rearrangement is a breaking change for any

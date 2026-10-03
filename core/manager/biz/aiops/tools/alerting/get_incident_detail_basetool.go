@@ -1,4 +1,4 @@
-package tools
+package alerting
 
 import (
 	"context"
@@ -93,7 +93,7 @@ func (t *GetIncidentDetailTool) singleIncidentDetail(ctx context.Context, incide
 		entry.Error = "incident_id must be > 0"
 		return entry
 	}
-	callCtx, cancel := context.WithTimeout(ctx, incidentDetailCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, IncidentDetailCallTimeout)
 	defer cancel()
 
 	inc, err := t.alertUC.GetIncident(callCtx, incidentID)

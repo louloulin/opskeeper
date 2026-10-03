@@ -12,6 +12,7 @@ package tools
 
 import (
 	"context"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
@@ -38,9 +39,9 @@ var untrustedOutputs = []struct {
 	{ToolNameQueryTraceQL, promptguard.KindTool},
 
 	// Alert text — names, annotations, labels, incident descriptions.
-	{ToolNameQueryIncidents, promptguard.KindAlert},
-	{ToolNameGetIncidentDetail, promptguard.KindAlert},
-	{ToolNameQueryAlertRules, promptguard.KindAlert},
+	{alerting.ToolNameQueryIncidents, promptguard.KindAlert},
+	{alerting.ToolNameGetIncidentDetail, promptguard.KindAlert},
+	{alerting.ToolNameQueryAlertRules, promptguard.KindAlert},
 	{ToolNameCorrelateIncident, promptguard.KindAlert},
 
 	// Repository and knowledge text — files, diffs, commit and PR prose.
@@ -58,7 +59,7 @@ var untrustedOutputs = []struct {
 	{host.ToolNameStatFile, promptguard.KindTool},
 
 	// Change events — deploy notes and commit summaries from CI.
-	{ToolNameQueryChangeEvents, promptguard.KindTool},
+	{alerting.ToolNameQueryChangeEvents, promptguard.KindTool},
 }
 
 // untrustedKindOf reports the declared kind for a tool name.

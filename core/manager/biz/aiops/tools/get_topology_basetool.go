@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"log/slog"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
@@ -15,7 +16,7 @@ import (
 // executeGetTopology in get_topology.go.
 type GetTopologyTool struct {
 	edges    *edgebiz.Usecase
-	alertUC  AlertUsecase
+	alertUC  alerting.AlertUsecase
 	topology TopologyInfo
 	log      *slog.Logger
 }
@@ -24,7 +25,7 @@ type GetTopologyTool struct {
 // be nil — the tool degrades to whatever it can populate. topology is a
 // value type so callers pass the resolved deployment-level facts at
 // construction time (mirrors Registry.SetTopologyInfo).
-func NewGetTopologyTool(edges *edgebiz.Usecase, alertUC AlertUsecase, topology TopologyInfo, log *slog.Logger) *GetTopologyTool {
+func NewGetTopologyTool(edges *edgebiz.Usecase, alertUC alerting.AlertUsecase, topology TopologyInfo, log *slog.Logger) *GetTopologyTool {
 	if log == nil {
 		log = slog.Default()
 	}

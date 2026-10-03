@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/chat2query"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
@@ -137,14 +138,14 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	}
 	// 9-11: alert-flavoured tools — gated on alertUC.
 	if r.alertUC != nil {
-		out = append(out, NewQueryIncidentsTool(r.alertUC, r.log))
-		out = append(out, NewGetIncidentDetailTool(r.alertUC, r.log))
-		out = append(out, NewQueryAlertRulesTool(r.alertUC, r.log))
+		out = append(out, alerting.NewQueryIncidentsTool(r.alertUC, r.log))
+		out = append(out, alerting.NewGetIncidentDetailTool(r.alertUC, r.log))
+		out = append(out, alerting.NewQueryAlertRulesTool(r.alertUC, r.log))
 	}
 	// query_change_events — RCA "what changed near T" (HLD-013 Phase 2).
 	// Gated on the audit seam; nil-safe (tool stays out of the bag).
 	if r.auditLister != nil {
-		out = append(out, NewQueryChangeEventsTool(r.auditLister, r.edgeChangeLister, r.log))
+		out = append(out, alerting.NewQueryChangeEventsTool(r.auditLister, r.edgeChangeLister, r.log))
 	}
 	// 12: get_edge_summary — gated on edges (alert/devices/caller are
 	// best-effort, mirroring the closure executor's defensive checks).

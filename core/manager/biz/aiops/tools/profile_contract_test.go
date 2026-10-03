@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	"path/filepath"
 	"runtime"
@@ -47,7 +48,7 @@ func TestEveryControlPlaneToolTheNodeOffersIsRegisteredHere(t *testing.T) {
 		topology.ToolNameExpandTopology,
 		topology.ToolNameFindTopologyNode,
 		topology.ToolNameFindOutlierEdges,
-		ToolNameQueryAlertRules,
+		alerting.ToolNameQueryAlertRules,
 	} {
 		if !declared[name] {
 			t.Errorf("%q is served by this registry but the node's read-only profile does not "+
@@ -73,7 +74,7 @@ func TestTheControlPlaneToolsTheNodeOffersAreAllReadOnly(t *testing.T) {
 		topology.ToolNameExpandTopology,
 		topology.ToolNameFindTopologyNode,
 		topology.ToolNameFindOutlierEdges,
-		ToolNameQueryAlertRules,
+		alerting.ToolNameQueryAlertRules,
 	} {
 		if got, ok := classes[name]; !ok {
 			t.Errorf("%q is not declared by the node's profile", name)

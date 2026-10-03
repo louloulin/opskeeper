@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"time"
@@ -41,12 +42,12 @@ type GetEdgeSummaryTool struct {
 	caller  Caller
 	edges   *edgebiz.Usecase
 	devices *devicebiz.Usecase
-	alertUC AlertUsecase
+	alertUC alerting.AlertUsecase
 	log     *slog.Logger
 }
 
 // NewGetEdgeSummaryTool builds the BaseTool variant.
-func NewGetEdgeSummaryTool(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Usecase, alertUC AlertUsecase, log *slog.Logger) *GetEdgeSummaryTool {
+func NewGetEdgeSummaryTool(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Usecase, alertUC alerting.AlertUsecase, log *slog.Logger) *GetEdgeSummaryTool {
 	if log == nil {
 		log = slog.Default()
 	}

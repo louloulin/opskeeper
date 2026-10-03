@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"sort"
@@ -31,7 +32,7 @@ import (
 
 // CorrelateIncidentTool is the BaseTool form of correlate_incident.
 type CorrelateIncidentTool struct {
-	alertUC    AlertUsecase
+	alertUC    alerting.AlertUsecase
 	promQuery  PromQuerier
 	logQuery   LogQuerier
 	traceQuery TraceQuerier
@@ -42,7 +43,7 @@ type CorrelateIncidentTool struct {
 
 // NewCorrelateIncidentTool builds the BaseTool variant.
 func NewCorrelateIncidentTool(
-	alertUC AlertUsecase,
+	alertUC alerting.AlertUsecase,
 	promQuery PromQuerier,
 	logQuery LogQuerier,
 	traceQuery TraceQuerier,
