@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -190,6 +191,22 @@ type EdgeOptions struct {
 	// CollectorInterval is how often the node samples. Empty leaves the
 	// production default (10s), which is longer than these tests wait.
 	CollectorInterval time.Duration
+	// HeartbeatInterval is how often the node proves its link is alive.
+	// Empty leaves the production default (30s).
+	//
+	// It is a field rather than a constant in the harness for the same
+	// reason it is one on the node: a test that has to observe link state
+	// inside a 30s tick either waits 30s or gives up on the observation.
+	// Decision 133 could only keep its outage window short because the
+	// window was not something the test chose — it was whatever the
+	// production heartbeat left over.
+	HeartbeatInterval time.Duration
+	// TunnelStuckThreshold is how many consecutive failed heartbeats the
+	// node tolerates before exiting for respawn. Zero leaves the
+	// production default (5), which with a fast heartbeat is five
+	// seconds — comfortably longer than the outage a test wants to
+	// survive, and long enough that the node proves it did not give up.
+	TunnelStuckThreshold int
 }
 
 // StartEdge spawns a node process and waits for it to answer for itself.
@@ -257,6 +274,16 @@ func StartEdge(t *testing.T, env *Env, bearer string, opts EdgeOptions) *Edge {
 	}
 	if collectorInterval != "" {
 		edgeEnv["OPSKEEPER_EDGE_COLLECTOR_INTERVAL"] = collectorInterval
+	}
+	// Only set when a test asked. Leaving them unset is not a shortcut,
+	// it is the default posture: a node here should run the same numbers
+	// a node in production runs, and a test that wants different ones
+	// says so where a reader can see it.
+	if opts.HeartbeatInterval > 0 {
+		edgeEnv["OPSKEEPER_EDGE_HEARTBEAT_INTERVAL"] = opts.HeartbeatInterval.String()
+	}
+	if opts.TunnelStuckThreshold > 0 {
+		edgeEnv["OPSKEEPER_EDGE_TUNNEL_STUCK_THRESHOLD"] = strconv.Itoa(opts.TunnelStuckThreshold)
 	}
 
 	edge.logBuf = &bytes.Buffer{}

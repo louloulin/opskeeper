@@ -179,7 +179,22 @@ func main() {
 	if changeEventWALDir == "" {
 		changeEventWALDir = "/var/lib/opskeeper-edge/changes"
 	}
-	agent := edgebiz.NewAgent(client, collector, edgebiz.Config{
+	// How long this node tolerates losing the control plane. Read before the
+	// agent is built so a typo is a boot error rather than a node running
+	// on numbers its operator did not choose, and logged with the product
+	// because the two settings multiply into the one an operator is
+	// actually trying to control.
+	tunables, err := loadTunables(log)
+	if err != nil {
+		log.Error("edge: refusing to boot on an unparseable link tolerance", slog.Any("err", err))
+		os.Exit(1)
+	}
+	log.Info("edge: link tolerance",
+		slog.Duration("heartbeat", tunables.heartbeat),
+		slog.Int("stuck_after", tunables.stuck),
+		slog.Duration("gives_up_after", tunables.tolerance()))
+
+	agentCfg := edgebiz.Config{
 		MetricsInterval:   cfg.Edge.CollectorInterval,
 		AgentVersion:      version,
 		TelemetryWALDir:   telemetryWALDir,
@@ -192,7 +207,9 @@ func main() {
 		// linked release line, which is the same order the installer uses.
 		PigVersion:      pigSelfVersion(),
 		UpgradeStageDir: stageDir,
-	}, log)
+	}
+	tunables.apply(&agentCfg)
+	agent := edgebiz.NewAgent(client, collector, agentCfg, log)
 
 	// Node agent: a PiG process under this node's supervision, serving the
 	// manager's agent.* commands. A failure here is logged and the edge

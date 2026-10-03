@@ -74,7 +74,18 @@ const MinMetricsInterval = time.Second
 // sensible defaults by NewAgent.
 type Config struct {
 	// HeartbeatInterval is how often the agent sends a heartbeat RPC.
-	HeartbeatInterval time.Duration // default 30s
+	HeartbeatInterval time.Duration // default DefaultHeartbeatInterval
+	// TunnelStuckThreshold is how many consecutive heartbeat failures the
+	// agent tolerates before declaring the tunnel stuck and exiting for
+	// systemd to respawn. Default DefaultTunnelStuckThreshold.
+	//
+	// It is a field rather than a constant because the two numbers above
+	// multiply into a single number an operator actually has a reason to
+	// change — "how long does this node tolerate losing the center" — and
+	// a pair of constants offers no way to express it. The product is
+	// printed at boot, because a threshold alone is not the tolerance: 5
+	// heartbeats is 150s at 30s and 5s at 1s.
+	TunnelStuckThreshold int
 	// MetricsInterval is how often the agent samples one metric point.
 	// Default 10s; floored at MinMetricsInterval. The floor is a protocol
 	// limit, not a preference — see MinMetricsInterval.
@@ -399,7 +410,10 @@ func (a *Agent) bridge() *AgentBridge {
 // fields.
 func NewAgent(client tunnel.Client, collector Collector, cfg Config, log *slog.Logger) *Agent {
 	if cfg.HeartbeatInterval <= 0 {
-		cfg.HeartbeatInterval = 30 * time.Second
+		cfg.HeartbeatInterval = DefaultHeartbeatInterval
+	}
+	if cfg.TunnelStuckThreshold <= 0 {
+		cfg.TunnelStuckThreshold = DefaultTunnelStuckThreshold
 	}
 	if cfg.MetricsInterval <= 0 {
 		cfg.MetricsInterval = 10 * time.Second
@@ -764,7 +778,7 @@ func (a *Agent) registerEdge(ctx context.Context) error {
 // heartbeatLoop sends one heartbeat every HeartbeatInterval until ctx
 // cancels. Errors are logged; transient ones (TCP/RPC blips) are
 // recovered by the tunnel layer transparently. When heartbeats fail
-// continuously for tunnelStuckThreshold ticks we treat the tunnel as
+// continuously for TunnelStuckThreshold ticks we treat the tunnel as
 // stuck (geminio RetryEnd silently giving up on TLS handshake / frontier
 // route never re-validating) and return errTunnelStuck so Agent.Run
 // unwinds and systemd respawns the process with a clean dial.
@@ -804,7 +818,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) error {
 				a.log.Warn("agent: heartbeat failed",
 					slog.Int("consecutive_fail", consecutiveFail),
 					slog.Any("err", err))
-				if consecutiveFail >= tunnelStuckThreshold {
+				if consecutiveFail >= a.cfg.TunnelStuckThreshold {
 					a.log.Error("agent: tunnel stuck; exiting for systemd respawn",
 						slog.Int("consecutive_fail", consecutiveFail))
 					return errTunnelStuck
@@ -828,12 +842,36 @@ func (a *Agent) heartbeatLoop(ctx context.Context) error {
 	}
 }
 
-// tunnelStuckThreshold = consecutive heartbeat failures before we declare
-// the tunnel stuck and exit. With HeartbeatInterval=30s and threshold=5,
-// the edge tolerates ~2.5min of network/manager wobble (TCP timeouts +
-// 2 normal retries) before bailing. Tuned for "manager restart cycle
-// completes within ~90s" vs "transient packet loss never lasts >60s".
-const tunnelStuckThreshold = 5
+// DefaultHeartbeatInterval is how often a node proves the link is alive.
+const DefaultHeartbeatInterval = 30 * time.Second
+
+// DefaultTunnelStuckThreshold = consecutive heartbeat failures before we
+// declare the tunnel stuck and exit. With DefaultHeartbeatInterval=30s and
+// threshold=5, the edge tolerates ~2.5min of network/manager wobble (TCP
+// timeouts + 2 normal retries) before bailing. Tuned for "manager restart
+// cycle completes within ~90s" vs "transient packet loss never lasts >60s".
+const DefaultTunnelStuckThreshold = 5
+
+// MinHeartbeatInterval is the floor on how fast a node may heartbeat.
+//
+// It exists for the same reason MinMetricsInterval does, and the two are
+// deliberately not the same number: metrics are the node talking to a
+// Prometheus at its own pace, while a heartbeat is the node asking the
+// control plane to confirm it exists. Below a second that stops being a
+// liveness check and becomes a load generator pointed at the manager, from
+// every node in the fleet at once. Clamped rather than refused, for the
+// reason MinMetricsInterval is: refusing would strand a node with a working
+// link over a tuning knob, and the clamp is logged so the operator can see
+// that the number they configured is not the number in force.
+const MinHeartbeatInterval = time.Second
+
+// ErrTunnelStuck is returned from heartbeatLoop when the configured number
+// of consecutive heartbeats has failed. It is exported because a caller
+// wrapping the node — a supervisor deciding between respawn and alert, or a
+// test outside this package — has to be able to tell "the link never came
+// back" from "the node was told to stop", and a string comparison is not a
+// way to tell two failure modes that both arrive as a non-nil error.
+var ErrTunnelStuck = errTunnelStuck
 
 // errTunnelStuck is the sentinel returned from heartbeatLoop when N
 // consecutive heartbeats failed. errgroup cancels siblings and Run

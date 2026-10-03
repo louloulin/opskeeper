@@ -141,6 +141,19 @@ func TestANodeKeepsItsTelemetryThroughAnOutage(t *testing.T) {
 		Model:             "fake-gpt",
 		CollectorMode:     "embedded",
 		CollectorInterval: 2 * time.Second,
+		// A one-second heartbeat with a two-minute give-up window. The
+		// pairing matters more than either number: what this test needs
+		// from the node is that it *notices* the outage quickly, so the
+		// drain is attempted inside the window and the pending count is
+		// sampled against a node that already knows the link is gone.
+		// Decision 133 had a 30s tick, which meant the node only learned
+		// about the cut somewhere inside an unrelated constant, and the
+		// outage had to be kept short enough to stay clear of a 150s
+		// give-up threshold it had no business being near. The tolerance
+		// here is deliberately still ~2 minutes, so what changed is the
+		// resolution and not the safety margin.
+		HeartbeatInterval:    time.Second,
+		TunnelStuckThreshold: 120,
 	})
 	edge.ID = edgeID
 	edge.WaitForRunningAgent(t, env, login.AccessToken, edgeID, 3*time.Minute)
