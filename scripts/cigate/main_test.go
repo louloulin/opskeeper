@@ -40,9 +40,13 @@ func repoMakefile() string {
 	return b.String()
 }
 
-// repoCI is a ci.yml that runs every gate, each on its own step.
+// repoCI is a ci.yml that runs every gate, each on its own step. The `on:`
+// block is the shape the fix settled on -- a bare push, so every branch starts
+// it -- because a fixture that omitted the trigger entirely would leave the
+// reachability rule untested against a realistic file.
 func repoCI() string {
 	var b strings.Builder
+	b.WriteString("on:\n  push:\n  pull_request:\n  workflow_dispatch:\n\njobs:\n  build:\n    steps:\n")
 	for _, g := range allGates() {
 		b.WriteString("      - name: " + g.Target + "\n        run: make " + g.Target + "\n")
 	}
@@ -263,5 +267,150 @@ func TestADroppedDecisionGateIsReported(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "broker-pin-check") {
 		t.Errorf("the report does not name the dropped decision gate: %v", err)
+	}
+}
+
+// --- Trigger reachability -------------------------------------------------
+//
+// ci.yml spent this repository's whole 2.0 line with `branches: [main]` while
+// the work sat on feature/pig and no pull request was opened, so the workflow
+// reported zero runs. These tests pin the shape that would have caught it.
+
+// The real ci.yml must be startable by a push to any branch, and the fact must
+// be stated rather than merely true.
+func TestTheRealWorkflowIsStartedByEveryPush(t *testing.T) {
+	got := TriggerReachabilityOf(repoCI())
+	if !got.PushPresent {
+		t.Fatal("the repository's ci.yml has no push trigger at all")
+	}
+	if got.Restricted {
+		t.Errorf("the repository's ci.yml restricts pushes to %v, so work on any "+
+			"other branch is never built by CI", got.Branches)
+	}
+	if problem := got.Problem(); problem != "" {
+		t.Errorf("the reachability rule reports the repository itself: %s", problem)
+	}
+	if summary := triggerSummary(got); summary != "every push starts the workflow" {
+		t.Errorf("a green run should say the property holds, got %q", summary)
+	}
+}
+
+// The exact shape that produced total_count: 0.
+func TestASingleBranchPushFilterIsReported(t *testing.T) {
+	ci := "on:\n  push:\n    branches: [main]\n  pull_request:\n" + repoCI()
+	got := TriggerReachabilityOf(ci)
+	if !got.Restricted || len(got.Branches) != 1 || got.Branches[0] != "main" {
+		t.Fatalf("the reader missed the filter: %+v", got)
+	}
+	problem := got.Problem()
+	if problem == "" {
+		t.Fatal("a one-branch push filter was accepted")
+	}
+	// The report has to say what to do, not only what is wrong: the pull_request
+	// trigger that coexists with it is exactly the loophole that let the defect
+	// survive, since no pull requests were opened either.
+	if !strings.Contains(problem, "pull_request") {
+		t.Errorf("the report does not name the sibling trigger that made this look covered: %s", problem)
+	}
+	if !strings.Contains(problem, "drop the `branches:` filter") {
+		t.Errorf("the report does not say how to fix it: %s", problem)
+	}
+}
+
+// check() has to surface it, not just the reader.
+func TestAnUnreachablePushTriggerFailsTheCheck(t *testing.T) {
+	root := writeRepo(t, repoMakefile(), "on:\n  push:\n    branches: [main]\n"+repoCI())
+	err := check(root)
+	if err == nil {
+		t.Fatal("a workflow no push can start passed the check")
+	}
+	if !strings.Contains(err.Error(), "branches:") {
+		t.Errorf("the report does not mention the filter: %v", err)
+	}
+}
+
+// Both spellings of the filter, and the wider ones that must pass.
+func TestTriggerReachabilityReadsEverySpelling(t *testing.T) {
+	cases := []struct {
+		name string
+		on   string
+		want []string // nil means unrestricted
+	}{
+		{
+			name: "a bare push runs on every branch",
+			on:   "on:\n  push:\n  pull_request:\n",
+		},
+		{
+			name: "an inline list of two branches is wide enough",
+			on:   "on:\n  push:\n    branches: [main, release]\n",
+			want: []string{"main", "release"},
+		},
+		{
+			name: "a block list of two branches is wide enough",
+			on:   "on:\n  push:\n    branches:\n      - main\n      - release\n",
+			want: []string{"main", "release"},
+		},
+		{
+			name: "an inline value is not a filter",
+			on:   "on:\n  push: {}\n",
+		},
+		{
+			name: "a comment after a bare push is not a filter",
+			on:   "on:\n  push: # every branch\n  pull_request:\n",
+		},
+		{
+			name: "paths are not a branch filter",
+			on:   "on:\n  push:\n    paths:\n      - 'core/**'\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := TriggerReachabilityOf(tc.on)
+			if !got.PushPresent {
+				t.Fatal("push was not found")
+			}
+			if tc.want == nil {
+				if got.Restricted {
+					t.Fatalf("read a filter that is not there: %v", got.Branches)
+				}
+				return
+			}
+			if !got.Restricted {
+				t.Fatalf("missed the filter entirely")
+			}
+			if strings.Join(got.Branches, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("branches = %v, want %v", got.Branches, tc.want)
+			}
+			if problem := got.Problem(); problem != "" {
+				t.Errorf("a %d-branch filter was reported: %s", len(tc.want), problem)
+			}
+		})
+	}
+}
+
+// A pull_request-only workflow is a choice, not an omission, and the summary
+// has to say which one it is rather than claiming pushes start it.
+func TestAPullRequestOnlyWorkflowIsNamedAsSuch(t *testing.T) {
+	got := TriggerReachabilityOf("on:\n  pull_request:\n")
+	if got.PushPresent {
+		t.Fatal("a workflow with no push trigger reported one")
+	}
+	if problem := got.Problem(); problem != "" {
+		t.Errorf("pull_request-only was reported as a defect: %s", problem)
+	}
+	summary := triggerSummary(got)
+	if !strings.Contains(summary, "no push trigger") {
+		t.Errorf("the summary implies a push path exists: %q", summary)
+	}
+}
+
+// The `on:` block must be read only where it really is: a `branches:` key
+// belonging to some other job, or to a comment, is not the trigger's filter.
+func TestTheOnBlockIsNotReadOutOfContext(t *testing.T) {
+	ci := "on:\n  push:\n\njobs:\n  build:\n    steps:\n      - run: echo hi\n" +
+		"# push:\n#   branches: [main]\n"
+	got := TriggerReachabilityOf(ci)
+	if got.Restricted {
+		t.Errorf("a commented-out trigger and a later job were read as the push filter: %+v", got)
 	}
 }

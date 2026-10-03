@@ -111,7 +111,14 @@ plugins/opskeeper-teamharness/eval/reports/
 .dist/
 .docker-gocache/
 
-# Stray local binaries from `go build ./scripts/<tool>`
+# Stray local binaries from `go build ./scripts/<tool>`. One line per
+# incident is how this list got to three: the ignore rule does not stop the
+# build, and a checker that reads the tree does (scripts/modulecheck,
+# checkNoRootBuildArtifacts).
 /modulecheck
 /deadcode
 /domaincheck
+/brokerpin
+/cigate
+/cochange
+/nodearch

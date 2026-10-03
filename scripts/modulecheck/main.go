@@ -26,11 +26,14 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -1029,6 +1032,16 @@ func main() {
 	}
 	violations = append(violations, sentinelViolations...)
 
+	// A stray checker binary at the repository root is a repository-hygiene
+	// failure with a two-megabyte payload, and it is caught at the moment the
+	// build happens.
+	artifactViolations, err := checkNoRootBuildArtifacts(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "modulecheck: "+err.Error())
+		os.Exit(2)
+	}
+	violations = append(violations, artifactViolations...)
+
 	if len(violations) == 0 {
 		fmt.Println("modulecheck: all module boundaries hold")
 		return
@@ -1040,6 +1053,104 @@ func main() {
 	}
 	os.Exit(1)
 }
+
+// checkNoRootBuildArtifacts reports a compiled checker binary that is *tracked*
+// at the repository root.
+//
+// The shape of the accident is specific, and the rule is drawn to that shape
+// rather than to "executables at the root": `go build ./scripts/cigate` writes
+// its output to the working directory, which is the repository root, under the
+// name of the tool. Nothing about that is a build error, nothing about it is
+// caught by `go vet`, and `git add -A` will happily stage two and a half
+// megabytes of Mach-O. It happened while writing decision 165, in a repository
+// whose .gitignore had already grown to three near-identical entries -- one
+// per incident -- because an ignore rule records the last time it happened and
+// does not prevent the next one.
+//
+// The rule asks whether the file is tracked rather than whether it is present,
+// and that distinction is the whole design. A presence test would make
+// `make module-check` answer differently depending on whether somebody had run
+// a build first, which is the exact defect decision 164 spent a day removing
+// from the test suite: a check whose verdict depends on untracked local state
+// is green for reasons that do not survive a clean checkout, and the failure
+// mode is a gate that is red on a developer's machine and green in CI. Every
+// build here writes somewhere, so "present at the root" is normal; "staged"
+// is the defect.
+//
+// A real root-level executable that does not collide with a scripts/ package
+// name is not what this catches, and RootBuildArtifactExempt is where such an
+// exception goes. It is a map for the same reason the other exemption tables
+// here are: a skip that needs a comment to justify itself is how an exemption
+// becomes a hole.
+func checkNoRootBuildArtifacts(root string) ([]string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	var violations []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() {
+			continue
+		}
+		if _, exempt := RootBuildArtifactExempt[name]; exempt {
+			continue
+		}
+		// The collision, not the bit pattern: no source file in this
+		// repository is named after a package under scripts/.
+		if info, err := os.Stat(filepath.Join(root, "scripts", name)); err != nil || !info.IsDir() {
+			continue
+		}
+		// A same-named script kept in the tree on purpose is a source file, and
+		// the executable bit plus a path collision is not enough to say
+		// otherwise; a compiled binary has a size a script does not.
+		info, err := entry.Info()
+		if err != nil || info.Size() < buildArtifactMinSize {
+			continue
+		}
+		tracked, err := isTracked(root, name)
+		if err != nil || !tracked {
+			continue
+		}
+		violations = append(violations, fmt.Sprintf(
+			"%s/%s is a compiled scripts/%s binary tracked at the repository root "+
+				"(%d bytes); `go build ./scripts/%s` writes here by default -- "+
+				"git rm it and build with -o into a temp directory",
+			filepath.Base(root), name, name, info.Size(), name))
+	}
+	return violations, nil
+}
+
+// isTracked reports whether git has the path in its index.
+//
+// git not being available, the directory not being a repository, and the path
+// simply not being tracked all answer false, and none of them is a reason to
+// report a violation: the claim this rule makes is about the index, and with
+// no index to ask there is nothing to claim. `git ls-files --error-unmatch`
+// exits non-zero both when the path is untracked and when it is unknown to
+// git, which is the right collapse -- the rule cannot tell them apart and does
+// not need to.
+func isTracked(root, name string) (bool, error) {
+	cmd := exec.Command("git", "ls-files", "--error-unmatch", "--", name)
+	cmd.Dir = root
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(stdout.String()) == name, nil
+}
+
+// buildArtifactMinSize separates a compiled binary from a script without
+// consulting git for the size, so a 40-line helper cannot be reported.
+const buildArtifactMinSize = 1 << 20
+
+// RootBuildArtifactExempt is empty and stays empty on purpose: every entry
+// needs a reason recorded, and a script that does not collide with a scripts/
+// package name has no reason to be listed. It exists so that the first genuine
+// exception is added as a judgement rather than as a silent skip.
+var RootBuildArtifactExempt = map[string]string{}
 
 // check walks every module and returns the violations it finds.
 func check(root string) ([]string, error) {

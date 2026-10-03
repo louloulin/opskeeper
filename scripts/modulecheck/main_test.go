@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1040,5 +1041,119 @@ func TestTheRepositoryHasNoGoWorkProbes(t *testing.T) {
 	}
 	if len(msgs) != 0 {
 		t.Fatalf("the real tree still probes for go.work: %v", msgs)
+	}
+}
+
+// --- Root build artifacts --------------------------------------------------
+
+// gitFixture lays out a throwaway repository with one scripts package and a
+// root entry of the same name, and reports whether that entry is staged.
+func gitFixture(t *testing.T, entrySize int, stage bool) string {
+	t.Helper()
+	root := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, "scripts", "cigate"), 0o755); err != nil {
+		t.Fatalf("mkdir scripts/cigate: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "scripts", "cigate", "main.go"),
+		[]byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("write package: %v", err)
+	}
+	entry := filepath.Join(root, "cigate")
+	if err := os.WriteFile(entry, make([]byte, entrySize), 0o755); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	run("init", "-q")
+	if stage {
+		run("add", "cigate")
+	}
+	return root
+}
+
+// The defect this catches is a staged 2.5 MB Mach-O named after a tool, so a
+// tracked one must be reported and name its size.
+func TestATrackedRootBinaryIsReported(t *testing.T) {
+	root := gitFixture(t, buildArtifactMinSize+1, true)
+	msgs, err := checkNoRootBuildArtifacts(root)
+	if err != nil {
+		t.Fatalf("checkNoRootBuildArtifacts: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("a staged 2 MB scripts binary was accepted: %v", msgs)
+	}
+	if !strings.Contains(msgs[0], "git rm it") {
+		t.Errorf("the report does not say what to do: %s", msgs[0])
+	}
+}
+
+// The distinction that keeps this rule out of decision 164's failure mode: a
+// build that has not been committed is not a defect, and a gate that went red
+// because somebody ran `go build` would be the same untracked-state dependency
+// that the go.work sentinels were.
+func TestAnUntrackedRootBinaryIsNotReported(t *testing.T) {
+	root := gitFixture(t, buildArtifactMinSize+1, false)
+	msgs, err := checkNoRootBuildArtifacts(root)
+	if err != nil {
+		t.Fatalf("checkNoRootBuildArtifacts: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("a local, ignored build artifact was reported: %v", msgs)
+	}
+}
+
+// A source file that shares a name with a tools package is not the accident.
+func TestASmallSameNamedScriptIsNotReported(t *testing.T) {
+	root := gitFixture(t, 64, true)
+	msgs, err := checkNoRootBuildArtifacts(root)
+	if err != nil {
+		t.Fatalf("checkNoRootBuildArtifacts: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("a 64-byte script was reported as a build artifact: %v", msgs)
+	}
+}
+
+// A tracked directory whose name matches a tools package is an unrelated
+// thing; the rule is about files.
+func TestTheRuleIgnoresEverythingElseAtTheRoot(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"Makefile", "go.mod", "scripts"} {
+		if err := os.WriteFile(filepath.Join(root, name), make([]byte, 2<<20), 0o644); err != nil && name != "scripts" {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	msgs, err := checkNoRootBuildArtifacts(root)
+	if err != nil {
+		t.Fatalf("checkNoRootBuildArtifacts: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("unrelated root entries were reported: %v", msgs)
+	}
+}
+
+// The rule has to be live on the tree that ships, not only on fixtures.
+func TestTheRepositoryTracksNoRootBuildArtifacts(t *testing.T) {
+	msgs, err := checkNoRootBuildArtifacts(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("checkNoRootBuildArtifacts on the real tree: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("the repository tracks a build artifact at its root: %v", msgs)
+	}
+}
+
+// Every exemption carries a reason.
+func TestTheRootBuildArtifactExemptionsAreJustified(t *testing.T) {
+	for name, why := range RootBuildArtifactExempt {
+		if strings.TrimSpace(why) == "" {
+			t.Errorf("%s is exempt with no reason recorded", name)
+		}
 	}
 }

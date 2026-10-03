@@ -16,15 +16,29 @@ name: CI
 # resolve without the workspace file CI cannot see.
 
 on:
+  # Every branch, not just main. This file triggered on `branches: [main]`
+  # until decision 165, and because the whole 2.0 line lives on feature/pig
+  # with no pull requests open, `gh api .../actions/runs` answered
+  # total_count: 0 -- the gate this workflow runs had never executed once
+  # (decision 163 added five gates to it; none of them had ever reported).
+  # A whitelist of one branch is a promise about where work happens, and this
+  # repository does not keep work on main.
   push:
-    branches: [main]
   pull_request:
+  # A workflow that can only start on an event somebody else must arrange
+  # needs a way to be started on purpose; verifying a fix on a push is one
+  # of the two reasons this repository reached 164 with a red gate.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Keyed on the head branch rather than the ref, so the push run and the
+  # pull-request run for the same commit are one run instead of two. Under
+  # `github.ref` they are `refs/heads/feature/pig` and `refs/pull/7/merge`
+  # and neither cancels the other.
+  group: ci-${{ github.event.pull_request.head.ref || github.ref }}
   cancel-in-progress: true
 
 jobs:

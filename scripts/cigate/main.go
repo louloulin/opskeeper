@@ -141,8 +141,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Printf("cigate: all %d acceptance gates (%d named by the plan, %d owned by a decision) are defined and invoked by CI\n",
-		len(allGates()), len(Gates()), len(DecisionGates()))
+	ci, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Printf("cigate: all %d acceptance gates (%d named by the plan, %d owned by a decision) "+
+		"are defined and invoked by CI, and %s\n",
+		len(allGates()), len(Gates()), len(DecisionGates()), triggerSummary(TriggerReachabilityOf(string(ci))))
 }
 
 // check reports every gate that is not wired, so one run tells the whole
@@ -184,6 +190,13 @@ func check(root string) error {
 		problems = append(problems, fmt.Sprintf(
 			"ci.yml invokes %q, which looks like an acceptance gate, but it is not in Gates(); "+
 				"either add it with its reason or rename it so it does not read like one", target))
+	}
+
+	// The gates being wired is only half of what a workflow promises; the other
+	// half is that a push can start it. Reported with the same discipline --
+	// every disagreement, then exit non-zero.
+	if reach := TriggerReachabilityOf(string(ci)); reach.Problem() != "" {
+		problems = append(problems, reach.Problem())
 	}
 
 	if len(problems) > 0 {
@@ -285,6 +298,208 @@ func allGates() []Gate {
 	all := Gates()
 	all = append(all, DecisionGates()...)
 	return all
+}
+
+// TriggerReachability is the second promise ci.yml makes about itself: that a
+// push to a branch somebody works on can start it at all.
+//
+// The failure this exists to catch is not hypothetical and it is not subtle.
+// ci.yml triggered on `push: branches: [main]`, the entire 2.0 line lives on
+// feature/pig, and nobody opened a pull request -- so
+// `gh api repos/louloulin/opskeeper/actions/runs --jq .total_count` answered
+// 0. Five acceptance gates had been wired into a workflow that had never
+// executed once (decision 163 wired them; decision 164 found that one of them
+// skipped itself and four others had never reported anything). Every claim
+// that CI guards those gates was true on paper and unexecuted in fact.
+//
+// A one-branch whitelist is the shape of that mistake: it reads as "run on
+// pushes", and it is not. So the rule below is narrow on purpose -- a push
+// trigger restricted to exactly one branch is reported; anything wider, and
+// any workflow that also offers pull_request or workflow_dispatch, passes.
+// The escape hatch is to drop `branches:` entirely, which is what the fix did.
+type TriggerReachability struct {
+	// Restricted is true when the push trigger carries a `branches:` filter.
+	Restricted bool
+	// Branches is the filter's list, empty when it was absent or written
+	// inline in a shape this reader did not recognise.
+	Branches []string
+	// PushPresent is false when the workflow has no push trigger at all, which
+	// is legal (pull_request-only is a real choice) and not reported here.
+	PushPresent bool
+	// Other is every non-push event name declared under `on:`.
+	Other []string
+}
+
+// TriggerProblem returns the reason the workflow cannot be started by a push
+// to an arbitrary branch, or "" when it can.
+//
+// The list is deliberately parsed rather than loaded through a YAML library:
+// this command already hand-reads the Makefile and the workflow, and adding a
+// dependency to ask one yes/no question about an `on:` block would make the
+// file's format, not its promise, the thing that changes most often.
+func TriggerReachabilityOf(ci string) TriggerReachability {
+	var out TriggerReachability
+	lines := strings.Split(ci, "\n")
+
+	// The `on:` key. YAML lets a workflow spell it `on:` or `true:`, and only
+	// the first is written here; if it is missing the zero value reports no
+	// push trigger and the caller decides what that means.
+	start := -1
+	for i, raw := range lines {
+		if raw == "on:" {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return out
+	}
+
+	// The body of `on:` runs until the next line that is neither indented nor a
+	// comment or blank, and its direct children are the lines at the first
+	// indent inside it -- `push:`'s own `branches:` is one level deeper and
+	// belongs to the child, not to `on:`. Reading the whole indented region
+	// would hand the trigger's filter to whatever event happened to have one.
+	type child struct {
+		name  string
+		start int
+		end   int
+	}
+	var children []child
+	childIndent := -1
+	for i := start + 1; i < len(lines); i++ {
+		raw := lines[i]
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if !strings.HasPrefix(raw, " ") && !strings.HasPrefix(raw, "\t") {
+			break
+		}
+		indent := len(raw) - len(strings.TrimLeft(raw, " \t"))
+		if childIndent < 0 {
+			childIndent = indent
+		}
+		if indent != childIndent {
+			continue
+		}
+		name, _, ok := strings.Cut(raw, ":")
+		if !ok {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		children = append(children, child{name: name, start: i, end: len(lines)})
+		if len(children) > 1 {
+			children[len(children)-2].end = i
+		}
+	}
+
+	for _, c := range children {
+		if c.name != "push" {
+			out.Other = append(out.Other, c.name)
+			continue
+		}
+		out.PushPresent = true
+		// A push with an inline value (`push: {}`, `push: # note`) has no
+		// nested block and therefore no branch filter.
+		if pushIsLeaf(lines[c.start]) {
+			continue
+		}
+		for i := c.start + 1; i < c.end; i++ {
+			raw := lines[i]
+			if strings.HasPrefix(raw, "#") {
+				continue
+			}
+			name, rest, ok := strings.Cut(raw, ":")
+			if !ok || strings.TrimSpace(name) != "branches" {
+				continue
+			}
+			out.Restricted = true
+			out.Branches = append(out.Branches, parseBranchList(lines, i, c.end, strings.TrimSpace(rest))...)
+		}
+	}
+	return out
+}
+
+// pushIsLeaf reports whether the `push:` line carries an inline value, which
+// ends its block and rules out a `branches:` filter under it.
+func pushIsLeaf(line string) bool {
+	_, rest, ok := strings.Cut(line, ":")
+	if !ok {
+		return false
+	}
+	rest = strings.TrimSpace(rest)
+	if i := strings.Index(rest, "#"); i >= 0 {
+		rest = strings.TrimSpace(rest[:i])
+	}
+	return rest != ""
+}
+
+// parseBranchList reads both spellings of the filter: `branches: [main, ci]`
+// on one line, and `branches:` followed by `- main` entries.
+func parseBranchList(lines []string, at, end int, inline string) []string {
+	inline = strings.Trim(inline, "[]")
+	if inline != "" {
+		var out []string
+		for _, part := range strings.Split(inline, ",") {
+			if name := strings.Trim(strings.TrimSpace(part), `"'`); name != "" {
+				out = append(out, name)
+			}
+		}
+		return out
+	}
+	var out []string
+	for i := at + 1; i < end; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "-") {
+			break
+		}
+		if name := strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "-")), `"'`); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// Problem is the human-readable version of the reachability rule, or "" when
+// the workflow can be started by a push to an arbitrary branch.
+func (t TriggerReachability) Problem() string {
+	if !t.Restricted {
+		return ""
+	}
+	if len(t.Branches) != 1 {
+		return ""
+	}
+	other := strings.Join(t.Other, ", ")
+	suffix := ""
+	if other != "" {
+		suffix = " (the workflow also declares " + other +
+			", so a change only reaches CI if somebody keeps opening those)"
+	}
+	return fmt.Sprintf(
+		"ci.yml runs on pushes to %q and nothing else%s, so a commit on any other "+
+			"branch is never built or tested by this workflow; drop the `branches:` "+
+			"filter so every push runs",
+		t.Branches[0], suffix)
+}
+
+// triggerSummary is how the reachability rule reads when it holds, so a green
+// run states the property rather than leaving it implied.
+func triggerSummary(t TriggerReachability) string {
+	switch {
+	case !t.PushPresent:
+		return "the workflow declares no push trigger (pull_request-only is a choice, not an omission)"
+	case !t.Restricted:
+		return "every push starts the workflow"
+	default:
+		return "pushes to " + strings.Join(t.Branches, ", ") + " start it"
+	}
 }
 
 func isGate(target string, gates []Gate) bool {
