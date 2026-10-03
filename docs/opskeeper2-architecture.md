@@ -7756,6 +7756,173 @@ no trace anywhere
    而且 **e2e 目前根本不在 CI 里**（只有一个 `ubuntu-24.04` job）。
 3. 心跳 / 卡死阈值开 env，让断网窗口可配（§4.70.4）。
 
+### 4.71 决策 134：跨架构这条，先把「没人查的那一段」变成闸门——并且明确它**不是**跨架构 e2e
+
+计划 §六 端到端第三条写的是「跨架构:amd64 与 arm64 各跑一次完整 e2e」。
+上一轮把它记成「缺 CI runner」，这句话**只说了一半**：在动 runner 之前，
+仓库里存在一个更靠前、且完全没有守卫的口子。补上它之后才轮到 runner。
+
+#### 4.71.1 交付链已经是对的，和没人查的那一段
+
+先说结论：**分发链本身没有 bug**。
+
+- `dist/build-edge-bundle.sh:36` 是 `BIN_DIR=$REPO_ROOT/bin/$ARCH`——
+  按**参数**推导目录，不是按主机架构。所以「给 arm64 节点打的包」不会
+  在打包机上就已经装成了 amd64 产物。
+- `Makefile` 的 `build-pig-{linux,darwin}-{amd64,arm64}` 四个目标各自
+  写死了 `GOOS` / `GOARCH` / `CGO_ENABLED=0`，没有复用变量。
+- 实测 `go version -m` 能精确读出编译器自己记进二进制的
+  `GOOS=linux / GOARCH=arm64 / CGO_ENABLED=0`。
+
+所以缺的不是"能力"，是**证据**：仓库里没有任何一处检查
+`bin/<arch>/pig` 真的是那个架构。四目标交叉编译是从一个 Makefile 里
+手写四遍的，那是四次把主机产物写进交叉槽位的机会，而这种失败：
+
+- 不崩溃、不打日志、健康检查照样绿；
+- 只在**客户那台机器上** exec 的时候以 `ENOEXEC` 出现；
+- 现场表现是"工具调用永远不返回"，而不是"agent 启动失败"。
+
+#### 4.71.2 四条规则，以及为什么"edge 与 agent 一致"必须单列
+
+`scripts/nodearch/`（`main.go` + 纯逻辑 `nodearch.go` + 19 条测试）：
+
+| 规则 | 判据 | 拦的是什么 |
+|---|---|---|
+| `arch-mismatch` | 二进制的 `GOOS/GOARCH` ≠ 所在目录 | 主机产物落进交叉槽位 |
+| `no-build-info` | 读不到 `GOOS`/`GOARCH` | 非 Go 文件、截断的下载 |
+| `cgo-enabled` | `CGO_ENABLED != 0` | distroless 镜像里没有 libc 可链 |
+| `edge-agent-mismatch` | edge 与它 spawn 的 agent 架构不同 | 每次 exec 失败 |
+
+最后一条**不是**前三条的推论，这是本条最容易被写错的地方：
+「两个文件都在正确的目录里」和「两个文件都能在这台节点上跑」是**两个
+不同的断言**。两个分别合规、但架构不同的二进制，可以同时通过全部目录
+规则，然后给出一台 edge 永远 exec 不了 agent 的节点——**而它会启动、
+会鉴权、会回答「你好」**。所以 `CheckPair` 是独立规则，不是 `CheckOne`
+的重复。
+
+`no-build-info` 单列的理由同理：读不到 `GOOS` 和 `GOOS` 读成了错的
+`GOOS`，告诉维护者的下一步完全不同（看构建 vs 看闸门），合成一条消息
+就把这个区别扔了。
+
+四处**主动**的设计选择：
+
+1. **四目标名单硬编码，不从 Makefile 读。** 一个从被检查对象推导要求的
+   闸门，无法发现被检查对象本身错了——`build-pig-all` 若悄悄少了 arm64，
+   跟着它走的闸门会把 arm64 这条要求一起丢掉，然后报告"全部目标已验证"。
+2. **可选项进 `Skipped` 而不是"通过"，且 `CheckedPairs == 0` 时报告必须
+   显式说"pair 规则本轮没跑"。** 一条覆盖率为零的绿色输出，最容易被读成
+   它没有的那个覆盖。
+3. **报告全部问题而非第一个。** 四目标的构建按第一条修要跑四轮。
+4. `pig` 四目标**必需**；`opskeeper-edge` **存在才查**——否则只跑
+   `make build-pig-all` 之后这个闸门永远红，那会训练人绕过它。
+
+#### 4.71.3 四次变异，全部当场变红
+
+夹具测试覆盖了每条规则，但夹具是我自己写的。四次真实变异验证的是
+**闸门接在真产物上时**也成立：
+
+| # | 变异 | 实测输出 | 退出码 |
+|---|---|---|---|
+| 1 | arm64 的 pig 覆盖 amd64 槽位 | **两条** finding，其中 `edge-agent-mismatch` 直接写出后果 | 1 |
+| 2 | 删掉 `darwin-arm64/pig` | `missing-binary`（走 finding 而非 skip） | 1 |
+| 3 | 槽位里放一段非 Go 文本 | `unreadable-binary` | 1 |
+| 4 | 槽位里放**同架构**的 cgo 二进制 | `cgo-enabled`（且只有这一条） | 1 |
+
+第 1 条的实测输出：
+
+```
+FAIL  bin/linux-amd64/opskeeper-edge: edge-agent-mismatch (GOARCH is amd64 but pig
+      it spawns is arm64; every exec of the agent fails on this node)
+FAIL  bin/linux-amd64/pig: arch-mismatch (built for linux/arm64, sitting in bin/linux-amd64)
+```
+
+`CheckPair` 当时只有夹具证明，第一次在真产物上跑就自己触发了——这正是
+它被单列为一条规则的理由。
+
+第 4 条是唯一需要现造夹具的：写了一个 4 行的 cgo 程序交叉编译成
+`darwin/arm64`，它的 `GOOS`/`GOARCH` 与槽位**完全正确**，所以唯一亮起来
+的必须是 cgo 规则。这条排除了"cgo 规则其实一直在被前三条顺带覆盖"的
+可能。
+
+`make build-edge-all` 之后（13s，8 个产物）：
+
+```
+node-arch-check: 8 binaries, 0 findings
+```
+
+无 skip、无「did not run」提示——**四条规则在 4 个真实目标上各跑了 4 次**。
+这是本条最强的一行证据，也是它区别于"我写了四个函数"的地方。
+
+#### 4.71.4 诚实边界：这**不是**跨架构 e2e
+
+必须把话说死，否则下一轮会误读台账：
+
+- 计划要的是「amd64 与 arm64 **各跑一次完整 e2e**」。本条做的是
+  **前置闸门**：证明将要被 e2e 使用的那批二进制是对的。
+- **真正的跨架构 e2e 仍然没做**，而且它的两个障碍都还在：
+  1. **e2e 根本不在 CI 里**——`.github/workflows/ci.yml` 只有一个
+     `ubuntu-24.04` job，e2e 是 `//go:build e2e` 标签，从未被任何 runner
+     执行过。
+  2. **缺 arm64 runner**。GitHub 的 arm64 runner（`ubuntu-24.04-arm`）
+     对私有仓库的可用性与配额**无法在本地验证**，这是本条唯一的风险点，
+     记在这里而不是记成一个乐观假设。
+- 本条**不**覆盖 `dist/build-edge-bundle.sh` 打出来的 tar 包本身
+  （只覆盖 `bin/<arch>/` 里的产物）。bundle 的目录推导逻辑是读过的、
+  是对的，但同样没有闸门。
+
+#### 4.71.5 对台账的影响
+
+- **台账仍 84.0%**。跨架构 e2e 这条**没有**完成，闸门不推进它。
+- 但把一条"完全没有守卫"的前提变成了闸门，性质上属于 §4.70 那类：
+  交付物本身没有前进，**可交付物的前置条件从"没人查"变成"有闸门"**。
+- 阶段 0 的 0.4 仍被上游 `coding/piglet/main.go` 的 `convertTools` 挡住，
+  未动。
+
+#### 4.71.6 下一步
+
+1. **把 e2e 接进 CI**，先在单个 `ubuntu-24.04` 上跑通（这一步不碰
+   arm64 依赖，是 arm64 runner 之前的必要铺垫）。
+2. **arm64 runner 可用性**先做成可失败的小实验（一次 workflow_dispatch
+   探针），而不是直接押注在它能跑通。
+3. 心跳 / 卡死阈值开 env，让断网窗口可配（§4.70.4）。
+4. `bundle` 层的闸门：`build-edge-bundle.sh` 打完包之后校验 tar 内容
+   与 `pig`/`opskeeper-edge` 的架构。
+
+#### 4.71.7 读数与闸门
+
+| 项 | 数 | 来源 |
+|---|---|---|
+| 新增测试 | **19 条**（纯逻辑夹具，含 2 条直接读仓库 `Makefile`） | `go test ./scripts/nodearch/ -v` |
+| 代码 | +737 行（`main.go` 144 / `nodearch.go` 262 / `nodearch_test.go` 331） | `wc -l` |
+| 真实产物 | **8 个二进制全绿**（4 目标 × `pig` + `opskeeper-edge`） | `make build-edge-all && make node-arch-check` |
+| 变异 | **4 次，4 次变红**（退出码 1） | §4.71.3 |
+| 模块边界 | 全部成立 | `make module-check` |
+| 域边界 | 58 域 / 43 边 / 0 环（未变） | `make domain-check` |
+| 跨架构 e2e | **未做** | §4.71.4 |
+
+本条**不新增任何跨模块依赖**：`scripts/nodearch` 只 import 标准库
+（`os/exec`、`os`、`path/filepath`、`strings`、`sort`、`fmt`、`io`），
+所以它不需要 modulecheck 知道它的存在，也不需要 `.go-arch-lint.yml` 给它授权。
+两条测试读 `Makefile` 文本而不是 import 任何包——它们要的正是**闸门自己
+不拥有的那部分信息**。
+
+#### 4.71.8 本条自己犯的错
+
+1. **skip 提示里写的是 `make build-opskeeper-edge-<os>-<arch>`**，
+   而 Makefile 里的目标名是 `build-edge-<os>-<arch>`。二进制叫
+   `opskeeper-edge`，目标叫 `build-edge`——两个名字，只有一个是命令。
+   写完自己跑了一次才发现输出在教人敲一个不存在的目标。补了
+   `TestSkipReasonNamesAMakeTargetThatExists` 逐个断言它建议的每个命令
+   在 Makefile 里真有定义。
+2. **四目标名单一开始想从 Makefile 正则解析**。那样闸门就跟着被检查对象
+   一起错：`build-pig-all` 少了 arm64，闸门也会跟着少一条要求，然后报告
+   "全部目标已验证"。改成硬编码 + 一条测试断言两边集合相等——**从两侧
+   互相锁死，而不是让一个推导另一个**。
+3. **第一版用 exec 报错的 `ENOENT` 判断"二进制不存在"**。而 `go` 本身
+   不存在时，错误**也是** `ENOENT`：开发机上没装 Go，四个目标会全部被
+   报成"没构建"，即一个**构建问题**的措辞，而真实原因是**没检查**。
+   改成先用 `os.Stat` 判存在性，两类问题从此走两条路。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

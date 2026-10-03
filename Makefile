@@ -271,6 +271,25 @@ arch-lint-run: ## 不安装、直接用 go run 跑 go-arch-lint（首次需要�
 module-check: ## 校验 OpsKeeper 2.0 模块边界（唯一 PiG 导入点 / core 无基础设施依赖）
 	go run ./scripts/modulecheck .
 
+# The release chain already puts the right binary in the right directory --
+# build-edge-bundle.sh derives its source dir from the arch argument it is
+# handed -- and nothing anywhere checks the artefact inside it. Four
+# cross-compile targets from one Makefile is four chances to write a host
+# build into a cross slot, and that failure only appears on a customer node
+# as ENOEXEC: no log line, no health check, just a tool call that never
+# returns. `go version -m` reads the GOOS/GOARCH/CGO_ENABLED the compiler
+# recorded in the binary itself, which is the only account that can
+# contradict the filename.
+#
+# The agent is required for all four targets; the edge is checked wherever it
+# happens to be built, so this gate is useful after build-pig-all alone. When
+# no edge is present the report says the pair rule did not run rather than
+# letting a green line stand in for coverage that was never exercised.
+.PHONY: node-arch-check
+node-arch-check: ## 校验 bin/<os>-<arch>/ 里节点的 pig 与 edge 真的是该架构（决策 134）
+	go run ./scripts/nodearch .
+	go test ./scripts/nodearch/ -count=1
+
 # modulecheck stops at the module and go-arch-lint stops at the layer, and
 # inside core/manager neither can see a domain: the arch-lint components are
 # named after layers (manager_biz, manager_model, ...), so biz/alert
