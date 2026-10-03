@@ -9643,6 +9643,135 @@ manager 拆分仍是阶段 3 里那 0.56，纯体力活。本轮没有让它更�
 但**它该依据什么被批准**这件事，现在比上一轮清楚：只有一根柱子，且那根柱子
 回答的不是它被问的那个问题。提案状态不变——**已定价的候选，不是已批准的决定**。
 
+### 4.87 决策 150：问「什么和什么一起故障」，答案是一个从来没接上的配置——而它同时是拆分的第二条硬约束
+
+#### 4.87.1 换个问法，第二问就可测了
+
+提案缺的三问里，第一问（一起扩缩容）和第二问（一起故障）一直被记成
+「要的是部署现实，本仓测不出来」。这个判断下得太早。真正决定两个域能不能
+独立扩缩容的，不是它们各自要几台机器，而是**它们是否共用同一个有上限的资源**——
+共用的话，一个域的负载会饿死另一个，加副本也不解决，因为大家抢的是同一份。
+
+于是去找共用资源，第一眼就撞上一个不该存在的东西。
+
+#### 4.87.2 `DBPoolConfig` 是一份被读进来、带上默认值、然后丢掉的配置
+
+`core/floor/config/config.go` 里有这么一段：
+
+```go
+// Pool tunes the underlying database/sql pool. Defaults are sized
+// for the single-replica MVP; multi-replica HA deployments should
+// raise MaxOpen and shrink ConnMaxLifetime so load balancers cycle
+// connections out from under rolling upgrades.
+Pool DBPoolConfig
+```
+
+`Load()` 也确实设了默认值：`MaxOpen=25`、`MaxIdle=5`、`ConnMaxLifetime=30m`，
+三个环境变量 `OPSKEEPER_DB_POOL_*` 都在。
+
+**然后没有任何代码应用它们。** `dbx.Open` 从头到尾没有调用过
+`SetMaxOpenConns` / `SetMaxIdleConns` / `SetConnMaxLifetime`。全仓
+`SetMaxOpenConns` 只出现在两处：`cmd/pool-fixture`（一个测试夹具）和
+`core/manager/middleware/adapter/postgres/pg.go`（那个适配器自己开的连接，
+有独立的 `PoolSize`，默认 10）。
+
+所以主库跑的一直是 `database/sql` 自己的默认值：
+
+| 旋钮 | 配置声称 | 实际跑的 |
+|---|---|---|
+| MaxOpen | 25 | **0 = 无上限** |
+| MaxIdle | 5 | **2** |
+| ConnMaxLifetime | 30m | **0 = 永不过期** |
+
+这一类缺陷本仓不是第一次见（§4.17 的「参数有解析器、参数派发不出去」、
+§4.83 的「端口只有写没有读」），形状也一样：**声明、默认值、文档、环境变量
+全齐，只差最后那一步接线**，所以没有任何一处会红。
+
+#### 4.87.3 为什么这不只是「调参没调」
+
+`dbx.Open` 返回的那一个 `*gorm.DB` 被注入给**全部五十多个域的 data 层**
+（`New(db *gorm.DB)` 是它们的统一构造签名）。也就是说：
+
+- 一个域连接泄漏、或者只是在慢查询期间占着连接不放，就能把 MySQL 的
+  `max_connections` 全部吃光，**其余五十多个域一起死**；
+- `MaxIdle=2` 意味着任何真实负载下连接都在反复新建（每次握手 + 认证），
+  而配置里写的 5 从未生效；
+- `ConnMaxLifetime=0` 意味着连接永不退休，这**直接和同一段注释里写的
+  HA 建议相反**——注释说「让负载均衡器在滚动升级时把连接换掉」，
+  而代码让连接永远不换。滚动升级时挂在长连接上的那一批请求会拿到
+  服务端已经关掉的连接。
+
+#### 4.87.4 第二问的答案，同时也是拆分方案的一条硬约束
+
+> **控制面里所有域共用同一个没有上限的连接池，对着一个 MySQL。**
+> 所以它们**必须一起故障**——不是「可能会」，是连接预算这个物理量只有一份。
+> 而把进程拆成两个可独立扩缩容的部署单元，如果两边仍然指向同一个 MySQL，
+> **这件事一点都不会变**。
+
+这条直接落在提案头上。`docs/manager-split.proposed` 算的是 42 条跨组 import
+语句的代价，那是对的；它没有算的是**拆完之后两个部署单元之间还剩下什么
+共享**。答案是：数据库连接预算。所以提案说的「41/42 说明这样切不贵」是对的，
+但「切开了就独立了」不成立——**隔离的收益比提案自己以为的小**。
+
+这不是反对拆分：把 100 个包切成两个可独立构建、可独立发布的单元本身有价值。
+只是它买到的是**构建与发布独立**，不是**资源与故障独立**。后者要等两半
+各有各的库（或至少各有各的连接池上限，并且那两个上限之和不超过
+`max_connections`）。
+
+#### 4.87.5 交付
+
+1. **`tunePool`**——新增，三条方言路径（mysql / sqlite / postgres）都调。
+   非正数的旋钮**保持 database/sql 默认**而不是夹到 0 或夹成小数字：
+   「<=0 表示不限制」是运维可能故意要的东西。
+2. **启动日志报实际值**（dialect / max_open / max_idle / conn_max_lifetime），
+   **没有上限时打 WARN** 并给出 `OPSKEEPER_DB_POOL_MAX_OPEN` 的提示——
+   这正是「忘配变量」会得到的状态。
+3. **`MaxIdle > MaxOpen` 时打 WARN**：`database/sql` 会静默把 MaxIdle 降到
+   MaxOpen，一个和实际行为不符的配置比没有配置更坏，因为它会骗读启动日志的人。
+4. **顺带核过另外两条共享资源**：Redis 那套**是接上的**
+   （`cmd/opskeeper/main.go:368` 把 `cfg.Redis.Pool.MaxActive` 传进
+   `PoolSize`），postgres 适配器有自己的 `PoolSize`（默认 10）。
+   所以 `dbx.Open` 是**唯一**的缺口，不是一类问题。
+
+#### 4.87.6 变异：把 `tunePool` 变回空操作，就是修复前的状态
+
+```
+--- FAIL: TestOpenAppliesTheConfiguredPoolCeilings
+    MaxOpenConnections = 0, want 7 — the configured ceiling is not reaching database/sql
+--- FAIL: TestTunePoolRetiresConnectionsOnTheConfiguredLifetime
+    MaxLifetimeClosed = 0, want at least 1 — ConnMaxLifetime did not retire the idle connection
+```
+
+第一条那个 `0` 就是**无上限池本身**——不是推出来的，是变异下实测读出来的。
+
+`ConnMaxLifetime` 那条值得单说：它是唯一一个 `sql.DBStats` 不直接报告的旋钮，
+所以在这次之前它是最不可能被发现的——`MaxOpenConnections` 至少还会显示一个数，
+而连接退休这件事在 `Stats()` 里根本没有对应字段。测试用「设成 1ns → 建连接 →
+睡 5ms → 再建 → `MaxLifetimeClosed >= 1`」来观测它。
+
+#### 4.87.7 这是改了运行时行为，所以跑了真 MySQL
+
+主库路径从「无上限」变成「25」，这是一次真实的运行时改动，不能只靠单元测试。
+`make test-e2e` 在真 MySQL 容器上跑完：**失败条数与改动前完全一致**，
+仍然是那两条 frontier 镜像取不到的（§4.85），没有新增任何失败。
+`core/manager` 177 个包全绿，`modulecheck` 边界成立。
+
+#### 4.87.8 进度：仍然 84.1%，而且这一条**故意不加分**
+
+本轮关掉的是一个**真缺陷**，但它不属于阶段 3 的三条里的任何一条：
+
+- 不是第一条（`iam → manager` 反向依赖，决策 109 已关）；
+- 不是第二条（manager 拆分，0.56 的体力活，一行没搬）；
+- 不是第三条（联邦 0.97，剩下的是跨网络 `Source.URL`）。
+
+它是在**给第二条找依据**的过程中掉出来的。提案说「没有这三样，41 这个数只能
+说明这样切不贵，说明不了这样切是对的」——本轮给不出「对」，但给出了
+「就算对，也不是你原来以为的那个对」：**共享的数据库连接预算**。
+
+所以分数不动。要加分得靠真的搬包，或者靠剩下那两条外部条件里的任意一条。
+但这一轮的价值不在分数上：它把一条「配置里写着、实际没生效」的隐患变成了
+一个 25 的上限和一条启动日志。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

@@ -15,6 +15,7 @@
 package dbx
 
 import (
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -41,11 +42,11 @@ import (
 func Open(cfg config.DBConfig, log *slog.Logger) (*gorm.DB, error) {
 	switch cfg.Dialect {
 	case "", "mysql":
-		return openMySQL(cfg.DSN, log)
+		return openMySQL(cfg.DSN, cfg.Pool, log)
 	case "sqlite":
-		return openSQLite(cfg.Path, log)
+		return openSQLite(cfg.Path, cfg.Pool, log)
 	case "postgres", "postgresql", "pg":
-		return openPostgres(cfg.DSN, log)
+		return openPostgres(cfg.DSN, cfg.Pool, log)
 	default:
 		return nil, fmt.Errorf("dbx: unsupported dialect %q", cfg.Dialect)
 	}
@@ -53,7 +54,7 @@ func Open(cfg config.DBConfig, log *slog.Logger) (*gorm.DB, error) {
 
 // openMySQL opens a MySQL connection via gorm and verifies reachability
 // with Ping(). The DSN password is never logged.
-func openMySQL(dsn string, log *slog.Logger) (*gorm.DB, error) {
+func openMySQL(dsn string, pool config.DBPoolConfig, log *slog.Logger) (*gorm.DB, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("dbx: empty mysql DSN")
 	}
@@ -72,6 +73,7 @@ func openMySQL(dsn string, log *slog.Logger) (*gorm.DB, error) {
 	if err := sqlDB.Ping(); err != nil {
 		return nil, fmt.Errorf("dbx: mysql ping failed: %w", err)
 	}
+	tunePool(sqlDB, pool, "mysql", log)
 
 	if log != nil {
 		log.Info("mysql opened", "endpoint", redactDSN(dsn))
@@ -85,7 +87,7 @@ func openMySQL(dsn string, log *slog.Logger) (*gorm.DB, error) {
 // Path may be:
 //   - a plain filesystem path ("./data/opskeeper.db", "/var/lib/opskeeper/db")
 //   - ":memory:" for an in-memory DB (tests)
-func openSQLite(path string, log *slog.Logger) (*gorm.DB, error) {
+func openSQLite(path string, pool config.DBPoolConfig, log *slog.Logger) (*gorm.DB, error) {
 	if path == "" {
 		return nil, fmt.Errorf("dbx: empty sqlite path")
 	}
@@ -108,6 +110,16 @@ func openSQLite(path string, log *slog.Logger) (*gorm.DB, error) {
 		return nil, fmt.Errorf("dbx: sqlite open %q: %w", path, err)
 	}
 
+	// SQLite has no server-side connection budget to overrun, but the
+	// handle is still shared by every bounded context in this process, so
+	// the same ceiling applies for the same reason: one domain's leak must
+	// not be able to exhaust the rest.
+	if sqlDB, err := gdb.DB(); err == nil {
+		tunePool(sqlDB, pool, "sqlite", log)
+	} else if log != nil {
+		log.Warn("sqlite pool could not be tuned", "err", err)
+	}
+
 	if log != nil {
 		log.Info("sqlite opened", "path", path, "journal_mode", "WAL", "foreign_keys", "on")
 	}
@@ -117,7 +129,7 @@ func openSQLite(path string, log *slog.Logger) (*gorm.DB, error) {
 // openPostgres opens a PostgreSQL connection via gorm and verifies
 // reachability with Ping(). Keyword-style DSNs are never logged because their
 // password cannot be redacted without a dialect-specific parser.
-func openPostgres(dsn string, log *slog.Logger) (*gorm.DB, error) {
+func openPostgres(dsn string, pool config.DBPoolConfig, log *slog.Logger) (*gorm.DB, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("dbx: empty postgres DSN")
 	}
@@ -137,6 +149,8 @@ func openPostgres(dsn string, log *slog.Logger) (*gorm.DB, error) {
 		return nil, fmt.Errorf("dbx: postgres ping failed: %w", err)
 	}
 
+	tunePool(sqlDB, pool, "postgres", log)
+
 	if log != nil {
 		endpoint := "postgres:***"
 		if strings.Contains(dsn, "@") {
@@ -145,6 +159,59 @@ func openPostgres(dsn string, log *slog.Logger) (*gorm.DB, error) {
 		log.Info("postgres opened", "endpoint", endpoint)
 	}
 	return gdb, nil
+}
+
+// tunePool applies the configured ceilings to a freshly opened handle.
+//
+// This function is the whole reason DBPoolConfig exists. Until it was
+// written, every knob in that struct was read by config.Load, carried in
+// the struct, documented with a default, and then dropped on the floor:
+// database/sql's own defaults were what actually ran, which are
+// MaxOpenConns unlimited, MaxIdleConns 2, and connections that never
+// expire. That is not a tuning opinion, it is a blast radius. Every
+// bounded context in this process shares one handle, so with no ceiling a
+// single domain leaking connections — or simply holding them during a slow
+// query — spends the server's whole connection budget and takes the other
+// fifty-odd domains down with it. The manager cannot be split into pieces
+// that scale independently while its halves still draw from one unbounded
+// pool against one MySQL.
+//
+// A non-positive knob keeps the database/sql default rather than clamping,
+// because "<=0 means unlimited" is a meaningful thing for an operator to
+// ask for on purpose.
+func tunePool(sqlDB *sql.DB, pool config.DBPoolConfig, dialect string, log *slog.Logger) {
+	if pool.MaxOpen > 0 {
+		sqlDB.SetMaxOpenConns(pool.MaxOpen)
+	}
+	if pool.MaxIdle > 0 {
+		sqlDB.SetMaxIdleConns(pool.MaxIdle)
+	}
+	if pool.ConnMaxLifetime > 0 {
+		sqlDB.SetConnMaxLifetime(pool.ConnMaxLifetime)
+	}
+	if log == nil {
+		return
+	}
+	if pool.MaxOpen <= 0 {
+		// Worth saying out loud: this is the state that took the whole
+		// control plane down once, and it is also the state an operator
+		// gets by forgetting the variable.
+		log.Warn("database pool has no ceiling; every domain shares one unlimited pool",
+			"dialect", dialect, "hint", "set OPSKEEPER_DB_POOL_MAX_OPEN")
+		return
+	}
+	if pool.MaxIdle > pool.MaxOpen {
+		// database/sql silently reduces MaxIdle to MaxOpen, so a
+		// config that says otherwise is a config that lies to whoever
+		// reads the startup log.
+		log.Warn("database pool idle exceeds open; database/sql will clamp it",
+			"dialect", dialect, "max_open", pool.MaxOpen, "max_idle", pool.MaxIdle)
+	}
+	log.Info("database pool configured",
+		"dialect", dialect,
+		"max_open", pool.MaxOpen,
+		"max_idle", pool.MaxIdle,
+		"conn_max_lifetime", pool.ConnMaxLifetime)
 }
 
 // buildSQLiteDSN appends pragma query params expected by modernc/glebarez sqlite.

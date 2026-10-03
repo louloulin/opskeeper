@@ -2,6 +2,7 @@ package dbx
 
 import (
 	"testing"
+	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 	"gorm.io/gorm"
@@ -198,4 +199,80 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// The pool knobs were read by config.Load, carried in DBPoolConfig, given
+// documented defaults, and then never applied. database/sql's own defaults
+// ran instead: unlimited open connections, two idle, and connections that
+// never expire. Every bounded context in the process shares this one
+// handle, so that is not a tuning preference — it is the whole control
+// plane's connection budget with no ceiling on it.
+func TestOpenAppliesTheConfiguredPoolCeilings(t *testing.T) {
+	gdb, err := Open(config.DBConfig{
+		Dialect: "sqlite",
+		Path:    ":memory:",
+		Pool: config.DBPoolConfig{
+			MaxOpen:         7,
+			MaxIdle:         3,
+			ConnMaxLifetime: time.Hour,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("gdb.DB: %v", err)
+	}
+	if got := sqlDB.Stats().MaxOpenConnections; got != 7 {
+		t.Fatalf("MaxOpenConnections = %d, want 7 — the configured ceiling is not reaching database/sql", got)
+	}
+}
+
+// A non-positive knob means "let database/sql decide", which is a real
+// thing an operator can ask for on purpose. It must not be silently
+// rewritten into a small number, and it must not be clamped to zero either
+// (zero max-open is a different statement: refuse every connection).
+func TestAPoolKnobLeftAtZeroKeepsTheDriverDefault(t *testing.T) {
+	gdb, err := Open(config.DBConfig{Dialect: "sqlite", Path: ":memory:"}, nil)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("gdb.DB: %v", err)
+	}
+	if got := sqlDB.Stats().MaxOpenConnections; got != 0 {
+		t.Fatalf("MaxOpenConnections = %d, want 0 (database/sql's unlimited default)", got)
+	}
+}
+
+// ConnMaxLifetime is the knob behind the documented HA advice about load
+// balancers cycling connections out from under a rolling upgrade. It is
+// also the one nothing observed before, because MaxOpenConnections — the
+// only pool number Stats reports — said nothing about it.
+func TestTunePoolRetiresConnectionsOnTheConfiguredLifetime(t *testing.T) {
+	gdb, err := Open(config.DBConfig{Dialect: "sqlite", Path: ":memory:"}, nil)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("gdb.DB: %v", err)
+	}
+
+	tunePool(sqlDB, config.DBPoolConfig{ConnMaxLifetime: time.Nanosecond}, "sqlite", nil)
+	if err := sqlDB.Ping(); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+	// The connection opened above is now idle and already past its
+	// lifetime. Letting the next acquire find it expired is what proves
+	// the setting landed: Stats counts the close.
+	time.Sleep(5 * time.Millisecond)
+	if err := sqlDB.Ping(); err != nil {
+		t.Fatalf("second ping: %v", err)
+	}
+	if got := sqlDB.Stats().MaxLifetimeClosed; got < 1 {
+		t.Fatalf("MaxLifetimeClosed = %d, want at least 1 — ConnMaxLifetime did not retire the idle connection", got)
+	}
 }
