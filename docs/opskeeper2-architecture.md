@@ -7255,43 +7255,70 @@ PiG 的包资源发现有两条路（`coding/packagecontent/packagecontent.go` `
 `plugins/pig-ops/*/package.json` 已补齐。这是**我们自己的缺陷**：计划 §3.1 写的分发单元
 就是「PiG package 目录，8 类资源全部可用」，而清单本身就是资源声明的入口。
 
-#### 4.67.2 缺陷二（上游 PiG）：工具来源分类读错了键，**插件工具被当成内置工具**
+#### 4.67.2 缺陷二（上游 PiG）：来源分类的 type switch **一个分支都不命中**
 
-补了清单也只是「发现了」。真正把 18 个工具藏掉的是 PiG 自己的一处键名不匹配：
+`coding/piglet/main.go` 的 `convertTools` 这样判定每个工具属于谁：
 
 ```go
-// coding/piglet/main.go  convertTools
-case map[string]any:
-    if name, ok := s["name"].(string); ok {   // ← 读 "name"
-        source = name
-    }
-...
-if source == "" { source = "builtin" }       // ← 兜底成内置
+switch s := t.SourceInfo.(type) {
+case string:         source = s
+case map[string]any: if name, ok := s["name"].(string); ok { source = name }
+}
+if source == "" { source = "builtin" }
 ```
 
-而它自己写的 map 是 `defaultExtensionSourceInfo` 产出的，键为
-`path` / `source` / `scope` / `origin` / `baseDir`——**没有 `name`**。
+把真 `pig` 跑起来、在这一行打印 `SourceInfo` 的真实值，结论是**两个分支各自错过一半**：
 
-于是每个工具的 `source` 都是 `""` → 兜底 `"builtin"` → `ScopeTools` 用
-`piglet.BuiltinTools` 判定 → 节点 profile 的 `tools: []`（本意是移除 shell）
-**把 18 个插件工具一起移除了**。
+| 工具 | `SourceInfo` 的真实类型与值 | 命中分支 | 结果 |
+|---|---|---|---|
+| 内置（`read` / `bash` / …） | **结构体** `codingagent.PiSourceInfo{Path:"<builtin:read>", Source:"builtin", …}` | **无** | 兜底 `"builtin"` → **碰巧对了** |
+| 扩展（`expand_topology` / …） | **map** `{path: …/extensions/opskeeper-sre-readonly, source:"local", …}` | `map[string]any`，但读的是 `"name"` | 兜底 `"builtin"` → **错了** |
 
-**v0.3.1 同样没修**（`go list -m -versions` 只有 0.2.0 / 0.3.0 / 0.3.1，两版都写 `s["name"]`），
-所以升 tag 无解。修法是一行：读 `"source"`。
+两处细节值得单独记：
 
-#### 4.67.3 2×2 矩阵：两个缺陷**都**必须修，缺一不可
+1. **内置工具的 `SourceInfo` 是结构体，不是 map**，而代码只处理了 `string` 与 `map[string]any`。
+   内置工具之所以表现正常，纯粹因为兜底值 `"builtin"` 恰好就是它们的正确答案——
+   **这个分支从来没有被真正执行过**。
+2. 扩展工具的 map 里**没有 `name` 键**，代码读它必然落空。
 
-同一个包、同一份 profile，只变两个变量（`/26` 是 PiG 注册到的工具总数：8 内置 + 18 扩展）：
+结果：每个插件工具的 `source` 都是 `""` → 归为 `"builtin"` → 由 `BuiltinTools` 判定 →
+节点 profile 的 `tools: []`（本意是移除 shell）把 18 个插件工具一起移除了。
 
-| 包有 `pi` 清单 | 上游修复 | 结果 |
-|---|---|---|
-| 无 | 无 | **0/18** 扩展从不被发现 |
-| 无 | 有 | **0/18** 仍然全灭 |
-| 有 | 无 | `0/26` 发现了，但被 profile 全部隐藏 |
-| 有 | 有 | **`18/26` active, 8 hidden** ✓ |
+#### 4.67.3 关键：**「改读 `source` 一行」是不够的，而且危险**
 
-第四行正是 `core/edge/agentprofile` 文档声称的设计意图。**这个 18/26 是变异验证出来的**，
-不是推断：打上那一行补丁重新构建，数字从 0 变成 18。
+上一版文档在这里写的是「修法是读 `"source"` 一行」。**这个结论是错的**，本轮把它推翻：
+
+即使把键名改对，读到的是 **`"local"`，不是扩展名**。而 `ScopeTools` 的 default 分支是
+`toolAllowed(extensionTools[source], tool.Name)`——`extensionTools["local"]` 不存在，
+取到 nil，于是 `toolAllowed(nil, …)` 恒真，**逐扩展的工具清单被整体绕过**。
+
+实测（同一个包、同一份 profile，只把 `host_dmesg` 从 piglet 的逐扩展清单里删掉）：
+
+| 上游修法 | 清单保留 `host_dmesg` | 清单删掉 `host_dmesg` | 逐扩展清单是否生效 |
+|---|---|---|---|
+| 现状（读 `"name"`） | 0/26 | 0/26 | — |
+| **只改读 `"source"`** | 18/26 | **18/26** | ❌ **失效（fail-open）** |
+| **按扩展名归属** | 18/26 | **17/26** | ✅ 生效 |
+
+**所以「最小修复」会把「一个工具都没有」换成「工具全都在、且审查清单形同虚设」**，
+而后者在外观上完全健康：节点能干活、闸门会拦、审计会记，只是**一个包可以 shipping
+一个它自己清单里没声明的工具，而没有任何东西会拒绝它**。这比现在的零工具更危险，
+因为它看起来是对的。
+
+正确的修法必须**按扩展名归属**（宿主记录的 `path` 的 basename 就是扩展名），并且顺带
+补上结构体那一支：
+
+```go
+case map[string]any:
+    if raw, ok := s["path"].(string); ok {
+        source = filepath.Base(raw)      // …/extensions/opskeeper-sre-readonly
+    }
+case codingagent.PiSourceInfo:
+    source = s.Source
+```
+
+这一版经实测同时满足两件事：**18 个工具出现**（节点终于能干活的工具），且
+**删掉一个就少一个**（审查清单继续是审查面）。
 
 #### 4.67.4 为什么**没有任何 profile 能绕过**
 
@@ -7351,13 +7378,23 @@ return append(infos, extensionTools...)   // Source 由测试自己填成扩展�
 构建真 `pig`（`GOWORK=off`，与发布同一条路径）、写节点自己那份 profile、指向仓库里真实的
 只读包、对着假模型跑一次，然后断言**模型收到的工具集 == 包清单声明的工具集**。
 
-今天的结果：**`0 of 18`**。
+**两条**，因为「工具出现了」和「审查清单还活着」是两件事，而一个只让工具出现的修复
+会满足前者、静默弄死后者：
 
-它今天会红，而红的原因在上游。两点说明：
+| 测试 | 断言 | 今天 |
+|---|---|---|
+| `TestTheNodeProfileActuallyOffersTheToolsItsPackagesDeclare` | 模型收到的工具集 == 包清单声明的工具集 | **0 of 18** |
+| `TestAToolRemovedFromTheReviewSurfaceIsRemovedFromTheMenu` | 把一个工具从清单里删掉，它就必须从菜单里消失 | 0 of 17（剩 17 个一个都没提供） |
 
-- 它**不进 `make test`**：一个长期红的测试只会训练所有人忽略红色。
-- 它**不该被删**：它是这个缺陷唯一的可执行证据；上游修好后它会自己转绿。
-  也接受 `OPSKEEPER_PIG_BIN` 覆盖，这样上游修好后可以用打过补丁的二进制直接验证，不必改代码。
+第二条是**对照**而不是单点断言：同一个包跑两次，只差清单里有没有那个工具，两次的
+提供集**必须不同**。只做「让工具出现」的修复会让这条测试变绿，而那恰恰是它要拦的东西。
+
+两条今天都会红，红的原因在上游。三点说明：
+
+- 它们**不进 `make test`**：一个长期红的测试只会训练所有人忽略红色。
+- 它们**不该被删**：这是这个缺陷唯一的可执行证据；上游修好后它们会自己转绿。
+- 都接受 `OPSKEEPER_PIG_BIN` 覆盖，这样上游修好后可以用打过补丁的二进制直接验证，
+  **不必改本仓库的代码**——而这正是判断一个上游修法安不安全的正确方式。
 
 #### 4.67.8 对计划与台账的影响
 
@@ -7370,10 +7407,15 @@ return append(infos, extensionTools...)   // Source 由测试自己填成扩展�
 
 #### 4.67.9 下一步
 
-1. **上游**：PiG `coding/piglet/main.go` 的 `s["name"]` → `s["source"]`，发 v0.3.2。
-2. **本仓库**：上游 tag 一到，`make module-standalone-check` + `pig-tool-scoping-check` 双绿，
+1. **上游**：PiG `coding/piglet/main.go` 的 `convertTools` 按**扩展名**归属（`path` 的
+   basename），并补上 `codingagent.PiSourceInfo` 结构体那一支；发 v0.3.2。
+   **不要接受只把 `"name"` 改成 `"source"` 的修法**——§4.67.3 实测它会让逐扩展清单
+   fail-open，把「零工具」换成「全工具且无人审查」，而外观完全健康。
+2. **验证修法的方式**：`OPSKEEPER_PIG_BIN=<打过补丁的二进制> make pig-tool-scoping-check`。
+   **两条都绿才算修好**；只绿第一条的是一个更危险的版本。
+3. **本仓库**：上游 tag 一到，`make module-standalone-check` + 上面那条双绿，
    阶段 0 的 0.4 才谈得上「带工具的真实对话」。
-3. 在此之前，**工具调用的 e2e 不要写**——它必然红，而红的理由与交付通路无关。
+4. 在此之前，**工具调用的 e2e 不要写**——它必然红，而红的理由与交付通路无关。
 
 ## 六、当前实现进度
 

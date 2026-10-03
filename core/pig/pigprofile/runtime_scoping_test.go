@@ -30,6 +30,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -80,6 +81,134 @@ func TestTheNodeProfileActuallyOffersTheToolsItsPackagesDeclare(t *testing.T) {
 			"well. The fix is to read \"source\"; it is in PiG, not here. See §4.67.",
 			len(offered), len(declared), strings.Join(missing, ", "))
 	}
+}
+
+// TestAToolRemovedFromTheReviewSurfaceIsRemovedFromTheMenu is the property
+// the gate above cannot see, and it is the one that decides whether a fix
+// to the upstream defect is safe to take.
+//
+// Making the tools appear is half the problem. The other half is that a
+// package's per-extension tool list is the review surface — `pig-ops.yaml`
+// says so in as many words, and the whole point of naming a tool there is
+// that a tool nobody listed cannot run. An upstream fix that merely made
+// every tool visible would satisfy the first test and quietly delete the
+// second: a package that ships a tool its manifest never declared would
+// still be offered that tool, and the failure would be invisible because
+// the node would look healthy and productive.
+//
+// So the assertion is deliberately a contrast: the same package, run twice,
+// differing only in whether one tool is listed. Offerings must differ.
+func TestAToolRemovedFromTheReviewSurfaceIsRemovedFromTheMenu(t *testing.T) {
+	pkg, err := filepath.Abs(readonlyPackageRel)
+	if err != nil {
+		t.Fatalf("resolve package: %v", err)
+	}
+	declared := declaredToolNames(t, pkg)
+	if len(declared) < 2 {
+		t.Fatalf("the package declares %d tools; this gate needs at least 2", len(declared))
+	}
+	dropped := declared[0]
+
+	trimmed := copyPackage(t, pkg, t.TempDir())
+	if err := os.WriteFile(filepath.Join(trimmed, "pig-ops.yaml"),
+		[]byte(manifestWithout(t, pkg, dropped)), 0o640); err != nil {
+		t.Fatalf("write trimmed manifest: %v", err)
+	}
+	stillDeclared := declaredToolNames(t, trimmed)
+	if contains(stillDeclared, dropped) {
+		t.Fatalf("the trimmed manifest still declares %q; the gate would prove nothing", dropped)
+	}
+
+	offered := offeredToolNames(t, trimmed)
+
+	for _, name := range stillDeclared {
+		if !contains(offered, name) {
+			t.Fatalf("with %q removed from the manifest the model was offered %d of the "+
+				"remaining %d tools; a node whose plugins are all switched off is not a "+
+				"node with plugins\nmissing: %s", dropped, len(offered), len(stillDeclared),
+				strings.Join(missingFrom(offered, stillDeclared), ", "))
+		}
+	}
+	if contains(offered, dropped) {
+		t.Errorf("%q is no longer declared in the package's manifest, but the runtime still "+
+			"offered it. The manifest's tool list is the review surface: an undeclared tool "+
+			"reaching the model means a package can become more capable without anybody "+
+			"accepting the diff. This is what a fix that only makes tools visible — rather "+
+			"than attributing each one to the extension that registered it — produces. "+
+			"See §4.67.4", dropped)
+	}
+}
+
+// manifestWithout returns the package's manifest with one tool entry removed.
+func manifestWithout(t *testing.T, pkg, tool string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(pkg, "pig-ops.yaml"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var kept []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if comment := strings.IndexByte(line, '#'); comment >= 0 {
+			// Keep the comment: a trimmed manifest that loses its own
+			// annotations is a worse thing to read than a shorter one.
+			line = line[:comment] + line[comment:]
+		}
+		if strings.Contains(line, "name: "+tool+",") || strings.Contains(line, "name: "+tool+" ") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// copyPackage copies a package tree so a gate can vary one file in it
+// without touching the repository.
+func copyPackage(t *testing.T, src, dst string) string {
+	t.Helper()
+	if err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, rErr := filepath.Rel(src, path)
+		if rErr != nil {
+			return rErr
+		}
+		if info.IsDir() && strings.HasPrefix(filepath.Base(path), ".") {
+			return filepath.SkipDir
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o750)
+		}
+		in, oErr := os.Open(path)
+		if oErr != nil {
+			return oErr
+		}
+		defer in.Close()
+		if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+			return err
+		}
+		out, cErr := os.Create(target)
+		if cErr != nil {
+			return cErr
+		}
+		defer out.Close()
+		_, cpErr := io.Copy(out, in)
+		return cpErr
+	}); err != nil {
+		t.Fatalf("copy package: %v", err)
+	}
+	return dst
+}
+
+func missingFrom(offered, want []string) []string {
+	var missing []string
+	for _, name := range want {
+		if !contains(offered, name) {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 // offeredToolNames runs a real agent against a fake model and returns the
