@@ -66,6 +66,21 @@ type Member struct {
 	// already seen and the monotonic rule on the child would refuse it —
 	// leaving a rollout that can never complete.
 	HighestIssued uint64
+	// IssuedBundle is the decision HighestIssued refers to.
+	//
+	// It is here so a delivery can be retried without spending a version.
+	// The alternative is the obvious design — a push that failed is
+	// re-pushed by publishing again — and it is wrong in a way that only
+	// shows up in production: every retry would mint a new version, each
+	// one would be newer than the last so nothing would refuse it, and a
+	// cluster with a flaky link would accumulate a version per attempt
+	// while the operator watched a number climb for no reason.
+	//
+	// Like the rest of the registry it is in memory, and a root that
+	// restarts forgets which bundle its newest version referred to. That
+	// is the same limitation HighestIssued already has and it is fixed by
+	// the same durable Ledger, not by anything here.
+	IssuedBundle federation.Bundle
 	// Acknowledged is the last version the child confirmed, and whether
 	// it took it. A root that has published 9 and last heard "7
 	// refused" is a different situation from one that has heard nothing.
@@ -182,6 +197,25 @@ func (r *Registry) Member(id federation.ClusterID) (Member, bool) {
 	return *m, true
 }
 
+// BundleFor returns the decision this root issued as its newest version for
+// a cluster.
+//
+// It exists for the retry path, and the ordering matters: a redelivery must
+// re-send exactly the decision that was issued. Re-deriving a bundle from
+// whatever the newest envelope happens to be would be a second decision
+// wearing the first version's number, and a child that had already refused
+// the original would be asked about it again under a name that is no longer
+// true.
+func (r *Registry) BundleFor(id federation.ClusterID) (federation.Bundle, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	m, ok := r.members[id]
+	if !ok || m.HighestIssued < federation.MinBundleVersion {
+		return federation.Bundle{}, false
+	}
+	return m.IssuedBundle, true
+}
+
 // Members lists every enrolled cluster, ordered by identity so a console and
 // a test see the same order.
 func (r *Registry) Members() []Member {
@@ -288,6 +322,7 @@ func (r *Registry) Publish(id federation.ClusterID, env pluginmanifest.Envelope,
 	}
 
 	m.HighestIssued = version
+	m.IssuedBundle = b
 	if r.ledger != nil {
 		if err := r.ledger.SaveHighestIssued(id, version); err != nil {
 			// The version is deliberately NOT rolled back here. Once

@@ -48,6 +48,10 @@ type PublishResult struct {
 	// has already moved, so a response that reported the pre-publish
 	// numbers would be wrong in the direction that matters.
 	Member Member `json:"-"`
+	// Delivery is what happened when the decision went out. It is not an
+	// error and it never will be: the version is issued either way, and
+	// this is the separate fact of whether a cluster has heard about it.
+	Delivery Delivery `json:"delivery"`
 }
 
 // Publisher issues policy bundles.

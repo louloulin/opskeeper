@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"io"
@@ -187,6 +188,106 @@ func TestTheKeyIdCanBeNamed(t *testing.T) {
 	}
 	if signer.KeyID() != "release-2027" {
 		t.Errorf("key id = %q, want the configured release-2027", signer.KeyID())
+	}
+}
+
+// TestARootWithNoArtifactDirectoryStillIssuesAndSaysNobodyWasTold is the
+// typed-nil trap, pinned.
+//
+// federationDistributor hands back a nil *FileDistributor, and passing that
+// straight into an interface parameter produces a non-nil interface holding a
+// nil pointer. Every `dist == nil` check downstream would then be false and
+// the first publish would dereference it — which is exactly what happened
+// the first time this wiring was assembled, and what this test now prevents.
+func TestARootWithNoArtifactDirectoryStillIssuesAndSaysNobodyWasTold(t *testing.T) {
+	seedEnv(t)
+	t.Setenv(federationArtifactDirEnv, "")
+	t.Setenv(federationArtifactPrefixEnv, "")
+
+	w, err := newFederationWiring(managersvcfb.NewDisabled(quietLogger()), quietLogger())
+	if err != nil {
+		t.Fatalf("newFederationWiring: %v", err)
+	}
+	if w.canDeliver {
+		t.Fatal("canDeliver = true with no artifact directory configured")
+	}
+	if !w.canPublish {
+		t.Fatal("canPublish = false with a release key configured; the two are independent")
+	}
+
+	id, _ := floorfed.NewClusterID("prod-cn-north")
+	if _, err := w.service.Enroll(id, "north"); err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+	// This call is the regression: it used to panic here.
+	res, err := w.service.Publish(t.Context(), id, publishRequestFor(t, "opskeeper-sre-readonly"))
+	if err != nil {
+		t.Fatalf("Publish on a root with nowhere to put the tree: %v", err)
+	}
+	if res.Bundle.Version != 1 {
+		t.Errorf("version = %d, want 1 — the decision was issued", res.Bundle.Version)
+	}
+	if res.Delivery.Delivered {
+		t.Error("Delivered = true on a root with no delivery path")
+	}
+	if !strings.Contains(res.Delivery.Error, "no configured way to deliver") {
+		t.Errorf("error = %q, want it to name the missing delivery path", res.Delivery.Error)
+	}
+}
+
+// TestAnArtifactDirectoryTurnsDeliveryOn is the other half: configuring a
+// directory is the whole of the zero-configuration path, and it is what a
+// root and its children sharing a mount need.
+func TestAnArtifactDirectoryTurnsDeliveryOn(t *testing.T) {
+	seedEnv(t)
+	dir := t.TempDir()
+	t.Setenv(federationArtifactDirEnv, dir)
+	t.Setenv(federationArtifactPrefixEnv, "")
+
+	w, err := newFederationWiring(managersvcfb.NewDisabled(quietLogger()), quietLogger())
+	if err != nil {
+		t.Fatalf("newFederationWiring: %v", err)
+	}
+	if !w.canDeliver {
+		t.Fatal("canDeliver = false with an artifact directory configured")
+	}
+	if w.artifactDir == "" {
+		t.Error("artifactDir is empty, so an operator's boot log says nothing about where trees go")
+	}
+
+	id, _ := floorfed.NewClusterID("prod-cn-north")
+	if _, err := w.service.Enroll(id, "north"); err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+	// The tunnel here is disabled, so the push fails — but the tree was
+	// written first, which is the ordering that makes a redelivery possible.
+	res, err := w.service.Publish(t.Context(), id, publishRequestFor(t, "opskeeper-sre-readonly"))
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if res.Delivery.Delivered {
+		t.Error("Delivered = true through a disabled tunnel")
+	}
+	want := filepath.Join(dir, "prod-cn-north-v1.tar.gz")
+	if _, statErr := os.Stat(want); statErr != nil {
+		t.Errorf("the policy tree was not written to %s: %v", want, statErr)
+	}
+}
+
+// TestAnUnusableArtifactDirectoryIsARefusalNotASilentSkip: a path that is
+// configured but cannot be written is a real misconfiguration, and running on
+// without it would leave an operator believing policy is being delivered.
+func TestAnUnusableArtifactDirectoryIsARefusalNotASilentSkip(t *testing.T) {
+	seedEnv(t)
+	// A regular file where a directory is needed.
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("x"), 0o640); err != nil {
+		t.Fatalf("write the blocker: %v", err)
+	}
+	t.Setenv(federationArtifactDirEnv, filepath.Join(blocker, "artifacts"))
+
+	if _, err := newFederationWiring(managersvcfb.NewDisabled(quietLogger()), quietLogger()); err == nil {
+		t.Error("an artifact directory that cannot be created was accepted silently")
 	}
 }
 

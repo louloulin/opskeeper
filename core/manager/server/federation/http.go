@@ -5,7 +5,8 @@
 //	POST /v1/federation/clusters                  enrol a child, get its token once
 //	GET  /v1/federation/clusters                  what is enrolled
 //	GET  /v1/federation/clusters/{id}             one cluster's ledger state
-//	POST /v1/federation/clusters/{id}/policy      sign a tree and issue a version
+//	POST /v1/federation/clusters/{id}/policy      sign a tree, issue a version, deliver it
+//	POST /v1/federation/clusters/{id}/policy/redeliver  send the issued version again
 //	POST /v1/federation/clusters/{id}/policy/ack  record what a child answered
 //	GET  /v1/federation/clusters/{id}/state       ask the child what it enforces
 //
@@ -49,6 +50,7 @@ type Service interface {
 	Members() []fedbiz.Member
 	Member(id floorfed.ClusterID) (fedbiz.Member, bool)
 	Publish(ctx context.Context, id floorfed.ClusterID, req fedbiz.PublishRequest) (fedbiz.PublishResult, error)
+	Redeliver(ctx context.Context, id floorfed.ClusterID) (fedbiz.PublishResult, error)
 	Acknowledge(id floorfed.ClusterID, out floorfed.Outcome) error
 }
 
@@ -86,6 +88,7 @@ func (h *Handler) Register(r chi.Router) {
 		r.With(h.requireAdmin).Get("/clusters", h.list)
 		r.With(h.requireAdmin).Get("/clusters/{id}", h.get)
 		r.With(h.requireAdmin).Post("/clusters/{id}/policy", h.publish)
+		r.With(h.requireAdmin).Post("/clusters/{id}/policy/redeliver", h.redeliver)
 		r.With(h.requireAdmin).Post("/clusters/{id}/policy/ack", h.ack)
 		r.With(h.requireAdmin).Get("/clusters/{id}/state", h.state)
 	})
@@ -223,6 +226,40 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"bundle":         res.Bundle,
 		"highest_issued": res.Member.HighestIssued,
+		// The delivery is in the publish response rather than in a
+		// separate read because the operator's question at this moment is
+		// one question, not two: "did my policy reach that cluster". A
+		// 200 with no delivery field would answer "yes" to a publish that
+		// told nobody anything.
+		"delivery": res.Delivery,
+	})
+}
+
+// redeliver puts an already-issued version on the wire again.
+//
+// It is a separate endpoint from publish for the reason it is a separate
+// method on the service: re-publishing to retry would mint a new version per
+// attempt, and every one would be newer than the last, so nothing would
+// refuse it and the version number would climb for reasons that have nothing
+// to do with policy.
+func (h *Handler) redeliver(w http.ResponseWriter, r *http.Request) {
+	if h.svc == nil {
+		writeErr(w, errNotWired)
+		return
+	}
+	id, err := floorfed.NewClusterID(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, errors.Join(errs.ErrInvalid, err))
+		return
+	}
+	res, err := h.svc.Redeliver(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"bundle":   res.Bundle,
+		"delivery": res.Delivery,
 	})
 }
 
@@ -375,6 +412,12 @@ func mapErr(err error) (string, int) {
 		// operator's next move is to provision a key, not to pick a
 		// different directory.
 		return "no_release_key", http.StatusServiceUnavailable
+	case errors.Is(err, fedbiz.ErrNoDeliveryPath):
+		// Unavailable rather than invalid: the request was well formed and
+		// the decision was issued. What this root cannot do is put the
+		// bytes somewhere the child can fetch them, so the operator's
+		// next move is to configure that — not to publish something else.
+		return "no_delivery_path", http.StatusServiceUnavailable
 	case errors.Is(err, ErrChildUnreachable):
 		return "child_unreachable", http.StatusBadGateway
 	case errors.Is(err, errNotWired):
