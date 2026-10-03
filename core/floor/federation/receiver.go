@@ -67,11 +67,11 @@ var ErrVersionRegressed = errors.New("federation: bundle version is not newer th
 // is answered with.
 type Outcome struct {
 	// Version is the bundle this outcome is about.
-	Version uint64
+	Version uint64 `json:"version"`
 	// Accepted is true when this receiver switched to that version. It is
 	// false both for a malformed bundle and for a policy refusal, because
 	// the caller's next move is the same in each case: do not retry.
-	Accepted bool
+	Accepted bool `json:"accepted"`
 	// Live is the version in force when this call returned, and it is
 	// refreshed on every call including a redelivery. It is never a
 	// historical value: a root that read a stale Live would conclude the
