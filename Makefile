@@ -201,6 +201,35 @@ audit-port-check: ## 审计端口：iam 不再反向依赖 manager，词表闭�
 		'TestTheRowAHandlerAsksForIsTheRowTheLedgerGets|TestAnUnannotatedRequestIsNotAudited|TestAFailingRequestIsAuditedAsAFailure'
 	@echo "audit-port-check: the port is BC-free, the vocabulary is closed, only the declared holders reach the writer, the grant is gone and rows still land"
 
+# 决策 127：迁移必须在**生产的那个方言**上跑一次。
+#
+# 决策 126 之后试图把 manager 真正跑起来，boot 第二遍时死在一条迁移上：
+#   DELETE FROM t WHERE id NOT IN (SELECT MIN(id) FROM t GROUP BY ...)
+# 这句话 SQLite 接受，MySQL 直接报 1093。而这条迁移的测试**只有 SQLite**
+# （core/manager/data/metric/store/migrate_test.go 用 glebarez/sqlite），
+# 于是它带着一条绿测试发布，然后在第二次启动时炸——因为 dedupeRaw 在表还
+# 不存在时会提前返回，第一次启动根本走不到那句。
+#
+# 所以闸门是「真 MySQL 上跑一遍」，而不是再加一条 SQLite 断言：
+#   docker compose up -d mysql
+#   OPSKEEPER_TEST_MYSQL_DSN='opskeeper:opskeeper@tcp(127.0.0.1:13306)/opskeeper_migtest?parseTime=true' \
+#     make mysql-migration-check
+# 变异验证（两条都做过）：
+#   1. 把 dedupeTable 换回扁平子查询 → metric 包 3 条全红，SQLite 侧 14 条全绿。
+#   2. 把 repair preview 的 CREATE INDEX 放回 schema 列表 → 清单级测试在
+#      "boot #2" 上红，SQLite 侧 38 条全绿。
+# 两次的共同点是 SQLite 侧始终是绿的：**当初漏出去的原因就在这里**，也是这条
+# 闸门必须存在的理由。
+.PHONY: mysql-migration-check
+mysql-migration-check: ## 迁移在真 MySQL 上跑一遍（SQLite 抓不到方言差异）
+	@test -n "$(OPSKEEPER_TEST_MYSQL_DSN)" || { \
+		echo "mysql-migration-check: set OPSKEEPER_TEST_MYSQL_DSN to a scratch MySQL DSN"; \
+		echo "  e.g. opskeeper:opskeeper@tcp(127.0.0.1:13306)/opskeeper_migtest?parseTime=true"; \
+		exit 1; }
+	go test -tags=integration ./core/manager/data/metric/store/ -count=1
+	go test -tags=integration ./cmd/opskeeper/ -count=1 -run 'TestTheManagerSchemaReplays|TestThePassesActuallyBuiltASchema|TestEveryMigratorIsCalledOnEveryBoot'
+	@echo "mysql-migration-check: the whole migration list runs three times on the dialect the deployment uses"
+
 # ----------------------------------------------------------------------------
 # lint
 # ----------------------------------------------------------------------------

@@ -242,6 +242,19 @@ var mysqlSchema = []string{
 		created_at DATETIME(6) NOT NULL,
 		UNIQUE KEY uq_repair_preview_candidate (run_id, candidate_id)
 	)`,
-	`CREATE INDEX idx_repair_preview_runs_incident ON repair_preview_runs (tenant_id, incident_id, created_at)`,
-	`CREATE INDEX idx_repair_preview_candidates_run ON repair_preview_candidates (run_id, candidate_id)`,
+	// The two secondary indexes are NOT created here. They were, and this
+	// list is replayed on every boot with no version ledger, so the second
+	// boot of a MySQL deployment died with
+	//
+	//	Error 1061 (42000): Duplicate key name 'idx_repair_preview_runs_incident'
+	//
+	// and the manager never reached its HTTP listener. The tables below use
+	// CREATE TABLE IF NOT EXISTS and therefore survive the replay; a bare
+	// CREATE INDEX has no such form in MySQL (IF NOT EXISTS on CREATE INDEX
+	// is MariaDB's, not MySQL's), so the only portable way to make the step
+	// idempotent is to let ensureMySQLIndexes own it — which is what it
+	// exists for, and which checks HasIndex before every statement.
+	//
+	// The tables carry their UNIQUE / PRIMARY keys inline, so nothing is
+	// lost by the index DDL moving out of the schema list.
 }

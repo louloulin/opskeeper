@@ -242,6 +242,54 @@ import (
 // version is overwritten at build time via -ldflags.
 var version = "dev"
 
+// managerMigrators is the manager's schema, in startup order.
+//
+// It is a named function rather than a literal at the call site because the
+// list is a thing with a property, and a literal at the call site cannot be
+// tested for that property: **every boot replays every migrator**, because
+// there is no version ledger in front of them, so the only guarantee a
+// deployment has is that each migrator is idempotent. Two of them were not,
+// and both failures shared a shape — a step that is a no-op on an empty
+// database and an error on the second boot:
+//
+//   - metric store's dedupeRaw returns early while the table does not exist,
+//     so the DELETE that MySQL rejects (1093) is only reached on boot #2.
+//   - repair preview's MySQL schema list carried two bare CREATE INDEX
+//     statements, so boot #2 died with 1061 Duplicate key name.
+//
+// Neither was visible to CI, which creates a fresh database on every run and
+// therefore only ever performs boot #1. `make mysql-migration-check` replays
+// this whole list twice against a real MySQL, which is the test both of them
+// needed and the one that will hold the next migrator honest.
+func managerMigrators() []dbx.Migrator {
+	return []dbx.Migrator{
+		iamdatauser.Migrate,
+		iamdataorg.Migrate,
+		iamdatamembership.Migrate,
+		manageralertdata.Migrate,
+		managerdemodata.Migrate,
+		managerdevicedata.Migrate,
+		manageredgedata.Migrate,
+		managertopologydata.Migrate,
+		managermetricdata.Migrate,
+		manageraiopsdata.Migrate,
+		managerbizskill.Migrate,
+		managersettingdata.Migrate,
+		managermarketplacedata.Migrate,
+		managersecretdata.Migrate,
+		managermcpdata.Migrate,
+		managerapprovaldata.Migrate,
+		managermonitordata.Migrate,
+		managerdatahitlstore.Migrate,
+		managerwebshelldata.Migrate,
+		manageraudtdata.Migrate,
+		managerreportdata.Migrate,
+		managerflowdata.Migrate,
+		incidentcontrol.Migrate,
+		repairpreviewcontrol.Migrate,
+	}
+}
+
 func main() {
 	fmt.Fprintf(os.Stderr, "opskeeper %s starting\n", version)
 
@@ -298,32 +346,7 @@ func main() {
 		log.Error("open db", slog.Any("err", err))
 		os.Exit(1)
 	}
-	if err := dbx.RunMigrations(db, log,
-		iamdatauser.Migrate,
-		iamdataorg.Migrate,
-		iamdatamembership.Migrate,
-		manageralertdata.Migrate,
-		managerdemodata.Migrate,
-		managerdevicedata.Migrate,
-		manageredgedata.Migrate,
-		managertopologydata.Migrate,
-		managermetricdata.Migrate,
-		manageraiopsdata.Migrate,
-		managerbizskill.Migrate,
-		managersettingdata.Migrate,
-		managermarketplacedata.Migrate,
-		managersecretdata.Migrate,
-		managermcpdata.Migrate,
-		managerapprovaldata.Migrate,
-		managermonitordata.Migrate,
-		managerdatahitlstore.Migrate,
-		managerwebshelldata.Migrate,
-		manageraudtdata.Migrate,
-		managerreportdata.Migrate,
-		managerflowdata.Migrate,
-		incidentcontrol.Migrate,
-		repairpreviewcontrol.Migrate,
-	); err != nil {
+	if err := dbx.RunMigrations(db, log, managerMigrators()...); err != nil {
 		log.Error("run migrations", slog.Any("err", err))
 		os.Exit(1)
 	}
