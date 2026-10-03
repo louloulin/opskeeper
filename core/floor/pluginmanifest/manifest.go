@@ -11,6 +11,8 @@ package pluginmanifest
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -34,6 +36,21 @@ type Plugin struct {
 	// Root. They are collected for the plugin listing; the agent runtime
 	// discovers them itself.
 	Skills []string
+	// Extensions are the package's `pi.extensions` entries, verbatim and
+	// relative to Root — the paths the package declares, not the names the
+	// agent will load them under.
+	//
+	// The distinction is PiG's and it is not ours to collapse here: PiG
+	// turns "extensions/opskeeper-gate/index.ts" into the public name
+	// "opskeeper-gate", and only the module allowed to import PiG can ask
+	// it that question without the answer drifting. So this carries the
+	// path, and the caller maps it through core/pig.
+	//
+	// A node needs it because the node's agent profile has to name every
+	// extension whose tools it is willing to have offered, and an
+	// extension nobody can name is an extension whose tool list cannot be
+	// written down.
+	Extensions []string
 }
 
 // Name returns the plugin's declared name.
@@ -66,7 +83,11 @@ func Load(root string) (Plugin, error) {
 	if err != nil {
 		return Plugin{}, err
 	}
-	return Plugin{Root: root, Manifest: m, Skills: skills}, nil
+	extensions, err := findExtensions(root)
+	if err != nil {
+		return Plugin{}, err
+	}
+	return Plugin{Root: root, Manifest: m, Skills: skills, Extensions: extensions}, nil
 }
 
 // LoadAll walks base and loads every immediate subdirectory that carries a
@@ -123,6 +144,45 @@ func findSkills(root string) ([]string, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// findExtensions reads the `pi.extensions` list a package declares.
+//
+// It reads the manifest rather than walking the extensions directory,
+// because those are two different questions and only the first one has an
+// answer the package author wrote down. A directory can hold a Go module
+// that was never meant to load; a declared entry is a statement that it
+// should.
+//
+// A package with no package.json is not an error. It is a plugin whose
+// author declared resources in some other way, and refusing it here would
+// make this a stricter gate than the loader that consumes the result.
+func findExtensions(root string) ([]string, error) {
+	raw, err := os.ReadFile(filepath.Join(root, "package.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var doc struct {
+		Pi struct {
+			Extensions []string `json:"extensions"`
+		} `json:"pi"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("read package.json: %w", err)
+	}
+	out := make([]string, 0, len(doc.Pi.Extensions))
+	for _, entry := range doc.Pi.Extensions {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		out = append(out, filepath.ToSlash(entry))
 	}
 	sort.Strings(out)
 	return out, nil

@@ -64,6 +64,27 @@ var extensionTools = []piglet.ToolInfo{
 	{Name: "host_restart_service", Source: "opskeeper-sre-repair"},
 }
 
+
+// admittedExtensions is the node profile's own view of the fixture above:
+// the same tools, grouped by the extension that registers them.
+//
+// Deriving one from the other is the point. A profile written by hand here
+// would be a second, independent statement of what the packages ship, and
+// the two could disagree without anything noticing — which is the shape of
+// the bug this file exists to catch, reproduced in the test that was
+// supposed to prevent it.
+func admittedExtensions() []agentprofile.Extension {
+	bySource := map[string][]string{}
+	for _, info := range extensionTools {
+		bySource[info.Source] = append(bySource[info.Source], info.Name)
+	}
+	out := make([]agentprofile.Extension, 0, len(bySource))
+	for name, tools := range bySource {
+		out = append(out, agentprofile.Extension{Name: name, Tools: tools})
+	}
+	return out
+}
+
 func parse(t *testing.T, body string) *piglet.Piglet {
 	t.Helper()
 	p, err := piglet.ParseBytes([]byte(body))
@@ -87,7 +108,7 @@ func registered() []piglet.ToolInfo {
 }
 
 func TestPiGAcknowledgesTheNodeProfile(t *testing.T) {
-	p := parse(t, agentprofile.Render())
+	p := parse(t, agentprofile.Render(admittedExtensions()))
 
 	if p.BuiltinTools == nil {
 		// Omitted and empty are different and only one of them is safe.
@@ -107,7 +128,7 @@ func TestPiGAcknowledgesTheNodeProfile(t *testing.T) {
 // TestTheProfileRemovesTheShellFromTheMenu is the assertion the profile
 // exists for, evaluated with PiG's own scoping function.
 func TestTheProfileRemovesTheShellFromTheMenu(t *testing.T) {
-	p := parse(t, agentprofile.Render())
+	p := parse(t, agentprofile.Render(admittedExtensions()))
 	active := piglet.ScopeTools(p, registered())
 
 	for _, name := range dangerousBuiltins {

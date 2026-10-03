@@ -754,6 +754,13 @@ deps:
       - oxpig_agent
       - oxpig_rpc
       - oxpig_wire
+      # 决策 142：节点 profile 里的 `extensions:` 块要按 PiG 的公开名分组，
+      # 而公开名是 PiG 自己的派生规则（core/pig/pigprofile 是全仓唯一持有
+      # 这个规则的包）。装配根必须写出这份 profile，所以在这一处、且只在
+      # 这一处，cmd 允许看到它——这与「只有 cmd 能碰到 pig」是同一条授权，
+      # 不是第二个例外。oxedge_agentprofile 因此保持零 PiG 依赖：它只渲染
+      # 别人告诉它是什么。
+      - oxpig_profile
       - oxedge_pigsup
       - oxedge_policygate
       - oxedge_gatesocket

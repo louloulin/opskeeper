@@ -11,7 +11,9 @@ import (
 	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/edge/agentprofile"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigprofile"
 )
 
 // agentSettingsFile is the per-project settings the agent reads on start.
@@ -326,6 +328,39 @@ func packageRoots(plugins []pluginmanifest.Plugin) []string {
 		out = append(out, p.Root)
 	}
 	return out
+}
+
+// agentExtensions turns the node's admitted packages into the extension
+// scopes its agent profile is written from.
+//
+// The two inputs are the same admission, read twice for two files that must
+// not disagree: the settings file names the packages the agent will load,
+// and the profile names the tools those packages may have offered. A node
+// whose profile and package list were built from different things would
+// look correct in both files and behave like neither.
+//
+// The manifest's tool list is attached to every extension the package
+// declares, because the manifest reviews the package and not the extension.
+// The gate makes the same pairing - it keys on tool names - so the profile
+// and the gate agree about what was reviewed.
+//
+// A package that declares an extension whose name PiG will not produce is a
+// boot error rather than a warning. The alternative is a profile that names
+// an extension the agent never loads, which reads as coverage and is not:
+// the tools that extension would have offered stay unconstrained.
+func agentExtensions(plugins []pluginmanifest.Plugin) ([]agentprofile.Extension, error) {
+	out := make([]agentprofile.Extension, 0, len(plugins))
+	for _, p := range plugins {
+		tools := p.Manifest.Spec.Tools.Names()
+		for _, declared := range p.Extensions {
+			name, err := pigprofile.ExtensionPublicName(declared)
+			if err != nil {
+				return nil, fmt.Errorf("package %q declares extension %q: %w", p.Name(), declared, err)
+			}
+			out = append(out, agentprofile.Extension{Name: name, Tools: tools})
+		}
+	}
+	return agentprofile.Scopes(out)
 }
 
 // writeAgentSettings points the agent at the admitted packages.

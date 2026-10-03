@@ -8865,7 +8865,7 @@ agent 自己的顶层目录（ambient），和 `settings.json` 里的 **Packages
 必须不在（这才是旧测试想要的那份保护，用 PiG 唯一支持的写法保住）。两次
 变异都红在正确断言上：改回 `[]`、加入 `workspace`。
 
-#### 4.78.4 现在的状态，与尚未决定的一件事
+#### 4.78.4 现在的状态，与一处需要更正的断言
 
 `make pig-tool-scoping-check` 在**带修复的 PiG** 上转绿
 （`OPSKEEPER_PIG_BIN=<本地构建>`，18/18）。但该闸门刻意用 `GOWORK=off`
@@ -8875,14 +8875,96 @@ prove something else"），所以 `make pig-dev-pin` 对它无效，**在 PiG �
 本之前它仍然是红的**。两个修复缺一不可：只有 profile 修复时，26 个工具会
 加载但全被判为 `builtin`，仍是 0/26。
 
-尚未决定：`TestAToolRemovedFromTheReviewSurfaceIsRemovedFromTheMenu`
-（同一文件，从未绿过，也从未接进 `make` 闸门）要求「manifest 删掉一个
-工具 → 模型就不再被提供它」。这条与既定架构冲突——`agentprofile.Render()`
-是静态的、不知道节点准入了哪些包，而 manifest 的工具清单是**在 host gate
-上执行的**。而且 `agentprofile` 目前**没有任何生产调用方**（只有
-`core/pig/pigprofile` 的契约测试引用它），节点启动路径还没写这个 profile。
-所以这是「要不要让 profile 变成 manifest 感知」的设计决策，不是本轮该
-顺手改掉的 bug。留作下一轮。
+**更正本节上一版的一处断言**：`agentprofile` 「没有任何生产调用方」是错的。
+生产路径是 `cmd/opskeeper-edge/agent.go:179` —— 节点准入判定完成后调用
+`agentprofile.Write`，写出的路径经同文件 `:379` 的
+`args := []string{"--mode", "rpc", "--piglet", profilePath}` 交给节点上的
+`pig` 进程。而且 `discovery: []` 与 `--piglet` 是在**同一个 commit**
+（`e4a8fed`，2026-10-02）落地的，也就是**缺陷 2 从落地那天起就一直在生产
+路径上生效**，节点从未拿到过自己那个包里的工具。上一版只 grep 了 `core/`、
+漏了 `cmd/`，因此漏判。
+
+`TestAToolRemovedFromTheReviewSurfaceIsRemovedFromTheMenu` 那条待决项已由
+**决策 142** 关闭（下一节）。
+
+### 4.79 决策 142：让节点 profile 读得懂 manifest——profile 从「静态文本」变成准入结果的一半
+
+#### 4.79.1 为什么这条测试该转绿，而不是该被改掉
+
+上一节把它记成「与既定架构冲突的设计决策」。这次把它翻过来，理由是代码
+自己在 `cmd/opskeeper-edge/agent.go:172-178` 的注释里写着：
+
+> The profile, written next to the package list **and for the same reason**:
+> it is the other half of what this agent may do, and it is written before
+> the process starts so **the two can never describe different nodes**
+
+也就是说：settings（包清单）与 profile（工具面）被**刻意**写在同一个进程
+启动前、被**刻意**声明为「描述同一个节点的另一半」。那么
+`Render()` 不知道准入结果就不是架构，是**那半边一直没实现**。判断依据是
+代码自己声明的设计意图，不是那条测试的措辞。
+
+`admitted []pluginmanifest.Plugin` 本来就在 `agent.go:179` 的作用域内
+（`:165` 正在用它写 settings）。profile 拿不到它，不是数据不可得，是没去取。
+
+#### 4.79.2 三处改动
+
+1. `core/floor/pluginmanifest/manifest.go`：`Plugin` 增 `Extensions []string`，
+   由新增的 `findExtensions(root)` 从 `package.json` 的 `pi.extensions` 填充。
+   这里存的是**资源路径**（如 `extensions/diagnose-postgres`），**不是**公开名
+   ——公开名是 PiG 的派生规则（`packagecontent.PublicName`），全仓只有
+   `core/pig/pigprofile` 持有它，而 `core/floor` 不能依赖 PiG。188 条测试通过。
+2. `core/pig/pigprofile/extensionname.go`（新）：`ExtensionPublicName(resourcePath)`
+   是 `packagecontent.PublicName(packagecontent.Extensions, …)` 的一层包装。
+   `doc.go` 里那句「no production code on purpose」已更正为「carries exactly
+   one piece of production code」——它现在确实有一行生产代码。
+3. `core/edge/agentprofile/profile.go`：`Render()` → `Render(extensions []Extension)`，
+   `Write(dir, extensions)`，新增 `Scopes()`（排序 + **重名报错，不合并**）与
+   `extensionsBlock()`。cmd 侧新增 `agentExtensions(plugins)`，按**包**的
+   manifest 工具名分组挂到 profile 上。
+
+#### 4.79.3 为什么按「包」分组，而不是按「扩展」归属
+
+`domain.ToolDecl`（`core/domain/plugin.go:201`）只有 `Name/Class/Limits`，
+**没有扩展归属字段**。要给逐工具归属就得改 schema，而 manifest 审的是**包**；
+「哪个扩展注册了某个工具」是实现细节，host gate 那边也是**按工具名**配对的。
+所以 profile 写「包 P 带来工具 T1/T2」，扩展名只作为 PiG schema 要求的分组键。
+这样不必改 schema 就拿到了 PiG 能执行的那份形状。
+
+#### 4.79.4 PiG 的残留缺口（fail-open，诚实记录，不粉饰）
+
+PiG 侧 `ScopeTools`（`coding/piglet/scope.go:50-52`）的
+`toolAllowed(nil, name)` 对 `nil` source **返回 true**。后果是：profile 里
+**没有点名的扩展，其全部工具仍然放行**。所以 manifest-aware profile 能做到
+「包里没声明的工具不再被提供」（这正是那条测试断言的），但**做不到**
+「只允许这些扩展」——ambient 来源（ambient top-level 目录、settings.json
+的 Packages）的工具会被**提供**，然后被 `core/edge/policygate` 拒绝。
+这是 PiG 侧缺口，写在 `extensionsBlock` 的注释里。补它要动 PiG。
+
+#### 4.79.5 验证
+
+- `TestAToolRemovedFromTheReviewSurfaceIsRemovedFromTheMenu` **首次转绿**
+  （6.0s）。它此前从未绿过，也从未接进 `make` 闸门。
+- 两次变异都被正确杀死：
+  - 抽掉 `extensions:` 块 → 红在
+    `TestTheProfileNamesEachAdmittedExtensionAndItsReviewedTools`（"the
+    profile names no extensions; PiG then treats every extension as
+    unconstrained, which is the state this file exists to leave"）
+  - 让某个扩展少列一个工具 → 红在
+    `TestTheProfileRemovesTheShellFromTheMenu`（点名了 `host_probe_tcp` /
+    `host_restart_service` / `query_promql` 三个被误减掉的插件工具）
+- `TestAToolRemovedFromTheReviewSurfaceIsRemovedFromTheMenu` 的 profile 现在
+  **由 `extensionTools` 夹具派生**（`admittedExtensions()`），保证 profile
+  与运行时注册来自同一事实——手写一份 profile 就是第二份独立陈述，两者可以
+  互相矛盾而没人察觉，那正是这条测试原本要防的 bug 形状。
+- `make module-check` 抓到一处新越权：`cmd` 直接 import 了
+  `core/pig/pigprofile`。已在 `.go-arch-lint.yml` 显式授权 `oxpig_profile`
+  并写明理由（装配根必须写出这份 profile，与「只有 cmd 能碰到 pig」是同一条
+  授权）。`oxedge_agentprofile` 因此保持零 PiG 依赖：它只渲染别人告诉它
+  是什么。
+
+本决策**不改任何进度百分比**：它关掉的是决策 141 留下的一个待决项，不是
+计划 §五里任何一条验收闸门。闸门仍红在同一处——PiG 未发带 `refresh()` 修复
+的 tag（§4.78.4）。
 
 ## 六、当前实现进度
 

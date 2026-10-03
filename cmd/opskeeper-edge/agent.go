@@ -176,7 +176,11 @@ func startNodeAgent(
 	// a shell on a production host, and the gate would then refuse every
 	// call to it, which is a safe but unreadable place to be during an
 	// incident.
-	profilePath, err := agentprofile.Write(filepath.Join(cfg.Cwd, agentConfigDirName()))
+	extensions, err := agentExtensions(admitted)
+	if err != nil {
+		return nil, nil, fmt.Errorf("edge agent profile: %w", err)
+	}
+	profilePath, err := agentprofile.Write(filepath.Join(cfg.Cwd, agentConfigDirName()), extensions)
 	if err != nil {
 		return nil, nil, fmt.Errorf("edge agent profile: %w", err)
 	}

@@ -51,6 +51,18 @@ func topLevel(t *testing.T, body, key string) (value string, found bool) {
 // indented lines on purpose, which is right for a root key and wrong for the
 // one place this file needs to look inside a block: the discovery scopes,
 // where the whole profile turns on a nested list.
+// nodePackages is the admitted set the tests below describe: two
+// extensions, and the tools a review said each package may have on a node.
+//
+// The tests are about the profile's static half, and they pass this anyway.
+// A profile for a node that admitted nothing is the degenerate case, and
+// asserting only on it would let the shape every real node runs rot
+// unnoticed — which is the failure this file was rewritten for.
+var nodePackages = []Extension{
+	{Name: "opskeeper-sre-readonly", Tools: []string{"get_topology", "host_probe_tcp"}},
+	{Name: "opskeeper-sre-repair", Tools: []string{"host_restart_service"}},
+}
+
 func nested(t *testing.T, body, parent, key string) (value string, found bool) {
 	t.Helper()
 	inside := false
@@ -71,15 +83,39 @@ func nested(t *testing.T, body, parent, key string) (value string, found bool) {
 	return "", false
 }
 
+// extensionTools reads the tool list written under one `extensions` entry.
+// The entries are list items rather than mappings keyed by name, so this
+// cannot be nested(): there is no key line to hang the block off.
+func extensionTools(rendered, name string) (string, bool) {
+	lines := strings.Split(rendered, "\n")
+	head := "  - name: " + name
+	for i, line := range lines {
+		if strings.TrimSpace(line) != strings.TrimSpace(head) {
+			continue
+		}
+		for _, next := range lines[i+1:] {
+			trimmed := strings.TrimSpace(next)
+			if !strings.HasPrefix(trimmed, "tools:") {
+				if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+					continue
+				}
+				return "", false
+			}
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, "tools:")), true
+		}
+	}
+	return "", false
+}
+
 func TestTheProfileIsNamedForWhatItIs(t *testing.T) {
-	name, found := topLevel(t, Render(), "name")
+	name, found := topLevel(t, Render(nodePackages), "name")
 	if !found {
 		t.Fatal("the profile has no name; it is what an operator sees in the agent's own diagnostics")
 	}
 	if name != Name {
 		t.Errorf("name = %q, want %q", name, Name)
 	}
-	desc, found := topLevel(t, Render(), "description")
+	desc, found := topLevel(t, Render(nodePackages), "description")
 	if !found || len(strings.Trim(desc, `"`)) == 0 {
 		t.Error("the profile has no description; a node agent that names nothing explains nothing in pig status")
 	}
@@ -88,7 +124,7 @@ func TestTheProfileIsNamedForWhatItIs(t *testing.T) {
 // TestTheProfileRemovesEveryBuiltinTool is the load-bearing assertion, and
 // it is about presence rather than value.
 func TestTheProfileRemovesEveryBuiltinTool(t *testing.T) {
-	value, found := topLevel(t, Render(), "tools")
+	value, found := topLevel(t, Render(nodePackages), "tools")
 	if !found {
 		// The failure this guards is the entire reason the file exists.
 		// An omitted `tools` means PiG's stock built-ins, and one of them
@@ -119,7 +155,7 @@ func TestTheProfileRemovesEveryBuiltinTool(t *testing.T) {
 // ambient surface is not. The project half is the old test's intent, still
 // enforced, in the only form PiG offers.
 func TestTheProfileKeepsTheNodeItsOwnPackages(t *testing.T) {
-	rendered := Render()
+	rendered := Render(nodePackages)
 	disc, found := topLevel(t, rendered, "discovery")
 	if !found {
 		t.Fatal("the profile has no discovery block. Under --piglet an absent block is not " +
@@ -150,22 +186,93 @@ func TestTheProfileKeepsTheNodeItsOwnPackages(t *testing.T) {
 }
 
 // TestTheProfileGrantsNothingItself keeps this file honest about what it
-// is. A profile that named extensions or skills would be a second,
-// unreviewed way to put tools on a node; this one stays a pure subtraction,
-// and the only reason that is safe is that the host's allow-list is what
-// actually decides.
+// is.
+//
+// "extensions" left this list when the profile learned to name them, and
+// leaving it would have been the lazy thing to do in either direction. The
+// reason it is not a grant is structural: a named extension is held to the
+// list written next to it, so naming one can only subtract. The property
+// that matters — that the list is the manifest's and not something wider —
+// cannot be checked from here, because this package never sees a manifest.
+// It is asserted where PiG's own scoping function is reachable, in
+// core/pig/pigprofile.
+//
+// The fields still below are grants in PiG's sense: they add resources, or
+// credentials, or a model, and a profile that carried any of them would be
+// a second unreviewed way to shape what runs on a host.
 func TestTheProfileGrantsNothingItself(t *testing.T) {
-	for _, field := range []string{"extensions", "skills", "packages", "secrets", "agentEnv", "model"} {
-		if _, found := topLevel(t, Render(), field); found {
+	for _, field := range []string{"skills", "packages", "secrets", "agentEnv", "model"} {
+		if _, found := topLevel(t, Render(nodePackages), field); found {
 			t.Errorf("the profile declares %q at the root; a profile that adds resources is a second "+
 				"way to put tools on a node that never passed a manifest review", field)
 		}
 	}
 }
 
+// TestTheProfileNamesEachAdmittedExtensionAndItsReviewedTools is the
+// property the extensions block exists for, asserted on the rendered text.
+//
+// The failure it guards is a package becoming more capable without anybody
+// accepting the diff. If a tool reaches the model that no manifest declared,
+// the node still refuses the call — the gate is the boundary — but the model
+// has been handed a capability review never approved, and every transcript
+// from then on is a transcript of an agent reaching for something it cannot
+// have.
+func TestTheProfileNamesEachAdmittedExtensionAndItsReviewedTools(t *testing.T) {
+	rendered := Render(nodePackages)
+	if _, found := topLevel(t, rendered, "extensions"); !found {
+		t.Fatal("the profile names no extensions; PiG then treats every extension as " +
+			"unconstrained, which is the state this file exists to leave")
+	}
+	for _, ext := range nodePackages {
+		want := "  - name: " + ext.Name + "\n"
+		if !strings.Contains(rendered, want) {
+			t.Errorf("the profile does not name %q; its tools are then unconstrained", ext.Name)
+			continue
+		}
+		tools, found := extensionTools(rendered, ext.Name)
+		if !found {
+			t.Errorf("extension %q is named with no tool list, which PiG reads as \"all of them\"", ext.Name)
+			continue
+		}
+		for _, tool := range ext.Tools {
+			if !strings.Contains(tools, tool) {
+				t.Errorf("extension %q is not held to the reviewed tool %q (list: %s)", ext.Name, tool, tools)
+			}
+		}
+	}
+}
+
+// TestANodeWithNoPackagesGetsNoExtensionsBlock keeps the degenerate case
+// honest. An empty list is not the same as no block: `tools: []` on an
+// extension means "this extension offers nothing", and writing that for
+// extensions the node does not have would be a claim about code that is not
+// loaded.
+func TestANodeWithNoPackagesGetsNoExtensionsBlock(t *testing.T) {
+	if _, found := topLevel(t, Render(nil), "extensions"); found {
+		t.Error("a node that admitted no packages wrote an extensions block; " +
+			"it is describing extensions it does not have")
+	}
+}
+
+// TestTwoPackagesCannotClaimOneExtensionName covers the conflict Scopes
+// refuses rather than resolves. Merging the two tool lists would produce a
+// profile that looks like both packages were reviewed as one, and the agent
+// would load whichever extension it reached first.
+func TestTwoPackagesCannotClaimOneExtensionName(t *testing.T) {
+	_, err := Scopes([]Extension{
+		{Name: "opskeeper-sre-readonly", Tools: []string{"get_topology"}},
+		{Name: "opskeeper-sre-readonly", Tools: []string{"host_restart_service"}},
+	})
+	if err == nil {
+		t.Fatal("two extensions with one name were accepted; the node would load one of them " +
+			"and this profile would describe both")
+	}
+}
+
 func TestWriteLeavesAReadableProfileAndNothingElse(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent", ".pig")
-	path, err := Write(dir)
+	path, err := Write(dir, nodePackages)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -180,8 +287,8 @@ func TestWriteLeavesAReadableProfileAndNothingElse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the written profile: %v", err)
 	}
-	if string(body) != Render() {
-		t.Error("the written profile differs from Render(); a node's profile is a review surface " +
+	if string(body) != Render(nodePackages) {
+		t.Error("the written profile differs from Render(nodePackages); a node's profile is a review surface " +
 			"and a difference between what is reviewed and what runs defeats it")
 	}
 
@@ -212,11 +319,11 @@ func TestWriteLeavesAReadableProfileAndNothingElse(t *testing.T) {
 
 func TestWriteIsIdempotent(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), ".pig")
-	first, err := Write(dir)
+	first, err := Write(dir, nodePackages)
 	if err != nil {
 		t.Fatalf("first Write: %v", err)
 	}
-	second, err := Write(dir)
+	second, err := Write(dir, nodePackages)
 	if err != nil {
 		t.Fatalf("second Write: %v", err)
 	}
@@ -228,7 +335,7 @@ func TestWriteIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the profile: %v", err)
 	}
-	if string(body) != Render() {
+	if string(body) != Render(nodePackages) {
 		t.Error("a second Write did not reproduce the same profile")
 	}
 }
@@ -237,7 +344,7 @@ func TestWriteRefusesAnEmptyDirectory(t *testing.T) {
 	// A node with no agent directory has been misconfigured, and the
 	// profile is not optional. Writing it somewhere else would start an
 	// agent whose profile nobody can find.
-	if path, err := Write("  "); err == nil {
-		t.Errorf(`Write("  ") returned %s; an unset agent directory must stop the node`, path)
+	if path, err := Write("  ", nodePackages); err == nil {
+		t.Errorf(`Write("  ", nodePackages) returned %s; an unset agent directory must stop the node`, path)
 	}
 }

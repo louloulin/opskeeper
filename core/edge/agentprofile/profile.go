@@ -67,6 +67,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -101,7 +102,11 @@ const Name = "opskeeper-node"
 // the host cannot. It is not a secret, but it is a statement of what runs
 // on this machine and there is no reason for an unprivileged local account
 // to be able to find and edit it.
-func Write(dir string) (string, error) {
+func Write(dir string, extensions []Extension) (string, error) {
+	scoped, err := Scopes(extensions)
+	if err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(dir) == "" {
 		return "", errors.New("agentprofile: no directory to write the profile into")
 	}
@@ -117,7 +122,7 @@ func Write(dir string) (string, error) {
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }()
 
-	if _, err := tmp.WriteString(Render()); err != nil {
+	if _, err := tmp.WriteString(Render(scoped)); err != nil {
 		_ = tmp.Close()
 		return "", fmt.Errorf("agentprofile: write the profile: %w", err)
 	}
@@ -141,10 +146,15 @@ func Write(dir string) (string, error) {
 // profile is what the node runs, and a reviewer should be able to read it
 // here rather than go looking for a generated file on some host.
 //
-// It is a literal rather than a template because there is nothing in it
-// that varies per node: the profile is the same subtraction everywhere, and
-// a generator here would be machinery for producing a constant.
-func Render() string {
+// It takes the node's admitted extensions because that is the one part of
+// the file that is not the same everywhere. An earlier version of this
+// function took nothing and said so — "the profile is the same subtraction
+// everywhere" — and that sentence is the bug: the profile and the package
+// list are written side by side, from the same admission, precisely so they
+// cannot describe different nodes, and a profile that named no extension
+// described every node as having the same tools no matter which packages it
+// had admitted. See the extensions block below.
+func Render(extensions []Extension) string {
 	return `# The OpsKeeper node agent profile — GENERATED, do not edit.
 #
 # This file decides what the model is OFFERED on this node. It does not
@@ -211,5 +221,98 @@ tools: []
 discovery:
   extensions: [user]
   skills: [user]
-`
+` + extensionsBlock(extensions)
+}
+
+// Extension is one extension the node admitted, together with the tools
+// its package's governance manifest reviewed.
+type Extension struct {
+	// Name is the extension's public name — the string PiG registers it
+	// under, and the string the agent attributes each of its tools to.
+	Name string
+	// Tools is the tool list the manifest declared for the package this
+	// extension came from.
+	//
+	// It is the package's, not the extension's, and that is deliberate.
+	// The manifest is the review surface and it reviews a package; which
+	// of a package's extensions happens to register a given tool is an
+	// implementation detail of that package, not a thing anybody reviewed.
+	// Attributing per extension instead would mean the manifest had to
+	// learn a field it does not have, for a distinction the gate does not
+	// make either — the gate keys on tool names, because those are what
+	// the model calls.
+	Tools []string
+}
+
+// Scopes normalises a node's admitted extensions into the form the profile
+// is written from: sorted by name, so two nodes with the same packages
+// produce byte-identical profiles and a diff means a package changed.
+//
+// It rejects a name that appears twice rather than merging the two lists.
+// Two packages claiming one extension name is a real conflict — the agent
+// would load whichever it loaded first and the profile would describe both
+// — and the answer to it is to refuse the node, not to silently pick a
+// side.
+func Scopes(extensions []Extension) ([]Extension, error) {
+	seen := make(map[string]struct{}, len(extensions))
+	out := make([]Extension, 0, len(extensions))
+	for _, ext := range extensions {
+		name := strings.TrimSpace(ext.Name)
+		if name == "" {
+			return nil, errors.New("agentprofile: an admitted extension has no name; " +
+				"the profile cannot say which of its tools the model may be offered")
+		}
+		if _, dup := seen[name]; dup {
+			return nil, fmt.Errorf("agentprofile: two admitted extensions are both called %q; "+
+				"the agent would load one of them and this profile describes both", name)
+		}
+		seen[name] = struct{}{}
+		tools := make([]string, 0, len(ext.Tools))
+		for _, tool := range ext.Tools {
+			tool = strings.TrimSpace(tool)
+			if tool == "" {
+				continue
+			}
+			tools = append(tools, tool)
+		}
+		sort.Strings(tools)
+		out = append(out, Extension{Name: name, Tools: tools})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// extensionsBlock renders the per-extension tool lists, or nothing at all
+// when the node admitted no extensions.
+//
+// Omitting the block is not the same as writing an empty one. Absent, every
+// extension keeps the tools it registered; present, each named extension is
+// held to exactly the list written next to it. A node with no packages has
+// no extension to hold anything to, so the block has nothing to say.
+func extensionsBlock(extensions []Extension) string {
+	if len(extensions) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n# The tools each admitted extension may be offered, by extension name.\n")
+	b.WriteString("#\n")
+	b.WriteString("# This is the manifest's tool list, restated where the agent can act on it.\n")
+	b.WriteString("# PiG attributes every tool to the extension that registered it, and a\n")
+	b.WriteString("# profile that named no extension would let every extension keep all of\n")
+	b.WriteString("# its tools - including any a package ships and never declared. Naming\n")
+	b.WriteString("# them here makes the manifest the last word on what the model is shown,\n")
+	b.WriteString("# so a package cannot become more capable without a review seeing the\n")
+	b.WriteString("# diff.\n")
+	b.WriteString("#\n")
+	b.WriteString("# What this cannot do is name an extension nobody told us about: PiG\n")
+	b.WriteString("# treats an unlisted extension as unconstrained, so a tool that arrives\n")
+	b.WriteString("# from a source outside this node's admitted packages is offered to the\n")
+	b.WriteString("# model and refused at the gate. That gap is why core/edge/policygate\n")
+	b.WriteString("# is the boundary and this file is not.\n")
+	b.WriteString("extensions:\n")
+	for _, ext := range extensions {
+		b.WriteString("  - name: " + ext.Name + "\n")
+		b.WriteString("    tools: [" + strings.Join(ext.Tools, ", ") + "]\n")
+	}
+	return b.String()
 }

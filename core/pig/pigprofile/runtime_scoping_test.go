@@ -42,6 +42,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MichaelKinsy/PiG/coding/packagecontent"
+
 	"github.com/vincent-wuhan/opskeeper/core/edge/agentprofile"
 )
 
@@ -282,8 +284,13 @@ func offeredToolNames(t *testing.T, pkg string) []string {
 		server.URL+"/v1"), 0o600)
 	write("settings.json", fmt.Sprintf(`{"packages":["file://%s"]}`, pkg), 0o600)
 
+	// The profile is built from the package under test, not from a
+	// constant. A fixed profile would make the gate insensitive to the very
+	// thing the second test varies — a manifest with one tool removed —
+	// and it would pass for a node offering tools no manifest declared,
+	// which is the finding.
 	profile := filepath.Join(dir, agentprofile.FileName)
-	if err := os.WriteFile(profile, []byte(agentprofile.Render()), 0o640); err != nil {
+	if err := os.WriteFile(profile, []byte(agentprofile.Render(profileFor(t, pkg))), 0o640); err != nil {
 		t.Fatalf("write profile: %v", err)
 	}
 
@@ -302,6 +309,37 @@ func offeredToolNames(t *testing.T, pkg string) []string {
 	}
 	sort.Strings(offered)
 	return offered
+}
+
+
+// profileFor is the node's profile for one package: every extension the
+// package declares, held to the tools its manifest declared.
+//
+// The grouping is the package's, not the extension's, and that is the same
+// choice the edge makes when it writes a real node's profile - the manifest
+// reviews a package, and which of its extensions registers a given tool is
+// an implementation detail nobody reviewed. The gate makes the identical
+// pairing, keying on tool names, so the two agree about what was reviewed.
+func profileFor(t *testing.T, pkg string) []agentprofile.Extension {
+	t.Helper()
+	resources, err := packagecontent.Discover(pkg)
+	if err != nil {
+		t.Fatalf("discover package resources: %v", err)
+	}
+	if len(resources.ExtensionEntries) == 0 {
+		t.Fatalf("the package at %s declares no extensions; there is nothing for a "+
+			"profile to name and the gate would prove nothing", pkg)
+	}
+	tools := declaredToolNames(t, pkg)
+	out := make([]agentprofile.Extension, 0, len(resources.ExtensionEntries))
+	for _, entry := range resources.ExtensionEntries {
+		name, err := packagecontent.PublicName(packagecontent.Extensions, entry, "")
+		if err != nil {
+			t.Fatalf("public name for extension %q: %v", entry, err)
+		}
+		out = append(out, agentprofile.Extension{Name: name, Tools: tools})
+	}
+	return out
 }
 
 // pigBinary builds the agent the way a release builds it, or uses one the
