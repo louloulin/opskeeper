@@ -103,6 +103,65 @@ func TestRestartServiceTool_RoundTrip(t *testing.T) {
 	}
 }
 
+// The edge now records the exact vector it ran (decision 154) and this is
+// the manager hop the closed loop reads. TestRestartServiceTool_RoundTrip
+// stops at a mocked response, so it cannot catch an envelope that drops the
+// vector on the floor — which is exactly what happened: the wire carried
+// Argv, the envelope did not, and a green restart looked identical to one
+// whose command was never kept. This asserts the byte survives this hop,
+// against a non-mocked response, because that is the only case that has a
+// vector to lose.
+func TestRestartServiceTool_CarriesTheExecutedArgvThroughTheEnvelope(t *testing.T) {
+	fc := &fakeCaller{
+		respBody: mustMarshal(tunnel.RestartServiceResponse{
+			Service:   "nginx",
+			Restarted: true,
+			Mocked:    false,
+			Argv:      []string{"systemctl", "restart", "nginx.service"},
+		}),
+	}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
+	tool := newRestartServiceToolFor(t, resolver, fc)
+
+	out, err := tool.InvokableRun(context.Background(), `{"device_id":1,"service":"nginx"}`)
+	if err != nil {
+		t.Fatalf("InvokableRun: %v", err)
+	}
+	var env restartServiceResultEnvelope
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("decode out: %v", err)
+	}
+	want := []string{"systemctl", "restart", "nginx.service"}
+	if len(env.Argv) != len(want) {
+		t.Fatalf("the executed argv did not survive the manager hop: got %v, want %v", env.Argv, want)
+	}
+	for i := range want {
+		if env.Argv[i] != want[i] {
+			t.Fatalf("argv[%d] = %q, want %q", i, env.Argv[i], want[i])
+		}
+	}
+	// The mirrored test for the other direction: a mock ran nothing, so the
+	// envelope must carry no vector rather than a plausible one.
+	fcMock := &fakeCaller{
+		respBody: mustMarshal(tunnel.RestartServiceResponse{Service: "nginx", Restarted: true, Mocked: true}),
+	}
+	toolMock := newRestartServiceToolFor(t, resolver, fcMock)
+	outMock, err := toolMock.InvokableRun(context.Background(), `{"device_id":1,"service":"nginx"}`)
+	if err != nil {
+		t.Fatalf("InvokableRun (mock): %v", err)
+	}
+	var envMock restartServiceResultEnvelope
+	if err := json.Unmarshal([]byte(outMock), &envMock); err != nil {
+		t.Fatalf("decode out (mock): %v", err)
+	}
+	if len(envMock.Argv) != 0 {
+		t.Errorf("a mocked restart ran nothing, so the envelope must carry no argv; got %v", envMock.Argv)
+	}
+	if !envMock.Mocked {
+		t.Errorf("mock envelope must still report Mocked=true")
+	}
+}
+
 func TestRestartServiceTool_CanonicalizesService(t *testing.T) {
 	// "Nginx.Service" with mixed-case + suffix should canonicalize to
 	// "nginx" for both the allow-list check AND the wire body.

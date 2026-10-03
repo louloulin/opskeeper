@@ -135,10 +135,17 @@ type restartServiceArgs struct {
 // device_id the call resolved to so the LLM sees the routing confirmed
 // in its own input. Mirrors the host_files envelope shape.
 type restartServiceResultEnvelope struct {
-	DeviceID  uint64    `json:"device_id"`
-	Service   string    `json:"service"`
-	Restarted bool      `json:"restarted"`
-	Mocked    bool      `json:"mocked"`
+	DeviceID  uint64 `json:"device_id"`
+	Service   string `json:"service"`
+	Restarted bool   `json:"restarted"`
+	Mocked    bool   `json:"mocked"`
+	// Argv is the exact vector the edge executed, copied through from
+	// the wire response. It is the only record of what actually ran, and
+	// this envelope is on the path the closed loop reads: dropping it
+	// here would leave the node's execution unable to seed a runbook, and
+	// the loss would be silent because the restart still reports success.
+	// Empty means the edge mocked the restart and ran nothing.
+	Argv      []string  `json:"argv,omitempty"`
 	StartedAt time.Time `json:"started_at"`
 	EndedAt   time.Time `json:"ended_at"`
 	Error     string    `json:"error,omitempty"`
@@ -249,6 +256,7 @@ func (t *RestartServiceTool) InvokableRun(ctx context.Context, argsJSON string, 
 		Service:   resp.Service,
 		Restarted: resp.Restarted,
 		Mocked:    resp.Mocked,
+		Argv:      resp.Argv,
 		StartedAt: resp.StartedAt,
 		EndedAt:   resp.EndedAt,
 		Error:     resp.Error,

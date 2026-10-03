@@ -10272,6 +10272,78 @@ nginx.service"`，**和直接执行是同一件事**。变异的意图（引入 
 阶段 0 / 1 / 3 未动，其余外部阻塞不变（PiG 推送打 tag、跨网络 `Source.URL`、拆分
 方案批准）。
 
+### 4.92 决策 155：决策 154 记下的那条 argv，在它自己要求的那一跳上被丢掉了
+
+#### 4.92.1 线索来自决策 154 亲手写下的那句话
+
+决策 154 把边缘的 `argv` 变成真的之后，在台账里写下了一句断言：manager 侧加了契约
+测试，证明这个向量**活着穿过那一跳**（`ResultJSON` 原样嵌入）。这次顺着「阶段 2
+最后那半条」（结晶生产端接线）往下走时，先核对的就是这句话——它不是错的，但它只
+说了**一条**跳。
+
+`recovery.execute` 那条跳确实有测试（`TestRecoveryExecuteTool_CarriesTheExecutedArgvToTheManager`），
+它断言内层 `host_restart_service` 的响应原样嵌进 `ResultJSON`。但闭环里还有**另一
+条**更普通的跳：`restart_service` 这个 BaseTool 自己把边缘响应翻译成一个
+`restartServiceResultEnvelope`，而那个信封没有 `argv` 字段。也就是说——
+
+#### 4.92.2 事实：`arg` 在 manager 这一跳被无声丢弃
+
+`core/manager/biz/aiops/tools/restart_service_basetool.go` 的 `InvokableRun`
+解出边缘响应后，逐字段搬进自己的信封：`Service` / `Restarted` / `Mocked` /
+`StartedAt` / `EndedAt` / `Error`。线契约 `tunnel.RestartServiceResponse.Argv`
+（决策 154 新加的）**不在搬运清单里**。
+
+后果是决策 154 想避免的那件事又发生了一次，只换了地方：边缘真跑了
+`["systemctl","restart","nginx.service"]`，manager 却把它扔了，而重启照样报
+`restarted:true`。**一次「命令没被留下」的成功重启，和一次「命令被留下」的成功
+重启，在 manager 侧长得一模一样。** 结晶要读的正是这个字段。
+
+#### 4.92.3 为什么既有测试没抓到
+
+`TestRestartServiceTool_RoundTrip` 停在一个 `Mocked:true` 的响应上，而 mock 的
+`Argv` 按决策 154 的定义**必须为空**。用一条本来就没有向量的响应，测不出「向量
+会不会被丢」——缺的正是那个 `Mocked:false` 的分支。
+
+#### 4.92.4 修法：把 `Argv` 加进信封并逐字段搬运
+
+- `restartServiceResultEnvelope` 加 `Argv []string`，`json:"argv,omitempty"`。
+- `InvokableRun` 里 `Argv: resp.Argv` 原样搬运，不做任何解释或重建。
+- 空值的语义与决策 154 一致：**空 = 这次什么都没运行**（mock），而不是「没记录」。
+  注释把这条写在了字段上。
+
+新测试 `TestRestartServiceTool_CarriesTheExecutedArgvThroughTheEnvelope` 用
+**非 mock** 响应断言逐词相同，再用 mock 响应断言信封里**必须为空**——两个方向都
+钉住，因为只钉一个方向就会允许「凭空造一个向量」或「丢掉真向量」其中之一。
+
+#### 4.92.5 变异验证：把 `Argv: resp.Argv` 删掉即红
+
+删掉那一行后新测试报
+`the executed argv did not survive the manager hop: got [], want [systemctl restart nginx.service]`，
+即断言命中的正是那条跳。恢复后包内全绿。
+
+#### 4.92.6 一处被否掉的扩大：不把 `Argv` 加进 `adapter.ExecResult`
+
+顺着同一条线索看了闭环自己的另一条修复路径——中间件 `host.restart_service`
+适配器（`core/manager/middleware/adapter/host/ops.go`），它同样 `exec` 了 argv
+却只在返回里给 `Message`。给 `adapter.ExecResult` 加 `Argv` 看似对称，但**那会
+造出一个没人读的字段**：这条路径的调用方（`writeOp` → `ExecResult`）今天没有
+任何消费者会读它，而决策 152 那条闸门正是为「没人读的旋钮」建的。
+
+只加字段而不接线，就是把决策 154 刚批过的「已建未接」再犯一次。因此本轮**只修
+真正在闭环读取路径上的那一跳**，把适配器那条留作后续——它需要连同消费者一起设计，
+而不是先落一个空壳。
+
+#### 4.92.7 进度：87.9% 不动，但「半条」的余量变薄了
+
+阶段 2 仍是 91.7%，因为缺的依旧是**闭环调用 `Ledger.Record`** 那一步。但决策 154
+把「人批过的 argv」从零变成一，本决策又把它从 `recovery.execute` 一条跳扩展到
+`restart_service` 这条普通跳——**「argv 存在」这件事的覆盖面更完整了，接线要凑
+的入参又少了一块**。`TrialOf` 仍需根因、验证增量与人类批过的触发条件，这三样按
+决策 154 的判断是「一次从未发生的事件」，仍需真实运行来产生。
+
+阶段 0 / 1 / 3 未动，外部阻塞不变（PiG 推送打 tag、跨网络 `Source.URL`、拆分方案
+批准）。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
