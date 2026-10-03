@@ -121,6 +121,14 @@ type ExecResult struct {
 	Message   string
 	Impacted  int // 受影响的行/键/资源数
 	Metadata  map[string]string
+	// Argv is the literal argument vector the operation handed to the
+	// machine, when it ran one. It is recorded because the only thing a
+	// crystallised runbook re-runs is this vector: a declaration that
+	// guessed it would be a different program. Ops that change state
+	// through a shell-free exec (restart/kill/cache-drop) fill it; an op
+	// with nothing to re-run leaves it nil rather than an empty slice,
+	// so "ran nothing" and "ran an empty command" stay distinguishable.
+	Argv []string
 }
 
 // Adapter 是中间件资源适配器接口。

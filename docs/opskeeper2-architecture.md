@@ -10579,6 +10579,98 @@ tag 不含修复；`make pig-tool-scoping-check` 默认那条路仍 0/18。这�
 下一步（若继续这条线）：把 `TrialOf` 接到 recovered worker，用 `tool_replay` 的
 `ArgsJSON` 装配 `Execution.Argv`，并从告警规则拉 `Trigger`；接上之前先写一条「成功
 run 走完闭环后 `Ledger.Runs()` 非空」的端到端断言，防止又是「建了没接」。
+### 4.95 决策 158：把 argv 从「事件里有」做到「平台真知道」——写过了工具边界，还接回了浏览器
+
+#### 4.95.1 决策 157 留下的那句话，字面上是错的
+
+§4.94.5 结尾写：「成功修复现在会落一条可读的 `tool_replay`，`ArgsJSON` 里就是被批准
+的参数（`host.restart_service` 的 `{"unit":"..."}`）」。这句话把两件事混成了一件：
+
+- `ArgsJSON` 是**调用方发过去的参数包**（`{"unit":"nginx.service"}`）；
+- 结晶要的 argv 是**机器真正执行的那条向量**（`["systemctl","restart","nginx.service"]`）。
+
+`RegistryInvoker` 走的是 `middlewareReg.CallTool` → 适配器 `Execute`，而
+`adapter.ExecResult` 当时只有 `{Operation,Success,Message,Impacted,Metadata}`——
+**适配器自己把 argv 丢在了它生成的出口**。`host/ops.go` 在 `r.run(ctx,
+[]string{"systemctl","restart",unit})` 那一行手里就有这条向量，返回时却没有这个字段。
+所以决策 157 补上的 `tool_replay` 里，`Argv` 永远是 `null`，`ArgsJSON` 只是参数包。
+**「平台不记录修复的 argv」这句话在决策 157 之后依然成立**，只是换了一个更靠后的位置。
+本轮把它做到不成立。
+
+#### 4.95.2 改了什么：把向量从 exec 那行一路带到时间线
+
+四段，每段都带反向验证：
+
+| 段 | 文件 | 改动 |
+|---|---|---|
+| 适配器出口 | `middleware/adapter/adapter.go` | `ExecResult` 加 `Argv []string`（无人读的字段不写，见下） |
+| 采集 | `host/host.go` + `host/ops.go` + `host/pressure_ops.go` | 四个写操作改为返回 `(impacted, message, ok, argv, err)`；`restartService`/`killProcess`/`garbageCollect` 填真执行的向量，`removeOldLogs` 留 `nil` |
+| 工具边界 | `host/host.go::writeOp` → `biz/loop/remediation_invoker.go::argvFromResult` | 结果包带 `"argv"`；invoker 读出来放进 `RemediationOutcome.Argv` |
+| 持久化 → 读出 | `biz/loop/remediation.go::RecordRemediation` → `phase_worker.go::ToolReplayEntry.Argv` → `server/loop/timeline_aggregate.go` → `web/.../ToolCallBlock.tsx` | 事件里的 replay 带 `Argv`；时间线解析进 `TimelineToolCall.Argv`；前端渲染 `$ systemctl restart nginx.service` |
+
+**每一段都在同一轮里接上了消费者**，没有留「建了没接」的字段——这正是决策 157
+§4.94.3 与 §4.89 记的同一类缺陷的防法：
+
+- `ExecResult.Argv` 的消费者是 `writeOp`；
+- `RemediationOutcome.Argv` 的消费者是 `RecordRemediation`；
+- `ToolReplayEntry.Argv` 的消费者是 `parseToolReplay` 与事件 payload；
+- `TimelineToolCall.Argv` 的消费者是 `ToolCallBlock`；
+- `ToolCallBlock.argv` 的消费者是它自己的测试与 `ChatDrawer`。
+
+#### 4.95.3 一处**刻意不填**，比填上更重要
+
+`removeOldLogs` 返回 `argv = nil`，注释写明了原因：它的效果是一组按条件重新推导出的
+**逐文件 `rm`**，不是一条向量。任何单条 `["rm","-f","--",file]` 被晋升，都会变成
+「删一个文件」而不是「删符合条件的一批」。留空使 `TrialOf` 拒绝结晶它**并说明理由**，
+而不是晋升一个改变了语义的程序。
+
+`garbageCollect` 填的是 `["sysctl","-w","vm.drop_caches=3"]`，**不是**前置的 `sync`：
+`sync` 只是刷脏页，改变状态的是 sysctl。结晶重放的必须是那个改状态的向量。
+
+#### 4.95.4 反向验证与闸门（本轮实测全绿）
+
+| 变异 | 结果 |
+|---|---|
+| `RecordRemediation` 删掉 `Argv:` 那一行 | `TestDryRun_PgLongRunningTx_EndToEnd` 红：payload 里 `"Argv":null` |
+| `parseToolReplay` 删掉 `Argv:` 映射 | `TestParseToolReplay_ReadsTheSuccessPathEntries` 红：`argv = []` |
+| `ToolCallBlock` 删掉 argv 渲染块 | `ToolCallBlock.test.tsx` 红 |
+
+| 闸门 | 结果 |
+|---|---|
+| `make module-check` | `all module boundaries hold` |
+| `make eval-gates` | 20/20 golden 可服务、`remediation axis 15/20`、`unmeasured: 0`，退出 0 |
+| `make module-standalone-check` | 全模块 `GOWORK=off` 构建+测试通过 |
+| `core/manager` 全量 `go test ./...` | 无 FAIL |
+| `web` `tsc -b --noEmit` + `vitest run` | 0 error；96 passed（含新增 2 条） |
+
+#### 4.95.5 进度：仍然是 87.9%，但缺口换了词
+
+阶段 2 的成本结晶仍是**半条**：机制、闸门、argv 采集全在，缺的依旧是闭环调用
+`crystallize.Ledger.Record` 那一步。本轮把它前面的**第二条**硬门也关掉了：
+
+- 决策 157 之前：成功路径连 replay 都没有；
+- 决策 157 之后：有 replay，但 `Argv` 是假的（其实是参数包）；
+- 本轮之后：`Argv` 是真执行的向量，且一路可读、可渲染。
+
+所以「把 `TrialOf` 接到 recovered worker」这一刀的**输入已经全部齐备**：`ToolReplayEntry`
+现在同时有 `ArgsJSON`（参数包）与 `Argv`（真向量），装配 `Execution` 不再需要推导。
+剩下的还是那件没做的事——**没有生产调用方**，且 `removeOldLogs` 这类无向量动作需要
+在接的时候显式跳过。
+
+| 阶段 | 之前 | 之后 | 依据 |
+|---|---|---|---|
+| 0 边缘交付闭环 | 80% | 80% | 未动 |
+| 1 离线与自治 | 100% | 100% | 未动 |
+| 2 生态与治理 | 91.7% | 91.7% | 半条仍是半条：证据链完整了，`Ledger.Record` 仍未接 |
+| 3 控制面与联邦 | 79.7% | 79.7% | 未动 |
+
+加权 = (80 + 100 + 91.7 + 79.7) / 4 = **87.9%**（不变）。
+
+下一步（同一条线）：把 `TrialOf` 接进 recovered worker，用 `ToolReplayEntry.Argv`
+直接装配 `Execution.Argv`（不再从 `ArgsJSON` 推），`Class` 取自工具 spec，
+`Trigger` 从 `alert_incidents.rule_id → rules.conditions_json` 拉；接之前先写一条
+「成功 run 走完闭环后 `Ledger.Runs()` 非空」的端到端断言。
+
 
 ## 六、当前实现进度
 

@@ -613,7 +613,7 @@ func TestParseAuditRow_FallbackWithoutCause(t *testing.T) {
 // covered in biz/loop.
 func TestParseToolReplay_ReadsTheSuccessPathEntries(t *testing.T) {
 	t.Parallel()
-	raw := `{"tool_replay":[{"Name":"host.restart_service","ArgsJSON":"{\"unit\":\"nginx.service\"}","ResultJSON":"{}","Status":"success","LatencyMs":17}]}`
+	raw := `{"tool_replay":[{"Name":"host.restart_service","ArgsJSON":"{\"unit\":\"nginx.service\"}","ResultJSON":"{}","Argv":["systemctl","restart","nginx.service"],"Status":"success","LatencyMs":17}]}`
 	got := parseToolReplay(raw, "opskeeper-repairer")
 	if len(got) != 1 {
 		t.Fatalf("parseToolReplay = %+v, want one entry", got)
@@ -626,6 +626,12 @@ func TestParseToolReplay_ReadsTheSuccessPathEntries(t *testing.T) {
 	}
 	if got[0].LatencyMs != 17 {
 		t.Errorf("latency = %d, want 17", got[0].LatencyMs)
+	}
+	// The executed vector must survive into the timeline: it is what a
+	// reviewer reads and what the crystalliser promotes, and dropping it
+	// here would leave the two of them guessing from ArgsJSON.
+	if strings.Join(got[0].Argv, " ") != "systemctl restart nginx.service" {
+		t.Errorf("argv = %v, want the executed vector surfaced, not dropped", got[0].Argv)
 	}
 }
 

@@ -37,47 +37,52 @@ const allowlistEnv = "OPSKEEPER_HOST_UNIT_ALLOWLIST"
 // RemediationOption carries no arguments. `level` exists for an operator who
 // wants to drop less than everything, and level 3 — the default — is the
 // choice that actually frees the memory an alert is complaining about.
-func (a *Adapter) garbageCollect(ctx context.Context, p params) (int, string, bool, error) {
+func (a *Adapter) garbageCollect(ctx context.Context, p params) (int, string, bool, []string, error) {
 	r, err := a.handle()
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", false, nil, err
 	}
 	level := 3
 	if raw, ok := p["level"]; ok && raw != nil {
 		v, err := toInt(raw)
 		if err != nil {
-			return 0, "", false, fmt.Errorf("host: level: %w", err)
+			return 0, "", false, nil, fmt.Errorf("host: level: %w", err)
 		}
 		if v < 1 || v > 3 {
 			// The kernel only defines 1, 2 and 3. Passing anything else is
 			// silently treated as no-op by some kernels and as a partial
 			// drop by others, which is exactly the kind of "it said it
 			// worked" this adapter exists to avoid.
-			return 0, "", false, fmt.Errorf("host: level must be 1 (page cache), 2 (dentries+inodes) or 3 (both), got %d", v)
+			return 0, "", false, nil, fmt.Errorf("host: level must be 1 (page cache), 2 (dentries+inodes) or 3 (both), got %d", v)
 		}
 		level = v
 	}
 
 	before, err := a.memAvailable(ctx, r)
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", false, nil, err
 	}
+	// The sysctl is the vector that changes state; `sync` only flushes
+	// dirty pages ahead of it. A runbook re-runs the vector that did the
+	// work, so the declaration carries the sysctl, and the sync stays a
+	// precondition of this tool rather than a second command in the argv.
+	dropArgv := []string{"sysctl", "-w", fmt.Sprintf("vm.drop_caches=%d", level)}
 	if _, err := r.run(ctx, []string{"sync"}); err != nil {
-		return 0, "", false, fmt.Errorf("host: sync failed before dropping caches, so no cache was dropped: %w", err)
+		return 0, "", false, nil, fmt.Errorf("host: sync failed before dropping caches, so no cache was dropped: %w", err)
 	}
-	if _, err := r.run(ctx, []string{"sysctl", "-w", fmt.Sprintf("vm.drop_caches=%d", level)}); err != nil {
+	if _, err := r.run(ctx, dropArgv); err != nil {
 		// The permission failure is the common one and it is not a bug in
 		// the platform: the kernel only accepts this write from a process
 		// with CAP_SYS_ADMIN. Saying so is the difference between an
 		// operator who adds a capability and one who files a bug.
-		return 0, "", false, fmt.Errorf("host: could not drop caches (the kernel accepts vm.drop_caches only from a privileged process): %w", err)
+		return 0, "", false, nil, fmt.Errorf("host: could not drop caches (the kernel accepts vm.drop_caches only from a privileged process): %w", err)
 	}
 	after, err := a.memAvailable(ctx, r)
 	if err != nil {
 		// The caches were dropped; failing to measure it is not a failure
 		// to act, and reporting the action as failed here would send the
 		// recovered phase into a rollback for a change that did happen.
-		return 0, fmt.Sprintf("dropped caches (vm.drop_caches=%d); the before/after memory reading failed: %s", level, err), true, nil
+		return 0, fmt.Sprintf("dropped caches (vm.drop_caches=%d); the before/after memory reading failed: %s", level, err), true, dropArgv, nil
 	}
 
 	reclaimed := after - before
@@ -100,7 +105,7 @@ func (a *Adapter) garbageCollect(ctx context.Context, p params) (int, string, bo
 			"the reclaimable cache was already returned, or the pressure is anonymous memory that dropping cache cannot help",
 			level, humanBytes(before))
 	}
-	return impacted, message, true, nil
+	return impacted, message, true, dropArgv, nil
 }
 
 // memAvailable reads MemAvailable (falling back to free+cache on older
@@ -138,52 +143,53 @@ func (a *Adapter) memAvailable(ctx context.Context, r runner) (int64, error) {
 // The restart's own exit status is not the verdict: systemctl restart is
 // synchronous, and it returns 0 for a unit that started and immediately
 // crashed. The unit's state afterwards is what decides success.
-func (a *Adapter) restartService(ctx context.Context, p params) (int, string, bool, error) {
+func (a *Adapter) restartService(ctx context.Context, p params) (int, string, bool, []string, error) {
 	r, err := a.handle()
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", false, nil, err
 	}
 	unit, err := p.requireString("unit")
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", false, nil, err
 	}
 	if err := validateUnit(unit); err != nil {
-		return 0, "", false, err
+		return 0, "", false, nil, err
 	}
 	allow := a.unitAllowlist()
 	if len(allow) == 0 {
-		return 0, "", false, fmt.Errorf("host: no units are restartable on this node: %s is unset, "+
+		return 0, "", false, nil, fmt.Errorf("host: no units are restartable on this node: %s is unset, "+
 			"and an empty allowlist refuses every restart rather than permitting every one", allowlistEnv)
 	}
 	if !containsString(allow, unit) {
-		return 0, "", false, fmt.Errorf("host: unit %s is not on this node's restart allowlist (%s)", unit, strings.Join(allow, ", "))
+		return 0, "", false, nil, fmt.Errorf("host: unit %s is not on this node's restart allowlist (%s)", unit, strings.Join(allow, ", "))
 	}
 
 	before, err := unitStatus(ctx, r, unit)
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", false, nil, err
 	}
 	if before["load_state"] != "loaded" {
-		return 0, "", false, fmt.Errorf("host: unit %s has LoadState=%v; there is nothing on this node to restart",
+		return 0, "", false, nil, fmt.Errorf("host: unit %s has LoadState=%v; there is nothing on this node to restart",
 			unit, before["load_state"])
 	}
 	wasActive := before["active_state"] == "active"
 
-	if _, err := r.run(ctx, []string{"systemctl", "restart", unit}); err != nil {
-		return 0, "", false, fmt.Errorf("host: systemctl restart %s failed: %w", unit, err)
+	restartArgv := []string{"systemctl", "restart", unit}
+	if _, err := r.run(ctx, restartArgv); err != nil {
+		return 0, "", false, nil, fmt.Errorf("host: systemctl restart %s failed: %w", unit, err)
 	}
 	after, err := unitStatus(ctx, r, unit)
 	if err != nil {
-		return 0, "", false, fmt.Errorf("host: %s was restarted but its state could not be read: %w", unit, err)
+		return 0, "", false, nil, fmt.Errorf("host: %s was restarted but its state could not be read: %w", unit, err)
 	}
 	state := fmt.Sprintf("%v/%v", after["active_state"], after["sub_state"])
 	if after["active_state"] != "active" {
 		return 1, fmt.Sprintf("restarted %s (was %s) but it did not come back active: systemctl reports %s. "+
 			"The unit stopped and did not start; check its own logs with host.service_status or journalctl",
-			unit, describeActive(wasActive), state), false, nil
+			unit, describeActive(wasActive), state), false, restartArgv, nil
 	}
 	return 1, fmt.Sprintf("restarted %s (was %s, now active since %v; %v restart(s) total)",
-		unit, describeActive(wasActive), after["active_since"], after["n_restarts"]), true, nil
+		unit, describeActive(wasActive), after["active_since"], after["n_restarts"]), true, restartArgv, nil
 }
 
 func describeActive(active bool) string {

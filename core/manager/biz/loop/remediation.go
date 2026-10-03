@@ -135,6 +135,13 @@ type RemediationOutcome struct {
 
 	// Result is the tool's raw response, for the replay log.
 	Result any
+
+	// Argv is the literal argument vector the dispatched tool handed to the
+	// machine, when it executed one. It is empty for tools that reach the
+	// change through an API rather than an exec (a k8s eviction, a SQL
+	// statement) and for reads. The crystalliser re-runs this vector
+	// verbatim, so it is copied from what ran and never derived here.
+	Argv []string
 }
 
 // RemediationInvoker performs one approved action.
@@ -263,20 +270,21 @@ func RecordRemediation(outcome RemediationOutcome, start time.Time, now func() t
 		stamp = now()
 	}
 	return ToolReplayEntry{
-			Name:       "",
-			ArgsJSON:   args,
-			ResultJSON: result,
-			Status:     outcome.Status,
-			LatencyMs:  latency,
-			Timestamp:  stamp,
-		}, SideEffect{
-			Kind: "mutation",
-			Detail: map[string]any{
-				"status":   outcome.Status,
-				"message":  outcome.Message,
-				"impacted": outcome.Impacted,
-			},
-		}
+		Name:       "",
+		ArgsJSON:   args,
+		ResultJSON: result,
+		Argv:       append([]string(nil), outcome.Argv...),
+		Status:     outcome.Status,
+		LatencyMs:  latency,
+		Timestamp:  stamp,
+	}, SideEffect{
+		Kind: "mutation",
+		Detail: map[string]any{
+			"status":   outcome.Status,
+			"message":  outcome.Message,
+			"impacted": outcome.Impacted,
+		},
+	}
 }
 
 // compile-time assertion that the default invoker is usable in place of any

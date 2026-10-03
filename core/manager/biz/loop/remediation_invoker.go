@@ -125,7 +125,46 @@ func (i RegistryInvoker) Invoke(ctx context.Context, req RemediationRequest) (Re
 		Message: fmt.Sprintf("%s completed", action),
 		Args:    args,
 		Result:  result,
+		Argv:    argvFromResult(result),
 	}, nil
+}
+
+// argvFromResult lifts the literal vector the adapter executed out of the
+// tool's result bag, when it put one there.
+//
+// This is the one field the crystalliser cannot derive and must not invent:
+// a runbook re-runs the vector byte for byte. The adapter is the only place
+// that knows it (it built the exec call), so it hands it back as
+// "argv": []string, and this reads it without coercing — a missing key or a
+// non-list yields nil, which makes TrialOf refuse to crystallise the run
+// rather than promote a guessed program.
+func argvFromResult(result any) []string {
+	bag, ok := result.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	switch v := bag["argv"].(type) {
+	case []string:
+		if len(v) == 0 {
+			return nil
+		}
+		return append([]string(nil), v...)
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			out = append(out, s)
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // resolveArgs assembles the argument bag and refuses the dispatch when a

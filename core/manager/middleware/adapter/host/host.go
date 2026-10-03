@@ -271,16 +271,17 @@ func (a *Adapter) Execute(ctx context.Context, op adapter.ExecOp) (*adapter.Exec
 	var impacted int
 	var message string
 	var ok bool
+	var argv []string
 	var err error
 	switch op.Operation {
 	case "garbage_collect":
-		impacted, message, ok, err = a.garbageCollect(ctx, p)
+		impacted, message, ok, argv, err = a.garbageCollect(ctx, p)
 	case "restart_service":
-		impacted, message, ok, err = a.restartService(ctx, p)
+		impacted, message, ok, argv, err = a.restartService(ctx, p)
 	case "kill_process":
-		impacted, message, ok, err = a.killProcess(ctx, p)
+		impacted, message, ok, argv, err = a.killProcess(ctx, p)
 	case "remove_old_logs":
-		impacted, message, ok, err = a.removeOldLogs(ctx, p)
+		impacted, message, ok, argv, err = a.removeOldLogs(ctx, p)
 	default:
 		return nil, fmt.Errorf("%w: host.%s", ErrUnknownOperation, op.Operation)
 	}
@@ -292,6 +293,7 @@ func (a *Adapter) Execute(ctx context.Context, op adapter.ExecOp) (*adapter.Exec
 		Success:   ok,
 		Message:   message,
 		Impacted:  impacted,
+		Argv:      argv,
 		Metadata:  map[string]string{"approved_by": op.ApprovedBy, "host": a.describe()},
 	}, nil
 }
@@ -412,6 +414,7 @@ func writeOp(a *Adapter, operation string) handler {
 			"success":   res.Success,
 			"message":   res.Message,
 			"impacted":  res.Impacted,
+			"argv":      res.Argv,
 		}, nil
 	}
 }

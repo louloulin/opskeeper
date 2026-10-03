@@ -232,6 +232,11 @@ func (d *dryRunRemediationInvoker) Invoke(_ context.Context, req RemediationRequ
 		Impacted: 1,
 		Args:     map[string]any{"target": req.Option.Target},
 		Result:   map[string]any{"dry_run": true},
+		// The vector the adapter executed, carried the way the host
+		// adapter returns it. The dry run names a plausible one so the
+		// end-to-end assertion below exercises the same field a real
+		// node fills, rather than a shape only the test knows.
+		Argv: []string{"systemctl", "restart", "pg-bouncer.service"},
 	}, nil
 }
 
@@ -328,6 +333,9 @@ func TestDryRun_PgLongRunningTx_EndToEnd(t *testing.T) {
 				t.Errorf("approved phase_contract_written has no tool_replay naming pg.terminate_long_tx: %s", ev.Payload)
 			} else {
 				foundReplay = true
+			}
+			if !payloadReplayCarriesArgv(t, ev, "systemctl", "restart", "pg-bouncer.service") {
+				t.Errorf("approved phase_contract_written does not carry the executed argv; the vector the node ran is what a runbook re-runs: %s", ev.Payload)
 			}
 		}
 	}

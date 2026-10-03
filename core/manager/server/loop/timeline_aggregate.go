@@ -124,14 +124,19 @@ type TimelinePhase struct {
 // during the phase. The renderer shows it in the expanded view; the
 // audit row also links to the matching entry.
 type TimelineToolCall struct {
-	Name        string `json:"name"`
-	Args        string `json:"args,omitempty"`
-	Result      string `json:"result,omitempty"`
-	Status      string `json:"status"`
-	LatencyMs   int64  `json:"latency_ms,omitempty"`
-	Actor       string `json:"actor,omitempty"`
-	SkillVer    string `json:"skill_version,omitempty"`
-	EvidenceRef string `json:"evidence_ref,omitempty"`
+	Name   string `json:"name"`
+	Args   string `json:"args,omitempty"`
+	Result string `json:"result,omitempty"`
+	// Argv is the literal vector the tool executed, when it ran one. It is
+	// the field a reviewer reads to see exactly what the platform did, and
+	// the field the crystalliser promotes into a declaration; Args is the
+	// resolved argument bag, which is a different answer.
+	Argv        []string `json:"argv,omitempty"`
+	Status      string   `json:"status"`
+	LatencyMs   int64    `json:"latency_ms,omitempty"`
+	Actor       string   `json:"actor,omitempty"`
+	SkillVer    string   `json:"skill_version,omitempty"`
+	EvidenceRef string   `json:"evidence_ref,omitempty"`
 }
 
 // TimelineAuditRow is one decision-point row the timeline shows
@@ -394,11 +399,12 @@ func parseToolReplay(raw, role string) []TimelineToolCall {
 	}
 	var detail struct {
 		ToolReplay []struct {
-			Name       string `json:"Name"`
-			ArgsJSON   string `json:"ArgsJSON"`
-			ResultJSON string `json:"ResultJSON"`
-			Status     string `json:"Status"`
-			LatencyMs  int64  `json:"LatencyMs"`
+			Name       string   `json:"Name"`
+			ArgsJSON   string   `json:"ArgsJSON"`
+			ResultJSON string   `json:"ResultJSON"`
+			Argv       []string `json:"Argv"`
+			Status     string   `json:"Status"`
+			LatencyMs  int64    `json:"LatencyMs"`
 		} `json:"tool_replay"`
 	}
 	if err := json.Unmarshal([]byte(raw), &detail); err != nil {
@@ -417,6 +423,7 @@ func parseToolReplay(raw, role string) []TimelineToolCall {
 			Name:      r.Name,
 			Args:      truncateForSummary(r.ArgsJSON),
 			Result:    truncateForSummary(r.ResultJSON),
+			Argv:      append([]string(nil), r.Argv...),
 			Status:    status,
 			LatencyMs: r.LatencyMs,
 			Actor:     role,

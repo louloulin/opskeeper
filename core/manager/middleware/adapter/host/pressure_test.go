@@ -96,7 +96,7 @@ func TestKillProcess_SendsTERMAndReadsTheStateBack(t *testing.T) {
 		[]byte("runaway-worker\n"), // before
 		[]byte(""),                 // after: no longer listed
 	}
-	impacted, message, ok, err := newTestAdapter(f).killProcess(context.Background(), params{"pid": 4211})
+	impacted, message, ok, _, err := newTestAdapter(f).killProcess(context.Background(), params{"pid": 4211})
 	if err != nil {
 		t.Fatalf("killProcess: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestKillProcess_SendsTERMAndReadsTheStateBack(t *testing.T) {
 func TestKillProcess_ReportsFailureWhenTheProcessSurvives(t *testing.T) {
 	f := newFakeRunner()
 	f.queue["ps"] = [][]byte{[]byte("runaway-worker\n"), []byte("runaway-worker\n")}
-	_, message, ok, err := newTestAdapter(f).killProcess(context.Background(), params{"pid": 4211})
+	_, message, ok, _, err := newTestAdapter(f).killProcess(context.Background(), params{"pid": 4211})
 	if err != nil {
 		t.Fatalf("killProcess: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestKillProcess_RefusesProcessesItMustNotSignal(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, _, err := newTestAdapter(newFakeRunner()).killProcess(context.Background(), params{"pid": tc.pid})
+			_, _, _, _, err := newTestAdapter(newFakeRunner()).killProcess(context.Background(), params{"pid": tc.pid})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want it to refuse with %q", err, tc.want)
 			}
@@ -152,7 +152,7 @@ func TestKillProcess_RefusesProcessesItMustNotSignal(t *testing.T) {
 func TestKillProcess_RefusesAKernelThread(t *testing.T) {
 	f := newFakeRunner()
 	f.responses["ps -p 2 -o comm="] = []byte("[kthreadd]\n")
-	_, _, _, err := newTestAdapter(f).killProcess(context.Background(), params{"pid": 2})
+	_, _, _, _, err := newTestAdapter(f).killProcess(context.Background(), params{"pid": 2})
 	if err == nil || !strings.Contains(err.Error(), "kernel thread") {
 		t.Fatalf("error = %v, want a kernel-thread refusal", err)
 	}
@@ -162,7 +162,7 @@ func TestKillProcess_RefusesAKernelThread(t *testing.T) {
 }
 
 func TestKillProcess_RequiresAPid(t *testing.T) {
-	if _, _, _, err := newTestAdapter(newFakeRunner()).killProcess(context.Background(), params{}); err == nil {
+	if _, _, _, _, err := newTestAdapter(newFakeRunner()).killProcess(context.Background(), params{}); err == nil {
 		t.Fatal("killing a process must not proceed without a pid")
 	}
 }
@@ -173,7 +173,7 @@ func TestRemoveOldLogs_DryRunReportsWithoutDeleting(t *testing.T) {
 	f.responses["find "+dir+" -xdev -type f -mtime +30 -printf %s\t%T@\t%p\n"] =
 		[]byte("4096\t1700000000\t" + filepath.Join(dir, "old.log") + "\n")
 
-	impacted, message, ok, err := newTestAdapter(f).removeOldLogs(context.Background(),
+	impacted, message, ok, _, err := newTestAdapter(f).removeOldLogs(context.Background(),
 		params{"path": dir, "dry_run": true})
 	if err != nil {
 		t.Fatalf("removeOldLogs: %v", err)
@@ -196,7 +196,7 @@ func TestRemoveOldLogs_DeletesWhatTheCriteriaName(t *testing.T) {
 	f.responses["find "+dir+" -xdev -type f -mtime +30 -printf %s\t%T@\t%p\n"] =
 		[]byte("4096\t1700000000\t" + target + "\n")
 
-	_, message, ok, err := newTestAdapter(f).removeOldLogs(context.Background(), params{"path": dir})
+	_, message, ok, _, err := newTestAdapter(f).removeOldLogs(context.Background(), params{"path": dir})
 	if err != nil {
 		t.Fatalf("removeOldLogs: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestRemoveOldLogs_NamesNothingItDidNotDerive(t *testing.T) {
 	f.responses["find "+dir+" -xdev -type f -mtime +30 -printf %s\t%T@\t%p\n"] =
 		[]byte("4096\t1700000000\t" + filepath.Join(dir, "old.log") + "\n")
 
-	if _, _, _, err := newTestAdapter(f).removeOldLogs(context.Background(), params{
+	if _, _, _, _, err := newTestAdapter(f).removeOldLogs(context.Background(), params{
 		"path": dir, "files": []string{"/etc/passwd"},
 	}); err != nil {
 		t.Fatalf("removeOldLogs: %v", err)
@@ -228,7 +228,7 @@ func TestRemoveOldLogs_NamesNothingItDidNotDerive(t *testing.T) {
 
 func TestRemoveOldLogs_RefusesSystemDirectories(t *testing.T) {
 	for _, dir := range protectedPaths {
-		if _, _, _, err := newTestAdapter(newFakeRunner()).removeOldLogs(context.Background(),
+		if _, _, _, _, err := newTestAdapter(newFakeRunner()).removeOldLogs(context.Background(),
 			params{"path": dir, "dry_run": true}); err == nil {
 			t.Errorf("removing logs from %s must be refused", dir)
 		}
@@ -241,11 +241,11 @@ func TestRemoveOldLogs_RefusesAFileAndAMissingPath(t *testing.T) {
 	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := newTestAdapter(newFakeRunner()).removeOldLogs(context.Background(),
+	if _, _, _, _, err := newTestAdapter(newFakeRunner()).removeOldLogs(context.Background(),
 		params{"path": file}); err == nil {
 		t.Error("a single file is not what this tool removes")
 	}
-	if _, _, _, err := newTestAdapter(newFakeRunner()).removeOldLogs(context.Background(),
+	if _, _, _, _, err := newTestAdapter(newFakeRunner()).removeOldLogs(context.Background(),
 		params{"path": filepath.Join(dir, "nope")}); err == nil {
 		t.Error("a missing directory must be refused, not silently treated as empty")
 	}
@@ -255,7 +255,7 @@ func TestRemoveOldLogs_ReportsWhenThereIsNothingToRemove(t *testing.T) {
 	dir := t.TempDir()
 	f := newFakeRunner()
 	f.responses["find "+dir+" -xdev -type f -mtime +30 -printf %s\t%T@\t%p\n"] = []byte("")
-	impacted, message, ok, err := newTestAdapter(f).removeOldLogs(context.Background(), params{"path": dir})
+	impacted, message, ok, _, err := newTestAdapter(f).removeOldLogs(context.Background(), params{"path": dir})
 	if err != nil {
 		t.Fatalf("removeOldLogs: %v", err)
 	}

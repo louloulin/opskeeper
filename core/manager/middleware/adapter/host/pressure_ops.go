@@ -33,39 +33,40 @@ import (
 //     can name the tool that is about to make the call.
 //   - kernel threads, whose command is bracketed. They are not ordinary
 //     processes and SIGTERM to one is meaningless at best.
-func (a *Adapter) killProcess(ctx context.Context, p params) (int, string, bool, error) {
+func (a *Adapter) killProcess(ctx context.Context, p params) (int, string, bool, []string, error) {
 	r, err := a.handle()
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", false, nil, err
 	}
 	raw, ok := p["pid"]
 	if !ok || raw == nil {
-		return 0, "", false, fmt.Errorf("host: pid is required: killing a process needs the pid the process list recorded")
+		return 0, "", false, nil, fmt.Errorf("host: pid is required: killing a process needs the pid the process list recorded")
 	}
 	pid, err := toInt(raw)
 	if err != nil {
-		return 0, "", false, fmt.Errorf("host: pid: %w", err)
+		return 0, "", false, nil, fmt.Errorf("host: pid: %w", err)
 	}
 	if pid <= 1 {
-		return 0, "", false, fmt.Errorf("host: refusing to signal pid %d: that is not an ordinary process", pid)
+		return 0, "", false, nil, fmt.Errorf("host: refusing to signal pid %d: that is not an ordinary process", pid)
 	}
 	if pid == os.Getpid() {
-		return 0, "", false, fmt.Errorf("host: refusing to signal pid %d: that is this adapter, and the call would not return", pid)
+		return 0, "", false, nil, fmt.Errorf("host: refusing to signal pid %d: that is this adapter, and the call would not return", pid)
 	}
 	if pid == os.Getppid() {
-		return 0, "", false, fmt.Errorf("host: refusing to signal pid %d: that is this adapter's parent, which supervises it", pid)
+		return 0, "", false, nil, fmt.Errorf("host: refusing to signal pid %d: that is this adapter's parent, which supervises it", pid)
 	}
 	before, err := processCommand(ctx, r, pid)
 	if err != nil {
-		return 0, "", false, fmt.Errorf("host: could not read pid %d before signalling it: %w", pid, err)
+		return 0, "", false, nil, fmt.Errorf("host: could not read pid %d before signalling it: %w", pid, err)
 	}
 	if strings.HasPrefix(before, "[") && strings.HasSuffix(before, "]") {
-		return 0, "", false, fmt.Errorf("host: refusing to signal pid %d (%s): it is a kernel thread, not a process that can be stopped",
+		return 0, "", false, nil, fmt.Errorf("host: refusing to signal pid %d (%s): it is a kernel thread, not a process that can be stopped",
 			pid, before)
 	}
 
-	if _, err := r.run(ctx, []string{"kill", "-TERM", strconv.Itoa(pid)}); err != nil {
-		return 0, "", false, fmt.Errorf("host: kill -TERM %d failed: %w", pid, err)
+	killArgv := []string{"kill", "-TERM", strconv.Itoa(pid)}
+	if _, err := r.run(ctx, killArgv); err != nil {
+		return 0, "", false, nil, fmt.Errorf("host: kill -TERM %d failed: %w", pid, err)
 	}
 	// The signal is asynchronous: kill(2) returning 0 says the signal was
 	// delivered, not that the process acted on it. Reporting success here
@@ -77,13 +78,13 @@ func (a *Adapter) killProcess(ctx context.Context, p params) (int, string, bool,
 		// ps no longer lists it, which is the outcome we wanted. A pid
 		// that has been reaped is indistinguishable from one that never
 		// existed, and both mean the process is gone.
-		return 1, fmt.Sprintf("sent SIGTERM to pid %d (%s); it is no longer listed", pid, before), true, nil
+		return 1, fmt.Sprintf("sent SIGTERM to pid %d (%s); it is no longer listed", pid, before), true, killArgv, nil
 	case after == "":
-		return 1, fmt.Sprintf("sent SIGTERM to pid %d (%s); it is no longer listed", pid, before), true, nil
+		return 1, fmt.Sprintf("sent SIGTERM to pid %d (%s); it is no longer listed", pid, before), true, killArgv, nil
 	default:
 		return 1, fmt.Sprintf("sent SIGTERM to pid %d (%s) but it is still running as %q. "+
 			"A process that ignores SIGTERM is usually mid-write; check what it is before escalating to SIGKILL, "+
-			"which will truncate whatever it was writing", pid, before, after), false, nil
+			"which will truncate whatever it was writing", pid, before, after), false, killArgv, nil
 	}
 }
 
@@ -122,50 +123,50 @@ var protectedPaths = []string{
 // dry_run reports the same set without touching anything, and it is the
 // right first call: an operator approving a deletion should see what it
 // would remove before it is removed.
-func (a *Adapter) removeOldLogs(ctx context.Context, p params) (int, string, bool, error) {
+func (a *Adapter) removeOldLogs(ctx context.Context, p params) (int, string, bool, []string, error) {
 	r, err := a.handle()
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", false, nil, err
 	}
 	path, err := p.requireString("path")
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", false, nil, err
 	}
 	clean := filepath.Clean(path)
 	for _, protected := range protectedPaths {
 		if clean == protected {
-			return 0, "", false, fmt.Errorf("host: refusing to delete logs from %s: it is a system directory, "+
+			return 0, "", false, nil, fmt.Errorf("host: refusing to delete logs from %s: it is a system directory, "+
 				"and reclaiming space never justifies removing the files a machine needs to boot", clean)
 		}
 	}
 	info, err := os.Stat(clean)
 	if err != nil {
-		return 0, "", false, fmt.Errorf("host: %s: %w", clean, err)
+		return 0, "", false, nil, fmt.Errorf("host: %s: %w", clean, err)
 	}
 	if !info.IsDir() {
-		return 0, "", false, fmt.Errorf("host: %s is not a directory; this tool removes old logs from a log directory, "+
+		return 0, "", false, nil, fmt.Errorf("host: %s is not a directory; this tool removes old logs from a log directory, "+
 			"not an individual file", clean)
 	}
 	days, err := p.optionalInt("older_than_days", 30)
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", false, nil, err
 	}
 	if days < 1 {
-		return 0, "", false, fmt.Errorf("host: older_than_days must be at least 1, got %d", days)
+		return 0, "", false, nil, fmt.Errorf("host: older_than_days must be at least 1, got %d", days)
 	}
 	dryRun := false
 	if raw, ok := p["dry_run"]; ok && raw != nil {
 		if dryRun, err = toBool(raw); err != nil {
-			return 0, "", false, fmt.Errorf("host: dry_run: %w", err)
+			return 0, "", false, nil, fmt.Errorf("host: dry_run: %w", err)
 		}
 	}
 
 	candidates, _, err := a.oldLogFiles(ctx, params{"path": clean, "older_than_days": days})
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", false, nil, err
 	}
 	if len(candidates) == 0 {
-		return 0, fmt.Sprintf("no file under %s has been unchanged for %d day(s); nothing to remove", clean, days), true, nil
+		return 0, fmt.Sprintf("no file under %s has been unchanged for %d day(s); nothing to remove", clean, days), true, nil, nil
 	}
 	var total int64
 	var removed []string
@@ -186,16 +187,22 @@ func (a *Adapter) removeOldLogs(ctx context.Context, p params) (int, string, boo
 	}
 	if dryRun {
 		return len(removed), fmt.Sprintf("dry run: %d file(s) under %s unchanged for %d day(s) would be removed, %s reclaimable: %s",
-			len(removed), clean, days, humanBytes(total), preview(removed)), true, nil
+			len(removed), clean, days, humanBytes(total), preview(removed)), true, nil, nil
 	}
 	message := fmt.Sprintf("removed %d file(s) from %s, %s reclaimable", len(removed), clean, humanBytes(total))
 	if len(failed) > 0 {
-		return len(removed), message + fmt.Sprintf("; %d could not be removed: %s", len(failed), strings.Join(failed, "; ")), false, nil
+		return len(removed), message + fmt.Sprintf("; %d could not be removed: %s", len(failed), strings.Join(failed, "; ")), false, nil, nil
 	}
 	if len(removed) > 0 {
-		return len(removed), message + ": " + preview(removed), true, nil
+		// No argv is recorded for this op on purpose. Its effect is a set
+		// of per-file `rm` calls, not one vector; a declaration carrying
+		// any single one of them would re-run a program that removes one
+		// file rather than the criterion-derived set. Leaving Argv nil
+		// makes TrialOf refuse to crystallise it, which is the honest
+		// outcome: this action has no literal vector to promote.
+		return len(removed), message + ": " + preview(removed), true, nil, nil
 	}
-	return 0, message, true, nil
+	return 0, message, true, nil, nil
 }
 
 // preview names a bounded sample, because a log directory with ten thousand

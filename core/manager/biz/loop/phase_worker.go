@@ -226,6 +226,15 @@ type ToolReplayEntry struct {
 	// ResultJSON is the JSON-encoded result.
 	ResultJSON string
 
+	// Argv is the literal argument vector the tool executed, when it ran
+	// one. It is separate from ArgsJSON because the two answer different
+	// questions: ArgsJSON is what the invoker sent (a resolved argument
+	// bag), Argv is what the machine actually ran. Only Argv may be
+	// promoted into an autonomy declaration, and only when it is a real
+	// vector — an empty one means the action reached its change without an
+	// exec, which has nothing to crystallise.
+	Argv []string
+
 	// Status is one of "success" / "failed" / "skipped".
 	Status string
 

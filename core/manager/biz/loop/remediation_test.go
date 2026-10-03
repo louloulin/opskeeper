@@ -227,6 +227,55 @@ func TestRegistryInvoker_DispatchesTheSelectedAction(t *testing.T) {
 	}
 }
 
+// TestRegistryInvoker_CarriesTheExecutedArgvOutOfTheToolResult: the adapter
+// is the only layer that knows the vector it handed to exec, and it returns
+// it in the result bag. Dropping it here is what leaves the crystalliser
+// with nothing to re-run — the gap decision 157 closed on the event side
+// would otherwise reopen on the dispatch side.
+func TestRegistryInvoker_CarriesTheExecutedArgvOutOfTheToolResult(t *testing.T) {
+	tools := callerWith(ToolSpec{Name: "host.restart_service", RequiredArgs: []string{"unit"}})
+	tools.result = map[string]interface{}{
+		"operation": "restart_service",
+		"success":   true,
+		"argv":      []string{"systemctl", "restart", "nginx.service"},
+	}
+	inv := RegistryInvoker{Tools: tools, ArgResolver: ArgResolverFunc(
+		func(_ context.Context, _ RemediationRequest, _ ToolSpec) (map[string]any, error) {
+			return map[string]any{"unit": "nginx.service"}, nil
+		})}
+
+	out, err := inv.Invoke(context.Background(), RemediationRequest{
+		Option:   RemediationOption{Action: "host.restart_service", Target: "host:edge-1"},
+		Approver: "policy:auto",
+	})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if strings.Join(out.Argv, " ") != "systemctl restart nginx.service" {
+		t.Errorf("out.Argv = %v, want the executed vector carried out of the result bag", out.Argv)
+	}
+}
+
+// TestRegistryInvoker_NoArgvMeansNothingToPromote: a tool that reached its
+// change without an exec (or a read) must leave Argv empty rather than
+// fabricate one. TrialOf reads that emptiness as "nothing to crystallise".
+func TestRegistryInvoker_NoArgvMeansNothingToPromote(t *testing.T) {
+	tools := callerWith(ToolSpec{Name: "pg.vacuum_analyze"})
+	tools.result = map[string]interface{}{"operation": "vacuum_analyze", "success": true}
+	inv := RegistryInvoker{Tools: tools}
+
+	out, err := inv.Invoke(context.Background(), RemediationRequest{
+		Option:   opt("pg.vacuum_analyze", "safe", true),
+		Approver: "policy:auto",
+	})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if len(out.Argv) != 0 {
+		t.Errorf("out.Argv = %v, want empty when the tool executed no vector", out.Argv)
+	}
+}
+
 func TestRegistryInvoker_RefusesAnActionWithNoRegisteredTool(t *testing.T) {
 	tools := callerWith() // empty registry
 	inv := RegistryInvoker{Tools: tools}
@@ -669,6 +718,27 @@ func payloadHasToolReplay(t *testing.T, e loopmodel.Event, want string) bool {
 	}
 	for _, r := range payload.ToolReplay {
 		if r.Name == want {
+			return true
+		}
+	}
+	return false
+}
+
+// payloadReplayCarriesArgv asserts the recorded replay names the literal
+// vector that ran. The crystalliser promotes this vector into a declaration,
+// so an event that recorded only the argument bag would leave it with
+// nothing to re-run.
+func payloadReplayCarriesArgv(t *testing.T, e loopmodel.Event, want ...string) bool {
+	t.Helper()
+	var payload struct {
+		ToolReplay []ToolReplayEntry `json:"tool_replay"`
+	}
+	if err := json.Unmarshal([]byte(e.Payload), &payload); err != nil {
+		t.Fatalf("event payload is not valid JSON (%v): %s", err, e.Payload)
+	}
+	flat := strings.Join(want, "\x00")
+	for _, r := range payload.ToolReplay {
+		if strings.Join(r.Argv, "\x00") == flat {
 			return true
 		}
 	}

@@ -190,8 +190,33 @@ func TestRestartService_ConfirmsTheUnitCameBack(t *testing.T) {
 	if !f.called("systemctl restart orders-api.service") {
 		t.Error("the restart was never issued")
 	}
+	// The result must carry the literal vector that ran. The crystalliser
+	// promotes a runbook by re-running exactly this vector; a result that
+	// only described the outcome left the platform unable to write one.
+	if strings.Join(res.Argv, " ") != "systemctl restart orders-api.service" {
+		t.Errorf("res.Argv = %v, want the executed restart vector", res.Argv)
+	}
 	if !strings.Contains(res.Message, "now active") {
 		t.Errorf("message = %q, want the confirmed state", res.Message)
+	}
+}
+
+// TestGarbageCollect_CarriesTheArgvThatChangedState keeps the capture honest
+// for the one write the loop runs unattended: the vector is the sysctl, not
+// the sync that merely flushed pages ahead of it.
+func TestGarbageCollect_CarriesTheArgvThatChangedState(t *testing.T) {
+	f := newFakeRunner()
+	f.queue["cat"] = [][]byte{[]byte(meminfoBefore), []byte(meminfoAfter)}
+	a := newTestAdapter(f)
+	res, err := a.Execute(context.Background(), adapter.ExecOp{
+		Operation:  "garbage_collect",
+		ApprovedBy: "op-7",
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.Join(res.Argv, " ") != "sysctl -w vm.drop_caches=3" {
+		t.Errorf("res.Argv = %v, want the sysctl vector", res.Argv)
 	}
 }
 
