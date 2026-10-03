@@ -10760,6 +10760,100 @@ argv 是机器真执行的向量而不是参数包（158）。本轮把那一跳
 （`GET /v1/loops/crystallized` 列出模式，`POST .../promote` 落一份 draft 等待审查），
 让晋升出来的草稿第一次出现在一个审批人能看到的地方。
 
+### 4.97 决策 160：晋升草稿第一次有了审批人能看到的地方——只读审查面 + 写进评审根
+
+#### 4.97.1 决策 159 留下的最后一句
+
+§4.96.5 记的是：「它距离『高频场景零推理成本』还差最后一跳——**晋升出来的 `Draft`
+还没有人手去审**」。决策 159 把闭环接到了 `Ledger.Record`，账本开始积累 streak；但
+`Ledger.Promoted()` 与 `DraftFor` 只能从测试里调到。一个永远不会被任何进程读到的
+晋升——同一台机器上被晋升、同一条审计链里被写下来——机制完成度再高，用户价值仍是零。
+
+本轮把这一跳接上，并且把边界划在了**渲染**与**准入**之间。
+
+#### 4.97.2 改了什么
+
+| 段 | 文件 | 改动 |
+|---|---|---|
+| 审查面 | `core/manager/server/aiops/crystallized.go`（新） | `PatternReader` 端口（`Promoted`/`DraftFor`/`Policy`）；`GET /v1/loops/crystallized` 列出每个仍在持有的晋升模式及其证据、策略；`GET /v1/loops/crystallized/{name}` 渲染那一份**字面** `pig-ops.yaml` |
+| 晋升落盘 | 同上 | `POST /v1/loops/crystallized/{name}/promote` 把草稿写进评审根；草稿已存在即 409，不覆盖人手改过的文件 |
+| 路由与装配 | `server/aiops/http.go` / `cmd/opskeeper/main.go` | `Handler.patterns`/`draftRoot`、`SetPatterns`/`SetDraftRoot`；`main` 把 `learner.Ledger()` 与 `OPSKEEPER_PLUGIN_IMPORT_DIR` 接上 |
+| 测试 | `server/aiops/crystallized_test.go`（新） | 9 条：未接线 503 / 非 admin 403 / 列表含证据与策略 / 空账本 / 详情渲染文档 / 未知名 404 / 写入评审根 / 二次晋升 409 / 无评审根 503 |
+
+#### 4.97.3 一次被闸门挡下的错误落点（本轮真正的发现）
+
+这一刀的第一版把审查面放进了 `core/manager/server/loop/`——因为路由是
+`/v1/loops/crystallized`，直觉上属于 loop 域。`make module-standalone-check` 立刻把它
+挡了下来：
+
+```
+domain graph: 58 domains, 44 edges, 148 import statements behind them
+aiops and loop now reach each other both ways ... a cycle between two things
+that therefore cannot evolve independently
+loop imports aiops, which is not a declared domain edge
+```
+
+原因：`crystallize` 这个包住在 `biz/aiops/crystallize`，域名是 **aiops**。`loop →
+aiops` 从来不是已声明的边，而 `aiops → loop` 是（决策 117）。在 loop 的 server 里
+import 一个 aiops 的包，就把这条边反向补上，闭合了一个 §4.96 反复提到的「两处互相
+依赖、不能独立演进」的形状。
+
+**修法**：审查面移到 `core/manager/server/aiops/`，紧挨它读的结晶器。路由路径**保留
+`/v1/loops/` 前缀**——这些模式确实是 loop 自己的历史，运维是照着 loop 在看的——但代码
+落在域名边指向的那一侧。类型与端点因此被命名为 `aiops.CrystallizedListResponse` 等。
+这是本轮唯一一处需要「改代码而不是改台账」的地方：域的边不是能靠加一条理由绕过的。
+
+#### 4.97.4 三处**刻意划的边界**
+
+- **渲染与准入分开**。终点是「草稿落在运维能看到的地方」，不是「装上去」。promote 只
+  `Draft.Write`，包仍要走和其他所有包完全相同的审核与签名通道（plugin release 路由）。
+  一个替运维按下批准的端点，不是一个审查面。
+- **写进运维点名的目录**。`OPSKEEPER_PLUGIN_IMPORT_DIR` 与容器导入路由共用一个根；
+  未设置就 503，而不是写到某个没人看的地方。「一个没人审的草稿不是一次审查」，与
+  §4.95.3 的 `removeOldLogs` 同一条规则。
+- **不覆盖**。`Draft.Write` 用 `os.Mkdir`（EEXIST），所以二次晋升是 409 冲突而不是静默
+  替换。运维可能已经在草稿上写了批注；替换它等于把一次决定擦掉。（顺带修了
+  `server/loop` 的 `writeErr` 缺 `ErrConflict` case 的问题——现已随代码一起移到 aiops。）
+
+#### 4.97.5 反向验证与闸门（本轮实测）
+
+| 变异 | 结果 |
+|---|---|
+| 审查面放回 `server/loop`（import aiops 的 crystallize） | `make module-standalone-check` 红：`aiops and loop now reach each other both ways` |
+| `ErrConflict` 无 case | `TestCrystallizedPromote_RefusesToOverwriteAnEditedDraft` 红（期望 409） |
+| `SetDraftRoot("")` | `TestCrystallizedPromote_NoRootAnswers503` 红 |
+| `SetPatterns` 不接 | 列表/详情/晋升三条各返回 503 |
+
+| 闸门 | 结果 |
+|---|---|
+| `core/manager ./server/...` 全量 `go test` | 无 FAIL |
+| `make module-check` | `all module boundaries hold` |
+| `scripts/domaincheck` 全量 `go test` | 通过（58 domains / 44 edges 档案与树一致） |
+| `make eval-gates` | 20/20 golden 可服务、`unmeasured: 0`，退出 0 |
+| `make module-standalone-check` | 全模块 `GOWORK=off` 构建+测试通过 |
+| gofmt | `server/aiops`、`cmd/opskeeper` 干净 |
+
+#### 4.97.6 进度：阶段 2 从 93.3% 到 95.0%
+
+这一刀把计划 §二 P2 第 7 条从「机制闭环」推到「用户可见价值兑现」：晋升出来的草稿现在
+有一个审批人能看到、能读、能落盘送审的入口。它距离 P2-7 的完整形状（草稿经 marketplace
+走审核与签名后成为节点包）还差最后一段——**从评审根到 plugin release 的那一段是既有的
+marketplace/plugin release 通路，不是新的机制**；本轮没有替它发一条自动通道，因为那会
+把「运营者决定」变成「平台替运营者决定」。
+
+| 阶段 | 之前 | 之后 | 依据 |
+|---|---|---|---|
+| 0 边缘交付闭环 | 80% | 80% | 未动 |
+| 1 离线与自治 | 100% | 100% | 未动 |
+| 2 生态与治理 | 93.3% | 95.0% | 晋升草稿有了只读审查面与送审落盘；剩 marketplace→release 是既有通路 |
+| 3 控制面与联邦 | 79.7% | 79.7% | 未动 |
+
+加权 = (80 + 100 + 95.0 + 79.7) / 4 = **88.675% ≈ 88.7%**。
+
+下一步（同一条线）：给审查面加一个控制台入口（`web/` 的 DPO 面板），把
+`GET /v1/loops/crystallized` 渲染成「待审自愈规则」列表并接上 promote 按钮；同时在
+`harness` 的 8-case 黄金集里补一条「晋升→落草稿→（人工）发布」的回归。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

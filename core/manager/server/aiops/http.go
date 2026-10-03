@@ -100,6 +100,12 @@ type Handler struct {
 	agents     AgentLister
 	userAgents UserAgentManager
 	llmClient  pigmodel.Completer // for /v1/aiops/query-translate; nil = endpoint 503
+	// patterns is the crystalliser's promotion surface; nil = the crystallised
+	// routes answer 503. See crystallized.go and SetPatterns.
+	patterns PatternReader
+	// draftRoot is where a promoted draft is written for review; empty = the
+	// promote route answers 503.
+	draftRoot string
 }
 
 // NewHandler builds the handler. mentions / catalog may be nil; see
@@ -153,6 +159,8 @@ func (h *Handler) Register(r chi.Router) {
 	// stays and they re-appear on restart. User-source agents go
 	// through the userAgents service (DB row removal).
 	r.Delete("/v1/agents/{name}", h.deleteAgent)
+	// Cost-crystallisation review surface (see crystallized.go).
+	h.writePatternsRoutes(r)
 }
 
 // --------- DTOs ---------

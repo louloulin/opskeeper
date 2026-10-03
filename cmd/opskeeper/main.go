@@ -2522,6 +2522,14 @@ func main() {
 		} else {
 			loopCrystallizer = learner
 			loopTriggers = managerbizloop.NewAlertTriggerAdapter(alertRepo, log)
+			// The review surface reads from the same ledger the loop writes to.
+			// It lives on the aiops handler because the crystalliser is in the
+			// aiops domain (aiops -> loop is the declared direction, decision
+			// 117; a loop-side endpoint on an aiops package would close a cycle).
+			// The route paths keep the /v1/loops prefix — these patterns are the
+			// loop's own history — but the code sits where the edge points.
+			aiopsHandler.SetPatterns(learner.Ledger())
+			aiopsHandler.SetDraftRoot(os.Getenv("OPSKEEPER_PLUGIN_IMPORT_DIR"))
 			log.Info("loop: cost crystallisation wired", slog.Int("tools", toolCount))
 		}
 	}
