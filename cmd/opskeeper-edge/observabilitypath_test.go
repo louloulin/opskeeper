@@ -77,7 +77,7 @@ func observabilityBroker(t *testing.T, tun *fakeTunnel, receipts ReceiptClaimer,
 		t.Fatalf("the three shipped packages cannot form one allow-list: %v", err)
 	}
 	broker, err := toolbroker.Listen(toolbroker.Options{
-		Authorize: toolAuthorizer(registry, receipts),
+		Authorize: toolAuthorizer(registry, receipts, nil),
 		Invoke:    &agentToolInvoker{client: tun},
 		Actor:     func(string) string { return actor },
 	})
@@ -292,7 +292,7 @@ func TestAnObservabilityToolOnANodeWithNoTunnelSaysSo(t *testing.T) {
 	}
 	// No tunnel at all.
 	broker, err := toolbroker.Listen(toolbroker.Options{
-		Authorize: toolAuthorizer(registry, &fakeReceipts{}),
+		Authorize: toolAuthorizer(registry, &fakeReceipts{}, nil),
 		Invoke:    &agentToolInvoker{},
 		Actor:     func(string) string { return RoleAdmin },
 	})

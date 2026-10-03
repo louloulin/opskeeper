@@ -82,10 +82,22 @@ func currentAutonomyRunner() AutonomyRunner {
 	return autonomyRunner
 }
 
+// ToolKey is the registered name of the autonomy tool.
+//
+// It is a constant rather than a literal repeated at the two places that
+// have to recognise this tool by name — the node's approval policy and the
+// node's tool router — because those two places are the whole of what makes
+// autonomy reachable, and a router that spells the name differently from
+// the registry is a router that never matches. It is exported because the
+// node's policy layer is in another module from the skill it is special-
+// casing, and a cross-module special case written as a string is a special
+// case nobody can find.
+const ToolKey = "host_autonomy_run"
+
 // Metadata describes the tool to a model that may call it.
 func (AutonomyRun) Metadata() skill.Metadata {
 	return skill.Metadata{
-		Key:      "host_autonomy_run",
+		Key:      ToolKey,
 		Name:     "自治自愈动作",
 		Class:    skill.ClassDangerous,
 		Category: "autonomy",

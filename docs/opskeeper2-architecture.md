@@ -8209,6 +8209,118 @@ want 1`（阈值 1 与 2 两例）。
 另外两条硬约束记在这里而不是留给下一轮重新发现：断网窗口必须 **≥ 30s**
 （`MinAutonomyOfflineAfter`），而本条已让心跳可配、窗口不再被 30s 的心跳卡住。
 
+### 4.74 决策 137：自治子系统完整、正确、且永远执行不到——以及为什么九条测试全绿
+
+决策 136 的 §4.73.6 把「审计回传 e2e」的三个缺口列了出来。但在动手搭夹具之前
+先验了一下那三个缺口的前提：**先让仲裁器真的跑一次**。结果这一步就塌了，而且是
+在离 e2e 很远的地方塌的。
+
+#### 4.74.1 一个互斥条件，框死了整条自治路径
+
+三处代码，各自单看都正确，合起来是一把钳子：
+
+1. `cmd/opskeeper-edge/tools.go: runsOnThisNode()` —— 只有 `ClassRead` 的技能可以在
+   本节点执行。`host_autonomy_run` 的类目是 `ClassDangerous`，被 `NeedsApproval` 归到
+   `ClassDestructive`，于是它**必然走 `upcall()`**，也就是必然要隧道。
+2. `cmd/opskeeper-edge/policy.go: toolAuthorizer()` —— `ClassWrite` 及以上要
+   `ClaimReceipt`，票据只能**向中心要**。
+3. `core/edge/autonomy` 的 `centerIsAway()` —— 只有中心失联满 `offline_after`
+   （`MinAutonomyOfflineAfter` = 30s）才肯自己仲裁。
+
+于是：(1)(2) 要求「隧道通」，(3) 要求「隧道不通」才能放行。**两个条件互斥，任何
+自治动作在宇宙的任何一个时刻都无法被执行**。仲裁器是一段永远收不到请求的代码。
+
+值得记的是这个子系统**不是半成品**。仲裁器、本地审计 spool、回传 pump、tunnel 上的
+`agent.autonomy_execute` 方法、中心的审计链，整条链都在、都在工作、都有代码。缺的
+只是一扇门，而门被两把锁从两侧锁上了。
+
+#### 4.74.2 九条测试为什么发现不了
+
+`cmd/opskeeper-edge/autonomy_test.go` 的九条测试**全部**是
+`builtin.AutonomyRun{}.Execute` 的直接调用。也就是说它们测的是**工具自己**，
+而 bug 在**工具外面**——在路由层和授权层。测得越细，越看不到：每一条都真的验证
+了「动作必须已声明」「触发条件必须真的成立」「argv 必须逐字节等于声明的那个」，
+而且全绿。
+
+这就是本次唯一真正的方法论收获：**当一个单元的测试全部是绕过式直调时，它测的是
+「这个东西对不对」，永远不测「这东西有没有人叫得到」。** 后者只能由一个从
+「模型说了什么」开始的路由级测试来回答。
+
+#### 4.74.3 修复：一条规则，落在两处
+
+规则是「**谁持有许可**」，不是「放宽某个检查」。只对这一个工具、只在中心失联时生效：
+
+- `core/floor/skill/builtin/autonomy_run.go` —— 导出 `ToolKey = "host_autonomy_run"`
+  常量，`Metadata()` 改用它。**只有这一处定义这个名字**，路由层和授权层都从这里取，
+  避免字符串在三个文件里各写一遍。
+- `cmd/opskeeper-edge/autonomyrouting.go`（新文件）—— `autonomyIsLocal(obs)`：链路
+  不可达则本地处理。`obs == nil` 按**在线**处理（不能判断时必须像中心在）。
+  文件头用三段英文注释写清了为什么这是修复而不是放松，以及为什么路由看的是**链路**
+  而不是仲裁器自己的裁决：否则两个答案会来自两只不同的钟。
+- `cmd/opskeeper-edge/policy.go` —— `toolAuthorizer(registry, gate, obs)` 增加第三参，
+  豁免插在 `NeedsApproval` **之后**、`gate == nil` **之前**。位置是关键：插错了会
+  变成「无审批通道也能跑」，插在 allow-list 之后才是「只是把逐次人工换成已签名的清单」。
+- `cmd/opskeeper-edge/tools.go` —— `agentToolInvoker` 增加 `obs` 字段；`Invoke` 里
+  `registered && c.ToolName == builtin.ToolKey && autonomyIsLocal(t.obs)` 时走
+  `runLocal`。
+- `cmd/opskeeper-edge/agent.go` —— 两处装配传入 `agent`。
+- 五个测试文件的 `toolAuthorizer(...)` 补第三参 `nil`（`policy_test.go` 10 处、
+  `toolpath_test.go` 2、`repairpath_test.go` 1、`observabilitypath_test.go` 2）。
+
+**许可从「一次一个收据」换成「一份已签名的清单」——因为一个人早就读过并签了这条
+argv。** 换掉的只有逐次人工，而它只在中心不在场时被换掉。中心在场时，链路、收据、
+审批队列，**一个字节都没变**。
+
+未过闸门的东西也仍然是未过闸门：动作未声明不行、触发条件不成立不行、argv 不逐字节
+相等不行、触达越界不行、TTL 过期不行、幂等键复用不行。六道检查一道没动。
+
+#### 4.74.4 五条路由级测试
+
+`cmd/opskeeper-edge/autonomyreach_test.go`（新文件）—— 全部从「模型发起一次调用」开始，
+不碰 `Execute`：
+
+1. `TestAnAutonomyRequestReachesTheArbiterWhileTheCenterIsAway` —— 缺口本身。
+2. `TestTheCenterReachablePathIsUntouched` —— 中心在线时仍要收据、仍走隧道。
+3. `TestTheAutonomyExemptionIsForThatOneTool` —— 另一个 `ClassDestructive` 工具
+   在同样条件下**仍被拒**。
+4. `TestTheAutonomyExemptionStillRequiresTheToolToBeDeclared` —— 豁免在 allow-list
+   **下游**。
+5. `TestANodeWithNoAutonomyInstalledAnswersRatherThanActs` —— 没声明自治的节点
+   回答「无自治声明」而不是照着做，所以这条规则也**造不出**新的执行面。
+
+#### 4.74.5 四次变异
+
+| 变异 | 手法 | 预期红点 | 实测 |
+|---|---|---|---|
+| A 正向 | 豁免条件永不匹配（`ToolKey+"-never"`，保留 import 以免编译失败） | 授权层拒绝 | ✅ `the node refused an autonomy request while the centre was away` |
+| B 正向 | `tools.go` 删掉 `runLocal` 分支 | 请求到不了仲裁器 | ✅ `the runner saw 0 calls, want 1` |
+| C 放松过度 | 豁免不看链路状态 | 在线路径被改写 | ✅ `permitted an unapproved destructive call while the control plane is answering` |
+| D 放松过度 | 豁免不按工具名 | 别的 destructive 工具被放行 | ✅ `a destructive tool other than autonomy ran with no approval` |
+
+A、B 各钉住修复的一个半边；C、D 钉住**这是收紧而不是放松**——两次都是把代码改得
+更宽松，测试立刻抓住。
+
+#### 4.74.6 诚实的边界
+
+- 这**不是 e2e**。它是进程内的路由级测试，证明了「请求能到达」和「闸门不会被顺带
+  拆掉」，**没有**证明 spool 落盘、回传 pump、中心审计链这三段。§4.73.6 那三个夹具
+  缺口一个都没被本条填上。
+- 门开了，但**门后面是什么仍未验证**。本次只证明了「盒子里的机器现在能被人按到」。
+- 未过闸门的情况**不在这条规则的射程内**：中心在线但审批队列无人处理时，节点依然
+  不会动作（`gate` 分支在豁免之后），而**中心在线但隧道假死**时，节点会按
+  `autonomyIsLocal` 的判断降级到本地——这条降级的时间窗由 `offline_after` 决定，
+  已由决策 136 开 env，但**默认值 30s 仍是拍的**，没有生产数据支撑。
+
+#### 4.74.7 顺带修正 §4.73.6 的一条错误结论
+
+§4.73.6 说「突破口是 `custommetrics` 插件」。**这是错的。** `custommetrics` 走
+**push**（节点主动把值 POST 上去），不经过 `CollectAll`，所以填不进 `MetricValue`，
+而 `metric_above` 的判据正是 `MetricValue`。正确入口是 `COLLECTOR_MODE=scrape` 配
+`OPSKEEPER_EDGE_SCRAPE_CONFIG_FILE`。已在 `tests/e2e/testenv/metrics.go` 写下可控的
+`/metrics` 端点（`NewMetricsSource` / `SetValue` / `Scrapes`），并给
+`tests/e2e/testenv/fakes.go` 补了 `LLMHold`（`HoldNextCall` / `WaitReached` /
+`Release`）—— 两者都**尚未接线**，是留给决策 138 的零件。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

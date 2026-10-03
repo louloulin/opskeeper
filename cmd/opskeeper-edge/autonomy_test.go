@@ -48,7 +48,18 @@ func autonomyPlugin() pluginmanifest.Plugin {
 			Spec: domain.PluginSpec{
 				Targets:     domain.Targets{domain.TargetEdge},
 				SafetyLevel: domain.SafetyL2,
-				Tools:       domain.Tools{{Name: "host_restart_service", Class: domain.ClassWrite}},
+				// The action names host_restart_service; the *tool a
+				// model calls* to ask for the action is host_autonomy_run,
+				// and it has to be in the same inventory or the node's
+				// allow-list refuses the call before the arbiter is ever
+				// consulted. It is declared at the class the skill really
+				// is, because the gate compares the declaration against the
+				// call site's independent assessment and refuses a package
+				// that understates its own tool.
+				Tools: domain.Tools{
+					{Name: "host_restart_service", Class: domain.ClassWrite},
+					{Name: builtin.ToolKey, Class: domain.ClassDestructive},
+				},
 				Autonomy: domain.AutonomyPolicy{
 					OfflineAfter: domain.Duration(2 * time.Minute),
 					Actions: []domain.AutonomyAction{{

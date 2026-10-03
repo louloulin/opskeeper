@@ -75,7 +75,7 @@ func registryOf(t *testing.T, manifests ...domain.PluginManifest) *policygate.Re
 
 func TestTheBrokerPermitsAToolTheManifestDeclaresAsRead(t *testing.T) {
 	auth := toolAuthorizer(registryOf(t,
-		manifestOf("p", domain.ToolDecl{Name: "host_dmesg", Class: domain.ClassRead})...), &fakeReceipts{})
+		manifestOf("p", domain.ToolDecl{Name: "host_dmesg", Class: domain.ClassRead})...), &fakeReceipts{}, nil)
 
 	for _, role := range []string{RoleAdmin, RoleOperator, RoleViewer, "", "nonsense"} {
 		permitted, reason := permit(auth, role, "s", "host_dmesg", []byte(`{}`))
@@ -90,7 +90,7 @@ func TestTheBrokerRefusesAToolNoManifestDeclares(t *testing.T) {
 	// undeclared tool: the model can be told it exists, and it is still
 	// refused at the only place that matters.
 	auth := toolAuthorizer(registryOf(t,
-		manifestOf("p", domain.ToolDecl{Name: "host_dmesg", Class: domain.ClassRead})...), &fakeReceipts{})
+		manifestOf("p", domain.ToolDecl{Name: "host_dmesg", Class: domain.ClassRead})...), &fakeReceipts{}, nil)
 
 	permitted, reason := permit(auth, RoleAdmin, "s", "host_reboot", []byte(`{}`))
 	if permitted {
@@ -110,7 +110,7 @@ func TestTheBrokerRefusesAToolWhoseRealClassIsWorseThanTheManifestClaims(t *test
 		t.Skip("host_restart_service is not registered in this build")
 	}
 	auth := toolAuthorizer(registryOf(t,
-		manifestOf("liar", domain.ToolDecl{Name: "host_restart_service", Class: domain.ClassRead})...), &fakeReceipts{})
+		manifestOf("liar", domain.ToolDecl{Name: "host_restart_service", Class: domain.ClassRead})...), &fakeReceipts{}, nil)
 
 	for _, role := range []string{RoleAdmin, RoleOperator, RoleViewer} {
 		permitted, reason := permit(auth, role, "s", "host_restart_service", []byte(`{}`))
@@ -133,7 +133,7 @@ func TestTheBrokerAppliesTheRoleCeilingToToolsItCannotCrossCheck(t *testing.T) {
 		manifestOf("p",
 			domain.ToolDecl{Name: "get_topology", Class: domain.ClassRead},
 			domain.ToolDecl{Name: "draft_config_change", Class: domain.ClassWrite},
-		)...), &fakeReceipts{})
+		)...), &fakeReceipts{}, nil)
 
 	if permitted, reason := permit(auth, RoleViewer, "s", "get_topology", []byte(`{}`)); !permitted {
 		t.Errorf("a viewer was refused a read tool: %s", reason)
@@ -148,7 +148,7 @@ func TestTheBrokerAppliesTheRoleCeilingToToolsItCannotCrossCheck(t *testing.T) {
 	// second.
 	receipts := &fakeReceipts{}
 	auth = toolAuthorizer(registryOf(t,
-		manifestOf("p", domain.ToolDecl{Name: "draft_config_change", Class: domain.ClassWrite})...), receipts)
+		manifestOf("p", domain.ToolDecl{Name: "draft_config_change", Class: domain.ClassWrite})...), receipts, nil)
 
 	if permitted, reason := permit(auth, RoleOperator, "s", "draft_config_change", []byte(`{}`)); permitted {
 		t.Error("a write tool ran with no approval behind it")
@@ -169,7 +169,7 @@ func TestTheBrokerAppliesTheRoleCeilingToToolsItCannotCrossCheck(t *testing.T) {
 func TestAWriteToolRunsOnlyOnceAHumanHasGrantedThatExactCall(t *testing.T) {
 	auth := toolAuthorizer(registryOf(t,
 		manifestOf("repair", domain.ToolDecl{Name: "host_restart_service", Class: domain.ClassWrite})...),
-		&fakeReceipts{})
+		&fakeReceipts{}, nil)
 
 	// Nobody has been asked, so there is nothing to claim.
 	if permitted, reason := permit(auth, RoleAdmin, "sess-1", "host_restart_service", []byte(`{"service":"orders-api"}`)); permitted {
@@ -182,7 +182,7 @@ func TestAWriteToolRunsOnlyOnceAHumanHasGrantedThatExactCall(t *testing.T) {
 	receipts := &fakeReceipts{}
 	auth = toolAuthorizer(registryOf(t,
 		manifestOf("repair", domain.ToolDecl{Name: "host_restart_service", Class: domain.ClassWrite})...),
-		receipts)
+		receipts, nil)
 	receipts.grant("sess-1", "host_restart_service", []byte(`{"service":"orders-api"}`))
 
 	if permitted, reason := permit(auth, RoleAdmin, "sess-1", "host_restart_service", []byte(`{"service":"orders-api"}`)); !permitted {
@@ -206,7 +206,7 @@ func TestANodeWithWriteToolsAndNoGateRefusesThemAll(t *testing.T) {
 	// certainly wrong.
 	auth := toolAuthorizer(registryOf(t,
 		manifestOf("repair", domain.ToolDecl{Name: "host_restart_service", Class: domain.ClassWrite})...),
-		nil)
+		nil, nil)
 
 	for _, role := range []string{RoleAdmin, RoleOperator, RoleViewer} {
 		if permitted, _ := permit(auth, role, "s", "host_restart_service", []byte(`{}`)); permitted {
@@ -215,7 +215,7 @@ func TestANodeWithWriteToolsAndNoGateRefusesThemAll(t *testing.T) {
 	}
 	// A read is unaffected: nobody needs to be asked about a read.
 	readAuth := toolAuthorizer(registryOf(t,
-		manifestOf("p", domain.ToolDecl{Name: "host_dmesg", Class: domain.ClassRead})...), nil)
+		manifestOf("p", domain.ToolDecl{Name: "host_dmesg", Class: domain.ClassRead})...), nil, nil)
 	if permitted, reason := permit(readAuth, RoleViewer, "s", "host_dmesg", []byte(`{}`)); !permitted {
 		t.Errorf("a read was refused on a node with no gate: %s", reason)
 	}
@@ -226,7 +226,7 @@ func TestAnUnrecognisedRoleGetsTheBottomOfTheLadder(t *testing.T) {
 	// read has to land at the bottom, or a typo in a role name hands out
 	// the top of the ladder to whoever typed it.
 	auth := toolAuthorizer(registryOf(t,
-		manifestOf("p", domain.ToolDecl{Name: "draft_config_change", Class: domain.ClassWrite})...), &fakeReceipts{})
+		manifestOf("p", domain.ToolDecl{Name: "draft_config_change", Class: domain.ClassWrite})...), &fakeReceipts{}, nil)
 
 	for _, role := range []string{"", "root", "Admin", "ADMIN", "superuser", "system"} {
 		if permitted, _ := permit(auth, role, "s", "draft_config_change", []byte(`{}`)); permitted {

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/golang/snappy"
@@ -51,7 +52,52 @@ type FakeLLM struct {
 	// test tells "the model was called again after the tool answered"
 	// from "the model answered once and the tool never ran".
 	gotMessages []int
+	// hold parks the next completion until the test releases it. See
+	// HoldNextCall.
+	hold *LLMHold
 }
+
+// LLMHold parks one completion.
+//
+// It exists for a sequencing problem that is a property of the system
+// rather than of the test: a node's autonomy only applies while the control
+// plane is unreachable, so a tool call has to *arrive* after the node has
+// noticed the outage. But the model call that produces the tool call is
+// itself in flight, and the node reaches the model over its own HTTP path
+// to the gateway rather than over the management tunnel — which is the real
+// production shape, a node that lost its management link and still has
+// outbound access to a provider.
+//
+// So the test starts the turn, parks the model mid-thought, cuts the link,
+// waits out the offline threshold, and only then lets the model finish.
+// Anything else either defers (the link is fine) or cannot happen at all
+// (no tunnel, no turn).
+type LLMHold struct {
+	reached chan struct{}
+	release chan struct{}
+}
+
+// HoldNextCall arms a hold on the next completion.
+func (f *FakeLLM) HoldNextCall() *LLMHold {
+	h := &LLMHold{reached: make(chan struct{}), release: make(chan struct{})}
+	f.mu.Lock()
+	f.hold = h
+	f.mu.Unlock()
+	return h
+}
+
+// WaitReached blocks until the armed completion has actually parked.
+func (h *LLMHold) WaitReached(t *testing.T) {
+	t.Helper()
+	select {
+	case <-h.reached:
+	case <-time.After(60 * time.Second):
+		t.Fatal("the model was never called; the hold cannot be exercised")
+	}
+}
+
+// Release lets the parked completion answer.
+func (h *LLMHold) Release() { close(h.release) }
 
 // LLMToolCall is one tool call the fake asks a model to make.
 //
@@ -173,7 +219,18 @@ func (f *FakeLLM) openaiChat(w http.ResponseWriter, r *http.Request) {
 		f.script = f.script[1:]
 		call = &head
 	}
+	hold := f.hold
+	f.hold = nil
 	f.mu.Unlock()
+
+	// Park *after* the bookkeeping above, so a test waiting on the hold is
+	// waiting on a request that has already been counted and whose reply is
+	// fully decided. Releasing earlier would race the very accounting the
+	// test is using to know the model was reached.
+	if hold != nil {
+		close(hold.reached)
+		<-hold.release
+	}
 
 	message := map[string]any{"role": "assistant"}
 	finish := "stop"

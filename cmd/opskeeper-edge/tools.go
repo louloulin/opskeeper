@@ -9,6 +9,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/edge/toolbroker"
 	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/skill/builtin"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
@@ -57,6 +58,10 @@ type agentToolInvoker struct {
 	// this records what actually happened, which is the half a gate alone
 	// cannot supply.
 	log *slog.Logger
+	// obs is how the router knows whether the control plane is answering.
+	// It is only consulted for the autonomy tool; every other tool routes
+	// the same way it always did.
+	obs autonomyObservations
 }
 
 // Invoke runs one permitted call.
@@ -69,6 +74,13 @@ type agentToolInvoker struct {
 func (t *agentToolInvoker) Invoke(ctx context.Context, c toolbroker.Call) (json.RawMessage, error) {
 	exec, registered := skill.Get(c.ToolName)
 	if !registered || !runsOnThisNode(exec) {
+		// The autonomy tool is the one call a node answers for itself, and
+		// only while the control plane is not answering. Everything else
+		// — including this tool while the centre is up — goes up the
+		// tunnel, where the approval for a mutating call lives.
+		if registered && c.ToolName == builtin.ToolKey && autonomyIsLocal(t.obs) {
+			return t.runLocal(ctx, exec, c)
+		}
 		return t.upcall(ctx, c)
 	}
 	return t.runLocal(ctx, exec, c)

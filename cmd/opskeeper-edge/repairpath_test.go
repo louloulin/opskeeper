@@ -57,7 +57,7 @@ func repairBroker(t *testing.T, tun *fakeTunnel, receipts ReceiptClaimer, actor 
 		t.Fatalf("the two shipped packages cannot form one allow-list: %v", err)
 	}
 	broker, err := toolbroker.Listen(toolbroker.Options{
-		Authorize: toolAuthorizer(registry, receipts),
+		Authorize: toolAuthorizer(registry, receipts, nil),
 		Invoke:    &agentToolInvoker{client: tun},
 		Actor:     func(string) string { return actor },
 	})

@@ -8,6 +8,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/edge/toolbroker"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/skill/builtin"
 )
 
 // The node's role ladder.
@@ -86,7 +87,7 @@ func manifestsOf(plugins []pluginmanifest.Plugin) []domain.PluginManifest {
 // The first two are properties of the deployment and could in principle be
 // cached; the third is a fact about one call, and caching it would be the
 // bug.
-func toolAuthorizer(registry *policygate.Registry, gate ReceiptClaimer) toolbroker.Authorizer {
+func toolAuthorizer(registry *policygate.Registry, gate ReceiptClaimer, obs autonomyObservations) toolbroker.Authorizer {
 	return func(ctx context.Context, c toolbroker.Call) (bool, string) {
 		call := policygate.Call{
 			SessionID: c.SessionID,
@@ -107,6 +108,17 @@ func toolAuthorizer(registry *policygate.Registry, gate ReceiptClaimer) toolbrok
 			return false, reason
 		}
 		if !policy.NeedsApproval(call) {
+			return true, ""
+		}
+		// Autonomy is the one call whose permission is a signature rather
+		// than a receipt, and only while the control plane is not here to
+		// issue one. Everything above still applied: the tool has to be in
+		// the package's declared inventory, under the caller's role
+		// ceiling, and not understated by the call site. What is replaced
+		// is the per-call human, and only because a human already read and
+		// signed the exact argv this call is allowed to run. See
+		// autonomyrouting.go for why this is a repair and not a loosening.
+		if c.ToolName == builtin.ToolKey && autonomyIsLocal(obs) {
 			return true, ""
 		}
 		if gate == nil {

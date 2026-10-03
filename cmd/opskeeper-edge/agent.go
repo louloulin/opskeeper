@@ -525,8 +525,8 @@ func startNodeAgent(
 		// The gate is passed in so the broker can demand the receipt for
 		// any call that needed a human. Without it a package that replaced
 		// the courier would find its mutating tools running unapproved.
-		Authorize: toolAuthorizer(registry, gate),
-		Invoke:    &agentToolInvoker{client: client, log: log},
+		Authorize: toolAuthorizer(registry, gate, agent),
+		Invoke:    &agentToolInvoker{client: client, log: log, obs: agent},
 		Actor:     bridge.ActorFor,
 		// The declared limits, read from the same registry the class is
 		// read from. This is the last point at which a tool's answer is

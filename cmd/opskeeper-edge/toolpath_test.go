@@ -92,7 +92,7 @@ func brokerFor(t *testing.T, tun *fakeTunnel) string {
 		t.Fatalf("RegistryFromManifests: %v", err)
 	}
 	broker, err := toolbroker.Listen(toolbroker.Options{
-		Authorize: toolAuthorizer(registry, &fakeReceipts{}),
+		Authorize: toolAuthorizer(registry, &fakeReceipts{}, nil),
 		Invoke:    &agentToolInvoker{client: tun},
 		Actor:     func(string) string { return RoleAdmin },
 	})
@@ -162,7 +162,7 @@ func TestTheShippedProfileRefusesAMutatingToolForAViewer(t *testing.T) {
 		t.Fatalf("RegistryFromManifests: %v", err)
 	}
 	broker, err := toolbroker.Listen(toolbroker.Options{
-		Authorize: toolAuthorizer(registry, &fakeReceipts{}),
+		Authorize: toolAuthorizer(registry, &fakeReceipts{}, nil),
 		Invoke:    &agentToolInvoker{client: &fakeTunnel{}},
 		Actor:     func(string) string { return RoleViewer },
 	})
