@@ -3,14 +3,18 @@
 package testenv
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/golang/snappy"
 )
 
 // ─── Fake LLM ───────────────────────────────────────────────────────────
@@ -517,6 +521,13 @@ type FakeProm struct {
 	mu      sync.Mutex
 	series  map[string][][2]any       // for query_range: query → samples
 	instant map[string][]InstantEntry // for query: query → entries
+
+	// written counts the label sets that arrived over remote_write, and
+	// byDevice counts them per device. See remoteWrite for why the count
+	// is taken from the label name rather than by decoding the payload.
+	written  int
+	byDevice map[uint64]int
+	writes   int
 }
 
 // InstantEntry is one vector entry the FakeProm returns for /api/v1/query.
@@ -529,12 +540,14 @@ type InstantEntry struct {
 
 func NewFakeProm() *FakeProm {
 	f := &FakeProm{
-		series:  map[string][][2]any{},
-		instant: map[string][]InstantEntry{},
+		series:   map[string][][2]any{},
+		instant:  map[string][]InstantEntry{},
+		byDevice: map[uint64]int{},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/query_range", f.queryRange)
 	mux.HandleFunc("/api/v1/query", f.queryInstant)
+	mux.HandleFunc("/api/v1/write", f.remoteWrite)
 	f.server = httptest.NewServer(mux)
 	return f
 }
@@ -616,6 +629,92 @@ func (f *FakeProm) queryInstant(w http.ResponseWriter, r *http.Request) {
 // readQueryParam returns the PromQL expression: Prom accepts it either
 // on the query string (GET) or in form body (POST). The real client
 // sends POST application/x-www-form-urlencoded, so we parse both.
+// remoteWrite is the receive end of Prometheus remote_write.
+//
+// The harness previously served only the two query endpoints, so a node that
+// pushed samples had nowhere to land: the manager's ingester POSTed to a URL
+// that returned 404, the node's write-ahead log was told "nothing was
+// accepted", and the log never drained. That is not a harmless gap — it means
+// any test asserting on replayed telemetry was asserting on a node that could
+// never finish replaying, and the failure would have been reported as a
+// product defect.
+//
+// Counting rows is done by counting the device_id label rather than by
+// decoding the protobuf. The manager's writer hand-rolls its protobuf
+// encoding and this harness has no reason to take a dependency on a decoder
+// to learn one number; the ingester attaches device_id to every single sample
+// it forwards (see biz/promwrite), so one occurrence is exactly one series.
+func (f *FakeProm) remoteWrite(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	if err != nil {
+		http.Error(w, "read: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	raw, err := snappy.Decode(nil, body)
+	if err != nil {
+		http.Error(w, "snappy: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	rows := bytes.Count(raw, []byte("device_id"))
+	devices := deviceIDsIn(raw)
+
+	f.mu.Lock()
+	f.writes++
+	f.written += rows
+	for _, id := range devices {
+		f.byDevice[id]++
+	}
+	f.mu.Unlock()
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Written is how many labelled series have arrived over remote_write in
+// total, how many of those carried each device id, and how many write
+// requests it took.
+func (f *FakeProm) Written() (total int, byDevice map[uint64]int, requests int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	perDevice := make(map[uint64]int, len(f.byDevice))
+	for id, n := range f.byDevice {
+		perDevice[id] = n
+	}
+	return f.written, perDevice, f.writes
+}
+
+// deviceIDsIn reads the numeric device_id label values out of a decoded
+// remote_write body. It looks for the label name followed by its length
+// prefix and decimal digits, which is enough to attribute a batch to a node
+// without pulling in a protobuf decoder. Values it cannot read are simply not
+// attributed; the total count above does not depend on this succeeding.
+func deviceIDsIn(raw []byte) []uint64 {
+	var out []uint64
+	needle := []byte("device_id")
+	for offset := 0; offset <= len(raw); {
+		i := bytes.Index(raw[offset:], needle)
+		if i < 0 {
+			return out
+		}
+		at := offset + i + len(needle)
+		if at < len(raw) && raw[at] < 0x20 {
+			at++
+			end := at
+			var value uint64
+			digits := 0
+			for end < len(raw) && raw[end] >= '0' && raw[end] <= '9' && digits < 19 {
+				value = value*10 + uint64(raw[end]-'0')
+				end++
+				digits++
+			}
+			if digits > 0 {
+				out = append(out, value)
+			}
+		}
+		offset = at
+	}
+	return out
+}
+
 func readQueryParam(r *http.Request) string {
 	if v := r.URL.Query().Get("query"); v != "" {
 		return v

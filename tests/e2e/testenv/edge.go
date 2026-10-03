@@ -45,6 +45,11 @@ type Edge struct {
 	// unpacked.
 	WorkDir string
 
+	// TelemetryWALDir is where the node's telemetry write-ahead log
+	// lives. A test can watch the directory directly, which is the only
+	// way to see "the samples are on disk" from outside the process.
+	TelemetryWALDir string
+
 	// environ is the environment this node process was actually started
 	// with, kept so a test can assert on it. The plan's acceptance
 	// criterion is about the node's *process environment*, and a test that
@@ -174,6 +179,17 @@ type EdgeOptions struct {
 	// manager's registry can resolve, or the turn fails at the gateway
 	// with a message about the cluster.
 	Model string
+	// CollectorMode is the node's periodic metric-push path. Empty means
+	// "off": the harness default, and what a fresh install uses when the
+	// hostmetrics / procmetrics plugins expose the same data by direct
+	// scrape. A test about the telemetry write-ahead log has to say
+	// "embedded" out loud, because the default node samples nothing and
+	// would make "the log drained" true of a log that was never
+	// written to in the first place.
+	CollectorMode string
+	// CollectorInterval is how often the node samples. Empty leaves the
+	// production default (10s), which is longer than these tests wait.
+	CollectorInterval time.Duration
 }
 
 // StartEdge spawns a node process and waits for it to answer for itself.
@@ -200,14 +216,24 @@ func StartEdge(t *testing.T, env *Env, bearer string, opts EdgeOptions) *Edge {
 			t.Fatalf("testenv: prepare node dir: %v", err)
 		}
 	}
+	edge.TelemetryWALDir = filepath.Join(edge.WorkDir, "telemetry")
 	packageRoot := writeAdmittedPackage(t, filepath.Join(edge.WorkDir, "packages"))
+
+	collectorMode := opts.CollectorMode
+	if collectorMode == "" {
+		collectorMode = "off"
+	}
+	collectorInterval := ""
+	if opts.CollectorInterval > 0 {
+		collectorInterval = opts.CollectorInterval.String()
+	}
 
 	edgeEnv := map[string]string{
 		"OPSKEEPER_EDGE_CLOUD_ADDR":           opts.FrontierEdgeAddr,
 		"OPSKEEPER_EDGE_ACCESS_KEY":           opts.AccessKey,
 		"OPSKEEPER_EDGE_SECRET_KEY":           opts.SecretKey,
-		"OPSKEEPER_EDGE_COLLECTOR_MODE":       "off",
-		"OPSKEEPER_EDGE_TELEMETRY_WAL_DIR":    filepath.Join(edge.WorkDir, "telemetry"),
+		"OPSKEEPER_EDGE_COLLECTOR_MODE":       collectorMode,
+		"OPSKEEPER_EDGE_TELEMETRY_WAL_DIR":    edge.TelemetryWALDir,
 		"OPSKEEPER_EDGE_CHANGE_EVENT_WAL_DIR": filepath.Join(edge.WorkDir, "changes"),
 		"OPSKEEPER_EDGE_UPGRADE_STAGE_DIR":    filepath.Join(edge.WorkDir, "upgrade"),
 		"OPSKEEPER_EDGE_PLUGIN_WORK_DIR":      filepath.Join(edge.WorkDir, "plugins"),
@@ -228,6 +254,9 @@ func StartEdge(t *testing.T, env *Env, bearer string, opts EdgeOptions) *Edge {
 		// reads like a permissions problem; naming it here means the
 		// package this test admits is the package under test.
 		"OPSKEEPER_EDGE_AGENT_PACKAGES": packageRoot,
+	}
+	if collectorInterval != "" {
+		edgeEnv["OPSKEEPER_EDGE_COLLECTOR_INTERVAL"] = collectorInterval
 	}
 
 	edge.logBuf = &bytes.Buffer{}
