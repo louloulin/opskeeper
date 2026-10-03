@@ -95,6 +95,16 @@ jobs:
           set -euo pipefail
           make package TARGET_OS=linux TARGET_ARCH=${{ matrix.arch }} PLATFORM=${{ matrix.platform }}
 
+      # The release-signing check, here and not on every push. It asserts that
+      # RELEASE_VERSION.json still describes *this* commit -- its two tree
+      # hashes are compared against HEAD -- so on a development branch it is
+      # red by construction and would only ever stop the job before the
+      # open-source gate underneath it got a chance to run. See the comment on
+      # the `verify-plugins` target in the Makefile.
+      - name: Verify release metadata
+        shell: bash
+        run: make version-check
+
       - name: Verify package
         shell: bash
         run: |

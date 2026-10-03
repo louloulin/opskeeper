@@ -177,6 +177,27 @@ def test_the_decoy_sentinel_is_exempt_but_a_real_key_is_not(tmp_path: Path) -> N
     assert "leak_test.go" in err
 
 
+def test_a_test_may_name_what_it_is_testing(tmp_path: Path) -> None:
+    """The OnGrid rule and the home-path rule exempt test files, nothing else.
+
+    A test that asserts the OnGrid acknowledgment boundary exists has to
+    contain the word OnGrid; without the exemption the gate reports the test
+    for asserting the gate, which is a way to make people delete the test.
+    """
+    scaffold(tmp_path)
+    (tmp_path / "test_boundary.py").write_text(
+        'assert "OnGrid" in open("docs/ACKNOWLEDGMENTS.md").read()\n', encoding="utf-8"
+    )
+    (tmp_path / "production.md").write_text("built by OnGrid\n", encoding="utf-8")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "add", "--no-gpg-sign")
+
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 1
+    assert "production.md" in err
+    assert "test_boundary.py" not in err
+
+
 def test_a_missing_required_file_still_stops_immediately(tmp_path: Path) -> None:
     """Some failures make the rest of the scan meaningless.
 

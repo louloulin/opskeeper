@@ -74,12 +74,28 @@ test-plugins: ## 运行插件测试
 	$(MAKE) -C plugins/agentteams-plugin-installer self-check
 	$(PYTHON) -m pytest tests/test_deterministic_archive.py tests/test_audit_open_source.py plugins/opskeeper-teamharness
 
+# version-check is deliberately NOT a prerequisite of this target, and its
+# absence is the reason the open-source gate below runs at all.
+#
+# check_release_version.py binds RELEASE_VERSION.json to one specific commit:
+# it requires web_hash == `git rev-parse HEAD:web` and teamharness_source_tree
+# == `git rev-parse HEAD:plugins/opskeeper-teamharness`, plus a rule that the
+# release commit may only touch release metadata. Those assertions can only
+# hold on the release commit itself, so on any 2.0 development commit the
+# check is red by construction.
+#
+# It used to be a prerequisite here, and the arrangement was worse than having
+# no gate: it sat in front of `audit_open_source.py`, so every push stopped at
+# a release-time assertion and the open-source gate -- the one that catches a
+# private path or a credential about to ship -- never executed. Meanwhile
+# `make package`, which is what the release workflow actually runs, never
+# depended on it either, so at release time it guarded nothing. It now runs
+# where its assertions mean something, in .github/workflows/release.yml.
 verify-plugins: build-plugins test-plugins ## 构建、测试并校验插件发布包
-	$(MAKE) version-check
 	$(PYTHON) scripts/verify_release.py
 	python3 scripts/audit_open_source.py
 
-version-check: ## 校验发布元数据与源码/插件版本一致
+version-check: ## 校验发布元数据与源码/插件版本一致（发布期门槛，见 .github/workflows/release.yml）
 	python3 scripts/check_release_version.py
 
 # ----------------------------------------------------------------------------

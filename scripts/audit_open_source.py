@@ -101,6 +101,21 @@ def fail(message: str) -> None:
 VIOLATIONS: list[str] = []
 
 
+def is_test(relative: Path) -> bool:
+    """Whether this is a test file.
+
+    Two of the rules below are about strings a test has to be able to write
+    down: a test that proves no home directory path reaches a node has to
+    contain one, and a test that proves the OnGrid boundary is honoured has to
+    name OnGrid. Neither is a leak. The exemption is by file kind rather than
+    by value for those two only, and it is deliberately not extended to the
+    credential rules -- a real token dropped into a test file is still
+    reported, which is what the decoy exemption above exists to prove.
+    """
+    name = relative.name
+    return name.endswith("_test.go") or name.endswith("_test.py") or name.startswith("test_")
+
+
 @lru_cache(maxsize=1)
 def tracked_files() -> frozenset[str] | None:
     """The paths a release would actually contain, or None if unknowable.
@@ -204,14 +219,15 @@ def main() -> int:
 
     for relative in files:
         content = (ROOT / relative).read_text(encoding="utf-8")
+        test_file = is_test(relative)
         for label, pattern in FORBIDDEN_PATTERNS.items():
-            if label == "private user path" and relative.name.endswith("_test.go"):
+            if label == "private user path" and test_file:
                 continue
             match = pattern.search(content)
             if match and match.group(0) not in DECOY_CREDENTIALS:
                 preview = match.group(0)[:120]
                 report(f"{label} found in {relative}: {preview}")
-        if re.search(r"ongrid", content, re.I) and relative not in ONGRID_ALLOWLIST:
+        if re.search(r"ongrid", content, re.I) and relative not in ONGRID_ALLOWLIST and not test_file:
             report(f"OnGrid outside compliance allowlist: {relative}")
 
     check_acknowledgments()

@@ -129,7 +129,8 @@ func DecisionGates() []Gate {
 // docker daemon and a real broker container, which is precisely what the
 // fast unit/compile job excludes.
 var NotInCI = map[string]string{
-	"node holds no cloud vendor key (directory + process environment)": "an e2e assertion: it needs docker and a real broker container, so it lives in make e2e-delivery-check rather than the unit job. See decision 132.",
+	"node holds no cloud vendor key (directory + process environment)":  "an e2e assertion: it needs docker and a real broker container, so it lives in make e2e-delivery-check rather than the unit job. See decision 132.",
+	"release metadata still describes this commit (make version-check)": "a release-time assertion, not a per-push one: it compares RELEASE_VERSION.json's web_hash and teamharness_source_tree against `git rev-parse HEAD:<tree>`, so it can only be green on the commit that was actually signed. Run on every push it was red by construction AND sat in front of the open-source gate, so a private path or a credential about to ship was never checked at all; it now runs in .github/workflows/release.yml, where its comparisons mean something. See decision 166.",
 }
 
 func main() {
