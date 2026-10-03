@@ -101,6 +101,16 @@ func Gates() []Gate {
 // says, and the plan's four-gate line is quoted often enough that it has to
 // keep meaning it.
 //
+// pig-tool-scoping-check is here because it is the one gate that answers
+// "can the node's agent actually do anything", and for a long time the
+// honest answer was "no" -- 0 of 18 tools. A red gate nobody runs is worse
+// than a missing one, so it stayed out of CI while red; the moment upstream
+// shipped the fix, wiring it in became the only way to keep the property.
+// It is also why this table is not a list of gates somebody liked: the
+// entry exists because the property went from impossible to check to
+// checked, and a table that only grew on preference would not have grown
+// here.
+//
 // broker-pin-check is here because decision 153 built it to own a property
 // nothing owned -- "the broker the acceptance tests is the broker that ships"
 // -- and a gate that only runs when somebody remembers to type it owns
@@ -109,6 +119,13 @@ func Gates() []Gate {
 // alone would have run a check that skipped.
 func DecisionGates() []Gate {
 	return []Gate{
+		{
+			Target: "pig-tool-scoping-check",
+			Why: "a node may hold a correct profile, a signed package, a gate, an allow-list and an " +
+				"audit ledger and still be handed an agent that cannot call anything; PiG shipped the " +
+				"provenance fix in v0.4.0, so the question has an answer again and the only thing " +
+				"left is to keep asking it (decision 168)",
+		},
 		{
 			Target: "broker-pin-check",
 			Why: "every file that names the frontier broker names one version, and the shipped " +

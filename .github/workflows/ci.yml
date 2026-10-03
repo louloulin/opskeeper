@@ -91,6 +91,9 @@ jobs:
       - name: Broker version pins agree
         run: make broker-pin-check
 
+      - name: Node agent is actually offered its package tools
+        run: make pig-tool-scoping-check
+
       - name: Plan acceptance gates are wired
         run: make ci-gate-check
 

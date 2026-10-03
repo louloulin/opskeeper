@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -268,6 +269,104 @@ func TestADroppedDecisionGateIsReported(t *testing.T) {
 	if !strings.Contains(err.Error(), "broker-pin-check") {
 		t.Errorf("the report does not name the dropped decision gate: %v", err)
 	}
+}
+
+// A gate recipe must not name any other module's directory as a path, and
+// the reason is go.work: it is not committed (.gitignore line 40), so a
+// recipe that resolves `./core/pig/...` from the repository root only works
+// on a machine that happens to have a workspace. broker-pin-check did exactly
+// that until decision 164, and one decision later pig-tool-scoping-check
+// nearly shipped the same thing -- `go test ./core/pig/pigprofile/` from the
+// root, wired into ci.yml, green on the machine that wired it and unrunnable
+// in the run that matters. A recipe that means to work inside a module says
+// `cd <module> && GOWORK=off ...`, which is what module-standalone-check does
+// and what CI actually runs.
+//
+// The workspace half of the rule is deliberately absent: a check for the
+// literal workspace filename is itself forbidden by modulecheck's
+// repository-root sentinel rule (scripts/modulecheck), and the shape it would
+// catch is the shape this rule already catches. Two gates for one property is
+// one gate too many, and the one that owns the literal is the one that
+// already explains why the file is not there.
+func TestNoGateRecipeResolvesThroughTheWorkspace(t *testing.T) {
+	makefile, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	if err != nil {
+		t.Fatalf("read Makefile: %v", err)
+	}
+	modules := moduleRoots(t)
+	if len(modules) == 0 {
+		t.Fatal("no module roots found; this test would pass on anything")
+	}
+	for _, g := range allGates() {
+		for _, line := range recipeOf(string(makefile), g.Target) {
+			for _, token := range strings.Fields(line) {
+				token = strings.Trim(token, `"'`)
+				for _, m := range modules {
+					if token == m || token == "./"+m || strings.HasPrefix(token, "./"+m+"/") {
+						t.Errorf("gate %q reaches into module %q from outside it (token %q); without a "+
+							"workspace that path is in no main module, so CI cannot run this gate. "+
+							"Use `cd %s && GOWORK=off ...`", g.Target, m, token, m)
+					}
+				}
+			}
+		}
+	}
+}
+
+// moduleRoots are the directories that hold their own go.mod, as paths
+// relative to the repository root. "." is excluded: the root module is what
+// a recipe is allowed to address directly.
+func moduleRoots(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(filepath.Join("..", ".."), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(filepath.Join("..", ".."), path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		if strings.HasPrefix(rel, "..") {
+			return fs.SkipDir
+		}
+		if _, statErr := os.Stat(filepath.Join(path, "go.mod")); statErr == nil {
+			out = append(out, filepath.ToSlash(rel))
+			return fs.SkipDir // a module never nests another one
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk for module roots: %v", err)
+	}
+	return out
+}
+
+// recipeOf returns the tab-indented command lines of one Makefile target.
+func recipeOf(makefile, target string) []string {
+	var (
+		lines    []string
+		inTarget bool
+	)
+	for _, line := range strings.Split(makefile, "\n") {
+		if inTarget {
+			if strings.HasPrefix(line, "\t") {
+				lines = append(lines, line)
+				continue
+			}
+			inTarget = false
+		}
+		if strings.HasPrefix(line, target+":") {
+			inTarget = true
+		}
+	}
+	return lines
 }
 
 // --- Trigger reachability -------------------------------------------------
