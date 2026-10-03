@@ -114,11 +114,24 @@ test-e2e-live: ## E2E live mode（用 tests/e2e/secrets.local.env 打通真实�
 # 目标，因此也是唯一一个能发现"进程边界上形状不对"的闸门——在它之前，
 # 有三个缺陷连续逃过了全部单元测试与进程内 e2e。
 #
-# DOCKER_HOST：colima 之类的非默认 daemon 必须显式指出来，否则容器那一步
-# 会以"连不上 docker"的样子失败，看起来像测试的问题。
+# DOCKER_HOST 不在这里设置。docker 客户端在没有 DOCKER_HOST 时用的就是
+# `docker` 命令本身在用的那个 socket，而这个目标是全仓库唯一一个会起容器
+# 的闸门——它默认指向 colima，就等于把绝大多数用 Docker Desktop 的人挡在
+# 门外，而失败的样子是"连不上 docker"，看起来像测试坏了。需要 colima 的
+# 人在自己的 shell 里设好 DOCKER_HOST，它会被原样带进来。
 e2e-delivery-check: ## 节点 Agent 交付闭环（需 Docker；见 tests/e2e/README.md）
-	DOCKER_HOST="$${DOCKER_HOST:-unix://$$HOME/.colima/default/docker.sock}" \
-		go test -tags=e2e -count=1 -timeout=20m ./tests/e2e/ -run 'TestTheGatewayServesAStreamToANodeCredential|TestNodeAgentDelivery'
+	go test -tags=e2e -count=1 -timeout=20m ./tests/e2e/ -run 'TestTheGatewayServesAStreamToANodeCredential|TestNodeAgentDelivery'
+
+# The broker reaches operators two ways — built locally and shipped in the
+# tarball, or pulled from Docker Hub — and upstream spells the two versions
+# differently (git tag `v1.2.5`, published image `1.2.5`). Four files on the
+# shipped side and two on the pulled side once disagreed, which meant the
+# delivery acceptance was testing a broker the release never shipped. This
+# is the check that keeps those six files saying the same thing.
+.PHONY: broker-pin-check
+broker-pin-check: ## 校验所有提到 frontier broker 版本的地方都指向同一个版本（决策 153）
+	go run ./scripts/brokerpin .
+	go test ./scripts/brokerpin/ -count=1
 
 # The two corpus gates answer different prior questions, and both have to
 # be asked. plugin-coverage asks whether a *plugin package* can serve an
@@ -662,7 +675,7 @@ docker-build-web: ## [release] 构建 opskeeper-web:$(VERSION) 镜像（前端 S
 # is unreliable in some networks, so we build the image locally from the
 # upstream source and ship it in the release tarball.
 FRONTIER_SRC     ?= $(HOME)/frontier
-FRONTIER_VERSION ?= v1.2.4
+FRONTIER_VERSION ?= v1.2.5
 FRONTIER_BUILD_FORCE ?= 1
 
 .PHONY: docker-build-broker

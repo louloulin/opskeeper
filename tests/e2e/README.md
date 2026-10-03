@@ -150,14 +150,15 @@ once and `go test -run` works on the catalog number).
 ## The node-agent delivery gate
 
 `node_agent_delivery_test.go` is the one suite here that is not a
-loopback test, and it is kept out of `make test-e2e` for that reason.
+loopback test. It runs in `make test-e2e` too — the two share the one
+broker and the one MySQL that `TestMain` tears down — and
+`make e2e-delivery-check` is the named target when you want only this
+path.
 
 ```bash
 make e2e-delivery-check
-# or, with the daemon spelled out:
-DOCKER_HOST="unix://$HOME/.colima/default/docker.sock" \
-  go test -tags=e2e -count=1 -timeout=20m ./tests/e2e/ \
-  -run 'TestTheGatewayServesAStreamToANodeCredential|TestNodeAgentDelivery'
+# or, on a machine whose daemon is not the default socket:
+DOCKER_HOST="unix://$HOME/.colima/default/docker.sock" make e2e-delivery-check
 ```
 
 What is real in it: the `opskeeper` manager binary, the `opskeeper-edge`
@@ -166,6 +167,13 @@ a release builds it), a frontier broker container, the node's own sockets,
 the manager's OpenAI-compatible gateway, and the console's SSE frame
 contract. What is substituted: the model, by the harness's fake LLM. So it
 proves the delivery path and says nothing about answer quality.
+
+It also says nothing about whether the node's agent was offered any tools.
+A node can hold a correct profile, a signed package, a gate, an allow-list
+and an audit ledger and still be handed an agent that may not call
+anything — that is the current state of `make pig-tool-scoping-check`,
+which is the only gate that asks. Run it before reading a green delivery
+gate as "the node can diagnose".
 
 The split exists because the two questions are different. Everything else in
 this directory replaces the transport (an in-process loopback) and the agent
@@ -186,10 +194,24 @@ asserts on the response **body**. It used to assert on the status line, and
 a gateway that answers 200 with a well-formed empty stream is
 indistinguishable, to every client, from a working one.
 
-Note on the frontier image: the harness defaults to
-`singchia/frontier:1.2.5`, which is not the tag `deploy/install/frontier.yaml`
-pins. Override with `OPSKEEPER_E2E_FRONTIER_IMAGE` if your registry mirror
-carries a different one.
+Note on the frontier image: the harness pulls `singchia/frontier:1.2.5`,
+which is the same broker the release ships — the release builds it from the
+upstream git tag `v1.2.5` and names the local image with the `v`; Docker Hub
+has never published that spelling. `make broker-pin-check` keeps the six
+files that name it agreeing.
+
+If your registry cannot reach the `singchia` namespace at all, build the
+broker from source with the Dockerfile the release uses and point the
+harness at that image:
+
+```sh
+git clone --depth 1 --branch v1.2.5 https://github.com/singchia/frontier.git /tmp/frontier
+make docker-build-broker FRONTIER_SRC=/tmp/frontier
+OPSKEEPER_E2E_FRONTIER_IMAGE=singchia/frontier:v1.2.5 make e2e-delivery-check
+```
+
+`OPSKEEPER_E2E_FRONTIER_IMAGE` is also the escape hatch for a mirror that
+carries a different tag.
 
 ## Conventions for writing a new e2e
 

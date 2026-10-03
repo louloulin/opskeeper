@@ -30,7 +30,7 @@ jobs:
             runner: ubuntu-24.04-arm
 
     env:
-      FRONTIER_VERSION: v1.2.4
+      FRONTIER_VERSION: v1.2.5
 
     steps:
       - name: Checkout

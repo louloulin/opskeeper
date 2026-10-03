@@ -195,7 +195,7 @@ docker save "${IMAGE_REF}" -o "${STAGE_DIR}/images/opskeeper.tar"
 # Frontier broker is upstream singchia/frontier (ADR-007). Docker Hub
 # pull is unreliable in some networks, so we build it locally (see
 # Makefile target `docker-build-broker`) and ship the image tar.
-FRONTIER_VERSION="${FRONTIER_VERSION:-v1.2.4}"
+FRONTIER_VERSION="${FRONTIER_VERSION:-v1.2.5}"
 FRONTIER_REF="singchia/frontier:${FRONTIER_VERSION}"
 log "saving docker image ${FRONTIER_REF} -> images/frontier.tar"
 if ! docker image inspect "${FRONTIER_REF}" >/dev/null 2>&1; then

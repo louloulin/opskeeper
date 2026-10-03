@@ -135,27 +135,35 @@ func sharedFrontier(t *testing.T) *Frontier {
 // addresses to hand to something other than a manager (a node, mainly).
 func SharedFrontier(t *testing.T) *Frontier { return sharedFrontier(t) }
 
-// defaultFrontierImage is the broker this harness runs.
+// defaultFrontierImage is the broker this harness runs, and it is the same
+// broker the release ships.
 //
-// It is NOT the tag docker-compose.yml pins (v1.2.4), and the difference
-// is deliberate rather than an oversight. The v-prefixed tag does not
-// resolve through the registry mirror this machine is configured with, so
-// a harness pinned to it cannot start a broker at all; 1.2.5 is the tag
-// that is actually deployed.
+// Getting that sentence true took a decision this file used to leave
+// unmade. The broker reaches operators two ways. The release builds it from
+// an upstream git tag and ships the image inside the tarball, so those files
+// name a local image — `singchia/frontier:v1.2.5`, a tag that has never
+// existed on Docker Hub and is never pulled. The development stack and this
+// harness pull it, so they say `1.2.5`, which is how upstream tags its
+// published images. Two spellings, one version, six files.
 //
-// It is NOT reliably obtainable either. The mirror in use answers 403 for
-// the whole singchia namespace, and a direct path to docker.io needs
-// credentials this harness does not have, so on a machine without a cached
-// copy the two delivery tests cannot run at all. That is an environment
-// precondition and it is reported as one (see frontier_image.go) rather
-// than as a failure of the thing under test.
+// They disagreed: the release shipped v1.2.4 while this harness ran 1.2.5.
+// Every individual file was correct and every comment explained itself, so
+// nothing was red. The property that mattered — that the acceptance proves
+// something about the thing that ships — had no owner. `make
+// broker-pin-check` owns it now.
 //
-// The divergence is stated here rather than papered over, because it is a
-// real discrepancy between what the repository asks for and what runs:
-// docker-compose.yml still pins v1.2.4, and whoever reconciles the two
-// should decide which is right (and re-run this gate afterwards) rather
-// than find out later that the composition and the acceptance test were
-// testing different brokers.
+// One thing is still not this repository's to fix. A machine whose registry
+// cannot reach the singchia namespace cannot pull either spelling, and then
+// these two tests cannot run at all. That is an environment precondition and
+// it is reported as one (see frontier_image.go) rather than as a failure of
+// the thing under test. Building the broker from source with the same
+// Dockerfile the release uses sidesteps it entirely:
+//
+//	make docker-build-broker FRONTIER_SRC=/path/to/frontier
+//	OPSKEEPER_E2E_FRONTIER_IMAGE=singchia/frontier:v1.2.5 make e2e-delivery-check
+//
+// That override names the shipped image, so the acceptance stops testing a
+// broker the release never ships.
 const defaultFrontierImage = "docker.io/singchia/frontier:1.2.5"
 
 // frontierImage resolves the broker image, overridable so a mirror or a
