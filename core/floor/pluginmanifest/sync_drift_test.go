@@ -1,6 +1,8 @@
 package pluginmanifest
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -353,10 +355,57 @@ func TestEveryPackagedExtensionBuildsTheWayTheNodeBuildsIt(t *testing.T) {
 // discovered rather than named: the test below walks this list, so adding a
 // fourth package without adding it here fails as a vacuous check rather
 // than passing silently.
-var toolsets = []string{
-	"opskeeper-sre-readonly",
-	"opskeeper-sre-observability",
-	"opskeeper-sre-repair",
+// toolsets is every toolset that carries a copy of the broker client,
+// read from the directory rather than written down here.
+//
+// The list used to be a literal, and a literal is a fourth thing to keep
+// in step: a new toolset that shipped its own client — which every one of
+// them has to, because each package builds standalone on a node — joined
+// the family without joining the check, so the client that could resend a
+// call whose reply was lost would have been a new file nobody compared
+// against anything. The guard was real and it covered three of six.
+//
+// Deriving it means the only way to not be checked is not to ship a
+// client, and a toolset with no client is itself wrong.
+func discoverToolsets(t *testing.T) []string {
+	t.Helper()
+	root := filepath.Join(repoRoot(t), "core", "pig", "extensions")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read %s: %v", root, err)
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		client := filepath.Join(root, e.Name(), "client.go")
+		body, err := os.ReadFile(client)
+		if err != nil {
+			// No client at all: a toolset that ships no broker client has
+			// no copy to keep in step. (Nothing ships that way today, and
+			// if something did, the build check beside this one would say
+			// so far more clearly than an absence here would.)
+			continue
+		}
+		// A client.go is not automatically a *broker* client. The gate
+		// extension has one too, and it speaks the policy-gate protocol —
+		// a different wire type, on a different socket, answering a
+		// different question. Including it in the comparison would be
+		// comparing two protocols and calling the difference a bug, and
+		// the first person to hit that would "fix" it by copying the
+		// wrong file.
+		//
+		// So the rule is the protocol itself: a copy of the tool-broker
+		// client is one that names ToolRequest. A new toolset that
+		// implemented the broker without that type would be caught by the
+		// build check, not here.
+		if !bytes.Contains(body, []byte("ToolRequest")) {
+			continue
+		}
+		out = append(out, e.Name())
+	}
+	return out
 }
 
 // TestEveryToolsetsBrokerClientIsTheSameFile asserts the one property that
@@ -373,6 +422,7 @@ var toolsets = []string{
 // resend an unknown outcome — is asserted equal here rather than left to
 // several sets of tests that happen to pass today.
 func TestEveryToolsetsBrokerClientIsTheSameFile(t *testing.T) {
+	toolsets := discoverToolsets(t)
 	if len(toolsets) < 2 {
 		t.Fatal("the list is too short for the comparison below to mean anything")
 	}
@@ -407,4 +457,63 @@ func stripPackageClause(src string) string {
 		return src[i+1:]
 	}
 	return src
+}
+
+// TestEveryPackageResourceEntryExistsOnDisk is the guard against the
+// failure mode where a package declares a resource it does not ship.
+//
+// The whole file-header argument above applies here, and it applies
+// hardest to this one: PiG treats a package.json's resource block as
+// *authoritative* — declaring one class suppresses convention discovery
+// for it — so a declared path that is not on disk is not a missing file,
+// it is a package the agent refuses to load. A node then boots with a
+// package set that the manager believes is installed, the model has no
+// tools, and every conversation test in the repository still passes
+// because none of them loads a package with extensions.
+//
+// It is found the hard way, which is the only reason it is here. The
+// self-heal package shipped a package.json naming opskeeper-gate, and
+// the directory that would have held it did not exist — sync-pig-ops.sh
+// copies *into* directories that are already there, so it wrote nine
+// extensions and said nothing about the tenth. `pig status` on a real
+// binary answered with healthy:false and the missing path, in one line,
+// after every unit test in this repository had passed.
+func TestEveryPackageResourceEntryExistsOnDisk(t *testing.T) {
+	for _, pkg := range shippedPlugins(t) {
+		t.Run(pkg.Name(), func(t *testing.T) {
+			root := pkg.Root
+			raw, err := os.ReadFile(filepath.Join(root, "package.json"))
+			if os.IsNotExist(err) {
+				// A package with no manifest discovers by convention, which
+				// is the safe direction: a directory that is there is a
+				// resource that loads.
+				return
+			}
+			if err != nil {
+				t.Fatalf("read the package manifest: %v", err)
+			}
+			var manifest struct {
+				Pi map[string][]string `json:"pi"`
+				Pig map[string][]string `json:"pig"`
+			}
+			if err := json.Unmarshal(raw, &manifest); err != nil {
+				t.Fatalf("parse the package manifest: %v", err)
+			}
+			declared := manifest.Pi
+			if declared == nil {
+				declared = manifest.Pig
+			}
+			for class, paths := range declared {
+				for _, p := range paths {
+					full := filepath.Join(root, filepath.FromSlash(p))
+					if _, err := os.Stat(full); err != nil {
+						t.Errorf("package.json declares %s %q, which is not on disk: the agent "+
+							"refuses a package whose declared resource is missing, so this node "+
+							"would boot with the package set the manager thinks it installed and a "+
+							"model that has no tools", class, p)
+					}
+				}
+			}
+		})
+	}
 }

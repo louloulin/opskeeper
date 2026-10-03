@@ -20,7 +20,7 @@
 // the protocol is the protocol: a socket a model can influence needs the
 // same framing, the same bounds and the same refusal to resend a call whose
 // outcome is unknown. That equality is asserted by
-// TestTheTwoToolsetsShareOneBrokerClient rather than left to discipline.
+// TestEveryToolsetsBrokerClientIsTheSameFile in core/floor/pluginmanifest rather than left to discipline.
 module github.com/vincent-wuhan/opskeeper/core/pig/extensions/opskeeper-sre-repair
 
 go 1.26.0

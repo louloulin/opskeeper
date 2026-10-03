@@ -8423,19 +8423,25 @@ radius 上限、有能力族、有覆盖率统计——**除了模型够不着�
 
 `install.strategy: pin`（同 repair）：能在无人值守时重启服务的包，不能跨机队自动升级。
 
-#### 4.75.6 顺手修掉一个「注释声称的守卫」
+#### 4.75.6 顺带撞见一条「注释引用了一个不存在的名字」——**本节的结论已被决策 139 推翻，保留原文**
 
 `core/pig/extensions/opskeeper-sre-repair/go.mod` 里写着：
 
 > That equality is asserted by TestTheTwoToolsetsShareOneBrokerClient rather
 > than left to discipline.
 
-全仓 `grep` ——**这个测试不存在**。于是在自己的模块里补了一个真的：
-`TestTheBrokerClientIsTheSameOneTheOtherToolsetsUse` 按字节比对 `client.go`（只允许
-package 子句不同），漂移即红。
+全仓 `grep` ——**这个测试名不存在**。本节当时的结论是「守卫根本不存在」，并在本模块
+补了一个按字节比对的 `TestTheBrokerClientIsTheSameOneTheOtherToolsetsUse`。
 
-（repair 那个模块里的失效注释本条没有改。它是别的模块的注释，而一个声称存在守卫的
-注释比一个没有守卫更危险——这条留给下一个动到 repair 的人，顺手删掉那句。）
+> **决策 139 更正**：守卫是**存在**的，真名是
+> `TestEveryToolsetsBrokerClientIsTheSameFile`（`core/floor/pluginmanifest`）。错的只是
+> 注释引用的名字，不是守卫本身。**而本节补的那个模块内测试比仓库里那个更弱**（只比
+> autonomy ↔ repair 两个文件，仓库里那个遍历整个列表），已在决策 139 中删除。
+>
+> 但「名字错」这件事本身不是全部——真正的缺陷在守卫的**列表**上，见 §4.76.3。
+> 一个引用了错名字的注释让人以为没有守卫，于是又写了一个更弱的；**两个事实叠起来
+> 才让真正的缺口（列表硬编码且不全）整整一个决策没被发现。** 这是本条真正的教训：
+> 「grep 不到」和「不存在」是两个不同的结论，而我在同一次判断里把它们合并了。
 
 #### 4.75.7 验证
 
@@ -8491,6 +8497,129 @@ package 子句不同），漂移即红。
 
 而这恰恰点出了下一刀为什么重要：**决策 139 要是做不出那条 e2e，上面这两个 0 就
 还是 0。**
+
+### 4.76 决策 139（上）：拿真 `pig` 装一次自己发布的包——结果它拒绝加载，而全仓库的测试是绿的
+
+§4.74.6 写下了「审计回传 e2e」的三条剧本。动手之前先验了一句更靠前的前提：
+**节点上的 pig 到底能不能加载一个带扩展的包？** 因为如果不能，后面全部白写。
+
+答案分两半，而且第二半是本条真正的收获。
+
+#### 4.76.1 先前的 e2e 从来没装过带扩展的包
+
+`tests/e2e/testenv/edge.go:539-547` 自己写着：
+
+> building five extensions is not what this [test] is [about] … A green
+> conversation here must not be read as "tools work on a node".
+
+这是诚实的警告，但也说明一件事：**本仓库从来没有一次 e2e 证明过「节点的模型调了
+节点的工具」**。决策 138 补上的 `opskeeper-sre-autonomy` 扩展，测试全部是进程内的
+`stubHost`——真 unix socket、真行协议、真重连，但没有一次经过 pig。
+
+所以「e2e 从来没装过带扩展的包」不是夹具的疏漏，是**一整层从未被端到端证明过**。
+
+#### 4.76.2 用真二进制问一次，答案是不
+
+本条手工做了一遍：真 `pig`（`GOWORK=off CGO_ENABLED=0` 从 `core/pig` 构建）+
+真发布目录 `plugins/pig-ops/opskeeper-sre-autonomy` + 真 `settings.json`。第一次
+`pig status --json` 的答案是：
+
+```json
+{"healthy":false, ... "errors":["project Package ... is invalid: extensions
+manifest entry \"extensions/opskeeper-gate\": stat ...: no such file or directory"]}
+```
+
+**`package.json` 声明了 `extensions/opskeeper-gate`，而那个目录不存在。**
+
+为什么会这样：`sync-pig-ops.sh` 是**往已存在的目录里复制**，不是「按清单创建」。
+我建新包时只 `mkdir` 了 `extensions/opskeeper-sre-autonomy`，脚本于是老老实实写了
+10 份扩展、对缺失的那 tenth 个一言不发。
+
+而这一刀如果留在仓库里，后果是 §4.75 里那个文件头自己预言过的那一句：
+
+> The agent would be live and the model would have no tools, and nothing in an
+> end-to-end conversation test would notice.
+
+——因为**这个仓库里没有任何一个 e2e 会加载带扩展的包**（4.76.1）。
+
+补上目录、重跑脚本，再问一次：
+
+```json
+{"healthy":true, "packages":{"total":1,"project":1},
+ "resources":{"total":4,"byKind":{"extensions":2,"skills":2}},
+ "items":[{"kind":"extensions","name":"opskeeper-gate","health":""},
+          {"kind":"extensions","name":"opskeeper-sre-autonomy","health":""},
+          {"kind":"skills","name":"opskeeper-selfheal","health":""}],
+ "errors":[]}
+```
+
+**决策 138 的扩展在真 pig 上编译并加载成功**，扩展与 skill 都健康，零错误。这是
+「决策 138 写的东西在节点上真的能用」的第一份直接证据——之前只有进程内测试。
+
+#### 4.76.3 补两条守卫，并**推翻**决策 138 的一条结论
+
+**新守卫一：`TestEveryPackageResourceEntryExistsOnDisk`**
+
+读每个发布包的 `package.json`，把 `pi` / `pig` 块里声明的每一个资源路径 stat 一遍。
+变异验证：往 `package.json` 加一个 `extensions/opskeeper-sre-does-not-exist` →
+红（`package.json declares extensions "..." which is not on disk: the agent
+refuses a package whose declared resource is missing, so this node would boot
+with the package set the manager thinks it installed and a model that has no
+tools`）。
+
+**新守卫二：把 `TestEveryToolsetsBrokerClientIsTheSameFile` 的硬编码列表改成从目录派生**
+
+这一条是本节最值得记的，因为它同时暴露了决策 138 的一个错误结论（见 4.75.6 的更正框）。
+
+原来那个 `var toolsets = []string{readonly, observability, repair}` 是**写死的**。
+改成从 `core/pig/extensions/` 遍历「有 `client.go` 的目录」之后，第一次跑就**红了**：
+
+```
+the opskeeper-gate and opskeeper-sre-autonomy broker clients have diverged
+the opskeeper-gate and opskeeper-sre-middleware broker clients have diverged
+...
+```
+
+而这次的**红本身是错的**——`opskeeper-gate` 的 `client.go` 讲的是 **gate 协议**
+（`wire.GateRequest`、另一个 socket、回答「准不准」），不是 tool broker 协议
+（`wire.ToolRequest`、回答「跑不跑」）。把两个协议拿来比，然后把差异叫成 bug，
+下一个人会「修」它——方式是复制错的文件。
+
+所以派生的判据改成**协议本身**：只收 `client.go` 里出现 `ToolRequest` 的目录。
+改完之后 5 个 broker client 全绿（readonly / observability / repair / middleware /
+**autonomy**），gate 正确地不参与比较。变异验证：把 autonomy 的 `writeTimeout`
+从 10s 改成 30s → 四条 `have diverged` 全红。
+
+**这才是决策 138 那个模块真正缺的守卫**——不是「没有守卫」，是「守卫的列表少写了
+三个，其中一个是我自己新加的那个」。一个硬编码的工具集清单就是第四个要人肉同步的
+地方，而本仓库被这类清单咬过太多次（`PIG_MODULES`、`go.work`、`toolsets`、
+`toolCapabilities`……）。现在它从目录派生，不来的唯一方式是**不带 client**，而那本身
+就是错的。
+
+#### 4.76.4 诚实的边界
+
+- **审计回传 e2e 本条仍然没写成。** 本条做的是它最靠前的那个前提，并且用一个
+  **一次性的手工探针**（不是仓库里的测试）问出来的。探针证明了「发布的包能被真 pig
+  加载」，**没有**证明「节点的模型调了节点的工具」，更没有证明「自治动作跑完并回传
+  中心审计链」。
+- 探针里那个假 provider 指向 `127.0.0.1:59999`（一个不存在的端口），**没有发过一次
+  请求**。所以「工具被注册」目前是从 `pig status` 的资源表推出来的，不是从模型
+  实际看到的工具清单里读出来的——**这两者不是同一件事**，而它们之间正是 e2e 该走
+  的一段路。
+- 手工探针本身也暴露了一个可复现性问题：它需要 `PIG_CODING_AGENT_DIR` 指向
+  `<dir>`、而 `settings.json` 落在 `<dir>/.pig/`，**不是** `<dir>/.pig/agent/`。
+  我第一次就放错了位置，`pig status` 静悄悄地报 `packages: total 0`——**一个装不上
+  包的节点，看起来和一个没配包的节点一模一样**。这个形状值得单独想清楚。
+
+#### 4.76.5 台账：84.0% 不动
+
+与 §4.75.9 同理，且本条的理由更弱一些：本条修的是**发布形态**的一个缺陷、加了两条
+守卫，**没有新增任何能力**。决策 139 的真正分数要等 e2e 跑出来。
+
+```
+阶段 3 = 79.3% 不变
+加权   = 84.0% 不变
+```
 
 ## 六、当前实现进度
 

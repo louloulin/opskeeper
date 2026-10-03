@@ -16,10 +16,14 @@
 // or the gate could answer its own questions, and a toolset that can
 // answer its own questions is not a toolset.
 //
-// The client is a byte-for-byte copy of the other two toolsets', because
-// the protocol is the protocol: a socket a model can influence needs the
-// same framing, the same bounds and the same refusal to resend a call
-// whose outcome is unknown.
+// The client is a byte-for-byte copy of the other toolsets', because the
+// protocol is the protocol: a socket a model can influence needs the same
+// framing, the same bounds and the same refusal to resend a call whose
+// outcome is unknown. That equality is asserted by
+// TestEveryToolsetsBrokerClientIsTheSameFile in core/floor/pluginmanifest,
+// which derives its list from this directory rather than naming the
+// toolsets — so joining the family and joining the check are the same
+// act.
 module github.com/vincent-wuhan/opskeeper/core/pig/extensions/opskeeper-sre-autonomy
 
 go 1.26.0
