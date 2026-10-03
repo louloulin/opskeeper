@@ -27,7 +27,7 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
-	edgefed "github.com/vincent-wuhan/opskeeper/core/edge/federation"
+	edgefed "github.com/vincent-wuhan/opskeeper/core/manager/service/federationchild"
 	floorfed "github.com/vincent-wuhan/opskeeper/core/floor/federation"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"

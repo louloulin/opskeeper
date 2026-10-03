@@ -64,7 +64,7 @@ components:
   iam_server:      { in: core/manager/iam/server/** }
 
   manager_service: { in: core/manager/service/** }
-  # 决策 123：根侧的集群通道。子集群侧是 oxedge_federation，这一边是它
+  # 决策 123：根侧的集群通道。子集群侧是 manager_federation_child，这一边是它
   # 的对端。依赖面被压到 manager_biz（注册表与发布器）和 oxfloor（规则与
   # 线上类型）两处，因为这一层的全部职责就是「记住哪个已认证的调用方可以
   # 代表哪个子集群，然后把两个方向的调用发过去」。它一旦认得别的 manager
@@ -207,7 +207,13 @@ components:
   # 包取东西，因为这层代理的职责就是「在根不在的时候照常工作」：它一旦
   # 认得 agent 的运行期、采集器或遥测 WAL，它的答案就不再只由策略状态决定，
   # 而「答案只由策略状态决定」正是这一层存在的全部理由。
-  oxedge_federation:  { in: core/edge/federation/** }
+  #
+  # 决策 125：它原来在 core/edge/federation，而 make module-check 抓到
+  # 装配根为了接子集群侧去 import 它——也就是说 manager 在组装自己的控制
+  # 平面时伸手进了 edge 模块。包里没有一行边缘代理代码（它拨号、答两个
+  # RPC、存一棵策略树），依赖闭包只有 floor 的两块，所以搬到 manager
+  # 侧做 federationlink 的对端，而不是给 cmd 开一条例外。
+  manager_federation_child: { in: core/manager/service/federationchild/** }
   # 决策 99：遥测写前日志。它是节点唯一一份「写下来是为了以后再发」的数据，
   # 而写下来这件事本身没有第二个可去的地方——所以它只允许看见落盘原语与
   # 线上类型，不得直接 import 隧道客户端。发不发是装配根的决定，不是这里
@@ -558,7 +564,7 @@ deps:
     mayDependOn: [oxcore_domain, oxedge_spool]
   # 只有 floor。少一条边就少一个「顺手在这里把策略树换成随便什么目录」的
   # 机会——那条路径的检查写在 Store.bound 里，但依赖面本身就是第二道检查。
-  oxedge_federation:
+  manager_federation_child:
     mayDependOn: [oxfloor]
   # 落盘缓冲只依赖标准库：文件、json、时间。这不是「暂时还没用到别的」，而是
   # 这个组件存在的理由——它下面躺着节点唯一一份没有副本的本地数据，依赖面越小，

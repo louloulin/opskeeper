@@ -1,11 +1,22 @@
-// Package federation is the child cluster's side of policy federation: the
-// part that answers the root.
+// Package federationchild is the child cluster's side of policy federation:
+// the part that answers a root.
 //
-// It exists as its own package rather than as more files in biz because it
-// needs all three of the pieces the federation work produced — the rules in
-// floor/federation, the wire in floor/tunnel, and a filesystem policy store —
-// and putting it anywhere else would mean one of them importing another.
-package federation
+// It is the counterpart to service/federationlink, and the two are siblings
+// on purpose: one is the root's outbound half and this is the child's
+// inbound half, and neither is a part of anything else on this plane.
+//
+// It used to live at core/edge/federation, which was wrong in a way only a
+// boundary check could find. Nothing in it is edge-agent code — it dials a
+// root as a tunnel client, answers two RPCs, and keeps a directory of policy
+// trees — and it was imported by the manager's own composition root, which
+// means the manager was reaching into the edge module to assemble the
+// manager's own control plane. The package's whole dependency closure is
+// floor/federation and floor/tunnel, neither of which is edge anything.
+//
+// It stays out of biz for the reason it always did: it needs the rules, the
+// wire and a filesystem store at once, and folding it into the registry would
+// mean the thing that answers a root also decides who is allowed to ask.
+package federationchild
 
 import (
 	"context"

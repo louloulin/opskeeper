@@ -25,7 +25,7 @@ import (
 // signature on a real tree and a real receiver on the other end.
 //
 // The child is core/floor/federation.Receiver — the same code
-// core/edge/federation.Agent calls — driven directly instead of through a
+// service/federationchild.Agent calls — driven directly instead of through a
 // tunnel. What is under test is therefore the contract between the two ends:
 // the shapes on the wire, the version an answer carries, and the difference
 // between a decision and a transport failure. A field renamed on one side

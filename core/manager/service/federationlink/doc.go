@@ -1,7 +1,7 @@
 // Package federationlink is the root's end of the cluster channel.
 //
 // It exists because the two ends of that channel do not have the same
-// problem. The child side (core/edge/federation) already answers from state
+// problem. The child side (service/federationchild) already answers from state
 // it holds alone. The root side has no state to answer from at all: before
 // this package there was no way for a root to reach a child it had enrolled,
 // so the control plane could mint a provisioning token and sign a bundle and

@@ -18,6 +18,24 @@ type EdgeCaller interface {
 	Call(ctx context.Context, edgeID uint64, method string, body []byte) ([]byte, error)
 }
 
+// PolicyGate is asked, on this control plane, whether a package may be pushed
+// to a node at all.
+//
+// It is a second opinion, not a replacement. The node still runs its own
+// Review on the bytes that arrive, and a gate here cannot make a node accept
+// something it would have refused. What the gate decides is narrower and
+// earlier: whether this control plane should be offering the package in the
+// first place. On a cluster federating to a root, that question has an owner
+// above this process, and answering it locally would make every node in the
+// cluster an independent policy decision — which is the thing federation
+// exists to prevent.
+//
+// A nil gate is a control plane with no policy above it, which is the ordinary
+// single-cluster case.
+type PolicyGate interface {
+	Check(name, version string) error
+}
+
 // NodeFleet is a Node backed by the manager's tunnel.
 //
 // It is deliberately thin: marshal, call, unmarshal, translate. Everything
@@ -25,8 +43,13 @@ type EdgeCaller interface {
 // everything that decides *when* lives in Rollout. What is left here is the
 // one thing neither of them can do, which is speak to a node that is not in
 // this process.
+//
+// The one exception to the "everything lives on the node" rule is the gate
+// above, and it is an exception because a node cannot know what its control
+// plane's root has decided. See PolicyGate.
 type NodeFleet struct {
 	caller EdgeCaller
+	gate   PolicyGate
 }
 
 // ErrNoTunnel is the one answer this adapter gives about itself rather than
@@ -53,10 +76,49 @@ var ErrNoTunnel = errors.New("the control plane has no tunnel to the fleet")
 // rejection from the outside.
 func NewNodeFleet(caller EdgeCaller) *NodeFleet { return &NodeFleet{caller: caller} }
 
+// SetPolicyGate installs the gate, or removes it with nil.
+//
+// Post-hoc for the same reason SetEdgeCaller is: on a child cluster the gate
+// is built from a policy store that the federation wiring creates, and that
+// wiring runs after the fleet exists. Calling it twice is not a way to change
+// policy mid-rollout — a rollout in flight keeps the gate it started with,
+// because a wave that silently changed its own rules halfway is worse than
+// one that started under the wrong ones.
+func (f *NodeFleet) SetPolicyGate(g PolicyGate) {
+	if f == nil {
+		return
+	}
+	f.gate = g
+}
+
+// admit is the gate's one question, asked before anything is marshalled.
+//
+// A refusal is a refusal and not a failure, because the two mean different
+// things to a rollout: a failure is a node that did not answer and will be
+// asked again, and a refusal is a decision that will not change by asking.
+// Reporting it as StatusFailed would put a policy that says no into a retry
+// loop, once per wave, forever.
+func (f *NodeFleet) admit(spec ports.PluginSpec) *Outcome {
+	if f.gate == nil {
+		return nil
+	}
+	if err := f.gate.Check(spec.Name, spec.Version); err != nil {
+		return &Outcome{
+			Plugin: spec.Name,
+			Status: StatusRefused,
+			Reason: "refused by the policy in force on this control plane, before any node was asked: " + err.Error(),
+		}
+	}
+	return nil
+}
+
 // Install asks one node to take a package.
 func (f *NodeFleet) Install(ctx context.Context, edgeID uint64, spec ports.PluginSpec) Outcome {
 	if f == nil || f.caller == nil {
 		return Outcome{Status: StatusFailed, Reason: ErrNoTunnel.Error()}
+	}
+	if denied := f.admit(spec); denied != nil {
+		return *denied
 	}
 	body, err := json.Marshal(tunnel.PluginInstallRequest{
 		Plugin:    spec.Name,
@@ -96,6 +158,12 @@ func (f *NodeFleet) Install(ctx context.Context, edgeID uint64, spec ports.Plugi
 }
 
 // Remove asks one node to give a package back.
+//
+// Deliberately not gated. A gate on removal would be a gate that can only
+// add, and a package the root has withdrawn from the policy is precisely the
+// one a cluster most needs to be rid of: leaving it installed because
+// removing it needs permission is a policy that cannot be enforced. The gate
+// decides what may arrive, never what may leave.
 func (f *NodeFleet) Remove(ctx context.Context, edgeID uint64, name, version string) Outcome {
 	if f == nil || f.caller == nil {
 		return Outcome{Status: StatusFailed, Reason: ErrNoTunnel.Error()}

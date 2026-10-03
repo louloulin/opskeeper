@@ -1397,6 +1397,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The other side of the same channel, and it needs the plugin fleet
+	// above because a child refuses, before any node is asked, to offer a
+	// package its root did not publish. nil for every process that is not
+	// configured as a child, which is all of them until an operator says
+	// otherwise.
+	federationChild, err := newFederationChildWiring(cfg, pluginNodeFleet,
+		log.With(slog.String("comp", "federation-child")))
+	if err != nil {
+		log.Error("federation: child wiring", slog.Any("err", err))
+		os.Exit(1)
+	}
+	if federationChild != nil {
+		federationChild.Start(rootCtx)
+		defer func() {
+			if cerr := federationChild.Close(); cerr != nil {
+				log.Warn("federation: child channel close", slog.Any("err", cerr))
+			}
+		}()
+	}
+
 	if err := managersvcfb.Install(rootCtx, fbClient, managersvcfb.Wiring{
 		EdgeAuthn:      edgeAuthn,
 		EdgeUC:         edgeUC,
