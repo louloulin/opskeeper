@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"strings"
 	"testing"
 
@@ -241,7 +242,7 @@ func TestBashTool_MissingCmd(t *testing.T) {
 
 func TestBashTool_TooManyIDs(t *testing.T) {
 	tool := newBashTool(t, &fakeHostFilesResolver{}, &fakeCaller{})
-	ids := make([]uint64, batchMaxIDs+1)
+	ids := make([]uint64, toolcore.BatchMaxIDs+1)
 	for i := range ids {
 		ids[i] = uint64(i + 1)
 	}

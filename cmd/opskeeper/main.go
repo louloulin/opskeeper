@@ -118,6 +118,7 @@ import (
 	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	aiopstoolsdec "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
+	aiopstoolscore "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	managerbizalert "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
 	investigator "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert/investigator"
 	managerbizapproval "github.com/vincent-wuhan/opskeeper/core/manager/biz/approval"
@@ -4528,12 +4529,12 @@ func buildAIOpsRuntime(
 
 	// 5. Stitch the runtime.
 	_ = ctx
-	// Coordinator-only redirect stubs (see redirect_stub.go). They
+	// Coordinator-only redirect stubs (see tools/toolcore/redirect.go). They
 	// catch hallucinated tool names so the LLM gets a "use AgentTool
 	// to dispatch" hint instead of crashing the graph with
 	// "tool not found in toolsNode".
 	coordStubs := make([]aiopstoolsbase.BaseTool, 0)
-	for _, t := range aiopstools.CoordinatorRedirectStubs() {
+	for _, t := range aiopstoolscore.CoordinatorRedirectStubs() {
 		// Same decorator chain as real tools so timeouts / audit
 		// behave consistently (the stub's body is trivial so the
 		// timeout is harmless, audit just records a no-op call).

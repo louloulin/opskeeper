@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
@@ -110,7 +111,7 @@ func (t *GetProcessListTool) Info(_ context.Context) (*basetool.ToolInfo, error)
 }
 
 // singleProcessList runs one inner GetProcessList call. Failure paths
-// fold into ResultEntry.Error so the runBatch slice stays full-length.
+// fold into ResultEntry.Error so the toolcore.RunBatch slice stays full-length.
 func (t *GetProcessListTool) singleProcessList(ctx context.Context, deviceID uint64, topN uint32, sortBy string) ProcessListResultEntry {
 	entry := ProcessListResultEntry{DeviceID: deviceID}
 	if deviceID == 0 {
@@ -158,7 +159,7 @@ func (t *GetProcessListTool) InvokableRun(ctx context.Context, argsJSON string, 
 	if err := json.Unmarshal([]byte(argsJSON), &in); err != nil {
 		return "", fmt.Errorf("get_process_list: bad args: %w", err)
 	}
-	if err := validateBatchIDs("device_ids", in.DeviceIDs); err != nil {
+	if err := toolcore.ValidateBatchIDs("device_ids", in.DeviceIDs); err != nil {
 		return "", fmt.Errorf("get_process_list: %w", err)
 	}
 	if in.TopN == 0 {
@@ -173,7 +174,7 @@ func (t *GetProcessListTool) InvokableRun(ctx context.Context, argsJSON string, 
 		return "", fmt.Errorf("get_process_list: sort_by must be cpu or mem (got %q)", in.SortBy)
 	}
 
-	results := runBatch(ctx, in.DeviceIDs, func(ctx context.Context, id uint64) ProcessListResultEntry {
+	results := toolcore.RunBatch(ctx, in.DeviceIDs, func(ctx context.Context, id uint64) ProcessListResultEntry {
 		return t.singleProcessList(ctx, id, in.TopN, in.SortBy)
 	})
 	env := ProcessListBatchResponse{Results: results}

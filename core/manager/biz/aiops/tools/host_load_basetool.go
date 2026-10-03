@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
@@ -14,7 +15,7 @@ import (
 
 // host_load_basetool.go — N+15 batch refactor (2026-05-07). The BaseTool
 // form of get_host_load now takes a `device_ids[]` array (1..16) and
-// fans out manager-side via runBatch, returning a per-id envelope with
+// fans out manager-side via toolcore.RunBatch, returning a per-id envelope with
 // success/error counts. Edge handler / wire types are untouched —
 // every inner call still hits MethodGetHostLoad with the same single
 // GetHostLoadRequest / GetHostLoadResponse pair.
@@ -22,8 +23,8 @@ import (
 // Why batch-first: the LLM was burning 5+ rounds doing "cpu on 5 nodes"
 // because the schema took a single edge_name. The schema change nudges
 // the model toward fleet-shape questions (which is the actual AIOps
-// workflow) and the runBatch fan-out makes the manager-side latency
-// flat with batchConcurrency in flight.
+// workflow) and the toolcore.RunBatch fan-out makes the manager-side latency
+// flat with toolcore.BatchConcurrency in flight.
 //
 // The closure path (host_load.go::executeGetHostLoad) is intentionally
 // NOT changed — the graph kernel doesn't call it; it's a PR-7 residue
@@ -110,9 +111,9 @@ func (t *GetHostLoadTool) Info(_ context.Context) (*basetool.ToolInfo, error) {
 
 // singleHostLoad runs one inner GetHostLoad call. All failure paths
 // (resolver miss / dispatch error / decode error) are caught and
-// surfaced as ResultEntry.Error so runBatch can keep the slice
+// surfaced as ResultEntry.Error so toolcore.RunBatch can keep the slice
 // full-length. tunnel-side timeout is the same hostLoadCallTimeout the
-// pre-batch code used; runBatch puts batchConcurrency in flight at once.
+// pre-batch code used; toolcore.RunBatch puts toolcore.BatchConcurrency in flight at once.
 func (t *GetHostLoadTool) singleHostLoad(ctx context.Context, deviceID uint64) HostLoadResultEntry {
 	entry := HostLoadResultEntry{DeviceID: deviceID}
 	if deviceID == 0 {
@@ -151,7 +152,7 @@ func (t *GetHostLoadTool) singleHostLoad(ctx context.Context, deviceID uint64) H
 }
 
 // InvokableRun parses argsJSON, validates the batch, fans out via
-// runBatch, and re-emits a HostLoadBatchResponse. Per-id failures are
+// toolcore.RunBatch, and re-emits a HostLoadBatchResponse. Per-id failures are
 // folded into the envelope (success_count / error_count), NOT returned
 // as the function-level error — the LLM sees the full picture and
 // decides whether to retry.
@@ -163,11 +164,11 @@ func (t *GetHostLoadTool) InvokableRun(ctx context.Context, argsJSON string, _ .
 	if err := json.Unmarshal([]byte(argsJSON), &in); err != nil {
 		return "", fmt.Errorf("get_host_load: bad args: %w", err)
 	}
-	if err := validateBatchIDs("device_ids", in.DeviceIDs); err != nil {
+	if err := toolcore.ValidateBatchIDs("device_ids", in.DeviceIDs); err != nil {
 		return "", fmt.Errorf("get_host_load: %w", err)
 	}
 
-	results := runBatch(ctx, in.DeviceIDs, t.singleHostLoad)
+	results := toolcore.RunBatch(ctx, in.DeviceIDs, t.singleHostLoad)
 	env := HostLoadBatchResponse{Results: results}
 	for _, r := range results {
 		if r.Error != "" {

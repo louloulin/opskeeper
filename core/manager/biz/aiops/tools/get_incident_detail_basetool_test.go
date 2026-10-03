@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"strings"
 	"testing"
 	"time"
@@ -132,7 +133,7 @@ func TestGetIncidentDetailTool_DispatchError(t *testing.T) {
 
 func TestGetIncidentDetailTool_TooManyIDs(t *testing.T) {
 	tool := NewGetIncidentDetailTool(&fakeAlertUC{}, nil)
-	ids := make([]uint64, batchMaxIDs+1)
+	ids := make([]uint64, toolcore.BatchMaxIDs+1)
 	for i := range ids {
 		ids[i] = uint64(i + 1)
 	}

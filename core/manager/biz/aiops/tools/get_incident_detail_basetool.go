@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
@@ -161,11 +162,11 @@ func (t *GetIncidentDetailTool) InvokableRun(ctx context.Context, argsJSON strin
 	if err := json.Unmarshal([]byte(argsJSON), &in); err != nil {
 		return "", fmt.Errorf("get_incident_detail: bad args: %w", err)
 	}
-	if err := validateBatchIDs("incident_ids", in.IncidentIDs); err != nil {
+	if err := toolcore.ValidateBatchIDs("incident_ids", in.IncidentIDs); err != nil {
 		return "", fmt.Errorf("get_incident_detail: %w", err)
 	}
 
-	results := runBatch(ctx, in.IncidentIDs, t.singleIncidentDetail)
+	results := toolcore.RunBatch(ctx, in.IncidentIDs, t.singleIncidentDetail)
 	env := IncidentDetailBatchResponse{Results: results}
 	for _, r := range results {
 		if r.Error != "" {

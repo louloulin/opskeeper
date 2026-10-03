@@ -212,7 +212,7 @@ type Config struct {
 	// AgentTool to dispatch to specialist-X" message instead of
 	// executing the real query. Without them, the turn aborts the
 	// moment the LLM picks a name not actually in the coordinator's
-	// filtered bag — see core/manager/biz/aiops/tools/redirect_stub.go.
+	// filtered bag — see core/manager/biz/aiops/tools/toolcore/redirect.go.
 	//
 	// Workers (specialists) never see this slice. They have the real
 	// tool under the same name in their own filtered bag.

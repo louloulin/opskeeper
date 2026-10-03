@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"slices"
 	"strings"
@@ -139,7 +140,7 @@ var BashSchema = json.RawMessage(`{
 const bashCallTimeout = 60 * time.Second
 
 // bashBatchTimeout caps the whole batched run. Wider than the per-id
-// ceiling so up to batchConcurrency calls can finish.
+// ceiling so up to toolcore.BatchConcurrency calls can finish.
 const bashBatchTimeout = 120 * time.Second
 
 // bashBatchArgs is the typed form of BashSchema.
@@ -281,7 +282,7 @@ func (t *BashTool) RunApproved(ctx context.Context, deviceIDs []uint64, cmd stri
 	if t.caller == nil {
 		return "", fmt.Errorf("%s: tunnel caller not configured", ToolNameBash)
 	}
-	if err := validateBatchIDs("device_ids", deviceIDs); err != nil {
+	if err := toolcore.ValidateBatchIDs("device_ids", deviceIDs); err != nil {
 		return "", fmt.Errorf("%s: %w", ToolNameBash, err)
 	}
 	if strings.TrimSpace(cmd) == "" {
@@ -295,7 +296,7 @@ func (t *BashTool) RunApproved(ctx context.Context, deviceIDs []uint64, cmd stri
 	}
 	batchCtx, cancel := context.WithTimeout(ctx, bashBatchTimeout)
 	defer cancel()
-	results := runBatch(batchCtx, deviceIDs, func(ctx context.Context, id uint64) BashResultEntry {
+	results := toolcore.RunBatch(batchCtx, deviceIDs, func(ctx context.Context, id uint64) BashResultEntry {
 		return t.singleBash(ctx, id, cmd, timeout, true)
 	})
 	return marshalBashEnvelope(cmd, results)
@@ -313,7 +314,7 @@ func (t *BashTool) InvokableRun(ctx context.Context, argsJSON string, opts ...ba
 	if len(in.DeviceIDs) == 0 && in.DeviceID != 0 {
 		in.DeviceIDs = []uint64{in.DeviceID}
 	}
-	if err := validateBatchIDs("device_ids", in.DeviceIDs); err != nil {
+	if err := toolcore.ValidateBatchIDs("device_ids", in.DeviceIDs); err != nil {
 		return "", fmt.Errorf("%s: %w", ToolNameBash, err)
 	}
 	if in.Cmd == "" {
@@ -339,7 +340,7 @@ func (t *BashTool) InvokableRun(ctx context.Context, argsJSON string, opts ...ba
 	batchCtx, cancel := context.WithTimeout(ctx, bashBatchTimeout)
 	defer cancel()
 
-	results := runBatch(batchCtx, in.DeviceIDs, func(ctx context.Context, id uint64) BashResultEntry {
+	results := toolcore.RunBatch(batchCtx, in.DeviceIDs, func(ctx context.Context, id uint64) BashResultEntry {
 		return t.singleBash(ctx, id, in.Cmd, in.TimeoutSeconds, false)
 	})
 	return marshalBashEnvelope(in.Cmd, results)

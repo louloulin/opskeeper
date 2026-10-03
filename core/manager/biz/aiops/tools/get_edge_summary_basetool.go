@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"time"
 
@@ -24,7 +25,7 @@ import (
 // inner stitches in flight can complete.
 //
 // Fan-out budget rationale: each inner already takes up to 30s
-// (edgeSummaryCallTimeout), and runBatch keeps batchConcurrency=4 in
+// (edgeSummaryCallTimeout), and toolcore.RunBatch keeps toolcore.BatchConcurrency=4 in
 // flight. With 16 ids the worst-case wall time is ~30s × ⌈16/4⌉ = 120s;
 // we set the outer to 90s as the practical cap (typical batches have
 // most ids returning fast since host_load + DB read are cheap when the
@@ -32,7 +33,7 @@ import (
 // the whole call past the LLM round-trip budget).
 
 // edgeSummaryBatchTimeout caps the whole batched run. Wider than the
-// per-id ceiling so up to batchConcurrency stitches can finish.
+// per-id ceiling so up to toolcore.BatchConcurrency stitches can finish.
 const edgeSummaryBatchTimeout = 90 * time.Second
 
 // GetEdgeSummaryTool is the BaseTool form of get_edge_summary.
@@ -223,14 +224,14 @@ func (t *GetEdgeSummaryTool) InvokableRun(ctx context.Context, argsJSON string, 
 			return string(body), nil
 		}
 		in.DeviceIDs = ids
-	} else if err := validateBatchIDs("device_ids", in.DeviceIDs); err != nil {
+	} else if err := toolcore.ValidateBatchIDs("device_ids", in.DeviceIDs); err != nil {
 		return "", fmt.Errorf("get_edge_summary: %w", err)
 	}
 
 	batchCtx, cancel := context.WithTimeout(ctx, edgeSummaryBatchTimeout)
 	defer cancel()
 
-	results := runBatch(batchCtx, in.DeviceIDs, t.singleEdgeSummary)
+	results := toolcore.RunBatch(batchCtx, in.DeviceIDs, t.singleEdgeSummary)
 	env := EdgeSummaryBatchResponse{Results: results}
 	for _, r := range results {
 		if r.Error != "" {

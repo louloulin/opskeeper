@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"strings"
 	"testing"
 
@@ -127,7 +128,7 @@ func TestGetHostLoadTool_BatchEmptyIDs(t *testing.T) {
 
 func TestGetHostLoadTool_BatchTooManyIDs(t *testing.T) {
 	tool := newHostLoadToolFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
-	ids := make([]uint64, batchMaxIDs+1)
+	ids := make([]uint64, toolcore.BatchMaxIDs+1)
 	for i := range ids {
 		ids[i] = uint64(i + 1)
 	}

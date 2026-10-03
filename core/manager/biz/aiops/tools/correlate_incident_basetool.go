@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"sort"
 	"strings"
@@ -251,7 +252,7 @@ func (t *CorrelateIncidentTool) InvokableRun(ctx context.Context, argsJSON strin
 	if err := json.Unmarshal([]byte(argsJSON), &in); err != nil {
 		return "", fmt.Errorf("correlate_incident: bad args: %w", err)
 	}
-	if err := validateBatchIDs("incident_ids", in.IncidentIDs); err != nil {
+	if err := toolcore.ValidateBatchIDs("incident_ids", in.IncidentIDs); err != nil {
 		return "", fmt.Errorf("correlate_incident: %w", err)
 	}
 	window := in.WindowMinutes
@@ -262,7 +263,7 @@ func (t *CorrelateIncidentTool) InvokableRun(ctx context.Context, argsJSON strin
 		window = 240
 	}
 
-	results := runBatch(ctx, in.IncidentIDs, func(ctx context.Context, id uint64) CorrelateIncidentResultEntry {
+	results := toolcore.RunBatch(ctx, in.IncidentIDs, func(ctx context.Context, id uint64) CorrelateIncidentResultEntry {
 		return t.singleCorrelate(ctx, id, window)
 	})
 	env := CorrelateIncidentBatchResponse{Results: results}

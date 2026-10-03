@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"strings"
 	"testing"
@@ -122,7 +123,7 @@ func TestGetEdgeSummaryTool_NilEdges(t *testing.T) {
 func TestGetEdgeSummaryTool_TooManyIDs(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	tool := NewGetEdgeSummaryTool(nil, uc, nil, nil, nil)
-	ids := make([]uint64, batchMaxIDs+1)
+	ids := make([]uint64, toolcore.BatchMaxIDs+1)
 	for i := range ids {
 		ids[i] = uint64(i + 1)
 	}
