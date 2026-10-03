@@ -10405,19 +10405,23 @@ fatal: unable to access 'https://github.com/MichaelKinsy/PiG.git/': The requeste
 台账 §4.78.4 记的用法）。
 
 ```
-base/go-build...  /tmp/pig_local_fix  （从 /Users/louloulin/appx/PiG 本地 main 构建）
-OPSKEEPER_PIG_BIN=/tmp/pig_local_fix ... -run TestTheNodeProfileActuallyOffersTheToolsItsPackagesDeclare
+GOWORK=off go build -o /tmp/pig_local_fix ./cmd/pig        # 在带修复的 PiG 目录里
+OPSKEEPER_PIG_BIN=/tmp/pig_local_fix \
+  go test -tags pigscoping -count=1 ./core/pig/pigprofile/ \
+    -run TestTheNodeProfileActuallyOffersTheToolsItsPackagesDeclare
 → ok   github.com/vincent-wuhan/opskeeper/core/pig/pigprofile   1.250s   （18/18）
 ```
 
-**这条结果同时暴露第二处独立缺陷**：闸门默认那条路（不带 `OPSKEEPER_PIG_BIN`）
-是用 `pigBinary()` 在**本机 `core/pig` 目录里**跑 `go build ... github.com/MichaelKinsy/PiG/cmd/pig`
-并显式设 `GOWORK=off` 的（`runtime_scoping_test.go:353-358`）。`GOWORK=off` 会让
-该构建**忽略仓库的 `go.work`**，于是它不会用 `go.work` 里
+**这条结果同时把默认路径的构成说清楚了**：闸门默认那条路（不带
+`OPSKEEPER_PIG_BIN`）是用 `pigBinary()` 在**本机 `core/pig` 目录里**跑
+`go build ... github.com/MichaelKinsy/PiG/cmd/pig` 并显式设 `GOWORK=off` 的
+（`runtime_scoping_test.go:353-358`）。`GOWORK=off` 会让该构建**忽略仓库的
+`go.work`**，于是它不会用 `go.work` 里
 `replace github.com/MichaelKinsy/PiG => /Users/louloulin/appx/PiG`——它会回到
 `core/pig/go.mod` 里写的 `v0.3.0`。这与台账 §4.78.4 的注释一致（"a gate that
 silently built against a developer's local PiG checkout would prove something
-else"），所以**闸门的行为是对的**；错的是台账接下来那句推论。
+else"），所以这不是闸门的缺陷，而是它刻意的设计；**要更正的是台账接下来那句
+把它当成「推送 + 打 tag 之后会自己转绿」的推论**。
 
 #### 4.93.6 更正：`make pig-dev-pin` 不能解除这条阻塞；它误导了台账三轮
 
@@ -10444,9 +10448,10 @@ tag 不含修复；`make pig-tool-scoping-check` 默认那条路仍 0/18。这�
 
 - 此前记法是「等一条本机命令（推送 + 打 tag）」，暗示阻塞在**本机可解**、只差执行；
 - 实测记法是「需要上游作者授权写权限，或本仓库自我承担 piglet 传递性重编译」。
-  前者不是本机可解，后者不是本机可做（需改 `go.mod` 里 piglet extensions 的
-  `require github.com/MichaelKinsy/PiG`，并重编四个 piglet，属另一条独立的、与
-  §4.95.7 的「三步」并列的线）。
+  前者不是本机可解，后者不是本机可做：它要改本仓库四个 piglet extension 的
+  `go.mod` 里对 `github.com/MichaelKinsy/PiG` 的 `require`（改指一个本仓库能分发的
+  版本），并重编四个 piglet。这是一条独立于「B 阶段跟随上游增量补钉」的新线，
+  需要先决定「节点上 piglet 由谁构建」，不能顺手做。
 
 因此这一格诚实的读法从「压在一条命令上」改为「压在一次外部授权或一次传递性重
 编译上」——两者都不是本轮能代做的动作，但**前者不再有「一条命令」的假象**。
