@@ -47,6 +47,30 @@ func topLevel(t *testing.T, body, key string) (value string, found bool) {
 	return "", false
 }
 
+// nested reads one level of indentation under a parent key. topLevel skips
+// indented lines on purpose, which is right for a root key and wrong for the
+// one place this file needs to look inside a block: the discovery scopes,
+// where the whole profile turns on a nested list.
+func nested(t *testing.T, body, parent, key string) (value string, found bool) {
+	t.Helper()
+	inside := false
+	for _, line := range strings.Split(body, "\n") {
+		if line == "" || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		indented := line[0] == ' ' || line[0] == '\t'
+		name, rest, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !indented {
+			inside = name == parent
+			continue
+		}
+		if inside && ok && name == key {
+			return strings.TrimSpace(rest), true
+		}
+	}
+	return "", false
+}
+
 func TestTheProfileIsNamedForWhatItIs(t *testing.T) {
 	name, found := topLevel(t, Render(), "name")
 	if !found {
@@ -77,23 +101,52 @@ func TestTheProfileRemovesEveryBuiltinTool(t *testing.T) {
 	}
 }
 
-func TestTheProfileTurnsOffAmbientDiscovery(t *testing.T) {
-	for _, kind := range []string{"extensions", "skills"} {
-		line := "  " + kind + ":"
-		if !strings.Contains(Render(), line+"\n    []") && !strings.Contains(Render(), line+" []") {
-			t.Errorf("discovery.%s is not an empty list; a named ambient source is a resource the "+
-				"model may invoke without ever appearing in a manifest", kind)
-		}
-	}
-	// Both keys have to exist. discovery itself present but one kind
-	// missing is a profile whose protection depends on which field a
-	// future editor happened to keep.
-	disc, found := topLevel(t, Render(), "discovery")
+// TestTheProfileKeepsTheNodeItsOwnPackages is the assertion that replaced
+// one which asserted the opposite and was wrong.
+//
+// The old test wanted both discovery lists empty, so that a skill dropped
+// into the agent's home directory could not become a tool the model may
+// invoke. That goal is real. The mechanism was not: PiG resolves ONE scope
+// list for the agent's own top-level directories and for the Packages in
+// settings.json, and an empty list means "no scopes" rather than "no ambient
+// sources" — so it switched off the node's own reviewed packages along with
+// the ambient ones. A node ran with eighteen declared plugin tools and none
+// of them reachable, and the suite was green throughout, because the test
+// read the file's text and the file's text had said what the test wanted.
+//
+// What this asserts is the invariant that actually matters: the scope a
+// node's packages are registered at is in the list, and the project-scope
+// ambient surface is not. The project half is the old test's intent, still
+// enforced, in the only form PiG offers.
+func TestTheProfileKeepsTheNodeItsOwnPackages(t *testing.T) {
+	rendered := Render()
+	disc, found := topLevel(t, rendered, "discovery")
 	if !found {
-		t.Fatal("the profile has no discovery block; without it the agent finds skills in its home " +
-			"directory that never passed a review")
+		t.Fatal("the profile has no discovery block. Under --piglet an absent block is not " +
+			"\"discover everything\": PiG answers an absent block with an empty scope list " +
+			"exactly as it answers an empty one, so omitting it loads no packages either")
 	}
 	_ = disc
+	for _, kind := range []string{"extensions", "skills"} {
+		value, found := nested(t, rendered, "discovery", kind)
+		if !found {
+			t.Errorf("discovery has no %s key; a profile whose protection depends on which "+
+				"field a future editor happened to keep is not a boundary", kind)
+			continue
+		}
+		if !strings.Contains(value, "user") {
+			t.Errorf("discovery.%s = %q, which does not admit the user scope. A node's packages "+
+				"are registered at that scope, so this profile would load none of them and the "+
+				"agent would be offered the host's built-ins and nothing else", kind, value)
+		}
+		for _, ambient := range []string{"workspace", "project"} {
+			if strings.Contains(value, ambient) {
+				t.Errorf("discovery.%s names %q; a project-scope resource is one the model may "+
+					"invoke without ever appearing in a manifest, and the node has no project scope "+
+					"to review one in", kind, ambient)
+			}
+		}
+	}
 }
 
 // TestTheProfileGrantsNothingItself keeps this file honest about what it

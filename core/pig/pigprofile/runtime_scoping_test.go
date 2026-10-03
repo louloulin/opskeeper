@@ -74,11 +74,22 @@ func TestTheNodeProfileActuallyOffersTheToolsItsPackagesDeclare(t *testing.T) {
 			"The model cannot call a tool it was never shown, so a node in this state "+
 			"holds a correct profile, a signed package, a gate, an allow-list and an audit "+
 			"ledger, and an agent that can do nothing with any of them.\n\n"+
-			"This is upstream: coding/piglet derives a tool's source by reading "+
-			"SourceInfo[\"name\"], while its own host writes SourceInfo[\"source\"]. Every "+
-			"tool therefore resolves to \"\", is classified \"builtin\", and the profile's "+
-			"`tools: []` — which exists to remove the shell — removes every plugin tool as "+
-			"well. The fix is to read \"source\"; it is in PiG, not here. See §4.67.",
+			"Two defects produced this, and each one hid the other, so fixing "+
+			"either alone still leaves the node with nothing.\n\n"+
+			"1. Upstream, in PiG: sessionToolRegistry.refresh overwrote each tool's "+
+			"per-tool source with the registering extension's provenance, and "+
+			"coding/piglet's converter has no key for provenance, so every tool "+
+			"resolved to \"builtin\" and the profile's `tools: []` — which exists to "+
+			"remove the shell — removed the plugins with it. Fixed in PiG by keeping "+
+			"a tool's own source and falling back to the extension's only when the "+
+			"host set none.\n\n"+
+			"2. Here, and the reason this was invisible: the profile's "+
+			"`discovery.extensions` did not admit the scope its own packages are "+
+			"registered at, so the agent was offered the host's built-ins and none "+
+			"of the node's plugins. The unit tests could not see it because they "+
+			"read the profile's text, and the text had said what they wanted.\n\n"+
+			"This gate builds the agent with GOWORK=off against the pinned PiG tag, "+
+			"so it stays red until PiG ships a release carrying fix 1. See §4.78.",
 			len(offered), len(declared), strings.Join(missing, ", "))
 	}
 }

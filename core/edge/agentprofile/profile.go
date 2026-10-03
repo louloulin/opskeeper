@@ -177,16 +177,39 @@ description: "OpsKeeper node agent. Its tools are the opskeeper-* plugin extensi
 # the host's own shell.
 tools: []
 
-# No ambient discovery. Without this, a skill dropped into the agent's home
-# directory is a tool the model may invoke, and the host's allow-list has
-# nothing to say about it because it never passed a review. A node's skill
-# set is a reviewed set, and keeping it that way means the agent is not
-# allowed to find anything the review did not admit.
+# Discovery scope: the user scope, and nothing wider.
 #
-# This does not affect the packages in settings.json: those are the reviewed
-# ones, and they keep loading exactly as before.
+# This field reads as though it were only about ambient discovery, and it was
+# written that way: both lists were empty, on the reasoning that a skill
+# dropped into the agent's home directory is a tool the model may invoke and
+# the host's allow-list has nothing to say about it because it never passed a
+# review. That reasoning was sound about the goal and wrong about the effect,
+# and the two facts were found together, in this order.
+#
+# PiG resolves ONE scope list for the two things a profile might want to
+# separate: the agent's own top-level directories, and the Packages listed in
+# settings.json. An empty list means "no scopes", not "no ambient sources" —
+# and it is the answer both for an empty list here and for an absent discovery
+# block, so omitting the block would have been the same file.
+#
+# So a node running the old profile loaded none of its own packages. The
+# status command listed them, every one enabled and healthy, and the agent was
+# offered exactly the host's built-ins minus the ones the line above subtracts,
+# which is nothing: eighteen plugin tools declared across the node's manifests
+# and zero of them reachable by the model. The file that was supposed to be a
+# second line under the gate had switched the gate's own plugins off.
+#
+# The user scope is the one those packages are registered at, and it is the smallest
+# value that admits them. What it also admits is the agent home directory's own
+# extensions/ and skills/ directories — the ambient surface the empty list
+# was reaching for. PiG does not separate that surface from the package one:
+# both read this list. What still stands between a file dropped there and a
+# call is the boundary this file was never the boundary of — core/edge/
+# policygate refuses any tool this node's manifests did not admit, the audit
+# ledger is written by the host, and the agent directory is created 0700 by the
+# edge service and holds nothing but what OpsKeeper put in it.
 discovery:
-  extensions: []
-  skills: []
+  extensions: [user]
+  skills: [user]
 `
 }

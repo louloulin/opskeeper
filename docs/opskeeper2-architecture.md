@@ -8762,6 +8762,128 @@ D 阶段记的是 95%，判据是「B1/B2/B3 全部闭环（18 + 12 + 53 + 5 个
 用」的口径，节点的工具链今天是 0。**两把尺子都存在，而它们在这里分岔了。** 这不是本
 条造成的偏差，是本条第一次把它量出来。
 
+### 4.78 决策 141：0/18 的真正原因是两个缺陷互相遮掩——一个在上游，一个是我们自己的 profile
+
+§4.77 判定这件事「是上游问题，PiG 改一行」，并把修复点写成把
+`SourceInfo["name"]` 换成 `SourceInfo["source"]`。**这个结论是错的**，而且
+按它去改也不会转绿。实测下来是**两个独立缺陷**，每一个都能单独造成 0/18，
+也正因为如此，先修哪一个都看不出任何变化——前几轮就是这样原地踏底的。
+
+#### 4.78.1 缺陷一（上游 PiG）：`refresh()` 把工具的来源换成了扩展的来源
+
+证据链三段：
+
+1. `coding/extension/host/subprocess/host.go:2721-2745`——宿主给每个工具写入
+   **精确的 per-tool source**（`tool.Source`，缺省即扩展名 `me.config.Name`）。
+2. `coding/session_tool_registry.go:220-221`——`refresh()` 无条件执行
+   `registration.SourceInfo = runner.ToolSourceInfo(...)`，把上面那个字符串
+   覆盖成**扩展级 provenance**。而 `ToolSourceInfo` 自己的注释就写着
+   `RegisteredTool.SourceInfo` 才是 D23 留给 Piglet scoping 的 per-tool 来源。
+3. `coding/piglet/main.go:1546-1556`——`convertTools` 读 `s["name"]`，但 Pi 的
+   SourceInfo 只有 `path/source/scope/origin`，`name` 这个 key 从来不存在，
+   于是每个工具都落到 `""` → `"builtin"`。
+
+`ScopeTools`（`coding/piglet/scope.go:31-45`）按 `source` 分流：空或 `builtin`
+走 `BuiltinTools` 白名单。我们的 profile 是 `tools: []`，于是 18 个插件工具
+连同 8 个内置工具一起被减掉。**注意不能简单把 key 改成 `"source"`**：
+provenance 里 `source` 的值是 `"local"`，查不到 per-extension 白名单，
+`toolAllowed(nil, …)` 直接放行——那会把修复变成 fail-open，正是 §4.67.4
+警告过的事。
+
+修法：保留工具自己的 source，只在宿主没有设置时才回退到扩展的。
+
+```go
+if registration.SourceInfo == nil {
+    if source, ok := runner.ToolSourceInfo(registration.Definition.Name); ok {
+        registration.SourceInfo = source
+    }
+}
+```
+
+回归测试 `coding/session_tool_registry_source_test.go`（新）先复现后修复：
+红在 `host_probe_tcp source = codingagent.PiSourceInfo{...}` 而不是
+`"sre-readonly"`，修复后 `./coding/` 2315 条全绿。
+
+#### 4.78.2 缺陷二（我们自己的）：profile 把节点自己的包也关掉了
+
+修好上游、重新编一个 pig 跑真二进制，闸门**仍然**是 0/18，而且日志是：
+
+```
+[piglet] Applied scoping (session_start): 0/8 tools active, 8 hidden
+```
+
+`0/8`——总共只有 8 个工具，全是内置。**扩展工具压根没注册进会话。**
+用 `-e <扩展目录>` 显式加载同一个扩展，18 个工具立刻全部出现，且
+`source="opskeeper-sre-readonly"` 正确。差别只在于：一个来自
+`settings.json` 的 `packages`，一个来自命令行。
+
+根因在 `cmd/pig/main.go:450-457`：
+
+```go
+func pigletAmbientSources(p *piglet.Piglet, kind string) *[]string {
+    if p == nil { return nil }
+    empty := []string{}
+    if p.Discovery == nil { return &empty }   // 注意：不是 nil
+    ...
+}
+```
+
+**空列表的意思是「没有任何作用域」，不是「不做 ambient 发现」**；而且
+`Discovery` 缺省时返回的也是空列表，所以「不写 discovery 块」和
+「写空列表」是同一个文件。PiG 用**同一份作用域列表**同时过滤两样东西：
+agent 自己的顶层目录（ambient），和 `settings.json` 里的 **Packages**。
+`collectPackageExtensionConfigs`（`configured_resources.go:456-457`）把
+`ambientScopes` 原样传进 `CollectResolvedPackageResourceItems`，于是包被
+一起过滤掉。
+
+实测（`PIG_DEBUG_EXT` 打点）：旧 profile `finalExtConfigs=0 loaded=0`；
+改成 `discovery: {extensions: [user], skills: [user]}` 后
+`finalExtConfigs=2 loaded=2 errors=0`，`Applied scoping: 18/26 tools active,
+8 hidden`——正是闸门要的形状。
+
+所以 `agentprofile` 里那段注释是**事实性错误**的：
+
+> This does not affect the packages in settings.json: those are the reviewed
+> ones, and they keep loading exactly as before.
+
+它恰恰关掉了它们。改法是显式声明 `user` 作用域（节点包注册所在的、也是能
+放行它们的最小作用域）。代价是 ambient 顶层目录（agent home 下的
+`extensions/`、`skills/`）也一并放行——PiG 没有把这两个面分开。真边界仍然
+在 `core/edge/policygate`（拒绝本节点 manifest 未准入的工具）和宿主写的
+审计链上，agent 目录由 edge 服务以 0700 创建；这个文件从来只是那道边界
+下面的第二道线。
+
+#### 4.78.3 为什么单测一直是绿的
+
+旧测试 `TestTheProfileTurnsOffAmbientDiscovery` 断言两个列表是**空**的——
+它读的是**文件的文本**，而文本恰好写了它想看到的东西。`pig status` 会把
+两个扩展都列成 `enabled: true`、`healthy`，一切正常；`pig-tool-scoping-check`
+是唯一能看见这件事的闸门，而它长期红着（§4.67 起）。
+
+新测试 `TestTheProfileKeepsTheNodeItsOwnPackages` 断言真正的不变量：用户
+作用域必须在列表里（否则节点自己的包加载不了），project/workspace 作用域
+必须不在（这才是旧测试想要的那份保护，用 PiG 唯一支持的写法保住）。两次
+变异都红在正确断言上：改回 `[]`、加入 `workspace`。
+
+#### 4.78.4 现在的状态，与尚未决定的一件事
+
+`make pig-tool-scoping-check` 在**带修复的 PiG** 上转绿
+（`OPSKEEPER_PIG_BIN=<本地构建>`，18/18）。但该闸门刻意用 `GOWORK=off`
+对**固定 tag** 构建（`runtime_scoping_test.go` 的 `pigBinary` 注释：
+"a gate that silently built against a developer's local PiG checkout would
+prove something else"），所以 `make pig-dev-pin` 对它无效，**在 PiG 发出版
+本之前它仍然是红的**。两个修复缺一不可：只有 profile 修复时，26 个工具会
+加载但全被判为 `builtin`，仍是 0/26。
+
+尚未决定：`TestAToolRemovedFromTheReviewSurfaceIsRemovedFromTheMenu`
+（同一文件，从未绿过，也从未接进 `make` 闸门）要求「manifest 删掉一个
+工具 → 模型就不再被提供它」。这条与既定架构冲突——`agentprofile.Render()`
+是静态的、不知道节点准入了哪些包，而 manifest 的工具清单是**在 host gate
+上执行的**。而且 `agentprofile` 目前**没有任何生产调用方**（只有
+`core/pig/pigprofile` 的契约测试引用它），节点启动路径还没写这个 profile。
+所以这是「要不要让 profile 变成 manifest 感知」的设计决策，不是本轮该
+顺手改掉的 bug。留作下一轮。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
