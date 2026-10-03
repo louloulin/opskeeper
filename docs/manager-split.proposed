@@ -1,0 +1,28 @@
+# manager 拆分候选方案（决策 120）
+#
+# 状态：已定价的候选，不是已批准的决定。
+# 定价：make split-cost FILE=docs/manager-split.proposed
+#   → 99 条 import 留在组内，41 条跨组，最重的一条缝 4 条 import。
+#
+# 分组依据写在下面，但真正的依据是那张图：device(L6) / edge(L5) / alert(L4)
+# 入度 29 / 33 / 27，是被依赖最多的三个域；aiops 出 78 入 13，是叶子依赖者而不是
+# 枢纽。把 aiops 和它压着的这三个域放进同一组，是因为把它们分开要为
+# aiops→edge(25) + aiops→device(24) + aiops→alert(14) = 63 条 import 付账，
+# 而这 63 条占了任何「摘底座」方案跨组总量的 71%。
+#
+# 还没写下来的东西（所以这个方案还不能批）：什么和什么一起扩缩容、什么和什么
+# 一起故障、哪些域要独立发版。没有这三样，41 这个数只能说明「这样切不贵」，
+# 说明不了「这样切是对的」。
+
+# AI 内核面：agent 内核 + 它直接坐着的三个底座域 + 审批/审计/拓扑/诊断。
+# 它们的共同点是：改动会同时牵动对方，所以放在一起能独立演进。
+core = aiops, device, edge, alert, topology, loop, hitl, approval, audit, mcp,
+        monitor, setting, skill, knowledge, report, proposal, incident
+
+# 应用面：入口层与适配层。彼此几乎不依赖（L0 占 36 个域），打包代价低。
+apps  = agentteams, aiopsconfig, chatdiagnose, cluster, control, dataguard,
+        demo, edgeauth, flow, frontierbound, grafana, higress, iam, imbridge,
+        integration, llmgw, llmpig, logs, marketplace, metric, middleware,
+        migrate, migrator, nodeagent, nodefleet, observability, pkg, plugin,
+        pluginimport, prometheus, promwrite, scheduler, secret, systemhealth,
+        systemupgrade, traces, version, webshell

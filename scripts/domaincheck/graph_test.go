@@ -1,0 +1,368 @@
+package main
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// graph_test.go covers the report modes, which check() has no opinion about.
+//
+// The gate answers "is the declared shape true". Stage 3's second item —
+// split the monolith into pieces that evolve independently — needs a
+// different answer, and it needs it to be arithmetic rather than taste:
+// how deep does the tree go, and how many declared edges would a proposed
+// grouping sever. A tool that answers those questions is only worth
+// keeping if it cannot quietly disagree with the gate it sits next to, so
+// the first tests here pin the two to the same reading of the same tree.
+
+func groupingFile(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "split")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write the grouping: %v", err)
+	}
+	return path
+}
+
+func reportCut(t *testing.T, g *domainGraph, body string) string {
+	t.Helper()
+	grouping, order, err := loadGrouping(groupingFile(t, body))
+	if err != nil {
+		t.Fatalf("load the grouping: %v", err)
+	}
+	var buf bytes.Buffer
+	g.printCut(&buf, grouping, order)
+	return buf.String()
+}
+
+func TestTheReportSeesEveryEdgeTheGateWouldForbid(t *testing.T) {
+	// One undeclared import is one edge. If buildGraph dropped or invented
+	// edges relative to check(), the two tools would answer "how tangled is
+	// this tree" differently on the same day, and the report would be the
+	// one nobody believed.
+	sources := world(
+		fixture("biz/alpha/a.go", managerPrefix+"biz/beta/b"),
+		fixture("biz/beta/b.go", managerPrefix+"pkg/pack"),
+	)
+	g := buildGraph(sources, testRules())
+	// Two undeclared edges, and no mutual pair, so no cycle finding.
+	if got := check(sources, testRules()); len(got) != 2 {
+		t.Fatalf("fixture assumption changed: want 2 violations, got %d: %v", len(got), got)
+	}
+	for _, want := range [][2]string{{"alpha", "beta"}, {"beta", "pkg"}} {
+		if g.weight[edge{want[0], want[1]}] == 0 {
+			t.Errorf("edge %s -> %s is missing from the report's graph", want[0], want[1])
+		}
+	}
+	// alpha and beta are not declared, so nothing here is a cycle, and the
+	// report must say so rather than inventing an entanglement.
+	var buf bytes.Buffer
+	g.printStructure(&buf)
+	if !strings.Contains(buf.String(), "the graph is a DAG") {
+		t.Error("a tree with no mutual pair was reported as entangled")
+	}
+}
+
+func TestAWeightIsAnImportCountNotAnEdgeCount(t *testing.T) {
+	// The reason weight exists: an edge held up by one import and an edge
+	// held up by twenty-five are not the same seam, and a split that treats
+	// them alike is a guess. Ranking by edge count would flatten exactly
+	// the distinction the report is for.
+	heavy := fixture("biz/alpha/a.go",
+		managerPrefix+"biz/beta/b", managerPrefix+"biz/beta/c", managerPrefix+"biz/beta/d")
+	g := buildGraph(world(heavy), testRules())
+	if got := g.weight[edge{"alpha", "beta"}]; got != 3 {
+		t.Fatalf("alpha -> beta weighs %d, want 3 import statements", got)
+	}
+	rs := g.rank()
+	for _, v := range rs {
+		if v.name != "beta" {
+			continue
+		}
+		if v.in != 3 || v.inEdges != 1 {
+			t.Errorf("beta in %d across %d edges, want 3 across 1: the count and the weight are being mixed up", v.in, v.inEdges)
+		}
+		return
+	}
+	t.Fatal("beta is not in the ranking at all")
+}
+
+func TestASharedTreeIsADomainButNotAnEdge(t *testing.T) {
+	// The gate lets anything import the shared trees without declaring it.
+	// The report has to keep that: counting shared imports as edges would
+	// make every domain look tangled and every proposed split look
+	// expensive, in a way the gate does not agree with.
+	sources := world(fixture("biz/alpha/a.go", managerPrefix+"shared/thing"))
+	g := buildGraph(sources, testRules())
+	for e := range g.weight {
+		if e.to == "shared" || e.from == "shared" {
+			t.Errorf("the shared tree was counted as the edge %s -> %s", e.from, e.to)
+		}
+	}
+	if !g.domains["shared"] {
+		t.Error("the shared tree is not listed as a domain, so the report cannot say it is one")
+	}
+}
+
+func TestATestFileIsInvisibleToTheWeight(t *testing.T) {
+	// Same rule as the gate, same reason: a test reaching across a boundary
+	// is the boundary being exercised, and pricing a split on the back of
+	// one would invent a seam that production does not have.
+	sources := world(testFile("biz/beta/b_test.go", managerPrefix+"biz/alpha/a"))
+	g := buildGraph(sources, testRules())
+	for e := range g.weight {
+		t.Errorf("a test file put the edge %s -> %s in the graph", e.from, e.to)
+	}
+	if !g.domains["beta"] {
+		t.Error("a domain that only exists in tests is missing from the domain list")
+	}
+}
+
+func TestTheLayeringPutsADependedOnDomainAboveWhoeverDependsOnIt(t *testing.T) {
+	// Longest path, not shortest: a domain sitting on top of the tree can
+	// change with everything under it, which is what makes it expensive to
+	// split. Levels are the bound on which pieces can move first.
+	sources := world(
+		fixture("biz/alpha/a.go", managerPrefix+"biz/beta/b"),
+		fixture("biz/beta/b.go", managerPrefix+"pkg/pack"),
+	)
+	lv := buildGraph(sources, testRules()).levels()
+	if lv["alpha"] != 0 || lv["beta"] != 1 || lv["pkg"] != 2 {
+		t.Fatalf("levels = %v, want alpha 0, beta 1, pkg 2 (one below its deepest dependent)", lv)
+	}
+}
+
+func TestAnIslandIsLevelZeroAndSaysNothing(t *testing.T) {
+	// A domain nobody imports is not a problem, but it is a fact the report
+	// has to hold: silently dropping it would make the domain count in the
+	// headline a smaller number than the gate's.
+	sources := world(fixture("biz/alpha/a.go", managerPrefix+"biz/beta/b"))
+	g := buildGraph(sources, testRules())
+	if got := g.levels()["shared"]; got != 0 {
+		t.Errorf("an island sits at level %d, want 0", got)
+	}
+	var buf bytes.Buffer
+	g.printStructure(&buf)
+	if !strings.Contains(buf.String(), "3 domains") {
+		t.Errorf("the headline does not count the island:\n%s", buf.String())
+	}
+}
+
+func TestAMutualPairIsReportedAsEntangled(t *testing.T) {
+	// A cycle means the layering has no answer, and the report that stays
+	// quiet about it hands people a number computed from a broken walk.
+	sources := world(
+		fixture("biz/alpha/a.go", managerPrefix+"biz/beta/b"),
+		fixture("biz/beta/b.go", managerPrefix+"biz/alpha/a"),
+	)
+	var buf bytes.Buffer
+	buildGraph(sources, testRules()).printStructure(&buf)
+	if !strings.Contains(buf.String(), "<->") {
+		t.Errorf("two domains reaching each other were not reported as entangled:\n%s", buf.String())
+	}
+	if strings.Contains(buf.String(), "the graph is a DAG") {
+		t.Error("a tree with a mutual pair still calls itself a DAG")
+	}
+}
+
+func TestAMutualPairDoesNotHangTheLayering(t *testing.T) {
+	// The peel has no indeg-0 node left in a cycle, so an unguarded walk
+	// spins. It must terminate: a report that hangs is a report that is
+	// disabled, and then nobody is checking anything.
+	sources := world(
+		fixture("biz/alpha/a.go", managerPrefix+"biz/beta/b"),
+		fixture("biz/beta/b.go", managerPrefix+"biz/alpha/a"),
+	)
+	g := buildGraph(sources, testRules())
+	lv := g.levels()
+	if len(lv) != 3 {
+		t.Fatalf("layering covers %d domains, want 3", len(lv))
+	}
+}
+
+func TestAGroupingIsPricedByWhatItActuallyCuts(t *testing.T) {
+	// Hand arithmetic, checked against the tool: alpha and beta inside one
+	// group, pkg outside, and the gate says alpha -> beta is declared and
+	// beta -> pkg is not, so the grouping severs exactly one import.
+	r, sources := withEdge(testRules(), "alpha", "beta", world()...)
+	sources = append(sources, fixture("biz/beta/b.go", managerPrefix+"pkg/pack"))
+	g := buildGraph(sources, r)
+	out := reportCut(t, g, "tier1 = alpha, beta\ntier2 = pkg, shared\n")
+	// alpha -> beta stays inside tier1; beta -> pkg crosses.
+	if !strings.Contains(out, "1 import statements stay inside a group, 1 cross one") {
+		t.Errorf("the split was not priced as the imports say it should be:\n%s", out)
+	}
+	if !strings.Contains(out, "beta") || !strings.Contains(out, "pkg") || !strings.Contains(out, "tier1 -> tier2") {
+		t.Errorf("the severed edge is not named with the groups it severs:\n%s", out)
+	}
+}
+
+func TestAGroupingThatMissesADomainIsToldSo(t *testing.T) {
+	// The most likely way a proposal is wrong is a domain nobody assigned.
+	// Counting only the assigned ones would understate the price and make a
+	// broken grouping look cheap.
+	r, sources := withEdge(testRules(), "alpha", "beta", world()...)
+	g := buildGraph(sources, r)
+	out := reportCut(t, g, "tier1 = alpha, beta\n")
+	// Only the shared tree is left out: alpha and beta were named.
+	if !strings.Contains(out, "1 domain(s) the grouping does not mention: shared") {
+		t.Errorf("the forgotten domains were not reported:\n%s", out)
+	}
+}
+
+func TestTheReportNamesTheGroupingsOwnTypos(t *testing.T) {
+	// A name in the file that is not a domain here is either a typo or a
+	// domain that used to exist. Both mean the proposal was not written
+	// against this tree, and both are silent failures otherwise.
+	r, sources := withEdge(testRules(), "alpha", "beta", world()...)
+	g := buildGraph(sources, r)
+	out := reportCut(t, g, "tier1 = alpha, beta, alhpa\ntier2 = pkg, shared\n")
+	if !strings.Contains(out, "not domains here: alhpa") {
+		t.Errorf("a name that is not a domain was accepted:\n%s", out)
+	}
+}
+
+func TestAGroupingThatCutsNothingIsPricedAtZeroNotSkipped(t *testing.T) {
+	// "This split is free" is the most valuable sentence this tool can
+	// print, and it only means something if it is printed.
+	r, sources := withEdge(testRules(), "alpha", "beta", world()...)
+	g := buildGraph(sources, r)
+	out := reportCut(t, g, "tier1 = alpha, beta, pkg, shared\n")
+	if !strings.Contains(out, "1 import statements stay inside a group, 0 cross one") {
+		t.Errorf("a split that cuts nothing was not priced at zero:\n%s", out)
+	}
+	if !strings.Contains(out, "does not cut a single edge") {
+		t.Errorf("a free split did not say so plainly:\n%s", out)
+	}
+}
+
+func TestAGroupingHasToBeReadableBeforeItIsPriced(t *testing.T) {
+	// Every one of these is a file a person typed by hand. A malformed one
+	// priced as "zero crossings" would be the worst possible answer.
+	cases := map[string]string{
+		"no groups at all": "\n\n# just a comment\n",
+		"no equals sign":   "tier1 alpha, beta\n",
+		"empty group name": " = alpha, beta\n",
+		"a domain in two":  "tier1 = alpha\ntier2 = beta, alpha\n",
+	}
+	for name, body := range cases {
+		if _, _, err := loadGrouping(groupingFile(t, body)); err == nil {
+			t.Errorf("%s: a grouping that cannot be read was accepted", name)
+		}
+	}
+}
+
+func TestAGroupingWithNoCrossingsIsNotAnError(t *testing.T) {
+	// A proposal that turns out to be free must not be rejected as
+	// malformed. Otherwise the only way to learn a split is free is to
+	// already know it.
+	r, sources := withEdge(testRules(), "alpha", "beta", world()...)
+	g := buildGraph(sources, r)
+	if _, _, err := loadGrouping(groupingFile(t, "tier1 = alpha, beta, shared\n")); err != nil {
+		t.Fatalf("a well-formed grouping was rejected: %v", err)
+	}
+	if out := reportCut(t, g, "tier1 = alpha, beta, shared\n"); strings.Contains(out, "not domains here") {
+		t.Errorf("a grouping of exactly the real domains was reported as containing names that are not domains:\n%s", out)
+	}
+}
+
+func TestTheShippedTreeIsADagSevenLevelsDeep(t *testing.T) {
+	// The real number, pinned. Decision 118 closed the last cycle, so the
+	// layering has an answer; if a future edge reopens one this test is the
+	// thing that says the headline changed, and the DAG claim in the report
+	// stops being true.
+	sources, stats, err := parseTree("../../core/manager", defaultRules())
+	if err != nil {
+		t.Fatalf("parse the manager module: %v", err)
+	}
+	g := buildGraph(sources, defaultRules())
+	lv := g.levels()
+	if len(lv) != stats.domains {
+		t.Fatalf("layering covers %d of %d domains; some were never placed", len(lv), stats.domains)
+	}
+	max := 0
+	for _, l := range lv {
+		if l > max {
+			max = l
+		}
+	}
+	if max+1 != 7 {
+		t.Errorf("the tree is %d levels deep, want 7: a level appearing or disappearing changes what a split costs", max+1)
+	}
+	var buf bytes.Buffer
+	g.printStructure(&buf)
+	if !strings.Contains(buf.String(), "the graph is a DAG") {
+		t.Error("the shipped tree is no longer a DAG and the report does not say so")
+	}
+	if !strings.Contains(buf.String(), "42 edges") {
+		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
+	}
+}
+
+func firstLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func TestAGroupingCanWrapAndACommentMaySitInTheMiddle(t *testing.T) {
+	// The real proposal file has 38 names in a group and the reasoning in
+	// comments next to them, so it is hard-wrapped. A reader that refuses
+	// that pushes people back to the one version nobody can review.
+	grouping, order, err := loadGrouping(groupingFile(t, `
+# why these two groups
+core = alpha, beta,
+       # device sits under everything
+       device,
+       edge
+apps = everythingelse
+`))
+	if err != nil {
+		t.Fatalf("a wrapped grouping was rejected: %v", err)
+	}
+	if len(order) != 2 || order[0] != "core" {
+		t.Fatalf("groups = %v, want core first", order)
+	}
+	for _, want := range []string{"alpha", "beta", "device", "edge"} {
+		if grouping[want] != "core" {
+			t.Errorf("%s landed in %q, want core", want, grouping[want])
+		}
+	}
+	if grouping["everythingelse"] != "apps" {
+		t.Error("the group after a wrapped one was lost")
+	}
+}
+
+func TestWrappingJoinsNamesWithACommaNotASpace(t *testing.T) {
+	// The bug this pins: the trailing comma is the author's request to
+	// continue, and it is also the only separator between the last name on
+	// one line and the first on the next. Swallowing it turns "mcp," +
+	// "monitor" into the domain "mcp monitor", which exists in no tree —
+	// and the price that comes back is confidently wrong.
+	grouping, _, err := loadGrouping(groupingFile(t, "core = aiops, mcp,\n       monitor\n"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, want := range []string{"aiops", "mcp", "monitor"} {
+		if _, ok := grouping[want]; !ok {
+			t.Errorf("%s is missing; the names were joined instead of continued: %v", want, grouping)
+		}
+	}
+	if len(grouping) != 3 {
+		t.Errorf("grouping has %d names, want 3: %v", len(grouping), grouping)
+	}
+}
+
+func TestAGroupingThatStopsMidListIsRejected(t *testing.T) {
+	// A trailing comma with nothing after it is a file that was cut off in
+	// an editor, not a proposal. Pricing it would drop every domain on the
+	// missing line from the count without saying so.
+	if _, _, err := loadGrouping(groupingFile(t, "core = alpha, beta,\n")); err == nil {
+		t.Error("a grouping that stops mid-list was accepted")
+	}
+}

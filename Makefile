@@ -248,6 +248,19 @@ deadcode-report: ## 报出生产代码里只有测试引用的符号（报告，
 	go run ./scripts/deadcode . core core/edge core/pig core/manager core/floor core/harness sdk
 	go test ./scripts/deadcode/ -count=1
 
+# A split proposal written on the day it is wrong is a proposal nobody
+# argues with, because the tool that says it is wrong also breaks the
+# build. So these two are reports: the gate above keeps its verdict, and
+# these only print what a grouping would cost.
+.PHONY: domain-graph
+domain-graph: ## 打印 control plane 域图（入出度排行 / 最长路径分层 / 纠缠对，不闸门）
+	go run ./scripts/domaincheck . -graph
+
+.PHONY: split-cost
+split-cost: ## 给一份分组方案定价：跨组 import 语句数 + 被切断的边（不闸门）
+	@test -n "$(FILE)" || { echo 'usage: make split-cost FILE=docs/manager-split.proposed'; exit 2; }
+	go run ./scripts/domaincheck . -cut $(FILE)
+
 # The root `make test` no longer reaches core/harness: it is a separate Go
 # module now, and that separation is the point. Anything that wants the
 # whole repository tested has to say so explicitly, or the golden-case

@@ -3619,7 +3619,7 @@ case resp.Accepted + resp.Rejected >= len(rows):
 | P2-6 | 工具语义鸿沟（工具注册表 + 语义检索） | ✅ **已关**（决策 104 更新本行） | 新包 `core/manager/biz/aiops/toolregistry`（`Entry` 值类型 + 唯一适配点 `EntryFromToolInfo` + `Catalogue.Search` 相关性排序 + `Fuse`/`RRFConstant` 混合检索接缝，18 条测试）；`ToolSearch` 的 keyword 分支从「按注册顺序截断」改为按相关性排序，`select:` 与响应 JSON 形状一字未动（§4.42） |
 | P2-7 | 成本无结晶机制 | ⚠️ **机制已做，生产端未接线**（决策 106 更新本行） | 新包 `core/manager/biz/aiops/crystallize`（53 条测试）：`Ledger.Record` 按「连续第一次就通过」的 streak 晋升、反证即退役，`DraftFor` 用**同一个** `pluginmanifest.Validate` 自检后产出草稿包；`make crystallize-check` 是闸门。缺的是**证据采集**：平台今天不记录修复的 argv，`Execution`/`TrialOf` 是那个缺口被写成的类型（§4.44.7） |
 | P2-8 | eval 只看最终答案（要三维） | ✅ **已关**（决策 105 更新本行） | 新文件 `core/harness/judge/diagnostic.go`：`DiagnosticAxes` 按 Localization × Identification × Reason 打分，两个 judge（启发式 / LLM）在成功路径共用同一组轴；`reason` 读轨迹面而非结论面；`axes` 子命令 + `make eval-axes` 是「三个轴都声明过」的闸门；顺带修掉 schema 加载器静默丢注入参数的真实缺陷（§4.43） |
-| P2-9 | manager 单体化（27 万行 + iam 反向依赖） | ⚠️ **部分** | **反向依赖已关（决策 109）**：`iam → manager` 的三条审计路径从 `scripts/modulecheck/main.go` 的 `exceptions` 台账与 `.go-arch-lint.yml` 的 `iam_server.mayDependOn` 里**双双删除**，行的形状下沉到 `core/manager/pkg/audit`（只放 `Event` + 词表 + request slot，无 usecase / repo / 链头 / HMAC），`biz/audit` 仍是唯一写入咽喉；`make audit-port-check` 13 条守边界、词表闭合、**唯一写入者**与端到端落库（§4.47 + §4.48：决策 110 把同一缺陷在另外 5 个域关掉，并把「谁可以持有咽喉」变成带理由的表）。**决策 111 另加 `make domain-check`**（55 个域 / 50 条声明边 / 7 对已知环 + 检查器 13 条夹具测试，§4.49），**决策 112/113/114/115/116/117/118 把其中七对环全部切掉**（`device ↔ edge`、`alert ↔ demo`、`chatdiagnose ↔ loop`、`loop ↔ report`、`aiops ↔ hitl`、`aiops ↔ loop`、`aiops ↔ alert` → **42 条边 / 0 对环**，§4.50–§4.56）。**阶段 3 第二条据此判完成**，理由不是表空了而是 §4.56.6 验过：造一个真实新环并把两条边都声明进去，checker 仍会独立算出环并要求处理——**空表转不住**。本轮学到的一条可复用结论：**跨域端口能否在消费方本地声明，取决于跨过去的是不是标量**；对面传复合结构时，那个结构就是耦合的载体（§4.56.2）。**体积那一半有了量化依据（决策 119）**：`make deadcode-report` 量出全模块 **486 个符号不可达**（245 零引用 / 241 只有测试引用），**整文件不可达只有 4 个 / 72 行**（占 28 万行的 0.03%），另有 **47 个 `With*` 接缝生产从未配置**。顶层那 4 个逐个打开后没有一个是干净死代码——`MigrateGitArtifact` 是**开了头没做完的灰度**（模型与迁移写完、生产 store 实现没写，注释自承「生产环境替换为 GORM + PostgreSQL」），三个 `Collect*` 是明写的「Phase 1 returns a zero value」占位。所以结论是**体积那一半几乎全是「拆」而不是「删」**（§4.57.4–§4.57.5）。**行数仍敞着**：`core/manager` 实测 **1132 个 Go 文件 / 281,566 行**（口径 `find core/manager -name '*.go'`；此前台账沿用的 1128 / 281,021 是决策 111 时的数，决策 112–115 加过测试文件但没重测，§4.54.6 已更正。仍比方案写的 27 万还多），按限界上下文继续拆分未做；`manager → iam_model`（IM bridge）那条反向依赖按原计划保留 |
+| P2-9 | manager 单体化（27 万行 + iam 反向依赖） | ⚠️ **部分** | **反向依赖已关（决策 109）**：`iam → manager` 的三条审计路径从 `scripts/modulecheck/main.go` 的 `exceptions` 台账与 `.go-arch-lint.yml` 的 `iam_server.mayDependOn` 里**双双删除**，行的形状下沉到 `core/manager/pkg/audit`（只放 `Event` + 词表 + request slot，无 usecase / repo / 链头 / HMAC），`biz/audit` 仍是唯一写入咽喉；`make audit-port-check` 13 条守边界、词表闭合、**唯一写入者**与端到端落库（§4.47 + §4.48：决策 110 把同一缺陷在另外 5 个域关掉，并把「谁可以持有咽喉」变成带理由的表）。**决策 111 另加 `make domain-check`**（55 个域 / 50 条声明边 / 7 对已知环 + 检查器 13 条夹具测试，§4.49），**决策 112/113/114/115/116/117/118 把其中七对环全部切掉**（`device ↔ edge`、`alert ↔ demo`、`chatdiagnose ↔ loop`、`loop ↔ report`、`aiops ↔ hitl`、`aiops ↔ loop`、`aiops ↔ alert` → **42 条边 / 0 对环**，§4.50–§4.56）。**阶段 3 第二条据此判完成**，理由不是表空了而是 §4.56.6 验过：造一个真实新环并把两条边都声明进去，checker 仍会独立算出环并要求处理——**空表转不住**。本轮学到的一条可复用结论：**跨域端口能否在消费方本地声明，取决于跨过去的是不是标量**；对面传复合结构时，那个结构就是耦合的载体（§4.56.2）。**拆分方案第一次被定价（决策 120）**：`make domain-graph` / `make split-cost` 打印这张图（55 域 / 42 边 / 140 条 import / 7 层 DAG）并给候选分组**算账**——`docs/manager-split.proposed` 报 **99 条组内 / 41 条跨组**，最重的一条缝 4 条 import；反向验证：手算 42 条边表得 20 条跨组，与工具输出（15 + 5）一致。同时算出一条**反直觉的结论**：先摘底座（`device/edge/alert`）要付 `aiops` 那 **63 条 import** 的账（占跨组总量 71%），比「枢纽跟着底座走」贵一倍以上（89 vs 41）；而把 `aiops` 单独摘成服务最贵（91）。**未批**：这个方案是一个已定价的候选，部署现实（一起扩缩容 / 一起故障 / 独立发版）还没写下来（§4.58）。**体积那一半有了量化依据（决策 119）**：`make deadcode-report` 量出全模块 **486 个符号不可达**（245 零引用 / 241 只有测试引用），**整文件不可达只有 4 个 / 72 行**（占 28 万行的 0.03%），另有 **47 个 `With*` 接缝生产从未配置**。顶层那 4 个逐个打开后没有一个是干净死代码——`MigrateGitArtifact` 是**开了头没做完的灰度**（模型与迁移写完、生产 store 实现没写，注释自承「生产环境替换为 GORM + PostgreSQL」），三个 `Collect*` 是明写的「Phase 1 returns a zero value」占位。所以结论是**体积那一半几乎全是「拆」而不是「删」**（§4.57.4–§4.57.5）。**行数仍敞着**：`core/manager` 实测 **1132 个 Go 文件 / 281,566 行**（口径 `find core/manager -name '*.go'`；此前台账沿用的 1128 / 281,021 是决策 111 时的数，决策 112–115 加过测试文件但没重测，§4.54.6 已更正。仍比方案写的 27 万还多），按限界上下文继续拆分未做；`manager → iam_model`（IM bridge）那条反向依赖按原计划保留 |
 | P2-10 | 无多集群联邦 | ❌ **未做** | `grep -rni 'federation\|multi-cluster' --include=*.go core/ cmd/` 只命中 `core/manager/middleware/adapter/k8s/client.go:259` 的一句注释 |
 | — | prompt injection 标注（阶段 2 的一条） | ✅ **已关**（决策 107 更新本行） | `core/manager/biz/aiops/promptguard`（`Fence` 每块现抽 nonce、`Parse` 只认 id 匹配的闭合标签、`Instruction()` 由 `Tag` 生成），闭集清单在 `core/manager/biz/aiops/tools/untrusted_sources.go`（键是 `ToolName*` 常量），适配点 `MarkUntrustedOutput`，四处接线含 `main.go` 后挂的 `host_bash`/`cloud_bash`；`make promptguard-check` 是闸门（§4.45） |
 | — | MCP 兼容层（阶段 2 的一条） | ⚠️ **运行时已有，对外协议面没有** | 决策 85 已更正：`mcpclient` + `biz/mcp` + `tools.MCPTool` + 启动期发现都在；缺的是**对外的 MCP 协议面** |
@@ -5765,6 +5765,139 @@ partial   86 lines  core/manager/data/hitl/store/dualwrite.go      NewDualWriteR
   6 对已知环」，实际是 **42 / 0**。
 - **没改变的**：阶段 3 仍 48%，加权仍 ≈76.2%；一行代码未删；`core/manager` 仍是
   1132 个 Go 文件 / 281,566 行。
+
+### 4.58 决策 120：把「拆成几块」也变成一个数——`make split-cost`
+
+#### 4.58.1 这一条要回答的问题，和它为什么不能靠想
+
+阶段 3 第二件的原文是「把 27 万行降到**可独立演进的几块**」。决策 111–118 把这件事的
+前半句做完了：55 个域、42 条声明边、0 对环，图是 DAG。但**「几块」一直是形容词**。
+阶段 3 第二件现在敞着的正是这个——按什么拆、拆几刀、每刀多贵，全部还没有数。
+
+而拆分的成本恰好是**可以从现有代码量出来的**：每条跨块的边都是一处必须有人接上的缝，
+所以一个候选分组的代价 = 它切断的声明边数，按边背后的 import 语句数加权。这不是估算，
+是这张图上已有的数据。
+
+没有工具的时候，这一步只能靠讨论，而讨论会被三种东西带偏：**声音最大的人、被讨论
+最多的人、和名字里带「manager」的那棵树**。工具不能替人决定拆不拆，但能让人在决定之前
+先看到代价。
+
+#### 4.58.2 工具形态：报告模式，不是第二个闸门
+
+`scripts/domaincheck/graph.go` 给现有检查器加两个报告模式，**闸门判定一个字没改**：
+
+- `-graph` 打印域图：入度 / 出度排行、**最长路径分层**、纠缠对。
+- `-cut <file>` 给一份 `group = a, b, c` 格式的分组文件**定价**：切掉多少条边、
+  按 import 语句数加权、列出被切断的每一条边（最重的 15 条），并**优先报出分组
+  忘掉的域和写错的域名**。
+
+三条边界，都不是随手加的：
+
+1. **`buildGraph` 复用 `domainOf`**，不复写一遍折叠规则。第二份「什么是一个域」的实现
+   就是第二个答案，两者第一次不一致的那天，这个文件打印的每个数字都在讲一棵不存在的树
+   ——与决策 114 的同一性教训同形。
+2. **报告模式在 `check()` 之前 `return`**。一个刚写出来的拆分方案如果第一天就变红，
+   那天的红会被关掉，然后永远不再有人看。方案要**被定价和被争论**，不是被闸门处刑。
+3. **shared 树不计入边、但计入域**。闸门允许任何域免声明地 import shared 树；报告若
+   把这些 import 算成边，会让每个域看起来都很纠缠、每个拆分看起来都很贵，而闸门并
+   不这么认为。两个工具必须在同一棵树上说同一句话。
+
+边权是 **import 语句数而不是边数**，因为一条边背后 1 个 import 和 25 个 import 不是同一
+处缝。把它们等同看待，本身就是一次猜测。
+
+#### 4.58.3 地面真值：这张图长什么样
+
+`make domain-graph` 在当前树上打印：
+
+```
+domain graph: 55 domains, 42 edges, 140 import statements behind them
+
+most depended-on:
+  edge     in 33 across 5 edges   out 4 across 1
+  device   in 29 across 3 edges   out 0
+  alert    in 27 across 6 edges   out 2 across 1
+  aiops    in 13 across 7 edges   out 78 across 9
+  loop     in  9 across 4 edges   out 3 across 1
+  audit    in  6 across 4 edges   out 0
+most dependent:
+  aiops      out 78 across 9 edges   in 13
+  agentteams out 7 / chatdiagnose out 6 / imbridge out 5
+
+longest-path layering: 7 levels (level 0 depends on nothing)
+  L0 (36)  ... 36 个域互不依赖
+  L1 ( 7): grafana iam mcp metric nodefleet pluginimport scheduler
+  L2 ( 3): aiops monitor setting
+  L3 ( 6): approval audit hitl loop skill topology
+  L4 ( 1): alert
+  L5 ( 1): edge
+  L6 ( 1): device
+
+entangled pairs: (none — the graph is a DAG)
+```
+
+三件事值得记下来：
+
+- **`device` / `edge` / `alert` 依次压在最顶上**（L6 / L5 / L4），且入度最高（29 / 33 / 27）。
+  它们是被依赖最多的三个域，也就是**别人改不动、它们自己一动就得带着一片走**的三个。
+  这三个是拆分的真正瓶颈所在，而不是最显眼的 `aiops`。
+- **`aiops` 出度 78、入度 13**：它依赖几乎整棵树，却基本没人依赖它。它是**叶子依赖者**，
+  不是枢纽——与决策 118「枢纽从来不是 aiops 的性质，是那三条反向依赖的性质」完全一致。
+- **L0 有 36 个域**：树非常宽。大量域之间毫无依赖，这意味着**打包它们几乎没有代价**，
+  真正的选择只在少数几个被依赖的域之间。
+
+#### 4.58.4 定价三个候选方案，其中一个明显便宜
+
+`make split-cost FILE` 给三个方向各打一次分。三个方案都覆盖全部 55 个域（漏掉的域
+会被工具报出来，所以这不是一个能靠疏忽赢的对比）：
+
+| 方案 | 组内 import | 跨组 import | 最重的一条缝 |
+|---|---|---|---|
+| A「底座摘出去」：`device/edge/alert` + 观测面独立成节点面 | 51 | **89** | `aiops → edge` 25 |
+| B「枢纽跟着底座走」：`aiops` 与它压着的三个域同组，其余归应用面 | **99** | **41** | `agentteams → alert` 4 |
+| C（反例）「枢纽单独成服务」：把 `aiops` 摘成一个服务 | 49 | **91** | `aiops → edge` 25 |
+
+结论不是「B 最好」，而是**两条更要紧的**：
+
+1. **摘出底座（A）比让枢纽跟着底座走（B）贵一倍以上**。差别全部来自 `aiops` 一个域的
+   三条边：`aiops → edge`(25) + `aiops → device`(24) + `aiops → alert`(14) = **63 条
+   import，占跨组总量的 71%**。也就是说 A 和 C 的高价是同一笔账——**任何把 `aiops`
+   和它依赖的底座分开的方案，都在为一处 63 条 import 的缝付钱**，而这处缝在方案里通常
+   会被写成一句「通过接口调用」。它不是接口调用，它是一处 63 个 import 的缝。
+2. **反向验证**：B 的跨组边数用手算独立核对过——直接解析 `main.go` 里的 `edges` 表得到
+   42 条边，按 B 的分组逐条判定，**22 条组内 / 20 条跨组**，与工具输出的
+   「15 条最重 + 5 条」= 20 条一致。工具的数不是它自己说的。
+
+候选方案 B 落在 `docs/manager-split.proposed`，可随时用 `make split-cost` 复算。
+**它是一个已定价的候选，不是已批准的决定**——拆分要在有部署现实（一起扩缩容 /
+一起故障）之后才谈得上，而现在这些现实还没被写下来。
+
+#### 4.58.5 顺带修掉的一个隐患
+
+`printStructure` / `printCut` 原本签名是 `*os.File`。这让它们**没法做夹具测试**——
+一个只能往 stdout 写的函数，测试就只能靠捕获子进程输出，于是第一条测试会把断言写在
+一个拿不到结构化结果的地方。改成 `io.Writer` 是一行 diff，但它把 11 条新测试从
+「不可能」变成「写出来就行」。顺带修了报告函数里 `w` 被 int 遮蔽的那处（同一函数里
+`w` 有时是 writer、有时是权重，读的人要靠运气）。
+
+#### 4.58.6 数字
+
+- `scripts/domaincheck/graph.go` 约 360 行 + `graph_test.go` 18 条夹具测试
+  （domaincheck 包 14 → **32 条**）。
+- 夹具覆盖的关键点：报告与闸门**看到同一批边**、shared 树不是边、测试文件不进权重、
+  分层把被依赖者放在上方、**成环时分层不死循环**、分组价与手算一致、**漏掉的域和写错的
+  域名都必须被报出来**、**零跨组也必须显式说出来**、四种手写坏文件全部被拒、
+  真实树是 7 层 DAG 且边数仍是 42（层数或边数一动，测试就会提醒台账该更新）。
+- **7 条变异全部被抓**：shared 树被算成边 / 测试文件进了权重 / 分层改成最短路 /
+  组内跨组计数反转 / 空分组被接受 / 续行用空格拼名 / 「零跨组」不再显式说出。
+  最后一条来自一次真实事故：提案文件硬折行时 `mcp,` + `monitor` 被拼成一个
+  不存在的域 `mcp monitor`，价格从 41 变成 23——**一个自信地算错的数**比一个
+  明显的崩溃危险得多，所以续行规则（逗号既是续行请求也是分隔符）单独钉了一条测试。
+- `make domain-graph` / `make split-cost` 两个新目标；闸门 `make domain-check` 行为不变。
+- **没改变的**：阶段 3 仍 **48%**，加权仍 ≈76.2%；**一行生产代码没搬**；
+  `core/manager` 仍是 1132 个 Go 文件 / 281,566 行。理由与决策 119 相同：
+  **一个不改代码的工具不该让进度百分比动**。改变的仍是证据——体积那一半第一次
+  有了「拆几刀、每刀多贵」的数，以及一条**反直觉但已被算出来的结论**（先摘底座
+  比先摘枢纽便宜一半以上的反面：摘底座要付 `aiops` 那 63 条 import 的账）。
 
 ---
 

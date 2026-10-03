@@ -314,8 +314,26 @@ func domainOf(path string) string {
 
 func main() {
 	root := "."
-	if len(os.Args) > 1 {
-		root = os.Args[1]
+	graph := false
+	cut := ""
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "-graph":
+			graph = true
+		case a == "-cut":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "domaincheck: -cut needs a grouping file")
+				os.Exit(2)
+			}
+			cut = args[i+1]
+			i++
+		case strings.HasPrefix(a, "-"):
+			fmt.Fprintln(os.Stderr, "domaincheck: unknown flag "+a)
+			os.Exit(2)
+		default:
+			root = a
+		}
 	}
 	sources, stats, err := parseTree(filepath.Join(root, "core", "manager"), defaultRules())
 	if err != nil {
@@ -324,6 +342,26 @@ func main() {
 	}
 
 	r := defaultRules()
+
+	// The report modes answer questions the gate cannot, and they never
+	// change the gate's verdict: a proposed split that is wrong should be
+	// priced and argued about, not turned into a red build on the day it is
+	// written, which is a red build people turn off.
+	if graph || cut != "" {
+		g := buildGraph(sources, r)
+		if graph {
+			g.printStructure(os.Stdout)
+		}
+		if cut != "" {
+			grouping, order, err := loadGrouping(cut)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "domaincheck: "+err.Error())
+				os.Exit(2)
+			}
+			g.printCut(os.Stdout, grouping, order)
+		}
+		return
+	}
 	violations := check(sources, r)
 	fmt.Printf("domaincheck: %d domains, %d shared, %d declared edges, %d declared cycles, "+
 		"%d test-only cross-domain imports (excluded, as in .go-arch-lint.yml)\n",
