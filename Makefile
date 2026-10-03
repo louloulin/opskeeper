@@ -328,7 +328,7 @@ split-cost: ## 给一份分组方案定价：跨组 import 语句数 + 被切断
 # about whether anyone ever CHANGES them together. The proposal names three
 # missing facts and this reports on the one the history can answer.
 .PHONY: domain-cochange
-domain-cochange: ## 打印各域的独立改动率与共变对（不闸门；证据，不是裁决）
+domain-cochange: ## 打印各域的独立改动率、它背后的段数与诞生段占比、共变对（不闸门；证据，不是裁决）
 	go run ./scripts/cochange/
 	go test ./scripts/cochange/ -count=1
 
