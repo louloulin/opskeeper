@@ -97,20 +97,24 @@ type federationWiring struct {
 // disabled error rather than with a 404. A root whose tunnel is down is a
 // root that has lost its way to its children, not a root that never had one.
 //
-// The registry is in memory, and until a Ledger implementation ships that is
-// an availability problem rather than a bookkeeping one: a root that
-// restarts forgets every member, so each child cluster is refused on its next
-// hello with its own still-valid provisioning token, and recovery means
-// re-enrolling them one at a time and handing each operator a new token.
-// (Decision 145 measured this; the wire cannot say which of the two causes a
-// refusal had, by design, so the log line at the hello boundary is where that
-// shows up.)
+// The registry is in memory and now has a Ledger underneath it, which is what
+// makes a restart survivable. Without one the root came back believing it had
+// never enrolled a cluster and refused every child's own still-valid
+// provisioning token, and recovery meant re-enrolling them one at a time and
+// handing each operator a new token. (Decision 145 measured that; the wire
+// cannot say which of the two causes a refusal had, by design, so the log
+// line at the hello boundary is where that shows up.)
 //
-// The Ledger port exists for exactly this and no implementation of it ships
-// yet. Wiring one is a data-layer change with no bearing on anything above
-// it, which is the point of it being a port — but "no bearing on anything
-// above it" is not the same as "nothing to do", and the comment above used to
-// read as though it were.
+// The file is the shipping Ledger because the supported topology is a single
+// root process whose whole membership is a handful of rows. The port names
+// the more interesting stores — Postgres, the audit chain — and neither is
+// wired; switching is a change to the two lines below and nothing else,
+// which is the point of the port existing.
+//
+// Restore is called before anything is served, and a failure to read the
+// ledger is fatal. A root that started anyway with an empty membership would
+// be doing exactly the thing the ledger prevents, silently, at the moment an
+// operator is relying on it.
 func newFederationWiring(fbClient *managersvcfb.Client, log *slog.Logger) (*federationWiring, error) {
 	if fbClient == nil {
 		return nil, fmt.Errorf("federation: no tunnel client to push over")
@@ -121,7 +125,31 @@ func newFederationWiring(fbClient *managersvcfb.Client, log *slog.Logger) (*fede
 		return nil, err
 	}
 
-	reg := fedbiz.NewRegistry(nil)
+	// Declared as the interface and assigned conditionally on purpose. A
+	// nil *FileLedger handed to NewRegistry would not be a nil Ledger —
+	// an interface holding a nil pointer is not nil — so every
+	// `r.ledger != nil` in the registry would be true and the first
+	// enrolment would dereference nothing.
+	var ledger fedbiz.Ledger
+	if usable := federationLedger(log); usable != nil {
+		ledger = usable
+	}
+	reg := fedbiz.NewRegistry(ledger)
+	if ledger != nil {
+		// Before the publisher, the link, and the routes. A ledger
+		// that exists but cannot be read proves there was a membership
+		// to lose, and starting with an empty one would re-enrol every
+		// cluster and rotate every token. That is the one case where
+		// refusing to start is the answer that cannot be wrong.
+		fileLedger, _ := ledger.(*fedbiz.FileLedger)
+		if err := reg.Restore(); err != nil {
+			return nil, fmt.Errorf("federation: restore: %w (ledger: %s)", err, fileLedger.Path())
+		}
+		log.Info("federation: ledger loaded",
+			slog.String("path", fileLedger.Path()),
+			slog.Int("clusters", len(reg.Members())),
+		)
+	}
 	var pub *fedbiz.Publisher
 	if signer != nil {
 		if pub, err = fedbiz.NewPublisher(reg, signer); err != nil {
@@ -251,4 +279,40 @@ func federationReleaseSigner() (*pluginmanifest.Signer, error) {
 		return nil, fmt.Errorf("federation: %s is not a usable release key: %w", federationReleaseKeyEnv, err)
 	}
 	return signer, nil
+}
+
+// federationLedgerPath is where the root's membership survives a restart.
+//
+// The default sits under /var/lib/opskeeper with the rest of the manager's
+// durable state. It is overridable because a root running from a container
+// image with a read-only root filesystem needs somewhere else to put it, and
+// an operator who cannot move it cannot run a root at all.
+func federationLedgerPath() string {
+	return firstNonEmpty(os.Getenv("OPSKEEPER_FEDERATION_LEDGER"),
+		"/var/lib/opskeeper/federation/ledger.json")
+}
+
+// federationLedger returns the ledger the root should keep its clusters in,
+// or nil — with one loud line — when the configured path cannot be used.
+//
+// Degrading beats refusing here, and the reason is asymmetry. A root with no
+// ledger is what this code did before the ledger existed: federation works,
+// and a restart forgets. A root that refuses to wire federation because it
+// cannot write a file has taken away a working feature over a durability
+// detail, and it would do so on every read-only image and every deployment
+// that has not mounted a volume. The operator is told exactly what is wrong
+// and what to do about it, at boot, rather than finding out from a refusal
+// during a rollout.
+func federationLedger(log *slog.Logger) *fedbiz.FileLedger {
+	ledger := fedbiz.NewFileLedger(federationLedgerPath())
+	if err := ledger.Probe(); err != nil {
+		log.Error("federation: the ledger path is not usable, so federation will not survive a restart",
+			slog.String("path", ledger.Path()),
+			slog.String("remedy", "make the path writable, or point "+
+				"OPSKEEPER_FEDERATION_LEDGER at one that is"),
+			slog.Any("err", err),
+		)
+		return nil
+	}
+	return ledger
 }

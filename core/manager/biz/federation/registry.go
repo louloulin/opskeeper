@@ -140,6 +140,20 @@ type Ledger interface {
 	// bundle that was sent but not recorded can be reissued, and a
 	// reissued version is one a child may already have refused.
 	SaveHighestIssued(id federation.ClusterID, version uint64) error
+	// LoadMembers returns everything this root has enrolled, for Restore.
+	//
+	// This is the half the port was missing, and its absence is why no
+	// implementation shipped: a Ledger that could only save would survive
+	// no restart in any useful sense — a root would come back believing
+	// it had never enrolled a cluster, refuse every child's own valid
+	// token, and need a human to re-enrol them one at a time. Writing
+	// the Postgres implementation first would have produced exactly that
+	// and looked finished.
+	//
+	// An empty result is a legitimate answer: a root that has enrolled
+	// nothing. An error is not, and Restore treats it as fatal — see
+	// there.
+	LoadMembers() ([]Member, error)
 }
 
 // NewRegistry builds a registry over a ledger.
@@ -149,6 +163,52 @@ func NewRegistry(ledger Ledger) *Registry {
 		now:     time.Now,
 		members: map[federation.ClusterID]*Member{},
 	}
+}
+
+// Restore repopulates the registry from its Ledger.
+//
+// It is separate from NewRegistry on purpose. A constructor that reached
+// for the disk would make "the registry is in memory" true only until the
+// first error, and it would force every test that wants a registry to have
+// a ledger. Here the choice is explicit: a caller that passes no ledger
+// gets an empty registry, and a caller that has one has to say so.
+//
+// The failure mode is the reason this is not best-effort. A root that could
+// not read its Ledger and started anyway would serve an empty membership,
+// which is indistinguishable from the restart lockout it was meant to
+// prevent — and it would do so silently, having logged a warning, at the
+// exact moment an operator is relying on it. Refusing to start is the
+// answer that cannot be wrong: an operator sees a root that is down rather
+// than a root that has quietly forgotten every cluster it governs.
+func (r *Registry) Restore() error {
+	if r.ledger == nil {
+		return nil
+	}
+	members, err := r.ledger.LoadMembers()
+	if err != nil {
+		return fmt.Errorf("federation: restore enrolled clusters: %w", err)
+	}
+	restored := make(map[federation.ClusterID]*Member, len(members))
+	for _, m := range members {
+		if !m.Cluster.ID.Valid() {
+			// A row with no identity cannot be authenticated against,
+			// and carrying it would make Members() list something
+			// nothing can ever bind to.
+			return fmt.Errorf("federation: the ledger holds a member with no cluster identity")
+		}
+		if _, dup := restored[m.Cluster.ID]; dup {
+			// Two rows for one cluster means the ledger has no
+			// primary key. Picking a winner would make the token
+			// that works depend on read order.
+			return fmt.Errorf("federation: the ledger holds two members for %q", m.Cluster.ID)
+		}
+		held := m
+		restored[m.Cluster.ID] = &held
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.members = restored
+	return nil
 }
 
 // Enroll provisions a child cluster and returns its provisioning token.
@@ -391,6 +451,22 @@ func (r *Registry) Acknowledge(id federation.ClusterID, out federation.Outcome) 
 	m.Acknowledged = out.Version
 	m.LastAck = out
 	m.LastContact = r.now()
+
+	// Written through, not just held in memory, because the hello reply
+	// sends Acknowledged back to the child as the version this root
+	// believes it is enforcing. A root that restarted and forgot would
+	// answer "version 0" to a cluster running version 9, and the child
+	// would read that as either a replay or a rollback depending on
+	// which way it compares. SaveMember writes the whole row, so this is
+	// the same call Enroll makes rather than a second write shape.
+	if r.ledger != nil {
+		if err := r.ledger.SaveMember(*m); err != nil {
+			// The in-memory answer stands. A refusal to record it is
+			// not a reason to forget it for this process lifetime, and
+			// the next acknowledgement will try again.
+			return fmt.Errorf("federation: record the answer from %q: %w", id, err)
+		}
+	}
 	return nil
 }
 

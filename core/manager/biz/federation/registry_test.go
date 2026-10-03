@@ -263,6 +263,7 @@ type failingLedger struct {
 
 func (l failingLedger) SaveMember(Member) error                              { return nil }
 func (l failingLedger) SaveHighestIssued(federation.ClusterID, uint64) error { return l.err }
+func (l failingLedger) LoadMembers() ([]Member, error)                       { return nil, nil }
 
 // TestAFailedLedgerSkipsAVersionRatherThanReissuingIt is the durability
 // property. Once Publish has built a bundle the caller may already have it on

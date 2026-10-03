@@ -6570,12 +6570,11 @@ marshal、子集群 unmarshal；一个在 wire 两侧被改掉名字的字段会
    `:1435` 调 `Start(rootCtx)`。剩下一件与进程无关的事：`Source.URL` 目前是
    `file://`，够共享挂载的部署，**不够跨网络**——那是托管来源的问题，不是
    子集群进程的问题，这两件事此前被记在同一条里。
-3. **持久化 `Ledger`**——端口在，实现不在，生产装配传的是 `nil`
-   （`cmd/opskeeper/federation_wiring.go:116`）。**后果此前被记轻了**：
-   写的是「根重启后忘记发过哪些版本，单调性只在一轮进程生命周期里成立」，
-   而实测（决策 145）**根重启会把每一个子集群都锁在门外**——`Authenticate`
-   找不到 member 就返回 `ErrRefused`，子集群拿自己那份**完全有效的** token
-   一样被拒。见 §4.82。
+3. ~~**持久化 `Ledger`**——端口在，实现不在。~~ **已实现（决策 146）**。
+   这里真正的缺口此前被记成了「没人写实现」，**而实际是端口只有写、没有读**
+   （只有 `SaveMember` / `SaveHighestIssued`），所以就算写出完美的 Postgres
+   实现也只会存不会取，重启照样锁死。补上 `LoadMembers` + `FileLedger` 后，
+   根重启不再忘记任何子集群。见 §4.83。
 
 **仍未实证的**：阶段 0.4 的真实对话验收（需要 Docker daemon 与真 provider key，
 本机不具备）。本刀的所有测试都不经过 socket、不经过 Docker、不经过真实 LLM——
@@ -9207,6 +9206,120 @@ re-enroll 并分发新 token。
 本决策**不改进度百分比**。它更正两条记录、一处后果记轻了的描述，并让一个
 已知缺口在事故当中可查；计划 §五 里没有对应这一项的验收闸门。
 
+### 4.83 决策 146：持久化 Ledger——缺口不在「没人实现」，在端口只有写没有读
+
+#### 4.83.1 上一条决策留下的那句话
+
+决策 145 结尾写的是「持久化 `Ledger` 仍然没实现，root 重启仍会锁死所有
+子集群……本决策做的是让这件事**可诊断**，不是让它不发生」。本轮就是去让它
+不发生。
+
+#### 4.83.2 真正的缺口不是「没人写实现」
+
+台账把这条记成「端口在，实现不在」。去看端口本身：
+
+```go
+type Ledger interface {
+	SaveMember(m Member) error
+	SaveHighestIssued(id federation.ClusterID, version uint64) error
+}
+```
+
+**只有两个写方法，没有任何读方法。** 所以「没有实现」这个描述把因果说反了：
+就算今天有人写出完美的 Postgres 实现，它也只会存不会取——root 重启后照样
+ believing 自己从未注册过任何集群，照样用 `ErrRefused` 拒掉每个子集群
+自己那份有效的 token。**缺的是端口表达不了读侧**，实现是那个之后的第二步。
+
+这也解释了为什么这个缺口能挂这么久而没人动它：写一个「Ledger 实现」听起来
+是个数据层任务，而它真正的第一步是改一个端口的形状。
+
+#### 4.83.3 交付的四件事
+
+1. **端口加 `LoadMembers() ([]Member, error)`**，并写明它为什么之前不在。
+2. **`Registry.Restore()`**——与 `NewRegistry` 分开，因为一个会去碰磁盘的
+   构造函数会让「registry 在内存里」只在没有错误时为真。**Restore 的失败是
+  致命的**：一个读不到 ledger 却照样启动的 root 会服务一份空 membership，
+   那和它本来要防的重启锁死**完全一样**，而且是静默的、只留一条 warning、
+   恰好发生在运维最依赖它的时候。
+3. **`FileLedger`**（`core/manager/biz/federation/fileledger.go`）——落地的
+   是**最无聊的那个实现**，这是有意的。端口注释里点了两个「有意思」的实现
+   （单 root 用 Postgres、以及 root 自己的审计链），两个都没接。而实际支持的
+   拓扑就是**单 root 进程、整个成员表几行**——对这个形状，文件不是妥协，
+   就是本来会选的东西：不需要迁移、不需要连接串，也不需要在 root 唯一会去
+   读它的那个时刻（重启）另有一套系统是活的。持久化沿用本仓已有的写法
+   （`agentteams/state`）：临时文件 → fsync → rename → **再 fsync 目录**。
+   权限用 `0600` 而非那个包的 `0644`：这个文件存的是 provisioning token 的
+   校验值。
+4. **`Acknowledge` 现在落盘**。这一条是写测试时才发现的：`Acknowledged`
+   丢了，hello 响应里的 `PolicyVersion` 就会回 0，等于 root 在告诉一个正在
+   跑版本 9 的子集群「我认为你在版本 0」。落盘走已有的 `SaveMember`
+   （整行写），不新增第二种写法。
+
+#### 4.83.4 一次设计错误，是被本仓自己的测试抓出来的
+
+第一版装配直接 `fedbiz.NewFileLedger(path)`。跑全量测试时 `cmd/opskeeper`
+**四条既有测试红了**：
+
+```
+Enroll: federation: enrol "prod-cn-north": federation: create ledger
+directory /var/lib/opskeeper/federation: mkdir /var/lib/opskeeper: permission denied
+```
+
+这不是测试环境问题，是**设计比它要修的 bug 更糟**：ledger 路径不可写时，
+root 连一个集群都注册不了——只读镜像、非特权用户、没挂卷的部署，会**彻底
+失去联邦功能**，而这比「重启会失忆」严重得多。
+
+改法是**降级而不是拒绝**：装配时 `Probe()` 一次，路径不可用就退回无 ledger
+（也就是本决策之前的行为），并在启动日志里用 Error 说清楚路径、原因和补救
+方式。不对称就在这里——**没有 ledger 的 root 是坏，没有 ledger 就拒绝启动
+的 root 更坏**，而后者会发生在每一个没挂卷的部署上。
+
+而**确实该 fail-closed 的是另一种情况**：ledger 文件在、但读不出来（损坏）。
+那证明**曾经有一份 membership**，而当成空的正是「静默重新注册所有人并轮换
+所有 token」的最坏响应。两种失败方向相反，所以处理也相反。
+
+`TestAnUnusableLedgerPathDegradesInsteadOfBreakingFederation` 用「父路径是
+一个普通文件」构造不可用路径——在任何平台都必然失败，也不需要一个会让测试
+因为错误的原因而变绿的权限位。
+
+顺带一个 Go 陷阱：降级返回的是 `*FileLedger` 的 nil，直接传给
+`NewRegistry(Ledger)` 会让接口持有一个**非 nil 的 nil 指针**，
+`r.ledger != nil` 恒真，第一次注册就会解引用空指针。装配里因此显式声明接口
+变量再条件赋值，并写了注释。
+
+#### 4.83.5 变异验证
+
+| 变异 | 红在哪 |
+|---|---|
+| 装配不调 `Restore`（编译通过，只有测试能抓） | `after a restart the root knows 0 cluster(s), want 1` + hello 被拒 |
+| 损坏的 ledger 当成空 | `a damaged ledger restored as an empty membership` |
+| `HighestIssued` 允许回退 | `HighestIssued = 4, want 9` |
+| ledger 变 `0644` | `ledger mode = 644; it holds a provisioning-token verifier` |
+| `Acknowledge` 不落盘 | `Acknowledged = 0, want 1` |
+| `Probe` 永远成功 | `TestAnUnusableLedgerPathDegradesInsteadOfBreakingFederation` |
+
+第一条值得单说：**「装配忘了调 Restore」这个变异能编译、能过本仓所有既有
+测试**——`registry` 包的测试直接调 `Restore()`，与装配无关。所以补了两条
+**走真实装配**的测试（同一份 env 指向的同一个文件，装配两次），它们是唯一
+能抓住它的东西。第一版这两条测试还因为 `t.TempDir()` 每次返回**新**目录而
+假红了一次，改成每个测试设一次 env 之后才是真的在测「两次装配读同一个文件」。
+
+#### 4.83.6 边界
+
+- 文件实现只对**单 root** 正确，这是当前支持的拓扑。多实例 root 需要换成
+  Postgres 或别的共享存储——这正是端口存在的理由，换实现是改装配那两行。
+- `LastContact` 与子集群自述（`Name` / `Version` / `EdgeCount` /
+  `TrustKeyID`）**不落盘**：它们不影响任何安全或单调性性质，丢了会退化成
+  「root 最近没听到你的消息」，下一次 ack 或 hello 就纠正过来了。为了它们在
+  每次心跳上写一次盘不划算。`TokenHash`、`HighestIssued`、`Acknowledged`
+  三项落盘，因为它们各自对应一条「丢了就出事」的不变量。
+- e2e 剧本未跑（需要 Docker 与真 provider key，本机不具备）。
+
+本决策**把阶段 3 的多集群联邦从 0.94 记到 0.97**：端到端可交付性的最后一块
+是跨网络的 `Source.URL` 托管来源（仍是 `file://`），而不是持久化。
+阶段 3 因此从 79.3% 到 **79.7%**，加权从 84.0% 到 **84.1%**
+（三阶段口径：(65 + 100 + 91.7 + 79.7) / 4）。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -9282,6 +9395,19 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
   读它**（`grep` 只有一个 `switcher.Switch` 的写入点），也就是说通道已经 100% 而
   enforcement 是 0%。本轮补的 `LiveGate` + `NodeFleet` 闸门把这条链接接上了
   插件下发路径。剩下 0.06 是 `Registry` 的持久化 `Ledger` 与跨网络的 `Source.URL`。
+
+**决策 146 把加权从 84.0% 记到 84.1%**（(65 + 100 + 91.7 + 79.7) / 4，§4.83）。
+只有阶段 3 动了：
+
+- **阶段 3 从 79.3% 到 79.7%**，联邦那条 0.94 → 0.97。上一条决策把剩下的
+  0.06 记成两半，本轮关掉其中一半：持久化 `Ledger` 落地，根重启不再忘记
+  任何子集群。**而真正的缺口此前被记反了**——不是「没人写实现」，是**端口
+  只有写没有读**，所以就算有人写出 Postgres 实现也照样存不回来。
+  剩下 0.03 是跨网络的 `Source.URL` 托管来源（仍是 `file://`，够共享挂载）。
+  这 0.03 与 0.94→0.97 的比例值得看一眼：**端到端可交付性的最后一块是
+  托管来源，不是持久化**，而持久化花掉的工作量比它值的多——这已经是阶段 3
+  第三次出现「通道很完整、可交付性只由最后一件事决定」的形状（决策 123/124
+  各记过一次）。
 
 **同一刀里还查出两件事，都不改分数，但都要记着：**
 
