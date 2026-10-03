@@ -1,11 +1,13 @@
 package biz_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -149,8 +151,17 @@ func (c *fakeCollector) GetProcessList(ctx context.Context, topN int, sortBy str
 	}, nil
 }
 
-// TestAgent_RunBasics runs the agent for ~250ms with sub-second tickers
-// and asserts register_edge + heartbeat + push_host_metrics fired.
+// TestAgent_RunBasics asserts register_edge + heartbeat + the three push
+// methods all fire on a real run.
+//
+// The metrics tick is deliberately NOT shortened. It used to be 50ms, which
+// is a sampling rate the wire cannot carry: host metric timestamps are whole
+// seconds, so the test was asserting that a configuration the protocol
+// cannot represent works. It also would have been actively misleading once
+// host_metrics_raw deduplicated on (edge_id, ts) — a sub-second tick now
+// drops every other sample by design. The test therefore runs a little over
+// one honest tick instead of many impossible ones, which is slower by about a
+// second and is the price of the assertion meaning something.
 func TestAgent_RunBasics(t *testing.T) {
 	fc := newFakeClient()
 	coll := &fakeCollector{}
@@ -158,12 +169,12 @@ func TestAgent_RunBasics(t *testing.T) {
 	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
 	a := biz.NewAgent(fc, coll, biz.Config{
 		HeartbeatInterval: 50 * time.Millisecond,
-		MetricsInterval:   50 * time.Millisecond,
-		MetricsBatchSize:  2, // flush after 2 samples (~100ms)
+		MetricsInterval:   biz.MinMetricsInterval,
+		MetricsBatchSize:  1,
 		AgentVersion:      "test",
 	}, discard)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), biz.MinMetricsInterval+300*time.Millisecond)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- a.Run(ctx) }()
@@ -262,4 +273,64 @@ func TestAgent_HandlersRegistered(t *testing.T) {
 	}
 
 	cancel()
+}
+
+// TestNewAgent_ClampsAMetricsIntervalTheWireCannotCarry is the other half of
+// the (edge_id, ts) dedup: once the center stores one point per edge per
+// second, a sub-second tick is not "finer granularity", it is a sample that
+// gets thrown away. NewAgent clamps rather than refuses — a node with a
+// working link should not be stranded over a tunable — but the operator has
+// to be able to find out that the number they configured is not the number in
+// force, so the clamp is a WARN and this asserts it was written.
+func TestNewAgent_ClampsAMetricsIntervalTheWireCannotCarry(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	fc := newFakeClient()
+	coll := &fakeCollector{}
+	a := biz.NewAgent(fc, coll, biz.Config{
+		MetricsInterval: 250 * time.Millisecond,
+	}, logger)
+
+	// The clamp is observable through behaviour, not through a getter: run
+	// for less than the *configured* interval and nothing must have been
+	// sampled, which is the difference between "slowed to the floor" and
+	// "still running at 250ms".
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	_ = a.Run(ctx)
+
+	if n := coll.collectCount.Load(); n != 0 {
+		t.Fatalf("the collector was called %d times in 150ms at a clamped 1s interval, want 0", n)
+	}
+	if !strings.Contains(logBuf.String(), "MetricsInterval") {
+		t.Errorf("the clamp was not logged; the operator cannot see the number in force:\n%s", logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), "in_force=1s") {
+		t.Errorf("the log does not say what is in force:\n%s", logBuf.String())
+	}
+}
+
+// TestNewAgent_LeavesAnHonestIntervalAlone is the other direction: the floor
+// must not quietly rewrite a working configuration, or a node that had asked
+// for 10s and got 10s would have no way to tell it from one that had asked
+// for 250ms.
+func TestNewAgent_LeavesAnHonestIntervalAlone(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	fc := newFakeClient()
+	coll := &fakeCollector{}
+	a := biz.NewAgent(fc, coll, biz.Config{MetricsInterval: 10 * time.Second}, logger)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	_ = a.Run(ctx)
+
+	if strings.Contains(logBuf.String(), "clamped") {
+		t.Errorf("a 10s interval was rewritten:\n%s", logBuf.String())
+	}
+	if n := coll.collectCount.Load(); n != 0 {
+		t.Errorf("Collect called %d times in 150ms at a 10s interval, want 0", n)
+	}
 }

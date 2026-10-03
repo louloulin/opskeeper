@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/metric"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
@@ -34,6 +35,27 @@ const (
 )
 
 // WriteRaw persists a batch of raw Points to host_metrics_raw.
+//
+// A point that is already there is left alone rather than inserted again.
+// Two callers make that happen, and neither is the node's fault:
+//
+//   - biz/metric.Ingester retries one payload up to four times. A write
+//     that landed but returned an error — a blip after COMMIT, a partial
+//     CreateInBatches — is indistinguishable from one that never landed,
+//     so the retry re-offers rows the table already holds.
+//   - the node's write-ahead log is at-least-once by design, so a lost
+//     ack means the same batch comes round again.
+//
+// The reason this is not cosmetic is the downsample job: it accumulates
+// counters with `a.netRx += p.NetRxBps`, so one duplicated row permanently
+// doubles that edge's reported network throughput for the whole 5-minute
+// bucket. The aggregate tables already carry the right contract in their
+// own comments ("on conflict we overwrite — rerunning is idempotent") and
+// get it from Save; this table was the one that did not.
+//
+// The conflict target is named rather than left bare so that a collision on
+// some other unique key still surfaces as an error instead of being
+// silently swallowed.
 func (w *Writer) WriteRaw(ctx context.Context, batch []model.Point) error {
 	if len(batch) == 0 {
 		return nil
@@ -53,7 +75,10 @@ func (w *Writer) WriteRaw(ctx context.Context, batch []model.Point) error {
 			DiskUsedPct: p.DiskUsedPct,
 		}
 	}
-	return w.db.WithContext(ctx).CreateInBatches(rows, createInBatchesSize).Error
+	return w.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "edge_id"}, {Name: "ts"}},
+		DoNothing: true,
+	}).CreateInBatches(rows, createInBatchesSize).Error
 }
 
 // WriteDeadLetter stores failed points in host_metrics_dead_letter with

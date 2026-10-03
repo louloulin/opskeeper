@@ -3737,13 +3737,16 @@ env**。
 | C 节点 Agent | 20% | 95% | 七个 `agent.*` + supervisor + 连接规模三项 |
 | D 插件生态 | 25% | 95% | 四个包 + 审核流水线 + 两条覆盖轴 |
 | 0 边缘交付闭环 | — | 代码 100% / 验收未做 | 0.1–0.3 全关（上表 + 决策 103 关掉 0.2 第二句），0.4 缺 Docker 与真 key |
-| 1 离线与有限自治 | — | 100%（本地） | 决策 97/98/99/100/101；剩 `Seq` 去重 |
+| 1 离线与有限自治 | — | 95%（本地） | 决策 97/98/99/100/101；**决策 121 关掉去重的一半**：`host_metrics_raw` 的 `(edge_id, ts)` 变唯一 + 命名的 `ON CONFLICT DO NOTHING`，中心自己的 flush 重试不再把 5m 桶的网络吞吐**永久翻倍**，并给 `MetricsInterval` 加上 1 秒下限（线路时间戳就是秒级，低于 1s 会被按重复丢掉）。**另一半未做**：`edge_change_events` 没有天然键，`Seq` 必须上过线（§4.59） |
 | 2 生态与治理 | — | 92% | 决策 104 关掉 6（注册表）、决策 105 关掉 8（eval 三维化）、决策 107 关掉 prompt injection 一条、决策 108 关掉 MCP 兼容层、决策 106 落掉 7 的机制（生产端接线未做，按半条计）；配额在决策 96 就已关掉，本行早前未同步；10 未做，9 部分 |
 | 3 瘦身与联邦 | — | 5% | 9/10 未动 |
 
 加权合计 **≈65%**（决策 108 更新本行：阶段 2 从 58% 升到 92%——决策 107 的
 prompt injection 与决策 108 的 MCP 兼容层各是六条里完整的一条；四阶段等比
-(65 + 100 + 91.7 + 5) / 4 = 65.4）。**阶段 0 与阶段 1 的代码侧可以记为完成，
+(65 + 100 + 91.7 + 5) / 4 = 65.4）。**本表的阶段 3 那一格（5%）是过期值**，
+§六 主表已把它记到 48%（决策 111–118 切环那一轮）；以主表为准。
+**决策 121 把阶段 1 从 100% 调回 95%**（`edge_change_events` 的去重仍未做），
+四阶段等比变成 (65 + 95 + 91.7 + 48.0) / 4 = **≈74.9%**。**阶段 0 与阶段 1 的代码侧可以记为完成，
 但那不等于计划完成**：阶段 2 的六条里五条半已闭，剩下的一半是结晶机制的生产端
 接线（机制已落地、闸门已绿，缺的是平台记录修复 argv 的那一步，见 §4.44.7）。
 这一格剩下的内容与方案原文「插件生态开放、成本可控」相比，少的是成本那半边。
@@ -5899,6 +5902,146 @@ entangled pairs: (none — the graph is a DAG)
   有了「拆几刀、每刀多贵」的数，以及一条**反直觉但已被算出来的结论**（先摘底座
   比先摘枢纽便宜一半以上的反面：摘底座要付 `aiops` 那 63 条 import 的账）。
 
+### 4.59 决策 121：at-least-once 的另一半——同一条曲线点只存一次
+
+#### 4.59.1 剩下的那一条待办，量出来是两个方向相反的问题
+
+阶段 1 的代码侧在决策 101 就判完了，挂在那里的最后一条是「遥测回放需要中心按
+`Seq` 去重」。这一条写下来的时候它是一个词——`Seq`——读起来像一把钥匙。**打开
+之后发现它描述的是两个形状相反的问题，而其中一个根本不该用 `Seq` 解决。**
+
+| 目标表 | 有没有天然键 | 重复从哪来 | 该用什么键 |
+|---|---|---|---|
+| `host_metrics_raw` | **有**：`(edge_id, ts)`，而且索引早就在 | ① 中心自己的 flush 重试 ② 节点 WAL 重放 | `(edge_id, ts)` |
+| `edge_change_events` | **没有** | 只有节点 WAL 重放 | 必须新增的 `Seq` |
+
+先做第一个。理由不是它更容易，是**它今天就在损坏数据，而第二个只在重放时发生**。
+
+#### 4.59.2 `host_metrics_raw` 那一半：一次重试把网络吞吐翻倍
+
+`biz/metric.Ingester.flush` 拿**同一份 payload** 重试最多四次（3 个退避 + 1 次
+首发）。而「写进去了但返回了错误」和「根本没写进去」在调用方看来是同一件事——
+COMMIT 之后的网络抖动、`CreateInBatches` 的部分失败，都是前者。于是重试把表里
+**已经有的行再插一遍**。
+
+地面真值（先写红后修）：同一批 2 行写两遍，`host_metrics_raw` 里有 **4 行**。
+
+这为什么不是一件 cosmetic 的事——`biz/metric.downsample` 对计数器是**求和**：
+
+```go
+a.netRx += p.NetRxBps        // downsample.go
+a.netTx += p.NetTxBps
+```
+
+所以一次重试会让那个节点在那整个 5 分钟桶里的**网络吞吐翻倍**，而且
+`host_metrics_5m` / `host_metrics_1h` 是复合主键 + `Save` 覆写，**永远不会重算**。
+一个节点因为一次数据库抖动，就永久地在看板上显示成「带宽是平常的两倍」——对一个
+AI 运维平台来说，这正是最容易被当真事的那种假象。
+
+还有一处顺带说明的**不一致**：聚合表的注释早就写着「on conflict 覆盖——重跑是幂等
+的」，并且用 `Save` 做到了；**只有 raw 表破坏了这个契约**，用裸 `CreateInBatches`。
+所以这次不是发明一条新规则，是把 raw 表拉回它自己两个兄弟已经写着的规则。
+
+#### 4.59.3 修法：唯一键 + 命名的冲突目标，迁移分三步
+
+1. `(edge_id, ts)` 改成**唯一**索引。索引**换了名字**（`uq_host_metrics_raw_edge_ts`），
+   因为 AutoMigrate 不能把一个已存在的索引从非唯一改成唯一——一张已经装了重复行
+   的表会直接建失败，然后 schema 停在半迁移状态，也就是把一次升级变成一次故障。
+2. `WriteRaw` 用 `clause.OnConflict{Columns: [edge_id, ts], DoNothing: true}`。
+   **冲突目标是写出来的，不是裸的 `DoNothing`**——裸的会把将来任何别的唯一键冲突
+   一起吞掉，并对一行从未落库的数据报成功，而批级回报正是节点 ack 的依据。
+3. `Migrate` 分三步，**顺序就是全部**：
+   ① 先折叠盘上已有的重复（`DELETE … WHERE id NOT IN (SELECT MIN(id) …)`，
+   保留 id 最小的那份，因为重放发的是同一份 payload，每个副本逐字节相同，保留
+   最早那份保住了 `created_at`，而保留期和运维的时间线都读它）；
+   ② `AutoMigrate`（由 model tag 建出唯一索引）；
+   ③ 删掉旧的非唯一索引（两张表在同样的两列上各有一个索引，代价是每次写入多一
+   次，而且会诱使下一个读代码的人以为旧名字还有含义）。
+
+三步在无事可做时都是 no-op，所以**空库、已迁移的库、正在被修复的库跑的是同一条
+路径**，Migrate 幂等（有测试）。
+
+顺带删掉一句假引用：`HostMetric` 的注释写着「Matches
+db/migrations/0003_init_manager_metric.up.sql exactly」，而**这个仓库里没有那个
+文件**。schema 来自 `Migrate`（gorm AutoMigrate）。一句指向不存在文件的注释，
+正是让 struct 和表漂移时没人发现的东西。
+
+#### 4.59.4 让这个键成立的那一半：`MetricsInterval` 的 1 秒下限
+
+`tunnel.HostMetricPoint.Ts` 是 **unix 秒**。也就是说**线路本来就无法表示一秒内的
+两个曲线点**——这个精度损失早就在协议里，不是我这次加的。
+
+但下限现在**承重**了：唯一键之后，同一秒的第二个采样点不是被存两次，而是**被丢
+掉**。所以 `NewAgent` 加了一道 clamp：低于 1s 的配置被抬到
+`biz.MinMetricsInterval`，并打一条 **WARN** 说明「你配的数字不是现在生效的数字」。
+
+clamp 而不是报错，是因为一个链路正常的节点不该因为一个可调参数被撂在那儿；而
+WARN 是因为**静默地改掉一个操作员配的数字是最坏的形状**。`OPSKEEPER_EDGE_COLLECTOR_INTERVAL`
+（默认 10s）经 `cmd/opskeeper-edge/main.go` 走同一个咽喉，所以生产与测试被同一道
+clamp 覆盖。
+
+#### 4.59.5 一条既有测试暴露的假前提
+
+`TestAgent_RunBasics` 原来用 `MetricsInterval: 50ms`、`MetricsBatchSize: 2`，跑
+250ms 断言 `push_host_metrics` 至少推过一次。
+
+**那是一个线路承载不了的配置**——采样比时间戳分辨率还快。这个测试一直在断言
+「一个协议无法表示的配置能工作」。更糟的是它现在**主动误导**：唯一键之后，50ms 的
+tick 会按设计丢掉隔点的样本，而这个测试还在用它当正常路径。
+
+所以它改成跑**一个诚实的 tick**（`MetricsInterval = biz.MinMetricsInterval`），
+慢了大约一秒。代价是这 1.1 秒，收益是这个断言重新有意义。**没有第二条路**：
+保留 50ms 就得让 clamp 变成「只在生产开」的可选开关，而那等于把刚钉住的协议
+边界留一个后门。
+
+#### 4.59.6 反向验证：7 条变异
+
+每条都改坏一处真实逻辑，确认真会变红：
+
+| 变异 | 抓到的测试 |
+|---|---|
+| `WriteRaw` 改成裸 `DoNothing` | `TestWriteRaw_RefusesToSwallowAnUnrelatedConflict` |
+| 去掉 `dedupeRaw` 步骤 | `TestMigrate_RepairsATableThatAlreadyHoldsDuplicates` |
+| 去重只按 `edge_id` 分组 | 同上 |
+| 旧索引不存在时改为报错 | `TestMigrate_IsIdempotent` |
+| 空库路径改为报错 | `TestMigrate_OnAFreshDatabase` |
+| 旧索引永远不删 | `TestMigrate_ReplacesTheLegacyIndexWithTheUniqueOne` |
+| 去掉 `MinMetricsInterval` clamp | `TestNewAgent_ClampsAMetricsIntervalTheWireCannotCarry` |
+
+其中「旧索引不存在时改为报错」这条抓出了**幂等性是真实要求**而不是习惯：Migrate
+在每次启动都跑，一个已经修好的部署如果第二次因为「没什么可做」而失败，就是把
+一次成功的升级变成一次拒绝启动。
+
+#### 4.59.7 这一条**没有**做到的事
+
+**`edge_change_events` 的那一半没做。** 说清楚为什么它是另一个决定而不只是另一半
+工作量：
+
+- 它**没有天然键**。两次真实的 systemd 重启可以共享
+  `(edge_id, source, kind, subject, action, ts, labels)` 的全部取值，所以这里
+  **不能**加内容唯一键——那会删掉真数据。只能新增 `Seq`。
+- `Seq` 要**上过线**（`ChangeEventWire` 加可选字段），而 `seq = 0` 的行必须
+  与「没有 seq」区分开，否则一个唯一索引会先把所有 live 事件撞在一起。
+- 查这一半的时候顺带核过一处看着可疑的地方并确认**不是**缺陷：`deliver` 在
+  `Record` 失败时仍然 `Ack(len(batch))`，看着像超量 ack，但 `spool.Ack` 把 `n`
+  夹到实际行数（`spool.go:370`），所以恰好 ack 掉真正写进去的那些。**记下来是
+  为了下一次不要重新怀疑它。**
+
+所以**阶段 1 不记 100%**。它此前记的「剩 `Seq` 去重」是一个词，现在它被拆成两条：
+一条关掉了，另一条连同它的三个设计约束一起交出去了。
+
+#### 4.59.8 数字
+
+- `data/metric/store`：7 条新测试（1 条地面真值 + 5 条迁移 + 1 条冲突目标），
+  `writer_test.go` 14 → **21 条**。
+- `core/edge/biz`：2 条新测试（下限生效 / 诚实间隔不被改写），1 条既有测试按
+  §4.59.5 重写。
+- 7 条变异全部被抓。
+- 测试总数：`core/manager` **3870 → 3877**，`core/edge` **473 → 475**，根模块
+  373 不变。
+- **没改变的**：`core/manager` 仍是 1132 个 Go 文件 / 281,566 行；阶段 3 仍 48%；
+  加权仍 ≈76.2%。
+
 ---
 
 ---
@@ -5936,13 +6079,17 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 | 阶段 | 完成度 | 判据与剩余 |
 |---|---|---|
 | 0 边缘交付闭环（P0） | **65%** | **三条** P0 都是「代码意图已写、实现路径从未跑过」：`cmd/opskeeper-edge/agent.go:209-212` 的 `Env` 只有两个 socket，`dist/build-edge-bundle.sh:38-49` 与 `deploy/Dockerfile.opskeeper-edge` 都不含 `pig`，`Makefile` 没有任何 `build-pig*` 目标。**已实测可行**：从 `core/pig` 构建 `github.com/MichaelKinsy/PiG/cmd/pig` 退出码 0（71 MB）。方案的「注入 `OPENAI_BASE_URL`」**不成立**（PiG 无此变量），正确路径是 `models.json` 自定义 provider + `PIG_CODING_AGENT_DIR`（§4.28.1）。**本轮新发现的第三条 P0 比前两条都严重：节点上的插件扩展编译不过**（`GOWORK=off` 实测报 `unknown revision core/v0.0.0`，且无 `go.sum`）——补齐 pig 与凭据之后节点仍然零工具（§4.28.8）。**决策 91 已关掉其中的第三条**：`core/wire` 内联进每个打包扩展、`go.mod` 删掉未发布的 `core v0.0.0`、只留 PiG SDK 一条 require，8 个打包扩展在 `GOWORK=off CGO_ENABLED=0` 下实测 8/8 构建通过，并新增「按节点的方式构建」这条**实测会红**的闸门（§4.29）。**决策 92 关掉了第二条**：`make build-pig-all` 从 `core/pig` + `GOWORK=off` 构建并**被每个 `build-edge-<arch>` 依赖**，两处 bundle 清单、`dist/package.sh`、`install-edge.sh`（含 `pig --version` 自检）、`Dockerfile.opskeeper-edge`、env 模板全部接通，六个位置各有断言（`core/floor/delivery`，6 条测试，**实测会红**）。**决策 93 关掉了 P0-1 的节点侧**：节点有了完整的凭据链（`OPSKEEPER_EDGE_AGENT_CONFIG_DIR` + `models.json` 的 `"$VAR"` 引用 + `PIG_CODING_AGENT_DIR`），并**对着真 `pig` 二进制验证**了三条（能解析 / 无凭据则拒绝 / 无 scope 则找不到）。本轮还查出方案 10 条清单里没有的第四条：**`DefaultAgentDir()` 在 `$HOME` 未设置时丢弃错误、返回相对路径 `.pig/agent`，被 agent 按 Cwd（即插件包根）解析**——凭据会落进签名插件内容里（§4.31.1）。**决策 94 关掉了 P0-1 的 manager 侧**：`core/manager/server/llmgw` 提供 `POST /v1/chat/completions`（流式 + 非流式）与 `GET /v1/models`，鉴权**复用隧道凭据对**（零新存储、零 schema 迁移、轮换即现有 `UpdateSecretHash`，§4.31.5），节点能选 model 不能选 provider；真 `pig` 二进制端到端抓出两处形状错误——`content` 实际是 string **或** parts 数组的联合类型（按 string 建模会拒绝真 agent 的每一个请求，而 18 条单元测试全绿）、大整数必须 `UseNumber` 才能活过 `>2^53`（§4.32）。**决策 95 把方案 0.1 剩下的三项职责与限流补齐**：每日 token 上限复用**同一个** `llm.InMemoryBudget` 实例（两份账 = 集群能花掉两倍上限）、每 edge 一个令牌桶超限 429、调用方的 `max_completion_tokens` 真正生效（之前被解析后丢弃）；顺带修掉 **429 之前被报成 400**（`writeError` 自带的 switch 对预算与限流哨兵没有分支）与一处 typed nil panic（§4.33）。剩下的不是 P0，是验收本身：方案 0.4 的 `make compose-up` 真实对话需要 Docker 与真 provider key；**决策 96 关掉了 per-tool 配额**（§4.28.4 判定的阶段 0 阻塞项）：清单里声明 `limits`、执行器 metadata 里也声明、两侧漂移由 `sdk.Check` 报错，**强制点在 tool broker**——节点上所有工具调用的唯一通道，因此覆盖将来任何一个第三方工具（没声明也有 1 MiB 默认上限，`skill.Spill` 从一段**零调用点的死代码**里搬出来并修好 0644 权限、24 小时回收与路径注入）。九个高基数读工具各有紧于默认值的上限与墙钟（§4.34）。剩下的**只有方案 0.4 的真实验收**：`make compose-up` 后一台 edge 完成一次真实对话、节点上可见独立 pig 进程、`/etc/opskeeper-edge` 无云厂商密钥——前两条已由 `core/floor/delivery` 与 `tests/agentgateway` 覆盖了可离线覆盖的部分，真 provider key 那一条本机不具备。**这一条是实测的而非推测**：`which docker` 有二进制，`docker info` 退出码 1（daemon 未运行），即容器从未在本机跑过。**0.2 的隧道下发（决策 103 已关）**：方案要求 `GatewayURL` / `TokenRef` **由隧道配置下发，而非硬编码 env**。决策 103 把它做成心跳应答的两个非机密字段（`agent_base_url` + `agent_model`），节点在自己的 env 沉默时采纳、env 非空时 env 胜——形状与 `pluginEndpointResolver` / `TunnelConfigFetcher` 逐字同形，没有新造凭据。**但「轮换 token 即逐台重启」这一条并没有被它修掉，也不该由它修**：token 仍是节点的隧道凭据对，轮换语义本来就与隧道一致（`UpdateSecretHash`）。见 §4.40.3 与 §4.41 |
-| 1 离线与有限自治（P1） | **100%** | **决策 98 关掉了方案 1.2（自治白名单）**：清单里签一份固定 argv 列表，节点只在中心失联超过阈值且**触发器实测成立**时执行它，执行的是声明的 argv、宿主派生幂等键、**先消费后执行**、两阶段落盘审计（`core/edge/autonomy` 41 项 + 装配根 10 项端到端，§4.36）。**13 条具名加载期拒绝**堵住清单侧（argv 含元字符、半径超 single-ns、TTL 超 6h、工具未声明、工具是 read、`offline_after` 低于 30s…）。**决策 99 关掉了方案 1.1（遥测本地 spool）**：先把「追加一行、封顶、按序回放」抽成 `core/edge/spool` 原语（只依赖标准库），再让遥测（`core/edge/telemetrywal`）、变更事件（`changewatcher/tunnel_sink.go`）、自治审计三个用户各自只声明自己的策略——**两份日志、一套丢弃表**（trace 先丢 > metric 30m 保质期 > change event 无保质期）；`Send(ctx, rows) (int, error)` 一个签名同时满足审计的「全有或全无」与遥测的「部分前进」；回放限流 100 行/5s 且**只有满批才限流**；本轮由测试抓出 8 个真实缺陷，其中 `Ack` 的读改写分锁会吞掉并发写入的行（§4.37）。**决策 100 修掉了回放路上的一处数据丢失**：`Accepted=0`（中心还没准备好）原被当成「永久拒绝」，于是断连攒下的积压**在恢复后第一条消息里被 ack 丢弃**——日志扛过了断网、死在握手的样子上；中心侧 `push_prom_samples` 的三条丢弃路径还爱说谎（返回 `Accepted=n`），一并改成「能放报写入数、放不下报 0」。现在 `Accepted=0` 读作「还没有」，批次留在盘上。**决策 101 关掉了审计回放传输**（§4.39）：`agent.audit.replay` 隧道方法 + `AutonomyAuditRow` 契约、中心 `RecordAutonomyReplay`（**整批形状校验在前、逐行 `EmitWithID` 在后**，所以一次重试不产生重复）补 HMAC 链、`buildAutonomy` 接上并启动 `autonomy.Pump`；节点把中心的回答读成三种动作（传输失败/还没收下 → 留住重试；形状拒绝 → 计数跳过不重试；全收 → ack），未进链的行由 `autonomyHealth.ReplayRefused` 上报。接线抓出**两处实现错误**并各有实测会红的回归：① handler 的 `bindEdgeTransport` 会按 body 改绑 transport，一个已绑 42 的连接推送 7 就能把 42 的自愈历史写进 7 的账（`TestInstall_AutonomyReplay_TrustsTheTransportEdgeID` 实测 `edge = 7, want 42`）；② 节点 sender 用 `Accepted+Rejected >= len(rows)` 判断「已交代」，多报一个数就会 ack 掉整批（`TestAutonomyReplaySender_ACountItCannotExplainIsRetried` 实测变红，改为 `== len(rows)`）。顺带修掉一处既有缺陷：`.go-arch-lint.yml` 里 `oxedge_spool` 写成 `mayDependOn: []`，go-arch-lint 的 spec 校验因此**拒绝运行整份文件**——决策 99（`8fefe7b`）之后 `make arch-lint-run` 一次也没通过过，已按同文件既有写法改为 `anyVendorDeps: true`（§4.39.6）。**阶段 1 的代码侧到此完整**，唯一剩下的是遥测回放需要中心**按 `Seq` 去重**（at-least-once 的另一半，目前 `host_metrics_raw` 是自增 `id` + 非唯一索引、`change_events` 无 `ON CONFLICT`、`promwrite` 无去重键，所以做到了「不丢」还没做到「不重」） |
+| 1 离线与有限自治（P1） | **95%** | **决策 98 关掉了方案 1.2（自治白名单）**：清单里签一份固定 argv 列表，节点只在中心失联超过阈值且**触发器实测成立**时执行它，执行的是声明的 argv、宿主派生幂等键、**先消费后执行**、两阶段落盘审计（`core/edge/autonomy` 41 项 + 装配根 10 项端到端，§4.36）。**13 条具名加载期拒绝**堵住清单侧（argv 含元字符、半径超 single-ns、TTL 超 6h、工具未声明、工具是 read、`offline_after` 低于 30s…）。**决策 99 关掉了方案 1.1（遥测本地 spool）**：先把「追加一行、封顶、按序回放」抽成 `core/edge/spool` 原语（只依赖标准库），再让遥测（`core/edge/telemetrywal`）、变更事件（`changewatcher/tunnel_sink.go`）、自治审计三个用户各自只声明自己的策略——**两份日志、一套丢弃表**（trace 先丢 > metric 30m 保质期 > change event 无保质期）；`Send(ctx, rows) (int, error)` 一个签名同时满足审计的「全有或全无」与遥测的「部分前进」；回放限流 100 行/5s 且**只有满批才限流**；本轮由测试抓出 8 个真实缺陷，其中 `Ack` 的读改写分锁会吞掉并发写入的行（§4.37）。**决策 100 修掉了回放路上的一处数据丢失**：`Accepted=0`（中心还没准备好）原被当成「永久拒绝」，于是断连攒下的积压**在恢复后第一条消息里被 ack 丢弃**——日志扛过了断网、死在握手的样子上；中心侧 `push_prom_samples` 的三条丢弃路径还爱说谎（返回 `Accepted=n`），一并改成「能放报写入数、放不下报 0」。现在 `Accepted=0` 读作「还没有」，批次留在盘上。**决策 101 关掉了审计回放传输**（§4.39）：`agent.audit.replay` 隧道方法 + `AutonomyAuditRow` 契约、中心 `RecordAutonomyReplay`（**整批形状校验在前、逐行 `EmitWithID` 在后**，所以一次重试不产生重复）补 HMAC 链、`buildAutonomy` 接上并启动 `autonomy.Pump`；节点把中心的回答读成三种动作（传输失败/还没收下 → 留住重试；形状拒绝 → 计数跳过不重试；全收 → ack），未进链的行由 `autonomyHealth.ReplayRefused` 上报。接线抓出**两处实现错误**并各有实测会红的回归：① handler 的 `bindEdgeTransport` 会按 body 改绑 transport，一个已绑 42 的连接推送 7 就能把 42 的自愈历史写进 7 的账（`TestInstall_AutonomyReplay_TrustsTheTransportEdgeID` 实测 `edge = 7, want 42`）；② 节点 sender 用 `Accepted+Rejected >= len(rows)` 判断「已交代」，多报一个数就会 ack 掉整批（`TestAutonomyReplaySender_ACountItCannotExplainIsRetried` 实测变红，改为 `== len(rows)`）。顺带修掉一处既有缺陷：`.go-arch-lint.yml` 里 `oxedge_spool` 写成 `mayDependOn: []`，go-arch-lint 的 spec 校验因此**拒绝运行整份文件**——决策 99（`8fefe7b`）之后 `make arch-lint-run` 一次也没通过过，已按同文件既有写法改为 `anyVendorDeps: true`（§4.39.6）。**阶段 1 的代码侧到此完整**。**决策 121 关掉了 at-least-once 的「不重」那一半，而且是两个方向相反的问题里的一个**（§4.59）：① `host_metrics_raw` 的 `(edge_id, ts)` 变**唯一**索引 + `WriteRaw` 用**命名的** `ON CONFLICT (edge_id, ts) DO NOTHING`，`Migrate` 分「折叠已有重复 → AutoMigrate → 删旧非唯一索引」三步（顺序即全部，且幂等）；顺带修掉一个**今天就在损坏数据**的缺陷——`biz/metric.Ingester.flush` 拿同一份 payload 重试四次，而「写进去了但返回错误」与「没写进去」不可区分，而 downsample 对计数器是**求和**，所以一次重试会把那 5 分钟桶的网络吞吐**永久翻倍**（`host_metrics_5m/1h` 是复合主键 + `Save`，永不重算）。② 唯一键让 `MetricsInterval` 的 1 秒下限变成承重项（`HostMetricPoint.Ts` 本来就是 unix 秒，亚秒 tick 会按重复被丢），`NewAgent` clamp + WARN。**7 条变异全部被抓**。**另一半未做**：`edge_change_events` **没有天然键**（两次真实重启可字段全同），不能用内容唯一键，`Seq` 必须新增字段上过线（§4.59.7） |
 | 2 生态与治理加固（P2） | **92%** | 工具注册表：**决策 104 关掉**——`core/manager/biz/aiops/toolregistry`（`Entry` 值类型、唯一适配点 `EntryFromToolInfo`、`Catalogue.Search` 相关性排序、`Filter` 按声明元数据查能力、`Fuse`/`RRFConstant` 混合检索接缝，18 条测试），`ToolSearch` 的 keyword 分支改为排序、`select:` 与响应形状未动（§4.42）；per-tool 配额：**决策 96 已关**（`sdk/manifest.go` 校验 `spec.tools[].limits`，强制点 `core/edge/toolbroker`），本行此前已过期；MCP 兼容层：**决策 108 关掉**——`/api/v1/mcp` 现在是一个真正的 MCP 端点：版本头由必填改为可选（缺失＝普通 MCP 客户端）、`initialize` 按客户端要的版本作答、`ping` 与 `notifications/*` 按规范应答、`tools/list` 可分页，工具面改在接线末尾组装（`cloud_bash`/`send_im_message`/`serve_page` 此前对 MCP 不可见），`docs/mcp-surface.md` 是对外契约；`make mcp-surface-check` 让本仓库自己的 `pkg/mcpclient` 用真 HTTP 打真 handler（§4.46）；成本结晶：**决策 106 落掉机制**——`core/manager/biz/aiops/crystallize` 按连续第一次就通过的 streak 晋升、反证即退役，草稿用真实的 `pluginmanifest.Validate` 自检（53 条测试、`make crystallize-check`）；**平台仍不记录修复的 argv，生产端接线未做**（§4.44）；eval 三维化：**决策 105 关掉**——`core/harness/judge/diagnostic.go` 的 `DiagnosticAxes` 按 Localization × Identification × Reason 打分、`reason` 读轨迹面、`Overall` 未动，`make eval-axes` 20/20（§4.43）；prompt injection 标注：**决策 107 关掉**——`core/manager/biz/aiops/promptguard` 每次渲染现抽 nonce、`Parse` 只认 id 匹配的闭合标签，`core/manager/biz/aiops/tools/untrusted_sources.go` 用 `ToolName*` 常量列出「输出是外来文本」的闭集并由 `MarkUntrustedOutput` 一处适配，四处接线（含 `main.go` 后挂的 `host_bash`/`cloud_bash`）；**`buildInvestigatedPrompt` 的三个块与 system 里的 `Instruction()` 同源**，`make promptguard-check` 是闸门（§4.45） |
 | 3 控制面瘦身与联邦（P3） | **48%** | **第一条已关（决策 109/110）**：`iam → manager` 的三条审计边从 `exceptions` 台账与 `iam_server.mayDependOn` 双双删除，行的形状下沉到 `core/manager/pkg/audit`——无 usecase / repo / 链头 / HMAC，`biz/audit` 仍是唯一写入咽喉（§4.47）；**决策 110 把同一缺陷在另外 5 个域关掉**（alert / knowledge / setting / plugin / mcp 此前都为了「给一行记录命名」而 import 写入咽喉），并把「谁可以持有咽喉」变成一张带理由的表，由 `make audit-port-check`（13 条）守住，顺带补上 MCP 五处内联字面量。**第二条已开工但未完成**：按 import 图量出 manager 是 **55 个域散在 4–5 个 layer 树**里、**55 条需声明的跨域边**、**7 对互为依赖的环**（aiops↔alert / aiops↔hitl / aiops↔loop / alert↔demo / chatdiagnose↔loop / device↔edge / loop↔report）——环是「不能独立演进」的最强证据，而 layer 粒度的 arch-lint **看不见它们**；另有 **10 个无人引用的包 / 5,544 行**，实测全是方案自己没接线的半成品（crystallize 897 / critic 386 / proposal 383 / decorator 509），**删死代码这条捷径在包粒度上不存在**。**决策 111 把这份盘点变成闸门**：`scripts/domaincheck` + `make domain-check`——域按层树归并（`biz/alert` 与 `model/alert` 同属 `alert`），50 条跨域边逐条带理由，7 对环必须写明「怎样才切得断」，**表项过期本身也是红**（过期理由比没有理由更糟），检查器自身 13 条夹具测试（§4.49）。**决策 112 切掉了 7 对里的第一对**：实测 `device → edge` 在生产代码里只有一条 import（设备删除里的级联），接缝开在事务中间、由装配根注入 `EdgeIdentityRevoker` 后 **49 条边 / 6 对环**；顺带发现表里那条边的**理由本身是错的**（device 记录里并没有 edge 词汇），一并删掉（§4.50）。**决策 113 切掉了第二对**：`data/alert/store` 曾在自己的事务里推进 `demo_scenario_runs`（生产持久化层知道 demo 存在），把「这条告警是不是某条已开故事」这个问题端口化、由 demo 侧回答后 **48 条边 / 5 对环**；同一条边的理由在表里也指错了方向，一并删掉（§4.51）。**决策 114 切掉了第三对**：`biz/loop` 里那个「本包不 import chatdiagnose」的端口，签名却写着 `*chatdiagnosemodel.IncidentPattern`——接口在消费方声明但类型由生产方词汇决定，跨域 import 只是被藏进签名；改成「postmortem 落库了」并把指纹推导搬回知识库拥有者后 **47 条边 / 4 对环**，顺带补上这条路径此前**完全缺失的测试**，并暴露两个真缺陷（接线处的 nil 指针、`tenant_id` 恒为 `""`）（§4.52）。**决策 115 切掉了第四对**：`biz/loop/gitsink` 的包注释写着「挪进子包 → 包图无环 ✅」，而域是按路径归并的，包图无环不等于域图无环；adapter 改为本地声明 `Sink` 接口后 `main.go` 一字未改，**46 条边 / 3 对环**（§4.53）。**决策 116 切掉了第五对，而且它与前四对不同类**：`aiops ↔ hitl` 的两条边里，`hitl → aiops` **从来就不是真的**——它由一个零生产调用方、且设计文档已删除的迁移窗口（`MigrateLegacy` / `DualWriteRepo`，569 行）撑着，删掉后 **44 条边 / 2 对环**；检查器随即抓出 `hitl → approval` 也是同一个文件撑着的假边（理由「两域共享一个模型」并不成立），一并删除（§4.54）。**决策 117 切掉了第六对，而且它的两半是两种病**：`biz/loop` 渲染提示词要围栏，于是 import 了 agent 的 `promptguard`——而那个零依赖安全原语被三个域共用，正确位置是共享底座（照决策 109 的形状下沉到 `pkg/promptguard`，并补上 `pkg/audit` 那条「用 `go/ast` 断言够不到 BC」的测试，断言收紧到只许标准库）；另一半 `mcp_basetool.go` 把 loop 的 MCP 工具包装成 `basetool.BaseTool`，而**适配器由它的输出定义**，于是搬进 `biz/aiops/tools`（方向从 `loop → aiops` 变成表里本来就有的 `aiops → loop`），**43 条边 / 1 对环**；顺带修好一个已经红了的 `make promptguard-check`（它还在跑旧路径，是闸门第一次在包被移动时发挥作用），以及一处点名了不存在包名的错理由（`biz/aiops/loop` 并不存在，第五例）（§4.55）。**决策 118 切掉了第七对，也是最后一对，域图归零**：`aiops ↔ alert` 的贵的一侧是 14 条 `aiops → alert`，而 `alert → aiops` 只有 1 个文件里的 2 条——`biz/alert/investigator` 拿 `chatruntime.SpawnRequest/Worker` 和 `model/aiops.Message` 换来「告警触发一次自动根因分析」。两个都是 struct，**本地重声明不成立**（决策 114 的同一性墙），所以本轮拆成全标量的 `InvestigationRequest` / `InvestigationOutcome`（方法名也从对方的 `SpawnWorker` 改成自己的 `RunInvestigation`），翻译放在装配根；`MessageReader` 只带三个字段、返回 `[]T` 而非 `[]*T`，于是两处 nil 检查消失；那条**零测试覆盖**的 `worker == nil` 防御分支被值返回消除，运行时仍可能的 `(nil,nil)` 守卫搬到唯一能造出它的那一侧并从静默成功变成 error。**42 条边 / 0 对环**，七轮共切 8 条声明边 / 13 条生产 import（§4.56）。§4.53.4 记的「枢纽」判断就此收口：`aiops` 仍是依赖最多的域（读告警、读 HITL、驱动 loop），但**依赖多不是环，被依赖才是问题**。**决策 119 不改一行代码、也不动百分比，只把「能减的行数」变成一个数**：新增 `scripts/deadcode` + `make deadcode-report`（12 条夹具测试），按**文件粒度**报出生产代码里不可达的符号——这是 `domaincheck`（包粒度）看不见、而决策 116 亲手挖到过 569 行的那一类。读数 **486 个符号 / 整文件只有 4 个 72 行**。工具在 `2140df9` 的 worktree 上被要求报出决策 116 删掉的那两个文件，**两档分类都判对**（`MigrateLegacy:test-only`、`NewDualWriteRepo:dead`）。工具**故意不做成闸门**并把看不见的六类路径（反射 / go:linkname / cgo / struct tag / 嵌入方法提升 / 构建标签）打印在每次输出末尾——不可靠的闸门会训练出「trust me」注释（§4.57）。**第二、三条仍未完成**：manager **1132 个 Go 文件 / 281,566 行**未搬（口径见 §4.54.6；此前沿用的 1128 / 281,021 是决策 111 时的数，未随 112–115 重测）；10 个无人引用的包 / 5,544 行全是方案自己没接线的半成品，删死代码这条捷径在包粒度上不存在（决策 116 顺带证明了**文件粒度**上存在，已记为下一轮候选）；`manager → iam_model`（IM bridge）按原计划保留；无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档） |
 
-加权合计 ≈ **76.2%**（决策 118 更新：阶段 3 从 46% 记为 48%——
-三条子项里第一条全关、第二条**判完成**（环归零且 §4.56.6 验过 checker 强制新环登记，
-空表转不住）、第三条（多集群联邦）零实现；四阶段等比 65 / 100 / 91.7 / 48.0 的均值 76.2。
+加权合计 ≈ **74.9%**（**决策 121 更新：阶段 1 从 100% 调回 95%**——它此前记的
+最后一条待办「按 `Seq` 去重」拆开之后是两个形状相反的问题，`host_metrics_raw`
+那一半已关，`edge_change_events` 那一半没做且不能用天然键解决，需要新增字段
+上过线（§4.59）。**这个百分比下降不是因为写坏了代码，是因为之前那个 100% 把
+一个词当成了一个决定**；阶段 3 仍 48% 不变。）四阶段等比 65 / 95 / 91.7 / 48.0
+的均值 74.9。决策 118 记的 76.2% 对应阶段 1 的 100%、阶段 3 的 48%；
+
 决策 117 记的 75.7% 对应阶段 3 的 46%、已切 13 / 剩余 21；
 决策 116 记的 75.2% 对应阶段 3 的 44%、已切 11 / 剩余 23；
 决策 115 记的 74.6% 对应阶段 3 的 41.7%、已切 9 / 剩余 25；
@@ -8071,7 +8218,11 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
      `push_prom_samples`，**不需要新 wire 方法**（新方法就是新的回滚点）。
      manager 侧能接受**迟到的批次**；`Accepted=0` 读作「还没收下」，批次留在
      盘上（决策 100，§4.38）。**唯一剩下的**是**按 `Seq` 去重**——at-least-once
-     的另一半还没写（阶段 1 的最后一条待办）。
+     的另一半**已关掉一半**（决策 121，§4.59）：`host_metrics_raw` 按
+     `(edge_id, ts)` 唯一 + `ON CONFLICT DO NOTHING`，顺带修掉中心自己重试
+     导致的 5m 桶计数器翻倍，并给采样周期加了 1 秒下限。**剩下的是
+     `edge_change_events`**：它没有天然键（两次真实的重启可以字段全同），
+     所以必须新增 `Seq` 并上过线——这是另一个决定，不是另一半工作量。
    - ~~**审计回放**还需要 `agent.autonomy.replay` 隧道方法 → 中心接收 →
      **审计链补写**~~ ✅ 已完成（决策 101，§4.39）：隧道方法 + 中心链补写 +
      节点侧启动 `autonomy.Pump` 全部落地。节点断连时两阶段落盘，恢复后限流

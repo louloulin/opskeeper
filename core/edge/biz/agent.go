@@ -52,13 +52,33 @@ type CollectorOutput struct {
 	Samples        []tunnel.PromSample
 }
 
+// MinMetricsInterval is the shortest host-metric sampling period the wire can
+// carry.
+//
+// tunnel.HostMetricPoint.Ts is unix *seconds*, so two samples inside one
+// second are the same point as far as the center is concerned — and since
+// host_metrics_raw now stores (edge_id, ts) exactly once, the second one is
+// dropped rather than stored twice. Sampling faster than this would therefore
+// lose data silently, at a rate set by the operator, which is the worst
+// possible shape for a config knob to have.
+//
+// A sub-second interval was already unrepresentable before this floor
+// existed; it just failed in the other direction, by storing the same second
+// twice and double-counting it in the 5m downsample. NewAgent clamps rather
+// than refuses, because refusing would strand a node that has a working link
+// over a tunable, and the clamp is logged at WARN so the operator can see
+// that the number they configured is not the number in force.
+const MinMetricsInterval = time.Second
+
 // Config holds the agent run-loop knobs. Zero values are replaced with
 // sensible defaults by NewAgent.
 type Config struct {
 	// HeartbeatInterval is how often the agent sends a heartbeat RPC.
 	HeartbeatInterval time.Duration // default 30s
 	// MetricsInterval is how often the agent samples one metric point.
-	MetricsInterval time.Duration // default 10s
+	// Default 10s; floored at MinMetricsInterval. The floor is a protocol
+	// limit, not a preference — see MinMetricsInterval.
+	MetricsInterval time.Duration
 	// MetricsBatchSize is how many points to buffer before push.
 	MetricsBatchSize int // default 30 (5min at 10s)
 
@@ -349,6 +369,13 @@ func NewAgent(client tunnel.Client, collector Collector, cfg Config, log *slog.L
 	}
 	if cfg.MetricsInterval <= 0 {
 		cfg.MetricsInterval = 10 * time.Second
+	} else if cfg.MetricsInterval < MinMetricsInterval {
+		orig := cfg.MetricsInterval
+		cfg.MetricsInterval = MinMetricsInterval
+		log.Warn("agent: MetricsInterval below the wire resolution; clamped",
+			slog.Duration("configured", orig),
+			slog.Duration("in_force", cfg.MetricsInterval),
+			slog.String("reason", "host metric timestamps are whole seconds; a faster tick would be dropped as a duplicate"))
 	}
 	if cfg.MetricsBatchSize <= 0 {
 		cfg.MetricsBatchSize = 30

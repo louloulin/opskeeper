@@ -228,3 +228,37 @@ func TestReader_ScanRawForDownsample_CrossEdge(t *testing.T) {
 		t.Errorf("unexpected ordering: %+v", got)
 	}
 }
+
+func TestWriter_WriteRaw_ReplayingTheSameBatchStoresItOnce(t *testing.T) {
+	// The ground truth for the at-least-once half. biz/metric.Ingester
+	// retries one payload up to four times, and a write that lands but
+	// returns an error (a blip after COMMIT, a partial CreateInBatches)
+	// is indistinguishable from one that never landed — so the retry
+	// re-inserts rows the table already has.
+	//
+	// It is not a node problem and it needs no node: this reproduces it
+	// with two writes from one process.
+	db := newTestDB(t)
+	w := NewWriter(db)
+	ctx := context.Background()
+	base := time.Date(2026, 4, 23, 12, 0, 0, 0, time.UTC)
+
+	batch := []model.Point{
+		{EdgeID: 1, Ts: base, CPUPct: 10, MemPct: 50, Load1: 0.5, NetRxBps: 100, NetTxBps: 200, DiskUsedPct: 11},
+		{EdgeID: 1, Ts: base.Add(10 * time.Second), CPUPct: 20, MemPct: 60, Load1: 1, NetRxBps: 300, NetTxBps: 400, DiskUsedPct: 12},
+	}
+	if err := w.WriteRaw(ctx, batch); err != nil {
+		t.Fatalf("first WriteRaw: %v", err)
+	}
+	if err := w.WriteRaw(ctx, batch); err != nil {
+		t.Fatalf("replayed WriteRaw must not be an error, got: %v", err)
+	}
+
+	var rows []model.HostMetric
+	if err := db.WithContext(ctx).Order("ts").Find(&rows).Error; err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("host_metrics_raw holds %d rows after a replay, want 2: the same point is stored twice", len(rows))
+	}
+}

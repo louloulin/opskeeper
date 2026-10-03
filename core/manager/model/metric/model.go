@@ -99,12 +99,27 @@ type Bucket1h struct {
 // GORM row types. One per physical table.
 // ---------------------------------------------------------------------
 
-// HostMetric is the host_metrics_raw row. Matches
-// db/migrations/0003_init_manager_metric.up.sql exactly.
+// HostMetric is the host_metrics_raw row. The schema comes from Migrate
+// (gorm AutoMigrate), not from a checked-in .sql — the comment that used to
+// point at db/migrations/0003_init_manager_metric.up.sql was naming a file
+// this repository does not contain, which is the kind of reference that stops
+// anyone from noticing when the struct and the table drift apart.
+//
+// (edge_id, ts) is UNIQUE, and that is the whole at-least-once contract for
+// the raw table: one host point per edge per second, and a replay stores it
+// once. The wire cannot represent two points inside one second
+// (tunnel.HostMetricPoint.Ts is unix seconds), so the key costs no
+// representable data. WriteRaw pairs it with ON CONFLICT DO NOTHING.
+//
+// The index has a new name rather than being the old
+// idx_host_metrics_raw_edge_ts turned unique in place, because AutoMigrate
+// cannot change an existing index from non-unique to unique — a table that
+// already holds duplicates would just fail. Migrate therefore dedupes,
+// lets AutoMigrate add this one, and only then drops the old.
 type HostMetric struct {
 	ID          uint64    `gorm:"primaryKey;autoIncrement;column:id"`
-	EdgeID      uint64    `gorm:"index:idx_host_metrics_raw_edge_ts,priority:1;column:edge_id;not null"`
-	Ts          time.Time `gorm:"index:idx_host_metrics_raw_edge_ts,priority:2;column:ts;not null"`
+	EdgeID      uint64    `gorm:"uniqueIndex:uq_host_metrics_raw_edge_ts,priority:1;column:edge_id;not null"`
+	Ts          time.Time `gorm:"uniqueIndex:uq_host_metrics_raw_edge_ts,priority:2;column:ts;not null"`
 	CPUPct      float64   `gorm:"column:cpu_pct;not null"`
 	MemPct      float64   `gorm:"column:mem_pct;not null"`
 	Load1       float64   `gorm:"column:load1;not null"`
