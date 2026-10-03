@@ -91,26 +91,11 @@ func realService(t *testing.T) (Service, *pluginmanifest.Signer, string) {
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}
-	return &publisherService{reg: reg, pub: pub}, signer, signedTreeOnDisk(t)
-}
-
-type publisherService struct {
-	reg *fedbiz.Registry
-	pub *fedbiz.Publisher
-}
-
-func (s *publisherService) Enroll(id floorfed.ClusterID, name string) (string, error) {
-	return s.reg.Enroll(id, name)
-}
-func (s *publisherService) Members() []fedbiz.Member { return s.reg.Members() }
-func (s *publisherService) Member(id floorfed.ClusterID) (fedbiz.Member, bool) {
-	return s.reg.Member(id)
-}
-func (s *publisherService) Publish(ctx context.Context, id floorfed.ClusterID, req fedbiz.PublishRequest) (fedbiz.PublishResult, error) {
-	return s.pub.Publish(ctx, id, req)
-}
-func (s *publisherService) Acknowledge(id floorfed.ClusterID, out floorfed.Outcome) error {
-	return s.reg.Acknowledge(id, out)
+	svc, err := fedbiz.NewService(reg, pub)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	return svc, signer, signedTreeOnDisk(t)
 }
 
 func signedTreeOnDisk(t *testing.T) string {
@@ -358,6 +343,43 @@ func TestPublishRequiresAStagedRoot(t *testing.T) {
 
 	if code, _ := do(t, srv, "POST", "/v1/federation/clusters/prod-cn-north/policy", `{}`); code != http.StatusBadRequest {
 		t.Errorf("publish with no staged_root = %d, want 400", code)
+	}
+}
+
+// TestAKeylessRootKeepsEverythingButTheSigning covers the shape of a
+// deployment that was never given a release key. It is a control plane with
+// one feature off, not a control plane that answers 503 to everything — so
+// the enrolment, the listing and the state read all keep working, and the
+// publish answers with a code that says "this root cannot sign" rather than
+// one that sends the operator looking for a different directory.
+func TestAKeylessRootKeepsEverythingButTheSigning(t *testing.T) {
+	svc, err := fedbiz.NewService(fedbiz.NewRegistry(nil), nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	srv := newServer(t, svc, nil, "admin")
+
+	if code, body := do(t, srv, "POST", "/v1/federation/clusters", `{"id":"prod-cn-north","name":"north"}`); code != http.StatusCreated {
+		t.Fatalf("enrol on a keyless root = %d, want 201 (%v)", code, body)
+	}
+	if code, body := do(t, srv, "GET", "/v1/federation/clusters", ""); code != http.StatusOK {
+		t.Errorf("list on a keyless root = %d, want 200 (%v)", code, body)
+	}
+
+	code, body := do(t, srv, "POST", "/v1/federation/clusters/prod-cn-north/policy",
+		`{"staged_root":"/tmp/somewhere"}`)
+	if code != http.StatusServiceUnavailable {
+		t.Errorf("publish on a keyless root = %d, want 503 (%v)", code, body)
+	}
+	if errCode(body) != "no_release_key" {
+		t.Errorf("code = %q, want no_release_key", errCode(body))
+	}
+
+	// The one that would be a data-integrity bug rather than a missing
+	// feature: a version spent on a decision this root could never make.
+	_, one := do(t, srv, "GET", "/v1/federation/clusters/prod-cn-north", "")
+	if issued, _ := one["highest_issued"].(float64); issued != 0 {
+		t.Errorf("highest_issued = %v after a keyless publish, want 0 — a version must not be spent on a refusal", one["highest_issued"])
 	}
 }
 

@@ -314,6 +314,15 @@ func (r *Registry) Acknowledge(id federation.ClusterID, out federation.Outcome) 
 	if !ok {
 		return ErrNotEnrolled
 	}
+	// An answer about no version is not an answer. Recording it would
+	// overwrite LastAck with a zero outcome, and LastAck is the only
+	// record that a child *declined* something — the refusal a rollout
+	// most needs to hear, and the one a root that stops hearing about
+	// goes on to misread as a cluster that is merely behind.
+	if out.Version < federation.MinBundleVersion {
+		return fmt.Errorf("%w: cluster %q acknowledged version %d, which is not a version anything can be issued as",
+			ErrUnknownVersion, id, out.Version)
+	}
 	// A child's answer about a version this root never issued is not
 	// recorded. It means one of the two is wrong about the numbering, and
 	// overwriting the root's own ledger with the child's version would

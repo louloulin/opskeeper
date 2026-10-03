@@ -368,6 +368,13 @@ func mapErr(err error) (string, int) {
 		// to be told plainly, because the alternative reading is "try
 		// again".
 		return "unknown_version", http.StatusConflict
+	case errors.Is(err, fedbiz.ErrNoReleaseKey):
+		// Unavailable, not invalid: the request was well formed and the
+		// tree may well be a package. This root simply cannot sign, and
+		// the version it would have issued was not spent — so the
+		// operator's next move is to provision a key, not to pick a
+		// different directory.
+		return "no_release_key", http.StatusServiceUnavailable
 	case errors.Is(err, ErrChildUnreachable):
 		return "child_unreachable", http.StatusBadGateway
 	case errors.Is(err, errNotWired):
