@@ -15,6 +15,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/querybackend"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
@@ -33,11 +34,11 @@ var untrustedOutputs = []struct {
 	kind promptguard.Kind
 }{
 	// Log content — Loki. Anyone who can write a log line writes this.
-	{ToolNameQueryLogQL, promptguard.KindLog},
+	{querybackend.ToolNameQueryLogQL, promptguard.KindLog},
 
 	// Trace data — Tempo. Span and service names come from instrumented
 	// applications, so they are written by whoever deploys them.
-	{ToolNameQueryTraceQL, promptguard.KindTool},
+	{querybackend.ToolNameQueryTraceQL, promptguard.KindTool},
 
 	// Alert text — names, annotations, labels, incident descriptions.
 	{alerting.ToolNameQueryIncidents, promptguard.KindAlert},

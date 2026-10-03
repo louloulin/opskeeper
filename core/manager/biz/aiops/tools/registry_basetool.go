@@ -8,6 +8,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/database"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/metriccatalog"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/querybackend"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	"os"
@@ -92,7 +93,7 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 
 	// 3: query_promql — gated on Prom client.
 	if r.promQuery != nil {
-		out = append(out, NewQueryPromQLTool(r.promQuery, r.log))
+		out = append(out, querybackend.NewQueryPromQLTool(r.promQuery, r.log))
 		out = append(out, metriccatalog.NewListMetricCatalogTool(r.promQuery, r.log))
 	}
 	// 3a: list_database_sources — configured databasemetrics /
@@ -107,11 +108,11 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	}
 	// 4: query_logql — gated on Loki client.
 	if r.logQuery != nil {
-		out = append(out, NewQueryLogQLTool(r.logQuery, r.log))
+		out = append(out, querybackend.NewQueryLogQLTool(r.logQuery, r.log))
 	}
 	// 5: query_traceql — gated on Tempo client.
 	if r.traceQuery != nil {
-		out = append(out, NewQueryTraceQLTool(r.traceQuery, r.log))
+		out = append(out, querybackend.NewQueryTraceQLTool(r.traceQuery, r.log))
 	}
 	// 5b: query_knowledge — operator-curated docs + git repos.
 	// Gated on knowledge service; nil-safe (tool stays out of the bag).

@@ -9,6 +9,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/database"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/metriccatalog"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/querybackend"
 	"go/format"
 	"os"
 	"path/filepath"
@@ -97,19 +98,19 @@ func observabilityTools() []observabilityEntry {
 				info, err := alerting.NewQueryChangeEventsTool(nil, nil, nil).Info(ctx)
 				return infoOf(t, info, err)
 			}},
-		{ToolNameQueryLogQL, "query_logql",
+		{querybackend.ToolNameQueryLogQL, "query_logql",
 			func(t *testing.T, ctx context.Context) basetoolInfo {
-				info, err := NewQueryLogQLTool(nil, nil).Info(ctx)
+				info, err := querybackend.NewQueryLogQLTool(nil, nil).Info(ctx)
 				return infoOf(t, info, err)
 			}},
-		{ToolNameQueryPromQL, "query_promql",
+		{querybackend.ToolNameQueryPromQL, "query_promql",
 			func(t *testing.T, ctx context.Context) basetoolInfo {
-				info, err := NewQueryPromQLTool(nil, nil).Info(ctx)
+				info, err := querybackend.NewQueryPromQLTool(nil, nil).Info(ctx)
 				return infoOf(t, info, err)
 			}},
-		{ToolNameQueryTraceQL, "query_traceql",
+		{querybackend.ToolNameQueryTraceQL, "query_traceql",
 			func(t *testing.T, ctx context.Context) basetoolInfo {
-				info, err := NewQueryTraceQLTool(nil, nil).Info(ctx)
+				info, err := querybackend.NewQueryTraceQLTool(nil, nil).Info(ctx)
 				return infoOf(t, info, err)
 			}},
 		{ToolNameReadSource, "read_source",

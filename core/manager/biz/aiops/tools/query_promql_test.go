@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/querybackend"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"sync"
@@ -63,11 +64,11 @@ func TestQueryPromQL_RoundTrip(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, pq, nil, nil, nil, slog.Default())
 
-	if !containsName(schemaNames(reg.Schemas()), ToolNameQueryPromQL) {
+	if !containsName(schemaNames(reg.Schemas()), querybackend.ToolNameQueryPromQL) {
 		t.Errorf("query_promql not registered: %v", schemaNames(reg.Schemas()))
 	}
 
-	out, err := reg.Invoke(context.Background(), ToolNameQueryPromQL,
+	out, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryPromQL,
 		json.RawMessage(`{"expr":"up","lookback_seconds":600}`))
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
@@ -97,7 +98,7 @@ func TestQueryPromQL_DefaultLookback(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, pq, nil, nil, nil, slog.Default())
 
-	if _, err := reg.Invoke(context.Background(), ToolNameQueryPromQL, json.RawMessage(`{"expr":"up"}`)); err != nil {
+	if _, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryPromQL, json.RawMessage(`{"expr":"up"}`)); err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
 	if pq.gotStep != 15*time.Second {
@@ -110,7 +111,7 @@ func TestQueryPromQL_MissingExpr(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, pq, nil, nil, nil, slog.Default())
 
-	if _, err := reg.Invoke(context.Background(), ToolNameQueryPromQL, json.RawMessage(`{}`)); err == nil {
+	if _, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryPromQL, json.RawMessage(`{}`)); err == nil {
 		t.Errorf("expected error for missing expr")
 	}
 }
@@ -120,7 +121,7 @@ func TestQueryPromQL_DispatchError(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, pq, nil, nil, nil, slog.Default())
 
-	_, err := reg.Invoke(context.Background(), ToolNameQueryPromQL, json.RawMessage(`{"expr":"up"}`))
+	_, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryPromQL, json.RawMessage(`{"expr":"up"}`))
 	if err == nil {
 		t.Errorf("expected propagated dispatch error")
 	}
@@ -130,10 +131,10 @@ func TestQueryPromQL_NotRegisteredWhenPromNil(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, nil, nil, nil, slog.Default())
 
-	if containsName(schemaNames(reg.Schemas()), ToolNameQueryPromQL) {
+	if containsName(schemaNames(reg.Schemas()), querybackend.ToolNameQueryPromQL) {
 		t.Errorf("query_promql should NOT be registered when promQuery is nil")
 	}
-	_, err := reg.Invoke(context.Background(), ToolNameQueryPromQL, json.RawMessage(`{"expr":"up"}`))
+	_, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryPromQL, json.RawMessage(`{"expr":"up"}`))
 	if err == nil {
 		t.Errorf("expected not-found error when prom disabled")
 	}

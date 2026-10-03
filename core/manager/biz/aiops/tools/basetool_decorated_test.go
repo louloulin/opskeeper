@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/querybackend"
 	"log/slog"
 	"strings"
 	"testing"
@@ -49,7 +50,7 @@ func TestBaseTool_DecoratedChain_QueryPromQL(t *testing.T) {
 			Result:     json.RawMessage(`[]`),
 		},
 	}
-	inner := NewQueryPromQLTool(pq, slog.Default())
+	inner := querybackend.NewQueryPromQLTool(pq, slog.Default())
 
 	sink := &chainAuditSink{}
 	limiter := decorators.NewTokenBucketLimiter(60)
@@ -75,7 +76,7 @@ func TestBaseTool_DecoratedChain_QueryPromQL(t *testing.T) {
 	if len(sink.starts) != 1 || len(sink.ends) != 1 {
 		t.Errorf("audit fired %d start / %d end, want 1/1", len(sink.starts), len(sink.ends))
 	}
-	if sink.starts[0].ToolName != ToolNameQueryPromQL {
+	if sink.starts[0].ToolName != querybackend.ToolNameQueryPromQL {
 		t.Errorf("audit name = %q", sink.starts[0].ToolName)
 	}
 	if sink.starts[0].UserID != 7 {
@@ -83,7 +84,7 @@ func TestBaseTool_DecoratedChain_QueryPromQL(t *testing.T) {
 	}
 
 	// metric decorator: counter ticked.
-	if got := chainCounter(t, reg, ToolNameQueryPromQL, "success"); got != 1 {
+	if got := chainCounter(t, reg, querybackend.ToolNameQueryPromQL, "success"); got != 1 {
 		t.Errorf("metric counter = %f, want 1", got)
 	}
 }
@@ -144,7 +145,7 @@ func TestBaseTool_DecoratedChain_Order(t *testing.T) {
 	pq := &fakePromQuerier{
 		resp: &promquery.InstantResult{ResultType: "matrix", Result: json.RawMessage(`[]`)},
 	}
-	inner := NewQueryPromQLTool(pq, slog.Default())
+	inner := querybackend.NewQueryPromQLTool(pq, slog.Default())
 
 	sink := &chainAuditSink{}
 	// 1/min, burst=1: 2nd call is denied.
@@ -182,7 +183,7 @@ func TestBaseTool_DecoratedChain_TenantBindNoOpForPromQL(t *testing.T) {
 	pq := &fakePromQuerier{
 		resp: &promquery.InstantResult{ResultType: "matrix", Result: json.RawMessage(`[]`)},
 	}
-	inner := NewQueryPromQLTool(pq, slog.Default())
+	inner := querybackend.NewQueryPromQLTool(pq, slog.Default())
 	wrapped := decorators.Wrap(inner, decorators.Deps{Timeout: 5 * time.Second})
 
 	if _, err := wrapped.InvokableRun(context.Background(), `{"expr":"up"}`,

@@ -25,6 +25,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/database"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/metriccatalog"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/querybackend"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
@@ -264,9 +265,9 @@ func NewRegistry(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Useca
 	})
 	if promQuery != nil {
 		r.Register(Tool{
-			Name:        ToolNameQueryPromQL,
-			Description: QueryPromQLDescription,
-			Schema:      QueryPromQLSchema,
+			Name:        querybackend.ToolNameQueryPromQL,
+			Description: querybackend.QueryPromQLDescription,
+			Schema:      querybackend.QueryPromQLSchema,
 			Execute:     r.executeQueryPromQL,
 		})
 		r.Register(Tool{
@@ -278,17 +279,17 @@ func NewRegistry(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Useca
 	}
 	if logQuery != nil {
 		r.Register(Tool{
-			Name:        ToolNameQueryLogQL,
-			Description: QueryLogQLDescription,
-			Schema:      QueryLogQLSchema,
+			Name:        querybackend.ToolNameQueryLogQL,
+			Description: querybackend.QueryLogQLDescription,
+			Schema:      querybackend.QueryLogQLSchema,
 			Execute:     r.executeQueryLogQL,
 		})
 	}
 	if traceQuery != nil {
 		r.Register(Tool{
-			Name:        ToolNameQueryTraceQL,
-			Description: QueryTraceQLDescription,
-			Schema:      QueryTraceQLSchema,
+			Name:        querybackend.ToolNameQueryTraceQL,
+			Description: querybackend.QueryTraceQLDescription,
+			Schema:      querybackend.QueryTraceQLSchema,
 			Execute:     r.executeQueryTraceQL,
 		})
 	}

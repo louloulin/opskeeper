@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/querybackend"
 	"log/slog"
 	"sync"
 	"testing"
@@ -40,12 +41,12 @@ func TestQueryTraceQL_RoundTrip(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, nil, tq, nil, slog.Default())
 
-	if !containsName(schemaNames(reg.Schemas()), ToolNameQueryTraceQL) {
+	if !containsName(schemaNames(reg.Schemas()), querybackend.ToolNameQueryTraceQL) {
 		t.Errorf("query_traceql not registered: %v", schemaNames(reg.Schemas()))
 	}
 
 	args := json.RawMessage(`{"query":"{ resource.service.name = \"web\" }","limit":10,"min_duration":"100ms"}`)
-	out, err := reg.Invoke(context.Background(), ToolNameQueryTraceQL, args)
+	out, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryTraceQL, args)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestQueryTraceQL_TagMode(t *testing.T) {
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, nil, tq, nil, slog.Default())
 
 	args := json.RawMessage(`{"service":"web","operation":"GET /api","max_duration":"5s"}`)
-	if _, err := reg.Invoke(context.Background(), ToolNameQueryTraceQL, args); err != nil {
+	if _, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryTraceQL, args); err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
 	if tq.got.Tags["service.name"] != "web" {
@@ -100,7 +101,7 @@ func TestQueryTraceQL_RequiresAFilter(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, nil, tq, nil, slog.Default())
 
-	if _, err := reg.Invoke(context.Background(), ToolNameQueryTraceQL, json.RawMessage(`{}`)); err == nil {
+	if _, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryTraceQL, json.RawMessage(`{}`)); err == nil {
 		t.Errorf("expected error when no filter is given")
 	}
 }
@@ -110,7 +111,7 @@ func TestQueryTraceQL_BadDuration(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, nil, tq, nil, slog.Default())
 
-	_, err := reg.Invoke(context.Background(), ToolNameQueryTraceQL,
+	_, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryTraceQL,
 		json.RawMessage(`{"service":"web","min_duration":"not-a-duration"}`))
 	if err == nil {
 		t.Errorf("expected error for bad min_duration")
@@ -122,7 +123,7 @@ func TestQueryTraceQL_DispatchError(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, nil, tq, nil, slog.Default())
 
-	_, err := reg.Invoke(context.Background(), ToolNameQueryTraceQL,
+	_, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryTraceQL,
 		json.RawMessage(`{"service":"web"}`))
 	if err == nil {
 		t.Errorf("expected propagated dispatch error")
@@ -133,10 +134,10 @@ func TestQueryTraceQL_NotRegisteredWhenNil(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, nil, nil, nil, slog.Default())
 
-	if containsName(schemaNames(reg.Schemas()), ToolNameQueryTraceQL) {
+	if containsName(schemaNames(reg.Schemas()), querybackend.ToolNameQueryTraceQL) {
 		t.Errorf("query_traceql should NOT be registered when traceQuery is nil")
 	}
-	_, err := reg.Invoke(context.Background(), ToolNameQueryTraceQL,
+	_, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryTraceQL,
 		json.RawMessage(`{"service":"web"}`))
 	if err == nil {
 		t.Errorf("expected not-found error when trace disabled")

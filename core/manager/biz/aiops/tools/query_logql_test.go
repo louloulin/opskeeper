@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/querybackend"
 	"log/slog"
 	"sync"
 	"testing"
@@ -41,11 +42,11 @@ func TestQueryLogQL_RoundTrip(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, lq, nil, nil, slog.Default())
 
-	if !containsName(schemaNames(reg.Schemas()), ToolNameQueryLogQL) {
+	if !containsName(schemaNames(reg.Schemas()), querybackend.ToolNameQueryLogQL) {
 		t.Errorf("query_logql not registered: %v", schemaNames(reg.Schemas()))
 	}
 
-	out, err := reg.Invoke(context.Background(), ToolNameQueryLogQL,
+	out, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryLogQL,
 		json.RawMessage(`{"query":"{edge_id=\"1\"} |= \"error\"","limit":50,"direction":"forward"}`))
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
@@ -78,7 +79,7 @@ func TestQueryLogQL_DefaultsLimitAndDirection(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, lq, nil, nil, slog.Default())
 
-	if _, err := reg.Invoke(context.Background(), ToolNameQueryLogQL, json.RawMessage(`{"query":"{a=\"b\"}"}`)); err != nil {
+	if _, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryLogQL, json.RawMessage(`{"query":"{a=\"b\"}"}`)); err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
 	if lq.got.Limit != 200 {
@@ -95,7 +96,7 @@ func TestQueryLogQL_ExplicitTimeWindow(t *testing.T) {
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, lq, nil, nil, slog.Default())
 
 	args := json.RawMessage(`{"query":"{a=\"b\"}","start":"2026-05-01T00:00:00Z","end":"2026-05-01T01:30:00Z"}`)
-	if _, err := reg.Invoke(context.Background(), ToolNameQueryLogQL, args); err != nil {
+	if _, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryLogQL, args); err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
 	wantStart, _ := time.Parse(time.RFC3339, "2026-05-01T00:00:00Z")
@@ -113,7 +114,7 @@ func TestQueryLogQL_RelativeNowWindow(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, lq, nil, nil, slog.Default())
 
-	if _, err := reg.Invoke(context.Background(), ToolNameQueryLogQL, json.RawMessage(`{"query":"{a=\"b\"}","start":"now-2h","end":"now"}`)); err != nil {
+	if _, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryLogQL, json.RawMessage(`{"query":"{a=\"b\"}","start":"now-2h","end":"now"}`)); err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
 	span := lq.got.End.Sub(lq.got.Start)
@@ -127,7 +128,7 @@ func TestQueryLogQL_MissingQuery(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, lq, nil, nil, slog.Default())
 
-	if _, err := reg.Invoke(context.Background(), ToolNameQueryLogQL, json.RawMessage(`{}`)); err == nil {
+	if _, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryLogQL, json.RawMessage(`{}`)); err == nil {
 		t.Errorf("expected error for missing query")
 	}
 }
@@ -137,7 +138,7 @@ func TestQueryLogQL_BadStart(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, lq, nil, nil, slog.Default())
 
-	_, err := reg.Invoke(context.Background(), ToolNameQueryLogQL,
+	_, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryLogQL,
 		json.RawMessage(`{"query":"{a=\"b\"}","start":"not-a-time"}`))
 	if err == nil {
 		t.Errorf("expected error for bad start")
@@ -149,7 +150,7 @@ func TestQueryLogQL_DispatchError(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, lq, nil, nil, slog.Default())
 
-	_, err := reg.Invoke(context.Background(), ToolNameQueryLogQL, json.RawMessage(`{"query":"{a=\"b\"}"}`))
+	_, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryLogQL, json.RawMessage(`{"query":"{a=\"b\"}"}`))
 	if err == nil {
 		t.Errorf("expected propagated dispatch error")
 	}
@@ -159,10 +160,10 @@ func TestQueryLogQL_NotRegisteredWhenNil(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, nil, nil, nil, slog.Default())
 
-	if containsName(schemaNames(reg.Schemas()), ToolNameQueryLogQL) {
+	if containsName(schemaNames(reg.Schemas()), querybackend.ToolNameQueryLogQL) {
 		t.Errorf("query_logql should NOT be registered when logQuery is nil")
 	}
-	_, err := reg.Invoke(context.Background(), ToolNameQueryLogQL, json.RawMessage(`{"query":"{a=\"b\"}"}`))
+	_, err := reg.Invoke(context.Background(), querybackend.ToolNameQueryLogQL, json.RawMessage(`{"query":"{a=\"b\"}"}`))
 	if err == nil {
 		t.Errorf("expected not-found error when log disabled")
 	}

@@ -5,6 +5,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/querybackend"
 	"log/slog"
 	"testing"
 
@@ -68,7 +69,7 @@ func TestLookupAgreesWithTheTable(t *testing.T) {
 func TestMarkUntrustedOutputsWrapsExactlyTheTable(t *testing.T) {
 	f := promptguard.NewFencer()
 	in := []basetool.BaseTool{
-		stubUntrustedTool{name: ToolNameQueryLogQL, out: "level=error msg=boom"},
+		stubUntrustedTool{name: querybackend.ToolNameQueryLogQL, out: "level=error msg=boom"},
 		stubUntrustedTool{name: "query_promql", out: "42"},
 	}
 	out := markUntrustedOutputs(in, f)
@@ -88,8 +89,8 @@ func TestMarkUntrustedOutputsWrapsExactlyTheTable(t *testing.T) {
 	if !ok {
 		t.Fatalf("the marked tool's result is not fenced:\n%s", fenced)
 	}
-	if env.Kind != promptguard.KindLog || env.Origin != ToolNameQueryLogQL {
-		t.Fatalf("envelope = %+v, want kind=log origin=%s", env, ToolNameQueryLogQL)
+	if env.Kind != promptguard.KindLog || env.Origin != querybackend.ToolNameQueryLogQL {
+		t.Fatalf("envelope = %+v, want kind=log origin=%s", env, querybackend.ToolNameQueryLogQL)
 	}
 	if env.Body != "level=error msg=boom" {
 		t.Fatalf("body = %q, want the tool's output unchanged", env.Body)
@@ -151,7 +152,7 @@ func TestEveryNameInTheTableIsFencedInTheShippedBag(t *testing.T) {
 	// A bag assembled with every dependency present must actually exercise
 	// the table; otherwise this test passes by having nothing to check.
 	for _, name := range []string{
-		ToolNameQueryLogQL, ToolNameQueryTraceQL,
+		querybackend.ToolNameQueryLogQL, querybackend.ToolNameQueryTraceQL,
 		alerting.ToolNameQueryIncidents, alerting.ToolNameGetIncidentDetail, alerting.ToolNameQueryAlertRules, correlate.ToolNameCorrelateIncident,
 		host.ToolNameFindLargeFiles, host.ToolNameDuSummary, host.ToolNameStatFile,
 	} {
@@ -171,7 +172,7 @@ func TestTheShippedBagFencesRatherThanJustWraps(t *testing.T) {
 	var found bool
 	for _, tool := range reg.BuildBaseTools().AllTools() {
 		info, err := tool.Info(context.Background())
-		if err != nil || info == nil || info.Name != ToolNameQueryLogQL {
+		if err != nil || info == nil || info.Name != querybackend.ToolNameQueryLogQL {
 			continue
 		}
 		found = true
@@ -183,8 +184,8 @@ func TestTheShippedBagFencesRatherThanJustWraps(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s's result is not fenced:\n%s", info.Name, out)
 		}
-		if env.Origin != ToolNameQueryLogQL || env.Kind != promptguard.KindLog {
-			t.Fatalf("envelope = %+v, want origin=%s kind=log", env, ToolNameQueryLogQL)
+		if env.Origin != querybackend.ToolNameQueryLogQL || env.Kind != promptguard.KindLog {
+			t.Fatalf("envelope = %+v, want origin=%s kind=log", env, querybackend.ToolNameQueryLogQL)
 		}
 	}
 	if !found {
