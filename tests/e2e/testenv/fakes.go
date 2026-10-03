@@ -31,6 +31,33 @@ type FakeLLM struct {
 	reply     string
 	calls     int
 	gotModels []string // model parameter from each request, in order
+
+	// script is a queue of tool calls the fake asks for, one per turn,
+	// consumed in order. Empty by default, which is why adding it changed
+	// no existing test: a fake with no script answers text exactly as
+	// before.
+	script []LLMToolCall
+	// gotTools records, per request, the tool names the caller advertised.
+	// It is the evidence for "the agent was offered something to call" —
+	// without it, a scripted tool call proves only that the fake can
+	// produce JSON, not that the node's agent had a menu.
+	gotTools [][]string
+	// gotMessages records the message count per request, which is how a
+	// test tells "the model was called again after the tool answered"
+	// from "the model answered once and the tool never ran".
+	gotMessages []int
+}
+
+// LLMToolCall is one tool call the fake asks a model to make.
+//
+// Arguments is a JSON string because that is the shape the OpenAI wire
+// carries for a streamed tool call's arguments: the client concatenates the
+// fragments, and a harness that handed over a pre-parsed object would be
+// testing a convenience the wire does not offer.
+type LLMToolCall struct {
+	ID        string
+	Name      string
+	Arguments string
 }
 
 // NewFakeLLM starts an httptest.Server that speaks enough of the
@@ -59,6 +86,39 @@ func (f *FakeLLM) SetLLMReply(s string) {
 	f.mu.Unlock()
 }
 
+// SetToolScript makes the fake ask for tool calls, one per turn, in order.
+//
+// It exists because the delivery acceptance is a conversation in which the
+// agent *does* something, and a fake that can only answer text can only
+// prove the pipe is open. The script is consumed turn by turn: the Nth
+// request gets the Nth entry, and once the queue is empty the fake goes
+// back to answering text. That shape is deliberate — it is what a real
+// tool-using turn looks like, one call then one answer — and it means a
+// test does not have to write a state machine to model a two-step turn.
+func (f *FakeLLM) SetToolScript(calls ...LLMToolCall) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.script = append([]LLMToolCall(nil), calls...)
+}
+
+// ToolsAdvertised returns the tool names each request carried, in order.
+func (f *FakeLLM) ToolsAdvertised() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([][]string, len(f.gotTools))
+	copy(out, f.gotTools)
+	return out
+}
+
+// MessagesPerRequest returns the message count of each request, in order.
+func (f *FakeLLM) MessagesPerRequest() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]int, len(f.gotMessages))
+	copy(out, f.gotMessages)
+	return out
+}
+
 // CallCount returns how many completions have been served.
 func (f *FakeLLM) CallCount() int {
 	f.mu.Lock()
@@ -78,26 +138,69 @@ func (f *FakeLLM) ModelsRequested() []string {
 
 func (f *FakeLLM) openaiChat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Model string `json:"model"`
+		Model    string `json:"model"`
+		Messages []struct {
+			Role string `json:"role"`
+		} `json:"messages"`
+		Tools []struct {
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		} `json:"tools"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	names := make([]string, 0, len(req.Tools))
+	for _, tool := range req.Tools {
+		names = append(names, tool.Function.Name)
+	}
+
 	f.mu.Lock()
 	f.calls++
 	f.gotModels = append(f.gotModels, req.Model)
+	f.gotMessages = append(f.gotMessages, len(req.Messages))
+	f.gotTools = append(f.gotTools, names)
 	reply := f.reply
+	var call *LLMToolCall
+	if len(f.script) > 0 {
+		head := f.script[0]
+		f.script = f.script[1:]
+		call = &head
+	}
 	f.mu.Unlock()
+
+	message := map[string]any{"role": "assistant"}
+	finish := "stop"
+	if call != nil {
+		// A tool call is content *and* a request: the assistant message
+		// carries no text, and the finish reason is what tells the client
+		// to go and run something. Getting finish_reason wrong here is
+		// the classic way to produce a fake that looks like it works and
+		// an agent that silently never calls a tool.
+		message["content"] = nil
+		message["tool_calls"] = []map[string]any{{
+			"index": 0,
+			"id":    call.ID,
+			"type":  "function",
+			"function": map[string]any{
+				"name":      call.Name,
+				"arguments": call.Arguments,
+			},
+		}}
+		finish = "tool_calls"
+	} else {
+		message["content"] = reply
+	}
+
 	resp := map[string]any{
 		"id":      "chatcmpl-fake",
 		"object":  "chat.completion",
 		"created": time.Now().Unix(),
 		"model":   req.Model,
 		"choices": []map[string]any{{
-			"index": 0,
-			"message": map[string]any{
-				"role":    "assistant",
-				"content": reply,
-			},
-			"finish_reason": "stop",
+			"index":         0,
+			"message":       message,
+			"finish_reason": finish,
 		}},
 		"usage": map[string]any{
 			"prompt_tokens":     42,
