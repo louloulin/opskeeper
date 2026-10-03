@@ -198,6 +198,44 @@ def test_a_test_may_name_what_it_is_testing(tmp_path: Path) -> None:
     assert "test_boundary.py" not in err
 
 
+def test_the_gates_own_test_may_hold_what_the_gate_looks_for(tmp_path: Path) -> None:
+    """The one file that has to contain the literals: the gate's own test.
+
+    It is identified by sharing the auditor's stem, and both spellings count.
+    The first version of this exemption matched only the Go spelling
+    (`audit_open_source_test`) and therefore missed the Python one
+    (`test_audit_open_source`) -- so the gate went on reporting the very file
+    that was exempt from it.
+    """
+    scaffold(tmp_path)
+    (tmp_path / "test_audit_open_source.py").write_text(
+        'LEAK = "louloulin"\nIP = "8.160.172.235"\n', encoding="utf-8"
+    )
+    (tmp_path / "audit_open_source_test.py").write_text(
+        'LEAK = "louloulin"\n', encoding="utf-8"
+    )
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "add", "--no-gpg-sign")
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 0, err
+
+
+def test_an_unrelated_test_file_is_not_exempt(tmp_path: Path) -> None:
+    """The exemption covers the gate's own test, not tests in general.
+
+    If it covered every test file, a real key committed beside a unit test
+    would ship, and the decoy exemption's whole reason for being narrow would
+    be gone.
+    """
+    scaffold(tmp_path)
+    (tmp_path / "test_payment.py").write_text('key = "louloulin"\n', encoding="utf-8")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "add", "--no-gpg-sign")
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 1
+    assert "test_payment.py" in err
+
+
 def test_every_ongrid_allowlist_entry_records_why(tmp_path: Path) -> None:
     """An allowlist entry with no reason is a failure someone silenced.
 

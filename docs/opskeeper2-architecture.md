@@ -11242,7 +11242,7 @@ var Markers = []string{"Makefile", "VERSION", "plugins/pig-ops"}
 ### 4.102 决策 166：让 CI 第一次真的跑起来，于是它一次抓出三样东西——其中两样从未有人知道存在
 
 决策 165 修好了触发条件并加了两道守卫，但**它自己也没有证据**：`gh api
-repos/louloulin/opskeeper/actions/runs --jq .total_count` 在推送之后仍然是 `0`。
+repos/<本仓库>/actions/runs --jq .total_count` 在推送之后仍然是 `0`。
 于是本轮改用 `gh workflow run ci.yml --ref feature/pig` 手动触发，拿到本仓库
 **历史上第一条 run**：
 
@@ -11291,7 +11291,7 @@ open-source gate failed: private path admitted: docs/superpowers/plans/2026-09-1
 而它实际上是五十件。
 
 它的第二个缺陷更根本：`text_files()` 走的是 `ROOT.rglob("*")`，扫的是**工作树**。
-于是一条从未提交的本地 `go.work`（里面带 `/Users/...`）就能让开源门槛变红，而干净
+于是一条从未提交的本地 `go.work`（里面带一条家目录绝对路径）就能让开源门槛变红，而干净
 checkout 是绿的——**这正是决策 164 花一整天从测试里拆掉的那一类依赖**：门槛的结论
 取决于未被跟踪的本地状态。
 
@@ -11384,16 +11384,16 @@ backend_commit 之后共 2315 个文件变动，其中 1560 个在允许的发�
 
 | 位置 | 命中 |
 |---|---|
-| `PPT_FULL.md` / `PPT_SCRIPT.md` / `PPT_SLIDES.md` / `FINAL_DEMO_SCRIPT.md` | 赛道 / 决赛 |
-| `openspec/changes/**/{design,proposal,tasks}.md`（6 个） | 决赛 / 参赛 / 评委 |
-| `site/app/live-incident/page.tsx` | 决赛（面向用户的文案） |
-| `site/app/open-source/page.tsx` / `site/app/zh/open-source/page.tsx` | 私有仓库属主名 |
-| `docs/ACKNOWLEDGMENTS.md` | 私有仓库属主名 |
-| `scripts/verify-final-demo.sh`、`core/manager/biz/demo/scenario_test.go` | goai-demo |
-| `plugins/opskeeper-teamharness/dashboard/.../archive-route.jsx` | 决赛 |
+| `PPT_FULL.md` / `PPT_SCRIPT.md` / `PPT_SLIDES.md` / `FINAL_DEMO_SCRIPT.md` | event-stage language |
+| `openspec/changes/**/{design,proposal,tasks}.md`（6 个） | event-stage language |
+| `site/app/live-incident/page.tsx` | event-stage language（面向用户的文案） |
+| `site/app/open-source/page.tsx` / `site/app/zh/open-source/page.tsx` | private repository owner |
+| `docs/ACKNOWLEDGMENTS.md` | private repository owner |
+| `scripts/verify-final-demo.sh`、`core/manager/biz/demo/scenario_test.go` | private demo tenant |
+| `plugins/opskeeper-teamharness/dashboard/.../archive-route.jsx` | event-stage language |
 
 其中一处本轮**直接改了**：`docs/opskeeper2-architecture.md`（本台账）里有 9 处私有
-属主名和 6 处 `/Users/...` 绝对路径——其中若干处是本轮我自己写进去的。它是本轮能改
+属主名和 6 处家目录绝对路径——其中若干处是本轮我自己写进去的。它是本轮能改
 的，因为它是本轮写的文档，替换成 `<PiG checkout>` / `<this repository>` 之后语义不变。
 
 其余的**一律没动**：它们是别人的演示脚本、赛事文档和用户可见文案，改写它们是产品

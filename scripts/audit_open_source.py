@@ -113,6 +113,25 @@ def fail(message: str) -> None:
 VIOLATIONS: list[str] = []
 
 
+def is_this_gate_s_own_test(relative: Path) -> bool:
+    """Whether this file is a test of the gate itself.
+
+    `tests/test_audit_open_source.py` has to contain every string the gate
+    looks for, because its whole job is to plant them and assert they are
+    reported. It is the one file in the repository that is required to hold
+    the forbidden literals, and it is identified by sharing the auditor's
+    stem rather than by a hand-listed path, so renaming the gate does not
+    quietly turn this into a hole.
+
+    Note the shape of the exemption: it covers the *test of the gate*, not
+    tests in general. A credential dropped into an unrelated `_test.go` is
+    still reported, which is the property the decoy exemption exists to
+    protect.
+    """
+    stem = relative.stem
+    return stem == AUDITOR.stem + "_test" or stem == "test_" + AUDITOR.stem
+
+
 def is_test(relative: Path) -> bool:
     """Whether this is a test file.
 
@@ -232,14 +251,17 @@ def main() -> int:
     for relative in files:
         content = (ROOT / relative).read_text(encoding="utf-8")
         test_file = is_test(relative)
+        gate_own_test = is_this_gate_s_own_test(relative)
         for label, pattern in FORBIDDEN_PATTERNS.items():
             if label == "private user path" and test_file:
+                continue
+            if gate_own_test:
                 continue
             match = pattern.search(content)
             if match and match.group(0) not in DECOY_CREDENTIALS:
                 preview = match.group(0)[:120]
                 report(f"{label} found in {relative}: {preview}")
-        if re.search(r"ongrid", content, re.I) and relative not in ONGRID_ALLOWLIST and not test_file:
+        if re.search(r"ongrid", content, re.I) and relative not in ONGRID_ALLOWLIST and not test_file and not gate_own_test:
             report(f"OnGrid outside compliance allowlist: {relative}")
 
     check_acknowledgments()
