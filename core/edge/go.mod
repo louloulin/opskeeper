@@ -69,6 +69,7 @@ require (
 	github.com/singchia/yafsm v1.0.1 // indirect
 	github.com/tklauser/go-sysconf v0.3.11 // indirect
 	github.com/tklauser/numcpus v0.6.0 // indirect
+	github.com/vincent-wuhan/opskeeper/sdk v0.0.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.3 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
@@ -77,7 +78,22 @@ require (
 // Sibling modules resolve by path during development; the workspace covers
 // this in a normal build, the replaces keep a bare module directory
 // buildable in CI jobs that disable workspaces.
+//
+// sdk is here because the node plane imports floor/tunnel, and floor/tunnel
+// now reaches floor/federation, which is where the policy rules live — and
+// floor/federation sits on top of floor/pluginmanifest, which imports sdk.
+// None of that is an edge→sdk dependency in the design sense, and none of it
+// is avoidable without splitting the governance manifest away from the wire.
+//
+// It is a local-path replace rather than a go.sum entry on purpose. A
+// directory replace is not verified against go.sum, and a version-verified
+// entry for a module that is never published under a real tag would be a
+// lie the moment someone cut a release. The cost of getting this wrong is
+// that `make module-standalone-check` fails with "missing go.sum entry for
+// sdk", which is the correct place for it to fail: that build is the one
+// that proves what a released node will actually resolve.
 replace (
 	github.com/vincent-wuhan/opskeeper/core => ../
 	github.com/vincent-wuhan/opskeeper/core/floor => ../floor
+	github.com/vincent-wuhan/opskeeper/sdk => ../../sdk
 )
