@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"io"
 	"log/slog"
 	"strings"
@@ -157,8 +158,8 @@ func TestInvestigateAsyncWritesEvent(t *testing.T) {
 	}
 
 	// Tool invocation sanity.
-	if toolsFake.gotName != aiopstools.ToolNameCorrelateIncident {
-		t.Errorf("tool name=%q, want %q", toolsFake.gotName, aiopstools.ToolNameCorrelateIncident)
+	if toolsFake.gotName != correlate.ToolNameCorrelateIncident {
+		t.Errorf("tool name=%q, want %q", toolsFake.gotName, correlate.ToolNameCorrelateIncident)
 	}
 	var argMap map[string]any
 	_ = json.Unmarshal(toolsFake.gotArgs, &argMap)

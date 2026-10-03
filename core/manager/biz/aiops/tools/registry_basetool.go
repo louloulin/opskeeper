@@ -3,6 +3,7 @@ package tools
 import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/chat2query"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/database"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
@@ -156,7 +157,7 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	// 13: correlate_incident — needs ALL four signal sources, same as
 	// the closure path (NewRegistry).
 	if r.alertUC != nil && r.promQuery != nil && r.logQuery != nil && r.traceQuery != nil {
-		out = append(out, NewCorrelateIncidentTool(
+		out = append(out, correlate.NewCorrelateIncidentTool(
 			r.alertUC, r.promQuery, r.logQuery, r.traceQuery, r.edges, r.devices, r.log,
 		))
 	}

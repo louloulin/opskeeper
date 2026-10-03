@@ -13,6 +13,7 @@ package tools
 import (
 	"context"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
@@ -42,7 +43,7 @@ var untrustedOutputs = []struct {
 	{alerting.ToolNameQueryIncidents, promptguard.KindAlert},
 	{alerting.ToolNameGetIncidentDetail, promptguard.KindAlert},
 	{alerting.ToolNameQueryAlertRules, promptguard.KindAlert},
-	{ToolNameCorrelateIncident, promptguard.KindAlert},
+	{correlate.ToolNameCorrelateIncident, promptguard.KindAlert},
 
 	// Repository and knowledge text — files, diffs, commit and PR prose.
 	{ToolNameListRepoSources, promptguard.KindSource},

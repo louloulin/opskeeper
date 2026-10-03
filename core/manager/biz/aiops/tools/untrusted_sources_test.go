@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"log/slog"
 	"testing"
@@ -151,7 +152,7 @@ func TestEveryNameInTheTableIsFencedInTheShippedBag(t *testing.T) {
 	// the table; otherwise this test passes by having nothing to check.
 	for _, name := range []string{
 		ToolNameQueryLogQL, ToolNameQueryTraceQL,
-		alerting.ToolNameQueryIncidents, alerting.ToolNameGetIncidentDetail, alerting.ToolNameQueryAlertRules, ToolNameCorrelateIncident,
+		alerting.ToolNameQueryIncidents, alerting.ToolNameGetIncidentDetail, alerting.ToolNameQueryAlertRules, correlate.ToolNameCorrelateIncident,
 		host.ToolNameFindLargeFiles, host.ToolNameDuSummary, host.ToolNameStatFile,
 	} {
 		if !marked[name] {

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/chat2query"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/database"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
@@ -353,9 +354,9 @@ func NewRegistry(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Useca
 	// it never returns a half-empty bundle that confuses the LLM.
 	if alertUC != nil && promQuery != nil && logQuery != nil && traceQuery != nil {
 		r.Register(Tool{
-			Name:        ToolNameCorrelateIncident,
-			Description: CorrelateIncidentDescription,
-			Schema:      CorrelateIncidentSchema,
+			Name:        correlate.ToolNameCorrelateIncident,
+			Description: correlate.CorrelateIncidentDescription,
+			Schema:      correlate.CorrelateIncidentSchema,
 			Execute:     r.executeCorrelateIncident,
 		})
 	}

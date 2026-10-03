@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/correlate"
 	"log/slog"
 	"sync"
 	"time"
@@ -310,9 +311,9 @@ func (i *Investigator) gatherBundle(ctx context.Context, incidentID uint64) ([]b
 	if err != nil {
 		return nil, fmt.Errorf("marshal correlate args: %w", err)
 	}
-	res, err := i.tools.Invoke(ctx, aiopstools.ToolNameCorrelateIncident, args)
+	res, err := i.tools.Invoke(ctx, correlate.ToolNameCorrelateIncident, args)
 	if err != nil {
-		return nil, fmt.Errorf("invoke %s: %w", aiopstools.ToolNameCorrelateIncident, err)
+		return nil, fmt.Errorf("invoke %s: %w", correlate.ToolNameCorrelateIncident, err)
 	}
 	if len(res.ResultJSON) == 0 {
 		return nil, errors.New("correlate_incident returned empty result")
