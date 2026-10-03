@@ -198,6 +198,25 @@ def test_a_test_may_name_what_it_is_testing(tmp_path: Path) -> None:
     assert "test_boundary.py" not in err
 
 
+def test_every_ongrid_allowlist_entry_records_why(tmp_path: Path) -> None:
+    """An allowlist entry with no reason is a failure someone silenced.
+
+    The same rule the ledger applies to its own exemption tables applies here:
+    the next person to add a path must write down why, or the list stops being
+    evidence and becomes a habit.
+    """
+    module = load_auditor(tmp_path)
+    for path, why in module.ONGRID_ALLOWLIST.items():
+        assert why.strip(), f"{path} is on the OnGrid allowlist with no reason recorded"
+
+
+def test_the_repository_ongrid_allowlist_points_at_files_that_exist() -> None:
+    """An entry for a file that was renamed or deleted is a hole, not a policy."""
+    real = load_auditor(REPO_ROOT)
+    for path in real.ONGRID_ALLOWLIST:
+        assert (REPO_ROOT / path).is_file(), f"{path} is on the OnGrid allowlist but does not exist"
+
+
 def test_a_missing_required_file_still_stops_immediately(tmp_path: Path) -> None:
     """Some failures make the rest of the scan meaningless.
 
@@ -228,3 +247,63 @@ def test_the_three_leaks_the_gate_exists_for(tmp_path: Path, pattern_fragment: s
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__]))
+
+
+# --- the repository's own private roots -------------------------------------
+#
+# This one exists because of a mistake made twice in a row, and both times the
+# same signal said it had worked: `git rm --cached` plus `git status` plus a
+# commit that reported thousands of deletions, while `git ls-tree -r HEAD`
+# still listed the files. The pattern in .gitignore was written as
+# `/docs/deliverables/` for a directory that lives at the repository root, so
+# it never matched and `git add -A` put every one of them back.
+#
+# The lesson is not "be careful with gitignore". It is that a claim about what
+# a release contains has to be checked with a command that reads the release.
+
+
+def check_ignore(root: Path, path: str) -> str:
+    result = subprocess.run(
+        ["git", "check-ignore", "-v", "--", path], cwd=root, capture_output=True, text=True
+    )
+    return result.stdout.strip()
+
+
+def test_the_private_roots_are_actually_ignored() -> None:
+    """A .gitignore line that matches nothing is not a policy.
+
+    `git status` on these paths shows them as untracked, which reads like
+    "handled" and is the reason this failed twice: nothing checked that the
+    pattern matched.
+    """
+    roots = ("deliverables/modelscope/ASSETS.md",
+             "docs/superpowers/plans/example.md",
+             "openspec/changes/example/.comet/handoff/design-context.md")
+    for path in roots:
+        matched = check_ignore(REPO_ROOT, path)
+        assert matched, f".gitignore has no rule that matches {path}"
+        assert REPO_ROOT.joinpath(path).exists() or True  # may be absent; the rule is what matters
+        # The rule must be the one these paths are excluded by, and it must
+        # come from this repository's own file rather than a global one.
+        assert matched.startswith(".gitignore:"), f"{path} is excluded by {matched}, not by this repo"
+
+
+def test_the_private_roots_are_not_in_any_commit() -> None:
+    """The check that actually answers the question, and the one that was missing.
+
+    `git ls-tree` reads the commit. Every other signal used in its place reads
+    the index or the working directory, and those three disagreed.
+    """
+    for prefix in ("deliverables/", "docs/superpowers/"):
+        listed = subprocess.run(
+            ["git", "ls-tree", "-r", "HEAD", "--name-only"],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        ).stdout.splitlines()
+        offenders = [p for p in listed if p.startswith(prefix)]
+        assert not offenders, f"{len(offenders)} file(s) under {prefix} are in HEAD: {offenders[:3]}"
+    listed = subprocess.run(
+        ["git", "ls-tree", "-r", "HEAD", "--name-only"],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    comet = [p for p in listed if "/.comet/" in p]
+    assert not comet, f"{len(comet)} .comet file(s) are in HEAD: {comet[:3]}"

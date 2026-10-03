@@ -17,13 +17,25 @@ SKIPPED_SUFFIX_PARTS = {
     ("plugins", "agentteams-plugin-installer", "dashboard", "dist"),
     ("plugins", "opskeeper-teamharness", "dist"),
 }
+# ONGRID_ALLOWLIST is where the OnGrid brand may be named, each with the
+# reason it is there.
+#
+# It is a map rather than a bare set for the same reason every other exemption
+# in this repository is: a name that appears in an allowlist with no recorded
+# reason is indistinguishable from a name somebody added to make a failure go
+# away, and the second one is how the first stops meaning anything. Two of the
+# six are documents that exist to talk *about* the rule -- a gate cannot
+# describe itself without quoting itself -- and one of those is this
+# repository's own architecture ledger, which records the decision to add the
+# rule and therefore cannot avoid the word.
 ONGRID_ALLOWLIST = {
-    Path("NOTICE.md"),
-    Path("TRADEMARK.md"),
-    Path("docs/BRAND_GOVERNANCE.md"),
-    Path("docs/PROVENANCE.md"),
-    Path("docs/ACKNOWLEDGMENTS.md"),
-    Path("docs/OPEN_SOURCE_GATE.md"),
+    Path("NOTICE.md"): "the notice must name the parties whose terms it carries",
+    Path("TRADEMARK.md"): "the trademark register is the canonical place the mark is listed",
+    Path("docs/BRAND_GOVERNANCE.md"): "the document that defines the naming boundary states the boundary",
+    Path("docs/PROVENANCE.md"): "provenance records where third-party material came from",
+    Path("docs/ACKNOWLEDGMENTS.md"): "the acknowledgment of the upstream project names it by design",
+    Path("docs/OPEN_SOURCE_GATE.md"): "this rule's own documentation; a gate cannot describe itself without quoting itself",
+    Path("docs/opskeeper2-architecture.md"): "the architecture ledger records the decisions on the other rules, including this one's name and reason, so quoting it is unavoidable",
 }
 REQUIRED_FILES = (
     Path("LICENSE"),

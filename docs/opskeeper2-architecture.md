@@ -11524,6 +11524,56 @@ release version check failed: plugin.yaml version drifted
 | `make ci-gate-check` | 5 gates + `every push starts the workflow` |
 | 第一次 push 触发的 CI run | step 1–15 全绿，step 16 停在 `version-check`（即本文的起因） |
 
+#### 4.103.4 CI 里第一次出现开源门槛的输出
+
+推送之后，第二次 push 触发的 run（37160290433）走到了第 16 步，step 1–15 全绿，
+第 16 步的日志里第一次出现这三行：
+
+```
+OK: all checks passed
+231 passed in 11.41s
+open-source gate failed: 25 violation(s) in the tracked tree
+```
+
+**这就是本轮想要的全部东西**：不是一条绿色的 CI，而是一条**真的会红、并且把 25 件事
+一次列全**的红。
+
+25 里有 1 处是本轮自己造成的：4.103.1 那一节为了说明豁免的边界，写出了 OnGrid 这个
+词，于是门槛举报了记录这条规则的那份文档。这是本轮第三次出现同一个形状——**写下关于
+某条规则的说明，本身就会命中那条规则**（前两次是 `self_check` 的路径和测试文件里的
+断言字符串）。这次的修法是把 `ONGRID_ALLOWLIST` 从裸集合改成**带理由的映射**，
+并把架构台账加进去，理由逐字写下：台账记录了这条规则的名字和来由，引用它无法避免。
+配套两条测试：每一条豁免都必须有理由，且每一条指向的文件必须存在——指向已删除文件
+的豁免是洞不是政策。
+
+最终 **25 → 24**，24 处全部是内容类，全部属于需要人来定的范围（4.102.5）。
+
+#### 4.103.5 同一个错误犯了第二次，以及钉住它的两条测试
+
+写完 4.103.4 之后提交时，`git add -A` 又把 `deliverables/` 的 19 个文件和 6 个
+`.comet/` 文件全部加了回来——**和 4.102.8 是同一个错误，第二次**。
+
+根因这次终于查到了：`.gitignore` 里写的是 `/docs/deliverables/`，而那个目录在仓库根
+下，不在 `docs/` 里；`**/.comet/` 那行**根本没写进去**——上一轮那段编辑没有落盘。
+所以那三个路径从来就没有被忽略过，`git add -A` 每次都会把它们收回来。上一轮我把
+它们从索引摘掉时是有效的（`ls-tree` 当时确实是 0），但 `.gitignore` 没兜住下一次。
+
+值得注意的是**同一个错误连犯两次而中间没有任何新信息**——两次我都在看 `git status`
+的暂存列，两次它都说做完了。真正能区分"我打算删"和"它已经不在了"的，只有
+`git ls-tree` 和 `git check-ignore`。这两条现在就是测试：
+
+- `test_the_private_roots_are_actually_ignored`：逐个路径跑 `git check-ignore -v`，
+  并要求命中来自本仓库的 `.gitignore` 而不是全局配置。一条匹配不到任何东西的
+  gitignore 行不是策略。
+- `test_the_private_roots_are_not_in_any_commit`：跑 `git ls-tree -r HEAD`，断言
+  三个路径根一个都不在提交里。
+
+变异验证：把 `/deliverables/` 退回成 `/docs/deliverables/` 并删掉 `**/.comet/`，
+第一条立刻红；恢复后 14 passed。
+
+这一条比前面四条都更值钱，因为它说的不是"这次做对了"，而是**下一次做错会被什么拦
+住**。
+
 #### 4.103.3 进度：仍然不动
 
 四阶段仍是 80% / 100% / 96.7% / 79.7%，加权 **89.1%**。
