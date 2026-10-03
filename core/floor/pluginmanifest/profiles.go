@@ -132,7 +132,7 @@ var deploymentProfiles = []Profile{
 		// disagree is worse than one with no prose, because the prose is
 		// what an operator trusts.
 		NotGranted:  "k8s.exec, db.write, mq.write",
-		BlockedNote: "an L3 package or one declaring a radius wider than pod is refused here even if its scopes were granted; widen MaxRadius in this profile rather than in a node's environment, so the change is reviewable.",
+		BlockedNote: "an L3 package or one declaring a radius wider than pod is refused here even if its scopes were granted; widen MaxRadius in this profile rather than in a node's environment, so the change is reviewable. The L3 refusal is what keeps the unattended self-heal package (opskeeper-sre-autonomy) off this fleet, which is the intended answer rather than an oversight: strong consistency and reversibility by restarting the thing you restarted is the last place to install a capability whose premise is that nobody is watching.",
 		Composes: []string{
 			"opskeeper-sre-middleware",
 			"opskeeper-sre-observability",
@@ -173,7 +173,20 @@ var deploymentProfiles = []Profile{
 		// grant as the control.
 		NotGranted:  "nothing — the namespace ceiling is what contains this profile, not the scope list",
 		BlockedNote: "a cluster-radius action is refused here. That is the tenancy boundary; a fleet that needs one is a fleet considering a different profile, not a reason to edit this one.",
+		// Autonomy is composed here and not in the financial profile, and
+		// the ceiling decided it rather than a preference. The self-heal
+		// package is L3 — it mutates a live host with nobody available to
+		// approve — and the financial profile is capped at L2 with a note
+		// saying so. A fleet whose rule is strong consistency and
+		// reversibility by restarting the thing you restarted is the last
+		// place to install a capability whose entire premise is that the
+		// restart is unattended. The SaaS profile is the defensible home:
+		// one pod's worth of reach, an explicit list of vectors a tenant's
+		// own operator signed, and a fleet large enough that one node's
+		// agent answering while the control plane is unreachable is a
+		// thing somebody would actually want.
 		Composes: []string{
+			"opskeeper-sre-autonomy",
 			"opskeeper-sre-middleware",
 			"opskeeper-sre-observability",
 			"opskeeper-sre-readonly",

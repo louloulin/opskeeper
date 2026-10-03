@@ -8321,6 +8321,177 @@ A、B 各钉住修复的一个半边；C、D 钉住**这是收紧而不是放松
 `tests/e2e/testenv/fakes.go` 补了 `LLMHold`（`HoldNextCall` / `WaitReached` /
 `Release`）—— 两者都**尚未接线**，是留给决策 138 的零件。
 
+### 4.75 决策 138：`host_autonomy_run` 在任何 PiG 扩展里都不存在——决策 137 打开的闸门，模型从来看不见
+
+决策 137 修好了一个互斥条件，让自治请求**能到达**仲裁器。本条是接着去建「审计回传
+e2e」时撞见的第二道门——它在 137 的**上一层**，而且性质更糟：137 之前那扇门是锁着的，
+这一扇是**根本不存在**。
+
+#### 4.75.1 三处证据
+
+- `core/pig/extensions/` 下五个扩展（gate / readonly / middleware / observability /
+  repair），`tools.go` 里注册的工具名合计约 30 个，**没有一个叫
+  `host_autonomy_run`**。
+- 全仓 `grep -rn 'autonomy' core/pig/` **零命中**。PiG 侧对自治这个概念一无所知。
+- 而 `core/floor/skill/builtin/autonomy_run.go` 的文件头写着：
+
+  > The tool is registered on every node … It is a host executor, so its presence
+  > in the registry does not put it in front of a model: only a manifest that names
+  > it makes the gate willing to dispatch it.
+
+  这句话**是对的**，而且正是问题所在：`skill.Register` 只把它放进**宿主**的注册表，
+  而模型看到的工具清单来自 **PiG 扩展**。两套注册表之间没有任何东西把
+  `host_autonomy_run` 从前者搬到后者。
+
+#### 4.75.2 这意味着什么
+
+`host_autonomy_run` 是全系统**唯一一个可以在无人审批时改主机**的入口。它有完整的
+仲裁器、六道闸门、审计 spool、回传 pump、HMAC 中心审计链、有 TTL、有幂等键、有 blast
+radius 上限、有能力族、有覆盖率统计——**除了模型够不着它**。
+
+换句话说：整条自治链路是一条从「没人能叫」开始的路。137 让门能推开，138 让门外面真的
+有路。**在这两条之前，自治是一次都不会发生的**，而这两条各自都测得出来：137 靠
+路由级测试，138 靠 schema 断言。
+
+顺带一个更有意思的推论：这个缺口的存在，恰好让 137 那把锁「看起来合理」——一个没人
+能调的工具，要求它拿到一张拿不到的收据，看起来像防御纵深。所以 137 的注释里那句
+「这是修复不是放松」是**事后**才成立的；在 138 之前，读者完全有理由怀疑那是放松。
+
+#### 4.75.3 补的是哪一个扩展，以及为什么不是 repair
+
+三个扩展（readonly / repair / autonomy）里，前两个的包头注释都写着
+
+> Every tool in this package is served by an upcall, because the reviewer that
+> must see a proposal lives on the other side of the tunnel.
+
+**这句话对自治工具是假的。** 137 之后它在中心离线时走 `runLocal`。把自治塞进 repair
+会让那个文件头的断言变成谎言——而本仓库最在意的就是这种「注释声称的守卫不存在」。
+
+所以新建第三个扩展 `opskeeper-sre-autonomy`，**一个工具**，`tools.go` 顶部写明：
+
+> A second tool would be a second way for a model to ask a node to change
+> something with nobody watching … the count is the point rather than a
+> coincidence.
+
+- `client.go` 与 repair 逐字节相同（**有测试断言**，见 4.75.6）
+- `go.mod` 只依赖 broker 协议类型，`replace` 指向 core
+- `scripts/sync-pig-ops.sh` 生成 `plugins/pig-ops/opskeeper-sre-autonomy/extensions/`
+  下的发布副本（节点上没有 unpublished module，所以 wire 词汇随扩展内联）
+- `go.work`、`Makefile` 的 `PIG_MODULES` 同步登记
+
+#### 4.75.4 最要紧的一条测试：schema 里不许有命令
+
+`TestTheToolTakesNoCommandParameter` 断言：
+
+1. schema 的 `properties` **不含** `command / cmd / argv / args / arguments /
+   script / shell / exec / run / bin / binary / path / file`
+2. 剩下的每个属性**类型都是 string**（模型只能填名字，填不出结构）
+3. `additionalProperties` **存在且为 false**——对象是闭合的
+
+第 3 条最容易被忽略：没有它，模型可以发送 schema 从未声明的 `command` 键，而一个
+宽松的宿主会觉得那字段「挺有用」。
+
+变异验证：给 schema 加一个 `command` 属性、把 `additionalProperties` 改成 `true`，
+**两条同时变红**（`the schema admits a "command" property` /
+`additionalProperties = true, want it present and false`）。
+
+这是本条真正的价值所在——**从这一刻起，往这个工具的 schema 里加命令是一个会被
+测试挡下的动作**，而在此之前它是一个只有人眼能发现的动作。
+
+#### 4.75.5 治理面：一个包引出三处联动
+
+新包一落地，三个原本沉默的闸门立刻响了，这三个响得都对：
+
+- `TestEveryShippedToolHasACapabilityFamily` → `host_autonomy_run` 归入
+  **`CapRecovery`** 而不是 `CapHost`。理由写在代码注释里：repair 的 restart 是人逐次
+  签的宿主操作，这个是**同样一次恢复、换了一条路**（签过的清单代替在线的审批人）；
+  归到 host 族会答错题。
+- `TestEveryShippedPackageIsComposedByAtLeastOneProfile` → **只有 SaaS profile
+  装它**，finance 不装。不是偏好，是**天花板决定的**：自治包是 L3，finance 是 L2，
+  而 finance 的 `BlockedNote` 本来就写着 L3 一律拒绝。把这个理由补进两处注释：
+  金融强一致、靠重启可逆的机队，是「装一个前提就是没人看着」的能力的最后一站。
+- `TestEveryPackagedExtensionMatchesItsCanonicalSource` → 变异发布副本的
+  `tools.go`，红在 `the packaged tools.go has ...`（已还原）。
+
+`safety_level: L3` 不是随手写的：L2 的天花板是 `write`，`MinimumClass(L2)` 正是
+`write`，一个 `destructive` 工具写在 L2 里会是**加载错误**而不是被夹紧。L3 才是
+「destructive 天花板 + 审批带 blast radius」。
+
+`required_scopes: []` 也是刻意的：这个扩展从不调 API，所以没有任何凭据要认证。附带
+一个好处——将来若有动作真的需要凭据，**加不上去**，必须回来改这一行，而改这里就等于
+重新评审。
+
+`install.strategy: pin`（同 repair）：能在无人值守时重启服务的包，不能跨机队自动升级。
+
+#### 4.75.6 顺手修掉一个「注释声称的守卫」
+
+`core/pig/extensions/opskeeper-sre-repair/go.mod` 里写着：
+
+> That equality is asserted by TestTheTwoToolsetsShareOneBrokerClient rather
+> than left to discipline.
+
+全仓 `grep` ——**这个测试不存在**。于是在自己的模块里补了一个真的：
+`TestTheBrokerClientIsTheSameOneTheOtherToolsetsUse` 按字节比对 `client.go`（只允许
+package 子句不同），漂移即红。
+
+（repair 那个模块里的失效注释本条没有改。它是别的模块的注释，而一个声称存在守卫的
+注释比一个没有守卫更危险——这条留给下一个动到 repair 的人，顺手删掉那句。）
+
+#### 4.75.7 验证
+
+| 项 | 结果 |
+|---|---|
+| 新模块 `go test ./... -count=1` | 14 passed |
+| 同上，`GOWORK=off`（发布条件） | ok |
+| `make plugin-extension-build-check` | every packaged extension builds the way a node builds it |
+| `go test ./core/floor/... -count=1` | 369 passed / 11 packages |
+| `go test ./core/manager/service/plugin/ ./core/manager/server/plugin/ ./core/manager/biz/federation/ ./core/pig/pigprofile/` | 134 passed / 4 packages |
+| `go build ./...` / `go vet ./...` | 全绿 |
+| `make module-check` | 边界全部成立 |
+| 变异 ×2（schema 加命令 / 打开对象）+ ×1（改发布副本） | 全部按预期变红 |
+
+#### 4.75.8 诚实的边界
+
+- **仍然不是 e2e。** 本条证明「模型看得见这个工具」和「schema 关得住命令」，没有证明
+  一次真实的断网自愈。「审计回传」那条 e2e 剧本仍然欠着，且现在**解锁了**：模型能调
+  了，剩下的缺口是夹具（scrape 配置、带 `autonomy` 块的准入包清单、`ScrapeConfigFile`
+  开关），这些零件在 4.74.7 里已备好但未接线。
+- **全量盘点没做。** 本条只钉死了 `host_autonomy_run` 这一个名字。宿主
+  `core/floor/skill/builtin` 里 `skill.Register` 有 14 处、PiG 五个扩展注册的工具有
+  76 个，两张表**没有做过一次完整比对**——粗看数量差得远（而且两边名字空间并不完全
+  重合：不少 PiG 工具是走 upcall 到中心、不在宿主注册表里的）。「还有没有别的宿主
+  能力模型够不着」是一次独立的盘点，本条不下结论。
+  （已排除的一个疑点：`opskeeper-gate` 扩展不注册任何工具，只做 `tool_call` 拦截，
+  它本来就该是「看不见工具」的。）
+- **`offline_after: 30s` 仍是拍的**（4.74.6 已记），本条没有动它。
+- 发布副本由脚本生成，**手改必被漂移测试抓住**——但本条只验证了**新包**被覆盖，没有
+  逐个复核旧包的四份副本是否也在同一守卫下（守卫是遍历目录的，理论上全覆盖）。
+
+#### 4.75.9 台账：**84.0% 不动**，两次都不动是对的
+
+阶段 3 的三条是**审计端口（1.00）、manager 拆分（0.44）、多集群联邦（0.94）**。
+自治自愈**不在这三条里的任何一条**——它在第一把尺子（§六 上半张表）的 D 阶段
+「插件生态 95%」的覆盖范围里，而那 25% 的权重已经计过 B3（写操作，需审批）
+这一批了。137 与 138 做的是**把已计过的能力从「不可达」变成「可达」**，不是新增
+一条，所以：
+
+```
+阶段 3 = 79.3% 不变
+加权   = (65 + 100 + 91.7 + 79.3) / 4 = 84.0% 不变
+```
+
+值得说清楚的是**为什么不动是对的**，因为这正是决策 124 那段话指出的偏差的又一例：
+本表对「这条能力有几处代码」和「这条能力能不能上生产」一视同仁，而 137+138 恰好
+是后者的分界线。**在这两个 commit 之前，「节点自治自愈」这个能力的交付状态是 0
+——不是「差一点」，是任何配置都改不了的 0**；在这两个 commit 之后它是一个**存在
+但未被 e2e 证明**的能力。如果本表的判据是「能不能上生产」，那 137+138 应该给分；
+如果判据是「e2e 跑过没有」，那不给分是对的。**本表用的是后者**（§六 明写
+「判据是每一阶段计划里写下的验收闸门」），而 §五 C 阶段的验收闸门是那三个剧本。
+所以不动。
+
+而这恰恰点出了下一刀为什么重要：**决策 139 要是做不出那条 e2e，上面这两个 0 就
+还是 0。**
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

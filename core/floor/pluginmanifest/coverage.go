@@ -198,6 +198,17 @@ var toolCapabilities = map[string]string{
 	"host_restart_service": CapHost,
 	"verify_recovery":      CapHost,
 	"recovery.execute":     CapRecovery,
+
+	// --- opskeeper-sre-autonomy ---
+	//
+	// CapRecovery rather than CapHost, and the difference is the whole
+	// point of the package. The repair toolset's restart is a host
+	// operation a human signed off on one call at a time; this one's is
+	// the same recovery, reached by a different route — a signed manifest
+	// rather than a live reviewer. An incident case that exercises it is
+	// scoring whether recovery works when the control plane is gone, and
+	// filing it under the host family would score the wrong question.
+	"host_autonomy_run": CapRecovery,
 }
 
 // CapabilitiesOf returns the capability families a package's tools serve,

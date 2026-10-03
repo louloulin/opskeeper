@@ -391,6 +391,7 @@ PIG_MODULES := . core core/edge core/floor core/harness core/manager core/pig \
 	core/pig/extensions/opskeeper-sre-middleware \
 	core/pig/extensions/opskeeper-sre-observability \
 	core/pig/extensions/opskeeper-sre-repair \
+	core/pig/extensions/opskeeper-sre-autonomy \
 	sdk
 
 # Deliberately not defaulted to a path on any one developer's machine. A
