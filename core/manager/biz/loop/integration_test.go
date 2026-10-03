@@ -315,6 +315,25 @@ func TestDryRun_PgLongRunningTx_EndToEnd(t *testing.T) {
 	if eventRepo.Len() != len(res.LoopEvents) {
 		t.Errorf("EventRepo.Len = %d, want %d", eventRepo.Len(), len(res.LoopEvents))
 	}
+
+	// A successful dispatch must leave the same durable trace of what it
+	// ran as a failed one. The approved phase is the only phase that
+	// invokes a tool, and here it ran pg.terminate_long_tx; if that only
+	// lived on phase_failed, a postmortem of a *successful* run could not
+	// tell "ran this" from "ran nothing".
+	foundReplay := false
+	for _, ev := range res.LoopEvents {
+		if ev.EventType == loopmodel.EventPhaseContractWritten && ev.Phase == string(PhaseApproved) {
+			if !payloadHasToolReplay(t, ev, "pg.terminate_long_tx") {
+				t.Errorf("approved phase_contract_written has no tool_replay naming pg.terminate_long_tx: %s", ev.Payload)
+			} else {
+				foundReplay = true
+			}
+		}
+	}
+	if !foundReplay {
+		t.Error("no approved phase_contract_written event recorded the successful dispatch; a good run would read as 'no tool invoked'")
+	}
 	_ = contractRepo
 }
 

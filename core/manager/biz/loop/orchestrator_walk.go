@@ -430,6 +430,14 @@ func sideEffectsPayload(r ExecResult) map[string]any {
 	if len(r.RawOutputs) > 0 {
 		out["raw_outputs"] = r.RawOutputs
 	}
+	// The tool replay is what the phase actually ran. The failure path
+	// (executor_error) already records it; a successful phase must too,
+	// or the only durable record of "what ran" would exist for the runs
+	// that changed nothing. Postmortems and the crystalliser read this
+	// event, so an absent key reads as "no tool was invoked".
+	if len(r.ToolReplay) > 0 {
+		out["tool_replay"] = r.ToolReplay
+	}
 	if len(out) == 0 {
 		return nil
 	}

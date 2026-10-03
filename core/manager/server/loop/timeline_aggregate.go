@@ -290,6 +290,9 @@ func buildPhase(phaseName string, events []loopmodel.Event) TimelinePhase {
 		if row, ok := parseAuditRow(ev.Payload, phaseName, ev); ok {
 			auditRows = append(auditRows, row)
 		}
+		for _, tc := range parseToolReplay(ev.Payload, role) {
+			toolCalls = append(toolCalls, tc)
+		}
 		for _, ref := range parseKnowledgeRefs(ev.Payload) {
 			knowledgeRefs = append(knowledgeRefs, ref)
 		}
@@ -371,6 +374,58 @@ func phaseFailureSummary(raw string) string {
 		return "phase failed: " + s
 	}
 	return "phase failed"
+}
+
+// parseToolReplay extracts the tool calls an execute wrote into the
+// event's "tool_replay" array. The orchestrator records this on the
+// phase_contract_written event (the success path) as well as on
+// phase_failed (the failure path), so reading only phase_failed — which
+// is what the payload shape used to imply — would hide every action a
+// *successful* run took.
+//
+// The array entries carry the same fields the agent-authored tool call
+// path uses (name/args/result/status/latency_ms), so both sources land
+// in the same TimelineToolCall shape and the renderer stays single-source.
+// Unknown / malformed payloads return nil rather than a zero entry.
+func parseToolReplay(raw, role string) []TimelineToolCall {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "{}" {
+		return nil
+	}
+	var detail struct {
+		ToolReplay []struct {
+			Name       string `json:"Name"`
+			ArgsJSON   string `json:"ArgsJSON"`
+			ResultJSON string `json:"ResultJSON"`
+			Status     string `json:"Status"`
+			LatencyMs  int64  `json:"LatencyMs"`
+		} `json:"tool_replay"`
+	}
+	if err := json.Unmarshal([]byte(raw), &detail); err != nil {
+		return nil
+	}
+	out := make([]TimelineToolCall, 0, len(detail.ToolReplay))
+	for _, r := range detail.ToolReplay {
+		if r.Name == "" {
+			continue
+		}
+		status := r.Status
+		if status == "" {
+			status = "success"
+		}
+		out = append(out, TimelineToolCall{
+			Name:      r.Name,
+			Args:      truncateForSummary(r.ArgsJSON),
+			Result:    truncateForSummary(r.ResultJSON),
+			Status:    status,
+			LatencyMs: r.LatencyMs,
+			Actor:     role,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // parseToolCall extracts a TimelineToolCall from the event payload

@@ -10483,6 +10483,103 @@ tag 不含修复；`make pig-tool-scoping-check` 默认那条路仍 0/18。这�
 默认路径仍是 0/18。但它的**依赖项**从「一条本机命令」改记为「外部授权」，并附上
 今天唯一可执行的验证手段。
 
+### 4.94 决策 157：结晶要的那条 argv，成功路径**从来没写进事件日志**——补上写入与读出两端
+
+#### 4.94.1 起点：决策 106/155 留下的那句「缺一处证据采集」
+
+§4.44.7 把成本结晶记成「机制已落地、生产端接线未做」，并在决策 154/155 之后把缺口
+缩到一句话：**今天平台不记录修复的 argv**。决策 154 让节点上的 `systemctl restart`
+真的执行并把 argv 放进 `restartServiceResultEnvelope`；决策 155 补上信封逐字段搬运
+时漏掉 `Argv` 的那一跳。两轮都在**边缘 BaseTool** 这条路（`recovery.execute`）上。
+
+但那不是闭环自己的修复路径。
+
+#### 4.94.2 找到真实位置：闭环走的是**中间件适配器**，且成功路径不落 replay
+
+闭环的修复路径不是 edge BaseTool，而是 `RegistryInvoker` →
+`middlewareReg.CallTool(action, args)` → `core/manager/middleware/adapter/host` 的
+`restartService`。而事件记录分两条：
+
+| 路径 | 何时写 | 是否带 `tool_replay` |
+|---|---|---|
+| `phase_failed`（`orchestrator_walk.go:164`） | 执行器返回错误 | **有**（显式 `payload["tool_replay"] = execResult.ToolReplay`） |
+| `phase_contract_written`（`orchestrator_walk.go`） | 执行器成功 | **无**（`sideEffectsPayload` 只输出 `side_effects` / `contract_ref` / `raw_outputs`） |
+
+后果是一句比「不记录 argv」更精确的话：**平台只对失败的修复记录"实际跑了什么"，
+对成功的修复不记**。而结晶唯一会晋升的，恰恰是成功且被反复验证的修复。也就是说
+——证据不是被记错了，是**根本没写**。此前那句「缺一处证据采集」的定位是错的：缺的
+不是一个新的采集点，而是已有的 `ToolReplay` 在成功路径上被丢掉了。
+
+#### 4.94.3 读出端也缺：`tool_replay` 有写无读
+
+即使写进去，也还得有人读。核对 `core/manager/server/loop/timeline_aggregate.go`
+的 `BuildTimelinePhases`：它从每条事件里挖 `parseToolCall`（认 `tool`/`name`/`args`/
+`result` 形状）与 `parseAuditRow`，**没有任何一处认 `tool_replay`**。所以
+`phase_failed` 里那个 `ToolReplay` 写了一个季度，没有任何消费者——时间线里看不到
+它。`parseContractPayload` 会把成功事件整段塞进 `ContractDetail`（前端
+`ContractPanel` 原样展示），所以字段到了前端也只是「一个没人认识的 JSON 键」。
+
+**这是一个「有写无读」的字段，和 §4.89 那批「没人读的旋钮」是同一类缺陷。** 本轮
+不重犯那个错：写入端和读出端一起补，并且各自带反向验证。
+
+#### 4.94.4 本轮改了什么
+
+两处产品代码 + 三处测试，方向相反、互为对方的验证：
+
+1. **写入端**（`biz/loop/orchestrator_walk.go::sideEffectsPayload`）：与失败路径
+   对齐，`len(r.ToolReplay) > 0` 时写入 `out["tool_replay"] = r.ToolReplay`。空
+   replay 不写键——「跑了个空」与「没跑」必须是两个不同的 payload。
+2. **读出端**（`server/loop/timeline_aggregate.go`）：新增 `parseToolReplay`，在
+   事件循环里把 `tool_replay` 数组逐条映射成 `TimelineToolCall`（`Name`/
+   `Args`/`Result`/`Status`/`LatencyMs`），与 `parseToolCall` 汇入**同一个**
+   `phase.ToolCalls`，前端无需二次分叉。未知/畸形 payload 返回 `nil`，不合成零值。
+
+测试与反向验证：
+
+| 测试 | 变异 | 结果 |
+|---|---|---|
+| `TestDryRun_PgLongRunningTx_EndToEnd` 新增断言：成功 run 的 approved `contract-written` 必须带 `tool_replay` 且 name = `pg.terminate_long_tx` | 删掉 `sideEffectsPayload` 的写入行 | **红**：`approved phase_contract_written has no tool_replay naming pg.terminate_long_tx` |
+| `TestBuildTimelinePhases_FullWalk` 新增断言：recovered 阶段的 `ToolCalls` 含 `pg.resize_pool` | 把读出端的 `append(toolCalls, tc)` 改成丢弃 | **红**：`recovered phase has no pg.resize_pool tool call` |
+| `TestParseToolReplay_*`：正常载荷解出一条；空/`{}`/非数组/裸数组一律 `nil` | — | 绿 |
+
+三个计划验收闸门本轮实测仍全绿：`make module-check` = `all module boundaries hold`；
+`make eval-gates` = 20 cases / `unmeasured: 0`；`make module-standalone-check` =
+`standalone: every module builds and tests on its own`。`core/manager` 全量
+`go test ./...` 无 FAIL。
+
+#### 4.94.5 说实话：这一步把 argv **可持久化了**，但没把它**送进结晶**
+
+必须把边界写清楚，否则就是把「机制已落地」又含糊一次：
+
+- 成功修复现在会落一条可读的 `tool_replay`，`ArgsJSON` 里就是被批准的参数
+  （`host.restart_service` 的 `{"unit":"..."}`）。**决策 106 那句「平台不记录修复的
+  argv」从此不成立**——至少对闭环的 `RegistryInvoker` 路径不成立。
+- 但 `crystallize.TrialOf` 仍**没有生产调用方**：`Ledger.Record` 在非测试代码里搜不到
+  调用点。本轮没有把 `TrialOf` 接到 recovered/postmortem worker 上。
+- 即便现在接，还差一个推导：`Execution.Argv` 是**字面向量**，而 `recovery.execute`
+  路径的 argv 在 `Parameters.Command` 里是**按工具名分发的语义参数**（
+  `restart_service`/`kill_process`/`noop`），两者之间需要一次显式转换；`Trigger`
+  要从 `alert_incidents.rule_id → rules.conditions_json` 拉。
+
+所以本轮**不宣称成本结晶的生产端已接线**。本轮关掉的是它前面那道更硬的门：
+证据从「对成功路径不存在」变成「存在且可读」。结晶那一步仍是**半条**，与 §4.44.7
+的记录一致，只是缺口从「没有证据」变成「证据没有被 Ledger 消费」。
+
+#### 4.94.6 进度
+
+| 阶段 | 之前 | 之后 | 依据 |
+|---|---|---|---|
+| 0 边缘交付闭环 | 80% | 80% | 未动 |
+| 1 离线与自治 | 100% | 100% | 未动 |
+| 2 生态与治理 | 91.7% | 91.7% | 半条仍是半条：证据可读了，但 `Ledger.Record` 仍未接 |
+| 3 控制面与联邦 | 79.7% | 79.7% | 未动 |
+
+加权 = (80 + 100 + 91.7 + 79.7) / 4 = **87.9%**（不变）。
+
+下一步（若继续这条线）：把 `TrialOf` 接到 recovered worker，用 `tool_replay` 的
+`ArgsJSON` 装配 `Execution.Argv`，并从告警规则拉 `Trigger`；接上之前先写一条「成功
+run 走完闭环后 `Ledger.Runs()` 非空」的端到端断言，防止又是「建了没接」。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

@@ -137,6 +137,25 @@ func TestBuildTimelinePhases_FullWalk(t *testing.T) {
 	if !foundExecution {
 		t.Errorf("recovered phase has no execution audit row")
 	}
+	// ... and the tool it actually ran. The orchestrator writes
+	// tool_replay onto the success-path contract event; if the aggregate
+	// only mined phase_failed, a clean recovery would show no tool call
+	// and read as "nothing was executed".
+	foundReplay := false
+	for _, tc := range recovered.ToolCalls {
+		if tc.Name == "pg.resize_pool" {
+			foundReplay = true
+			if tc.Status != "success" {
+				t.Errorf("replayed tool status = %q, want success", tc.Status)
+			}
+			if !strings.Contains(tc.Args, "120") {
+				t.Errorf("replayed tool args = %q, want the executed arguments", tc.Args)
+			}
+		}
+	}
+	if !foundReplay {
+		t.Errorf("recovered phase has no pg.resize_pool tool call; the successful repair would read as 'ran nothing'")
+	}
 
 	// Postmortem phase must surface a close audit row.
 	postmortem := phases[6]
@@ -335,7 +354,7 @@ func fullPGPoolWalk(start time.Time) []loopmodel.Event {
 		{
 			ID: 12, IncidentID: "INC-PG-POOL-001", Phase: "recovered",
 			EventType: loopmodel.EventPhaseContractWritten, CreatedAt: start.Add(5 * time.Minute),
-			Payload:        `{"schema_version":"v1","passed":true,"deltas":{"app_pool_waiters":-0.96,"app_pool_wait_latency_p95":-0.94,"pg_connections_active":-0.05},"recovery_signal":true,"sample_size":10,"tolerance":0.15,"audit_kind":"execution","actor":"opskeeper-repairer","actor_role":"opskeeper-repairer","action":"resize_pool","bound_target":"pg:pool-fixture","bound_params":"from=90 to=120","evidence_ref":"evidence/incidents/INC-PG-POOL-001/recovery-check.json"}`,
+			Payload:        `{"schema_version":"v1","passed":true,"deltas":{"app_pool_waiters":-0.96,"app_pool_wait_latency_p95":-0.94,"pg_connections_active":-0.05},"recovery_signal":true,"sample_size":10,"tolerance":0.15,"audit_kind":"execution","actor":"opskeeper-repairer","actor_role":"opskeeper-repairer","action":"resize_pool","bound_target":"pg:pool-fixture","bound_params":"from=90 to=120","evidence_ref":"evidence/incidents/INC-PG-POOL-001/recovery-check.json","tool_replay":[{"Name":"pg.resize_pool","ArgsJSON":"{\"from\":90,\"to\":120}","ResultJSON":"{\"pool_size\":120}","Status":"success","LatencyMs":42}]}`,
 			IdempotencyKey: "recovered:contract:1",
 		},
 		// postmortem
@@ -585,5 +604,40 @@ func TestParseAuditRow_FallbackWithoutCause(t *testing.T) {
 	}
 	if !strings.Contains(got.FallbackCause, "<unset>:fallback_without_cause") {
 		t.Errorf("FallbackCause = %q, want substring <unset>:fallback_without_cause", got.FallbackCause)
+	}
+}
+
+// TestParseToolReplay_ReadsTheSuccessPathEntries: the payload the
+// orchestrator writes on phase_contract_written must yield a tool call.
+// This is the read half of the pairing — the orchestrator's write half is
+// covered in biz/loop.
+func TestParseToolReplay_ReadsTheSuccessPathEntries(t *testing.T) {
+	t.Parallel()
+	raw := `{"tool_replay":[{"Name":"host.restart_service","ArgsJSON":"{\"unit\":\"nginx.service\"}","ResultJSON":"{}","Status":"success","LatencyMs":17}]}`
+	got := parseToolReplay(raw, "opskeeper-repairer")
+	if len(got) != 1 {
+		t.Fatalf("parseToolReplay = %+v, want one entry", got)
+	}
+	if got[0].Name != "host.restart_service" {
+		t.Errorf("name = %q, want host.restart_service", got[0].Name)
+	}
+	if got[0].Actor != "opskeeper-repairer" {
+		t.Errorf("actor = %q, want the phase role", got[0].Actor)
+	}
+	if got[0].LatencyMs != 17 {
+		t.Errorf("latency = %d, want 17", got[0].LatencyMs)
+	}
+}
+
+// TestParseToolReplay_AbsentOrMalformedIsNoCall: a phase that ran nothing
+// (or whose payload predates the field) must not synthesise a tool call.
+// A zero entry here would be indistinguishable from a real invocation and
+// would put "ran something" on every phase.
+func TestParseToolReplay_AbsentOrMalformedIsNoCall(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"", "{}", `{"summary":"no replay here"}`, `{"tool_replay":"not-an-array"}`, `[1,2,3]`} {
+		if got := parseToolReplay(raw, "opskeeper-repairer"); got != nil {
+			t.Errorf("parseToolReplay(%q) = %+v, want nil", raw, got)
+		}
 	}
 }

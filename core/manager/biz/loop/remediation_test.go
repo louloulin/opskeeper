@@ -651,22 +651,21 @@ func TestDryRun_AFailedDispatchReachesTheEventLog(t *testing.T) {
 	}
 }
 
-// payloadHasToolReplay reads the recorded action out of a phase_failed
-// event's JSON payload.
+// payloadHasToolReplay reads the recorded action out of an event's JSON
+// payload. The caller decides which event types are relevant: a failed
+// dispatch is recorded on phase_failed, a successful one on
+// phase_contract_written, and both carry the same "tool_replay" shape.
 //
 // The event log stores the payload as a string, so this goes through JSON —
 // which is also the right thing to assert against: whatever the in-memory
 // event carried, what a postmortem reads is what was serialised.
 func payloadHasToolReplay(t *testing.T, e loopmodel.Event, want string) bool {
 	t.Helper()
-	if e.EventType != loopmodel.EventPhaseFailed {
-		return false
-	}
 	var payload struct {
 		ToolReplay []ToolReplayEntry `json:"tool_replay"`
 	}
 	if err := json.Unmarshal([]byte(e.Payload), &payload); err != nil {
-		t.Fatalf("phase_failed payload is not valid JSON (%v): %s", err, e.Payload)
+		t.Fatalf("event payload is not valid JSON (%v): %s", err, e.Payload)
 	}
 	for _, r := range payload.ToolReplay {
 		if r.Name == want {
