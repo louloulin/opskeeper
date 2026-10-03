@@ -2,7 +2,7 @@
 #
 # 状态：已定价的候选，不是已批准的决定。
 # 定价：make split-cost FILE=docs/manager-split.proposed
-#   → 99 条 import 留在组内，41 条跨组，最重的一条缝 4 条 import。
+#   → 102 条 import 留在组内，41 条跨组，最重的一条缝 4 条 import。
 #
 # 分组依据写在下面，但真正的依据是那张图：device(L6) / edge(L5) / alert(L4)
 # 入度 29 / 33 / 27，是被依赖最多的三个域；aiops 出 78 入 13，是叶子依赖者而不是
@@ -20,9 +20,15 @@ core = aiops, device, edge, alert, topology, loop, hitl, approval, audit, mcp,
         monitor, setting, skill, knowledge, report, proposal, incident
 
 # 应用面：入口层与适配层。彼此几乎不依赖（L0 占 36 个域），打包代价低。
+#
+# federation / federationlink 是集群联邦的两半：biz/federation 是根侧的账本与
+# 发布器，service/federationlink 是「哪个已认证的调用方可以代表哪个子集群」
+# 这张绑定表和两个方向的调用。放同一组是因为它们之间那条边就是这件事本身，
+# 拆开它等于把一次绑定的判断留在缝的两侧。都不在 core 组：这一层不讲 agent
+# 内核，它讲的是控制面怎么把一份签好的策略送到另一个控制面手里。
 apps  = agentteams, aiopsconfig, chatdiagnose, cluster, control, dataguard,
-        demo, edgeauth, flow, frontierbound, grafana, higress, iam, imbridge,
-        integration, llmgw, llmpig, logs, marketplace, metric, middleware,
-        migrate, migrator, nodeagent, nodefleet, observability, pkg, plugin,
-        pluginimport, prometheus, promwrite, scheduler, secret, systemhealth,
-        systemupgrade, traces, version, webshell
+        demo, edgeauth, federation, federationlink, flow, frontierbound, grafana,
+        higress, iam, imbridge, integration, llmgw, llmpig, logs, marketplace,
+        metric, middleware, migrate, migrator, nodeagent, nodefleet, observability,
+        pkg, plugin, pluginimport, prometheus, promwrite, scheduler, secret,
+        systemhealth, systemupgrade, traces, version, webshell

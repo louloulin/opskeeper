@@ -36,7 +36,6 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
 
 	floorfed "github.com/vincent-wuhan/opskeeper/core/floor/federation"
-	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	fedbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/federation"
 )
 
@@ -53,22 +52,6 @@ type Service interface {
 	Acknowledge(id floorfed.ClusterID, out floorfed.Outcome) error
 }
 
-// Pusher reaches one child cluster over the tunnel.
-//
-// It is optional and separate from Service on purpose. Membership and the
-// publish ledger are things this root owns and can answer with or without a
-// tunnel; asking a child what it is enforcing is a round trip, and a root
-// whose tunnel is down must still be able to say who it has enrolled and what
-// it has sent them.
-type Pusher interface {
-	// PushPolicy delivers one decision and returns the child's verdict.
-	PushPolicy(ctx context.Context, id floorfed.ClusterID, req tunnel.ClusterPolicyRequest) (tunnel.ClusterPolicyResponse, error)
-	// AskState asks the child what it is enforcing. It is the only call
-	// whose answer is authoritative about the child rather than about this
-	// root.
-	AskState(ctx context.Context, id floorfed.ClusterID) (tunnel.ClusterStateResponse, error)
-}
-
 // ErrChildUnreachable means the tunnel to that child did not answer.
 var ErrChildUnreachable = errors.New("federation: the child cluster did not answer")
 
@@ -79,7 +62,10 @@ type Handler struct {
 	// 503 rather than 404. "This root cannot reach its children" and
 	// "this route does not exist" send an operator to completely different
 	// pages.
-	push Pusher
+	//
+	// The port lives in biz/federation because the implementation is on
+	// the far side of the tunnel; see Pusher there for why.
+	push fedbiz.Pusher
 }
 
 // NewHandler builds the handler. A nil service is tolerated so wiring can
@@ -91,7 +77,7 @@ func NewHandler(svc Service) *Handler { return &Handler{svc: svc} }
 func (h *Handler) SetService(svc Service) { h.svc = svc }
 
 // SetPusher back-fills the tunnel-side pusher.
-func (h *Handler) SetPusher(p Pusher) { h.push = p }
+func (h *Handler) SetPusher(p fedbiz.Pusher) { h.push = p }
 
 // Register mounts the federation routes.
 func (h *Handler) Register(r chi.Router) {

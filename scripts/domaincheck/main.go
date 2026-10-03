@@ -133,6 +133,8 @@ var edges = map[edge]string{
 	{"frontierbound", "edge"}:   "the frontier is the tunnel's node-facing side: it reads node state and change events",
 	{"frontierbound", "metric"}: "the tunnel heartbeat answers carry metric snapshots",
 
+	{"federationlink", "federation"}: "the root side of the cluster channel holds the table of which authenticated caller may act for which child, and it answers that question by asking the federation domain's registry. One direction: the registry does not import the link, because whether a cluster exists is the registry's judgement and reaching a cluster is the link's job (decision 123)",
+
 	{"grafana", "monitor"}: "grafana monitors are configured from the monitor model",
 	{"grafana", "setting"}: "grafana's endpoint and credentials are platform settings",
 

@@ -42,7 +42,7 @@ func asRole(role string) func(http.Handler) http.Handler {
 	}
 }
 
-func newServer(t *testing.T, svc Service, push Pusher, role string) *httptest.Server {
+func newServer(t *testing.T, svc Service, push fedbiz.Pusher, role string) *httptest.Server {
 	t.Helper()
 	r := chi.NewRouter()
 	r.Use(asRole(role))

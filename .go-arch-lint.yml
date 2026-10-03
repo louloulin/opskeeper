@@ -64,6 +64,13 @@ components:
   iam_server:      { in: core/manager/iam/server/** }
 
   manager_service: { in: core/manager/service/** }
+  # 决策 123：根侧的集群通道。子集群侧是 oxedge_federation，这一边是它
+  # 的对端。依赖面被压到 manager_biz（注册表与发布器）和 oxfloor（规则与
+  # 线上类型）两处，因为这一层的全部职责就是「记住哪个已认证的调用方可以
+  # 代表哪个子集群，然后把两个方向的调用发过去」。它一旦认得别的 manager
+  # 包，绑定表就会开始替那些包做判断，而绑定表不是做判断的地方——
+  # 判断在注册表和子集群自己的接收器里。
+  manager_federation_link: { in: core/manager/service/federationlink/** }
   manager_biz:     { in: core/manager/biz/** }
   manager_data:    { in: core/manager/data/** }
   manager_model:   { in: core/manager/model/** }
@@ -320,6 +327,15 @@ deps:
       - oxcore_domain
       - oxcore_ports
       - shared_pkg
+      - oxfloor
+  # 决策 123：根侧集群通道的授权面是 manager_service 那几条的子集。
+  # 单独写出来而不是「它归 manager_service 管」是有意的——它读的是
+  # biz/federation 的注册表和 floor 的线上类型，一旦哪天它开始 import
+  # 别的 manager 包，应当在这里被拦下并要求一次说明，而不是被
+  # manager_service 那张宽表默默放行。
+  manager_federation_link:
+    mayDependOn:
+      - manager_biz
       - oxfloor
   # manager_biz 额外允许 pigagent/pigwire：内核的宿主绑定（决策 30）必须
   # 拿到 PiG 的事件与内核类型，而 core/pig 不能反向依赖根模块——所以这层
