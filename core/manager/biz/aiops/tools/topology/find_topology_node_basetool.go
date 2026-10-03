@@ -1,4 +1,4 @@
-package tools
+package topology
 
 import (
 	"context"

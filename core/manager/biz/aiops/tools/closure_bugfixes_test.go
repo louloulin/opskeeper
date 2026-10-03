@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	"log/slog"
 	"strings"
 	"testing"
@@ -23,7 +24,7 @@ func TestExecuteFindOutlierEdges_RejectsLoadMetric(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, &fakePromQuerier{}, nil, nil, nil, slog.Default())
 
-	_, err := reg.Invoke(context.Background(), ToolNameFindOutlierEdges, json.RawMessage(`{"metric":"load"}`))
+	_, err := reg.Invoke(context.Background(), topology.ToolNameFindOutlierEdges, json.RawMessage(`{"metric":"load"}`))
 	if err == nil {
 		t.Fatalf("expected error for metric=load, got nil")
 	}
@@ -33,14 +34,14 @@ func TestExecuteFindOutlierEdges_RejectsLoadMetric(t *testing.T) {
 	}
 
 	// Same for composite.
-	if _, err := reg.Invoke(context.Background(), ToolNameFindOutlierEdges, json.RawMessage(`{"metric":"composite"}`)); err == nil {
+	if _, err := reg.Invoke(context.Background(), topology.ToolNameFindOutlierEdges, json.RawMessage(`{"metric":"composite"}`)); err == nil {
 		t.Fatalf("expected error for metric=composite, got nil")
 	}
 
 	// And cpu must NOT be rejected by the whitelist guard. (We don't
 	// assert success — the fake prom returns nil — only that the error
 	// path is *not* the whitelist one.)
-	_, err = reg.Invoke(context.Background(), ToolNameFindOutlierEdges, json.RawMessage(`{"metric":"cpu"}`))
+	_, err = reg.Invoke(context.Background(), topology.ToolNameFindOutlierEdges, json.RawMessage(`{"metric":"cpu"}`))
 	if err != nil && strings.Contains(err.Error(), "cpu, mem or disk") {
 		t.Errorf("metric=cpu unexpectedly hit whitelist guard: %v", err)
 	}

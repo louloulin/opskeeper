@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
 	"log/slog"
 
@@ -303,15 +304,15 @@ func NewRegistry(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Useca
 	}
 	if edges != nil && promQuery != nil {
 		r.Register(Tool{
-			Name:        ToolNameRankEdges,
-			Description: RankEdgesDescription,
-			Schema:      RankEdgesSchema,
+			Name:        topology.ToolNameRankEdges,
+			Description: topology.RankEdgesDescription,
+			Schema:      topology.RankEdgesSchema,
 			Execute:     r.executeRankEdges,
 		})
 		r.Register(Tool{
-			Name:        ToolNameFindOutlierEdges,
-			Description: FindOutlierEdgesDescription,
-			Schema:      FindOutlierEdgesSchema,
+			Name:        topology.ToolNameFindOutlierEdges,
+			Description: topology.FindOutlierEdgesDescription,
+			Schema:      topology.FindOutlierEdgesSchema,
 			Execute:     r.executeFindOutlierEdges,
 		})
 	}

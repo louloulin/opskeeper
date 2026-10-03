@@ -1,9 +1,10 @@
-package tools
+package topology
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"time"
 
@@ -14,13 +15,13 @@ import (
 // FindOutlierEdgesTool is the BaseTool form of find_outlier_edges.
 // Mirrors executeFindOutlierEdges in find_outlier_edges.go.
 type FindOutlierEdgesTool struct {
-	promQuery PromQuerier
+	promQuery toolcore.PromQuerier
 	edges     *edgebiz.Usecase
 	log       *slog.Logger
 }
 
 // NewFindOutlierEdgesTool builds the BaseTool variant.
-func NewFindOutlierEdgesTool(promQuery PromQuerier, edges *edgebiz.Usecase, log *slog.Logger) *FindOutlierEdgesTool {
+func NewFindOutlierEdgesTool(promQuery toolcore.PromQuerier, edges *edgebiz.Usecase, log *slog.Logger) *FindOutlierEdgesTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -59,17 +60,17 @@ func (t *FindOutlierEdgesTool) InvokableRun(ctx context.Context, argsJSON string
 	if err := json.Unmarshal([]byte(argsJSON), &in); err != nil {
 		return "", fmt.Errorf("find_outlier_edges: bad args: %w", err)
 	}
-	// Whitelist cpu/mem/disk explicitly. rankMetricExpr also accepts
+	// Whitelist cpu/mem/disk explicitly. RankMetricExpr also accepts
 	// load/composite (for rank_edges), but z-score outlier detection on
 	// those is not in scope — fail fast with a clear message instead of
-	// relying on rankMetricExpr's ok-bool.
+	// relying on RankMetricExpr's ok-bool.
 	switch in.Metric {
 	case "cpu", "mem", "disk":
 		// ok
 	default:
 		return "", fmt.Errorf("find_outlier_edges: metric must be cpu, mem or disk; got %q", in.Metric)
 	}
-	base, label, _ := rankMetricExpr(in.Metric)
+	base, label, _ := RankMetricExpr(in.Metric)
 	if in.Sigma <= 0 {
 		in.Sigma = 2
 	}
@@ -86,14 +87,14 @@ func (t *FindOutlierEdgesTool) InvokableRun(ctx context.Context, argsJSON string
 	start := end.Add(-5 * time.Minute)
 	step := 30 * time.Second
 
-	callCtx, cancel := context.WithTimeout(ctx, outlierCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, OutlierCallTimeout)
 	defer cancel()
 	res, err := t.promQuery.QueryRange(callCtx, expr, start, end, step)
 	if err != nil {
 		return "", fmt.Errorf("find_outlier_edges: dispatch: %w", err)
 	}
 
-	rankRows, err := decodeRankSeries(res, label)
+	rankRows, err := DecodeRankSeries(res, label)
 	if err != nil {
 		return "", fmt.Errorf("find_outlier_edges: decode: %w", err)
 	}

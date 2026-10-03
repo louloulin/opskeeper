@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -43,9 +44,9 @@ func TestEveryControlPlaneToolTheNodeOffersIsRegisteredHere(t *testing.T) {
 
 	for _, name := range []string{
 		ToolNameGetTopology,
-		ToolNameExpandTopology,
-		ToolNameFindTopologyNode,
-		ToolNameFindOutlierEdges,
+		topology.ToolNameExpandTopology,
+		topology.ToolNameFindTopologyNode,
+		topology.ToolNameFindOutlierEdges,
 		ToolNameQueryAlertRules,
 	} {
 		if !declared[name] {
@@ -69,9 +70,9 @@ func TestTheControlPlaneToolsTheNodeOffersAreAllReadOnly(t *testing.T) {
 	}
 	for _, name := range []string{
 		ToolNameGetTopology,
-		ToolNameExpandTopology,
-		ToolNameFindTopologyNode,
-		ToolNameFindOutlierEdges,
+		topology.ToolNameExpandTopology,
+		topology.ToolNameFindTopologyNode,
+		topology.ToolNameFindOutlierEdges,
 		ToolNameQueryAlertRules,
 	} {
 		if got, ok := classes[name]; !ok {

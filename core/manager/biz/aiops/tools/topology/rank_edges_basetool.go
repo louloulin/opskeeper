@@ -1,9 +1,10 @@
-package tools
+package topology
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"time"
 
@@ -14,13 +15,13 @@ import (
 // RankEdgesTool is the BaseTool form of rank_edges. Mirrors
 // executeRankEdges in rank_edges.go.
 type RankEdgesTool struct {
-	promQuery PromQuerier
+	promQuery toolcore.PromQuerier
 	edges     *edgebiz.Usecase
 	log       *slog.Logger
 }
 
 // NewRankEdgesTool builds the BaseTool variant.
-func NewRankEdgesTool(promQuery PromQuerier, edges *edgebiz.Usecase, log *slog.Logger) *RankEdgesTool {
+func NewRankEdgesTool(promQuery toolcore.PromQuerier, edges *edgebiz.Usecase, log *slog.Logger) *RankEdgesTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -61,7 +62,7 @@ func (t *RankEdgesTool) InvokableRun(ctx context.Context, argsJSON string, _ ...
 	if in.By == "" {
 		return "", fmt.Errorf("rank_edges: by required")
 	}
-	base, label, ok := rankMetricExpr(in.By)
+	base, label, ok := RankMetricExpr(in.By)
 	if !ok {
 		return "", fmt.Errorf("rank_edges: unsupported by=%q", in.By)
 	}
@@ -86,14 +87,14 @@ func (t *RankEdgesTool) InvokableRun(ctx context.Context, argsJSON string, _ ...
 	start := end.Add(-5 * time.Minute)
 	step := 30 * time.Second
 
-	callCtx, cancel := context.WithTimeout(ctx, rankEdgesCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, RankEdgesCallTimeout)
 	defer cancel()
 	res, err := t.promQuery.QueryRange(callCtx, expr, start, end, step)
 	if err != nil {
 		return "", fmt.Errorf("rank_edges: dispatch: %w", err)
 	}
 
-	rows, err := decodeRankSeries(res, label)
+	rows, err := DecodeRankSeries(res, label)
 	if err != nil {
 		return "", fmt.Errorf("rank_edges: decode: %w", err)
 	}

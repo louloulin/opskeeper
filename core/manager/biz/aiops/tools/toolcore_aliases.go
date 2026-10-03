@@ -17,6 +17,7 @@ type (
 	ExecuteResult = toolcore.ExecuteResult
 	Tool          = toolcore.Tool
 	ToolBag       = toolcore.ToolBag
+	PromQuerier   = toolcore.PromQuerier
 )
 
 // Functions and values cannot be aliased, only re-bound. These are the

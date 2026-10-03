@@ -2,6 +2,7 @@ package tools
 
 import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	"os"
 	"strconv"
 
@@ -130,8 +131,8 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	}
 	// 8: rank_edges — gated on Prom + edges (same as NewRegistry).
 	if r.promQuery != nil && r.edges != nil {
-		out = append(out, NewRankEdgesTool(r.promQuery, r.edges, r.log))
-		out = append(out, NewFindOutlierEdgesTool(r.promQuery, r.edges, r.log))
+		out = append(out, topology.NewRankEdgesTool(r.promQuery, r.edges, r.log))
+		out = append(out, topology.NewFindOutlierEdgesTool(r.promQuery, r.edges, r.log))
 	}
 	// 9-11: alert-flavoured tools — gated on alertUC.
 	if r.alertUC != nil {
@@ -216,8 +217,8 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	// is built in main.go. expand_topology also takes the device usecase
 	// so it can resolve a device_id shortcut into the linked node_id.
 	if r.topologyGraph != nil {
-		out = append(out, NewExpandTopologyTool(r.topologyGraph, r.devices, r.log))
-		out = append(out, NewFindTopologyNodeTool(r.topologyGraph, r.log))
+		out = append(out, topology.NewExpandTopologyTool(r.topologyGraph, r.devices, r.log))
+		out = append(out, topology.NewFindTopologyNodeTool(r.topologyGraph, r.log))
 	}
 
 	// 18: bash — generic host shell skill. Read commands use the edge

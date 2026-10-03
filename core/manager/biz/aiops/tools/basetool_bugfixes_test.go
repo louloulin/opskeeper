@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	"log/slog"
 	"strings"
 	"testing"
@@ -22,7 +23,7 @@ import (
 // explicit, so we lock that in.
 func TestFindOutlierEdgesTool_RejectsLoadMetric(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
-	tool := NewFindOutlierEdgesTool(&fakePromQuerier{}, uc, nil)
+	tool := topology.NewFindOutlierEdgesTool(&fakePromQuerier{}, uc, nil)
 
 	_, err := tool.InvokableRun(context.Background(), `{"metric":"load"}`)
 	if err == nil {

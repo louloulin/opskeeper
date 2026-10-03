@@ -1,56 +1,22 @@
 package tools
 
+// This file is the upcall half of find_outlier_edges. The batch BaseTool
+// that the in-process agent loop presents lives in tools/topology; the
+// wire name, the schema and the PromQL both come from there, so the two
+// halves cannot answer to different tools.
+//
+// It stays in this package because it is a method on Registry, and
+// Registry is the upcall dispatch surface.
+
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	"time"
 
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
-
-// ToolNameFindOutlierEdges is the stable wire name the LLM sees.
-const ToolNameFindOutlierEdges = "find_outlier_edges"
-
-// FindOutlierEdgesDescription pushes the model toward this tool when the
-// question is about which edges deviate from the fleet baseline.
-const FindOutlierEdgesDescription = "Find edges whose metric value is more than N standard deviations above the fleet mean. " +
-	"Use this for 'who's an outlier on cpu/mem/disk' style questions. Default sigma is 2."
-
-// FindOutlierEdgesSchema is the JSON Schema of the tool's argument object.
-var FindOutlierEdgesSchema = json.RawMessage(`{
-  "type": "object",
-  "properties": {
-    "metric": {
-      "type": "string",
-      "enum": ["cpu", "mem", "disk"],
-      "description": "Which closed-set host metric to compare across the fleet."
-    },
-    "sigma": {
-      "type": "number",
-      "minimum": 0.5,
-      "maximum": 10,
-      "description": "z-score threshold (default 2). Edges with z > sigma are returned."
-    }
-  },
-  "required": ["metric"]
-}`)
-
-// FindOutlierEdgesArgs is the typed form of FindOutlierEdgesSchema.
-type FindOutlierEdgesArgs struct {
-	Metric string  `json:"metric"`
-	Sigma  float64 `json:"sigma,omitempty"`
-}
-
-// OutlierEdgeRow is one outlier hit.
-type OutlierEdgeRow struct {
-	EdgeID   uint64  `json:"edge_id"`
-	EdgeName string  `json:"edge_name"`
-	ZScore   float64 `json:"z_score"`
-	Metric   string  `json:"metric"`
-}
-
-const outlierCallTimeout = 30 * time.Second
 
 // executeFindOutlierEdges builds a z-score PromQL of the shape
 //
@@ -67,7 +33,7 @@ func (r *Registry) executeFindOutlierEdges(ctx context.Context, args json.RawMes
 		return ExecuteResult{}, fmt.Errorf("find_outlier_edges: edge usecase not configured")
 	}
 
-	var in FindOutlierEdgesArgs
+	var in topology.FindOutlierEdgesArgs
 	if err := json.Unmarshal(args, &in); err != nil {
 		return ExecuteResult{}, fmt.Errorf("find_outlier_edges: bad args: %w", err)
 	}
@@ -81,7 +47,7 @@ func (r *Registry) executeFindOutlierEdges(ctx context.Context, args json.RawMes
 	default:
 		return ExecuteResult{}, fmt.Errorf("find_outlier_edges: metric must be cpu, mem or disk; got %q", in.Metric)
 	}
-	base, label, _ := rankMetricExpr(in.Metric)
+	base, label, _ := topology.RankMetricExpr(in.Metric)
 	if in.Sigma <= 0 {
 		in.Sigma = 2
 	}
@@ -101,20 +67,20 @@ func (r *Registry) executeFindOutlierEdges(ctx context.Context, args json.RawMes
 	start := end.Add(-5 * time.Minute)
 	step := 30 * time.Second
 
-	callCtx, cancel := context.WithTimeout(ctx, outlierCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, topology.OutlierCallTimeout)
 	defer cancel()
 	res, err := r.promQuery.QueryRange(callCtx, expr, start, end, step)
 	if err != nil {
 		return ExecuteResult{}, fmt.Errorf("find_outlier_edges: dispatch: %w", err)
 	}
 
-	rankRows, err := decodeRankSeries(res, label)
+	rankRows, err := topology.DecodeRankSeries(res, label)
 	if err != nil {
 		return ExecuteResult{}, fmt.Errorf("find_outlier_edges: decode: %w", err)
 	}
-	rows := make([]OutlierEdgeRow, 0, len(rankRows))
+	rows := make([]topology.OutlierEdgeRow, 0, len(rankRows))
 	for _, rr := range rankRows {
-		rows = append(rows, OutlierEdgeRow{
+		rows = append(rows, topology.OutlierEdgeRow{
 			EdgeID: rr.EdgeID,
 			ZScore: rr.Value,
 			Metric: rr.Metric,

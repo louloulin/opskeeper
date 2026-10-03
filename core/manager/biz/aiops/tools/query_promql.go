@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
-
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
 )
 
 // ToolNameQueryPromQL is the stable wire name the LLM sees for the PromQL tool.
@@ -115,17 +113,4 @@ func (r *Registry) executeQueryPromQL(ctx context.Context, args json.RawMessage)
 		return ExecuteResult{}, fmt.Errorf("query_promql: marshal response: %w", err)
 	}
 	return ExecuteResult{ResultJSON: out}, nil
-}
-
-// PromQuerier is the narrow surface the query_promql executor needs from
-// the promquery client. Declared here so tests can inject a fake.
-//
-// NOTE: this interface is what r.promQuery is typed as. The concrete
-// *promquery.Client satisfies it.
-type PromQuerier interface {
-	QueryRange(ctx context.Context, expr string, start, end time.Time, step time.Duration) (*promquery.InstantResult, error)
-	// Query is the instant form. correlate_incident.go uses it to grab
-	// a single point-in-time vector for cpu_pct / mem_pct / up. Concrete
-	// *promquery.Client satisfies it.
-	Query(ctx context.Context, expr string, ts time.Time) (*promquery.InstantResult, error)
 }
