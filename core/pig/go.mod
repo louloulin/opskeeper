@@ -21,19 +21,19 @@ module github.com/vincent-wuhan/opskeeper/core/pig
 go 1.26.0
 
 require (
-	github.com/MichaelKinsy/PiG v0.3.0
+	github.com/MichaelKinsy/PiG v0.4.0
 	github.com/vincent-wuhan/opskeeper/core v0.0.0
 	// Test-only (pigprofile). See the replace note below.
 	github.com/vincent-wuhan/opskeeper/core/edge v0.0.0
 )
 
-require github.com/MichaelKinsy/PiG/extensions/sdk v0.3.0
+require github.com/MichaelKinsy/PiG/extensions/sdk v0.4.0
 
 require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
-	github.com/alecthomas/chroma/v2 v2.24.1 // indirect
+	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.7 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.10 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.32.17 // indirect
@@ -59,6 +59,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/klauspost/compress v1.19.2 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect

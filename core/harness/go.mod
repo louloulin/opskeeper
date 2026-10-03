@@ -38,8 +38,8 @@ require github.com/vincent-wuhan/opskeeper/core/pig v0.0.0
 
 require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
-	github.com/MichaelKinsy/PiG v0.3.0 // indirect
-	github.com/MichaelKinsy/PiG/extensions/sdk v0.3.0 // indirect
+	github.com/MichaelKinsy/PiG v0.4.0 // indirect
+	github.com/MichaelKinsy/PiG/extensions/sdk v0.4.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.7 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.10 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.32.17 // indirect

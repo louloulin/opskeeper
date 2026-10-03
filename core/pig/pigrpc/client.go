@@ -247,7 +247,18 @@ func (c *Client) Prompt(ctx context.Context, text string) error {
 	if err != nil {
 		return err
 	}
-	if err := client.Prompt(c.guardPrompt("prompt", text), nil); err != nil {
+	// v0.4.0 widened Prompt: it takes the images and an explicit streaming
+	// behaviour, and it reports what the host did with the message
+	// (handled / queued / started) instead of only whether the send worked.
+	// Both new arguments are nil on purpose -- OpsKeeper submits text only,
+	// and a nil streaming behaviour leaves the host's default. The
+	// disposition is deliberately not propagated: this method's contract is
+	// "the message was accepted", and every disposition above is an
+	// acceptance. What it would buy -- telling a caller that a prompt
+	// submitted during a running turn was queued rather than started -- is a
+	// question about SSE delivery, and it belongs on the edge's frame
+	// contract rather than hidden in a return value nobody reads.
+	if _, err := client.Prompt(c.guardPrompt("prompt", text), nil, nil); err != nil {
 		return fmt.Errorf("pigrpc: prompt: %w", err)
 	}
 	return nil
@@ -266,7 +277,10 @@ func (c *Client) Steer(ctx context.Context, text string) error {
 	if err != nil {
 		return err
 	}
-	if err := client.Steer(c.guardPrompt("steer", text), nil); err != nil {
+	// v0.4.0 also made Steer report a QueuedInputDisposition. Same reasoning
+	// as Prompt above: `handled` and `queued` are both deliveries, and which
+	// one happened is visible in the turn's event stream.
+	if _, err := client.Steer(c.guardPrompt("steer", text), nil); err != nil {
 		return fmt.Errorf("pigrpc: steer: %w", err)
 	}
 	return nil

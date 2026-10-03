@@ -212,7 +212,10 @@ func TestTheBuiltinCheckIsNotVacuous(t *testing.T) {
 	if err == nil {
 		t.Fatal("PiG accepted a made-up tool name; the built-in check above cannot mean anything")
 	}
-	if !strings.Contains(err.Error(), "unknown built-in tool") {
+	// v0.4.0 reworded the refusal from "unknown built-in tool" to
+	// "is not a built-in tool"; the direction of the check is what matters,
+	// so pin the phrase this version actually uses.
+	if !strings.Contains(err.Error(), "is not a built-in tool") {
 		t.Errorf("PiG refused %q for a reason other than the tool name (%v), so the check above is "+
 			"not testing what it claims to test", "not-a-pig-builtin", err)
 	}

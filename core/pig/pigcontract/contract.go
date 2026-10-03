@@ -265,8 +265,14 @@ var _ = func() {
 	var start agent.ToolExecutionStartEvent
 	_, _, _ = start.ToolCallID, start.ToolName, start.Args
 
+	// v0.4.0 replaced the streaming field: `Content []ai.ToolResultMessageContent`
+	// became `PartialResult AgentToolResult`, which is a complete-so-far
+	// snapshot rather than a delta, and it added Args and ParentToolCallID.
+	// The mapper reads PartialResult, so the pin names it.
 	var mid agent.ToolExecutionUpdateEvent
-	_, _, _ = mid.ToolCallID, mid.ToolName, mid.Content
+	_, _, _ = mid.ToolCallID, mid.ToolName, mid.ParentToolCallID
+	_ = mid.Args
+	var _ []ai.ToolResultMessageContent = mid.PartialResult.Content
 
 	var done agent.ToolExecutionEndEvent
 	_, _, _ = done.ToolCallID, done.ToolName, done.Duration
@@ -299,8 +305,11 @@ var _ = func(ctx context.Context, opts rpcclient.RpcClientOptions) {
 	_ = client.Start()
 	client.Wait()
 
-	_ = client.Prompt("", nil)
-	_ = client.Steer("", nil)
+	_, _ = client.Prompt("", nil, nil)
+	_, _ = client.Steer("", nil)
+	_ = rpcclient.PromptDispositionHandled
+	_ = rpcclient.QueuedInputDispositionQueued
+	_ = rpcclient.StreamingBehaviorSteer
 	_ = client.Abort()
 	_, _ = client.SetModel("", "")
 
@@ -420,7 +429,7 @@ var _ = func(rt *coding.Runtime, s *coding.Session, ctx context.Context, ag *age
 	_, _ = s.RunAgentPrompt(ctx, func(context.Context) ([]agent.AgentMessage, error) { return nil, nil })
 	_ = s.Events()
 	_, _ = s.Send(ctx, "")
-	_ = s.Steer(ctx, "", nil, nil)
+	_, _ = s.Steer(ctx, "", nil, nil)
 	_ = s.Abort(ctx)
 	_ = s.WaitForIdle(ctx)
 	_ = s.Messages()

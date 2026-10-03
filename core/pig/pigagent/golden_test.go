@@ -56,7 +56,9 @@ func agentScript(t *testing.T) []wire.StreamEvent {
 	emit(agent.MessageUpdateEvent{AssistantMessageEvent: ai.TextDeltaEvent{Delta: "checking"}})
 	emit(agent.MessageEndEvent{Message: assistantMessage("Let me look.", 1)})
 	emit(agent.ToolExecutionStartEvent{ToolCallID: "tc-1", ToolName: "get_topology", Args: json.RawMessage(`{"root":"prod"}`)})
-	emit(agent.ToolExecutionUpdateEvent{ToolCallID: "tc-1", ToolName: "tail_file", Content: "line 1\n"})
+	emit(agent.ToolExecutionUpdateEvent{ToolCallID: "tc-1", ToolName: "tail_file", PartialResult: agent.AgentToolResult{
+		Content: []ai.ToolResultMessageContent{ai.TextContent{Text: "line 1\n"}},
+	}})
 	emit(agent.ToolExecutionEndEvent{ToolCallID: "tc-1", ToolName: "get_topology", Result: agent.AgentToolResult{
 		Content: []ai.ToolResultMessageContent{ai.TextContent{Text: "three tiers"}},
 	}})

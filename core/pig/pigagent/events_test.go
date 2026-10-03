@@ -269,7 +269,9 @@ func TestMapperToolEndErrorTextIsTruncated(t *testing.T) {
 
 func TestMapperToolUpdate(t *testing.T) {
 	m := newTestMapper()
-	frames := m.Map(agent.ToolExecutionUpdateEvent{ToolCallID: "tc-a", ToolName: "tail_file", Content: "line 1\n"})
+	frames := m.Map(agent.ToolExecutionUpdateEvent{ToolCallID: "tc-a", ToolName: "tail_file", PartialResult: agent.AgentToolResult{
+		Content: []ai.ToolResultMessageContent{ai.TextContent{Text: "line 1\n"}},
+	}})
 	if len(frames) != 1 {
 		t.Fatalf("produced %d frames, want 1", len(frames))
 	}
@@ -278,6 +280,29 @@ func TestMapperToolUpdate(t *testing.T) {
 	}
 	if frames[0].Tool.ResultJSON != "line 1\n" {
 		t.Errorf("result_json = %q", frames[0].Tool.ResultJSON)
+	}
+}
+
+// TestMapperToolUpdateJoinsTextBlocks pins the join rule v0.4.0 introduced:
+// the update carries content blocks, and the wire field is one string. The
+// same rule the terminal frame uses (AgentToolResult.Text) has to apply here,
+// or a multi-block tool result would render differently mid-stream than it
+// does once settled.
+func TestMapperToolUpdateJoinsTextBlocks(t *testing.T) {
+	m := newTestMapper()
+	frames := m.Map(agent.ToolExecutionUpdateEvent{
+		ToolCallID: "tc-a", ToolName: "tail_file",
+		PartialResult: agent.AgentToolResult{Content: []ai.ToolResultMessageContent{
+			ai.TextContent{Text: "line 1"},
+			ai.ImageContent{Data: "AAAA", MimeType: "image/png"},
+			ai.TextContent{Text: "line 2"},
+		}},
+	})
+	if len(frames) != 1 {
+		t.Fatalf("produced %d frames, want 1", len(frames))
+	}
+	if got := frames[0].Tool.ResultJSON; got != "line 1\nline 2" {
+		t.Errorf("result_json = %q, want the text blocks joined and the image dropped", got)
 	}
 }
 
@@ -347,7 +372,9 @@ func TestMapperSeqIsMonotonicAcrossFrameTypes(t *testing.T) {
 	emit(agent.MessageUpdateEvent{AssistantMessageEvent: ai.TextDeltaEvent{Delta: "a"}})
 	emit(agent.MessageEndEvent{Message: assistantMessage("a", 1)})
 	emit(agent.ToolExecutionStartEvent{ToolCallID: "tc-a", ToolName: "t"})
-	emit(agent.ToolExecutionUpdateEvent{ToolCallID: "tc-a", ToolName: "t", Content: "x"})
+	emit(agent.ToolExecutionUpdateEvent{ToolCallID: "tc-a", ToolName: "t", PartialResult: agent.AgentToolResult{
+		Content: []ai.ToolResultMessageContent{ai.TextContent{Text: "x"}},
+	}})
 	emit(agent.ToolExecutionEndEvent{ToolCallID: "tc-a", ToolName: "t"})
 	emit(agent.AgentEndEvent{})
 	if last != 7 {

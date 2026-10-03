@@ -231,7 +231,12 @@ func (m *Mapper) Map(ev agent.AgentEvent) []wire.StreamEvent {
 		f.Tool = &wire.ToolFrame{
 			ToolCallID: e.ToolCallID,
 			Name:       e.ToolName,
-			ResultJSON: e.Content,
+			// v0.4.0 replaced the update's `Content` string with
+			// `PartialResult`, an AgentToolResult whose Content blocks are a
+			// complete-so-far snapshot rather than a delta. The wire field is
+			// unchanged, so the mapping is the same read one level deeper,
+			// joined by text exactly like the terminal frame below.
+			ResultJSON: e.PartialResult.Text(),
 		}
 		return []wire.StreamEvent{f}
 
@@ -240,8 +245,11 @@ func (m *Mapper) Map(ev agent.AgentEvent) []wire.StreamEvent {
 		// host policy gate refused it before it ran. The console renders
 		// the two differently, so a block must never be reported as an
 		// error.
+		// v0.4.0 made the event's own `IsError` authoritative (upstream's
+		// `event.isError`): it also covers a thrown tool and an
+		// afterToolCall hook, neither of which sets Result.IsError.
 		status := wire.ToolSuccess
-		if e.Result.IsError {
+		if e.IsError || e.Result.IsError {
 			status = wire.ToolError
 		}
 		if isBlocked(e.Result) {

@@ -251,7 +251,7 @@ func TestExecuteDeliversProgressUpdate(t *testing.T) {
 	a, _ := NewAdapter(tool)
 
 	var got []string
-	updater := agent.ToolUpdateCallback(func(content string, _ any) { got = append(got, content) })
+	updater := agent.ToolUpdateCallback(func(partial agent.AgentToolResult) { got = append(got, partial.Text()) })
 	if _, err := a.Execute(context.Background(), "c", json.RawMessage(`{}`), updater); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

@@ -230,7 +230,11 @@ func (s *Session) Steer(ctx context.Context, text string) error {
 	if s == nil || s.sess == nil {
 		return ErrClosed
 	}
-	return s.sess.Steer(ctx, text, nil, nil)
+	// v0.4.0 added a QueuedInputDisposition return. Discarded for the same
+	// reason pigrpc.Client.Steer discards it: every disposition means the
+	// input was taken, and the difference shows up in the event stream.
+	_, err := s.sess.Steer(ctx, text, nil, nil)
+	return err
 }
 
 // Abort cancels the turn in flight. It is safe to call when nothing is

@@ -167,18 +167,25 @@ func (a *Adapter) Execute(
 		}, nil
 	}
 
+	result := agent.AgentToolResult{
+		Content: []ai.ToolResultMessageContent{ai.TextContent{Text: out}},
+		IsError: false,
+		Preview: previewOf(out),
+	}
 	if onUpdate != nil && out != "" {
 		// Deliver the result as a progress frame too, so a long tool's
 		// console tile fills before the call settles rather than only at
 		// the end.
-		onUpdate(out, nil)
+		//
+		// v0.4.0 changed the callback from `func(content string, details any)`
+		// to `func(partial AgentToolResult)`, and its contract is now that each
+		// update is a complete-so-far snapshot rather than a delta. Sending
+		// the same value that is about to be returned is therefore the
+		// faithful translation -- under the old contract `out` was the whole
+		// text as well, so the console tile shows the same bytes either way.
+		onUpdate(result)
 	}
-
-	return agent.AgentToolResult{
-		Content: []ai.ToolResultMessageContent{ai.TextContent{Text: out}},
-		IsError: false,
-		Preview: previewOf(out),
-	}, nil
+	return result, nil
 }
 
 // textResult builds a one-block text result.
