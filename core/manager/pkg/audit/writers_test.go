@@ -60,12 +60,12 @@ var throatHolders = map[string]string{
 // lists it, and the change-event tool that joins a configuration change to
 // the operator who made it.
 var rowTypeReaders = map[string]string{
-	"data/audit/store":  "persistence: the entity, the chain head, the migration",
-	"server/audit":      "the ledger view lists and filters rows",
-	"biz/audit":         "the writer maps an Event onto the entity",
-	"biz/aiops/tools":   "query_change_events joins a change to the row that authorised it",
-	"server/plugin":     "its test asserts on persisted rows",
-	"server/middleware": "its test asserts on the row the middleware emitted",
+	"data/audit/store":         "persistence: the entity, the chain head, the migration",
+	"server/audit":             "the ledger view lists and filters rows",
+	"biz/audit":                "the writer maps an Event onto the entity",
+	"biz/aiops/tools/alerting": "query_change_events joins a change to the row that authorised it",
+	"server/plugin":            "its test asserts on persisted rows",
+	"server/middleware":        "its test asserts on the row the middleware emitted",
 }
 
 // TestOnlyTheThroatHoldsTheWriter is the manager-wide form of the rule
