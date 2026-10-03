@@ -97,12 +97,20 @@ type federationWiring struct {
 // disabled error rather than with a 404. A root whose tunnel is down is a
 // root that has lost its way to its children, not a root that never had one.
 //
-// The registry is in memory. That is a real limitation rather than a
-// simplification — a root that restarts forgets which versions it issued,
-// and the monotonic guarantee only survives a restart through a durable
-// Ledger — and it is why the Ledger port exists and no implementation of it
-// ships yet. Wiring it is a data-layer change with no bearing on anything
-// above it, which is the point of it being a port.
+// The registry is in memory, and until a Ledger implementation ships that is
+// an availability problem rather than a bookkeeping one: a root that
+// restarts forgets every member, so each child cluster is refused on its next
+// hello with its own still-valid provisioning token, and recovery means
+// re-enrolling them one at a time and handing each operator a new token.
+// (Decision 145 measured this; the wire cannot say which of the two causes a
+// refusal had, by design, so the log line at the hello boundary is where that
+// shows up.)
+//
+// The Ledger port exists for exactly this and no implementation of it ships
+// yet. Wiring one is a data-layer change with no bearing on anything above
+// it, which is the point of it being a port — but "no bearing on anything
+// above it" is not the same as "nothing to do", and the comment above used to
+// read as though it were.
 func newFederationWiring(fbClient *managersvcfb.Client, log *slog.Logger) (*federationWiring, error) {
 	if fbClient == nil {
 		return nil, fmt.Errorf("federation: no tunnel client to push over")

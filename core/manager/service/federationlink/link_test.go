@@ -89,6 +89,15 @@ func (r *scriptedRegistrar) setMember(m fedbiz.Member) {
 	r.members[m.Cluster.ID] = m
 }
 
+// Known mirrors the real registry: a member exists or it does not, and
+// knowing that says nothing about the token.
+func (r *scriptedRegistrar) Known(id floorfed.ClusterID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.members[id]
+	return ok
+}
+
 func (r *scriptedRegistrar) Authenticate(id floorfed.ClusterID, token string, claimed floorfed.Cluster) (fedbiz.Member, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

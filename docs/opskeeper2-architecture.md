@@ -6564,12 +6564,18 @@ marshal、子集群 unmarshal；一个在 wire 两侧被改掉名字的字段会
 
 1. **manager 拆分**（0.56）——1180 个文件 / 287,155 行，域图已经是 43 边 0 环，
    接缝都是现成的，切的是体力活而不是判断；
-2. **子集群进程本身**（0.10）——一个跑在子集群 manager 里的 `edge/federation.Agent`。
-   代码全部就位（`NewAgent` / `Register` / `Hello` / `HandlePolicy` / `HandleState`
-   都有测试），缺的是把它装配进子集群的启动路径，并给 `Source.URL` 一个真实的
-   托管来源（本刀交付的是 `file://`，够一个共享挂载的部署用，不够一个跨网络的）。
-3. **持久化 `Ledger`**——`Registry` 全在内存，根重启后忘记发过哪些版本，
-   单调性只在一轮进程生命周期里成立。端口在，实现不在（§4.61 已记）。
+2. ~~**子集群进程本身**（0.10）——代码全部就位，缺的是把它装配进子集群的
+   启动路径。~~ **装配已完成（决策 145 核实）**：`cmd/opskeeper/federation_child.go`
+   的 `newFederationChildWiring` 已接进 `cmd/opskeeper/main.go:1428`，并在
+   `:1435` 调 `Start(rootCtx)`。剩下一件与进程无关的事：`Source.URL` 目前是
+   `file://`，够共享挂载的部署，**不够跨网络**——那是托管来源的问题，不是
+   子集群进程的问题，这两件事此前被记在同一条里。
+3. **持久化 `Ledger`**——端口在，实现不在，生产装配传的是 `nil`
+   （`cmd/opskeeper/federation_wiring.go:116`）。**后果此前被记轻了**：
+   写的是「根重启后忘记发过哪些版本，单调性只在一轮进程生命周期里成立」，
+   而实测（决策 145）**根重启会把每一个子集群都锁在门外**——`Authenticate`
+   找不到 member 就返回 `ErrRefused`，子集群拿自己那份**完全有效的** token
+   一样被拒。见 §4.82。
 
 **仍未实证的**：阶段 0.4 的真实对话验收（需要 Docker daemon 与真 provider key，
 本机不具备）。本刀的所有测试都不经过 socket、不经过 Docker、不经过真实 LLM——
@@ -9110,6 +9116,96 @@ allow-list」这个**方向相反**的结论。
 
 本决策**不改进度百分比**：它关闭的是一条过期记录，并补上一处文档框架缺口，
 两者都不推进计划 §五 的任何一条验收闸门。
+
+### 4.82 决策 145：联邦的 Ledger 缺口记轻了，而那条拒绝日志让运维查不下去
+
+#### 4.82.1 起点：核实台账里剩下的三块
+
+阶段 3 的剩余按「能移动百分比的幅度」排过序，第一是 manager 拆分（0.56，
+1180 个文件的体力活，不是一轮能做的）。本轮去核实第二、三块的**当前真实
+状态**，结果两条都需要更正——而第三块更正出来的东西比它本身重要。
+
+#### 4.82.2 子集群进程：已装配，台账没跟上
+
+「缺的是把它装配进子集群的启动路径」这句已经不成立：
+`cmd/opskeeper/federation_child.go` 的 `newFederationChildWiring` 接在
+`cmd/opskeeper/main.go:1428`，`:1435` 调 `Start(rootCtx)`，并在关闭时
+`Close()`。这与决策 125 自己的记录（「子集群进程装配完成」）一致，是这条
+待决项自己没删。真正剩下的只有 `Source.URL` 仍是 `file://`（够共享挂载，
+不够跨网络），而那是**托管来源**的问题，与进程无关，此前被混在同一条里。
+
+#### 4.82.3 持久化 Ledger：后果此前被记轻了一个数量级
+
+台账原文是「`Registry` 全在内存，根重启后忘记发过哪些版本，单调性只在一轮
+进程生命周期里成立」。这句**本身没错，但它描述的不是最坏的后果**。
+
+`Registry.Authenticate` 在 member 不存在时直接返回 `ErrRefused`。member 在
+内存里，而生产装配传的是 `nil`（`federation_wiring.go:116`）。于是实测结果是：
+
+```
+before restart: HighestIssued=1 Acknowledged=0
+after restart, the child's own valid token is refused: federation: cluster hello refused
+```
+
+**不是「忘了发过哪些版本」，是每一个子集群都被锁在门外**，而且要恢复必须
+逐个重新 enroll——而 `Enroll` 会**铸造新 token**（`TestReEnrollingRotatesTheToken`
+就钉着这一点），也就是要把新凭据人工送到每个子集群的运维手里。
+
+版本号本身倒是没有危险：子集群不按版本排序，它用 `live` 符号链接切换
+（决策 124/125），所以「版本复用」不会让子集群降级策略。**真正的后果是可用性，
+不是策略回退**——台账把它记成了单调性问题，低估了。
+
+#### 4.82.4 而这条拒绝，日志让运维查不下去
+
+这一条是本轮真正动手的原因。`ErrRefused` 把「没有这个集群」和「token 不对」
+合成一个错误是**刻意的**，理由写在 `registry.go:29-38`：分得清就等于送给
+任何能开连接的人一份免费的集群枚举表。这个取舍是对的。
+
+但代价当时只算了一半：`federationlink` 的拒绝日志记的是 `err`，而 `err` 对
+两种原因**是同一个值**。所以**运维的日志和攻击者看到的响应一样不可诊断**。
+
+而最常见的原因恰恰是「root 重启忘了所有 member」——它表现得**和凭据被轮换
+或有人在爆破一模一样**。事故当中运维的第一反应会是「token 被换了」或
+「有人在猜我们的 token」，两个都会把人引到错误的地方。
+
+修法是**让日志能答，但让 wire 继续不能答**：
+
+- `Registry.Known(id) bool`——只说有没有 member，不涉及 token。注释写明它
+  只服务于这一个调用点，**任何第二个调用方就是把 oracle 在上一层重建**；
+- `federationlink` 的 `Clusters` 接口加同款方法，拒绝日志多一个 `cause` 字段；
+- **wire 响应一个字没改**，仍是 `"this root does not serve that cluster"`。
+
+日志是运维读的，不是那个要开连接才能套出信息的调用方读的，所以在这里区分
+不泄漏被拒绝本身在保护的东西。
+
+#### 4.82.5 变异验证
+
+| 变异 | 红在哪 |
+|---|---|
+| 日志退回不可诊断（`if false && !Known(...)`） | `TestARefusalNamesItsCauseInTheLogAndNotOnTheWire` + `TestARestartedRootSaysSoRatherThanBlamingTheToken`，两条都点名了缺失的 `cause` |
+| 把原因泄漏到 wire（按 `Known` 返回不同 reason） | 红在 oracle 断言：`the wire distinguished the two refusals ... that is the enumeration oracle ErrRefused exists to prevent` |
+
+第二条是这个改动最需要的测试：**修「不可诊断」的诱惑，最容易犯的错就是顺手
+把原因也放进响应里**。没有一个专门盯 wire 的断言，这次修复就会以安全为代价
+换可用性，而且不会有人发现。
+
+`TestARestartedRootSaysSoRatherThanBlamingTheToken` 刻意用**真 registry +
+生产那个 `nil` ledger**，不用 fake——否则结论会依赖 fake 恰好与生产装配
+对「谁已注册」有一致意见。它先证明重启前 hello 是通的，所以后面被拒只能是
+重启造成的，不是夹具搭错了。
+
+#### 4.82.6 本决策没有解决那个缺口
+
+**持久化 `Ledger` 仍然没实现**，root 重启仍会锁死所有子集群。本决策做的是
+让这件事**可诊断**，不是让它不发生。这两件事的量级差得很远——前者是几行
+日志和一个只读方法，后者是一个数据层决定（Postgres 还是审计链？）加它的
+崩溃恢复语义。
+
+也不该把它包装成「顺手修好了」：日志说清楚了原因，恢复仍然要人工逐个
+re-enroll 并分发新 token。
+
+本决策**不改进度百分比**。它更正两条记录、一处后果记轻了的描述，并让一个
+已知缺口在事故当中可查；计划 §五 里没有对应这一项的验收闸门。
 
 ## 六、当前实现进度
 

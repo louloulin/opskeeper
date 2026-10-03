@@ -51,6 +51,10 @@ type Caller interface {
 // cluster, and what do I believe about it".
 type Clusters interface {
 	Authenticate(id floorfed.ClusterID, token string, claimed floorfed.Cluster) (fedbiz.Member, error)
+	// Known is for the log line this handler writes on a refusal, and
+	// nothing else. See Registry.Known for why the wire cannot answer
+	// this question but the operator's terminal can.
+	Known(id floorfed.ClusterID) bool
 }
 
 // Option configures a Link.
@@ -156,14 +160,31 @@ func (l *Links) hello(edgeID uint64, req tunnel.ClusterHelloRequest) tunnel.Clus
 	}
 	m, err := l.clusters.Authenticate(req.Cluster.ID, req.ProvisioningToken, req.Cluster)
 	if err != nil {
-		// One sentence for every refusal, whatever went wrong. The
-		// registry does not tell this handler whether the cluster is
-		// unknown or the token is wrong, and repeating its discipline
-		// here is what keeps the wire from leaking what the console
-		// already knows.
+		// The wire gets one sentence for every refusal, whatever went
+		// wrong. The registry does not tell this handler whether the
+		// cluster is unknown or the token is wrong, and repeating its
+		// discipline here is what keeps the wire from leaking what the
+		// console already knows.
+		//
+		// The operator's log does not have to keep that discipline,
+		// because the operator is not the party the oracle protects
+		// against — an attacker is. And it matters: the commonest cause
+		// of this refusal is a root that restarted and forgot every
+		// member, which then refuses a child's own valid token and
+		// looks, from both ends, exactly like a credential problem.
+		// Without this the first hypothesis during an incident is
+		// "someone rotated the token" or "someone is guessing at ours",
+		// and both send the operator looking in the wrong place.
+		reason := "the provisioning token does not match"
+		if !l.clusters.Known(req.Cluster.ID) {
+			reason = "this root has no member for that cluster; a root that " +
+				"restarted without a durable Ledger forgets every one, " +
+				"and re-enrolment mints a new token"
+		}
 		l.log.Warn("federation: cluster refused",
 			slog.String("cluster", req.Cluster.ID.String()),
 			slog.Uint64("edge_id", edgeID),
+			slog.String("cause", reason),
 			slog.Any("err", err),
 		)
 		return refuseFederation("this root does not serve that cluster")

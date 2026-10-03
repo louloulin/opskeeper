@@ -186,6 +186,28 @@ func (r *Registry) Enroll(id federation.ClusterID, name string) (string, error) 
 	return token, nil
 }
 
+// Known reports whether this root has a member for the cluster, without
+// saying anything about its token.
+//
+// It exists for one caller: the server-side log at the hello boundary. The
+// wire deliberately cannot tell "no such cluster" from "wrong token" — that
+// distinction is a free cluster-enumeration oracle (see ErrRefused) — and
+// the cost of that discipline is that an operator reading a refusal has no
+// way to tell the two apart either. The most common cause by far is the
+// root having restarted with no durable Ledger, which forgets every member
+// and then refuses each child's own perfectly valid token.
+//
+// A log line is read by the operator, not by the caller that would have to
+// open a connection to learn it, so distinguishing here leaks nothing the
+// refusal itself was protecting. Nothing else may use this: a second caller
+// that can tell the cases apart is the oracle, rebuilt one layer up.
+func (r *Registry) Known(id federation.ClusterID) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.members[id]
+	return ok
+}
+
 // Member returns one enrolled cluster.
 func (r *Registry) Member(id federation.ClusterID) (Member, bool) {
 	r.mu.RLock()
