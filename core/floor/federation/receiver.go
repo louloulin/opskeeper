@@ -3,7 +3,9 @@ package federation
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,13 +15,40 @@ import (
 // ErrNotStaged means the tree this bundle refers to is not on this machine
 // yet.
 //
-// It is the one failure that is *not* remembered, and the distinction is the
-// whole of this type's error handling. A transport problem is not a decision:
-// the same bytes will arrive again and this time they will be applied. A policy
-// refusal and a malformed bundle are decisions, they are recorded against the
-// version, and a repeat of the same version replays the same answer instead of
-// running the check a second time.
+// It is one of the failures that are *not* remembered, and which failures
+// those is the whole of this type's error handling — see decline for the line
+// it draws. A tree that has not arrived is not a decision: the same bytes will
+// arrive again and this time they will be applied.
 var ErrNotStaged = errors.New("federation: policy tree not staged yet")
+
+// ErrPromotionFailed means the policy was fine and the cluster could not put
+// it in force — the disk was full, the staging area was not writable, the
+// rename failed.
+//
+// It is the second of the two failures that are *not* remembered, and the
+// reason is the same as the first. A filesystem condition is not a decision
+// about the policy, and it clears on its own. Recording it would make the
+// refusal permanent for that version: the root retries, is told "refused",
+// concludes the cluster objects to the policy, and publishes a new version
+// that will fail in exactly the same way until someone frees a disk.
+//
+// Everything before the switch is remembered, because a signature failure and
+// an admission refusal really are decisions and really are final for the
+// version that carried them.
+var ErrPromotionFailed = errors.New("federation: accepted policy could not be put in force")
+
+// ErrPromotionRefused means the switcher declined the path itself rather than
+// failing to use it — the tree is not somewhere this cluster will promote
+// from.
+//
+// It is the third answer, and it is the one that is easy to fold into
+// ErrPromotionFailed by accident. Folding it in means a root that keeps
+// naming a path outside the staging area is told "retry", retries forever,
+// and the cluster's policy never advances — with a log full of what look
+// like transient disk errors. Folding it the other way means a genuinely
+// full disk produces a permanent refusal, which is the mistake this package
+// already made once and has a test for.
+var ErrPromotionRefused = errors.New("federation: the policy path is not one this cluster will promote")
 
 // ErrVersionRegressed means the bundle is older than what this cluster is
 // already enforcing.
@@ -241,17 +270,33 @@ func (r *Receiver) Apply(b Bundle, stagedRoot string) (Outcome, error) {
 	}
 	env, err := b.Validate()
 	if err != nil {
-		return r.record(b.Version, false, err.Error(), err), err
+		// Not recorded. See the note on decline.
+		return r.decline(b.Version, err.Error()), err
 	}
 
 	// 3. The tree. Absent is a transport problem, not a decision, so it is
 	//    the one failure that leaves no record and the root may retry.
-	if stagedRoot == "" {
-		return Outcome{Version: b.Version, Live: r.liveVersion(), At: r.now()}, ErrNotStaged
+	//
+	//    The existence check comes first, before anything reads the tree,
+	//    and that ordering is load-bearing. Verification run against a
+	//    directory that is not there says "no pig-ops.sig", which reads
+	//    exactly like an unsigned package — and an unsigned package is a
+	//    forgery, which is remembered. A push that simply arrived before
+	//    its files would then burn the version it was for, and the real
+	//    push of that version could never be applied. Asking whether the
+	//    directory exists costs one stat and keeps "not here yet" and
+	//    "not signed" as different facts.
+	if strings.TrimSpace(stagedRoot) == "" {
+		return r.decline(b.Version, "no staged path in the push"), ErrNotStaged
 	}
-	if _, statErr := filepath.Abs(stagedRoot); statErr != nil {
-		return Outcome{Version: b.Version, Live: r.liveVersion(), At: r.now()},
-			fmt.Errorf("%w: %v", ErrNotStaged, statErr)
+	absRoot, absErr := filepath.Abs(stagedRoot)
+	if absErr != nil {
+		return r.decline(b.Version, "staged path: "+absErr.Error()),
+			fmt.Errorf("%w: %v", ErrNotStaged, absErr)
+	}
+	if _, statErr := os.Stat(absRoot); statErr != nil {
+		reason := "staged policy not present yet: " + statErr.Error()
+		return r.decline(b.Version, reason), fmt.Errorf("%w: %s", ErrNotStaged, reason)
 	}
 	// The envelope in the bundle and the sidecar in the tree are two
 	// copies of one signature. pluginmanifest already refuses a pair that
@@ -259,31 +304,44 @@ func (r *Receiver) Apply(b Bundle, stagedRoot string) (Outcome, error) {
 	// what an operator reads when they ask "what is this cluster
 	// running", so a child that applied a tree whose signature was not
 	// the one it was handed would be able to answer that question wrongly.
-	sidecar, err := pluginmanifest.VerifyDir(stagedRoot, r.trust)
+	sidecar, err := pluginmanifest.VerifyDir(absRoot, r.trust)
 	if err != nil {
-		return r.record(b.Version, false, "signature: "+err.Error(), err), err
+		// Not recorded. Anyone who can reach this cluster can send a
+		// message claiming any version they like, and a signature
+		// failure is the cheapest thing to fake. Recording it would
+		// hand them a lever: push a forged version 9, have it refused
+		// and remembered, and the root's real version 9 can never be
+		// applied again.
+		return r.decline(b.Version, "signature: "+err.Error()), err
 	}
 	if sidecar.KeyID != env.KeyID || sidecar.TreeDigest != env.TreeDigest {
 		mismatch := fmt.Errorf("%w: bundle carries an envelope for %s/%s but the staged tree is signed for %s/%s",
 			ErrMalformedBundle, env.KeyID, shortDigest(env.TreeDigest), sidecar.KeyID, shortDigest(sidecar.TreeDigest))
-		return r.record(b.Version, false, "envelope does not match the tree's sidecar", mismatch), mismatch
+		return r.decline(b.Version, "envelope does not match the tree's sidecar"), mismatch
 	}
 
 	// 4. Admission. Signed is not the same as permitted: a package the
 	//    release key vouched for can still exceed what this cluster's own
 	//    policy allows it to hold.
-	if d := pluginmanifest.Review(stagedRoot, r.trust, r.policy); !d.Allowed {
+	if d := pluginmanifest.Review(absRoot, r.trust, r.policy); !d.Allowed {
 		refused := fmt.Errorf("federation: cluster %q refuses %s: %s", r.clusterID, b, d)
 		return r.record(b.Version, false, "admission: "+d.String(), refused), refused
 	}
 
 	// 5. The switch, and only now.
-	if _, err := r.switcher.Switch(stagedRoot); err != nil {
-		// The contract says the previous tree is still live, so this is
-		// recorded as a refusal at the old version rather than a partial
-		// success. A recorded refusal is final for this version: the
-		// root publishes a new version carrying the fix.
-		return r.record(b.Version, false, "switch: "+err.Error(), err), err
+	if _, err := r.switcher.Switch(absRoot); err != nil {
+		if errors.Is(err, ErrPromotionRefused) {
+			// The path itself was declined. Retrying the same version
+			// with the same path will be declined again, so this is a
+			// decision and it is recorded as one.
+			refused := fmt.Errorf("federation: cluster %q refuses %s: %w", r.clusterID, b, err)
+			return r.record(b.Version, false, "switch: "+err.Error(), refused), refused
+		}
+		// Deliberately not recorded. The policy passed every check; what
+		// failed is the machine, and the machine recovers. See
+		// ErrPromotionFailed.
+		return Outcome{Version: b.Version, Live: r.liveVersion(), Reason: "switch: " + err.Error(), At: r.now()},
+			fmt.Errorf("%w: %v", ErrPromotionFailed, err)
 	}
 
 	r.mu.Lock()
@@ -298,6 +356,34 @@ func shortDigest(d string) string {
 		return d
 	}
 	return d[:12]
+}
+
+// decline is what a receiver does with a message it refuses to treat as a
+// decision about policy.
+//
+// The split it draws is between two things that look identical at the call
+// site and are opposites in practice:
+//
+//   - A bundle the root really published, which this cluster read correctly
+//     and does not permit. That is a decision. It is recorded against the
+//     version, so a redelivery replays the same refusal, and so the root's
+//     acknowledgement accounting can tell an operator that the rollout
+//     stopped rather than went quiet.
+//
+//   - A bundle that is malformed, unsigned, signed by a key this cluster
+//     does not trust, or otherwise not provably from the root. That is not a
+//     decision about anything, and recording it is a denial of service
+//     handed to whoever can open a connection: they claim version 9, get it
+//     refused and remembered, and the root's genuine version 9 is now
+//     permanently unappliable. The cheapest way to forge a bundle is to
+//     leave the signature off, so "it failed the signature check" is the
+//     shape an attacker sends on purpose.
+//
+// The refused outcome is still returned in both cases, so the caller learns
+// what happened; only the memory differs.
+func (r *Receiver) decline(version uint64, reason string) Outcome {
+	live := r.liveVersion()
+	return Outcome{Version: version, Live: live, Reason: reason, At: r.now()}
 }
 
 // record remembers a decision and returns it.

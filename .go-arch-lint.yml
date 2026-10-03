@@ -194,6 +194,13 @@ components:
   # 谁往里面加一个「顺手」的 import，这个组件就会长出一条谁也没评审过的边，
   # 而它下面是节点唯一一份没有备份的本地数据。
   oxedge_spool:       { in: core/edge/spool/** }
+  # 子集群侧的策略联邦代理：回答根下发的策略、汇报自己在 enforce 哪一版。
+  # 它的依赖面刻意只有 oxfloor——规则在 floor/federation，线上类型在
+  # floor/tunnel，磁盘上的策略树由本包自己管。它不从 core/edge 的任何其他
+  # 包取东西，因为这层代理的职责就是「在根不在的时候照常工作」：它一旦
+  # 认得 agent 的运行期、采集器或遥测 WAL，它的答案就不再只由策略状态决定，
+  # 而「答案只由策略状态决定」正是这一层存在的全部理由。
+  oxedge_federation:  { in: core/edge/federation/** }
   # 决策 99：遥测写前日志。它是节点唯一一份「写下来是为了以后再发」的数据，
   # 而写下来这件事本身没有第二个可去的地方——所以它只允许看见落盘原语与
   # 线上类型，不得直接 import 隧道客户端。发不发是装配根的决定，不是这里
@@ -533,6 +540,10 @@ deps:
   # 的路径。
   oxedge_autonomy:
     mayDependOn: [oxcore_domain, oxedge_spool]
+  # 只有 floor。少一条边就少一个「顺手在这里把策略树换成随便什么目录」的
+  # 机会——那条路径的检查写在 Store.bound 里，但依赖面本身就是第二道检查。
+  oxedge_federation:
+    mayDependOn: [oxfloor]
   # 落盘缓冲只依赖标准库：文件、json、时间。这不是「暂时还没用到别的」，而是
   # 这个组件存在的理由——它下面躺着节点唯一一份没有副本的本地数据，依赖面越小，
   # 它能被拉去做什么就越可预测。
