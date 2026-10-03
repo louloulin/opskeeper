@@ -10671,6 +10671,94 @@ run 走完闭环后 `Ledger.Runs()` 非空」的端到端断言，防止又是�
 `Trigger` 从 `alert_incidents.rule_id → rules.conditions_json` 拉；接之前先写一条
 「成功 run 走完闭环后 `Ledger.Runs()` 非空」的端到端断言。
 
+### 4.96 决策 159：成本结晶的接线——`Ledger.Record` 第一次有了生产调用方
+
+#### 4.96.1 决策 154/157/158 留下的那句话，现在可以删掉了
+
+§4.90.7 与 §4.95.5 反复记的是同一件事：「`crystallize.Ledger.Record` 无生产调用方」。
+三轮都在修它**前面的**输入——先证明成功 run 的 replay 会落事件（157），再证明 replay 里的
+argv 是机器真执行的向量而不是参数包（158）。本轮把那一跳接上，并且发现阻止它一直没被接上的
+不是懒，是**两处真实的断线**：
+
+1. **`ApprovedPhaseWorker` 从不写 `ApprovalDecision` 合约**。`recovered` 阶段的
+   `Planner` 通过 `ApprovedDecisionLoader` 读它（`recovery.go:136`），而全仓
+   `WriteContract` 只有两个调用方（`orchestrator_walk.go:316` 的 side-effect 路径与 `:349`
+   的 `root_cause_json` 路径）。dry-run 里靠一个测试替身 `pgApprovedLoader` 兜着，
+   生产里 `readApprovalDecision` 会永远读到 nil——而 `TrialOf` 要的 `target` 正是从这里来。
+2. **`RecoveredPhaseWorker` 从不把 `verified_delta` 写成合约**。同样只有 `RawOutputs`。
+   `readVerifiedDelta`（`orchestrator.go:673`）因此永远返回 nil。也就是说
+   「成功 run 走完闭环后 `Ledger.Runs()` 非空」这条断言，在接通输入端之前是**不可能**
+   成立的——这正是上一轮把它写成「接之前先写一条端到端断言」的原因。
+
+本轮没有去补那两个合约写手，而是**把学习所需的证据从事件里读回来**。理由是事件已经
+是这条路线上唯一的持久记录：`sideEffectsPayload` 把 `raw_outputs`、`tool_replay`、
+`side_effects` 一起写进了 `phase_contract_written`，而 `ApprovalDecision` 合约本身
+（若写）也只是这些字段的另一份拷贝。多一个写入端就多一处可能与事件不一致的真相源，
+而 §4.89/§4.95.3 已经记过这类「两处回答同一个问题」的形状。
+
+#### 4.96.2 改了什么：一条从事件到账本的完整通路
+
+| 段 | 文件 | 改动 |
+|---|---|---|
+| 记录真执行的工具名 | `biz/loop/remediation.go` / `remediation_invoker.go` | `RemediationOutcome.Tool` 与 `ToolReplayEntry.RegisteredTool`：结晶要按**注册名**读工具的 class，而 action 名与注册名不总是同一个字符串 |
+| 事件里带上向量与工具 | `biz/loop/approved_worker.go` | 成功派发时把 `remediation_argv` / `remediation_tool` 写进 `RawOutputs`，随 `phase_contract_written` 落事件；class **刻意不写**（见 4.96.3） |
+| 端口 | `biz/loop/crystallize_port.go`（新） | `RecoveryCrystallizer`（被告诉一次干净的恢复）+ `AutonomyTriggerSource`（把 `alert_incidents.rule_id → rules.conditions_json` 的那条比较读出来）+ `RecoveryEvidence`（fault/tool/argv/trigger/verification 的值对象） |
+| 学习的那一跳 | `biz/loop/orchestrator_walk.go` | `learnFromRecovery` 在 postmortem 阶段自己的事件写完**之后、`nextPhase` 返回 `ErrTerminalPhase` 之前**调用；`verifiedDeltaFrom` / `approvedEventPayload` 从事件读回证据；`singleComparisonTrigger` 从规则读触发器 |
+| 适配器 | `biz/aiops/crystallizehook/learner.go`（新） | 持有 `crystallize.Ledger`，把 `RecoveryEvidence` 装配成 `Trial`；class 从工具注册表读，radius/TTL 从策略取 |
+| 触发源 | `biz/loop/alert_trigger_adapter.go`（新） | `AlertTriggerAdapter`：从 incident 的 `RuleID` 读 `alert_rules.conditions_json`，只接受**恰好一条** comparison 且算子是「上升」方向 |
+| 装配 | `cmd/opskeeper/main.go` / `loop_adapters.go` | 当 remediation 派发被装配（`len(middlewareReg.ListTools(""))>0`）时一并构造 learner 与 trigger 源；`riskLevelToToolClass` 是 risk→class 的唯一映射点 |
+
+**调用点为什么在循环里、而不在循环后**：`walkPhases` 在 `nextPhase(postmortem)` 返回
+`ErrTerminalPhase` 时**提前 return**（`orchestrator_walk.go:262`），任何写在循环之后的
+学习块都不可达。这是本轮第二个被实测抓住的缺陷——第一次实现写在循环后，端到端断言
+报「0 recoveries」，而 debug 行根本没打印出来。
+
+#### 4.96.3 三处**刻意不做**，比做了更重要
+
+- **class 不写进事件**。它是注册表对工具陈述的属性；事件上再放一份就成了「同一个问题
+  的第二个答案」，两份会漂移。读者按注册名去注册表取。
+- **触发器不推断**。`singleComparisonTrigger` 对「零条」「多条」「下降算子」「metric 为空」
+  一律拒绝，而不是取第一条或把 `<` 翻成 `>`。与 §4.95.3 的 `removeOldLogs` 同一条规则：
+  一个语义被改变的程序不是被批准的那个程序。
+- **非数值 incident id 直接放弃**。harness case 与 chat-promoted run 自带 id，没有对应
+  `alert_incidents` 行；这不是错误，是「这次恢复学不出自愈动作」。
+
+#### 4.96.4 反向验证与闸门（本轮实测）
+
+| 变异 | 结果 |
+|---|---|
+| 删掉 `walkPhases` 里的 `learnFromRecovery` 调用 | `TestDryRun_AVerifiedRunLandsInTheCrystallizer` 红：`crystallizer was told about 0 recoveries` |
+| 删掉 `approved_worker` 把 `remediation_argv` 写进 `RawOutputs` 两行 | 同一条端到端红 |
+| `crystallizehook` 5 条拒绝路径（无 argv / 未注册工具 / 无法映射的 risk / 无 verification / 半配置构造） | 全部有独立测试 |
+
+| 闸门 | 结果 |
+|---|---|
+| `core/manager` 全量 `go test ./... -count=1` | 无 FAIL |
+| `make module-check` | `all module boundaries hold` |
+| `make eval-gates` | 20/20 golden 可服务、`remediation axis 0/20`（**预期值**，写操作刻意不进节点包）、`unmeasured: 0`，退出 0 |
+| `make module-standalone-check` | 全模块 `GOWORK=off` 构建+测试通过 |
+| gofmt | `biz/loop`、`biz/aiops/crystallizehook`、`cmd/opskeeper` 干净 |
+
+#### 4.96.5 进度：阶段 2 从 91.7% 到 93.3%
+
+这一刀关掉的是计划 §二 P2 第 7 条「成本无结晶机制」里最后一处机制缺口：账本现在**有**
+调用方，且调用方在每次成功恢复后都会被触发。它距离「高频场景零推理成本」还差最后一跳——
+**晋升出来的 `Draft` 还没有人手去审**：`Ledger.Promoted()` 与 `DraftFor` 存在、有测试，
+但没有 HTTP 端点或控制台入口把它们呈现给审批人。那一步是阶段 2 的下一刀，也是 §二
+表里「高频场景零推理成本」用户可见价值真正兑现的地方。
+
+| 阶段 | 之前 | 之后 | 依据 |
+|---|---|---|---|
+| 0 边缘交付闭环 | 80% | 80% | 未动 |
+| 1 离线与自治 | 100% | 100% | 未动 |
+| 2 生态与治理 | 91.7% | 93.3% | 结晶机制闭环：事件→证据→Trial→Ledger 全通；缺 draft 的审批呈现 |
+| 3 控制面与联邦 | 79.7% | 79.7% | 未动 |
+
+加权 = (80 + 100 + 93.3 + 79.7) / 4 = **88.25%**。
+
+下一步（同一条线）：把 `Learner.Ledger().Promoted()` 与 `DraftFor` 接到一个只读端点
+（`GET /v1/loops/crystallized` 列出模式，`POST .../promote` 落一份 draft 等待审查），
+让晋升出来的草稿第一次出现在一个审批人能看到的地方。
 
 ## 六、当前实现进度
 

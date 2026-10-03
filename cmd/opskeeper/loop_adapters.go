@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact"
 	middlewareadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
 	gitadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/git"
@@ -212,6 +213,28 @@ func loopAdapterSources() []loopAdapterSource {
 // The returned slice is empty when nothing is configured, which is the same
 // observable state as before this existed: an empty registry and an
 // invoker that refuses with a reason instead of advancing the run.
+// riskLevelToToolClass maps a registry risk grade to the class a crystallised
+// declaration is graded on.
+//
+// It lives at the assembly root because it is the one place both the registry
+// (which states a risk) and the domain (which states a class) are visible.
+// The mapping is deliberately coarser than the five-level ladder: the
+// crystalliser's safety question is "may a node run this with no model in
+// the path", and it answers that from the class. An unknown grade returns
+// false so the learner refuses the run rather than defaulting a safety level.
+func riskLevelToToolClass(risk string) (domain.ToolClass, bool) {
+	switch middlewareadapter.RiskLevel(strings.TrimSpace(risk)) {
+	case middlewareadapter.RiskL0ReadOnly, middlewareadapter.RiskL1Diagnostic:
+		return domain.ClassRead, true
+	case middlewareadapter.RiskL2SoftWrite:
+		return domain.ClassWrite, true
+	case middlewareadapter.RiskL3HardWrite, middlewareadapter.RiskL4Destructive:
+		return domain.ClassDestructive, true
+	default:
+		return domain.ClassUnknown, false
+	}
+}
+
 func wireLoopRemediationAdapters(ctx context.Context, log *slog.Logger, reg *middlewareregistry.Registry) []func() {
 	var closers []func()
 	for _, src := range loopAdapterSources() {

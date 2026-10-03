@@ -269,6 +269,23 @@ const (
 	approvedMetaRemediationAction  = "remediation_action"
 )
 
+// approvedMetaRemediationTool / Argv are what a downstream consumer (the
+// crystalliser) needs to turn a verified recovery into a runbook
+// declaration: the registry name it reads the tool's class by, and the
+// literal vector a node would re-run. They ride on the phase_contract_written
+// event payload rather than on a side table so the recorded trace of a run
+// is self-contained: a reader of the event does not need to re-run the
+// dispatch to learn what it did.
+//
+// The class is deliberately absent. It is a property the registry states
+// about the tool, so a copy on the event would be a second answer to the
+// same question and the two could drift; a reader takes it from the
+// registry by name.
+const (
+	approvedMetaRemediationTool = "remediation_tool"
+	approvedMetaRemediationArgv = "remediation_argv"
+)
+
 // approvedAutoApprover 是 auto_approve=true 动作的审计署名。它是一个
 // 字面量而不是空串：审计链上必须能区分"策略自动批准"与"某个人批准"，
 // 而"policy:auto"让前者不冒充人。
@@ -492,14 +509,25 @@ func (w *ApprovedPhaseWorker) dispatchRemediation(ctx context.Context, plan Plan
 	side.Detail["auto_approve"] = selected.AutoApprove
 	side.Detail["approver"] = approver
 
+	rawOutputs := map[string]any{
+		approvedMetaRemediationStatus:  outcome.Status,
+		approvedMetaRemediationMessage: outcome.Message,
+		approvedMetaRemediationAction:  selected.Action,
+	}
+	// The class, tool and argv are recorded only when the replay actually
+	// carries a vector to re-run. Writing an empty argv here would let a
+	// downstream reader treat "reached its change through an API" as "a
+	// runbook with no arguments", which the ledger refuses anyway — but
+	// recording the absence explicitly is what tells the two apart at the
+	// event.
+	if len(replay.Argv) > 0 {
+		rawOutputs[approvedMetaRemediationArgv] = replay.Argv
+		rawOutputs[approvedMetaRemediationTool] = replay.RegisteredTool
+	}
 	result := ExecResult{
 		SideEffects: []SideEffect{side},
 		ToolReplay:  []ToolReplayEntry{replay},
-		RawOutputs: map[string]any{
-			approvedMetaRemediationStatus:  outcome.Status,
-			approvedMetaRemediationMessage: outcome.Message,
-			approvedMetaRemediationAction:  selected.Action,
-		},
+		RawOutputs:  rawOutputs,
 	}
 	if outcome.Status != RemediationStatusSuccess || invokeErr != nil {
 		return result, fmt.Errorf("%w: %s: %s", ErrRemediationFailed, selected.Action, outcome.Message)

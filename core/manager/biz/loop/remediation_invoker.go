@@ -123,6 +123,7 @@ func (i RegistryInvoker) Invoke(ctx context.Context, req RemediationRequest) (Re
 	return RemediationOutcome{
 		Status:  RemediationStatusSuccess,
 		Message: fmt.Sprintf("%s completed", action),
+		Tool:    spec.Name,
 		Args:    args,
 		Result:  result,
 		Argv:    argvFromResult(result),

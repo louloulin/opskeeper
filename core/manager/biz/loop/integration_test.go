@@ -31,6 +31,7 @@ package loop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -38,6 +39,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
@@ -103,12 +105,20 @@ func newPgLongRunningTxCase() *pgLongRunningTxCase {
 type recordingVerifyCaller struct {
 	mu    sync.Mutex
 	calls int
+	// failAlways makes the caller report a failed recovery, so the walk
+	// rolls back and never reaches postmortem. It exists to pin the rule
+	// that only a run which actually restored the metric is learned from.
+	failAlways bool
 }
 
 func (r *recordingVerifyCaller) InvokeVerifyRecovery(_ context.Context, _ string) (string, error) {
 	r.mu.Lock()
 	r.calls++
+	fail := r.failAlways
 	r.mu.Unlock()
+	if fail {
+		return `{"schema_version":"v1","passed":false,"failed_metrics":["cpu_usage"],"deltas":{"cpu_usage":0.8},"sample_size":12,"tolerance":0.15,"retry_count":1,"warning_level":"fail"}`, nil
+	}
 	return `{"schema_version":"v1","passed":true,"deltas":{"cpu_usage":0.05,"qps":0.02},"sample_size":12,"tolerance":0.15,"retry_count":0,"warning_level":"pass"}`, nil
 }
 
@@ -173,6 +183,90 @@ func newDryRunOrchestrator(t *testing.T, hooks PauseHook) (Orchestrator, *InMemo
 	return o, eventRepo, contractRepo
 }
 
+// newDryRunOrchestratorWithCrystallizer builds a dry-run orchestrator whose
+// walk reports clean recoveries to the given crystallizer and names the
+// detection signal from the given trigger source.
+func newDryRunOrchestratorWithCrystallizer(t *testing.T, hooks PauseHook, c RecoveryCrystallizer, triggers AutonomyTriggerSource) (Orchestrator, *InMemoryContractRepo) {
+	t.Helper()
+	eventRepo := NewInMemoryEventRepo()
+	contractRepo := NewInMemoryContractRepo()
+	verifyCaller := &recordingVerifyCaller{}
+	stateStore := newInMemoryStateStore()
+	remediationLoader, remediationInvoker := dryRunRemediationDeps()
+	workers, err := DefaultPhaseWorkerFactory(PhaseWorkerDeps{
+		VerifyCaller:       verifyCaller,
+		StateStore:         stateStore,
+		ApprovedRefLoader:  &pgApprovedLoader{},
+		RemediationLoader:  remediationLoader,
+		RemediationInvoker: remediationInvoker,
+		FlowRunner:         NoopFlowRunner{},
+		PauseHook:          hooks,
+		Logger:             slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+		Clock:              func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("DefaultPhaseWorkerFactory err: %v", err)
+	}
+	o, err := NewOrchestrator(OrchestratorDeps{
+		Locker:                 stubLocker{},
+		AdvisoryLockTimeoutSec: 5,
+		EventRepo:              eventRepo,
+		ContractRepo:           contractRepo,
+		WorkerRegistry:         NewWorkerRegistry(workers),
+		Logger:                 slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+		Crystallizer:           c,
+		Triggers:               triggers,
+	})
+	if err != nil {
+		t.Fatalf("NewOrchestrator err: %v", err)
+	}
+	return o, contractRepo
+}
+
+// recordingCrystallizer captures what the walk reports.
+type recordingCrystallizer struct {
+	mu   sync.Mutex
+	seen []RecoveryEvidence
+	err  error
+}
+
+func (c *recordingCrystallizer) Learn(_ context.Context, ev RecoveryEvidence) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.seen = append(c.seen, ev)
+	return c.err
+}
+
+func (c *recordingCrystallizer) evidence() []RecoveryEvidence {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]RecoveryEvidence(nil), c.seen...)
+}
+
+// seedRootCauseContract writes the RootCauseJSON the investigated phase
+// would produce, so a DB-less dry run carries a fault kind the crystalliser
+// can read.
+func seedRootCauseContract(t *testing.T, repo *InMemoryContractRepo, cs *pgLongRunningTxCase) {
+	t.Helper()
+	payload, err := json.Marshal(cs.RootCause)
+	if err != nil {
+		t.Fatalf("marshal root cause: %v", err)
+	}
+	if err := repo.WriteContract(context.Background(), &loopmodel.Contract{
+		IncidentID:     cs.IncidentID,
+		TenantID:       cs.TenantID,
+		Phase:          string(PhaseInvestigated),
+		Type:           "root_cause_json",
+		SchemaVer:      ContractSchemaV1,
+		Payload:        string(payload),
+		SizeBytes:      len(payload),
+		StorageBackend: loopmodel.StorageBackendDB,
+		CreatedAt:      time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed root cause contract: %v", err)
+	}
+}
+
 // pgApprovedLoader is a minimal ApprovedDecisionLoader for the dry
 // run. Production wires ContractRepo.LoadApprovedDecision; here we
 // synthesize an ApprovalDecision with the harness case's target +
@@ -230,8 +324,13 @@ func (d *dryRunRemediationInvoker) Invoke(_ context.Context, req RemediationRequ
 		Status:   RemediationStatusSuccess,
 		Message:  "dry run: " + req.Option.Action + " dispatched",
 		Impacted: 1,
-		Args:     map[string]any{"target": req.Option.Target},
-		Result:   map[string]any{"dry_run": true},
+		// The registry name the action resolved to. The real invoker fills
+		// this from the tool lookup, and the crystalliser reads the tool's
+		// class by it; a dry run that left it empty would report a recovery
+		// the platform cannot grade.
+		Tool:   req.Option.Action,
+		Args:   map[string]any{"target": req.Option.Target},
+		Result: map[string]any{"dry_run": true},
 		// The vector the adapter executed, carried the way the host
 		// adapter returns it. The dry run names a plausible one so the
 		// end-to-end assertion below exercises the same field a real
@@ -343,6 +442,109 @@ func TestDryRun_PgLongRunningTx_EndToEnd(t *testing.T) {
 		t.Error("no approved phase_contract_written event recorded the successful dispatch; a good run would read as 'no tool invoked'")
 	}
 	_ = contractRepo
+}
+
+// TestDryRun_AVerifiedRunLandsInTheCrystallizer is the plan's item 7 seam
+// end to end: a run that walks to postmortem reporting a clean recovery tells
+// the crystallizer the fault, the tool, the literal argv and the trigger.
+func TestDryRun_AVerifiedRunLandsInTheCrystallizer(t *testing.T) {
+	t.Parallel()
+	cs := newPgLongRunningTxCase()
+	crystal := &recordingCrystallizer{}
+	triggers := AutonomyTriggerSourceFunc(func(_ context.Context, _, incidentID string) (domain.AutonomyTrigger, bool) {
+		if incidentID != cs.IncidentID {
+			return domain.AutonomyTrigger{}, false
+		}
+		return domain.AutonomyTrigger{Kind: domain.TriggerMetricAbove, Metric: "pg_long_running_transactions", Threshold: 1}, true
+	})
+	o, contracts := newDryRunOrchestratorWithCrystallizer(t, NoopPauseHook{}, crystal, triggers)
+	// The dry run's investigated phase is a BasePhaseWorker (no LLM caller),
+	// so it writes no root_cause_json. Seed the contract the production
+	// investigated phase would have written, so the learning path reads the
+	// same fault kind a real run carries.
+	seedRootCauseContract(t, contracts, cs)
+
+	res, err := o.Run(context.Background(), RunOptions{IncidentID: cs.IncidentID, TenantID: cs.TenantID, TriggeredBy: "alert"})
+	if err != nil {
+		t.Fatalf("Run err: %v", err)
+	}
+	if res.FinalPhase != PhasePostmortem {
+		t.Fatalf("FinalPhase = %s, want postmortem (the run must reach the end before it learns)", res.FinalPhase)
+	}
+	got := crystal.evidence()
+	if len(got) != 1 {
+		t.Fatalf("crystallizer was told about %d recoveries, want 1", len(got))
+	}
+	ev := got[0]
+	if ev.IncidentID != cs.IncidentID || ev.TenantID != cs.TenantID {
+		t.Errorf("evidence scope = %s/%s, want %s/%s", ev.TenantID, ev.IncidentID, cs.TenantID, cs.IncidentID)
+	}
+	if ev.FaultKind != "pg.long_running_tx" {
+		t.Errorf("FaultKind = %q, want the investigator's root cause kind", ev.FaultKind)
+	}
+	if ev.Tool != "pg.terminate_long_tx" {
+		t.Errorf("Tool = %q, want the action that dispatched", ev.Tool)
+	}
+	if len(ev.Argv) != 3 || ev.Argv[0] != "systemctl" {
+		t.Errorf("Argv = %v, want the executor's literal vector", ev.Argv)
+	}
+	if !ev.Trigger.Valid() || ev.Trigger.Metric != "pg_long_running_transactions" {
+		t.Errorf("Trigger = %+v, want the signal the source named", ev.Trigger)
+	}
+	if ev.Verified == nil || !ev.Verified.Passed {
+		t.Errorf("Verified = %+v, want a passing verification", ev.Verified)
+	}
+}
+
+// TestDryRun_AFailedVerificationDoesNotReachTheCrystallizer: a fix that did
+// not restore the metric is not evidence about the fix, and learning from it
+// would promote a runbook that only works when it is not needed.
+func TestDryRun_AFailedRunDoesNotReachTheCrystallizer(t *testing.T) {
+	t.Parallel()
+	// A verify caller that always reports a failed recovery, so the walk
+	// rolls back and never lands on postmortem.
+	eventRepo := NewInMemoryEventRepo()
+	contractRepo := NewInMemoryContractRepo()
+	stateStore := newInMemoryStateStore()
+	remediationLoader, remediationInvoker := dryRunRemediationDeps()
+	workers, err := DefaultPhaseWorkerFactory(PhaseWorkerDeps{
+		VerifyCaller:       &recordingVerifyCaller{failAlways: true},
+		StateStore:         stateStore,
+		ApprovedRefLoader:  &pgApprovedLoader{},
+		RemediationLoader:  remediationLoader,
+		RemediationInvoker: remediationInvoker,
+		FlowRunner:         NoopFlowRunner{},
+		PauseHook:          NoopPauseHook{},
+		Logger:             slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+		Clock:              func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("DefaultPhaseWorkerFactory err: %v", err)
+	}
+	crystal := &recordingCrystallizer{}
+	o, err := NewOrchestrator(OrchestratorDeps{
+		Locker:                 stubLocker{},
+		AdvisoryLockTimeoutSec: 5,
+		EventRepo:              eventRepo,
+		ContractRepo:           contractRepo,
+		WorkerRegistry:         NewWorkerRegistry(workers),
+		Logger:                 slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+		Crystallizer:           crystal,
+	})
+	if err != nil {
+		t.Fatalf("NewOrchestrator err: %v", err)
+	}
+	cs := newPgLongRunningTxCase()
+	res, err := o.Run(context.Background(), RunOptions{IncidentID: cs.IncidentID, TenantID: cs.TenantID, TriggeredBy: "alert"})
+	if err != nil {
+		t.Fatalf("Run err: %v", err)
+	}
+	if res.FinalPhase == PhasePostmortem {
+		t.Fatalf("a failed verification reached postmortem; the test's premise is broken")
+	}
+	if got := crystal.evidence(); len(got) != 0 {
+		t.Fatalf("crystallizer was told about %d recoveries from a failed run, want 0", len(got))
+	}
 }
 
 // TestDryRun_ChatPromote_FromApproved asserts the chat-entry path

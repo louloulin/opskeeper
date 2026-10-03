@@ -220,6 +220,13 @@ type ToolReplayEntry struct {
 	// Name is the tool name (e.g. "pg.terminate_long_tx").
 	Name string
 
+	// RegisteredTool is the registry's name for the tool that actually ran.
+	// It is separate from Name because Name is the action the loop
+	// proposed and RegisteredTool is the entry the registry resolved it
+	// to; a crystalliser reads the tool's declared class from the registry
+	// by this name and no other.
+	RegisteredTool string
+
 	// ArgsJSON is the JSON-encoded argument bag.
 	ArgsJSON string
 

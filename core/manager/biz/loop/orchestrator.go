@@ -264,6 +264,24 @@ type OrchestratorDeps struct {
 	// AND opts.LinkedConversationID != "". nil = skip the push
 	// (alert-triggered runs never push back).
 	ChatReportPusher ChatReportPusher
+
+	// Crystallizer is the optional seam that learns from a clean recovery.
+	// It is told the fault, the tool, the literal argv and the
+	// verification of every run that reached postmortem and passed on the
+	// first try; across runs it is what promotes a repeated fix into a
+	// runbook the node can execute with no model in the path.
+	//
+	// nil = skip learning (a deployment that has not opted into
+	// crystallisation records nothing and pays full inference every run).
+	Crystallizer RecoveryCrystallizer
+
+	// Triggers names the detection signal an incident fired on, so a
+	// crystallised action carries the comparison the operator wrote rather
+	// than one inferred from a metric name. It is only consulted when
+	// Crystallizer is set. nil = learn as a producer would without a
+	// trigger, which today means nothing is crystallised: the ledger
+	// refuses a declaration it cannot bind to a signal.
+	Triggers AutonomyTriggerSource
 }
 
 // ChatReportPusher is the narrow seam the orchestrator needs to
@@ -309,6 +327,12 @@ func NewOrchestrator(deps OrchestratorDeps) (Orchestrator, error) {
 			ContractRepo:           deps.ContractRepo,
 			WorkerRegistry:         deps.WorkerRegistry,
 			Logger:                 deps.Logger,
+			// Carried through rather than dropped: a seam the constructor
+			// forgets is a seam the walker sees as nil, and a nil
+			// crystalliser is indistinguishable from "not configured".
+			ChatReportPusher: deps.ChatReportPusher,
+			Crystallizer:     deps.Crystallizer,
+			Triggers:         deps.Triggers,
 		},
 		resultCache: make(map[string]cachedRunResult),
 	}, nil
@@ -679,6 +703,24 @@ func (o *orchestrator) readVerifiedDelta(ctx context.Context, opts RunOptions) *
 		return nil
 	}
 	return &verified
+}
+
+// readApprovalDecision reads the ApprovalDecision contract the approved
+// phase writes, so a downstream consumer (the crystalliser) can name the
+// target a fix was aimed at without a second contract read.
+func (o *orchestrator) readApprovalDecision(ctx context.Context, opts RunOptions) *ApprovalDecision {
+	if o.deps.ContractRepo == nil {
+		return nil
+	}
+	payload, err := o.deps.ContractRepo.ReadContract(ctx, opts.TenantID, opts.IncidentID, PhaseApproved, "ApprovalDecision")
+	if err != nil || payload == nil {
+		return nil
+	}
+	var decision ApprovalDecision
+	if err := json.Unmarshal([]byte(payload.Payload), &decision); err != nil {
+		return nil
+	}
+	return &decision
 }
 
 func (o *orchestrator) readPostmortem(ctx context.Context, opts RunOptions) *PostmortemDoc {

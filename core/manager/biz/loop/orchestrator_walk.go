@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
 )
 
@@ -249,6 +250,17 @@ func (o *orchestrator) walkPhases(ctx context.Context, opts RunOptions, from Pha
 			return events, PhaseFailed, fmt.Errorf("loop: append %s event: %w", loopmodel.EventPhaseContractWritten, err)
 		}
 		events = append(events, phaseContractEvent)
+
+		// Learn from a clean recovery. The run reached postmortem, which
+		// means the recovered phase verified it, and the crystalliser counts
+		// the streak a pattern needs before an operator is asked to admit a
+		// runbook. The call is here rather than after the loop because the
+		// loop returns on the terminal transition, and it is outside the
+		// phase workers because the decision is about repetition across runs
+		// while a worker sees one run.
+		if current == PhasePostmortem {
+			o.learnFromRecovery(ctx, opts, events)
+		}
 
 		if opts.StopAfterPhase != "" && current == opts.StopAfterPhase {
 			return events, current, nil
@@ -475,6 +487,200 @@ func upstreamContractFor(p Phase) *ContractRef {
 		}
 	}
 	return nil
+}
+
+// learnFromRecovery hands a clean recovery to the crystalliser.
+//
+// The evidence is assembled from the two events the walk already recorded:
+// the approved phase's phase_contract_written payload names the tool, the
+// class and the literal argv, and the recovered phase's payload carries the
+// verification contract. Reading them back rather than threading a value
+// through the walker keeps the learning path on the same durable record a
+// postmortem reads — if the argv is not in the event, the platform does not
+// know it, and a crystalliser fed from anywhere else would be asserting
+// something the audit trail cannot corroborate.
+func (o *orchestrator) learnFromRecovery(ctx context.Context, opts RunOptions, events []loopmodel.Event) {
+	if o.deps.Crystallizer == nil {
+		return
+	}
+	approved := approvedEventPayload(events)
+	if approved == nil {
+		return
+	}
+	// The remediation fields ride inside the event's raw_outputs bag, which
+	// is where the orchestrator stores an Executor's RawOutputs.
+	rawOutputs, _ := approved["raw_outputs"].(map[string]any)
+	if rawOutputs == nil {
+		return
+	}
+	argv := stringSliceFrom(rawOutputs[approvedMetaRemediationArgv])
+	if len(argv) == 0 {
+		// The action reached its change without an exec, or the adapter did
+		// not report a vector. Either way there is nothing a node could be
+		// asked to re-run, and the crystalliser would refuse it — bailing
+		// here keeps the reason out of the log for the common case.
+		return
+	}
+	tool, _ := rawOutputs[approvedMetaRemediationTool].(string)
+	if tool == "" {
+		return
+	}
+
+	verified := verifiedDeltaFrom(events)
+	if verified == nil {
+		// The recovered phase reports its verification on the event; the
+		// contract read is a second, older path that a deployment without a
+		// contract writer still does not have. Either source is authoritative
+		// for "did it pass", and reading the event keeps learning on the
+		// record the run itself wrote.
+		verified = o.readVerifiedDelta(ctx, opts)
+	}
+	if verified == nil {
+		return
+	}
+
+	var faultKind string
+	if rc := o.readRootCause(ctx, opts); rc != nil && rc.RootCauseObject != nil {
+		faultKind = rc.RootCauseObject.Kind
+	}
+	target := approvedTarget(approved)
+	if target == "" {
+		// The approved phase's side effect names the target the fix was
+		// aimed at; when it is absent, fall back to the resource locator
+		// the approval decision recorded.
+		if approval := o.readApprovalDecision(ctx, opts); approval != nil {
+			target = approval.Target
+		}
+	}
+
+	var trigger domain.AutonomyTrigger
+	if o.deps.Triggers != nil {
+		trigger, _ = o.deps.Triggers.AutonomyTriggerFor(ctx, opts.TenantID, opts.IncidentID)
+	}
+
+	ev := RecoveryEvidence{
+		At:         time.Now().UTC(),
+		IncidentID: opts.IncidentID,
+		TenantID:   opts.TenantID,
+		FaultKind:  faultKind,
+		Target:     target,
+		Tool:       tool,
+		Argv:       argv,
+		Trigger:    trigger,
+		Verified:   verified,
+	}
+	if err := o.deps.Crystallizer.Learn(ctx, ev); err != nil && o.deps.Logger != nil {
+		o.deps.Logger.Warn("loop: crystallise recovery failed (non-fatal)",
+			slog.String("incident", opts.IncidentID), slog.Any("err", err))
+	}
+}
+
+// approvedTarget reads the target the approved phase's side effect named.
+//
+// sideEffectsPayload records each side effect as {kind, target, detail}, so
+// the target is the first side effect's "target" field. A mutation side
+// effect is the only one the approved phase emits on a successful dispatch,
+// and its target is the resource locator the loop selected.
+func approvedTarget(payload map[string]any) string {
+	sides, _ := payload["side_effects"].([]any)
+	for _, s := range sides {
+		m, ok := s.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, ok := m["target"].(string); ok && t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// verifiedDeltaFrom reads the verification contract off the recovered
+// phase's phase_contract_written event.
+//
+// The recovered worker reports the VerifiedDelta in its Executor's
+// RawOutputs, and the orchestrator records those on the event. Reading it
+// back rather than forcing a second contract writer keeps one source of
+// truth for a run: the event is what the walker already persisted, and a
+// consumer fed from anywhere else would be asserting something the run's own
+// record cannot corroborate.
+func verifiedDeltaFrom(events []loopmodel.Event) *VerifiedDelta {
+	for _, ev := range events {
+		if ev.EventType != loopmodel.EventPhaseContractWritten || ev.Phase != string(PhaseRecovered) {
+			continue
+		}
+		payload := decodeEventPayload(ev.Payload)
+		rawOutputs, _ := payload["raw_outputs"].(map[string]any)
+		if rawOutputs == nil {
+			continue
+		}
+		raw, ok := rawOutputs["verified_delta"]
+		if !ok || raw == nil {
+			continue
+		}
+		// The RecoveredPhaseWorker puts a *VerifiedDelta in RawOutputs; the
+		// event round-trips it as a JSON object, so re-encode and decode into
+		// the contract type instead of reflecting over an any.
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			continue
+		}
+		var vd VerifiedDelta
+		if err := json.Unmarshal(encoded, &vd); err != nil {
+			continue
+		}
+		return &vd
+	}
+	return nil
+}
+
+// approvedEventPayload returns the payload of the first approved
+// phase_contract_written event, or nil.
+func approvedEventPayload(events []loopmodel.Event) map[string]any {
+	for _, ev := range events {
+		if ev.EventType != loopmodel.EventPhaseContractWritten || ev.Phase != string(PhaseApproved) {
+			continue
+		}
+		if p := decodeEventPayload(ev.Payload); p != nil {
+			return p
+		}
+	}
+	return nil
+}
+
+// decodeEventPayload unmarshals an event payload, tolerating the empty and
+// malformed cases by returning nil.
+func decodeEventPayload(raw string) map[string]any {
+	if raw == "" {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// stringSliceFrom reads a []string out of a JSON-decoded payload, where a
+// list arrives as []any. A non-list or a non-string element yields nil
+// rather than a coerced value: a partial vector is not a program.
+func stringSliceFrom(v any) []string {
+	switch t := v.(type) {
+	case []string:
+		return append([]string(nil), t...)
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			s, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			out = append(out, s)
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // renderPostmortemMarkdown reads the postmortem contract the phase

@@ -118,6 +118,17 @@ type RemediationOutcome struct {
 	// Status is one of the RemediationStatus* constants.
 	Status string
 
+	// Tool is the registered tool name the action dispatched through, when
+	// an invoker resolved it. It is empty for an outcome that never reached
+	// a tool (an unresolved argument, a missing registry).
+	//
+	// It is carried separately from the RemediationOption.Action because
+	// the two are not always the same string: the loop proposes an action
+	// name and the invoker looks it up, and a lookup that found a tool
+	// under a different registered name is a fact the crystalliser needs
+	// when it asks the tool registry what class that tool declares.
+	Tool string
+
 	// Message is the operator-facing account of the attempt. It is
 	// persisted into the postmortem, so it must say what was attempted
 	// and what the server answered.
@@ -270,13 +281,14 @@ func RecordRemediation(outcome RemediationOutcome, start time.Time, now func() t
 		stamp = now()
 	}
 	return ToolReplayEntry{
-		Name:       "",
-		ArgsJSON:   args,
-		ResultJSON: result,
-		Argv:       append([]string(nil), outcome.Argv...),
-		Status:     outcome.Status,
-		LatencyMs:  latency,
-		Timestamp:  stamp,
+		Name:           "",
+		RegisteredTool: outcome.Tool,
+		ArgsJSON:       args,
+		ResultJSON:     result,
+		Argv:           append([]string(nil), outcome.Argv...),
+		Status:         outcome.Status,
+		LatencyMs:      latency,
+		Timestamp:      stamp,
 	}, SideEffect{
 		Kind: "mutation",
 		Detail: map[string]any{
