@@ -7923,6 +7923,134 @@ node-arch-check: 8 binaries, 0 findings
    报成"没构建"，即一个**构建问题**的措辞，而真实原因是**没检查**。
    改成先用 `os.Stat` 判存在性，两类问题从此走两条路。
 
+### 4.72 决策 135：计划安全专项第三条「自治动作逃逸」——三半里唯一没有执行层探针的那半
+
+计划 §六 安全专项（**必须进 CI**）列了四条。第二条（节点令牌越权）由决策 131
+补齐，第四条（`plugin-coverage` 仍为 0/20 且这是预期值）由决策 87 钉住。
+第三条写的是：
+
+> 自治动作逃逸：篡改 `argv`、超 `blast_radius`、重放已执行 `idempotency_key`
+> 均须被拒。
+
+#### 4.72.1 先查覆盖，三半的现状并不对称
+
+| 逃逸方式 | 准入层（`sdk`） | 执行层（`core/edge/autonomy`） |
+|---|---|---|
+| 篡改 argv | ✓ | ✓ `TestTheRunnerIsGivenTheDeclaredArgvAndNotTheClaimed` |
+| 重放 idempotency_key | — | ✓ `TestAReplayIsRefused` |
+| **超 blast_radius** | ✓ `TestTheAutonomyRefusalsAreNamed` 的 "a namespace-wide blast radius" | **空** |
+
+argv 与重放两条的探针都**驱动 Arbiter 并断言 runner 从未被触达**，也就是断言
+"被拒"而不只是"被纠正"。而 blast_radius 只在准入层有一条：一份声明
+`blast_radius: namespace` 的清单不会变成已安装的包。
+
+问题在于**这两侧之间还隔着一台节点**，而节点上执行这道上限的只有一行——
+`Arbiter.mismatch` 里的 `AtMost(a.reg.maxRadius)`。它没有测试。
+
+#### 4.72.2 查清那一行是不是承重：准入是唯一入口吗
+
+按代码的说法，那一行是"复检"（注释原文：the node's own ceiling is re-checked
+here even though the loader already applied it）。**注释是准确的**，这条链查过：
+
+```
+admitPackages → pluginmanifest.Review(签名/信任) → pluginmanifest.Load
+              → pluginmanifest.Validate → sdk.Validate → validateAutonomy
+              → AutonomyPolicy.Valid → AutonomyAction.Valid
+              → BlastRadius.Rank() > RadiusSingleNS.Rank() 则整包拒绝
+```
+
+所以节点的准入**确实**已经卡住了超宽声明。但是：
+
+- `NewRegistry` **完全不校验**——它只查重名（`NameCollisionError`），然后把
+  声明原样抄进去。一份超宽的声明会被它照单全收。
+- 因此节点这一侧**唯一**的执行点就是 `mismatch` 里那一行。删掉它，一份超宽
+  声明在断网节点上会真的跑起来，而**包里没有任何测试会红**。
+
+这一行承重，而且它自己写下了理由：an enforcement point that trusts an upstream
+check has no failure mode of its own — it just moves the failure upstream。写下
+这句话的代码当时没有为它写测试。
+
+#### 4.72.3 两次变异，第二次是我自己想改"好"的地方
+
+**变异一**：删掉 `mismatch` 里那三行复检。结果：
+
+```
+--- FAIL: TestADeclarationWiderThanTheNodesCeilingIsRefused/cluster
+    escape_test.go:63: a declaration reaching wider than the node's ceiling ran
+    escape_test.go:66: the runner was called with [[systemctl restart orders-api]]
+    escape_test.go:69: verdict = run (declared, unexpired, unspent, and the
+                         control plane has been away long enough), want refuse
+```
+
+**失败信息本身就是攻击**：一份声明能到 cluster 的自治动作，在中心失联的节点上
+执行了 `systemctl restart orders-api`，没有人问过。
+
+更要紧的是**失败列表里只有 `escape_test.go`**。包里原有的 33 条测试——包括
+`TestAReplayIsRefused` 和 `TestTheRunnerIsGivenTheDeclaredArgvAndNotTheClaimed`
+——**全部照绿**。这就是"这条探针原本是空的"的证据，不是"测试写得不够整齐"。
+
+**变异二**：反过来，在 `NewRegistry` 里也加一道超宽拒绝。这看上去是显然正确的
+加固，也是我自己第一反应想做的改动。测试当场红，而且红的方式恰好是设计理由
+本身：
+
+```
+NewRegistry refused the declaration (autonomy action reaches wider than this
+node's ceiling: cluster); this test exists to say the registry must NOT be
+the line of defence
+```
+
+**为什么不加**：Registry 拒掉一份声明 = Registry 把它**丢掉了**。于是引用它的
+claim 会走 `Defer`，理由是「no autonomy action named X is declared on this
+node」——运维问「我的自愈为什么没跑」，得到的回答是「没有这个动作」。而今天节点
+给的是「the declaration reaches cluster and this node's autonomy ceiling is
+single-ns」。后者才告诉他该去改清单。
+
+更实际的后果是：Registry 一旦拒绝，那一行复检就成了**不可达的死代码**，
+而不可达的安全检查会慢慢被当成冗余删掉——正是本条要防的事。
+
+所以**明确不改生产代码**：Registry 持有声明，Arbiter 拒绝 claim，两者之间的
+那个 `Refuse` 与 `Defer` 的区别是运维唯一的线索，测试把它钉住。
+
+#### 4.72.4 探针本身写了什么
+
+- `TestADeclarationWiderThanTheNodesCeilingIsRefused`：三种超宽值
+  （`namespace` / `cluster` / 拼错的 `cluser`）。claim **完全诚实**——触发条件、
+  argv、target、window 全对，**唯一**不对的就是声明的范围，所以除了上限检查
+  没有别的东西能拒它。断言：不跑、runner 未被触达、verdict 是 `Refuse`、
+  理由同时点名声明范围与节点上限、`Refused` 计数 +1、审计里留下一条
+  `decided/refuse` 的行（没人记录的自愈与模型压根没问过是同一件事）。
+- `TestTheCeilingIsEnforcedHereAndNotOnlyAtAdmission`：断言 Registry **持有**
+  这份声明，且 claim 得到的是 `Refuse` 而**不是** `Defer`。上面那段的理由。
+- `TestOnlyDeclaredRadiiRun`：把边界两侧都钉住。**只试一侧的检查，全拒和全放
+  都能过。** 无 / `pod` / `single-ns` 跑；`namespace` / `cluster` / `cluser` /
+  `POD` 不跑。最后两行在，因为 radius 是**字符串**，`"POD"` 不是 `"pod"`
+  （`Rank()` 把无法识别的值排在比 cluster 更宽的位置）。
+
+顺带把 `newHarness` 拆成 `newHarnessFor(t, manifest)`，只改了夹具的入口，
+让一条测试不必重述另外八个字段。
+
+#### 4.72.5 诚实边界
+
+- 本条**只**补执行层。准入层那条（`sdk/autonomy_test.go`）本来就在，**没动**。
+- 本条**不是**端到端。它跑的是真 Arbiter、真 Registry、真时钟与真 Reach，
+  但没有节点进程、没有隧道、没有中心审计链——"执行层拒了"与"中心看到了这次
+  拒绝"是两件事，后者属于 §4.70.6 记的审计回传那一段，**仍未做**。
+- 计划 §六 安全专项的第一条（栅栏语义三用例）与第四条此前已完成，本条不涉及。
+
+#### 4.72.6 对台账的影响
+
+- **台账仍 84.0%**：安全专项的三条里，第三条从"两侧各有一半"变成"执行层承重
+  且有探针"，这是补齐验收项而不是推进某个阶段。
+- `core/edge/autonomy` 33 → **36** 条测试（新增 3 个函数 / 11 个子测试）。
+- `make module-check` 绿；`core/edge` 全模块 `go test ./... -count=1` 绿。
+
+#### 4.72.7 下一步
+
+1. **审计回传**（计划 §六 断网场景后半）：本条把"节点会拒"钉住了，但"中心看
+   到了节点拒过"仍然只在单元测试里。这是同一条链上最后一段接缝。
+2. 跨架构 e2e（§4.71.6）：e2e 仍不在 CI 里，arm64 runner 可用性未验证。
+3. 心跳 / 卡死阈值开 env（§4.70.4）。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

@@ -121,7 +121,14 @@ var installedAt = time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	reg, err := NewRegistry([]domain.PluginManifest{manifest()}, installedAt)
+	return newHarnessFor(t, manifest())
+}
+
+// newHarnessFor builds the same node over a different declaration, so a test
+// about one field does not have to restate the other eight.
+func newHarnessFor(t *testing.T, m domain.PluginManifest) *harness {
+	t.Helper()
+	reg, err := NewRegistry([]domain.PluginManifest{m}, installedAt)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
