@@ -378,7 +378,7 @@ PIG_MODULES := . core core/edge core/floor core/harness core/manager core/pig \
 # checked-in default is how a replace directive comes back by accident.
 PIG_DEV_PATH ?=
 
-.PHONY: module-standalone-check pig-dev-pin pig-dev-unpin plugin-extension-build-check
+.PHONY: module-standalone-check pig-dev-pin pig-dev-unpin plugin-extension-build-check pig-tool-scoping-check
 module-standalone-check: ## 关掉 workspace 与代理，按发布条件构建并测试全部模块
 	@for m in $(PIG_MODULES); do \
 		echo "  standalone: $$m"; \
@@ -410,6 +410,21 @@ pig-dev-pin: ## 本地改 PiG 时用：make pig-dev-pin PIG_DEV_PATH=/path/to/Pi
 pig-dev-unpin: ## 撤销本地 PiG checkout 覆盖，回到固定 tag
 	go work edit -dropreplace github.com/MichaelKinsy/PiG
 	@echo "pig-dev-unpin: back on the published tag. Verify with 'make module-standalone-check'."
+
+# 节点 Agent 到底被提供了哪些工具——用真二进制回答。
+#
+# 单元测试回答不了这个问题：piglet.ScopeTools 是这条链路上唯一可被本仓库
+# 直接调用的部分，而真实运行时的工具来源分类发生在 PiG 内部一个未导出的
+# 转换里，单元测试只能用**手搓**的来源去喂它。于是它证明了「若运行时这样
+# 分类则 profile 正确」，而运行时并不这样分类（§4.67）。
+#
+# 这个目标今天会红，红的原因在上游 PiG，不在本仓库。它不进 `make test`：
+# 一个长期红的测试只会训练所有人忽略红色。它也不该被删掉——它是这个缺陷
+# 唯一的可执行证据，上游修好后它会自己转绿。
+.PHONY: pig-tool-scoping-check
+pig-tool-scoping-check: ## 真二进制验证节点 Agent 被提供了插件工具（当前因上游 PiG 缺陷为红）
+	go test -tags pigscoping -count=1 -timeout 10m ./core/pig/pigprofile/ \
+		-run TestTheNodeProfileActuallyOffersTheToolsItsPackagesDeclare
 
 # ----------------------------------------------------------------------------
 # proto
