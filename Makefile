@@ -86,7 +86,7 @@ version-check: ## 校验发布元数据与源码/插件版本一致
 # test
 # ----------------------------------------------------------------------------
 
-.PHONY: test test-race test-integration test-e2e test-e2e-live protocol-validate
+.PHONY: test test-race test-integration test-e2e test-e2e-live e2e-delivery-check protocol-validate
 test: ## 单元测试
 	$(MAKE) protocol-validate
 	go test ./...
@@ -105,6 +105,20 @@ test-e2e: ## E2E（默认 fakes，无外部凭证；catalog: docs/test/e2e-catal
 
 test-e2e-live: ## E2E live mode（用 tests/e2e/secrets.local.env 打通真实外部服务）
 	E2E_LIVE_ALL=1 go test -tags=e2e -count=1 -timeout=15m ./tests/e2e/...
+
+# 方案 0.4 的验收闸门：真二进制拓扑下的一次真实对话。
+#
+# 与 test-e2e 分开，是因为它要 Docker（frontier broker 容器）、要真构建
+# pig 二进制，而这两件事都不是"跑一遍 e2e"该顺带做的。它也是本仓库里
+# 唯一一个会同时起 manager 进程、edge 进程、pig 子进程和 broker 容器的
+# 目标，因此也是唯一一个能发现"进程边界上形状不对"的闸门——在它之前，
+# 有三个缺陷连续逃过了全部单元测试与进程内 e2e。
+#
+# DOCKER_HOST：colima 之类的非默认 daemon 必须显式指出来，否则容器那一步
+# 会以"连不上 docker"的样子失败，看起来像测试的问题。
+e2e-delivery-check: ## 节点 Agent 交付闭环（需 Docker；见 tests/e2e/README.md）
+	DOCKER_HOST="$${DOCKER_HOST:-unix://$$HOME/.colima/default/docker.sock}" \
+		go test -tags=e2e -count=1 -timeout=20m ./tests/e2e/ -run 'TestTheGatewayServesAStreamToANodeCredential|TestNodeAgentDelivery'
 
 # The two corpus gates answer different prior questions, and both have to
 # be asked. plugin-coverage asks whether a *plugin package* can serve an

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,6 +47,16 @@ const (
 	// Either way nothing was applied, and the operator has to be told so
 	// rather than left believing a call was released.
 	CodeAgentBadDecision = "agent_bad_decision"
+	// CodeAgentBusy means another conversation's turn is in flight.
+	//
+	// It exists because the node's agent is one process with one session.
+	// Two consoles can both hold an open conversation on the same node, and
+	// without this the second prompt is accepted and its output is stamped
+	// with whichever conversation started last — which is not a degraded
+	// answer, it is one operator's turn rendered in another's transcript.
+	// A refusal costs the second operator one retry; the alternative costs
+	// somebody a decision they never made.
+	CodeAgentBusy = "agent_busy"
 )
 
 // AgentSource is what the bridge needs from the node's agent supervisor.
@@ -99,6 +110,9 @@ type AgentBridge struct {
 	// lives.
 	translate func(ports.ProcessEvent) []wire.StreamEvent
 	dropped   atomic.Int64
+	// unattributed counts agent records that arrived with no conversation
+	// in flight, which the node cannot route and therefore does not send.
+	unattributed atomic.Int64
 
 	// roles remembers which system role each conversation is acting as.
 	//
@@ -114,7 +128,32 @@ type AgentBridge struct {
 	// active is the conversation whose turn is currently in flight, or
 	// empty when the agent is idle.
 	active string
+	// settled is the conversation whose turn most recently ended, and
+	// settledAt when it did.
+	//
+	// It exists because an agent finishes *reporting* a turn after it
+	// finishes *having* one. The event that ends the turn is not the last
+	// event of it: the console's `done` frame — the one carrying the
+	// turn's token usage, the frame the console's stream closes on — rides
+	// on the event after it. Clearing the in-flight marker the moment the
+	// turn ends therefore strands that frame on the floor, and an
+	// operator watching a stream that never says why it stopped has no way
+	// to tell a finished investigation from a broken node.
+	settled   string
+	settledAt time.Time
 }
+
+// settleGrace is how long a finished turn still owns the events that
+// follow it.
+//
+// The tail is short in practice — the agent announces the end of a turn
+// and then reports on it, milliseconds later — but the node has no way to
+// know which event is last, so the window is a bound rather than a guess
+// at a duration. It is deliberately far shorter than roleTTL: this is a
+// relay concern, not a memory-retention one, and holding a conversation's
+// claim on the node for hours would mean a second operator is told the
+// node is busy long after it is free.
+const settleGrace = 10 * time.Second
 
 // roleEntry is one conversation's role and when it was last refreshed.
 type roleEntry struct {
@@ -231,17 +270,62 @@ func (b *AgentBridge) Register(c tunnel.Client) {
 // is reported as an error for an agent that is not up yet: that is
 // agent.state's answer, not a failure to subscribe.
 func (b *AgentBridge) StartEvents(ctx context.Context) {
-	proc, err := b.source.Process()
-	if err != nil {
-		// No process to subscribe to. The node still answers agent.state
-		// and agent.health, so the console can render the absence; there
-		// is simply nothing to relay yet.
+	// Preferred path: a source that binds the relay itself, so the
+	// subscription survives the process being replaced.
+	//
+	// This is the difference between a node that relays its agent's output
+	// and a node that is permanently deaf to it. StartEvents runs once,
+	// during startup, and on a cold node the agent process is not up yet —
+	// so binding to "the process that exists right now" binds to nothing
+	// and never retries. The node then heartbeats, reports a healthy agent,
+	// answers agent.state, runs the turn, pays for the model call, and
+	// shows the operator an empty conversation. No error anywhere, because
+	// every individual fact is true.
+	if src, ok := b.source.(eventSource); ok {
+		release := src.OnEvent(b.relay)
+		go func() {
+			<-ctx.Done()
+			release()
+		}()
 		return
 	}
+
+	proc, err := b.source.Process()
+	if err != nil {
+		// No process, and no source that can wait for one. The node still
+		// answers agent.state and agent.health, so the console can render
+		// the absence; but say it, because a node in this state is a node
+		// whose conversations will never produce a frame, and the only
+		// symptom an operator gets is silence.
+		b.warn("node agent events are not relayed: no agent process yet and no source that survives a restart",
+			"err", err)
+		return
+	}
+	b.warn("node agent events are bound to one process and will stop at the next agent restart",
+		"hint", "the agent source does not implement OnEvent, so the relay cannot be rebound")
 	go func() {
 		_ = proc.OnEvent(b.relay)
 		<-ctx.Done()
 	}()
+}
+
+// eventSource is an AgentSource that can bind a relay itself.
+//
+// It is declared here, beside the bridge that needs it, for the same reason
+// AgentSource is a two-method interface rather than the concrete supervisor:
+// the bridge is testable against a stub, and a stub that cannot promise a
+// restart-durable subscription says so by not having this method — which is
+// exactly the distinction the fallback above has to make.
+type eventSource interface {
+	OnEvent(fn func(ports.ProcessEvent)) func()
+}
+
+// warn logs through the bridge's logger when it has one.
+func (b *AgentBridge) warn(msg string, args ...any) {
+	if b.log == nil {
+		return
+	}
+	b.log.Warn(msg, args...)
 }
 
 // SetEdgeID updates the edge id frames are stamped with. The manager
@@ -267,17 +351,50 @@ func (b *AgentBridge) relay(ev ports.ProcessEvent) {
 	if b.client == nil {
 		return
 	}
+
+	// The frame belongs to the conversation whose prompt started this turn,
+	// not to whatever the agent calls its own session.
+	//
+	// This is the one line where a node-agent turn either reaches a console
+	// or does not, and it is worth being exact about why the two ids are
+	// different. The agent is one process with one session, and it names
+	// that session itself — the node never tells it which conversation is
+	// talking, because the node is not supposed to hand the agent anything
+	// it could assert. The control plane, meanwhile, routes every inbound
+	// frame by the conversation id it minted for the console, and drops
+	// anything it cannot attribute, because attributing a frame to the
+	// wrong conversation puts one operator's turn in another's transcript.
+	//
+	// So the id that matters is the one the node recorded when the prompt
+	// arrived, and stamping the agent's own id here means every frame of
+	// every turn is dropped on arrival. That is a silent failure in the
+	// worst direction: the turn runs, the model is paid for, the node's
+	// ledger records it, and the console shows nothing at all.
+	owner := b.turnOwner()
+
 	// The turn is over the moment the agent says so. The role record
 	// outlives it — a tool batch already in flight can still call the gate
 	// — but there is no longer a turn whose role an unrecognised session
 	// could be borrowing.
 	if ev.Terminal {
-		b.endTurn(ev.SessionID)
+		b.endTurn(owner)
 	}
+
+	// An event with no owner is a record the agent produced outside any
+	// turn: a start-up line, a notice, something from a process the node
+	// has just restarted. It is counted and dropped rather than sent with an
+	// empty id, which the control plane would drop anyway — the difference
+	// is that the count is on the node's health line, so "the agent is
+	// talking and nobody hears it" becomes a number instead of a silence.
+	if owner == "" {
+		b.unattributed.Add(1)
+		return
+	}
+
 	frame := tunnel.AgentEventFrame{
 		EdgeID:    b.edgeID,
 		Type:      ev.Type,
-		SessionID: ev.SessionID,
+		SessionID: owner,
 		Iteration: ev.Iteration,
 		Seq:       ev.Seq,
 		Terminal:  ev.Terminal,
@@ -290,13 +407,69 @@ func (b *AgentBridge) relay(ev ports.ProcessEvent) {
 	// over the wire with Frame nil, because dropping it would leave a gap
 	// in a conversation nobody could explain.
 	if b.translate != nil {
-		translated := b.translate(ev)
+		// The translator is handed an attributed copy, not the agent's own
+		// record. It keys one counter chain per conversation and refuses an
+		// event with no session id at all, on the grounds that guessing
+		// would renumber a live conversation — a correct decision for the
+		// control plane, which mints ids itself, and the wrong one here,
+		// because a node agent's events arrive with an empty session: the
+		// node never tells the agent which conversation is talking, by
+		// design. Handing over the raw event therefore yields no frames at
+		// all, and the turn runs, is paid for, and shows the operator
+		// nothing.
+		attributed := ev
+		attributed.SessionID = owner
+		translated := b.translate(attributed)
 		if len(translated) == 1 {
+			// The translator works from the agent's record, so the frame it
+			// built carries the agent's session id. The console routes on
+			// this id, so it has to be the conversation's — the same
+			// correction as above, one level down, and skipping it is how a
+			// correct outer frame ends up carrying an unroutable inner one.
+			translated[0].SessionID = owner
 			frame.Frame = &translated[0]
 		}
 	}
 	b.push(frame)
 }
+
+// turnOwner reports which conversation the agent is speaking for, or ""
+// when there is none.
+//
+// It is wider than inFlight on purpose: a turn that ended moments ago is
+// still being described, and those last events belong to it. Narrowing
+// this to the in-flight marker is what drops the `done` frame.
+func (b *AgentBridge) turnOwner() string {
+	b.roleMu.RLock()
+	defer b.roleMu.RUnlock()
+	if b.active != "" {
+		return b.active
+	}
+	if b.settled != "" && b.now().Sub(b.settledAt) < settleGrace {
+		return b.settled
+	}
+	return ""
+}
+
+// inFlight reports the conversation holding the node right now, or "".
+//
+// The busy check uses this and not turnOwner, because "this turn has
+// ended" and "this node is free" are the same statement only for an
+// instant, and refusing a second operator for the length of the settle
+// window would be a node telling two people it cannot help.
+func (b *AgentBridge) inFlight() string {
+	b.roleMu.RLock()
+	defer b.roleMu.RUnlock()
+	return b.active
+}
+
+// UnattributedEvents reports agent records the node could not attribute to
+// a conversation.
+//
+// It is a health number rather than a log line because the question it
+// answers is asked at the worst possible moment: an operator staring at a
+// console showing nothing, on a node whose agent is visibly working.
+func (b *AgentBridge) UnattributedEvents() int64 { return b.unattributed.Load() }
 
 // EmitApproval relays a gated call to the console.
 //
@@ -412,6 +585,19 @@ func (b *AgentBridge) handlePrompt(_ context.Context, _ tunnel.Session, _ string
 			Error:     "session_id and text are required",
 		})
 	}
+	// One agent, one session, one turn at a time. The refusal names the
+	// conversation holding the node rather than a generic busy, because the
+	// operator who gets it is looking at a node and needs to know whether
+	// somebody else is mid-investigation on it.
+	if owner := b.inFlight(); owner != "" && owner != req.SessionID {
+		return b.encodePrompt(tunnel.AgentPromptResponse{
+			SessionID: req.SessionID,
+			Code:      CodeAgentBusy,
+			Error: fmt.Sprintf("conversation %q is mid-turn on this node; "+
+				"a node runs one agent turn at a time", owner),
+		})
+	}
+
 	// Recorded before the turn starts. The agent's first action can be a
 	// tool call, and a tool call is asked about long after this returns —
 	// a role written afterwards would be one turn too late.
@@ -706,14 +892,20 @@ func (b *AgentBridge) noteRole(sessionID, role string) {
 // itself outlives this. Only the fallback moves: once the turn is over
 // there is no turn whose role an unrecognised name could be borrowing.
 func (b *AgentBridge) endTurn(sessionID string) {
+	// An empty owner is not an error: a turn that ended without ever being
+	// attributed has nothing to clear, and refusing here would leave the
+	// marker set for a turn that is already over.
 	if sessionID == "" {
 		return
 	}
 	b.roleMu.Lock()
+	defer b.roleMu.Unlock()
 	if b.active == sessionID {
 		b.active = ""
+		// The claim does not vanish with the turn: see settled.
+		b.settled = sessionID
+		b.settledAt = b.now()
 	}
-	b.roleMu.Unlock()
 }
 
 // forget drops one record, if it is still the one the reader saw.
@@ -726,6 +918,9 @@ func (b *AgentBridge) forget(sessionID string, seen roleEntry) {
 	defer b.roleMu.Unlock()
 	if cur, ok := b.roles[sessionID]; ok && cur.seen.Equal(seen.seen) {
 		delete(b.roles, sessionID)
+		if b.settled == sessionID {
+			b.settled = ""
+		}
 		if b.active == sessionID {
 			b.active = ""
 		}

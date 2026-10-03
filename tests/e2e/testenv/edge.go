@@ -75,7 +75,20 @@ func EdgeBinary(t *testing.T) string {
 			return
 		}
 		out := filepath.Join(dir, "opskeeper-edge")
-		cmd := exec.Command("go", "build", "-o", out, "./cmd/opskeeper-edge")
+		// The version is stamped, exactly as a release stamps it, and the
+		// reason it has to be is worth stating: a node refuses to host a
+		// package whose min_edge_version it cannot compare against, and
+		// the comparison needs a plain dotted numeric. An unstamped build
+		// reports "dev", every package is refused at the version step, and
+		// the node comes up as "no AI agent" with a boot log that has to be
+		// read to explain. (The repository's own VERSION file is
+		// v2026.09.14-rc4, which is *not* a form a node can compare — a
+		// discrepancy between the release version string and the admission
+		// check, worth reconciling, and one this harness does not paper
+		// over by quietly defaulting to something that happens to parse.)
+		cmd := exec.Command("go", "build",
+			"-ldflags", "-X main.version="+nodeAdvertisedVersion,
+			"-o", out, "./cmd/opskeeper-edge")
 		cmd.Dir = repo
 		var buf bytes.Buffer
 		cmd.Stdout = &buf
@@ -133,6 +146,11 @@ func PigBinary(t *testing.T) string {
 	return pigBinPath
 }
 
+// nodeAdvertisedVersion is the version this harness's node reports.
+//
+// It is a plain dotted numeric on purpose — see EdgeBinary.
+const nodeAdvertisedVersion = "0.9.0"
+
 // EdgeOptions is what a node needs to be a node.
 type EdgeOptions struct {
 	// FrontierEdgeAddr is the broker's edgebound listener.
@@ -171,10 +189,11 @@ func StartEdge(t *testing.T, env *Env, bearer string, opts EdgeOptions) *Edge {
 	// so the assertion "no cloud credential on this node" is about a
 	// directory the test owns end to end.
 	for _, d := range []string{edge.ConfigDir, edge.WorkDir} {
-		if err := os.MkdirAll(filepath.Join(d, "packages"), 0o750); err != nil {
+		if err := os.MkdirAll(d, 0o750); err != nil {
 			t.Fatalf("testenv: prepare node dir: %v", err)
 		}
 	}
+	packageRoot := writeAdmittedPackage(t, filepath.Join(edge.WorkDir, "packages"))
 
 	edgeEnv := map[string]string{
 		"OPSKEEPER_EDGE_CLOUD_ADDR":           opts.FrontierEdgeAddr,
@@ -196,6 +215,12 @@ func StartEdge(t *testing.T, env *Env, bearer string, opts EdgeOptions) *Edge {
 		"OPSKEEPER_EDGE_AGENT_BASE_URL":   opts.GatewayBaseURL,
 		"OPSKEEPER_EDGE_AGENT_TOKEN":      opts.AccessKey + ":" + opts.SecretKey,
 		"OPSKEEPER_EDGE_AGENT_MODEL":      opts.Model,
+		// The node's package set, named explicitly rather than left to the
+		// default path. A node that starts with the default looks for a
+		// boot bundle under /var/lib, finds none, and logs a refusal that
+		// reads like a permissions problem; naming it here means the
+		// package this test admits is the package under test.
+		"OPSKEEPER_EDGE_AGENT_PACKAGES": packageRoot,
 	}
 
 	edge.logBuf = &bytes.Buffer{}
@@ -400,4 +425,82 @@ func (e *Env) StreamConversation(t *testing.T, bearer, sessionID string) (<-chan
 		}
 	}()
 	return frames, cancel
+}
+
+// writeAdmittedPackage creates one governance manifest the node will admit,
+// and returns the package set root.
+//
+// It is written here rather than copied from plugins/pig-ops/ on purpose.
+// The shipped packages carry Go extension sources a node has to build
+// before it can host them, and building five extensions is not what this
+// step is testing — the conversation is. Copying a real package and then
+// stripping its extensions would produce a package that exists nowhere and
+// claims to be one of the shipped ones, which is worse than a small
+// manifest that says what it is: a node's package set, admitted by the real
+// validator, carrying no tools.
+//
+// The tool call is the next increment of this acceptance, and when it comes
+// it belongs to a package with real extensions in it. A green conversation
+// here must not be read as "tools work on a node".
+func writeAdmittedPackage(t *testing.T, base string) string {
+	t.Helper()
+	root := filepath.Join(base, "e2e-delivery")
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		t.Fatalf("testenv: create package root: %v", err)
+	}
+	manifest := `apiVersion: opskeeper.io/v1
+kind: Plugin
+metadata:
+  name: e2e-delivery
+  version: 0.1.0
+  vendor: opskeeper
+spec:
+  targets: [edge]
+  safety_level: L1
+  capabilities: [read]
+  tools: []
+  required_scopes: []
+  audit:
+    emits: true
+    mutates: false
+  approval:
+    required: false
+  install:
+    strategy: rolling
+    min_edge_version: 0.7.0
+`
+	if err := os.WriteFile(filepath.Join(root, "pig-ops.yaml"), []byte(manifest), 0o640); err != nil {
+		t.Fatalf("testenv: write package manifest: %v", err)
+	}
+	// The package root itself, not the directory holding it: the node's
+	// list is a list of packages, each reviewed on its own, so handing it
+	// the parent is a node looking for a manifest one level up.
+	return root
+}
+
+// NodeConversations asks the control plane what conversations it believes
+// are open on a node.
+//
+// It is a diagnostic accessor rather than an assertion: the interesting
+// question when a turn produces no frames is whether the control plane
+// thinks the conversation exists at all, and that is a different fact from
+// the one the SSE stream reports.
+func (e *Env) NodeConversations(t *testing.T, bearer string) any {
+	t.Helper()
+	status, body, err := e.DoJSON("GET", "/api/v1/node-agents/sessions", nil, bearer)
+	if err != nil {
+		return fmt.Sprintf("unavailable: %v", err)
+	}
+	return map[string]any{"status": status, "body": body}
+}
+
+// ReadFileOrEmpty reads a node-owned file for a failure message, and never
+// fails the test doing it: a missing file is itself information.
+func ReadFileOrEmpty(t *testing.T, path string) string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("(%s: %v)", filepath.Base(path), err)
+	}
+	return string(body)
 }

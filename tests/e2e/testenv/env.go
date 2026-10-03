@@ -283,6 +283,38 @@ func (e *Env) DoJSON(method, path string, body any, bearer string) (int, map[str
 	return resp.StatusCode, out, nil
 }
 
+// StreamBody posts a request and returns the raw response body.
+//
+// DoJSON is the wrong tool for an endpoint that answers text/event-stream: it
+// hands back a nil map for every SSE response, successfully, because a stream
+// is not JSON. A test that wanted the frames therefore had nothing to assert
+// on and asserted on the status line instead — which is how a gateway
+// answering 200 with a well-formed but empty stream passed.
+func (e *Env) StreamBody(path string, body any, bearer string) (string, error) {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequest("POST", e.httpBase+path, bytes.NewReader(raw))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return string(out), fmt.Errorf("status %d: %s", resp.StatusCode, string(out))
+	}
+	return string(out), nil
+}
+
 // LoginResult is the subset of /v1/auth/login that tests care about.
 type LoginResult struct {
 	AccessToken  string

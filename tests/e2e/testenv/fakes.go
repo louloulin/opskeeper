@@ -4,6 +4,7 @@ package testenv
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -139,6 +140,7 @@ func (f *FakeLLM) ModelsRequested() []string {
 func (f *FakeLLM) openaiChat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Model    string `json:"model"`
+		Stream   bool   `json:"stream"`
 		Messages []struct {
 			Role string `json:"role"`
 		} `json:"messages"`
@@ -208,13 +210,118 @@ func (f *FakeLLM) openaiChat(w http.ResponseWriter, r *http.Request) {
 			"total_tokens":      50,
 		},
 	}
+	if req.Stream {
+		writeOpenAIStream(w, req.Model, message, finish, resp["usage"])
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// writeOpenAIStream serves the same reply as an event stream.
+//
+// It exists because a fake that answers a `stream: true` request with a
+// whole JSON body is a fake that no provider has ever been, and the failure
+// it produces is the quietest kind: the client's SSE reader finds no `data:`
+// lines, the turn settles with an empty message, and nothing anywhere
+// reports an error. A delivery test that ran on that fake would have been
+// asserting against a gateway that silently drops every reply, and it would
+// have kept passing.
+//
+// The text is split into several deltas rather than sent whole, because the
+// only way a test can tell a stream from a buffered replay is by seeing more
+// than one frame arrive.
+func writeOpenAIStream(
+	w http.ResponseWriter, model string, message map[string]any,
+	finish string, usage any,
+) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	send := func(payload map[string]any) {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return
+		}
+		fmt.Fprintf(w, "data: %s\n\n", raw)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	}
+	chunk := func(delta map[string]any, reason string, withUsage bool) map[string]any {
+		out := map[string]any{
+			"id":      "chatcmpl-fake",
+			"object":  "chat.completion.chunk",
+			"created": time.Now().Unix(),
+			"model":   model,
+			"choices": []map[string]any{{
+				"index":         0,
+				"delta":         delta,
+				"finish_reason": reason,
+			}},
+		}
+		if withUsage {
+			out["usage"] = usage
+		}
+		return out
+	}
+
+	send(chunk(map[string]any{"role": "assistant", "content": ""}, "", false))
+
+	if calls, ok := message["tool_calls"].([]map[string]any); ok && len(calls) > 0 {
+		// A tool call is a delta like any other, and the client only runs it
+		// once it reads the finish reason.
+		for i, call := range calls {
+			fn, _ := call["function"].(map[string]any)
+			piece := map[string]any{
+				"index":    i,
+				"id":       call["id"],
+				"type":     "function",
+				"function": map[string]any{"name": fn["name"], "arguments": fn["arguments"]},
+			}
+			send(chunk(map[string]any{"tool_calls": []map[string]any{piece}}, "", false))
+		}
+	} else if text, ok := message["content"].(string); ok && text != "" {
+		for _, piece := range streamPieces(text) {
+			send(chunk(map[string]any{"content": piece}, "", false))
+		}
+	}
+
+	send(chunk(map[string]any{}, finish, true))
+	fmt.Fprint(w, "data: [DONE]\n\n")
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// streamPieces cuts a reply into a few deltas at rune boundaries.
+//
+// A cut that split a multi-byte rune would produce a stream no real client
+// could reassemble, and the failure would be blamed on the client.
+func streamPieces(text string) []string {
+	runes := []rune(text)
+	const want = 4
+	if len(runes) <= want {
+		return []string{text}
+	}
+	size := (len(runes) + want - 1) / want
+	var out []string
+	for start := 0; start < len(runes); start += size {
+		end := start + size
+		if end > len(runes) {
+			end = len(runes)
+		}
+		out = append(out, string(runes[start:end]))
+	}
+	return out
+}
+
 func (f *FakeLLM) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Model string `json:"model"`
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	f.mu.Lock()

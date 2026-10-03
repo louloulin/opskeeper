@@ -147,6 +147,50 @@ New tests follow the same naming as the catalog: `<area>_<short>_test.go`,
 one numbered case per file (so a regression doesn't take down five at
 once and `go test -run` works on the catalog number).
 
+## The node-agent delivery gate
+
+`node_agent_delivery_test.go` is the one suite here that is not a
+loopback test, and it is kept out of `make test-e2e` for that reason.
+
+```bash
+make e2e-delivery-check
+# or, with the daemon spelled out:
+DOCKER_HOST="unix://$HOME/.colima/default/docker.sock" \
+  go test -tags=e2e -count=1 -timeout=20m ./tests/e2e/ \
+  -run 'TestTheGatewayServesAStreamToANodeCredential|TestNodeAgentDelivery'
+```
+
+What is real in it: the `opskeeper` manager binary, the `opskeeper-edge`
+binary, a `pig` binary built from `core/pig` with `GOWORK=off` (the same way
+a release builds it), a frontier broker container, the node's own sockets,
+the manager's OpenAI-compatible gateway, and the console's SSE frame
+contract. What is substituted: the model, by the harness's fake LLM. So it
+proves the delivery path and says nothing about answer quality.
+
+The split exists because the two questions are different. Everything else in
+this directory replaces the transport (an in-process loopback) and the agent
+process (a scripted stand-in), which is the right trade for operational
+scenarios and the wrong one for "do the real halves fit together". Three
+defects have now escaped that trade entirely and been caught only here:
+
+- the edge subscribed to the agent's event stream exactly once, so a node
+  whose agent started after the node itself never heard it again;
+- frames were stamped with the agent's own session id, which in PiG's rpc
+  mode is empty, so the manager dropped every frame of every turn;
+- the fake LLM answered a `stream: true` request with a whole JSON body, so
+  the client's SSE reader found no `data:` lines and the gateway settled an
+  empty reply — with a 200 and no error anywhere.
+
+That third one is the reason `TestTheGatewayServesAStreamToANodeCredential`
+asserts on the response **body**. It used to assert on the status line, and
+a gateway that answers 200 with a well-formed empty stream is
+indistinguishable, to every client, from a working one.
+
+Note on the frontier image: the harness defaults to
+`singchia/frontier:1.2.5`, which is not the tag `deploy/install/frontier.yaml`
+pins. Override with `OPSKEEPER_E2E_FRONTIER_IMAGE` if your registry mirror
+carries a different one.
+
 ## Conventions for writing a new e2e
 
 1. Pick a row from `docs/test/e2e-catalog.md` — implement that one row.

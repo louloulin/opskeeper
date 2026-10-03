@@ -482,6 +482,9 @@ func TestStartEventsDoesNotBlockItsCaller(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("StartEvents returned without subscribing to the process")
 	}
+	// A turn has to belong to a conversation before its records can be
+	// routed; the node learns which one from the prompt, not from the agent.
+	b.noteRole("conv-1", "")
 	src.emit(ports.ProcessEvent{
 		Type: "turn_start", SessionID: "s-1", Seq: 1,
 		Payload: []byte(`{}`),

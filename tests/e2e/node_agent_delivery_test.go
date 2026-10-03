@@ -13,6 +13,65 @@ import (
 	"github.com/vincent-wuhan/opskeeper/tests/e2e/testenv"
 )
 
+// TestTheGatewayServesAStreamToANodeCredential isolates the first hop.
+//
+// The delivery path has three hops — node agent to gateway, gateway to
+// provider, frames back — and a failure in a full-topology test cannot say
+// which one broke. This test cuts the node out entirely: it mints a node
+// credential through the same API an operator uses and calls the gateway
+// with it, which is exactly what a node's agent does over the wire.
+//
+// It is here because a node that cannot get a model answer has no
+// conversation to have, so "the turn produced no frames" is only
+// interpretable once this hop is known to work.
+func TestTheGatewayServesAStreamToANodeCredential(t *testing.T) {
+	env := testenv.Start(t)
+	login := env.LoginAdmin()
+	env.FakeLLM().SetLLMReply("网关直连探针。")
+
+	_, access, secret := env.CreateEdge(t, login.AccessToken, "gateway-probe-node")
+
+	// Streamed, because that is what the node's agent asks for, and the two
+	// paths are different code: the gateway settles the provider's reply and
+	// re-encodes it as frames.
+	status, body, err := env.DoJSON("POST", "/v1/chat/completions", map[string]any{
+		"model": "fake-gpt",
+		"messages": []map[string]any{
+			{"role": "user", "content": "ping"},
+		},
+		"stream": true,
+	}, access+":"+secret)
+	if err != nil {
+		t.Fatalf("gateway stream: transport: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("gateway stream: status=%d body=%s", status, testenv.MustJSON(body))
+	}
+	if env.FakeLLM().CallCount() == 0 {
+		t.Fatalf("the gateway answered without calling a model; it is not proxying\n%s", env.ManagerLogs())
+	}
+	// The body, not the status line. This assertion was the one that would
+	// have caught the bug this test was written next to: the gateway settled
+	// the provider reply with no content blocks, wrote a well-formed stream
+	// with nothing in it, and answered 200. A hop test that checks the
+	// status and stops is a hop test that cannot tell a working hop from a
+	// silent one.
+	stream, err := env.StreamBody("/v1/chat/completions", map[string]any{
+		"model": "fake-gpt",
+		"messages": []map[string]any{
+			{"role": "user", "content": "ping"},
+		},
+		"stream": true,
+	}, access+":"+secret)
+	if err != nil {
+		t.Fatalf("gateway stream body: transport: %v", err)
+	}
+	if !strings.Contains(stream, "网关直连探针") {
+		t.Fatalf("the stream carried no model text; a gateway that answers 200 with an "+
+			"empty stream is indistinguishable, to every client, from a broken one\nbody: %s", stream)
+	}
+}
+
 // The delivery acceptance, run against real processes.
 //
 // What is real: the manager binary, the node binary, the node's agent —
@@ -107,7 +166,7 @@ func TestNodeAgentDelivery(t *testing.T) {
 		t.Fatalf("send turn: status=%d body=%s", status, testenv.MustJSON(body))
 	}
 
-	seen := collectUntilDone(t, frames, env, edge, 3*time.Minute)
+	seen := collectUntilDone(t, frames, env, edge, login.AccessToken, turnTimeout)
 
 	t.Run("the turn streams back on the console's frame contract", func(t *testing.T) {
 		var text strings.Builder
@@ -158,7 +217,13 @@ func TestNodeAgentDelivery(t *testing.T) {
 		if !strings.Contains(logs, "llmgw: stream served") {
 			t.Fatalf("the gateway served no stream\n=== manager logs ===\n%s", logs)
 		}
-		if !strings.Contains(logs, fmt.Sprintf("edge_id=%d", edgeID)) {
+		// Both spellings, because the manager's handler is JSON in this
+		// configuration and logfmt in the other one, and an assertion
+		// written against the wrong one is a test that fails on a working
+		// gateway — which is how it read when the reply was still missing.
+		named := strings.Contains(logs, fmt.Sprintf("edge_id=%d", edgeID)) ||
+			strings.Contains(logs, fmt.Sprintf(`"edge_id":%d`, edgeID))
+		if !named {
 			t.Errorf("the gateway served a stream but never named node %d; the node's identity and its model traffic are not the same fact\n=== manager logs ===\n%s", edgeID, logs)
 		}
 		if env.FakeLLM().CallCount() == 0 {
@@ -205,8 +270,24 @@ func openConversation(t *testing.T, env *testenv.Env, edge *testenv.Edge, bearer
 	return sid
 }
 
+// turnTimeout bounds one turn.
+//
+// Sixty seconds is generous for a loopback fake and short enough that a
+// hang is a failure message rather than a wait. It is not a performance
+// budget: the model here is a fixture, so a turn that has not finished in a
+// minute is not a slow turn, it is a turn that went somewhere nobody is
+// watching.
+const turnTimeout = 60 * time.Second
+
 // collectUntilDone reads frames until the turn ends.
-func collectUntilDone(t *testing.T, frames <-chan map[string]any, env *testenv.Env, edge *testenv.Edge, timeout time.Duration) []map[string]any {
+//
+// A failure here prints the node's own audit ledger and the control plane's
+// view of its open conversations, because "no frames" has at least three
+// very different causes — the agent never ran, it ran and its frames were
+// dropped in transit, or the frames arrived for a conversation the control
+// plane could not attribute — and they need different fixes. The frame list
+// alone cannot tell them apart.
+func collectUntilDone(t *testing.T, frames <-chan map[string]any, env *testenv.Env, edge *testenv.Edge, bearer string, timeout time.Duration) []map[string]any {
 	t.Helper()
 	var out []map[string]any
 	deadline := time.After(timeout)
@@ -221,8 +302,12 @@ func collectUntilDone(t *testing.T, frames <-chan map[string]any, env *testenv.E
 				return out
 			}
 		case <-deadline:
-			t.Fatalf("the turn did not end within %s\nframes: %s\n=== edge logs ===\n%s\n=== manager logs ===\n%s",
-				timeout, testenv.MustJSON(out), edge.Logs(), env.ManagerLogs())
+			t.Fatalf("the turn did not end within %s\nframes: %s\nmodel calls: %d %v\nconversations: %s\nnode ledger: %s\n=== edge logs ===\n%s\n=== manager logs ===\n%s",
+				timeout, testenv.MustJSON(out),
+				env.FakeLLM().CallCount(), env.FakeLLM().ModelsRequested(),
+				testenv.MustJSON(env.NodeConversations(t, bearer)),
+				testenv.ReadFileOrEmpty(t, filepath.Join(edge.WorkDir, "audit-ledger.jsonl")),
+				edge.Logs(), env.ManagerLogs())
 		}
 	}
 }
