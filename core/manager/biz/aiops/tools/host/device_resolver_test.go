@@ -1,4 +1,4 @@
-package tools
+package host
 
 import (
 	"context"
@@ -33,30 +33,27 @@ func TestDeviceResolver_NilDependencies(t *testing.T) {
 	}
 }
 
-// TestDeviceResolver_AdaptedToHostFiles confirms the adapter shim used
-// by the three host_files BaseTools delegates to DeviceResolver and
-// returns 0 (no error) for an unmapped id. Production wiring goes
-// through this adapter; the adapter's correctness gates every
-// host_files tool path.
-func TestDeviceResolver_AdaptedToHostFiles(t *testing.T) {
-	a := deviceResolverAdapter{inner: NewDeviceResolver(nil, nil)}
-	got, err := a.LookupHostEdge(context.Background(), 7)
+// TestResolveHostEdgeIsNilSafe pins the one behaviour the adapter used to
+// provide. A tool assembled without a device usecase is a supported
+// degraded configuration, so a nil resolver has to answer "no host link"
+// rather than panic — and it has to keep answering that way after the
+// adapter became a function.
+func TestResolveHostEdgeIsNilSafe(t *testing.T) {
+	got, err := ResolveHostEdge(context.Background(), nil, 7)
 	if err != nil {
-		t.Fatalf("LookupHostEdge: unexpected err %v", err)
+		t.Fatalf("ResolveHostEdge(nil): unexpected err %v", err)
 	}
 	if got != 0 {
-		t.Errorf("LookupHostEdge = %d, want 0", got)
+		t.Errorf("ResolveHostEdge(nil) = %d, want 0", got)
 	}
 
-	// Adapter with nil inner must also be nil-safe (defensive — no
-	// production caller passes nil today, but a future test
-	// constructing an adapter directly might).
-	a2 := deviceResolverAdapter{inner: nil}
-	got, err = a2.LookupHostEdge(context.Background(), 7)
+	// A real resolver with no backing usecases is the other nil-shaped
+	// case, and it must not be confused with "no host link found".
+	got, err = ResolveHostEdge(context.Background(), NewDeviceResolver(nil, nil), 7)
 	if err != nil {
-		t.Fatalf("LookupHostEdge(nil inner): unexpected err %v", err)
+		t.Fatalf("ResolveHostEdge(no deps): unexpected err %v", err)
 	}
 	if got != 0 {
-		t.Errorf("LookupHostEdge(nil inner) = %d, want 0", got)
+		t.Errorf("ResolveHostEdge(no deps) = %d, want 0", got)
 	}
 }

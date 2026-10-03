@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"log/slog"
 	"testing"
 
@@ -124,7 +125,7 @@ func TestEveryNameInTheTableIsFencedInTheShippedBag(t *testing.T) {
 	reg.SetPluginConfigLister(fakePluginConfigLister{})
 
 	bag := reg.BuildBaseTools()
-	bag = AppendHostFilesTools(bag, &fakeCaller{}, uc, dc.usecase(), slog.Default())
+	bag = host.AppendHostFilesTools(bag, &fakeCaller{}, uc, dc.usecase(), slog.Default())
 
 	marked := map[string]bool{}
 	for _, tool := range bag.AllTools() {
@@ -150,7 +151,7 @@ func TestEveryNameInTheTableIsFencedInTheShippedBag(t *testing.T) {
 	for _, name := range []string{
 		ToolNameQueryLogQL, ToolNameQueryTraceQL,
 		ToolNameQueryIncidents, ToolNameGetIncidentDetail, ToolNameQueryAlertRules, ToolNameCorrelateIncident,
-		ToolNameFindLargeFiles, ToolNameDuSummary, ToolNameStatFile,
+		host.ToolNameFindLargeFiles, host.ToolNameDuSummary, host.ToolNameStatFile,
 	} {
 		if !marked[name] {
 			t.Errorf("%q must be present and fenced in the fully-wired bag", name)

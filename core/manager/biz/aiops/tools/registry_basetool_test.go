@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"log/slog"
 	"testing"
 
@@ -84,16 +85,16 @@ func TestBuildBaseTools_GraphKernelToolBagCount(t *testing.T) {
 	reg := NewRegistry(&fakeCaller{}, uc, dc.usecase(), pq, lq, tq, au, slog.Default())
 	reg.SetPluginConfigLister(fakePluginConfigLister{})
 	bag := reg.BuildBaseTools()
-	bag = AppendHostFilesTools(bag, &fakeCaller{}, uc, dc.usecase(), slog.Default())
+	bag = host.AppendHostFilesTools(bag, &fakeCaller{}, uc, dc.usecase(), slog.Default())
 
 	names := toolInfoNames(t, bag.AllTools())
 	t.Logf("graph kernel toolBag (count=%d): %v", len(names), names)
 
 	// Sanity: host_files trio MUST be present once AppendHostFilesTools
 	// has been called with non-nil deps.
-	for _, want := range []string{ToolNameFindLargeFiles, ToolNameDuSummary, ToolNameStatFile} {
+	for _, want := range []string{host.ToolNameFindLargeFiles, host.ToolNameDuSummary, host.ToolNameStatFile} {
 		if !containsName(names, want) {
-			t.Errorf("toolBag missing %q after AppendHostFilesTools", want)
+			t.Errorf("toolBag missing %q after host.AppendHostFilesTools", want)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"slices"
@@ -189,7 +190,7 @@ type BashBatchResponse struct {
 // BashTool is the BaseTool implementation.
 type BashTool struct {
 	caller   Caller
-	resolver hostFilesDeviceResolver
+	resolver host.DeviceResolver
 	proposer HostBashProposer
 	log      *slog.Logger
 }
@@ -208,7 +209,7 @@ func NewBashToolWithProposer(c Caller, e *edgebiz.Usecase, d *devicebiz.Usecase,
 	}
 	return &BashTool{
 		caller:   c,
-		resolver: deviceResolverAdapter{inner: NewDeviceResolver(d, e)},
+		resolver: host.NewDeviceResolver(d, e),
 		proposer: proposer,
 		log:      log,
 	}
@@ -237,7 +238,7 @@ func (t *BashTool) singleBash(ctx context.Context, deviceID uint64, cmd string, 
 		entry.Error = "device_id must be > 0"
 		return entry
 	}
-	edgeID, err := t.resolver.LookupHostEdge(ctx, deviceID)
+	edgeID, err := host.ResolveHostEdge(ctx, t.resolver, deviceID)
 	if err != nil {
 		entry.Error = fmt.Sprintf("resolve device %d: %v", deviceID, err)
 		return entry

@@ -1,9 +1,10 @@
-package tools
+package host
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"strings"
 	"testing"
 	"time"
@@ -12,15 +13,15 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
-// fakeHostFilesResolver is a stub hostFilesDeviceResolver. Tests
+// fakeHostResolver is a stub hostFilesDeviceResolver. Tests
 // preload either a deviceID→edgeID map (happy path) or an err to
 // exercise the failure branches.
-type fakeHostFilesResolver struct {
+type fakeHostResolver struct {
 	mapping map[uint64]uint64
 	err     error
 }
 
-func (f *fakeHostFilesResolver) LookupHostEdge(_ context.Context, deviceID uint64) (uint64, error) {
+func (f *fakeHostResolver) ResolveEdgeID(_ context.Context, deviceID uint64) (uint64, error) {
 	if f.err != nil {
 		return 0, f.err
 	}
@@ -33,7 +34,7 @@ func (f *fakeHostFilesResolver) LookupHostEdge(_ context.Context, deviceID uint6
 // newHostFilesToolsFor builds the three host_files BaseTools backed by
 // a fake caller + fake resolver. Returns the (caller, find, du, stat)
 // quad so each test can pick what it needs without re-doing wiring.
-func newHostFilesToolsFor(t *testing.T, resolver hostFilesDeviceResolver, fc *fakeCaller) (*FindLargeFilesTool, *DuSummaryTool, *StatFileTool) {
+func newHostFilesToolsFor(t *testing.T, resolver DeviceResolver, fc *fakeCaller) (*FindLargeFilesTool, *DuSummaryTool, *StatFileTool) {
 	t.Helper()
 	find := &FindLargeFilesTool{caller: fc, resolver: resolver}
 	du := &DuSummaryTool{caller: fc, resolver: resolver}
@@ -46,7 +47,7 @@ func newHostFilesToolsFor(t *testing.T, resolver hostFilesDeviceResolver, fc *fa
 // =====================================================================
 
 func TestFindLargeFilesTool_Info(t *testing.T) {
-	tool, _, _ := newHostFilesToolsFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	tool, _, _ := newHostFilesToolsFor(t, &fakeHostResolver{}, &fakeCaller{})
 	info, err := tool.Info(context.Background())
 	if err != nil {
 		t.Fatalf("Info: %v", err)
@@ -105,7 +106,7 @@ func TestFindLargeFilesTool_BatchRoundTrip(t *testing.T) {
 			},
 		}),
 	}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	tool, _, _ := newHostFilesToolsFor(t, resolver, fc)
 
 	out, err := tool.InvokableRun(context.Background(), `{"device_id":1,"paths":["/var/log","/var/cache"],"top_n":5}`)
@@ -160,7 +161,7 @@ func TestFindLargeFilesTool_Defaults(t *testing.T) {
 	fc := &fakeCaller{
 		respBody: mustMarshal(tunnel.FindLargeFilesResponse{Results: []tunnel.FindLargeFilesResultEntry{{Path: "/", ScannedPath: "/"}}}),
 	}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	tool, _, _ := newHostFilesToolsFor(t, resolver, fc)
 
 	if _, err := tool.InvokableRun(context.Background(), `{"device_id":1,"paths":["/"]}`); err != nil {
@@ -182,7 +183,7 @@ func TestFindLargeFilesTool_TopNClamp(t *testing.T) {
 	fc := &fakeCaller{
 		respBody: mustMarshal(tunnel.FindLargeFilesResponse{Results: []tunnel.FindLargeFilesResultEntry{{Path: "/"}}}),
 	}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	tool, _, _ := newHostFilesToolsFor(t, resolver, fc)
 
 	if _, err := tool.InvokableRun(context.Background(), `{"device_id":1,"paths":["/"],"top_n":9999}`); err != nil {
@@ -196,7 +197,7 @@ func TestFindLargeFilesTool_TopNClamp(t *testing.T) {
 }
 
 func TestFindLargeFilesTool_MissingDeviceID(t *testing.T) {
-	tool, _, _ := newHostFilesToolsFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	tool, _, _ := newHostFilesToolsFor(t, &fakeHostResolver{}, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"paths":["/"]}`)
 	if err == nil {
 		t.Fatalf("expected error for missing device_id")
@@ -210,7 +211,7 @@ func TestFindLargeFilesTool_MissingDeviceID(t *testing.T) {
 }
 
 func TestFindLargeFilesTool_MissingPaths(t *testing.T) {
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	tool, _, _ := newHostFilesToolsFor(t, resolver, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":1}`)
 	if err == nil {
@@ -222,7 +223,7 @@ func TestFindLargeFilesTool_MissingPaths(t *testing.T) {
 }
 
 func TestFindLargeFilesTool_TooManyPaths(t *testing.T) {
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	tool, _, _ := newHostFilesToolsFor(t, resolver, &fakeCaller{})
 	// Build args with 17 paths.
 	paths := make([]string, hostFilesMaxBatchPaths+1)
@@ -240,7 +241,7 @@ func TestFindLargeFilesTool_TooManyPaths(t *testing.T) {
 }
 
 func TestFindLargeFilesTool_EmptyPathString(t *testing.T) {
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	tool, _, _ := newHostFilesToolsFor(t, resolver, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":1,"paths":["/var",""]}`)
 	if err == nil {
@@ -249,7 +250,7 @@ func TestFindLargeFilesTool_EmptyPathString(t *testing.T) {
 }
 
 func TestFindLargeFilesTool_UnlinkedDevice(t *testing.T) {
-	tool, _, _ := newHostFilesToolsFor(t, &fakeHostFilesResolver{mapping: map[uint64]uint64{}}, &fakeCaller{})
+	tool, _, _ := newHostFilesToolsFor(t, &fakeHostResolver{mapping: map[uint64]uint64{}}, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":42,"paths":["/var"]}`)
 	if err == nil {
 		t.Fatalf("expected error for unlinked device_id")
@@ -261,7 +262,7 @@ func TestFindLargeFilesTool_UnlinkedDevice(t *testing.T) {
 
 func TestFindLargeFilesTool_DispatchError(t *testing.T) {
 	fc := &fakeCaller{respErr: errs.ErrEdgeOffline}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	tool, _, _ := newHostFilesToolsFor(t, resolver, fc)
 
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":1,"paths":["/var"]}`)
@@ -274,7 +275,7 @@ func TestFindLargeFilesTool_DispatchError(t *testing.T) {
 }
 
 func TestFindLargeFilesTool_NilCaller(t *testing.T) {
-	tool := &FindLargeFilesTool{caller: nil, resolver: &fakeHostFilesResolver{}}
+	tool := &FindLargeFilesTool{caller: nil, resolver: &fakeHostResolver{}}
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":1,"paths":["/var"]}`)
 	if err == nil || !strings.Contains(err.Error(), "caller") {
 		t.Errorf("expected caller-not-configured error, got %v", err)
@@ -286,7 +287,7 @@ func TestFindLargeFilesTool_NilCaller(t *testing.T) {
 // =====================================================================
 
 func TestDuSummaryTool_Info(t *testing.T) {
-	_, tool, _ := newHostFilesToolsFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	_, tool, _ := newHostFilesToolsFor(t, &fakeHostResolver{}, &fakeCaller{})
 	info, err := tool.Info(context.Background())
 	if err != nil {
 		t.Fatalf("Info: %v", err)
@@ -335,7 +336,7 @@ func TestDuSummaryTool_BatchRoundTrip(t *testing.T) {
 			},
 		}),
 	}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	_, tool, _ := newHostFilesToolsFor(t, resolver, fc)
 
 	out, err := tool.InvokableRun(context.Background(), `{"device_id":1,"paths":["/var","/opt","/home"],"depth":1}`)
@@ -377,7 +378,7 @@ func TestDuSummaryTool_BatchRoundTrip(t *testing.T) {
 
 func TestDuSummaryTool_DepthClamp(t *testing.T) {
 	fc := &fakeCaller{respBody: mustMarshal(tunnel.DuSummaryResponse{Results: []tunnel.DuSummaryResultEntry{{Path: "/var"}}})}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	_, tool, _ := newHostFilesToolsFor(t, resolver, fc)
 
 	if _, err := tool.InvokableRun(context.Background(), `{"device_id":1,"paths":["/var"],"depth":99}`); err != nil {
@@ -391,7 +392,7 @@ func TestDuSummaryTool_DepthClamp(t *testing.T) {
 }
 
 func TestDuSummaryTool_MissingDeviceID(t *testing.T) {
-	_, tool, _ := newHostFilesToolsFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	_, tool, _ := newHostFilesToolsFor(t, &fakeHostResolver{}, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"paths":["/var"]}`)
 	if err == nil {
 		t.Fatalf("expected error")
@@ -402,7 +403,7 @@ func TestDuSummaryTool_MissingDeviceID(t *testing.T) {
 }
 
 func TestDuSummaryTool_MissingPaths(t *testing.T) {
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	_, tool, _ := newHostFilesToolsFor(t, resolver, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":1}`)
 	if err == nil {
@@ -414,7 +415,7 @@ func TestDuSummaryTool_MissingPaths(t *testing.T) {
 }
 
 func TestDuSummaryTool_TooManyPaths(t *testing.T) {
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	_, tool, _ := newHostFilesToolsFor(t, resolver, &fakeCaller{})
 	paths := make([]string, hostFilesMaxBatchPaths+1)
 	for i := range paths {
@@ -428,7 +429,7 @@ func TestDuSummaryTool_TooManyPaths(t *testing.T) {
 }
 
 func TestDuSummaryTool_UnlinkedDevice(t *testing.T) {
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{}}
 	_, tool, _ := newHostFilesToolsFor(t, resolver, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":42,"paths":["/var"]}`)
 	if err == nil {
@@ -441,7 +442,7 @@ func TestDuSummaryTool_UnlinkedDevice(t *testing.T) {
 
 func TestDuSummaryTool_DispatchError(t *testing.T) {
 	fc := &fakeCaller{respErr: errs.ErrEdgeOffline}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	_, tool, _ := newHostFilesToolsFor(t, resolver, fc)
 
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":1,"paths":["/var"]}`)
@@ -458,7 +459,7 @@ func TestDuSummaryTool_DispatchError(t *testing.T) {
 // =====================================================================
 
 func TestStatFileTool_Info(t *testing.T) {
-	_, _, tool := newHostFilesToolsFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	_, _, tool := newHostFilesToolsFor(t, &fakeHostResolver{}, &fakeCaller{})
 	info, err := tool.Info(context.Background())
 	if err != nil {
 		t.Fatalf("Info: %v", err)
@@ -487,7 +488,7 @@ func TestStatFileTool_BatchRoundTrip(t *testing.T) {
 			},
 		}),
 	}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	_, _, tool := newHostFilesToolsFor(t, resolver, fc)
 
 	out, err := tool.InvokableRun(context.Background(), `{"device_id":1,"paths":["/etc/passwd","/var/log/messages"]}`)
@@ -525,7 +526,7 @@ func TestStatFileTool_BatchRoundTrip(t *testing.T) {
 }
 
 func TestStatFileTool_MissingDeviceID(t *testing.T) {
-	_, _, tool := newHostFilesToolsFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	_, _, tool := newHostFilesToolsFor(t, &fakeHostResolver{}, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"paths":["/etc/passwd"]}`)
 	if err == nil {
 		t.Fatalf("expected error")
@@ -536,7 +537,7 @@ func TestStatFileTool_MissingDeviceID(t *testing.T) {
 }
 
 func TestStatFileTool_MissingPaths(t *testing.T) {
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	_, _, tool := newHostFilesToolsFor(t, resolver, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":1}`)
 	if err == nil {
@@ -548,7 +549,7 @@ func TestStatFileTool_MissingPaths(t *testing.T) {
 }
 
 func TestStatFileTool_TooManyPaths(t *testing.T) {
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	_, _, tool := newHostFilesToolsFor(t, resolver, &fakeCaller{})
 	paths := make([]string, hostFilesMaxBatchPaths+1)
 	for i := range paths {
@@ -562,7 +563,7 @@ func TestStatFileTool_TooManyPaths(t *testing.T) {
 }
 
 func TestStatFileTool_UnlinkedDevice(t *testing.T) {
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{}}
 	_, _, tool := newHostFilesToolsFor(t, resolver, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":42,"paths":["/etc/passwd"]}`)
 	if err == nil {
@@ -575,7 +576,7 @@ func TestStatFileTool_UnlinkedDevice(t *testing.T) {
 
 func TestStatFileTool_DispatchError(t *testing.T) {
 	fc := &fakeCaller{respErr: errs.ErrEdgeOffline}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	_, _, tool := newHostFilesToolsFor(t, resolver, fc)
 
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":1,"paths":["/etc/passwd"]}`)
@@ -598,7 +599,7 @@ func TestAppendHostFilesTools_NilDepsReturnsUnchanged(t *testing.T) {
 		t.Errorf("expected nil bag to return nil, got %v", got)
 	}
 	// non-nil bag, nil deps — bag unchanged (no host_files appended).
-	bag := NewToolBag(nil, 30)
+	bag := toolcore.NewToolBag(nil, 30)
 	got = AppendHostFilesTools(bag, nil, nil, nil, nil)
 	if got != bag {
 		t.Errorf("expected same bag back, got different ref")

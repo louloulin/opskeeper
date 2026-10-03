@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"strings"
 	"sync"
 	"testing"
@@ -659,21 +660,21 @@ func TestAppendRecoveryExecuteTool_NilDepsReturnsUnchanged(t *testing.T) {
 }
 
 type fakeHostFixtureTerminator struct {
-	calls    []HostProcessTerminationRequest
+	calls    []host.HostProcessTerminationRequest
 	results  map[string]json.RawMessage
-	statuses map[string]HostFixtureStatus
+	statuses map[string]host.HostFixtureStatus
 	err      error
 }
 
-func (f *fakeHostFixtureTerminator) Status(_ context.Context, request HostProcessTerminationRequest) (HostFixtureStatus, error) {
+func (f *fakeHostFixtureTerminator) Status(_ context.Context, request host.HostProcessTerminationRequest) (host.HostFixtureStatus, error) {
 	status, ok := f.statuses[request.FixtureManifestID]
 	if !ok {
-		return HostFixtureStatus{}, errs.ErrNotFound
+		return host.HostFixtureStatus{}, errs.ErrNotFound
 	}
 	return status, nil
 }
 
-func (f *fakeHostFixtureTerminator) Terminate(_ context.Context, request HostProcessTerminationRequest) (json.RawMessage, error) {
+func (f *fakeHostFixtureTerminator) Terminate(_ context.Context, request host.HostProcessTerminationRequest) (json.RawMessage, error) {
 	f.calls = append(f.calls, request)
 	if f.err != nil {
 		return nil, f.err
@@ -695,7 +696,7 @@ func TestRecoveryExecuteTool_KillProcessUsesExactApprovedTarget(t *testing.T) {
 		Action: "kill_process", Resource: "host:fixture", Execution: approvedExecution,
 	}
 	terminator := &fakeHostFixtureTerminator{
-		statuses: map[string]HostFixtureStatus{
+		statuses: map[string]host.HostFixtureStatus{
 			"f4b1c0a19d3e5f7a": {ManifestID: "f4b1c0a19d3e5f7a", IncidentID: "host-cpu", Resource: "host:fixture", Status: "running"},
 		},
 		results: map[string]json.RawMessage{
@@ -747,7 +748,7 @@ func TestRecoveryExecuteTool_KillProcessRejectsTargetMismatchBeforeReservation(t
 		ProposalID: "88888888-8888-4888-8888-888888888888", SessionID: "host-cpu",
 		Kind: "agentteams_hitl", Action: "kill_process", Resource: "host:fixture", Execution: approvedExecution,
 	}
-	terminator := &fakeHostFixtureTerminator{statuses: map[string]HostFixtureStatus{
+	terminator := &fakeHostFixtureTerminator{statuses: map[string]host.HostFixtureStatus{
 		"f4b1c0a19d3e5f7a": {ManifestID: "f4b1c0a19d3e5f7a", IncidentID: "host-cpu", Resource: "host:fixture", Status: "running"},
 	}}
 	tool := NewRecoveryExecuteTool(&fakeDispatcher{name: ToolNameRestartService}, terminator, audit, nil)

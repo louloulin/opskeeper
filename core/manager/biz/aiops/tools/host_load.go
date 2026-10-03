@@ -1,48 +1,31 @@
 package tools
 
+// This file is the upcall half of get_host_load.
+//
+// The batch-first BaseTool in tools/host is what the in-process agent
+// loop presents to the model. This is what the node's own agent reaches
+// when it calls the tool through the upcall channel, and it keeps the
+// older single-device shape: one edge_name, no fan-out. The wire name,
+// the description and the schema live in tools/host so both halves answer
+// to one declaration.
+//
+// It stays here because it is a method on Registry, and Registry is the
+// upcall dispatch surface — a method cannot be moved to another package
+// without moving the thing it hangs off.
+
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 )
-
-// ToolNameGetHostLoad is the stable wire name the LLM sees for this tool.
-const ToolNameGetHostLoad = "get_host_load"
-
-// GetHostLoadDescription is the single-sentence description the model reads
-// when deciding whether to call this tool. Accuracy here directly affects
-// dispatch quality; keep it concrete.
-const GetHostLoadDescription = "Return current CPU percent, memory percent, and 1/5/15-minute load averages of the named edge host."
-
-// GetHostLoadSchema is the JSON Schema of the tool's argument object.
-var GetHostLoadSchema = json.RawMessage(`{
-  "type": "object",
-  "properties": {
-    "edge_name": {
-      "type": "string",
-      "description": "Name of the edge as set when the edge was created."
-    }
-  },
-  "required": ["edge_name"]
-}`)
-
-// GetHostLoadArgs is the typed form of GetHostLoadSchema.
-type GetHostLoadArgs struct {
-	EdgeName string `json:"edge_name"`
-}
-
-// hostLoadCallTimeout caps how long a single tool dispatch may wait on
-// the frontier round-trip. We derive a child ctx with this deadline so
-// long-running edge calls cannot wedge the agent loop.
-const hostLoadCallTimeout = 15 * time.Second
 
 // executeGetHostLoad resolves edge_name -> edge.ID via manager/biz/edge and
 // dispatches a get_host_load reverse call through the frontier.
 func (r *Registry) executeGetHostLoad(ctx context.Context, args json.RawMessage) (ExecuteResult, error) {
-	var in GetHostLoadArgs
+	var in host.GetHostLoadArgs
 	if err := json.Unmarshal(args, &in); err != nil {
 		return ExecuteResult{}, fmt.Errorf("get_host_load: bad args: %w", err)
 	}
@@ -59,7 +42,7 @@ func (r *Registry) executeGetHostLoad(ctx context.Context, args json.RawMessage)
 	if err != nil {
 		return ExecuteResult{DeviceID: &edge.ID}, fmt.Errorf("get_host_load: marshal req: %w", err)
 	}
-	callCtx, cancel := context.WithTimeout(ctx, hostLoadCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, host.HostLoadCallTimeout)
 	defer cancel()
 	respBody, err := r.caller.Call(callCtx, edge.ID, tunnel.MethodGetHostLoad, body)
 	if err != nil {

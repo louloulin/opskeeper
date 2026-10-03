@@ -1,4 +1,4 @@
-package tools
+package host
 
 import (
 	"context"
@@ -18,7 +18,7 @@ import (
 // newHostLoadToolFor builds a GetHostLoadTool with the test-fake
 // resolver so we can plant device_id → edge_id mappings without a real
 // device usecase.
-func newHostLoadToolFor(_ *testing.T, resolver hostFilesDeviceResolver, fc *fakeCaller) *GetHostLoadTool {
+func newHostLoadToolFor(_ *testing.T, resolver DeviceResolver, fc *fakeCaller) *GetHostLoadTool {
 	return &GetHostLoadTool{caller: fc, resolver: resolver}
 }
 
@@ -60,7 +60,7 @@ func TestGetHostLoadTool_BatchHappy(t *testing.T) {
 	fc := &fakeCaller{
 		respBody: mustMarshal(tunnel.GetHostLoadResponse{CPUPct: 12.3, MemPct: 45.6}),
 	}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7, 2: 8, 3: 9}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7, 2: 8, 3: 9}}
 	tool := newHostLoadToolFor(t, resolver, fc)
 
 	out, err := tool.InvokableRun(context.Background(), `{"device_ids":[1,2,3]}`)
@@ -96,7 +96,7 @@ func TestGetHostLoadTool_BatchPartialSuccess(t *testing.T) {
 	fc := &fakeCaller{
 		respBody: mustMarshal(tunnel.GetHostLoadResponse{CPUPct: 1}),
 	}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7, 2: 8}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7, 2: 8}}
 	tool := newHostLoadToolFor(t, resolver, fc)
 
 	out, err := tool.InvokableRun(context.Background(), `{"device_ids":[1,2,4]}`)
@@ -116,7 +116,7 @@ func TestGetHostLoadTool_BatchPartialSuccess(t *testing.T) {
 }
 
 func TestGetHostLoadTool_BatchEmptyIDs(t *testing.T) {
-	tool := newHostLoadToolFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	tool := newHostLoadToolFor(t, &fakeHostResolver{}, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"device_ids":[]}`)
 	if err == nil {
 		t.Fatalf("expected error for empty device_ids")
@@ -127,7 +127,7 @@ func TestGetHostLoadTool_BatchEmptyIDs(t *testing.T) {
 }
 
 func TestGetHostLoadTool_BatchTooManyIDs(t *testing.T) {
-	tool := newHostLoadToolFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	tool := newHostLoadToolFor(t, &fakeHostResolver{}, &fakeCaller{})
 	ids := make([]uint64, toolcore.BatchMaxIDs+1)
 	for i := range ids {
 		ids[i] = uint64(i + 1)
@@ -150,7 +150,7 @@ func TestGetHostLoadTool_BatchOrderPreserved(t *testing.T) {
 	for i := uint64(1); i <= 8; i++ {
 		mapping[i] = i + 100
 	}
-	resolver := &fakeHostFilesResolver{mapping: mapping}
+	resolver := &fakeHostResolver{mapping: mapping}
 	tool := newHostLoadToolFor(t, resolver, fc)
 
 	out, err := tool.InvokableRun(context.Background(), `{"device_ids":[5,2,8,1,7]}`)
@@ -168,7 +168,7 @@ func TestGetHostLoadTool_BatchOrderPreserved(t *testing.T) {
 }
 
 func TestGetHostLoadTool_BadArgs(t *testing.T) {
-	tool := newHostLoadToolFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	tool := newHostLoadToolFor(t, &fakeHostResolver{}, &fakeCaller{})
 
 	if _, err := tool.InvokableRun(context.Background(), `not json`); err == nil {
 		t.Errorf("expected error for non-JSON")
@@ -179,7 +179,7 @@ func TestGetHostLoadTool_BadArgs(t *testing.T) {
 }
 
 func TestGetHostLoadTool_NilCaller(t *testing.T) {
-	tool := &GetHostLoadTool{caller: nil, resolver: &fakeHostFilesResolver{}}
+	tool := &GetHostLoadTool{caller: nil, resolver: &fakeHostResolver{}}
 	_, err := tool.InvokableRun(context.Background(), `{"device_ids":[1]}`)
 	if err == nil {
 		t.Errorf("expected error when caller nil")
@@ -188,7 +188,7 @@ func TestGetHostLoadTool_NilCaller(t *testing.T) {
 
 func TestGetHostLoadTool_DispatchError(t *testing.T) {
 	fc := &fakeCaller{respErr: errors.New("frontier offline")}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	tool := newHostLoadToolFor(t, resolver, fc)
 
 	out, err := tool.InvokableRun(context.Background(), `{"device_ids":[1]}`)

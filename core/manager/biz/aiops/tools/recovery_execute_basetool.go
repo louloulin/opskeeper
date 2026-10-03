@@ -30,6 +30,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"io"
 	"log/slog"
 	"time"
@@ -176,16 +177,6 @@ type RecoveryProposalRequest struct {
 // HostProcessTerminator is the only execution seam allowed for kill_process.
 // Implementations resolve the incident-owned process group server-side and
 // must never accept a client-provided PID.
-type HostProcessTerminator interface {
-	Status(ctx context.Context, request HostProcessTerminationRequest) (HostFixtureStatus, error)
-	Terminate(ctx context.Context, request HostProcessTerminationRequest) (json.RawMessage, error)
-}
-
-type HostProcessTerminationRequest struct {
-	IncidentID        string
-	FixtureManifestID string
-}
-
 // PoolRecoveryExecutor is the only execution seam allowed for resize_pool.
 // Implementations resolve the incident-owned PostgreSQL pool server-side and
 // prove recovery with a new database probe.
@@ -200,7 +191,7 @@ type PoolRecoveryExecutor interface {
 // inject a stub without pulling in the real RestartServiceTool.
 type RecoveryExecuteTool struct {
 	dispatcher    basetool.BaseTool
-	terminator    HostProcessTerminator
+	terminator    host.HostProcessTerminator
 	poolRecoverer PoolRecoveryExecutor
 	auditRepo     MutatingProposalAuditRepo
 	previewGate   repairpreview.Gate
@@ -212,7 +203,7 @@ type RecoveryExecuteTool struct {
 // execute delegates to it for command=="restart_service". auditRepo
 // MAY be nil (test-time only); production wiring should pass a real
 // repo and gate the tool's registration on it being non-nil.
-func NewRecoveryExecuteTool(dispatcher basetool.BaseTool, terminator HostProcessTerminator, auditRepo MutatingProposalAuditRepo, log *slog.Logger) *RecoveryExecuteTool {
+func NewRecoveryExecuteTool(dispatcher basetool.BaseTool, terminator host.HostProcessTerminator, auditRepo MutatingProposalAuditRepo, log *slog.Logger) *RecoveryExecuteTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -357,7 +348,7 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 		if t.auditRepo == nil {
 			return "", fmt.Errorf("%s: mutating proposal audit repository required for agentteams callers", ToolNameRecoveryExecute)
 		}
-		fixtureRequest := HostProcessTerminationRequest{
+		fixtureRequest := host.HostProcessTerminationRequest{
 			IncidentID:        in.IncidentID,
 			FixtureManifestID: params.FixtureManifestID,
 		}
@@ -441,7 +432,7 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 	}
 
 	if params.Command == hitlmodel.RecoveryActionKillProcess {
-		terminationResult, err := t.terminator.Terminate(ctx, HostProcessTerminationRequest{
+		terminationResult, err := t.terminator.Terminate(ctx, host.HostProcessTerminationRequest{
 			IncidentID:        in.IncidentID,
 			FixtureManifestID: params.FixtureManifestID,
 		})
@@ -541,7 +532,7 @@ func (t *RecoveryExecuteTool) finishReservedProposal(ctx context.Context, propos
 // The caller is responsible for wrapping the returned tool in the
 // decorator chain (chain.go's Wrap), which automatically applies the
 // ReviewGate decorator when Class="write"|"destructive".
-func AppendRecoveryExecuteTool(out []basetool.BaseTool, dispatcher basetool.BaseTool, terminator HostProcessTerminator, auditRepo MutatingProposalAuditRepo, log *slog.Logger) []basetool.BaseTool {
+func AppendRecoveryExecuteTool(out []basetool.BaseTool, dispatcher basetool.BaseTool, terminator host.HostProcessTerminator, auditRepo MutatingProposalAuditRepo, log *slog.Logger) []basetool.BaseTool {
 	if dispatcher == nil || auditRepo == nil {
 		return out
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"log/slog"
 	"sync"
 	"testing"
@@ -113,11 +114,11 @@ func TestGetHostLoadRoundTrip(t *testing.T) {
 	// auto-registered from biz deps (logQuery/traceQuery/alertUC) — counted
 	// loosely so adding new tools doesn't ripple test churn.
 	names := schemaNames(reg.Schemas())
-	if !containsName(names, ToolNameGetHostLoad) || !containsName(names, ToolNameGetProcessList) {
+	if !containsName(names, host.ToolNameGetHostLoad) || !containsName(names, host.ToolNameGetProcessList) {
 		t.Errorf("expected host_load + process_list registered, got %v", names)
 	}
 
-	out, err := reg.Invoke(context.Background(), ToolNameGetHostLoad, json.RawMessage(`{"edge_name":"node-a"}`))
+	out, err := reg.Invoke(context.Background(), host.ToolNameGetHostLoad, json.RawMessage(`{"edge_name":"node-a"}`))
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestGetHostLoadRoundTrip(t *testing.T) {
 func TestGetHostLoadMissingEdgeName(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, nil, nil, nil, slog.Default())
-	_, err := reg.Invoke(context.Background(), ToolNameGetHostLoad, json.RawMessage(`{}`))
+	_, err := reg.Invoke(context.Background(), host.ToolNameGetHostLoad, json.RawMessage(`{}`))
 	if err == nil {
 		t.Fatalf("expected error for missing edge_name")
 	}
@@ -151,7 +152,7 @@ func TestGetHostLoadMissingEdgeName(t *testing.T) {
 func TestGetHostLoadUnknownEdge(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, nil, nil, nil, slog.Default())
-	_, err := reg.Invoke(context.Background(), ToolNameGetHostLoad, json.RawMessage(`{"edge_name":"no-such"}`))
+	_, err := reg.Invoke(context.Background(), host.ToolNameGetHostLoad, json.RawMessage(`{"edge_name":"no-such"}`))
 	if err == nil {
 		t.Fatalf("expected error for unknown edge")
 	}
@@ -170,7 +171,7 @@ func TestGetProcessListDefaults(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(edge), nil, nil, slog.Default())
 	reg := NewRegistry(fc, uc, nil, nil, nil, nil, nil, slog.Default())
 
-	_, err := reg.Invoke(context.Background(), ToolNameGetProcessList, json.RawMessage(`{"edge_name":"node-b"}`))
+	_, err := reg.Invoke(context.Background(), host.ToolNameGetProcessList, json.RawMessage(`{"edge_name":"node-b"}`))
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestCallerErrorPropagates(t *testing.T) {
 	edge := &edgemodel.Edge{ID: 1, Name: "x"}
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(edge), nil, nil, slog.Default())
 	reg := NewRegistry(fc, uc, nil, nil, nil, nil, nil, slog.Default())
-	_, err := reg.Invoke(context.Background(), ToolNameGetHostLoad, json.RawMessage(`{"edge_name":"x"}`))
+	_, err := reg.Invoke(context.Background(), host.ToolNameGetHostLoad, json.RawMessage(`{"edge_name":"x"}`))
 	if err == nil || !errors.Is(err, errs.ErrEdgeOffline) {
 		t.Errorf("want ErrEdgeOffline, got %v", err)
 	}

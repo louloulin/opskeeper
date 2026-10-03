@@ -1,9 +1,10 @@
-package tools
+package host
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"path/filepath"
 	"time"
@@ -19,7 +20,7 @@ import (
 // declared in skills/host-files/SKILL.md. Each tool unmarshals the LLM
 // argsJSON, resolves device_id → host edge_id via the edge_devices
 // junction (devicebiz.EdgeDeviceRepo + EdgeDeviceRelationHost), forwards
-// the request through the frontier tunnel (Caller.Call), and returns the
+// the request through the frontier tunnel (toolcore.Caller.Call), and returns the
 // edge-side JSON verbatim.
 //
 // Batch protocol (2026-05-07): each schema accepts `paths: string[]`
@@ -47,40 +48,18 @@ const hostFilesCallTimeout = 60 * time.Second
 // for defense in depth. Keep in sync with the schema's maxItems below.
 const hostFilesMaxBatchPaths = 16
 
-// hostFilesDeviceResolver is the narrow interface the host_files
-// BaseTools need to translate device_id → host edge_id. Both the
-// shared DeviceResolver and a test fake satisfy it. Declared locally
-// so the test fakes can keep using LookupHostEdge as the seam name
-// while the production wiring goes through DeviceResolver.
-type hostFilesDeviceResolver interface {
-	// LookupHostEdge returns the host edge_id for deviceID, or 0 +
-	// nil error when the device has no Type=Host junction row. Real
-	// errors (DB outage etc.) propagate.
-	LookupHostEdge(ctx context.Context, deviceID uint64) (uint64, error)
-}
-
-// deviceResolverAdapter bridges DeviceResolver to the
-// hostFilesDeviceResolver interface used internally by the three
-// host_files BaseTools. The adapter exists so test code can keep
-// injecting a fakeHostFilesResolver that implements LookupHostEdge
-// while production wiring goes through the shared DeviceResolver.
-type deviceResolverAdapter struct {
-	inner DeviceResolver
-}
-
-func (a deviceResolverAdapter) LookupHostEdge(ctx context.Context, deviceID uint64) (uint64, error) {
-	if a.inner == nil {
-		return 0, nil
-	}
-	return a.inner.ResolveEdgeID(ctx, deviceID)
-}
+// There used to be a second interface here, LookupHostEdge, with the same
+// contract under a different method name, and an adapter whose only job was
+// to sit between them so a test fake could implement whichever it liked.
+// The seam is now crossed by the exported DeviceResolver, so the second
+// name bought nothing and the adapter only had one caller.
 
 // dispatchEdgeCall is the shared tunnel-call helper used by all three
 // host_files BaseTools. It marshals req, applies the per-call timeout,
 // fires through caller, and returns the raw response bytes (for the
 // tool to re-emit verbatim or unmarshal as it sees fit). toolName is
 // used in error messages so the LLM can route the failure cleanly.
-func dispatchEdgeCall(ctx context.Context, caller Caller, edgeID uint64, method string, req any, toolName string) ([]byte, error) {
+func dispatchEdgeCall(ctx context.Context, caller toolcore.Caller, edgeID uint64, method string, req any, toolName string) ([]byte, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("%s: marshal req: %w", toolName, err)
@@ -181,8 +160,8 @@ type findLargeFilesResultEnvelope struct {
 // find_large_files. Holds its dependencies on the struct (
 // 改进点 #1) so it can be unit-tested without standing up the registry.
 type FindLargeFilesTool struct {
-	caller   Caller
-	resolver hostFilesDeviceResolver
+	caller   toolcore.Caller
+	resolver DeviceResolver
 	log      *slog.Logger
 }
 
@@ -190,13 +169,13 @@ type FindLargeFilesTool struct {
 // to slog.Default(). edges may be nil if devices is wired with a real
 // junction; the fallback path is only triggered when the junction is
 // missing rows (legacy deployment grace).
-func NewFindLargeFilesTool(c Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *FindLargeFilesTool {
+func NewFindLargeFilesTool(c toolcore.Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *FindLargeFilesTool {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &FindLargeFilesTool{
 		caller:   c,
-		resolver: deviceResolverAdapter{inner: NewDeviceResolver(d, e)},
+		resolver: NewDeviceResolver(d, e),
 		log:      log,
 	}
 }
@@ -248,7 +227,7 @@ func (t *FindLargeFilesTool) InvokableRun(ctx context.Context, argsJSON string, 
 		in.ExcludePaths = []string{"/proc", "/sys", "/dev", "/run"}
 	}
 
-	edgeID, err := t.resolver.LookupHostEdge(ctx, in.DeviceID)
+	edgeID, err := ResolveHostEdge(ctx, t.resolver, in.DeviceID)
 	if err != nil {
 		return "", fmt.Errorf("%s: resolve device %d: %w", ToolNameFindLargeFiles, in.DeviceID, err)
 	}
@@ -363,19 +342,19 @@ type duCoverage struct {
 
 // DuSummaryTool is the BaseTool-shape implementation of du_summary.
 type DuSummaryTool struct {
-	caller   Caller
-	resolver hostFilesDeviceResolver
+	caller   toolcore.Caller
+	resolver DeviceResolver
 	log      *slog.Logger
 }
 
 // NewDuSummaryTool builds a new BaseTool. See NewFindLargeFilesTool.
-func NewDuSummaryTool(c Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *DuSummaryTool {
+func NewDuSummaryTool(c toolcore.Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *DuSummaryTool {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &DuSummaryTool{
 		caller:   c,
-		resolver: deviceResolverAdapter{inner: NewDeviceResolver(d, e)},
+		resolver: NewDeviceResolver(d, e),
 		log:      log,
 	}
 }
@@ -414,7 +393,7 @@ func (t *DuSummaryTool) InvokableRun(ctx context.Context, argsJSON string, _ ...
 		in.Depth = 5
 	}
 
-	edgeID, err := t.resolver.LookupHostEdge(ctx, in.DeviceID)
+	edgeID, err := ResolveHostEdge(ctx, t.resolver, in.DeviceID)
 	if err != nil {
 		return "", fmt.Errorf("%s: resolve device %d: %w", ToolNameDuSummary, in.DeviceID, err)
 	}
@@ -592,19 +571,19 @@ type statFileResultEnvelope struct {
 
 // StatFileTool is the BaseTool-shape implementation of stat_file.
 type StatFileTool struct {
-	caller   Caller
-	resolver hostFilesDeviceResolver
+	caller   toolcore.Caller
+	resolver DeviceResolver
 	log      *slog.Logger
 }
 
 // NewStatFileTool builds a new BaseTool. See NewFindLargeFilesTool.
-func NewStatFileTool(c Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *StatFileTool {
+func NewStatFileTool(c toolcore.Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *StatFileTool {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &StatFileTool{
 		caller:   c,
-		resolver: deviceResolverAdapter{inner: NewDeviceResolver(d, e)},
+		resolver: NewDeviceResolver(d, e),
 		log:      log,
 	}
 }
@@ -637,7 +616,7 @@ func (t *StatFileTool) InvokableRun(ctx context.Context, argsJSON string, _ ...b
 		return "", err
 	}
 
-	edgeID, err := t.resolver.LookupHostEdge(ctx, in.DeviceID)
+	edgeID, err := ResolveHostEdge(ctx, t.resolver, in.DeviceID)
 	if err != nil {
 		return "", fmt.Errorf("%s: resolve device %d: %w", ToolNameStatFile, in.DeviceID, err)
 	}

@@ -1,4 +1,4 @@
-package tools
+package host
 
 import (
 	"context"
@@ -87,4 +87,19 @@ func (r junctionDeviceResolver) ResolveEdgeID(ctx context.Context, deviceID uint
 		}
 	}
 	return 0, nil
+}
+
+// ResolveHostEdge is the nil-safe way for a tool to ask for the host edge
+// behind a device.
+//
+// It used to be an adapter struct with exactly this body. The adapter had
+// one caller shape and one job — a nil inner must answer "no host link"
+// rather than panic, because a tool built without a device usecase is a
+// supported degraded configuration, not a bug — and a named function says
+// that in one line instead of a type, two methods and a conversion.
+func ResolveHostEdge(ctx context.Context, r DeviceResolver, deviceID uint64) (uint64, error) {
+	if r == nil {
+		return 0, nil
+	}
+	return r.ResolveEdgeID(ctx, deviceID)
 }

@@ -1,4 +1,4 @@
-package tools
+package host
 
 import (
 	"context"
@@ -25,22 +25,22 @@ import (
 
 // GetProcessListTool is the BaseTool form of get_process_list.
 type GetProcessListTool struct {
-	caller   Caller
+	caller   toolcore.Caller
 	edges    *edgebiz.Usecase
-	resolver hostFilesDeviceResolver
+	resolver DeviceResolver
 	log      *slog.Logger
 }
 
 // NewGetProcessListTool builds the BaseTool variant. devices is required
 // for device_id → edge_id resolution.
-func NewGetProcessListTool(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Usecase, log *slog.Logger) *GetProcessListTool {
+func NewGetProcessListTool(caller toolcore.Caller, edges *edgebiz.Usecase, devices *devicebiz.Usecase, log *slog.Logger) *GetProcessListTool {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &GetProcessListTool{
 		caller:   caller,
 		edges:    edges,
-		resolver: deviceResolverAdapter{inner: NewDeviceResolver(devices, edges)},
+		resolver: NewDeviceResolver(devices, edges),
 		log:      log,
 	}
 }
@@ -118,7 +118,7 @@ func (t *GetProcessListTool) singleProcessList(ctx context.Context, deviceID uin
 		entry.Error = "device_id must be > 0"
 		return entry
 	}
-	edgeID, err := t.resolver.LookupHostEdge(ctx, deviceID)
+	edgeID, err := ResolveHostEdge(ctx, t.resolver, deviceID)
 	if err != nil {
 		entry.Error = fmt.Sprintf("resolve device %d: %v", deviceID, err)
 		return entry
@@ -134,7 +134,7 @@ func (t *GetProcessListTool) singleProcessList(ctx context.Context, deviceID uin
 		entry.Error = fmt.Sprintf("marshal req: %v", err)
 		return entry
 	}
-	callCtx, cancel := context.WithTimeout(ctx, processListCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, ProcessListCallTimeout)
 	defer cancel()
 	respBody, err := t.caller.Call(callCtx, edgeID, tunnel.MethodGetProcessList, body)
 	if err != nil {

@@ -118,6 +118,7 @@ import (
 	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	aiopstoolsdec "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
+	aiopshost "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	aiopstoolscore "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	managerbizalert "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
 	investigator "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert/investigator"
@@ -1507,7 +1508,7 @@ func main() {
 			log.Error("host fixture client config requires both URL and token")
 			os.Exit(1)
 		}
-		toolsReg.SetHostFixtureTerminator(aiopstools.NewHostFixtureClient(hostFixtureURL, hostFixtureToken))
+		toolsReg.SetHostFixtureTerminator(aiopshost.NewHostFixtureClient(hostFixtureURL, hostFixtureToken))
 	}
 	poolFixtureURL := strings.TrimSpace(os.Getenv("OPSKEEPER_POOL_FIXTURE_URL"))
 	poolFixtureToken := strings.TrimSpace(os.Getenv("OPSKEEPER_POOL_FIXTURE_TOKEN"))
@@ -2886,7 +2887,7 @@ func main() {
 	// (tool class -> casbin action, worker role -> MCPAuthorizer), so moving
 	// the assembly changes what exists, not who may call it.
 	mcpBaseBag := toolsReg.BuildBaseTools()
-	mcpBaseBag = aiopstools.AppendHostFilesTools(mcpBaseBag, fbClient, edgeUC, deviceUC, log)
+	mcpBaseBag = aiopshost.AppendHostFilesTools(mcpBaseBag, fbClient, edgeUC, deviceUC, log)
 	mcpBaseTools := make([]mcpclient.Tool, 0)
 	for _, tool := range mcpBaseBag.AllTools() {
 		if tool == nil {
@@ -3126,7 +3127,7 @@ func main() {
 	// skill_bridge) are silently bypassed. Idempotent.
 	{
 		invBag := toolsReg.BuildBaseTools()
-		invBag = aiopstools.AppendHostFilesTools(invBag, fbClient, edgeUC, deviceUC, log)
+		invBag = aiopshost.AppendHostFilesTools(invBag, fbClient, edgeUC, deviceUC, log)
 		toolsReg.RegisterBaseToolsAsSkills(invBag, log.With(slog.String("comp", "inventory-bridge")))
 		// Re-merge so flow `tool` nodes can run tools registered after the
 		// invoker was first built — cloud_bash (its proposer is wired above)
@@ -4465,7 +4466,7 @@ func buildAIOpsRuntime(
 	//    threshold the specialty tier auto-redacts and the LLM
 	//    fetches schemas via the always-loaded ToolSearch tool.
 	bag := toolsReg.BuildBaseTools()
-	bag = aiopstools.AppendHostFilesTools(bag, fbClient, edgeUC, deviceUC, log)
+	bag = aiopshost.AppendHostFilesTools(bag, fbClient, edgeUC, deviceUC, log)
 	baseTools := bag.SchemasForLLM()
 	reviewSpawner := &chatruntimeReviewSpawner{}
 	deps := aiopstoolsdec.Deps{

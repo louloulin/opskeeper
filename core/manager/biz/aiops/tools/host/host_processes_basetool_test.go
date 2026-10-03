@@ -1,4 +1,4 @@
-package tools
+package host
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
-func newProcessListToolFor(_ *testing.T, resolver hostFilesDeviceResolver, fc *fakeCaller) *GetProcessListTool {
+func newProcessListToolFor(_ *testing.T, resolver DeviceResolver, fc *fakeCaller) *GetProcessListTool {
 	return &GetProcessListTool{caller: fc, resolver: resolver}
 }
 
@@ -47,7 +47,7 @@ func TestGetProcessListTool_BatchHappy(t *testing.T) {
 			Processes: []tunnel.ProcessInfo{{PID: 1, Name: "init"}},
 		}),
 	}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7, 2: 8}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7, 2: 8}}
 	tool := newProcessListToolFor(t, resolver, fc)
 
 	out, err := tool.InvokableRun(context.Background(), `{"device_ids":[1,2]}`)
@@ -85,7 +85,7 @@ func TestGetProcessListTool_BatchPartialSuccess(t *testing.T) {
 			Processes: []tunnel.ProcessInfo{{PID: 1, Name: "init"}},
 		}),
 	}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	tool := newProcessListToolFor(t, resolver, fc)
 
 	out, err := tool.InvokableRun(context.Background(), `{"device_ids":[1,99]}`)
@@ -103,7 +103,7 @@ func TestGetProcessListTool_BatchPartialSuccess(t *testing.T) {
 }
 
 func TestGetProcessListTool_BadArgs(t *testing.T) {
-	tool := newProcessListToolFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	tool := newProcessListToolFor(t, &fakeHostResolver{}, &fakeCaller{})
 	if _, err := tool.InvokableRun(context.Background(), `not json`); err == nil {
 		t.Errorf("expected error for non-JSON")
 	}
@@ -116,7 +116,7 @@ func TestGetProcessListTool_BadArgs(t *testing.T) {
 }
 
 func TestGetProcessListTool_TooManyIDs(t *testing.T) {
-	tool := newProcessListToolFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	tool := newProcessListToolFor(t, &fakeHostResolver{}, &fakeCaller{})
 	ids := make([]uint64, toolcore.BatchMaxIDs+1)
 	for i := range ids {
 		ids[i] = uint64(i + 1)
@@ -129,7 +129,7 @@ func TestGetProcessListTool_TooManyIDs(t *testing.T) {
 }
 
 func TestGetProcessListTool_NilCaller(t *testing.T) {
-	tool := &GetProcessListTool{caller: nil, resolver: &fakeHostFilesResolver{}}
+	tool := &GetProcessListTool{caller: nil, resolver: &fakeHostResolver{}}
 	_, err := tool.InvokableRun(context.Background(), `{"device_ids":[1]}`)
 	if err == nil {
 		t.Errorf("expected error when caller is nil")

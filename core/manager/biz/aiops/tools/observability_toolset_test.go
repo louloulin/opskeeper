@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"go/format"
 	"os"
 	"path/filepath"
@@ -63,9 +64,9 @@ func observabilityTools() []observabilityEntry {
 				info, err := NewGetEdgeSummaryTool(nil, nil, nil, nil, nil).Info(ctx)
 				return infoOf(t, info, err)
 			}},
-		{ToolNameGetHostLoad, "get_host_load",
+		{host.ToolNameGetHostLoad, "get_host_load",
 			func(t *testing.T, ctx context.Context) basetoolInfo {
-				info, err := NewGetHostLoadTool(nil, nil, nil, nil).Info(ctx)
+				info, err := host.NewGetHostLoadTool(nil, nil, nil, nil).Info(ctx)
 				return infoOf(t, info, err)
 			}},
 		{ToolNameGrepSource, "grep_source",

@@ -16,4 +16,14 @@ type (
 	Caller        = toolcore.Caller
 	ExecuteResult = toolcore.ExecuteResult
 	Tool          = toolcore.Tool
+	ToolBag       = toolcore.ToolBag
+)
+
+// Functions and values cannot be aliased, only re-bound. These are the
+// same three functions toolcore exports, reached through a variable, so a
+// caller here and a caller there run identical code.
+var (
+	NewToolBag     = toolcore.NewToolBag
+	IsCoreToolName = toolcore.IsCoreToolName
+	CoreToolNames  = toolcore.CoreToolNames
 )

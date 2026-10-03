@@ -30,7 +30,7 @@
 // somehow already knows the parameter shape (e.g. from system prompt
 // context) can still call the tool — the inner Tool's argsJSON
 // validation handles any malformed input.
-package tools
+package toolcore
 
 import (
 	"context"

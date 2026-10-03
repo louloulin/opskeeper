@@ -12,6 +12,7 @@ package tools
 
 import (
 	"context"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
@@ -52,9 +53,9 @@ var untrustedOutputs = []struct {
 	// because a log file on a compromised host is an attacker's own text.
 	{ToolNameBash, promptguard.KindTool},
 	{ToolNameCloudBash, promptguard.KindTool},
-	{ToolNameFindLargeFiles, promptguard.KindTool},
-	{ToolNameDuSummary, promptguard.KindTool},
-	{ToolNameStatFile, promptguard.KindTool},
+	{host.ToolNameFindLargeFiles, promptguard.KindTool},
+	{host.ToolNameDuSummary, promptguard.KindTool},
+	{host.ToolNameStatFile, promptguard.KindTool},
 
 	// Change events — deploy notes and commit summaries from CI.
 	{ToolNameQueryChangeEvents, promptguard.KindTool},

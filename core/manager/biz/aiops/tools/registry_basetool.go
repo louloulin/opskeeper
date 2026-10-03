@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"os"
 	"strconv"
 
@@ -78,8 +79,8 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	// (post N+15 batch refactor — the schemas now take device_ids[]
 	// rather than edge_name). The closure variants in registry.go still
 	// take edge_name and register unconditionally too.
-	out = append(out, NewGetHostLoadTool(r.caller, r.edges, r.devices, r.log))
-	out = append(out, NewGetProcessListTool(r.caller, r.edges, r.devices, r.log))
+	out = append(out, host.NewGetHostLoadTool(r.caller, r.edges, r.devices, r.log))
+	out = append(out, host.NewGetProcessListTool(r.caller, r.edges, r.devices, r.log))
 
 	// 3: query_promql — gated on Prom client.
 	if r.promQuery != nil {

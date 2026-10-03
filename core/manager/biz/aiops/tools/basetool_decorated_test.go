@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"log/slog"
 	"strings"
 	"testing"
@@ -98,8 +99,8 @@ func TestBaseTool_DecoratedChain_HostLoad(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(edge), nil, nil, slog.Default())
 	// Post N+15: get_host_load takes device_ids[]; we wire a resolver
 	// inline so the chain test doesn't need the full DeviceUsecase setup.
-	inner := NewGetHostLoadTool(fc, uc, nil, slog.Default())
-	inner.resolver = &fakeHostFilesResolver{mapping: map[uint64]uint64{11: 11}}
+	inner := host.NewGetHostLoadToolWithResolver(fc, uc,
+		&fakeHostResolver{mapping: map[uint64]uint64{11: 11}}, slog.Default())
 
 	sink := &chainAuditSink{}
 	limiter := decorators.NewTokenBucketLimiter(60)
@@ -123,7 +124,7 @@ func TestBaseTool_DecoratedChain_HostLoad(t *testing.T) {
 	if len(sink.starts) != 1 || len(sink.ends) != 1 {
 		t.Errorf("audit fired %d start / %d end, want 1/1", len(sink.starts), len(sink.ends))
 	}
-	if got := chainCounter(t, reg, ToolNameGetHostLoad, "success"); got != 1 {
+	if got := chainCounter(t, reg, host.ToolNameGetHostLoad, "success"); got != 1 {
 		t.Errorf("metric counter = %f, want 1", got)
 	}
 }

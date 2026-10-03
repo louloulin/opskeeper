@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"log/slog"
 	"strings"
 	"time"
@@ -156,7 +157,7 @@ type restartServiceResultEnvelope struct {
 // mandatory for Class="write"|"destructive" tools).
 type RestartServiceTool struct {
 	caller   Caller
-	resolver hostFilesDeviceResolver // reuse the same resolver interface as host_files
+	resolver host.DeviceResolver // reuse the same resolver interface as host_files
 	log      *slog.Logger
 }
 
@@ -168,7 +169,7 @@ func NewRestartServiceTool(c Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, l
 	}
 	return &RestartServiceTool{
 		caller:   c,
-		resolver: deviceResolverAdapter{inner: NewDeviceResolver(d, e)},
+		resolver: host.NewDeviceResolver(d, e),
 		log:      log,
 	}
 }
@@ -216,7 +217,7 @@ func (t *RestartServiceTool) InvokableRun(ctx context.Context, argsJSON string, 
 			ToolNameRestartService, in.Service, strings.Join(AllowedRestartServices, " "))
 	}
 
-	edgeID, err := t.resolver.LookupHostEdge(ctx, in.DeviceID)
+	edgeID, err := host.ResolveHostEdge(ctx, t.resolver, in.DeviceID)
 	if err != nil {
 		return "", fmt.Errorf("%s: resolve device %d: %w", ToolNameRestartService, in.DeviceID, err)
 	}

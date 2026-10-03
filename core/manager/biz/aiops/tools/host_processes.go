@@ -1,60 +1,32 @@
 package tools
 
+// This file is the upcall half of get_host_load.
+//
+// The batch-first BaseTool in tools/host is what the in-process agent
+// loop presents to the model. This is what the node's own agent reaches
+// when it calls the tool through the upcall channel, and it keeps the
+// older single-device shape: one edge_name, no fan-out. The wire name,
+// the description and the schema live in tools/host so both halves answer
+// to one declaration.
+//
+// It stays here because it is a method on Registry, and Registry is the
+// upcall dispatch surface — a method cannot be moved to another package
+// without moving the thing it hangs off.
+
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 )
-
-// ToolNameGetProcessList is the stable wire name the LLM sees for this tool.
-const ToolNameGetProcessList = "get_host_processes"
-
-// GetProcessListDescription is the single-sentence description the model
-// reads when deciding whether to call this tool.
-const GetProcessListDescription = "Return the top-N processes on the named edge host, sorted by CPU or memory usage."
-
-// GetProcessListSchema is the JSON Schema of the tool's argument object.
-var GetProcessListSchema = json.RawMessage(`{
-  "type": "object",
-  "properties": {
-    "edge_name": {
-      "type": "string",
-      "description": "Name of the edge as set when the edge was created."
-    },
-    "top_n": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 100,
-      "description": "How many processes to return (default 10)."
-    },
-    "sort_by": {
-      "type": "string",
-      "enum": ["cpu", "mem"],
-      "description": "Sort key: cpu or mem (default cpu)."
-    }
-  },
-  "required": ["edge_name"]
-}`)
-
-// GetProcessListArgs is the typed form of GetProcessListSchema.
-type GetProcessListArgs struct {
-	EdgeName string `json:"edge_name"`
-	TopN     uint32 `json:"top_n"`
-	SortBy   string `json:"sort_by"`
-}
-
-// processListCallTimeout caps how long a single dispatch may wait. Same
-// rationale as hostLoadCallTimeout.
-const processListCallTimeout = 15 * time.Second
 
 // executeGetProcessList resolves edge_name -> edge.ID and dispatches a
 // get_process_list reverse call through the frontier. TopN defaults to
 // 10; SortBy defaults to "cpu".
 func (r *Registry) executeGetProcessList(ctx context.Context, args json.RawMessage) (ExecuteResult, error) {
-	var in GetProcessListArgs
+	var in host.GetProcessListArgs
 	if err := json.Unmarshal(args, &in); err != nil {
 		return ExecuteResult{}, fmt.Errorf("get_process_list: bad args: %w", err)
 	}
@@ -83,7 +55,7 @@ func (r *Registry) executeGetProcessList(ctx context.Context, args json.RawMessa
 	if err != nil {
 		return ExecuteResult{DeviceID: &edge.ID}, fmt.Errorf("get_process_list: marshal req: %w", err)
 	}
-	callCtx, cancel := context.WithTimeout(ctx, processListCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, host.ProcessListCallTimeout)
 	defer cancel()
 	respBody, err := r.caller.Call(callCtx, edge.ID, tunnel.MethodGetProcessList, body)
 	if err != nil {

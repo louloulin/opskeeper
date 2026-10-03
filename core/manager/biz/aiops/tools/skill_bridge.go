@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 
 	skillcore "github.com/vincent-wuhan/opskeeper/core/floor/skill"
 	skillsvc "github.com/vincent-wuhan/opskeeper/core/manager/biz/skill"
@@ -244,6 +245,6 @@ func (r *Registry) newSkillExecutor(svc SkillRunner, key string, scope skillcore
 // any future ScopeHost tool. The Registry-method shape is preserved
 // so call sites stay one-line.
 func (r *Registry) resolveEdgeForDeviceID(ctx context.Context, deviceID uint64) uint64 {
-	eid, _ := NewDeviceResolver(r.devices, r.edges).ResolveEdgeID(ctx, deviceID)
+	eid, _ := host.NewDeviceResolver(r.devices, r.edges).ResolveEdgeID(ctx, deviceID)
 	return eid
 }

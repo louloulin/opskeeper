@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"strings"
 	"testing"
@@ -13,12 +14,12 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
 )
 
-func newBashTool(_ *testing.T, resolver hostFilesDeviceResolver, fc *fakeCaller) *BashTool {
+func newBashTool(_ *testing.T, resolver host.DeviceResolver, fc *fakeCaller) *BashTool {
 	return &BashTool{caller: fc, resolver: resolver}
 }
 
 func TestBashTool_Info(t *testing.T) {
-	tool := newBashTool(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	tool := newBashTool(t, &fakeHostResolver{}, &fakeCaller{})
 	info, err := tool.Info(context.Background())
 	if err != nil {
 		t.Fatalf("Info: %v", err)
@@ -57,7 +58,7 @@ func TestBashTool_LegacyDeviceIDRunsReadOnly(t *testing.T) {
 	fc := &fakeCaller{
 		respBody: mustMarshal(tunnel.BashExecResponse{Allowed: true, Stdout: "ok"}),
 	}
-	tool := newBashTool(t, &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}, fc)
+	tool := newBashTool(t, &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}, fc)
 	out, err := tool.InvokableRun(context.Background(), `{"device_id":1,"cmd":"df -h"}`)
 	if err != nil {
 		t.Fatalf("InvokableRun: %v", err)
@@ -94,7 +95,7 @@ func (r *recHostBashProposer) ProposeAndAwait(_ context.Context, deviceIDs []uin
 func TestBashTool_MutatingCommandUsesApprovalInsteadOfDispatch(t *testing.T) {
 	fc := &fakeCaller{respBody: mustMarshal(tunnel.BashExecResponse{Allowed: true})}
 	prop := &recHostBashProposer{}
-	tool := &BashTool{caller: fc, resolver: &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}, proposer: prop}
+	tool := &BashTool{caller: fc, resolver: &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}, proposer: prop}
 	ctx := basetool.WithHostWriteAllowed(context.Background(), true)
 	out, err := tool.InvokableRun(ctx, `{"device_ids":[1],"cmd":"rm /opt/opskeeper/edge/edge-bundle-linux-amd64-v0.9.0.tar.gz"}`)
 	if err != nil {
@@ -114,7 +115,7 @@ func TestBashTool_MutatingCommandUsesApprovalInsteadOfDispatch(t *testing.T) {
 func TestBashTool_ReadCommandWithShellSyntaxDoesNotUseApproval(t *testing.T) {
 	fc := &fakeCaller{respBody: mustMarshal(tunnel.BashExecResponse{Allowed: false, Reason: "unsupported shell operator"})}
 	prop := &recHostBashProposer{}
-	tool := &BashTool{caller: fc, resolver: &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}, proposer: prop}
+	tool := &BashTool{caller: fc, resolver: &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}, proposer: prop}
 	ctx := basetool.WithHostWriteAllowed(context.Background(), true)
 	_, err := tool.InvokableRun(ctx, `{"device_ids":[1],"cmd":"docker system df 2>/dev/null && echo \"---\""}`)
 	if err != nil {
@@ -134,7 +135,7 @@ func TestBashTool_BatchHappy(t *testing.T) {
 			Allowed: true, Stdout: "root 1 ...\n", ExitCode: 0, DurationMs: 12,
 		}),
 	}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7, 2: 8, 3: 9}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7, 2: 8, 3: 9}}
 	tool := newBashTool(t, resolver, fc)
 
 	out, err := tool.InvokableRun(context.Background(), `{"device_ids":[1,2,3],"cmd":"ps aux | head"}`)
@@ -177,7 +178,7 @@ func TestBashTool_BatchPolicyRejectionFlowsThrough(t *testing.T) {
 			Allowed: false, Reason: "binary 'rm' is in denied class", ExitCode: 0,
 		}),
 	}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7, 2: 8}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7, 2: 8}}
 	tool := newBashTool(t, resolver, fc)
 	out, err := tool.InvokableRun(context.Background(), `{"device_ids":[1,2],"cmd":"rm -rf /tmp/x"}`)
 	if err != nil {
@@ -205,7 +206,7 @@ func TestBashTool_BatchPartialSuccess(t *testing.T) {
 	fc := &fakeCaller{
 		respBody: mustMarshal(tunnel.BashExecResponse{Allowed: true, Stdout: "ok"}),
 	}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}} // 99 unmapped
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}} // 99 unmapped
 	tool := newBashTool(t, resolver, fc)
 	out, err := tool.InvokableRun(context.Background(), `{"device_ids":[1,99],"cmd":"ps"}`)
 	if err != nil {
@@ -222,7 +223,7 @@ func TestBashTool_BatchPartialSuccess(t *testing.T) {
 }
 
 func TestBashTool_MissingDeviceIDs(t *testing.T) {
-	tool := newBashTool(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	tool := newBashTool(t, &fakeHostResolver{}, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"cmd":"ps"}`)
 	if err == nil {
 		t.Fatalf("expected error for missing device_ids")
@@ -233,7 +234,7 @@ func TestBashTool_MissingDeviceIDs(t *testing.T) {
 }
 
 func TestBashTool_MissingCmd(t *testing.T) {
-	tool := newBashTool(t, &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}, &fakeCaller{})
+	tool := newBashTool(t, &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"device_ids":[1]}`)
 	if err == nil {
 		t.Fatalf("expected error for missing cmd")
@@ -241,7 +242,7 @@ func TestBashTool_MissingCmd(t *testing.T) {
 }
 
 func TestBashTool_TooManyIDs(t *testing.T) {
-	tool := newBashTool(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	tool := newBashTool(t, &fakeHostResolver{}, &fakeCaller{})
 	ids := make([]uint64, toolcore.BatchMaxIDs+1)
 	for i := range ids {
 		ids[i] = uint64(i + 1)
@@ -255,7 +256,7 @@ func TestBashTool_TooManyIDs(t *testing.T) {
 
 func TestBashTool_DispatchError(t *testing.T) {
 	fc := &fakeCaller{respErr: errs.ErrEdgeOffline}
-	tool := newBashTool(t, &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}, fc)
+	tool := newBashTool(t, &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}, fc)
 	out, err := tool.InvokableRun(context.Background(), `{"device_ids":[1],"cmd":"ps"}`)
 	if err != nil {
 		// Dispatch errors fold into per-entry Error.
@@ -269,7 +270,7 @@ func TestBashTool_DispatchError(t *testing.T) {
 }
 
 func TestBashTool_NilCaller(t *testing.T) {
-	tool := &BashTool{caller: nil, resolver: &fakeHostFilesResolver{}}
+	tool := &BashTool{caller: nil, resolver: &fakeHostResolver{}}
 	_, err := tool.InvokableRun(context.Background(), `{"device_ids":[1],"cmd":"ps"}`)
 	if err == nil || !strings.Contains(err.Error(), "caller") {
 		t.Errorf("expected caller-not-configured error, got %v", err)
@@ -280,7 +281,7 @@ func TestBashTool_TimeoutClamp(t *testing.T) {
 	fc := &fakeCaller{
 		respBody: mustMarshal(tunnel.BashExecResponse{Allowed: true}),
 	}
-	tool := newBashTool(t, &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}, fc)
+	tool := newBashTool(t, &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}, fc)
 	if _, err := tool.InvokableRun(context.Background(), `{"device_ids":[1],"cmd":"ps","timeout_seconds":9999}`); err != nil {
 		t.Fatalf("InvokableRun: %v", err)
 	}
@@ -299,7 +300,7 @@ func TestBashTool_BatchOrderPreserved(t *testing.T) {
 	for i := uint64(1); i <= 8; i++ {
 		mapping[i] = i + 100
 	}
-	resolver := &fakeHostFilesResolver{mapping: mapping}
+	resolver := &fakeHostResolver{mapping: mapping}
 	tool := newBashTool(t, resolver, fc)
 	out, err := tool.InvokableRun(context.Background(), `{"device_ids":[7,3,5,1],"cmd":"uname -a"}`)
 	if err != nil {
@@ -325,7 +326,7 @@ func TestAppendBashTool_NilDepsReturnsUnchanged(t *testing.T) {
 // TestBashTool_WhenToUseMatchesPolicy guards against drift between the
 // when_to_use prompt and the actual cmdpolicy default.
 func TestBashTool_WhenToUseMatchesPolicy(t *testing.T) {
-	tool := newBashTool(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	tool := newBashTool(t, &fakeHostResolver{}, &fakeCaller{})
 	info, _ := tool.Info(context.Background())
 	policy := cmdpolicy.DefaultReadOnly()
 	for _, mention := range []string{"ps", "df", "iptables", "systemctl", "journalctl"} {

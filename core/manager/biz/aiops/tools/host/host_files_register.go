@@ -1,6 +1,7 @@
-package tools
+package host
 
 import (
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
@@ -11,7 +12,7 @@ import (
 
 // AppendHostFilesTools registers the three edge-scope host_files
 // BaseTools (find_large_files / du_summary / stat_file) onto the
-// provided ToolBag. Returns the same bag for caller-side chaining; the
+// provided toolcore.ToolBag. Returns the same bag for caller-side chaining; the
 // bag is left untouched on the early return.
 //
 // Wiring contract — when called from PR-7's BuildBaseTools (or any
@@ -27,7 +28,7 @@ import (
 // in the "specialty" tier (per tierByName) so its schema is redacted
 // by default. Below threshold it stays in core alongside everything
 // else.
-func AppendHostFilesTools(bag *ToolBag, c Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *ToolBag {
+func AppendHostFilesTools(bag *toolcore.ToolBag, c toolcore.Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *toolcore.ToolBag {
 	if bag == nil {
 		return bag
 	}

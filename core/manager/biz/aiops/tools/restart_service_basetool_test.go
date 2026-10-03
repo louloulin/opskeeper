@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	"strings"
 	"testing"
 
@@ -14,13 +15,13 @@ import (
 // newRestartServiceToolFor builds the restart_service BaseTool backed
 // by a fake caller + fake resolver. Mirrors the host_files test
 // helper so the two tools share their wiring fixtures.
-func newRestartServiceToolFor(t *testing.T, resolver hostFilesDeviceResolver, fc *fakeCaller) *RestartServiceTool {
+func newRestartServiceToolFor(t *testing.T, resolver host.DeviceResolver, fc *fakeCaller) *RestartServiceTool {
 	t.Helper()
 	return &RestartServiceTool{caller: fc, resolver: resolver}
 }
 
 func TestRestartServiceTool_Info(t *testing.T) {
-	tool := newRestartServiceToolFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	tool := newRestartServiceToolFor(t, &fakeHostResolver{}, &fakeCaller{})
 	info, err := tool.Info(context.Background())
 	if err != nil {
 		t.Fatalf("Info: %v", err)
@@ -66,7 +67,7 @@ func TestRestartServiceTool_RoundTrip(t *testing.T) {
 			Mocked:    true,
 		}),
 	}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	tool := newRestartServiceToolFor(t, resolver, fc)
 
 	out, err := tool.InvokableRun(context.Background(), `{"device_id":1,"service":"nginx","reason":"502 spike"}`)
@@ -106,7 +107,7 @@ func TestRestartServiceTool_CanonicalizesService(t *testing.T) {
 	// "Nginx.Service" with mixed-case + suffix should canonicalize to
 	// "nginx" for both the allow-list check AND the wire body.
 	fc := &fakeCaller{respBody: mustMarshal(tunnel.RestartServiceResponse{Service: "nginx", Restarted: true, Mocked: true})}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	tool := newRestartServiceToolFor(t, resolver, fc)
 
 	if _, err := tool.InvokableRun(context.Background(), `{"device_id":1,"service":"Nginx.SERVICE"}`); err != nil {
@@ -122,7 +123,7 @@ func TestRestartServiceTool_CanonicalizesService(t *testing.T) {
 }
 
 func TestRestartServiceTool_RejectsOutOfList(t *testing.T) {
-	tool := newRestartServiceToolFor(t, &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}, &fakeCaller{})
+	tool := newRestartServiceToolFor(t, &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":1,"service":"sshd"}`)
 	if err == nil {
 		t.Fatalf("expected allow-list rejection")
@@ -133,7 +134,7 @@ func TestRestartServiceTool_RejectsOutOfList(t *testing.T) {
 }
 
 func TestRestartServiceTool_MissingDeviceID(t *testing.T) {
-	tool := newRestartServiceToolFor(t, &fakeHostFilesResolver{}, &fakeCaller{})
+	tool := newRestartServiceToolFor(t, &fakeHostResolver{}, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"service":"nginx"}`)
 	if err == nil {
 		t.Fatalf("expected error for missing device_id")
@@ -144,7 +145,7 @@ func TestRestartServiceTool_MissingDeviceID(t *testing.T) {
 }
 
 func TestRestartServiceTool_MissingService(t *testing.T) {
-	tool := newRestartServiceToolFor(t, &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}, &fakeCaller{})
+	tool := newRestartServiceToolFor(t, &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":1}`)
 	if err == nil {
 		t.Fatalf("expected error for missing service")
@@ -155,7 +156,7 @@ func TestRestartServiceTool_MissingService(t *testing.T) {
 }
 
 func TestRestartServiceTool_UnlinkedDevice(t *testing.T) {
-	tool := newRestartServiceToolFor(t, &fakeHostFilesResolver{mapping: map[uint64]uint64{}}, &fakeCaller{})
+	tool := newRestartServiceToolFor(t, &fakeHostResolver{mapping: map[uint64]uint64{}}, &fakeCaller{})
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":42,"service":"nginx"}`)
 	if err == nil {
 		t.Fatalf("expected error for unlinked device_id")
@@ -167,7 +168,7 @@ func TestRestartServiceTool_UnlinkedDevice(t *testing.T) {
 
 func TestRestartServiceTool_DispatchError(t *testing.T) {
 	fc := &fakeCaller{respErr: errs.ErrEdgeOffline}
-	resolver := &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}
+	resolver := &fakeHostResolver{mapping: map[uint64]uint64{1: 7}}
 	tool := newRestartServiceToolFor(t, resolver, fc)
 
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":1,"service":"nginx"}`)
@@ -180,7 +181,7 @@ func TestRestartServiceTool_DispatchError(t *testing.T) {
 }
 
 func TestRestartServiceTool_NilCaller(t *testing.T) {
-	tool := &RestartServiceTool{caller: nil, resolver: &fakeHostFilesResolver{}}
+	tool := &RestartServiceTool{caller: nil, resolver: &fakeHostResolver{}}
 	_, err := tool.InvokableRun(context.Background(), `{"device_id":1,"service":"nginx"}`)
 	if err == nil || !strings.Contains(err.Error(), "caller") {
 		t.Errorf("expected caller-not-configured error, got %v", err)

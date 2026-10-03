@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
 	"log/slog"
 
@@ -87,7 +88,7 @@ type Registry struct {
 	repairPreviewGate repairpreview.Gate
 	// hostFixtureTerminator is the narrow case-owned kill_process seam.
 	// nil keeps restart_service usable and makes kill_process fail closed.
-	hostFixtureTerminator HostProcessTerminator
+	hostFixtureTerminator host.HostProcessTerminator
 	// poolRecoveryExecutor is the narrow case-owned resize_pool seam.
 	// nil keeps restart_service/kill_process usable and resize_pool fail closed.
 	poolRecoveryExecutor PoolRecoveryExecutor
@@ -182,7 +183,7 @@ func (r *Registry) SetRecoveryAuditRepo(repo MutatingProposalAuditRepo) { r.reco
 
 func (r *Registry) SetRepairPreviewGate(gate repairpreview.Gate) { r.repairPreviewGate = gate }
 
-func (r *Registry) SetHostFixtureTerminator(terminator HostProcessTerminator) {
+func (r *Registry) SetHostFixtureTerminator(terminator host.HostProcessTerminator) {
 	r.hostFixtureTerminator = terminator
 }
 
@@ -240,15 +241,15 @@ func NewRegistry(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Useca
 		tools:      map[string]Tool{},
 	}
 	r.Register(Tool{
-		Name:        ToolNameGetHostLoad,
-		Description: GetHostLoadDescription,
-		Schema:      GetHostLoadSchema,
+		Name:        host.ToolNameGetHostLoad,
+		Description: host.GetHostLoadDescription,
+		Schema:      host.GetHostLoadSchema,
 		Execute:     r.executeGetHostLoad,
 	})
 	r.Register(Tool{
-		Name:        ToolNameGetProcessList,
-		Description: GetProcessListDescription,
-		Schema:      GetProcessListSchema,
+		Name:        host.ToolNameGetProcessList,
+		Description: host.GetProcessListDescription,
+		Schema:      host.GetProcessListSchema,
 		Execute:     r.executeGetProcessList,
 	})
 	if promQuery != nil {

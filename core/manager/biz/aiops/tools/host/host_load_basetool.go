@@ -1,4 +1,4 @@
-package tools
+package host
 
 import (
 	"context"
@@ -32,9 +32,9 @@ import (
 
 // GetHostLoadTool is the BaseTool form of get_host_load.
 type GetHostLoadTool struct {
-	caller   Caller
+	caller   toolcore.Caller
 	edges    *edgebiz.Usecase
-	resolver hostFilesDeviceResolver
+	resolver DeviceResolver
 	log      *slog.Logger
 }
 
@@ -42,14 +42,28 @@ type GetHostLoadTool struct {
 // (degrades to slog.Default()). devices is required for device_id →
 // edge_id resolution; edges is consulted as the legacy fallback path
 // when a device row has no junction link.
-func NewGetHostLoadTool(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Usecase, log *slog.Logger) *GetHostLoadTool {
+func NewGetHostLoadTool(caller toolcore.Caller, edges *edgebiz.Usecase, devices *devicebiz.Usecase, log *slog.Logger) *GetHostLoadTool {
+	if log == nil {
+		log = slog.Default()
+	}
+	return NewGetHostLoadToolWithResolver(caller, edges, NewDeviceResolver(devices, edges), log)
+}
+
+// NewGetHostLoadToolWithResolver is NewGetHostLoadTool for a caller that
+// already knows how to turn a device into a host edge.
+//
+// It is exported because the resolver is the one dependency a tool cannot
+// build for itself, and a test on the other side of the package boundary
+// that wants a fake would otherwise have to reach into an unexported
+// field. That reach is exactly the coupling this package exists to end.
+func NewGetHostLoadToolWithResolver(caller toolcore.Caller, edges *edgebiz.Usecase, resolver DeviceResolver, log *slog.Logger) *GetHostLoadTool {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &GetHostLoadTool{
 		caller:   caller,
 		edges:    edges,
-		resolver: deviceResolverAdapter{inner: NewDeviceResolver(devices, edges)},
+		resolver: resolver,
 		log:      log,
 	}
 }
@@ -112,7 +126,7 @@ func (t *GetHostLoadTool) Info(_ context.Context) (*basetool.ToolInfo, error) {
 // singleHostLoad runs one inner GetHostLoad call. All failure paths
 // (resolver miss / dispatch error / decode error) are caught and
 // surfaced as ResultEntry.Error so toolcore.RunBatch can keep the slice
-// full-length. tunnel-side timeout is the same hostLoadCallTimeout the
+// full-length. tunnel-side timeout is the same HostLoadCallTimeout the
 // pre-batch code used; toolcore.RunBatch puts toolcore.BatchConcurrency in flight at once.
 func (t *GetHostLoadTool) singleHostLoad(ctx context.Context, deviceID uint64) HostLoadResultEntry {
 	entry := HostLoadResultEntry{DeviceID: deviceID}
@@ -120,7 +134,7 @@ func (t *GetHostLoadTool) singleHostLoad(ctx context.Context, deviceID uint64) H
 		entry.Error = "device_id must be > 0"
 		return entry
 	}
-	edgeID, err := t.resolver.LookupHostEdge(ctx, deviceID)
+	edgeID, err := ResolveHostEdge(ctx, t.resolver, deviceID)
 	if err != nil {
 		entry.Error = fmt.Sprintf("resolve device %d: %v", deviceID, err)
 		return entry
@@ -135,7 +149,7 @@ func (t *GetHostLoadTool) singleHostLoad(ctx context.Context, deviceID uint64) H
 		entry.Error = fmt.Sprintf("marshal req: %v", err)
 		return entry
 	}
-	callCtx, cancel := context.WithTimeout(ctx, hostLoadCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, HostLoadCallTimeout)
 	defer cancel()
 	respBody, err := t.caller.Call(callCtx, edgeID, tunnel.MethodGetHostLoad, body)
 	if err != nil {
