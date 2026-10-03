@@ -443,11 +443,18 @@ func parseTree(dir string, r rules) ([]source, treeStats, error) {
 		importPath := managerPrefix + filepath.ToSlash(rel)
 		importPath = strings.TrimSuffix(importPath, ".go")
 		isTest := strings.HasSuffix(path, "_test.go")
+		// The package is the second axis, and it gets printed next to the
+		// domain name, so it is stored the way a person would write it
+		// (biz/alert, not an absolute path and not an import path).
+		pkg := filepath.ToSlash(filepath.Dir(rel))
+		if pkg == "." {
+			pkg = ""
+		}
 		src := source{
 			path:  importPath,
 			test:  isTest,
 			lines: countLines(body),
-			pkg:   filepath.Dir(path),
+			pkg:   pkg,
 		}
 		for _, imp := range file.Imports {
 			if v, err := strconv.Unquote(imp.Path.Value); err == nil {

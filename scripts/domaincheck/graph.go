@@ -33,6 +33,23 @@ type domainGraph struct {
 	// edge at all, so the report can say "these four are islands" rather
 	// than staying silent about them.
 	domains map[string]bool
+	// lines is how much code each domain owns, and pkgs is the same
+	// measure one level down. They are the size axis, and they answer the
+	// question the edge count cannot: a grouping that severs forty imports
+	// and relocates three per cent of the tree is not a split, it is a
+	// rename with a diagram. Test files are excluded, as everywhere else.
+	lines map[string]int
+	pkgs  map[string]pkgSize
+}
+
+// pkgSize is one package's share of the tree. domain is kept alongside it
+// because the whole reason this axis exists is that the two do not agree:
+// domainOf collapses biz/aiops/tools onto the domain "aiops", so the
+// largest package in the tree can be invisible in the domain view.
+type pkgSize struct {
+	domain string
+	lines  int
+	files  int
 }
 
 type ranked struct {
@@ -46,6 +63,8 @@ func buildGraph(sources []source, r rules) *domainGraph {
 	g := &domainGraph{
 		weight:  map[edge]int{},
 		domains: map[string]bool{},
+		lines:   map[string]int{},
+		pkgs:    map[string]pkgSize{},
 	}
 	for _, src := range sources {
 		from := domainOf(src.path)
@@ -56,6 +75,19 @@ func buildGraph(sources []source, r rules) *domainGraph {
 		if src.test {
 			continue
 		}
+		g.lines[from] += src.lines
+		// A file sitting directly in the manager root has no package
+		// directory to name it. Today there are none, and a blank row in
+		// the report would be read as a rendering bug, so it is named.
+		name := src.pkg
+		if name == "" {
+			name = "(manager root)"
+		}
+		p := g.pkgs[name]
+		p.domain = from
+		p.lines += src.lines
+		p.files++
+		g.pkgs[name] = p
 		for _, imp := range src.imports {
 			to := domainOf(imp)
 			if to == "" || to == from {
@@ -69,6 +101,95 @@ func buildGraph(sources []source, r rules) *domainGraph {
 		}
 	}
 	return g
+}
+
+// printSize reports the other axis: not what depends on what, but how much
+// code there is to move.
+//
+// The two axes disagree, and the disagreement is the finding. domainOf
+// collapses the five layer trees onto one name, so biz/aiops, model/aiops
+// and service/aiops are all "aiops". A domain of three hundred lines can
+// therefore sit in the same column as a domain that is one enormous
+// package, and no edge count can tell the two apart. Stage 3's second item
+// is priced in lines: what a split relocates, not how many seams it cuts.
+func (g *domainGraph) printSize(w io.Writer) {
+	total := 0
+	for _, n := range g.lines {
+		total += n
+	}
+	if total == 0 {
+		return
+	}
+
+	type sizedPkg struct {
+		name string
+		pkgSize
+	}
+	pkgs := make([]sizedPkg, 0, len(g.pkgs))
+	for name, p := range g.pkgs {
+		pkgs = append(pkgs, sizedPkg{name, p})
+	}
+	sort.Slice(pkgs, func(i, j int) bool {
+		if pkgs[i].lines != pkgs[j].lines {
+			return pkgs[i].lines > pkgs[j].lines
+		}
+		return pkgs[i].name < pkgs[j].name
+	})
+
+	fmt.Fprintf(w, "\nwhere the code is (%d lines, tests excluded):\n", total)
+	for i, p := range pkgs {
+		if i >= 10 {
+			fmt.Fprintf(w, "  %-34s ... and %d smaller packages\n", "", len(pkgs)-10)
+			break
+		}
+		fmt.Fprintf(w, "  %-34s %6d  %5.1f%%  %2d files  (domain %s)\n",
+			p.name, p.lines, 100*float64(p.lines)/float64(total), p.files, p.domain)
+	}
+
+	// A domain that is a single package is the case the domain view cannot
+	// show: its name says "one concern", but there is nothing under it to
+	// pull out, so a split that treats it as a peer of a wide domain is
+	// pricing a rename as if it were a decomposition.
+	type sizedDomain struct {
+		name  string
+		lines int
+		pkgs  int
+	}
+	dom := map[string]sizedDomain{}
+	for _, p := range g.pkgs {
+		d := dom[p.domain]
+		d.name = p.domain
+		d.lines += p.lines
+		d.pkgs++
+		dom[p.domain] = d
+	}
+	ds := make([]sizedDomain, 0, len(dom))
+	for _, d := range dom {
+		ds = append(ds, d)
+	}
+	sort.Slice(ds, func(i, j int) bool {
+		if ds[i].lines != ds[j].lines {
+			return ds[i].lines > ds[j].lines
+		}
+		return ds[i].name < ds[j].name
+	})
+
+	fmt.Fprintln(w, "\nthe same tree read as domains (the same code, the other axis):")
+	for i, d := range ds {
+		if i >= 8 {
+			break
+		}
+		note := ""
+		if d.pkgs == 1 {
+			note = "  <- one package, nothing under it to split"
+		}
+		fmt.Fprintf(w, "  %-20s %6d  %5.1f%%  %2d packages%s\n",
+			d.name, d.lines, 100*float64(d.lines)/float64(total), d.pkgs, note)
+	}
+	fmt.Fprintf(w, "\n  %d packages across %d domains. The largest package is %.1f%% of the tree\n",
+		len(pkgs), len(ds), 100*float64(pkgs[0].lines)/float64(total))
+	fmt.Fprintf(w, "  and the largest domain %.1f%%. A split is priced by the first number.\n",
+		100*float64(ds[0].lines)/float64(total))
 }
 
 func (g *domainGraph) rank() []ranked {
@@ -184,6 +305,8 @@ func (g *domainGraph) printStructure(w io.Writer) {
 		fmt.Fprintf(w, "  %-16s out %3d across %2d edges   in %3d across %2d\n",
 			v.name, v.out, v.outEdges, v.in, v.inEdges)
 	}
+
+	g.printSize(w)
 
 	lv := g.levels()
 	max := 0

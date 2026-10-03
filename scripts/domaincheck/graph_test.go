@@ -38,6 +38,89 @@ func reportCut(t *testing.T, g *domainGraph, body string) string {
 	return buf.String()
 }
 
+// sizedFixture is a file with a package and a line count, which is what
+// the size axis measures. fixture() leaves both empty because the edge
+// tests do not care about them.
+func sizedFixture(pkg string, lines int) source {
+	return source{
+		path:  managerPrefix + pkg + "/f.go",
+		pkg:   pkg,
+		lines: lines,
+	}
+}
+
+func reportSize(t *testing.T, g *domainGraph) string {
+	t.Helper()
+	var buf bytes.Buffer
+	g.printSize(&buf)
+	return buf.String()
+}
+
+func TestASplitIsPricedInLinesAndNotInFiles(t *testing.T) {
+	// Many small files and a few large ones are different propositions,
+	// and only one of them is what a split actually has to move.
+	sources := world(
+		sizedFixture("biz/alpha/split", 900),
+		sizedFixture("biz/beta/split", 100),
+	)
+	out := reportSize(t, buildGraph(sources, testRules()))
+	if !strings.Contains(out, "biz/alpha/split") {
+		t.Fatalf("the biggest package is missing from the report:\n%s", out)
+	}
+	alpha, beta := strings.Index(out, "biz/alpha/split"), strings.Index(out, "biz/beta/split")
+	if alpha > beta {
+		t.Errorf("the larger package should be reported first:\n%s", out)
+	}
+	if !strings.Contains(out, "900") {
+		t.Errorf("the report should price a package in lines:\n%s", out)
+	}
+}
+
+func TestATestFileIsInvisibleToTheSizeToo(t *testing.T) {
+	// The weight already ignores test files. If the size axis counted
+	// them, the two halves of the same report would disagree about which
+	// code is the code.
+	test := sizedFixture("biz/alpha", 100000)
+	test.test = true
+	sources := world(test, sizedFixture("biz/beta", 40))
+	out := reportSize(t, buildGraph(sources, testRules()))
+	if strings.Contains(out, "100000") {
+		t.Errorf("only non-test lines belong in the size report:\n%s", out)
+	}
+	if !strings.Contains(out, "where the code is (40 lines") {
+		t.Errorf("the one real file should be the whole total:\n%s", out)
+	}
+}
+
+func TestAPackageHiddenInsideAWideDomainIsStillPricedOnItsOwn(t *testing.T) {
+	// The reason the second axis exists. domainOf collapses
+	// biz/alpha/* and biz/beta/* onto two names, and a domain that is one
+	// enormous package beside forty small ones reads as merely a domain.
+	sources := world(sizedFixture("biz/alpha/huge", 5000))
+	for i := 0; i < 40; i++ {
+		sources = append(sources, sizedFixture("biz/alpha/small", 10))
+	}
+	out := reportSize(t, buildGraph(sources, testRules()))
+	if !strings.Contains(out, "biz/alpha/huge") {
+		t.Fatalf("the one large package must be reported by its own name:\n%s", out)
+	}
+	if !strings.Contains(out, "5000") {
+		t.Errorf("its size is the finding and should be printed:\n%s", out)
+	}
+}
+
+func TestADomainOfOnePackageSaysThereIsNothingUnderItToSplit(t *testing.T) {
+	// A domain that is a single package cannot be decomposed without
+	// first being given more than one. Reporting it as a peer of a wide
+	// domain prices a rename as a decomposition.
+	sources := world(sizedFixture("biz/alpha", 300))
+	sources = append(sources, sizedFixture("biz/beta", 200), sizedFixture("biz/beta/more", 100))
+	out := reportSize(t, buildGraph(sources, testRules()))
+	if !strings.Contains(out, "nothing under it to split") {
+		t.Errorf("a one-package domain should be marked as such:\n%s", out)
+	}
+}
+
 func TestTheReportSeesEveryEdgeTheGateWouldForbid(t *testing.T) {
 	// One undeclared import is one edge. If buildGraph dropped or invented
 	// edges relative to check(), the two tools would answer "how tangled is
