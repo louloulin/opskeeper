@@ -68,6 +68,15 @@ jobs:
       - name: Build and test every module on its own published tags
         run: make module-standalone-check
 
+      - name: Control-plane domain boundaries
+        run: make domain-check
+
+      - name: Golden-corpus and diagnostic-axis gates
+        run: make eval-gates
+
+      - name: Plan acceptance gates are wired
+        run: make ci-gate-check
+
       - name: Verify web console
         run: |
           corepack enable

@@ -314,6 +314,18 @@ domain-check: ## 校验 control plane 的域边界（55 个域 / 42 条声明边
 	go run ./scripts/domaincheck .
 	go test ./scripts/domaincheck/ -count=1
 
+# The plan's section 6 names its acceptance gates in a sentence, and two of
+# the three were green only on the machine of whoever typed them: `eval-gates`
+# and `domain-check` ran nowhere automatic. A gate nothing executes is a gate
+# that does not exist, and this repository has watched seven declared cycles
+# come back twice. This target reads the Makefile and ci.yml and fails when a
+# promised gate is missing from either -- it does not re-run the gates, since
+# CI runs them three lines above and the answer is on the same page.
+.PHONY: ci-gate-check
+ci-gate-check: ## 校验计划 §六 的验收门槛都已定义并真的被 CI 调用（决策 163）
+	go run ./scripts/cigate .
+	go test ./scripts/cigate/ -count=1
+
 # Report only, never a gate: a name-based reachability walk cannot see
 # interface satisfaction, reflection, cgo or go:linkname, so a red build on
 # its output would train people to add "trust me" comments. The number it

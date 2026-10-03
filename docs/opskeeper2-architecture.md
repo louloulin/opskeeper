@@ -10988,6 +10988,122 @@ import 也不 replace `core/manager`（那是它有意的边界——评测器�
 `Registry` 的持久化 `Ledger`（§4.61 已记、决策 124 未动）与 manager 行数拆分
 （`docs/manager-split.proposed` 的分组批准，外部阻塞：需要分组批准）。
 
+
+### 4.100 决策 163：计划 §六 点名的四条验收门槛，其中两条**从来没有被任何自动化跑过**——把「承诺」变成「会红」
+
+#### 4.100.1 这一轮查的是「门槛清单」，不是任何一条门槛
+
+社区方案的 §六 结尾写着一句验收门槛：
+
+> `make module-check` + `make eval-gates` + `make module-standalone-check` 全绿；
+> 节点上 `/etc/opskeeper-edge` 与进程环境经审计确认无云厂商密钥。
+
+这句话被台账反复引用（§4.69.5 甚至写明「四条全部有可执行证据」）。本轮没有去
+重跑它们——那是每一轮都在做的事——而是去问一个更靠前的问题：**这四条，哪一条
+真的会被别人跑？**
+
+#### 4.100.2 实测：三条 make 门槛里，只有两条在 CI 里
+
+`.github/workflows/ci.yml` 的步骤序列（`grep -n 'run: make'`）只有：
+
+```
+make module-check
+make module-standalone-check
+make verify-plugins
+```
+
+`eval-gates` 与 `domain-check` **一次都没有出现**。它们在本机、在每一份发布说明、
+在台账的每一张验收表里都是绿的，而**没有任何东西会在它们退化时变红**：
+
+- `eval-gates` 的黄金语料掉一个 case、`--fail-on-unmeasured-axis` 开始失败、
+  `plugin-coverage` 的诊断轴回归——一个 pull request 都不会红；
+- `domain-check` 更尖锐。它由决策 111 建立，理由恰恰是 `modulecheck` 停在模块级、
+  `go-arch-lint` 停在层组件级，两者都看不见一个限界上下文想要一条手写的环。一个
+  只在有人记得敲它时才跑的域闸门，等于不存在——决策 111 要暴露的那七对环**回来过
+  两次**（§4.50–§4.56）。
+
+#### 4.100.3 改了什么
+
+| 段 | 文件 | 改动 |
+|---|---|---|
+| 闸门 | `scripts/cigate/`（`main.go` + 18 条测试，新） | 持一张「计划点名的门槛」表，同时查两半：Makefile 仍定义该 target、`ci.yml` 仍真的调用它；两处任一缺失即非零退出 |
+| 接线 | `.github/workflows/ci.yml` | 在 `module-standalone-check` 之后补三步：`make domain-check`、`make eval-gates`、`make ci-gate-check` |
+| 目标 | `Makefile` | 新增 `ci-gate-check`（`go run ./scripts/cigate .` + `go test ./scripts/cigate/`），钉在 `domain-check` 之后 |
+
+`cigate` 的表里每条门槛都**必须带理由**（`Why`），因为一条说不出为什么重要的门槛
+就是第一条被删掉的；表本身有测试（`TestEveryGateRecordsWhyItMatters`）要求理由非空。
+
+#### 4.100.4 两个设计选择，各对应本仓库被咬过的一种形状
+
+1. **表写死在 `cigate` 里，不从 `ci.yml` 派生。** 这与 `scripts/nodearch` 硬编码
+   四个目标同源：一个从被检查对象推导要求的闸门，无法发现被检查对象本身少了一项。
+   若 `ci.yml` 哪天删掉 `make eval-gates`，一个读 `ci.yml` 的检查会跟着把这条要求
+   一起丢掉，然后报告「全部承诺已兑现」。
+2. **反向漂移也报。** 一个 gate 形状（`*-check`）的 target 被 CI 跑了、却不在表里，
+   同样是漂移：表说哪四条重要，`ci.yml` 里有第五条。检查器自己的 `ci-gate-check`
+   走一条**带理由**的自我豁免（`SelfExempt`），而不是一条按名字跳过的规则——否则
+   一次「加了个 `-check` 却忘了登记」会被静默放行，那正是豁免变成洞的方式。
+
+`cigate` **刻意不检查门槛当前是不是绿的**：那是 CI 在同一次运行里紧接着三步做的事，
+把这个答案折进来只会造出一个「跑闸门的闸门」，而回归之所以不可见，从来不是因为
+门槛被跳过了两次。
+
+#### 4.100.5 测试与变异
+
+18 条单元测试，两个方向都钉：四条 `-check` 逐条「从 CI 删掉调用必须红」、逐条
+「从 Makefile 删掉定义必须红」、`-check` 反向漂移必须红、检查器自我豁免必须带着
+理由、解析器不吃 `VERSION := 1.2.3`/`.PHONY`/注释、`make <target>` 的各种写法都能
+读出来而 `echo make x` 与注释掉的 `make x` 都读不出来。
+
+四条**对着真仓库**的变异，全部当场变红：
+
+| 变异 | 结果 |
+|---|---|
+| 把 `run: make eval-gates` 换成 `echo eval-gates was here` | 红在「eval-gates 未被 ci.yml 调用」 |
+| 从 Makefile 删掉 `domain-check` 整块 | 红在「Makefile 不再定义 domain-check」 |
+| 把 `run: make domain-check` 换成 `echo make domain-check` | 红在同一处——**提及不算调用** |
+| 恢复后 | `cigate: all 4 plan acceptance gates are defined and invoked by CI`，退出 0 |
+
+第三、四条变异是关键：一个 `strings.Contains(ci, target)` 的朴素实现会把
+`echo make domain-check` 判成「跑过了」，而它一个字都没运行。
+
+#### 4.100.6 验证（本轮实测）
+
+| 闸门 | 结果 |
+|---|---|
+| `make ci-gate-check` | `all 4 plan acceptance gates are defined and invoked by CI` + 18 测试绿 |
+| `make module-check` | `all module boundaries hold` |
+| `make domain-check` | 58 域 / 43 边 / 0 环 |
+| `make eval-gates` | 退出 0（coverage / vocabulary / axes 三条子闸门各自 GOWORK=off 也绿） |
+| `go vet ./scripts/cigate/` | 干净 |
+| gofmt | `scripts/cigate` / `.github` 干净 |
+
+#### 4.100.7 进度：不动百分比
+
+这一刀关的是**验收门槛自身的耐久性**，不是任何一条门槛的内容，也不推进四个阶段里
+任何一个交付物。按台账纪律（§4.88.8、§4.90.7 同理由），加一条守着既有承诺的闸门
+不涨分——涨了就是在给覆盖率记账。
+
+| 阶段 | 之前 | 之后 | 依据 |
+|---|---|---|---|
+| 0 边缘交付闭环 | 80% | 80% | 未动 |
+| 1 离线与自治 | 100% | 100% | 未动 |
+| 2 生态与治理 | 96.7% | 96.7% | 未动 |
+| 3 控制面与联邦 | 79.7% | 79.7% | 未动 |
+
+加权 = (80 + 100 + 96.7 + 79.7) / 4 = **89.1%**（不变）。
+
+可以记的一条：§4.69.5 那句「四条全部有可执行证据」是对的（每条本机确实能跑），
+但它与「四条都会被人跑」是两件事——前者是能力，后者是**承诺**。本轮把后者也变成
+会红的东西。
+
+#### 4.100.8 还没做的一条（诚实记下）
+
+门槛清单里那句「节点无云厂商密钥」是 **e2e 断言**（`//go:build e2e`），需要 docker
+与一个真的 broker 容器，因此它**有意不进**这个单元/编译 job——已逐字记进
+`cigate.NotInCI` 并附理由。它不是欠账，是刻意的分工；`make e2e-delivery-check`
+是它的入口。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
