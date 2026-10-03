@@ -42,6 +42,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"go/parser"
 	"go/token"
@@ -195,6 +196,34 @@ type source struct {
 	path    string
 	imports []string
 	test    bool
+	// lines is the file's line count, and it is here because the one
+	// question a split has to answer is not "how many edges does this
+	// grouping cut" but "how much code does it move". A grouping that
+	// severs forty imports and relocates three per cent of the tree is
+	// not a split; it is a rename with a diagram.
+	lines int
+	// pkg is the package directory, which is a different axis from
+	// domain: domainOf collapses biz/aiops/tools into the domain "aiops",
+	// and a domain can hide one enormous package among fifty small
+	// ones. The largest package in this tree is invisible to the
+	// domain view for exactly that reason.
+	pkg string
+}
+
+// countLines is bytes.Count(body, "\n") plus one when the file does not end
+// in a newline. A file that does is counted as having the lines it has, and
+// a file that does not still has a last line — which is the one case where a
+// naive count is off by one per file, and off by one per file is off by
+// seventy in a tree this size.
+func countLines(body []byte) int {
+	if len(body) == 0 {
+		return 0
+	}
+	n := bytes.Count(body, []byte("\n"))
+	if body[len(body)-1] != '\n' {
+		n++
+	}
+	return n
 }
 
 // check reports every way the tree disagrees with the rules.
@@ -396,7 +425,14 @@ func parseTree(dir string, r rules) ([]source, treeStats, error) {
 		if d.IsDir() || !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		// One read feeds both the imports and the line count. Parsing the
+		// file a second time to count its lines would be the kind of
+		// waste that is harmless once and annoying forever.
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		file, err := parser.ParseFile(fset, path, body, parser.ImportsOnly)
 		if err != nil {
 			return err
 		}
@@ -407,7 +443,12 @@ func parseTree(dir string, r rules) ([]source, treeStats, error) {
 		importPath := managerPrefix + filepath.ToSlash(rel)
 		importPath = strings.TrimSuffix(importPath, ".go")
 		isTest := strings.HasSuffix(path, "_test.go")
-		src := source{path: importPath, test: isTest}
+		src := source{
+			path:  importPath,
+			test:  isTest,
+			lines: countLines(body),
+			pkg:   filepath.Dir(path),
+		}
 		for _, imp := range file.Imports {
 			if v, err := strconv.Unquote(imp.Path.Value); err == nil {
 				src.imports = append(src.imports, v)
