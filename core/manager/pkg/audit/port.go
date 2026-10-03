@@ -193,6 +193,42 @@ const (
 	// and folding them would make one of them a payload scan.
 	ActionMCPToolCall      = "mcp_tool_call"
 	ActionMCPToolAuthorize = "mcp_tool_authorize"
+
+	// The node plane's own vocabulary (决策 126).
+	//
+	// core/ports has declared a closed set of node-side actions since
+	// before any node could write one, and every one of them was unmapped
+	// here — so when a node's rows finally reached the chain there was
+	// nowhere to file them. These are that set, one-for-one, with a node_
+	// prefix (plus plugin_removed, which core/ports gained in decision 126
+	// for the same reason: an install that is recorded and a removal that
+	// is not would make the ledger's plugin history an append-only fiction).
+	//
+	// The prefix is not decoration. An operator asking "what did the AI do
+	// on this host" is asking about the node, and "did the operator
+	// approve a plugin release" is asking about the console; the two must
+	// never sort into one filter, and a bare tool_call would.
+	//
+	// One-to-one rather than collapsed, deliberately. blocked / failed /
+	// allowed are three separate questions an investigator asks first, and
+	// the MCP entries above already rejected folding exactly this trio
+	// into a status field. Three of these have no writer on the node yet
+	// (plugin_loaded, proposal_created, recovery_applied); they are here so
+	// the map is total and an action nobody has implemented is refused as
+	// an unknown string rather than silently filed under a neighbour.
+	ActionNodeToolCall        = "node_tool_call"
+	ActionNodeToolBlocked     = "node_tool_blocked"
+	ActionNodeToolFailed      = "node_tool_failed"
+	ActionNodeApprovalRequest = "node_approval_request"
+	ActionNodeApprovalGrant   = "node_approval_grant"
+	ActionNodeApprovalDeny    = "node_approval_deny"
+	ActionNodeAgentTurn       = "node_agent_turn"
+	ActionNodeModelCall       = "node_model_call"
+	ActionNodePluginInstall   = "node_plugin_install"
+	ActionNodePluginRemove    = "node_plugin_remove"
+	ActionNodePluginLoad      = "node_plugin_load"
+	ActionNodeProposalCreate  = "node_proposal_create"
+	ActionNodeRecoveryApply   = "node_recovery_apply"
 )
 
 // ResourceType buckets used in the resource_type column. Same flat-list

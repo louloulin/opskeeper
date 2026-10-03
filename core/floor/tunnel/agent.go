@@ -73,6 +73,17 @@ const (
 	// reason: the manager cannot pull a batch out of a node it cannot
 	// reach, and the whole point is that the node comes back.
 	MethodAgentAuditReplay = "agent.audit.replay"
+	// MethodAgentAuditEntries is a node handing the control plane its own
+	// ledger rows — tool calls, plugin installs, the PiG agent's turns —
+	// so they can be chained centrally. It is separate from
+	// MethodAgentAuditReplay because a self-heal row and a tool-call row
+	// share nothing but their producer; see audit.go for why widening the
+	// older method would have made its name wrong.
+	//
+	// The direction and the reasoning are the same as above: the node
+	// comes back, because the manager cannot pull a batch out of a node it
+	// cannot reach.
+	MethodAgentAuditEntries = "agent.audit.entries"
 )
 
 // AgentPromptRequest is the wire body for MethodAgentPrompt.

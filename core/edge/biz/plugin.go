@@ -2,6 +2,8 @@ package biz
 
 import (
 	"context"
+	"encoding/json"
+	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
@@ -142,7 +144,67 @@ func (a *Agent) handlePluginInstall(ctx context.Context, req tunnel.PluginInstal
 		Signature: req.Signature,
 		KeyID:     req.KeyID,
 	})
+	// What the node did to its own tool set, recorded here rather than in
+	// the store: the store's job is the filesystem, and a signature
+	// verified in a directory three layers down is a fact nobody reads.
+	// This is also the row that makes the manager's plugin_release history
+	// checkable — the console knows what it *meant* to ship, and this is
+	// what the host actually ended up running.
+	recordPluginRow(a, ports.ActionPluginInstall, state)
 	return installResponse(state, entriesOf(a, store))
+}
+
+// recordPluginRow writes one plugin row to the node's own ledger.
+//
+// Both the install and the removal go through here, and the shape is
+// identical, because an operator asking "what is on this host" needs the
+// absence as much as the presence: a ledger that records every install and
+// no removal cannot answer "is the vulnerable version gone", and a version
+// that was rolled back and then quietly reinstalled by a retry looks like
+// one continuous install.
+//
+// A nil sink records nothing and is not an error. That is a weaker
+// guarantee than the gate's — the gate's sink is mandatory and the node
+// refuses to boot without it — and it is deliberate: the gate is on the
+// path of every privileged action, while this is bookkeeping about
+// packaging. A node that cannot keep the first still refuses; a node that
+// somehow cannot keep the second says nothing rather than failing a
+// release.
+func recordPluginRow(a *Agent, action ports.AuditAction, state ports.PluginState) {
+	sink := a.auditSink()
+	if sink == nil {
+		return
+	}
+	detail := map[string]any{
+		"version": state.Version,
+		"status":  statusOf(state),
+	}
+	if state.Digest != "" {
+		detail["digest"] = state.Digest
+	}
+	if state.Replaced != nil {
+		detail["replaced_version"] = state.Replaced.Version
+		detail["replaced_digest"] = state.Replaced.Digest
+	}
+	if state.Refused != "" {
+		detail["refused"] = state.Refused
+	}
+	if state.Error != "" {
+		detail["error"] = state.Error
+	}
+	body, err := json.Marshal(detail)
+	if err != nil {
+		return
+	}
+	_ = sink.Record(context.Background(), ports.AuditEntry{
+		At:      time.Now().UTC(),
+		Actor:   "node:plugin",
+		Action:  action,
+		Target:  state.Name,
+		Outcome: statusOf(state),
+		Class:   "write",
+		Detail:  body,
+	})
 }
 
 // handlePluginRemove implements MethodPluginRemove.
@@ -161,6 +223,7 @@ func (a *Agent) handlePluginRemove(ctx context.Context, req tunnel.PluginRemoveR
 		}
 	}
 	state := store.Remove(ctx, req.Plugin, req.Version)
+	recordPluginRow(a, ports.ActionPluginRemove, state)
 	return tunnel.PluginRemoveResponse{
 		Status:    statusOf(state),
 		Plugin:    state.Name,

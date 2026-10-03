@@ -46,7 +46,9 @@ var throatHolders = map[string]string{
 	"biz/aiops/agentkernel": "LedgerWriter is the agent kernel's writer seam, and the row " +
 		"it writes is an agent action rather than a user action",
 	"service/frontierbound": "autonomy replay writes the decisions a node made on its own " +
-		"back into the chain when the tunnel came back (decision 101)",
+		"back into the chain when the tunnel came back (decision 101), and a node's own " +
+		"ledger — every tool call, block, agent turn and plugin install it recorded — " +
+		"travels the same way (decision 126)",
 	"server/plugin": "its test builds a real usecase to assert a plugin release lands in " +
 		"the chain; the production handler uses the port",
 }

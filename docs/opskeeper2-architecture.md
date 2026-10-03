@@ -6550,7 +6550,7 @@ marshal、子集群 unmarshal；一个在 wire 两侧被改掉名字的字段会
 
 ```
 阶段 3 = (1.00 + 0.44 + 0.94) / 3 = 79.3%   （此前 78.0%，决策 125）
-加权   = (65 + 100 + 83.3 + 79.3) / 4 = 81.9%   （此前 83.7%，决策 125）
+加权   = (65 + 100 + 91.7 + 79.3) / 4 = 84.0%   （此前 83.7%，决策 125）
 ```
 
 **把「策略树投递通道 + 根侧推送接线 + 33 条测试 + 4 条跨模块契约」算成 0.8 个点，
@@ -6735,50 +6735,247 @@ which no rule in .go-arch-lint.yml permits
 
 **这个错是闸门抓的，不是 review 抓的**，而它已经在主干里躺了好几轮。
 
-#### 4.63.8 顺带查出来的：插件安装一条审计都不写
+#### 4.63.8 顺带查出来的：节点平面的审计进不了链（本节初稿写错过，两轮内第二次）
 
 查闸门接缝时顺手核了审计。`core/ports/audit.go` 的 13 个 `Action` 常量里
 **6 个零引用**：`AgentTurn` / `ModelCall` / `PluginInstall` / `PluginLoad` /
 `ProposalCreate` / `RecoveryApply`。逐个查证：
 
-- `ports.AuditSink` 本身是活的（`core/edge/policygate` 与 `core/pig/pigagent` 在用，
-  7 个动作在写），实现是 `core/manager/biz/aiops/agentkernel/audit.go` 的 HMAC 链。
-- **但整条插件安装路径一条记录都不写**：`service/plugin` 零 audit 引用，
-  `core/edge/biz/plugin.go` 零 audit 引用，`cmd/opskeeper-edge/plugininstall.go`
-  **零 audit 引用**。`core/manager/agentteams/plugin_sync.go:68` 的
-  `LoggingSyncClient.InstallPlugin` 明确写着「记一条日志然后返回 nil」。
-- 而插件清单里声明着 `audit: {emits: true, mutates: false}`——
-  **这个声明没有任何消费者**。计划 §3.3 的表里写着「审计：HMAC chain 在宿主写；
-  插件只能通过 `audit.emits` 声明」，**声明这一半是真的，被声明的那一半没人听。**
-
-这不是新发现的小 bug，是**计划里一条非协商要求从未被兑现，而台账没有为它记过分**。
-
-#### 4.63.9 台账：加权从 83.7% 降到 81.9%，而本轮是净加功能的
+**这一节的第一稿是错的，而错法和 §4.63.1 那次是同一种：用一个符号级 grep 的
+结果去下一个系统级结论。** 第一稿写的是「整条插件安装路径一条审计记录都不写」，
+依据是 `core/ports/audit.go` 里 `ActionPluginInstall` / `ActionPluginLoad` 两个
+常量零引用。**事实是错的**：
 
 ```
-阶段 2 = 5.0 / 6 = 83.3%   （此前 5.5 / 6 = 91.7%）
+$ grep -rn "auditRelease\|ActionPluginRelease" --include="*.go" core/manager/server/plugin/
+  core/manager/server/plugin/http.go:301: auditRelease(r, auditport.ActionPluginReleaseStart, ...)
+  ... Advance / Halt / Rollback 四处，成功与失败都记
+```
+
+**插件发布的 start / advance / halt / rollback 在 manager 侧全部有审计，
+连失败与被拒都记**（`http.go:297-301` 的注释写得很清楚：只记成功的审计等于
+没有审计，因为最该问的问题是「谁试过」）。第一稿只 grep 了**新词表**
+（`core/ports`），没有看**旧词表**（`core/manager/pkg/audit`，`port.go` 里
+30 多个 `Action*`，含 plugin_release 四种、autonomy_execute、mcp_tool_call），
+于是把「新词表的两个常量是死的」读成了「这件事没人记」。
+
+**两轮内第二次犯同一种错，所以这里要写清楚正确的方法**：发现一个符号没有引用方时，
+能得出的结论只有「这个符号没有引用方」。**要下系统级结论，必须再问一次
+「这件事有没有别的词表、别的通路、别的进程在做」**——而这一次问了，答案是有。
+
+**核实之后，真正的缺口是另一个，而且更干净：**
+
+| 平面 | 词表 | 谁写 | 状态 |
+|---|---|---|---|
+| 控制面（manager） | `core/manager/pkg/audit`，30+ 个 `Action*` | 各域经咽喉 `biz/audit.Usecase` | **活的、完整的** |
+| 节点面（edge） | `core/ports/audit.go`，13 个 `Action*` | `policygate` / `pigagent` | **没有装配，一条不写** |
+
+节点侧那一列的证据是硬的：`cmd/opskeeper-edge/agent.go:444` 的
+`policygate.New(...)` **没有传 `Audit`**，而 `core/edge/policygate/gate.go:897`
+的 `record` 第一句就是 `if g.audit == nil { return }`。也就是说
+`ActionToolCall` / `ActionToolBlocked` / `ActionToolFailed` 这三个常量在
+manager 侧被引用（`agentkernel` 的链），**在节点侧一个都不会被写**。
+6 个零引用的 `Action*`（`AgentTurn` / `ModelCall` / `PluginInstall` /
+`PluginLoad` / `ProposalCreate` / `RecoveryApply`）全部属于这一侧。
+
+**所以缺的不是「插件安装记账」——发布那一侧早就在记了。缺的是「节点平面到链的
+通路」**：节点上真正发生的高权限动作（每一次工具调用、每一次插件安装与加载、
+PiG 的 6 个 Code\* 状态）**没有一条进得了链**。manager 记的是「我发起了发布」，
+不是「节点装了什么、跑了什么」。
+
+**而计划 §3.3 的表里写着的恰恰是后者那条线**：「审计：HMAC chain 在宿主写；
+插件只能通过 `audit.emits` 声明」。**声明这一半是真的**（`pig-ops.yaml` 里
+`audit: {emits: true}` 到处都在），**被声明的那一半没人听**——因为节点侧根本没有
+一条把记录送到链上的路。
+
+**这个缺口没有为它在四个阶段里记过分**，理由和 §4.63.2 一样：它跨了两个阶段的
+措辞，谁都没认领。本节只把事实钉在这里，记账留给下一刀把它关掉之后。
+
+#### 4.63.9 台账：83.7% → 84.0%，而这一节的前一稿记了一个更低的数
+
+**先记一次自我更正**：本节初稿写的是「加权降到 81.9%」，理由是阶段 2 的审核
+流水线没闭。那条理由是错的（§4.63.8 记了错在哪），所以分数改回来。
+
+```
+阶段 2 = 5.5 / 6 = 91.7%   （不变；本轮初稿误降为 5.0/6，理由不成立）
 阶段 3 = (1.00 + 0.44 + 0.94) / 3 = 79.3%   （此前 78.0%）
-加权   = (65 + 100 + 83.3 + 79.3) / 4 = 81.9%   （此前 83.7%）
+加权   = (65 + 100 + 91.7 + 79.3) / 4 = 84.0%   （此前 83.7%）
 ```
 
-**阶段 3 上调 1.3 个点**：联邦那条 0.90 → 0.94。子集群进程装配完成，更关键的是
-**策略终于有了消费者**——从「通道 100% + enforcement 0%」变成两端都通。剩下的
-0.06 是 `Registry` 的持久化 `Ledger`（端口在、实现不在）与一个跨网络可用的
+**只有阶段 3 动了，+1.3 个点**：联邦那条 0.90 → 0.94。子集群进程装配完成，更关键
+的是**策略终于有了消费者**——从「通道 100% + enforcement 0%」变成两端都通。
+剩下的 0.06 是 `Registry` 的持久化 `Ledger`（端口在、实现不在）与一个跨网络可用的
 `Source.URL` 托管来源（现交付 `file://`）。
 
-**阶段 2 下调 8.4 个点**：审核流水线那条从「闭」改成「三分之二」。它做的是
-manifest 校验 + 签名 + 灰度发布，三样都在，**但宿主强制的那一账没记**。
-按它自己的判据（§三 的六条）此前记 5.5/6，现在记 5.0/6。
+**这一刀真正的教训不在分数上。** 它加了三样东西：约 2,700 行、40 余条测试，
+一个从「没人读」到「有人在读」的 enforcement 链，以及**一个此前没被任何人核对
+过的缺口**（节点平面进不了链）。它同时**改错了一次分数**——用一个符号级 grep
+的结果去下一个系统级结论，两轮内第二次（第一次是 §4.63.1 的 `deadcode` 误报）。
 
-**所以加权是降的，尽管本轮加了 8 个文件、约 2,700 行、40 余条测试、并补上了一个
-从「没人读」到「有人在读」的 enforcement 链。** 原因只有一个：**上一轮那个 83.7%
-里，有 8.4 个点建立在一个从未被核对过的假设上——「审核流水线闭了」。核对之后它
-没闭。**进度下降而工作量上升，是台账第一次出现这种情况，而它出现的条件恰恰是
-台账终于开始核对某一条而不是继续记账。**
+**一个核对动作，同时产出了一项进展和一次错误记账，而错误的成本恰好等于被核对
+的那一项本该有的价值。** 这比「没核对」更值得记：**没有台账就没有这个错误，
+但没有台账就永远发现不了这个缺口**，而发现之后又必须有人去核实它是不是真的。
+下一次遇到「某个符号零引用」，先问「这件事有没有别的通路」，再动分数。
 
-下一刀仍然在 manager 拆分（0.56，阶段 3 剩下的 0.56 里最大的一个）。**但本轮
-把 §4.63.8 那条记下来了：插件安装不记账，比 manager 拆分更便宜、更该先做**——
-它是阶段 2 掉下去的 8.4 个点的正主，而且它不需要搬任何一行代码。
+**下一刀不按台账的顺序走。** 阶段 3 剩下的最大一块是 manager 拆分（0.56），
+但 §4.63.8 记的「节点平面进不了链」更便宜、边界更清楚，而它覆盖的是一整片
+高权限动作的可见性——在运维 AI 平台里，AI 在节点上做了什么，比控制面发起了
+什么发布更该被看见。
+
+**（决策 126 已按这条指针做完，见 §4.64。它没有动任何一格分数，理由见 §4.64.8。）**
+### 4.64 决策 126：节点平面进链——以及一个被这份账本顺手挖出来的真 bug
+
+#### 4.64.1 起点：上一刀指认的缺口，这次先做三个核对面
+
+§4.63.8 记下的结论是「控制面 30+ 个 Action 活得很好，节点面 13 个一条不写」。
+这次没有直接开工，而是先把那个结论按三个面各核一遍——**因为上一个错误的形状
+就是「拿一个 grep 的结果下一个系统级结论」**（§4.63.1、§4.63.8 各一次）：
+
+```
+$ grep -rn "policygate.New" --include="*.go" cmd/ core/
+  cmd/opskeeper-edge/agent.go:452          ← 唯一一处装配
+
+$ sed -n '897,900p' core/edge/policygate/gate.go
+  func (g *Gate) record(ctx context.Context, action ports.AuditAction, ...) {
+      if g.audit == nil {
+          return
+```
+
+三个核对面的结果是一致的：**端口在、实现在、装配不在**。`cmd/opskeeper-edge/agent.go`
+的 `policygate.New` 没有传 `Audit`，而 `record` 的第一句就是那个 nil 检查——
+**上一轮的判断成立**。于是这一刀要补的是**最后一跳**，不是三个写入点。
+
+#### 4.64.2 契约先行：`agent.audit.entries`，而不是把 `agent.audit.replay` 加宽
+
+线上的形状写在 `core/floor/tunnel/audit.go`，方法常量紧挨着
+`MethodAgentAuditReplay`（`core/floor/tunnel/agent.go`）。三个设计点：
+
+- **新方法，不加宽旧方法。** 两者的行形状除了「都是节点产生的」之外没有交集：
+  自治行是一次自愈决策的十三个字段（action/package/argv/trigger/phase…），账本行是
+  策略闸门、PiG runstate、插件安装器三个组件各自认为值得写的东西。加宽会让旧方法
+  的名字变错，并且逼 autonomy 去填一个它永远不会填的字段。
+- **`AuditEntry` 不带 `PrevHash` / `Hash`。** 节点算不了链接，**也不该能算**——
+  一个能签链的节点就是一个能伪造链的节点。这两个字段是控制面写的。
+- **三态语义与自治回放逐字相同**（全收 / 全拒且形状不对 / (0,0) 还没准备好），
+  因为两条路写的是同一条有序无去重键的链，而**只有节点能分辨「没收到」和
+  「全部拒绝」**。三态在 `core/manager/service/frontierbound/handlers.go` 的 handler
+  与 `cmd/opskeeper-edge/auditledger.go` 的 sender 两侧都有测试钉住。
+
+#### 4.64.3 节点侧：账本 + pump，复用 `core/edge/spool` 而不是第二份实现
+
+`core/edge/auditlog`（新组件，`mayDependOn: [oxcore_ports, oxedge_spool]`）只有两个
+文件：`spool.go` 实现 `ports.AuditSink`，`pump.go` 是 `spool.Pump` 的带类型包装。
+不 import tunnel 是刻意的——**线上的形状转换放在 `cmd/opskeeper-edge` 的装配根**，
+和 autonomy 同一处，理由也一样：那份文件是唯一同时知道隧道 client、agent 心跳和
+节点工作目录的地方。
+
+三条与 autonomy 不同的决定，都是有代价的：
+
+| | autonomy | 节点账本 | 为什么 |
+|---|---|---|---|
+| 是否可选 | 无 manifest 声明则 nil | **必然**（打不开账本节点不启动） | 没有「声明」这回事：每一次被闸门放行或拦下的工具调用都属于它 |
+| 容量上限 | autonomy 自己的默认值 | 16 MiB | 账本行是**每次调用一行**，一周的 agent 会写出自治行数量级的东西 |
+| 过期丢弃 | 有 | **无**（`PriorityCritical`） | 「这件事记下来是不是已经太晚了」没有有用的答案 |
+
+**必然性这条是有代价的，写在这里**：一个节点会因为工作目录不可写而拒绝启动，
+这是新增的启动期失败模式。它换来的东西是——**一个记不住东西的节点看起来仍然像
+在守着这台机器**，因为角色上限、工具白名单、gate socket 全都还在，唯独证据落在一个
+不存在的文件上。启动失败说的是「这个节点不可信于记录」，那是运维能处理的句子。
+
+#### 4.64.4 顺手挖出来的一个真 bug：半写行会吃掉重启后的第一行
+
+写账本测试时写了一条「断电在行尾撕开半行」的用例，它红了，而**红的方式说明我
+上一轮把断言方向写反了**：`Peek` 接受了那半行。查下去发现不是测试的问题——是
+`core/edge/spool` 的一个真缺陷：
+
+```
+$ go test ./core/edge/auditlog/ -run PowerCut
+  Peek returned 1 rows, want 2
+```
+
+`readLocked` 会跳过解析不了的行（这是对的，也是文档里写着的），但文件是以
+**`O_APPEND` 打开**的。断电撕开的那半行**没有换行符**，于是重启之后写入的第一行
+直接粘在它后面，形成一行「上次那半行 + 这次这一整行」——**上次那半行本来就不可读，
+现在把一条本身完全正常的行也赔进去了**。两个 spool（自治、账本）都有这个暴露面。
+
+修法是打开时截断到最后一个换行（`core/edge/spool/spool.go` 的 `trimPartialTail`）：
+丢掉的就是**本来就永远解析不了的那几个字节**，别的什么都不动。分块回扫而不是逐字节
+回退，因为一个带着长尾巴的 spool 否则会在此后每一次重启里被慢慢读一遍。两条测试
+钉住它：一条证明**断电之后写的那一行还在**，一条证明**整文件只有一行且没结尾时会被
+清空而不是留着**。
+
+**这一条值得单独记，因为它说明「测试红了」有两种读法**：一种是断言写错了，
+一种是它撞上了一个没人发现的缺陷。分辨的办法不是看哪个更顺眼，是**去看被测代码
+到底做了什么**——上一轮我差点选了前者。
+
+#### 4.64.5 控制面：十四个动作、一个映射、两条形状规则
+
+`core/manager/pkg/audit/port.go` 补了 `node_*` 词表（`model/audit` 同步 re-export，
+`TestTheVocabularyIsWellFormed` 与 `TestTheReExportCoversTheWholeVocabulary` 守着），
+`core/manager/biz/audit/nodeledger.go` 做翻译：
+
+- **一对一，不折叠。** blocked / failed / allowed 是调查者最先问的三个问题，而
+  同一份文件里的 `mcp_tool_call` / `mcp_tool_authorize` 已经因为同样的理由拒绝过
+  把「被拒绝」折进 status。三个动作（`plugin_loaded` / `proposal_created` /
+  `recovery_applied`）目前**没有写入方**，它们在表里是为了让映射是**全的**：
+  没人实现的动作会被当作「这个 build 解释不了的字符串」整批拒绝，而不是悄悄归档
+  到邻居身上。
+- **`core/ports` 补了 `plugin_removed`。** 只记安装不记卸载，账本就答不了
+  「那个有漏洞的版本还在这台机器上吗」，而「回滚之后被重试又装回去」看起来会像
+  一次连续安装。
+- **形状规则只有两条**：动作可映射、时间非零。**别的都不要求**——一条节点满足
+  不了的规则会整批拒绝，而节点对整批拒绝的处置是**计数并跳过**（§4.64.2 的三态），
+  也就是说那种拒绝是**静默的**。空 actor、空 target 原样进 payload。
+
+#### 4.64.6 接线：三个写入方，两条装配线
+
+```
+policygate.New(Audit: audit.sink)                    cmd/opskeeper-edge/agent.go
+agent.SetAuditSink(audit.sink)                      core/edge/biz（插件安装/卸载）
+auditlog.NewPump(Sender: auditEntriesSender{...})    cmd/opskeeper-edge/auditledger.go
+frontierbound.Wiring{NodeLedger: NewNodeLedger(auditUC)}  cmd/opskeeper/main.go
+```
+
+`service/frontierbound` 早就在审计咽喉持有者表里（`core/manager/pkg/audit/writers_test.go`），
+本轮只把表里那行理由补全为「自治回放 + 节点自己的账本」。
+
+**一条接线本轮明确没有做**：`pigagent.Deps.Audit` 在**控制面**早就接到了 manager
+的账本（`cmd/opskeeper/aiopskernel.go`），而**节点上的 agent 是 `pig --mode rpc`
+子进程**，它的工具调用经由 gate socket 回到节点的闸门——所以 `agent_turn` /
+`model_call` 两个动作在节点侧至今没有写入方，映射表里留着它们是诚实而不是遗漏。
+
+#### 4.64.7 六道门槛
+
+`make module-check` / `domain-check`（58 域 / 43 边 / 0 环）/ `eval-gates` /
+`module-standalone-check` / `arch-lint-run` / `audit-port-check` 全绿。arch-lint
+的 `cmd` 授权表新增 `oxedge_auditlog` 一条，理由与 `oxedge_autonomy` 同源。
+
+#### 4.64.8 台账：**84.0% 不动**，而且不动是对的
+
+四阶段台账里**没有「节点平面进链」这一条**——§4.63.8 当时就是这么记的
+（「它不落在阶段 2 的六条里，所以不因它动这一格」）。本轮把它关掉了，**但仍然
+不动任何一格**：
+
+```
+阶段 0 = 65%   不变（0.4 需要 docker daemon，本机不具备）
+阶段 1 = 100%  不变
+阶段 2 = 91.7% 不变（六条里没有这一条）
+阶段 3 = 79.3% 不变
+加权   = 84.0%  不变
+```
+
+**给分数找一个能涨的格子，比不改更糟。** 这一刀的真实价值是**计划 §3.3 那张表上
+真的一条开始兑现**（节点平面每一次工具调用、每一次插件安装与加载，链上有一条），
+而那不是四阶段里任何一条的验收项。与其把某一格硬拔高，不如**把台账缺这一条这件事
+记下来**——下一个读到 §4.63.8 的人会知道它已经被关掉，而不是再去查一遍。
+
+#### 4.64.9 下一刀
+
+阶段 3 剩下的最大一块仍是 **manager 拆分（0.56）**。但这一刀暴露出来的东西比它大：
+**节点账本现在写进链了，可没有人查过它。** 计划里审计链的验收写的是「链完整」，
+现在链里多了一整片来源（节点），而 `chain head / verify` 那条路的测试用的都是
+控制面自己写的行。下一步该做的是**让 verify 说得出「这段链里有多少行来自节点、
+它们有没有被改过」**，而不是只说链没断。
 
 ## 六、当前实现进度
 
@@ -6814,7 +7011,7 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 |---|---|---|
 | 0 边缘交付闭环（P0） | **65%** | **三条** P0 都是「代码意图已写、实现路径从未跑过」：`cmd/opskeeper-edge/agent.go:209-212` 的 `Env` 只有两个 socket，`dist/build-edge-bundle.sh:38-49` 与 `deploy/Dockerfile.opskeeper-edge` 都不含 `pig`，`Makefile` 没有任何 `build-pig*` 目标。**已实测可行**：从 `core/pig` 构建 `github.com/MichaelKinsy/PiG/cmd/pig` 退出码 0（71 MB）。方案的「注入 `OPENAI_BASE_URL`」**不成立**（PiG 无此变量），正确路径是 `models.json` 自定义 provider + `PIG_CODING_AGENT_DIR`（§4.28.1）。**本轮新发现的第三条 P0 比前两条都严重：节点上的插件扩展编译不过**（`GOWORK=off` 实测报 `unknown revision core/v0.0.0`，且无 `go.sum`）——补齐 pig 与凭据之后节点仍然零工具（§4.28.8）。**决策 91 已关掉其中的第三条**：`core/wire` 内联进每个打包扩展、`go.mod` 删掉未发布的 `core v0.0.0`、只留 PiG SDK 一条 require，8 个打包扩展在 `GOWORK=off CGO_ENABLED=0` 下实测 8/8 构建通过，并新增「按节点的方式构建」这条**实测会红**的闸门（§4.29）。**决策 92 关掉了第二条**：`make build-pig-all` 从 `core/pig` + `GOWORK=off` 构建并**被每个 `build-edge-<arch>` 依赖**，两处 bundle 清单、`dist/package.sh`、`install-edge.sh`（含 `pig --version` 自检）、`Dockerfile.opskeeper-edge`、env 模板全部接通，六个位置各有断言（`core/floor/delivery`，6 条测试，**实测会红**）。**决策 93 关掉了 P0-1 的节点侧**：节点有了完整的凭据链（`OPSKEEPER_EDGE_AGENT_CONFIG_DIR` + `models.json` 的 `"$VAR"` 引用 + `PIG_CODING_AGENT_DIR`），并**对着真 `pig` 二进制验证**了三条（能解析 / 无凭据则拒绝 / 无 scope 则找不到）。本轮还查出方案 10 条清单里没有的第四条：**`DefaultAgentDir()` 在 `$HOME` 未设置时丢弃错误、返回相对路径 `.pig/agent`，被 agent 按 Cwd（即插件包根）解析**——凭据会落进签名插件内容里（§4.31.1）。**决策 94 关掉了 P0-1 的 manager 侧**：`core/manager/server/llmgw` 提供 `POST /v1/chat/completions`（流式 + 非流式）与 `GET /v1/models`，鉴权**复用隧道凭据对**（零新存储、零 schema 迁移、轮换即现有 `UpdateSecretHash`，§4.31.5），节点能选 model 不能选 provider；真 `pig` 二进制端到端抓出两处形状错误——`content` 实际是 string **或** parts 数组的联合类型（按 string 建模会拒绝真 agent 的每一个请求，而 18 条单元测试全绿）、大整数必须 `UseNumber` 才能活过 `>2^53`（§4.32）。**决策 95 把方案 0.1 剩下的三项职责与限流补齐**：每日 token 上限复用**同一个** `llm.InMemoryBudget` 实例（两份账 = 集群能花掉两倍上限）、每 edge 一个令牌桶超限 429、调用方的 `max_completion_tokens` 真正生效（之前被解析后丢弃）；顺带修掉 **429 之前被报成 400**（`writeError` 自带的 switch 对预算与限流哨兵没有分支）与一处 typed nil panic（§4.33）。剩下的不是 P0，是验收本身：方案 0.4 的 `make compose-up` 真实对话需要 Docker 与真 provider key；**决策 96 关掉了 per-tool 配额**（§4.28.4 判定的阶段 0 阻塞项）：清单里声明 `limits`、执行器 metadata 里也声明、两侧漂移由 `sdk.Check` 报错，**强制点在 tool broker**——节点上所有工具调用的唯一通道，因此覆盖将来任何一个第三方工具（没声明也有 1 MiB 默认上限，`skill.Spill` 从一段**零调用点的死代码**里搬出来并修好 0644 权限、24 小时回收与路径注入）。九个高基数读工具各有紧于默认值的上限与墙钟（§4.34）。剩下的**只有方案 0.4 的真实验收**：`make compose-up` 后一台 edge 完成一次真实对话、节点上可见独立 pig 进程、`/etc/opskeeper-edge` 无云厂商密钥——前两条已由 `core/floor/delivery` 与 `tests/agentgateway` 覆盖了可离线覆盖的部分，真 provider key 那一条本机不具备。**这一条是实测的而非推测**：`which docker` 有二进制，`docker info` 退出码 1（daemon 未运行），即容器从未在本机跑过。**0.2 的隧道下发（决策 103 已关）**：方案要求 `GatewayURL` / `TokenRef` **由隧道配置下发，而非硬编码 env**。决策 103 把它做成心跳应答的两个非机密字段（`agent_base_url` + `agent_model`），节点在自己的 env 沉默时采纳、env 非空时 env 胜——形状与 `pluginEndpointResolver` / `TunnelConfigFetcher` 逐字同形，没有新造凭据。**但「轮换 token 即逐台重启」这一条并没有被它修掉，也不该由它修**：token 仍是节点的隧道凭据对，轮换语义本来就与隧道一致（`UpdateSecretHash`）。见 §4.40.3 与 §4.41 |
 | 1 离线与有限自治（P1） | **100%** | **决策 98 关掉了方案 1.2（自治白名单）**：清单里签一份固定 argv 列表，节点只在中心失联超过阈值且**触发器实测成立**时执行它，执行的是声明的 argv、宿主派生幂等键、**先消费后执行**、两阶段落盘审计（`core/edge/autonomy` 41 项 + 装配根 10 项端到端，§4.36）。**13 条具名加载期拒绝**堵住清单侧（argv 含元字符、半径超 single-ns、TTL 超 6h、工具未声明、工具是 read、`offline_after` 低于 30s…）。**决策 99 关掉了方案 1.1（遥测本地 spool）**：先把「追加一行、封顶、按序回放」抽成 `core/edge/spool` 原语（只依赖标准库），再让遥测（`core/edge/telemetrywal`）、变更事件（`changewatcher/tunnel_sink.go`）、自治审计三个用户各自只声明自己的策略——**两份日志、一套丢弃表**（trace 先丢 > metric 30m 保质期 > change event 无保质期）；`Send(ctx, rows) (int, error)` 一个签名同时满足审计的「全有或全无」与遥测的「部分前进」；回放限流 100 行/5s 且**只有满批才限流**；本轮由测试抓出 8 个真实缺陷，其中 `Ack` 的读改写分锁会吞掉并发写入的行（§4.37）。**决策 100 修掉了回放路上的一处数据丢失**：`Accepted=0`（中心还没准备好）原被当成「永久拒绝」，于是断连攒下的积压**在恢复后第一条消息里被 ack 丢弃**——日志扛过了断网、死在握手的样子上；中心侧 `push_prom_samples` 的三条丢弃路径还爱说谎（返回 `Accepted=n`），一并改成「能放报写入数、放不下报 0」。现在 `Accepted=0` 读作「还没有」，批次留在盘上。**决策 101 关掉了审计回放传输**（§4.39）：`agent.audit.replay` 隧道方法 + `AutonomyAuditRow` 契约、中心 `RecordAutonomyReplay`（**整批形状校验在前、逐行 `EmitWithID` 在后**，所以一次重试不产生重复）补 HMAC 链、`buildAutonomy` 接上并启动 `autonomy.Pump`；节点把中心的回答读成三种动作（传输失败/还没收下 → 留住重试；形状拒绝 → 计数跳过不重试；全收 → ack），未进链的行由 `autonomyHealth.ReplayRefused` 上报。接线抓出**两处实现错误**并各有实测会红的回归：① handler 的 `bindEdgeTransport` 会按 body 改绑 transport，一个已绑 42 的连接推送 7 就能把 42 的自愈历史写进 7 的账（`TestInstall_AutonomyReplay_TrustsTheTransportEdgeID` 实测 `edge = 7, want 42`）；② 节点 sender 用 `Accepted+Rejected >= len(rows)` 判断「已交代」，多报一个数就会 ack 掉整批（`TestAutonomyReplaySender_ACountItCannotExplainIsRetried` 实测变红，改为 `== len(rows)`）。顺带修掉一处既有缺陷：`.go-arch-lint.yml` 里 `oxedge_spool` 写成 `mayDependOn: []`，go-arch-lint 的 spec 校验因此**拒绝运行整份文件**——决策 99（`8fefe7b`）之后 `make arch-lint-run` 一次也没通过过，已按同文件既有写法改为 `anyVendorDeps: true`（§4.39.6）。**阶段 1 的代码侧到此完整**。**决策 121 关掉了 at-least-once 的「不重」那一半，而且是两个方向相反的问题里的一个**（§4.59）：① `host_metrics_raw` 的 `(edge_id, ts)` 变**唯一**索引 + `WriteRaw` 用**命名的** `ON CONFLICT (edge_id, ts) DO NOTHING`，`Migrate` 分「折叠已有重复 → AutoMigrate → 删旧非唯一索引」三步（顺序即全部，且幂等）；顺带修掉一个**今天就在损坏数据**的缺陷——`biz/metric.Ingester.flush` 拿同一份 payload 重试四次，而「写进去了但返回错误」与「没写进去」不可区分，而 downsample 对计数器是**求和**，所以一次重试会把那 5 分钟桶的网络吞吐**永久翻倍**（`host_metrics_5m/1h` 是复合主键 + `Save`，永不重算）。② 唯一键让 `MetricsInterval` 的 1 秒下限变成承重项（`HostMetricPoint.Ts` 本来就是 unix 秒，亚秒 tick 会按重复被丢），`NewAgent` clamp + WARN。**7 条变异全部被抓**。**决策 122 关掉另一半**（§4.60）：`edge_change_events` **没有天然键**（两次真实重启可字段全同），所以内容唯一键会删掉真历史——唯一能用的键是节点写前日志的行号。`Seq` 真的过了线（`spool.RecordSeq` 第二个入口 → `deliver` 落盘时打号 → `callOnce` 带上 → 中心行上落 **NULL**（不是 0，否则唯一索引会让一个节点的所有普通事件互相撞上））；中心侧**两层**——usecase 预筛让 `Accepted` 与 per-kind 计数器说真话，DB 唯一索引兜住预筛失败；新增 `opskeeper_change_events_deduped_total`。**本轮抓到最重要的一处**：第一轮中心侧测试 6/6 全绿时，把 handler 里的线路→行交接删掉**仍然 6/6 全绿**——特性在生产里是死的而没有一条测试会红，补的 handler 端到端测试让同一个变异红 3 条。**11 条变异全部被抓** |
-| 2 生态与治理加固（P2） | **83.3%** | 工具注册表：**决策 104 关掉**——`core/manager/biz/aiops/toolregistry`（`Entry` 值类型、唯一适配点 `EntryFromToolInfo`、`Catalogue.Search` 相关性排序、`Filter` 按声明元数据查能力、`Fuse`/`RRFConstant` 混合检索接缝，18 条测试），`ToolSearch` 的 keyword 分支改为排序、`select:` 与响应形状未动（§4.42）；per-tool 配额：**决策 96 已关**（`sdk/manifest.go` 校验 `spec.tools[].limits`，强制点 `core/edge/toolbroker`），本行此前已过期；MCP 兼容层：**决策 108 关掉**——`/api/v1/mcp` 现在是一个真正的 MCP 端点：版本头由必填改为可选（缺失＝普通 MCP 客户端）、`initialize` 按客户端要的版本作答、`ping` 与 `notifications/*` 按规范应答、`tools/list` 可分页，工具面改在接线末尾组装（`cloud_bash`/`send_im_message`/`serve_page` 此前对 MCP 不可见），`docs/mcp-surface.md` 是对外契约；`make mcp-surface-check` 让本仓库自己的 `pkg/mcpclient` 用真 HTTP 打真 handler（§4.46）；成本结晶：**决策 106 落掉机制**——`core/manager/biz/aiops/crystallize` 按连续第一次就通过的 streak 晋升、反证即退役，草稿用真实的 `pluginmanifest.Validate` 自检（53 条测试、`make crystallize-check`）；**平台仍不记录修复的 argv，生产端接线未做**（§4.44）；eval 三维化：**决策 105 关掉**——`core/harness/judge/diagnostic.go` 的 `DiagnosticAxes` 按 Localization × Identification × Reason 打分、`reason` 读轨迹面、`Overall` 未动，`make eval-axes` 20/20（§4.43）；prompt injection 标注：**决策 107 关掉**——`core/manager/biz/aiops/promptguard` 每次渲染现抽 nonce、`Parse` 只认 id 匹配的闭合标签，`core/manager/biz/aiops/tools/untrusted_sources.go` 用 `ToolName*` 常量列出「输出是外来文本」的闭集并由 `MarkUntrustedOutput` 一处适配，四处接线（含 `main.go` 后挂的 `host_bash`/`cloud_bash`）；**`buildInvestigatedPrompt` 的三个块与 system 里的 `Instruction()` 同源**，`make promptguard-check` 是闸门（§4.45）。**决策 125 把这一格从 92% 记到 83.3%**（5.5/6 → 5.0/6）：插件审核流水线那条从「闭」改成三分之二——manifest 校验、签名、灰度发布三样都在，**但宿主强制的那一账没记**。核实依据是 `core/ports/audit.go` 13 个 `Action` 常量里 6 个零引用，其中 `ActionPluginInstall` / `ActionPluginLoad` 对应的整条插件安装路径（`service/plugin`、`core/edge/biz/plugin.go`、`cmd/opskeeper-edge/plugininstall.go`）**一条审计记录都不写**，`agentteams/plugin_sync.go:68` 的 `LoggingSyncClient.InstallPlugin` 明确写着「记一条日志然后返回 nil」；而插件清单里声明的 `audit: {emits: true}` **没有任何消费者**。这是计划 §3.3 里一条非协商要求（审计由宿主写、插件只能声明）从未被兑现，而台账此前没有为它记过分（§4.63.8） |
+| 2 生态与治理加固（P2） | **91.7%** | 工具注册表：**决策 104 关掉**——`core/manager/biz/aiops/toolregistry`（`Entry` 值类型、唯一适配点 `EntryFromToolInfo`、`Catalogue.Search` 相关性排序、`Filter` 按声明元数据查能力、`Fuse`/`RRFConstant` 混合检索接缝，18 条测试），`ToolSearch` 的 keyword 分支改为排序、`select:` 与响应形状未动（§4.42）；per-tool 配额：**决策 96 已关**（`sdk/manifest.go` 校验 `spec.tools[].limits`，强制点 `core/edge/toolbroker`），本行此前已过期；MCP 兼容层：**决策 108 关掉**——`/api/v1/mcp` 现在是一个真正的 MCP 端点：版本头由必填改为可选（缺失＝普通 MCP 客户端）、`initialize` 按客户端要的版本作答、`ping` 与 `notifications/*` 按规范应答、`tools/list` 可分页，工具面改在接线末尾组装（`cloud_bash`/`send_im_message`/`serve_page` 此前对 MCP 不可见），`docs/mcp-surface.md` 是对外契约；`make mcp-surface-check` 让本仓库自己的 `pkg/mcpclient` 用真 HTTP 打真 handler（§4.46）；成本结晶：**决策 106 落掉机制**——`core/manager/biz/aiops/crystallize` 按连续第一次就通过的 streak 晋升、反证即退役，草稿用真实的 `pluginmanifest.Validate` 自检（53 条测试、`make crystallize-check`）；**平台仍不记录修复的 argv，生产端接线未做**（§4.44）；eval 三维化：**决策 105 关掉**——`core/harness/judge/diagnostic.go` 的 `DiagnosticAxes` 按 Localization × Identification × Reason 打分、`reason` 读轨迹面、`Overall` 未动，`make eval-axes` 20/20（§4.43）；prompt injection 标注：**决策 107 关掉**——`core/manager/biz/aiops/promptguard` 每次渲染现抽 nonce、`Parse` 只认 id 匹配的闭合标签，`core/manager/biz/aiops/tools/untrusted_sources.go` 用 `ToolName*` 常量列出「输出是外来文本」的闭集并由 `MarkUntrustedOutput` 一处适配，四处接线（含 `main.go` 后挂的 `host_bash`/`cloud_bash`）；**`buildInvestigatedPrompt` 的三个块与 system 里的 `Instruction()` 同源**，`make promptguard-check` 是闸门（§4.45）。**决策 125 查过这一格并维持 92%（5.5/6）**：本轮一度记为 83.3%，理由是「插件安装不记账」，而那个理由是错的——发布一侧（`plugin_release_start/advance/halt/rollback`）在 manager 侧一直有审计，成功与失败都记。**真正缺的是节点平面到链的通路**，而它不落在阶段 2 的六条里，所以本轮不因它动这一格（§4.63.8）。**决策 126 已经把那条通路关掉了**（`agent.audit.entries` 全线贯通：策略闸门的每一次放行/拦截/审批、插件安装器的每一次安装与卸载，链上现在各有一条），**并且仍然不动这一格**——四阶段台账里没有这一条，给某一格硬拔高比不改更糟（§4.64.8） |
 | 3 控制面瘦身与联邦（P3） | **79.3%** | **第一条已关（决策 109/110）**：`iam → manager` 的三条审计边从 `exceptions` 台账与 `iam_server.mayDependOn` 双双删除，行的形状下沉到 `core/manager/pkg/audit`——无 usecase / repo / 链头 / HMAC，`biz/audit` 仍是唯一写入咽喉（§4.47）；**决策 110 把同一缺陷在另外 5 个域关掉**（alert / knowledge / setting / plugin / mcp 此前都为了「给一行记录命名」而 import 写入咽喉），并把「谁可以持有咽喉」变成一张带理由的表，由 `make audit-port-check`（13 条）守住，顺带补上 MCP 五处内联字面量。**第二条已开工但未完成**：按 import 图量出 manager 是 **55 个域散在 4–5 个 layer 树**里、**55 条需声明的跨域边**、**7 对互为依赖的环**（aiops↔alert / aiops↔hitl / aiops↔loop / alert↔demo / chatdiagnose↔loop / device↔edge / loop↔report）——环是「不能独立演进」的最强证据，而 layer 粒度的 arch-lint **看不见它们**；另有 **10 个无人引用的包 / 5,544 行**，实测全是方案自己没接线的半成品（crystallize 897 / critic 386 / proposal 383 / decorator 509），**删死代码这条捷径在包粒度上不存在**。**决策 111 把这份盘点变成闸门**：`scripts/domaincheck` + `make domain-check`——域按层树归并（`biz/alert` 与 `model/alert` 同属 `alert`），50 条跨域边逐条带理由，7 对环必须写明「怎样才切得断」，**表项过期本身也是红**（过期理由比没有理由更糟），检查器自身 13 条夹具测试（§4.49）。**决策 112 切掉了 7 对里的第一对**：实测 `device → edge` 在生产代码里只有一条 import（设备删除里的级联），接缝开在事务中间、由装配根注入 `EdgeIdentityRevoker` 后 **49 条边 / 6 对环**；顺带发现表里那条边的**理由本身是错的**（device 记录里并没有 edge 词汇），一并删掉（§4.50）。**决策 113 切掉了第二对**：`data/alert/store` 曾在自己的事务里推进 `demo_scenario_runs`（生产持久化层知道 demo 存在），把「这条告警是不是某条已开故事」这个问题端口化、由 demo 侧回答后 **48 条边 / 5 对环**；同一条边的理由在表里也指错了方向，一并删掉（§4.51）。**决策 114 切掉了第三对**：`biz/loop` 里那个「本包不 import chatdiagnose」的端口，签名却写着 `*chatdiagnosemodel.IncidentPattern`——接口在消费方声明但类型由生产方词汇决定，跨域 import 只是被藏进签名；改成「postmortem 落库了」并把指纹推导搬回知识库拥有者后 **47 条边 / 4 对环**，顺带补上这条路径此前**完全缺失的测试**，并暴露两个真缺陷（接线处的 nil 指针、`tenant_id` 恒为 `""`）（§4.52）。**决策 115 切掉了第四对**：`biz/loop/gitsink` 的包注释写着「挪进子包 → 包图无环 ✅」，而域是按路径归并的，包图无环不等于域图无环；adapter 改为本地声明 `Sink` 接口后 `main.go` 一字未改，**46 条边 / 3 对环**（§4.53）。**决策 116 切掉了第五对，而且它与前四对不同类**：`aiops ↔ hitl` 的两条边里，`hitl → aiops` **从来就不是真的**——它由一个零生产调用方、且设计文档已删除的迁移窗口（`MigrateLegacy` / `DualWriteRepo`，569 行）撑着，删掉后 **44 条边 / 2 对环**；检查器随即抓出 `hitl → approval` 也是同一个文件撑着的假边（理由「两域共享一个模型」并不成立），一并删除（§4.54）。**决策 117 切掉了第六对，而且它的两半是两种病**：`biz/loop` 渲染提示词要围栏，于是 import 了 agent 的 `promptguard`——而那个零依赖安全原语被三个域共用，正确位置是共享底座（照决策 109 的形状下沉到 `pkg/promptguard`，并补上 `pkg/audit` 那条「用 `go/ast` 断言够不到 BC」的测试，断言收紧到只许标准库）；另一半 `mcp_basetool.go` 把 loop 的 MCP 工具包装成 `basetool.BaseTool`，而**适配器由它的输出定义**，于是搬进 `biz/aiops/tools`（方向从 `loop → aiops` 变成表里本来就有的 `aiops → loop`），**43 条边 / 1 对环**；顺带修好一个已经红了的 `make promptguard-check`（它还在跑旧路径，是闸门第一次在包被移动时发挥作用），以及一处点名了不存在包名的错理由（`biz/aiops/loop` 并不存在，第五例）（§4.55）。**决策 118 切掉了第七对，也是最后一对，域图归零**：`aiops ↔ alert` 的贵的一侧是 14 条 `aiops → alert`，而 `alert → aiops` 只有 1 个文件里的 2 条——`biz/alert/investigator` 拿 `chatruntime.SpawnRequest/Worker` 和 `model/aiops.Message` 换来「告警触发一次自动根因分析」。两个都是 struct，**本地重声明不成立**（决策 114 的同一性墙），所以本轮拆成全标量的 `InvestigationRequest` / `InvestigationOutcome`（方法名也从对方的 `SpawnWorker` 改成自己的 `RunInvestigation`），翻译放在装配根；`MessageReader` 只带三个字段、返回 `[]T` 而非 `[]*T`，于是两处 nil 检查消失；那条**零测试覆盖**的 `worker == nil` 防御分支被值返回消除，运行时仍可能的 `(nil,nil)` 守卫搬到唯一能造出它的那一侧并从静默成功变成 error。**42 条边 / 0 对环**，七轮共切 8 条声明边 / 13 条生产 import（§4.56）。§4.53.4 记的「枢纽」判断就此收口：`aiops` 仍是依赖最多的域（读告警、读 HITL、驱动 loop），但**依赖多不是环，被依赖才是问题**。**决策 119 不改一行代码、也不动百分比，只把「能减的行数」变成一个数**：新增 `scripts/deadcode` + `make deadcode-report`（12 条夹具测试），按**文件粒度**报出生产代码里不可达的符号——这是 `domaincheck`（包粒度）看不见、而决策 116 亲手挖到过 569 行的那一类。读数 **486 个符号 / 整文件只有 4 个 72 行**。工具在 `2140df9` 的 worktree 上被要求报出决策 116 删掉的那两个文件，**两档分类都判对**（`MigrateLegacy:test-only`、`NewDualWriteRepo:dead`）。工具**故意不做成闸门**并把看不见的六类路径（反射 / go:linkname / cgo / struct tag / 嵌入方法提升 / 构建标签）打印在每次输出末尾——不可靠的闸门会训练出「trust me」注释（§4.57）。**第二条仍未完成**：manager **1180 个 Go 文件 / 287,155 行**未搬（口径 `find core/manager -name '*.go'`，见 §4.54.6；决策 123 时的数，此前沿用的 1135 / 282,605 停在决策 119）；10 个无人引用的包 / 5,544 行全是方案自己没接线的半成品，删死代码这条捷径在包粒度上不存在（决策 116 顺带证明了**文件粒度**上存在，已记为下一轮候选）；`manager → iam_model`（IM bridge）按原计划保留。**第三条从零到约五分之四（决策 123）**：此前记的是「无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档）」，现在五处落地：`core/floor/federation`（规则与状态机）、`core/manager/biz/federation`（注册表与发布器）、`core/manager/server/federation`（控制面路由）、`core/manager/service/federationchild`（子集群侧代理与原子策略存储，决策 125 从 `core/edge/federation` 搬来）、`core/manager/service/federationlink`（根侧绑定表与两个方向的调用）。签名通道复用 `pluginmanifest`，不另造格式。**决策 124 把联邦那条从 0.80 记到 0.90**：`main` 侧的挂载与 `Forget` 的下线回调已接上（§4.61.9）之后，`PushPolicy` 仍是**零生产调用方**——发布只签名记账，从不推送。补上的两件事是**投递通道**（`Store.Receive` 验摘要在解包之前、`Distributor` 按 cluster+version 命名归档、线契约加一个与 `StagedPath` 互斥的 `Source`）与**根侧接线**（`Publish` 发版本后投递，投递结果作为 `Delivery` 与 error 分开报；`Redeliver` 复用首次投递的字节而不是重打包，因为摘要是子集群在解包之前比对的）。**授权模型不需要新造**：签名本身就是授权，子集群用自己 trust store 验根的 ed25519，URL 只是传输。这两条**零新增跨域依赖**。**剩下的是子集群进程本身**——一个跑在子集群 manager 里的 `federationchild.Agent`（代码与测试全部就位，缺的是装配进子集群启动路径），以及给 `Source.URL` 一个跨网络可用的托管来源（本刀交付 `file://`，够共享挂载的部署）；再加上 `Registry` 全在内存这件事——持久化 `Ledger` 端口在，实现不在（§4.61 已记，决策 124 未动）（§4.62）。**决策 125 把这条从 0.90 记到 0.94，并同时改掉了一个比「缺装配」更靠后的缺口**：实测 `live` 符号链接**没有任何生产代码读它**（`grep LiveLinkName\|\.Switch(` 只命中 `receiver.go:332` 的写入点），也就是**通道 100% 而 enforcement 0%**。补上的是 `core/floor/federation/gate.go` 的 `LiveGate`（只答「在不在策略里」，不重做 `Review`——它会拿 `min_edge_version` 比调用方的版本，而 manager 声明不了节点的版本）接在 `service/plugin` 的 `NodeFleet.Install` 上（**不是** `fetch_package`，那条是边缘二进制升级），加上 `cmd/opskeeper/federation_child.go` 的子集群装配（启动不等根、hello 每次重连重发、策略上限复用边缘那三个变量）。**`make module-check` 顺带抓到一个架构错**：那个包里没有一行边缘代理代码，却在 `core/edge` 模块里被 manager 的装配根 import——已搬到 `core/manager/service/federationchild`，域图 57 → 58 域 / 43 边 / 0 环（§4.63） |
 
 加权合计 ≈ **76.2%**（**决策 122 记回**：决策 121 把阶段 1 从 100% 调回 95%——
@@ -6842,25 +7039,34 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 决策 124 又放大了一次。诚实的读法是：**阶段 3 的瓶颈已经不是联邦，是 manager 拆分**
 （§4.62.11）。
 
-**决策 125 把加权从 83.7% 记到 81.9%——本轮净加功能，账却是往下走的**
-（(65 + 100 + 83.3 + 79.3) / 4，§4.63.9）。两条分数一升一降：
+**决策 125 把加权从 83.7% 记到 84.0%**（(65 + 100 + 91.7 + 79.3) / 4，§4.63.9）。
+
+**决策 126 记 84.0% 不动**：节点平面进链（计划 §3.3 那张表的第一行）在四阶段台账
+里没有对应条目，因此关掉它也不改任何一格；它真正的价值是那条计划条目第一次有了
+可执行的兑现路径（§4.64）。同时修掉 `core/edge/spool` 的一个真缺陷——断电撕开的
+半写行会连带吃掉重启后写入的第一行，两个 spool 都有这个暴露面（§4.64.4）。
+只有阶段 3 动了：
 
 - **阶段 3 从 78.0% 到 79.3%**，联邦那条 0.90 → 0.94。子集群进程装配完成，
   更要紧的是**策略终于有了消费者**：上一轮量到 `live` 符号链接**没有任何生产代码
   读它**（`grep` 只有一个 `switcher.Switch` 的写入点），也就是说通道已经 100% 而
   enforcement 是 0%。本轮补的 `LiveGate` + `NodeFleet` 闸门把这条链接接上了
   插件下发路径。剩下 0.06 是 `Registry` 的持久化 `Ledger` 与跨网络的 `Source.URL`。
-- **阶段 2 从 91.7% 降到 83.3%**，审核流水线那条从「闭」改成三分之二。
-  核实依据是 §4.63.8：整条插件安装路径（`service/plugin`、`core/edge/biz/plugin.go`、
-  `cmd/opskeeper-edge/plugininstall.go`）**一条审计记录都不写**，
-  `ports.AuditPluginInstall` / `ActionPluginLoad` 两个常量零引用，而插件清单里
-  声明的 `audit: {emits: true}` **没有任何消费者**。这是计划 §3.3 里一条非协商要求
-  从未被兑现，而台账此前没有为它记过分。
 
-**加权下降而工作量上升，是这张表第一次出现这种情况，而它出现的条件恰恰是台账
-开始核对某一条而不是继续记账。** 上一轮那个 83.7% 里有 8.4 个点建立在一个从未核对
-过的假设上。下一刀仍在 manager 拆分（0.56），**但 §4.63.8 那条更便宜也更该先做**：
-它不需要搬一行代码。
+**同一刀里还查出两件事，都不改分数，但都要记着：**
+
+1. **本节初稿说的「插件安装不记账」是错的**（§4.63.8）。发布那一侧
+   （`plugin_release_start/advance/halt/rollback`）在 manager 侧一直有审计，
+   成功与失败都记。两轮内第二次犯「用符号级 grep 下系统级结论」的错，
+   §4.63.9 已把分数改回来。
+2. **真正缺的是节点平面到链的通路**：`cmd/opskeeper-edge/agent.go:444` 的
+   `policygate.New` 不传 `Audit`，而 `record` 见到 nil 直接 return。于是
+   **节点上每一次工具调用、每一次插件安装与加载，链上一条都没有**；manager 记的
+   是「我发起了发布」，不是「节点装了什么、跑了什么」。这是计划 §3.3 那张表上
+   真的一条没兑现，而四个阶段里没有任何一条认领它。
+
+下一刀做第 2 条——它比 manager 拆分（0.56）更便宜、边界更清楚，而且覆盖的是
+一整片高权限动作的可见性。
 
 决策 123 记的 82.9% 对应阶段 3 的 74.7%（联邦那条从 0 到约五分之四）；
 决策 117 记的 75.7% 对应阶段 3 的 46%、已切 13 / 剩余 21；

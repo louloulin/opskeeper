@@ -27,11 +27,11 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
-	edgefed "github.com/vincent-wuhan/opskeeper/core/manager/service/federationchild"
 	floorfed "github.com/vincent-wuhan/opskeeper/core/floor/federation"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	fedbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/federation"
+	edgefed "github.com/vincent-wuhan/opskeeper/core/manager/service/federationchild"
 	managersvcfedlink "github.com/vincent-wuhan/opskeeper/core/manager/service/federationlink"
 )
 

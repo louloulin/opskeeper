@@ -20,6 +20,7 @@ const (
 	ActionAgentTurn       AuditAction = "agent_turn"
 	ActionModelCall       AuditAction = "model_call"
 	ActionPluginInstall   AuditAction = "plugin_installed"
+	ActionPluginRemove    AuditAction = "plugin_removed"
 	ActionPluginLoad      AuditAction = "plugin_loaded"
 	ActionProposalCreate  AuditAction = "proposal_created"
 	ActionRecoveryApply   AuditAction = "recovery_applied"

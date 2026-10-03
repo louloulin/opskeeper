@@ -1439,6 +1439,11 @@ func main() {
 		// records what the fleet did during the outage. The node's own
 		// spool is its account; this is what makes it evidence.
 		AutonomyReplay: managersvcfb.NewAutonomyReplay(auditUC),
+		// 决策 126：节点自己写下的账本行进链的最后一跳。与上面那条同源
+		// 不同行——自治行是一次自愈决策的十三个字段，而这里的行是节点上
+		// 三个不同组件（策略闸门、PiG runstate、插件安装器）各自认为值得
+		// 记录的东西，所以它需要自己的转换与自己的形状规则。
+		NodeLedger: managersvcfb.NewNodeLedger(auditUC),
 		// ModelEndpoint is how a node learns which model endpoint to use
 		// without being hand-provisioned. Non-secret: the node presents
 		// its own tunnel credential pair to the gateway, so this answer

@@ -164,6 +164,20 @@ const (
 	ActionMCPToolCall      = auditport.ActionMCPToolCall
 	ActionMCPToolAuthorize = auditport.ActionMCPToolAuthorize
 
+	ActionNodeToolCall        = auditport.ActionNodeToolCall
+	ActionNodeToolBlocked     = auditport.ActionNodeToolBlocked
+	ActionNodeToolFailed      = auditport.ActionNodeToolFailed
+	ActionNodeApprovalRequest = auditport.ActionNodeApprovalRequest
+	ActionNodeApprovalGrant   = auditport.ActionNodeApprovalGrant
+	ActionNodeApprovalDeny    = auditport.ActionNodeApprovalDeny
+	ActionNodeAgentTurn       = auditport.ActionNodeAgentTurn
+	ActionNodeModelCall       = auditport.ActionNodeModelCall
+	ActionNodePluginInstall   = auditport.ActionNodePluginInstall
+	ActionNodePluginRemove    = auditport.ActionNodePluginRemove
+	ActionNodePluginLoad      = auditport.ActionNodePluginLoad
+	ActionNodeProposalCreate  = auditport.ActionNodeProposalCreate
+	ActionNodeRecoveryApply   = auditport.ActionNodeRecoveryApply
+
 	ResourceUser     = auditport.ResourceUser
 	ResourceDevice   = auditport.ResourceDevice
 	ResourceIncident = auditport.ResourceIncident

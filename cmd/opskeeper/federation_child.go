@@ -42,11 +42,11 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
-	edgefed "github.com/vincent-wuhan/opskeeper/core/manager/service/federationchild"
 	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 	floorfed "github.com/vincent-wuhan/opskeeper/core/floor/federation"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	edgefed "github.com/vincent-wuhan/opskeeper/core/manager/service/federationchild"
 	managersvcplugin "github.com/vincent-wuhan/opskeeper/core/manager/service/plugin"
 )
 

@@ -46,6 +46,7 @@ package spool
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -256,6 +257,11 @@ func (s *Spool) open() error {
 		return fmt.Errorf("spool: stat %s: %w", path, err)
 	}
 	s.size = info.Size()
+	if err := s.trimPartialTail(f, info.Size()); err != nil {
+		f.Close()
+		s.f = nil
+		return err
+	}
 	// The sequence has to survive a restart, or every reconnect would start
 	// numbering from one and the center's dedupe would treat a redelivery
 	// of last week's rows as a week of new ones.
@@ -270,6 +276,70 @@ func (s *Spool) open() error {
 			s.seq = r.Seq
 		}
 	}
+	return nil
+}
+
+// trimPartialTail removes the tail of a write that was cut off mid-line.
+//
+// It runs once, at open, and it is here because of what readLocked already
+// does. A half-written line fails to parse, so readLocked skips it and the
+// rows around it are still readable — that is correct, and it is also not
+// enough. The file is opened O_APPEND, so the next row lands *after* the
+// torn bytes, producing one line that is "half of the last row plus all of
+// the next one". The tear was already unreadable; now a row written after
+// the restart is unreadable too, and it was never bad on its own.
+//
+// Truncating to the last newline discards exactly the bytes that could never
+// parse and nothing else. The alternative — leaving them — is a spool that
+// loses one good row for every power cut, on the one class of data where
+// that is the failure that matters.
+func (s *Spool) trimPartialTail(f *os.File, size int64) error {
+	if size == 0 {
+		return nil
+	}
+	if _, err := f.Seek(-1, io.SeekEnd); err != nil {
+		return fmt.Errorf("spool: seek to the end of %s: %w", s.path, err)
+	}
+	var last [1]byte
+	if _, err := io.ReadFull(f, last[:]); err != nil {
+		return fmt.Errorf("spool: read the end of %s: %w", s.path, err)
+	}
+	if last[0] == '\n' {
+		return nil
+	}
+	// Walk back in blocks rather than a byte at a time; a spool left with a
+	// long torn tail would otherwise be reopened slowly, on every restart,
+	// for the rest of its life.
+	const block = 64 << 10
+	buf := make([]byte, block)
+	at := size
+	for at > 0 {
+		n := int64(block)
+		if at < n {
+			n = at
+		}
+		at -= n
+		if _, err := f.Seek(at, io.SeekStart); err != nil {
+			return fmt.Errorf("spool: rewind %s: %w", s.path, err)
+		}
+		if _, err := io.ReadFull(f, buf[:n]); err != nil {
+			return fmt.Errorf("spool: read %s: %w", s.path, err)
+		}
+		if i := bytes.LastIndexByte(buf[:n], '\n'); i >= 0 {
+			cut := at + int64(i) + 1
+			if err := f.Truncate(cut); err != nil {
+				return fmt.Errorf("spool: truncate %s: %w", s.path, err)
+			}
+			s.size = cut
+			return nil
+		}
+	}
+	// No newline at all: the whole file is one unterminated line, so there
+	// is nothing in it worth keeping.
+	if err := f.Truncate(0); err != nil {
+		return fmt.Errorf("spool: truncate %s: %w", s.path, err)
+	}
+	s.size = 0
 	return nil
 }
 

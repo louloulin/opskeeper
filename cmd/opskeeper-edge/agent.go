@@ -328,6 +328,40 @@ func startNodeAgent(
 		}
 	}
 
+	// The node's own ledger (决策 126), built here for the same reason
+	// autonomy is: it has to exist before the gate, because the gate is
+	// its first writer and a gate constructed without a sink is a gate
+	// that records nothing — which is the state this node was in until
+	// this line existed.
+	audit, err := buildAuditLedger(client, agent, cfg.Cwd, log)
+	if err != nil {
+		return nil, nil, fmt.Errorf("edge agent audit ledger: %w", err)
+	}
+	log.Info("node audit ledger health", slog.Any("health", audit.Health()))
+	// The same sink for the Agent's own writers — the plugin installer
+	// today. It is a setter and not a constructor argument because the
+	// Agent was built before this file ran, and rebuilding it to hand it
+	// a field would mean duplicating the collector, the config and the
+	// link state it owns.
+	agent.SetAuditSink(audit.sink)
+	go func() {
+		if err := audit.pump.Run(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("node audit pump stopped early", slog.Any("err", err))
+		}
+	}()
+	{
+		priorStop := stop
+		stop = func() {
+			// Close before the gate socket goes away: a node shutting down
+			// mid-turn still has rows in flight, and the file they are in
+			// has to be flushed for the process that comes after this one.
+			if err := audit.sink.Close(); err != nil {
+				log.Warn("node audit ledger did not close cleanly", slog.Any("err", err))
+			}
+			priorStop()
+		}
+	}
+
 	// The gate, the socket, the bridge and the supervisor reference each
 	// other, and the cycle is broken in one place rather than spread across
 	// the file: the supervisor is built first with a factory that reads the
@@ -445,6 +479,12 @@ func startNodeAgent(
 		Policy:  registry.Policy(roleCeiling("")),
 		ByActor: func(actor string) policygate.Policy { return registry.Policy(roleCeiling(actor)) },
 		Emit:    bridge.EmitApproval,
+		// The gate records every call it allows, blocks and defers. It
+		// was handed nothing before decision 126, and every row it wrote
+		// went to a nil check at the top of record() — the check is still
+		// there, because a gate with no sink must not panic, but on this
+		// node it is no longer the path taken.
+		Audit: audit.sink,
 	})
 	if err != nil {
 		stop()

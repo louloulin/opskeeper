@@ -139,6 +139,85 @@ func TestAnInterruptedWriteDoesNotCostTheRowsAroundIt(t *testing.T) {
 	}
 }
 
+// A tear is only harmless while nothing is appended after it. The file is
+// opened O_APPEND, so without a repair at open the next row is glued onto
+// the half-written bytes and a good row written *after* the restart is lost
+// with them — the failure the previous test cannot see, because it never
+// reopens.
+func TestATornTailIsTruncatedSoTheNextRowIsNotWrittenOntoIt(t *testing.T) {
+	s, _ := newSpool(t, Options{})
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if err := s.Record(ctx, "event", map[string]int{"i": i}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	f, err := os.OpenFile(s.Path(), os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := f.WriteString(`{"c":"event","at":"2026-03-01T12:00:0`); err != nil {
+		t.Fatalf("seed partial: %v", err)
+	}
+	f.Close()
+
+	s2, err := Open(Options{Path: s.Path(), Now: time.Now})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	if err := s2.Record(ctx, "event", map[string]int{"i": 2}); err != nil {
+		t.Fatalf("Record after a torn tail: %v", err)
+	}
+	rows, err := s2.Peek(0)
+	if err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("read %d rows, want 3: a row written after a power cut is not collateral damage", len(rows))
+	}
+	if !strings.Contains(string(rows[2].Payload), `"i":2`) {
+		t.Errorf("the last row is %s, want the one just written", rows[2].Payload)
+	}
+}
+
+// A file that is one unterminated line has nothing in it worth keeping, and
+// the repair must say so rather than leaving a row that can never parse.
+func TestASpoolThatIsNothingButATornLineIsEmptiedRatherThanKept(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "spool", "rows.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"c":"event","at":`), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	s, err := Open(Options{Path: path})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	rows, err := s.Peek(0)
+	if err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("a spool of one torn line reports %d rows", len(rows))
+	}
+	if err := s.Record(context.Background(), "event", map[string]int{"i": 1}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	rows, err = s.Peek(0)
+	if err != nil {
+		t.Fatalf("Peek after Record: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("read %d rows after a clean restart, want 1", len(rows))
+	}
+}
+
 // TestARowWrittenWhileOfflineIsStillThereWhenTheLinkReturns is 断连写入 +
 // 恢复回放, which is the case the whole package exists for. The writer
 // never learns whether anything is listening, because the writer is a

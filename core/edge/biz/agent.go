@@ -198,6 +198,20 @@ type Agent struct {
 	// able to see. Guarded by mu for the same reason pluginHealthFn is.
 	pluginInstaller ports.PluginInstaller
 
+	// audit is where this node's own rows go before the center has them
+	// (决策 126). Optional and wired post-construction (SetAuditSink) for
+	// the same reason as pluginHealthFn: the ledger is built in the
+	// composition root, after the Agent, because it needs the tunnel client
+	// that the Agent is itself built from.
+	//
+	// A node with no sink is not a node with nothing to say — the gate is
+	// the other writer and it is always there — so nil is tolerated here
+	// and means "this build recorded nothing", which the composition root
+	// is expected to make impossible rather than this package to enforce.
+	// Guarded by mu because the plugin handlers run on the tunnel's read
+	// goroutine while the setter runs on the boot goroutine.
+	audit ports.AuditSink
+
 	// link tracks whether the control plane is answering.
 	//
 	// The heartbeat is the witness, and nothing else is: a TCP socket that
@@ -320,6 +334,26 @@ func (a *Agent) MetricValue(name string) (float64, bool) { return a.latest.looku
 // SetPluginHealthFn wires the plugin-health provider used by the heartbeat
 // loop. Safe to call after Run has started — the heartbeat goroutine reads
 // the field under mu. nil fn disables plugin reporting (heartbeat omits it).
+// SetAuditSink wires the node's own ledger.
+//
+// It exists because the ledger is built after this Agent — it needs the
+// tunnel client this Agent was constructed from — and the plugin handlers
+// that write to it are registered against this Agent. A setter is the
+// honest shape for that, exactly as it is for the plugin health callback.
+func (a *Agent) SetAuditSink(sink ports.AuditSink) {
+	a.mu.Lock()
+	a.audit = sink
+	a.mu.Unlock()
+}
+
+// auditSink reads the sink under the lock, so a handler that records a
+// plugin install and a boot that is still wiring the ledger cannot race.
+func (a *Agent) auditSink() ports.AuditSink {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.audit
+}
+
 func (a *Agent) SetPluginHealthFn(fn func() []tunnel.PluginHealthWire) {
 	a.mu.Lock()
 	a.pluginHealthFn = fn

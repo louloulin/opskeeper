@@ -90,6 +90,16 @@ type Wiring struct {
 	// pump keeps the rows on disk, which loses nothing and is visible on
 	// the node's health line.
 	AutonomyReplay AutonomyReplayRecorder
+	// NodeLedger receives the rows a node wrote about its own tool calls,
+	// its agent turns and its plugin installs. Unlike AutonomyReplay this
+	// is not optional in practice: every node that runs a gated tool has
+	// something to say, and a fleet whose nodes all record nothing is the
+	// state decision 126 was written about.
+	//
+	// When it is nil the handler does not install, and a node's pump keeps
+	// its rows and counts the method as unanswered — visible on the
+	// health line rather than silent.
+	NodeLedger NodeLedgerRecorder
 	// ModelEndpoint names the model endpoint a node's agent should use. It
 	// is the manager's half of the plan's 0.2: the destination and the
 	// model slug are named here rather than written into every host's env
@@ -165,6 +175,15 @@ type ModelEndpointResolver interface {
 //   - accepted: rows now in the chain for good. The node acks these.
 type AutonomyReplayRecorder interface {
 	RecordAutonomyReplay(ctx context.Context, edgeID uint64, rows []tunnel.AutonomyAuditRow) (accepted, rejected int, err error)
+}
+
+// NodeLedgerRecorder appends a node's own ledger rows to the chain. Same
+// three-answer contract as AutonomyReplayRecorder, and for the same reason:
+// both are writes to one ordered chain with no dedupe key, so "took none of
+// it" and "refused all of it" must stay distinguishable all the way to the
+// node, which is the only place that can act on the difference.
+type NodeLedgerRecorder interface {
+	RecordNodeEntries(ctx context.Context, edgeID uint64, rows []tunnel.AuditEntry) (accepted, rejected int, err error)
 }
 
 // AgentToolRunner runs one control-plane tool for a node's agent.
@@ -766,6 +785,73 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 			})
 		}); err != nil {
 			return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodAgentAuditReplay, err)
+		}
+	}
+
+	// agent.audit.entries: a node's own ledger rows, on their way into the
+	// chain (决策 126).
+	//
+	// This is the last hop for every tool call, block, agent turn and
+	// plugin install that happens on a node. Until it existed the manager
+	// recorded what the *console* did and nothing about what the fleet did,
+	// which for an agent fleet is the half that matters: the console
+	// approved a release, the node then ran whatever it liked with it.
+	//
+	// The identity rule is agent.audit.replay's, and it is not optional
+	// here: the rows are the node's testimony about a host, and a node
+	// that could file another host's testimony would make the chain say
+	// something false. The transport's binding wins; the body's EdgeID is
+	// only consulted when nothing has bound the transport yet, which is
+	// the first-connect race the metrics path already handles.
+	//
+	// A body this manager cannot parse answers with a refusal count rather
+	// than an error, so one malformed batch does not wedge a backlog that
+	// is otherwise fine — the node counts those rows and passes them, and
+	// the count is on its health line.
+	if w.NodeLedger != nil {
+		if err := c.Register(ctx, tunnel.MethodAgentAuditEntries, func(rpcCtx context.Context, edgeID uint64, body []byte) ([]byte, error) {
+			var in tunnel.AuditEntriesRequest
+			if err := json.Unmarshal(body, &in); err != nil {
+				log.Warn("frontierbound: agent.audit.entries decode failed",
+					slog.Uint64("edge_id", edgeID), slog.Any("err", err))
+				return json.Marshal(tunnel.AuditEntriesResponse{
+					Accepted: 0, Rejected: 0, Reason: "malformed node ledger body",
+				})
+			}
+			canonicalEdgeID := c.canonicalizeEdgeID(edgeID)
+			switch {
+			case canonicalEdgeID == 0 && in.EdgeID != 0:
+				canonicalEdgeID = in.EdgeID
+				c.bindEdgeTransport(edgeID, canonicalEdgeID)
+			case canonicalEdgeID != 0 && in.EdgeID != 0 && in.EdgeID != canonicalEdgeID:
+				log.Warn("frontierbound: a node's ledger named an edge the transport did not authenticate as; using the transport's binding",
+					slog.Uint64("edge_id", canonicalEdgeID),
+					slog.Uint64("transport_edge_id", edgeID),
+					slog.Uint64("claimed_edge_id", in.EdgeID))
+			}
+			if canonicalEdgeID == 0 {
+				// Not registered yet. Accepted=0 with no error is the
+				// signal the node keeps its batch, which is the same
+				// handshake the metrics and autonomy paths use.
+				log.Debug("frontierbound: agent.audit.entries deferred (no canonical edge yet)",
+					slog.Uint64("transport_edge_id", edgeID),
+					slog.Int("rows", len(in.Entries)))
+				return json.Marshal(tunnel.AuditEntriesResponse{Accepted: 0})
+			}
+			accepted, rejected, err := w.NodeLedger.RecordNodeEntries(rpcCtx, canonicalEdgeID, in.Entries)
+			if err != nil {
+				log.Warn("frontierbound: a node's ledger rows failed; the node will retry",
+					slog.Uint64("edge_id", canonicalEdgeID),
+					slog.Int("rows", len(in.Entries)),
+					slog.Any("err", err))
+				return nil, fmt.Errorf("agent.audit.entries: %w", err)
+			}
+			return json.Marshal(tunnel.AuditEntriesResponse{
+				Accepted: accepted,
+				Rejected: rejected,
+			})
+		}); err != nil {
+			return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodAgentAuditEntries, err)
 		}
 	}
 
