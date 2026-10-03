@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -57,35 +58,53 @@ type SandboxConfig struct {
 	AllowedUnits []string
 
 	// Mocked = true → the handler pretends success without shelling
-	// out. = false → error "real systemctl not yet implemented" so a
-	// misconfigured edge can't accidentally restart in PR-7.
+	// out. = false → the handler really restarts the unit.
+	//
+	// The default stays true: an edge that restarts services because
+	// nobody read a release note is a worse failure than an edge that
+	// reports success without acting, so the operator opts in. What
+	// changed is that opting in now does something.
 	Mocked bool
+
+	// SystemctlPath is the binary the real path executes. It is a
+	// configuration value and not a constant only so a test can point it
+	// at a script; on a node it is "systemctl".
+	//
+	// env: OPSKEEPER_EDGE_RESTART_SERVICE_SYSTEMCTL
+	SystemctlPath string
 
 	// allowed is the precomputed lookup set. Lazily filled by ensure().
 	once    sync.Once
 	allowed map[string]struct{}
 }
 
-// DefaultSandboxConfig returns the production-default config. The unit
-// list mirrors the SKILL.md `[能力: restart_service]` body block:
-// nginx / redis / prometheus / loki / tempo / grafana / mysql / opskeeper.
-// Mocked = true while the real systemctl path is still TODO (PR-7
-// stub posture). The allow-list is intentionally narrow — the worst
-// blast radius on a single-tenant dev box is restarting one of these
-// services, which is recoverable.
+// DefaultSandboxConfig returns the production-default config: the shipped
+// allow-list, the mock posture, and the platform's systemctl.
 func DefaultSandboxConfig() *SandboxConfig {
 	return &SandboxConfig{
-		AllowedUnits: []string{
-			"nginx",
-			"redis",
-			"prometheus",
-			"loki",
-			"tempo",
-			"grafana",
-			"mysql",
-			"opskeeper",
-		},
-		Mocked: true,
+		AllowedUnits:  DefaultAllowedUnits(),
+		Mocked:        true,
+		SystemctlPath: "systemctl",
+	}
+}
+
+// DefaultAllowedUnits is the unit list an edge ships with. It is a
+// function rather than a package variable so that a caller who copies the
+// default cannot mutate the default for everybody else by appending to it.
+//
+// The list mirrors the SKILL.md `[能力: restart_service]` body block.
+// It is intentionally narrow — the worst blast radius on a single-tenant
+// dev box is restarting one of these services, which is recoverable.
+func DefaultAllowedUnits() []string {
+	return []string{
+		"nginx",
+		"redis",
+		"prometheus",
+		"loki",
+		"tempo",
+		"grafana",
+		"mysql",
+		"opskeeper",
 	}
 }
 
@@ -146,16 +165,31 @@ func canonicalUnit(unit string) string {
 // error when the sandbox itself is unhealthy (empty allow-list); the
 // caller decides whether to treat it as fatal. log may be nil.
 func Register(client tunnel.Client, log *slog.Logger) error {
+	return RegisterWith(client, DefaultSandboxConfig(), log)
+}
+
+// RegisterWith is Register with the node's own configuration, which is how
+// an operator reaches the real restart path. It is a separate function
+// rather than a defaulted argument so the two callers cannot be confused
+// for one: the shipped default really is mocked, and a caller that means
+// to change that has to say so in a line of its own.
+func RegisterWith(client tunnel.Client, sb *SandboxConfig, log *slog.Logger) error {
 	if log == nil {
 		log = slog.Default()
 	}
-	sb := DefaultSandboxConfig()
+	if sb == nil {
+		return errors.New("restart_service: sandbox config is nil")
+	}
 	if err := sb.Validate(); err != nil {
 		return err
+	}
+	if sb.SystemctlPath == "" {
+		sb.SystemctlPath = "systemctl"
 	}
 	log.Info("restart_service: sandbox ready",
 		slog.Int("allowed_units", len(sb.AllowedUnits)),
 		slog.Bool("mocked", sb.Mocked),
+		slog.String("systemctl", sb.SystemctlPath),
 	)
 	client.RegisterHandler(tunnel.MethodRestartService, makeRestartHandler(sb, log))
 	return nil
@@ -195,25 +229,97 @@ func makeRestartHandler(sb *SandboxConfig, log *slog.Logger) tunnel.Handler {
 
 		startedAt := time.Now().UTC()
 
-		// PR-7 stub: never shell out. When sb.Mocked is true return a
-		// successful pretend-restart; when an operator flips Mocked to
-		// false (anticipating real systemctl) we error explicitly so
-		// a half-implemented config can't fire.
-		if !sb.Mocked {
-			return nil, fmt.Errorf("restart_service: real systemctl shell-out not implemented; set sandbox Mocked=true")
-		}
-		if err := cctx.Err(); err != nil {
-			return nil, fmt.Errorf("restart_service: %w", err)
+		// Mocked: pretend, and say so in the response. A mock that did
+		// not carry `mocked: true` back would be the most expensive lie
+		// in this file — the audit row would claim a service restarted.
+		if sb.Mocked {
+			if err := cctx.Err(); err != nil {
+				return nil, fmt.Errorf("restart_service: %w", err)
+			}
+			endedAt := time.Now().UTC()
+			resp := tunnel.RestartServiceResponse{
+				Service:   canonical,
+				Restarted: true,
+				Mocked:    true,
+				StartedAt: startedAt,
+				EndedAt:   endedAt,
+			}
+			return json.Marshal(resp)
 		}
 
+		// Real: execute the vector with no shell between it and the
+		// process. `canonical` has already been through canonicalUnit,
+		// which rejects anything containing a path separator or
+		// whitespace, so the only way the unit name reaches argv is as
+		// one argument — there is nothing for a metacharacter to break
+		// out of, and nothing here would expand one.
+		argv := []string{sb.SystemctlPath, "restart", canonical + ".service"}
+		cmd := exec.CommandContext(cctx, argv[0], argv[1:]...)
+		out, runErr := cmd.CombinedOutput()
 		endedAt := time.Now().UTC()
+
 		resp := tunnel.RestartServiceResponse{
 			Service:   canonical,
-			Restarted: true,
-			Mocked:    true,
+			Mocked:    false,
 			StartedAt: startedAt,
 			EndedAt:   endedAt,
+			Argv:      argv,
+		}
+		if runErr != nil {
+			// A failed restart is an answer, not a transport fault:
+			// returning an error here would throw away the argv and the
+			// reason, and the caller would learn only that "something
+			// went wrong" about a service it was told had restarted.
+			resp.Restarted = false
+			resp.Error = restartFailure(runErr, out)
+			body, marshalErr := json.Marshal(resp)
+			if marshalErr != nil {
+				return nil, fmt.Errorf("restart_service: marshal response: %w", marshalErr)
+			}
+			return body, nil
+		}
+		resp.Restarted = true
+		if detail := trimOutput(out); detail != "" {
+			log.Info("restart_service: systemctl output",
+				slog.String("service", canonical),
+				slog.String("output", detail),
+			)
 		}
 		return json.Marshal(resp)
 	}
+}
+
+// maxRestartOutput bounds what the node echoes back about a failed
+// restart. systemctl is chatty and the caller is an LLM reading a tool
+// result, so an unbounded failure message is a prompt-injection surface
+// with a service manager's error text in it.
+const maxRestartOutput = 2048
+
+// trimOutput renders a command's combined output for a log line, bounded.
+func trimOutput(out []byte) string {
+	s := strings.TrimSpace(string(out))
+	if len(s) > maxRestartOutput {
+		return s[:maxRestartOutput] + "… (truncated)"
+	}
+	return s
+}
+
+// restartFailure explains why the unit did not restart.
+//
+// The context case is called out separately because `signal: killed` on its
+// own says nothing about why: the answer is that this node's own 10s budget
+// ran out, and an operator reading a generic exec error would go looking for
+// a systemd problem that is not there.
+func restartFailure(runErr error, out []byte) string {
+	detail := trimOutput(out)
+	if errors.Is(runErr, context.DeadlineExceeded) {
+		if detail == "" {
+			return fmt.Sprintf("systemctl restart exceeded the node's %s budget", restartHandlerTimeout)
+		}
+		return fmt.Sprintf("systemctl restart exceeded the node's %s budget: %s", restartHandlerTimeout, detail)
+	}
+	if detail == "" {
+		return fmt.Sprintf("systemctl restart failed: %v", runErr)
+	}
+	return fmt.Sprintf("systemctl restart failed: %v: %s", runErr, detail)
 }

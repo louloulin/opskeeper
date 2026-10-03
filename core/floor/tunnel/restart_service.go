@@ -13,11 +13,12 @@ import "time"
 // reviewer worker, the worker reads SOP + edge state, and only on
 // "Decision: approve" do we ever marshal a wire request through here.
 //
-// First version intentionally keeps the wire shape thin (unit name,
-// optional reason for the audit row) and mirrors host_files.go: one
-// method constant + Request/Response struct pair. Real systemctl
-// shell-out is deferred — see core/edge/restart_service for
-// the mock + sandbox implementation.
+// The wire shape stays thin (unit name, optional reason for the audit
+// row) and mirrors host_files.go: one method constant + Request/Response
+// struct pair. The response carries the argv that actually ran, which is
+// the one thing a caller cannot reconstruct for itself: the unit name
+// says which service, the vector says what was executed, and only the
+// second one can seed a runbook — see core/manager/biz/aiops/crystallize.
 const (
 	// MethodRestartService restarts a systemd service on the edge. Only
 	// units whose short name appears in the edge sandbox allow-list are
@@ -59,9 +60,17 @@ type RestartServiceResponse struct {
 	Restarted bool `json:"restarted"`
 
 	// Mocked = true while the edge handler is the PR-7 stub. Once real
-	// systemctl shell-out lands this flips to false. Tests assert on
-	// this so the audit posture is unambiguous in both modes.
+	// systemctl runs (operator-enabled per node) this is false. Tests and
+	// audit rows assert on it so the posture is unambiguous in both modes:
+	// a green restart that changed nothing must never look like one that
+	// did.
 	Mocked bool `json:"mocked"`
+
+	// Argv is the exact vector the edge executed, in order, and is the
+	// only record of it. Empty when Mocked is true, because a mock runs
+	// nothing and a synthesised vector here would be a runbook promoted
+	// on a command nobody ever ran.
+	Argv []string `json:"argv,omitempty"`
 
 	// StartedAt / EndedAt bracket the (mock) restart on the edge clock.
 	StartedAt time.Time `json:"started_at"`

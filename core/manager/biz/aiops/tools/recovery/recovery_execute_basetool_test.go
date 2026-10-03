@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
@@ -900,5 +901,67 @@ func TestRecoveryExecuteTool_KillProcessAlwaysRequiresProposal(t *testing.T) {
 	}
 	if len(terminator.calls) != 0 || len(audit.checks) != 0 {
 		t.Fatalf("unexpected execution: calls=%+v checks=%+v", terminator.calls, audit.checks)
+	}
+}
+
+// The argv is the only record of what actually ran, and the manager side is
+// where cost crystallisation would read it from — a runbook promoted on a
+// guessed command is a runbook that fixes the wrong thing on a node nobody
+// looked at. This asserts the vector survives the hop rather than assuming
+// it does, because the hop is exactly where a "ResultJSON" that is quietly
+// re-shaped would lose it.
+func TestRecoveryExecuteTool_CarriesTheExecutedArgvToTheManager(t *testing.T) {
+	audit := newFakeAuditRepo()
+	audit.approve["inc-42"] = true
+
+	dispatcher := &fakeDispatcher{
+		name:  restartServiceToolName,
+		class: "write",
+		respBody: `{"service":"nginx","restarted":true,"mocked":false,` +
+			`"argv":["systemctl","restart","nginx.service"],` +
+			`"started_at":"2026-08-21T10:00:00Z","ended_at":"2026-08-21T10:00:05Z"}`,
+	}
+	tool := newRecoveryExecuteToolFor(dispatcher, audit)
+
+	args := `{
+		"incident_id":"inc-42",
+		"proposal_id":"11111111-1111-4111-8111-111111111111",
+		"skill_id":"restart-nginx",
+		"target":"host-7",
+		"resource_type":"host",
+		"baseline_window":"5m",
+		"compare_window":"2m",
+		"tolerance":0.15,
+		"parameters":{
+			"command":"restart_service",
+			"device_id":7,
+			"service":"nginx",
+			"reason":"verify_recovery passed=false; cpu_usage 0.45 -> 0.05 delta"
+		}
+	}`
+	out, err := tool.InvokableRun(context.Background(), args)
+	if err != nil {
+		t.Fatalf("InvokableRun: %v", err)
+	}
+	var env recoveryExecuteEnvelope
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+
+	var inner tunnel.RestartServiceResponse
+	if err := json.Unmarshal(env.ResultJSON, &inner); err != nil {
+		t.Fatalf("decode embedded restart_service envelope: %v", err)
+	}
+	want := []string{"systemctl", "restart", "nginx.service"}
+	if len(inner.Argv) != len(want) {
+		t.Fatalf("argv did not survive the hop: got %v, want %v", inner.Argv, want)
+	}
+	for i := range want {
+		if inner.Argv[i] != want[i] {
+			t.Fatalf("argv[%d] = %q, want %q", i, inner.Argv[i], want[i])
+		}
+	}
+	if inner.Mocked {
+		t.Errorf("a response carrying an argv must not also claim to be mocked")
 	}
 }

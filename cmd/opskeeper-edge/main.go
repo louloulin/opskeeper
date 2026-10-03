@@ -118,12 +118,25 @@ func main() {
 		log.Warn("host_files register failed; capability disabled", slog.Any("err", err))
 	}
 
-	// restart_service plugin (/ first MUTATING skill).
-	// Mocked posture in PR-7: handler returns Mocked=true without
-	// shelling out. SandboxConfig.Validate enforces a non-empty
-	// allow-list; on failure we boot without the capability so the
-	// edge can still scrape metrics / read files.
-	if err := edgerestartservice.Register(client, log); err != nil {
+	// restart_service plugin — the first and only MUTATING skill on a node.
+	//
+	// The posture is the operator's: Mocked defaults to true, and a mocked
+	// node answers successfully without touching a service, saying so in
+	// its response. Setting it false makes this node really run systemctl,
+	// against an allow-list that is still enforced here at the edge rather
+	// than trusted from the cloud. A sandbox that fails validation costs
+	// the capability, not the boot: the edge can still scrape metrics and
+	// read files without it.
+	restartSandbox := &edgerestartservice.SandboxConfig{
+		Mocked:        cfg.Edge.RestartService.Mocked,
+		SystemctlPath: cfg.Edge.RestartService.SystemctlPath,
+	}
+	if len(cfg.Edge.RestartService.AllowedUnits) > 0 {
+		restartSandbox.AllowedUnits = cfg.Edge.RestartService.AllowedUnits
+	} else {
+		restartSandbox.AllowedUnits = edgerestartservice.DefaultAllowedUnits()
+	}
+	if err := edgerestartservice.RegisterWith(client, restartSandbox, log); err != nil {
 		log.Warn("restart_service register failed; capability disabled", slog.Any("err", err))
 	}
 

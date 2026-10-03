@@ -488,6 +488,44 @@ type EdgeConfig struct {
 	//
 	// env: OPSKEEPER_EDGE_COLLECTOR_INTERVAL; default 10s
 	CollectorInterval time.Duration
+
+	// RestartService configures the node's only mutating handler. It is
+	// split out rather than folded in because it is the one place an
+	// operator decides whether this node may actually change something.
+	//
+	// env: OPSKEEPER_EDGE_RESTART_SERVICE_MOCKED,
+	//      OPSKEEPER_EDGE_RESTART_SERVICE_ALLOWED_UNITS,
+	//      OPSKEEPER_EDGE_RESTART_SERVICE_SYSTEMCTL
+	RestartService EdgeRestartServiceConfig
+}
+
+// EdgeRestartServiceConfig is how much a node is allowed to restart, and
+// whether it is allowed to do it at all.
+//
+// Mocked defaults to true, which is the shipped posture: the handler
+// answers successfully without touching a service, and says so in its own
+// response so nothing downstream can mistake a pretend for a repair. An
+// operator who wants a node that really restarts units sets it to false,
+// and that is the only way the real systemctl path is reached.
+type EdgeRestartServiceConfig struct {
+	// Mocked = true (default) pretends; false executes systemctl for real
+	// against the allow-listed units.
+	//
+	// env: OPSKEEPER_EDGE_RESTART_SERVICE_MOCKED; default true
+	Mocked bool
+
+	// AllowedUnits overrides the shipped unit list. Empty means "use the
+	// shipped list", which is deliberately narrow.
+	//
+	// env: OPSKEEPER_EDGE_RESTART_SERVICE_ALLOWED_UNITS (comma separated)
+	AllowedUnits []string
+
+	// SystemctlPath is the binary the real path runs. It is a configuration
+	// value and not a constant only so a test can point it at a script; on
+	// a node it is "systemctl".
+	//
+	// env: OPSKEEPER_EDGE_RESTART_SERVICE_SYSTEMCTL; default systemctl
+	SystemctlPath string
 }
 
 // Load reads env vars and returns a Config with defaults applied.
@@ -554,6 +592,9 @@ func Load() (*Config, error) {
 	c.Edge.CollectorMode = getEnv("OPSKEEPER_EDGE_COLLECTOR_MODE", "off")
 	c.Edge.ScrapeConfigFile = getEnv("OPSKEEPER_EDGE_SCRAPE_CONFIG_FILE", "/etc/opskeeper-edge/scrape.yaml")
 	c.Edge.CollectorInterval = getEnvDuration("OPSKEEPER_EDGE_COLLECTOR_INTERVAL", 10*time.Second)
+	c.Edge.RestartService.Mocked = getEnvBool("OPSKEEPER_EDGE_RESTART_SERVICE_MOCKED", true)
+	c.Edge.RestartService.AllowedUnits = getEnvCSV("OPSKEEPER_EDGE_RESTART_SERVICE_ALLOWED_UNITS", nil)
+	c.Edge.RestartService.SystemctlPath = getEnv("OPSKEEPER_EDGE_RESTART_SERVICE_SYSTEMCTL", "systemctl")
 
 	c.FrontierClient.Addr = getEnv("OPSKEEPER_FRONTIER_ADDR", "frontier:40011")
 	c.FrontierClient.ServiceName = getEnv("OPSKEEPER_FRONTIER_SERVICE_NAME", "opskeeper-manager")
