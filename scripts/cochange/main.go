@@ -39,11 +39,13 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // layerDirs are the first path segments under core/manager that are a
@@ -62,6 +64,15 @@ type Change struct {
 	Commit  string
 	Subject string
 	Domains []string
+	// When is the commit's own authored date, in the author's own timezone.
+	//
+	// Runs are consecutive commits, which is a statement about the log and
+	// not about the calendar: a run of five commits can be one morning or
+	// five weeks with nothing else in the control plane in between. The
+	// question the split proposal actually asks -- "is this domain worked
+	// on repeatedly, or was it refactored in one sitting" -- is a question
+	// about days, so the date travels with the change.
+	When time.Time
 }
 
 // Solo is the share of a domain's changes that touched no other domain.
@@ -87,6 +98,17 @@ type Solo struct {
 	// first run of changes — the stretch in which the domain did not
 	// exist yet and nothing else could have touched it.
 	//
+	// Days is how many distinct calendar days this domain's solo commits
+	// landed on, and SpanDays is how far the first and last of them are
+	// apart. Together they separate the two readings of Runs that look
+	// identical in the number: six runs on six days inside one week is one
+	// busy week, and six runs across a quarter is a domain that keeps
+	// coming back on its own.
+	//
+	// A commit's day is read in the author's own timezone, because "we
+	// shipped this on Tuesday" is a statement about the author's Tuesday.
+	Days     int
+	SpanDays int
 	// This is the sharpest correction to the whole ranking. A domain that
 	// was created inside the measured window scores 100% solo by
 	// construction, because there is nothing co-changing with it yet. That
@@ -105,6 +127,21 @@ type Campaign struct {
 	LongestRun int
 	Built      int
 	Subjects   []string
+	// Days is how many distinct calendar days ALL of this domain's solo
+	// work landed on. It is the field the ONE DAY verdict reads, and it is
+	// not the same as RunDays: three single-commit runs on three different
+	// days are three days of work, and a verdict computed from the biggest
+	// run alone would call that one day.
+	Days int
+	// RunDays is how many distinct days the biggest run covered, and
+	// RunSpan is how far its first and last commit are apart. A campaign
+	// that says "5 commits" is a morning; a campaign that says "5 commits
+	// over 40 days" is five small ones, and only the second one is
+	// evidence that the domain is worked on alone.
+	RunDays int
+	RunSpan int
+	RunFrom string
+	RunTo   string
 }
 
 // Ratio is Solo's share of Total, or 0 when the domain never changed.
@@ -128,6 +165,17 @@ type Report struct {
 	MedianDomains float64
 	Solo          []Solo
 	Pairs         []Pair
+	// WindowFrom, WindowTo and WindowDays are the calendar extent of the
+	// control-plane history this report measured.
+	//
+	// They are printed first, before any ratio, because every ratio below
+	// is a statement about a window and a window of one day cannot support
+	// a claim about how a domain ships over time. A reader who sees
+	// "aiops 54% independent" and never sees "measured over 1 day" has
+	// been told the more comfortable half.
+	WindowFrom string
+	WindowTo   string
+	WindowDays int
 	// Widest is the largest number of domains one commit touched. A
 	// commit that touches most of the tree carries no information about
 	// coupling, and the reader deserves to know the ceiling.
@@ -185,6 +233,13 @@ func summarise(changes []Change) Report {
 		}
 	}
 
+	all := make([]int, 0, len(ordered))
+	for i := range ordered {
+		all = append(all, i)
+	}
+	_, r.WindowDays = dayShape(ordered, all)
+	r.WindowFrom, r.WindowTo = dayBounds(ordered, all)
+
 	total := map[string]int{}
 	pairs := map[[2]string]int{}
 	soloAt := map[string][]int{}
@@ -231,18 +286,28 @@ func summarise(changes []Change) Report {
 		// domain without ceasing to be construction.
 		bornRun := firstRun(allAt[d])
 		built := countIn(soloAt[d], bornRun)
+		days, span := dayShape(ordered, soloAt[d])
 		r.Solo = append(r.Solo, Solo{
 			Domain: d, Solo: len(soloAt[d]), Total: n,
 			Runs: runs, LongestRun: longest, Built: built,
+			Days: days, SpanDays: span,
 		})
 		if len(soloAt[d]) > 0 {
+			run := longestRun(soloAt[d])
+			runDays, runSpan := dayShape(ordered, run)
+			from, to := dayBounds(ordered, run)
 			r.Campaigns = append(r.Campaigns, Campaign{
 				Domain:     d,
 				Solo:       len(soloAt[d]),
 				Runs:       runs,
 				LongestRun: longest,
 				Built:      built,
-				Subjects:   subjectsOf(soloChange, longestRun(soloAt[d])),
+				Subjects:   subjectsOf(soloChange, run),
+				Days:       days,
+				RunDays:    runDays,
+				RunSpan:    runSpan,
+				RunFrom:    from,
+				RunTo:      to,
 			})
 		}
 	}
@@ -280,6 +345,72 @@ func summarise(changes []Change) Report {
 		return r.Pairs[i].B < r.Pairs[j].B
 	})
 	return r
+}
+
+// dayShape reports how many distinct calendar days a set of positions'
+// commits landed on, and how far the first and last of them are apart.
+//
+// Both numbers are 0 for an empty set, and SpanDays is 0 whenever every
+// commit shares one day -- which is the case the whole addition exists to
+// make visible: "10 solo commits, 10 runs" and "10 solo commits, 1 day" are
+// the same ratio and opposite claims.
+func dayShape(ordered []Change, positions []int) (days, span int) {
+	first, last := dayBoundsFull(ordered, positions)
+	if first.IsZero() {
+		return 0, 0
+	}
+	unique := map[string]bool{}
+	for _, pos := range positions {
+		if pos >= 0 && pos < len(ordered) {
+			unique[dayKey(ordered[pos].When)] = true
+		}
+	}
+	span = int(last.Sub(first).Hours() / 24)
+	if span < 0 {
+		span = 0
+	}
+	return len(unique), span
+}
+
+// dayBounds is dayShape's endpoints as printable dates.
+func dayBounds(ordered []Change, positions []int) (from, to string) {
+	first, last := dayBoundsFull(ordered, positions)
+	if first.IsZero() {
+		return "", ""
+	}
+	return dayKey(first), dayKey(last)
+}
+
+// dayBoundsFull returns the earliest and latest commit among the positions.
+// The log is newest-first, so "earliest" is the last one seen, and the
+// positions are not assumed to be sorted -- a caller that hands them over
+// in another order gets the same answer.
+func dayBoundsFull(ordered []Change, positions []int) (earliest, latest time.Time) {
+	for _, pos := range positions {
+		if pos < 0 || pos >= len(ordered) {
+			continue
+		}
+		when := ordered[pos].When
+		if when.IsZero() {
+			continue
+		}
+		if earliest.IsZero() || when.Before(earliest) {
+			earliest = when
+		}
+		if latest.IsZero() || when.After(latest) {
+			latest = when
+		}
+	}
+	return earliest, latest
+}
+
+// dayKey is a commit's calendar day in its own timezone, which is the day
+// its author would name.
+func dayKey(t time.Time) string {
+	if t.IsZero() {
+		return "unknown"
+	}
+	return t.Format("2006-01-02")
 }
 
 // soloRuns groups a domain's solo positions into maximal runs of
@@ -437,8 +568,19 @@ func readHistory(repo, ref string) ([]Change, error) {
 		if len(ds) == 0 {
 			continue
 		}
-		subject, _ := git(repo, "log", "-1", "--format=%s", c)
-		out = append(out, Change{Commit: c, Subject: strings.TrimSpace(subject), Domains: ds})
+		// One git call for both fields: reading them separately would work
+		// and would also read the commit twice, which is the kind of cost
+		// that makes a 65-commit report feel slow and a 6500-commit one
+		// feel broken.
+		meta, _ := git(repo, "log", "-1", "--format=%s%x1f%cI", c)
+		subject, when, _ := strings.Cut(meta, "\x1f")
+		parsed, _ := time.Parse(time.RFC3339, strings.TrimSpace(when))
+		out = append(out, Change{
+			Commit:  c,
+			Subject: strings.TrimSpace(subject),
+			Domains: ds,
+			When:    parsed,
+		})
 	}
 	return out, nil
 }
@@ -453,11 +595,20 @@ func git(repo string, args ...string) (string, error) {
 	return buf.String(), nil
 }
 
-func printReport(w *os.File, r Report) {
+func printReport(w io.Writer, r Report) {
 	fmt.Fprintf(w, "cochange: %d commits examined, %d touched the control plane\n",
 		r.Commits, r.Touching)
-	fmt.Fprintf(w, "  domains per commit: median %.0f, widest %d\n\n",
-		r.MedianDomains, r.Widest)
+	fmt.Fprintf(w, "  domains per commit: median %.0f, widest %d\n", r.MedianDomains, r.Widest)
+	if r.WindowFrom != "" {
+		fmt.Fprintf(w, "  window: %s to %s (%d day(s))\n", r.WindowFrom, r.WindowTo, r.WindowDays)
+		if r.WindowDays < 7 {
+			fmt.Fprintf(w, "  a window this short cannot support any claim about how a domain\n"+
+				"  ships over time; read the ratios below as how this work was\n"+
+				"  batched on the days it was done, which is a real property and a\n"+
+				"  much smaller one.\n")
+		}
+	}
+	fmt.Fprintln(w)
 	if r.MedianDomains <= 1 {
 		fmt.Fprintf(w, "  a median of one means most commits stay inside a single\n"+
 			"  domain, so co-change carries real signal here rather than the\n"+
@@ -469,8 +620,9 @@ func printReport(w *os.File, r Report) {
 
 	fmt.Fprintf(w, "  changed alone (the property \"ships independently\" asks about):\n")
 	for _, s := range r.Solo {
-		fmt.Fprintf(w, "    %-16s %2d / %2d  (%.0f%%)  in %d run(s), longest %d\n",
-			s.Domain, s.Solo, s.Total, s.Ratio()*100, s.Runs, s.LongestRun)
+		fmt.Fprintf(w, "    %-16s %2d / %2d  (%.0f%%)  in %d run(s), longest %d, "+
+			"%d day(s) touched, over %dd\n",
+			s.Domain, s.Solo, s.Total, s.Ratio()*100, s.Runs, s.LongestRun, s.Days, s.SpanDays)
 	}
 
 	// The ratio above cannot tell a habit from a campaign, and the split
@@ -482,6 +634,13 @@ func printReport(w *os.File, r Report) {
 	for _, c := range r.Campaigns {
 		verdict := "recurring"
 		switch {
+		case c.Days == 1 && c.Solo > 1:
+			// Every solo commit landed on one calendar day. This is the
+			// correction the run count could not make: runs break on any
+			// other domain's commit, so six runs on one day is one day, and
+			// reading it as recurrence is how a one-afternoon refactor ends
+			// up quoted as evidence that a domain ships on its own.
+			verdict = "ONE DAY, not a habit"
 		case c.Built == c.Solo && c.Solo > 1:
 			// Every solo commit is inside the domain's opening run, so
 			// the domain did not exist when the earlier ones landed. The
@@ -494,8 +653,13 @@ func printReport(w *os.File, r Report) {
 		case c.LongestRun >= 3 && c.LongestRun*2 >= c.Solo:
 			verdict = "mostly one campaign"
 		}
-		fmt.Fprintf(w, "    %-16s %d solo in %d run(s), longest %d, %d at birth  <- %s\n",
-			c.Domain, c.Solo, c.Runs, c.LongestRun, c.Built, verdict)
+		span := ""
+		if c.RunFrom != "" {
+			span = fmt.Sprintf(", longest run covers %d day(s) from %s to %s",
+				c.RunDays, c.RunFrom, c.RunTo)
+		}
+		fmt.Fprintf(w, "    %-16s %d solo in %d run(s), longest %d, %d at birth%s  <- %s\n",
+			c.Domain, c.Solo, c.Runs, c.LongestRun, c.Built, span, verdict)
 		for _, subject := range c.Subjects {
 			fmt.Fprintf(w, "        %s\n", subject)
 		}
@@ -517,6 +681,14 @@ func printReport(w *os.File, r Report) {
     - the window is this repository's whole history, which is short. A
       domain with few changes has a coarse ratio, and 0/1 and 0/2 are not
       the same evidence.
+    - the day counts answer the question a run count cannot, and they are
+      the axis to read first. Runs break on any other domain's commit, so a
+      domain can show six runs inside one afternoon; the day count says so
+      where the run count cannot. A "day" is a commit's own authored day, so
+      a late-evening commit is the author's evening, not UTC's.
+    - a domain marked ONE DAY has been shown to have been worked on alone,
+      and nothing more. Whether it would be worked on alone again is a
+      question this window cannot answer, because the window is the day.
     - a focused refactoring campaign shows up as independence that is not
       structural. The runs section above is how you tell: a domain whose
       solo work is ONE run has not been shown to ship independently, it has
@@ -534,15 +706,105 @@ func printReport(w *os.File, r Report) {
 `)
 }
 
+// soloDetail renders one domain's solo work as a dated, run-grouped list.
+//
+// The summary report answers "how many runs"; this answers "which days",
+// which is the only way a reader can settle "was that one campaign" without
+// re-running git by hand. It prints the co-changing commits too, because a
+// run boundary is invisible without them: a run looks like one block of work
+// precisely because nothing else was in the control plane between its
+// commits, and the reader should be able to see that rather than be told.
+func soloDetail(w io.Writer, changes []Change, domain string) bool {
+	ordered := make([]Change, 0, len(changes))
+	for _, c := range changes {
+		if len(c.Domains) > 0 {
+			ordered = append(ordered, c)
+		}
+	}
+	var solo []int
+	total := 0
+	for i, c := range ordered {
+		for _, d := range c.Domains {
+			if d == domain {
+				total++
+				if len(c.Domains) == 1 {
+					solo = append(solo, i)
+				}
+			}
+		}
+	}
+	if total == 0 {
+		fmt.Fprintf(w, "cochange: no commit in this window touched %s\n", domain)
+		return false
+	}
+	fmt.Fprintf(w, "cochange: %s -- %d solo of %d control-plane commits\n\n",
+		domain, len(solo), total)
+	if len(solo) == 0 {
+		fmt.Fprintf(w, "  it was never changed alone, so it has no run shape to show\n")
+		return true
+	}
+	// Newest first, matching the log, and grouped by run with the run's
+	// co-changes printed underneath each solo commit.
+	prev := -2
+	run := 0
+	for _, pos := range solo {
+		if pos != prev+1 {
+			run++
+			runAt := ordered[pos]
+			fmt.Fprintf(w, "  run %d starts %s  (%s)\n",
+				run, dayKey(runAt.When), runAt.Subject)
+		}
+		prev = pos
+		c := ordered[pos]
+		fmt.Fprintf(w, "     %s  %s\n", dayKey(c.When), c.Subject)
+		for _, name := range neighbours(ordered, pos) {
+			fmt.Fprintf(w, "        (that day also carried %s)\n", name)
+		}
+	}
+	days, span := dayShape(ordered, solo)
+	fmt.Fprintf(w, "\n  %d run(s), %d distinct day(s), spanning %d day(s)\n",
+		run, days, span)
+	return true
+}
+
+// neighbours are the commits around one position that touched other domains.
+// They are what makes a run boundary legible: the gap between two solo
+// commits is a stretch in which something else was being worked on.
+func neighbours(ordered []Change, pos int) []string {
+	var out []string
+	for _, at := range []int{pos - 1, pos + 1} {
+		if at < 0 || at >= len(ordered) || at == pos {
+			continue
+		}
+		c := ordered[at]
+		others := make([]string, 0, len(c.Domains))
+		for _, d := range c.Domains {
+			others = append(others, d)
+		}
+		if len(others) == 1 {
+			continue // that is a solo commit of another domain, not a co-change
+		}
+		out = append(out, strings.Join(others, "+"))
+	}
+	return out
+}
+
 func main() {
 	repo := flag.String("repo", ".", "repository to read history from")
 	ref := flag.String("ref", "", "ref to read; empty reads HEAD")
+	domain := flag.String("domain", "", "print one domain's solo work, dated and run-grouped")
 	flag.Parse()
 
 	changes, err := readHistory(filepath.Clean(*repo), *ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cochange: "+err.Error())
 		os.Exit(2)
+	}
+	if *domain != "" {
+		if !soloDetail(os.Stdout, changes, *domain) {
+			os.Exit(2)
+		}
+		return
 	}
 	printReport(os.Stdout, summarise(changes))
 }
