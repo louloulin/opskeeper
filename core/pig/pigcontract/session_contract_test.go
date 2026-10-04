@@ -37,6 +37,12 @@ import (
 //     OpsKeeper sets it on every production turn, and the claim it makes in
 //     its own comments is that the operations agent has no filesystem
 //     editor — a claim that is only as good as this flag's behaviour.
+//  5. CWDOverride does NOT move a fresh session's working directory. A
+//     SessionKernel option claimed it did, and the claim was load-bearing:
+//     a turn's relative paths resolve somewhere, and "somewhere we chose"
+//     is a different assertion from "wherever the manager was started".
+//     The assumption was measured and is currently false, which is why the
+//     option is gone and the runtime's cwd is now the deployment's.
 //
 // These are behavioural assertions against a real coding.Session driven by
 // PiG's faux provider, not against a re-implementation, so they fail when
@@ -91,6 +97,10 @@ func toolStep(name string, args map[string]any) ai.FauxResponseStep {
 type contractSession struct {
 	sess    *coding.Session
 	runtime *coding.Runtime
+	// cwd is the Services' working directory, which is what a fresh
+	// session's own cwd is expected to equal. Kept here rather than
+	// recomputed by each test so the two cannot drift.
+	cwd string
 }
 
 func newContractSession(t *testing.T, steps []ai.FauxResponseStep, tools []agent.AgentTool, tune func(*coding.SessionStartOptions)) *contractSession {
@@ -138,7 +148,7 @@ func newContractSession(t *testing.T, steps []ai.FauxResponseStep, tools []agent
 			t.Errorf("Runtime.Close: %v", err)
 		}
 	})
-	return &contractSession{sess: sess, runtime: runtime}
+	return &contractSession{sess: sess, runtime: runtime, cwd: dir}
 }
 
 // eventTap is a consumer of the session's event stream.
@@ -207,6 +217,51 @@ func startTapped(cs *contractSession) *eventTap {
 	tap := &eventTap{settled: make(chan struct{})}
 	tap.run(cs.sess)
 	return tap
+}
+
+// ── 5. the working directory a turn actually runs in ────────────────────────
+
+// TestCWDOverrideDoesNotMoveAFreshSession pins the assumption that decided
+// where a control-plane turn's relative paths resolve.
+//
+// PiG's SessionStartOptions.CWDOverride reads, in the upstream comment,
+// like "selects an effective cwd for an opened Session". OpsKeeper read it
+// that way and exposed it as a SessionKernel option whose doc said a tool
+// with a relative path could not walk into the manager's own tree. It never
+// set it, which hid a second problem: it would not have worked.
+//
+// Measured here against a real session, because the two readings differ by
+// exactly the thing that matters — whether an operations turn runs in a
+// directory the deployment chose or in whatever directory the manager
+// process was started from.
+//
+// If this test ever fails, upstream has started honouring the override for
+// fresh sessions, and the kernel can have its containment option back. That
+// is a better outcome than the current one; it is simply not the current
+// one, and the field that pretended otherwise has been removed.
+func TestCWDOverrideDoesNotMoveAFreshSession(t *testing.T) {
+	other := t.TempDir()
+	cs := newContractSession(t, []ai.FauxResponseStep{textStep("ok")}, nil,
+		func(opts *coding.SessionStartOptions) {
+			opts.CWDOverride = &other
+		})
+	if other == cs.cwd {
+		t.Fatal("the override directory and the runtime's cwd are the same " +
+			"directory, so this test cannot tell them apart")
+	}
+	if got := cs.sess.CWD(); got == other {
+		t.Fatalf("CWDOverride moved a fresh session to %q. That is upstream "+
+			"implementing something it did not implement when decision 171 "+
+			"removed the kernel's containment option; re-add it and point it "+
+			"at a per-turn directory", other)
+	}
+	// The other half of the assertion: the override did not silently move
+	// the session somewhere else entirely. Its cwd is the Services' cwd —
+	// which in this harness is a temp dir, and in production is
+	// RuntimeOptions.CWD.
+	if got, want := cs.sess.CWD(), cs.cwd; got != want {
+		t.Errorf("session cwd is %q, want the runtime's %q", got, want)
+	}
 }
 
 // ── 1. hook installation: append versus replace ──────────────────────────────

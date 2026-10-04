@@ -54,11 +54,21 @@ const (
 )
 
 // Kernel enumerates the agent kernels the service can dispatch to.
-// The three ship side-by-side; default is legacy.
+//
+// All four spellings keep working. The default is the embedded-SDK driver:
+// the product ships on PiG's own coding.Session, and the other three are the
+// ways back.
 type Kernel string
 
 const (
 	// KernelLegacy is the pre-PR-9 agent.Agent for-loop (agent.go).
+	//
+	// It is no longer the default and it is still supported, which is the
+	// point: the default moved, and a deployment that had chosen something
+	// else must not find its choice changed underneath it. Everything that
+	// could select a kernel before this line moved still selects the same
+	// one, and the new default applies only where nobody had expressed an
+	// opinion — an unset environment variable.
 	KernelLegacy Kernel = "legacy"
 	// KernelGraph is the retired spelling. It used to select an eino ReAct
 	// graph under chatruntime.Runtime; eino is gone, so the value now
@@ -74,19 +84,24 @@ const (
 	// in the loop.
 	KernelPig Kernel = "pig"
 	// KernelPigSDK is KernelPig driving PiG's own coding.Session instead of
-	// a bare agent.Agent (decision 86).
+	// a bare agent.Agent (decision 86). It is the default.
 	//
 	// It is a separate value rather than a replacement for "pig" on purpose.
 	// The two drivers share their mapper, their policy gate, their prompt
 	// assembly and their tool adapters, and a differential golden holds them
 	// to the same console frames and the same transcript rows — but they are
 	// not the same process shape. The Session carries an extension runner
-	// and a session log, which means a PiG package can contribute tools and
-	// lifecycle hooks to a control-plane turn, and it means a session
-	// occupies a runtime until it closes. An operator who wants the
-	// capability should be able to turn it on and turn it back off without
-	// a rebuild, and a value that silently swapped underneath the old
-	// spelling would take that choice away.
+	// and a session log, which means the turn runs inside the same object a
+	// PiG package extends, and it means a session occupies a runtime until
+	// it closes.
+	//
+	// Making it the default (decision 171) changes what a *new* deployment
+	// gets, not what an existing one has: "pig", "graph" and "legacy" all
+	// still mean exactly what they meant before, so every deployment that
+	// ever set the variable is unaffected. A deployment that set nothing
+	// gets the driver the 2.0 plan calls the end state, which is the honest
+	// reading of "unset" — nobody chose the pre-2.0 loop, it was simply
+	// there first.
 	//
 	// The spelling is "pig-sdk" rather than "session" because what a reader
 	// needs to know at the env var is that this is the embedded-SDK driver;
@@ -94,10 +109,26 @@ const (
 	KernelPigSDK Kernel = "pig-sdk"
 )
 
-// ParseKernel normalises a string env value into a Kernel. Empty or
-// unrecognised values default to KernelLegacy. Used by cmd/opskeeper/main.go.
+// ParseKernel normalises a string env value into a Kernel. Used by
+// cmd/opskeeper/main.go.
+//
+// Two fallbacks, and they are deliberately different:
+//
+//   - Empty (nobody expressed an opinion) is the product's default:
+//     KernelPigSDK.
+//   - Unrecognised (somebody expressed an opinion we cannot read) is
+//     KernelLegacy, with a warning from the caller. Guessing there would be
+//     the worst of both: a typo would move a deployment onto a new driver
+//     *and* leave no one able to explain why.
+//
+// The distinction is the same one KernelGraph's doc comment describes for a
+// value that outlives a rename, one step further out. "We could not read
+// your setting, so we changed nothing" is a sentence an operator can act on;
+// "we could not read your setting, so we upgraded you" is not.
 func ParseKernel(s string) Kernel {
 	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return KernelPigSDK
 	case "graph":
 		return KernelGraph
 	case "pig":
@@ -712,4 +743,20 @@ func runtimeReplyToAgentReply(r *chatruntime.Reply) *agent.Reply {
 // requiring auth upstream.
 func (s *Service) UsageToday(ctx context.Context) (*biz.DailyUsage, error) {
 	return s.usage.Today(ctx)
+}
+
+// IsKnownKernel reports whether a string env value names a kernel this build
+// recognises, so a caller can tell "the operator asked for nothing" from
+// "the operator asked for something we cannot read".
+//
+// It is a separate function rather than a sentinel from ParseKernel because
+// the two callers want opposite things from the same input: the boot path
+// wants a kernel to run, and the boot log wants to know whether it guessed.
+func IsKnownKernel(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "legacy", "graph", "pig", "pig-sdk", "pig_sdk", "sdk":
+		return true
+	default:
+		return false
+	}
 }

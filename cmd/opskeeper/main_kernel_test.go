@@ -9,15 +9,21 @@ import (
 
 // TestKernelEnvParsing covers the cmd-level boot-time decision:
 //
-//	unset / empty → KernelLegacy (default = zero behavior change)
+//	unset / empty → KernelPigSDK (nobody chose; the product's default)
 //	"graph" → KernelGraph
 //	"pig"   → KernelPig
-//	"garbage" → KernelLegacy (with warn — see service.NewWithKernel)
+//	"pig-sdk" → KernelPigSDK
+//	"garbage" → KernelLegacy (with a warning - see main())
 //
 // The actual env wiring lives in main(); this test exercises the
 // parser the env value flows through, plus emulates the env-set
-// path via os.Setenv. / the default MUST be
-// legacy so the kernel switch is opt-in.
+// path via os.Setenv.
+//
+// The two fallbacks are the assertion. Empty and unrecognised used to be
+// the same answer, and separating them is what let the default move to the
+// embedded SDK driver without taking anyone's explicit choice with it: a
+// deployment that set "pig", "graph" or "legacy" is unaffected, and one
+// that set a typo stays where it was and is told so.
 func TestKernelEnvParsing(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -25,8 +31,9 @@ func TestKernelEnvParsing(t *testing.T) {
 		setEnv bool
 		want   managersvcaiops.Kernel
 	}{
-		{"unset", "", false, managersvcaiops.KernelLegacy},
-		{"empty_string", "", true, managersvcaiops.KernelLegacy},
+		{"unset", "", false, managersvcaiops.KernelPigSDK},
+		{"empty_string", "", true, managersvcaiops.KernelPigSDK},
+		{"whitespace_only", "   ", true, managersvcaiops.KernelPigSDK},
 		{"graph_lower", "graph", true, managersvcaiops.KernelGraph},
 		{"graph_upper", "GRAPH", true, managersvcaiops.KernelGraph},
 		{"graph_padded", "  graph  ", true, managersvcaiops.KernelGraph},
@@ -97,6 +104,24 @@ func TestTheDriverPredicatesAnswerDifferentQuestions(t *testing.T) {
 		}
 		if got := c.kernel.UsesPiGSession(); got != c.wantSession {
 			t.Errorf("%q.UsesPiGSession() = %v, want %v", c.kernel, got, c.wantSession)
+		}
+	}
+}
+
+// TestTheBootLogCanTellGuessedFromInstructed pins the second half of the
+// fallback: a value that is not a kernel must be reported as such, because
+// the whole justification for falling back to the pre-2.0 loop is that the
+// operator gets told.
+func TestTheBootLogCanTellGuessedFromInstructed(t *testing.T) {
+	for _, value := range []string{"legacy", "graph", "pig", "pig-sdk", "PIG-SDK", " sdk "} {
+		if !managersvcaiops.IsKnownKernel(value) {
+			t.Errorf("IsKnownKernel(%q) = false; ParseKernel accepts it, so the boot log "+
+				"would warn about a value it honoured", value)
+		}
+	}
+	for _, value := range []string{"", "  ", "gpt", "pig-sdkd", "graph2", "session"} {
+		if managersvcaiops.IsKnownKernel(value) {
+			t.Errorf("IsKnownKernel(%q) = true, but no kernel answers to it", value)
 		}
 	}
 }

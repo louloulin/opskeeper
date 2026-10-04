@@ -120,17 +120,27 @@ func newSeededSessions(uid uint64) (*memSessions, string) {
 
 // TestParseKernel_Defaults exercises the env→Kernel parsing.
 //
-//	unset / empty / garbage → legacy
-//	"graph"                 → graph
+//	unset / empty  → pig-sdk (nobody chose; the product's default)
+//	"graph"        → graph
+//	"pig"          → pig
+//	"garbage"      → legacy, and the boot log says so
+//
+// The two fallbacks are the assertion: "we could not read your setting, so
+// we changed nothing" is a sentence an operator can act on, and it is a
+// different sentence from "you did not set anything, so we used ours".
 func TestParseKernel_Defaults(t *testing.T) {
 	cases := []struct {
 		in   string
 		want Kernel
 	}{
-		{"", KernelLegacy},
+		{"", KernelPigSDK},
+		{"   ", KernelPigSDK},
 		{"legacy", KernelLegacy},
 		{"GRAPH", KernelGraph},
 		{"  graph  ", KernelGraph},
+		{"pig", KernelPig},
+		{"pig-sdk", KernelPigSDK},
+		{"sdk", KernelPigSDK},
 		{"garbage", KernelLegacy},
 	}
 	for _, c := range cases {

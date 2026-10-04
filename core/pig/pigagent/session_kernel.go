@@ -101,12 +101,25 @@ type SessionKernelOptions struct {
 	// hold a session slot forever.
 	SessionTimeout time.Duration
 
-	// ScratchDir becomes the session's working directory. OpsKeeper points
-	// it at a per-session empty directory so a tool with a relative path
-	// cannot walk into the manager's own source tree. Empty leaves PiG's
-	// runtime CWD in place, which is only safe when the deployment sets
-	// RuntimeOptions.CWD to a directory that holds nothing worth reading.
-	ScratchDir string
+	// There is deliberately no working-directory option here.
+	//
+	// There was one, called ScratchDir, documented as "becomes the
+	// session's working directory". It was never set by any caller, and
+	// this is why: PiG only reads SessionStartOptions.CWDOverride when it
+	// is *resuming* a session whose stored cwd no longer exists. A fresh
+	// session's working directory comes from the Services the Runtime was
+	// built with, and nothing a caller passes at Start can move it.
+	//
+	// That claim was measured, not read. pigcontract's
+	// TestCWDOverrideDoesNotMoveAFreshSession starts a session whose
+	// override names a directory that exists, and PiG still reports the
+	// runtime's cwd. A field that looks like a safety measure and is not
+	// one is worse than a missing field, because the missing one gets
+	// written; the assertion is left in place so that upstream honouring
+	// it turns red instead of turning silently useful.
+	//
+	// The lever is pigcoding.RuntimeOptions.CWD, and it is the deployment's
+	// to set. See decision 171.
 }
 
 // SessionKernel is the SDK-driven implementation of the Agent port.
@@ -229,8 +242,12 @@ func (k *SessionKernel) Run(ctx context.Context, req ports.AgentRequest) (*TurnR
 		NoSession: true,
 		// Pin the PiG session id to our session row's id so a transcript
 		// traces to the agent that produced it without a mapping table.
-		SessionID:   req.SessionID,
-		CWDOverride: k.opts.ScratchDir,
+		SessionID: req.SessionID,
+		// No CWDOverride: PiG ignores it for a fresh session, so passing
+		// one would read as a containment measure while changing nothing.
+		// The session's working directory is the Runtime's, which the
+		// deployment owns; see SessionKernelOptions and decision 171.
+		CWDOverride: "",
 	})
 	if err != nil {
 		return failTurn(mapper, sink, err, false)

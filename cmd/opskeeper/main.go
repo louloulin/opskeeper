@@ -886,11 +886,20 @@ func main() {
 	// ModelRegistry rather than written to auth.json: there is no
 	// interactive login on a server, and re-registering on change is what
 	// makes an admin's edit take effect without a restart.
-	pigRuntime, err := pigcoding.NewRuntime(pigcoding.RuntimeOptions{
-		AgentDir:     pigAgentDir(log),
-		CWD:          ".",
-		AbortContext: rootCtx,
-	})
+	//
+	// CWD is the one field here that is a containment decision rather than
+	// a path. Every turn's relative paths resolve against it, and PiG
+	// discovers a session's skills, prompt templates and context files
+	// under it, so "." would mean "whatever directory the operator
+	// happened to start the manager from" — the repository in a developer
+	// checkout, the application root in a container — with any file
+	// dropped there participating in the control plane's prompt.
+	//
+	// SessionStartOptions.CWDOverride cannot be used to fix this per turn:
+	// PiG only reads it when resuming a session whose stored cwd is gone.
+	// Measured in pigcontract (decision 171). So the directory is chosen
+	// once, here, and it holds nothing.
+	pigRuntime, err := newPigRuntime(log, rootCtx)
 	if err != nil {
 		// Without a runtime there is no agent, and the console would
 		// answer every chat with a bare 500. Failing the boot says why.
@@ -1681,11 +1690,16 @@ func main() {
 	)
 	aiopsUsage := managerbizaiops.NewUsageUsecase(aiopsRepo, log)
 
-	// The optional PiG-backed agent kernel. Default stays "legacy"
-	// so chat behaviour is unchanged out of the box; operators opt
-	// into the new path via OPSKEEPER_AGENT_KERNEL=pig. The old
-	// "graph" spelling is retired but still accepted, and resolves
-	// to the same kernel.
+	// The PiG-backed agent kernel, and the default is the embedded SDK.
+	//
+	// Unset means "nobody chose", which is the product's decision to make
+	// and it is PiG's coding.Session (decision 171). A value we cannot read
+	// means "somebody chose something we do not know", which is not ours to
+	// overrule — that falls back to the pre-2.0 loop and says so here, in
+	// the log, at the one moment an operator can still see it.
+	//
+	// The old "graph" spelling is retired but still accepted, and resolves
+	// to the same kernel as "pig".
 	// When the env is set we build:
 	//   - RoutingChatModel (PR-1) wrapping the existing llmRouter, one
 	//     per provider id ("openai" | "anthropic" | "zhipu" | "gemini").
@@ -1695,8 +1709,17 @@ func main() {
 	//     (silent on missing dirs — fresh installs boot fine).
 	//   - chatruntime.Runtime, the cutover entry the service routes to.
 	// Mismatch / build errors fall back to legacy with a logged warning.
-	kernel := managersvcaiops.ParseKernel(os.Getenv("OPSKEEPER_AGENT_KERNEL"))
-	log.Info("aiops agent kernel selected", slog.String("kernel", string(kernel)))
+	rawKernel := strings.TrimSpace(os.Getenv("OPSKEEPER_AGENT_KERNEL"))
+	kernel := managersvcaiops.ParseKernel(rawKernel)
+	if rawKernel != "" && !managersvcaiops.IsKnownKernel(rawKernel) {
+		log.Warn("aiops: OPSKEEPER_AGENT_KERNEL is not a kernel this build knows; "+
+			"staying on the pre-2.0 loop rather than guessing",
+			slog.String("value", rawKernel),
+			slog.String("known", "legacy|graph|pig|pig-sdk"))
+	}
+	log.Info("aiops agent kernel selected",
+		slog.String("kernel", string(kernel)),
+		slog.Bool("defaulted", rawKernel == ""))
 
 	// Knowledge base + git-repo integration (RAG Phase-1). Wire BEFORE
 	// buildAIOpsRuntime so the BaseTool bag picks up query_knowledge —
@@ -4104,6 +4127,67 @@ func pigAgentDir(log *slog.Logger) string {
 		return filepath.Join(".", ".pig")
 	}
 	log.Debug("pig: agent configuration directory", slog.String("dir", dir))
+	return dir
+}
+
+// newPigRuntime builds the process-wide PiG runtime: the model registry every
+// session resolves against, the extension runner, and the working directory
+// every turn runs in.
+//
+// It is a named function rather than an inline literal so that the working
+// directory can be asserted instead of read. The two fields below are the
+// two halves of the containment story — where the credentials live, and
+// where a tool's relative paths resolve — and both were wrong at least once
+// in a way that no caller could see (decisions 31, 171).
+func newPigRuntime(log *slog.Logger, abort context.Context) (*pigcoding.Runtime, error) {
+	return pigcoding.NewRuntime(pigcoding.RuntimeOptions{
+		AgentDir: pigAgentDir(log),
+		// CWD is the one field here that is a containment decision rather
+		// than a path. Every turn's relative paths resolve against it, and
+		// PiG discovers a session's skills, prompt templates and context
+		// files under it, so "." would mean "whatever directory the
+		// operator happened to start the manager from" — the repository in
+		// a developer checkout, the application root in a container — with
+		// any file dropped there participating in the control plane's
+		// prompt.
+		//
+		// SessionStartOptions.CWDOverride cannot fix this per turn: PiG only
+		// reads it when resuming a session whose stored cwd is gone.
+		// Measured in pigcontract (decision 171).
+		CWD:          pigWorkDir(log),
+		AbortContext: abort,
+	})
+}
+
+// pigWorkDir is the working directory every control-plane agent turn runs in.
+//
+// It is empty, it is 0700, and the process owns it. The alternative — running
+// every turn in the directory the manager was started from — is what this
+// replaced: in a developer checkout that is the repository, and in a
+// container it is the application root, so a relative path in a tool call
+// would resolve against OpsKeeper's own source tree.
+//
+// It is deliberately NOT the agent directory. That one holds the PiG
+// configuration (models.json, settings.json, auth state) and is read by the
+// runtime to build the provider catalog; a working directory that shares a
+// tree with the credential files is one path-resolution mistake away from
+// being an exfiltration route.
+//
+// A failure to create it is not fatal in the way a missing database is,
+// but it is not silently ignored either: falling back to "." would
+// reinstate the exact behaviour this function exists to remove, so the
+// fallback names the problem in the log and uses a fresh temp directory.
+func pigWorkDir(log *slog.Logger) string {
+	dir, err := os.MkdirTemp("", "opskeeper-pig-work-")
+	if err != nil {
+		log.Error("pig: no working directory for agent turns; relative paths "+
+			"will resolve against the process working directory, which is "+
+			"whatever directory the manager was started from",
+			slog.Any("err", err))
+		return "."
+	}
+	_ = os.Chmod(dir, 0o700)
+	log.Debug("pig: agent working directory", slog.String("dir", dir))
 	return dir
 }
 
