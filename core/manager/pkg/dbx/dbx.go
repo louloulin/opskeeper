@@ -1,7 +1,8 @@
 // Package dbx is the shared infrastructure helper for the opskeeper database.
 //
-// Opskeeper defaults to MySQL (via gorm.io/driver/mysql). PostgreSQL and SQLite
-// remain available as opt-in backends. The data model itself is
+// Opskeeper defaults to SQLite (via github.com/glebarez/sqlite), so a fresh
+// checkout boots with no external service. MySQL (gorm.io/driver/mysql) and
+// PostgreSQL remain available as opt-in backends. The data model itself is
 // dialect-agnostic GORM; callers should not depend on any dialect-specific SQL.
 //
 // SQLite pragmas enabled at open time (when Dialect == "sqlite"):
@@ -10,8 +11,9 @@
 //	busy_timeout = 5000 ms    // block briefly instead of SQLITE_BUSY
 //	foreign_keys = ON         // SQLite ships with FKs disabled by default
 //
-// MySQL connections verify reachability with Ping() at Open time so config
-// mistakes surface as a fail-fast error instead of lazily at first query.
+// MySQL/PostgreSQL connections verify reachability with Ping() at Open time so
+// config mistakes surface as a fail-fast error instead of lazily at first
+// query. SQLite needs no server, so it simply materialises the database file.
 package dbx
 
 import (
@@ -32,19 +34,26 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 )
 
-// Open opens the configured database backend. Dialect selects MySQL (default),
-// PostgreSQL, or SQLite; an empty dialect is treated as MySQL for defensive
-// defaults.
+// Open opens the configured database backend. Dialect selects SQLite (default),
+// MySQL, or PostgreSQL; an empty dialect is treated as SQLite for defensive
+// defaults, landing on config.DefaultSQLitePath when no path is supplied.
 //
 // The returned *gorm.DB uses a Warn-level logger so the normal query stream
 // stays out of the application log. Callers that want query logs should wrap
 // with db.Session(&gorm.Session{Logger: ...}) at call sites.
 func Open(cfg config.DBConfig, log *slog.Logger) (*gorm.DB, error) {
 	switch cfg.Dialect {
-	case "", "mysql":
+	case "mysql":
 		return openMySQL(cfg.DSN, cfg.Pool, log)
-	case "sqlite":
-		return openSQLite(cfg.Path, cfg.Pool, log)
+	case "", "sqlite":
+		// A zero-value DBConfig carries neither dialect nor path. Rather
+		// than fail on the empty string, fall back to the same default
+		// config.Load() applies so both paths converge on one database.
+		path := cfg.Path
+		if path == "" {
+			path = config.DefaultSQLitePath
+		}
+		return openSQLite(path, cfg.Pool, log)
 	case "postgres", "postgresql", "pg":
 		return openPostgres(cfg.DSN, cfg.Pool, log)
 	default:

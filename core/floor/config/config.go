@@ -3,9 +3,9 @@
 // MVP uses plain os.Getenv + sensible defaults (no YAML/viper dep yet).
 // See .env.example at the repo root for the full list of variables.
 //
-// Field grouping reflects the post-pivot stack: HTTP / metrics, DB (MySQL
-// default, SQLite opt-in), JWT (iam), OpenAI (llm), Admin bootstrap (cloud
-// only), Edge (opskeeper-edge).
+// Field grouping reflects the post-pivot stack: HTTP / metrics, DB (SQLite
+// default, MySQL/PostgreSQL opt-in), JWT (iam), OpenAI (llm), Admin bootstrap
+// (cloud only), Edge (opskeeper-edge).
 package config
 
 import (
@@ -253,19 +253,30 @@ type FrontierClientConfig struct {
 	Disabled bool
 }
 
-// DBConfig selects the backend (MySQL by default, PostgreSQL/SQLite opt-in) and
-// carries the parameters for whichever is active. Only the fields matching
-// Dialect are consulted at Open time; the others may be empty.
+// DefaultDialect is the backend the manager opens when OPSKEEPER_DB_DIALECT
+// is unset. SQLite keeps a fresh checkout runnable with no external service;
+// MySQL and PostgreSQL stay one env var away for production.
+const DefaultDialect = "sqlite"
+
+// DefaultSQLitePath is the on-disk location of the SQLite database used by
+// the default dialect. It is referenced by dbx.Open so a hand-built zero-value
+// DBConfig lands in the same place config.Load() would have put it.
+const DefaultSQLitePath = "./data/opskeeper.db"
+
+// DBConfig selects the backend (SQLite by default, MySQL/PostgreSQL opt-in)
+// and carries the parameters for whichever is active. Only the fields
+// matching Dialect are consulted at Open time; the others may be empty.
 type DBConfig struct {
-	// Dialect selects the backend: "mysql" (default), "postgres", or "sqlite".
-	// An empty string is treated as "mysql" for defensive defaults.
+	// Dialect selects the backend: "sqlite" (default), "mysql", or "postgres".
+	// An empty string is treated as "sqlite" for defensive defaults.
 	Dialect string
 	// DSN is the MySQL or PostgreSQL Data Source Name used when Dialect is
 	// "mysql" or "postgres".
 	// Example: "opskeeper:opskeeper@tcp(127.0.0.1:3306)/opskeeper?parseTime=true&charset=utf8mb4&loc=Local".
 	DSN string
 	// Path is the sqlite database file path used when Dialect == "sqlite".
-	// The special value ":memory:" is accepted for tests.
+	// Defaults to DefaultSQLitePath; the special value ":memory:" is
+	// accepted for tests.
 	Path string
 	// Host is the MySQL host. When non-empty the loader composes DSN
 	// from the Host/Port/User/Password/DBName/SSLMode fields (which
@@ -540,12 +551,12 @@ func Load() (*Config, error) {
 		Traces:      TracesConfig{URL: getEnv("OPSKEEPER_TRACE_QUERY_URL", "http://tempo:3200")},
 	}
 
-	c.DB.Dialect = getEnv("OPSKEEPER_DB_DIALECT", "mysql")
+	c.DB.Dialect = getEnv("OPSKEEPER_DB_DIALECT", DefaultDialect)
 	c.DB.DSN = getEnv(
 		"OPSKEEPER_DB_DSN",
 		"opskeeper:opskeeper@tcp(127.0.0.1:3306)/opskeeper?parseTime=true&charset=utf8mb4&loc=Local",
 	)
-	c.DB.Path = getEnv("OPSKEEPER_DB_PATH", "./data/opskeeper.db")
+	c.DB.Path = getEnv("OPSKEEPER_DB_PATH", DefaultSQLitePath)
 
 	c.JWT.Secret = getEnv("OPSKEEPER_JWT_SECRET", "dev-insecure-secret-change-me")
 	c.JWT.AccessTTL = getEnvDuration("OPSKEEPER_JWT_ACCESS_TTL", 15*time.Minute)

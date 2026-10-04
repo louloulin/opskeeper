@@ -20,6 +20,6 @@ package dbx
 //	    manageraiopsdata.Migrate,
 //	); err != nil { ... }
 //
-// The same migrator list works for MySQL (production default) and SQLite
-// (local dev opt-in) — AutoMigrate emits the correct DDL for whichever
-// dialect the *gorm.DB is bound to.
+// The same migrator list works for every supported dialect (SQLite by
+// default, MySQL/PostgreSQL opt-in) — AutoMigrate emits the correct DDL for
+// whichever dialect the *gorm.DB is bound to.

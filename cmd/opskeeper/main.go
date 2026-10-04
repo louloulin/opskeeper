@@ -339,7 +339,8 @@ func main() {
 		_ = otelShutdown(shutCtx)
 	}()
 
-	// Open the configured DB backend (MySQL by default, SQLite opt-in) and
+	// Open the configured DB backend (SQLite by default, MySQL/PostgreSQL
+	// opt-in) and
 	// run AutoMigrate-based schema management. Each data package exposes a
 	// Migrate(db) function and is composed in startup order below.
 	db, err := dbx.Open(cfg.DB, log)

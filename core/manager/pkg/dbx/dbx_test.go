@@ -30,22 +30,25 @@ func TestOpen_SQLiteInMemory(t *testing.T) {
 	}
 }
 
-func TestOpen_DefaultsToMySQL(t *testing.T) {
-	// Empty Dialect should route to the MySQL branch. We only assert that
-	// we hit the MySQL ping failure (no server available in tests) and not
-	// the "unsupported dialect" path; the error message is the contract.
-	cfg := config.DBConfig{DSN: "opskeeper:opskeeper@tcp(127.0.0.1:1)/opskeeper"}
-	_, err := Open(cfg, nil)
-	if err == nil {
-		t.Fatal("expected error (no mysql reachable), got nil")
+func TestOpen_DefaultsToSQLite(t *testing.T) {
+	// Empty Dialect routes to the SQLite branch, so a config that forgot to
+	// name a backend still opens a working local database rather than
+	// erroring. ":memory:" keeps the test off the default ./data path.
+	cfg := config.DBConfig{Path: ":memory:"}
+	db, err := Open(cfg, nil)
+	if err != nil {
+		t.Fatalf("empty Dialect should default to sqlite, got error: %v", err)
 	}
-	// We do NOT want to see "unsupported dialect" — that would mean the
-	// defensive default routing is broken.
-	if got := err.Error(); got == "" {
-		t.Fatalf("empty error")
+	// A successful Open already proves we neither hit "unsupported dialect"
+	// nor the MySQL branch (which would fail its ping with no server). Prove
+	// the handle is actually usable, since that is the whole point of the
+	// default.
+	var one int
+	if err := db.Raw("SELECT 1").Scan(&one).Error; err != nil {
+		t.Fatalf("default sqlite handle not usable: %v", err)
 	}
-	if contains(err.Error(), "unsupported dialect") {
-		t.Errorf("empty Dialect should default to mysql, got %q", err.Error())
+	if one != 1 {
+		t.Errorf("SELECT 1 = %d, want 1", one)
 	}
 }
 

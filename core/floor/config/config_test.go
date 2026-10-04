@@ -40,15 +40,17 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.MetricsAddr != ":9100" {
 		t.Errorf("MetricsAddr default = %q, want :9100", cfg.MetricsAddr)
 	}
-	if cfg.DB.Dialect != "mysql" {
-		t.Errorf("DB.Dialect default = %q, want mysql", cfg.DB.Dialect)
+	if cfg.DB.Dialect != DefaultDialect {
+		t.Errorf("DB.Dialect default = %q, want %q", cfg.DB.Dialect, DefaultDialect)
 	}
+	// DSN/Path are carried regardless of the active dialect; the default
+	// SQLite path is what a fresh boot actually opens.
 	wantDSN := "opskeeper:opskeeper@tcp(127.0.0.1:3306)/opskeeper?parseTime=true&charset=utf8mb4&loc=Local"
 	if cfg.DB.DSN != wantDSN {
 		t.Errorf("DB.DSN default = %q, want %q", cfg.DB.DSN, wantDSN)
 	}
-	if cfg.DB.Path != "./data/opskeeper.db" {
-		t.Errorf("DB.Path default = %q, want ./data/opskeeper.db", cfg.DB.Path)
+	if cfg.DB.Path != DefaultSQLitePath {
+		t.Errorf("DB.Path default = %q, want %q", cfg.DB.Path, DefaultSQLitePath)
 	}
 	if cfg.JWT.AccessTTL != 15*time.Minute {
 		t.Errorf("JWT.AccessTTL default = %v, want 15m", cfg.JWT.AccessTTL)
