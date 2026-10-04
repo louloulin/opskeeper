@@ -29,11 +29,7 @@ const (
 	pluginManifestDir = "../../plugins/pig-ops"
 	// planDRowPrefix is how the plugin row begins in the progress table.
 	planDRowPrefix = "| D 插件生态 |"
-	// progressHeading scopes the search. Several decisions carry their own
-	// copy of this table, and those are history: decision 108's D row still
-	// says four packages, which was true when it was written. Rewriting
-	// them would be falsifying the record, so the check reads the progress
-	// section and only that one.
+	// progressHeading scopes the search; see progressRow for why.
 	progressHeading = "## 六、当前实现进度"
 )
 
@@ -119,26 +115,10 @@ func countDeclaredTools(body string) int {
 	return n
 }
 
-// planDRow returns the plugin row of the progress table, and only of the
-// progress table: the same row appears inside decision records, where it
-// records what was true at the time.
+// planDRow returns the plugin row of the progress table.
 func planDRow(t *testing.T, ledger string) string {
 	t.Helper()
-	start := strings.Index(ledger, progressHeading)
-	if start < 0 {
-		t.Fatalf("the ledger has no %q section; this check reads the progress table and has to be told where it moved", progressHeading)
-	}
-	rest := ledger[start:]
-	if end := strings.Index(rest, "\n## "); end >= 0 {
-		rest = rest[:end]
-	}
-	for _, line := range strings.Split(rest, "\n") {
-		if strings.HasPrefix(line, planDRowPrefix) {
-			return line
-		}
-	}
-	t.Fatalf("no line starting with %q inside %q; the progress table's shape changed", planDRowPrefix, progressHeading)
-	return ""
+	return progressRow(t, ledger, planDRowPrefix)
 }
 
 // TestTheProgressTableCountsTheToolsTheManifestsDeclare is the check that
