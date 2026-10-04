@@ -513,6 +513,19 @@ func managerBinary(t *testing.T) string {
 		out := filepath.Join(dir, "opskeeper-manager")
 		cmd := exec.Command("go", "build", "-o", out, "./cmd/opskeeper")
 		cmd.Dir = repo
+		// GOWORK=off, for the same reason the node's binary is built that
+		// way (see this package's edge.go): the workspace file is a local
+		// development convenience that points PiG at a checkout on the
+		// developer's disk, and nothing in CI has one. A manager binary
+		// built with it does not test the dependency set that ships.
+		//
+		// This is not hypothetical. The acceptance suite spent a run
+		// failing on `s.sess.Steer returns 1 value` — a compile error in
+		// OpsKeeper's own file — because go.work pointed at a PiG checkout
+		// that predated the v0.4.0 release the modules actually pin. The
+		// message named the wrong repository, and the only reason it was
+		// not chased into PiG is that the pin was checked first.
+		cmd.Env = buildEnv()
 		var buf bytes.Buffer
 		cmd.Stdout = &buf
 		cmd.Stderr = &buf

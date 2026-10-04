@@ -103,6 +103,7 @@ func EdgeBinary(t *testing.T) string {
 			"-ldflags", "-X main.version="+nodeAdvertisedVersion,
 			"-o", out, "./cmd/opskeeper-edge")
 		cmd.Dir = repo
+		cmd.Env = buildEnv()
 		var buf bytes.Buffer
 		cmd.Stdout = &buf
 		cmd.Stderr = &buf
@@ -116,6 +117,22 @@ func EdgeBinary(t *testing.T) string {
 		t.Fatalf("testenv: %v", edgeBinErr)
 	}
 	return edgeBinPath
+}
+
+// buildEnv is the environment every binary this harness runs is built in.
+//
+// One function rather than one line per call site, because the three call
+// sites have to agree and there was a release where they did not: the node
+// agent was built with the workspace off while the manager and the node
+// binary were not, so two of the three silently linked a developer's local
+// PiG checkout. That is not a small difference in a repository whose
+// dependency is a 0.x library pinned by tag — it is the difference between
+// testing the release and testing the desk it was written at.
+//
+// GOWORK=off is what a release does. CI has no workspace file at all, so
+// this makes the local run and the CI run the same run.
+func buildEnv() []string {
+	return append(os.Environ(), "GOWORK=off")
 }
 
 // PigBinary builds the node's agent once per `go test`, from core/pig with
@@ -143,7 +160,7 @@ func PigBinary(t *testing.T) string {
 		out := filepath.Join(dir, "pig")
 		cmd := exec.Command("go", "build", "-trimpath", "-o", out, "github.com/MichaelKinsy/PiG/cmd/pig")
 		cmd.Dir = pigDir
-		cmd.Env = append(os.Environ(), "GOWORK=off", "CGO_ENABLED=0")
+		cmd.Env = append(buildEnv(), "CGO_ENABLED=0")
 		var buf bytes.Buffer
 		cmd.Stdout = &buf
 		cmd.Stderr = &buf
