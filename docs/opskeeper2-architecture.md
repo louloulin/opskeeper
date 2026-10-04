@@ -11945,6 +11945,12 @@ OpsKeeper 的调用方，而唯一的线索指向了错的那个仓库。
 | `cd core/floor && GOWORK=off go test ./config/...` | ok |
 | `GOWORK=off go test -tags e2e ./tests/e2e/testenv/` | ok |
 | `make e2e-delivery-check`（colima docker：真 manager / 真 edge / 真 pig 子进程 / 真网关 / 真 SSE） | **ok，53.9s** |
+| `GOWORK=off go test ./... -count=1`（根模块，**不带任何 tag**） | exit 0，18 包 |
+| `cd core/manager && GOWORK=off go test ./... -count=1` | exit 0，178 包 |
+| `make module-standalone-check`（关 workspace 与代理，18 个模块逐个 build+test） | 全绿 |
+| `make eval-gates`（计划 §六 点名的三条） | 全绿 |
+| `make module-check` / `make ci-gate-check` | 全绿 |
+| `make pig-tool-scoping-check` | ok，5.9s |
 | 三条变异：`CWD` 改回 `"."`、去掉一处 `buildEnv()`、内核空值改回 `legacy` | 均**如期变红** |
 
 #### 4.107.6 进度：阶段 0 从 95% 到 98%，加权 92.9% → 93.6%
@@ -12003,6 +12009,34 @@ MySQL / PostgreSQL 保持一个环境变量之遥。
 与本轮的三处**位于互不重叠的区段**，可以按 hunk 切开——所以「混不混进本轮 commit」不是
 一个不得已的选择，是一个可以选的选择，而选的是不混。混进去的代价是具体的：将来有人要
 回退它，就得先拆开一个与它无关的 commit。
+
+#### 4.107.9 收尾时全量扫描抓到的：这条守卫自己编译不过它要守的那次构建
+
+上面那三条变异都验过之后，本轮做的第一件常规事是全量扫描——而它立刻红了：
+
+```
+tests/e2e/testenv/buildenv_test.go:75:9: undefined: buildEnv
+FAIL	github.com/vincent-wuhan/opskeeper/tests/e2e/testenv [build failed]
+```
+
+`tests/e2e/testenv` 里**每一个**非测试文件都带 `//go:build e2e`，只有本轮新加的这条
+守卫是裸的。它引用 `buildEnv()`，而那个函数当时写在 `edge.go` 里——于是**默认的
+`go test ./...` 编译不过这个包**。定向跑 `go test -tags e2e ./tests/e2e/testenv/`
+是绿的（我先跑的就是它），所以这道缺陷精确地落在「我用来验证它的那次运行」的外面。
+
+**这不是运气不好，是守卫被放错了构建里。** 显然的修法是给守卫也加 tag，而那个修法
+是错的：CI 里没有任何一步跑 `go test -tags e2e ./tests/e2e/testenv/`，一条带 tag 的
+守卫就是一条**永远不运行的守卫**——而 §4.104.4 记的正是「把它登记进 CI 之前先发现
+它跑不起来」的同一个形状，那次的修法也是「让它在 CI 真的那次运行里可执行」。
+
+所以修法是让这个包里**唯一没有 tag 的文件**装着这条规则：`tests/e2e/testenv/
+buildenv.go`。被守的三个调用点仍然在带 tag 的文件里，规则本身在默认构建里，于是
+**默认的全量扫描才是能发现这类错误的那一次运行**。修完之后同一个包在带 tag 与不带
+tag 两种构建下都编译、都跑，守卫在不带 tag 的那次里 `--- PASS`。
+
+这个形状值得记一句，因为它和 §4.104.3（读取器把签名动作当工具）互为镜像：那里的闸门
+读错了被检查的对象，这里的闸门**连自己所在的那次构建都编译不过**。两者都是同一个
+问题的两面——**一条闸门必须先证明自己在它将要运行的那次构建里存在**。
 
 ## 六、当前实现进度
 

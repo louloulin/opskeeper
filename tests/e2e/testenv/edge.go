@@ -119,22 +119,6 @@ func EdgeBinary(t *testing.T) string {
 	return edgeBinPath
 }
 
-// buildEnv is the environment every binary this harness runs is built in.
-//
-// One function rather than one line per call site, because the three call
-// sites have to agree and there was a release where they did not: the node
-// agent was built with the workspace off while the manager and the node
-// binary were not, so two of the three silently linked a developer's local
-// PiG checkout. That is not a small difference in a repository whose
-// dependency is a 0.x library pinned by tag — it is the difference between
-// testing the release and testing the desk it was written at.
-//
-// GOWORK=off is what a release does. CI has no workspace file at all, so
-// this makes the local run and the CI run the same run.
-func buildEnv() []string {
-	return append(os.Environ(), "GOWORK=off")
-}
-
 // PigBinary builds the node's agent once per `go test`, from core/pig with
 // the workspace off.
 //
