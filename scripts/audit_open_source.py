@@ -235,6 +235,56 @@ def check_acknowledgments() -> None:
             fail(f"missing acknowledgment boundary: {term}")
 
 
+LEDGER_REL = Path("docs/opskeeper2-architecture.md")
+
+# The progress section's own reading of this gate. It is matched by its row
+# label rather than by the shape of the number, because "17" appears in the
+# ledger dozens of times -- as history, as an intermediate count, as part of
+# a sentence about how the gate used to behave. Only the labelled row is a
+# claim about the repository as it stands.
+LEDGER_COUNT_RE = re.compile(r"^\| 开源门槛违规 \| \*\*(\d+) 项\*\* \|", re.M)
+
+
+def check_ledger_violation_count(found: int) -> None:
+    """The ledger states how many violations this gate currently finds.
+
+    This gate is the only step in CI that is red, and until decision 176 the
+    progress section did not say so -- the count existed only in decision
+    records, where each number was true when written and is not evidence
+    about today. A reader deciding what is left could not see the one number
+    that decides whether a release ships.
+
+    A missing ledger is a violation rather than a skip. The alternative --
+    skipping when there is nothing to read -- means deleting one row of one
+    document turns the check off, and a check that can be turned off by
+    deleting a file is not a check. The cost is that every synthetic
+    repository in tests/test_audit_open_source.py has to carry the row, which
+    is one line in one scaffolding function.
+    """
+    ledger = ROOT / LEDGER_REL
+    if not ledger.exists():
+        report(
+            f"{LEDGER_REL.as_posix()} is missing, so the violation count it states cannot be "
+            f"checked; this run found {found}"
+        )
+        return
+    text = ledger.read_text(encoding="utf-8")
+    m = LEDGER_COUNT_RE.search(text)
+    if m is None:
+        report(
+            f"{LEDGER_REL.as_posix()} has no `| 开源门槛违规 | **N 项** |` row, so the gate's "
+            f"current count has no stated reading; this run found {found}"
+        )
+        return
+    stated = int(m.group(1))
+    if stated != found:
+        report(
+            f"the ledger states {stated} open-source violation(s); this run found {found}. "
+            f"Both numbers are honest at their own moment -- fix or add violations and update "
+            f"the row, do not delete it"
+        )
+
+
 def main() -> int:
     tracked = tracked_files()
     scope = "the tracked tree" if tracked is not None else "the whole working tree (no git index)"
@@ -265,6 +315,11 @@ def main() -> int:
             report(f"OnGrid outside compliance allowlist: {relative}")
 
     check_acknowledgments()
+
+    # Captured before the ledger check can append: the number it compares is
+    # this run's finding, not one that already includes the comparison.
+    found = len(VIOLATIONS)
+    check_ledger_violation_count(found)
 
     if VIOLATIONS:
         print(f"open-source gate failed: {len(VIOLATIONS)} violation(s) in {scope}", file=sys.stderr)

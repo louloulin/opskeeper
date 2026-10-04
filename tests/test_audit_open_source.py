@@ -13,6 +13,7 @@ something it should reject.
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,7 @@ from pathlib import Path
 import pytest
 
 AUDITOR_REL = Path("scripts/audit_open_source.py")
+LEDGER_REL = Path("docs/opskeeper2-architecture.md")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -44,7 +46,7 @@ def git(root: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
 
 
-def scaffold(root: Path, *, commit: bool = True) -> None:
+def scaffold(root: Path, *, commit: bool = True, violations: int = 0) -> None:
     """A repository the auditor can accept apart from what a case adds.
 
     The required files are real because check_required_files insists, and
@@ -69,6 +71,14 @@ def scaffold(root: Path, *, commit: bool = True) -> None:
         encoding="utf-8",
     )
     (root / "docs" / "OPEN_SOURCE_GATE.md").write_text("gate\n", encoding="utf-8")
+    # The ledger row is not optional scaffolding: a case that plants
+    # violations leaves it at zero on purpose, so the mismatch it reports is
+    # a second finding in the output rather than a substitute for the one
+    # under test. Cases that assert on absence use count_violations=0.
+    (root / LEDGER_REL).write_text(
+        f"| 开源门槛违规 | **{violations} 项** | a stand-in for the real ledger |\n",
+        encoding="utf-8",
+    )
     git(root, "init", "-q")
     # Identity first: a commit with none fails, and it would fail for a
     # reason that has nothing to do with the gate under test.
@@ -345,3 +355,75 @@ def test_the_private_roots_are_not_in_any_commit() -> None:
     ).stdout.splitlines()
     comet = [p for p in listed if "/.comet/" in p]
     assert not comet, f"{len(comet)} .comet file(s) are in HEAD: {comet[:3]}"
+
+
+def test_the_ledger_must_state_the_count_this_run_found(tmp_path: Path) -> None:
+    """The count in the progress section is a claim, so it is checked.
+
+    It is not checked by trusting it: a case that plants a violation while
+    the row still says zero gets both findings, and the run stays red for
+    the reason it was already red for.
+    """
+    scaffold(tmp_path, violations=0)
+    (tmp_path / "leak.py").write_text("owner = '/Users/somebody/private'\n", encoding="utf-8")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "leak", "--no-gpg-sign")
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 1
+    assert "the ledger states 0 open-source violation(s); this run found 1" in err
+
+
+def test_a_ledger_that_stale_count_is_correct_is_green(tmp_path: Path) -> None:
+    """The other direction: fixing a violation has to move the number.
+
+    Without this the row would be a one-way ratchet -- the gate could go
+    red forever but never green, because nothing would notice that the
+    ledger was the thing still holding it there.
+    """
+    scaffold(tmp_path, violations=1)
+    (tmp_path / "leak.py").write_text("owner = '/Users/somebody/private'\n", encoding="utf-8")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "leak", "--no-gpg-sign")
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 1
+    assert "the ledger states" not in err
+    assert "has no `| 开源门槛违规" not in err
+
+
+def test_a_ledger_without_the_row_is_reported(tmp_path: Path) -> None:
+    scaffold(tmp_path)
+    (tmp_path / LEDGER_REL).write_text("no reading here\n", encoding="utf-8")
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 1
+    assert "has no `| 开源门槛违规" in err
+
+
+def test_a_missing_ledger_is_reported_rather_than_skipped(tmp_path: Path) -> None:
+    """Deleting the row must not switch the check off.
+
+    The tempting shape is "if the ledger is there, compare it", and it is
+    wrong for one specific reason: removing one line of one document would
+    make the gate stop noticing that the document is wrong, which is the
+    only thing the gate was added for.
+    """
+    scaffold(tmp_path)
+    (tmp_path / LEDGER_REL).unlink()
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 1
+    assert "opskeeper2-architecture.md is missing" in err
+
+
+def test_the_real_ledger_carries_the_row() -> None:
+    """The repository's own progress section states this gate's count.
+
+    Deliberately not "and it matches". This gate runs against the real tree
+    on every push and compares the number itself; what a test can add is the
+    other half -- that the row exists at all -- which is what would otherwise
+    be deleted without turning anything red at the moment of deletion.
+    """
+    ledger = REPO_ROOT / LEDGER_REL
+    assert ledger.exists(), f"{LEDGER_REL} is missing; the auditor now reports it as a violation"
+    text = ledger.read_text(encoding="utf-8")
+    assert re.search(r"^\| 开源门槛违规 \| \*\*\d+ 项\*\* \|", text, re.M), (
+        "the ledger has no `| 开源门槛违规 | **N 项** |` row; the auditor reports this as a violation"
+    )
