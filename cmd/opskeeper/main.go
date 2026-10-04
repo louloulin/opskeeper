@@ -115,7 +115,6 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
 	aiopschatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 
-	managerbizcrystallizehook "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/crystallizehook"
 	aiopsinvestigator "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/investigator"
 	managerbizaiopsmentions "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/mentions"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
@@ -2525,37 +2524,16 @@ func main() {
 	if err != nil {
 		log.Error("loop: phase worker factory", slog.Any("err", err))
 	}
-	// Cost crystallisation (plan item 7). The learner is the object the
-	// ledger was missing: it holds the cross-run streaks and is told by the
-	// orchestrator about every recovery that verified on the first try. It
-	// is wired only when the remediation dispatch is, because without a tool
-	// registry a recovery cannot be graded and the learner would refuse
-	// every run for want of a class.
-	var loopCrystallizer managerbizloop.RecoveryCrystallizer
-	var loopTriggers managerbizloop.AutonomyTriggerSource
-	if toolCount := len(middlewareReg.ListTools("")); toolCount > 0 {
-		learner, cerr := managerbizcrystallizehook.New(middlewareReg, managerbizcrystallizehook.Config{
-			// The class is a property the registry states about the tool, so
-			// the mapping is the one place a risk level becomes a class.
-			ToolClass:   riskLevelToToolClass,
-			BlastRadius: domain.RadiusSingleNS,
-			TTL:         15 * time.Minute,
-		}, log.With(slog.String("comp", "crystallize")))
-		if cerr != nil {
-			log.Error("loop: crystallize learner init failed; cost crystallisation disabled", slog.Any("err", cerr))
-		} else {
-			loopCrystallizer = learner
-			loopTriggers = managerbizloop.NewAlertTriggerAdapter(alertRepo, log)
-			// The review surface reads from the same ledger the loop writes to.
-			// It lives on the aiops handler because the crystalliser is in the
-			// aiops domain (aiops -> loop is the declared direction, decision
-			// 117; a loop-side endpoint on an aiops package would close a cycle).
-			// The route paths keep the /v1/loops prefix — these patterns are the
-			// loop's own history — but the code sits where the edge points.
-			aiopsHandler.SetPatterns(learner.Ledger())
-			aiopsHandler.SetDraftRoot(os.Getenv("OPSKEEPER_PLUGIN_IMPORT_DIR"))
-			log.Info("loop: cost crystallisation wired", slog.Int("tools", toolCount))
-		}
+	// Cost crystallisation (plan item 7). Whether it is on, and what the
+	// console reads, are decided in one function so all three can be tested
+	// from a process that is not a booted control plane; see
+	// loop_crystallize.go for what the three decisions are.
+	crystallization, cerr := newLoopCrystallization(middlewareReg, alertRepo, aiopsHandler, log)
+	switch {
+	case cerr != nil:
+		log.Error("loop: crystallize learner init failed; cost crystallisation disabled", slog.Any("err", cerr))
+	case crystallization.enabled():
+		log.Info("loop: cost crystallisation wired", slog.Int("tools", crystallization.tools))
 	}
 	loopOrchestrator, err := managerbizloop.NewOrchestrator(managerbizloop.OrchestratorDeps{
 		// Locker: MySQL GET_LOCK/RELEASE_LOCK adapter (data/loop/store.NewLockerDB)
@@ -2566,8 +2544,8 @@ func main() {
 		ContractRepo:           loopContractRepo,
 		WorkerRegistry:         managerbizloop.NewWorkerRegistry(loopWorkers),
 		Logger:                 log.With(slog.String("comp", "loop")),
-		Crystallizer:           loopCrystallizer,
-		Triggers:               loopTriggers,
+		Crystallizer:           crystallization.crystallizer,
+		Triggers:               crystallization.triggers,
 	})
 	if err != nil {
 		log.Error("loop: orchestrator init", slog.Any("err", err))
