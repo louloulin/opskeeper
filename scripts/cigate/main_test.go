@@ -23,7 +23,89 @@ func writeRepo(t *testing.T, makefile, ci string) string {
 	if err := os.WriteFile(filepath.Join(dir, "ci.yml"), []byte(ci), 0o644); err != nil {
 		t.Fatalf("write ci.yml: %v", err)
 	}
+	writeRepoE2E(t, root)
 	return root
+}
+
+// repoE2ETests is a stand-in for tests/e2e in the shape that matters.
+//
+// Two properties are load-bearing and neither is obvious. First, the
+// delivery file holds a broker test AND a broker-free one, because that is
+// the real file: a reader that works per file instead of per function
+// excludes the gateway hop along with the delivery test, and the gateway hop
+// is the only thing in the suite that proves a node credential can be
+// answered with a stream. Second, main_test.go calls
+// TerminateSharedFrontier, which contains the substring a naive match reads
+// as a dependency — and TestMain is the one function that can never be
+// skipped by name without skipping the package.
+func repoE2ETests() map[string]string {
+	return map[string]string{
+		"node_agent_delivery_test.go": `//go:build e2e
+
+package e2e
+
+func TestDelivery(t *testing.T) {
+	frontier := testenv.SharedFrontier(t)
+	env := testenv.Start(t, testenv.WithFrontier(frontier))
+	_ = env
+}
+
+func TestTheGatewayServesAStreamToANodeCredential(t *testing.T) {
+	env := testenv.Start(t)
+	_ = env
+}
+`,
+		"offline_replay_test.go": `//go:build e2e
+
+package e2e
+
+func TestOfflineReplay(t *testing.T) {
+	frontier := testenv.SharedFrontier(t)
+	env := testenv.Start(t, testenv.WithFrontier(frontier))
+	_ = env
+}
+`,
+		"main_test.go": `//go:build e2e
+
+package e2e
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	testenv.TerminateSharedFrontier()
+	testenv.TerminateSharedMySQL()
+	os.Exit(code)
+}
+`,
+	}
+}
+
+func writeRepoE2E(t *testing.T, root string) {
+	t.Helper()
+	dir := filepath.Join(root, "tests", "e2e")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir tests/e2e: %v", err)
+	}
+	for name, body := range repoE2ETests() {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+}
+
+// gateRecipe is one gate's whole block in the fixture Makefile.
+//
+// e2e-manager-check is the one gate whose recipe is not interchangeable with
+// the others, because it is the only one that names what it leaves out. A
+// fixture that gave it a generic recipe would let every test in this file
+// pass against a Makefile the checker rejects. Tests that delete a gate
+// delete this exact text, so the two cannot drift apart.
+func gateRecipe(target string) string {
+	if target == "e2e-manager-check" {
+		return "E2E_BROKER_TESTS := TestDelivery|TestOfflineReplay\n" +
+			"e2e-manager-check: ## runs the suite\n" +
+			"\tgo test -tags=e2e ./tests/e2e/ -skip '$(E2E_BROKER_TESTS)'\n\n"
+	}
+	return target + ": ## does the thing\n\tgo run ./scripts/x .\n\n"
 }
 
 // repoMakefile is a Makefile that defines every gate, in the same shape the
@@ -32,7 +114,7 @@ func repoMakefile() string {
 	var b strings.Builder
 	b.WriteString(".PHONY: " + strings.Join(gateNames(), " ") + "\n")
 	for _, g := range allGates() {
-		b.WriteString(g.Target + ": ## does the thing\n\tgo run ./scripts/x .\n\n")
+		b.WriteString(gateRecipe(g.Target))
 	}
 	// A near-miss: a variable whose name contains a gate, and a target that
 	// is not a gate. Neither should count.
@@ -86,7 +168,10 @@ func TestADroppedCIInvocationIsReported(t *testing.T) {
 func TestADroppedMakefileTargetIsReported(t *testing.T) {
 	for _, g := range allGates() {
 		t.Run(g.Target, func(t *testing.T) {
-			mk := strings.Replace(repoMakefile(), g.Target+": ## does the thing\n\tgo run ./scripts/x .\n\n", "", 1)
+			mk := strings.Replace(repoMakefile(), gateRecipe(g.Target), "", 1)
+			if mk == repoMakefile() {
+				t.Fatalf("the fixture never contained %s, so this test proved nothing", g.Target)
+			}
 			err := check(writeRepo(t, mk, repoCI()))
 			if err == nil {
 				t.Fatalf("the Makefile no longer defines %s, and the check passed", g.Target)
@@ -268,6 +353,105 @@ func TestADroppedDecisionGateIsReported(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "broker-pin-check") {
 		t.Errorf("the report does not name the dropped decision gate: %v", err)
+	}
+}
+
+// The e2e gate skips two tests by name, and a skip list that only one
+// direction is checked on is a list that grows: the way to make a pipeline
+// green is to add a name to it, and nothing here would notice that the name
+// did not need skipping at all.
+func TestABrokerTestNobodyListedIsReported(t *testing.T) {
+	root := writeRepo(t, repoMakefile(), repoCI())
+	path := filepath.Join(root, "tests", "e2e", "new_test.go")
+	body := `//go:build e2e
+
+package e2e
+
+func TestANewNodeSideThing(t *testing.T) {
+	frontier := testenv.SharedFrontier(t)
+	_ = frontier
+}
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write the new test: %v", err)
+	}
+	err := check(root)
+	if err == nil {
+		t.Fatal("a test that pulls the broker container and is not on the skip list passed")
+	}
+	if !strings.Contains(err.Error(), "TestANewNodeSideThing") {
+		t.Errorf("the report does not name the test that would have failed the job: %v", err)
+	}
+}
+
+func TestABrokerFreeTestOnTheSkipListIsReported(t *testing.T) {
+	mk := strings.Replace(repoMakefile(),
+		"E2E_BROKER_TESTS := TestDelivery|TestOfflineReplay",
+		"E2E_BROKER_TESTS := TestDelivery|TestOfflineReplay|TestTheGatewayServesAStreamToANodeCredential", 1)
+	err := check(writeRepo(t, mk, repoCI()))
+	if err == nil {
+		t.Fatal("a test that needs no broker was excluded, and the suite stops covering it silently")
+	}
+	if !strings.Contains(err.Error(), "stops covering") {
+		t.Errorf("the report does not say what excluding it costs: %v", err)
+	}
+}
+
+// A list that is maintained and then not passed to go test is the same as no
+// list: the recipe runs all thirty tests and the registry decides when the
+// job is allowed to pass.
+func TestAMaintainedSkipListThatTheRecipeIgnoresIsReported(t *testing.T) {
+	mk := strings.Replace(repoMakefile(), " -skip '$(E2E_BROKER_TESTS)'", "", 1)
+	if mk == repoMakefile() {
+		t.Fatal("the fixture recipe no longer has a -skip to remove")
+	}
+	err := check(writeRepo(t, mk, repoCI()))
+	if err == nil {
+		t.Fatal("E2E_BROKER_TESTS is defined, correct, and never passed to go test")
+	}
+	if !strings.Contains(err.Error(), "not used") {
+		t.Errorf("the report does not say the list is unused: %v", err)
+	}
+}
+
+// TestMain calls TerminateSharedFrontier in every run of the suite and needs
+// no broker of its own. Reading that substring as a dependency would put the
+// package's entry point on the skip list, which skips everything.
+func TestTestMainIsNotReadAsABrokerDependency(t *testing.T) {
+	got, err := brokerDependentTests(filepath.Join("..", "..", "tests", "e2e"))
+	if err != nil {
+		t.Fatalf("read the real tests/e2e: %v", err)
+	}
+	for _, name := range got {
+		if name == "TestMain" {
+			t.Fatal("TestMain was read as needing a broker; skipping it skips the whole package")
+		}
+	}
+}
+
+// The file-granular version of this reader was wrong inside a day, and the
+// case that proves it is in the real tree rather than in a fixture: the
+// delivery test and the gateway hop share a file, and only one of them dials
+// the broker.
+func TestTheGatewayHopIsNotSkippedForSharingAFileWithADeliveryTest(t *testing.T) {
+	got, err := brokerDependentTests(filepath.Join("..", "..", "tests", "e2e"))
+	if err != nil {
+		t.Fatalf("read the real tests/e2e: %v", err)
+	}
+	var sawDelivery, sawGateway bool
+	for _, name := range got {
+		switch name {
+		case "TestNodeAgentDelivery":
+			sawDelivery = true
+		case "TestTheGatewayServesAStreamToANodeCredential":
+			sawGateway = true
+		}
+	}
+	if !sawDelivery {
+		t.Error("TestNodeAgentDelivery is not in the broker set; it is the one test that definitely needs the container")
+	}
+	if sawGateway {
+		t.Error("TestTheGatewayServesAStreamToANodeCredential is in the broker set; it cuts the node out and runs anywhere")
 	}
 }
 

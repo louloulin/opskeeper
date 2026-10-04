@@ -43,6 +43,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -125,6 +127,16 @@ func DecisionGates() []Gate {
 				"audit ledger and still be handed an agent that cannot call anything; PiG shipped the " +
 				"provenance fix in v0.4.0, so the question has an answer again and the only thing " +
 				"left is to keep asking it (decision 168)",
+		},
+		{
+			Target: "e2e-manager-check",
+			Why: "the plan's section 6 end-to-end acceptance — login, RBAC, credentials, the " +
+				"gateway streaming to a node credential, MCP, workflows, notifications, RCA, the " +
+				"harness — was checked by nothing but a human typing make test-e2e. ci.yml excluded " +
+				"the suite because it needs docker, which is what a GitHub Actions runner is; the " +
+				"only part that needs more than that is the tunnel-broker pull, and those two tests " +
+				"stay in make e2e-delivery-check so a registry rate limit cannot take the other " +
+				"twenty-eight down with them (decision 173)",
 		},
 		{
 			Target: "broker-pin-check",
@@ -210,6 +222,14 @@ func check(root string) error {
 				"either add it with its reason or rename it so it does not read like one", target))
 	}
 
+	// A gate that runs twenty-eight of the suite's thirty tests is only as
+	// honest as the two it skips. That pair is re-derived from the sources
+	// rather than read from the Makefile, because a skip list that checks
+	// itself is a skip list that can grow.
+	if err := brokerSkipAgrees(root, string(makefile)); err != nil {
+		problems = append(problems, err.Error())
+	}
+
 	// The gates being wired is only half of what a workflow promises; the other
 	// half is that a push can start it. Reported with the same discipline --
 	// every disagreement, then exit non-zero.
@@ -289,6 +309,146 @@ func splitCommands(line string) []string {
 	return strings.FieldsFunc(line, func(r rune) bool {
 		return r == ';' || r == '|' || r == '&'
 	})
+}
+
+// brokerCallers are the two testenv entry points that need a tunnel broker
+// container. SharedFrontier brings the broker up; WithFrontier hands an
+// existing one to Start. A test that calls either cannot run without it.
+//
+// The match is anchored on `testenv.` so that TestMain's teardown call —
+// testenv.TerminateSharedFrontier — is not read as a dependency. It appears
+// in every e2e run and needs no broker of its own, and matching it would put
+// the package's entry point in the skip list.
+var brokerCallers = []string{"testenv.SharedFrontier(", "testenv.WithFrontier("}
+
+// topLevelFuncRE finds the start of any top-level func, named or not.
+var topLevelFuncRE = regexp.MustCompile(`(?m)^func ([A-Za-z0-9_]+)\(`)
+
+// brokerDependentTests re-derives which e2e tests need a broker container.
+//
+// It is function-scoped, and the first version of this was file-scoped and
+// was wrong within a day: node_agent_delivery_test.go holds both
+// TestNodeAgentDelivery (which starts the broker) and
+// TestTheGatewayServesAStreamToANodeCredential (which cuts the node out
+// entirely and runs anywhere). A file-granular reader either excluded the
+// gateway hop along with the delivery test — quietly giving up the hop that
+// proves a node credential can get a stream at all — or demanded a broker
+// for a test that never dials one.
+//
+// The extent of a Go function is not something to re-derive from braces, so
+// the reader attributes each call to the nearest preceding top-level `func`
+// and keeps the ones that are tests. A broker call sitting in a file-scope
+// helper therefore attributes to nothing, which is the safe direction: the
+// check reports a disagreement and a human looks.
+func brokerDependentTests(e2eDir string) ([]string, error) {
+	entries, err := os.ReadDir(e2eDir)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", e2eDir, err)
+	}
+	seen := map[string]bool{}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(e2eDir, name))
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", name, err)
+		}
+
+		current := ""
+		for _, line := range strings.Split(string(body), "\n") {
+			if m := topLevelFuncRE.FindStringSubmatch(line); m != nil {
+				current = m[1]
+			}
+			if current == "" || !strings.HasPrefix(current, "Test") {
+				continue
+			}
+			for _, caller := range brokerCallers {
+				if strings.Contains(line, caller) {
+					seen[current] = true
+				}
+			}
+		}
+	}
+
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// makefileVar reads a top-level `NAME := value` assignment. Like makeTargets
+// it skips recipes, comments and dot-targets, and unlike a regexp over the
+// whole file it does not have to reason about backslash continuations.
+func makefileVar(src, name string) (string, bool) {
+	prefix := name + " :="
+	for _, line := range strings.Split(src, "\n") {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(line, prefix)), `\`)), true
+	}
+	return "", false
+}
+
+// brokerSkipAgrees is the check on the check.
+//
+// e2e-manager-check excludes the broker tests by a name list in the Makefile.
+// A list nobody compares to the sources is a list that only grows: add a test
+// that needs a broker, do not list it, and it fails loudly — fine. Add one
+// that does not, list it anyway to get a pipeline green, and the suite quietly
+// stops covering whatever it covered. Both directions are compared here, and
+// the recipe is required to actually use the variable, so a list that is
+// maintained but not wired is reported too.
+func brokerSkipAgrees(root, makefileSrc string) error {
+	derived, err := brokerDependentTests(filepath.Join(root, "tests", "e2e"))
+	if err != nil {
+		return err
+	}
+	if len(derived) == 0 {
+		return fmt.Errorf("no e2e test calls %s any more, so E2E_BROKER_TESTS is either "+
+			"stale or the harness moved; a skip list that describes nothing is not a skip list, "+
+			"it is a way to stop asking", strings.Join(brokerCallers, " or "))
+	}
+
+	raw, ok := makefileVar(makefileSrc, "E2E_BROKER_TESTS")
+	if !ok {
+		return fmt.Errorf("the Makefile no longer defines E2E_BROKER_TESTS; make e2e-manager-check " +
+			"silently stops skipping anything, and the broker tests take the suite down with them")
+	}
+	listed := strings.Split(raw, "|")
+	sort.Strings(listed)
+
+	var problems []string
+	for _, want := range derived {
+		if !slices.Contains(listed, want) {
+			problems = append(problems, fmt.Sprintf(
+				"%s calls testenv.SharedFrontier or testenv.WithFrontier, so it needs the broker "+
+					"container, but E2E_BROKER_TESTS does not name it; add it, or the e2e job will "+
+					"fail on a Docker Hub rate limit that has nothing to do with the change", want))
+		}
+	}
+	for _, got := range listed {
+		if !slices.Contains(derived, got) {
+			problems = append(problems, fmt.Sprintf(
+				"E2E_BROKER_TESTS excludes %s, which needs no broker container; a test is only "+
+					"allowed on that list if the sources say it pulls the broker, so this one is "+
+					"something the suite stops covering", got))
+		}
+	}
+	if !strings.Contains(makefileSrc, "-skip '$(E2E_BROKER_TESTS)'") {
+		problems = append(problems,
+			"make e2e-manager-check does not pass -skip '$(E2E_BROKER_TESTS)', so the list above "+
+				"is maintained correctly and then not used")
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("the e2e suite's broker exclusion does not match its sources:\n  %s",
+			strings.Join(problems, "\n  "))
+	}
+	return nil
 }
 
 // SelfExempt is what checks gates without being a gate the plan promises.

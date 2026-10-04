@@ -12118,7 +12118,7 @@ boot 路径上为一个「省钱的附加功能」准备的。装配现在**拒�
 | 删掉 nil alert repo 的拒绝 | 红：`panic: loop: NewAlertTriggerAdapter: repo is nil`（测试进程崩，而不是断言失败——这正是它要证明的那件事） |
 | 基线 | 六条全绿 |
 | `GOWORK=off go test ./cmd/opskeeper/ -count=1` | ok |
-| `make module-standalone-check` | 18 个模块全绿 |
+| `make module-standalone-check` | 14 个模块全绿（实测 `PIG_MODULES`，**此处此前写 18，是上一轮没核就抄进本节的数**，见 §4.109.4） |
 | `make module-check` / `make ci-gate-check` | 全绿 |
 | `scripts/audit_open_source.py` | 仍 **17**（本轮未新增违规） |
 
@@ -12249,6 +12249,105 @@ Makefile 里那段反斜杠续行的赋值，它确实匹配到了，却只吃�
 
 第二条变异顺带证了一件事：`PIG_MODULES` 的**行结构**也在被检查——加一项时我故意写成
 反斜杠续行的形式，它照样被数进去，说明续行解析这条路径是真的在跑，不是碰巧。
+
+### 4.109 决策 173：把 e2e 套件接进 CI——「需要 docker」这句话一直是理由，不是事实
+
+#### 4.109.1 起点：计划 §六 的端到端验收，CI 一条都没跑
+
+计划 §六「测试计划」列了三组端到端验收，其中「单节点：安装 → 隧道连通 → 对话 →
+流式输出 → 工具调用 → 审计链完整」是整份计划**唯一**能证明「这个平台真的能用」的
+一条。而 `ci.yml` 的文件头写着：
+
+> e2e tests are `//go:build e2e` tagged and intentionally excluded here — they
+> need docker + a live test environment; this gate is the fast unit/compile layer.
+
+这句话是对的。**它作为排除的理由是错的。**
+
+`make ci-gate-check` 登记了 7 条验收闸门，全都在 CI 里。但那 7 条没有一条回答
+「端到端跑得通吗」——它们读文件、跑单元、跑黄金集、核对清单。**从第一天到今天，
+本仓库的每一次 push 都没有执行过一个端到端测试**，靠的是一个记得敲 `make test-e2e`
+的人。
+
+#### 4.109.2 实测：需要 Docker 的是 MySQL，而 CI 本来就是 Docker 主机
+
+动手前先量，而不是先信那句注释。`tests/e2e/testenv` 用 testcontainers 起一个
+MySQL 8.0 容器（`sharedMySQL`，`env.go:406`），所以**确实需要 Docker**——但
+GitHub Actions 的 `ubuntu-24.04` runner 就是一台 Docker 主机。要求被排除它的那个
+地方，恰好满足这个要求。
+
+真正多出来的是什么？两个测试：`TestNodeAgentDelivery` 与
+`TestANodeKeepsItsTelemetryThroughAnOutage`。它们调 `testenv.SharedFrontier`，
+要从 Docker Hub 拉 `singchia/frontier:1.2.5`。本机实测拉取失败（daocloud 镜像源
+EOF），harness 自己把话说得很清楚：这是环境前置，不是缺陷。
+
+**30 个 e2e 测试，28 个不需要 broker。** 本机带 `-skip` 实测：**47.7 秒，退出码 0。**
+
+#### 4.109.3 改了什么
+
+| 段 | 改动 | 为什么是这个形状 |
+|---|---|---|
+| 闸门 | Makefile 新增 `e2e-manager-check`：`-skip '$(E2E_BROKER_TESTS)'` 跑全套其余部分 | broker 两条留在 `e2e-delivery-check`。**分开是为了让一次 registry 限流不要把另外 28 条一起带走** |
+| CI | `ci.yml` 新增 `e2e` job（20 分钟超时），每次 push 都跑 | 原来那条注释同时被删掉——它会变成下一次排除的理由 |
+| 登记 | `cigate` 的 `DecisionGates()` 登记第 7 条闸门 | 7 条里 4 条来自计划、3 条来自决策；这条是决策带来的 |
+| **对账** | `brokerSkipAgrees`：从 `tests/e2e` 源码重新推导「谁需要 broker」，与 Makefile 里的名单**双向比对**，并要求 recipe 真的用了这个变量 | 见下 |
+
+**为什么跳过清单要双向比对。** 一份只做单向检查的清单只会往一个方向长：想让流水线
+变绿，把名字加进去就行，没有任何东西会发现那个名字其实不需要跳过。两条方向都要红：
+
+| 变异 | 期望 | 实测 |
+|---|---|---|
+| 源码里多一个调 `SharedFrontier` 的测试，名单里没有 | 红 | 红，点名 `TestANewNodeSideThing` |
+| 名单里多一个不需要 broker 的测试 | 红 | 红，报「something the suite stops covering」 |
+| 名单正确但 recipe 不传 `-skip` | 红 | 红，报「maintained correctly and then not used」 |
+| 基线 | 绿 | 绿 |
+
+#### 4.109.4 这条对账当场抓到了我自己写错的一版
+
+第一版是**文件粒度**的：扫 `tests/e2e/*.go`，看哪个文件调了 `testenv.SharedFrontier`。
+写完跑 `cigate`，它立刻红了：
+
+> `TestTheGatewayServesAStreamToANodeCredential` calls `testenv.SharedFrontier` …
+
+因为它和 `TestNodeAgentDelivery` 在**同一个文件**里。而这个测试恰恰是**不需要**
+broker 的——本机那次带 `-skip` 的运行里它是过的，唯一失败的是 delivery 那条。
+
+文件粒度只有两个出路，两个都是错的：把网关那一跳一起排除掉（而网关那一跳是整套
+e2e 里**唯一**证明「一个节点凭据能拿到流式回答」的东西），或者要求一个从不拨号
+broker 的测试去拨号 broker。**已改成函数粒度**：每个调用归属于它前面最近的顶层
+`func`，只保留 `Test` 开头的。
+
+同一处还有一个更细的坑：`TestMain` 调 `testenv.TerminateSharedFrontier`——包含
+`SharedFrontier` 这个子串，但它每个 run 都执行、自己不需要 broker，而**它是唯一
+一个不能按名字跳过的东西**（跳过它等于跳过整个包）。匹配锚在 `testenv.` 之后，
+就是为了不把它读成依赖。这两条各有一条测试对着真树断言
+（`TestTestMainIsNotReadAsABrokerDependency`、
+`TestTheGatewayHopIsNotSkippedForSharingAFileWithADeliveryTest`）。
+
+**顺带更正本账一处**：§4.108.4 那张验证表里写着「`make module-standalone-check`
+18 个模块全绿」。那是上一轮**没核就抄进本节**的数——`PIG_MODULES` 是 14 条，
+决策 172 刚把它做成闸门，两节挨着，一节核了一节没核。已改为 14。
+
+#### 4.109.5 进度：不动百分比，而且这次的不动要说明理由
+
+**架构完成度仍是 97.0%，四阶段仍是 93.6%。**
+
+按 §4.64.8 立的规矩——**给某一格硬拔高比不改更糟**。计划 §六 的端到端验收不是 A–E
+里的任何一条，也不是阶段 0–3 里的任何一条；它是「测试计划」里的一组条目，而本账
+的两张表量的都不是它。
+
+而且**更不该动**：这一轮没有让任何节点多一个能力、没有让任何一次推理更便宜、没有
+让任何一次交付更可靠。它让一件**本来就成立**的事变成了**每次 push 都会发生**的事。
+台账里没有一格是量这个的，而为此新造一格会让百分比开始回答一个没人问的问题。
+
+**真正变的是**：计划 §六 那条「单节点安装 → 隧道连通 → 对话 → 流式输出」从此有了
+执行者。broker 那两条仍然要人在有 registry 的机器上跑——这是**记录在案**的
+（`make e2e-delivery-check`，且 `cigate` 的对账保证它们没有被别的名字顶替），不是
+遗漏。
+
+**下一个候选**：`TestANodeKeepsItsTelemetryThroughAnOutage` 也是 broker 依赖。它
+测的是计划 §四 阶段 1.1「断网不丢数据」那条**唯一**的端到端断言——阶段 1 记 100%，
+而它的验收证据现在只能手动跑。如果它能在不需要 broker 的前提下跑（节点侧走直连
+而不是经隧道），那是本轮这条线索的下一个真东西。
 
 ## 六、当前实现进度
 

@@ -135,6 +135,42 @@ test-e2e-live: ## E2E live mode（用 tests/e2e/secrets.local.env 打通真实�
 # 的闸门——它默认指向 colima，就等于把绝大多数用 Docker Desktop 的人挡在
 # 门外，而失败的样子是"连不上 docker"，看起来像测试坏了。需要 colima 的
 # 人在自己的 shell 里设好 DOCKER_HOST，它会被原样带进来。
+# Which e2e tests need a tunnel broker container, and therefore cannot run
+# where the registry is unreachable or rate-limited.
+#
+# This list is the reason the rest of the suite is CI-runnable, so it is a
+# variable rather than a flag buried in a recipe: scripts/cigate recomputes
+# the set from tests/e2e (a test file that calls testenv.SharedFrontier or
+# testenv.WithFrontier) and fails if it disagrees in either direction. Adding
+# a broker-dependent test and not listing it here is red; listing a test that
+# does not need the broker is also red, because that is how a real regression
+# gets skipped to make a pipeline green.
+E2E_BROKER_TESTS := TestNodeAgentDelivery|TestANodeKeepsItsTelemetryThroughAnOutage
+
+# The rest of the end-to-end suite, on every push.
+#
+# ci.yml carried the note "e2e tests need docker + a live test environment"
+# and excluded the whole suite on that basis. Docker is real here — MySQL
+# comes up through testcontainers — but a GitHub Actions runner is a docker
+# host, so the requirement was satisfied by the very place the suite was
+# being kept out of. What the suite needs beyond that is one pulled image
+# (mysql:8.0) and about fifty seconds.
+#
+# So for the life of this repository the plan's section 6 end-to-end
+# acceptance — login, RBAC, credentials, the gateway serving a stream to a
+# node credential, MCP, workflows, notifications, RCA, the harness — has been
+# checked by nothing but a human typing make test-e2e. This target is what
+# makes it a gate.
+#
+# The broker tests stay out on their own merits, not because the suite is
+# unrunnable: they pull singchia/frontier from Docker Hub, and when that pull
+# fails the harness says so and fails the run (see tests/e2e/README.md).
+# Keeping them in a separate target means a registry outage does not take the
+# other twenty-eight down with it.
+.PHONY: e2e-manager-check
+e2e-manager-check: ## 端到端套件（除两条需要隧道 broker 的；CI 每次 push 都跑）
+	go test -tags=e2e -count=1 -timeout=25m ./tests/e2e/ -skip '$(E2E_BROKER_TESTS)'
+
 e2e-delivery-check: ## 节点 Agent 交付闭环（需 Docker；见 tests/e2e/README.md）
 	go test -tags=e2e -count=1 -timeout=20m ./tests/e2e/ -run 'TestTheGatewayServesAStreamToANodeCredential|TestNodeAgentDelivery'
 
