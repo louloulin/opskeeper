@@ -12360,10 +12360,9 @@ broker 的测试去拨号 broker。**已改成函数粒度**：每个调用归�
 e2e-delivery-check` + `cigate` 的双向对账保证它们没被别的名字顶替。
 
 **由此得出的下一条真问题**不是「怎么把这两条搬进 CI」，而是：**阶段 1 记 100%，
-而它唯一的端到端验收证据在一个 CI 跑不了的 job 里。** 百分比与证据强度之间有一处
-缺口，要么把证据做进 CI（需要 CI 能拉 `singchia/frontier`，或改用进程内的隧道实现
-替身），要么把阶段 1 的判据写成它现在真正有的形状（单元 + 进程内集成，而不是 e2e）。
-这两条都还没有决定，本轮不动百分比。
+而它唯一的端到端验收证据在一个 CI 跑不了的 job 里。**
+
+**这一句本身说过头了，下一节更正。**
 
 ## 六、当前实现进度
 
@@ -14247,6 +14246,72 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
     - **`gofmt` / `go vet` 的既有例外不动**：`core/floor/skill/builtin/spill_helper.go`
       的格式与 `middleware/adapter/k8s/cleanup.go:203` 的 `append with no values`
       都是搬迁前就在的，属于别人的账。
+
+### 四阶段的证据锚点（决策 174）
+
+上面那张表回答「还差多少」，答不了「凭什么」。**一个百分比可以和一个不存在的测试
+并存**：把 `TestATransportFailureStopsBeforeTheRowsThatDidNotGo` 删掉，阶段 1 仍然
+记 100%，`ledgercheck` 的六条检查仍然全绿——它们验的是**算术**（权重之和、写下的
+总数等于上面各行之和、括号里的公式仍列着那些行、四格均值、台账里的模块数、清单里
+的工具数），没有一条问过「这条结论依赖的测试还在不在」。
+
+这正是 `cigate` 文件头描述的那个形状：一个被引用的数字、一条有人敲过的命令，和
+一个没人拥有的性质。所以这里把每个阶段的百分比**挂在具体的测试上**，并让
+`scripts/ledgercheck` 机器核对三件事：路径存在、所在模块在 CI 的 `PIG_MODULES`
+里（也就是 `module-standalone-check` 每次 push 都会 build+test 它）、以及最后一列
+「CI 未覆盖」与实际算出来的集合**相等**。
+
+| 阶段 | 测试证据（每一个都必须存在且被 CI 跑到） | CI 未覆盖 |
+|---|---|---|
+| 0 边缘交付闭环 | `core/manager/server/llmgw`、`core/floor/delivery`、`core/edge/pigsupervisor`、`tests/agentgateway` | - |
+| 1 离线与有限自治 | `core/edge/spool/spool_test.go`、`core/edge/telemetrywal/wal_test.go`、`core/edge/changewatcher/tunnel_wal_test.go`、`core/edge/biz/agent_replay_accept_test.go`、`core/edge/autonomy/autonomy_test.go`、`core/edge/policygate/fence_test.go` | - |
+| 2 生态与治理加固 | `core/manager/biz/aiops/crystallize`、`core/harness/judge`、`core/manager/pkg/promptguard`、`core/manager/server/mcp` | - |
+| 3 控制面与联邦 | `core/floor/federation`、`core/manager/biz/federation`、`core/manager/service/federationchild`、`core/manager/service/federationlink`、`core/manager/server/federation` | - |
+
+**三处必须说清楚的事，否则这张表会被读成比它实际更强的样子：**
+
+1. **阶段 1 的风险窗口其实在 CI 里。** 计划 §四 1.1 真正的危险是「回放被误判成已
+   送达」——e2e 自己的注释说那是「唯一可能发出错 ack 的窗口」。而
+   `agent_replay_accept_test.go` 的 `TestATransportFailureStopsBeforeTheRowsThatDidNotGo`
+   正是拿一个传输失败的 client 打这条断言，它在 `core/edge` 模块里，**每次 push 都
+   跑**。§4.109.5 曾经把阶段 1 的证据说成「只在一个 CI 跑不了的 job 里」，那是过头
+   了，本节更正。
+2. **阶段 1 真正不在 CI 里的是跨进程拓扑**，不是那个窗口：`tests/e2e/offline_replay_test.go`
+   与 `node_agent_delivery_test.go` 需要隧道 broker 镜像。它们**没有**列进锚点，
+   因为锚点列的是「支撑这个百分比的证据」，而这两条证明的是另一件事——组件跨进程
+   接起来仍然成立。它们的去处是 `make e2e-delivery-check`，由 `cigate` 的双向对账
+   保证没被别的名字顶替。
+3. **阶段 3 的第二条（manager 拆分）没有测试证据**，因为它量的不是行为而是行数
+   （`find core/manager -name '*.go' | wc -l`，口径写在进度表里，按 §4.57 不做闸门）。
+   所以阶段 3 的 79.7% 里，联邦那部分有锚点，拆分那部分只有口径。**这是这张表现在
+   的形状，不是它该有的终态**——它记的是当前真实的样子，不是理想。
+
+**更正 §4.109.5 的一句过头话。** 那一节写「阶段 1 记 100%，而它**唯一的**端到端
+验收证据在一个 CI 跑不了的 job 里」。实测下来，「唯一」是错的，而且错在危险的那一
+侧——它会让下一个人以为那条风险窗口没人管。
+
+计划 §四 1.1 真正的危险是「回放被误判成已送达」，e2e 自己的注释说那是「唯一可能
+发出错 ack 的窗口」。而 `core/edge/biz/agent_replay_accept_test.go` 的
+`TestATransportFailureStopsBeforeTheRowsThatDidNotGo` 正是拿一个**传输失败**的
+client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，**每次 push 都跑**。
+
+**所以阶段 1 的证据不是「只在一个跑不了的 job 里」，而是「风险窗口在 CI 里，跨进程
+拓扑不在」**。这个区别不是措辞：前者意味着阶段 1 的 100% 悬空，后者意味着它有一条
+真实的、可执行的、每次都在跑的底线，而 e2e 额外证明的是组件跨进程接起来仍然成立。
+
+**锚点检查自己的三条变异**（本轮实测）：
+
+| 变异 | 期望 | 实测 |
+|---|---|---|
+| 阶段 1 的锚点指向一个不存在的文件 | 红 | 红：「the claim lost its evidence and the percentage did not move」 |
+| 阶段 1 加一条 broker 依赖的 e2e 证据，却仍写「CI 未覆盖 = -」 | 红 | 红：「the ledger lists [] and the computed set is [tests/e2e/offline_replay_test.go]; one of the two is stale」 |
+| 同上，但如实写进未覆盖列 | 绿 | 绿——证明这条规则两个方向都成立，而不是只会红 |
+| 基线 | 绿 | 绿 |
+
+写第二条变异时踩到本包自己的一个坑，值得记一句：`os.Stat` 对**所有**锚点都报「不
+存在」。原因是测试的 CWD 是 `scripts/ledgercheck`，而台账里写的路径是仓库相对——
+两次都不是 bug，合起来是「所有路径都相对错了基准」。修法是在一处 `repoRoot` 折算，
+不是让四个调用点各自记得。
 
 ### 当前真实缺口
 
