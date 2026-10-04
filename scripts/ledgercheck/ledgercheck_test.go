@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -206,6 +207,91 @@ func TestTheFourStageAveragesAreTheMeansTheyClaim(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no four-stage mean lines found; this check is not looking at what it claims to")
+	}
+}
+
+// fourStageRowRE reads one of the four stage rows of the distributed
+// programme's progress table: `| 2 生态与治理加固（P2） | **96.7%** | ... |`.
+var fourStageRowRE = regexp.MustCompile(`(?m)^\| ([0-3]) [^|]*\| \*\*(\d+(?:\.\d+)?)%\*\* \|`)
+
+// fourStageTotalRE reads the stated weighted total of the same table, and
+// the four values it is said to be the mean of.
+//
+// Both the bold and the 四阶段等比 are required. The bold is how the current
+// line is told from the historical ones stacked under it, and 四阶段等比 is
+// what separates this total from the A–E one that shares the section.
+var fourStageTotalRE = regexp.MustCompile(
+	`加权合计 ≈ \*\*(\d+(?:\.\d+)?)%\*\*（[^）]*四阶段等比 (\d+(?:\.\d+)?) / (\d+(?:\.\d+)?) / (\d+(?:\.\d+)?) / (\d+(?:\.\d+)?)`)
+
+// TestTheStageRowsAndTheStatedTotalAreTheSameNumber is the check that was
+// missing for a long time, and its absence is worth more than the check.
+//
+// The existing average check scans the whole ledger for a formula of the
+// shape "a / b / c / d 的均值 n" and verifies the arithmetic. That is true of
+// every historical formula in the document, all of which were correct when
+// written, and it never once looks at the four rows of the progress table.
+// So the table's rows could say 98 / 100 / 91.7 / 79.3, the stated total
+// under them could say 76.2%, and the decision records three screens down
+// could say 93.6% — and every check in this package would be green.
+//
+// It was green that way for long enough that "四阶段 93.6%" was quoted from
+// the decision records in every hand-off while the section titled 当前实现进度
+// said 76.2%. Nothing in this repository noticed, because nothing asked the
+// two whether they agreed. See decision 177.
+func TestTheStageRowsAndTheStatedTotalAreTheSameNumber(t *testing.T) {
+	ledger := readLedger(t)
+	start := strings.Index(ledger, progressHeading)
+	if start < 0 {
+		t.Fatalf("the ledger has no %q section", progressHeading)
+	}
+	progress := ledger[start:]
+	if end := strings.Index(progress, "\n## "); end >= 0 {
+		progress = progress[:end]
+	}
+
+	totals := fourStageTotalRE.FindAllStringSubmatch(progress, -1)
+	if len(totals) != 1 {
+		t.Fatalf("the progress section has %d bold four-stage totals, not 1; "+
+			"the current one has to be unambiguous, or this check cannot tell which is which", len(totals))
+	}
+
+	rows := map[string]string{}
+	for _, m := range fourStageRowRE.FindAllStringSubmatch(progress, -1) {
+		if _, dup := rows[m[1]]; dup {
+			t.Fatalf("the progress section states stage %s twice", m[1])
+		}
+		rows[m[1]] = m[2]
+	}
+	if len(rows) != 4 {
+		t.Fatalf("the progress section has %d stage rows, not 4: %v", len(rows), rows)
+	}
+
+	var problems []string
+	for i, stage := range []string{"0", "1", "2", "3"} {
+		said := totals[0][i+2]
+		if rows[stage] != said {
+			problems = append(problems, fmt.Sprintf(
+				"stage %s reads %s%% in its row but %s%% in the stated total; "+
+					"one of the two is stale and the weighted number below them is derived from it",
+				stage, rows[stage], said))
+		}
+	}
+
+	var sum float64
+	for i := 2; i <= 5; i++ {
+		sum += mustFloat(totals[0][i])
+	}
+	want := sum / 4
+	claimed := mustFloat(totals[0][1])
+	if math.Abs(claimed-want) > 0.06 {
+		problems = append(problems, fmt.Sprintf(
+			"the stated total is %g but the four values it names average %.3f", claimed, want))
+	}
+
+	if len(problems) > 0 {
+		sort.Strings(problems)
+		t.Errorf("the progress section's stage rows and its stated total disagree:\n  %s",
+			strings.Join(problems, "\n  "))
 	}
 }
 
