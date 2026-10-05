@@ -428,8 +428,19 @@ node-arch-check: ## 校验 bin/<os>-<arch>/ 里节点的 pig 与 edge 真的是�
 domain-release-report: ## 打印可证明独立发版的域（入向跨域 import 为零）
 	go run ./scripts/domaincheck . -release
 
+# The other half of "which edges are worth cutting". The release report
+# measures what nothing depends on; this one measures what each remaining
+# edge actually carries, and separates a port whose implementation sits on
+# the consumer's side (cheap: move the interface to core/floor, the edge
+# goes away — decisions 227, 230) from a data shape (expensive: it moves
+# with its table and its foreign keys). It exists because a hand-sorted
+# version of this question got it wrong twice.
+.PHONY: domain-seam-report
+domain-seam-report: ## 逐条判定跨域边承载的是端口还是数据（决策 231）
+	go run ./scripts/domaincheck . -seams
+
 .PHONY: domain-check
-domain-check: ## 校验 control plane 的域边界（55 个域 / 42 条声明边 / 0 对环，决策 118 起）
+domain-check: ## 校验 control plane 的域边界（57 个域 / 40 条声明边 / 0 对环，决策 231 起）
 	go run ./scripts/domaincheck .
 	go test ./scripts/domaincheck/ -count=1
 
