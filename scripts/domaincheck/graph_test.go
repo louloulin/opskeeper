@@ -490,11 +490,15 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// a function signature the composition root had already handed it — and
 	// the price column's "two types" turned out to be a closure of six, two
 	// of which were a shared vocabulary type that one third domain had
-	// already copied by hand).
+	// already copied by hand), decision 242's (grafana -> monitor, where the
+	// mirror wanted six columns of an eleven-column entity) and decision
+	// 247's (agentteams -> alert, where a recovery closure wanted two columns
+	// of a twenty-five-column entity and a status constant that was a
+	// precondition of the question rather than a filter it set).
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "33 edges") {
+	if !strings.Contains(buf.String(), "32 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

@@ -142,16 +142,15 @@ var sharedDomains = map[string]string{
 // convenient. A domain that cannot say why it reaches into another one is a
 // domain that should not be reaching.
 var edges = map[edge]string{
-	{"agentteams", "alert"}: "a worker's finding has to land in the same alert rows the platform shows and be judged by the same rules; a second alert vocabulary would be a second thing to page on",
-	{"agentteams", "mcp"}:   "the middleware that authenticates an AgentTeams worker over MCP lives in server/mcp; splitting it would mean two auth chains for one protocol",
-	{"aiops", "alert"}:      "the agent raises and silences alerts through the platform's rules rather than carrying a second alert implementation. One direction only since decision 118, which was the last cycle in the tree: the alert domain used to call the agent kernel's own SpawnRequest/Worker structs, and it now asks for one investigation in its own value types",
-	{"aiops", "approval"}:   "a remediation the agent wants to run is queued in the approval domain, which is the HITL path it must not be able to route around",
-	{"aiops", "audit"}:      "the agent kernel's LedgerWriter writes agent actions (tool calls, turns) into the same chain an operator reads",
-	{"aiops", "device"}:     "an alert names a device and a tool call resolves it to a machine; the agent needs the device vocabulary to say which one",
-	{"aiops", "edge"}:       "the agent's tools address nodes through the edge domain; there is no second worth having notion of 'which node'",
-	{"aiops", "hitl"}:       "an investigation that needs a human hands the request to the human-in-the-loop domain instead of blocking on a channel of its own. One direction only since decision 116: the hitl side had reached back into aiops solely through a migration-and-dual-write window that was never wired and has expired, so the cycle is gone while these three imports stay",
-	{"aiops", "loop"}:       "the agent kernel drives the investigation loop, so the agent asks it for a recovery verdict, a loop toolset and what it learned; one direction only since decision 117. The old reason named a package that does not exist — there is no biz/aiops/loop, loop is its own context at biz/loop",
-	{"aiops", "topology"}:   "correlation answers 'what is related to this' from the topology domain instead of a private graph",
+	{"agentteams", "mcp"}: "the middleware that authenticates an AgentTeams worker over MCP lives in server/mcp; splitting it would mean two auth chains for one protocol",
+	{"aiops", "alert"}:    "the agent raises and silences alerts through the platform's rules rather than carrying a second alert implementation. One direction only since decision 118, which was the last cycle in the tree: the alert domain used to call the agent kernel's own SpawnRequest/Worker structs, and it now asks for one investigation in its own value types",
+	{"aiops", "approval"}: "a remediation the agent wants to run is queued in the approval domain, which is the HITL path it must not be able to route around",
+	{"aiops", "audit"}:    "the agent kernel's LedgerWriter writes agent actions (tool calls, turns) into the same chain an operator reads",
+	{"aiops", "device"}:   "an alert names a device and a tool call resolves it to a machine; the agent needs the device vocabulary to say which one",
+	{"aiops", "edge"}:     "the agent's tools address nodes through the edge domain; there is no second worth having notion of 'which node'",
+	{"aiops", "hitl"}:     "an investigation that needs a human hands the request to the human-in-the-loop domain instead of blocking on a channel of its own. One direction only since decision 116: the hitl side had reached back into aiops solely through a migration-and-dual-write window that was never wired and has expired, so the cycle is gone while these three imports stay",
+	{"aiops", "loop"}:     "the agent kernel drives the investigation loop, so the agent asks it for a recovery verdict, a loop toolset and what it learned; one direction only since decision 117. The old reason named a package that does not exist — there is no biz/aiops/loop, loop is its own context at biz/loop",
+	{"aiops", "topology"}: "correlation answers 'what is related to this' from the topology domain instead of a private graph",
 
 	{"aiopsconfig", "aiops"}: "the config service assembles the agent's alert-config and tool surfaces: it configures aiops rather than reimplementing it",
 	{"aiopsconfig", "alert"}: "the agent's settings endpoints resolve alert configuration through the alert service",
@@ -237,8 +236,8 @@ var cycles = map[[2]string]string{}
 // saves. `biz/audit` is the only write throat in the tree, and
 // `make audit-port-check` exists to keep it that way.
 //
-// The nearest miss is not this shape. `agentteams -> alert` and `loop -> alert`
-// share *rows*, not a *chain*: rows have no chaining property, so a split can
+// The nearest miss is not this shape. `loop -> alert` shares *rows* with
+// `biz/audit`, not a *chain*: rows have no chaining property, so a split can
 // be bridged with an interface and eventual consistency. A chain has one, so a
 // split has to coordinate. That is a real technical difference, not a
 // distinction in vocabulary — and it is the reason this table is declared

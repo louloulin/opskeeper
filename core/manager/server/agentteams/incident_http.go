@@ -13,9 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
-	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"
 	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
@@ -239,15 +237,12 @@ func (h *Handler) resolveLinkedAlertIncident(
 	if h.alerts == nil {
 		return false, nil
 	}
-	incidents, err := h.alerts.ListIncidents(ctx, alertbiz.IncidentFilter{
-		Status: alertmodel.IncidentStatusOpen,
-		Limit:  500,
-	})
+	incidents, err := h.alerts.ListOpenAlerts(ctx, 500)
 	if err != nil {
 		return false, fmt.Errorf("load linked alert incident: %w", err)
 	}
 	for _, incident := range incidents {
-		if incident == nil || !incidentLabelsContain(incident.LabelsJSON, "incident_id", incidentID) {
+		if !incidentLabelsContain(incident.LabelsJSON, "incident_id", incidentID) {
 			continue
 		}
 		return h.alerts.SystemResolveIncident(

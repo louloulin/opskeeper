@@ -3515,7 +3515,13 @@ func main() {
 				agentteamsHandler.SetKnowledgeWriter(knowledgeUC)
 			}
 			agentteamsHandler.SetIncidentRecorder(incidentcontrol.NewSQLRepository(db))
-			agentteamsHandler.SetAlertIncidentResolver(alertUC)
+			// The adapter, not the usecase. The port is declared in the
+			// agentteams package and names nothing from alert; the adapter is
+			// what turns "a filter and twenty-five columns" into "the two
+			// columns a recovery closure needs", and doing it here would have
+			// put the alert entity back on the consumer's side of the
+			// boundary it was just cut from.
+			agentteamsHandler.SetAlertIncidentResolver(managerbizalert.OpenAlertResolver{UC: alertUC})
 			_ = agentteamsHigress // 用于 cmd/opskeeper/auth_agentteams.go 的 Bearer 中间件
 
 			// Plugin 生命周期管理：filesystem registry + Bearer-auth CRUD/sync

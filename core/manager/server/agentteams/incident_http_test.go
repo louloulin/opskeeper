@@ -10,25 +10,28 @@ import (
 	"testing"
 	"time"
 
-	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
-	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
 
+// linkedAlertResolver stubs the port, so it speaks the projection rather
+// than the alert entity. That is the point of the cut: a test that had to
+// build a twenty-five-column row to check "the right incident got closed"
+// was measuring the entity, not the behaviour.
 type linkedAlertResolver struct {
-	incidents []*alertmodel.Incident
+	incidents []domain.OpenAlert
 	resolved  []string
 	seenLimit int
 }
 
 const testTenantID = "open-source-test"
 
-func (resolver *linkedAlertResolver) ListIncidents(
+func (resolver *linkedAlertResolver) ListOpenAlerts(
 	_ context.Context,
-	filter alertbiz.IncidentFilter,
-) ([]*alertmodel.Incident, error) {
-	resolver.seenLimit = filter.Limit
+	limit int,
+) ([]domain.OpenAlert, error) {
+	resolver.seenLimit = limit
 	return resolver.incidents, nil
 }
 
@@ -46,9 +49,8 @@ func TestRecordIncidentEventClosesLinkedAlert(t *testing.T) {
 	t.Setenv("OPSKEEPER_DEFAULT_INCIDENT_TENANT_ID", testTenantID)
 	recorder := &memIncidentRecorder{}
 	resolver := &linkedAlertResolver{
-		incidents: []*alertmodel.Incident{{
+		incidents: []domain.OpenAlert{{
 			DedupeKey:  "pg-pool-exhaustion",
-			Status:     alertmodel.IncidentStatusOpen,
 			LabelsJSON: `{"incident_id":"incident-live-pool-smoke","target":"pg:pool-fixture"}`,
 		}},
 	}

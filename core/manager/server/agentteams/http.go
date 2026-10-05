@@ -26,10 +26,9 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
-	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
 	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
-	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	knowledgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"
 	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
@@ -50,8 +49,23 @@ type IncidentRecorder interface {
 	ListIncident(ctx context.Context, tenantID, incidentID string) ([]incidentcontrol.Event, error)
 }
 
+// AlertIncidentResolver is this package's own port, and it names nothing
+// from the alert domain.
+//
+// The shape it had — a filter struct and a twenty-five-column entity, both
+// declared over there — was the whole content of the `agentteams -> alert`
+// edge. What this handler actually does is narrower by a wide margin: when a
+// run reports recovery, find the still-open alert incident carrying that
+// incident id in its labels and close it. Two columns answer that, and
+// "open" is not a filter this caller sets but a precondition of the question,
+// so it is in the method name instead.
+//
+// The projection is domain.OpenAlert rather than a type declared here, because
+// the alert side has to build one too and the two declarations must not be
+// able to drift. alert.OpenAlertResolver satisfies this structurally;
+// cmd/opskeeper hands one over. Neither domain names the other.
 type AlertIncidentResolver interface {
-	ListIncidents(ctx context.Context, filter alertbiz.IncidentFilter) ([]*alertmodel.Incident, error)
+	ListOpenAlerts(ctx context.Context, limit int) ([]domain.OpenAlert, error)
 	SystemResolveIncident(ctx context.Context, dedupeKey, reason string, occurredAt time.Time) (bool, error)
 }
 

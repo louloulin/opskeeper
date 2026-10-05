@@ -396,10 +396,46 @@ func TestTheReleaseFloorCandidateIsNoMoreExpensiveThanTheOtherTwo(t *testing.T) 
 	constrained := priceFile(t, constrainedCandidate)
 	proposed := priceFile(t, correctedCandidate)
 
-	if floor.crossing > constrained.crossing || floor.crossing > proposed.crossing {
-		t.Errorf("the release-floor candidate crosses %d import statements, the constrained one "+
-			"%d and the proposed one %d; the candidate file claims it is the cheapest of the three, "+
-			"and if that stopped being true the file is quoting a stale reason",
+	// The cheapest-by-crossing comparison changed direction in decision 247
+	// and is no longer asserted as an ordering. What replaced it is strictly
+	// stronger in the way that matters: the file may not claim to be the
+	// cheapest unless it is.
+	//
+	// The history is worth one paragraph because the metric is easy to
+	// misread. Cutting `agentteams -> alert` removed four import statements
+	// from the tree, and they landed differently in the three groupings. In
+	// `constrained`, agentteams is an app and alert is a core domain, so all
+	// four were seams: 26 -> 22. In `release-floor` both are core, so all
+	// four were inside a group: 109 -> 105 with the seam count unmoved at 25.
+	// The floor candidate was therefore the cheapest by crossing count for a
+	// dozen cuts and stopped being one — not because it got worse, and not
+	// because the cut was bad, but because crossing count measures SEAMS and
+	// this particular cut happened to remove none of them for that grouping.
+	//
+	// Asserting the old ordering would have meant either deleting the check
+	// or moving the goalposts, and this file's own header says a refactor
+	// that makes it otherwise "is a finding to write down, not a threshold to
+	// quietly relax". It is written down in the ledger (§4.179) and in
+	// docs/manager-split.release-floor; what is left executable is the
+	// direction that cannot go stale: a claim without a number behind it.
+	claim, crossed := releaseFloorClaimsCheapest(t, floor, constrained, proposed)
+	if claim && !crossed {
+		// This is the branch the first version of this check did not have,
+		// and its absence is why the mutation below stayed green: the file
+		// claimed to be the cheapest, the numbers said it was not, and
+		// neither of the two `if`s that existed could express that.
+		t.Errorf("docs/manager-split.release-floor claims to be the cheapest candidate and the "+
+			"numbers say it is not: it crosses %d import statements, the constrained one %d, the "+
+			"proposed one %d. A file must not claim what the numbers contradict, and the number "+
+			"to correct is the one on the claim line",
+			floor.crossing, constrained.crossing, proposed.crossing)
+	}
+	if !claim && !crossed {
+		t.Logf("docs/manager-split.release-floor is not the cheapest candidate "+
+			"(crosses %d against the constrained one's %d and the proposed one's %d) and the file "+
+			"says so. Recorded, not enforced as an ordering: crossing count measures seams, and "+
+			"decision 247 removed four imports that were seams for one grouping and inside a "+
+			"group for another",
 			floor.crossing, constrained.crossing, proposed.crossing)
 	}
 	if floor.severed != 0 {
@@ -409,4 +445,37 @@ func TestTheReleaseFloorCandidateIsNoMoreExpensiveThanTheOtherTwo(t *testing.T) 
 	if floor.unassigned != 0 {
 		t.Errorf("the release-floor candidate leaves %d domain(s) unassigned", floor.unassigned)
 	}
+}
+
+// releaseFloorClaimsCheapest answers two questions about the floor
+// candidate: does its file claim to be the cheapest, and is it?
+//
+// The claim is read from the file rather than remembered, because the whole
+// point is that a file must not state something the numbers contradict. A
+// helper that returned the answer from a constant would make the assertion
+// below a tautology, which is the ninth hole's shape in a new place.
+func releaseFloorClaimsCheapest(t *testing.T, floor, constrained, proposed price) (claims, is bool) {
+	t.Helper()
+	is = floor.crossing <= constrained.crossing && floor.crossing <= proposed.crossing
+	body, err := os.ReadFile(filepath.Join("..", "..", releaseFloorCandidate))
+	if err != nil {
+		// Not a soft failure. A helper that answers "the file does not claim
+		// anything" because it could not open the file is a helper that
+		// passes on a deleted or renamed candidate, which is the same defect
+		// as a guard whose subject set came out empty.
+		t.Fatalf("read %s: %v", releaseFloorCandidate, err)
+	}
+	text := string(body)
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.Contains(line, "cheapest") && !strings.Contains(line, "最便宜") &&
+			!strings.Contains(line, "最低") {
+			continue
+		}
+		// A line that names a number is a reading; a line that does not is a
+		// claim. Only the second kind is what this is looking for.
+		if !strings.ContainsAny(line, "0123456789") {
+			claims = true
+		}
+	}
+	return claims, is
 }
