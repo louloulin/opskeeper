@@ -256,7 +256,7 @@ func (h *Handler) tenantID(w http.ResponseWriter, r *http.Request) (string, bool
 		return "", false
 	}
 	tenantID := callerTenantID(caller)
-	if caller.IsSuperuser || caller.Role == "admin" {
+	if caller.IsSuperuser || caller.Role == tenantctx.RoleAdmin {
 		if requestedTenant := r.URL.Query().Get("tenant_id"); requestedTenant != "" {
 			tenantID = requestedTenant
 		}

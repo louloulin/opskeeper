@@ -18,7 +18,11 @@
 //     layer's Authorizer on every mutation.
 package model
 
-import "time"
+import (
+	"time"
+
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+)
 
 // System-level role constants (`users.role` column).
 //
@@ -28,11 +32,29 @@ import "time"
 //   - viewer = 只读 + 受限 chat（toolbag 过滤成 ClassSafe）
 //
 // 见 同名 "viewer" 与 MembershipRoleViewer 不冲突（不同列）。
+//
+// The three values themselves are declared in tenantctx, next to the
+// Tenant.Role field that carries them, because every bounded context
+// needs to name them and only core/base/pkg is importable by all of them
+// (decision 229). Before that, this file held the literals and five other
+// packages re-declared `roleAdmin = "admin"` locally with a comment
+// asking readers to keep them in sync — five places where the role
+// vocabulary could drift with nothing to notice. These aliases keep the
+// iam-facing spelling and remove the second source; the assertion below
+// makes the two halves impossible to separate by accident.
 const (
-	RoleAdmin  = "admin"
-	RoleUser   = "user"
-	RoleViewer = "viewer"
+	RoleAdmin  = tenantctx.RoleAdmin
+	RoleUser   = tenantctx.RoleUser
+	RoleViewer = tenantctx.RoleViewer
 )
+
+// role_alias_test.go holds the assertion that these three stay aliases
+// rather than fresh literals. It is a test and not a compile-time check
+// on purpose: Go cannot compare two untyped string constants in a
+// constant expression, so the usual array-index trick only proves the
+// lengths match — which is the half that rarely drifts. A same-length
+// typo ("admn") would sail past it while turning every admin into a
+// viewer. The test compares the values, so it catches that too.
 
 // IsValidRole returns true when r is one of the canonical system role
 // constants. Used by Service.SetRole / Service.Create to refuse junk.

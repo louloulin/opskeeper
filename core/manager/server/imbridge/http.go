@@ -14,12 +14,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizbridge "github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge/provider/feishu"
-	iammodel "github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/imbridge"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	bizbridge "github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge/provider/feishu"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/imbridge"
 	"log/slog"
 )
 
@@ -30,7 +29,7 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, errs.ErrUnauthorized.Error(), errs.HTTPStatus(errs.ErrUnauthorized))
 		return false
 	}
-	if t.Role != iammodel.RoleAdmin {
+	if t.Role != tenantctx.RoleAdmin {
 		http.Error(w, errs.ErrForbidden.Error(), errs.HTTPStatus(errs.ErrForbidden))
 		return false
 	}

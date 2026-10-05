@@ -182,7 +182,6 @@ var edges = map[edge]string{
 	{"grafana", "setting"}: "grafana's endpoint and credentials are platform settings",
 
 	{"imbridge", "aiops"}: "the IM bridge delivers an agent finding into a chat channel, so it formats the agent's output",
-	{"imbridge", "iam"}:   "the bridge attributes a message to a user, and a model is the one thing two contexts are meant to agree on rather than copy",
 
 	{"integration", "grafana"}: "the integration tests build a real grafana client against a real endpoint",
 

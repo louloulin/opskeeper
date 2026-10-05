@@ -40,9 +40,10 @@ import (
 	floorfed "github.com/vincent-wuhan/opskeeper/core/floor/federation"
 )
 
-// roleAdmin mirrors iam/model.RoleAdmin without crossing the BC boundary,
-// the same trade core/manager/server/edge makes.
-const roleAdmin = "admin"
+// roleAdmin is the platform-admin role, named through the vocabulary
+// tenantctx owns (decision 229) rather than a local literal kept in sync
+// with iam/model by convention.
+const roleAdmin = tenantctx.RoleAdmin
 
 // Service is the narrow surface this handler needs.
 type Service interface {

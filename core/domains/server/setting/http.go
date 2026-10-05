@@ -226,7 +226,7 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) (caller, bool) {
 		writeErr(w, errs.ErrUnauthorized)
 		return caller{}, false
 	}
-	if c.Role != "admin" {
+	if c.Role != tenantctx.RoleAdmin {
 		writeErr(w, errs.ErrForbidden)
 		return caller{}, false
 	}

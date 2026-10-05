@@ -31,10 +31,11 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
-// roleAdmin mirrors iam/model.RoleAdmin without crossing the BC boundary
-// (arch-lint forbids manager -> iam imports). If the literal changes in
-// iam/model, it must change here too.
-const roleAdmin = "admin"
+// roleAdmin is the platform-admin role, named through the vocabulary
+// tenantctx owns (decision 229). It used to be a local literal kept in
+// sync with iam/model by convention, which arch-lint could not enforce
+// because the two files sit on opposite sides of that boundary.
+const roleAdmin = tenantctx.RoleAdmin
 
 // EdgeService is the narrow service contract the handler depends on. It
 // exists so tests can swap in a fake without constructing a full biz stack;

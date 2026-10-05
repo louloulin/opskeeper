@@ -298,8 +298,16 @@ deps:
   iam_data:
     mayDependOn: [iam_biz, iam_model, shared_pkg]
   iam_model:
-    # No project grants: nothing in this component imports another
-    # project component today.
+    # 决策 229 开了第一条：model.go 引用 core/base/pkg/tenantctx 的角色常量，
+    # 不再自己声明 `RoleAdmin = "admin"`。iam 是角色词汇的定义方（它拥有
+    # users.role 与 RoleCanMutate），而这个字符串同时被十几个 handler 读，
+    # 过去有六处各自复制一份、靠注释要求"保持同步"。把声明放在
+    # Tenant.Role 旁边、也就是 core/base/pkg 这棵每个 BC 都能 import 的树里，
+    # 两边就不必互相 import：iam/model 用别名保留自己的拼写（它的调用方遍布
+    # 控制面），imbridge 那条边因此整个消失。shared_pkg 不认识任何 BC，依赖它
+    # 不会把业务语义带进底座。
+    mayDependOn:
+      - shared_pkg
     #
     # `anyVendorDeps` rather than `anyProjectDeps` is the whole point.
     # The schema refuses a rule with an empty mayDependOn and no flags
@@ -319,10 +327,13 @@ deps:
   # ---------------- manager BC ----------------
   manager_server:
     # !!! 已知债务：arch-lint 的 mayDependOn 是组件粒度白名单，同组件新增同类导入不会再报警。
-    # 每条都对应真实违例文件，manager/iam 迁移到 core/manager 时随条目一起删除：
-    #   - iam_model: core/manager/server/imbridge/http.go 复用 iam/model
+    # 决策 229 撤掉 iam_model：它唯一的行使者是 server/imbridge/http.go 里的
+    # `iammodel.RoleAdmin`，而那条 import 已经不存在了——角色词汇下沉到
+    # core/base/pkg/tenantctx（Tenant.Role 字段的声明处），imbridge 改读
+    # tenantctx.RoleAdmin。授权留着就是一条没人行使的口子（决策 74 的同一条
+    # 判据），而它恰恰会为下一条 manager/server → iam 的 import 免费放行，
+    # 所以撤掉它本身就是这一刀的一部分。
     mayDependOn:
-      - iam_model
       - manager_biz
       - manager_model
       - manager_server

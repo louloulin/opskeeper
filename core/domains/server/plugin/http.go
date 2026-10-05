@@ -37,10 +37,12 @@ import (
 	release "github.com/vincent-wuhan/opskeeper/core/domains/service/plugin"
 )
 
-// roleAdmin mirrors iam/model.RoleAdmin without crossing the BC boundary.
-// If the literal changes in iam/model it must change here too, which is the
-// same trade core/manager/server/edge already makes.
-const roleAdmin = "admin"
+// roleAdmin is the platform-admin role, named through the vocabulary
+// tenantctx owns (decision 229). It used to be a local literal whose
+// comment asked the reader to keep it in sync with iam/model "by
+// convention" — a convention nothing could enforce, from a package that
+// cannot import the declaration it was mirroring.
+const roleAdmin = tenantctx.RoleAdmin
 
 // Service is the narrow surface this handler needs. *release.Manager
 // satisfies it structurally, so the HTTP layer can be tested against a

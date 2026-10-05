@@ -45,12 +45,21 @@ import (
 	wsfanout "github.com/vincent-wuhan/opskeeper/core/base/pkg/wsfanout"
 )
 
-// RoleAdmin / RoleViewer mirror iam/model.Role* without crossing the BC
-// boundary. adds RoleViewer for the read-only role.
-// Kept in sync by convention (see server/edge for the same rationale).
+// RoleAdmin / RoleViewer are the two roles this service branches on. They
+// are aliases rather than local literals: they used to re-declare
+// iam/model's values "kept in sync by convention", from a package the
+// arch-lint boundary keeps away from iam (decision 229). Re-exporting the
+// vocabulary tenantctx owns keeps this package's exported names — callers
+// all over the control plane read aiops.RoleAdmin — while the strings
+// themselves now have one definition.
+
+// The two roles this service branches on. Aliased rather than re-declared
+// so the strings have one definition (decision 229); re-exported under
+// this package's names because callers all over the control plane read
+// aiops.RoleAdmin.
 const (
-	RoleAdmin  = "admin"
-	RoleViewer = "viewer"
+	RoleAdmin  = tenantctx.RoleAdmin
+	RoleViewer = tenantctx.RoleViewer
 )
 
 // Kernel enumerates the agent kernels the service can dispatch to.
