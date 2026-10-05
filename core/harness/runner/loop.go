@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/harness/axes"
 	"github.com/vincent-wuhan/opskeeper/core/harness/judge"
 	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
 )
@@ -544,7 +545,20 @@ func walkOrchestrator(ctx context.Context, opts LoopOptions, _ *schema.Case, dep
 }
 
 // caseToJudgeCase converts schema.Case → judge.Case.
+//
+// It carries everything the case declares that a judge can act on, and the
+// reason that list is short is that it used to be shorter: the case's own
+// rca_accuracy threshold and all three diagnostic axes were both dropped on
+// this bridge. The threshold is a number nobody compared; the axes were worse,
+// because their absence is invisible — judge.DiagnosticAxes returns nothing
+// for a case that declares no locus, so a run scored through this path could
+// never be flagged for reasoning that was right by accident.
+//
+// The derivation is the same one opskeeper-eval uses, because it lives in a
+// library both can import. When it sat in that command, this file could not
+// have reached it.
 func caseToJudgeCase(c *schema.Case) *judge.Case {
+	expectations := axes.Of(c)
 	return &judge.Case{
 		ID:                   c.ID,
 		ExpectedRootCause:    c.Expect.RootCauseLines,
@@ -555,6 +569,8 @@ func caseToJudgeCase(c *schema.Case) *judge.Case {
 		// rubric.rca_accuracy 只在 case.yaml 里存在，从没到达任何 judge。
 		RCAThreshold:       c.Rubric.RCAAccuracy,
 		NoCollateralDamage: c.Rubric.NoCollateralDamage,
+		ExpectedLocus:      expectations.Locus,
+		ExpectedFaultType:  expectations.FaultType,
 	}
 }
 

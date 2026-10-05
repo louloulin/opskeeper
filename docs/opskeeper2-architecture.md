@@ -22815,6 +22815,89 @@ e2e 只能断言一个硬编码的 `0.5`——**于是「阈值被忽略」这�
 代码量，因为**「读错列」与「判断写两遍」的修法都是接线而不是删实现**。**这不记成任何形式
 的进度**，理由与 §4.198、§4.195 同源。
 
+### 4.200 决策 266：把三轴派生从命令里搬进库——**因为「够不到」在 Go 里不报错**
+
+#### 上一轮自己记下的那条剩余，本轮做完了
+
+决策 265 的「诚实的剩余」里有一条：`core/harness/runner` 不 import `cmd`，所以派生住在
+`cmd/opskeeper-eval/axes.go` 时，**loop harness 那条评分路径拿不到三轴**。当时的措辞是
+「要修就得把派生搬进 `core/harness`，本轮不做」。本轮做了。
+
+#### 这条差距的真实形状：不是「少一个维度」，是「一种错误永远不会被发现」
+
+`judge.DiagnosticAxes` 对一个没有声明 locus 的 case 返回空，于是**这条路径上的
+`reason`/`localization`/`identification` 三列根本不存在**——而 `applyDiagnostic` 的标记条件
+是「三轴里有 reason 且 reason ≤ 0.5 且 overall ≥ 0.7」。**没有 reason 轴，这个条件永远
+不成立**，所以：**一个结论完全正确、轨迹里一条观测都没有的回答，经 runner 打分时不会被
+标记**。它与一次真正的诊断在结果维度上无法区分，而这正是三轴被加进来要分开的那两件事。
+
+更糟的是两个 harness 把结果写进**同一张 leaderboard**：同一批 case，一半的行带三轴、
+一半不带，平均下去就得到一个两边都不承认的数字。
+
+#### 搬，而不是抄
+
+新包 `core/harness/axes`，授权面只有 `oxharness_schema`（`.go-arch-lint.yml` 新增
+`oxharness_axes` 组件 + `runner`/`cmd` 两条授权）——**它读 case 的形状，不认识 judge 的
+词汇**，judge 那一侧仍然是 `DiagnosticAxes` 的事。`cmd/opskeeper-eval/axes.go` 从 269 行
+缩成只剩命令与报告面，行为**逐字不变**（`make eval-gates` 仍输出 20 cases / 5 coarsened /
+0 unmeasured）。
+
+派生自己的测试也跟着搬了（4 条）。**一个只有通过某个命令的测试文件才能被覆盖的库，覆盖
+缺口恰好长成这次这个 bug 的形状**——第二个调用方（runner）在旧布局下看不到其中任何一条。
+
+#### 三道守卫
+
+| 守卫 | 拦住什么 |
+|---|---|
+| `TestTheDerivationHasNoSecondImplementation`（源码级） | 在 `cmd/opskeeper-eval` 或 `core/harness/runner` 里再写一份 `caseFamily` / `axisTokens` / `locusIdentityKeys` … |
+| `TestTheBridgeCarriesExactlyWhatTheDerivationSays`（runner 侧，逐案） | 桥接少带或多带一列 token |
+| `TestTheEvalBridgeCarriesExactlyWhatTheDerivationSays`（eval 侧，逐案） | 同上，在另一条桥接上 |
+| `TestARunScoredThroughThisBridgeIsFlaggedWhenTheTraceIsUngrounded` | 三轴又从这条桥接上消失（端到端断言标记本身，不断言某个数字——**数字会随权重变，标记才是给人看的结论**） |
+
+逐案而不是抽查一个 case：**派生规则的一处改动（多认一个身份键、少拆一个分隔符）只会
+影响特定的 case family**，抽查恰好会漏掉它影响的那一族。守卫放在两条桥接上各一份，是因为
+「不一致」这件事只能在各自的桥接上观察——从库那一侧看，两边都调用了 `axes.Of`。
+
+#### 变异实测（6 条，全红）
+
+| 变异 | 结果 |
+|---|---|
+| 身份键表里去掉 `table` / `tables` | 红（4 条派生测试 + 两条桥接逐案比对） |
+| locus 里不再放 family | 红（`TestATwoCharacterFamilyIsNotDropped` 等） |
+| runner 桥接不带三轴 | 红（逐案比对 + 端到端 flag 断言） |
+| eval 桥接不带三轴 | 红（eval 侧逐案比对） |
+| 在 `cmd/opskeeper-eval` 里另写一份 `caseFamily` | 红（分叉守卫） |
+| 派生里改 token 规则（family 不入 locus） | 红（派生测试） |
+
+#### 一个值得记住的形状
+
+**把实现放在命令里，等于给第二个调用方关上一扇不会响的门。** `core/harness/runner`
+import `cmd/opskeeper-eval` 编译不过——但这不是本轮的问题，本轮的问题是**它没有去 import**，
+于是它安静地少算了一个轴，**没有任何编译期或运行期信号**。这与决策 263/264 的那三处
+「一份派生住在两个地方」是同一个家族，但方向相反：**那次是两份，这次是零份**。
+
+#### 诚实的剩余
+
+- **分叉守卫是标识符级，不是语义级**：有人在新包里用别的名字重写一份逻辑，它不会红。
+  真正的语义守卫是那两条逐案比对——但它们只覆盖这两条桥接。
+- `transcheck` 读数：未设目标列 **186 → 184**，「找到写入方」**144 → 142**，**unaccounted
+  仍是 42**——这两列从「在别处有人写」变成「本处已设」，**不是新证据，是同一件事的两种说法**。
+- 计划阶段 2 的「eval 三维化」现在**两条 harness 都成立**；但「接入 AIOpsLab 式可注入
+  故障环境作为对抗性 benchmark」这一条仍未做。
+
+#### 读数
+
+| 读数 | 值 |
+|---|---|
+| 域 / 声明边 / 环 / 生产跨域 import / 测试专用 | **56 / 22 / 0 / 114 / 120（全部未动）** |
+| 三份拆分报价 | **95 / 19、105 / 9、99 / 15（全部未动）** |
+| `core/harness` 包数 | 7 → **8**（新增 `axes`） |
+| `core/manager` | **944 / 240,016（未动）** |
+| 阶段 2 / 阶段 3 / 加权 | **96.7% / 99.7% / 98.6%（一分不动）** |
+
+**本决策不改进度百分比**：阶段 2 那一格是按计划 §五的验收闸门记的，而闸门里没有「两条
+harness 一致」这一条。**把一个真缺陷的修复记成分数上涨，是这份台账最不愿意做的一种事。**
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -22876,6 +22959,25 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
   存在**。三份报价各降 3：**95 / 19**、**105 / 9**、**99 / 15**。
   **把这一刀记成分数上涨会是最容易的一种造假**，理由与 §4.192 那句
   「把「切边」记成搬运进度会掩盖这件事」同源，见 §4.193。
+
+- **决策 266 把三轴派生从 `cmd/opskeeper-eval` 搬进新包 `core/harness/axes`**，**补上的是
+  loop harness 那条评分路径**：它此前拿不到三轴（`runner` 不 import `cmd`），而
+  `judge.DiagnosticAxes` 对没有声明的 case 返回空，于是 **`applyDiagnostic` 的标记条件在
+  这条路径上永远不成立**——**一个结论完全正确、轨迹里一条观测都没有的回答，经 runner 打分时
+  不会被标记**，而两个 harness 的行写进同一张 leaderboard。搬而不是抄：新组件
+  `oxharness_axes` 的授权面只有 `oxharness_schema`（读 case，不认识 judge 词汇），
+  `cmd/opskeeper-eval/axes.go` 从 269 行缩成只剩命令面，**`make eval-gates` 输出逐字不变**
+  （20 cases / 5 coarsened / 0 unmeasured）。四道守卫：源码级分叉守卫（这些标识符只能在
+  axes 包定义）、**两条桥接各自逐案比对**（逐案而非抽查——派生规则一处改动只影响特定
+  case family，抽查恰好漏掉那一族）、以及端到端的 flag 断言（断三轴、断言标记而非某个数字）。
+  变异 6/6 全红。**记下一个形状**：把实现放在命令里，等于给第二个调用方关上一扇不会响的门
+  ——`runner` 够不到它，而**没有任何编译期或运行期信号**；这与决策 263/264 那三处「一份派生
+  住在两个地方」同家族，但方向相反，**那次是两份，这次是零份**。读数：域图 56/22/0、
+  import 114/120、三份报价与各阶段百分比全部未动；`transcheck` 未设列 186 → 184、找到写入方
+  144 → 142、**unaccounted 仍是 42**（这两列只是从「在别处有人写」变成「本处已设」，不是新
+  证据）；`core/harness` 7 → 8 个包，`core/manager` 未动。**不改进度百分比**：阶段 2 那一格按
+  计划 §五的验收闸门记，而闸门里没有「两条 harness 一致」这一条——**把一个真缺陷的修复记成
+  分数上涨，是这份台账最不愿意做的一种事**。详见 §4.200。
 
 - **决策 265 把 264 留下的 52 个「没人写的列」逐条读了一遍**：读了 15 处，**4 处合法**
   （无类型 map / 指针回填 / YAML pack 双路填充 / 内置规则故意留空），**3 处是真缺陷**。

@@ -31,6 +31,7 @@ import (
 	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/harness/axes"
 	"github.com/vincent-wuhan/opskeeper/core/harness/judge"
 	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
 	"github.com/vincent-wuhan/opskeeper/core/harness/vocabulary"
@@ -318,8 +319,11 @@ func judgeCaseOf(c *schema.Case) *judge.Case {
 	// computed here, because both the heuristic and the LLM judge have to
 	// score them and a number only one path produces is a number a
 	// leaderboard averages over half its rows. The derivation itself is in
-	// axes.go, which is the single place "where the fault is" is defined.
-	expectations := diagnosticExpectationsOf(c)
+	// core/harness/axes, which is the single place "where the fault is" is
+	// defined — and it lives in a library rather than in this command so the
+	// loop harness can reach it too (it did not, for as long as the
+	// derivation sat here, and scored every case without the three axes).
+	expectations := axes.Of(c)
 	return &judge.Case{
 		ID:                   c.ID,
 		ExpectedRootCause:    c.Expect.RootCauseLines,

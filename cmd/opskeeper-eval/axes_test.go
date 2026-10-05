@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vincent-wuhan/opskeeper/core/harness/axes"
 	"github.com/vincent-wuhan/opskeeper/core/harness/judge"
 	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
 )
@@ -64,81 +65,6 @@ func TestEveryShippedCaseDeclaresTheThreeAxes(t *testing.T) {
 	}
 	if report.Unmeasured != 0 {
 		t.Errorf("%d cases are unmeasurable", report.Unmeasured)
-	}
-}
-
-func TestTheLocusComesFromIdentityParametersNotKnobs(t *testing.T) {
-	c := &schema.Case{
-		ID: "pg/lock-waits",
-		Inject: []schema.InjectStep{{
-			Type: "pg.inject_lock_chain",
-			Params: map[string]interface{}{
-				"table": "orders",
-				// Knobs must not become loci: no correct answer repeats "4",
-				// so requiring it would fail answers for saying the right
-				// thing.
-				"cores":       4,
-				"target_load": 98,
-			},
-		}},
-		Expect: schema.Expect{RootCauseLines: []string{"pg.lock_waits"}},
-	}
-	got := diagnosticExpectationsOf(c)
-	if !containsToken(got.Locus, "orders") || !containsToken(got.Locus, "pg") {
-		t.Fatalf("locus = %v, want the table and the family", got.Locus)
-	}
-	if containsToken(got.Locus, "4") || containsToken(got.Locus, "98") {
-		t.Errorf("a knob became a locus: %v", got.Locus)
-	}
-	if got.Thin {
-		t.Errorf("locus with a named table reported as coarsened: %v", got.Locus)
-	}
-}
-
-func TestATwoCharacterFamilyIsNotDropped(t *testing.T) {
-	// "pg" and "mq" are exactly the tokens the minimum-length rule exists to
-	// drop from prose, and dropping the family would leave those five cases
-	// with no locus at all.
-	for _, id := range []string{"pg/lock-waits", "mq/broker-down"} {
-		family := strings.SplitN(id, "/", 2)[0]
-		got := diagnosticExpectationsOf(&schema.Case{
-			ID:     id,
-			Expect: schema.Expect{RootCauseLines: []string{family + ".something"}},
-		})
-		if !containsToken(got.Locus, family) {
-			t.Errorf("%s: family %q missing from locus %v", id, family, got.Locus)
-		}
-	}
-}
-
-func TestACoarsenedLocusIsReportedRatherThanFabricated(t *testing.T) {
-	got := diagnosticExpectationsOf(&schema.Case{
-		ID: "redis/memory-burst",
-		Inject: []schema.InjectStep{{
-			Type:   "redis.inject_memory_burst",
-			Params: map[string]interface{}{"maxmemory_mb": 1024, "fill_percent": 99},
-		}},
-		Expect: schema.Expect{RootCauseLines: []string{"redis.memory_usage"}},
-	})
-	if len(got.Locus) != 1 || got.Locus[0] != "redis" {
-		t.Fatalf("locus = %v, want the family alone", got.Locus)
-	}
-	if !got.Thin {
-		t.Error("a family-only locus was not reported as coarsened")
-	}
-}
-
-func TestAFlowListParameterIsALocus(t *testing.T) {
-	got := diagnosticExpectationsOf(&schema.Case{
-		ID: "pg/long-running-tx",
-		Inject: []schema.InjectStep{{
-			Type:   "pg.begin_txn_hold",
-			Params: map[string]interface{}{"tables": []interface{}{"orders"}},
-		}},
-		Expect: schema.Expect{RootCauseLines: []string{"pg.long_running_txns"}},
-	})
-	if !containsToken(got.Locus, "orders") {
-		t.Errorf("locus = %v, want the table from the inline list", got.Locus)
 	}
 }
 
@@ -250,15 +176,6 @@ func TestARealCaseScoresTheAxesAndFlagsAnUngroundedAnswer(t *testing.T) {
 	}
 }
 
-func containsToken(tokens []string, want string) bool {
-	for _, token := range tokens {
-		if token == want {
-			return true
-		}
-	}
-	return false
-}
-
 // case 自报的 rca_accuracy 阈值必须过桥到达judge。
 //
 // rubric.rca_accuracy 在 30+ 个随仓库发布的 case.yaml 里都写了（0.8 / 0.85 /
@@ -276,5 +193,31 @@ func TestJudgeCaseOfCarriesTheDeclaredThreshold(t *testing.T) {
 	}
 	if got := judgeCaseOf(caseObj).RCAThreshold; got != caseObj.Rubric.RCAAccuracy {
 		t.Errorf("RCAThreshold = %v, want the case's declared %v", got, caseObj.Rubric.RCAAccuracy)
+	}
+}
+
+// eval 这条桥接同样逐案对齐那一份派生——与 runner 侧那条守卫成对。
+//
+// 两个 harness 共用一个 judge、一张 leaderboard，而它们此前对同一个 case 得出
+// 不同的三轴。守卫放在两边而不是一处，是因为「不一致」这件事只能在各自的桥接上
+// 观察：从库那一侧看，两条桥接都调用了 axes.Of，从任一 bridge 那一侧也看不到
+// 另一条桥接。
+func TestTheEvalBridgeCarriesExactlyWhatTheDerivationSays(t *testing.T) {
+	cases, err := schema.NewLoader(shippedCasesDir).LoadAll()
+	if err != nil {
+		t.Fatalf("load shipped cases: %v", err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("no shipped cases: the comparison would pass on an empty corpus")
+	}
+	for _, c := range cases {
+		want := axes.Of(c)
+		got := judgeCaseOf(c)
+		if strings.Join(got.ExpectedLocus, ",") != strings.Join(want.Locus, ",") {
+			t.Errorf("%s: locus = %v, want %v", c.ID, got.ExpectedLocus, want.Locus)
+		}
+		if strings.Join(got.ExpectedFaultType, ",") != strings.Join(want.FaultType, ",") {
+			t.Errorf("%s: fault type = %v, want %v", c.ID, got.ExpectedFaultType, want.FaultType)
+		}
 	}
 }

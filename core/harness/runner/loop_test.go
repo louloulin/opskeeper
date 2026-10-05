@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/harness/axes"
 	"github.com/vincent-wuhan/opskeeper/core/harness/judge"
 	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
 )
@@ -231,5 +232,76 @@ func TestCaseToJudgeCaseCarriesTheDeclaredThreshold(t *testing.T) {
 	}
 	if got := caseToJudgeCase(c).RCAThreshold; got != 0.85 {
 		t.Errorf("RCAThreshold = %v, want 0.85", got)
+	}
+}
+
+// 两条评分桥接必须与那一份派生逐案一致。
+//
+// runner 与 opskeeper-eval 用同一个 judge 打同一批 case。它们此前对同一个 case
+// 得出不同的三轴——eval 那条有，runner 那条没有——而两个 harness 都把结果写进
+// 同一张 leaderboard。逐案比对而不是抽查一个 case：派生规则的一处改动（多认一个
+// 身份键、少拆一个分隔符）只会影响特定的 casefamily，抽查恰好会漏掉。
+func TestTheBridgeCarriesExactlyWhatTheDerivationSays(t *testing.T) {
+	cases, err := schema.NewLoader("../cases").LoadAll()
+	if err != nil {
+		t.Fatalf("load shipped cases: %v", err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("no shipped cases: the comparison would pass on an empty corpus")
+	}
+	for _, c := range cases {
+		want := axes.Of(c)
+		got := caseToJudgeCase(c)
+		if !equalTokens(got.ExpectedLocus, want.Locus) {
+			t.Errorf("%s: locus = %v, want %v", c.ID, got.ExpectedLocus, want.Locus)
+		}
+		if !equalTokens(got.ExpectedFaultType, want.FaultType) {
+			t.Errorf("%s: fault type = %v, want %v", c.ID, got.ExpectedFaultType, want.FaultType)
+		}
+	}
+}
+
+func equalTokens(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// 这是搬动派生要换来的东西：runner 这条路径现在也能看见三轴。
+//
+// 一个结论完全正确、轨迹里一条观测都没有的回答，在只看结果维度的评分里与一次
+// 真正的诊断无法区分——而它此前连被标记的机会都没有，因为这条路径算不出 reason
+// 轴。断言的是标记本身，不是某个数字：数字会随权重变，标记是给人看的那个结论。
+func TestARunScoredThroughThisBridgeIsFlaggedWhenTheTraceIsUngrounded(t *testing.T) {
+	cases, err := schema.NewLoader("../cases").LoadAll()
+	if err != nil {
+		t.Fatalf("load shipped cases: %v", err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("no shipped cases")
+	}
+	c := cases[0]
+	judgeCase := caseToJudgeCase(c)
+	if len(judgeCase.ExpectedLocus) == 0 || len(judgeCase.ExpectedFaultType) == 0 {
+		t.Fatalf("%s carries no axes through this bridge: %+v", c.ID, judgeCase)
+	}
+	// 结论完美、轨迹为空：只有 reason 轴能看见这件事。
+	response := &judge.AgentResponse{
+		RootCause:    append([]string(nil), c.Expect.RootCauseLines...),
+		Remediations: append([]string(nil), c.Expect.RemediationOptions...),
+	}
+	score, err := judge.NewHeuristicJudge().Score(context.Background(), judgeCase, response)
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if !score.Flagged {
+		t.Errorf("%s: an answer with an empty trace was not flagged (reason=%v overall=%.2f)",
+			c.ID, score.Dimensions[judge.DimensionReason], score.Overall)
 	}
 }

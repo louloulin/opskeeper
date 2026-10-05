@@ -243,6 +243,10 @@ components:
   oxharness_leaderboard: { in: core/harness/leaderboard/** }
   oxharness_projection: { in: core/harness/projection/** }
   oxharness_vocabulary: { in: core/harness/vocabulary/** }
+  # 决策 266：三轴派生。它此前住在 cmd/opskeeper-eval，于是 core/harness/runner
+  # 够不到它（runner 不 import cmd），那条评分路径上的每个 case 都没有三轴。
+  # 它只依赖 schema —— 读 case，不认识 judge，也不认识任何 harness 之外的东西。
+  oxharness_axes:      { in: core/harness/axes/** }
   oxedge_agentprofile:  { in: core/edge/agentprofile/** }
   oxpig_profile:        { in: core/pig/pigprofile/** }
   oxpig_ext:            { in: core/pig/extensions/** }
@@ -691,6 +695,13 @@ deps:
       - oxharness_judge
       - oxpig_model
       - oxharness_schema
+      # 决策 266：为了把三轴带进这条评分路径。
+      - oxharness_axes
+  # 决策 266：三轴派生的授权面只有 schema —— 它读 case 文件的形状，
+  # 不认识 judge 的词汇（那是 judge.DiagnosticAxes 的事），也不认识
+  # 任何 harness 之外的包。
+  oxharness_axes:
+    mayDependOn: [oxharness_schema]
   oxharness_leaderboard:
     # No project grants: nothing in this component imports another
     # project component today.
@@ -868,6 +879,7 @@ deps:
       - oxdomains_server
       - oxdomains_service
       - oxedge_agentprofile
+      - oxharness_axes
       - oxharness_judge
       - oxharness_projection
       - oxharness_vocabulary

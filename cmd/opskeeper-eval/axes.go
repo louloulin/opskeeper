@@ -1,3 +1,16 @@
+// opskeeper-eval axes — whether the corpus declares enough for the three
+// diagnostic axes to mean anything.
+//
+// The judge scores Localization × Identification × Reason; this command answers
+// the prior question. A case that declares no locus produces no localization
+// number at all, and an axis nobody declared is an axis a leaderboard silently
+// averages over nothing.
+//
+// What a case declares is derived, not authored, and that derivation lives in
+// core/harness/axes — one implementation, two harnesses. It used to be right
+// here, which meant the loop harness could not reach it (core/harness/runner
+// does not import cmd) and therefore scored every case without the three axes.
+// This file is now only the reporting surface.
 package main
 
 import (
@@ -7,183 +20,11 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 
+	"github.com/vincent-wuhan/opskeeper/core/harness/axes"
 	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
 )
-
-// opskeeper-eval axes — what a case declares about the three diagnostic axes.
-//
-// The judge scores Localization × Identification × Reason (arXiv:2606.29193);
-// this command answers the prior question, which is whether the corpus
-// declares enough for those axes to mean anything. A case that declares no
-// locus produces no localization number at all, and an axis nobody declared is
-// an axis a leaderboard silently averages over nothing.
-//
-// The three declarations are derived, not asked for in a separate field, and
-// the derivation is the whole point of this file: it is the one place where
-// "where the fault is" is defined for the corpus. The three sources are the
-// case's own authored material, so no case has to be rewritten to be scored:
-//
-//	Localization   the case id's family segment (`pg/lock-waits` → `pg`) plus
-//	               the injection's identity parameters (table: orders,
-//	               namespace: test, topic: order.events, …). The parameters
-//	               come from schema.InjectStep.Params, which the loader only
-//	               started filling in this change — before it, every
-//	               localization would have been the family alone.
-//	Identification the case id's fault segment, tokenized (`lock-waits` →
-//	               ["lock", "waits"])
-//	Reason         the case's expected root-cause lines — the observations a
-//	               grounded reasoning trace has to contain
-//
-// Why the case id and not the injection type: the id is the authored name of
-// the fault ("lock waits"), while the injection type names the script that
-// produced it (`pg.inject_lock_chain`, `pg.begin_txn_hold` for
-// `pg/long-running-tx`). Which script ran is an implementation detail of the
-// injector; the fault's name is what the corpus promises the agent will find.
-//
-// Five of the twenty shipped cases name no sub-resource at all: the fault was
-// injected on "the host", "the replica", "the redis instance", and the case
-// says nothing narrower. Their localization is measured on the family alone
-// and reported as coarsened (`~` in the output) rather than propped up with a
-// name the injector never used.
-//
-// A token shorter than three characters is dropped. Two-character fragments
-// like the `tx` in `long-running-tx` are not words an agent can be held to —
-// "transaction" does not contain "tx" — and keeping them would fail a correct
-// answer for a spelling reason.
-const minimumAxisTokenLen = 3
-
-// locusIdentityKeys are the injection parameter keys whose values name a
-// resource rather than a knob.
-//
-// The distinction is what makes localization discriminating: `table: orders`
-// names the thing the fault happened to and can be missed, while `cores: 4`
-// and `target_load: 98` describe how hard the fault was driven and are
-// numbers a correct answer has no reason to repeat. A new case that injects
-// through a key not listed here still scores — it just scores on its family —
-// and `axes` prints the token count, so the coarseness is visible rather than
-// assumed.
-var locusIdentityKeys = []string{
-	"namespace", "deployment", "pod", "pvc", "node", "target_node",
-	"service", "host", "instance", "database",
-	"table", "tables", "topic", "consumer_group", "queue",
-	"broker_id", "key", "path",
-}
-
-// diagnosticExpectations is one case's declaration of the three axes.
-type diagnosticExpectations struct {
-	CaseID    string   `json:"case_id"`
-	Locus     []string `json:"locus"`
-	FaultType []string `json:"fault_type"`
-	Evidence  []string `json:"evidence"`
-	// Thin marks a case whose locus is the family alone. Such a case still
-	// scores, but every answer that names its own resource family scores 1.0,
-	// so the number carries almost nothing. It is reported rather than fixed
-	// by inventing a target the injector never used.
-	Thin bool `json:"thin,omitempty"`
-}
-
-// diagnosticExpectationsOf derives the three axes from a case.
-func diagnosticExpectationsOf(c *schema.Case) diagnosticExpectations {
-	out := diagnosticExpectations{CaseID: c.ID}
-	// The family is not put through axisTokens: the two-character families
-	// ("pg", "mq") are exactly the ones the minimum-length rule exists to drop
-	// from prose, and dropping the family would leave those cases with no
-	// locus at all.
-	out.Locus = append(out.Locus, strings.ToLower(strings.TrimSpace(caseFamily(c.ID))))
-	for _, param := range c.Inject {
-		for _, key := range locusIdentityKeys {
-			value, ok := param.Params[key]
-			if !ok {
-				continue
-			}
-			for _, token := range scalarTokens(value) {
-				out.Locus = append(out.Locus, token)
-			}
-		}
-	}
-	out.Locus = uniqueTokens(out.Locus)
-
-	out.FaultType = uniqueTokens(axisTokens(caseFaultName(c.ID)))
-	// The family token alone is a locus no answer can miss.
-	out.Thin = len(out.Locus) <= 1
-	out.Evidence = append([]string(nil), c.Expect.RootCauseLines...)
-	return out
-}
-
-// caseFamily is the first path segment of the case id.
-func caseFamily(id string) string {
-	if index := strings.IndexByte(id, '/'); index > 0 {
-		return id[:index]
-	}
-	return ""
-}
-
-// caseFaultName is the last path segment of the case id.
-func caseFaultName(id string) string {
-	if index := strings.LastIndexByte(id, '/'); index >= 0 {
-		return id[index+1:]
-	}
-	return id
-}
-
-// axisTokens lower-cases, splits on separators and drops fragments too short
-// to be words.
-func axisTokens(raw string) []string {
-	fields := strings.FieldsFunc(strings.ToLower(raw), func(r rune) bool {
-		return r == '-' || r == '_' || r == ' ' || r == '.' || r == '/'
-	})
-	out := make([]string, 0, len(fields))
-	for _, field := range fields {
-		if len([]rune(field)) < minimumAxisTokenLen {
-			continue
-		}
-		out = append(out, field)
-	}
-	return out
-}
-
-// scalarTokens flattens an injection parameter value into strings. Booleans
-// are dropped: `simulate_network_partition: true` is a mode, not a name.
-func scalarTokens(value any) []string {
-	switch typed := value.(type) {
-	case string:
-		if typed == "" {
-			return nil
-		}
-		return []string{typed}
-	case int:
-		return []string{strconv.Itoa(typed)}
-	case int64:
-		return []string{strconv.FormatInt(typed, 10)}
-	case float64:
-		return []string{strconv.FormatFloat(typed, 'f', -1, 64)}
-	case []any:
-		out := make([]string, 0, len(typed))
-		for _, item := range typed {
-			out = append(out, scalarTokens(item)...)
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-func uniqueTokens(tokens []string) []string {
-	seen := make(map[string]bool, len(tokens))
-	out := make([]string, 0, len(tokens))
-	for _, token := range tokens {
-		lowered := strings.ToLower(strings.TrimSpace(token))
-		if lowered == "" || seen[lowered] {
-			continue
-		}
-		seen[lowered] = true
-		out = append(out, lowered)
-	}
-	return out
-}
 
 type axesFlags struct {
 	casesDir       string
@@ -207,10 +48,10 @@ func cmdAxes(_ context.Context, args []string) error {
 }
 
 type axesReport struct {
-	Cases      []diagnosticExpectations `json:"cases"`
-	Total      int                      `json:"total"`
-	Thin       int                      `json:"thin_locus"`
-	Unmeasured int                      `json:"unmeasured"`
+	Cases      []axes.Expectations `json:"cases"`
+	Total      int                 `json:"total"`
+	Thin       int                 `json:"thin_locus"`
+	Unmeasured int                 `json:"unmeasured"`
 }
 
 func runAxes(f axesFlags, out *os.File) error {
@@ -218,12 +59,12 @@ func runAxes(f axesFlags, out *os.File) error {
 	if err != nil {
 		return fmt.Errorf("load cases from %s: %w", f.casesDir, err)
 	}
-	report := axesReport{Cases: make([]diagnosticExpectations, 0, len(cases))}
+	report := axesReport{Cases: make([]axes.Expectations, 0, len(cases))}
 	for _, c := range cases {
 		if f.filter != "" && !strings.Contains(c.ID, f.filter) {
 			continue
 		}
-		expectations := diagnosticExpectationsOf(c)
+		expectations := axes.Of(c)
 		report.Cases = append(report.Cases, expectations)
 		report.Total++
 		if expectations.Thin {
