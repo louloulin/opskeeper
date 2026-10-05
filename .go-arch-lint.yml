@@ -78,7 +78,6 @@ components:
 
   oxedge_service: { in: core/edge/service/** }
   oxedge_biz:     { in: core/edge/biz/** }
-  oxedge_model:   { in: core/edge/model/** }
 
   shared_pkg: { in: core/manager/pkg/** }
   # 决策 66：llm 的 PiG 实现从 shared_pkg 里搬出来了。搬之前 shared_pkg 的
@@ -412,26 +411,19 @@ deps:
   oxedge_service:
     mayDependOn: [oxedge_biz, oxfloor]
   oxedge_biz:
-    mayDependOn: [oxedge_model, oxedge_runtime, oxcore_ports, oxcore_wire, oxfloor, oxtelemetry_wal]
-  oxedge_model:
-    # No project grants: nothing in this component imports another
-    # project component today.
-    #
-    # `anyVendorDeps` rather than `anyProjectDeps` is the whole point.
-    # The schema refuses a rule with an empty mayDependOn and no flags
-    # at all, and the two flags are opposites: anyProjectDeps opens
-    # this component to every other project component, which is the
-    # exact hole this file is here to close. anyVendorDeps says the
-    # opposite — this component may reach third-party libraries (the
-    # repository already allows that globally) and may reach no project
-    # component whatsoever.
-    #
-    # Before decision 74 these components carried dozens of grants that
-    # no import used, so arch-lint was reporting a boundary far wider
-    # than the one the code had. Deleting the unused grants is what
-    # turns the file back into a statement about the architecture
-    # rather than a list of permissions nobody exercised.
-    anyVendorDeps: true
+    mayDependOn: [oxedge_runtime, oxcore_ports, oxcore_wire, oxfloor, oxtelemetry_wal]
+  # 决策 200 删掉了 oxedge_model 这个组件，连同它下面那条 oxedge_biz 的授权。
+  # 它原来声明 core/edge/model/**，而那个目录里的 HostMetric / ProcessInfo 是
+  # tunnel.HostMetricPoint 的早期副本：节点侧真正在用的是 core/floor/tunnel 的
+  # 那个类型，经 core/edge/collector 的 CollectorOutput.HostPoint 上线。
+  # 最后一个引用它的是三个写明「Phase 1 返回零值」的采集桩，那三个桩本轮也删了，
+  # 于是这个组件连声明的目录都不存在了。
+  #
+  # 留这一段是因为它身上挂着一份解释：为什么「什么都不许依赖」要用
+  # `anyVendorDeps: true` 而不是 `mayDependOn: []`（spec 校验会把后者读成配置错误
+  # 并拒绝运行整份文件），以及决策 74 删掉 104 条无人行使的授权正是为了让这份文件
+  # 重新变成一句关于架构的话。现在用这个写法的组件还有 oxedge_spool、
+  # oxtelemetry_wal 等五个。
   # ---------------- OpsKeeper 2.0 module direction ----------------
   # core is the root of the new graph: it may not depend on anything, not
   # even on shared_pkg. A contract that reaches into infrastructure forces
@@ -585,7 +577,7 @@ deps:
   # 后果不是一条规则失效，是 `make arch-lint-run` 从 8fefe7b 起一次也没跑
   # 通过：本应由它拦住的越界，那几天一条都没被拦住。
   #
-  # anyVendorDeps 是文档给出的写法，也是 oxedge_model 等组件已经在用的写法：
+  # anyVendorDeps 是文档给出的写法，也是 oxedge_spool 等组件已经在用的写法：
   # 允许第三方库（.go-arch-lint.yml 全局本就允许），不允许任何本项目组件。
   oxedge_spool:
     anyVendorDeps: true
