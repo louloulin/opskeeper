@@ -500,11 +500,16 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// test beside it asserted the value arriving was Host) and decision 249's
 	// (agentteams -> mcp, where the dependency was three package functions —
 	// which no port can narrow, because a package function cannot be injected
-	// — and a six-field credential struct for routes that read three fields).
+	// — and a six-field credential struct for routes that read three fields)
+	// and decision 251's (webshell -> edge, where the consumer read one
+	// column of a fifteen-column row purely to compare it against a status
+	// constant, so the row itself was the only reason that boundary existed
+	// — and where handing that one column back as a string deleted a nil
+	// check that no repository in this tree could ever trigger).
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "30 edges") {
+	if !strings.Contains(buf.String(), "29 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

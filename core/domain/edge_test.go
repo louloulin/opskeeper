@@ -73,3 +73,51 @@ func TestTheEdgeStatusConstantsAreTheOnesTheColumnIsConstrainedTo(t *testing.T) 
 			"count every node in both buckets")
 	}
 }
+
+// TestEdgeStatusQueryAnswersOneQuestionAndReturnsAValue is the guard for the
+// second edge port, and it is the guard the previous shape could not have had.
+//
+// The webshell used to declare its own `EdgeStatusLookup` whose single method
+// returned `*model.Edge`. A method-count assertion is satisfied by that, so
+// the count alone never objected to the row — what the row cost was a
+// `(nil, nil)` state the holder had to carry a branch for and no repository
+// in this tree can produce. So the return type is measured here, on the type,
+// where nobody can satisfy it by changing a comment.
+func TestEdgeStatusQueryAnswersOneQuestionAndReturnsAValue(t *testing.T) {
+	typ := reflect.TypeOf((*EdgeStatusQuery)(nil)).Elem()
+	if typ.NumMethod() != 1 {
+		var got []string
+		for i := 0; i < typ.NumMethod(); i++ {
+			got = append(got, typ.Method(i).Name)
+		}
+		t.Fatalf("EdgeStatusQuery has %d methods %v; it answers one question — is this node "+
+			"online — and a second method is how List comes back, and List is what made a "+
+			"fleet of a thousand and one look like a dead host", typ.NumMethod(), got)
+	}
+	if name := typ.Method(0).Name; name != "PresenceStatus" {
+		t.Errorf("EdgeStatusQuery's one method is %s, want PresenceStatus", name)
+	}
+	out := typ.Method(0).Type.Out(0)
+	if out.Kind() != reflect.String {
+		t.Errorf("PresenceStatus answers with %s, want string; anything that can be nil brings "+
+			"the absent-row branch back, and that branch is what this port exists to delete", out)
+	}
+}
+
+// TestTheTwoEdgePortsAreNotTheSameType pins a decision rather than a shape.
+//
+// EdgeQuery and EdgeStatusQuery could be one interface with two methods, and
+// that would be shorter. It would also hand the alert staleness gauge and the
+// system-health probe a point lookup neither asked for, which is the accretion
+// the EdgeQuery doc warns about in its own words. Merging them is the kind of
+// edit that looks like tidying and hands two consumers a method they never
+// justified, so it is refused here by name.
+func TestTheTwoEdgePortsAreNotTheSameType(t *testing.T) {
+	q := reflect.TypeOf((*EdgeQuery)(nil)).Elem()
+	s := reflect.TypeOf((*EdgeStatusQuery)(nil)).Elem()
+	if q == s {
+		t.Fatal("EdgeQuery and EdgeStatusQuery are the same type; merging them gives the " +
+			"alert gauge and the health probe a point lookup they never asked for, which is " +
+			"the accretion EdgeQuery's own doc comment rules out")
+	}
+}

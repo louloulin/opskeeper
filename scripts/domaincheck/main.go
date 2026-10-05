@@ -196,8 +196,6 @@ var edges = map[edge]string{
 	{"report", "loop"}:  "a report is produced out of an agent conversation or a loop investigation, and the postmortem service renders the loop's own postmortem contract (PostmortemDoc / RootCauseJSON / CritiqueScore) — one direction only since decision 115",
 
 	{"systemhealth", "alert"}: "the health summary counts active alerts through the alert service",
-
-	{"webshell", "edge"}: "the webshell reaches the node through the edge transport",
 }
 
 // pair canonicalises a mutual pair so that the table can be written in

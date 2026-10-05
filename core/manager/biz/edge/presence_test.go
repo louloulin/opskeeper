@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
@@ -173,5 +174,120 @@ func TestListPresenceOnAnUnwiredUsecaseIsNotWiredYet(t *testing.T) {
 	if _, err := uc.ListPresence(context.Background(), 10); err == nil {
 		t.Fatal("an unwired usecase returned no error; the probe would report the fleet as " +
 			"healthy because the dependency was never built")
+	}
+}
+
+// presenceStatusRepo answers a point read and records what it was asked for.
+//
+// It is a separate fake from presenceRepo rather than a field on it, because
+// the two ports ask different questions and a fake that answered both would
+// let a test pass against an implementation wired to the wrong one — which is
+// the one mistake the two-interface split exists to make impossible.
+type presenceStatusRepo struct {
+	*fakeRepo
+	edge *model.Edge
+	err  error
+	ids  []uint64
+}
+
+func (r *presenceStatusRepo) GetByID(_ context.Context, id uint64) (*model.Edge, error) {
+	r.ids = append(r.ids, id)
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.edge, nil
+}
+
+// TestPresenceStatusAnswersWithTheColumnAndNothingElse is the projection
+// test for the webshell's question.
+//
+// The consumer compares the answer against domain.EdgeStatusOnline and puts
+// it in an error message when it does not match. That is all it does, so the
+// test asserts the same thing and no more: a caller that wanted a name or a
+// last-seen stamp would not compile against a string, which is the property
+// being bought.
+//
+// The three rows are the point, and the third one is why. The first draft of
+// this test held a single online row, and the mutation that replaced the
+// projection with the constant `return domain.EdgeStatusOnline` PASSED it —
+// because a test that only ever sees "online" cannot tell reading a column
+// from returning a literal. That is the sixteenth measuring hole in this
+// ledger, and it was found by running the mutation rather than by reading the
+// test, which is the only reason it was found at all.
+//
+// The third value is not reachable through the edges table's CHECK constraint,
+// and it is here anyway: a projection that maps values is a different
+// function from one that forwards them, and a test that cannot tell them apart
+// is a test that will not notice the day somebody adds a third state.
+func TestPresenceStatusAnswersWithTheColumnAndNothingElse(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status string
+	}{
+		{"the node is online", model.StatusOnline},
+		{"the node is not answering", model.StatusOffline},
+		{"a value no current row can hold", "draining"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &presenceStatusRepo{
+				fakeRepo: newFakeRepo(),
+				edge:     &model.Edge{ID: 4321, Status: tc.status},
+			}
+			uc := &Usecase{repo: repo}
+
+			got, err := uc.PresenceStatus(context.Background(), 4321)
+			if err != nil {
+				t.Fatalf("PresenceStatus returned %v", err)
+			}
+			if got != tc.status {
+				t.Errorf("PresenceStatus = %q, want %q; the port forwards the column, and a "+
+					"projection that substituted a constant here would report a node that "+
+					"cannot be reached as one that can", got, tc.status)
+			}
+			if len(repo.ids) != 1 || repo.ids[0] != 4321 {
+				t.Errorf("the repo was asked for %v, want exactly one read of edge 4321", repo.ids)
+			}
+		})
+	}
+}
+
+// TestPresenceStatusReportsAMissingNodeAsAnErrorNotAsAState is the branch
+// this cut deleted from the consumer.
+//
+// The old port returned `*model.Edge`, so its holder carried
+// `if edge == nil { ... }` — a state no repository here produces, since
+// u.Get maps a missing row to errs.ErrNotFound. This pins the behaviour that
+// makes that branch unnecessary: a node that is gone is an error, and never a
+// presence state a caller could mistake for a reachable one.
+func TestPresenceStatusReportsAMissingNodeAsAnErrorNotAsAState(t *testing.T) {
+	repo := &presenceStatusRepo{fakeRepo: newFakeRepo(), err: errs.ErrNotFound}
+	uc := &Usecase{repo: repo}
+
+	got, err := uc.PresenceStatus(context.Background(), 7)
+	if err == nil {
+		t.Fatalf("PresenceStatus returned %q for a node that is gone; a caller that checks "+
+			"the value first would open a shell to a node that does not exist", got)
+	}
+	if !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("PresenceStatus returned %v, want errs.ErrNotFound; the three reasons a shell "+
+			"cannot open are logged separately, so the reason has to survive the projection", err)
+	}
+	if got != "" {
+		t.Errorf("PresenceStatus returned %q alongside an error; the value must be empty so a "+
+			"caller that ignores the error cannot read an empty status as a presence state", got)
+	}
+}
+
+// TestPresenceStatusRefusesWhenTheTreeIsNotWired covers the boot mistake.
+//
+// Usecase.Get answers errs.ErrNotWiredYet when the repository was never
+// handed in. That state is exactly the one the composition root can produce by
+// forgetting an argument, and it has to arrive as an error rather than as a
+// zero value that a caller would read as "not online, but present".
+func TestPresenceStatusRefusesWhenTheTreeIsNotWired(t *testing.T) {
+	uc := &Usecase{}
+	got, err := uc.PresenceStatus(context.Background(), 1)
+	if !errors.Is(err, errs.ErrNotWiredYet) {
+		t.Fatalf("an unwired usecase returned (%q, %v), want errs.ErrNotWiredYet", got, err)
 	}
 }

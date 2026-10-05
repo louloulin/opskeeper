@@ -9,10 +9,10 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	managerbizdevice "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
 	managerdevicedata "github.com/vincent-wuhan/opskeeper/core/manager/data/device/store"
 	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 	managerwebshellserver "github.com/vincent-wuhan/opskeeper/core/manager/server/webshell"
 )
 
@@ -108,16 +108,23 @@ func (j *junction) Unlink(context.Context, uint64, uint64, devicemodel.EdgeDevic
 	panic("Unlink is not on the webshell path")
 }
 
-// offlineEdge is an edge-status reader that reports the agent as not
-// answering. That makes resolveEdge fail, which is the point: it stops the
-// request at the lookup under test and returns before the handler reaches the
-// session router, the SSH client or the websocket upgrade — none of which
-// this test wants to stand up.
+// offlineEdge answers the presence question with "not answering". That makes
+// resolveEdge fail, which is the point: it stops the request at the lookup
+// under test and returns before the handler reaches the session router, the
+// SSH client or the websocket upgrade — none of which this test wants to
+// stand up.
+//
+// It is a second boot-path guard, added with decision 251: main.go used to
+// hand this handler the edge GORM store, and the store answers a different
+// question than the port now asks. `*store.Repo` cannot satisfy
+// domain.EdgeStatusQuery at all, so the argument that would restore the old
+// wiring no longer compiles — the same compile-time guard the device
+// argument got in decision 248, and for the same reason.
 type offlineEdge struct{ calls int }
 
-func (o *offlineEdge) GetByID(_ context.Context, id uint64) (*edgemodel.Edge, error) {
+func (o *offlineEdge) PresenceStatus(_ context.Context, _ uint64) (string, error) {
 	o.calls++
-	return &edgemodel.Edge{ID: id, Status: edgemodel.StatusOffline}, nil
+	return domain.EdgeStatusOffline, nil
 }
 
 // TestTheShellAsksTheDeviceDomainWhichEdgeItBelongsTo is the seam with no

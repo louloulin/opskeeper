@@ -34,8 +34,8 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	bizwebshell "github.com/vincent-wuhan/opskeeper/core/manager/biz/webshell"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
 )
 
@@ -73,16 +73,21 @@ type DeviceLinks interface {
 	LookupEdgeForDevice(ctx context.Context, deviceID uint64) (uint64, error)
 }
 
-// EdgeStatusLookup is the whole of what this handler needs from the edge
-// domain: given an edge id, is that agent online right now?
+// The edge question this handler asks is "given an edge id, is that agent
+// online right now?", and the port that answers it is domain.EdgeStatusQuery.
 //
-// Fifteen methods were available here before, and the handler used one of
-// them in a way that was wrong — see resolveEdge below. Narrowing the port
-// to the question actually being asked is what made the wrong answer
-// impossible to keep writing.
-type EdgeStatusLookup interface {
-	GetByID(ctx context.Context, id uint64) (*edgemodel.Edge, error)
-}
+// It used to be a locally declared `EdgeStatusLookup` whose one method
+// returned `*edgemodel.Edge` — the whole fifteen-column row — and the domain
+// boundary this package crossed to get that type was the last production
+// cross-domain import the webshell domain had (decision 251). Narrowing the
+// answer to the one column that is read is what made the boundary
+// unnecessary: the two untyped constants it compares against now live in
+// core/domain, so the handler can ask the question without naming the model.
+//
+// Fifteen methods were available at the store before either narrowing, and
+// the handler used one of them in a way that was wrong — see resolveEdge
+// below. Both narrowings are load-bearing, and only the second one is about
+// packages.
 
 // Handler bundles dependencies. *Handler is constructed once at boot.
 type Handler struct {
@@ -90,7 +95,7 @@ type Handler struct {
 	router   *bizwebshell.Router
 	audit    bizwebshell.Recorder
 	links    DeviceLinks
-	edges    EdgeStatusLookup
+	edges    domain.EdgeStatusQuery
 	authz    AuthzMW
 	log      *slog.Logger
 	upgrader websocket.Upgrader
@@ -98,7 +103,7 @@ type Handler struct {
 
 // NewHandler builds the HTTP handler.
 func NewHandler(streamer Streamer, router *bizwebshell.Router, audit bizwebshell.Recorder,
-	links DeviceLinks, edges EdgeStatusLookup, log *slog.Logger,
+	links DeviceLinks, edges domain.EdgeStatusQuery, log *slog.Logger,
 ) *Handler {
 	if log == nil {
 		log = slog.Default()
@@ -216,15 +221,12 @@ func (h *Handler) resolveEdge(ctx context.Context, deviceID uint64) (uint64, err
 	if edgeID == 0 {
 		return 0, errors.New("no edge registered for device")
 	}
-	edge, err := h.edges.GetByID(ctx, edgeID)
+	status, err := h.edges.PresenceStatus(ctx, edgeID)
 	if err != nil {
 		return 0, fmt.Errorf("read edge %d: %w", edgeID, err)
 	}
-	if edge == nil {
-		return 0, fmt.Errorf("edge %d is gone", edgeID)
-	}
-	if edge.Status != edgemodel.StatusOnline {
-		return 0, fmt.Errorf("edge %d is %s", edgeID, edge.Status)
+	if status != domain.EdgeStatusOnline {
+		return 0, fmt.Errorf("edge %d is %s", edgeID, status)
 	}
 	return edgeID, nil
 }

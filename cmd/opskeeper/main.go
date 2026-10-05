@@ -1528,7 +1528,17 @@ func main() {
 		// nowhere else, and a store whose wiring is missing shows up as a
 		// nil dereference at the first shell rather than as a wiring error.
 		deviceUC,
-		edgeRepo,
+		// The edge usecase, for the reason the line above gives for the
+		// device one. This argument used to be edgeRepo, so the handler
+		// asked the GORM store for a node's presence directly and the
+		// edge biz layer was bypassed at exactly the one call site that
+		// decides whether an operator may open a shell. It answered the
+		// same question from the same row, so nothing about the running
+		// system changed — but the port it holds is now
+		// domain.EdgeStatusQuery, and only the usecase can satisfy that.
+		// The repository is not assignable to it, so this line failing to
+		// compile is the wiring guard, not a comment (decision 251).
+		edgeUC,
 		log.With(slog.String("comp", "webshell")),
 	)
 	webshellHandler.SetAuthz(authzMW)

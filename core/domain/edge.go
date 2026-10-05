@@ -76,3 +76,36 @@ type EdgeQuery interface {
 	// which is a type that exists to be wrong later.
 	ListPresence(ctx context.Context, limit int) ([]EdgePresence, error)
 }
+
+// EdgeStatusQuery is the port the webshell holds, and it is a second
+// interface rather than a second method on EdgeQuery on purpose.
+//
+// The file above says a wider port is a port every future caller can reach
+// through, and it offers the remedy as "a second method here with its own
+// justification". Read strictly, that remedy is a second *port*: alert and
+// systemhealth hold EdgeQuery to count stale nodes, and handing them a point
+// lookup they never asked for is the same accretion one method later. The
+// three consumers ask three different questions, and a question that has one
+// holder has no business sharing a type with a question that has two.
+//
+// The answer is one string, not an EdgePresence. This consumer reads exactly
+// one column of the fifteen the model carries — the presence state — and the
+// projection principle the rest of this file follows is "move the columns the
+// caller reads", not "move a row that contains them". A record whose only use
+// is to be compared against EdgeStatusOnline is a struct with one legal
+// comparison, and the two untyped constants above already exist so that
+// naming a state costs no import.
+//
+// The missing row is an error rather than a zero value, and that is what
+// removes a branch from the caller: a `*model.Edge` port can answer
+// `(nil, nil)`, so its holder has to carry a "the row is gone" check that no
+// implementation in this tree can produce. A string cannot, so the question
+// stops being askable.
+type EdgeStatusQuery interface {
+	// PresenceStatus returns the node's presence state — one of
+	// EdgeStatusOnline or EdgeStatusOffline — or an error if the node is
+	// not registered. It does not fall back to any other value, because
+	// "unknown" is a claim about a node and this port is only allowed to
+	// make claims the edges table already makes.
+	PresenceStatus(ctx context.Context, id uint64) (string, error)
+}

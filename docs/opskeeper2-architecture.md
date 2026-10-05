@@ -20833,6 +20833,126 @@ M1–M3 同时证明了一件更重要的事：**这个数会随树动，它不�
 在此之前，34 那条数列从未有过这个证据。
 
 
+### 4.183 决策 251：切掉 `webshell → edge`——**消费者只读了十五列里的一列，于是整行就是这条边存在的全部理由**
+
+这一刀切的是 `webshell` 域**最后一条**生产跨域 import。切完之后该域零跨域出向，
+而它的入向**本来就是零**——这一点下面单独记，因为本轮对它的预测是错的。
+
+#### 一、这一刀的内容：一次比较，不是一次读取
+
+`server/webshell` 的 `EdgeStatusLookup` 早已被决策 228 收窄到**一个方法**，
+但那一个方法返回的是 `*edgemodel.Edge`——**整行十五列**。而 `resolveEdge`
+对这一行做的事只有一件：
+
+```go
+if edge.Status != edgemodel.StatusOnline {   // 读 1 列，比一个常量
+```
+
+**被切掉的是十四列，不是十四个方法。** 决策 228 收窄的是方法数，而**方法数从来
+不是这条边的成本**——一个返回整行的单方法端口，量起来和一个返回一列的单方法端口
+完全一样。这解释了为什么决策 228 的守卫（`TestTheEdgePortStaysOneMethodWide`，
+断言 `NumMethod() == 1`）在决策 251 之前一直是绿的：**它量的东西是对的，但它量的
+不是这件事。**
+
+于是两个决定：
+
+**（1）新端口，而不是给 `EdgeQuery` 加方法。**
+`core/domain/edge.go` 里 `EdgeQuery` 的注释写着「wider port 是每个未来调用方都能
+伸手进去的端口」，并把补救写成「在这里加第二个方法，各带各的理由」。**严格读一遍，
+那个补救是一个新端口**：`alert` 与 `systemhealth` 持 `EdgeQuery` 是为了**数陈旧节点**，
+给它们一个按 id 的点查是同一句话在下一个方法上的复发。三个消费者问三个问题，
+而**只有一个持有者的问题没有资格和有两个持有者的问题共用一个类型**。
+新端口 `domain.EdgeStatusQuery`，一个方法 `PresenceStatus`。
+
+**（2）返回一个 string，而不是一行。**
+投影原则是「搬消费者读的那几列」，不是「搬一个包含它们的行」。`core/domain`
+里 `EdgeStatusOnline` / `EdgeStatusOffline` 这两个**无类型常量**本来就是为这件事
+准备的（决策 229/232 反复拒绝引入第三套拼写），于是**命名一个状态不需要任何 import**。
+
+**而这一条顺带删掉了消费者里的一个分支。** 端口返回行，行可以缺席，于是持有者必须
+带着 `if edge == nil` 的检查——**而本仓没有任何 repository 能产出 `(nil, nil)`**：
+`data/edge/store` 的 `GetByID` 把「找不到」映射成 `errs.ErrNotFound`。
+**那个分支零测试覆盖、零评审依据、且不可达。** 返回 string 之后这个问题**不再能被提出**，
+这比「加一条注释说它不可达」强，因为注释会被下一个人当成可以照着写的先例。
+
+#### 二、接线：从 GORM store 换成 usecase，**旧装配编不过**
+
+`main.go` 此前把 `edgeRepo`（GORM store）交给这个 handler——**和决策 248 里
+`webshell → device` 那条一模一样的病**：handler 绕过 biz 层直接问 store，
+于是「节点在不在线」这个决定**由一个存储适配器来回答**，而拥有状态词汇的域不在
+调用路径上。改成交 `edgeUC` 之后：
+
+- **M1 变异（把 `edgeUC` 换回 `edgeRepo`）→ 编译失败**：
+  `cannot use edgeRepo (*store.Repo) as domain.EdgeStatusQuery`。
+  按本文件一贯的规矩，**编译器拒绝的变异不能当守卫有效的证据**——
+  但「旧装配无法编译」本身可以当**结论**：这条边现在不是靠纪律维持的，
+  是靠 `*store.Repo` 不满足那个接口维持的。
+- `cmd/opskeeper/webshell_links_wiring_test.go` 里那个自接线的 fake 必须同步改形状，
+  这本身印证了决策 249 的结论：**接缝测试自己接线，所以它抓不到 boot 路径**——
+  真正抓住的是 `main.go` 的编译。
+
+#### 三、**一个被实测推翻的预测**，以及它为什么错
+
+切之前本轮预测的是：「`webshell` 域入向归零，**第二个进 FLOOR**」。
+实测：**FLOOR 一行未动，36 域 / 46,975 行 / 94 包**，而 `webshell` **早就在里面**。
+
+原因是预测把**出向**当成了**入向**。FLOOR 的定义是「没有入向跨域 import 的域」，
+而这一刀切掉的是 `webshell` **指向别处**的那一条——`webshell` 从来就没有被别人
+import 过（它只被 `cmd/` 装配）。**一个域能不能独立发版取决于它有没有入向边；
+本轮又一次证明问对问题比努力切边更重要。**
+
+顺带记一句：三份报价**各降 1**（proposed 30 → 29、constrained 18 → 17、
+release-floor 25 → 24），因为那是一条组间 import。而 `release-floor` 那份的
+叙述此前刚在决策 249 里记过一次「跨组数**涨**了 1」，**现在同一份报价既涨过又降过，
+而两次的树都比对方好**——这是「报价是分组方式的函数，不是树质量的函数」这句话的
+**第二个证据**，而且是同一份文件上的两个方向。
+
+#### 四、**第十六次量具洞，而且是本轮自己踩的**
+
+投影测试第一版只有一个用例：一行 `Status: online`，断言返回值是 `online`。
+然后跑变异 **M6：把 `return edge.Status` 换成 `return domain.EdgeStatusOnline`
+——测试通过。**
+
+因为**一个只见过 `online` 的测试，量不出「读了一列」和「返回了一个字面量」的区别**。
+它断言的是一个常量，不是一次投影。这与决策 119–199 记的那一族洞同形，
+但方向是反的：**前十五次是守卫量错了东西，这一次是我先写好了守卫，然后没跑变异，
+于是它安静地错着。**
+
+补法是把用例改成三行表驱动：`online` / `offline` / **一个当前 CHECK 约束不允许的值**。
+第三个值**在生产里不可达**，而它仍然在表里——因为**一个映射值的投影和一個转发值的
+投影是兩個函數**，而分不清它們的測試不會在有人加第三個狀態的那天發覺。
+
+重跑：**M6 与 M7（换成另一个常量）都 RED**，且各自点名了具体哪一行不符。
+
+**另一条守卫自己量错了槽位，也记下来**：`TestTheEdgePortAnswersWithAValueAndNotARow`
+第一版读的是 `Out(1)`，而 `Out(1)` 是 `error`——它对着一个答案是 string 的方法
+报了 `interface`。**一个量错槽位的守卫比没有守卫更糟，因为它因为没人选过的理由而绿。**
+修正成读 `Out(0)`，并把这段经过留在注释里，**免得下一个人「修」它的时候去放松断言
+而不是去读签名**。
+
+#### 五、口径与分数
+
+- **已切 28 → 29 / 34**，`manager 拆分` 0.82 → **0.85**，
+  阶段 3 **93.7% → 94.7%**（(1.00 + 0.85 + 0.99)/3 = 94.67），
+  加权 **97.1% → 97.4%**（(98 + 100 + 96.7 + 94.7)/4 = 97.35）。
+- **但这一格必须连着决策 250 一起读**：「已切 29 / 34」是手写累加器，
+  **本仓库没有任何工具能产出那个 34**（§4.182 的四次复现全部失败）。
+  **本轮起，这一刀第一次有了一个能量出来的数跟着它**：
+  **生产跨域 import 126 → 125**（`make domain-check`，决策 250 立的计数器）。
+  分数仍然是判断，**而 125 是测量**——两个数第一次同时在场。
+- 声明边 **30 → 29**；57 域 / 9 shared / **0 环** / **4 层** 未变。
+- FLOOR **36 域 / 46,975 行 / 94 包未变**（理由见 §三）。
+- 三份报价：**proposed 96/29**、**constrained 108/17**、**release-floor 101/24**。
+- `core/manager` 939 / 238,791 → **939 / 238,984（+193 行，文件数不变）**。
+  涨的是**守卫与注释**：`presence_test.go` +131、`edge_test.go` +62、
+  `http_test.go` 与 `http.go` 净 ±0 附近。**生产代码净变化接近零**——
+  这一刀删掉的是一条 import 和一个分支，加进来的是一个 12 行的方法。
+  **第五次记下同一个比值。**
+- 测试：`func Test` 2894 → **2898**（+4：webshell 1 / biz/edge 3；
+  表驱动子测不计）。`core/manager` 全量绿，根 750、scripts 346、
+  domain 76、domains 645、edge 540、pig 320、harness 234、floor 391。
+
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -20874,12 +20994,54 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
   **本段此前那句「这在生产上几乎不可达」是未经测量的推断，本轮推翻它**：我不知道部署重启频率，也不知道故障复现频率，**没有测过任何一个**，而「几乎不可达」需要这两个数的比才能说。**其中可测的那一半已由决策 207 关闭**（§4.140）：默认路径在三种部署形态下可写（`Dockerfile.opskeeper` 把状态根 chown 给进程用户并以其身份运行）、有 bind-mount、install 与 upgrade 两个脚本都 mkdir 且 chown 到 65532，并由第十八条闸门钉住这四者不再分开——**本段此前列为「唯一缺口」的那句「没有验证过能不能写」到此作废**。
   **未测的那一半仍是部署重启频率与故障复现频率**，所以「这个功能值多少分」仍然不知道，**分数因此不动（96.7%）**——理由与上一轮不同：上一轮是「可测的也没测」，这一轮是「可测的测完了，剩下的需要部署事实」。决策 207 顺带关掉了同一机制下的另外三个目录（`repos`/`plugins`/`federation`），其中 `federation` 的后果最重：容器层被抹掉后 root 会忘记集群集合并重新注册所有人、轮换所有 token，而台账 4.83.4 原本把这个列为「文件损坏时」的最坏响应。
   本轮做的是它的**用户可见后果**：`GET /v1/loops/crystallized` 现在带 `observing_since`，控制台空状态改说「自 <时刻> 起还没有模式被晋升」并点明账本不跨重启，**不再把「这个窗口没有」说成「从来没有过」**——因为这两种读法要求的后续动作正好相反；eval 三维化：**决策 105 关掉**——`core/harness/judge/diagnostic.go` 的 `DiagnosticAxes` 按 Localization × Identification × Reason 打分、`reason` 读轨迹面、`Overall` 未动，`make eval-axes` 20/20（§4.43）；prompt injection 标注：**决策 107 关掉**——`core/manager/biz/aiops/promptguard` 每次渲染现抽 nonce、`Parse` 只认 id 匹配的闭合标签，`core/manager/biz/aiops/tools/untrusted_sources.go` 用 `ToolName*` 常量列出「输出是外来文本」的闭集并由 `MarkUntrustedOutput` 一处适配，四处接线（含 `main.go` 后挂的 `host_bash`/`cloud_bash`）；**`buildInvestigatedPrompt` 的三个块与 system 里的 `Instruction()` 同源**，`make promptguard-check` 是闸门（§4.45）。**决策 125 查过这一格并维持 92%（5.5/6）**：本轮一度记为 83.3%，理由是「插件安装不记账」，而那个理由是错的——发布一侧（`plugin_release_start/advance/halt/rollback`）在 manager 侧一直有审计，成功与失败都记。**真正缺的是节点平面到链的通路**，而它不落在阶段 2 的六条里，所以本轮不因它动这一格（§4.63.8）。**决策 126 已经把那条通路关掉了**（`agent.audit.entries` 全线贯通：策略闸门的每一次放行/拦截/审批、插件安装器的每一次安装与卸载，链上现在各有一条），**并且仍然不动这一格**——四阶段台账里没有这一条，给某一格硬拔高比不改更糟（§4.64.8）。**决策 159 早已关掉本行最后那半条，而本行的叙述没有跟上**：`biz/aiops/crystallizehook.Learner` 是 `Ledger.Record` 的第一个生产调用方，`main.go` 在工具注册表非空时把它接进 `OrchestratorDeps.Crystallizer`，而 `walkPhases` 只在「验证通过的那一次修复」上调用它（§4.96）。**本行此前那句「闭环调用 `Ledger.Record` 那一步没有做」说的是决策 154 之前的世界**；本行的 96.7% 一直把它算进去了，只是最后一句还停在三节之前。剩下的 0.2/6 是晋升后的草稿接进既有 release 通路（§4.98.5），**决策 172 把这一跳补上了一条它此前没有的测试**（§4.108.3） |
-| 3 控制面瘦身与联邦（P3） | **93.7%** | 本行 = (1.00 审计端口 + 0.82 manager 拆分 + 0.99 多集群联邦) / 3，**决策 242 把 manager 拆分从 0.71 记到 0.74**（已切生产跨域边 24 → 25 / 34，切掉 `grafana → monitor`，见 §4.174），**决策 247 把它从 0.74 记到 0.77**（已切 25 → **26** / 34，切掉 `agentteams → alert`，见 §4.179），**决策 241 把 manager 拆分从 0.68 记到 0.71**（已切生产跨域边 23 → **24** / 34，切掉 `marketplace → pluginimport`，见 §4.173），**决策 240 把 manager 拆分从 0.65 记到 0.68**（已切生产跨域边 22 → **23** / 34，切掉 `aiops → skill`，见 §4.172），**决策 227 把 manager 拆分从 0.44 记到 0.47**（已切生产跨域边 15 → 16 / 34，口径未动）；**决策 235 把它从 0.53 记到 0.59**（已切生产跨域边 18 → **20** / 34，一次切掉两条：`alert → edge` 与 `systemhealth → edge`，两者都由同一个 `core/domain.EdgeQuery` 端口接走，而这两个域此前各自声明过一个本地 `EdgeLister`——接缝已经存在，只是签名仍然指名 `edgebiz` / `edgemodel`，所以那是一个包边界而不是接口边界（§4.167），三个分量各自的来历见下。**决策 215 把联邦那条从 0.97 记到 0.99，并收回本段此前那句「跨网络要 CDN 或对象存储——外部条件」**：子集群侧的 `checkSourceScheme` 早就接受 `http`/`https`（4 MiB 上限、摘要先验后解包、签名 gate 齐备），**接收端从来没有在等一个 CDN**；缺的是根侧产出一个 `https://` URL 并在给出它之前校验过字节，而那一直是本仓的代码。已交付 `PublishedDistributor`（先打包留在本地、再问 store、比对通过才给 URL）、`ErrNotPublished`（可重试）与 `ErrPublishedMismatch`（**不可重试**——两个权威的冲突，重试只会永远冲突）、`ManifestLedger`（JSON 清单，**每次投递重读不缓存**，因为发布步骤在带外跑），并在 `federation_wiring.go` 接线、四个环境变量首次落进 `deploy/.env.example`。**刻意不做文件服务器**（deliver.go 的原理由成立）。剩下的 0.01 是部署侧那一步（上传 + 写 manifest），**那一步不在本仓，所以本仓测不到它**（§4.148）。**第一条已关（决策 109/110）**：`iam → manager` 的三条审计边从 `exceptions` 台账与 `iam_server.mayDependOn` 双双删除，行的形状下沉到 `core/manager/pkg/audit`——无 usecase / repo / 链头 / HMAC，`biz/audit` 仍是唯一写入咽喉（§4.47）；**决策 110 把同一缺陷在另外 5 个域关掉**（alert / knowledge / setting / plugin / mcp 此前都为了「给一行记录命名」而 import 写入咽喉），并把「谁可以持有咽喉」变成一张带理由的表，由 `make audit-port-check`（13 条）守住，顺带补上 MCP 五处内联字面量。**第二条已开工但未完成**（**决策 111 当时的读数：55 个域散在 4–5 个 layer 树 / 55 条需声明的跨域边 / 7 对互为依赖的环**（aiops↔alert / aiops↔hitl / aiops↔loop / alert↔demo / chatdiagnose↔loop / device↔edge / loop↔report）——**这三组数早已被决策 112–118 逐条推翻，今天是 57 域 / 30 边 / 0 环（决策 227、229、230 各切掉一条，决策 235 一次切掉两条，决策 236、238、240、241、242、247 各再切一条），见本节末尾的控制面域图行；下面这一段保留的是「当初为什么要做这件事」而不是今天的读数**。环是「不能独立演进」的最强证据，而 layer 粒度的 arch-lint **看不见它们**；另有 **10 个无人引用的包 / 5,544 行**，实测全是方案自己没接线的半成品（crystallize 897 / critic 386 / proposal 383 / decorator 509），**删死代码这条捷径在包粒度上不存在**。**决策 111 把这份盘点变成闸门**：`scripts/domaincheck` + `make domain-check`——域按层树归并（`biz/alert` 与 `model/alert` 同属 `alert`），50 条跨域边逐条带理由，7 对环必须写明「怎样才切得断」，**表项过期本身也是红**（过期理由比没有理由更糟），检查器自身 13 条夹具测试（§4.49）。**决策 112 切掉了 7 对里的第一对**：实测 `device → edge` 在生产代码里只有一条 import（设备删除里的级联），接缝开在事务中间、由装配根注入 `EdgeIdentityRevoker` 后 **49 条边 / 6 对环**；顺带发现表里那条边的**理由本身是错的**（device 记录里并没有 edge 词汇），一并删掉（§4.50）。**决策 113 切掉了第二对**：`data/alert/store` 曾在自己的事务里推进 `demo_scenario_runs`（生产持久化层知道 demo 存在），把「这条告警是不是某条已开故事」这个问题端口化、由 demo 侧回答后 **48 条边 / 5 对环**；同一条边的理由在表里也指错了方向，一并删掉（§4.51）。**决策 114 切掉了第三对**：`biz/loop` 里那个「本包不 import chatdiagnose」的端口，签名却写着 `*chatdiagnosemodel.IncidentPattern`——接口在消费方声明但类型由生产方词汇决定，跨域 import 只是被藏进签名；改成「postmortem 落库了」并把指纹推导搬回知识库拥有者后 **47 条边 / 4 对环**，顺带补上这条路径此前**完全缺失的测试**，并暴露两个真缺陷（接线处的 nil 指针、`tenant_id` 恒为 `""`）（§4.52）。**决策 115 切掉了第四对**：`biz/loop/gitsink` 的包注释写着「挪进子包 → 包图无环 ✅」，而域是按路径归并的，包图无环不等于域图无环；adapter 改为本地声明 `Sink` 接口后 `main.go` 一字未改，**46 条边 / 3 对环**（§4.53）。**决策 116 切掉了第五对，而且它与前四对不同类**：`aiops ↔ hitl` 的两条边里，`hitl → aiops` **从来就不是真的**——它由一个零生产调用方、且设计文档已删除的迁移窗口（`MigrateLegacy` / `DualWriteRepo`，569 行）撑着，删掉后 **44 条边 / 2 对环**；检查器随即抓出 `hitl → approval` 也是同一个文件撑着的假边（理由「两域共享一个模型」并不成立），一并删除（§4.54）。**决策 117 切掉了第六对，而且它的两半是两种病**：`biz/loop` 渲染提示词要围栏，于是 import 了 agent 的 `promptguard`——而那个零依赖安全原语被三个域共用，正确位置是共享底座（照决策 109 的形状下沉到 `pkg/promptguard`，并补上 `pkg/audit` 那条「用 `go/ast` 断言够不到 BC」的测试，断言收紧到只许标准库）；另一半 `mcp_basetool.go` 把 loop 的 MCP 工具包装成 `basetool.BaseTool`，而**适配器由它的输出定义**，于是搬进 `biz/aiops/tools`（方向从 `loop → aiops` 变成表里本来就有的 `aiops → loop`），**43 条边 / 1 对环**；顺带修好一个已经红了的 `make promptguard-check`（它还在跑旧路径，是闸门第一次在包被移动时发挥作用），以及一处点名了不存在包名的错理由（`biz/aiops/loop` 并不存在，第五例）（§4.55）。**决策 118 切掉了第七对，也是最后一对，域图归零**：`aiops ↔ alert` 的贵的一侧是 14 条 `aiops → alert`，而 `alert → aiops` 只有 1 个文件里的 2 条——`biz/alert/investigator` 拿 `chatruntime.SpawnRequest/Worker` 和 `model/aiops.Message` 换来「告警触发一次自动根因分析」。两个都是 struct，**本地重声明不成立**（决策 114 的同一性墙），所以本轮拆成全标量的 `InvestigationRequest` / `InvestigationOutcome`（方法名也从对方的 `SpawnWorker` 改成自己的 `RunInvestigation`），翻译放在装配根；`MessageReader` 只带三个字段、返回 `[]T` 而非 `[]*T`，于是两处 nil 检查消失；那条**零测试覆盖**的 `worker == nil` 防御分支被值返回消除，运行时仍可能的 `(nil,nil)` 守卫搬到唯一能造出它的那一侧并从静默成功变成 error。**42 条边 / 0 对环**，七轮共切 8 条声明边 / 13 条生产 import（§4.56）。§4.53.4 记的「枢纽」判断就此收口：`aiops` 仍是依赖最多的域（读告警、读 HITL、驱动 loop），但**依赖多不是环，被依赖才是问题**。**决策 119 不改一行代码、也不动百分比，只把「能减的行数」变成一个数**：新增 `scripts/deadcode` + `make deadcode-report`（12 条夹具测试），按**文件粒度**报出生产代码里不可达的符号——这是 `domaincheck`（包粒度）看不见、而决策 116 亲手挖到过 569 行的那一类。读数 **794 个符号（502 dead / 292 test-only）/ 整文件 7 个 138 行**——**决策 199 修正了这条**：工具此前按**名字**而不是按**包**记可达性，于是同名符号互相背书（`Migrate` 在 20+ 个包各有一份、`WithTenant` 两个包、`NewBizRepo` 三个包），486（决策 119 当时）与 510（改动前实测）都是**下界**；改成按包归因后 dead 从 250 翻到 502，新增的 252 个已用同包文本 grep 逐个复核，**0 个有代码引用**。夹具 12 条 → **16 条**（新增的 4 条里有一条专门钉住「方法通过变量调用」这个更危险的误报方向）。工具在 `2140df9` 的 worktree 上被要求报出决策 116 删掉的那两个文件，**两档分类都判对**（`MigrateLegacy:test-only`、`NewDualWriteRepo:dead`）。工具**故意不做成闸门**并把看不见的六类路径（反射 / go:linkname / cgo / struct tag / 嵌入方法提升 / 构建标签）打印在每次输出末尾——不可靠的闸门会训练出「trust me」注释（§4.57）。**第二条仍未完成**：manager **939 个 Go 文件 / 238,791 行**未搬。**决策 241 是十一刀里第一次让这个数变小**（237,544 → 237,463，**-81 行**）：它把一份手抄的 `LoadWarning`、一个 14 行的投影函数和 108 行搬去 `core/domain` 的类型声明一起删了，留下四个 alias。**切边让代码变少这件事此前十刀都没做到过**，所以这一行值得单独记：前面每一刀都是把一个 15 字段的 GORM 实体换成投影、代价是多一个实现文件，而这把的消费者本来就已经写好了接缝，只是签名里写了两个它不拥有的名字（决策 228 在 `core/manager` 里加了一个 webshell 测试文件并把一段扫描换成两次点查，所以这个数**涨了**而不是继续掉——修缺陷本来就要加代码，把它记成搬运进度是不诚实的。再往前：决策 227 抬出 `metric`，决策 226 的 audit / middleware / plugin，决策 225 的 incident / repairpreview，决策 224 的 federation / grafana / monitor / setting / integration / federationlink，决策 223 的 flow / scheduler / nodeagent / nodefleet，以及决策 221、222 的 `pkg` 与 13 个域）
+| 3 控制面瘦身与联邦（P3） | **94.7%** | 本行 = (1.00 审计端口 + 0.85 manager 拆分 + 0.99 多集群联邦) / 3，**决策 251 把它从 0.82 记到 0.85**（已切 28 → **29** / 34，切掉 `webshell → edge`，**实测生产跨域 import 126 → 125**，见 §4.183），**决策 250 给这个分量装上了第一把量具**（§4.182）：「已切 N / 34」此前**没有任何工具能产出**，而本行与加权都由它驱动——**这一格的分量是判断，不是测量**，**唯一能量出来的数是生产跨域 import，本轮起它每次切边都会重取**；**决策 242 把 manager 拆分从 0.71 记到 0.74**（已切生产跨域边 24 → 25 / 34，切掉 `grafana → monitor`，见 §4.174），**决策 247 把它从 0.74 记到 0.77**（已切 25 → **26** / 34，切掉 `agentteams → alert`，见 §4.179），**决策 241 把 manager 拆分从 0.68 记到 0.71**（已切生产跨域边 23 → **24** / 34，切掉 `marketplace → pluginimport`，见 §4.173），**决策 240 把 manager 拆分从 0.65 记到 0.68**（已切生产跨域边 22 → **23** / 34，切掉 `aiops → skill`，见 §4.172），**决策 227 把 manager 拆分从 0.44 记到 0.47**（已切生产跨域边 15 → 16 / 34，口径未动）；**决策 235 把它从 0.53 记到 0.59**（已切生产跨域边 18 → **20** / 34，一次切掉两条：`alert → edge` 与 `systemhealth → edge`，两者都由同一个 `core/domain.EdgeQuery` 端口接走，而这两个域此前各自声明过一个本地 `EdgeLister`——接缝已经存在，只是签名仍然指名 `edgebiz` / `edgemodel`，所以那是一个包边界而不是接口边界（§4.167），三个分量各自的来历见下。**决策 215 把联邦那条从 0.97 记到 0.99，并收回本段此前那句「跨网络要 CDN 或对象存储——外部条件」**：子集群侧的 `checkSourceScheme` 早就接受 `http`/`https`（4 MiB 上限、摘要先验后解包、签名 gate 齐备），**接收端从来没有在等一个 CDN**；缺的是根侧产出一个 `https://` URL 并在给出它之前校验过字节，而那一直是本仓的代码。已交付 `PublishedDistributor`（先打包留在本地、再问 store、比对通过才给 URL）、`ErrNotPublished`（可重试）与 `ErrPublishedMismatch`（**不可重试**——两个权威的冲突，重试只会永远冲突）、`ManifestLedger`（JSON 清单，**每次投递重读不缓存**，因为发布步骤在带外跑），并在 `federation_wiring.go` 接线、四个环境变量首次落进 `deploy/.env.example`。**刻意不做文件服务器**（deliver.go 的原理由成立）。剩下的 0.01 是部署侧那一步（上传 + 写 manifest），**那一步不在本仓，所以本仓测不到它**（§4.148）。**第一条已关（决策 109/110）**：`iam → manager` 的三条审计边从 `exceptions` 台账与 `iam_server.mayDependOn` 双双删除，行的形状下沉到 `core/manager/pkg/audit`——无 usecase / repo / 链头 / HMAC，`biz/audit` 仍是唯一写入咽喉（§4.47）；**决策 110 把同一缺陷在另外 5 个域关掉**（alert / knowledge / setting / plugin / mcp 此前都为了「给一行记录命名」而 import 写入咽喉），并把「谁可以持有咽喉」变成一张带理由的表，由 `make audit-port-check`（13 条）守住，顺带补上 MCP 五处内联字面量。**第二条已开工但未完成**（**决策 111 当时的读数：55 个域散在 4–5 个 layer 树 / 55 条需声明的跨域边 / 7 对互为依赖的环**（aiops↔alert / aiops↔hitl / aiops↔loop / alert↔demo / chatdiagnose↔loop / device↔edge / loop↔report）——**这三组数早已被决策 112–118 逐条推翻，今天是 57 域 / 29 边 / 0 环（决策 227、229、230 各切掉一条，决策 235 一次切掉两条，决策 236、238、240、241、242、247、249、251 各再切一条），见本节末尾的控制面域图行；下面这一段保留的是「当初为什么要做这件事」而不是今天的读数**。环是「不能独立演进」的最强证据，而 layer 粒度的 arch-lint **看不见它们**；另有 **10 个无人引用的包 / 5,544 行**，实测全是方案自己没接线的半成品（crystallize 897 / critic 386 / proposal 383 / decorator 509），**删死代码这条捷径在包粒度上不存在**。**决策 111 把这份盘点变成闸门**：`scripts/domaincheck` + `make domain-check`——域按层树归并（`biz/alert` 与 `model/alert` 同属 `alert`），50 条跨域边逐条带理由，7 对环必须写明「怎样才切得断」，**表项过期本身也是红**（过期理由比没有理由更糟），检查器自身 13 条夹具测试（§4.49）。**决策 112 切掉了 7 对里的第一对**：实测 `device → edge` 在生产代码里只有一条 import（设备删除里的级联），接缝开在事务中间、由装配根注入 `EdgeIdentityRevoker` 后 **49 条边 / 6 对环**；顺带发现表里那条边的**理由本身是错的**（device 记录里并没有 edge 词汇），一并删掉（§4.50）。**决策 113 切掉了第二对**：`data/alert/store` 曾在自己的事务里推进 `demo_scenario_runs`（生产持久化层知道 demo 存在），把「这条告警是不是某条已开故事」这个问题端口化、由 demo 侧回答后 **48 条边 / 5 对环**；同一条边的理由在表里也指错了方向，一并删掉（§4.51）。**决策 114 切掉了第三对**：`biz/loop` 里那个「本包不 import chatdiagnose」的端口，签名却写着 `*chatdiagnosemodel.IncidentPattern`——接口在消费方声明但类型由生产方词汇决定，跨域 import 只是被藏进签名；改成「postmortem 落库了」并把指纹推导搬回知识库拥有者后 **47 条边 / 4 对环**，顺带补上这条路径此前**完全缺失的测试**，并暴露两个真缺陷（接线处的 nil 指针、`tenant_id` 恒为 `""`）（§4.52）。**决策 115 切掉了第四对**：`biz/loop/gitsink` 的包注释写着「挪进子包 → 包图无环 ✅」，而域是按路径归并的，包图无环不等于域图无环；adapter 改为本地声明 `Sink` 接口后 `main.go` 一字未改，**46 条边 / 3 对环**（§4.53）。**决策 116 切掉了第五对，而且它与前四对不同类**：`aiops ↔ hitl` 的两条边里，`hitl → aiops` **从来就不是真的**——它由一个零生产调用方、且设计文档已删除的迁移窗口（`MigrateLegacy` / `DualWriteRepo`，569 行）撑着，删掉后 **44 条边 / 2 对环**；检查器随即抓出 `hitl → approval` 也是同一个文件撑着的假边（理由「两域共享一个模型」并不成立），一并删除（§4.54）。**决策 117 切掉了第六对，而且它的两半是两种病**：`biz/loop` 渲染提示词要围栏，于是 import 了 agent 的 `promptguard`——而那个零依赖安全原语被三个域共用，正确位置是共享底座（照决策 109 的形状下沉到 `pkg/promptguard`，并补上 `pkg/audit` 那条「用 `go/ast` 断言够不到 BC」的测试，断言收紧到只许标准库）；另一半 `mcp_basetool.go` 把 loop 的 MCP 工具包装成 `basetool.BaseTool`，而**适配器由它的输出定义**，于是搬进 `biz/aiops/tools`（方向从 `loop → aiops` 变成表里本来就有的 `aiops → loop`），**43 条边 / 1 对环**；顺带修好一个已经红了的 `make promptguard-check`（它还在跑旧路径，是闸门第一次在包被移动时发挥作用），以及一处点名了不存在包名的错理由（`biz/aiops/loop` 并不存在，第五例）（§4.55）。**决策 118 切掉了第七对，也是最后一对，域图归零**：`aiops ↔ alert` 的贵的一侧是 14 条 `aiops → alert`，而 `alert → aiops` 只有 1 个文件里的 2 条——`biz/alert/investigator` 拿 `chatruntime.SpawnRequest/Worker` 和 `model/aiops.Message` 换来「告警触发一次自动根因分析」。两个都是 struct，**本地重声明不成立**（决策 114 的同一性墙），所以本轮拆成全标量的 `InvestigationRequest` / `InvestigationOutcome`（方法名也从对方的 `SpawnWorker` 改成自己的 `RunInvestigation`），翻译放在装配根；`MessageReader` 只带三个字段、返回 `[]T` 而非 `[]*T`，于是两处 nil 检查消失；那条**零测试覆盖**的 `worker == nil` 防御分支被值返回消除，运行时仍可能的 `(nil,nil)` 守卫搬到唯一能造出它的那一侧并从静默成功变成 error。**42 条边 / 0 对环**，七轮共切 8 条声明边 / 13 条生产 import（§4.56）。§4.53.4 记的「枢纽」判断就此收口：`aiops` 仍是依赖最多的域（读告警、读 HITL、驱动 loop），但**依赖多不是环，被依赖才是问题**。**决策 119 不改一行代码、也不动百分比，只把「能减的行数」变成一个数**：新增 `scripts/deadcode` + `make deadcode-report`（12 条夹具测试），按**文件粒度**报出生产代码里不可达的符号——这是 `domaincheck`（包粒度）看不见、而决策 116 亲手挖到过 569 行的那一类。读数 **794 个符号（502 dead / 292 test-only）/ 整文件 7 个 138 行**——**决策 199 修正了这条**：工具此前按**名字**而不是按**包**记可达性，于是同名符号互相背书（`Migrate` 在 20+ 个包各有一份、`WithTenant` 两个包、`NewBizRepo` 三个包），486（决策 119 当时）与 510（改动前实测）都是**下界**；改成按包归因后 dead 从 250 翻到 502，新增的 252 个已用同包文本 grep 逐个复核，**0 个有代码引用**。夹具 12 条 → **16 条**（新增的 4 条里有一条专门钉住「方法通过变量调用」这个更危险的误报方向）。工具在 `2140df9` 的 worktree 上被要求报出决策 116 删掉的那两个文件，**两档分类都判对**（`MigrateLegacy:test-only`、`NewDualWriteRepo:dead`）。工具**故意不做成闸门**并把看不见的六类路径（反射 / go:linkname / cgo / struct tag / 嵌入方法提升 / 构建标签）打印在每次输出末尾——不可靠的闸门会训练出「trust me」注释（§4.57）。**第二条仍未完成**：manager **939 个 Go 文件 / 238,984 行**未搬。**决策 241 是十一刀里第一次让这个数变小**（237,544 → 237,463，**-81 行**）：它把一份手抄的 `LoadWarning`、一个 14 行的投影函数和 108 行搬去 `core/domain` 的类型声明一起删了，留下四个 alias。**切边让代码变少这件事此前十刀都没做到过**，所以这一行值得单独记：前面每一刀都是把一个 15 字段的 GORM 实体换成投影、代价是多一个实现文件，而这把的消费者本来就已经写好了接缝，只是签名里写了两个它不拥有的名字（决策 228 在 `core/manager` 里加了一个 webshell 测试文件并把一段扫描换成两次点查，所以这个数**涨了**而不是继续掉——修缺陷本来就要加代码，把它记成搬运进度是不诚实的。再往前：决策 227 抬出 `metric`，决策 226 的 audit / middleware / plugin，决策 225 的 incident / repairpreview，决策 224 的 federation / grafana / monitor / setting / integration / federationlink，决策 223 的 flow / scheduler / nodeagent / nodefleet，以及决策 221、222 的 `pkg` 与 13 个域）
 
 **不依赖任何口径约定的读数**：零入向的域今天有 **32 个**（`make domain-release-report`），其中 **20 个（62.5%）已经是可独立发版的模块**，12 个还在 `core/manager`（**决策 249 让 `mcp` 的入向归零，这是本文件第一次由「切边」而不是「搬域」使一个域变成可证明独立发版**）（决策 222 抬出 13 个、决策 223 抬出 2 个、决策 224 抬出 `federationlink` 与 `integration`，决策 225 抬出 `incident`，决策 226 抬出 `plugin`，决策 227 抬出 `metric`）。**决策 229 之后分子分母不再同向**：这一刀没有搬任何域，可它让 `imbridge` 自己掉进零入向集合、进而让 `iam` 的入度归零，两个域一次进来（`iam` 4,524 行 / 13 个包），所以**分母涨了 1 而分子没动，百分比从 69.0% 降到 66.7%——而这是本轮唯一一个"分数下降"的读数，它下降的原因是拿到了两个域而不是丢了一个**。**决策 222–226 记过一句「这个分数与 0.44 那条边计数无关——搬走整块零入边的域按构造切不到边」，那句话到此为止不再成立**：决策 227 先切断了 `frontierbound → metric` 这条边，`metric` 因此**掉进**零入向集合，然后才被搬走。**这一次两个读数是同一件事**，而在此之前它们是彼此失明的。（口径 `find core/manager -name '*.go' | wc -l` 与同法 `cat {} + | wc -l`，见 §4.54.6；**决策 172 实测重取**——1180 / 287,155 是决策 123 时的数，更早的 1135 / 282,605 停在决策 119，**而分母在拆分一行没动的情况下自己长了 31 个文件 / 9,289 行**；决策 203 又给它加回 39 行（审计闭集的一个动作常量 + 一个资源类型），**第四次**由第 15 条闸门拦下并重取，见 §4.108.8；**决策 194 把这两条命令本身变成闸门**——`TestTheManagerSizeInTheProgressSectionIsTheTreesOwn` 每次 push 都跑，所以这个数不再靠人记得重取）；10 个无人引用的包 / 5,544 行全是方案自己没接线的半成品，删死代码这条捷径在包粒度上不存在（决策 116 顺带证明了**文件粒度**上存在，已记为下一轮候选）；`manager → iam_model`（IM bridge）按原计划保留。**第三条从零到约五分之四（决策 123）**：此前记的是「无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档）」，现在五处落地：`core/floor/federation`（规则与状态机）、`core/domains/biz/federation`（注册表与发布器）、`core/domains/server/federation`（控制面路由）、`core/domains/service/federationchild`（子集群侧代理与原子策略存储，决策 125 从 `core/edge/federation` 搬来）、`core/domains/service/federationlink`（根侧绑定表与两个方向的调用）。签名通道复用 `pluginmanifest`，不另造格式。**决策 124 把联邦那条从 0.80 记到 0.90**：`main` 侧的挂载与 `Forget` 的下线回调已接上（§4.61.9）之后，`PushPolicy` 仍是**零生产调用方**——发布只签名记账，从不推送。补上的两件事是**投递通道**（`Store.Receive` 验摘要在解包之前、`Distributor` 按 cluster+version 命名归档、线契约加一个与 `StagedPath` 互斥的 `Source`）与**根侧接线**（`Publish` 发版本后投递，投递结果作为 `Delivery` 与 error 分开报；`Redeliver` 复用首次投递的字节而不是重打包，因为摘要是子集群在解包之前比对的）。**授权模型不需要新造**：签名本身就是授权，子集群用自己 trust store 验根的 ed25519，URL 只是传输。这两条**零新增跨域依赖**。**剩下的是给 `Source.URL` 一个跨网络可用的托管来源**（本刀交付 `file://`，够共享挂载的部署；跨网络要 CDN 或对象存储——外部条件）——**决策 182 更正了此前的三处陈述**（本段此前写「剩下的是子集群进程本身……缺的是装配进子集群启动路径」以及「`Registry` 全在内存、持久化 `Ledger` 实现不在」，**三处都已不成立**）：子集群 Agent 已装配（`federation_child.go` 的 `newFederationChildWiring` 在 `main.go` 启动路径调用），`Registry` 持有 `Ledger` 端口且 `FileLedger` 实现已交付并接进 `federation_wiring.go`（§4.115）。**分数不动**——把陈述修对是事实，把 79.7% 往上拔是判断（§4.64.8）。**决策 125 把这条从 0.90 记到 0.94，并同时改掉了一个比「缺装配」更靠后的缺口**：实测 `live` 符号链接**没有任何生产代码读它**（`grep LiveLinkName\|\.Switch(` 只命中 `receiver.go:332` 的写入点），也就是**通道 100% 而 enforcement 0%**。补上的是 `core/floor/federation/gate.go` 的 `LiveGate`（只答「在不在策略里」，不重做 `Review`——它会拿 `min_edge_version` 比调用方的版本，而 manager 声明不了节点的版本）接在 `service/plugin` 的 `NodeFleet.Install` 上（**不是** `fetch_package`，那条是边缘二进制升级），加上 `cmd/opskeeper/federation_child.go` 的子集群装配（启动不等根、hello 每次重连重发、策略上限复用边缘那三个变量）。**`make module-check` 顺带抓到一个架构错**：那个包里没有一行边缘代理代码，却在 `core/edge` 模块里被 manager 的装配根 import——已搬到 `core/domains/service/federationchild`，域图 57 → 「58 域 / 43 边 / 0 环」（§4.63 当时的读数；本轮起是 57） |
 
-加权合计 ≈ **97.1%**（四阶段等比 98 / 100 / 96.7 / 93.7 的均值 97.1）。这一栏按
+加权合计 ≈ **97.4%**（四阶段等比 98 / 100 / 96.7 / 94.7 的均值 97.35）。这一栏按
 决策倒序追加，每一条只说自己动的那一分量：
+
+- **决策 251 切掉 `webshell → edge`**，已切 28 → **29** / 34，
+  `manager 拆分` 0.82 → **0.85**，阶段 3 **93.7% → 94.7%**，
+  加权 **97.1% → 97.4%**，声明边 30 → **29**。**这一刀的内容是十四列，
+  不是十四个方法**：决策 228 早已把端口收窄到**一个方法**，
+  而那个方法返回 `*edgemodel.Edge`——**整行十五列**——`resolveEdge` 只读
+  **一列**去比一个常量。**方法数从来不是这条边的成本**，
+  这解释了决策 228 那条 `NumMethod() == 1` 的守卫为什么一直是绿的：
+  **它量的东西是对的，但它量的不是这件事。**
+  两个决定：**新端口而不是给 `EdgeQuery` 加方法**（严格读一遍那份注释，
+  它的补救是一个新端口——给 `alert` / `systemhealth` 一个它们没问过的点查
+  是同一句话在下一个方法上的复发），**返回 string 而不是一行**
+  （`core/domain` 那两个无类型常量本来就是为这件事准备的，
+  于是命名一个状态不需要任何 import，**而这顺带删掉了消费者里那个
+  `edge == nil` 分支——本仓没有任何 repository 能产出 `(nil, nil)`，
+  它零覆盖、零依据、不可达**）。
+  **接线把 GORM store 换成 usecase**，与决策 248 同一个病、同一处治法：
+  M1 变异退回 `edgeRepo` → **编译失败**（`cannot use edgeRepo as
+  domain.EdgeStatusQuery`）——按惯例编译失败不当守卫证据，
+  但「旧装配无法编译」本身是结论。
+  **一个被实测推翻的预测**：切前预测「`webshell` 入向归零、第二个进 FLOOR」，
+  实测 **FLOOR 一行未动（36 域 / 46,975 行 / 94 包）**，
+  因为 `webshell` **本来就是零入向**、早就在 FLOOR 里，
+  而这一刀切的是**出向**边——**把出向当成了入向**。
+  三份报价**各降 1**（96/29、108/17、101/24），
+  于是 `release-floor` 那份**既在决策 249 涨过 1（24 → 25）、又在这一刀降回 24**，
+  **两次的树都比对方好**——「报价是分组方式的函数，不是树质量的函数」的第二个证据，
+  而且是同一份文件上的两个方向。
+  **本轮第一次，一个切边同时动了一个能量出来的数**：
+  **生产跨域 import 126 → 125**（决策 250 立的计数器）。
+  分数仍然是判断（34 那条基线仍不可复现），**而 125 是测量**——
+  两个数第一次同时在场。**代价记清楚**：`core/manager`
+  238,791 → **238,984（+193 行，文件数不变）**，
+  涨的几乎全是守卫与注释，**生产代码净变化接近零**。
+  **本轮自己踩了第十六次量具洞**：投影测试第一版只见过 `online` 一行，
+  于是变异「`return edge.Status` 换成 `return domain.EdgeStatusOnline`」
+  **通过了**——**一个只见过 online 的测试量不出「读了一列」和「返回字面量」的区别**。
+  补法是三行表驱动并**加一个 CHECK 约束不允许的值**（生产不可达，
+  但**分不清映射与转发的测试不会在有人加第三个状态那天发觉**），
+  重跑 M6/M7 双 RED。另一条守卫自己量错了槽位（读了 `Out(1)` 即 `error`，
+  对着一个 string 方法报 `interface`），
+  **一个量错槽位的守卫比没有守卫更糟，因为它因为没人选过的理由而绿**（§4.183）。
 
 - **决策 249 切掉 `agentteams → mcp`**，已切 27 → **28** / 34，
   `manager 拆分` 0.79 → **0.82**，阶段 3 **92.7% → 93.7%**，
@@ -23272,8 +23434,8 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
 
 | 读数 | 当前值 | 口径 / 主人 |
 |---|---|---|
-| 控制面域图 | **57 域 / 30 边 / 0 环** | `make domain-check`；`scripts/domaincheck` 的测试逐条核对这三个数。**决策 238 切 `mcp → aiops`（37 → 36）、决策 240 切 `aiops → skill`（36 → 35）、决策 241 切 `marketplace → pluginimport`（35 → 34）、决策 242 切 `grafana → monitor`（34 → 33）、决策 247 切 `agentteams → alert`（33 → 32）**，域数与环数未变。**决策 247 是第一条切完还要把声明与理由一起删掉的边**：`domaincheck` 报「declared but no longer happens」并要求删表项，理由写在命令的输出里——**过期理由比没有理由更糟**（§4.179）。**分层深度在决策 241 从 5 层降到 4 层**，原因见 §4.173 §七 |
-| 生产跨域 import | **126** | `make domain-check`；`scripts/domaincheck` 的汇总行直接打印它，**决策 250 才让它第一次可被计算**（§4.182）。口径：生产文件（`_test.go` 除外）中两端落在不同有界上下文、`to != from`、且**目标不是 9 个 shared 底座**的 import 语句数。它**不是**声明边数（30），**也不是**台账头条「已切 28 / 34」的那个 34——**后者从未有任何量具，是逐次手写累加的**，且 §4.56.8 记的旧读数（42 边时为 19）与今天的 126 **从来不是同一个量**（今天边更少而 import 多 6.6 倍）。三次复现尝试（生产 import 语句 149 / 去重域对 44 / 去重发起文件 85 / 去重被导入包 13）**没有一个等于 19 或 34**。守卫：`scripts/domaincheck/prodimport_test.go` 三条（独立遍历复核 / 非零且严格小于生产 import 总数的上界 / prod 与 test-only 各自独立计数），六次变异实测见 §4.182。**可复现的复核命令**：`GOWORK=off go run ./scripts/domaincheck .` |
+| 控制面域图 | **57 域 / 29 边 / 0 环** | `make domain-check`；`scripts/domaincheck` 的测试逐条核对这三个数。**决策 238 切 `mcp → aiops`（37 → 36）、决策 240 切 `aiops → skill`（36 → 35）、决策 241 切 `marketplace → pluginimport`（35 → 34）、决策 242 切 `grafana → monitor`（34 → 33）、决策 247 切 `agentteams → alert`（33 → 32）、决策 248 切 `webshell → device`（32 → 31）、决策 249 切 `agentteams → mcp`（31 → 30）、决策 251 切 `webshell → edge`（30 → 29）**，域数与环数未变。**决策 247 是第一条切完还要把声明与理由一起删掉的边**：`domaincheck` 报「declared but no longer happens」并要求删表项，理由写在命令的输出里——**过期理由比没有理由更糟**（§4.179）。**分层深度在决策 241 从 5 层降到 4 层**，原因见 §4.173 §七 |
+| 生产跨域 import | **125** | `make domain-check`；`scripts/domaincheck` 的汇总行直接打印它，**决策 250 才让它第一次可被计算**（§4.182），**决策 251 第一次在切边之后动它：126 → 125**。口径：生产文件（`_test.go` 除外）中两端落在不同有界上下文、`to != from`、且**目标不是 9 个 shared 底座**的 import 语句数。它**不是**声明边数（30），**也不是**台账头条「已切 28 / 34」的那个 34——**后者从未有任何量具，是逐次手写累加的**，且 §4.56.8 记的旧读数（42 边时为 19）与今天的 126 **从来不是同一个量**（今天边更少而 import 多 6.6 倍）。三次复现尝试（生产 import 语句 149 / 去重域对 44 / 去重发起文件 85 / 去重被导入包 13）**没有一个等于 19 或 34**。守卫：`scripts/domaincheck/prodimport_test.go` 三条（独立遍历复核 / 非零且严格小于生产 import 总数的上界 / prod 与 test-only 各自独立计数），六次变异实测见 §4.182。**可复现的复核命令**：`GOWORK=off go run ./scripts/domaincheck .` |
 | 开源门槛违规 | **13 项** | `make audit-open-source`；`scripts/audit_open_source.py` 自己核对这一行。**本轮 17 → 13**：自主关掉 4 项明确无争议的（私有演示租户 2 处——`scenario_test.go` 与 `verify-final-demo.sh` 里的私有租户名是自包含合成 fixture，改中性名 `demo-tenant`；赛事语言 2 处——`site/app/live-incident` 的演示页文案与 `archive-route.jsx` 注释，改中性词）。**剩 13 项仍待人拍板**（决策 179）：赛事材料 10 处（`FINAL_DEMO_SCRIPT.md` / `PPT_*.md` / `openspec/changes/**`）与私有属主 3 处（`docs/ACKNOWLEDGMENTS.md` / `site/app/**/open-source`）——前者按规则属「私有交付证据」，改词不足以让它变成产品文档，需决定删/改/从发布集排除；后者「抹掉属主不等于抹掉致谢」（§4.104.9） |
 
 **这一行由 `scripts/domaincheck` 自己核对**，而不是由 `ledgercheck`——因为域、声明

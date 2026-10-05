@@ -3,12 +3,11 @@ package webshell
 import (
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 // fleetBeyondTheOldPage is the number this whole file is about.
@@ -42,27 +41,29 @@ func (f *fakeLinks) LookupEdgeForDevice(_ context.Context, deviceID uint64) (uin
 	return f.edgeID, f.err
 }
 
+// fakeEdgeStatus answers the presence question and nothing else, which is
+// what the port now permits.
+//
+// It used to hold a `*edgemodel.Edge` and check that the id it was asked for
+// matched the id in the row. That check was the only place the fake could
+// disagree with a real store, and it existed because the port handed out a
+// row: a port that returns one string cannot be asked about a row it did not
+// ask for, so the id check went with the row (decision 251).
 type fakeEdgeStatus struct {
-	edge  *edgemodel.Edge
-	err   error
-	calls int
+	status string
+	err    error
+	calls  int
 }
 
-func (f *fakeEdgeStatus) GetByID(_ context.Context, id uint64) (*edgemodel.Edge, error) {
+func (f *fakeEdgeStatus) PresenceStatus(_ context.Context, _ uint64) (string, error) {
 	f.calls++
 	if f.err != nil {
-		return nil, f.err
+		return "", f.err
 	}
-	if f.edge == nil {
-		return nil, errors.New("edge row is gone")
-	}
-	if f.edge.ID != id {
-		return nil, fmt.Errorf("asked for edge %d, store holds %d", id, f.edge.ID)
-	}
-	return f.edge, nil
+	return f.status, nil
 }
 
-func newHandlerUnderTest(links DeviceLinks, edges EdgeStatusLookup) *Handler {
+func newHandlerUnderTest(links DeviceLinks, edges domain.EdgeStatusQuery) *Handler {
 	return &Handler{links: links, edges: edges}
 }
 
@@ -75,7 +76,7 @@ func TestADeviceBeyondTheOldPageStillResolves(t *testing.T) {
 		edgeID   = uint64(fleetBeyondTheOldPage + 341)
 	)
 	links := &fakeLinks{edgeID: edgeID}
-	edges := &fakeEdgeStatus{edge: &edgemodel.Edge{ID: edgeID, Status: edgemodel.StatusOnline}}
+	edges := &fakeEdgeStatus{status: domain.EdgeStatusOnline}
 
 	got, err := newHandlerUnderTest(links, edges).resolveEdge(context.Background(), deviceID)
 	if err != nil {
@@ -95,7 +96,7 @@ func TestADeviceBeyondTheOldPageStillResolves(t *testing.T) {
 // table and filters it correctly, which is the shape that was wrong.
 func TestResolvingADeviceCostsTwoPointLookups(t *testing.T) {
 	links := &fakeLinks{edgeID: 9}
-	edges := &fakeEdgeStatus{edge: &edgemodel.Edge{ID: 9, Status: edgemodel.StatusOnline}}
+	edges := &fakeEdgeStatus{status: domain.EdgeStatusOnline}
 
 	if _, err := newHandlerUnderTest(links, edges).resolveEdge(context.Background(), 3); err != nil {
 		t.Fatalf("resolveEdge: %v", err)
@@ -117,14 +118,52 @@ func TestResolvingADeviceCostsTwoPointLookups(t *testing.T) {
 // the alternative is a comment, and a comment is what the next person
 // optimises away.
 func TestTheEdgePortStaysOneMethodWide(t *testing.T) {
-	got := reflect.TypeOf((*EdgeStatusLookup)(nil)).Elem()
+	got := reflect.TypeOf((*domain.EdgeStatusQuery)(nil)).Elem()
 	if got.NumMethod() != 1 {
-		t.Fatalf("EdgeStatusLookup has %d methods (%v); a second one is how List comes back, "+
+		t.Fatalf("domain.EdgeStatusQuery has %d methods (%v); a second one is how List comes back, "+
 			"and List is what made a fleet of a thousand and one look like a dead host",
 			got.NumMethod(), methodNames(got))
 	}
-	if name := got.Method(0).Name; name != "GetByID" {
-		t.Errorf("EdgeStatusLookup's one method is %s, want GetByID", name)
+	if name := got.Method(0).Name; name != "PresenceStatus" {
+		t.Errorf("domain.EdgeStatusQuery's one method is %s, want PresenceStatus", name)
+	}
+}
+
+// TestTheEdgePortAnswersWithAValueAndNotARow is the second half of the same
+// guard, and it is the half that would have caught the previous shape.
+//
+// A method count alone is satisfied by a one-method port that returns
+// `*edgemodel.Edge`, which is exactly what this was. What that shape cost is
+// not the method count: it is that a row can be absent, so the holder has to
+// carry a branch for `(nil, nil)` — a state no repository in this tree
+// produces, and therefore a branch no test can reach and no reviewer can
+// justify. The return type is therefore measured, on the type, rather than
+// inferred from the body.
+func TestTheEdgePortAnswersWithAValueAndNotARow(t *testing.T) {
+	method, ok := reflect.TypeOf((*domain.EdgeStatusQuery)(nil)).Elem().MethodByName("PresenceStatus")
+	if !ok {
+		t.Fatal("domain.EdgeStatusQuery has no PresenceStatus method")
+	}
+	outs := method.Type.NumOut()
+	if outs != 2 {
+		t.Fatalf("PresenceStatus returns %d values (%v); the port answers one question, "+
+			"so a third return value would be a second question nobody asked",
+			outs, method.Type)
+	}
+	// The value is the FIRST return and the error is the second. The first
+	// draft of this guard read slot 1, and it failed green-on-arrival for
+	// the wrong reason: slot 1 is `error`, so it reported "interface" for a
+	// method whose answer is a plain string. A guard that measures the wrong
+	// slot is worse than no guard, because it passes for a reason nobody
+	// chose — this comment is here so the next reader does not "fix" it by
+	// relaxing the assertion instead of reading the signature.
+	if got := method.Type.Out(0).Kind(); got != reflect.String {
+		t.Errorf("PresenceStatus's first return is %s, want string; a pointer or a struct "+
+			"lets an absent row back in, and the absent-row branch is what this port exists "+
+			"to delete", got)
+	}
+	if got := method.Type.Out(1); got != reflect.TypeOf((*error)(nil)).Elem() {
+		t.Errorf("PresenceStatus's second return is %v, want error", got)
 	}
 }
 
@@ -154,19 +193,19 @@ func TestTheThreeWaysAShellCannotOpenSayDifferentThings(t *testing.T) {
 		{
 			name:  "no edge was ever registered for the device",
 			links: &fakeLinks{err: errors.New("edge_devices: not found")},
-			edges: &fakeEdgeStatus{edge: &edgemodel.Edge{ID: 1, Status: edgemodel.StatusOnline}},
+			edges: &fakeEdgeStatus{status: domain.EdgeStatusOnline},
 			wants: []string{"no edge registered", "not found"},
 		},
 		{
 			name:  "the junction row points at nothing",
 			links: &fakeLinks{edgeID: 0},
-			edges: &fakeEdgeStatus{edge: &edgemodel.Edge{ID: 1, Status: edgemodel.StatusOnline}},
+			edges: &fakeEdgeStatus{status: domain.EdgeStatusOnline},
 			wants: []string{"no edge registered"},
 		},
 		{
 			name:  "the agent is registered but not answering",
 			links: &fakeLinks{edgeID: 12},
-			edges: &fakeEdgeStatus{edge: &edgemodel.Edge{ID: 12, Status: edgemodel.StatusOffline}},
+			edges: &fakeEdgeStatus{status: domain.EdgeStatusOffline},
 			wants: []string{"is offline"},
 		},
 		{

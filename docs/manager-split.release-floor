@@ -13,21 +13,26 @@
 # 三份的实测价：
 #
 #   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed         96         30         3 / 4
-#   docs/manager-split.constrained        108         18         0 / 4
-#   docs/manager-split.release-floor        101         25         0 / 4
+#   docs/manager-split.proposed         96         29         3 / 4
+#   docs/manager-split.constrained        108         17         0 / 4
+#   docs/manager-split.release-floor        101         24         0 / 4
 #
 # 决策 230 重取了这三行。触发它的是切掉 `flow -> scheduler`（missed-run 端口
 # 下沉到 `core/floor/scheduler`）：proposed 与 constrained 各少一条组内 import，
 # 本文件的跨组数少一条——`scheduler` 因为那条边被切掉而自己掉进 FLOOR，于是
 # 进 `independent` 组，而它与 `flow` 之间的那条边已经不存在了。
 #
-# **本文件不再是跨组 import 最少的那一份**（决策 247 起）：本文件 25 条、
-# constrained 18 条。**决策 249 之后本文件的跨组数反而涨了 1**（24 → 25），
+# **本文件不再是跨组 import 最少的那一份**（决策 247 起）：本文件 24 条、
+# constrained 17 条。**决策 249 之后本文件的跨组数反而涨了 1**（24 → 25），
 # 而树在变好——原因是 `mcp` 从 `core` 组搬进了 `independent` 组（它切完之后
 # 入向归零 became 可证明独立发版），它向 core 组的那些出向 import 于是从组内
 # 变成跨组。**这一份的报价是分组方式的函数，不是树质量的函数**，所以分组一改，
-# 报价就动，而这一次是往坏的方向动。它仍然在另外两个维度上是最省的一份——切断的硬约束 0/4、
+# 报价就动，而那一次是往坏的方向动。**决策 251 又把它降回 24**
+# （切 `webshell -> edge`），这一次三份各降 1，因为那是一条**出向**边：
+# `webshell` 早就是零入向域、早就列在本文件的 `independent` 组里，它指向
+# core 组的那一条 import 切掉之后对分组没有影响，只是组内少一条。
+# **同一份报价既涨过又降过，而两次的树都比对方好——这正是「报价是分组方式的
+# 函数」这句话的第二个证据。** 它仍然在另外两个维度上是最省的一份——切断的硬约束 0/4、
 # 未分配的域 0 个——而这两个维度才是「floor」这个名字的依据。跨组数被反超的
 # 原因见下 §「为什么它在决策 247 之前是最省的那一份」。
 #
