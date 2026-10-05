@@ -157,8 +157,6 @@ var edges = map[edge]string{
 	{"aiopsconfig", "aiops"}: "the config service assembles the agent's alert-config and tool surfaces: it configures aiops rather than reimplementing it",
 	{"aiopsconfig", "alert"}: "the agent's settings endpoints resolve alert configuration through the alert service",
 
-	{"alert", "edge"}: "an alert is raised against a node, and acknowledging it has to update that node's state",
-
 	{"chatdiagnose", "aiops"}: "chat diagnosis runs on the agent's chat runtime",
 	{"chatdiagnose", "audit"}: "promoting a chat into an investigation is an operator action and belongs in the chain",
 	{"chatdiagnose", "loop"}:  "promoting a chat hands the work to the loop domain, which owns the investigation; the reverse of that edge used to exist because the loop wrote the knowledge base's own rows (decision 114)",
@@ -206,7 +204,6 @@ var edges = map[edge]string{
 	{"report", "loop"}:  "a report is produced out of an agent conversation or a loop investigation, and the postmortem service renders the loop's own postmortem contract (PostmortemDoc / RootCauseJSON / CritiqueScore) — one direction only since decision 115",
 
 	{"systemhealth", "alert"}: "the health summary counts active alerts through the alert service",
-	{"systemhealth", "edge"}:  "the health summary reports node reachability from the edge domain",
 
 	{"webshell", "device"}: "a terminal session is opened against a device record",
 	{"webshell", "edge"}:   "the webshell reaches the node through the edge transport",
@@ -476,6 +473,7 @@ func main() {
 	release := false
 	seams := false
 	shared := false
+	edges := false
 	cut := ""
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
@@ -488,6 +486,8 @@ func main() {
 			seams = true
 		case a == "-shared":
 			shared = true
+		case a == "-edges":
+			edges = true
 		case a == "-cut":
 			if i+1 >= len(args) {
 				fmt.Fprintln(os.Stderr, "domaincheck: -cut needs a grouping file")
@@ -514,7 +514,7 @@ func main() {
 	// change the gate's verdict: a proposed split that is wrong should be
 	// priced and argued about, not turned into a red build on the day it is
 	// written, which is a red build people turn off.
-	if graph || release || seams || shared || cut != "" {
+	if graph || release || seams || shared || edges || cut != "" {
 		g := buildGraph(sources, r)
 		// The floor is measured over core/manager, so the files that would
 		// break if a domain moved are outside what it walked. They are read
@@ -537,6 +537,9 @@ func main() {
 		}
 		if shared {
 			printShared(os.Stdout, sources, r)
+		}
+		if edges {
+			printEdges(os.Stdout, sources, r)
 		}
 		if cut != "" {
 			grouping, order, err := loadGrouping(cut)

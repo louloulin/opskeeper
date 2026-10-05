@@ -7,18 +7,17 @@ import (
 	"testing"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 type fakeEdgeLister struct {
-	edges []*edgemodel.Edge
+	edges []domain.EdgePresence
 	err   error
 }
 
-func (f *fakeEdgeLister) List(_ context.Context, _ edgebiz.ListFilter) ([]*edgemodel.Edge, error) {
+func (f *fakeEdgeLister) ListPresence(_ context.Context, _ int) ([]domain.EdgePresence, error) {
 	return f.edges, f.err
 }
 

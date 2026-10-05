@@ -10,9 +10,8 @@ import (
 	"strings"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	alertsvc "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 )
 
@@ -49,6 +48,12 @@ type Report struct {
 	Checks    []Check   `json:"checks"`
 }
 
+// edgeSampleLimit bounds how many registered nodes the edge probe samples. The
+// probe reports a fleet-wide health verdict, so a cap that silently truncates
+// the fleet would report a healthy sample as the whole picture; the limit is
+// reported back in the details so a reader can see the sample was capped.
+const edgeSampleLimit = 1000
+
 type DBPinger interface {
 	PingContext(ctx context.Context) error
 }
@@ -73,9 +78,12 @@ type IncidentCounter interface {
 	CountIncidents(ctx context.Context, caller alertsvc.Caller, in alertsvc.IncidentFilter) (int64, error)
 }
 
-type EdgeLister interface {
-	List(ctx context.Context, f edgebiz.ListFilter) ([]*edgemodel.Edge, error)
-}
+// EdgeLister is an alias rather than a local interface for the same reason
+// alert's is: the previous signature named edgebiz.ListFilter and
+// edgemodel.Edge, so declaring the seam here still compiled this domain
+// against the edge domain's packages. Naming the port in core/domain is what
+// makes the probe a client of a contract rather than a caller of a location.
+type EdgeLister = domain.EdgeQuery
 
 type LLMProviderResolver interface {
 	ResolveProviders(ctx context.Context) ([]llm.ProviderConfig, string, error)
@@ -317,20 +325,23 @@ func (s *Service) checkEdges(ctx context.Context) Check {
 		if s.deps.Edges == nil {
 			return StatusDegraded, "edge service is not wired", nil
 		}
-		edges, err := s.deps.Edges.List(ctx, edgebiz.ListFilter{Limit: 1000})
+		edges, err := s.deps.Edges.ListPresence(ctx, edgeSampleLimit)
 		if err != nil {
 			return StatusFailed, "edge list check failed: " + err.Error(), nil
 		}
 		online := 0
 		offline := 0
 		for _, e := range edges {
-			if e == nil {
-				continue
-			}
+			// The port returns values, not pointers, so there is no nil
+			// to skip here: the projection that builds them already
+			// dropped the nil rows a soft-deleted scan can produce. A
+			// nil check on a value type would not compile, which is the
+			// cheapest possible reminder that this loop cannot forget
+			// to handle one.
 			switch e.Status {
-			case edgemodel.StatusOnline:
+			case domain.EdgeStatusOnline:
 				online++
-			case edgemodel.StatusOffline:
+			case domain.EdgeStatusOffline:
 				offline++
 			}
 		}
@@ -338,7 +349,7 @@ func (s *Service) checkEdges(ctx context.Context) Check {
 			"sampled": len(edges),
 			"online":  online,
 			"offline": offline,
-			"limit":   1000,
+			"limit":   edgeSampleLimit,
 		}
 		switch {
 		case len(edges) == 0:

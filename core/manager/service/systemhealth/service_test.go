@@ -8,8 +8,7 @@ import (
 	"testing"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	alertsvc "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 )
 
@@ -48,11 +47,11 @@ func (f fakeIncidents) CountIncidents(context.Context, alertsvc.Caller, alertsvc
 }
 
 type fakeEdges struct {
-	edges []*edgemodel.Edge
+	edges []domain.EdgePresence
 	err   error
 }
 
-func (f fakeEdges) List(context.Context, edgebiz.ListFilter) ([]*edgemodel.Edge, error) {
+func (f fakeEdges) ListPresence(context.Context, int) ([]domain.EdgePresence, error) {
 	return f.edges, f.err
 }
 
@@ -90,8 +89,8 @@ func TestCheckAggregatesFailedDependency(t *testing.T) {
 			{ID: 1, RuleKey: "cpu_high", Enabled: true},
 		}},
 		Incidents: fakeIncidents{},
-		Edges: fakeEdges{edges: []*edgemodel.Edge{
-			{ID: 1, Status: edgemodel.StatusOnline},
+		Edges: fakeEdges{edges: []domain.EdgePresence{
+			{ID: 1, Status: domain.EdgeStatusOnline},
 		}},
 	})
 
@@ -177,8 +176,8 @@ func TestCheckReportsGrafanaMissingCredentialAsDegraded(t *testing.T) {
 			{ID: 1, RuleKey: "cpu_high", Enabled: true},
 		}},
 		Incidents: fakeIncidents{},
-		Edges: fakeEdges{edges: []*edgemodel.Edge{
-			{ID: 1, Status: edgemodel.StatusOnline},
+		Edges: fakeEdges{edges: []domain.EdgePresence{
+			{ID: 1, Status: domain.EdgeStatusOnline},
 		}},
 	})
 
@@ -202,7 +201,7 @@ func TestCheckEdgesReportsAccessStateSeparatelyFromPlatformHealth(t *testing.T) 
 	t.Parallel()
 	tests := []struct {
 		name    string
-		edges   []*edgemodel.Edge
+		edges   []domain.EdgePresence
 		want    Status
 		message string
 	}{
@@ -214,27 +213,27 @@ func TestCheckEdgesReportsAccessStateSeparatelyFromPlatformHealth(t *testing.T) 
 		},
 		{
 			name: "all sampled edges offline is failed",
-			edges: []*edgemodel.Edge{
-				{ID: 1, Status: edgemodel.StatusOffline},
-				{ID: 2, Status: edgemodel.StatusOffline},
+			edges: []domain.EdgePresence{
+				{ID: 1, Status: domain.EdgeStatusOffline},
+				{ID: 2, Status: domain.EdgeStatusOffline},
 			},
 			want:    StatusFailed,
 			message: "all sampled edge agents are offline",
 		},
 		{
 			name: "partial offline is degraded",
-			edges: []*edgemodel.Edge{
-				{ID: 1, Status: edgemodel.StatusOnline},
-				{ID: 2, Status: edgemodel.StatusOffline},
+			edges: []domain.EdgePresence{
+				{ID: 1, Status: domain.EdgeStatusOnline},
+				{ID: 2, Status: domain.EdgeStatusOffline},
 			},
 			want:    StatusDegraded,
 			message: "1 sampled edge agent(s) are offline",
 		},
 		{
 			name: "all online is ok",
-			edges: []*edgemodel.Edge{
-				{ID: 1, Status: edgemodel.StatusOnline},
-				{ID: 2, Status: edgemodel.StatusOnline},
+			edges: []domain.EdgePresence{
+				{ID: 1, Status: domain.EdgeStatusOnline},
+				{ID: 2, Status: domain.EdgeStatusOnline},
 			},
 			want:    StatusOK,
 			message: "sampled edge agents are online",

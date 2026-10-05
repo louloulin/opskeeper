@@ -413,7 +413,7 @@ func TestAGroupingWithNoCrossingsIsNotAnError(t *testing.T) {
 	}
 }
 
-func TestTheShippedTreeIsADagSevenLevelsDeep(t *testing.T) {
+func TestTheShippedTreeIsADagFiveLevelsDeep(t *testing.T) {
 	// The real number, pinned. Decision 118 closed the last cycle, so the
 	// layering has an answer; if a future edge reopens one this test is the
 	// thing that says the headline changed, and the DAG claim in the report
@@ -433,26 +433,37 @@ func TestTheShippedTreeIsADagSevenLevelsDeep(t *testing.T) {
 			max = l
 		}
 	}
-	if max+1 != 7 {
-		t.Errorf("the tree is %d levels deep, want 7: a level appearing or disappearing changes what a split costs", max+1)
+	// Seven until decision 235, which cut alert -> edge and systemhealth ->
+	// edge. Both were leaf-reaching edges into a domain that sits in the
+	// middle of the layering, so removing them did not just drop two
+	// entries — it collapsed the two longest chains the graph had, and the
+	// depth fell by exactly the number of edges cut. That is the assertion
+	// being a number and not a direction: it cannot tell a deliberate cut
+	// from an accidental layer, which is why the edge count is pinned on
+	// the very next lines and the two have to move together.
+	if max+1 != 5 {
+		t.Errorf("the tree is %d levels deep, want 5: a level appearing or disappearing changes what a split costs", max+1)
 	}
 	var buf bytes.Buffer
 	g.printStructure(&buf)
 	if !strings.Contains(buf.String(), "the graph is a DAG") {
 		t.Error("the shipped tree is no longer a DAG and the report does not say so")
 	}
-	// 40 = decision 118's 42, plus the edge decision 123 added when the root
-	// side of the cluster channel became a domain of its own, minus the three
+	// 38 = decision 118's 42, plus the edge decision 123 added when the root
+	// side of the cluster channel became a domain of its own, minus the five
 	// since cut: decision 227 (frontierbound -> metric, whose port moved
 	// next to HostMetricPoint in core/floor/tunnel), decision 229
 	// (imbridge -> iam, the only remaining edge that selected nothing but a
-	// constant, cut by moving the role vocabulary down to tenantctx), and
-	// decision 230 (flow -> scheduler, whose MissedRunInfo/Repo port moved
-	// down to core/floor/scheduler because the flow data store is the only
-	// implementor and lives in a different domain). A cut edge lowers this
-	// number the same way an added one raises it, which is the whole reason
-	// this assertion is written as a number and not as a direction.
-	if !strings.Contains(buf.String(), "40 edges") {
+	// constant, cut by moving the role vocabulary down to tenantctx), decision
+	// 230 (flow -> scheduler, whose MissedRunInfo/Repo port moved down to
+	// core/floor/scheduler because the flow data store is the only
+	// implementor and lives in a different domain), and decision 235's two
+	// (alert -> edge and systemhealth -> edge, both cut by moving the
+	// six-column node presence projection down to core/domain and giving
+	// both domains the one-method domain.EdgeQuery port). A cut edge lowers
+	// this number the same way an added one raises it, which is the whole
+	// reason this assertion is written as a number and not as a direction.
+	if !strings.Contains(buf.String(), "38 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

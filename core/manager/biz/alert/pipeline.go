@@ -10,32 +10,36 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/logquery"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/notify"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
-// EdgeLister enumerates registered edges. *edgebiz.Usecase satisfies it.
-// Used by refreshDeviceStalenessGauge to expose
-// device_last_seen_seconds_ago to Prom — a metric_raw rule is the new
-// path for "host offline" alerts after the collapse.
+// EdgeLister enumerates registered edges. It used to be a local interface
+// whose signature named edgebiz.ListFilter and edgemodel.Edge, which made it a
+// package-shaped boundary rather than an interface one: the seam was declared
+// here but the types it named still pulled this domain into the edge domain's
+// compile graph. The port now lives in core/domain and this is an alias, so
+// the seam is where the reader expects it and both halves can be checked
+// against each other.
 //
-// Post-split (May 2026): the staleness gauge is keyed by device_id, but
-// because the pre-launch backfill makes edge.id == host_device.id we
-// can keep listing edges and use their numeric id as the device_id
-// label without standing up a parallel device-lister surface.
-type EdgeLister interface {
-	List(ctx context.Context, f edgebiz.ListFilter) ([]*edgemodel.Edge, error)
-}
+// Used by refreshDeviceStalenessGauge to expose
+// device_last_seen_seconds_ago to Prom.
+type EdgeLister = domain.EdgeQuery
 
 // PromQuerier runs an instant PromQL query. *promquery.Client satisfies it.
 type PromQuerier interface {
 	Query(ctx context.Context, expr string, ts time.Time) (*promquery.InstantResult, error)
 }
+
+// edgeListerSampleLimit bounds how many registered nodes the staleness gauge
+// reads per tick. It is a constant rather than configuration because it was
+// already a literal at the one call site and nothing has ever tuned it — a
+// knob nobody turns is a knob that only makes the sampling rate unknowable.
+const edgeListerSampleLimit = 1000
 
 // LogQuerier runs a LogQL range query against Loki. *logquery.Client
 // satisfies it via QueryRange. The Phase-B evaluator queries a tight
@@ -207,7 +211,7 @@ func (e *PipelineEvaluator) evaluate(ctx context.Context) {
 // skipped — gauge staleness for one tick is preferable to a panic in
 // the alert loop.
 func (e *PipelineEvaluator) refreshDeviceStalenessGauge(ctx context.Context, now time.Time) {
-	edges, err := e.edges.List(ctx, edgebiz.ListFilter{Limit: 1000})
+	edges, err := e.edges.ListPresence(ctx, edgeListerSampleLimit)
 	if err != nil {
 		e.log.Warn("alert: list edges for staleness gauge failed", slog.Any("err", err))
 		return

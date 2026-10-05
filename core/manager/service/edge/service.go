@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
@@ -55,6 +56,23 @@ func (s *Service) Create(ctx context.Context, name string, createdBy *uint64) (*
 // List returns edges matching filter.
 func (s *Service) List(ctx context.Context, f biz.ListFilter) ([]*model.Edge, error) {
 	return s.uc.List(ctx, f)
+}
+
+// main wires this Service — not the usecase — into the two consumers of
+// domain.EdgeQuery, so the port is claimed here too. A wrapper that forwards
+// every method except the one two other domains depend on has a hole exactly
+// where the seam is.
+var _ domain.EdgeQuery = (*Service)(nil)
+
+// ListPresence implements domain.EdgeQuery. This Service is the value main
+// hands to the two consumers of that port — the alert pipeline's staleness
+// gauge and the system-health edge probe — so the projection has to be
+// reachable from here as well as from the usecase. The Service is a
+// pass-through over that usecase by design, and a pass-through that forwards
+// every method except the one two other domains now depend on would be a
+// wrapper with a hole in it exactly where the seam is.
+func (s *Service) ListPresence(ctx context.Context, limit int) ([]domain.EdgePresence, error) {
+	return s.uc.ListPresence(ctx, limit)
 }
 
 // Get returns one edge by id.

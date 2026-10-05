@@ -364,6 +364,13 @@ deps:
       - manager_biz
       - manager_model
       - manager_service
+      # 决策 235：systemhealth 的节点可达性探针不再 import biz/edge 的
+      # ListFilter 与 model/edge 的 Edge，改持 core/domain 里的
+      # domain.EdgeQuery 端口。这条授权只为 service/systemhealth 一个文件
+      # 而加，理由与 decision 74 记的那 104 条相反：那一批是零 import 的
+      # 幽灵授权，这一条有真实 import 行使它，且 modulecheck 的
+      # 「每条 mayDependOn 至少被一个真实 import 使用」不变式会守着它。
+      - oxcore_domain
       - oxcore_ports
       - oxdomains_biz
       - oxfloor
