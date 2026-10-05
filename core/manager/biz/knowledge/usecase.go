@@ -32,7 +32,7 @@ import (
 	"time"
 	"unicode"
 
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
 	"github.com/vincent-wuhan/opskeeper/core/manager/observability/otelgenai"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/embedding"

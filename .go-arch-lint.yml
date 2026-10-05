@@ -117,7 +117,7 @@ components:
   oxfloor: { in: core/floor/** }
   shared_middleware:  { in: core/manager/middleware/** }
   shared_knowledge:   { in: core/manager/knowledge/** }
-  shared_control:     { in: core/manager/control/** }
+  shared_control:     { in: core/domains/control/** }
   shared_dataguard:   { in: core/manager/dataguard/** }
   shared_agentteams:  { in: core/manager/agentteams/** }
   shared_observability: { in: core/manager/observability/** }
@@ -734,6 +734,7 @@ deps:
       - oxfloor
       - oxpig_ai
       - oxpig_model
+      - shared_control
       - shared_pkg
 
   # No oxfloor here, and that is a measurement rather than an omission.

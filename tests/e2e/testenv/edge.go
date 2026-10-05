@@ -82,7 +82,7 @@ func EdgeBinary(t *testing.T) string {
 			edgeBinErr = fmt.Errorf("cannot locate repo root from testenv source")
 			return
 		}
-		dir, err := os.MkdirTemp("", "opskeeper-e2e-edge-")
+		dir, err := mkTempDir("opskeeper-e2e-edge-")
 		if err != nil {
 			edgeBinErr = err
 			return
@@ -136,7 +136,7 @@ func PigBinary(t *testing.T) string {
 			pigBinErr = fmt.Errorf("core/pig module not found: %w", err)
 			return
 		}
-		dir, err := os.MkdirTemp("", "opskeeper-e2e-pig-")
+		dir, err := mkTempDir("opskeeper-e2e-pig-")
 		if err != nil {
 			pigBinErr = err
 			return

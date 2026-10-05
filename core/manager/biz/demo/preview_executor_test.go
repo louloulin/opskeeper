@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	_ "github.com/glebarez/go-sqlite"
-	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
+	repairpreview "github.com/vincent-wuhan/opskeeper/core/domains/control/repairpreview"
 )
 
 const testPreviewTargetFingerprint = "0123456789abcdef"

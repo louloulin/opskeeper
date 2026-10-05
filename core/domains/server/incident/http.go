@@ -13,8 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
-	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
+	repairpreview "github.com/vincent-wuhan/opskeeper/core/domains/control/repairpreview"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 

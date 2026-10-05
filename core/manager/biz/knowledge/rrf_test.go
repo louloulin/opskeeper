@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/qdrantx"
 )
 

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )

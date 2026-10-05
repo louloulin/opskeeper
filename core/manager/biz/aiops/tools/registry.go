@@ -28,7 +28,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/querybackend"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
-	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
+	repairpreview "github.com/vincent-wuhan/opskeeper/core/domains/control/repairpreview"
 	"log/slog"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"

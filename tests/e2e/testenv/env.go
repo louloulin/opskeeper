@@ -505,7 +505,7 @@ func managerBinary(t *testing.T) string {
 			binaryErr = errors.New("cannot locate repo root from testenv source")
 			return
 		}
-		dir, err := os.MkdirTemp("", "opskeeper-e2e-bin-")
+		dir, err := mkTempDir("opskeeper-e2e-bin-")
 		if err != nil {
 			binaryErr = err
 			return

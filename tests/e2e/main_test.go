@@ -21,5 +21,11 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	testenv.TerminateSharedFrontier()
 	testenv.TerminateSharedMySQL()
+	// The three binaries this suite builds — manager, edge agent and the
+	// node's pig — each live in their own scratch directory, and a run used
+	// to leave all three behind. Same reason as the two calls above: a
+	// leaked 74–104 MiB per run is invisible once and fatal on a runner
+	// that has to survive a queue of them.
+	testenv.Cleanup()
 	os.Exit(code)
 }

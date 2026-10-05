@@ -36,7 +36,7 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
+	repairpreview "github.com/vincent-wuhan/opskeeper/core/domains/control/repairpreview"
 	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )

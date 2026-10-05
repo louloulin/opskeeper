@@ -18,7 +18,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
 	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
 	knowledgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
 	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )

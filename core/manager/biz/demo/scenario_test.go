@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
-	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
+	repairpreview "github.com/vincent-wuhan/opskeeper/core/domains/control/repairpreview"
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	demomodel "github.com/vincent-wuhan/opskeeper/core/manager/model/demo"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"

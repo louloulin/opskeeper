@@ -28,7 +28,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
 	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
 	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	knowledgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"

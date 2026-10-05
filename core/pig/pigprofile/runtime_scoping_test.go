@@ -474,6 +474,26 @@ var builtOnce sync.Once
 // builtPath is where that one binary lives.
 var builtPath string
 
+// builtDir is the scratch directory that binary lives in. It is recorded
+// rather than removed at the build site because the Once that builds the
+// agent and the test that needed it are not the same test: a cleanup
+// registered against the test that happened to trigger the build would pull
+// the binary out from under the five packages that still have to run against
+// it. TestMain is the only point at which none of them can be running.
+var builtDir string
+
+// TestMain hands back the scratch directory. Without it every run of this
+// gate left a 70 MB agent binary in the system temp directory — invisible on
+// a workstation, and the reason a CI runner eventually fails to compile
+// anything at all.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if builtDir != "" {
+		_ = os.RemoveAll(builtDir)
+	}
+	os.Exit(code)
+}
+
 // pigBinary builds the agent the way a release builds it, or uses one the
 // caller already built.
 func pigBinary(t *testing.T) string {
@@ -487,6 +507,7 @@ func pigBinary(t *testing.T) string {
 			builtPath = "mkdtemp failed: " + err.Error()
 			return
 		}
+		builtDir = dir
 		out := filepath.Join(dir, "pig")
 		cmd := exec.Command("go", "build", "-o", out, "github.com/MichaelKinsy/PiG/cmd/pig")
 		cmd.Dir = ".."
