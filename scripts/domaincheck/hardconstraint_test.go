@@ -89,6 +89,68 @@ func TestAHardConstraintWhoseEdgeNoLongerHappensIsAViolation(t *testing.T) {
 // that is the enforcement. This test exists so the failure names the constraint
 // instead of arriving as one line inside a checker that also reports unrelated
 // things.
+// TestTheHardConstraintSetIsTheFourTheTreeActuallyHas is the count guard, and
+// it exists because the test below it cannot notice its own subject being
+// deleted.
+//
+// TestTheShippedHardConstraintsHoldInTheRealTree asks `check` whether any
+// *declared* hard constraint is violated. Delete a declaration and the answer
+// is "none of the remaining ones are violated" — a pass. The whole point of a
+// hard constraint is that a particular dependency is not severable, so a set
+// that quietly shrinks has not relaxed a price, it has deleted a property the
+// ledger has been citing since decision 196.
+//
+// It is caught, but not by anything that claims to: removing the
+// `middleware -> audit` declaration turns
+// TestThePriceQuotedInAnyCandidateIsThePriceThePricerComputes red, because
+// the severed-edge count in the three candidate files stops matching. That is
+// an accident of arithmetic — the price moved, so the quote is stale. Delete a
+// constraint in a way that leaves the prices alone and nothing catches it, and
+// the tests that do go red do not say which property was given up.
+//
+// So the set is pinned the way decision 240 pinned a declaration count: by
+// value, with the reason next to it. Four, named, because a count that is only
+// a count gets edited to whatever the current number happens to be.
+func TestTheHardConstraintSetIsTheFourTheTreeActuallyHas(t *testing.T) {
+	want := map[edge]string{
+		{from: "aiops", to: "audit"}:         "the agent kernel's LedgerWriter appends agent actions to the chain an operator reads",
+		{from: "chatdiagnose", to: "audit"}:  "promoting a chat into an investigation is an operator action and lands in the chain",
+		{from: "frontierbound", to: "audit"}: "a node's autonomous replay writes the decisions it made back into the chain",
+		{from: "middleware", to: "audit"}:    "the audit middleware is the only thing that turns a handled request into a chain record",
+	}
+	if len(hardConstraints) != len(want) {
+		t.Errorf("there are %d hard process constraints, want %d. Each one is a dependency "+
+			"the plan decided cannot be severed for any price, and the four are all writes to "+
+			"the ordered HMAC chain. Removing one does not relax a cost — it gives up a "+
+			"property the ledger has cited since decision 196, and the test that checks the "+
+			"remaining ones hold will report green",
+			len(hardConstraints), len(want))
+	}
+	for e, reason := range want {
+		got, ok := hardConstraints[e]
+		if !ok {
+			t.Errorf("the hard constraint %s -> %s is gone. It was there because: %s",
+				e.from, e.to, reason)
+			continue
+		}
+		if got != reason {
+			t.Errorf("the hard constraint %s -> %s now reads %q; it was %q. The reason is "+
+				"the part a reader argues with when the set changes, so it is pinned with it",
+				e.from, e.to, got, reason)
+		}
+	}
+	// And the reverse: a fifth constraint is as much a decision as a missing
+	// one, and it needs the same treatment.
+	for e := range hardConstraints {
+		if _, ok := want[e]; !ok {
+			t.Errorf("%s -> %s is declared a hard constraint but is not in the pinned set. "+
+				"If it is one now, say here why it cannot be severed — a constraint whose "+
+				"reason is only in a commit message is a constraint nobody will defend when "+
+				"the next proposal wants to cut it", e.from, e.to)
+		}
+	}
+}
+
 func TestTheShippedHardConstraintsHoldInTheRealTree(t *testing.T) {
 	sources, _, err := parseControlPlane("../..")
 	if err != nil {
