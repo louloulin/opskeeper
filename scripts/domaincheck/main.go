@@ -54,7 +54,20 @@ import (
 	"strings"
 )
 
-// managerPrefix is the module this checker is about.
+// The control plane spans two modules, and this checker is about both of
+// them. managerPrefix is where the control plane proper lives; domainsPrefix
+// is the release floor that was cut out of it (decision 222). They are listed
+// together because the question this tool answers — which bounded contexts
+// may reach which — is a question about the control plane, not about a
+// directory. Reading only the first would have made the domain count fall
+// from 57 to 44 the day the floor moved, and a gate that quietly measures
+// less is worse than one that measures nothing: the number would still have
+// looked fine.
+var controlPlanePrefixes = []string{
+	"github.com/vincent-wuhan/opskeeper/core/manager/",
+	"github.com/vincent-wuhan/opskeeper/core/domains/",
+}
+
 const managerPrefix = "github.com/vincent-wuhan/opskeeper/core/manager/"
 
 // layerDirs are the trees a domain's code is scattered across. A path whose
@@ -427,10 +440,16 @@ func check(sources []source, r rules) []string {
 // would exempt its imports from every rule in this file, and a boundary
 // check that a misplaced file can switch off is not a boundary check.
 func domainOf(path string) string {
-	if !strings.HasPrefix(path, managerPrefix) {
+	rest := ""
+	for _, prefix := range controlPlanePrefixes {
+		if strings.HasPrefix(path, prefix) {
+			rest = strings.TrimPrefix(path, prefix)
+			break
+		}
+	}
+	if rest == "" {
 		return ""
 	}
-	rest := strings.TrimPrefix(path, managerPrefix)
 	parts := strings.Split(rest, "/")
 	if parts[0] == "" {
 		return ""
@@ -467,7 +486,7 @@ func main() {
 			root = a
 		}
 	}
-	sources, stats, err := parseTree(filepath.Join(root, "core", "manager"), defaultRules())
+	sources, stats, err := parseControlPlane(root)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "domaincheck: "+err.Error())
 		os.Exit(2)
@@ -695,7 +714,31 @@ func wiringUse(root string) (map[string]map[string]int, error) {
 	return out, nil
 }
 
-func parseTree(dir string, r rules) ([]source, treeStats, error) {
+// parseControlPlane walks the whole control plane, which is two modules.
+//
+// The tests call this rather than parseTree so that a test and the gate
+// cannot end up measuring different trees — which is exactly what happened
+// when the release floor moved out of core/manager and three tests kept
+// walking the directory it had left.
+func parseControlPlane(root string) ([]source, treeStats, error) {
+	var sources []source
+	stats := treeStats{}
+	for _, mod := range []struct{ dir, prefix string }{
+		{"core/manager", controlPlanePrefixes[0]},
+		{"core/domains", controlPlanePrefixes[1]},
+	} {
+		got, st, err := parseTree(filepath.Join(root, filepath.FromSlash(mod.dir)), mod.prefix, defaultRules())
+		if err != nil {
+			return nil, treeStats{}, err
+		}
+		sources = append(sources, got...)
+		stats.domains += st.domains
+		stats.testOnlyEdges += st.testOnlyEdges
+	}
+	return sources, stats, nil
+}
+
+func parseTree(dir, modulePrefix string, r rules) ([]source, treeStats, error) {
 	fset := token.NewFileSet()
 	var sources []source
 	domains := map[string]bool{}
@@ -730,7 +773,7 @@ func parseTree(dir string, r rules) ([]source, treeStats, error) {
 		if err != nil {
 			return err
 		}
-		importPath := managerPrefix + filepath.ToSlash(rel)
+		importPath := modulePrefix + filepath.ToSlash(rel)
 		importPath = strings.TrimSuffix(importPath, ".go")
 		isTest := strings.HasSuffix(path, "_test.go")
 		// The package is the second axis, and it gets printed next to the

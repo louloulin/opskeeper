@@ -27,7 +27,15 @@ const (
 	// and a boundary check that only recognised managerPrefix would skip
 	// every base import without saying so. A gate that quietly stops looking
 	// is worse than one that is missing, because it still reports green.
-	basePrefix    = "github.com/vincent-wuhan/opskeeper/core/base/"
+	basePrefix = "github.com/vincent-wuhan/opskeeper/core/base/"
+	// domainsPrefix is the release floor, a module of its own since decision
+	// 222. It is deliberately NOT a shared tree and does not belong in
+	// sharedTrees below: it is a set of bounded contexts, so iam reaching into
+	// it is the very thing this test exists to refuse. It is named here only
+	// so such an import is *seen*. Left out of the prefix list below, the
+	// check would skip it silently and keep reporting green — the third time
+	// this file has been taught about a module by a move instead of a review.
+	domainsPrefix = "github.com/vincent-wuhan/opskeeper/core/domains/"
 	iamPrefix     = managerPrefix + "iam/"
 	pkgPrefix     = basePrefix + "pkg/"
 	auditPortPath = pkgPrefix + "audit"
@@ -45,7 +53,7 @@ const (
 // adding a grant without updating the rule here leaves one of the two red.
 var sharedTrees = []string{
 	pkgPrefix,
-	basePrefix + "pkg",       // errors, tenant context, and now the audit port
+	basePrefix + "pkg",          // errors, tenant context, and now the audit port
 	managerPrefix + "dataguard", // field sensitivity, shared by authz
 }
 
@@ -125,7 +133,9 @@ func TestThisContextReachesNothingAboveItself(t *testing.T) {
 				t.Errorf("%s: unquote import: %v", pf.path, err)
 				continue
 			}
-			if !strings.HasPrefix(target, managerPrefix) && !strings.HasPrefix(target, basePrefix) {
+			if !strings.HasPrefix(target, managerPrefix) &&
+				!strings.HasPrefix(target, basePrefix) &&
+				!strings.HasPrefix(target, domainsPrefix) {
 				continue // stdlib, a third party, or another module
 			}
 			if strings.HasPrefix(target, iamPrefix) {

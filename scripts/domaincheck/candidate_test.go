@@ -46,7 +46,7 @@ type price struct {
 func priceFile(t *testing.T, rel string) price {
 	t.Helper()
 	root := filepath.Join("..", "..")
-	sources, _, err := parseTree(filepath.Join(root, "core", "manager"), defaultRules())
+	sources, _, err := parseTree(filepath.Join(root, "core", "manager"), managerPrefix, defaultRules())
 	if err != nil {
 		t.Fatalf("parse the tree: %v", err)
 	}
@@ -268,7 +268,11 @@ func atoiOrFailT(s string) int {
 func releaseFloor(t *testing.T) map[string]bool {
 	t.Helper()
 	root := filepath.Join("..", "..")
-	sources, _, err := parseTree(filepath.Join(root, "core", "manager"), defaultRules())
+	// The floor is a property of the control plane, and the control plane is
+	// two modules since decision 222. Walking core/manager alone would have
+	// quietly redefined the floor as the thirteen domains that stayed, and
+	// every assertion below would have passed against that smaller set.
+	sources, _, err := parseControlPlane(root)
 	if err != nil {
 		t.Fatalf("parse the tree: %v", err)
 	}

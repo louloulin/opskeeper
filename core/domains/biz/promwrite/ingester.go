@@ -24,9 +24,9 @@ import (
 	"sync"
 	"time"
 
+	pkgpromwrite "github.com/vincent-wuhan/opskeeper/core/base/pkg/promwrite"
 	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	pkgpromwrite "github.com/vincent-wuhan/opskeeper/core/base/pkg/promwrite"
 )
 
 // Health is the lightweight health snapshot the alert pipeline evaluator

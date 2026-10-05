@@ -53,7 +53,7 @@ func entryPointsFromSources(sources []source, r rules) map[string]map[string]boo
 // TestTheEntryPointBookkeepingAgreesWithTheTree is the gate proper.
 func TestTheEntryPointBookkeepingAgreesWithTheTree(t *testing.T) {
 	root := "../.."
-	sources, _, err := parseTree(root+"/core/manager", defaultRules())
+	sources, _, err := parseTree(root+"/core/manager", managerPrefix, defaultRules())
 	if err != nil {
 		t.Fatalf("parse the tree: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestTheEntryPointBookkeepingAgreesWithTheTree(t *testing.T) {
 // neither reads as a classification when it is a leftover.
 func TestTheReportSplitsTheCoupledDomainsIntoOneDoorAndMany(t *testing.T) {
 	root := "../.."
-	sources, _, err := parseTree(root+"/core/manager", defaultRules())
+	sources, _, err := parseTree(root+"/core/manager", managerPrefix, defaultRules())
 	if err != nil {
 		t.Fatalf("parse the tree: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestTheReportSplitsTheCoupledDomainsIntoOneDoorAndMany(t *testing.T) {
 // different measures under one heading.
 func TestTheImporterColumnCountsDomainsAndNotImportStatements(t *testing.T) {
 	root := "../.."
-	sources, _, err := parseTree(root+"/core/manager", defaultRules())
+	sources, _, err := parseTree(root+"/core/manager", managerPrefix, defaultRules())
 	if err != nil {
 		t.Fatalf("parse the tree: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestTheImporterColumnCountsDomainsAndNotImportStatements(t *testing.T) {
 // components, and the graph report excludes them for a different reason.
 func TestTheReleaseTiersPartitionTheTreeAndKeepSharedOnTheOutside(t *testing.T) {
 	root := "../.."
-	sources, _, err := parseTree(root+"/core/manager", defaultRules())
+	sources, _, err := parseTree(root+"/core/manager", managerPrefix, defaultRules())
 	if err != nil {
 		t.Fatalf("parse the tree: %v", err)
 	}

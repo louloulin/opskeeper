@@ -11,9 +11,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizsecret "github.com/vincent-wuhan/opskeeper/core/manager/biz/secret"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	bizsecret "github.com/vincent-wuhan/opskeeper/core/domains/biz/secret"
 )
 
 // Handler serves /v1/secrets.

@@ -11,7 +11,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
-	upgradesvc "github.com/vincent-wuhan/opskeeper/core/manager/service/systemupgrade"
+	upgradesvc "github.com/vincent-wuhan/opskeeper/core/domains/service/systemupgrade"
 )
 
 type UpgradeService interface {

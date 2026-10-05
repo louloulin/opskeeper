@@ -66,7 +66,7 @@ var planItems = []planItem{
 	{
 		name:    "LLM 网关",
 		what:    "0.1 manager 侧 OpenAI 兼容端点，按节点令牌桶限流并返回 429",
-		anchors: []string{"core/manager/server/llmgw/spend.go"},
+		anchors: []string{"core/domains/server/llmgw/spend.go"},
 	},
 	{
 		name:    "边缘接入",
@@ -171,10 +171,10 @@ var planItems = []planItem{
 	{
 		name:    "节点令牌越权",
 		what:    "§六 安全 2：节点 A 的令牌不能用于节点 B 的推理",
-		anchors: []string{"core/manager/server/llmgw/nodeidentity_test.go"},
+		anchors: []string{"core/domains/server/llmgw/nodeidentity_test.go"},
 		checks: []planCheck{
-			{"core/manager/server/llmgw/nodeidentity_test.go", "TestOneNodesAllowanceCannotBeSpentOnAnothers"},
-			{"core/manager/server/llmgw/nodeidentity_test.go", "TestAMixedPairIsRefusedBeforeTheModelIsReached"},
+			{"core/domains/server/llmgw/nodeidentity_test.go", "TestOneNodesAllowanceCannotBeSpentOnAnothers"},
+			{"core/domains/server/llmgw/nodeidentity_test.go", "TestAMixedPairIsRefusedBeforeTheModelIsReached"},
 		},
 	},
 	{

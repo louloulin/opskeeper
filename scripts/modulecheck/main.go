@@ -190,6 +190,32 @@ func rules() []rule {
 			Label: "floor (shared infrastructure)",
 		},
 		{
+			// domains is the release floor, cut out of the manager module
+			// and made a module so the Go module system — not a reviewer's
+			// memory — enforces what scripts/domaincheck -release measured:
+			// nothing in the control plane imports these domains, production
+			// or test, so extracting them cannot break a build that imports
+			// the module they left.
+			//
+			// Its allowance is the four modules underneath the control
+			// plane and nothing above them. In particular there is no
+			// core/manager: thirteen of the twenty-six release-floor
+			// domains import concrete packages out of the domains that
+			// stayed, and those are deliberately absent here rather than
+			// pulled along, because pulling them would make this module
+			// depend on the module it was extracted from.
+			Dir:    "core/domains",
+			Module: "github.com/vincent-wuhan/opskeeper/core/domains",
+			Allowed: []string{
+				coreModulePrefix + "/",
+				coreModulePrefix + "/base/",
+				coreModulePrefix + "/floor/",
+				coreModulePrefix + "/pig/",
+			},
+			AnyVendor: true,
+			Label:     "domains (control-plane release floor)",
+		},
+		{
 			// base is the control plane's own infrastructure, one tier
 			// below the control plane: errors, tenant context, credential
 			// injection, the audit write port, database and cache plumbing,

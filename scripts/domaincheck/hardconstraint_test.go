@@ -90,7 +90,7 @@ func TestAHardConstraintWhoseEdgeNoLongerHappensIsAViolation(t *testing.T) {
 // instead of arriving as one line inside a checker that also reports unrelated
 // things.
 func TestTheShippedHardConstraintsHoldInTheRealTree(t *testing.T) {
-	sources, _, err := parseTree("../../core/manager", defaultRules())
+	sources, _, err := parseTree("../../core/manager", managerPrefix, defaultRules())
 	if err != nil {
 		t.Fatalf("parse the manager tree: %v", err)
 	}

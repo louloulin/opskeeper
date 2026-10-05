@@ -64,6 +64,17 @@ components:
   iam_server:      { in: core/manager/iam/server/** }
 
   manager_service: { in: core/manager/service/** }
+  # The release floor, cut out of the manager module. These five carry the
+  # same layer rules as their manager_* siblings — a file move does not
+  # change what a layer is allowed to see — and each mayDependOn below is
+  # the set the moved files actually import today, not the sibling's whole
+  # list, because a grant with no import behind it is a standing permission
+  # (see the decision-74 note at the top of this file).
+  oxdomains_service: { in: core/domains/service/** }
+  oxdomains_biz:     { in: core/domains/biz/** }
+  oxdomains_data:    { in: core/domains/data/** }
+  oxdomains_model:   { in: core/domains/model/** }
+  oxdomains_server:  { in: core/domains/server/** }
   # 决策 123：根侧的集群通道。子集群侧是 manager_federation_child，这一边是它
   # 的对端。依赖面被压到 manager_biz（注册表与发布器）和 oxfloor（规则与
   # 线上类型）两处，因为这一层的全部职责就是「记住哪个已认证的调用方可以
@@ -84,7 +95,7 @@ components:
   # mayDependOn 里挂着 oxpig_model 例外，理由是"PiG 支撑的 llm.Client 必须落在
   # 控制面"——现在这个实现有自己的组件，例外可以删掉，shared_pkg 也就重新变回
   # 一个不认识 agent 内核的底座。
-  shared_llmpig: { in: core/manager/llmpig/** }
+  shared_llmpig: { in: core/domains/llmpig/** }
   api:        { in: api/** }
   cmd:        { in: cmd/** }
 
@@ -217,7 +228,7 @@ components:
   # 平面时伸手进了 edge 模块。包里没有一行边缘代理代码（它拨号、答两个
   # RPC、存一棵策略树），依赖闭包只有 floor 的两块，所以搬到 manager
   # 侧做 federationlink 的对端，而不是给 cmd 开一条例外。
-  manager_federation_child: { in: core/manager/service/federationchild/** }
+  manager_federation_child: { in: core/domains/service/federationchild/** }
   # 决策 99：遥测写前日志。它是节点唯一一份「写下来是为了以后再发」的数据，
   # 而写下来这件事本身没有第二个可去的地方——所以它只允许看见落盘原语与
   # 线上类型，不得直接 import 隧道客户端。发不发是装配根的决定，不是这里
@@ -689,6 +700,45 @@ deps:
       - oxpig_model
       - shared_pkg
 
+  oxdomains_biz:
+    mayDependOn:
+      - oxdomains_model
+      - oxfloor
+      - shared_pkg
+
+  oxdomains_data:
+    mayDependOn:
+      - oxdomains_model
+      - shared_pkg
+
+  # oxdomains_model imports nothing outside itself: it is the DTO layer of
+  # the domains that moved. It is registered with no grant at all rather
+  # than with `mayDependOn: []`, because go-arch-lint's spec check reads an
+  # empty list as a malformed file and refuses to run any of it — the same
+  # trap decision 99 hit. An omitted block is the way to say "depends on
+  # nothing", and manager_biz / manager_model / manager_server already say
+  # it that way.
+  oxdomains_server:
+    mayDependOn:
+      - oxdomains_biz
+      - oxdomains_service
+      - oxcore_domain
+      - oxfloor
+      - oxpig_ai
+      - oxpig_model
+      - shared_pkg
+
+  # No oxfloor here, and that is a measurement rather than an omission.
+  # service/federationchild does import core/floor, but this component does
+  # not own it: manager_federation_child is the narrower declaration and the
+  # checker resolves overlaps by name, so those imports are booked against
+  # that grant — which is the one place a sub-cluster side channel is
+  # allowed to see the tunnel. What is left here is prometheus and
+  # systemupgrade, and neither reaches for floor.
+  oxdomains_service:
+    mayDependOn:
+      - shared_pkg
+
   # ---------------- 装配层 ----------------
   # cmd/opskeeper 装配 iam + manager，cmd/opskeeper-edge 装配 edge；
   # go-arch-lint v3 无"按子目录分 cmd"的原生表达，这里合并授权，
@@ -718,6 +768,13 @@ deps:
       - manager_model
       - manager_server
       - manager_service
+      # 决策 222：release floor 独立成 core/domains 模块后，装配根第一次
+      # 从两个模块里取控制面的层。四个 domains_* 与它们的 manager_* 同层，
+      # 授权面也只到实际 import 的那几处。
+      - oxdomains_biz
+      - oxdomains_data
+      - oxdomains_server
+      - oxdomains_service
       - oxedge_agentprofile
       - oxharness_judge
       - oxharness_projection

@@ -418,7 +418,7 @@ func TestTheShippedTreeIsADagSevenLevelsDeep(t *testing.T) {
 	// layering has an answer; if a future edge reopens one this test is the
 	// thing that says the headline changed, and the DAG claim in the report
 	// stops being true.
-	sources, stats, err := parseTree("../../core/manager", defaultRules())
+	sources, stats, err := parseTree("../../core/manager", managerPrefix, defaultRules())
 	if err != nil {
 		t.Fatalf("parse the manager module: %v", err)
 	}

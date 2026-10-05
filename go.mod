@@ -14,6 +14,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/mysql v0.42.0
 	github.com/vincent-wuhan/opskeeper/core v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/base v0.0.0
+github.com/vincent-wuhan/opskeeper/core/domains v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/edge v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/floor v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/harness v0.0.0-00010101000000-000000000000
@@ -202,6 +203,7 @@ require (
 replace (
 	github.com/vincent-wuhan/opskeeper/core => ./core
 	github.com/vincent-wuhan/opskeeper/core/base => ./core/base
+github.com/vincent-wuhan/opskeeper/core/domains => ./core/domains
 	github.com/vincent-wuhan/opskeeper/core/edge => ./core/edge
 	github.com/vincent-wuhan/opskeeper/core/floor => ./core/floor
 	github.com/vincent-wuhan/opskeeper/core/harness => ./core/harness

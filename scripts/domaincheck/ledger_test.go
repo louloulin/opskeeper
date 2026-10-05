@@ -48,9 +48,9 @@ var ledgerGraphRE = regexp.MustCompile(`(?m)^\| 控制面域图 \| \*\*(\d+) 域
 // quietly wrong. That is the shape this refuses: a number that is quoted in
 // the section people read to decide what is left, with nothing that notices.
 func TestTheLedgerStatesTheDomainGraphThisTreeHas(t *testing.T) {
-	_, stats, err := parseTree("../../core/manager", defaultRules())
+	_, stats, err := parseControlPlane("../..")
 	if err != nil {
-		t.Fatalf("parse the manager module: %v", err)
+		t.Fatalf("parse the control plane: %v", err)
 	}
 	r := defaultRules()
 

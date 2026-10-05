@@ -14,8 +14,8 @@ package agentgateway_test
 import (
 	"testing"
 
+	"github.com/vincent-wuhan/opskeeper/core/domains/server/llmgw"
 	"github.com/vincent-wuhan/opskeeper/core/floor/config"
-	"github.com/vincent-wuhan/opskeeper/core/manager/server/llmgw"
 )
 
 func TestTheDocumentedDefaultRateIsTheOneTheDeploymentGets(t *testing.T) {

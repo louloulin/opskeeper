@@ -3,7 +3,7 @@ package store
 import (
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/secret"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/secret"
 )
 
 // Migrate AutoMigrates the secrets table. Registered in cmd/opskeeper/main.go

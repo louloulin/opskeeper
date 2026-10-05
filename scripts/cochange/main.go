@@ -69,6 +69,15 @@ const managerPrefix = "core/manager/"
 // one thing a report about coupling must never be.
 const basePrefix = "core/base/"
 
+// domainsPrefix is the release floor, cut out of the manager module
+// (decision 222). It holds bounded contexts, not a library, so its domains
+// are named the same way the manager's are — but they are now reached under
+// a different prefix, and a mapping that only knew managerPrefix would
+// report those thirteen domains as having no history at all. That is the
+// failure this report can least afford: a domain that looks untouched is a
+// domain a reader concludes is safe to ignore.
+const domainsPrefix = "core/domains/"
+
 // Change is one commit's footprint in the control plane.
 type Change struct {
 	Commit  string
@@ -209,6 +218,8 @@ func domainOf(path string) string {
 	switch {
 	case strings.HasPrefix(path, managerPrefix):
 		rest = strings.TrimPrefix(path, managerPrefix)
+	case strings.HasPrefix(path, domainsPrefix):
+		rest = strings.TrimPrefix(path, domainsPrefix)
 	case strings.HasPrefix(path, basePrefix):
 		// Everything under core/base is the one shared domain the module
 		// holds: pkg itself and its 31 subpackages. A subpackage name would

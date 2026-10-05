@@ -547,7 +547,7 @@ module-race: ## 对新模块跑竞态检测（supervisor 重启循环是并发�
 # A green `make module-test` is a statement about the workspace. This one is a
 # statement about what ships.
 
-PIG_MODULES := . core core/base core/edge core/floor core/harness core/manager core/pig \
+PIG_MODULES := . core core/base core/domains core/edge core/floor core/harness core/manager core/pig \
 	core/pig/extensions/opskeeper-gate \
 	core/pig/extensions/opskeeper-sre-readonly \
 	core/pig/extensions/opskeeper-sre-middleware \

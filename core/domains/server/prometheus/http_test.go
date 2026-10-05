@@ -13,7 +13,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
-	svc "github.com/vincent-wuhan/opskeeper/core/manager/service/prometheus"
+	svc "github.com/vincent-wuhan/opskeeper/core/domains/service/prometheus"
 )
 
 type stubService struct {

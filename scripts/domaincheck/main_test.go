@@ -238,7 +238,7 @@ func TestAnEmptyTreeIsNotSilentlyGreen(t *testing.T) {
 	// has to refuse. A walk that found no files would otherwise report
 	// "every domain boundary holds" for a tree it never looked at, which is
 	// the failure mode this repository keeps having to fix.
-	if _, _, err := parseTree(t.TempDir(), defaultRules()); err == nil {
+	if _, _, err := parseTree(t.TempDir(), managerPrefix, defaultRules()); err == nil {
 		t.Fatal("parsing an empty directory reported success")
 	}
 }
@@ -247,7 +247,7 @@ func TestTheShippedTablesDescribeTheShippedTree(t *testing.T) {
 	// The same walk main() does, so the checker's own gate is a test: a
 	// new cross-domain import, a new cycle, or a table that stopped
 	// matching the tree all fail here with a message naming the domain.
-	sources, stats, err := parseTree("../../core/manager", defaultRules())
+	sources, stats, err := parseTree("../../core/manager", managerPrefix, defaultRules())
 	if err != nil {
 		t.Fatalf("parse the manager module: %v", err)
 	}

@@ -33,7 +33,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/edge/agentmodel"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/server/llmgw"
+	"github.com/vincent-wuhan/opskeeper/core/domains/server/llmgw"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )

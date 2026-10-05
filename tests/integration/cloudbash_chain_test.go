@@ -24,9 +24,9 @@ import (
 	"gorm.io/gorm"
 
 	bizapproval "github.com/vincent-wuhan/opskeeper/core/manager/biz/approval"
-	bizsecret "github.com/vincent-wuhan/opskeeper/core/manager/biz/secret"
+	bizsecret "github.com/vincent-wuhan/opskeeper/core/domains/biz/secret"
 	approvalstore "github.com/vincent-wuhan/opskeeper/core/manager/data/approval/store"
-	secretstore "github.com/vincent-wuhan/opskeeper/core/manager/data/secret/store"
+	secretstore "github.com/vincent-wuhan/opskeeper/core/domains/data/secret/store"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/runner"
 )
 

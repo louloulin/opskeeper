@@ -60,7 +60,7 @@ func writeTree(t *testing.T, files map[string]string) string {
 // the classification rather than about the maps underneath it.
 func doorKinds(t *testing.T, root string) map[string]string {
 	t.Helper()
-	sources, _, err := parseTree(root, rules{})
+	sources, _, err := parseTree(root, managerPrefix, rules{})
 	if err != nil {
 		t.Fatalf("parse the tree: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestTheDoorColumnLeadsWithThePartThatIsNotSubstitutable(t *testing.T) {
 // map by a different route than printReleaseFloor takes — every door of each
 // domain rather than only the first — and compares against the printed text.
 func TestTheHeadlineCountInTheReportIsRecomputedNotAsserted(t *testing.T) {
-	sources, _, err := parseTree("../../core/manager", defaultRules())
+	sources, _, err := parseTree("../../core/manager", managerPrefix, defaultRules())
 	if err != nil {
 		t.Fatalf("parse the tree: %v", err)
 	}
@@ -379,7 +379,7 @@ func headlineCounts(t *testing.T, out string) (substitutable, total int) {
 // bookkeeping; mutating the shipped one in place would leak into any later
 // test in this package.
 func TestTheHeadlineCountMovesWhenADoorDoes(t *testing.T) {
-	sources, _, err := parseTree("../../core/manager", defaultRules())
+	sources, _, err := parseTree("../../core/manager", managerPrefix, defaultRules())
 	if err != nil {
 		t.Fatalf("parse the tree: %v", err)
 	}
