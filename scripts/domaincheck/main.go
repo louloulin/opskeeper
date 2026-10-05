@@ -475,6 +475,16 @@ func main() {
 	// written, which is a red build people turn off.
 	if graph || release || cut != "" {
 		g := buildGraph(sources, r)
+		// The floor is measured over core/manager, so the files that would
+		// break if a domain moved are outside what it walked. They are read
+		// here and attached before anything is printed, because a report that
+		// omits them is the version that was wrong.
+		if wiring, err := wiringUse(root); err != nil {
+			fmt.Fprintln(os.Stderr, "domaincheck: "+err.Error())
+			os.Exit(2)
+		} else {
+			g.wiring = wiring
+		}
 		if graph {
 			g.printStructure(os.Stdout)
 		}
@@ -606,6 +616,77 @@ func kindOf(ts *ast.TypeSpec, specs map[string]*ast.TypeSpec, seen map[string]bo
 		return kindInterface
 	}
 	return kindOther
+}
+
+// wiringUse is who, outside core/manager, imports each manager domain.
+//
+// The release floor is computed from core/manager alone, which makes "nothing
+// imports this domain" a statement about a closed world. It is not a closed
+// world: the composition roots under cmd/ import manager domains, and they are
+// the files that would fail to build if a domain moved. The floor did not
+// count them, so for most of its own rows the sentence "releasing it breaks
+// nobody's build" was false.
+//
+// They are counted here rather than folded into the bounded-context edge count,
+// because the two are different currencies. An inbound edge is another context
+// depending on this one, which is coordination. A line in a composition root
+// is assembly, which is nobody's coordination and costs one edit. Both are
+// real; conflating them would either inflate the floor into uselessness or
+// keep the claim overstated, and the first version of this report did the
+// second.
+//
+// Only non-test Go files are read, and the imports come from the parser rather
+// than from a substring search: domaincheck and modulecheck both name
+// managerPrefix as a string constant, and a text search would have counted this
+// checker's own source as a dependent of every domain in the tree.
+func wiringUse(root string) (map[string]map[string]int, error) {
+	fset := token.NewFileSet()
+	out := map[string]map[string]int{}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			// The manager tree is the thing being measured, not a dependent
+			// of itself, and the rest of these hold no Go that could wire it.
+			switch d.Name() {
+			case ".git", "node_modules", "core":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		for _, imp := range file.Imports {
+			v, err := strconv.Unquote(imp.Path.Value)
+			if err != nil {
+				continue
+			}
+			domain := domainOf(v)
+			if domain == "" {
+				continue
+			}
+			if out[domain] == nil {
+				out[domain] = map[string]int{}
+			}
+			out[domain][rel]++
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func parseTree(dir string, r rules) ([]source, treeStats, error) {

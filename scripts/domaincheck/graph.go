@@ -72,6 +72,13 @@ type domainGraph struct {
 	// a concrete type that would have to travel with it, so "the seam
 	// already exists" is true of the import and false of the design.
 	doorUse map[string]map[string]map[string]declKind
+	// wiring is who outside core/manager imports each domain, keyed by the
+	// file that does it. It is not an edge in the graph above, because the
+	// graph's subject is bounded contexts and a composition root is not one.
+	// It is here because the release floor is read as a promise about
+	// independent release, and a promise that omits the assembly files would
+	// be false for almost every row it prints.
+	wiring map[string]map[string]int
 }
 
 // pkgSize is one package's share of the tree. domain is kept alongside it
@@ -833,9 +840,32 @@ func (g *domainGraph) printReleaseFloor(w io.Writer, shared map[string]string) {
 
 	fmt.Fprintln(w, "\nrelease floor: domains with no inbound cross-domain import")
 	fmt.Fprintln(w, "  A domain nothing imports can be released without coordinating with any other")
-	fmt.Fprintln(w, "  bounded context: releasing it breaks nobody's build, and nobody's release breaks")
-	fmt.Fprintln(w, "  its build. That is a fact about the import graph, not an estimate about a team.")
-	fmt.Fprintln(w, "  It is a FLOOR, not the answer to \"which domains ship independently\" — a domain")
+	fmt.Fprintln(w, "  bounded context, and nobody's release breaks its build. That is a fact about the")
+	fmt.Fprintln(w, "  import graph, not an estimate about a team.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "  \"nothing imports it\" is narrower than it looks, because this graph is built from")
+	fmt.Fprintln(w, "  core/manager alone: the composition roots under cmd/ are invisible to it, and")
+	wired, unwired := 0, 0
+	for _, d := range floor {
+		if len(g.wiring[d]) == 0 {
+			unwired++
+		} else {
+			wired++
+		}
+	}
+	if wired > 0 {
+		fmt.Fprintf(w, "  %d of the %d below are wired there anyway. The last column says how.\n", wired, len(floor))
+		fmt.Fprintln(w, "  That is assembly rather than coordination between two contexts, and it costs")
+		fmt.Fprintln(w, "  an edit rather than a conversation — but it is not zero, and an earlier version")
+		fmt.Fprintf(w, "  of this report said \"breaks nobody's build\", which was wrong for all but %d of\n", unwired)
+		fmt.Fprintln(w, "  these rows. The claim is about bounded contexts only, and the rows below are")
+		fmt.Fprintln(w, "  only as independent as that claim is.")
+	} else {
+		fmt.Fprintln(w, "  None of the domains below is wired from outside core/manager, so for this tree")
+		fmt.Fprintln(w, "  the two readings coincide.")
+	}
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "  It remains a FLOOR, not the answer to \"which domains ship independently\" — a domain")
 	fmt.Fprintln(w, "  with inbound edges may still be independently shippable behind a stable")
 	fmt.Fprintln(w, "  interface, and no amount of reading this graph can tell you that.")
 
@@ -858,7 +888,8 @@ func (g *domainGraph) printReleaseFloor(w io.Writer, shared map[string]string) {
 			sort.Strings(names)
 			base = "rests on " + strings.Join(names, ", ")
 		}
-		fmt.Fprintf(w, "    %-16s %6d lines  %2d packages  %s\n", d, lines, pkgs, base)
+		fmt.Fprintf(w, "    %-16s %6d lines  %2d packages  %-26s %s\n",
+			d, lines, pkgs, base, g.wiringColumn(d))
 	}
 
 	if len(excluded) > 0 {
@@ -924,6 +955,37 @@ func (g *domainGraph) printReleaseFloor(w io.Writer, shared map[string]string) {
 			fmt.Fprintf(w, "    %s\n", g.entryRow(d))
 		}
 	}
+}
+
+// wiringColumn is what a floor domain costs to move out from under the
+// composition roots, which is the part of the cost the edge count cannot see.
+//
+// A domain nobody outside the tree imports is free to extract, and saying so
+// is worth a column: it is the one row of this report where extraction is
+// genuinely costless. Everything else carries at least the assembly edit, and
+// the count is printed so a reader can price the step rather than guess it.
+func (g *domainGraph) wiringColumn(domain string) string {
+	files := g.wiring[domain]
+	if len(files) == 0 {
+		return "not wired outside core/manager"
+	}
+	imports := 0
+	for _, n := range files {
+		imports += n
+	}
+	roots := map[string]bool{}
+	for f := range files {
+		roots[strings.SplitN(f, "/", 2)[0]] = true
+	}
+	places := make([]string, 0, len(roots))
+	for r := range roots {
+		places = append(places, r)
+	}
+	sort.Strings(places)
+	return fmt.Sprintf("wired: %d %s, %d %s in %s",
+		imports, plural(imports, "import", "imports"),
+		len(files), plural(len(files), "file", "files"),
+		strings.Join(places, ", "))
 }
 
 // firstKey is the single entry package of a domain reached through one, which
