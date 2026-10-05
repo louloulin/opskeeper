@@ -280,6 +280,25 @@ type source struct {
 	// are rare enough here that counting them as unattributed is the
 	// honest answer rather than a guess about which package they meant.
 	used map[string]map[string]bool
+	// refs is the same walk counted again: how many times each selected
+	// symbol is actually *used*, rather than how many distinct symbols the
+	// file picks from the package.
+	//
+	// It exists because `used` answers the wrong question for pricing. Two
+	// consumers can select the identical set of seven symbols and be worlds
+	// apart: one reads four fields off a struct and the other walks a parsed
+	// object graph. The symbol set is the same, the import count is the same,
+	// and the work to cut the edge is not — because the projection each one
+	// would need is a different size.
+	//
+	// Decision 254 measured exactly that pair (marketplace and pluginimport
+	// off the same chatruntime package) and the symbol count could not tell
+	// them apart, because the difference was not which symbols they named but
+	// how much of each one they read. This is the counter for that.
+	refs map[string]map[string]int
+	// bulk is the measured shape of each exported struct this file's
+	// package declares. See structBulk for why the seam report needs it.
+	bulk map[string]structBulk
 	// file is the parsed tree, kept only long enough to resolve type
 	// aliases after every file in a package has been seen — an alias may
 	// name a type declared in a sibling file, so it cannot be resolved while
@@ -608,6 +627,7 @@ func resolveDeclared(sources []source) {
 	// byPkg collects the raw type specs first, so an alias can be resolved
 	// against the package it lives in rather than the file it was written in.
 	typeSpecs := map[string]map[string]*ast.TypeSpec{}
+	bulkSpecs := map[string]map[string]structBulk{}
 	for _, src := range sources {
 		if src.file == nil || src.test {
 			continue
@@ -615,6 +635,9 @@ func resolveDeclared(sources []source) {
 		key := pkgKey(src)
 		if typeSpecs[key] == nil {
 			typeSpecs[key] = map[string]*ast.TypeSpec{}
+		}
+		if bulkSpecs[key] == nil {
+			bulkSpecs[key] = map[string]structBulk{}
 		}
 		for _, decl := range src.file.Decls {
 			gd, ok := decl.(*ast.GenDecl)
@@ -627,6 +650,7 @@ func resolveDeclared(sources []source) {
 					continue
 				}
 				typeSpecs[key][ts.Name.Name] = ts
+				bulkSpecs[key][ts.Name.Name] = measureBulk(ts)
 			}
 		}
 	}
@@ -650,7 +674,105 @@ func resolveDeclared(sources []source) {
 				sources[i].declared[name] = kind
 			}
 		}
+		if sources[i].bulk == nil && !sources[i].test && bulkSpecs[key] != nil {
+			sources[i].bulk = map[string]structBulk{}
+			for name, b := range bulkSpecs[key] {
+				if b.fields > 0 {
+					sources[i].bulk[name] = b
+				}
+			}
+		}
 	}
+}
+
+// structBulk is how much of a type a consumer is signing up for when it
+// selects the name.
+//
+// It answers the question the reference counter could not. Decision 254
+// found two consumers of one package whose selected symbol sets were
+// identical — seven names, referenced a handful of times each — and whose
+// cuts were nothing alike: one read four scalar fields off a small struct,
+// the other walked a parsed object graph. Reference counts could not tell
+// them apart because the work in the second case is inside field selections
+// (`res.Skills`, `sk.Metadata.Requires`) that no package-qualified selector
+// ever names.
+//
+// So the counter moved one level down, from "how often is the name used" to
+// "how big is the thing behind the name". A wide struct with nested
+// containers is the shape that makes a cheap-looking edge expensive, and it
+// is readable straight from the syntax tree — no type checker required, which
+// matters because type-checking this tree needs a loadable module graph and
+// `-seams` is a report that has to run in a working copy.
+type structBulk struct {
+	// fields is the struct's own field count.
+	fields int
+	// containers is how many of those fields are a slice, array, map or
+	// pointer — the ones that make a value reach further than a scalar does.
+	// A pointer counts because `Pack *Pack` drags a second type across the
+	// boundary just as a `[]Skill` does.
+	containers int
+	// nested is how many of the fields are themselves struct types declared
+	// in the same package, which is the case a projection cannot drop: the
+	// outer type is easy to narrow, the inner one is not.
+	nested int
+}
+
+// measureBulk counts a type spec's fields. A non-struct yields the zero
+// value, which is how "there is nothing here" is spelled — a function or a
+// constant selected by a consumer carries no shape to project.
+func measureBulk(ts *ast.TypeSpec) structBulk {
+	st, ok := ts.Type.(*ast.StructType)
+	if !ok || st.Fields == nil {
+		return structBulk{}
+	}
+	var b structBulk
+	for _, f := range st.Fields.List {
+		if len(f.Names) == 0 {
+			// An embedded field is one dependency wearing no name. It counts
+			// once: the promoted field set is what it contributes, and
+			// counting it per promoted name would let a single embed
+			// outweigh a dozen explicit fields.
+			b.fields++
+			if isContainerType(f.Type) {
+				b.containers++
+			}
+			continue
+		}
+		for range f.Names {
+			b.fields++
+		}
+		if isContainerType(f.Type) {
+			b.containers += len(f.Names)
+		}
+		if isStructType(f.Type) {
+			b.nested += len(f.Names)
+		}
+	}
+	return b
+}
+
+func isContainerType(e ast.Expr) bool {
+	switch t := e.(type) {
+	case *ast.ArrayType:
+		return true
+	case *ast.MapType:
+		return true
+	case *ast.StarExpr:
+		return true
+	case *ast.SelectorExpr:
+		// A qualified name cannot be resolved without the import graph, and
+		// guessing wrong here would inflate every type in the tree. time.Time
+		// and friends are containers for the purposes of this count and are
+		// deliberately not counted.
+		_ = t
+		return false
+	}
+	return false
+}
+
+func isStructType(e ast.Expr) bool {
+	ident, ok := e.(*ast.Ident)
+	return ok && ident.Obj != nil
 }
 
 // kindOf is one declared type's kind, following an alias to whatever it names.
@@ -852,6 +974,7 @@ func parseTree(dir, modulePrefix string, r rules) ([]source, treeStats, error) {
 		}
 		if len(alias) > 0 {
 			src.used = map[string]map[string]bool{}
+			src.refs = map[string]map[string]int{}
 			ast.Inspect(file, func(n ast.Node) bool {
 				sel, ok := n.(*ast.SelectorExpr)
 				if !ok {
@@ -869,6 +992,10 @@ func parseTree(dir, modulePrefix string, r rules) ([]source, treeStats, error) {
 					src.used[path] = map[string]bool{}
 				}
 				src.used[path][sel.Sel.Name] = true
+				if src.refs[path] == nil {
+					src.refs[path] = map[string]int{}
+				}
+				src.refs[path][sel.Sel.Name]++
 				return true
 			})
 		}

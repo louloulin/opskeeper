@@ -49,6 +49,37 @@ type seamRow struct {
 	implementor string
 	// weight is the number of import statements behind the edge.
 	weight int
+	// refs counts how many times the consumer actually *uses* each selected
+	// symbol, summed across its production files, and files counts how many
+	// of those files there are.
+	//
+	// The two numbers together are the only ones here that respond to "how
+	// deep does this consumer go". Everything above answers what kind of
+	// thing crosses; this answers how much of it is being read. A consumer
+	// that names seven symbols and reads one field each is not in the same
+	// position as one that names seven and walks all of them, and the
+	// existing counters cannot tell those apart — see decision 254, where
+	// two consumers of one package had identical symbol sets and wildly
+	// different cuts.
+	refs  map[string]int
+	files int
+	// bulk is the measured shape of the struct types this edge's consumer
+	// selects, keyed by symbol. Only struct types appear; a selected
+	// function or constant has no shape to project.
+	bulk map[string]structBulk
+}
+
+// depth is the total number of symbol uses behind the edge. It is reported
+// beside the weight rather than instead of it, because the two disagree in
+// the direction that matters: weight counts statements, this counts work, and
+// an edge can be one statement deep into a struct or forty references into a
+// tree.
+func (r *seamRow) depth() int {
+	n := 0
+	for _, c := range r.refs {
+		n += c
+	}
+	return n
 }
 
 func (r seamRow) verdict() string {
@@ -72,9 +103,26 @@ func (r seamRow) verdict() string {
 // show which edges are worth a knife before anyone spends one.
 func printSeams(w io.Writer, sources []source, r rules) {
 	declared := map[string]map[string]declKind{}
+	// bulk is keyed by import path for the same reason declared is: a
+	// consumer selects types declared in the *producer's* files, so the
+	// shapes have to be collected across the producer's package and then
+	// looked up by the path this consumer imported, not read off the
+	// consumer's own source.
+	bulkByPkg := map[string]map[string]structBulk{}
 	for _, src := range sources {
 		if src.declared != nil {
 			declared[pkgKey(src)] = src.declared
+		}
+		if len(src.bulk) > 0 {
+			key := pkgKey(src)
+			if bulkByPkg[key] == nil {
+				bulkByPkg[key] = map[string]structBulk{}
+			}
+			for sym, b := range src.bulk {
+				if cur, seen := bulkByPkg[key][sym]; !seen || b.fields > cur.fields {
+					bulkByPkg[key][sym] = b
+				}
+			}
 		}
 	}
 
@@ -138,6 +186,32 @@ func printSeams(w io.Writer, sources []source, r rules) {
 				rows[e] = row
 			}
 			row.weight++
+			row.files++
+			// Only the symbols this consumer actually selected. Reporting the
+			// producer package's whole exported surface would be a fact about
+			// the package, not about the edge, and it buries the one number
+			// that matters — the shape of the thing being carried.
+			for sym := range syms {
+				b, ok := bulkByPkg[imp][sym]
+				if !ok {
+					continue
+				}
+				if row.bulk == nil {
+					row.bulk = map[string]structBulk{}
+				}
+				// Widest wins when a symbol is declared in several files of
+				// the same package, which is the only way two declarations
+				// can exist for one name and still compile.
+				if cur, seen := row.bulk[sym]; !seen || b.fields > cur.fields {
+					row.bulk[sym] = b
+				}
+			}
+			for sym, uses := range src.refs[imp] {
+				if row.refs == nil {
+					row.refs = map[string]int{}
+				}
+				row.refs[sym] += uses
+			}
 			for sym := range syms {
 				if declared[imp][sym] == kindInterface {
 					row.ifaces = append(row.ifaces, sym)
@@ -186,6 +260,28 @@ func printSeams(w io.Writer, sources []source, r rules) {
 	fmt.Fprintln(w, "  mixed         interfaces alongside values. The values have to move too.")
 	fmt.Fprintln(w, "  data          no interface at all. Structs, entities, tables.")
 	fmt.Fprintln(w)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  Two more axes, and neither is the one the weight is. Everything above says")
+	fmt.Fprintln(w, "  what kind of thing crosses; the next two say how much of it is being read.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  refs  counts uses of each selected symbol, and cannot see inside a value.")
+	fmt.Fprintln(w, "       A low number here is not cheap: decision 254 found a consumer that")
+	fmt.Fprintln(w, "       selected seven symbols, used them seven times, and walked a parsed")
+	fmt.Fprintln(w, "       object graph through field selections no package-qualified name")
+	fmt.Fprintln(w, "       ever mentions. Read refs and shape together.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  shape is the measured size of the struct types on the edge: own fields,")
+	fmt.Fprintln(w, "       how many of those are containers (slice/array/map/pointer) and how")
+	fmt.Fprintln(w, "       many are nested structs. This is the number that separates a")
+	fmt.Fprintln(w, "       projection of four scalars from a projection of a tree, and it is")
+	fmt.Fprintln(w, "       what a projection has to be sized against.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  Both are report-only and neither is a gate. refs counts occurrences, not")
+	fmt.Fprintln(w, "  work — forty uses in one loop is not forty uses in straight-line code —")
+	fmt.Fprintln(w, "  and shape cannot resolve a qualified field type, so a time.Time is not")
+	fmt.Fprintln(w, "  counted as a container. A gauge that is wrong in a known direction is")
+	fmt.Fprintln(w, "  worth printing; a gate built on it would train its reader to skip it.")
+	fmt.Fprintln(w)
 	for _, e := range keys {
 		row := rows[e]
 		fmt.Fprintf(w, "  %-13s %3d  %-14s -> %-14s", row.verdict(), row.weight, row.from, row.to)
@@ -198,6 +294,13 @@ func printSeams(w io.Writer, sources []source, r rules) {
 		}
 		if len(row.others) > 0 {
 			fmt.Fprintf(w, "                 value: %s\n", strings.Join(dedupe(sortedCopy(row.others)), ", "))
+		}
+		if len(row.refs) > 0 {
+			fmt.Fprintf(w, "                 refs:  %d uses in %d file(s) — %s\n",
+				row.depth(), row.files, describeRefs(row.refs))
+		}
+		if len(row.bulk) > 0 {
+			fmt.Fprintf(w, "                 shape: %s\n", describeBulk(row.bulk))
 		}
 	}
 }
@@ -224,6 +327,60 @@ func importAliases(f *ast.File) map[string]string {
 		out[name] = path
 	}
 	return out
+}
+
+// describeRefs renders the per-symbol use counts, hottest first, so the
+// symbol that dominates the edge is the first thing a reader sees. Ties are
+// broken by name because a report that reorders itself between runs cannot be
+// diffed.
+func describeRefs(refs map[string]int) string {
+	type kv struct {
+		sym string
+		n   int
+	}
+	pairs := make([]kv, 0, len(refs))
+	for s, n := range refs {
+		pairs = append(pairs, kv{s, n})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].n != pairs[j].n {
+			return pairs[i].n > pairs[j].n
+		}
+		return pairs[i].sym < pairs[j].sym
+	})
+	parts := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		parts = append(parts, fmt.Sprintf("%s×%d", p.sym, p.n))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// describeBulk renders the fat types on an edge first, because a wide struct
+// with containers is what makes a narrow-looking edge expensive. Ties break on
+// the name so two runs diff cleanly.
+func describeBulk(bulk map[string]structBulk) string {
+	type kv struct {
+		sym string
+		b   structBulk
+	}
+	pairs := make([]kv, 0, len(bulk))
+	for s, b := range bulk {
+		pairs = append(pairs, kv{s, b})
+	}
+	// A weight rather than a plain field sort: containers and nested structs
+	// are what a projection cannot drop, so they outrank raw width.
+	weight := func(b structBulk) int { return b.fields + 2*b.containers + 2*b.nested }
+	sort.Slice(pairs, func(i, j int) bool {
+		if weight(pairs[i].b) != weight(pairs[j].b) {
+			return weight(pairs[i].b) > weight(pairs[j].b)
+		}
+		return pairs[i].sym < pairs[j].sym
+	})
+	parts := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		parts = append(parts, fmt.Sprintf("%s(%df %dc %dn)", p.sym, p.b.fields, p.b.containers, p.b.nested))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func dedupe(in []string) []string {
