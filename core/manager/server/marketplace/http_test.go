@@ -65,7 +65,7 @@ func TestInstall_AdminGate(t *testing.T) {
 			}, nil
 		},
 	}
-	router := newRouter(NewHandler(svc))
+	router := newRouter(NewHandler(svc, nil, ""))
 
 	body := `{"type":"local","path":"/tmp/etcd-tools"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/marketplace/install", strings.NewReader(body))
@@ -103,7 +103,7 @@ func TestInstall_BadRequestMaps400(t *testing.T) {
 			return nil, errors.Join(errs.ErrInvalid, errors.New("path must be absolute"))
 		},
 	}
-	router := newRouter(NewHandler(svc))
+	router := newRouter(NewHandler(svc, nil, ""))
 	req := httptest.NewRequest(http.MethodPost, "/v1/marketplace/install",
 		bytes.NewBufferString(`{"type":"local"}`))
 	req = req.WithContext(adminCtx())
@@ -120,7 +120,7 @@ func TestInstall_ConflictMaps409(t *testing.T) {
 			return nil, errs.ErrConflict
 		},
 	}
-	router := newRouter(NewHandler(svc))
+	router := newRouter(NewHandler(svc, nil, ""))
 	req := httptest.NewRequest(http.MethodPost, "/v1/marketplace/install",
 		bytes.NewBufferString(`{"type":"local","path":"/tmp/x"}`))
 	req = req.WithContext(adminCtx())
@@ -140,7 +140,7 @@ func TestListInstalled_OpenToAuthUser(t *testing.T) {
 			}, nil
 		},
 	}
-	router := newRouter(NewHandler(svc))
+	router := newRouter(NewHandler(svc, nil, ""))
 	req := httptest.NewRequest(http.MethodGet, "/v1/marketplace/installed", nil)
 	req = req.WithContext(userCtx())
 	rec := httptest.NewRecorder()
@@ -168,7 +168,7 @@ func TestUninstall_AdminAndIdempotent(t *testing.T) {
 			return nil
 		},
 	}
-	router := newRouter(NewHandler(svc))
+	router := newRouter(NewHandler(svc, nil, ""))
 	req := httptest.NewRequest(http.MethodDelete, "/v1/marketplace/installed/etcd-tools", nil)
 	req = req.WithContext(adminCtx())
 	rec := httptest.NewRecorder()
@@ -198,7 +198,7 @@ func TestRegistries_OpenToAuthUser(t *testing.T) {
 			}
 		},
 	}
-	router := newRouter(NewHandler(svc))
+	router := newRouter(NewHandler(svc, nil, ""))
 	req := httptest.NewRequest(http.MethodGet, "/v1/marketplace/registries", nil)
 	req = req.WithContext(userCtx())
 	rec := httptest.NewRecorder()

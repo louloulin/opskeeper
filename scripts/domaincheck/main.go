@@ -190,8 +190,6 @@ var edges = map[edge]string{
 
 	{"nodeagent", "nodefleet"}: "the node-agent endpoints are the fleet's session handles",
 
-	{"pluginimport", "aiops"}: "an imported plugin becomes part of the agent's tool surface, which is assembled in the chat runtime",
-
 	{"report", "aiops"}: "a report is produced out of an agent conversation",
 	{"report", "loop"}:  "a report is produced out of an agent conversation or a loop investigation, and the postmortem service renders the loop's own postmortem contract (PostmortemDoc / RootCauseJSON / CritiqueScore) — one direction only since decision 115",
 

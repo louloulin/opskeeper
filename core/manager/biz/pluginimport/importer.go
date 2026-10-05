@@ -34,7 +34,6 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 )
 
 // resourceDirs is the flattened view of domain.PackageResources: every
@@ -96,7 +95,36 @@ type Report = domain.PluginImportReport
 // generated package has been validated by the same loader the control plane
 // uses. An import that produced a package nothing could load would leave an
 // operator with a directory and no explanation.
-func Import(opts Options) (*Report, error) {
+// Importer is the converter with its one dependency injected.
+//
+// It used to be the package-level function `Import`, which called into the
+// agent runtime's package loader directly. A package function cannot be given
+// a dependency, so there was no port to narrow and the cross-domain import
+// had nothing to cut except the call itself (decision 252, and the same shape
+// decision 249 met on three other functions).
+type Importer struct {
+	loader domain.ContainerLoader
+}
+
+// New builds an importer that reads containers through loader.
+//
+// A nil loader is refused at use rather than at construction, so that a
+// forgotten argument produces an error an operator can read instead of a nil
+// dereference on the first upload.
+func New(loader domain.ContainerLoader) *Importer {
+	return &Importer{loader: loader}
+}
+
+// Import converts one container into a package.
+//
+// It writes to a staging directory and moves it into place only after the
+// generated package has been validated by the same loader the control plane
+// uses. An import that produced a package nothing could load would leave an
+// operator with a directory and no explanation.
+func (i *Importer) Import(opts Options) (*Report, error) {
+	if i == nil || i.loader == nil {
+		return nil, errors.New("pluginimport: no container loader is wired; the composition root must pass one to New")
+	}
 	if opts.Source == "" {
 		return nil, errors.New("pluginimport: Source is required")
 	}
@@ -129,13 +157,15 @@ func Import(opts Options) (*Report, error) {
 	// not have a second opinion about what counts as a container, because
 	// two opinions would eventually disagree and the converter would be the
 	// one that wins by being newer.
-	result, err := chatruntime.LoadPluginContainer(source)
+	//
+	// One call, not two. This used to be LoadPluginContainer followed by
+	// DetectContainer, which probed the same directory twice and let the
+	// report's `kind` come from a different reading than the pack that the
+	// first call had produced. The port returns both together because they
+	// are one answer, not two.
+	src, err := i.loader.LoadContainer(source)
 	if err != nil {
 		return nil, fmt.Errorf("pluginimport: read %s: %w", source, err)
-	}
-	kind, _, err := chatruntime.DetectContainer(source)
-	if err != nil {
-		return nil, fmt.Errorf("pluginimport: detect %s: %w", source, err)
 	}
 
 	staging, err := os.MkdirTemp(filepath.Dir(dest), ".pluginimport-*")
@@ -144,15 +174,15 @@ func Import(opts Options) (*Report, error) {
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
 
-	report := &Report{Kind: kind, Warnings: result.Warnings}
+	report := &Report{Kind: src.Kind, Warnings: src.Warnings}
 	if m, err := readSourceManifest(source); err != nil {
 		return nil, err
 	} else {
 		report.SourceManifest = m
 	}
-	report.Name = nameOf(result, source)
-	report.Version = versionOf(result)
-	report.Description = descriptionOf(result)
+	report.Name = nameOf(src, source)
+	report.Version = versionOf(src)
+	report.Description = descriptionOf(src)
 
 	if err := copyResources(source, staging, report); err != nil {
 		return nil, err
@@ -160,7 +190,7 @@ func Import(opts Options) (*Report, error) {
 	if err := writeManifest(staging, report, opts, targets); err != nil {
 		return nil, err
 	}
-	report.Decisions = decisionsFor(result, report)
+	report.Decisions = decisionsFor(src, report)
 
 	// The generated package is proven loadable before it is moved into
 	// place, using the same loader that will admit it later. An import
@@ -283,7 +313,7 @@ func copyResources(source, staging string, report *Report) error {
 			continue
 		}
 		if previous, taken := written[dir.packaged]; taken {
-			report.Warnings = append(report.Warnings, chatruntime.LoadWarning{
+			report.Warnings = append(report.Warnings, domain.LoadWarning{
 				Path: filepath.Join(source, dir.legacy),
 				Code: "resource_directory_collides",
 				Reason: fmt.Sprintf(
@@ -410,14 +440,16 @@ func within(child, parent string) bool {
 }
 
 // nameOf is the package name, falling back to the directory.
-func nameOf(result *chatruntime.LoadResult, source string) string {
-	if result.Pack != nil {
-		if n := strings.TrimSpace(result.Pack.ID); n != "" {
-			return n
-		}
-		if n := strings.TrimSpace(result.Pack.DisplayName); n != "" {
-			return n
-		}
+//
+// The fallbacks live here rather than in the port, and that is the point of
+// the split: a source that states no name still converts, and what this
+// repository names it is this repository's decision rather than the loader's.
+func nameOf(src domain.ContainerSource, source string) string {
+	if n := strings.TrimSpace(src.ID); n != "" {
+		return n
+	}
+	if n := strings.TrimSpace(src.DisplayName); n != "" {
+		return n
 	}
 	return filepath.Base(source)
 }
@@ -428,20 +460,15 @@ func nameOf(result *chatruntime.LoadResult, source string) string {
 // version would be un-updatable. Zero is the honest reading of "the source
 // did not say", and it is comparable enough for a first import to be
 // followed by a real one.
-func versionOf(result *chatruntime.LoadResult) string {
-	if result.Pack != nil {
-		if v := strings.TrimSpace(result.Pack.Version); v != "" {
-			return v
-		}
+func versionOf(src domain.ContainerSource) string {
+	if v := strings.TrimSpace(src.Version); v != "" {
+		return v
 	}
 	return "0.0.0"
 }
 
-func descriptionOf(result *chatruntime.LoadResult) string {
-	if result.Pack != nil {
-		return strings.TrimSpace(result.Pack.Description)
-	}
-	return ""
+func descriptionOf(src domain.ContainerSource) string {
+	return strings.TrimSpace(src.Description)
 }
 
 // writeManifest emits the governance sidecar.
@@ -592,7 +619,7 @@ func isYamlBooleanOrNumber(s string) bool {
 // Every entry says why the answer is not derivable, because "missing
 // value" and "cannot be inferred without a review" are different problems
 // and an operator should know which one they are looking at.
-func decisionsFor(result *chatruntime.LoadResult, report *Report) []Decision {
+func decisionsFor(src domain.ContainerSource, report *Report) []Decision {
 	out := []Decision{
 		{
 			Field:    "spec.tools",
@@ -638,10 +665,10 @@ func decisionsFor(result *chatruntime.LoadResult, report *Report) []Decision {
 				"two the container meant.",
 		})
 	}
-	if len(result.Warnings) > 0 {
+	if len(src.Warnings) > 0 {
 		out = append(out, Decision{
 			Field:    "(loader warnings)",
-			Question: fmt.Sprintf("%d file(s) in the source did not parse cleanly. What were they?", len(result.Warnings)),
+			Question: fmt.Sprintf("%d file(s) in the source did not parse cleanly. What were they?", len(src.Warnings)),
 			Why: "A file the loader could not read is a file no review has read either. " +
 				"Dropping it silently would leave a package that looks complete.",
 		})

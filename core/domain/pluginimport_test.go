@@ -236,3 +236,97 @@ func TestAnEmptyImportReportIsAnObject(t *testing.T) {
 		t.Errorf("an empty PluginImportReport marshals as %s, not an object", raw)
 	}
 }
+
+// TestContainerSourceCarriesTheSixFieldsTheImporterWrites is the field-set
+// guard for the projection that replaced a package model.
+//
+// The loader's real result also carries parsed `Skills` and `Agents` trees.
+// The importer reads neither — it copies files by walking the directory — so
+// every one of those fields is a column the port hands over for no reader, and
+// a field added "for symmetry with the loader" is the same leak in a smaller
+// dose. The set is pinned by name and by count, and adding one has to be argued
+// for in the same commit.
+func TestContainerSourceCarriesTheSixFieldsTheImporterWrites(t *testing.T) {
+	typ := reflect.TypeOf(ContainerSource{})
+	if typ.NumField() != 6 {
+		var got []string
+		for i := 0; i < typ.NumField(); i++ {
+			got = append(got, typ.Field(i).Name)
+		}
+		t.Fatalf("ContainerSource has %d fields %v, want the 6 the conversion report is "+
+			"built from; the loader's parsed skill and agent trees are not among them and "+
+			"must not become so", typ.NumField(), got)
+	}
+	want := map[string]bool{
+		"Kind": true, "ID": true, "DisplayName": true,
+		"Version": true, "Description": true, "Warnings": true,
+	}
+	for i := 0; i < typ.NumField(); i++ {
+		name := typ.Field(i).Name
+		if !want[name] {
+			t.Errorf("ContainerSource.%s is not one of the six fields the report is built "+
+				"from; if it was added on purpose, list it here in the same commit and say "+
+				"which part of the conversion reads it", name)
+		}
+		delete(want, name)
+	}
+	for name := range want {
+		t.Errorf("ContainerSource is missing %s, which the report is built from; dropping "+
+			"it breaks a caller that compiles fine against a zero value", name)
+	}
+}
+
+// TestContainerLoaderAnswersOneQuestion stops the port from accreting.
+//
+// The importer asks one thing about a directory. A second method is how a
+// container loader turns into a package loader inside a port, and a package
+// loader is a different seam with a different owner — the same accretion
+// `EdgeQuery`'s own doc comment rules out for the edge ports.
+func TestContainerLoaderAnswersOneQuestion(t *testing.T) {
+	typ := reflect.TypeOf((*ContainerLoader)(nil)).Elem()
+	if typ.NumMethod() != 1 {
+		var got []string
+		for i := 0; i < typ.NumMethod(); i++ {
+			got = append(got, typ.Method(i).Name)
+		}
+		t.Fatalf("ContainerLoader has %d methods %v; it answers one question — what is in "+
+			"this directory — and a second method is a package loader arriving through the "+
+			"front door", typ.NumMethod(), got)
+	}
+	if name := typ.Method(0).Name; name != "LoadContainer" {
+		t.Errorf("ContainerLoader's one method is %s, want LoadContainer", name)
+	}
+}
+
+// TestContainerSourceCarriesNoDefaults pins the half of the contract that is
+// easy to get wrong in the direction that looks helpful.
+//
+// The importer falls back to the directory name when a source states no id and
+// to "0.0.0" when it states no version. Those are conversion policy — what
+// this repository decides an incomplete package should be called — and a
+// loader that applied them would be making that decision for the one domain
+// that is allowed to. The port returns what the source said, including
+// nothing.
+func TestContainerSourceCarriesNoDefaults(t *testing.T) {
+	typ := reflect.TypeOf(ContainerSource{})
+	for _, field := range []string{"ID", "DisplayName", "Version", "Description"} {
+		f, ok := typ.FieldByName(field)
+		if !ok {
+			t.Fatalf("ContainerSource has no %s field", field)
+		}
+		if f.Type.Kind() != reflect.String {
+			t.Errorf("ContainerSource.%s is %s, want string; a defaulted field would be a "+
+				"field whose zero value is a decision the converter has not made yet", field, f.Type)
+		}
+	}
+	// The zero value is what a source that declared nothing produces, and it
+	// has to be an honest "nothing", not a "0.0.0".
+	var zero ContainerSource
+	if zero.Version != "" {
+		t.Errorf("the zero ContainerSource has Version %q; a default baked into the zero "+
+			"value is a default the loader chose", zero.Version)
+	}
+	if zero.ID != "" {
+		t.Errorf("the zero ContainerSource has ID %q, want empty", zero.ID)
+	}
+}

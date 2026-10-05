@@ -2786,7 +2786,6 @@ func main() {
 		SignaturePinnedKey:   mpPinnedKey,
 		DevMode:              mpDevMode,
 	}, log.With(slog.String("comp", "marketplace")))
-	marketplaceHandler := managerservermarketplace.NewHandler(mpUC)
 	// Legacy container -> PiG package conversion (PLAN D2). The route is
 	// admin-only and writes converted packages under the import root, which
 	// is where an operator reviews them before publishing through the
@@ -2794,7 +2793,16 @@ func main() {
 	// the route answers 503: a converter with nowhere reviewed to write is
 	// not half a feature, it is one that would put packages somewhere
 	// nobody chose.
-	marketplaceHandler.SetImporter(managerbizpluginimport.Import, os.Getenv("OPSKEEPER_PLUGIN_IMPORT_DIR"))
+	//
+	// The converter now holds a port instead of calling the agent runtime's
+	// loader directly, and this is the one place the two are joined. The
+	// adapter is named rather than inlined because a seam test needs to
+	// hand the route a real converter too, and a method value on an
+	// anonymous struct would have made that impossible to write
+	// (decision 252).
+	pluginImporter := managerbizpluginimport.New(aiopschatruntime.ContainerLoader{})
+	marketplaceHandler := managerservermarketplace.NewHandler(
+		mpUC, pluginImporter.Import, os.Getenv("OPSKEEPER_PLUGIN_IMPORT_DIR"))
 	// HLD-017 generic secret vault: the single semantics-agnostic credential
 	// store installed skills (and future external-MCP clients) inject from.
 	secretUC := managerbizsecret.NewUsecase(managersecretdata.NewRepo(db))

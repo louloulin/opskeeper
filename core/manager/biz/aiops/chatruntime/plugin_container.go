@@ -128,18 +128,43 @@ func hasBareSkills(dir string) bool {
 // "hooks_dropped"); .mcp.json triggers a single "mcp_unsupported"
 // warning. Neither is acted upon
 func LoadPluginContainer(dir string) (*LoadResult, error) {
+	kind, manifestPath, err := detectContainerForLoad(dir)
+	if err != nil {
+		return nil, err
+	}
+	return loadPluginContainer(dir, kind, manifestPath)
+}
+
+// detectContainerForLoad is the single place that decides whether a directory
+// is a container this loader will read, and it exists so that the answer can
+// be handed to the loader rather than re-derived.
+//
+// It used to be inline in LoadPluginContainer, which computed the kind, threw
+// it away, and returned a LoadResult that does not carry one. The importer on
+// the other side of a domain boundary then had to call DetectContainer a
+// SECOND time to learn the kind it was about to report — two walks of one
+// directory, and a report whose `kind` came from a different reading than the
+// pack the same call had produced (decision 252).
+func detectContainerForLoad(dir string) (ContainerKind, string, error) {
 	kind, manifestPath, err := DetectContainer(dir)
 	if err != nil {
-		return nil, fmt.Errorf("chatruntime: detect container in %s: %w", dir, err)
+		return ContainerNone, "", fmt.Errorf("chatruntime: detect container in %s: %w", dir, err)
 	}
 	if kind == ContainerNone {
-		return nil, fmt.Errorf("chatruntime: no recognized pack layout in %s (need .claude-plugin/plugin.json, openclaw.plugin.json, or at least one skills/<name>/SKILL.md)", dir)
+		return ContainerNone, "", fmt.Errorf("chatruntime: no recognized pack layout in %s (need .claude-plugin/plugin.json, openclaw.plugin.json, or at least one skills/<name>/SKILL.md)", dir)
 	}
+	return kind, manifestPath, nil
+}
 
+// loadPluginContainer is the loader proper, and it takes the detection as an
+// argument rather than making one. Every caller that has already asked "is
+// this a container?" therefore pays for that answer once.
+func loadPluginContainer(dir string, kind ContainerKind, manifestPath string) (*LoadResult, error) {
 	var (
 		pack     *Pack
 		warnings []LoadWarning
 		raw      []byte
+		err      error
 	)
 	if kind == ContainerBareSkills {
 		// skills.sh-style drop: no manifest file, synthesize one from the

@@ -45,7 +45,17 @@ type Handler struct {
 }
 
 // NewHandler builds the handler.
-func NewHandler(svc Service) *Handler { return &Handler{svc: svc} }
+// NewHandler builds the marketplace handler.
+//
+// The importer and the import root are constructor parameters rather than a
+// setter, and that shape was measured rather than preferred: with a setter,
+// a seam test wires it itself and therefore cannot catch a boot path that
+// forgot to, and "the import route answers 503 forever" is exactly the
+// failure a test written beside the wiring will not see. As arguments, a
+// forgotten wiring does not compile (decision 252, after decision 249).
+func NewHandler(svc Service, importer ImportFunc, importRoot string) *Handler {
+	return &Handler{svc: svc, importInto: importer, importRoot: importRoot}
+}
 
 // Register attaches the routes under a chi.Router that already has
 // the auth middleware in front of it (see cmd/opskeeper).

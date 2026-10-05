@@ -11,6 +11,21 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 )
 
+// importUnderTest runs a real conversion through a real loader.
+//
+// The importer holds a port now, so a test that wanted a conversion had to
+// decide what to hand it. Handing it the production adapter is the choice
+// that keeps these tests honest: a stub loader would let a regression in
+// either half — the converter's policy or the loader's reading — pass, and
+// the whole subject of this file is the seam between them.
+//
+// The chatruntime import this adds is test-only, so it does not put the
+// pluginimport domain back in the production import graph that decision 252
+// closed.
+func importUnderTest(opts Options) (*Report, error) {
+	return New(chatruntime.ContainerLoader{}).Import(opts)
+}
+
 // write puts a file at rel under dir, creating parents.
 func write(t *testing.T, dir, rel, body string) {
 	t.Helper()
@@ -80,7 +95,7 @@ func TestEachContainerFormConvertsToALoadablePackage(t *testing.T) {
 			src := tc.make(t)
 			dest := filepath.Join(t.TempDir(), "out")
 
-			report, err := Import(Options{Source: src, Dest: dest})
+			report, err := importUnderTest(Options{Source: src, Dest: dest})
 			if err != nil {
 				t.Fatalf("Import: %v", err)
 			}
@@ -117,7 +132,7 @@ func TestAConvertedPackageIsInertUntilSomebodyReviewsIt(t *testing.T) {
 	src := claudeContainer(t)
 	dest := filepath.Join(t.TempDir(), "out")
 
-	report, err := Import(Options{Source: src, Dest: dest})
+	report, err := importUnderTest(Options{Source: src, Dest: dest})
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -151,7 +166,7 @@ func TestTheToolListIsAlwaysSomethingToDo(t *testing.T) {
 	// would read as "nothing left to review", which is the one thing an
 	// import is never true of.
 	src := bareSkillsContainer(t)
-	report, err := Import(Options{
+	report, err := importUnderTest(Options{
 		Source: src,
 		Dest:   filepath.Join(t.TempDir(), "out"),
 	})
@@ -177,10 +192,10 @@ func TestAnImportReplacesNothing(t *testing.T) {
 	// review surface for a package is its files.
 	src := claudeContainer(t)
 	dest := filepath.Join(t.TempDir(), "out")
-	if _, err := Import(Options{Source: src, Dest: dest}); err != nil {
+	if _, err := importUnderTest(Options{Source: src, Dest: dest}); err != nil {
 		t.Fatalf("first Import: %v", err)
 	}
-	if _, err := Import(Options{Source: src, Dest: dest}); err == nil {
+	if _, err := importUnderTest(Options{Source: src, Dest: dest}); err == nil {
 		t.Error("a second import overwrote an existing package")
 	}
 }
@@ -189,7 +204,7 @@ func TestAnImportRefusesToWriteInsideItsOwnSource(t *testing.T) {
 	// A converter that copied a directory into itself would recurse; one
 	// that overwrote it would destroy the original before anybody looked.
 	src := claudeContainer(t)
-	if _, err := Import(Options{
+	if _, err := importUnderTest(Options{
 		Source: src,
 		Dest:   filepath.Join(src, "converted"),
 	}); err == nil {
@@ -201,7 +216,7 @@ func TestASourceThatIsNotAContainerIsRefusedWithWhatWasLookedFor(t *testing.T) {
 	// The error names the three recognised forms, so somebody converting a
 	// fourth one learns what to add rather than only that it failed.
 	src := t.TempDir()
-	_, err := Import(Options{Source: src, Dest: filepath.Join(t.TempDir(), "out")})
+	_, err := importUnderTest(Options{Source: src, Dest: filepath.Join(t.TempDir(), "out")})
 	if err == nil {
 		t.Fatal("an empty directory was converted")
 	}
@@ -219,7 +234,7 @@ func TestCommandsBecomePrompts(t *testing.T) {
 	// shipped nothing.
 	src := claudeContainer(t)
 	dest := filepath.Join(t.TempDir(), "out")
-	report, err := Import(Options{Source: src, Dest: dest})
+	report, err := importUnderTest(Options{Source: src, Dest: dest})
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -239,7 +254,7 @@ func TestExtensionsSurviveAndAreCalledOutAsADecision(t *testing.T) {
 	write(t, src, "extensions/acme/extension.js", "export default function () {}\n")
 	dest := filepath.Join(t.TempDir(), "out")
 
-	report, err := Import(Options{Source: src, Dest: dest})
+	report, err := importUnderTest(Options{Source: src, Dest: dest})
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -269,7 +284,7 @@ func TestAnAwkwardNameSurvivesTheRoundTrip(t *testing.T) {
 			write(t, dir, "skills/s/SKILL.md", skill)
 			dest := filepath.Join(t.TempDir(), "out")
 
-			report, err := Import(Options{Source: dir, Dest: dest})
+			report, err := importUnderTest(Options{Source: dir, Dest: dest})
 			if err != nil {
 				t.Fatalf("Import: %v", err)
 			}
@@ -292,7 +307,7 @@ func TestTheVersionIsAlwaysPresent(t *testing.T) {
 	write(t, src, "skills/s/SKILL.md", skill)
 	dest := filepath.Join(t.TempDir(), "out")
 
-	report, err := Import(Options{Source: src, Dest: dest})
+	report, err := importUnderTest(Options{Source: src, Dest: dest})
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -322,7 +337,7 @@ func TestSymlinksAreNotFollowed(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 	dest := filepath.Join(t.TempDir(), "out")
-	if _, err := Import(Options{Source: src, Dest: dest}); err != nil {
+	if _, err := importUnderTest(Options{Source: src, Dest: dest}); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "skills", "leaked", "SKILL.md")); !os.IsNotExist(err) {
@@ -359,7 +374,7 @@ func TestEveryResourceClassSurvivesTheConversion(t *testing.T) {
 	}
 
 	dest := filepath.Join(t.TempDir(), "converted")
-	report, err := Import(Options{Source: source, Dest: dest})
+	report, err := importUnderTest(Options{Source: source, Dest: dest})
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -400,7 +415,7 @@ func TestTheTwoSpellingsOfOneClassAreReportedRatherThanSilentlyMerged(t *testing
 	write(t, source, "prompts/acme-note.md", "the other spelling of the same note\n")
 
 	dest := filepath.Join(t.TempDir(), "converted")
-	report, err := Import(Options{Source: source, Dest: dest})
+	report, err := importUnderTest(Options{Source: source, Dest: dest})
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -442,7 +457,7 @@ func TestAPiBlockIsReportedAndNotCopied(t *testing.T) {
 	}`)
 
 	dest := filepath.Join(t.TempDir(), "converted")
-	report, err := Import(Options{Source: source, Dest: dest})
+	report, err := importUnderTest(Options{Source: source, Dest: dest})
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -486,7 +501,7 @@ func TestAPackageJSONWithNoResourceBlockIsNotADeclaration(t *testing.T) {
 	write(t, source, "package.json", `{"name":"acme-tools","version":"1.4.0","dependencies":{"left-pad":"^1.0.0"}}`)
 
 	dest := filepath.Join(t.TempDir(), "converted")
-	report, err := Import(Options{Source: source, Dest: dest})
+	report, err := importUnderTest(Options{Source: source, Dest: dest})
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -514,7 +529,7 @@ func TestAnUnreadablePackageJSONIsReportedRatherThanRefused(t *testing.T) {
 	write(t, source, "package.json", "{ this is not json")
 
 	dest := filepath.Join(t.TempDir(), "converted")
-	report, err := Import(Options{Source: source, Dest: dest})
+	report, err := importUnderTest(Options{Source: source, Dest: dest})
 	if err != nil {
 		t.Fatalf("Import refused a container over an unreadable package.json: %v", err)
 	}
@@ -544,4 +559,69 @@ func sameStrings(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+// TestAnUnwiredImporterRefusesRatherThanGuessing covers the boot mistake.
+//
+// The converter is now a struct with a dependency, and a struct can be
+// constructed with the dependency missing. The only safe answer to "nobody
+// told me how to read a container" is to refuse: importing without a loader
+// would have to invent a package identity, and an invented identity is a
+// package an operator reviews believing the source said it.
+func TestAnUnwiredImporterRefusesRatherThanGuessing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		imp  *Importer
+	}{
+		{"no loader", New(nil)},
+		{"nil importer", (*Importer)(nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report, err := tc.imp.Import(Options{Source: t.TempDir(), Dest: t.TempDir()})
+			if err == nil {
+				t.Fatalf("an unwired importer converted a container and reported %+v", report)
+			}
+			if report != nil {
+				t.Errorf("an unwired importer returned %+v alongside an error; a report "+
+					"built from a container nobody read is worse than no report", report)
+			}
+		})
+	}
+}
+
+// TestTheReportNamesTheContainerTheLoaderActuallyRead is the consumer half of
+// the one-detection property.
+//
+// The importer used to call the loader and then ask a second question about
+// the same directory, and the kind it reported came from the second answer.
+// That could only go wrong if the directory changed between the two calls,
+// which is why no test caught it — so the property is pinned here as a
+// standing equality instead: whatever the report says, it is what the loader
+// says about the same path.
+func TestTheReportNamesTheContainerTheLoaderActuallyRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		kind domain.ContainerKind
+		make func(t *testing.T) string
+	}{
+		{"claude", domain.ContainerClaude, claudeContainer},
+		{"bare skills", domain.ContainerBareSkills, bareSkillsContainer},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := tc.make(t)
+			want, _, err := chatruntime.DetectContainer(src)
+			if err != nil {
+				t.Fatalf("DetectContainer: %v", err)
+			}
+			report, err := importUnderTest(Options{Source: src, Dest: filepath.Join(t.TempDir(), "out")})
+			if err != nil {
+				t.Fatalf("import: %v", err)
+			}
+			if report.Kind != want || report.Kind != tc.kind {
+				t.Errorf("report.Kind = %q, the loader says %q, the fixture is %q; a report "+
+					"that names a different container than the one it loaded describes a "+
+					"conversion nobody reviewed", report.Kind, want, tc.kind)
+			}
+		})
+	}
 }

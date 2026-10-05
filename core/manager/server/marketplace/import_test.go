@@ -14,8 +14,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/pluginimport"
 )
+
+// realImporter builds the production converter over the production loader.
+//
+// It is a function rather than a package-level var because the loader is a
+// zero-size value and there is nothing to share; a var would only add a thing
+// a test could reassign.
+func realImporter() *pluginimport.Importer {
+	return pluginimport.New(chatruntime.ContainerLoader{})
+}
 
 // The import route talks to the real converter on purpose. The interesting
 // failures are in the handoff — what the converter was handed, where the
@@ -90,8 +100,7 @@ func claudeArchive(t *testing.T, name string) []byte {
 
 func TestImport_RequiresAdmin(t *testing.T) {
 	called := false
-	h := NewHandler(stubSvc{})
-	h.SetImporter(func(pluginimport.Options) (*pluginimport.Report, error) {
+	h := NewHandler(stubSvc{}, func(pluginimport.Options) (*pluginimport.Report, error) {
 		called = true
 		return &pluginimport.Report{}, nil
 	}, t.TempDir())
@@ -107,7 +116,7 @@ func TestImport_RequiresAdmin(t *testing.T) {
 func TestImport_SaysSoWhenItIsNotConfigured(t *testing.T) {
 	// A route that is mounted but unwired must not look like a conversion
 	// that failed: the operator has a configuration to set.
-	rec := importRequest(t, newRouter(NewHandler(stubSvc{})), "acme.zip", claudeArchive(t, "acme-tools"), adminCtx())
+	rec := importRequest(t, newRouter(NewHandler(stubSvc{}, nil, "")), "acme.zip", claudeArchive(t, "acme-tools"), adminCtx())
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 body=%s", rec.Code, rec.Body.String())
 	}
@@ -121,8 +130,7 @@ func TestImport_SaysSoWhenItIsNotConfigured(t *testing.T) {
 // decide before it can be published.
 func TestImport_ConvertsAContainerIntoAPackageOnDisk(t *testing.T) {
 	root := t.TempDir()
-	h := NewHandler(stubSvc{})
-	h.SetImporter(pluginimport.Import, root)
+	h := NewHandler(stubSvc{}, realImporter().Import, root)
 
 	rec := importRequest(t, newRouter(h), "acme-tools.zip", claudeArchive(t, "acme-tools"), adminCtx())
 	if rec.Code != http.StatusOK {
@@ -179,8 +187,7 @@ func TestImport_ConvertsAContainerIntoAPackageOnDisk(t *testing.T) {
 // behind files nobody reviewed.
 func TestImport_RefusesToReplaceAnExistingPackage(t *testing.T) {
 	root := t.TempDir()
-	h := NewHandler(stubSvc{})
-	h.SetImporter(pluginimport.Import, root)
+	h := NewHandler(stubSvc{}, realImporter().Import, root)
 	router := newRouter(h)
 
 	if rec := importRequest(t, router, "acme-tools.zip", claudeArchive(t, "acme-tools"), adminCtx()); rec.Code != http.StatusOK {
@@ -204,8 +211,7 @@ func TestImport_RefusesToReplaceAnExistingPackage(t *testing.T) {
 // would name every one of them after the temp dir.
 func TestImport_NamesABareSkillsPackAfterTheArchive(t *testing.T) {
 	root := t.TempDir()
-	h := NewHandler(stubSvc{})
-	h.SetImporter(pluginimport.Import, root)
+	h := NewHandler(stubSvc{}, realImporter().Import, root)
 
 	archive := zipOf(t, map[string]string{"skills/acme-diagnose/SKILL.md": importSkill})
 	rec := importRequest(t, newRouter(h), "acme-drops.zip", archive, adminCtx())
@@ -230,8 +236,7 @@ func TestImport_NamesABareSkillsPackAfterTheArchive(t *testing.T) {
 // error: the answer has to say what a container looks like.
 func TestImport_RefusesSomethingThatIsNotAContainer(t *testing.T) {
 	root := t.TempDir()
-	h := NewHandler(stubSvc{})
-	h.SetImporter(pluginimport.Import, root)
+	h := NewHandler(stubSvc{}, realImporter().Import, root)
 
 	rec := importRequest(t, newRouter(h), "notes.zip", zipOf(t, map[string]string{"README.md": "just notes\n"}), adminCtx())
 	if rec.Code != http.StatusBadRequest {
@@ -265,8 +270,7 @@ func TestImport_RefusesSomethingThatIsNotAContainer(t *testing.T) {
 // not a style question, it is a second contract for the console to hold.
 func TestImport_AnswersTheReportInTheSameNamingAsTheWarningsBesideIt(t *testing.T) {
 	root := t.TempDir()
-	h := NewHandler(stubSvc{})
-	h.SetImporter(pluginimport.Import, root)
+	h := NewHandler(stubSvc{}, realImporter().Import, root)
 
 	rec := importRequest(t, newRouter(h), "acme-tools.zip", claudeArchive(t, "acme-tools"), adminCtx())
 	if rec.Code != http.StatusOK {

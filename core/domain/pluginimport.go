@@ -193,3 +193,60 @@ type PluginImportReport struct {
 	// so an import does not quietly drop a parse failure.
 	Warnings []LoadWarning `json:"warnings"`
 }
+
+// ContainerSource is what one legacy container directory yielded.
+//
+// It is six fields, and they are the six the importer writes into the
+// generated manifest: which form was recognised, the four identity strings
+// the manifest carries, and the loader's own non-fatal findings.
+//
+// The shape is the decision, so it is worth saying what is NOT here. The
+// loader's real result type also carries the parsed `Skills` and `Agents`
+// trees, and the importer reads **neither** — it copies files by walking the
+// source directory itself, because the thing it produces is a directory, not
+// an in-memory package. So the port hands back the pack's *identity* and the
+// warnings, and the two big trees stay inside the loader where nothing else
+// can reach them.
+//
+// The four identity fields are returned raw and un-defaulted on purpose. The
+// importer falls back to the directory name when there is no id, and to
+// "0.0.0" when there is no version; those are *conversion policy* — what this
+// repository decides a package with no stated version should be — and a port
+// that applied them would be making that decision on the loader's behalf.
+type ContainerSource struct {
+	// Kind is the recognised container form.
+	Kind ContainerKind
+	// ID is the pack key, empty when the source declared none.
+	ID string
+	// DisplayName is the human-facing title, empty when the source
+	// declared none. It is separate from ID because a source may state
+	// one and not the other, and the importer prefers ID when both are
+	// present.
+	DisplayName string
+	// Version follows semver, empty when the source declared none.
+	Version string
+	// Description is a one-liner, empty when the source declared none.
+	Description string
+	// Warnings are the loader's non-fatal findings, carried through so an
+	// import does not quietly drop a parse failure.
+	Warnings []LoadWarning
+}
+
+// ContainerLoader is the port the importer holds to read a container.
+//
+// It replaces a direct call into the agent runtime's package loader, and the
+// reason that call was a cross-domain edge is the same one this file's header
+// describes for the previous two cuts: the importer needed six strings and
+// imported a 692-line container detector, a package model it had no use for,
+// and two skill trees it never read.
+//
+// The second return is an error rather than an empty ContainerSource. A
+// directory with no recognised layout is not a container with no identity; it
+// is a directory this loader declined to read, and the importer's answer to
+// that is to refuse the import rather than synthesise a package out of it.
+type ContainerLoader interface {
+	// LoadContainer reads dir and reports what it found. It returns an
+	// error when dir holds no recognised container layout or cannot be
+	// read at all.
+	LoadContainer(dir string) (ContainerSource, error)
+}

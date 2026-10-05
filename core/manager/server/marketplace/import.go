@@ -53,13 +53,13 @@ import (
 // are now reachable from exactly one place: main.go.
 type ImportFunc func(req domain.PluginImportRequest) (*domain.PluginImportReport, error)
 
-// SetImporter wires the converter and the directory converted packages are
-// written under. Until it is called the route answers 503: "not
-// configured" is a state an operator can fix, while a 500 would send them
-// looking for a bug in a converter that was never switched on.
-func (h *Handler) SetImporter(fn ImportFunc, root string) {
-	h.importInto, h.importRoot = fn, root
-}
+// The importer and the import root arrive through NewHandler rather than a
+// setter. Nothing sets them afterwards, and that is the point: a wiring that
+// can be forgotten is a wiring no test beside it can catch, because the test
+// does the forgetting-proofing by calling the setter itself (decision 252).
+// An unwired handler still answers 503, so a nil importer stays an operator-
+// fixable state rather than a panic — it is just no longer reachable by
+// accident.
 
 // errImportNotConfigured is the 503 the route answers before it is wired.
 const errImportNotConfigured = notWiredError("plugin import is not configured on this manager (set OPSKEEPER_PLUGIN_IMPORT_DIR)")
