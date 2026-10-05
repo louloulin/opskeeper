@@ -16091,6 +16091,97 @@ M2 值得单说：把 COPY 挪到正确性看起来一样的位置（文件在�
 **而在那两条环境理由后面，藏着四个从来没人见过的真缺陷。** 它们每一个都只需要跑一次
 `make docker-opskeeper` 就会被发现，而那一次之所以没跑，是因为所有人都同意「跑不了」。
 
+### 4.147 决策 214：把那份「切断自己硬约束的拆分方案」改回来——结果它**更便宜**
+
+#### 一、上一轮留下的不是待办，是一个已知的自相矛盾
+
+决策 211 给 `domaincheck -cut` 加了硬约束报告，并查出一件事：
+`docs/manager-split.proposed` **切断了它自己在第 36-39 行声明的 4 条硬约束里的 3 条**。
+
+那 4 条全部指向 `audit`（决策 196 读完 43 条边后的读数：只有审计链是真正的物理硬约束）。
+所以任何合法分组都必须让
+
+```
+{audit, aiops, chatdiagnose, frontierbound, middleware}
+```
+
+落在同一组。而提案把 `audit` 留在 core、把这 5 个持有者里的另外 3 个放进 apps。
+
+关键在于：**这个矛盾不需要等任何新数据就能判定**，因为第一问（哪些边是物理硬约束）
+是**已经有答案**的那一问。所以「改回来」这件事本轮就可以做完，不必等第三问。
+
+#### 二、改法与一个没人预料到的结果
+
+把 `chatdiagnose` / `frontierbound` / `middleware` 从 apps 移进 core，重跑
+`make split-cost`。预期是**更贵**——多三个域进 core，它们各自还有别的出边。
+
+实测**更便宜**：
+
+| 候选 | 组内 import | 跨组 import | 切断的硬约束 |
+|---|---|---|---|
+| `docs/manager-split.proposed` | 105 | 42 | **3 / 4** |
+| `docs/manager-split.constrained`（新） | 116 | **31** | **0 / 4** |
+
+机制值得写清楚，因为它是这一整轮存在的理由：**那三个域不是跨组边的消费者，
+是生产者。** 它们在 apps，而它们依赖的东西（`audit` / `aiops` / `loop` / `edge`）
+都在 core，于是它们几乎每一条出边都是一条缝：
+
+```
+chatdiagnose -> aiops / loop / audit      全部 apps -> core
+frontierbound -> audit / edge / metric    前两条 apps -> core
+middleware -> audit                       apps -> core
+```
+
+把它们放进 core，这批边从缝变成组内；代价是它们自己**指向 apps 的**那几条
+（本方案里只剩 `frontierbound -> metric` 一条，值 1）变成缝。净账 42 → 31，少 11 条缝。
+
+**所以那份提案是在付更高的价，去买一个它自己禁止买的性质。**
+这不是「两个候选差不多、你来选」——是其中一份在它自己的判据下明确地更差。
+
+#### 三、顺带修掉的第二个缺陷：漏掉一个域
+
+决策 211 记过「分组只提到 57 个域，`federationchild` 没有被分配」，两份候选都漏了它。
+`core/manager/service/federationchild` 是子集群那一侧的策略接收端，与
+`service/federationlink`（哪个已认证调用方可以代表哪个子集群）成对；提案自己给
+`federationlink` 放 apps 的理由是「这一层讲的是控制面怎么把一份签好的策略送到另一个
+控制面手里」——`federationchild` 讲的是同一件事的另一半，所以它在 apps。
+
+本版 58 个域全部分配，定价器不再报 `1 domain(s) the grouping does not mention`。
+
+#### 四、第 24 条闸门，以及它自己抓到的一个洞
+
+`scripts/domaincheck/candidate_test.go`（4 个测试）：
+
+1. 修正候选**不得切断任何硬约束**；
+2. **必须分配每一个域**（未分配的域，它的包在缝的两侧都不计，价格会低估）；
+3. 修正候选**不得比它修正的那份更贵**——这是「更便宜」这个结论的回归护栏，
+   哪天重构让它真的更贵了，那是真发现，该改文件而不是放宽阈值；
+4. **文件里印的报价必须等于定价器实算的报价**（防陈旧）。
+
+第 4 条的**两行都查**，不是冗余。第一版只查描述本文件的那一行，反向验证立刻找出漏洞：
+把引用**另一份提案**那一行的 105 改成 999，闸门是**绿的**。一张引用邻居的表也是对邻居的断言，
+只盯自己那一列的闸门会让另一列烂掉。
+
+反向验证 5 个变异体，**5/5 全红**：`chatdiagnose` 移出 core / 拿掉 `federationchild` /
+篡改引用原提案的报价 / 篡改分母 / 掏空 core 让修正版变贵。
+
+#### 五、分数不动，理由和决策 211 一样
+
+阶段 3 仍是 **80.3%**，加权仍是 **93.75%**。因为本轮**没有让方案可以被批准**：
+
+- **第三问依然空着**：哪些域要独立发版。理由与本轮无关——控制面的全部提交落在同一天
+  （决策 169，`make domain-cochange` 报 `window: 2026-10-02 to 2026-10-03 (1 day(s))`），
+  这条轴上根本没有第二个时间点。import 图说的是「切这里便宜」，共变数据说的是
+  「有人会一起改」，而后者此刻测不出来。
+- **第二问的答案仍然不站在「拆了就独立」那一边**：两半仍共用同一个数据库连接预算
+  （决策 150）。所以买到的仍然是**构建与发布独立**，不是资源与故障独立。
+
+**本轮修掉的是「方案违反了自己的硬约束」，不是「方案可以批了」。**
+前者是这份仓自己能判的（第一问已有答案），后者要等真实的多周历史。
+
+一句该写下来的话：**一份候选方案在自己声明的判据下明确更差时，它不是一个待权衡的
+选项，它是一个待修的缺陷。** 而修它的成本是零——三行分组，三条测试，一次定价。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -16135,6 +16226,22 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 | 3 控制面瘦身与联邦（P3） | **80.3%** | 本行 = (1.00 审计端口 + 0.44 manager 拆分 + 0.97 多集群联邦) / 3，三个分量各自的来历见下。**第一条已关（决策 109/110）**：`iam → manager` 的三条审计边从 `exceptions` 台账与 `iam_server.mayDependOn` 双双删除，行的形状下沉到 `core/manager/pkg/audit`——无 usecase / repo / 链头 / HMAC，`biz/audit` 仍是唯一写入咽喉（§4.47）；**决策 110 把同一缺陷在另外 5 个域关掉**（alert / knowledge / setting / plugin / mcp 此前都为了「给一行记录命名」而 import 写入咽喉），并把「谁可以持有咽喉」变成一张带理由的表，由 `make audit-port-check`（13 条）守住，顺带补上 MCP 五处内联字面量。**第二条已开工但未完成**（**决策 111 当时的读数：55 个域散在 4–5 个 layer 树 / 55 条需声明的跨域边 / 7 对互为依赖的环**（aiops↔alert / aiops↔hitl / aiops↔loop / alert↔demo / chatdiagnose↔loop / device↔edge / loop↔report）——**这三组数早已被决策 112–118 逐条推翻，今天是 58 域 / 43 边 / 0 环，见本节末尾的控制面域图行；下面这一段保留的是「当初为什么要做这件事」而不是今天的读数**。环是「不能独立演进」的最强证据，而 layer 粒度的 arch-lint **看不见它们**；另有 **10 个无人引用的包 / 5,544 行**，实测全是方案自己没接线的半成品（crystallize 897 / critic 386 / proposal 383 / decorator 509），**删死代码这条捷径在包粒度上不存在**。**决策 111 把这份盘点变成闸门**：`scripts/domaincheck` + `make domain-check`——域按层树归并（`biz/alert` 与 `model/alert` 同属 `alert`），50 条跨域边逐条带理由，7 对环必须写明「怎样才切得断」，**表项过期本身也是红**（过期理由比没有理由更糟），检查器自身 13 条夹具测试（§4.49）。**决策 112 切掉了 7 对里的第一对**：实测 `device → edge` 在生产代码里只有一条 import（设备删除里的级联），接缝开在事务中间、由装配根注入 `EdgeIdentityRevoker` 后 **49 条边 / 6 对环**；顺带发现表里那条边的**理由本身是错的**（device 记录里并没有 edge 词汇），一并删掉（§4.50）。**决策 113 切掉了第二对**：`data/alert/store` 曾在自己的事务里推进 `demo_scenario_runs`（生产持久化层知道 demo 存在），把「这条告警是不是某条已开故事」这个问题端口化、由 demo 侧回答后 **48 条边 / 5 对环**；同一条边的理由在表里也指错了方向，一并删掉（§4.51）。**决策 114 切掉了第三对**：`biz/loop` 里那个「本包不 import chatdiagnose」的端口，签名却写着 `*chatdiagnosemodel.IncidentPattern`——接口在消费方声明但类型由生产方词汇决定，跨域 import 只是被藏进签名；改成「postmortem 落库了」并把指纹推导搬回知识库拥有者后 **47 条边 / 4 对环**，顺带补上这条路径此前**完全缺失的测试**，并暴露两个真缺陷（接线处的 nil 指针、`tenant_id` 恒为 `""`）（§4.52）。**决策 115 切掉了第四对**：`biz/loop/gitsink` 的包注释写着「挪进子包 → 包图无环 ✅」，而域是按路径归并的，包图无环不等于域图无环；adapter 改为本地声明 `Sink` 接口后 `main.go` 一字未改，**46 条边 / 3 对环**（§4.53）。**决策 116 切掉了第五对，而且它与前四对不同类**：`aiops ↔ hitl` 的两条边里，`hitl → aiops` **从来就不是真的**——它由一个零生产调用方、且设计文档已删除的迁移窗口（`MigrateLegacy` / `DualWriteRepo`，569 行）撑着，删掉后 **44 条边 / 2 对环**；检查器随即抓出 `hitl → approval` 也是同一个文件撑着的假边（理由「两域共享一个模型」并不成立），一并删除（§4.54）。**决策 117 切掉了第六对，而且它的两半是两种病**：`biz/loop` 渲染提示词要围栏，于是 import 了 agent 的 `promptguard`——而那个零依赖安全原语被三个域共用，正确位置是共享底座（照决策 109 的形状下沉到 `pkg/promptguard`，并补上 `pkg/audit` 那条「用 `go/ast` 断言够不到 BC」的测试，断言收紧到只许标准库）；另一半 `mcp_basetool.go` 把 loop 的 MCP 工具包装成 `basetool.BaseTool`，而**适配器由它的输出定义**，于是搬进 `biz/aiops/tools`（方向从 `loop → aiops` 变成表里本来就有的 `aiops → loop`），**43 条边 / 1 对环**；顺带修好一个已经红了的 `make promptguard-check`（它还在跑旧路径，是闸门第一次在包被移动时发挥作用），以及一处点名了不存在包名的错理由（`biz/aiops/loop` 并不存在，第五例）（§4.55）。**决策 118 切掉了第七对，也是最后一对，域图归零**：`aiops ↔ alert` 的贵的一侧是 14 条 `aiops → alert`，而 `alert → aiops` 只有 1 个文件里的 2 条——`biz/alert/investigator` 拿 `chatruntime.SpawnRequest/Worker` 和 `model/aiops.Message` 换来「告警触发一次自动根因分析」。两个都是 struct，**本地重声明不成立**（决策 114 的同一性墙），所以本轮拆成全标量的 `InvestigationRequest` / `InvestigationOutcome`（方法名也从对方的 `SpawnWorker` 改成自己的 `RunInvestigation`），翻译放在装配根；`MessageReader` 只带三个字段、返回 `[]T` 而非 `[]*T`，于是两处 nil 检查消失；那条**零测试覆盖**的 `worker == nil` 防御分支被值返回消除，运行时仍可能的 `(nil,nil)` 守卫搬到唯一能造出它的那一侧并从静默成功变成 error。**42 条边 / 0 对环**，七轮共切 8 条声明边 / 13 条生产 import（§4.56）。§4.53.4 记的「枢纽」判断就此收口：`aiops` 仍是依赖最多的域（读告警、读 HITL、驱动 loop），但**依赖多不是环，被依赖才是问题**。**决策 119 不改一行代码、也不动百分比，只把「能减的行数」变成一个数**：新增 `scripts/deadcode` + `make deadcode-report`（12 条夹具测试），按**文件粒度**报出生产代码里不可达的符号——这是 `domaincheck`（包粒度）看不见、而决策 116 亲手挖到过 569 行的那一类。读数 **794 个符号（502 dead / 292 test-only）/ 整文件 7 个 138 行**——**决策 199 修正了这条**：工具此前按**名字**而不是按**包**记可达性，于是同名符号互相背书（`Migrate` 在 20+ 个包各有一份、`WithTenant` 两个包、`NewBizRepo` 三个包），486（决策 119 当时）与 510（改动前实测）都是**下界**；改成按包归因后 dead 从 250 翻到 502，新增的 252 个已用同包文本 grep 逐个复核，**0 个有代码引用**。夹具 12 条 → **16 条**（新增的 4 条里有一条专门钉住「方法通过变量调用」这个更危险的误报方向）。工具在 `2140df9` 的 worktree 上被要求报出决策 116 删掉的那两个文件，**两档分类都判对**（`MigrateLegacy:test-only`、`NewDualWriteRepo:dead`）。工具**故意不做成闸门**并把看不见的六类路径（反射 / go:linkname / cgo / struct tag / 嵌入方法提升 / 构建标签）打印在每次输出末尾——不可靠的闸门会训练出「trust me」注释（§4.57）。**第二条仍未完成**：manager **1214 个 Go 文件 / 298,280 行**未搬（口径 `find core/manager -name '*.go' | wc -l` 与同法 `cat {} + | wc -l`，见 §4.54.6；**决策 172 实测重取**——1180 / 287,155 是决策 123 时的数，更早的 1135 / 282,605 停在决策 119，**而分母在拆分一行没动的情况下自己长了 31 个文件 / 9,289 行**；决策 203 又给它加回 39 行（审计闭集的一个动作常量 + 一个资源类型），**第四次**由第 15 条闸门拦下并重取，见 §4.108.8；**决策 194 把这两条命令本身变成闸门**——`TestTheManagerSizeInTheProgressSectionIsTheTreesOwn` 每次 push 都跑，所以这个数不再靠人记得重取）；10 个无人引用的包 / 5,544 行全是方案自己没接线的半成品，删死代码这条捷径在包粒度上不存在（决策 116 顺带证明了**文件粒度**上存在，已记为下一轮候选）；`manager → iam_model`（IM bridge）按原计划保留。**第三条从零到约五分之四（决策 123）**：此前记的是「无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档）」，现在五处落地：`core/floor/federation`（规则与状态机）、`core/manager/biz/federation`（注册表与发布器）、`core/manager/server/federation`（控制面路由）、`core/manager/service/federationchild`（子集群侧代理与原子策略存储，决策 125 从 `core/edge/federation` 搬来）、`core/manager/service/federationlink`（根侧绑定表与两个方向的调用）。签名通道复用 `pluginmanifest`，不另造格式。**决策 124 把联邦那条从 0.80 记到 0.90**：`main` 侧的挂载与 `Forget` 的下线回调已接上（§4.61.9）之后，`PushPolicy` 仍是**零生产调用方**——发布只签名记账，从不推送。补上的两件事是**投递通道**（`Store.Receive` 验摘要在解包之前、`Distributor` 按 cluster+version 命名归档、线契约加一个与 `StagedPath` 互斥的 `Source`）与**根侧接线**（`Publish` 发版本后投递，投递结果作为 `Delivery` 与 error 分开报；`Redeliver` 复用首次投递的字节而不是重打包，因为摘要是子集群在解包之前比对的）。**授权模型不需要新造**：签名本身就是授权，子集群用自己 trust store 验根的 ed25519，URL 只是传输。这两条**零新增跨域依赖**。**剩下的是给 `Source.URL` 一个跨网络可用的托管来源**（本刀交付 `file://`，够共享挂载的部署；跨网络要 CDN 或对象存储——外部条件）——**决策 182 更正了此前的三处陈述**（本段此前写「剩下的是子集群进程本身……缺的是装配进子集群启动路径」以及「`Registry` 全在内存、持久化 `Ledger` 实现不在」，**三处都已不成立**）：子集群 Agent 已装配（`federation_child.go` 的 `newFederationChildWiring` 在 `main.go` 启动路径调用），`Registry` 持有 `Ledger` 端口且 `FileLedger` 实现已交付并接进 `federation_wiring.go`（§4.115）。**分数不动**——把陈述修对是事实，把 79.7% 往上拔是判断（§4.64.8）。**决策 125 把这条从 0.90 记到 0.94，并同时改掉了一个比「缺装配」更靠后的缺口**：实测 `live` 符号链接**没有任何生产代码读它**（`grep LiveLinkName\|\.Switch(` 只命中 `receiver.go:332` 的写入点），也就是**通道 100% 而 enforcement 0%**。补上的是 `core/floor/federation/gate.go` 的 `LiveGate`（只答「在不在策略里」，不重做 `Review`——它会拿 `min_edge_version` 比调用方的版本，而 manager 声明不了节点的版本）接在 `service/plugin` 的 `NodeFleet.Install` 上（**不是** `fetch_package`，那条是边缘二进制升级），加上 `cmd/opskeeper/federation_child.go` 的子集群装配（启动不等根、hello 每次重连重发、策略上限复用边缘那三个变量）。**`make module-check` 顺带抓到一个架构错**：那个包里没有一行边缘代理代码，却在 `core/edge` 模块里被 manager 的装配根 import——已搬到 `core/manager/service/federationchild`，域图 57 → 58 域 / 43 边 / 0 环（§4.63） |
 
 加权合计 ≈ **93.75%**（四阶段等比 98 / 100 / 96.7 / 80.3 的均值 93.75）。
+
+**阶段 3 的那 0.56（manager 拆分）本轮修掉了一个自相矛盾，分数不动。**
+`docs/manager-split.proposed` 切断了它自己声明的 4 条硬约束里的 3 条（决策 211 查出），
+而第一问「哪些边是物理硬约束」**已有答案**（决策 196：只有审计链），所以这个矛盾不必等
+任何新数据就能判。改法是把 `chatdiagnose` / `frontierbound` / `middleware` 从 apps 移进
+core——**结果更便宜**：跨组 import 42 → 31，同时切断的硬约束 3 → 0，58 个域全部分配
+（`federationchild` 原先两份候选都漏了）。修正候选在 `docs/manager-split.constrained`，
+两条都能用 `make split-cost` 复算，第 24 条闸门（`scripts/domaincheck/candidate_test.go`，
+4 个测试，反向验证 5/5）保证它不切断硬约束、不漏域、不比原版贵、且文件里印的报价等于
+定价器实算的报价（§4.147）。
+
+**分数为什么不动的理由和决策 211 一样**：本轮没有让方案可以被批准。第三问（哪些域要独立
+发版）依然空着——控制面的全部提交落在同一天，`make domain-cochange` 报
+`window: 2026-10-02 to 2026-10-03 (1 day(s))`，这条轴上没有第二个时间点；而第二问的答案
+仍然不站在「拆了就独立」那一边（两半共用同一个数据库连接预算，决策 150）。
+**修掉的是「方案违反了自己的硬约束」，不是「方案可以批了」。**
 
 **下面这一段是这条合计从 76.2% 一路推到 93.6% 的历史，不是当前读数。** 决策 177
 把它和上一段分开记，理由是：读这一节的人要的是现在，而这一行在他读到第二个决策
