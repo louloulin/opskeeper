@@ -15941,6 +15941,156 @@ M5 和 M6 是这个仓反复强调的那件事：**一个可能失败的检查�
 还差「一个业务决定」的是阶段 3 的 manager 拆分；唯一还差「一个外部设施」的是联邦的跨网络
 托管。**其余全部落地并有闸门。**
 
+### 4.146 决策 213：去**量**那个「本机没有 Docker」——它一直在，而它挡住了四个真缺陷
+
+#### 一、一个从未被验证的前提，代价是四条路都以为坏的是环境
+
+台账里「本机没有 Docker，所以 0.4 的 `make compose-up` 跑不了」这句话，出现过很多轮。
+它是**假设，不是测量**。
+
+本轮去测了：
+
+```
+docker version --format '{{.Server.Version}}'   → 29.6.1
+docker compose version                          → v5.3.0
+docker ps                                       → 正常，无容器在跑
+```
+
+**Docker 一直都在。** 于是「跑不了」这个结论被撤销，而它后面压着的东西全部露了出来：
+`make compose-up` 和 `make docker-opskeeper` 两条路各有一串缺陷，**每一个都被前一个挡住**，
+所以从来没有人一次看到超过一个。
+
+这也是本决策最有用的一句：**一个没有被验证的前提，会把它掩护下的所有缺陷一起藏起来**，
+因为每个人看到失败都会归因到那个前提，而那个前提是所有人都同意的。
+
+#### 二、缺陷一：九个服务和 web search 无关，却因为其中一个没有默认镜像而起不来
+
+`deploy/docker-compose.yml` 里 searxng 那一行原本是：
+
+```
+image: ${SEARXNG_IMAGE:?set SEARXNG_IMAGE to a verified immutable image}
+```
+
+`SEARXNG_IMAGE` 在 `.env.example` 里是空的，全仓再无第二处文档，没有任何发布流程钉它。
+**十个服务里九个与 web search 无关的栈，因为一个外围服务没有默认镜像而无法启动。**
+
+规则本身是对的（不要浮动 tag），错的是**问错了人**。机制值得单独记，因为它反直觉：
+
+> **`${VAR:?...}` 在 compose 解析文件时就求值，早于 profile 生效。** 所以它会对一个
+> 本次运行根本不会启动的服务报错。
+
+这一条是**实测**的，不是读文档猜的——在 `/tmp` 里造了一个两服务最小复现：
+
+| 场景 | 结果 |
+|---|---|
+| `${VAR:?}` + profile，未设变量，`config` | **exit 1**（`required variable SOME_IMAGE is missing`） |
+| `${VAR:-}` + profile，未设变量，`config` | **exit 0** |
+| `${VAR:-}` + profile，**启用** profile，未设变量 | exit 1（compose 自己的「no image」错误） |
+| `${VAR:-}` + profile，设了值，启用 profile | 正常 |
+
+修法是三件事一起：给 searxng 加 `profiles: ["search"]`、默认值改成空、
+**新增 `make compose-search-up` 保留钉版要求**——它拒绝空值、拒绝 `:latest`、拒绝无 tag 无
+digest 的裸名字，三种都实测过。所以规则没有被削弱，只是**改为问那个能回答它的人**
+（选择启用的人），而不是问每一个只想把栈跑起来的人。
+
+前后对比实测：旧形态 `config` exit 1，新形态 exit 0。
+
+#### 三、缺陷二：compose 找的镜像，没有任何 target 会打
+
+compose 要 `opskeeper:${VERSION:-dev}`，而 `docker-opskeeper` 打的是
+`opskeeper:$(VERSION)`——`VERSION` 来自仓库根的 `VERSION` 文件，本检出上是
+**`v2026.09.14-rc4`**。两者永不相遇：构建产出了 `opskeeper:v2026.09.14-rc4`，
+compose 去找 `opskeeper:dev`，**那个 tag 没有 target 会打，也没有任何地方会拉**。
+
+修法是 `compose-up` 传 `VERSION=$(VERSION)`——这和 `docker-build` 早就有的
+`--build-arg VERSION=$(VERSION)` 是同一个握手的另一侧。
+
+#### 四、缺陷三：Dockerfile 在 `go mod download` 之前没有拷本地 replace 的模块
+
+```
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+```
+
+而根 `go.mod` 有**七个**本地目录 replace（`=> ./core`、`=> ./core/edge`、…）。目录替换下
+Go 要读 `<dir>/go.mod` 来算模块图，于是构建在**读第一行源码之前**就死了：
+
+```
+reading core/go.mod: open /app/core/go.mod: no such file or directory
+```
+
+**这一条是本轮四个缺陷里最容易发现的一个**——只要有人跑过一次 `make docker-opskeeper`。
+它一直没被发现，理由和第一节是同一个。
+
+修法是七行 `COPY`，**从 go.mod 的 replace 块转写而来**。转写是弱点：Dockerfile 没法
+「保留目录结构地」glob 七个嵌套目录，而猜错之后的报错是一条关于某个没人记得加过的文件的
+消息。所以它**转写并且被闸门守着，两个方向都守**（第 22 条）。
+
+#### 五、缺陷四：`go.work` 泄进构建上下文
+
+修完上面三条，构建往前走，然后在编译阶段死了：
+
+```
+github.com/MichaelKinsy/PiG@v0.4.0 (replaced by <某人的绝对路径>/appx/PiG):
+  reading <某人的绝对路径>/appx/PiG/go.mod: no such file or directory
+```
+
+那条 replace（一个指向仓库之外的绝对路径）在 **`go.work` 里**，不在任何 `go.mod` 里。而 `go.work` 被 `.gitignore`
+排除（它是一个检出的文件，不是源码的一部分）——**却没有被 `.dockerignore` 排除**，
+所以 `COPY . .` 把它拷进了镜像。
+
+而 **`go.work` 在构建目录里时，`go build` 听它的，优先于每一个 `go.mod` 里的 replace**。
+于是镜像构建把 PiG 解析到某个人的笔记本路径上。
+
+**这一条与上一条是同一类，只是高一层**：一个属于**这台机器**的文件泄进了构建。可移植的
+替换链已经在那些 `go.mod` 里了，而镜像应该从 `go.mod` 构建。守住它的是两份**会静默漂移**
+的清单（`.gitignore` 与 `.dockerignore`），所以第 22 条同时断言 `go.work` 在两份里都被排除。
+
+#### 六、缺陷五（小）：开发构建目标不透传镜像地址
+
+`docker-build`（发布目标）传 `--build-arg ONNXRUNTIME_MIRROR`，`docker-opskeeper`
+（开发目标）**不传**。所以在到不了 GitHub 的网络里，**唯一的逃生口在发布路径上**——
+而发布路径的前提是你已经构建出了那个东西。现在两个目标都传。
+
+#### 七、然后剩下的两条已经不是代码问题了
+
+修完四个缺陷之后，构建撞上两件**环境**的事，两件都实测：
+
+1. **GitHub 不可达**。ONNX Runtime 只发布在 GitHub releases。宿主机直连
+   `github.com:443` 是 `SSL_ERROR_SYSCALL`，而 `goproxy.cn` 200、`mirrors.aliyun.com` 301
+   ——**是这台机器的网络出口，不是容器问题**。这和决策 190/191 那条 arm64 镜像是同一类。
+   （本地验证时用第三方代理把这一段跑通了，**那不是发布路径**。）
+2. **磁盘满了**。`460Gi` 的卷只剩 **`282Mi`**，Docker 自己的 blob 存储已经在报
+   `input/output error`，连 `docker system df` 都读不出来。
+
+**清理磁盘是破坏性操作，不该由我替人决定。** 所以 0.4 到此为止，理由是**环境**，
+而这一轮真正的产出是那四个缺陷加三条闸门。
+
+#### 八、三条闸门，反向验证 7/7
+
+| 闸门 | 守什么 |
+|---|---|
+| 第 22 条 `dockerreplace` | go.mod 的 replace 块 ↔ Dockerfile 的 COPY 列表，**两个方向**；并且要求 COPY 在 `go mod download` **之前**（顺序是承重的，不是整齐）；并且 `go.work` 在 `.dockerignore` 里 |
+| 第 23 条 `composestart` | compose 里不得有非注释的 `${VAR:?`；`compose-up` 必须传 `VERSION=$(VERSION)`；`compose-up` 不得静默启用 profile |
+
+反向验证：M1 少拷一个模块、M2 把 COPY 挪到 `go mod download` 之后、M3 加一条指向不存在模块
+的陈旧 COPY、M4 把 `go.work` 放回构建上下文、M5 让 compose 重新长出解析期硬需求、
+M6 让 `compose-up` 不再传 VERSION、M7 让 `compose-up` 静默启用 profile。**7/7 全红。**
+
+M2 值得单说：把 COPY 挪到正确性看起来一样的位置（文件在那里、路径对、只是晚了），
+构建仍然是坏的——而这正是原来那个缺陷的样子。
+
+#### 九、这一轮对「进度」意味着什么
+
+分数仍然不动。**但「计划 §六 验收门槛里跑不了的那一条」这个理由被换掉了**：
+
+- 原来记的是「需要 Docker」——**假的**
+- 现在记的是「需要能访问 GitHub 的网络，和一块有空间的磁盘」——**实测的**
+
+**而在那两条环境理由后面，藏着四个从来没人见过的真缺陷。** 它们每一个都只需要跑一次
+`make docker-opskeeper` 就会被发现，而那一次之所以没跑，是因为所有人都同意「跑不了」。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

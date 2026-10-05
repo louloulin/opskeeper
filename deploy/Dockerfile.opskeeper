@@ -93,7 +93,36 @@ ENV PATH=/usr/local/go/bin:/go/bin:$PATH \
 # cache across image rebuilds — without it every package run repays
 # the ~150s mod-download cost. Requires syntax=docker/dockerfile:1.7
 # (declared at the top of this file).
+#
+# The seven local modules are copied in BEFORE `go mod download`, and that
+# ordering is load-bearing rather than tidy. The root go.mod replaces seven
+# modules with local directories (`=> ./core`, `=> ./core/edge`, …), and for a
+# directory replacement Go reads `<dir>/go.mod` to compute the module graph. So
+# `COPY go.mod go.sum ./` on its own leaves `go mod download` looking for
+# /app/core/go.mod, which is not there, and the build dies with
+#
+#     reading core/go.mod: open /app/core/go.mod: no such file or directory
+#
+# This was not a theoretical risk. It is what `make docker-opskeeper` did, and
+# therefore what `make compose-up` did, on every run, until somebody finally ran
+# it on a machine that had Docker.
+#
+# The list below is the replace block in the root go.mod, transcribed. It is
+# transcribed rather than derived because a Dockerfile cannot glob seven nested
+# directories while preserving their layout, and a wrong guess is a build that
+# fails with a message about a file nobody remembers adding. So it is
+# transcribed AND gated: scripts/ledgercheck's dockerreplace gate reads the
+# replace block out of go.mod and fails if this list and it disagree, in either
+# direction. A missing entry breaks the build; an extra one is a stale line
+# claiming a module that no longer exists; both are red.
 COPY go.mod go.sum ./
+COPY core/go.mod          ./core/
+COPY core/edge/go.mod     ./core/edge/
+COPY core/floor/go.mod    ./core/floor/
+COPY core/harness/go.mod  ./core/harness/
+COPY core/manager/go.mod  ./core/manager/
+COPY core/pig/go.mod      ./core/pig/
+COPY sdk/go.mod           ./sdk/
 RUN go mod download
 
 # Copy the rest of the repo (build context = repo root).

@@ -652,8 +652,20 @@ migrate-down: ## DB migrate down 1 步
 .PHONY: docker docker-opskeeper docker-opskeeper-edge
 docker: docker-opskeeper docker-opskeeper-edge ## 构建全部镜像
 
+# ONNXRUNTIME_MIRROR is passed here for the same reason docker-build passes it:
+# the ONNX Runtime archive is published on GitHub releases and nowhere else, so
+# a network that cannot reach GitHub cannot build this image at all. The dev
+# target used to leave the build-arg off, which meant the escape hatch existed
+# only on the release path — the one path you cannot reach without already
+# having built the thing. `?=` above means a host that needs a mirror sets it
+# in the environment and both targets pick it up.
 docker-opskeeper: ## 构建 opskeeper 镜像
-	docker build --build-arg VERSION=$(VERSION) -t opskeeper:$(VERSION) -f deploy/Dockerfile.opskeeper .
+	docker build \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg ONNXRUNTIME_VERSION=$(ONNXRUNTIME_VERSION) \
+		--build-arg ONNXRUNTIME_MIRROR=$(ONNXRUNTIME_MIRROR) \
+		-t opskeeper:$(VERSION) \
+		-f deploy/Dockerfile.opskeeper .
 
 docker-opskeeper-edge: ## 构建 opskeeper-edge 镜像
 	docker build -t opskeeper-edge:$(VERSION) -f deploy/Dockerfile.opskeeper-edge .
@@ -662,12 +674,45 @@ docker-opskeeper-edge: ## 构建 opskeeper-edge 镜像
 # compose
 # ----------------------------------------------------------------------------
 
-.PHONY: compose-up compose-down
-compose-up: ## 本地 docker compose 启动
-	docker compose -f deploy/docker-compose.yml up -d
+.PHONY: compose-up compose-down compose-search-up
+# VERSION is passed through because the compose file asks for
+# ${VERSION:-dev} while the build targets tag with the real VERSION from the
+# VERSION file. Without this line the two never meet: `make docker-opskeeper`
+# produces opskeeper:v2026.09.14-rc4 and `make compose-up` goes looking for
+# opskeeper:dev, which nothing builds. Passing it here is the same line
+# docker-build already has (--build-arg VERSION=$(VERSION)), just on the other
+# side of the same handshake.
+compose-up: ## 本地 docker compose 启动（不含 searxng：它在一个 profile 里）
+	VERSION=$(VERSION) docker compose -f deploy/docker-compose.yml up -d
 
 compose-down: ## 本地 docker compose 停止
 	docker compose -f deploy/docker-compose.yml down
+
+# The search profile is opt-in, and opting in is where the pinning rule is
+# enforced. It used to be enforced by ${SEARXNG_IMAGE:?...} inside the compose
+# file, which compose evaluates at parse time — before profiles are applied —
+# so an unset variable stopped the whole stack from starting for a service the
+# run was never going to start. Asking the person who opts in is the same rule
+# asked of somebody who can actually answer it.
+#
+# The check is a tag check rather than a digest check on purpose: a digest is
+# stronger, and a digest is also something a human cannot type from a registry
+# page without a tool. `:latest` and a bare name are what actually get typed by
+# accident, so those are what get refused.
+compose-search-up: ## 启动 searxng（search profile）；要求 SEARXNG_IMAGE 钉到具体 tag 或 digest
+	@if [ -z "$(SEARXNG_IMAGE)" ]; then \
+		echo "SEARXNG_IMAGE is empty. The search profile needs a pinned image, not a floating one."; \
+		echo "  SEARXNG_IMAGE=searxng/searxng:<tag> make compose-search-up"; \
+		echo "See the searxng block in deploy/docker-compose.yml for why it is not defaulted."; \
+		exit 2; \
+	fi
+	@case "$(SEARXNG_IMAGE)" in \
+		*:latest|*latest) echo "refusing $(SEARXNG_IMAGE): 'latest' is not a pin, it is a moving target that makes the deployment unreproducible"; exit 2 ;; \
+		*@sha256:*) : ;; \
+		*:*) : ;; \
+		*) echo "refusing $(SEARXNG_IMAGE): no tag and no digest. searxng/searxng alone means 'whatever is newest'"; exit 2 ;; \
+	esac
+	VERSION=$(VERSION) docker compose -f deploy/docker-compose.yml --profile search up -d
 
 # ----------------------------------------------------------------------------
 # run

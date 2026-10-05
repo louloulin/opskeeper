@@ -1334,6 +1334,9 @@ func importsOf(path string) []string {
 var rootSentinelExempt = map[string]string{
 	"scripts/modulecheck/main.go":      "this rule's own pattern and the prose that explains it",
 	"scripts/modulecheck/main_test.go": "the mutation fixtures and the test that proves the rule fires",
+	"scripts/ledgercheck/dockerreplace_test.go": "reads .dockerignore and .gitignore as text to assert " +
+		"they exclude go.work from the Docker build context; it never stats or opens a go.work, " +
+		"so the gate's answer does not depend on whether the machine running it has one",
 }
 
 // checkRootSentinel reports every .go file that names go.work as a
