@@ -15,16 +15,30 @@
 // What it checks, and what it deliberately does not:
 //
 //   - Every "GET /path" / "POST /path" line inside a ``` fence of
-//     docs/api/*.md must match a route literal registered in some .go file,
+//     docs/api/*.md must be served by a route the tree actually registers,
 //     comparing segment by segment with {param} as a wildcard.
 //   - Every `opskeeper-eval <subcommand>` invocation must match a `case
 //     "<subcommand>"` in cmd/opskeeper-eval/main.go.
+//
+// "Actually registers" is the second layer, and it is the whole point of this
+// revision. The first version matched a claim against any path-shaped string
+// in the tree, and that set contains a great deal that is not a route: a glob
+// in a plugin loader, a constant, a path in a comment, an outbound client's
+// URL. On this repository it holds 459 such strings and 259 registrations, and
+// the difference is 200 ways to write a document about a server that does not
+// exist and have this command agree with you. A check a phantom can satisfy
+// is not a weaker check — it is a check that teaches the reader to add
+// phantoms. See registration.go.
 //
 // It does not check response shapes. A response body is a claim about
 // structured data, and the honest way to pin one is a test on the handler plus
 // a doc example — which is what knowledge/gitartifact/doc_contract_test.go
 // does for the one API whose responses are pinned. This command answers the
 // coarser question that gate cannot: is this endpoint real at all.
+//
+// And "registered" is still not "reachable": a route can be registered on a
+// router that no server ever serves. That is a further question, it needs the
+// wiring rather than the syntax, and it is not answered here.
 package main
 
 import (
@@ -53,8 +67,8 @@ func main() {
 	}
 	fmt.Printf("docs checked: %d   endpoints claimed: %d   subcommands claimed: %d\n",
 		report.Docs, report.Endpoints, report.Subcommands)
-	fmt.Printf("routes found in source: %d   eval subcommands found: %d\n",
-		len(report.Routes), len(report.Subcommands2))
+	fmt.Printf("route literals in source: %d   of those registered on a router: %d   "+
+		"eval subcommands found: %d\n", len(report.Routes), len(report.Registered), len(report.Subcommands2))
 	if len(report.Missing) > 0 {
 		fmt.Fprintln(os.Stderr, "\nthese claims have nothing behind them:")
 		for _, m := range report.Missing {
@@ -73,11 +87,19 @@ type Missing struct {
 }
 
 // Report is what one run found.
+//
+// Routes and Registered are both here and they are not the same set. Routes
+// is every path-shaped string literal in the tree; Registered is the subset
+// handed to something that registers routes. Only Registered can satisfy a
+// documented claim — the other number is printed because a reader who sees
+// "459 literals, 268 registrations" learns how much of the tree a string
+// scan would have called an endpoint.
 type Report struct {
 	Docs         int
 	Endpoints    int
 	Subcommands  int
 	Routes       map[string]bool
+	Registered   map[string]bool
 	Subcommands2 map[string]bool
 	Missing      []Missing
 }
@@ -96,6 +118,7 @@ var (
 func check(root string, verbose bool) (Report, error) {
 	report := Report{
 		Routes:       map[string]bool{},
+		Registered:   map[string]bool{},
 		Subcommands2: map[string]bool{},
 	}
 	// The source side first: every route literal and every subcommand.
@@ -104,10 +127,11 @@ func check(root string, verbose bool) (Report, error) {
 			return err
 		}
 		if info.IsDir() {
-			base := filepath.Base(path)
 			// These trees are large, vendored, or generated; a route literal
-			// in them is not this repository's contract.
-			if base == "node_modules" || base == "vendor" || base == ".git" || base == "dist" {
+			// in them is not this repository's contract. The list is
+			// skipDir's, shared with the registration pass — two lists would
+			// be two chances to scan a tree the other one skips.
+			if skipDir(filepath.Base(path)) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -139,6 +163,13 @@ func check(root string, verbose bool) (Report, error) {
 		return report, err
 	}
 
+	// The second layer, and the one a claim is actually matched against.
+	registered, err := registeredRoutes(root)
+	if err != nil {
+		return report, err
+	}
+	report.Registered = registered
+
 	docs, err := filepath.Glob(filepath.Join(root, "docs", "api", "*.md"))
 	if err != nil {
 		return report, err
@@ -156,9 +187,9 @@ func check(root string, verbose bool) (Report, error) {
 				report.Endpoints++
 				path := block.body[match[2]:match[3]]
 				if verbose {
-					fmt.Printf("claim %-44s served by %q\n", path, matchingRoute(report.Routes, path))
+					fmt.Printf("claim %-44s served by %q\n", path, matchingRoute(report.Registered, path))
 				}
-				if !anyRouteMatches(report.Routes, path) {
+				if !anyRouteMatches(report.Registered, path) {
 					report.Missing = append(report.Missing, Missing{
 						Doc:   rel,
 						Line:  lineOf(string(body), block.offset+match[0]),

@@ -280,6 +280,7 @@ HTTP 协议之外，同一个 linker 图通过 BaseTool `git.find_runtime_link` 
 
 ## 十、相关
 
+- 闸门：`make apidoc-check` —— 本文件里每条 `METHOD /path` 必须**被源码里真实的路由注册服务**（决策 269 起要求「注册过」，而不只是「树里出现过这个字符串」）
 - 实现：`core/manager/knowledge/gitartifact/`（协议 + linker）、`.../api/`（索引器）
 - 模型可见工具面：`core/manager/middleware/adapter/git/git.go`
 - Middleware API：[docs/api/middleware.md](middleware.md)

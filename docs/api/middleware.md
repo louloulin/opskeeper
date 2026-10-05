@@ -149,4 +149,5 @@ registrar 表，三份今天一致但没有任何东西保证它们一致。现�
 - 实现：`core/manager/middleware/{registry,adapter,toolset}`、`core/manager/middleware/adapter/*`
 - 形状守卫：`core/manager/middleware/adapter/docsurface_test.go`
 - 能力闸门：`make eval-vocabulary`（对着活注册表跑）
+- 端点闸门：`make apidoc-check` —— 本文件里每条 `METHOD /path` 必须**被源码里真实的路由注册服务**（决策 269 起要求「注册过」，而不只是「树里出现过这个字符串」）
 - 节点侧工具面：`core/pig/extensions/opskeeper-sre-*`（插件形态的同一批能力）

@@ -21,6 +21,16 @@ func writeTree(t *testing.T, files map[string]string) string {
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			t.Fatal(err)
 		}
+		// A Go file with no package clause is not Go, and the registration
+		// layer reads the tree with go/parser — so every Go fixture is given
+		// one. Doing it here rather than in each fixture keeps the bodies
+		// below about the one thing they are testing, and keeps the
+		// deliberately-unparseable fixture the only one that has to opt out.
+		// The extension is checked too: a document is not Go and must not be
+		// given a package clause, since a finding's line number is read off it.
+		if strings.HasSuffix(path, ".go") && !strings.HasPrefix(strings.TrimSpace(body), "package ") {
+			body = "package fixture\n\n" + body
+		}
 		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}

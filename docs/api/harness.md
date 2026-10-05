@@ -202,5 +202,5 @@ make eval-axes          # axes：哪些 case 没声明三轴
 
 - CLI：`cmd/opskeeper-eval/`
 - 库：`core/harness/{schema,injector,judge,axes,leaderboard,projection,vocabulary,runner}`
-- 闸门：`make eval-gates`、`make apidoc-check`
-- 形状守卫：`scripts/apidoc`
+- 闸门：`make eval-gates`
+- 形状守卫：`scripts/apidoc`- 闸门：`make apidoc-check` —— 本文件里每条 `METHOD /path` 必须**被源码里真实的路由注册服务**（决策 269 起要求「注册过」，而不只是「树里出现过这个字符串」）

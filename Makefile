@@ -596,7 +596,7 @@ deadcode-report: ## 报出生产代码里只有测试引用的符号（报告，
 # 读起来都像已交付的契约。这道闸门读文档围栏里的每一行 `METHOD /path` 与每一次
 # `opskeeper-eval <sub>`，要求它在源码里有对应注册；散文里的「未交付」不算声明。
 .PHONY: apidoc-check
-apidoc-check: ## 校验 docs/api 声称的每个端点与子命令在源码里真实存在（决策 267）
+apidoc-check: ## 校验 docs/api 声称的每个端点被真实注册过、每个子命令真实存在（决策 267；决策 269 加「注册」这一层）
 	go run ./scripts/apidoc .
 	go test ./scripts/apidoc/ -count=1
 
