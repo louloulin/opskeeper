@@ -91,16 +91,27 @@ var throatHolders = map[string]string{
 // model/audit holds two things now that the vocabulary moved out (decision
 // 109): the GORM entities, and re-exported constants. The entities are
 // storage, and storage has to be readable by exactly the code that already
-// understood the table: the store that writes it, the ledger view that
-// lists it, and the change-event tool that joins a configuration change to
-// the operator who made it.
+// understood the table.
+//
+// That sentence used to end with a fourth reader: query_change_events, the
+// RCA tool that joins a configuration change to the operator who authorised
+// it. It read the entity because its seam's return type was `[]auditmodel.Log`
+// — an interface whose signature named somebody else's struct. Decision 273
+// published the nine fields it actually needs as core/base/pkg/audit.ChangeRow
+// and the tool reads the projection, so it is off this list.
+//
+// **Six entries became five: three production readers and two tests.** What is
+// left in production is the store that persists, the view that lists, and the
+// writer that maps an Event onto a row; the other two are tests that assert a
+// row actually landed. That is the shape this list was supposed to reach: the
+// entity belongs to the code that writes it, and a reader outside that set now
+// has to say which fields it wants rather than which struct it may hold.
 var rowTypeReaders = map[string]string{
-	"domains/data/audit/store":         "persistence: the entity, the chain head, the migration",
-	"domains/server/audit":             "the ledger view lists and filters rows",
-	"domains/biz/audit":                "the writer maps an Event onto the entity",
-	"manager/biz/aiops/tools/alerting": "query_change_events joins a change to the row that authorised it",
-	"domains/server/plugin":            "its test asserts on persisted rows",
-	"domains/server/middleware":        "its test asserts on the row the middleware emitted",
+	"domains/data/audit/store":  "persistence: the entity, the chain head, the migration",
+	"domains/server/audit":      "the ledger view lists and filters rows",
+	"domains/biz/audit":         "the writer maps an Event onto the entity",
+	"domains/server/plugin":     "its test asserts on persisted rows",
+	"domains/server/middleware": "its test asserts on the row the middleware emitted",
 }
 
 // TestOnlyTheThroatHoldsTheWriter is the manager-wide form of the rule

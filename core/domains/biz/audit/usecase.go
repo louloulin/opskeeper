@@ -300,7 +300,19 @@ func (u *Usecase) List(ctx context.Context, f ListFilters) ([]model.Log, int64, 
 // query_change_events AIOps tool's "what changed near the incident" step.
 // Failures (status=failure/denied) are intentionally included — "someone
 // tried to change X right before the symptom" is itself a root-cause lead.
-func (u *Usecase) ListChanges(ctx context.Context, from, to time.Time, resourceType, action string, limit int) ([]model.Log, error) {
+//
+// It returns the projection, not model.Log, and that return type is the whole
+// point of decision 273: the tool across this seam used to name this domain's
+// GORM entity, which made the audit domain the last domain in the tree with an
+// inbound cross-context import. The translation lives in projectChanges below
+// rather than at the call site, so the seventeen storage columns — three of
+// them chain columns — stop at this line and the reader is handed the nine it
+// asks for.
+//
+// Nothing about the write path changes, and the method is still satisfied
+// structurally by auditport.ChangeLister, so cmd/opskeeper still passes this
+// *Usecase straight into the registry with no adapter.
+func (u *Usecase) ListChanges(ctx context.Context, from, to time.Time, resourceType, action string, limit int) ([]auditport.ChangeRow, error) {
 	if u == nil || u.repo == nil {
 		return nil, nil
 	}
@@ -314,7 +326,38 @@ func (u *Usecase) ListChanges(ctx context.Context, from, to time.Time, resourceT
 		Action:       action,
 		Limit:        limit,
 	})
-	return logs, err
+	if err != nil {
+		return nil, err
+	}
+	return projectChanges(logs), nil
+}
+
+// projectChanges narrows storage rows to the published read projection.
+//
+// It returns nil for an empty input rather than an empty slice, matching what
+// every caller here does with the result (both append to it, and the JSON
+// encoder writes `[]` either way) and keeping the difference between "the
+// query found nothing" and "the query was never run" out of the wire format,
+// where neither is distinguishable to the model anyway.
+func projectChanges(logs []model.Log) []auditport.ChangeRow {
+	if len(logs) == 0 {
+		return nil
+	}
+	out := make([]auditport.ChangeRow, 0, len(logs))
+	for _, l := range logs {
+		out = append(out, auditport.ChangeRow{
+			OccurredAt:   l.OccurredAt,
+			UserEmail:    l.UserEmail,
+			Role:         l.Role,
+			Action:       l.Action,
+			ResourceType: l.ResourceType,
+			ResourceID:   l.ResourceID,
+			ResourceName: l.ResourceName,
+			Status:       l.Status,
+			PayloadJSON:  l.PayloadJSON,
+		})
+	}
+	return out
 }
 
 // RunRetention runs the daily cleanup at the next 03:00 wall clock and

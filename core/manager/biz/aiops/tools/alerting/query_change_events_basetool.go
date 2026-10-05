@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
@@ -28,11 +28,20 @@ import (
 // the LLM doesn't over-trust an empty result.
 
 // AuditLister is the narrow seam query_change_events consumes. Satisfied
-// directly by *biz/audit.Usecase. Primitive-param so the tools package
-// stays off the data/store layer (it only needs the model type).
-type AuditLister interface {
-	ListChanges(ctx context.Context, from, to time.Time, resourceType, action string, limit int) ([]auditmodel.Log, error)
-}
+// directly by *biz/audit.Usecase — no adapter, because the projection below
+// was shaped to match what the usecase already returns.
+//
+// It is an alias rather than a locally-declared interface, and that is
+// decision 273: the seam used to be declared right here with
+// `[]auditmodel.Log` as its return type, which named the audit domain's GORM
+// entity and left it the last inbound cross-context edge in the tree. The
+// shape of the row now lives in core/base/pkg/audit, where the write shapes
+// already lived, and the tool holds the published port.
+//
+// The alias is kept rather than renaming the type away because it is the name
+// the registry and cmd/opskeeper already say out loud; the seam did not move,
+// only what crosses it.
+type AuditLister = auditport.ChangeLister
 
 // EdgeChangeLister is the seam for the A.3 follow-up: edge-side
 // change events captured by the changewatcher (journald / dockerd /

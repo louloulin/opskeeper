@@ -13,9 +13,9 @@
 # 三份的实测价：
 #
 #   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed 94 12 0 / 0
-#   docs/manager-split.constrained 99 7 0 / 0
-#   docs/manager-split.release-floor 88 18 0 / 0
+#   docs/manager-split.proposed 93 12 0 / 0
+#   docs/manager-split.constrained 98 7 0 / 0
+#   docs/manager-split.release-floor 87 18 0 / 0
 #
 # 决策 230 重取了这三行。触发它的是切掉 `flow -> scheduler`（missed-run 端口
 # 下沉到 `core/floor/scheduler`）：proposed 与 constrained 各少一条组内 import，
@@ -192,22 +192,54 @@
 # **FLOOR 集合变小可以是两件完全不同的事**——搬出去了（变好），或者本来就不
 # 是域（更早就不该在里面）。**这一份的表只记「谁在里面」，不记「为什么」，
 # 所以这两种在读数上长得一模一样**，而读这一行的人需要知道是哪一种。
-independent = chatdiagnose, cluster, demo, edgeauth, federationchild,
+independent = audit, chatdiagnose, cluster, demo, edgeauth, federationchild,
         federationlink, flow, frontierbound, grafana, iam, imbridge, incident, integration,
         llmgw, llmpig, logs, marketplace, mcp, metric, monitor, nodeagent,
         plugin, pluginimport, prometheus, promwrite, proposal, report,
         scheduler, secret, setting, skill, systemhealth, systemupgrade,
         traces, version, webshell
 
-# 其余 25 个：入向有边因而需要真答案的 13 个，加上 10 个 shared 底座组件
-# （它们在 import 图里读作叶子但不是叶子——被依赖不需要声明，所以它们的入度
-# 在这张图里不可测，工具把它们点名排除而不是悄悄跳过），再加上 chatdiagnose
-# 与 frontierbound 这两个「可证明独立发版但写审计链」的域。
+# **决策 273 把 `audit` 从这一组搬进了 `independent`**，于是本组 36 → 37 个域，
+# 而「其余」那一组相应地少了一个。这一搬不是判断，是**读数**：`audit` 的入向
+# 跨域 import 归零了。它是最后一根入边——`aiops -> audit` 那条**读边**，被
+# `core/base/pkg/audit` 里的 `ChangeRow` 投影接走（此前它以 `[]auditmodel.Log`
+# 为返回类型，把 17 个存储列、每个筛选一个索引、三个链列全部暴露给了 RCA 工具）。
+# **防篡改账本的表结构从这一刻起不再是谁的业务**，而这件事在一份按「谁和谁要
+# 一起发版」写的文件里，是这个域唯一需要被分开的理由。
+#
+# 需要说清的是它没有解决什么：搬进 `independent` 只说明**没有人 import 它**，
+# 所以**发版**不需要协调。它没有解决**部署**问题，而且在本文件里它恰好是那个
+# 区分二者的例子——审计链的写咽喉曾经是 4 条硬约束（决策 272 全部由端口解掉，
+# 分母归 0），硬约束是「必须同一个部署单元」而不是「必须一起发版」。所以现在
+# 这个域在两个维度上都是自由的，而把它写进 `independent` 之前它在其中一个维度上
+# 曾经被锁住。**这个区别的代价上一次被记录是决策 272，把 4 → 0 记成端口而不是
+# 删除；这一刀沿用那个记账方式。**
+#
+# 其余 21 个，**这三个数字是本轮重新点过的，理由见下**：
+#
+#   - 10 个入向有边、因而需要真答案的域（`aiops` `alert` `approval` `device`
+#     `edge` `federation` `hitl` `loop` `nodefleet` `topology`），加起来正好是
+#     `-graph` 报告里 in-degree 非零的那 10 行。
+#   - 10 个 shared 底座组件（`agentteams` `container` `control` `dataguard`
+#     `higress` `knowledge` `migrate` `migrator` `middleware` `observability`）。
+#     它们在 import 图里读作叶子但不是叶子——被依赖不需要声明，所以它们的入度
+#     在这张图里不可测，工具把它们点名排除而不是悄悄跳过。
+#   - 剩下 1 个是 `pkg`，而**它已经不是一个域了**：决策 221 把它搬去了
+#     `core/base` 模块，`domaincheck` 明确把它从 shared 名单里删掉了，理由是
+#     「还在名单里的检查器，会盯着一个树已经没有的东西看，还一路报绿」。
+#     **本文件的分组没有跟着删，于是它一直占着一个不存在的位置。**
+#
+# **这段散文此前写的是「其余 25 个 = 13 + 10 + 2」，四个数字全错**，而它错在
+# 一个已经发生过的事件上：它描述的是一个把 `chatdiagnose` 与 `frontierbound`
+# 算进「其余」的版本，可这两个域从一开始就在上面的 `independent` 名单里。**一
+# 段手数的账在树动了三十七刀之后没有任何东西会替它更新**——这正是决策 270
+# 把「价格清单」变成工具的原因，而这里说明**清单之外的散文仍然是清单之外的
+# 散文**：本轮是闸门把这三个数点出来的，不是有人重数了一遍。
 # container（决策 271，插件容器加载器）在这里的理由与 pkg / dataguard 一样：
 # 它在 import 图里读作叶子——被依赖不需要声明——但它同时被 aiops 与 marketplace
 # 依赖，而且已经是一个独立的 Go module（core/extension），入度在这张图里
 # 不可测这件事本身不该成为不分配它的理由。
-core = agentteams, aiops, alert, approval, audit, container, control,
+core = agentteams, aiops, alert, approval, container, control,
         dataguard, device, edge, federation,
         higress, hitl, knowledge, loop, middleware,
         migrate, migrator, nodefleet, observability, pkg, topology

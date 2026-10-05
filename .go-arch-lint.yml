@@ -445,7 +445,18 @@ deps:
       - oxcore_domain
       - oxcore_ports
       - oxcore_wire
-      - oxdomains_model
+      # 决策 273 删掉 oxdomains_model：core/manager 对 core/domains/model/**
+      # 的 import 归零了，最后一条是 biz/aiops/tools/alerting 那个
+      # query_change_events 的 `[]auditmodel.Log` 返回类型。**这一条是整条
+      # 授权的最后一个使用者**，所以删它不是收紧，是清账——留着它等于
+      # 授权一件已经没有人做的事，而白名单的死条款比缺少白名单更坏：
+      # 它让下一次真正的越界看起来像「本来就有许可」。
+      #
+      # 顺带一个可核对的读数：**core/manager（935 个文件）现在完全不 import
+      # core/domains/model**。model 层从此只被 core/domains 自己和装配根读。
+      # 决策 226 当年撤掉的是 manager_biz / manager_model 的 oxdomains_biz
+      # 与 oxdomains_model 两条，理由是「它们唯一的使用者是 core/domains 自己」；
+      # 七年之后剩下的最后一条也被这一刀收走，**同一个理由成立了两次**。
       # oxextension_container: 插件容器加载器（决策 271）。chatruntime、
       # biz/marketplace 与 biz/pluginimport 从 chatruntime 里那套重复声明
       # 改成直接 import 它之后，控制面到插件面只有这一条边，而不是三条

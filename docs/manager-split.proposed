@@ -101,15 +101,25 @@
 # —— 决策 272 更正：上面这 4 条里，4 条都不再是写边 ——
 #
 # 这四行是决策 196 当时的读法，保留在这里作为记录。**当前指向 audit 域的声明边
-# 只有一条，而且它不是写边：**
+# 一条都没有。**
 #
-# 下面这段是**当前**清单，`scripts/ledgercheck` 的 TestTheCurrentAuditEdgesAreNamedInTheSplitProposal
+# 下面这段是**当前**清单，`scripts/ledgercheck` 的 TestTheAuditDomainHasNoInboundEdgeAndTheGateSaysWhy
 # 机器读的就是它；上面那四行是历史，机器不读，所以两份不会互相污染。
 #
-#   now  1.  aiops  -> audit   读边：change-events 工具把一次配置变更关联到授权它的人，
-#                              所以它读的是落库的行（domains/model/audit 的实体）。
-#                              行没有链式性质，可以用投影跨进程桥接；链有。
+#   now  0.  (none)   决策 273：最后一条读边也切掉了。change-events 工具原来用
+#                      `[]auditmodel.Log` 做它接缝的返回类型——接口本来已经是端口，
+#                      依赖在**类型**里，而类型是别人私有的存储实体。17 个存储列、
+#                      每个筛选一个索引、三个链列，就为了读 9 个字段。现在行的形状
+#                      是 core/base/pkg/audit.ChangeRow，和写侧的形状住在一起。
+#                      **audit 域的入向跨域 import 因此归零**，防篡改账本的表结构
+#                      从此不是任何别的域的业务。
 #
+# 这条 0 与决策 272 的 4 → 0 不是同一件事，值得分开记：272 把**写**边的硬约束
+# 解掉了，代价是「跨进程调用咽喉」的传输成本在「0 条硬约束」这个读数里看不见；
+# 273 把**读**边也解掉了，代价是行形状的增删从此要动 `core/base/pkg/audit` 这个
+# 共享包——**耦合没有消失，它换了宿主**，而新宿主是全仓每个域都已经在依赖的那一个。
+# 换句话说：一个只有 AI 工具在用的字段，现在全仓每个域的编译都要经过。
+
 # 写边为什么全部消失：决策 272 给审计咽喉加了端口。chatdiagnose、aiops 的
 # agentkernel、middleware、frontierbound 四个持有方此前各自持有具体的
 # `*audit.Usecase`（其中一个甚至只调一个方法），现在各自持有 core/base/pkg/audit

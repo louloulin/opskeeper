@@ -328,6 +328,16 @@ func TestTheReleaseFloorCandidateIsExactlyTheProvenFloorLessTheAuditWriters(t *t
 	// so this stays true if that table ever grows: a hard constraint's source
 	// is by definition a domain that has to be placeable in the same deployment
 	// unit as the thing it writes.
+	//
+	// Decision 272 emptied that table — all four constraints were dissolved by
+	// ports, and the test was renamed rather than deleted so that an empty
+	// table has to say why. So this set is now empty, which means the
+	// subtraction below is a no-op and the independent group is the whole
+	// proven floor. That is the correct state for this gate to be in, and it
+	// is worth being explicit that it got there by dissolving four constraints
+	// rather than by never having had them: `hardconstraint_test.go` names each
+	// one and what removed it, and a future constraint lands back in this loop
+	// without anybody editing this file.
 	auditWriters := map[string]bool{}
 	for e := range hardConstraints {
 		auditWriters[e.from] = true

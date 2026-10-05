@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
@@ -16,24 +16,24 @@ type fakeAuditLister struct {
 	gotFrom, gotTo             time.Time
 	gotResourceType, gotAction string
 	gotLimit                   int
-	logs                       []auditmodel.Log
+	logs                       []auditport.ChangeRow
 }
 
-func (f *fakeAuditLister) ListChanges(_ context.Context, from, to time.Time, rt, action string, limit int) ([]auditmodel.Log, error) {
+func (f *fakeAuditLister) ListChanges(_ context.Context, from, to time.Time, rt, action string, limit int) ([]auditport.ChangeRow, error) {
 	f.gotFrom, f.gotTo, f.gotResourceType, f.gotAction, f.gotLimit = from, to, rt, action, limit
 	return f.logs, nil
 }
 
 func TestQueryChangeEventsTool(t *testing.T) {
 	anchor := time.Date(2026, 5, 22, 1, 4, 40, 0, time.UTC)
-	fake := &fakeAuditLister{logs: []auditmodel.Log{{
+	fake := &fakeAuditLister{logs: []auditport.ChangeRow{{
 		OccurredAt:   anchor.Add(-10 * time.Minute),
 		UserEmail:    "admin@opskeeper.local",
 		Role:         "admin",
-		Action:       auditmodel.ActionRuleUpdate,
-		ResourceType: auditmodel.ResourceRule,
+		Action:       auditport.ActionRuleUpdate,
+		ResourceType: auditport.ResourceRule,
 		ResourceName: "cpu_high",
-		Status:       auditmodel.StatusSuccess,
+		Status:       auditport.StatusSuccess,
 		PayloadJSON:  `{"enabled":false}`,
 	}}}
 	tool := NewQueryChangeEventsTool(fake, nil, nil)
@@ -69,7 +69,7 @@ func TestQueryChangeEventsTool(t *testing.T) {
 	if resp.Count != 1 || len(resp.Changes) != 1 {
 		t.Fatalf("count=%d changes=%d, want 1/1", resp.Count, len(resp.Changes))
 	}
-	if resp.Changes[0].Action != auditmodel.ActionRuleUpdate || resp.Changes[0].ResourceName != "cpu_high" {
+	if resp.Changes[0].Action != auditport.ActionRuleUpdate || resp.Changes[0].ResourceName != "cpu_high" {
 		t.Errorf("change = %+v", resp.Changes[0])
 	}
 }
@@ -108,7 +108,7 @@ func (f *fakeEdgeLister) ListByWindow(_ context.Context, _, _ time.Time, _ strin
 }
 
 func TestQueryChangeEvents_MergesAuditAndEdge(t *testing.T) {
-	audit := &fakeAuditLister{logs: []auditmodel.Log{
+	audit := &fakeAuditLister{logs: []auditport.ChangeRow{
 		{OccurredAt: time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC), Action: "rule_update", ResourceType: "rule", Status: "ok"},
 		{OccurredAt: time.Date(2026, 7, 14, 10, 5, 0, 0, time.UTC), Action: "setting_update", ResourceType: "setting", Status: "ok"},
 	}}
@@ -157,7 +157,7 @@ func TestQueryChangeEvents_MergesAuditAndEdge(t *testing.T) {
 }
 
 func TestQueryChangeEvents_EdgeSourceFailureSoftens(t *testing.T) {
-	audit := &fakeAuditLister{logs: []auditmodel.Log{
+	audit := &fakeAuditLister{logs: []auditport.ChangeRow{
 		{OccurredAt: time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC), Action: "rule_update", Status: "ok"},
 	}}
 	edge := &fakeEdgeLister{err: errors.New("db down")}

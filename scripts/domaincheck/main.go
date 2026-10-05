@@ -180,27 +180,33 @@ var edges = map[edge]string{
 	// port now lives in core/floor/tunnel next to HostMetricPoint, which is
 	// what let the handler name the call without naming the domain.
 
-	// This is the SECOND aiops -> audit edge and it is not the one decision
-	// 196 read. That one was the agent kernel writing rows, and decision 272
-	// cut it: agentkernel now holds auditport.IDSink / auditport.Verifier
-	// instead of the ledger's concrete façade.
+	// The aiops -> audit edge is gone, and it went the way decision 272's
+	// four went: a port, not a deletion. What was left after that cut was
+	// this one — a READ edge, the change-events tool reading the persisted
+	// row to join a configuration change to the operator who authorised it.
 	//
-	// What is left is a different seam with a different name. The
-	// change-events tool joins a configuration change to the operator who
-	// authorised it, so it reads the persisted row — core/domains/model/
-	// audit's GORM entity — rather than asking the writer to write one.
-	// Readers of a table are not writers of it, and decision 109 already
-	// drew this line: model/audit holds the entities, and "storage has to be
-	// readable by exactly the code that already understood the table". The
-	// store that writes it, the ledger view that lists it, and this tool are
-	// that set.
+	// It survived 272 precisely because reads and writes are different
+	// problems, and it took 273 to see that the difference was smaller than
+	// it looked. The seam was already an interface; the dependency was in
+	// its return type. `ListChanges(...) ([]auditmodel.Log, error)` named
+	// the audit domain's GORM entity, so a tool that reads nine fields was
+	// compiling against seventeen columns, an index per filter and three
+	// hash-chain columns. A port whose signature mentions somebody's struct
+	// is not a port.
 	//
-	// It is NOT a hard process constraint, and the distinction is the whole
-	// point of the 272 write-up: rows have no chaining property, so a split
-	// bridges them with a projection, while the chain has one and needed a
-	// single writer. The writer seam is closed; the reader seam is open and
-	// priced.
-	{"aiops", "audit"}: "the change-events tool joins a configuration change to the operator who authorised it, so it reads the persisted row rather than asking the writer to write one. Readers of the table are not writers of it, and rows carry no chaining property — this is the reader seam, not the writer seam decision 272 closed",
+	// So the row shape moved down to core/base/pkg/audit as ChangeRow and
+	// the seam became auditport.ChangeLister, and audit became the last
+	// domain in the tree with no inbound cross-context import at all. The
+	// ledger's schema is now nobody's business but its own, which for a
+	// tamper-evident table is the property that matters most and the one
+	// every other domain here has had for free.
+	//
+	// Note what did NOT happen: the writer seam closed in 272 stays closed,
+	// and this cut did not make audit independently deployable by any other
+	// means than that one. It removed a reader. A ledger with readers can
+	// still not change its columns without the reader's team agreeing, which
+	// is why the projection is a named type in a package that holds no
+	// storage rather than a widening of the port.
 
 	{"federationlink", "federation"}: "the root side of the cluster channel holds the table of which authenticated caller may act for which child, and it answers that question by asking the federation domain's registry. One direction: the registry does not import the link, because whether a cluster exists is the registry's judgement and reaching a cluster is the link's job (decision 123)",
 
