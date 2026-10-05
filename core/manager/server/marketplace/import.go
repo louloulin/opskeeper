@@ -34,16 +34,24 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/pluginimport"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 )
 
 // ImportFunc converts one legacy container directory into a PiG package at
-// opts.Dest. pluginimport.Import is the production implementation; the
+// req.Dest. pluginimport.Import is the production implementation; the
 // route takes it as a function so the HTTP layer can be tested without a
 // real converter writing to a real import root.
-type ImportFunc func(opts pluginimport.Options) (*pluginimport.Report, error)
+//
+// Both parameter and result types are core/domain shapes (decision 241).
+// They used to be pluginimport's, and the composition root still hands over
+// the same function — but naming them here made this file, which imports
+// nothing but net/http and the standard library, a cross-domain importer of a
+// 726-line converter. It never called one method on it. The converter and
+// everything it drags — the container detector, the loader, the registries —
+// are now reachable from exactly one place: main.go.
+type ImportFunc func(req domain.PluginImportRequest) (*domain.PluginImportReport, error)
 
 // SetImporter wires the converter and the directory converted packages are
 // written under. Until it is called the route answers 503: "not
@@ -67,7 +75,7 @@ func (e notWiredError) Error() string { return string(e) }
 // the conversion report — including the decisions still to be answered.
 type importResp struct {
 	Dest string `json:"dest"`
-	*pluginimport.Report
+	*domain.PluginImportReport
 }
 
 func (h *Handler) importContainer(w http.ResponseWriter, r *http.Request) {
@@ -147,11 +155,11 @@ func (h *Handler) importContainer(w http.ResponseWriter, r *http.Request) {
 	// later; the route does not have a second opinion about what a
 	// container is.
 	src := source
-	if kind, _, err := chatruntime.DetectContainer(src); err == nil && kind == chatruntime.ContainerNone {
+	if kind, _, err := chatruntime.DetectContainer(src); err == nil && kind == domain.ContainerNone {
 		src = descendSingleDir(src)
 	}
 
-	report, err := h.importInto(pluginimport.Options{
+	report, err := h.importInto(domain.PluginImportRequest{
 		Source: src,
 		Dest:   staging,
 		// The upload's file name is the only origin this route knows, and
@@ -182,7 +190,7 @@ func (h *Handler) importContainer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, fmt.Errorf("install converted package: %w", err))
 		return
 	}
-	writeJSON(w, http.StatusOK, importResp{Dest: final, Report: report})
+	writeJSON(w, http.StatusOK, importResp{Dest: final, PluginImportReport: report})
 }
 
 // importRootEnsure creates the import root on first use.

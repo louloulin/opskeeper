@@ -185,8 +185,7 @@ var edges = map[edge]string{
 
 	{"loop", "alert"}: "an investigation starts from an alert and closes it, so the loop reads and updates alert state",
 
-	{"marketplace", "aiops"}:        "the marketplace lists what an agent can install, which is the agent's tool vocabulary",
-	{"marketplace", "pluginimport"}: "installing from the marketplace is the plugin-import domain's job",
+	{"marketplace", "aiops"}: "the marketplace lists what an agent can install, which is the agent's tool vocabulary",
 
 	{"mcp", "loop"}: "an investigation started over MCP enters the same loop as a chat one",
 

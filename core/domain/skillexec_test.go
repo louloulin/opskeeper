@@ -20,7 +20,7 @@ import (
 // things, and `core/domain` is the one namespace every domain shares.
 
 // TestTheSharedNamespaceDeclaresNoBareCaller is the guard on the rename.
-//
+
 // Moving `skill.Caller` into this package under its own name would have made
 // it the eighth declaration of a word that already means five things, in the
 // one place where a reader is most likely to assume a name is shared. Nothing
@@ -33,12 +33,26 @@ import (
 // say which one.
 func TestTheSharedNamespaceDeclaresNoBareCaller(t *testing.T) {
 	declared := exportedTypeNames(t)
-	for _, banned := range []string{"Caller", "Usecase", "Event", "Rule"} {
+	// The first four were decision 240's list. Decision 241 added the second
+	// four, each with the declaration count that put it there — a number, not
+	// a hunch, and the count is of *type declarations* across the repository,
+	// which is not the same as what grepping the word gives: `Report` answers
+	// 8 types, 11 occurrences, and only the first of those means another
+	// package owns a type by that name. `Options` is declared 13 times,
+	// `Decision` 10, `SourceManifest` 0 times now that the converter aliases
+	// it here. A ban list that only grows when somebody happens to notice a
+	// collision is a list of the collisions somebody happened to look at, so
+	// this one is a count.
+	for _, banned := range []string{
+		"Caller", "Usecase", "Event", "Rule",
+		"Options", "Report", "Decision", "SourceManifest",
+	} {
 		if declared[banned] {
-			t.Errorf("core/domain declares a type named %s. Those four names are the trap list: "+
-				"each is declared several times across this repository for different things, and "+
-				"this package is the one namespace every domain shares. A name added here has "+
-				"to say which of them it is — SkillCaller, EdgePresence, ToolStartEvent.", banned)
+			t.Errorf("core/domain declares a type named %s. These eight names are the trap "+
+				"list: each is declared several times across this repository for different "+
+				"things, and this package is the one namespace every domain shares. A name "+
+				"added here has to say which of them it is — SkillCaller, EdgePresence, "+
+				"ToolStartEvent, PluginImportReport.", banned)
 		}
 	}
 	for _, want := range []string{"SkillCaller", "SkillExecution", "SkillOutcome"} {

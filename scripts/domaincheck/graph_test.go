@@ -413,7 +413,7 @@ func TestAGroupingWithNoCrossingsIsNotAnError(t *testing.T) {
 	}
 }
 
-func TestTheShippedTreeIsADagFiveLevelsDeep(t *testing.T) {
+func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// The real number, pinned. Decision 118 closed the last cycle, so the
 	// layering has an answer; if a future edge reopens one this test is the
 	// thing that says the headline changed, and the DAG claim in the report
@@ -441,17 +441,29 @@ func TestTheShippedTreeIsADagFiveLevelsDeep(t *testing.T) {
 	// being a number and not a direction: it cannot tell a deliberate cut
 	// from an accidental layer, which is why the edge count is pinned on
 	// the very next lines and the two have to move together.
-	if max+1 != 5 {
-		t.Errorf("the tree is %d levels deep, want 5: a level appearing or disappearing changes what a split costs", max+1)
+	//
+	// Decision 241 took it from five to four, and the mechanism is the one
+	// worth recording: it did not shorten a chain, it removed a link from
+	// the top of one. Levels here are longest-path-from-a-source, so a
+	// domain's level is set by what *depends on it*, not by what it depends
+	// on. `pluginimport` sat at level 1 for exactly one reason — the
+	// marketplace route imported it — and `aiops` sat at level 2 for exactly
+	// one reason: `pluginimport` imported it. Cut the first edge and
+	// `pluginimport` has in-degree zero, so it drops to level 0, and
+	// `aiops` follows it up. The graph is one level shallower and not one
+	// dependency weaker; what changed is that a domain nothing depends on
+	// any more no longer holds another one down.
+	if max+1 != 4 {
+		t.Errorf("the tree is %d levels deep, want 4: a level appearing or disappearing changes what a split costs", max+1)
 	}
 	var buf bytes.Buffer
 	g.printStructure(&buf)
 	if !strings.Contains(buf.String(), "the graph is a DAG") {
 		t.Error("the shipped tree is no longer a DAG and the report does not say so")
 	}
-	// 35 = decision 118's 42, plus the edge decision 123 added when the root
+	// 34 = decision 118's 42, plus the edge decision 123 added when the root
 	// side of the cluster channel became a domain of its own, minus the eight
-	// since cut: decision 227 (frontierbound -> metric, whose port moved
+	// since cut (nine): decision 227 (frontierbound -> metric, whose port moved
 	// next to HostMetricPoint in core/floor/tunnel), decision 229
 	// (imbridge -> iam, the only remaining edge that selected nothing but a
 	// constant, cut by moving the role vocabulary down to tenantctx), decision
@@ -472,11 +484,17 @@ func TestTheShippedTreeIsADagFiveLevelsDeep(t *testing.T) {
 	// its own one-method SkillRunner and the only thing its signature named
 	// from the producer were three structs — one of which, Caller, is
 	// declared seven times in this repository for five different things, so
-	// the three moved down under names that say which skill they belong to).
+	// the three moved down under names that say which skill they belong to)., and
+	// decision 241's (marketplace -> pluginimport, where an HTTP route that
+	// never called a method on the converter named its two parameter types in
+	// a function signature the composition root had already handed it — and
+	// the price column's "two types" turned out to be a closure of six, two
+	// of which were a shared vocabulary type that one third domain had
+	// already copied by hand).
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "35 edges") {
+	if !strings.Contains(buf.String(), "34 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

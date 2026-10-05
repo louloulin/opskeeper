@@ -58,113 +58,37 @@ var resourceDirs = func() []struct{ legacy, packaged string } {
 	return out
 }()
 
-// Options configures an import.
-type Options struct {
-	// Source is the legacy container directory. Required.
-	Source string
-	// Dest is the package directory to write. Required. It must not
-	// already exist: an import that merged into an existing package would
-	// leave behind whatever the previous version had and nobody reviewed.
-	Dest string
-	// Vendor is recorded in the generated manifest. Optional.
-	Vendor string
-	// Targets is where the package may run. Defaults to the edge, which is
-	// the only target a converted package is safe on: nothing here has
-	// been reviewed for the control plane, and the control plane holds
-	// identity, approval, and the audit ledger.
-	Targets domain.Targets
-}
+// The four shapes below moved to core/domain as PluginImport* (decision 241).
+// The aliases are the whole change: `core/manager/server/marketplace/import.go`
+// is handed this converter as a function by the composition root, and the only
+// reason that route named this package is that the function type it holds
+// spelled these two types. Naming them here made one HTTP file a cross-domain
+// importer of a 726-line converter.
+//
+// They are renamed as well as moved. `Options` is declared thirteen times in
+// this repository, `Report` eleven, `Decision` ten, and core/domain is the one
+// namespace every domain shares; a bare `domain.Options` would be the
+// fourteenth, and a reader who reached for it would get the wrong two fields.
+// Every call site in this package keeps its old spelling through the aliases,
+// which is why the diff below is four lines and not four hundred.
+
+// Options configures an import. Declared in core/domain as
+// PluginImportRequest; see that file for why the names in the shared namespace
+// say which import they belong to.
+type Options = domain.PluginImportRequest
 
 // Decision is one thing a human still has to decide before the generated
-// package can do anything.
-//
-// These are reported rather than guessed. A converter that filled them in
-// would be claiming to have reviewed code it only read the names of.
-// The JSON names are declared rather than left to Go's field names because
-// this struct is embedded in an HTTP response. Without tags the route would
-// answer `{"Field": ..., "Question": ...}` while the LoadWarning slice
-// right beside it answers `{"path": ..., "reason": ...}` — two naming
-// conventions inside one JSON object, which is a contract the console has
-// to be taught the shape of rather than read. Snake_case matches every other
-// DTO the console parses. Nothing consumed this response before the import
-// page, so there is no wire compatibility to preserve.
-type Decision struct {
-	// Field is the manifest path, e.g. "spec.tools".
-	Field string `json:"field"`
-	// Question is what has to be answered.
-	Question string `json:"question"`
-	// Why is the answer not derivable — which is what makes this a
-	// decision rather than a missing value.
-	Why string `json:"why"`
-}
+// package can do anything. Declared in core/domain as PluginImportDecision.
+type Decision = domain.PluginImportDecision
 
-// SourceManifest is a read of a container's own package.json.
-//
-// PiG discovers a package's resources from its manifest when the manifest
-// declares them, and from the conventional directories when it does not.
-// Those two are mutually exclusive: a package.json carrying a "pi" block
-// suppresses convention discovery for every Pi class, so a package whose
-// manifest declares one skill and has a skills/ directory with nine loads
-// exactly one.
-//
-// That is why this is reported rather than carried across. A converted
-// package has no manifest, so it discovers by convention — which is a
-// superset of what a declaring manifest selects, and therefore the safe
-// direction. Copying the manifest instead would import its *suppression*:
-// every class it left undeclared would stop loading on the node, silently,
-// and the operator would be looking at a package that shipped nine skills
-// and serves one.
-type SourceManifest struct {
-	// Present is whether a package.json was there at all.
-	Present bool `json:"present"`
-	// Declares is whether it carried a resource-declaring block ("pi" or
-	// "pig"). A package.json with neither is npm metadata and nothing more.
-	Declares bool `json:"declares_resources"`
-	// Classes is every resource class either block named, sorted.
-	Classes []string `json:"classes,omitempty"`
-	// Entries maps a class to the paths it declared. It is the list a
-	// reviewer needs, because it is the difference between the resources
-	// the container served and the ones the converted package will find.
-	Entries map[string][]string `json:"entries,omitempty"`
-}
+// SourceManifest is a read of a container's own package.json. Declared in
+// core/domain as PluginImportSourceManifest.
+type SourceManifest = domain.PluginImportSourceManifest
 
-// Report is what an import produced.
-type Report struct {
-	// Kind is the container form that was recognised.
-	Kind chatruntime.ContainerKind `json:"kind"`
-	// Name, Version and Description are carried across from the source.
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	Description string `json:"description"`
-	// Skills and Agents are the package-relative paths written.
-	Skills []string `json:"skills"`
-	Agents []string `json:"agents"`
-	// The other resource classes are counts rather than paths: nobody
-	// reviews a count, and a report that listed forty identical extension
-	// paths would be skimmed past.
-	//
-	// Themes and AgentEnvironments are here for the same reason the classes
-	// they count are copied at all. They are the two an earlier version of
-	// this converter did not know about, and a class it did not know about
-	// was a class it dropped without saying so — the report read exactly
-	// the same whether the container had shipped a theme or not.
-	Prompts           int `json:"prompts"`
-	MCP               int `json:"mcp"`
-	Extension         int `json:"extensions"`
-	Themes            int `json:"themes"`
-	AgentEnvironments int `json:"agent_environments"`
-	// SourceManifest is what the container's own package.json said about
-	// where its resources live. It is reported and deliberately not copied;
-	// see readSourceManifest for why copying it would be worse than
-	// dropping it.
-	SourceManifest SourceManifest `json:"source_manifest"`
-	// Decisions is what remains undecided. It is never empty for a
-	// container that carried no governance, which is all of them.
-	Decisions []Decision `json:"decisions"`
-	// Warnings are the loader's own non-fatal findings, carried through
-	// so an import does not quietly drop a parse failure.
-	Warnings []chatruntime.LoadWarning `json:"warnings"`
-}
+// Report is what an import produced. Declared in core/domain as
+// PluginImportReport — including its json tags, which are the body of
+// POST /v1/marketplace/import and are unchanged by the move.
+type Report = domain.PluginImportReport
 
 // Import converts one container into a package.
 //

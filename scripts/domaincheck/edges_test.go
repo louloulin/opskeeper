@@ -1,6 +1,9 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -519,40 +522,22 @@ func (h *Handler) first() pb.Row { return h.Rows[0] }
 	}
 }
 
-// TestAMarketplacePluginImportIsNotATwoSymbolEdge is the shipped-tree version of
-// the same claim, and it is the one that would have stopped this round's cut
-// from being the wrong cut. If the importer's report grows or shrinks, the
-// test says the assertion moved, rather than the number quietly sliding back
-// to something the ranking likes.
-func TestAMarketplacePluginImportIsNotATwoSymbolEdge(t *testing.T) {
-	sources, _, err := parseControlPlane("../..")
-	if err != nil {
-		t.Fatalf("reading the shipped tree: %v", err)
-	}
-	out := edgeReport(t, sources, defaultRules())
-
-	row := ""
-	for _, line := range strings.Split(out, "\n") {
-		m := edgeRowRE.FindStringSubmatch(line)
-		if m != nil && m[2] == "marketplace" && m[3] == "pluginimport" {
-			row = line
-		}
-	}
-	if row == "" {
-		t.Fatalf("the edge report has no row for marketplace -> pluginimport.\n%s", out)
-	}
-	if strings.Contains(row, "no method + 4 closure") == false && !strings.Contains(row, "closure") {
-		t.Errorf("the marketplace -> pluginimport row prices the two types the route names and "+
-			"nothing behind them, which is what made this edge look like the cheapest one on the "+
-			"list.\n%s\nIts Report names a Kind declared in aiops and a Warnings slice of a type "+
-			"declared in two domains; moving it means moving those", out)
-	}
-	// And the specific drag, named: this is the fact the cut has to plan for.
-	if !strings.Contains(out, "via Report.Kind") {
-		t.Errorf("the report does not say which field drags aiops vocabulary behind the "+
-			"pluginimport report.\n%s", out)
-	}
-}
+// TestAMarketplacePluginImportIsNotATwoSymbolEdge used to be a shipped-tree
+// guard and is not any more, and saying why is more useful than the test was.
+//
+// It read the real edge report and refused a row that priced
+// `marketplace -> pluginimport` as the two types the route names. It was
+// right, and decision 241 then cut the edge — so the row it was reading is
+// gone, and a guard that t.Fatalf's on a missing row would have failed on the
+// cut that satisfied it.
+//
+// The claim it made is not lost. That the price column undercounts a shape
+// whose fields point into a third domain is a property of the pricer, and it
+// is asserted at fixture level by TestAClosureIntoAnotherDomainIsNamed, where
+// it costs four lines instead of a whole tree walk. What is asserted at
+// shipped-tree level now is the thing the fixture cannot know: that no file
+// in the marketplace domain imports the converter at all, which is
+// TestNoMarketplaceFileImportsTheConverter below.
 
 // TestATypeTheProducerAlsoDeclaresIsNotReportedAsSomebodyElses is decision 233's
 // shape arriving in the closure walk.
@@ -643,5 +628,135 @@ func TestTheEdgeDecision240CutIsNotOnTheList(t *testing.T) {
 		t.Error("aiops -> skill is declared again; if it came back, say what now needs it, " +
 			"because the tool bridge holds a one-method port in core/domain and nothing in it " +
 			"needs the skill service's audit rows, scope routing, tunnel round trip or catalogue")
+	}
+}
+
+// The cut below is the first one in this file whose guard reads the tree
+// rather than the table, and the reason is that the table is the wrong place
+// to learn this from.
+//
+// `marketplace -> pluginimport` was declared, so "is it off the list" is a real
+// question — but a list entry is one line somebody can add back, and every
+// other cut guard in this file asks only about that line. The thing that
+// actually went wrong upstream was an import in a file, and the file is what
+// has to stay clean. So these two tests read the shipped tree through the same
+// parseTree the gate reads it through: a second walk of the import graph in a
+// test is the thing this package's header already warns about.
+func TestTheEdgeDecision241CutIsNotOnTheList(t *testing.T) {
+	if _, ok := edges[edge{from: "marketplace", to: "pluginimport"}]; ok {
+		t.Error("marketplace -> pluginimport is declared again; the route behind " +
+			"POST /v1/marketplace/import is handed the converter as a function by the " +
+			"composition root, and both parameter and result types now live in core/domain. " +
+			"If the edge came back, say what in the HTTP layer needs the converter itself — " +
+			"nothing did before this cut and nothing should now")
+	}
+}
+
+// TestNoMarketplaceFileImportsTheConverter is the guard that would have caught
+// the original shape, whichever way the declaration table was edited.
+func TestNoMarketplaceFileImportsTheConverter(t *testing.T) {
+	sources, _, err := parseTree("../..", managerPrefix, testRules())
+	if err != nil {
+		t.Fatalf("parse the shipped tree: %v", err)
+	}
+	const producer = managerPrefix + "biz/pluginimport"
+	for _, src := range sources {
+		if src.test || domainOf(src.path) != "marketplace" {
+			continue
+		}
+		for _, imp := range src.imports {
+			if imp == producer || strings.HasPrefix(imp, producer+"/") {
+				t.Errorf("%s imports %s. One HTTP file naming two type names was the whole "+
+					"reason this edge existed; main.go is the one place allowed to wire the "+
+					"converter, and it hands it over as a function", src.path, imp)
+			}
+		}
+	}
+}
+
+// TestLoadWarningIsDeclaredOnce guards the second half of the cut, which is
+// not about an edge at all.
+//
+// `biz/marketplace` used to carry its own `LoadWarning`, copied field for field
+// out of aiops' chatruntime, under a comment saying the point was to keep the
+// chatruntime import out of biz/marketplace — in a package whose usecase.go
+// imported chatruntime eight symbols over. The stated reason was false, and a
+// copy defended by a false reason is a copy that will drift: the two had the
+// same three fields and the same three tags, and nothing would have said so if
+// a fourth field arrived on one side only.
+//
+// This one deliberately does not use parseTree, which is worth saying because
+// every other guard in this file does. The tree walk resolves a type alias to
+// whatever it names (kindOf, on purpose, so `type Repo = store.Repo` is judged
+// as the interface it points at) and `declKind`'s zero value is kindOther — so
+// "chatruntime declares LoadWarning" and "nowhere declares LoadWarning" read
+// identically through `source.declared`. The walk is built to answer whether a
+// door is substitutable, and this question is whether two packages each own a
+// struct of the same name. Those are different questions and they need
+// different instruments; using the wrong one here would have produced a green
+// test, which is the failure this repository keeps paying for.
+func TestLoadWarningIsDeclaredOnce(t *testing.T) {
+	// The walk root is the repository, so trim paths back to repo-relative.
+	rel := func(path string) string {
+		if i := strings.Index(path, "core/"); i >= 0 {
+			return filepath.ToSlash(path[i:])
+		}
+		return filepath.ToSlash(path)
+	}
+	var owners []string
+	// Only the roots that hold Go source. Walking the repository root took
+	// this test from eight seconds to a hundred and nineteen, because it went
+	// looking for .go files inside a node_modules and a set of built
+	// artefacts — and a guard that is slow gets run less, which is a quieter
+	// way to lose it than deleting it.
+	goRoots := map[string]bool{"core": true, "cmd": true, "sdk": true}
+	err := filepath.WalkDir("../..", func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			// Skip a subtree when its FIRST path segment is not one of the
+			// roots. Testing the first segment rather than the directory's
+			// own name is what lets core/domain and core/manager/biz/aiops
+			// through while node_modules and bin stay out.
+			if seg := strings.Split(filepath.ToSlash(path), "/"); len(seg) >= 4 && !goRoots[seg[2]] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		file, perr := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if perr != nil {
+			return nil //nolint:nilerr // a file that does not parse fails the build elsewhere
+		}
+		for _, decl := range file.Decls {
+			gen, isGen := decl.(*ast.GenDecl)
+			if !isGen || gen.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				ts, isType := spec.(*ast.TypeSpec)
+				// An alias is not a second declaration: `type LoadWarning =
+				// domain.LoadWarning` is the same type under a second name,
+				// and chatruntime has one on purpose so its 31 uses and its
+				// tests keep spelling what they always spelled.
+				if isType && ts.Name.Name == "LoadWarning" && !ts.Assign.IsValid() {
+					owners = append(owners, rel(path))
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk the tree: %v", err)
+	}
+	want := "core/domain/pluginimport.go"
+	if len(owners) != 1 || owners[0] != want {
+		t.Errorf("LoadWarning is declared in %v; it belongs to exactly one file, %s, because "+
+			"three domains hand it to a client. A second struct declaration is the shape "+
+			"decision 241 deleted: two types with the same name, the same three fields and "+
+			"the same three tags, kept in step by nothing", owners, want)
 	}
 }

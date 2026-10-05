@@ -15,6 +15,8 @@ package chatruntime
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 // ToolClass categorizes a tool's blast radius. Policies filter tools by
@@ -423,14 +425,14 @@ type LoadResult struct {
 // LoadWarning is a non-fatal load issue. Code is a stable identifier
 // (e.g. "name_normalized", "missing_when_to_use") so SPA / tests can
 // filter without scraping Reason text.
-type LoadWarning struct {
-	// Path is the file the warning applies to (absolute or relative
-	// to the loader's root — loader convention).
-	Path string `json:"path"`
-
-	// Reason is human-readable English text.
-	Reason string `json:"reason"`
-
-	// Code is the stable identifier.
-	Code string `json:"code"`
-}
+//
+// It moved to core/domain (decision 241) for the same reason ContainerKind
+// did, and the evidence is a file that used to sit three declarations below
+// this one: `biz/marketplace` carried its own `LoadWarning` with the comment
+// "mirrors chatruntime.LoadWarning so we don't leak that import out of
+// biz/marketplace" — in a package whose usecase.go imported this one eight
+// symbols over, LoadWarning among them. The copy was defended by a reason
+// that was not true, and a copy defended by a false reason is a copy that
+// will drift. The declaration there is gone; the one here is an alias, so
+// all 31 uses in this file and the rest of the package are unchanged.
+type LoadWarning = domain.LoadWarning

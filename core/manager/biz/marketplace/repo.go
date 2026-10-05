@@ -3,6 +3,7 @@ package marketplace
 import (
 	"context"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/marketplace"
 )
 
@@ -135,13 +136,5 @@ type CapabilitySummary struct {
 type InstallResult struct {
 	Pack         *model.InstalledPack  `json:"pack"`
 	Capabilities CapabilityDeclaration `json:"capabilities"`
-	Warnings     []LoadWarning         `json:"warnings"`
-}
-
-// LoadWarning mirrors chatruntime.LoadWarning so we don't leak that
-// import out of biz/marketplace; the JSON shape is identical.
-type LoadWarning struct {
-	Path   string `json:"path"`
-	Reason string `json:"reason"`
-	Code   string `json:"code"`
+	Warnings     []domain.LoadWarning  `json:"warnings"`
 }

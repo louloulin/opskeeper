@@ -335,7 +335,7 @@ func (uc *Usecase) Install(ctx context.Context, caller Caller, src Source) (*Ins
 	return &InstallResult{
 		Pack:         row,
 		Capabilities: caps,
-		Warnings:     toBizWarnings(loadRes.Warnings),
+		Warnings:     loadRes.Warnings,
 	}, nil
 }
 
@@ -821,20 +821,6 @@ func buildCapabilityDeclaration(packID, version string, res *chatruntime.LoadRes
 	caps.Summary.Bins = sortedKeys(binSet)
 	caps.Summary.ConfigKeys = sortedKeys(cfgSet)
 	return caps
-}
-
-// toBizWarnings projects chatruntime.LoadWarning into the
-// JSON-stable biz.LoadWarning shape so the chatruntime import
-// doesn't leak across the HTTP boundary.
-func toBizWarnings(in []chatruntime.LoadWarning) []LoadWarning {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]LoadWarning, 0, len(in))
-	for _, w := range in {
-		out = append(out, LoadWarning(w))
-	}
-	return out
 }
 
 // pathHasPrefix is a package-local helper (chatruntime exposes the

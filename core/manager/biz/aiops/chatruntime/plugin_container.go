@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 // PluginManifest is the on-disk shape of `.claude-plugin/plugin.json`
@@ -34,21 +36,25 @@ type PluginManifest struct {
 }
 
 // ContainerKind labels which marker file we found in a candidate dir.
-type ContainerKind string
+//
+// It moved to core/domain (decision 241) because three domains need it and
+// none of the three is this one: the loader, the converter, and the marketplace
+// all have to say which container form they are looking at. A shared shape
+// living inside a business package is a shape every other consumer has to
+// either import this package for or copy by hand — and one of them copied it
+// (see the note on LoadWarning in types.go). The aliases below keep every call
+// site in this package, and its tests, spelling the name they always spelled.
+type ContainerKind = domain.ContainerKind
 
 const (
 	// ContainerClaude is the `.claude-plugin/plugin.json` form.
-	ContainerClaude ContainerKind = "claude"
+	ContainerClaude = domain.ContainerClaude
 	// ContainerOpenclaw is the `openclaw.plugin.json` form.
-	ContainerOpenclaw ContainerKind = "openclaw"
-	// ContainerBareSkills is the skills.sh / vercel-labs/skills form:
-	// a directory containing one or more `skills/<name>/SKILL.md`
-	// (or a root-level SKILL.md) and NO manifest file. The pack ID
-	// and display name are synthesized from the directory name. This
-	// is what `npx skills add owner/repo` produces.
-	ContainerBareSkills ContainerKind = "bare_skills"
+	ContainerOpenclaw = domain.ContainerOpenclaw
+	// ContainerBareSkills is the skills.sh / vercel-labs/skills form.
+	ContainerBareSkills = domain.ContainerBareSkills
 	// ContainerNone means no recognized layout was found.
-	ContainerNone ContainerKind = ""
+	ContainerNone = domain.ContainerNone
 )
 
 // DetectContainer probes a directory for plugin container markers.
