@@ -51,6 +51,16 @@ type domainGraph struct {
 	// *still* coupled to once its context coupling is taken away, which is
 	// the question that report exists to answer honestly.
 	sharedUse map[string]map[string]bool
+	// entryUse is which packages of a domain the rest of the tree actually
+	// reaches into, and who reaches them.
+	//
+	// It answers a question the edge weight cannot. "aiops is imported 11
+	// times" says how much; it does not say whether those 11 imports touch
+	// one package of aiops or seven spread across its layers. The first is
+	// a domain that already has a boundary, and the second is a domain
+	// whose internals are the interface. Both cost the same to break and
+	// only one of them is cheap to split.
+	entryUse map[string]map[string]map[string]bool
 }
 
 // pkgSize is one package's share of the tree. domain is kept alongside it
@@ -77,6 +87,7 @@ func buildGraph(sources []source, r rules) *domainGraph {
 		lines:     map[string]int{},
 		pkgs:      map[string]pkgSize{},
 		sharedUse: map[string]map[string]bool{},
+		entryUse:  map[string]map[string]map[string]bool{},
 	}
 	for _, src := range sources {
 		from := domainOf(src.path)
@@ -114,6 +125,13 @@ func buildGraph(sources []source, r rules) *domainGraph {
 				continue
 			}
 			g.weight[edge{from, to}]++
+			if g.entryUse[to] == nil {
+				g.entryUse[to] = map[string]map[string]bool{}
+			}
+			if g.entryUse[to][imp] == nil {
+				g.entryUse[to][imp] = map[string]bool{}
+			}
+			g.entryUse[to][imp][from] = true
 		}
 	}
 	return g
@@ -741,59 +759,43 @@ func (g *domainGraph) printCutVerdict(w io.Writer, grouping map[string]string) {
 //     it stands on. That coupling is real and it is not a seam between two
 //     contexts, but it is a coupling, and a reader told "this domain can ship
 //     on its own" deserves to know which base components it still rides.
-func (g *domainGraph) printReleaseFloor(w io.Writer, shared map[string]string) {
-	// inbound counts the declared-context edges into each domain. weight
-	// already excludes shared components, so a zero here means zero
-	// inbound coupling to any bounded context.
+//
+// releaseTiers is the whole computation, separated from the printing.
+//
+// It is separated so the partition can be asserted rather than read. The
+// failure this protects against is not subtle arithmetic: it is the report
+// quietly listing a shared base component as independently shippable, which is
+// exactly the sentence this file exists to never produce, and which nothing
+// else in the checker would notice.
+func (g *domainGraph) releaseTiers(shared map[string]string) (floor, single, multi, excluded []string) {
 	inbound := map[string]int{}
 	for e, n := range g.weight {
 		inbound[e.to] += n
 	}
-
-	type releasable struct {
-		domain   string
-		lines    int
-		pkgs     int
-		shared   []string
-		excluded string
-	}
-	var free, blocked []releasable
 	for d := range g.domains {
-		lines, pkgs := g.sizeOfDomain(d)
-		r := releasable{domain: d, lines: lines, pkgs: pkgs}
-		for s := range g.sharedUse[d] {
-			r.shared = append(r.shared, s)
-		}
-		sort.Strings(r.shared)
-		if why := shared[d]; why != "" {
-			// Named, not skipped: the count below is only true of the
-			// non-shared ones, and a reader who cannot see which were
-			// dropped cannot check the count.
-			r.excluded = "shared base component: " + why
-			blocked = append(blocked, r)
+		if shared[d] != "" {
+			excluded = append(excluded, d)
 			continue
 		}
-		if inbound[d] > 0 {
-			blocked = append(blocked, r)
+		if inbound[d] == 0 {
+			floor = append(floor, d)
 			continue
 		}
-		free = append(free, r)
+		if len(g.entryUse[d]) == 1 {
+			single = append(single, d)
+		} else {
+			multi = append(multi, d)
+		}
 	}
-	sort.Slice(free, func(i, j int) bool {
-		if free[i].lines != free[j].lines {
-			return free[i].lines > free[j].lines
-		}
-		return free[i].domain < free[j].domain
-	})
-	sort.Slice(blocked, func(i, j int) bool { return blocked[i].domain < blocked[j].domain })
+	sort.Strings(floor)
+	sort.Strings(single)
+	sort.Strings(multi)
+	sort.Strings(excluded)
+	return floor, single, multi, excluded
+}
 
-	freeLines := 0
-	freePkgs := 0
-	for _, r := range free {
-		freeLines += r.lines
-		freePkgs += r.pkgs
-	}
-	total := g.totalLines()
+func (g *domainGraph) printReleaseFloor(w io.Writer, shared map[string]string) {
+	floor, single, multi, excluded := g.releaseTiers(shared)
 
 	fmt.Fprintln(w, "\nrelease floor: domains with no inbound cross-domain import")
 	fmt.Fprintln(w, "  A domain nothing imports can be released without coordinating with any other")
@@ -802,56 +804,95 @@ func (g *domainGraph) printReleaseFloor(w io.Writer, shared map[string]string) {
 	fmt.Fprintln(w, "  It is a FLOOR, not the answer to \"which domains ship independently\" — a domain")
 	fmt.Fprintln(w, "  with inbound edges may still be independently shippable behind a stable")
 	fmt.Fprintln(w, "  interface, and no amount of reading this graph can tell you that.")
+
+	freeLines, freePkgs := 0, 0
+	for _, d := range floor {
+		lines, pkgs := g.sizeOfDomain(d)
+		freeLines += lines
+		freePkgs += pkgs
+	}
 	fmt.Fprintf(w, "\n  %d of %d domains, %d lines (%.1f%% of the tree), %d packages\n",
-		len(free), len(g.domains), freeLines, share(freeLines, total), freePkgs)
-	for _, r := range free {
+		len(floor), len(g.domains), freeLines, share(freeLines, g.totalLines()), freePkgs)
+	for _, d := range floor {
+		lines, pkgs := g.sizeOfDomain(d)
 		base := "no base dependency"
-		if len(r.shared) > 0 {
-			base = "rests on " + strings.Join(r.shared, ", ")
+		if deps := g.sharedUse[d]; len(deps) > 0 {
+			names := make([]string, 0, len(deps))
+			for name := range deps {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			base = "rests on " + strings.Join(names, ", ")
 		}
-		fmt.Fprintf(w, "    %-16s %6d lines  %2d packages  %s\n", r.domain, r.lines, r.pkgs, base)
+		fmt.Fprintf(w, "    %-16s %6d lines  %2d packages  %s\n", d, lines, pkgs, base)
 	}
 
-	// The shared exclusions, printed rather than applied quietly, because
-	// "middleware is independently shippable" is exactly the sentence this
-	// report must never produce and the only reliable way to prevent it is
-	// to show that the name was considered and dropped for a stated reason.
-	var sharedDropped []string
-	for _, r := range blocked {
-		if r.excluded != "" {
-			sharedDropped = append(sharedDropped, r.domain)
-		}
-	}
-	if len(sharedDropped) > 0 {
+	if len(excluded) > 0 {
 		fmt.Fprintf(w, "\n  %d domain(s) read as leaves in the import graph and are NOT counted above,\n",
-			len(sharedDropped))
+			len(excluded))
 		fmt.Fprintln(w, "  because being depended on needs no declaration and their in-degree is not")
 		fmt.Fprintln(w, "  measurable here:")
-		for _, d := range sharedDropped {
+		for _, d := range excluded {
 			fmt.Fprintf(w, "    %-16s %s\n", d, shared[d])
 		}
 	}
+
 	fmt.Fprintf(w, "\n  the other %d domain(s) have inbound edges and need a real answer, which is\n",
-		len(blocked)-len(sharedDropped))
+		len(single)+len(multi))
 	fmt.Fprintln(w, "  a question about interfaces and about who is willing to coordinate — not a")
 	fmt.Fprintln(w, "  question this graph can answer. See make domain-cochange for the one axis of")
 	fmt.Fprintln(w, "  evidence that exists, and note that it needs more than a single day of history.")
-	// Named rather than counted, for the same reason the shared ones are:
-	// a reader who is told twenty domains need a judgement call cannot
-	// check the twenty, and a count is not a list.
-	var coupled []string
-	for _, r := range blocked {
-		if r.excluded == "" {
-			coupled = append(coupled, fmt.Sprintf("%s(%d in)", r.domain, inbound[r.domain]))
+
+	if len(single) > 0 {
+		fmt.Fprintf(w, "\n  of those, %d are reached through exactly ONE package — the seam already\n", len(single))
+		fmt.Fprintln(w, "  exists, so a split would preserve it rather than invent it. This is a")
+		fmt.Fprintln(w, "  NECESSARY condition for extraction, not a proof of it: one package today is")
+		fmt.Fprintln(w, "  not a promised-stable interface, and only a person can say it will be one.")
+		fmt.Fprintln(w, "  What it buys is an ordering — these are the ones to try first:")
+		for _, d := range single {
+			fmt.Fprintf(w, "    %s\n", g.entryRow(d))
 		}
 	}
-	for i := 0; i < len(coupled); i += 6 {
-		end := i + 6
-		if end > len(coupled) {
-			end = len(coupled)
+	if len(multi) > 0 {
+		fmt.Fprintf(w, "\n  and %d are reached through two or more packages, which is where the coupling\n", len(multi))
+		fmt.Fprintln(w, "  is structural rather than nominal — a boundary here has to be built, not found:")
+		for _, d := range multi {
+			fmt.Fprintf(w, "    %s\n", g.entryRow(d))
 		}
-		fmt.Fprintf(w, "    %s\n", strings.Join(coupled[i:end], "  "))
 	}
+}
+
+// entryRow is one line of the coupled-domain report.
+//
+// It is a function rather than inline formatting so that the count it prints
+// can be checked. "importers" is counted as distinct domains, which is what
+// the word means; the inbound *import statement* count is a different unit and
+// is already on the -graph report, and putting it in a column headed
+// "importers" would let a reader compare two numbers that were never the same
+// measure. The two differ for most domains here — loop is imported by four
+// domains across ten statements — so this is not a distinction without a
+// difference, it is the whole content of the column.
+func (g *domainGraph) entryRow(domain string) string {
+	entries := g.entryUse[domain]
+	var importers int
+	for e := range g.weight {
+		if e.to == domain {
+			importers++
+		}
+	}
+	return fmt.Sprintf("%-14s %d entr%s, %d importer%s",
+		domain, len(entries), plural(len(entries), "y", "ies"),
+		importers, plural(importers, "", "s"))
+}
+
+// plural is the report's whole agreement about grammar: it picks the suffix
+// from the count rather than from the noun, so a row that says "1 entry" does
+// not also say "1 entries".
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // share is a percentage that tolerates a zero total, which happens whenever
