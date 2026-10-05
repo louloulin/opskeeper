@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/extension/biz/container"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 )
 
 // importUnderTest runs a real conversion through a real loader.
@@ -19,11 +19,14 @@ import (
 // either half — the converter's policy or the loader's reading — pass, and
 // the whole subject of this file is the seam between them.
 //
-// The chatruntime import this adds is test-only, so it does not put the
-// pluginimport domain back in the production import graph that decision 252
-// closed.
+// The container import this uses is the one decision 271 opened for exactly
+// this: the loader is a port implementation and the test that wants an
+// end-to-end conversion needs the real one. Pointing it at the new module
+// rather than at the chat runtime also keeps the direction right — the
+// pluginimport domain reaches down to the loader, never up into a runtime
+// that reaches back down into it.
 func importUnderTest(opts Options) (*Report, error) {
-	return New(chatruntime.ContainerLoader{}).Import(opts)
+	return New(container.ContainerLoader{}).Import(opts)
 }
 
 // write puts a file at rel under dir, creating parents.
@@ -99,7 +102,7 @@ func TestEachContainerFormConvertsToALoadablePackage(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Import: %v", err)
 			}
-			if report.Kind == chatruntime.ContainerNone {
+			if report.Kind == container.ContainerNone {
 				t.Errorf("kind = none, want a recognised container")
 			}
 			if report.Name == "" {
@@ -609,7 +612,7 @@ func TestTheReportNamesTheContainerTheLoaderActuallyRead(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src := tc.make(t)
-			want, _, err := chatruntime.DetectContainer(src)
+			want, _, err := container.DetectContainer(src)
 			if err != nil {
 				t.Fatalf("DetectContainer: %v", err)
 			}

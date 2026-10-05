@@ -1,4 +1,4 @@
-package chatruntime
+package container
 
 import (
 	"crypto/sha256"
@@ -345,7 +345,7 @@ func walkSkillsRoot(skillsDir, resolvedRoot string) ([]*Skill, []LoadWarning) {
 		// we still don't auto-recurse (avoid loops); operators can land
 		// SKILL.md files at real paths.
 		if info.Mode()&os.ModeSymlink != 0 {
-			if !pathSafeUnderRoot(path, resolvedRoot, &warnings) {
+			if !PathSafeUnderRoot(path, resolvedRoot, &warnings) {
 				if info.IsDir() {
 					return filepath.SkipDir
 				}
@@ -359,7 +359,7 @@ func walkSkillsRoot(skillsDir, resolvedRoot string) ([]*Skill, []LoadWarning) {
 		if filepath.Base(path) != "SKILL.md" {
 			return nil
 		}
-		if !pathSafeUnderRoot(path, resolvedRoot, &warnings) {
+		if !PathSafeUnderRoot(path, resolvedRoot, &warnings) {
 			return nil
 		}
 		sk, ws, err := ParseSkillMd(path)
@@ -415,7 +415,7 @@ func walkAgentsRoot(agentsDir, resolvedRoot string) ([]*Agent, []LoadWarning) {
 		if strings.EqualFold(info.Name(), "README.md") {
 			return nil
 		}
-		if !pathSafeUnderRoot(path, resolvedRoot, &warnings) {
+		if !PathSafeUnderRoot(path, resolvedRoot, &warnings) {
 			return nil
 		}
 		ag, ws, err := ParseAgentMd(path)
@@ -464,7 +464,7 @@ func walkCommandsRoot(commandsDir, resolvedRoot string) ([]*Skill, []LoadWarning
 		if strings.EqualFold(info.Name(), "README.md") {
 			return nil
 		}
-		if !pathSafeUnderRoot(path, resolvedRoot, &warnings) {
+		if !PathSafeUnderRoot(path, resolvedRoot, &warnings) {
 			return nil
 		}
 		sk, ws, err := ConvertCommandFile(path)
@@ -508,7 +508,7 @@ func scanHooksDir(hooksDir, resolvedRoot string) []LoadWarning {
 		if info == nil || info.IsDir() {
 			return nil
 		}
-		if !pathSafeUnderRoot(path, resolvedRoot, &warnings) {
+		if !PathSafeUnderRoot(path, resolvedRoot, &warnings) {
 			return nil
 		}
 		dropped = append(dropped, path)
@@ -538,7 +538,14 @@ func scanHooksDir(hooksDir, resolvedRoot string) []LoadWarning {
 // stat-per-file plus a hard fail when the path itself can't be
 // resolved (broken symlink, race-deleted file) — surfaced as
 // symlink_error rather than crashing the load.
-func pathSafeUnderRoot(path, resolvedRoot string, warnings *[]LoadWarning) bool {
+// PathSafeUnderRoot is the exported form of the symlink-and-traversal guard
+// below. It is exported for exactly one caller outside this file — the
+// unified directory walk that lives in the chat runtime package — and the
+// reason is that a containment check is a security boundary: leaving a
+// second private copy behind for that caller would mean two functions that
+// decide whether a plugin file may be read, and only one of them would be
+// covered by this file's tests.
+func PathSafeUnderRoot(path, resolvedRoot string, warnings *[]LoadWarning) bool {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		*warnings = append(*warnings, LoadWarning{
@@ -548,7 +555,7 @@ func pathSafeUnderRoot(path, resolvedRoot string, warnings *[]LoadWarning) bool 
 		})
 		return false
 	}
-	if !pathHasPrefix(resolved, resolvedRoot) {
+	if !PathHasPrefix(resolved, resolvedRoot) {
 		*warnings = append(*warnings, LoadWarning{
 			Path:   path,
 			Code:   "escapes_root",

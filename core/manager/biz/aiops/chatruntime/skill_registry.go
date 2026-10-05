@@ -2,7 +2,6 @@ package chatruntime
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -219,21 +218,3 @@ func filterToolsByPolicy(tools []ToolDecl, policy Policy) []ToolDecl {
 	return out
 }
 
-// pathHasPrefix returns true when child sits inside parent (or is the
-// parent itself). Cleans both paths first so trailing slashes don't
-// cause false negatives. Mirrors core/floor/skill/loader.go for consistency.
-func pathHasPrefix(child, parent string) bool {
-	child = filepath.Clean(child)
-	parent = filepath.Clean(parent)
-	if child == parent {
-		return true
-	}
-	rel, err := filepath.Rel(parent, child)
-	if err != nil {
-		return false
-	}
-	if strings.HasPrefix(rel, "..") {
-		return false
-	}
-	return true
-}

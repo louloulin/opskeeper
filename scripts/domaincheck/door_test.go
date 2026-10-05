@@ -42,6 +42,27 @@ import (
 func writeTree(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
+	// Every fixture tree has to have all three control-plane modules on
+	// disk, even the ones that only care about two of them. parseControlPlane
+	// walks the whole list in controlPlanePrefixes and reports a missing
+	// directory as a walk that is broken rather than as a module that is
+	// absent, which is the right default for the repository and the wrong
+	// one for a fixture — so the empty module is created here, once, rather
+	// than by every test that happens to call the control-plane walk.
+	for _, prefix := range controlPlanePrefixes {
+		dir := filepath.Join(root, "core", filepath.Base(strings.TrimSuffix(prefix, "/")))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("make %s: %v", dir, err)
+		}
+		// A directory is not a module to the walk; a Go file in it is. The
+		// placeholder is a package with no declarations, so a fixture that
+		// never mentions this module measures exactly what it would have
+		// measured before the module existed.
+		stub := filepath.Join(dir, "stub.go")
+		if err := os.WriteFile(stub, []byte("package "+filepath.Base(dir)+"\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", stub, err)
+		}
+	}
 	for rel, body := range files {
 		path := filepath.Join(root, rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

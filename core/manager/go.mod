@@ -59,6 +59,7 @@ require (
 	github.com/vincent-wuhan/opskeeper/core/base v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/domains v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/edge v0.0.0
+	github.com/vincent-wuhan/opskeeper/core/extension v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/floor v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/pig v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/otel v1.43.0
@@ -188,6 +189,7 @@ replace (
 	github.com/vincent-wuhan/opskeeper/core/domains => ../domains
 	github.com/vincent-wuhan/opskeeper/core => ../
 	github.com/vincent-wuhan/opskeeper/core/edge => ../edge
+	github.com/vincent-wuhan/opskeeper/core/extension => ../extension
 	github.com/vincent-wuhan/opskeeper/core/floor => ../floor
 	github.com/vincent-wuhan/opskeeper/core/pig => ../pig
 	github.com/vincent-wuhan/opskeeper/sdk => ../../sdk

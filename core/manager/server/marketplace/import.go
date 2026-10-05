@@ -36,7 +36,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/domain"
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
+	extcontainer "github.com/vincent-wuhan/opskeeper/core/extension/biz/container"
 )
 
 // ImportFunc converts one legacy container directory into a PiG package at
@@ -155,7 +155,7 @@ func (h *Handler) importContainer(w http.ResponseWriter, r *http.Request) {
 	// later; the route does not have a second opinion about what a
 	// container is.
 	src := source
-	if kind, _, err := chatruntime.DetectContainer(src); err == nil && kind == domain.ContainerNone {
+	if kind, _, err := extcontainer.DetectContainer(src); err == nil && kind == domain.ContainerNone {
 		src = descendSingleDir(src)
 	}
 

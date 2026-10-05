@@ -216,6 +216,37 @@ func rules() []rule {
 			Label:     "domains (control-plane release floor)",
 		},
 		{
+			// extension is the plugin surface — the loader that turns a
+			// directory on disk into a validated set of skill, agent and
+			// command declarations. It is the first module cut out of
+			// core/manager under a criterion that is not "the control
+			// plane is too big": the criterion is what a plugin author
+			// has to be able to depend on.
+			//
+			// The list below is two entries and that is the whole design.
+			// A plugin format whose loader drags in an HTTP server, a
+			// database driver and a control plane is not a format anyone
+			// can vendor, so this module is allowed core/domain for the
+			// port types and gopkg.in/yaml.v3 for frontmatter, and
+			// nothing else — not even the other OpsKeeper modules
+			// underneath manager. In particular there is no
+			// core/manager: the loader is pure parsing, and the moment it
+			// needs the control plane to decide something it stops being
+			// a loader and becomes a request to the control plane.
+			//
+			// Trust deliberately stays on the host side. Nothing here
+			// approves a pack, injects a credential, filters a tool call
+			// or writes an audit row; a loader that could also approve
+			// would be a loader an attacker could ship.
+			Dir:    "core/extension",
+			Module: "github.com/vincent-wuhan/opskeeper/core/extension",
+			Allowed: []string{
+				coreModulePrefix + "/",
+				"gopkg.in/yaml.v3",
+			},
+			Label: "extension (plugin surface)",
+		},
+		{
 			// base is the control plane's own infrastructure, one tier
 			// below the control plane: errors, tenant context, credential
 			// injection, the audit write port, database and cache plumbing,

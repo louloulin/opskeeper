@@ -163,6 +163,10 @@ components:
   #   pig         the PiG adapter. The ONLY component permitted to
   #               import github.com/MichaelKinsy/PiG.
   #   plugin_sdk  the third-party plugin surface. Depends on core only.
+  # oxextension_container is the plugin loader (决策 271). Its only project
+  # edge is core/domain, for the port types the host implements — see the
+  # `deps:` entry below.
+  oxextension_container: { in: core/extension/biz/container/** }
   oxcore_domain: { in: core/domain/** }
   oxcore_ports:  { in: core/ports/** }
   oxcore_wire:   { in: core/wire/** }
@@ -256,6 +260,21 @@ components:
 
 # 允许依赖的正向清单（未列出 = 禁止）
 deps:
+  # ---------------- 插件面 → 契约层 ----------------
+  #
+  # 决策 271 把容器加载器从 core/manager/biz/aiops/chatruntime 切到
+  # core/extension，切成一个独立的 go module。它全部的项目内依赖只有一条：
+  # core/domain——因为 ContainerLoader 要实现 domain.ContainerLoader 这个
+  # 端口，ContainerKind / LoadWarning 也要和端口签名对齐。
+  #
+  # 刻意**没有**的：core/manager（加载器是纯解析，需要的是文件系统和一个
+  # YAML 解析器；一旦它需要控制面替它决定什么，它就不是加载器而是一次对
+  # 控制面的请求）、core/pig、core/floor、core/base。第三方只允许
+  # gopkg.in/yaml.v3，而这条限制的真正执行者是 core/extension/go.mod 的
+  # require 表，不是这份 yml——模块系统是编译期的事实，arch-lint 是评审期
+  # 的提醒，两者都要有。
+  oxextension_container:
+    mayDependOn: [oxcore_domain]
   # ---------------- BC → 2.0 契约层 ----------------
   #
   # 下面每个 BC 都被允许依赖 oxcore_*。这不是把边界放松，而是把已经存在
@@ -358,6 +377,11 @@ deps:
       # 才留下，没人行使的必须撤。
       - oxcore_domain
       - oxcore_ports
+      # 决策 271：server/marketplace/import.go 探一次容器类型来判断导入
+      # 源长什么样（.claude-plugin / openclaw / 裸 skills 目录）。这个判断
+      # 过去借道 chatruntime 借来，于是 HTTP 层为了读一个枚举认识了一整个
+      # Agent 运行时；改读插件面之后这条边只剩枚举本身。
+      - oxextension_container
       # 决策 67：query_translate 端点直接发一次补全（不建 Session），
       # http.go 读回 stored-ledger 的用量。这两处与控制面其他调用方看到
       # 的是同一套 PiG 类型，所以授权与 biz 层相同——HTTP 层没有第二个
@@ -424,6 +448,12 @@ deps:
       - oxcore_wire
       - oxdomains_biz
       - oxdomains_model
+      # oxextension_container: 插件容器加载器（决策 271）。chatruntime、
+      # biz/marketplace 与 biz/pluginimport 从 chatruntime 里那套重复声明
+      # 改成直接 import 它之后，控制面到插件面只有这一条边，而不是三条
+      # 各自指向 chatruntime 的边。加载器本身不认识控制面——它的
+      # mayDependOn 只有 oxcore_domain，方向由 core/extension/go.mod 兜底。
+      - oxextension_container
       - oxpig_agent
       - oxpig_ai
       - oxpig_model

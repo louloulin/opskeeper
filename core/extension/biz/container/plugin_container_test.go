@@ -1,4 +1,4 @@
-package chatruntime
+package container
 
 import (
 	"path/filepath"
@@ -299,4 +299,38 @@ func mapKeys(m map[string]any) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestBareSkillsPackID — id normalisation rules.
+func TestBareSkillsPackID(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"vercel-labs__skills", "vercel-labs-skills"},
+		{"My Awesome Pack v2", "my-awesome-pack-v2"},
+		{"____", "untitled-skill-pack"},
+		{"", "untitled-skill-pack"},
+		{"snake_case_repo", "snake-case-repo"},
+		{"already-clean", "already-clean"},
+	}
+	for _, tc := range cases {
+		if got := bareSkillsPackID(tc.in); got != tc.want {
+			t.Errorf("bareSkillsPackID(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func skillNames(skills []*Skill) []string {
+	out := make([]string, 0, len(skills))
+	for _, sk := range skills {
+		out = append(out, sk.Name)
+	}
+	return out
+}
+
+func hasName(list []string, name string) bool {
+	for _, n := range list {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }

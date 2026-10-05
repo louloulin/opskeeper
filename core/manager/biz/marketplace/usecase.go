@@ -15,16 +15,17 @@ import (
 	"strings"
 	"time"
 
-	chatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/marketplace"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	extcontainer "github.com/vincent-wuhan/opskeeper/core/extension/biz/container"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/marketplace"
 )
 
 // Config wires the usecase's filesystem layout + trust knobs.
 type Config struct {
 	// SystemSkillsRoot is the cluster-wide pack root (every tenant
 	// sees these). Today it doubles as the AgentsRoot — packs ship
-	// agents/ inside themselves and chatruntime.LoadAll picks them up
+	// agents/ inside themselves and extcontainer.LoadAll picks them up
 	// from either root. Single-tenant deployments use this and leave
 	// TenantSkillsRoot nil.
 	SystemSkillsRoot string
@@ -170,14 +171,14 @@ func (uc *Usecase) Install(ctx context.Context, caller Caller, src Source) (*Ins
 	//      bare skills.sh layout        (skills/<name>/SKILL.md or root SKILL.md)
 	//    Rejection only fires on ContainerNone — nothing at all that
 	//    looks like a pack.
-	containerKind, _, err := chatruntime.DetectContainer(stagingPath)
-	if err != nil || containerKind == chatruntime.ContainerNone {
+	containerKind, _, err := extcontainer.DetectContainer(stagingPath)
+	if err != nil || containerKind == extcontainer.ContainerNone {
 		cleanupStaging()
 		return nil, fmt.Errorf("%w: not a recognized pack layout (need .claude-plugin/plugin.json, openclaw.plugin.json, or at least one skills/<name>/SKILL.md)", errs.ErrInvalid)
 	}
 
 	// 3. Validate by loading the container — same parser as boot.
-	loadRes, loadErr := chatruntime.LoadPluginContainer(stagingPath)
+	loadRes, loadErr := extcontainer.LoadPluginContainer(stagingPath)
 	if loadErr != nil {
 		cleanupStaging()
 		return nil, fmt.Errorf("%w: plugin container load failed: %s", errs.ErrInvalid, loadErr.Error())
@@ -429,7 +430,7 @@ func (uc *Usecase) SetBindings(ctx context.Context, caller Caller, packID string
 // binding's KEY (declared slot vs manual "extra:") is irrelevant here — every
 // associated credential is injected by its own TYPE rule at exec. Best-effort:
 // unparsable rows are skipped; single-tenant (lists all). Satisfies
-// chatruntime.CredentialBinder structurally.
+// the credential binder structurally.
 func (uc *Usecase) BoundCredentialNamesForSkills(ctx context.Context, skillNames []string) []string {
 	if len(skillNames) == 0 {
 		return nil
@@ -682,7 +683,7 @@ func (uc *Usecase) fetchToStaging(ctx context.Context, src Source) (string, stri
 			return "", "", fmt.Errorf("git clone: %w (%s)", err, strings.TrimSpace(string(out)))
 		}
 		// Drop the .git dir so it doesn't bloat the install or get
-		// scanned by chatruntime.
+		// scanned by the container loader.
 		_ = os.RemoveAll(filepath.Join(dst, ".git"))
 		return dst, stage, nil
 
@@ -726,7 +727,7 @@ func (uc *Usecase) downloadAndExtractTarball(ctx context.Context, url, dst strin
 // rebaseDirs rewrites every loaded skill / agent .Dir from the
 // staging path to the final install path. Required because the
 // LoadPluginContainer call ran against staging.
-func rebaseDirs(res *chatruntime.LoadResult, installPath string) {
+func rebaseDirs(res *extcontainer.LoadResult, installPath string) {
 	if res == nil {
 		return
 	}
@@ -748,7 +749,7 @@ func rebaseDirs(res *chatruntime.LoadResult, installPath string) {
 // builder. It walks every skill in the LoadResult, pulls
 // metadata.requires + metadata.opskeeper.edge_capabilities + tool
 // classes, and dedupes a summary across them.
-func buildCapabilityDeclaration(packID, version string, res *chatruntime.LoadResult) CapabilityDeclaration {
+func buildCapabilityDeclaration(packID, version string, res *extcontainer.LoadResult) CapabilityDeclaration {
 	caps := CapabilityDeclaration{
 		PackID:  packID,
 		Version: version,
@@ -799,7 +800,7 @@ func buildCapabilityDeclaration(packID, version string, res *chatruntime.LoadRes
 		for _, t := range sk.Tools {
 			cls := string(t.Class)
 			if cls == "" {
-				cls = string(chatruntime.ClassRead)
+				cls = string(domain.ClassRead)
 			}
 			if !classSeen[cls] {
 				classSeen[cls] = true

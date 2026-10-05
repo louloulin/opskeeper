@@ -71,6 +71,11 @@ import (
 var controlPlanePrefixes = []string{
 	"github.com/vincent-wuhan/opskeeper/core/manager/",
 	"github.com/vincent-wuhan/opskeeper/core/domains/",
+	// 决策 271：插件面也参与「控制面不许反向依赖」的判定。container
+	// 不在这里的话，core/manager → core/extension 这条边会落在三段
+	// prefix 之外被当成模块外部的 import 跳过，于是「extension 不许
+	// 回头依赖 manager」这条规则就只剩 modulecheck 一道闸。
+	"github.com/vincent-wuhan/opskeeper/core/extension/",
 }
 
 const managerPrefix = "github.com/vincent-wuhan/opskeeper/core/manager/"
@@ -134,6 +139,14 @@ var sharedDomains = map[string]string{
 	"migrate":       "schema migration",
 	"migrator":      "migration steps",
 	"higress":       "the gateway configuration surface",
+	// container is the plugin container loader (decision 271). It is
+	// shared for the same reason pkg used to be and no longer is: two
+	// domains on opposite sides of every other boundary both need it —
+	// aiops resolves skills and personas out of what it loaded, and
+	// marketplace has to know what kind of pack it is staging — and it
+	// is now its own Go module, so nothing about it can drift back into
+	// either of them.
+	"container": "the plugin container loader: the on-disk format every domain that reads a pack goes through first",
 }
 
 // edges is every cross-domain import that exists on purpose.
@@ -175,8 +188,6 @@ var edges = map[edge]string{
 	{"imbridge", "aiops"}: "the IM bridge delivers an agent finding into a chat channel, so it formats the agent's output",
 
 	{"loop", "alert"}: "an investigation starts from an alert and closes it, so the loop reads and updates alert state",
-
-	{"marketplace", "aiops"}: "the marketplace lists what an agent can install, which is the agent's tool vocabulary",
 
 	{"mcp", "loop"}: "an investigation started over MCP enters the same loop as a chat one",
 
@@ -887,21 +898,31 @@ func wiringUse(root string) (map[string]map[string]int, error) {
 	return out, nil
 }
 
-// parseControlPlane walks the whole control plane, which is two modules.
+// parseControlPlane walks the whole control plane, which is three modules
+// as of decision 271.
 //
 // The tests call this rather than parseTree so that a test and the gate
 // cannot end up measuring different trees — which is exactly what happened
 // when the release floor moved out of core/manager and three tests kept
-// walking the directory it had left.
+// walking the directory it had left. It happened a second time, smaller, when
+// the plugin loader moved out to core/extension: the walk still covered only
+// manager and domains, so the counter said 56 while the graph — which builds
+// a node for every declared shared domain — placed 57. The third module is
+// here so the counter and the graph are counting the same set again, and the
+// loop is over controlPlanePrefixes rather than over an index so the next
+// module cannot be added to one and forgotten in the other.
 func parseControlPlane(root string) ([]source, treeStats, error) {
 	var sources []source
 	stats := treeStats{}
 	seen := map[string]bool{}
-	for _, mod := range []struct{ dir, prefix string }{
-		{"core/manager", controlPlanePrefixes[0]},
-		{"core/domains", controlPlanePrefixes[1]},
-	} {
-		got, st, err := parseTree(filepath.Join(root, filepath.FromSlash(mod.dir)), mod.prefix, defaultRules())
+	for _, prefix := range controlPlanePrefixes {
+		// The prefix is github.com/vincent-wuhan/opskeeper/core/<mod>/, so
+		// the tree it names is core/<mod> next to this repository's root.
+		// Deriving one from the other is the point: a module added to
+		// controlPlanePrefixes is walked by the same line that declares it
+		// shared, and there is no second list to forget.
+		dir := filepath.Join("core", filepath.Base(strings.TrimSuffix(prefix, "/")))
+		got, st, err := parseTree(filepath.Join(root, filepath.FromSlash(dir)), prefix, defaultRules())
 		if err != nil {
 			return nil, treeStats{}, err
 		}

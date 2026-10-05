@@ -14,13 +14,14 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/mysql v0.42.0
 	github.com/vincent-wuhan/opskeeper/core v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/base v0.0.0
-github.com/vincent-wuhan/opskeeper/core/domains v0.0.0
+	github.com/vincent-wuhan/opskeeper/core/domains v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/edge v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/floor v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/harness v0.0.0-00010101000000-000000000000
 	github.com/vincent-wuhan/opskeeper/core/manager v0.0.0-00010101000000-000000000000
 	github.com/vincent-wuhan/opskeeper/core/pig v0.0.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.68.0
+	go.opentelemetry.io/otel/trace v1.43.0
 	golang.org/x/sync v0.22.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.6.0
@@ -136,6 +137,7 @@ require (
 	github.com/sugarme/tokenizer v0.2.3-0.20230829214935-448e79b1ed65 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
+	github.com/vincent-wuhan/opskeeper/core/extension v0.0.0 // indirect
 	github.com/vincent-wuhan/opskeeper/sdk v0.0.0 // indirect
 	github.com/yalue/onnxruntime_go v1.7.0 // indirect
 	github.com/yuin/goldmark v1.8.5 // indirect
@@ -146,7 +148,6 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.43.0 // indirect
 	go.opentelemetry.io/otel/metric v1.43.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.43.0 // indirect
-	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
@@ -203,8 +204,9 @@ require (
 replace (
 	github.com/vincent-wuhan/opskeeper/core => ./core
 	github.com/vincent-wuhan/opskeeper/core/base => ./core/base
-github.com/vincent-wuhan/opskeeper/core/domains => ./core/domains
+	github.com/vincent-wuhan/opskeeper/core/domains => ./core/domains
 	github.com/vincent-wuhan/opskeeper/core/edge => ./core/edge
+	github.com/vincent-wuhan/opskeeper/core/extension => ./core/extension
 	github.com/vincent-wuhan/opskeeper/core/floor => ./core/floor
 	github.com/vincent-wuhan/opskeeper/core/harness => ./core/harness
 	github.com/vincent-wuhan/opskeeper/core/manager => ./core/manager

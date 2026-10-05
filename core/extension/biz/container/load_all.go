@@ -1,4 +1,4 @@
-package chatruntime
+package container
 
 import (
 	"fmt"
@@ -146,9 +146,9 @@ func walkLoadRoot(root string, wantSkills bool) (*LoadResult, error) {
 		// /var/lib/opskeeper/system/skills/<pack> → real-bundle). filepath.Walk
 		// won't follow it on its own, so we Stat-resolve it: if it lands
 		// inside resolvedRoot AND points to a directory that hosts a
-		// plugin container, treat it as a container.
+		// plugin container, treat it as a 
 		if info.Mode()&os.ModeSymlink != 0 {
-			if !pathSafeUnderRoot(path, resolvedRoot, &res.Warnings) {
+			if !PathSafeUnderRoot(path, resolvedRoot, &res.Warnings) {
 				return nil
 			}
 			target, err := os.Stat(path)
@@ -200,7 +200,7 @@ func walkLoadRoot(root string, wantSkills bool) (*LoadResult, error) {
 			if base != "SKILL.md" {
 				return nil
 			}
-			if !pathSafeUnderRoot(path, resolvedRoot, &res.Warnings) {
+			if !PathSafeUnderRoot(path, resolvedRoot, &res.Warnings) {
 				return nil
 			}
 			sk, ws, err := ParseSkillMd(path)
@@ -223,7 +223,7 @@ func walkLoadRoot(root string, wantSkills bool) (*LoadResult, error) {
 		if strings.EqualFold(base, "README.md") {
 			return nil
 		}
-		if !pathSafeUnderRoot(path, resolvedRoot, &res.Warnings) {
+		if !PathSafeUnderRoot(path, resolvedRoot, &res.Warnings) {
 			return nil
 		}
 		ag, ws, err := ParseAgentMd(path)

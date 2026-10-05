@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -258,38 +260,61 @@ func Use(s prod.Selected) string { return s.ID }
 	}
 }
 
-// The measurement is pinned to the tree it was built for.
+// The measurement is pinned to the tree it was built for, and the thing it
+// measures moved.
 //
-// Decision 254's whole argument was that `marketplace -> aiops` is not the
-// cheap edge its import count makes it, and the reason is that LoadResult has
-// no scalar in it: four fields, four containers, two of them parsed trees.
-// If someone narrows LoadResult, this test is where that shows up, and it
-// goes red in the same commit as the change rather than in the next cut's
-// review.
-func TestTheShapeOfLoadResultIsStillTheReasonMarketplaceIsNotCheap(t *testing.T) {
-	sources, _, err := parseControlPlane("../..")
-	if err != nil {
-		t.Fatalf("reading the shipped tree: %v", err)
+// Decision 254's argument was that `marketplace -> aiops` is not the cheap
+// edge its import count makes it, and the reason is that LoadResult has no
+// scalar in it: four fields, four containers, two of them parsed trees.
+// Decision 271 cut that edge — the marketplace now reads the container loader
+// directly, and `container` is a shared domain, so the seam report has no row
+// to read the shape off any more. The measurement is worth more now than it
+// was then: LoadResult is what a plugin author's build pulls in, so its size
+// is the price of `go get`-ing the loader.
+//
+// So the test stopped reading a seam report and started reading the
+// declaration. Same number, measured at the place it now lives.
+func TestTheShapeOfLoadResultIsStillTheReasonItIsNotAOneFieldResult(t *testing.T) {
+	got := measureLoadResult(t, filepath.Join("..", "..", "core", "extension", "biz", "container"))
+	want := "4f 4c 0n"
+	if got != want {
+		t.Errorf("LoadResult is now %q, was %q. Decision 254 priced the plugin result "+
+			"shape on the strength of that number and decision 271 moved the declaration "+
+			"to core/extension; if it was narrowed on purpose, say so here rather than "+
+			"letting the next reader assume the old reading still holds", got, want)
 	}
-	var sb strings.Builder
-	printSeams(&sb, sources, defaultRules())
-	out := sb.String()
+}
 
-	want := "shape: LoadResult(4f 4c"
-	if !strings.Contains(out, want) {
-		t.Errorf("LoadResult is no longer reported as %q, so the note in decision 254 that "+
-			"marketplace is not the cheap edge its two imports make it no longer follows from "+
-			"the tree. If LoadResult was narrowed on purpose, update that section with the new "+
-			"reading rather than deleting this test\n%s", want, grepLines(out, "marketplace"))
+// measureLoadResult finds the LoadResult declaration anywhere in dir and
+// formats it the way the seam report does, so the number this test pins is
+// the same number the report used to print.
+func measureLoadResult(t *testing.T, dir string) string {
+	t.Helper()
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, dir, nil, 0)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", dir, err)
 	}
-	// And the thin end of the same report, which is what a cheap edge looks
-	// like. Call is two strings; if it grows, systemhealth -> alert stops being
-	// the two-string projection it was assessed as.
-	if !strings.Contains(out, "Caller(2f 0c") {
-		t.Errorf("Caller is no longer reported as 2 fields and 0 containers. Decision 254 "+
-			"assessed systemhealth -> alert as a cheap cut on the strength of that shape; if "+
-			"Caller has grown, that assessment needs revisiting\n%s", grepLines(out, "systemhealth"))
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				gen, ok := decl.(*ast.GenDecl)
+				if !ok || gen.Tok != token.TYPE {
+					continue
+				}
+				for _, spec := range gen.Specs {
+					ts, ok := spec.(*ast.TypeSpec)
+					if !ok || ts.Name.Name != "LoadResult" {
+						continue
+					}
+					b := measureBulk(ts)
+					return fmt.Sprintf("%df %dc %dn", b.fields, b.containers, b.nested)
+				}
+			}
+		}
 	}
+	t.Fatalf("no LoadResult declaration under %s", dir)
+	return ""
 }
 
 func grepLines(s, needle string) string {

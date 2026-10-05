@@ -1,4 +1,4 @@
-package chatruntime
+package container
 
 import (
 	"os"
@@ -107,23 +107,6 @@ body beta
 	}
 	if len(res.Skills) != 2 {
 		t.Errorf("want 2 skills loaded, got %d", len(res.Skills))
-	}
-}
-
-// TestBareSkillsPackID — id normalisation rules.
-func TestBareSkillsPackID(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"vercel-labs__skills", "vercel-labs-skills"},
-		{"My Awesome Pack v2", "my-awesome-pack-v2"},
-		{"____", "untitled-skill-pack"},
-		{"", "untitled-skill-pack"},
-		{"snake_case_repo", "snake-case-repo"},
-		{"already-clean", "already-clean"},
-	}
-	for _, tc := range cases {
-		if got := bareSkillsPackID(tc.in); got != tc.want {
-			t.Errorf("bareSkillsPackID(%q) = %q, want %q", tc.in, got, tc.want)
-		}
 	}
 }
 

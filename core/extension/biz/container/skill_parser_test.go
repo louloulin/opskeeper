@@ -1,6 +1,7 @@
-package chatruntime
+package container
 
 import (
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -59,7 +60,7 @@ func TestParseSkillMd_Typical(t *testing.T) {
 	if len(sk.Tools) != 2 {
 		t.Fatalf("Tools len = %d, want 2", len(sk.Tools))
 	}
-	if sk.Tools[0].Name != "find_files" || sk.Tools[0].Class != ClassRead {
+	if sk.Tools[0].Name != "find_files" || sk.Tools[0].Class != domain.ClassRead {
 		t.Errorf("Tools[0] = %+v", sk.Tools[0])
 	}
 	if sk.Tools[0].WhenToUse == "" {

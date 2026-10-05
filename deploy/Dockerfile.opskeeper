@@ -120,6 +120,7 @@ COPY core/go.mod          ./core/
 COPY core/base/go.mod     ./core/base/
 COPY core/domains/go.mod  ./core/domains/
 COPY core/edge/go.mod     ./core/edge/
+COPY core/extension/go.mod ./core/extension/
 COPY core/floor/go.mod    ./core/floor/
 COPY core/harness/go.mod  ./core/harness/
 COPY core/manager/go.mod  ./core/manager/
