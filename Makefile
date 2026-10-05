@@ -231,11 +231,22 @@ eval-axes: ## golden case 是否声明了三个诊断轴（能测才算数）
 # that matter cannot be checked by reading a manifest after the fact — a
 # promoted pattern has to be able to load, a retired one has to disappear, and
 # a trial that is not evidence has to change nothing — so the gate runs them.
+#
+# The second command is the one this gate did not have until a mutation
+# proved it needed. Everything above tests the mechanism; nothing tested
+# whether the manager's boot path calls it. Deleting the single line in
+# main.go that builds the learner left this gate green, left
+# `go test ./cmd/...` green, and left the plan's item 7 — a fix pattern
+# promoting itself into a runbook — silently dead. A gate that names a
+# capability and does not check that anything calls it is the same defect as
+# a comment, one level up.
 .PHONY: crystallize-check
-crystallize-check: ## 结晶：晋升 / 退役 / 拒绝不可用输入 / 草稿能过真实校验器
+crystallize-check: ## 结晶：晋升 / 退役 / 拒绝不可用输入 / 草稿能过真实校验器 / 生产接线在位
 	cd core/manager && GOWORK=off go test ./biz/aiops/crystallize/ -count=1 -run \
 		'TestTheEmittedDeclarationIsOneAPackageCanLoad|TestThreeCleanVerificationsPromoteAPattern|TestARollbackRetiresAPromotedPattern|TestADraftRefusesToOverwriteAPackage|TestAnUnusableTrialChangesNothing|TestTrialOfBuildsATrialTheLedgerAccepts'
-	@echo "crystallize-check: promotion, retirement, refusal and load-through-admission are green"
+	GOWORK=off go test ./cmd/opskeeper/ -count=1 -run \
+		'TestTheCrystallizerTheBootBuildsIsTheOneTheOrchestratorIsGiven|TestANilAlertRepoLeavesTheFeatureOffRatherThanTakingTheProcessDown'
+	@echo "crystallize-check: promotion, retirement, refusal, load-through-admission and the boot wiring are green"
 
 # Marking foreign text as untrusted is a security claim, and a claim that
 # nothing checks is a comment. The gate pins the four things the claim rests

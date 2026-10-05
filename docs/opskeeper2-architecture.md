@@ -3617,7 +3617,7 @@ case resp.Accepted + resp.Rejected >= len(rows):
 | P1-5 | 工具级资源配额缺失 | ✅ **已关** | `sdk/manifest.go:292` 校验 `spec.tools[].limits`（负值拒绝）；强制点 `core/edge/toolbroker/server.go:141-143/391/417`（未声明也有默认上限）；`budget_test.go` 6 条 |
 | 1.3 | 幂等与栅栏（论文 2607.14166 三探针） | ✅ **已关** | `core/edge/policygate/fence_test.go` 9 条，正对三个探针：同一幂等键提交八次只执行一次（:25）、租约内可收租约外不可（:129）、会话内第二个写调用**等待而非排队**（:173，即兄弟分支不被绕过）、读不被挂起的审批挡住（:220）、拒绝在窗口内有效且后来的「同意」能清掉先前的「不」（:346） |
 | P2-6 | 工具语义鸿沟（工具注册表 + 语义检索） | ✅ **已关**（决策 104 更新本行） | 新包 `core/manager/biz/aiops/toolregistry`（`Entry` 值类型 + 唯一适配点 `EntryFromToolInfo` + `Catalogue.Search` 相关性排序 + `Fuse`/`RRFConstant` 混合检索接缝，18 条测试）；`ToolSearch` 的 keyword 分支从「按注册顺序截断」改为按相关性排序，`select:` 与响应 JSON 形状一字未动（§4.42） |
-| P2-7 | 成本无结晶机制 | ⚠️ **机制已做，生产端未接线**（决策 106 更新本行） | 新包 `core/manager/biz/aiops/crystallize`（53 条测试）：`Ledger.Record` 按「连续第一次就通过」的 streak 晋升、反证即退役，`DraftFor` 用**同一个** `pluginmanifest.Validate` 自检后产出草稿包；`make crystallize-check` 是闸门。缺的是**证据采集**：平台今天不记录修复的 argv，`Execution`/`TrialOf` 是那个缺口被写成的类型（§4.44.7） |
+| P2-7 | 成本无结晶机制 | ✅ **已关**（决策 244 更新本行，推翻决策 106 的「未接线」） | 新包 `core/manager/biz/aiops/crystallize`（53 条测试）：`Ledger.Record` 按「连续第一次就通过」的 streak 晋升、反证即退役，`DraftFor` 用**同一个** `pluginmanifest.Validate` 自检后产出草稿包；`make crystallize-check` 是闸门。**决策 106 记的「生产端未接线」已经不成立**：`core/manager/biz/aiops/crystallizehook`（`learner.go` 的包注释第一句就是「It is the production wiring the plan's item 7 was missing」）+ `cmd/opskeeper/loop_crystallize.go` + `main.go` 里的 `newLoopCrystallization` 调用已经把 recovery 证据接进 ledger。**决策 106 真正说对的那一半不是「没接线」，是「没有任何东西保证它接着」**——本轮实测：删掉 `main.go` 那一行，`make crystallize-check` 与 `go test ./cmd/...` 全绿。决策 244 补了守卫（§4.176） |
 | P2-8 | eval 只看最终答案（要三维） | ✅ **已关**（决策 105 更新本行） | 新文件 `core/harness/judge/diagnostic.go`：`DiagnosticAxes` 按 Localization × Identification × Reason 打分，两个 judge（启发式 / LLM）在成功路径共用同一组轴；`reason` 读轨迹面而非结论面；`axes` 子命令 + `make eval-axes` 是「三个轴都声明过」的闸门；顺带修掉 schema 加载器静默丢注入参数的真实缺陷（§4.43） |
 | P2-9 | manager 单体化（27 万行 + iam 反向依赖） | ⚠️ **部分** | **反向依赖已关（决策 109）**：`iam → manager` 的三条审计路径从 `scripts/modulecheck/main.go` 的 `exceptions` 台账与 `.go-arch-lint.yml` 的 `iam_server.mayDependOn` 里**双双删除**，行的形状下沉到 `core/manager/pkg/audit`（只放 `Event` + 词表 + request slot，无 usecase / repo / 链头 / HMAC），`biz/audit` 仍是唯一写入咽喉；`make audit-port-check` 13 条守边界、词表闭合、**唯一写入者**与端到端落库（§4.47 + §4.48：决策 110 把同一缺陷在另外 5 个域关掉，并把「谁可以持有咽喉」变成带理由的表）。**决策 111 另加 `make domain-check`**（55 个域 / 50 条声明边 / 7 对已知环 + 检查器 13 条夹具测试，§4.49），**决策 112/113/114/115/116/117/118 把其中七对环全部切掉**（`device ↔ edge`、`alert ↔ demo`、`chatdiagnose ↔ loop`、`loop ↔ report`、`aiops ↔ hitl`、`aiops ↔ loop`、`aiops ↔ alert` → **42 条边 / 0 对环**，§4.50–§4.56；决策 123 加了一条 `federationlink → federation` 的单向边，**43 条边 / 环仍是 0**，§4.59）。**阶段 3 第二条据此判完成**，理由不是表空了而是 §4.56.6 验过：造一个真实新环并把两条边都声明进去，checker 仍会独立算出环并要求处理——**空表转不住**。本轮学到的一条可复用结论：**跨域端口能否在消费方本地声明，取决于跨过去的是不是标量**；对面传复合结构时，那个结构就是耦合的载体（§4.56.2）。**拆分方案第一次被定价（决策 120）**：`make domain-graph` / `make split-cost` 打印这张图（57 域 / 43 边 / 143 条 import / 7 层 DAG）并给候选分组**算账**——`docs/manager-split.proposed` 报 **102 条组内 / 41 条跨组**，最重的一条缝 4 条 import；反向验证：手算 43 条边表得 20 条跨组，与工具输出（15 + 5）一致——决策 123 那条新边落在组内，所以两个数都没动。同时算出一条**反直觉的结论**：先摘底座（`device/edge/alert`）要付 `aiops` 那 **63 条 import** 的账（占跨组总量 71%），比「枢纽跟着底座走」贵一倍以上（89 vs 41）；而把 `aiops` 单独摘成服务最贵（91）。**未批**：这个方案是一个已定价的候选，部署现实（一起扩缩容 / 一起故障 / 独立发版）还没写下来（§4.58）。**体积那一半有了量化依据（决策 119）**：`make deadcode-report` 量出全模块 **486 个符号不可达**（245 零引用 / 241 只有测试引用），**整文件不可达只有 4 个 / 72 行**（占 28 万行的 0.03%），另有 **47 个 `With*` 接缝生产从未配置**。顶层那 4 个逐个打开后没有一个是干净死代码——`MigrateGitArtifact` 是**开了头没做完的灰度**（模型与迁移写完、生产 store 实现没写，注释自承「生产环境替换为 GORM + PostgreSQL」），三个 `Collect*` 是明写的「Phase 1 returns a zero value」占位。所以结论是**体积那一半几乎全是「拆」而不是「删」**（§4.57.4–§4.57.5）。**行数仍敞着**：`core/manager` 实测 **1132 个 Go 文件 / 281,566 行**（口径 `find core/manager -name '*.go'`；此前台账沿用的 1128 / 281,021 是决策 111 时的数，决策 112–115 加过测试文件但没重测，§4.54.6 已更正。仍比方案写的 27 万还多），按限界上下文继续拆分未做；`manager → iam_model`（IM bridge）那条反向依赖按原计划保留 |
 | P2-10 | 无多集群联邦 | ✅ **已关**（决策 192 补本行） | **本行此前记的是「❌ 未做」，理由是 `grep -rni 'federation\|multi-cluster' --include=*.go core/ cmd/` 「只命中 `middleware/adapter/k8s/client.go:259` 的一句注释」——那条理由早已不成立，同一条命令今天命中 **45 个文件**，而锚点表没有任何一个决策回头改过它（机制是「决策 XXX 更新本行」，P2-6/7/8 都被更新过，只有这条没有）。联邦五处落地：`core/floor/federation`（规则与状态机）、`core/manager/biz/federation`（注册表与发布器）、`core/manager/server/federation`（控制面路由）、`core/manager/service/federationchild`（子集群侧代理与原子策略存储）、`core/manager/service/federationlink`（根侧绑定表与两个方向的调用）；生产装配在 `cmd/opskeeper/federation_wiring.go`。来历与 0.97 这个分数的推导见 §六 阶段 3 行第三段 |
@@ -19745,6 +19745,144 @@ T4 与 T5 各是一次「先有洞后补测」：`panelSpecs` 此前既不测覆
   （本轮不动这两个模块）。
 
 
+### 4.176 决策 244：对账表的一行过期了，而过期的那一行说的其实是对的——**第九次「机制在，接线不确定」**
+
+#### 一、起点：按决策 102 的办法重新对账
+
+计划 §二 的十条问题此前在决策 102 逐条对过一次账，判据写得很清楚：
+**「代码在哪、闸门叫什么」，不是「上次写过什么」**。本轮照这个判据重跑 P0–P2
+那十行，第一遍就撞上 §4.40.1 的一行与代码不符：
+
+> | P2-7 | 成本无结晶机制 | ⚠️ **机制已做，生产端未接线**（决策 106 更新本行） | … 缺的是**证据采集**：平台今天不记录修复的 argv
+
+本轮实测到的却是：`core/manager/biz/aiops/crystallizehook` 存在，
+`crystallizehook/learner.go` 的**包注释第一句**就是
+
+> It is the production wiring the plan's item 7 was missing.
+
+`cmd/opskeeper/loop_crystallize.go` 存在，`cmd/opskeeper/main.go:2543` 调了
+`newLoopCrystallization(middlewareReg, alertRepo, aiopsHandler, log)`，
+返回值 `crystallization` 进了 `managerbizloop.OrchestratorDeps` 的
+`Crystallizer` 与 `Triggers` 两个字段。**接线是在的。**
+
+这已经是本文件第二次出现同一形状（第一次是 P2-10 那一行记着
+「`grep federation` 只命中一句注释」，而决策 192 把它翻了过来），
+所以它值得当成一个规律而不是一个巧合：**对账表是快照，代码不是**，
+而快照与代码漂移时，**没有人负责发现**，因为发现的手段（重跑对账）没有闸门。
+
+#### 二、但决策 106 说对的那一半，不是「没接线」
+
+把这一行翻成「已关」之前先做了一件本文件的规矩：先问「**这个结论能被删掉吗**」。
+
+于是在 `main.go` 上做了一次变异——把那唯一一行调用换成零值：
+
+```go
+// crystallization, cerr := newLoopCrystallization(middlewareReg, alertRepo, aiopsHandler, log)
+var crystallization loopCrystallization
+var cerr error
+```
+
+结果：
+
+| 命令 | 变异后 |
+|---|---|
+| `go build ./...` | **绿** |
+| `go test ./cmd/... -count=1` | **绿，381 passed** |
+| `make crystallize-check` | **绿** |
+| `cmd/opskeeper/loop_crystallize_test.go`（6 条） | **全绿** |
+
+**删掉生产接线，四道门全部照绿。** 计划 §二 P2-7 说的那个能力
+（「已被反复验证的修复模式自动晋升为确定性 runbook」）此刻是**死的**，
+而每一条闸门都在报告机制健康。
+
+所以决策 106 的判定要拆成两半，而且**两半的严重程度不同**：
+
+- **「没接线」是错的**——接线在，而且从包注释看是当初专门为此写的。
+- **「没有任何东西保证它接着」是对的**，而且是**九个决策以来最贵的一种**：
+  前八次是「守卫在看空气」（量具的洞），这次是**根本没有量具**——
+  计划的十条问题里，唯一一条「机制已做、装配存疑」的条目，
+  它的装配**恰好就是那个没人测的东西**。
+
+`loop_crystallize_test.go` 那 6 条全部测的是 `newLoopCrystallization` 这个**函数**：
+无工具时关、无 alert repo 时拒绝、有两者时建出 learner。它们**每一条都进不去
+装配**——因为「装配」这个词指的不是函数，是**谁调用它**，而那不在任何函数的
+签名里。
+
+#### 三、修法：一条读 `main.go` 的结构断言，并让闸门 own 它
+
+守卫放在 `cmd/opskeeper/loop_crystallize_boot_test.go`
+（`TestTheCrystallizerTheBootBuildsIsTheOneTheOrchestratorIsGiven`），
+用 `go/ast` 而不是字符串包含。三件事：
+
+1. **找到 `newLoopCrystallization` 的调用，取它绑定到的名字**（`crystallization`）。
+2. **找到 `NewOrchestrator` 的依赖结构体**，取 `Crystallizer` 与 `Triggers`
+   两个字段的填充值。
+3. **断言两者的基名相同**——用 `baseIdent` 把 `x` 与 `x.y` 按**它们指着的那个
+   对象**比较，而不是按拼写比较。
+
+**它比「调用出现过吗」更严**，因为「建了 learner 却接到别的地方」是
+`loop_crystallize_test.go` 永远进不去的另一个状态：那个函数返回的对象是对的，
+问题在**调用者拿它去做了什么**。
+
+两个刻意的写法：
+
+- **`bootObjectBuiltBy` 在找不到调用时 `t.Fatalf` 而不是返回 `""`**。这是决策
+  243 刚写下的判据（「断言集合里每个成员满足 P」的守卫必须同时断言集合非空）
+  在另一个位置的同一条纪律：返回空串会让调用方拿 `""` 去比较，
+  **空集合于是伪装成「两边一致」**——那正是决策 243 查出的
+  grafana/monitor 那两条守卫的洞，而 `""` 比较是它的语法版本。
+- **闸门必须自己拥有它**。只加测试不加 `make crystallize-check` 是不完整的：
+  新测试在根模块，而 `crystallize-check` 第一条命令 `cd core/manager`——
+  **原来的闸门根本不会跑到它**。所以第二条命令加进 Makefile，
+  变异复测确认它转红（见下）。
+
+#### 四、三条变异实测
+
+| 变异 | 结果 | 报出的信息 |
+|---|---|---|
+| M1 删掉 `newLoopCrystallization` 调用 | RED | 「main.go never calls newLoopCrystallization」 |
+| M2 `Crystallizer: nil`（建了但不接） | RED | 「is filled from "nil", not from the object the boot built」 |
+| M3 删掉 `Crystallizer` 字段 | RED | 「OrchestratorDeps has no Crystallizer field」 |
+
+**再加一条闸门级的**：M1 变异下 `make crystallize-check` 从绿转红
+（`FAIL github.com/vincent-wuhan/opskeeper/cmd/opskeeper`），
+还原后回绿。这条是这一刀与前八次的关键区别——**前八次修的是量具，这次补的是闸门**。
+
+#### 五、通则：三个不同的命题，本仓库把它们说过两次
+
+| 命题 | 状态 | 谁保证 |
+|---|---|---|
+| 机制存在 | 42 条顶层用例（`crystallize` 15 + `crystallizehook` 20 + `loop_crystallize` 6 + 本轮 1） | `make crystallize-check` 第一条命令 |
+| 接线存在 | 本轮之前**无人保证** | 决策 244 的守卫 |
+| 接线被闸门覆盖 | 本轮之前**无人保证** | 决策 244 改的 Makefile |
+
+第二行和第三行经常被合起来说成「已实现」，而它们是两个可以各自为假的命题。
+**这一刀的收获不在结晶**，结晶是这仓库里完成度最高的部分之一；
+收获是**上面这张表**，以及一条可推广的判据：
+
+> 一个「机制已完成」的能力，**在被问「谁保证装配存在」之前**，
+> 应当按「未接线」记账。
+
+这不是新发明，本文件 §4.10 与决策 30 就写过同一件事的另一个形状
+（「有的东西有测试不代表有的东西被用」）。**但它需要第二次写下来，
+因为第一次写下来的时候没有配一个闸门，而没有闸门的规则不会留在一个仓库里。**
+
+#### 六、口径与分数
+
+- **分数一个数都不动**：阶段 3 维持 **91.0%**，加权维持 **96.4%**，已切维持
+  **25 / 34**。本轮**一行生产代码都没改**（新增一个测试文件、改 Makefile 闸门）。
+  理由与决策 243 同形：台账的进度是「计划 §四 五阶段的验收闸门过了多少」，
+  修一个守卫不推进任何一个闸门。
+- **但 §4.40.1 的对账表多了一处更正**：P2-7 由 ⚠️ 改 ✅，并按决策 102/192 的
+  既有格式在行内注明「决策 244 更新本行，推翻决策 106 的『未接线』」，
+  保留了推翻它的那次实测（删掉一行，全绿）。**这一行从「过期」变成了
+  「被推翻的过期」**——留着旧结论并注明推翻它，比直接改数字更难被下一轮误读回去。
+- **0.4 的验收仍然缺外部条件**：`docker info` exit 1，daemon 未运行，
+  容器从未在本机起来过。「一台 edge 完成一次真实对话」**不能由离线证据替代**，
+  照旧记为**未验收**。
+- 测试：根模块 `cmd/opskeeper` +1 条顶层用例；`scripts` 维持 **300** 未动。
+
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -19792,6 +19930,25 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 
 加权合计 ≈ **96.4%**（四阶段等比 98 / 100 / 96.7 / 91.0 的均值 96.4）。这一栏按
 决策倒序追加，每一条只说自己动的那一分量：
+
+- **决策 244 不动任何分数，但把对账表的一行从「过期」改成了「被推翻的过期」**——
+  计划 §二 的 P2-7 记着「机制已做，生产端未接线」，本轮实测接线**是有的**
+  （`crystallizehook` 的包注释第一句就写着「It is the production wiring the
+  plan's item 7 was missing」，`main.go` 调了 `newLoopCrystallization`）。
+  **但把那一行换成零值之后：`go build` 绿、`go test ./cmd/...` 绿（381 passed）、
+  `make crystallize-check` 绿、`loop_crystallize_test.go` 那 6 条全绿。**
+  所以决策 106 那一行要拆成两半：**「没接线」是错的，「没有任何东西保证它接着」
+  是对的**——而后者是**第九次量具洞，且是前八次没有的一种：前八次是守卫在量零，
+  这次是根本没有量具**。那 6 条测试全部测的是 `newLoopCrystallization` 这个**函数**，
+  而「谁调用它」不在任何函数的签名里。修法是一条 `go/ast` 结构断言
+  （`cmd/opskeeper/loop_crystallize_boot_test.go`），断言**建出来的那个对象就是
+  交给 orchestrator 的那个对象**——这比「调用出现过吗」更严，因为「建了 learner
+  却接到别处」正是那 6 条永远进不去的状态。三条变异（删调用 / 接 `nil` / 删字段）
+  全红；**闸门级复测**：M1 下 `make crystallize-check` 转红。顺带补上一条纪律：
+  新测试在根模块而原闸门第一条命令是 `cd core/manager`，**不把第二条命令加进
+  Makefile 的话，闸门根本不会跑到它**。这一刀真正的收获是一张可推广的表：
+  **机制存在 / 接线存在 / 接线被闸门覆盖，是三个能各自为假的命题，
+  而后两个此前从未被单独问过**（§4.176）。
 
 - **决策 243 不动任何分数，只给 4 条硬约束加一条数它们的守卫**——**分数不动是结论，
   不是省事**：这一刀**一行生产代码都没改**，而台账把进度定义为「计划 §四 五阶段的验收
