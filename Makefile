@@ -248,6 +248,30 @@ crystallize-check: ## 结晶：晋升 / 退役 / 拒绝不可用输入 / 草稿�
 		'TestTheCrystallizerTheBootBuildsIsTheOneTheOrchestratorIsGiven|TestANilAlertRepoLeavesTheFeatureOffRatherThanTakingTheProcessDown'
 	@echo "crystallize-check: promotion, retirement, refusal, load-through-admission and the boot wiring are green"
 
+# The plan's first P0 is that a node cannot reach a model. Half of that fix
+# lives in llmgw.Register (the routes) and half in
+# modelEndpointResolver.AgentEndpoint (the string every node is handed), and
+# the two are a contract with no witness: a node spends one string against the
+# other and a mismatch is a 404 on every model call — a node that boots,
+# authenticates, reports its metrics and then fails every question.
+#
+# The gate that does cover delivery, e2e-delivery-check, needs Docker, and on
+# a machine without a daemon it cannot run — which is exactly the condition
+# under which this drift would reach a release. So the invariant gets an
+# offline gate: it builds the real router, mounts the real handler, asks the
+# real resolver, and sends a node's request to the address the manager
+# advertises. No container, no provider, no network.
+#
+# Measured before the test existed: dropping the "/v1" suffix from
+# AgentEndpoint left `go test ./...` (737 cases) and `go test ./tests/...`
+# (12 cases) green. Both halves of the drift are now covered — the test goes
+# red whether the advertised root moves or the registered route does.
+.PHONY: agent-llm-path-check
+agent-llm-path-check: ## manager 广告给节点的模型 URL 真的能到达网关注册的路由（决策 245）
+	GOWORK=off go test ./cmd/opskeeper/ -count=1 -run \
+		'TestTheURLANodeIsToldReachesTheGatewayTheManagerMounts'
+	@echo "agent-llm-path-check: the advertised endpoint reaches the model call"
+
 # Marking foreign text as untrusted is a security claim, and a claim that
 # nothing checks is a comment. The gate pins the four things the claim rests
 # on: the marker an attacker would need to forge is drawn per render, a table
