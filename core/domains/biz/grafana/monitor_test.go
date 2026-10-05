@@ -8,8 +8,12 @@ import (
 
 // TestBuildMonitorDashboardJSON verifies the renderer maps each opskeeper
 // panel onto the Grafana wire shape and lays out the grid 2-wide. This
-// is the only logic that runs without a live Grafana, so the test
-// focuses there; SyncMonitorPanels itself is exercised by integration
+// sentence used to say it was the only logic that runs without a live
+// Grafana, and it was measuring the dependency rather than the domain: the
+// client build could not be reached without a settings table, because the
+// service held `*setting.Service` by name. setting_port_test.go now reaches
+// it through a map, so what is left for integration is the part that
+// actually talks to Grafana.
 // tests / manual smoke against an embedded Grafana.
 func TestBuildMonitorDashboardJSON(t *testing.T) {
 	t.Parallel()

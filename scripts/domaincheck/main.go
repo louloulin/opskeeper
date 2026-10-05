@@ -175,8 +175,6 @@ var edges = map[edge]string{
 
 	{"federationlink", "federation"}: "the root side of the cluster channel holds the table of which authenticated caller may act for which child, and it answers that question by asking the federation domain's registry. One direction: the registry does not import the link, because whether a cluster exists is the registry's judgement and reaching a cluster is the link's job (decision 123)",
 
-	{"grafana", "setting"}: "grafana's endpoint and credentials are platform settings",
-
 	{"imbridge", "aiops"}: "the IM bridge delivers an agent finding into a chat channel, so it formats the agent's output",
 
 	{"loop", "alert"}: "an investigation starts from an alert and closes it, so the loop reads and updates alert state",

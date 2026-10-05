@@ -28,8 +28,6 @@ import (
 
 	pkggrafana "github.com/vincent-wuhan/opskeeper/core/base/pkg/grafana"
 	"github.com/vincent-wuhan/opskeeper/core/domain"
-	settingbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/setting"
-	settingmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/setting"
 )
 
 // Identifiers we hand to the user's Grafana. Keep these stable; they're
@@ -48,7 +46,7 @@ var dashboardsFS embed.FS
 
 // Service is the biz-layer orchestrator. svc must be non-nil; log may be.
 type Service struct {
-	settings           *settingbiz.Service
+	settings           domain.SettingStore
 	log                *slog.Logger
 	tlsInsecure        bool   // skip cert verify when calling Grafana
 	panelDashboardUID  string // Monitor-page mirror dashboard uid (HLD-monitor-panels)
@@ -58,7 +56,14 @@ type Service struct {
 // New builds the service. tlsInsecure mirrors cfg.Grafana.TLSInsecure —
 // turn it on when the operator points at an external Grafana with a
 // self-signed cert (matches the pattern PromConfig.TLSInsecure already uses).
-func New(settings *settingbiz.Service, tlsInsecure bool, log *slog.Logger) *Service {
+// New takes the settings port, not the setting service. The distinction is
+// the whole point: `*setting.Service` satisfied this field structurally
+// before, so naming the interface changed nothing about the dependency, and
+// the Grafana service could only be exercised with a settings table and the
+// setting domain in the build graph. What makes it a boundary now is that
+// the port's signature names nothing but builtins — a five-line fake
+// satisfies it, and this package no longer imports setting at all.
+func New(settings domain.SettingStore, tlsInsecure bool, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -118,7 +123,7 @@ func (s *Service) BootstrapEmbedded(ctx context.Context, adminUser, adminPasswor
 	if s.settings == nil {
 		return
 	}
-	existing, _, _ := s.settings.Get(ctx, settingmodel.CategoryGrafana, settingmodel.KeyGrafanaSAToken)
+	existing, _, _ := s.settings.Get(ctx, domain.SettingCategoryGrafana, domain.SettingKeyGrafanaSAToken)
 	if strings.TrimSpace(existing) != "" {
 		s.log.Debug("grafana bootstrap skipped: token already set")
 		return
@@ -127,7 +132,7 @@ func (s *Service) BootstrapEmbedded(ctx context.Context, adminUser, adminPasswor
 		s.log.Info("grafana bootstrap skipped: admin creds not provided (external Grafana?)")
 		return
 	}
-	rootURL, _, _ := s.settings.Get(ctx, settingmodel.CategoryGrafana, settingmodel.KeyGrafanaRootURL)
+	rootURL, _, _ := s.settings.Get(ctx, domain.SettingCategoryGrafana, domain.SettingKeyGrafanaRootURL)
 	rootURL = strings.TrimSpace(rootURL)
 	if rootURL == "" {
 		s.log.Info("grafana bootstrap skipped: root_url empty")
@@ -160,7 +165,7 @@ func (s *Service) BootstrapEmbedded(ctx context.Context, adminUser, adminPasswor
 		s.log.Warn("grafana bootstrap: token create failed; skipping", slog.Any("err", err))
 		return
 	}
-	if err := s.settings.Set(ctx, settingmodel.CategoryGrafana, settingmodel.KeyGrafanaSAToken, token, true); err != nil {
+	if err := s.settings.Set(ctx, domain.SettingCategoryGrafana, domain.SettingKeyGrafanaSAToken, token, true); err != nil {
 		s.log.Error("grafana bootstrap: persist token failed", slog.Any("err", err))
 		return
 	}
@@ -195,7 +200,7 @@ func (s *Service) Sync(ctx context.Context) (*domain.GrafanaSyncResult, error) {
 	// often configure prom + grafana in the same sitting, and the
 	// query_url they typed seconds ago is what they expect to land in
 	// the datasource.
-	promURL, _, _ := s.settings.Get(ctx, settingmodel.CategoryProm, settingmodel.KeyPromQueryURL)
+	promURL, _, _ := s.settings.Get(ctx, domain.SettingCategoryProm, domain.SettingKeyPromQueryURL)
 	promURL = strings.TrimSpace(promURL)
 	if promURL == "" {
 		return nil, errors.New("grafana: cannot sync — prom.query_url is empty (configure Prometheus first)")
@@ -209,9 +214,9 @@ func (s *Service) Sync(ctx context.Context) (*domain.GrafanaSyncResult, error) {
 	// secureJsonData so the user's external Grafana can actually query
 	// the same TSDB opskeeper is writing to. Bearer wins over Basic; if
 	// neither is set, datasource is anonymous.
-	bearer, _, _ := s.settings.Get(ctx, settingmodel.CategoryProm, settingmodel.KeyPromBearerToken)
-	basicUser, _, _ := s.settings.Get(ctx, settingmodel.CategoryProm, settingmodel.KeyPromBasicUser)
-	basicPass, _, _ := s.settings.Get(ctx, settingmodel.CategoryProm, settingmodel.KeyPromBasicPassword)
+	bearer, _, _ := s.settings.Get(ctx, domain.SettingCategoryProm, domain.SettingKeyPromBearerToken)
+	basicUser, _, _ := s.settings.Get(ctx, domain.SettingCategoryProm, domain.SettingKeyPromBasicUser)
+	basicPass, _, _ := s.settings.Get(ctx, domain.SettingCategoryProm, domain.SettingKeyPromBasicPassword)
 
 	ds := pkggrafana.Datasource{
 		UID:    datasourceUID,
@@ -266,13 +271,13 @@ func (s *Service) client(ctx context.Context) (*pkggrafana.Client, error) {
 	if s.settings == nil {
 		return nil, errors.New("grafana: settings service not wired")
 	}
-	root, _, _ := s.settings.Get(ctx, settingmodel.CategoryGrafana, settingmodel.KeyGrafanaRootURL)
+	root, _, _ := s.settings.Get(ctx, domain.SettingCategoryGrafana, domain.SettingKeyGrafanaRootURL)
 	root = strings.TrimSpace(root)
 	if root == "" {
 		return nil, errors.New("grafana: root_url is empty (configure under 设置 → 集成)")
 	}
-	saToken, _, _ := s.settings.Get(ctx, settingmodel.CategoryGrafana, settingmodel.KeyGrafanaSAToken)
-	apiKey, _, _ := s.settings.Get(ctx, settingmodel.CategoryGrafana, settingmodel.KeyGrafanaAPIKey)
+	saToken, _, _ := s.settings.Get(ctx, domain.SettingCategoryGrafana, domain.SettingKeyGrafanaSAToken)
+	apiKey, _, _ := s.settings.Get(ctx, domain.SettingCategoryGrafana, domain.SettingKeyGrafanaAPIKey)
 	token := strings.TrimSpace(saToken)
 	if token == "" {
 		token = strings.TrimSpace(apiKey)

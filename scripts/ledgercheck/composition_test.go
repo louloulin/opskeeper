@@ -53,8 +53,15 @@ func progressSection(t *testing.T) string {
 	return progress
 }
 
+// The three values and the three labels are captured separately. Decision 258
+// is why: the labels used to be skipped as prose and the distinctness check
+// compared the *numbers*, so two different parts that happened to score the
+// same (audit ports 1.00 and the manager split 1.00) were reported as "one
+// part listed twice" — which is the defect the check exists to catch, not an
+// instance of it. The stated reason for the check is about parts, so it now
+// reads the parts.
 var compositionRE = regexp.MustCompile(
-	`\((\d+(?:\.\d+)?)[^()]*?\+ (\d+(?:\.\d+)?)[^()]*?\+ (\d+(?:\.\d+)?)[^()]*?\)\s*/\s*(\d+)`)
+	`\((\d+(?:\.\d+)?)([^\d()]*?)\+ (\d+(?:\.\d+)?)([^\d()]*?)\+ (\d+(?:\.\d+)?)([^\d()]*?)\)\s*/\s*(\d+)`)
 
 // stageRowRE reads the stage number and the percentage out of one row of the
 // four-stage table in the progress section. It is the same shape the
@@ -89,7 +96,7 @@ func TestEveryStageRowThatSpellsOutItsCompositionAddsUpToIt(t *testing.T) {
 		}
 
 		var sum float64
-		for _, raw := range parts[1:4] {
+		for _, raw := range []string{parts[1], parts[3], parts[5]} {
 			v, err := strconv.ParseFloat(raw, 64)
 			if err != nil {
 				problems = append(problems, fmt.Sprintf(
@@ -103,11 +110,11 @@ func TestEveryStageRowThatSpellsOutItsCompositionAddsUpToIt(t *testing.T) {
 		if math.IsNaN(sum) {
 			continue
 		}
-		divisor, err := strconv.Atoi(parts[4])
+		divisor, err := strconv.Atoi(parts[7])
 		if err != nil || divisor == 0 {
 			problems = append(problems, fmt.Sprintf(
 				"stage %s divides its composition by %q, which is not a usable divisor: %s",
-				stage, parts[4], line))
+				stage, parts[7], line))
 			continue
 		}
 
@@ -120,7 +127,7 @@ func TestEveryStageRowThatSpellsOutItsCompositionAddsUpToIt(t *testing.T) {
 			problems = append(problems, fmt.Sprintf(
 				"stage %s reads %s%%, but the composition it spells out (%s + %s + %s) / %d is %s%%; "+
 					"a weighted number derived from a wrong part is wrong everywhere it is quoted",
-				stage, stated, parts[1], parts[2], parts[3], divisor, want))
+				stage, stated, parts[1], parts[3], parts[5], divisor, want))
 		}
 	}
 
@@ -151,18 +158,27 @@ func TestStageThreeNamesItsThreeParts(t *testing.T) {
 	if parts == nil {
 		t.Fatalf("stage 3 no longer spells out its composition, so its percentage has no owner again: %s", row)
 	}
-	if parts[4] != "3" {
+	if parts[7] != "3" {
 		t.Errorf("stage 3 divides by %s; the plan's stage 3 has three lines, so a row that divides by "+
-			"another number is averaging something else", parts[4])
+			"another number is averaging something else", parts[7])
 	}
-	// All three parts have to be distinct, because three copies of one part
-	// would make the mean a constant that never moves.
+	// The three parts have to be distinct, because three copies of one part
+	// would make the mean a constant that never moves. The comparison is on
+	// the labels, not the values: "1.00 audit + 1.00 manager + 0.99
+	// federation" is three parts that happen to include two equal scores,
+	// and reading it as one part twice would forbid the row from ever
+	// reaching a full row (decision 258).
 	seen := map[string]bool{}
-	for _, raw := range parts[1:4] {
-		if seen[raw] {
-			t.Errorf("stage 3's composition lists %s twice: %s", raw, row)
+	for i, raw := range []string{parts[2], parts[4], parts[6]} {
+		label := strings.TrimSpace(strings.Trim(strings.TrimSpace(raw), "*"))
+		if label == "" {
+			t.Errorf("stage 3's composition part %d has no label, so it cannot be told apart from the others: %s", i+1, row)
+			continue
 		}
-		seen[raw] = true
+		if seen[label] {
+			t.Errorf("stage 3's composition lists %s twice: %s", label, row)
+		}
+		seen[label] = true
 	}
 }
 

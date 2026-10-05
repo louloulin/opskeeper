@@ -13,9 +13,9 @@
 # 三份的实测价：
 #
 #   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed         95         24         3 / 4
-#   docs/manager-split.constrained        105         14         0 / 4
-#   docs/manager-split.release-floor        99         20         0 / 4
+#   docs/manager-split.proposed         95         22         3 / 4
+#   docs/manager-split.constrained        105         12         0 / 4
+#   docs/manager-split.release-floor        99         18         0 / 4
 #
 # 决策 230 重取了这三行。触发它的是切掉 `flow -> scheduler`（missed-run 端口
 # 下沉到 `core/floor/scheduler`）：proposed 与 constrained 各少一条组内 import，
@@ -164,12 +164,23 @@
 # **这一条同时是那把尺子第一次给出正面结果**：切边之前 `mcp` 在入向表上，
 # 切完之后不在了。前面十一刀里有十刀是「让一条边变便宜」，这一刀是「让一个域
 # 变得可以被证明独立发版」，而这件事只有在你先问对了问题的时候才会发生。
+#
+# `setting` 是第三个这样进来的（决策 258），而它的进法与前三个都不同：
+# `metric` 是搬走的，`mcp` 是问对了问题才没的，`scheduler` 的入边本来就只有
+# 一条。`setting` 的入边也只有一条（`grafana -> setting`），而那条边的内容是
+# 「grafana 这个域要读配置」——**一个每个域都要读配置的需求，恰好被实现成了
+# 持有配置服务本身**。把 `SettingStore` 端口与 prom/grafana 的词汇下沉到
+# `core/domain` 之后这条边消失，`setting` 域随即入度归零。
+# **这一条是四例里最值得注意的一例**：前三例的端口都搬去了一个**新地方**
+# （`core/floor/tunnel`、`core/domain`、`core/floor/scheduler`），而这一次
+# 搬去的 `core/domain` 早就存在，且里面已经有一个 `grafana.go`。**端口的
+# 正确落点常常是已经有人为别的理由建好的那个包。**
 independent = aiopsconfig, cluster, demo, edgeauth, federationchild,
         federationlink, flow, grafana, iam, imbridge, incident, integration,
         llmgw, llmpig, logs, marketplace, mcp, metric, monitor, nodeagent,
         plugin, pluginimport, prometheus, promwrite, proposal, report,
-        scheduler, secret, skill, systemhealth, systemupgrade, traces, version,
-        webshell
+        scheduler, secret, setting, skill, systemhealth, systemupgrade,
+        traces, version, webshell
 
 # 其余 25 个：入向有边因而需要真答案的 13 个，加上 10 个 shared 底座组件
 # （它们在 import 图里读作叶子但不是叶子——被依赖不需要声明，所以它们的入度
@@ -178,4 +189,4 @@ independent = aiopsconfig, cluster, demo, edgeauth, federationchild,
 core = agentteams, aiops, alert, approval, audit, chatdiagnose, control,
         dataguard, device, edge, federation, frontierbound,
         higress, hitl, knowledge, loop, middleware,
-        migrate, migrator, nodefleet, observability, pkg, setting, topology
+        migrate, migrator, nodefleet, observability, pkg, topology

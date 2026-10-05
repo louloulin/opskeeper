@@ -525,11 +525,16 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// nineteen-column rule model and read one column of it — Enabled, plus
 	// len() on the slice — and threaded a Caller that both alert methods
 	// declare as `_`, so the port asked for rows nobody read and an identity
-	// nobody read).
+	// nobody read) and decision 258's (grafana -> setting, where the port
+	// signature was already all built-in types — string, bool, error — so
+	// `*setting.Service` satisfied it structurally and no adapter was
+	// needed; the only thing this edge named was the type of one field, which
+	// means this cut needed no seam at all, only a port and eleven
+	// constants).
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "25 edges") {
+	if !strings.Contains(buf.String(), "24 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

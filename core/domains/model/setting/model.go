@@ -9,7 +9,11 @@
 // area (llm, notification, ...).
 package setting
 
-import "time"
+import (
+	"time"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+)
 
 // Setting is one (category, key) -> value row.
 //
@@ -36,12 +40,19 @@ func (Setting) TableName() string { return "system_settings" }
 // DB-backed config.
 const (
 	CategoryLLM       = "llm"
-	CategoryProm      = "prom"      // external Prometheus / VictoriaMetrics / Mimir / Thanos
-	CategoryGrafana   = "grafana"   // external Grafana root URL + service-account token
 	CategoryLoki      = "loki"      // external Loki / VictoriaLogs URL + auth
 	CategoryTempo     = "tempo"     // external Tempo OTLP HTTP endpoint + auth
 	CategoryWebSearch = "websearch" // built-in web_search skill: Tavily key + future provider knobs
 	CategoryAgent     = "agent"     // AI agent behaviour toggles (write-action gate, …)
+)
+
+// Prom and Grafana are aliases, not declarations. They moved to core/domain
+// because a second domain has to name them to ask its own question, and a
+// constant two packages each declare is two words that read the same and mean
+// different the day one of them changes. The values are still declared once.
+const (
+	CategoryProm    = domain.SettingCategoryProm
+	CategoryGrafana = domain.SettingCategoryGrafana
 )
 
 // Well-known keys under CategoryAgent.
@@ -135,13 +146,13 @@ const (
 // basic on every request via the Resolver; URLs are read at startup (env
 // seed → DB) and changes require a manager restart.
 const (
-	KeyPromQueryURL       = "query_url"
-	KeyPromRemoteWriteURL = "remote_write_url"
-	KeyPromBearerToken    = "bearer_token" // sensitive
-	KeyPromBasicUser      = "basic_user"
-	KeyPromBasicPassword  = "basic_password" // sensitive
-	KeyPromTLSInsecure    = "tls_insecure"   // "true" / "false"
-	KeyPromTLSCAPEM       = "tls_ca_pem"     // PEM text
+	KeyPromQueryURL       = domain.SettingKeyPromQueryURL
+	KeyPromRemoteWriteURL = domain.SettingKeyPromRemoteWriteURL
+	KeyPromBearerToken    = domain.SettingKeyPromBearerToken // sensitive
+	KeyPromBasicUser      = domain.SettingKeyPromBasicUser
+	KeyPromBasicPassword  = domain.SettingKeyPromBasicPassword // sensitive
+	KeyPromTLSInsecure    = domain.SettingKeyPromTLSInsecure   // "true" / "false"
+	KeyPromTLSCAPEM       = domain.SettingKeyPromTLSCAPEM      // PEM text
 )
 
 // Well-known keys under CategoryGrafana. PR-2 wires these into a Grafana
@@ -158,10 +169,10 @@ const (
 // backend so the dashboard-fetch proxy can default it without making the
 // SPA pass it on every call.
 const (
-	KeyGrafanaRootURL = "root_url"
-	KeyGrafanaSAToken = "sa_token" // sensitive — Grafana service-account token
-	KeyGrafanaAPIKey  = "api_key"  // sensitive — alternative bearer for external Grafana
-	KeyGrafanaOrgID   = "org_id"
+	KeyGrafanaRootURL = domain.SettingKeyGrafanaRootURL
+	KeyGrafanaSAToken = domain.SettingKeyGrafanaSAToken // sensitive — service-account token
+	KeyGrafanaAPIKey  = domain.SettingKeyGrafanaAPIKey  // sensitive — alternative bearer for external Grafana
+	KeyGrafanaOrgID   = domain.SettingKeyGrafanaOrgID
 )
 
 // Well-known keys under CategoryLoki. The PluginConfigUC reads these on
