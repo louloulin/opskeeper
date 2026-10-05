@@ -360,7 +360,7 @@ agent-llm-path-check: ## manager 广告给节点的模型 URL 真的能到达网
 # inside blocks a payload cannot close.
 .PHONY: promptguard-check
 promptguard-check: ## 外来文本进模型前带 nonce 围栏（prompt injection 一条）
-	cd core/manager && GOWORK=off go test ./pkg/promptguard/ -count=1 -run \
+	cd core/base && GOWORK=off go test ./pkg/promptguard/ -count=1 -run \
 		'TestABodyContainingTheClosingMarkerCannotCloseTheBlock|TestAMarkerWithAStaleIDCannotCloseThisBlock|TestEveryBlockGetsAFreshID|TestMarkerVariantsAreEscaped|TestParseRejectsWhatIsNotABlock|TestTheInstructionNamesTheTagTheFencerWrites|TestTheFenceCannotReachThePlatform'
 	cd core/manager && GOWORK=off go test ./biz/aiops/tools/decorators/ -count=1 -run \
 		'TestTheResultIsFencedWithTheToolsOwnName|TestAnAdversarialResultCannotCloseTheFence|TestAnErrorIsNotFenced|TestInfoPassesThrough'
@@ -416,10 +416,10 @@ mcp-surface-check: ## MCP 对外协议面：握手、保活、分页、可见性
 audit-port-check: ## 审计端口：iam 不再反向依赖 manager，词表闭合，行照常落库
 	cd core/manager && GOWORK=off go test ./iam/server/ -count=1 -run \
 		'TestThisContextReachesNothingAboveItself|TestEveryAuditRowThisContextEmitsIsNamedThroughThePort|TestTheArchitectureRulesGrantThisContextNothingAboveIt'
-	cd core/manager && GOWORK=off go test ./pkg/audit/ -count=1 -run \
+	cd core/base && GOWORK=off go test ./pkg/audit/ -count=1 -run \
 		'TestTheSlotSurvivesEveryContextRewrap|TestOutsideAMiddlewareChainNothingIsRemembered|TestThePortCannotReachTheLedger|TestTheVocabularyIsWellFormed|TestOnlyTheThroatHoldsTheWriter|TestNoDomainOutsideTheListsReachesTheWriter'
-	cd core/manager && GOWORK=off go test ./model/audit/ -count=1 -run 'TestTheReExportCoversTheWholeVocabulary'
-	cd core/manager && GOWORK=off go test ./server/middleware/ -count=1 -run \
+	cd core/domains && GOWORK=off go test ./model/audit/ -count=1 -run 'TestTheReExportCoversTheWholeVocabulary'
+	cd core/domains && GOWORK=off go test ./server/middleware/ -count=1 -run \
 		'TestTheRowAHandlerAsksForIsTheRowTheLedgerGets|TestAnUnannotatedRequestIsNotAudited|TestAFailingRequestIsAuditedAsAFailure'
 	@echo "audit-port-check: the port is BC-free, the vocabulary is closed, only the declared holders reach the writer, the grant is gone and rows still land"
 

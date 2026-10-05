@@ -294,6 +294,15 @@ func check(root string) error {
 		problems = append(problems, err.Error())
 	}
 
+	// Being wired is not the same as running anything: a recipe can name a
+	// package that moved to another module, and go test answers "[setup
+	// failed]" about a path instead of failing about a behaviour. Two named
+	// gates in this file's own tables were in that state, so the recipes
+	// themselves are read here.
+	if err := checkGatePackagePaths(root, string(makefile), reachableTargets(string(makefile), invoked)); err != nil {
+		problems = append(problems, err.Error())
+	}
+
 	// The gates being wired is only half of what a workflow promises; the other
 	// half is that a push can start it. Reported with the same discipline --
 	// every disagreement, then exit non-zero.
