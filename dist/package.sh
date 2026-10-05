@@ -116,6 +116,20 @@ copy_opt "${REPO_ROOT}/deploy/install/README.md"           "${STAGE_DIR}/README.
 copy_opt "${REPO_ROOT}/deploy/install/install.sh"          "${STAGE_DIR}/install.sh"          755
 copy_opt "${REPO_ROOT}/deploy/install/uninstall.sh"        "${STAGE_DIR}/uninstall.sh"        755
 copy_opt "${REPO_ROOT}/deploy/install/upgrade.sh"          "${STAGE_DIR}/upgrade.sh"          755
+
+# state-dirs.sh is NOT optional, which is why it does not use copy_opt.
+# install.sh and upgrade.sh `source` it, and both run under `set -e`, so a
+# tarball without it dies on the first data directory rather than on a health
+# check. That is the right place to fail and the wrong reason to get there:
+# copy_opt warns and continues, so a rename on one side would have shipped a
+# tarball that could not install. The whole list of host directories and their
+# uids lives in this one file, so losing it loses every mkdir and chown.
+if [ -f "${REPO_ROOT}/deploy/install/state-dirs.sh" ]; then
+    cp "${REPO_ROOT}/deploy/install/state-dirs.sh" "${STAGE_DIR}/state-dirs.sh"
+    log "  + state-dirs.sh"
+else
+    die "deploy/install/state-dirs.sh missing: install.sh and upgrade.sh source it, and the stack cannot be installed without it"
+fi
 copy_opt "${REPO_ROOT}/deploy/install/docker-compose.yml"  "${STAGE_DIR}/docker-compose.yml"
 copy_opt "${REPO_ROOT}/deploy/install/.env.example"        "${STAGE_DIR}/.env.example"
 copy_opt "${REPO_ROOT}/deploy/install/frontier.yaml"       "${STAGE_DIR}/frontier.yaml"

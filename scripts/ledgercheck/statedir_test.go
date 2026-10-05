@@ -1,8 +1,10 @@
 package ledgercheck
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -109,6 +111,32 @@ func stateRoots(t *testing.T) []string {
 	return roots
 }
 
+// hostSideMountRE captures a data directory as it appears on the HOST side of
+// any mount, whichever service declares it.
+//
+// This is the second of the two sides, and it exists because the first
+// attempt at the reverse assertion was wrong in an instructive way. Asking
+// "is every directory in the install list also a /var/lib/opskeeper mount?"
+// answers no for grafana, loki, mysql, prometheus, qdrant and tempo — all
+// six of which the list quite correctly prepares, and all six of which are
+// mounted by a DIFFERENT service onto its own container path (/prometheus,
+// /var/tempo, …). The check reported correct behaviour as a defect, which is
+// the failure direction a reader trusts most.
+var hostSideMountRE = regexp.MustCompile(`\$\{OPSKEEPER_DATA_DIR[^}]*\}/([A-Za-z0-9_.-]+):`)
+
+func hostSideStateDirs(t *testing.T) map[string]bool {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.FromSlash(installManifest))
+	if err != nil {
+		t.Fatalf("read %s: %v", installManifest, err)
+	}
+	out := map[string]bool{}
+	for _, m := range hostSideMountRE.FindAllStringSubmatch(string(raw), -1) {
+		out[m[1]] = true
+	}
+	return out
+}
+
 // Two limits of this reconciliation, stated here rather than discovered later.
 //
 // It reads the manifest as text and does not parse which service a volume
@@ -124,17 +152,22 @@ func stateRoots(t *testing.T) []string {
 // exactly the kind of state a developer wants thrown away. The helm chart is
 // not read either, because it mounts the whole state root as one PVC and so
 // has no per-directory list to disagree about.
+// installManifest is the production shape. The development compose next to
+// it deliberately keeps nothing under /var/lib/opskeeper, and the helm chart
+// mounts the whole state root as one PVC, so neither has a per-directory list
+// to disagree about.
+const installManifest = "../../deploy/install/docker-compose.yml"
+
 func mountedStateDirs(t *testing.T) map[string]string {
 	t.Helper()
-	const manifest = "../../deploy/install/docker-compose.yml"
-	raw, err := os.ReadFile(filepath.FromSlash(manifest))
+	raw, err := os.ReadFile(filepath.FromSlash(installManifest))
 	if err != nil {
-		t.Fatalf("read %s: %v", manifest, err)
+		t.Fatalf("read %s: %v", installManifest, err)
 	}
 	out := map[string]string{}
 	for i, line := range strings.Split(string(raw), "\n") {
 		for _, m := range composeMountRE.FindAllStringSubmatch(line, -1) {
-			out[m[1]] = fmt.Sprintf("%s:%d", manifest, i+1)
+			out[m[1]] = fmt.Sprintf("%s:%d", installManifest, i+1)
 		}
 	}
 	return out
@@ -216,90 +249,120 @@ func TestEveryStateDirTheCodeWritesHasAHostMount(t *testing.T) {
 // the four mounts this decision added — and it is written after adding them
 // rather than before, which is the honest note on its own value.
 
-// chownRE captures the state directory a `chown -R` re-owns to the manager's
-// uid. Only the manager's own uid is captured; a mount for another service
-// (mysql, grafana) is chowned to that service's uid and is not this check's
-// business.
-var chownRE = regexp.MustCompile(`chown -R +65532:65532 +"\$OPSKEEPER_DATA_DIR/([A-Za-z0-9_.-]+)"`)
+// stateDirsSH is the single place the host directories and their uids are
+// written down, and both install paths read it rather than carrying a copy.
+const stateDirsSH = "../../deploy/install/state-dirs.sh"
 
-func chownedStateDirs(t *testing.T, script string) map[string]bool {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.FromSlash(script))
-	if err != nil {
-		t.Fatalf("read %s: %v", script, err)
-	}
-	out := map[string]bool{}
-	for _, m := range chownRE.FindAllStringSubmatch(string(raw), -1) {
-		out[m[1]] = true
-	}
-	return out
+// stateDir is one row of that list: a directory under the manager's data root
+// and the uid its container process runs as. A uid of "-" means "create it,
+// do not chown it" — a service whose container runs as root.
+type stateDir struct {
+	uid string
 }
 
-// mkdirStateDirRE matches a state directory named in a shell script. It is
-// applied only to the lines a `mkdir` command spans, because the same
-// variable appears in the chown lines too and matching those would make the
-// mkdir check pass on the strength of a chown — which is the exact inversion
-// this check exists to catch, since a chown of a directory that does not exist
-// yet is a no-op.
-var mkdirStateDirRE = regexp.MustCompile(`"\$OPSKEEPER_DATA_DIR/([A-Za-z0-9_.-]+)"`)
-
-func mkdirStateDirs(t *testing.T, script string) map[string]bool {
+// listedStateDirs runs the list rather than parsing it.
+//
+// The list is a shell function, so a regex over it is a second description of
+// a format that the shell itself already knows how to read: it would drift
+// the first time a row gained a field, and it would drift SILENTLY, because a
+// regex that stops matching produces an empty set and an empty set reads as
+// "nothing to check" to every assertion downstream. Executing the function
+// costs one exec and cannot disagree with what install.sh will see.
+func listedStateDirs(t *testing.T) map[string]stateDir {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.FromSlash(script))
+	cmd := exec.Command("bash", "-c", "set -euo pipefail; . \"$1\"; opskeeper_state_dirs", "bash", stateDirsSH)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("read %s: %v", script, err)
+		t.Fatalf("running %s: %v\n%s", stateDirsSH, err, stderr.String())
 	}
-	out := map[string]bool{}
-	spanning := false
-	for _, line := range strings.Split(string(raw), "\n") {
-		if !spanning && !strings.Contains(line, "mkdir") {
+	outMap := map[string]stateDir{}
+	for i, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
 			continue
 		}
-		for _, m := range mkdirStateDirRE.FindAllStringSubmatch(line, -1) {
-			out[m[1]] = true
+		fields := strings.Fields(line)
+		if len(fields) < 2 || len(fields) > 3 {
+			t.Fatalf("%s line %d is not <dir> <uid> [mode]: %q", stateDirsSH, i+1, line)
 		}
-		// A backslash continues the command; anything else ends it.
-		spanning = strings.HasSuffix(strings.TrimRight(line, " \t"), "\\")
-		if !spanning {
-			continue
+		if _, dup := outMap[fields[0]]; dup {
+			t.Fatalf("%s lists %q twice", stateDirsSH, fields[0])
 		}
+		if fields[1] != "-" && !uidRE.MatchString(fields[1]) {
+			t.Fatalf("%s line %d has uid %q, which is neither n:n nor -", stateDirsSH, i+1, fields[1])
+		}
+		outMap[fields[0]] = stateDir{uid: fields[1]}
 	}
-	return out
+	if len(outMap) == 0 {
+		t.Fatalf("%s listed no directories, so this check is reading nothing", stateDirsSH)
+	}
+	return outMap
 }
 
-func TestEveryMountedStateDirIsChownedByBothInstallScripts(t *testing.T) {
+// uidRE is the one shape a uid column may take besides "-".
+var uidRE = regexp.MustCompile(`^\d+:\d+$`)
+
+// managerUID is what Dockerfile.opskeeper chowns the state root to and then
+// runs as, so it is the uid every mount the manager writes into must carry.
+const managerUID = "65532:65532"
+
+func TestEveryMountedStateDirIsPreparedByTheInstallList(t *testing.T) {
 	mounted := mountedStateDirs(t)
 	if len(mounted) == 0 {
 		t.Fatal("no manager state directory is mounted in the install manifest, so this check is reading nothing")
 	}
+	listed := listedStateDirs(t)
 
-	for _, script := range []string{"../../deploy/install/install.sh", "../../deploy/install/upgrade.sh"} {
-		chowned, created := chownedStateDirs(t, script), mkdirStateDirs(t, script)
-		if len(chowned) == 0 || len(created) == 0 {
-			t.Fatalf("%s re-owns %d and creates %d state directories, so this check is reading nothing",
-				script, len(chowned), len(created))
+	// A mount the install list does not prepare is created by `compose up`
+	// as root, which no log line reports and the mount does not prevent.
+	var unprepared []string
+	for dir := range mounted {
+		if _, ok := listed[dir]; !ok {
+			unprepared = append(unprepared, fmt.Sprintf("%s (mounted at %s)", dir, mounted[dir]))
 		}
-		for _, want := range []struct {
-			label string
-			have  map[string]bool
-			why   string
-		}{
-			{"chown", chowned, "docker creates a missing host directory as root and the image runs as 65532, " +
-				"so the mount then exists and is unwritable — which reads as a working feature and is not one"},
-			{"mkdir", created, "a chown of a directory that does not exist yet is a no-op, and it runs before " +
-				"`compose up` is what would create it"},
-		} {
-			var absent []string
-			for dir := range mounted {
-				if !want.have[dir] {
-					absent = append(absent, fmt.Sprintf("%s (mounted at %s)", dir, mounted[dir]))
-				}
-			}
-			sort.Strings(absent)
-			if len(absent) > 0 {
-				t.Errorf("%s does not %s %d mounted state director(ies):\n  %s\n%s",
-					script, want.label, len(absent), strings.Join(absent, "\n  "), want.why)
-			}
+	}
+	sort.Strings(unprepared)
+	if len(unprepared) > 0 {
+		t.Errorf("%d mounted state director(ies) are not in %s:\n  %s\n"+
+			"docker creates a missing host directory as root and the image runs as %s, so the mount "+
+			"exists, nothing errors, and the nonroot process cannot write",
+			len(unprepared), stateDirsSH, strings.Join(unprepared, "\n  "), managerUID)
+	}
+
+	// And the uid, which the previous revision of this check read out of two
+	// shell scripts with a regex. Getting the directory into the list without
+	// giving it the manager's uid produces the same unwritable mount, so the
+	// uid is asserted rather than assumed.
+	var wrongUID []string
+	for dir := range mounted {
+		if got, ok := listed[dir]; ok && got.uid != managerUID {
+			wrongUID = append(wrongUID, fmt.Sprintf("%s is %s, want %s", dir, got.uid, managerUID))
 		}
+	}
+	sort.Strings(wrongUID)
+	if len(wrongUID) > 0 {
+		t.Errorf("%d mounted state director(ies) are not owned by the manager uid:\n  %s\n"+
+			"these are the directories the manager WRITES into; a different uid is a read-only mount to it",
+			len(wrongUID), strings.Join(wrongUID, "\n  "))
+	}
+
+	// And the other side, against the HOST side of every service's mount
+	// rather than the manager's container side: a directory the install
+	// prepares but no service mounts is created, never used, and reads in the
+	// list as something the operator should expect to find persisted.
+	hostSide := hostSideStateDirs(t)
+	var unused []string
+	for dir := range listed {
+		if !hostSide[dir] {
+			unused = append(unused, dir)
+		}
+	}
+	sort.Strings(unused)
+	if len(unused) > 0 {
+		t.Errorf("%s prepares %d director(ies) no service in the manifest mounts:\n  %s\n"+
+			"they are created on every install and nothing ever reads them; if one of them was meant to be "+
+			"persistent, its mount is missing, and if it was not, it should not be in the list",
+			stateDirsSH, len(unused), strings.Join(unused, "\n  "))
 	}
 }
