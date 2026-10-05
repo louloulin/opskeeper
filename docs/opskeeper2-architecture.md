@@ -14568,6 +14568,125 @@ manifest 路径加载，从不被 Go 导入（工具局限第 4 条写明了这�
 2. **`decorator`（509 行）**：零导入已确认，但要先判断它是「计划里的适配器层」还是
    「被 `biz/aiops/tools/decorators` 取代的旧实现」——后者删，前者交计划。
 3. **唯一仍需要人回答的那件事没变**：多租户 resolver（决策 198 已把问题收窄成「租户从哪来」）。
+
+### 4.135 决策 202：把「节点 AI 通过 `agent.tool` 上呼控制面跑工具」这条通道的审计链逐段读完——它是本账读过的**唯一一条自带「未审计就上线」注释、而我一路读到叶子都没找到审计写入**的真实缺口
+
+上一轮（决策 201）留了一个明确的下一步：给 `decorator`（509 行、零导入）定性之前，
+先要**证伪或证实**一件事——`agent.tool` 这条 RPC（节点 AI 反向请求控制面代跑一个
+它自己没有的工具）到底有没有写审计。`frontierbound/handlers.go` 里那段注释把它
+包装成了「已审计」的样子：
+
+> the alternative — a second route into the control plane from inside the agent
+> process — **would be unaudited**
+
+言下之意是「本路是审计的」。**这一轮我把这条链从 RPC 入口一路读到叶子，每个环节
+都问「谁写审计」，答案是一路都没写。** 下面是逐段的证伪过程，不是断言。
+
+#### 一、这条通道的两条分支，分别通向两个注册表
+
+`agent.tool` 进 `frontierbound/handlers.go:867` 后，调
+`agentToolUpcall.RunAgentTool`（`cmd/opskeeper/main.go:6455`），那里按
+`toolset.ParseFamily(tool)` 把调用**分成两条完全不同的路**：
+
+| 分支 | 判定 | 落点 | 装饰器栈 |
+|---|---|---|---|
+| 非 middleware 家族 | `a.reg.Invoke(ctx, tool, args)` | `aiopstools.Registry` → `r.tools[name].Execute` | **无**（裸闭包工具） |
+| middleware 家族 | `a.runMiddlewareTool(tool, args)` | `middlewareregistry.Registry.CallTool` | **无** |
+
+#### 二、逐段找审计写入，六段全部落空
+
+我按「先找权威位置、再数偏离点」的规矩（§4.163 定的方法），不去猜，而是把每一段
+的实际调用读出来：
+
+1. **RPC handler**（`handlers.go:867-886`）：只做 `json.Unmarshal`、非空校验、调
+   `RunAgentTool`，把错误包成 `AgentToolResponse{Error}`。**无审计**。
+2. **`RunAgentTool`**（`main.go:6455`）：做的是**归属校验**——`a.fleet.Stats(edgeID,
+   sessionID)` 确认这个节点确实拥有这个会话，否则拒绝（防止一个被攻陷的节点冒用
+   另一个节点的身份）。归属校验做得很到位，但它是**授权**不是**审计**：它决定「能不能
+   跑」，不记录「跑了什么」。`agentToolUpcall` 结构体（`main.go:6422`）只有
+   `reg`/`fleet`/`middleware` 三个字段，**没有任何审计 sink**。**无写入**。
+3. **非 middleware 分支** `a.reg.Invoke`（`registry.go:437`）：`Registry.Invoke` 落到
+   `r.tools[name].Execute(ctx, args)`——这是**注册时挂的裸闭包**，不经过
+   `decorators.Wrap`。而 aiops 工具的审计（`WithAudit` → `AuditSink.OnToolStart`）
+   只在**另一条路**上生效：`main.go:4637-4648` 的 chat 工具袋构建，那里对每个
+   BaseTool 逐个 `Wrap(t, deps)`。`RunAgentTool` 的 `a.reg` 是同一个 `Registry`，
+   但走的是 `Invoke` 而非 `BuildBaseTools` 出来的**已装饰工具袋**。**无写入**。
+4. **middleware 分支** `runMiddlewareTool`（`main.go:6515`）：这一段甚至把调用者的
+   `ctx` 丢掉了——`a.middleware.CallTool(context.Background(), tool, parsed)`。
+   丢 `ctx` 意味着即便某个 handler 内部想写审计，也拿不到调用者的租户/会话/追踪信息。
+   `middlewareregistry.Registry.CallTool`（`registry/registry.go:120`）本身也只是
+   查表 + `tool.Handler(ctx, args)`，**没有装饰器栈**。**无写入**。
+5. **节点侧 ledger**（`cmd/opskeeper-edge/auditledger.go`）：这是我要**证伪**的那一段
+   ——「也许节点自己把这次上呼记下来了再上报」。`auditledger.go` 里的
+   `auditEntriesSender.Send` 发的是 `ports.AuditEntry`，但**整个 edge 侧没有任何一处
+   把「控制面代我跑的工具」翻译成一条 AuditEntry**。节点记的是它**自己**的动作
+   （采集、上报），不是控制面替它做的事。**无写入**。
+6. **审计动作常量表**（`pkg/audit/port.go`）：我预期这里会有个 `ActionAgentTool` 或
+   类似的常量。整张表（`auth_*`/`user_*`/`device_*`/`rule_*`/`incident_*`/
+   `setting_*`/`channel_*`/`repo_*`/`skill_*`/`plugin_*`）里**没有一条对应「节点上呼
+   工具」**。这是最硬的证据：如果这条通道是设计成要审计的，动作常量早就该有它的位。
+
+#### 三、所以缺口是什么，不是什么
+
+先把**不是**问题的部分划掉，免得台账把账算重：
+
+- **归属校验是在的**——`fleet.Stats` 那道关卡真实存在，节点不能冒用他人会话。
+- **只读门是在的**——`runMiddlewareTool` 里有 `toolset.IsRead(spec.RiskLevel)` 校验，
+  写类工具（`pg.kill_session`/`k8s.drain`/`redis.flushdb`）在这条通道上被显式拒绝，
+  只能走闭环的审批派发。这道门的设计意图和注释都写得很清楚。
+- **审计链的物理载体是好的**——HMAC chain 在宿主，节点上报走 `agent.audit.entries`
+  → `NodeLedger.RecordNodeEntries`，这条路本身通。
+
+真正的缺口精确到一句话：**一次由节点 AI 发起、经控制面代执行的只读工具调用，在审计
+台账里不留痕。** 不是「可以被冒用」（归属校验挡住了），不是「可以写」（只读门挡住
+了），而是**「事后无法回答『昨晚这条节点会话，让控制面替它查了哪张表』」**。
+
+这在当前阶段危害有限——这条通道目前只放行**只读**工具，只读调用不改状态。但它是一颗
+**定时炸弹**：台账 §五 规划里，这条上呼通道正是插件工具下发的必经之路（节点装个诊断
+插件，工具实现在控制面）。一旦有写类工具经这条路（或绕过只读门）落地，「无审计的
+代执行」就从记账问题升级成合规问题。
+
+#### 四、`decorator`（509 行）按决策 201 的判据定性：**计划脚手架，保留，交计划**
+
+- **被取代？否。** `biz/aiops/tools/decorators`（audit/chain/metric/ratelimit/timeout）
+  确实实现了同名能力，但那是**给 aiops BaseTool 工具袋用的**；`middleware/adapter/
+  decorator` 是**给 middleware 适配器工具用的**，两套工具面（见 `main.go:6422` 那段
+  注释：一个是「关于机群的工具」，一个是「伸进系统的工具」）。不是同一个东西。
+- **自述为零？否。** 它是实打实的装饰器实现（audit/timeout/metrics 三个文件）。
+- **服务的是有名字的计划项？是。** 父包 `middleware/adapter/adapter.go:192-198`
+  明写「路径 A 阶段 2 任务 2.1 实现：audit.go / timeout.go / metrics.go」。
+
+**结论：保留。** 但它保留的意义变了——它不只是「计划脚手架」，它是**上面那个审计
+缺口本该长出来的那层**。middleware 工具一旦需要审计/超时/指标，`decorator` 就是现成
+的落点。这把决策从「保留一个未接线的目录」升级成「一个已定位的修复位」。
+
+#### 五、4 个真候选（211 行）逐个定性
+
+| 包 | 行数 | 定性 | 判据 |
+|---|---|---|---|
+| `model/proposal` | 133 | **保留**（计划项） | 文件头自述「路径 A P1-2 阶段 1 任务 1.1 — 统一 Proposal 表 GORM 模型」，8 状态机 + 审批/变更 kind，服务 §五 的提案/审批工作流。计划活着。 |
+| `data/middleware/store` | 68 | **保留**（migration） | 两个 `Migrate`（含 `migrate_git_artifact`）。决策 201 刚恢复过同族的 migration，判据一致：数据库迁移不是「死代码」，删了起不来。 |
+| `iam/biz` | 6 | **保留**（BC 门面 doc） | 只是个 `doc.go`（6 行），声明「本 BC 的用例与仓储接口住这，实现住 ../data」。是 BC 边界的文档锚点，arch-lint / 域图认它。 |
+| `data/metric/clickhouse` | 4 | **保留**（占位） | 只是个 `doc.go`（4 行），自述「ClickHouse Writer/Reader 的阶段二占位」。有名有姓的计划占位。 |
+
+**4 个全部保留，0 删。** 这四个加起来才 211 行，且没有一个是「被取代」或「自述为零」
+的真死代码——它们是**活计划的地基**。决策 201 立的「四档判据」在这四个身上全部
+命中第三档（未接线的计划脚手架）。**deadpkg 的 4 个真候选这一轮清零。**
+
+#### 六、这一轮真正改变台账的是什么
+
+不是删了多少行（本轮 0 删），而是**一个此前被注释「保护」着的合规缺口被证伪并定位
+到了它的修复位**。上一轮我在「九、下一步」里写「不要在未证实审计缺失前写『无审计』」
+——现在证实了，而且把修复路径也一并钉住：
+
+- **缺口**：`agent.tool` 上呼通道（含其 middleware 分支）不留审计痕。
+- **修复位**：`middleware/adapter/decorator`（已保留，audit.go 现成）。
+- **放行条件**：只读门 + 归属校验已把风险面收窄到「只读」；等插件工具真要经这条
+  通道下发写操作时，审计必须先于写权限接上。
+
+按 §4.163 的规矩，这不改变 §六 的百分比（承诺 ≠ 验收，一个已知缺口在没有修复、没有
+测试钉住之前不加也不减进度），但它把一条「看起来已审计」的通道的真相记进了台账。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
