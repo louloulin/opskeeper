@@ -162,8 +162,6 @@ var edges = map[edge]string{
 
 	{"edge", "device"}: "the edge register flow resolves, creates and updates the host Device behind a node (biz/edge, server/edge). One direction only: a device deletion reaches the edge identities through a revoker the composition root injects rather than by importing them (decision 112)",
 
-	{"flow", "scheduler"}: "a flow step schedules work through the scheduler domain",
-
 	{"frontierbound", "audit"}: "autonomy replay writes the decisions a node made on its own back into the chain when the tunnel returned (decision 101)",
 	{"frontierbound", "edge"}:  "the frontier is the tunnel's node-facing side: it reads node state and change events",
 	// The frontierbound -> metric edge is gone (decision 227), and the

@@ -734,9 +734,21 @@ deps:
       - shared_pkg
 
   oxdomains_data:
+    # 决策 230 开了 oxfloor：唯一的使用者是 data/flow/store，它要实现
+    # core/floor/scheduler 的 Repo（missed-run 检测端口）。这个端口此前住在
+    # core/domains/biz/scheduler，于是这层数据代码为了说「我实现了你的接口」
+    # 而 import 那个 biz 包——数据层伸手进业务层，正是端口要防的那个反向。
+    # 端口下沉到 core/floor 之后，data 与 biz 各自只依赖 floor，谁也不认识
+    # 谁，`flow -> scheduler` 那条声明边因此消失。
+    #
+    # 依赖面因此从「biz + model + base」变成「biz + model + base + floor」，
+    # 而 floor 不认识任何业务域：它只有 missed-run 契约，没有实现、没有编排、
+    # 没有对 flow 的任何认识。data 层认得它，与 data 层认得 shared_pkg 是同一
+    # 类事——被依赖的是契约，不是别人的内部。
     mayDependOn:
       - oxdomains_biz
       - oxdomains_model
+      - oxfloor
       - shared_pkg
 
   # oxdomains_model was registered with no grant at all rather than with

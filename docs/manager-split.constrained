@@ -34,8 +34,8 @@
 # 预期是「更贵」——多三个域进 core，它们各自还有别的出边。结果是**更便宜**：
 #
 #   候选                              组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed          103          41         3 / 4
-#   docs/manager-split.constrained       115          29         0 / 4
+#   docs/manager-split.proposed          102          41         3 / 4
+#   docs/manager-split.constrained       114          29         0 / 4
 #
 # 机制不难理解，但方向值得写清楚，因为它是本文件存在的全部理由：
 # 那三个域不是跨组边的**消费者**，是**生产者**。它们在 apps，而它们依赖的东西

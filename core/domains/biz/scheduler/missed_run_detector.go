@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
+	floorscheduler "github.com/vincent-wuhan/opskeeper/core/floor/scheduler"
 )
 
 // AlertSink 告警写入接口。
@@ -18,19 +19,21 @@ type AlertSink interface {
 }
 
 // MissedRunInfo 单条 missed run 信息。
-type MissedRunInfo struct {
-	FlowID            string
-	NodeID            string
-	CronSpec          string
-	ExpectedFireAt    time.Time
-	MissedDurationSec int64
-}
+//
+// It is an alias, not a second declaration (decision 230). The struct and the
+// Repo port moved to core/floor/scheduler, because the only implementation
+// that exists — core/domains/data/flow/store, which reads the flow schedule
+// table — lives in a different domain and could not name this interface
+// without importing this package. Keeping a local copy here would have left
+// two structurally-identical-but-distinct types, and the store's `var _
+// Repo` assertion would silently stop proving anything. The alias keeps this
+// package's public spelling for its own callers while the definition has one
+// home.
+type MissedRunInfo = floorscheduler.MissedRunInfo
 
-// Repo 数据访问接口。
-type Repo interface {
-	ListMissed(ctx context.Context, before time.Time) ([]MissedRunInfo, error)
-	RecordMissedAudit(ctx context.Context, missed MissedRunInfo) error
-}
+// Repo 数据访问接口。端口本体已下沉到 core/floor/scheduler（决策 230）；
+// 这里保留别名，让本包与既有调用方的拼写不变。
+type Repo = floorscheduler.Repo
 
 // Detector missed-run 检测器。
 type Detector struct {

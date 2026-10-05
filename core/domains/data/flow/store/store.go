@@ -13,8 +13,8 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	biz "github.com/vincent-wuhan/opskeeper/core/domains/biz/flow"
-	schedulerbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/scheduler"
 	model "github.com/vincent-wuhan/opskeeper/core/domains/model/flow"
+	floorscheduler "github.com/vincent-wuhan/opskeeper/core/floor/scheduler"
 )
 
 // Repo implements biz/flow.Repo.
@@ -25,7 +25,7 @@ func NewRepo(db *gorm.DB) *Repo { return &Repo{db: db} }
 
 var _ biz.Repo = (*Repo)(nil)
 var _ biz.ScheduleStateRepo = (*Repo)(nil)
-var _ schedulerbiz.Repo = (*Repo)(nil)
+var _ floorscheduler.Repo = (*Repo)(nil)
 
 func (r *Repo) Create(ctx context.Context, f *model.Flow) error {
 	return r.db.WithContext(ctx).Create(f).Error
@@ -113,17 +113,17 @@ func (r *Repo) DeleteScheduleStatesNotIn(ctx context.Context, keys []biz.Schedul
 	return nil
 }
 
-// ListMissed implements schedulerbiz.Repo for boot-time compensation.
-func (r *Repo) ListMissed(ctx context.Context, before time.Time) ([]schedulerbiz.MissedRunInfo, error) {
+// ListMissed implements floorscheduler.Repo for boot-time compensation.
+func (r *Repo) ListMissed(ctx context.Context, before time.Time) ([]floorscheduler.MissedRunInfo, error) {
 	var states []*model.FlowScheduleNextFire
 	if err := r.db.WithContext(ctx).
 		Where("status = ? AND next_fire_at < ?", model.FlowScheduleStatusEnabled, before.UTC()).
 		Order("next_fire_at ASC").Find(&states).Error; err != nil {
 		return nil, fmt.Errorf("list missed flow schedules: %w", err)
 	}
-	missed := make([]schedulerbiz.MissedRunInfo, 0, len(states))
+	missed := make([]floorscheduler.MissedRunInfo, 0, len(states))
 	for _, state := range states {
-		missed = append(missed, schedulerbiz.MissedRunInfo{
+		missed = append(missed, floorscheduler.MissedRunInfo{
 			FlowID:            fmt.Sprintf("%d", state.FlowID),
 			NodeID:            state.NodeID,
 			CronSpec:          state.CronSpec,
@@ -134,9 +134,9 @@ func (r *Repo) ListMissed(ctx context.Context, before time.Time) ([]schedulerbiz
 	return missed, nil
 }
 
-// RecordMissedAudit implements schedulerbiz.Repo and is idempotent by the
+// RecordMissedAudit implements floorscheduler.Repo and is idempotent by the
 // unique schedule/expected-fire pair.
-func (r *Repo) RecordMissedAudit(ctx context.Context, missed schedulerbiz.MissedRunInfo) error {
+func (r *Repo) RecordMissedAudit(ctx context.Context, missed floorscheduler.MissedRunInfo) error {
 	scheduleID := fmt.Sprintf("%s:%s", missed.FlowID, missed.NodeID)
 	var existing model.MissedRunAudit
 	err := r.db.WithContext(ctx).Where("schedule_id = ? AND expected_fire_at = ?", scheduleID, missed.ExpectedFireAt.UTC()).First(&existing).Error
