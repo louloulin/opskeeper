@@ -21437,6 +21437,122 @@ M3 的恢复多留了一个 `}`，构建直接失败。**这一类事故已经�
 - 闸门：scripts 全绿，gofmt 干净。**本刀不动任何百分比。**
 
 
+### 4.188 给定价器装上第二把量具的第二天：修掉一个**静默失效的键**
+
+**本轮也没有切边，百分比一个数都没有动。** 计划是切 `grafana → setting`
+（上一轮按 `shape` 排出来最干净的一条），动手前先看了一眼那条边长什么样，
+于是先撞上了别的东西。
+
+#### 症状
+
+`grafana → setting` 的 seam 报告长这样：
+
+```
+  data            2  grafana        -> setting
+                 value: CategoryGrafana, CategoryProm, KeyGrafanaAPIKey, …
+                 refs:  22 uses in 2 file(s) — …
+```
+
+**没有 `shape:` 行。** 而 `biz/grafana/service.go` 明明持有
+`*settingbiz.Service`，那是个六字段的结构体。上一轮刚加的形状计数器对
+**`core/domains` 里的每一个类型都是瞎的**——而 `grafana` 与 `setting` 两个域
+都在 `core/domains`。
+
+#### 病因
+
+```go
+func pkgKey(src source) string {
+	if src.pkg == "" {
+		return strings.TrimSuffix(managerPrefix, "/")
+	}
+	return managerPrefix + src.pkg
+}
+```
+
+`managerPrefix` 硬编码 `core/manager/`。而 `domaincheck` 扫**两个**模块
+（`core/manager` 与 `core/domains`，见 `parseControlPlane` 的那个循环），
+`core/domains` 的 source 带着一个**相对的** `pkg`（`biz/setting`）。于是
+`core/domains/biz/setting` 这个包被算成 `core/manager/biz/setting`
+——**一个全树没有任何一条 import 指向的路径**。
+
+而 `pkgKey` 有 **11 个调用点**：`printSeams` 用它把「某个包声明了什么」和
+「消费方 import 了什么」对起来，`graph.go` 用它建 `pkgDeclared`，
+`shared.go` 用它报告包名，`edges.go` 有四处。**对不上就是查不到，
+查不到不报错、不告警，只是返回空。**
+
+#### 两个后果，方向相反
+
+**一、接口被读成值。** `printSeams` 的 `declared[imp][sym]` 查不到，
+`settingbiz.Service` 于是落进 `others` 而不是 `ifaces`，verdict 报 `data`
+——「没有接口，全是数据，必须搬」。
+
+**这个工具存在的理由就是不要再犯这个错。** 决策 228 用手表把
+`flow → scheduler` 归进「data shape，要跟着 GORM 实体搬」，决策 230 切了它，
+发现很便宜；决策 249 又记了一次同型的误归类。而这里，同一个错误**正被程序
+在每次运行时、对半个树、由没有人参与地重复着**。
+
+**二、形状计数对半个模块沉默。** 决策 254 的 `shape` 走同一张表，所以
+`core/domains` 的类型全部测不出来。**而沉默会被读成「没东西值得搬」，
+而不是「工具没看」**——这是报告型工具最坏的失败方式。
+
+#### 影响面：一条边，以及半个模块的测量
+
+修法是从 `src.path` 切掉文件名，而不是重造一个路径。对 `core/manager`
+**逐字相同**（`core/manager/biz/alert/usecase` → `…/biz/alert`，与旧的
+`managerPrefix + "biz/alert"` 一致），对 `core/domains` 才第一次对。
+
+**实测前后对照（把旧实现装回去跑一遍，逐条比 verdict）：**
+
+| 边 | 修前 | 修后 |
+|---|---|---|
+| `federationlink → federation` | `data` | **`mixed`** |
+
+**只有这一条。** 另外三条 `mixed`（`loop → alert`、`edge → device`、
+`aiopsconfig → aiops`）修前修后都是 `mixed`，因为它们的生产方在
+`core/manager`，不受影响；二十六条边里其余的 verdict 一个没动。
+
+**所以这是一个真实但局部的修复，不该被写成「让所有判断都错了」。**
+它真正的价值是另一头：**形状计数从「只覆盖 `core/manager`」变成覆盖全部
+57 个域**，而那正是决策 254 用来分辨贵贱的那把尺子。
+
+顺带确认了一件此前只是断言的事：**`TestTheCheapBucketIsEmpty` 修后仍绿，
+即今天仍然没有一条 `port-opposite` 边**。决策 247 之后的判断没有被推翻，
+而这是第一次由**修好之后的工具**给出的确认，而不是由一把半盲的工具给出的
+「没看到」。
+
+#### 上一轮对 `grafana → setting` 的评估被推翻
+
+上一轮说它是全部候选里**唯一「零 struct」**的一条边。修好之后同一行变成：
+
+```
+  data            2  grafana        -> setting
+                 value: CategoryGrafana, …, Service
+                 shape: Service(4f 2c 1n)
+```
+
+**不是零 struct。** `Service` 是 `repo Repo` + `log *slog.Logger` +
+`mu sync.RWMutex` + `cache map[string]string`——四个字段里两个是容器
+（一个指针一个 map），一个嵌套。
+
+**而这改变了那条边的性质，不只是它的价格。** `settingbiz.Service` 是**具体
+类型**（`type Service struct`），所以 `grafana` 域持着 `setting` 域的实现本身
+——这**不是「接口太宽」，是根本没有接缝**。切它要先造一个端口。
+
+九个 category/key 常量则是另一件事：它们是 setting 域的**词汇**，投影一份到
+grafana 域会造成**同一个字符串在两个域各声明一次**，而这类平行声明正是决策
+254 用来否决 `systemhealth → alert` 的那把尺子。**所以这条边比上一轮说的贵，
+而且贵在一个设计问题上，不在一个字段数上。** 它值得单独一轮，不该顺手夹带。
+
+#### 闸门
+
+- `scripts/domaincheck/pkgkey_test.go` 三条：第二模块里声明的接口**仍然**
+  被读成接口（失败信息直接点名这是决策 228 的误分类）；第二模块里声明的
+  结构体**仍然**被测量；`pkgKey` 对两个模块都等于那条 import 路径
+  （**并且特意传入一个与 `path` 不符的 `pkg` 字段**，证明它读的是哪一个）。
+- 变异实测：把 `pkgKey` 装回旧实现，**三条同红**。
+- 闸门：scripts 全绿、根全绿、gofmt 干净。**本刀不动任何百分比。**
+
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

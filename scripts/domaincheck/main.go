@@ -616,11 +616,33 @@ type treeStats struct {
 // Unexported names are ignored throughout, because a dependent outside the
 // package cannot reach them and this question is entirely about what the other
 // side of the door can hold.
+// pkgKey is the import path of the package a source file belongs to.
+//
+// It used to be `managerPrefix + src.pkg`, which is right for core/manager and
+// wrong for every package in core/domains — those sources carry a relative `pkg`
+// like "biz/setting" and get the manager prefix welded on the front, so the key
+// came out as a path that no import in the tree has ever named. Everything that
+// joins a package's exports against the path a consumer imported therefore
+// missed for core/domains, and the miss was silent in both directions:
+//
+//   - an interface declared in core/domains read as a value, so a
+//     substitutable port was filed under "data, expensive". That is the same
+//     misclassification decision 228 made by hand and decision 230 disproved;
+//     this tool was reproducing it by accident, for half the tree.
+//   - the shape counter added in decision 254 found no shapes to report for
+//     any core/domains type, which is why `grafana -> setting` came back with
+//     nine string constants and no measurement for the `*settingbiz.Service`
+//     struct sitting among them.
+//
+// The fix reads the package off the file's own import path instead of
+// rebuilding one, which is the same value for core/manager — so every key this
+// function produced before is still produced — and the right one for
+// core/domains.
 func pkgKey(src source) string {
-	if src.pkg == "" {
-		return strings.TrimSuffix(managerPrefix, "/")
+	if i := strings.LastIndex(src.path, "/"); i >= 0 {
+		return src.path[:i]
 	}
-	return managerPrefix + src.pkg
+	return src.path
 }
 
 func resolveDeclared(sources []source) {
