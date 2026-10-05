@@ -103,6 +103,14 @@ type Handler struct {
 	// patterns is the crystalliser's promotion surface; nil = the crystallised
 	// routes answer 503. See crystallized.go and SetPatterns.
 	patterns PatternReader
+	// patternsSince is when this manager attached the ledger, and so where
+	// its observation of crystallisation begins. The ledger is in-memory by
+	// design (crystallize.Ledger documents why), so a manager that restarted
+	// five minutes ago serves an empty pattern list that means "nothing in
+	// the last five minutes", not "nothing has ever been promoted". The
+	// field exists so the response can say which of the two it is; see
+	// SetPatterns and CrystallizedListResponse.ObservingSince.
+	patternsSince time.Time
 	// draftRoot is where a promoted draft is written for review; empty = the
 	// promote route answers 503.
 	draftRoot string

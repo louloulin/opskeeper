@@ -116,6 +116,45 @@ describe('CrystallizedPage', () => {
     expect(screen.queryByText('No pattern has earned a runbook yet')).not.toBeInTheDocument();
   });
 
+  it('scopes an empty list to the window it counted, not to all history', async () => {
+    // The ledger is in-memory by design, so a manager that restarted serves
+    // a valid, empty list meaning "nothing since boot". Saying "no pattern
+    // has earned a runbook yet" there is a claim about all of history that
+    // this page cannot support, and the two readings call for opposite
+    // responses from the operator.
+    server.use(
+      http.get('/api/v1/loops/crystallized', () =>
+        HttpResponse.json({
+          items: [],
+          total: 0,
+          policy: POLICY,
+          observing_since: '2026-10-05T11:58:00Z',
+        })
+      )
+    );
+    renderPage();
+    expect(await screen.findByText(/No pattern has been promoted since 2026-10-05T11:58:00Z/))
+      .toBeInTheDocument();
+    // The unbounded claim is exactly what must not be shown.
+    expect(screen.queryByText('No pattern has earned a runbook yet')).not.toBeInTheDocument();
+    // And the reason has to be stated, or the operator cannot tell a fleet
+    // that has promoted nothing from evidence a restart threw away.
+    expect(screen.getByText(/in-memory/)).toBeInTheDocument();
+  });
+
+  it('falls back to the plain copy when the server sends no window', async () => {
+    // An older manager does not send observing_since. Guessing a window here
+    // would be inventing one; the copy has to fall back rather than claim
+    // an observation start nobody reported.
+    server.use(
+      http.get('/api/v1/loops/crystallized', () =>
+        HttpResponse.json({ items: [], total: 0, policy: POLICY })
+      )
+    );
+    renderPage();
+    expect(await screen.findByText('No pattern has earned a runbook yet')).toBeInTheDocument();
+  });
+
   it('renders the exact pig-ops.yaml in the detail drawer', async () => {
     const yaml = [
       '# Draft, not a release: emitted by opskeeper crystallize and awaiting review.',

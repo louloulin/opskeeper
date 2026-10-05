@@ -64,7 +64,24 @@ type PatternReader interface {
 // is a property of this process's ledger, and a manager that never populated
 // one must say so rather than serve an empty list that reads as "nothing has
 // been promoted anywhere".
-func (h *Handler) SetPatterns(p PatternReader) { h.patterns = p }
+//
+// The moment of wiring is recorded, because it is the start of this
+// manager's observation. That sentence is doing real work: the 503 above
+// covers one of the two ways this list comes back empty, and the other one
+// is a manager that restarted and is now serving a perfectly well-formed
+// empty list whose true reading is "nothing in the window that began when
+// this process booted". Before this, an operator who let a pattern be
+// promoted, deployed, and came back to an empty list had no way to tell a
+// lost ledger from a fleet that had never earned one — and the two call for
+// opposite responses. Recording the window is what turns the second reading
+// from a guess into a statement the response makes on its own.
+func (h *Handler) SetPatterns(p PatternReader) {
+	h.patterns = p
+	h.patternsSince = time.Time{}
+	if p != nil {
+		h.patternsSince = time.Now().UTC()
+	}
+}
 
 // SetDraftRoot names the directory a promoted draft is written into for
 // review. Empty leaves the promote route at 503: a draft is a file an
@@ -134,6 +151,18 @@ type CrystallizedListResponse struct {
 	Items  []CrystallizedPattern `json:"items"`
 	Total  int                   `json:"total"`
 	Policy CrystallizedPolicy    `json:"policy"`
+	// ObservingSince is when this manager attached its ledger, and so the
+	// start of the window Total counts. It is present on every response, not
+	// only the empty one, because a list that is non-empty now is still a
+	// list that was empty a moment ago and a reader comparing two snapshots
+	// needs the same baseline for both.
+	//
+	// Empty is written rather than omitted so that a client cannot mistake
+	// "this build does not send it" for "this ledger has been observing
+	// since the beginning of time". The ledger is in-memory — see
+	// crystallize.Ledger for why, and for the replay seam a durable one
+	// would use — so the honest bound on this number is this process.
+	ObservingSince string `json:"observing_since"`
 }
 
 // CrystallizedDetailResponse is the GET /v1/loops/crystallized/{name} body.
@@ -182,8 +211,9 @@ func (h *Handler) crystallized(w http.ResponseWriter, r *http.Request) {
 	}
 	p := h.patterns.Policy()
 	writeJSON(w, http.StatusOK, CrystallizedListResponse{
-		Items: items,
-		Total: len(items),
+		Items:          items,
+		Total:          len(items),
+		ObservingSince: formatCrystallizedTime(h.patternsSince),
 		Policy: CrystallizedPolicy{
 			MinCleanStreak: p.MinCleanStreak,
 			MaxTTLSeconds:  int(p.MaxTTL / time.Second),
@@ -339,6 +369,19 @@ func requireAdminRole(w http.ResponseWriter, r *http.Request) bool {
 // is a ledger bug; the projection leaves the name empty there and the detail
 // route surfaces the render error, rather than inventing a name that would
 // address nothing.
+// formatCrystallizedTime renders a wire timestamp the way the rest of this
+// file does, with one difference in intent: a zero time is an empty string
+// rather than year one. ObservingSince is zero only when no ledger is
+// attached, and that case answers 503 before reaching here — so an empty
+// string means "this build sent nothing", which is the reading a client
+// should fall back to, rather than a date in 0001 that looks like data.
+func formatCrystallizedTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
 func (h *Handler) wirePattern(run crystallize.Run) CrystallizedPattern {
 	a := run.Pattern.Action
 	out := CrystallizedPattern{

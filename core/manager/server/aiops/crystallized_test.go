@@ -277,3 +277,99 @@ func TestCrystallizedPromote_NoRootAnswers503(t *testing.T) {
 		t.Fatalf("status = %d, want 503", w.Code)
 	}
 }
+
+// An empty pattern list is ambiguous, and the ambiguity is the whole point
+// of this test. The ledger is in-memory by design, so a manager that
+// restarted has a perfectly valid, perfectly empty list whose true reading
+// is "nothing since boot" — not "nothing has ever been promoted". An
+// operator who deployed a crystallised pattern and came back to an empty
+// list has to be able to tell those apart, because the two call for
+// opposite responses: one is a fleet with nothing to promote, the other is
+// evidence that did not survive a restart.
+//
+// So the response has to carry the window it counted.
+func TestCrystallized_EmptyListSaysWhichWindowItCounted(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(&fakeService{})
+	h.SetPatterns(crystallize.NewLedger(crystallize.Policy{}))
+	r := buildRouter(h, adminTenant())
+	req := httptest.NewRequest(http.MethodGet, "/v1/loops/crystallized", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+	var body CrystallizedListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Total != 0 || len(body.Items) != 0 {
+		t.Fatalf("items = %v, want none", body.Items)
+	}
+	if body.ObservingSince == "" {
+		t.Fatal("an empty pattern list carries no observing_since, so it reads as " +
+			"\"nothing has ever been promoted\" — which is a claim this manager cannot make")
+	}
+	since, err := time.Parse(time.RFC3339, body.ObservingSince)
+	if err != nil {
+		t.Fatalf("observing_since %q is not RFC3339: %v", body.ObservingSince, err)
+	}
+	if since.After(time.Now()) {
+		t.Errorf("observing_since = %s, which is in the future", since)
+	}
+	// A zero time formatted rather than blanked is the failure this guards:
+	// it looks like data, and a client sorting or diffing it cannot tell it
+	// apart from a real observation start.
+	if strings.HasPrefix(body.ObservingSince, "0001-") {
+		t.Errorf("observing_since = %s, which is a zero time wearing a timestamp's clothes", body.ObservingSince)
+	}
+}
+
+// A list that is NOT empty carries the same baseline, because a reader
+// comparing two snapshots needs the window to be stated identically in
+// both. A field that appears only when the answer is uncomfortable is a
+// field that gets ignored.
+func TestCrystallized_APopulatedListCarriesTheSameWindow(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(&fakeService{})
+	h.SetPatterns(promotedLedger(t))
+	r := buildRouter(h, adminTenant())
+	req := httptest.NewRequest(http.MethodGet, "/v1/loops/crystallized", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	var body CrystallizedListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Items) == 0 {
+		t.Fatal("fixture produced no patterns, so this test would pass vacuously")
+	}
+	if body.ObservingSince == "" {
+		t.Error("a populated list omits observing_since; the field must not appear only when empty")
+	}
+}
+
+// Unwiring must clear the window as well as the reader. A stale timestamp
+// left behind would be a second way for the response to describe a ledger
+// this handler no longer has — and it would survive until the next boot.
+func TestCrystallized_UnwiringClearsTheObservationWindow(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(&fakeService{})
+	h.SetPatterns(promotedLedger(t))
+	if h.patternsSince.IsZero() {
+		t.Fatal("wiring a ledger recorded no observation start")
+	}
+	h.SetPatterns(nil)
+	if !h.patternsSince.IsZero() {
+		t.Errorf("unwiring left an observation start of %s behind", h.patternsSince)
+	}
+	// And the route still answers 503 rather than serving the list it held
+	// a moment ago.
+	r := buildRouter(h, adminTenant())
+	req := httptest.NewRequest(http.MethodGet, "/v1/loops/crystallized", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status after unwiring = %d, want 503", w.Code)
+	}
+}

@@ -52,6 +52,17 @@ export interface CrystallizedListResponse {
   items: CrystallizedPattern[];
   total: number;
   policy: CrystallizedPolicy;
+  /**
+   * 后端账本接上的时刻，也就是 `total` 所数窗口的起点。
+   *
+   * 账本是内存的（设计如此，见 crystallize.Ledger 的注释），所以重启之后
+   * 这个列表会合法地变空，而它真实的含义是「从这个时刻起没有」，
+   * **不是**「从来没有过」。审批人必须能分开这两种读法——它们要求的后续
+   * 动作正好相反。
+   *
+   * 可选：更早的构建不发送这个字段，那时的 UI 退回到原来的说法。
+   */
+  observing_since?: string;
 }
 
 export interface CrystallizedDetailResponse {

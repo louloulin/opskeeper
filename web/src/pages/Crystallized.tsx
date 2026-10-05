@@ -35,6 +35,7 @@ export default function CrystallizedPage() {
   const { isAdmin } = usePermissions();
   const [items, setItems] = useState<CrystallizedPattern[]>([]);
   const [policy, setPolicy] = useState<CrystallizedPolicy | null>(null);
+  const [observingSince, setObservingSince] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<CrystallizedPattern | null>(null);
@@ -45,6 +46,7 @@ export default function CrystallizedPage() {
       const r = await listCrystallized();
       setItems(r.items ?? []);
       setPolicy(r.policy ?? null);
+      setObservingSince(r.observing_since ?? null);
       setErr(null);
     } catch (e) {
       // 503 with not-wired is a state, not a failure: this manager never
@@ -53,6 +55,7 @@ export default function CrystallizedPage() {
       const msg = e instanceof ApiError ? e.message : (e as Error).message;
       setErr(msg);
       setItems([]);
+      setObservingSince(null);
     } finally {
       setLoading(false);
     }
@@ -111,14 +114,30 @@ export default function CrystallizedPage() {
         ) : null}
 
         {!loading && items.length === 0 && !err ? (
-          <EmptyState
-            icon={Sparkles}
-            title={tr('还没有模式被晋升', 'No pattern has earned a runbook yet')}
-            hint={tr(
-              '同一个修复需要连续多次一次通过才会晋升；单次成功是轶事，不是规则',
-              'A fix has to verify cleanly several times in a row; one success is an anecdote, not a rule'
-            )}
-          />
+          observingSince ? (
+            <EmptyState
+              icon={Sparkles}
+              title={tr(
+                `自 ${observingSince} 起还没有模式被晋升`,
+                `No pattern has been promoted since ${observingSince}`
+              )}
+              hint={tr(
+                '这是这个窗口的读数，不是全部历史的读数：结晶账本在内存里，管理面重启会清空它，' +
+                  '已经攒下的连续通过次数不会跨重启保留。',
+                'This is a reading of that window, not of all history: the crystallisation ledger is ' +
+                  'in-memory, a manager restart empties it, and a streak does not survive one.'
+              )}
+            />
+          ) : (
+            <EmptyState
+              icon={Sparkles}
+              title={tr('还没有模式被晋升', 'No pattern has earned a runbook yet')}
+              hint={tr(
+                '同一个修复需要连续多次一次通过才会晋升；单次成功是轶事，不是规则',
+                'A fix has to verify cleanly several times in a row; one success is an anecdote, not a rule'
+              )}
+            />
+          )
         ) : null}
 
         <div className="space-y-3">
