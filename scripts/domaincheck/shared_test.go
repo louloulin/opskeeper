@@ -84,6 +84,7 @@ type sharedSummary struct {
 	sym       string
 	consumers map[string]bool
 	targets   map[string]bool
+	shapes    []string
 }
 
 func sharedRows(t *testing.T) []sharedSummary {
@@ -95,16 +96,27 @@ func sharedRows(t *testing.T) []sharedSummary {
 	var sb strings.Builder
 	printShared(&sb, sources, defaultRules())
 	var out []sharedSummary
-	for _, line := range strings.Split(sb.String(), "\n") {
-		m := sharedRowRE.FindStringSubmatch(line)
+	lines := strings.Split(sb.String(), "\n")
+	for i := 0; i < len(lines); i++ {
+		m := sharedRowRE.FindStringSubmatch(lines[i])
 		if m == nil {
 			continue
 		}
-		out = append(out, sharedSummary{
+		row := sharedSummary{
 			sym:       m[2],
 			consumers: setOf(m[3]),
 			targets:   setOf(m[4]),
-		})
+		}
+		// The shape lines are indented under the row they belong to and carry
+		// no leading number, so they are consumed by position: everything
+		// indented deeper than the row, until the next row starts.
+		for j := i + 1; j < len(lines); j++ {
+			if !strings.HasPrefix(lines[j], "        ") || !strings.Contains(lines[j], ":") {
+				break
+			}
+			row.shapes = append(row.shapes, strings.TrimSpace(lines[j]))
+		}
+		out = append(out, row)
 	}
 	return out
 }
@@ -119,3 +131,62 @@ func setOf(field string) map[string]bool {
 
 var sharedRowRE = regexp.MustCompile(
 	`^\s+(\d+)\s+(\S+)\s+consumers:\s+(.*?)\s+targets:\s+(.*?)(?:\s+<--.*)?$`)
+
+// TestTheTrapColumnSaysWhyNotJustThat is the assertion behind the shapes the
+// ambiguous rows print.
+//
+// A warning that only says "these two are different types" leaves the reader
+// with a puzzle, and puzzles get skipped. The finding this report exists to
+// deliver is the opposite: `ListFilter` is not a shared shape that happens to
+// have two names, it is one name over three unrelated query vocabularies —
+// edge filters by status and creator, device filters by role bits and
+// hostname, gitartifact filters by tenant and branch. They share `Limit` and
+// nothing else. Once that is printed, the row stops looking like a move
+// candidate and starts looking like a coincidence, which is the correct
+// reading and the one a ranking by consumer count would never have produced.
+func TestTheTrapColumnSaysWhyNotJustThat(t *testing.T) {
+	shapes := map[string][]string{}
+	for _, r := range sharedRows(t) {
+		if len(r.targets) > 1 {
+			shapes[r.sym] = r.shapes
+		}
+	}
+	lf, ok := shapes["ListFilter"]
+	if !ok {
+		t.Fatal("ListFilter is no longer reported as ambiguous; if that is real it has become a " +
+			"move candidate and belongs at the top of the shared list")
+	}
+	if len(lf) < 2 {
+		t.Fatalf("ListFilter has %d declaring packages reported, want at least 2", len(lf))
+	}
+	// The owners must be visibly different. The comparison is on the field
+	// list alone, not on the whole rendered line: the package path differs
+	// even when the fields are identical, so comparing lines would pass for a
+	// report that printed the same struct three times under three names. That
+	// is exactly the mutation this assertion was written against.
+	shapesSeen := map[string]bool{}
+	for _, line := range lf {
+		open := strings.Index(line, "{")
+		shape := line
+		if open >= 0 {
+			shape = line[open:]
+		}
+		shapesSeen[shape] = true
+	}
+	if len(shapesSeen) < 2 {
+		t.Errorf("all ListFilter owners rendered the same field list %v; the report is not showing "+
+			"the shapes it claims to show, and a reader would merge types that are not alike", lf)
+	}
+	// And the specific shape that makes the point: none of the three owners
+	// filters by both a status and a hostname, which is what "one shared
+	// filter type" would look like if it existed.
+	joined := strings.Join(lf, " ")
+	if strings.Contains(joined, "Hostname") && strings.Contains(joined, "Status") {
+		for _, line := range lf {
+			if strings.Contains(line, "Hostname") && strings.Contains(line, "Status") {
+				t.Errorf("one owner of ListFilter carries both Hostname and Status (%s); the three "+
+					"are documented as unrelated, so either the tree changed or the report is wrong", line)
+			}
+		}
+	}
+}

@@ -18126,6 +18126,129 @@ core/domain: 9 files / 1743 lines
   这一轮交付的是「搬什么」这个问题第一次有了可复算的答案，以及一个必须由人拍
   板的策略问题
 
+### 4.166 决策 233：**上一轮我上交了一个人要拍板的问题，这一轮把它量掉了——答案是「都不用」**
+
+#### 一、上一轮上交的问题与本轮的处置
+
+决策 232 §五 把一个策略决定上交运营者：**`core/domain` 要不要收 GORM 实体。**
+本轮没有等回答，因为**在拍板之前还有一件可做的事**：先量消费者到底用
+`Edge` / `Incident` 的哪几个字段。量完之后，**那个问题不再需要回答**——不是因为
+答案好不好，而是因为**它不在这条路上**。
+
+#### 二、测量：`Edge` 有 15 个字段，四个消费者一共用 6 个
+
+| 消费者 | 触碰字段 | 访问次数 |
+|---|---|---|
+| `systemhealth` | `Status` | 15 |
+| `webshell` | `ID` `Status` `DeviceID` | 8 |
+| `alert` | `ID` `Name` `CreatedAt` `DeviceID` `LastSeenAt` | 15 |
+| `aiops` | `ID` `Name` `Status` `LastSeenAt` `DeviceID` `CreatedAt` | 80 |
+
+**九个字段没有任何消费者碰过**，而它们的名单说明了为什么：
+
+```
+AccessKeyID  SecretKeyHash  DeleteMarker  DeletedAt
+AgentVersion  PigVersion  Description  UpdatedAt  CreatedBy
+```
+
+**凭据（`AccessKeyID` / `SecretKeyHash`）、软删除机制（`DeleteMarker` / `DeletedAt`）、
+版本自报（`AgentVersion` / `PigVersion`）——一个都没出去。** 出去的全是「这台机器
+叫什么、活着没、上次什么时候看见的、挂在哪个设备下」。
+
+另两个测量支撑「投影可行」：
+
+- **没有任何消费者构造 `Edge`**（无复合字面量、无 `new(Edge)`），全是读；
+- **`Edge` 跨过域边界的签名只有 7 个**：`aiops` 6 个、`webshell` 1 个，
+  `alert` 与 `systemhealth` **在签名里根本没出现过 `Edge`**——它们拿到的是别人
+  已经填好的值，只读字段。
+
+到这里看起来很明确：给 `Edge` 一个 6 字段的投影放进 `core/domain`，实体留在
+edge 域，契约层一个 GORM 实体都不用加。**决策 232 那个策略问题到此作废。**
+
+#### 三、然后我按「这条边能不能被清空」重算了一遍，投影只值 1 条边
+
+投影只覆盖 `Edge` + `StatusOnline` / `StatusOffline`。**指向 `edge` 域的 5 条边
+各自还需要什么：**
+
+| 边 | 投影 + 常量之外还差 |
+|---|---|
+| `webshell → edge` | **无** ✅ |
+| `alert → edge` | `ListFilter` |
+| `systemhealth → edge` | `ListFilter` |
+| `aiops → edge` | `ListFilter` `ChangeEventRow` `PluginRow` `Usecase` |
+| `frontierbound → edge` | 7 个符号 |
+
+**5 条边里只有 1 条能被投影清空，而卡住另外 3 条的是同一个符号：`ListFilter`。**
+
+#### 四、`ListFilter` 是**同名巧合**，不是共享形状
+
+决策 232 已经给它打了 `same name, several owners` 的标记。本轮把每个声明方的
+字段列打出来：
+
+```
+ListFilter   consumers: aiops alert systemhealth   targets: device edge
+  biz/device: {RolesAny RolesUnknownOnly Online Hostname Name IPAddress Limit Offset}
+  biz/edge:   {Status Name CreatedBy Limit Offset}
+  knowledge/gitartifact/store: {TenantID Branch IndexStatus Limit Since}
+```
+
+**三个毫不相干的查询词汇，除了 `Limit` 没有任何一个字段相同。** edge 按状态和创建
+人筛，device 按角色位和主机名筛，gitartifact 按租户和分支筛。
+
+**所以它根本不是一个「共享形状」**——决策 232 排第一的那份排名里它排第三，
+而没有这一列的话，读的人会挑它下手。这一列存在的全部理由就是拦住这一下。
+
+同样的道理在 `Usecase` 上更极端：**16 个包各有一个 `Usecase`，字段两两不同**
+（`biz/edge` 是 `{repo devices links mirror plugins log phMu pluginHealth}`，
+`biz/audit` 是 `{repo log chain chainStore}`）。而决策 228 最初那份符号排名里，
+`Usecase` 是被 4 条边共享的**头号候选**。
+
+#### 五、真正的约束是什么
+
+三条测量叠起来指向同一个结论，而它不是分层问题，也不是策略问题：
+
+> **`aiops` / `alert` / `systemhealth` 各自需要一个「对 edge 的查询」，而那个查询是
+> 每个域自己的业务概念，不是共享形状。**
+
+`ListFilter` 只是这个事实的**症状**：三个域都需要「按条件列一批节点」，于是三个域
+各自定义了一个 `ListFilter`，然后它们同名。**搬它没有意义，因为没有任何一个
+`ListFilter` 是要和别人共享的。**
+
+这一条不能靠工具决定，也不该由工具决定——它是产品问题：**agent 到底需不需要一个
+跨域的节点查询能力？** 如果需要，正确形状是 `aiops` 声明自己需要的查询端口、
+由 edge 域实现、装配根注入（这正是决策 230 对 `scheduler.Repo` 做的同一件事）；
+如果不需要，那三条边就应当按现在的样子留着，因为它们各自在用自己域的词汇。
+**这两条路都不经过「把 `ListFilter` 搬到 `core/domain`」。**
+
+#### 六、工具的改动：把警告变成诊断
+
+`-shared` 报告的陷阱列现在打印**每个声明方各自的字段列表**（外加一句
+`not a struct here`，好让「不是结构体」和「工具没看」区分开）。
+
+**一个只说「这两个不一样」的警告是个谜题，而谜题会被跳过**；打印出字段列之后，
+那一行不再像一个可搬的候选，而开始像一个巧合——这才是正确的读法，也是按消费者数
+排序**永远产生不出来**的读法。
+
+新增 `TestTheTrapColumnSaysWhyNotJustThat`。变异实测两次：
+
+| 变异 | 期望 | 实测 |
+|---|---|---|
+| M1：让每个声明方都渲染同一个字段列表 | 红 | **红** |
+| M2（先红后绿的一次）：断言比较整行而不是字段列表 | — | **绿**——因为包路径不同，即使字段一样整行也不同。**断言写错了，改成只比 `{...}` 里的内容后 M1 才接住** |
+
+M2 记在这里是因为它是本轮第三次「自己写的守卫自己有洞」：断言写了、跑绿了、
+看起来有覆盖，而它比的是**包路径**而不是**形状**。
+
+#### 七、闸门
+
+- `go test ./scripts/... -count=1` ✅ **322 passed**（+1）
+- `make module-check` ✅；`go run ./scripts/domaincheck` ✅ **57 域 / 40 边 / 0 环**
+- 变异实测两次（§六）
+- 阶段 3 仍 **84.0%**、加权仍 **94.7%**——**这一轮推翻了上一轮的一个方案，而推翻
+  本身就是交付**：决策 232 提出的「窄投影」路线经实测只值 1 条边，且卡点是同名
+  巧合而不是分层。**在拍板之前先量，量完发现不需要拍板**——这比拿到一个答案省下
+  一整轮
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

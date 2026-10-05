@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"go/ast"
+	"go/token"
 	"io"
 	"sort"
 	"strings"
@@ -34,6 +36,11 @@ type sharedRow struct {
 	// same-named type — a case worth seeing, because moving one of them
 	// would silently change what the other means.
 	targets map[string]bool
+	// shapes renders one line per declaring package: that package's field
+	// list for this symbol. It is only filled for symbols with more than one
+	// declaring domain, because that is the only case where "there are two of
+	// these" is a question a reader has to answer before moving anything.
+	shapes []string
 }
 
 func (r sharedRow) fanOut() int { return len(r.consumers) }
@@ -45,14 +52,52 @@ func (r sharedRow) fanOut() int { return len(r.consumers) }
 func printShared(w io.Writer, sources []source, r rules) {
 	// symbol -> consuming domain -> declaring domain
 	consumers := map[string]map[string]map[string]bool{}
+	// owner[sym] is the import path the symbol was last seen declared in. A
+	// name with several declaring domains is reached through several import
+	// paths, and the last one wins; that is fine here because the report
+	// only uses it to look up field lists for a symbol that is already known
+	// to be ambiguous, and every owner is printed.
+	owner := map[string]string{}
 	// package -> domain, so a symbol's declaring side can be resolved
 	pkgDomain := map[string]string{}
+	// fields[pkg][sym] = the struct's field names, in declaration order.
+	fields := map[string]map[string][]string{}
 	for _, src := range sources {
 		d := domainOf(src.path)
 		if d == "" {
 			continue
 		}
-		pkgDomain[pkgKey(src)] = d
+		pkg := pkgKey(src)
+		pkgDomain[pkg] = d
+		if src.file == nil {
+			continue
+		}
+		if fields[pkg] == nil {
+			fields[pkg] = map[string][]string{}
+		}
+		for _, decl := range src.file.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				st, ok := ts.Type.(*ast.StructType)
+				if !ok || st.Fields == nil {
+					continue
+				}
+				var names []string
+				for _, f := range st.Fields.List {
+					for _, id := range f.Names {
+						names = append(names, id.Name)
+					}
+				}
+				fields[pkg][ts.Name.Name] = names
+			}
+		}
 	}
 
 	for _, src := range sources {
@@ -76,6 +121,7 @@ func printShared(w io.Writer, sources []source, r rules) {
 					consumers[sym][from] = map[string]bool{}
 				}
 				consumers[sym][from][to] = true
+				owner[sym] = imp
 			}
 		}
 	}
@@ -90,6 +136,9 @@ func printShared(w io.Writer, sources []source, r rules) {
 			}
 		}
 		if len(row.consumers) > 1 {
+			if len(row.targets) > 1 {
+				row.shapes = shapesOf(sym, owner[sym], fields, sources)
+			}
 			rows = append(rows, row)
 		}
 	}
@@ -123,6 +172,14 @@ func printShared(w io.Writer, sources []source, r rules) {
 			strings.Join(sortedNames(row.consumers), " "),
 			strings.Join(sortedNames(row.targets), " "),
 			flag)
+		// A warning that does not say why is a warning nobody can act on.
+		// These are the entries a ranking by consumer count puts at the very
+		// top, so the report prints what each owner actually holds: if the
+		// field lists are unrelated, the name is a coincidence and the
+		// symbol is not a move candidate at all.
+		for _, line := range row.shapes {
+			fmt.Fprintf(w, "        %s\n", line)
+		}
 	}
 	fmt.Fprintf(w, "\n  %d symbols are selected by more than one domain\n", len(rows))
 }
@@ -133,5 +190,40 @@ func sortedNames(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// shapesOf renders one line per declaring package for a symbol that more than
+// one domain declares. A package with no struct body — an interface, an alias,
+// a constant — gets said so rather than silently printing nothing, because a
+// missing line would read as "this one has no fields" when the truth is that
+// the tool did not look.
+func shapesOf(sym, hint string, fields map[string]map[string][]string, sources []source) []string {
+	pkgs := map[string]bool{}
+	if hint != "" {
+		pkgs[hint] = true
+	}
+	for _, src := range sources {
+		if src.declared == nil {
+			continue
+		}
+		if _, ok := src.declared[sym]; ok {
+			pkgs[pkgKey(src)] = true
+		}
+	}
+	names := make([]string, 0, len(pkgs))
+	for p := range pkgs {
+		names = append(names, p)
+	}
+	sort.Strings(names)
+	var out []string
+	for _, p := range names {
+		f := fields[p][sym]
+		if len(f) == 0 {
+			out = append(out, fmt.Sprintf("%s: not a struct here (interface, alias or constant)", p))
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s: {%s}", p, strings.Join(f, " ")))
+	}
 	return out
 }
