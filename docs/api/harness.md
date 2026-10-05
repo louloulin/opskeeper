@@ -1,427 +1,206 @@
-# API 文档：Harness 评测平台
+# Harness 评测平台：CLI 面（不是 REST）
 
-> **范围**：golden case 评测 + 双模型 judge 评分 + leaderboard 回归
-> **关联**：
-> - Spec：[openspec/specs/harness-eval-platform/spec.md](../../openspec/specs/harness-eval-platform/spec.md)
-> - ADR：[docs/superpowers/decisions/2026-07-13-harness-judge-models.md](../superpowers/decisions/2026-07-13-harness-judge-models.md)
-> - 使用指南：[docs/harness-guide.md](../harness-guide.md)
+> **范围**：golden case 执行、fault 注入、judge 评分、三诊断轴、leaderboard 回归、能力词表。
+> **真实形态**：`cmd/opskeeper-eval` 一个二进制 + `core/harness` 九个库包。**本平台没有 HTTP 服务。**
+> **本文描述的是代码当前实际行为**，含「未交付」一节（文末）。曾经有一份 REST 文档描述 13 个端点，**那 13 个端点从未存在**（见文末）。
+> **形状守卫**：`make apidoc-check`（`scripts/apidoc`）保证本文不会声称一个不存在的端点或子命令；本文的每个子命令都在 `cmd/opskeeper-eval/main.go` 的 `case` 里被逐一核对。
 
 ---
 
-## 一、case 管理
+## 一、为什么是 CLI
 
-### 1.1 列出 case
+评测平台跑的是**注入真实故障、驱动真实 agent、再打分**这件事。它的调用者是 CI 与人，
+不是浏览器。它需要的是可复现的命令行、机器可读的 JSON 输出、以及能在没有 HTTP 客户端的
+地方跑（节点侧、离线机器）。**曾经按 REST 写的那份文档描述的是一个不存在的服务**——
+`docs/api/` 下曾经有十三行 `GET /api/v1/harness/...`，仓库里没有任何一处注册它们。
 
+---
+
+## 二、二进制
+
+```bash
+go run ./cmd/opskeeper-eval <subcommand> [flags]
+opskeeper-eval --version
+opskeeper-eval <subcommand> --help     # 每个子命令的 flag 列表
 ```
-GET /api/v1/harness/cases
+
+退出码：`0` 成功；`1` 命令返回错误（错误信息在 stderr）；`2` 未知子命令。
+
+---
+
+## 三、子命令
+
+### 3.1 `run` — 执行 case 或 suite
+
+| flag | 作用 |
+|---|---|
+| `-case` | 单个 case id，例如 `pg/long-running-tx` |
+| `-suite` | suite 名 |
+| `-env` | 执行环境（默认 staging） |
+| `-judge-model` | 评分模型 |
+| `-concurrency` | 并发数 |
+| `-output` / `-report-dir` | 输出文件 / 报告目录 |
+
+```bash
+opskeeper-eval run --case pg/long-running-tx --env staging
+opskeeper-eval run --suite middleware-baseline --concurrency 4
 ```
 
-**Query**：
+### 3.2 `inject` — 手动触发故障注入
 
-| 参数 | 类型 | 说明 |
+| flag | 作用 |
+|---|---|
+| `-case` | case id |
+| `-target` | 目标（`ns=test deploy=order-svc` 形式） |
+| `-confirm-prod` | 允许对生产注入。**没有它就注入不了生产**，这是一个必须显式写出来的开关 |
+
+```bash
+opskeeper-eval inject --case k8s/pod-oom --target ns=test deploy=order-svc
+```
+
+### 3.3 `judge` — 对已有响应重跑评分
+
+| flag | 作用 |
+|---|---|
+| `-case` / `-cases-dir` | 单个 case / 语料目录 |
+| `-response` | `judge.AgentResponse` 的 JSON（用 `project` 生成） |
+| `-judge` | `heuristic` 或 `llm` |
+| `-provider` / `-model` | LLM judge 的 provider 与模型 |
+| `-out` | 输出 |
+| `-plugins-dir` | 插件包目录（能力可服务性检查用） |
+| `-allow-unservable` | 允许对本构建无法服务的 case 打分 |
+
+```bash
+opskeeper-eval judge --case pg/long-running-tx --response agent-response.json
+opskeeper-eval judge --case pg/long-running-tx --response agent-response.json \
+    --judge llm --provider anthropic
+```
+
+**`allow-unservable` 是一道诚实的开关**：一个 case 需要的工具本构建没有时，它的分数不是
+agent 的成绩。不给这个开关就直接判不合格，等于把平台的失败算成 agent 的失败。
+
+### 3.4 `run-loop` — loop 模式闭环
+
+| flag | 作用 |
+|---|---|
+| `-case` / `-cases-dir` / `-env` | 同 `run` |
+| `-execution-mode` | `dry-run` 或 `real-agentteams` |
+| `-incident-id` / `-trace-id` | 真实模式的标识 |
+| `-hitl-evidence` / `-mcp-evidence` / `-fixture-before-evidence` / `-fixture-after-evidence` | 六类证据文件 |
+| `-judge` / `-judge-model` / `-judge-provider` | 评分路径 |
+
+```bash
+opskeeper-eval run-loop --case host/cpu-spike --execution-mode=real-agentteams \
+  --incident-id host-cpu-spike-real --trace-id <32 hex> \
+  --postmortem-evidence pm.json --judge llm
+```
+
+### 3.5 `leaderboard` — 排行榜与回归基线
+
+| flag | 作用 |
+|---|---|
+| `-dir` | leaderboard 目录 |
+| `-out-dir` | 报告输出目录 |
+| `-threshold` | 回归阈值 |
+
+### 3.6 `list-cases` — 列出语料
+
+| flag | 作用 |
+|---|---|
+| `-cases-dir` | 语料目录（默认 `core/harness/cases`） |
+| `-filter` | 按 id 片段过滤 |
+
+```bash
+opskeeper-eval list-cases --filter pg
+```
+
+### 3.7 `plugin-coverage` — case 能力期望 vs 插件包能力
+
+| flag | 作用 |
+|---|---|
+| `-cases-dir` / `-plugins-dir` / `-filter` | 输入 |
+| `-json` | 机器可读输出 |
+| `-fail-on-gap` | 有缺口即非零退出 |
+| `-fail-on-unrecorded-diagnose-gap` | 未登记的诊断缺口也非零退出 |
+
+### 3.8 `vocabulary` — case 能力期望 vs 本构建真实词表
+
+| flag | 作用 |
+|---|---|
+| `-cases-dir` / `-plugins-dir` / `-filter` / `-kind-map` | 输入 |
+| `-json` / `-fail-on-gap` | 输出与门控 |
+
+```bash
+opskeeper-eval vocabulary
+```
+
+### 3.9 `project` — 把生产的 RootCauseJSON 投影成评分响应
+
+| flag | 作用 |
+|---|---|
+| `-contract` | 生产的 RootCauseJSON 契约文件 |
+| `-kind-map` | 故障类型映射 |
+| `-out` | 输出 `judge.AgentResponse` |
+| `-bare` | 只输出响应，不做打分 |
+| `-allow-unmapped-root-cause` | 允许契约里出现映射表没有的根因类型 |
+| `-detected-at` / `-investigated-at` / `-recovered-at` | 三个时间戳 |
+
+```bash
+opskeeper-eval project --contract rc.json --kind-map kinds.json --out resp.json
+```
+
+### 3.10 `axes` — 三个诊断轴的声明面
+
+| flag | 作用 |
+|---|---|
+| `-cases-dir` / `-filter` | 输入 |
+| `-json` | 机器可读输出 |
+| `-fail-on-unmeasured-axis` | 有 case 三轴中任一无法测量即非零退出 |
+
+```bash
+opskeeper-eval axes --fail-on-unmeasured-axis
+```
+
+派生规则在 `core/harness/axes`（一份实现，两条评分路径共用），打分在
+`core/harness/judge`，存储与对比在 `core/harness/leaderboard`。
+
+---
+
+## 四、CI 里的三道闸门
+
+```bash
+make eval-coverage      # plugin-coverage：哪些 case 没有插件能服务
+make eval-vocabulary    # vocabulary：哪些 case 连结构上都无法满足
+make eval-axes          # axes：哪些 case 没声明三轴
+```
+
+三者都是 `eval-gates` 的组成部分，且都在 CI 每次 push 跑到。**它们的输出不是分数，是缺口**：
+一个 case 在这里红了，说明平台还不能公平地评它，而不是 agent 答错了。
+
+---
+
+## 五、未交付
+
+以下内容在旧版本文里出现过，**代码从未实现**：
+
+| 项 | 状态 | 缺什么 |
 |---|---|---|
-| `severity` | string | P0 / P1 / P2 / P3 |
-| `tag` | string | 按 tag 过滤 |
-| `resource` | string | pg / redis / mq / k8s / host |
+| `GET /api/v1/harness/cases`（列 case） | ❌ 从未实现 | 无此端点；用 `list-cases` |
+| `POST /api/v1/harness/cases/validate` | ❌ 从未实现 | 无此端点；`schema.NewLoader` 在进程内校验 |
+| `GET/POST /api/v1/harness/runs`、`/runs/{run_id}` | ❌ 从未实现 | 无运行记录服务；结果落文件与 leaderboard |
+| `POST /api/v1/harness/inject`、`/inject/{inject_id}/stop` | ❌ 从未实现 | 注入是 `inject` 子命令 |
+| `GET /api/v1/harness/leaderboard`、`POST .../lock`、`POST .../check-regression` | ❌ 从未实现 | 排行榜是 `leaderboard` 子命令 |
+| `GET /api/v1/harness/judge/models`、`POST .../judge`、`GET .../judge/consistency` | ❌ 从未实现 | 评分是 `judge` 子命令 |
+| 响应信封 `{code, message, data}` | ❌ 不适用 | CLI 输出是文本或 `--json` 的结构 |
 
-**响应**：
-
-```json
-{
-  "code": 0,
-  "data": {
-    "items": [
-      {
-        "id": "pg/long-running-tx",
-        "description": "模拟 PG 长事务导致锁等待和性能下降",
-        "severity": "P0",
-        "tags": ["pg", "lock", "performance"],
-        "resource": "pg",
-        "rubric": {
-          "rca_accuracy": 0.85,
-          "time_to_remediate": 120
-        }
-      }
-    ],
-    "total": 60
-  }
-}
-```
-
-### 1.2 校验 case
-
-```
-POST /api/v1/harness/cases/validate
-```
-
-**Body**：单个 case YAML 或 JSON。
-
-**响应**：
-
-```json
-{
-  "code": 0,
-  "data": {
-    "valid": true,
-    "warnings": ["inject.duration=600s 接近 prod 限制 300s"]
-  }
-}
-```
+**「双模型 judge 一致性」（judge/consistency）是一个真想法，但不是已交付的端点**：现在能做的
+是同一响应分别用 `heuristic` 与 `llm` 打两次并人工比对，命令层面没有内建的一致性判定。
 
 ---
 
-## 二、运行评测
-
-### 2.1 同步运行单个 case
-
-```
-POST /api/v1/harness/runs
-```
-
-**Body**：
-
-```json
-{
-  "case_id": "pg/long-running-tx",
-  "env": "staging",
-  "timeout_s": 300
-}
-```
-
-**响应**：
-
-```json
-{
-  "code": 0,
-  "data": {
-    "run_id": "hr-abc123",
-    "status": "running",
-    "case_id": "pg/long-running-tx",
-    "started_at": "2026-07-13T10:00:00Z"
-  }
-}
-```
-
-### 2.2 同步运行 suite
-
-```json
-{
-  "suite": "middleware-baseline",
-  "env": "staging",
-  "judge_models": ["claude-sonnet-4", "gpt-4o"]
-}
-```
-
-### 2.3 异步运行 + webhook
-
-```json
-{
-  "case_id": "pg/long-running-tx",
-  "env": "staging",
-  "async": true,
-  "webhook_url": "https://ci.example.com/callback",
-  "webhook_secret_ref": "<encrypted_secret_ref>"
-}
-```
-
-执行完成时 POST 到 webhook：
-
-```json
-{
-  "run_id": "hr-abc123",
-  "status": "completed",
-  "score": {
-    "overall": 0.92,
-    "rca_accuracy": 0.95,
-    "time_to_detect_s": 18,
-    "time_to_remediate_s": 85,
-    "collateral_damage": false,
-    "rubric_compliance": 0.92
-  }
-}
-```
-
----
-
-## 三、查询 run
-
-### 3.1 run 详情
-
-```
-GET /api/v1/harness/runs/{run_id}
-```
-
-**响应**：
-
-```json
-{
-  "code": 0,
-  "data": {
-    "run_id": "hr-abc123",
-    "case_id": "pg/long-running-tx",
-    "env": "staging",
-    "status": "completed",  // running / completed / failed / flagged
-    "started_at": "2026-07-13T10:00:00Z",
-    "completed_at": "2026-07-13T10:02:30Z",
-    "duration_s": 150,
-    "judge_results": [
-      {
-        "model": "claude-sonnet-4",
-        "score": 0.93,
-        "rubric_breakdown": { ... }
-      },
-      {
-        "model": "gpt-4o",
-        "score": 0.91,
-        "rubric_breakdown": { ... }
-      }
-    ],
-    "final_score": 0.92,
-    "flagged": false,
-    "agent_response": { ... },   // Agent 的实际响应
-    "injection_logs": [ ... ]   // fault-injector 日志
-  }
-}
-```
-
-### 3.2 run 列表
-
-```
-GET /api/v1/harness/runs?since=24h&case_id=pg/long-running-tx
-```
-
----
-
-## 四、注入操作
-
-### 4.1 注入故障
-
-```
-POST /api/v1/harness/inject
-```
-
-**Body**：
-
-```json
-{
-  "case_id": "k8s/pod-oom",
-  "env": "staging",
-  "max_duration_s": 300,
-  "params": {
-    "namespace": "default",
-    "deployment": "order-svc",
-    "memory_limit": "256Mi"
-  }
-}
-```
-
-**响应（默认 staging）**：
-
-```json
-{
-  "code": 0,
-  "data": {
-    "inject_id": "inj-xyz789",
-    "status": "injecting",
-    "started_at": "2026-07-13T10:00:00Z",
-    "auto_rollback_at": "2026-07-13T10:05:00Z"
-  }
-}
-```
-
-### 4.2 prod 环境拦截
-
-请求 `env=prod` 时：
-
-```json
-{
-  "code": 0,
-  "data": {
-    "status": "requires_dual_approval",
-    "approvers_required": 2,
-    "approvers_so_far": [],
-    "approval_ticket_id": "at-inj-prod-001"
-  }
-}
-```
-
-需要 2 名审批人通过后才会执行。
-
-### 4.3 手动停止注入
-
-```
-POST /api/v1/harness/inject/{inject_id}/stop
-```
-
----
-
-## 五、Leaderboard
-
-### 5.1 查看 leaderboard
-
-```
-GET /api/v1/harness/leaderboard?since=30d
-```
-
-**响应**：
-
-```json
-{
-  "code": 0,
-  "data": {
-    "since": "30d",
-    "total_runs": 240,
-    "overall_score": 0.90,
-    "baseline_score": 0.91,
-    "delta": -0.01,
-    "cases": [
-      {
-        "case_id": "pg/long-running-tx",
-        "score_avg": 0.92,
-        "delta_vs_baseline": +0.02,
-        "runs": 30,
-        "status": "pass"
-      },
-      {
-        "case_id": "redis/big-key",
-        "score_avg": 0.88,
-        "delta_vs_baseline": -0.03,
-        "runs": 25,
-        "status": "warn"
-      }
-    ]
-  }
-}
-```
-
-### 5.2 锁定基线
-
-```
-POST /api/v1/harness/leaderboard/lock
-```
-
-**Body**：
-
-```json
-{
-  "version": "v1.0",
-  "comment": "release v1.0 基线"
-}
-```
-
-锁定后所有评分与此对比。每月一次。
-
-### 5.3 检查回归
-
-```
-POST /api/v1/harness/leaderboard/check-regression
-```
-
-**Body**：
-
-```json
-{
-  "run_results": [...]  // 来自 /runs 的响应
-}
-```
-
-**响应**：
-
-```json
-{
-  "code": 0,
-  "data": {
-    "passed": true,
-    "max_drop_pct": 3.2,
-    "alerts": [],
-    "blocks": []
-  }
-}
-```
-
-`blocks` 非空时返回 422：
-
-```json
-{
-  "code": 4022,
-  "message": "回归阻断：评分下降 > 15%",
-  "data": {
-    "blocks": [
-      { "case_id": "k8s/pod-oom", "drop_pct": 18.4 }
-    ]
-  }
-}
-```
-
----
-
-## 六、Judge 模型
-
-### 6.1 列出可用模型
-
-```
-GET /api/v1/harness/judge/models
-```
-
-### 6.2 单 case 外部 judge
-
-```
-POST /api/v1/harness/judge
-```
-
-**Body**：
-
-```json
-{
-  "case_id": "pg/long-running-tx",
-  "agent_response": { ... },
-  "models": ["claude-sonnet-4", "gpt-4o"]
-}
-```
-
-用于本地调试或第三方评测集成。
-
-### 6.3 一致性指标
-
-```
-GET /api/v1/harness/judge/consistency?since=30d
-```
-
-返回两模型一致率（spec §Requirement "judge 双模型取均值"目标 ≥ 80%）。
-
----
-
-## 七、错误码
-
-| HTTP | code | 含义 |
-|---|---|---|
-| 200 | 0 | 成功 |
-| 400 | 4000 | 请求参数错误 |
-| 401 | 4001 | 未认证 |
-| 403 | 4003 | prod 环境注入未授权 / 跨租户 |
-| 404 | 4004 | case / run 不存在 |
-| 409 | 4009 | run 冲突（同 case_id + env 已有 running）|
-| 422 | 4022 | 回归阻断 / schema 校验失败 |
-| 429 | 4029 | judge 限速（> 60/min）|
-| 500 | 5000 | 服务端错误 |
-| 503 | 5003 | 注入器暂不可用（资源忙）|
-
----
-
-## 八、多租户隔离
-
-所有 run / inject / leaderboard 强制 tenant 隔离：
-
-- run 创建：自动绑定调用者 tenant
-- leaderboard：返回当前 tenant 的统计
-- 跨租户查看：仅 superuser 可访问（`tenant_id=0`）
-
----
-
-## 九、相关
-
-- Spec：[openspec/specs/harness-eval-platform/spec.md](../../openspec/specs/harness-eval-platform/spec.md)
-- ADR：[docs/superpowers/decisions/2026-07-13-harness-judge-models.md](../superpowers/decisions/2026-07-13-harness-judge-models.md)
-- 使用指南：[docs/harness-guide.md](../harness-guide.md)
-- Middleware API：[docs/api/middleware.md](middleware.md)
-- git-artifact API：[docs/api/git-artifact.md](git-artifact.md)
+## 六、相关
+
+- CLI：`cmd/opskeeper-eval/`
+- 库：`core/harness/{schema,injector,judge,axes,leaderboard,projection,vocabulary,runner}`
+- 闸门：`make eval-gates`、`make apidoc-check`
+- 形状守卫：`scripts/apidoc`

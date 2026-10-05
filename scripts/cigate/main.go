@@ -154,6 +154,15 @@ func DecisionGates() []Gate {
 				"(decision 187)",
 		},
 		{
+			Target: "apidoc-check",
+			Why: "docs/api is the one place a fully written, entirely fictional contract can sit for " +
+				"months with nothing red: two of its three documents described REST APIs that were " +
+				"never registered anywhere, and a contract nobody can call is worse than no contract " +
+				"because it is trusted. The gate reads every METHOD /path and opskeeper-eval " +
+				"subcommand out of the docs' fenced blocks and requires a registration in the source " +
+				"(decision 267)",
+		},
+		{
 			Target: "mcp-surface-check",
 			Why: "the plan's phase 2 MCP compatibility layer is a wire contract -- handshake, " +
 				"keepalive, pagination and version refusal, plus the late-seam trap where a tool " +

@@ -172,6 +172,14 @@ jobs:
       - name: Plan acceptance gates are wired
         run: make ci-gate-check
 
+      # docs/api is the one place in this repository where a fully written,
+      # entirely fictional contract could sit for months with nothing red:
+      # two of its three documents described REST APIs that were never
+      # registered. This gate makes a documented endpoint a claim that has to
+      # be true in the source.
+      - name: Documented endpoints exist
+        run: make apidoc-check
+
       - name: Verify web console
         run: |
           corepack enable

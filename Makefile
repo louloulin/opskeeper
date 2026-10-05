@@ -591,6 +591,15 @@ deadcode-report: ## 报出生产代码里只有测试引用的符号（报告，
 	go run ./scripts/deadcode . core core/edge core/pig core/manager core/floor core/harness sdk
 	go test ./scripts/deadcode/ -count=1
 
+# docs/api 是这个仓库里唯一一处「可以写出一份完整交付、而没有任何东西会红」的地方：
+# harness.md 描述过十三个从未注册的 HTTP 端点，middleware.md 描述过九个，而两者
+# 读起来都像已交付的契约。这道闸门读文档围栏里的每一行 `METHOD /path` 与每一次
+# `opskeeper-eval <sub>`，要求它在源码里有对应注册；散文里的「未交付」不算声明。
+.PHONY: apidoc-check
+apidoc-check: ## 校验 docs/api 声称的每个端点与子命令在源码里真实存在（决策 267）
+	go run ./scripts/apidoc .
+	go test ./scripts/apidoc/ -count=1
+
 # transcheck is the third gauge the ledger says it is missing: a hand-written
 # struct translation is a place where adding a column to the source leaves the
 # literal compiling and ships the new column as a zero value, and nothing in
