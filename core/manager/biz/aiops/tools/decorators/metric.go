@@ -27,7 +27,7 @@ var (
 )
 
 // getMetricCollectors returns (and lazily creates / registers) the
-// collectors for reg. Identical pattern to core/manager/pkg/llm/metrics.go's
+// collectors for reg. Identical pattern to core/base/pkg/llm/metrics.go's
 // registerOrExisting — we treat AlreadyRegisteredError as "reuse the
 // existing collector" so multiple decorator chains over the same
 // registry don't panic.

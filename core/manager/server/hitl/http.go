@@ -11,8 +11,8 @@ import (
 
 	bizhitl "github.com/vincent-wuhan/opskeeper/core/manager/biz/hitl"
 	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 const maxRequestBodyBytes = 32 << 10

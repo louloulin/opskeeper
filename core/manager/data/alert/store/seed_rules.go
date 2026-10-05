@@ -7,7 +7,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/notify"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/notify"
 )
 
 // SeedBuiltinRules populates alert_rules with the canonical built-in

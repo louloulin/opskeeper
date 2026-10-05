@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/mcpclient"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/mcpclient"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // postMCP sends one JSON-RPC message to the endpoint with a plain user tenant

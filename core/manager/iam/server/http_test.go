@@ -14,8 +14,8 @@ import (
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/user"
 	iammodel "github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
 	"github.com/vincent-wuhan/opskeeper/core/manager/iam/service"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 type serverTestRepo struct {

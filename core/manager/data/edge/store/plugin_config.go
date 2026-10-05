@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // PluginConfigRepo persists edge_plugin_configs.

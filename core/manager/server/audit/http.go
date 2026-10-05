@@ -15,8 +15,8 @@ import (
 
 	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // Handler exposes the admin-facing audit endpoints.

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 const (

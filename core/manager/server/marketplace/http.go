@@ -18,8 +18,8 @@ import (
 
 	bizmp "github.com/vincent-wuhan/opskeeper/core/manager/biz/marketplace"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/marketplace"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // Service is the narrow surface the handler depends on. *bizmp.Usecase

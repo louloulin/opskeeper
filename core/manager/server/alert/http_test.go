@@ -12,8 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	svc "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 )
 

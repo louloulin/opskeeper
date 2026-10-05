@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/dbx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/dbx"
 )
 
 // The manager's migrations are replayed in full on every boot, and there is

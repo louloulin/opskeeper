@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
 )
 
 // promhelpers.go — the PromQL value plumbing that more than one tool asks

@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"time"
 
-	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 )
 
 // agentToolAuditEmitter is the slice of biz/audit.Usecase this file needs.

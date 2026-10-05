@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // defaultSeedName is the canonical name of the platform's single

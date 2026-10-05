@@ -8,7 +8,7 @@ import (
 
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // fakes_test.go is the test double the host cluster shares internally.

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tracequery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tracequery"
 )
 
 // fakeTraceQuerier captures the last SearchTraces call.

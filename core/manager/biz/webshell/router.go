@@ -17,7 +17,7 @@ import (
 	"time"
 
 	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
-	wsfanout "github.com/vincent-wuhan/opskeeper/core/manager/pkg/wsfanout"
+	wsfanout "github.com/vincent-wuhan/opskeeper/core/base/pkg/wsfanout"
 )
 
 // Caller is the narrow tunnel surface used to invoke RPCs against

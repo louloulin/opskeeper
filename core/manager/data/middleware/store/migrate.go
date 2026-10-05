@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/middleware"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/dbx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/dbx"
 )
 
 // Migrate registers the middleware_resources,

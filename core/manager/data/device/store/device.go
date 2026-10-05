@@ -14,7 +14,7 @@ import (
 
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // EdgeIdentityRevoker is what deleting a device needs from the edge

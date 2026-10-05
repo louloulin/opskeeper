@@ -137,7 +137,7 @@ var planItems = []planItem{
 	{
 		name:    "MCP",
 		what:    "2 对外用 MCP 协议，对内自建网关做授权与审计",
-		anchors: []string{"core/manager/pkg/mcpclient"},
+		anchors: []string{"core/base/pkg/mcpclient"},
 	},
 	{
 		name:    "结晶",

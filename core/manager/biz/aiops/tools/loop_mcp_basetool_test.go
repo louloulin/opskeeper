@@ -13,7 +13,7 @@ import (
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	aiopstoolsdec "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
 	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 func TestMCPBaseTools_RunThroughStandardDecoratorChain(t *testing.T) {

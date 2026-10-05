@@ -59,6 +59,16 @@ var layerDirs = map[string]bool{
 
 const managerPrefix = "core/manager/"
 
+// basePrefix is the control plane's shared infrastructure, which used to be
+// core/manager/pkg and is a module of its own (decision 221).
+//
+// The co-change report answers "which bounded contexts change together", and
+// pkg is one of the answers: 45 domains change when it changes. Dropping it
+// from the mapping would not make the report smaller, it would make the
+// largest shared dependency in the tree invisible — and invisibility is the
+// one thing a report about coupling must never be.
+const basePrefix = "core/base/"
+
 // Change is one commit's footprint in the control plane.
 type Change struct {
 	Commit  string
@@ -195,10 +205,23 @@ type Report struct {
 // which bounded contexts evolve independently, which is worse than
 // reporting nothing.
 func domainOf(path string) string {
-	if !strings.HasPrefix(path, managerPrefix) {
+	rest := ""
+	switch {
+	case strings.HasPrefix(path, managerPrefix):
+		rest = strings.TrimPrefix(path, managerPrefix)
+	case strings.HasPrefix(path, basePrefix):
+		// Everything under core/base is the one shared domain the module
+		// holds: pkg itself and its 31 subpackages. A subpackage name would
+		// read as a bounded context, and ranking "redislock" as one would be
+		// a category error — it is a library the whole control plane sits on.
+		rest = strings.TrimPrefix(path, basePrefix)
+		if !strings.HasPrefix(rest, "pkg/") && rest != "pkg" {
+			return ""
+		}
+		return "pkg"
+	default:
 		return ""
 	}
-	rest := strings.TrimPrefix(path, managerPrefix)
 	if !strings.Contains(rest, "/") {
 		return ""
 	}

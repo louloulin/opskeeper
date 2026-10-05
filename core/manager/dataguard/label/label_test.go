@@ -10,7 +10,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/heuristic"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/store"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // fakeRepo 是 label.Repo 的 in-memory 实现。

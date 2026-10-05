@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // QueryTemplateStore is the GORM-backed persistence for chat_to_query

@@ -19,7 +19,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/crystallize"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 var crystallizedBase = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)

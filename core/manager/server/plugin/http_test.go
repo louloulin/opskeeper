@@ -20,7 +20,7 @@ import (
 
 	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	auditmw "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
 	release "github.com/vincent-wuhan/opskeeper/core/manager/service/plugin"
 )
@@ -78,7 +78,7 @@ func (f *fakeService) Compatibility(_ context.Context, req release.Requirement) 
 
 // asRole stands in for the auth middleware, which every route here sits
 // behind. It writes the tenant both to the plain context value and to
-// the mutable slot, exactly as core/manager/pkg/auth does — the slot is the
+// the mutable slot, exactly as core/base/pkg/auth does — the slot is the
 // path the audit middleware reads, so a helper that only did With()
 // would let the audit row come out with an empty role while the
 // handler still saw the tenant.

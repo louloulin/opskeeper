@@ -17,7 +17,7 @@ import (
 	bizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
 	reportstore "github.com/vincent-wuhan/opskeeper/core/manager/data/report/store"
 	reportmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 func newTestHandler(t *testing.T) (*Handler, *gorm.DB) {

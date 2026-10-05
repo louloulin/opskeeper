@@ -6,7 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/llm"
 	svcaiops "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
 )
 

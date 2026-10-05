@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
-	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 type AuditEmitter interface {

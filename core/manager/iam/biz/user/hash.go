@@ -1,9 +1,9 @@
 package user
 
-import "github.com/vincent-wuhan/opskeeper/core/manager/pkg/passwd"
+import "github.com/vincent-wuhan/opskeeper/core/base/pkg/passwd"
 
 // hashPassword is a thin wrapper around passwd.Hash. The argon2id helpers
-// were promoted to core/manager/pkg/passwd so manager/biz/edge can reuse the
+// were promoted to core/base/pkg/passwd so manager/biz/edge can reuse the
 // same scheme for its SecretKeyHash without crossing the iam BC boundary
 // (arch-lint forbids manager -> iam imports).
 func hashPassword(password string) (string, error) {

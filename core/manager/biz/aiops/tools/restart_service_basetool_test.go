@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // newRestartServiceToolFor builds the restart_service BaseTool backed

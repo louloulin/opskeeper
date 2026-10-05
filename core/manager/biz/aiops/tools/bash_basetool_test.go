@@ -11,7 +11,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/edge/cmdpolicy"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 func newBashTool(_ *testing.T, resolver host.DeviceResolver, fc *fakeCaller) *BashTool {

@@ -21,10 +21,10 @@ import (
 	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
 	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
-	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/mcpclient"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/mcpclient"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 type fakeKnowledgeSearcher func(context.Context, string, knowledgebiz.SearchOptions) ([]knowledgebiz.SearchHit, error)

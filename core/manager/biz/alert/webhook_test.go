@@ -7,7 +7,7 @@ import (
 	"time"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 type webhookFakeInvestigator struct {

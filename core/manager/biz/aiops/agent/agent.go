@@ -27,7 +27,7 @@ import (
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/toolreplay"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"

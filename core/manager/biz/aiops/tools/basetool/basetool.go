@@ -124,7 +124,7 @@ type InvokeOption func(*invokeConfig)
 // helper accessors (or, for now, only the decorator chain reads it).
 type invokeConfig struct {
 	// Tenant is the caller's tenant identifier. Sourced from
-	// core/manager/pkg/tenantctx.Tenant. Used by the audit decorator to
+	// core/base/pkg/tenantctx.Tenant. Used by the audit decorator to
 	// scope chat_tool_calls rows and (later) by the per-tenant skill
 	// override layer.
 	Tenant string

@@ -13,7 +13,12 @@ import (
 // copy is exactly the kind of thing that rots quietly: a new action lands
 // in the port, every existing caller still compiles, and this package's
 // re-export simply stops offering it.
-const portSource = "../../pkg/audit/port.go"
+// The port moved out to the core/base module with the rest of the control
+// plane's shared infrastructure (decision 221), so this path is three levels
+// up and across rather than two levels up. It is read as a file rather than
+// imported on purpose: the point of the test is that the re-export covers
+// the vocabulary *in the source*, which an import would hide.
+const portSource = "../../../base/pkg/audit/port.go"
 
 // declaredConsts returns every constant name in an AST file mapped to the
 // right-hand side it is bound to, reduced to the part that identifies it.

@@ -722,7 +722,7 @@ func runStatOnePath(_ context.Context, sb *SandboxConfig, path string) tunnel.St
 // =====================================================================
 
 // humanBytes returns a "12.3 MiB"-style binary size string. Lifted from
-// core/manager/pkg/humanize semantics; kept local so this package has no
+// core/base/pkg/humanize semantics; kept local so this package has no
 // dependency outside std + tunnel types.
 func humanBytes(n int64) string {
 	const unit = 1024

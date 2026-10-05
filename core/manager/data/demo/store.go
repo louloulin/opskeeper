@@ -10,7 +10,7 @@ import (
 
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/demo"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // The labels the pg-pool-exhaustion scenario is recognised by. They are the

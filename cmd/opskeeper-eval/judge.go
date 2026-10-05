@@ -37,7 +37,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/config"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/llm"
 )
 
 // judgeHeuristic and judgeLLM are the two scoring paths.

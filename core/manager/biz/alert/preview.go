@@ -11,8 +11,8 @@ import (
 	"time"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
 )
 
 // PreviewInput is the parameter object PreviewRule consumes. It mirrors

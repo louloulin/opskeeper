@@ -8,7 +8,7 @@ import (
 	"time"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // Resolution selects which physical table feeds a range query.

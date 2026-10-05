@@ -31,12 +31,12 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
-	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/mcp"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/mcpclient"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/mcpclient"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // Service is the narrow surface the handler depends on. *bizmcp.Usecase

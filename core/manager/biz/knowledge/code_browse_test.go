@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // fakeRepoStore is a minimal RepoStore: only ListRepos returns data; the
@@ -51,7 +51,7 @@ func newCodeBrowseUC(t *testing.T) (*Usecase, string) {
 	cloneDir := t.TempDir()
 	repoURL := "https://github.com/acme/widget.git"
 	dir := filepath.Join(cloneDir, "1")
-	if err := os.MkdirAll(filepath.Join(dir, "core/manager/pkg"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "core/base/pkg"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	write := func(rel, body string) {
@@ -60,7 +60,7 @@ func newCodeBrowseUC(t *testing.T) (*Usecase, string) {
 		}
 	}
 	write("main.go", "package main\n\nfunc main() {\n\tResolveEdgeID()\n}\n")
-	write("core/manager/pkg/resolver.go", "package pkg\n\n// ResolveEdgeID maps device→edge.\nfunc ResolveEdgeID() uint64 {\n\treturn 0\n}\n")
+	write("core/base/pkg/resolver.go", "package pkg\n\n// ResolveEdgeID maps device→edge.\nfunc ResolveEdgeID() uint64 {\n\treturn 0\n}\n")
 	write("README.md", "# widget\n\ndocs here\n")
 	// a binary file (NUL byte) to exercise the binary guard
 	if err := os.WriteFile(filepath.Join(dir, "blob.bin"), []byte{0x00, 0x01, 0x02, 0x00}, 0o644); err != nil {
@@ -114,11 +114,11 @@ func TestListRepoSources(t *testing.T) {
 	}
 
 	// resolve by numeric id, list a subdir
-	sub, err := uc.ListRepoSources(ctx, "1", "core/manager/pkg")
+	sub, err := uc.ListRepoSources(ctx, "1", "core/base/pkg")
 	if err != nil {
 		t.Fatalf("list subdir: %v", err)
 	}
-	if len(sub.Entries) != 1 || sub.Entries[0].Path != "core/manager/pkg/resolver.go" {
+	if len(sub.Entries) != 1 || sub.Entries[0].Path != "core/base/pkg/resolver.go" {
 		t.Fatalf("subdir listing wrong: %+v", sub.Entries)
 	}
 }
@@ -128,7 +128,7 @@ func TestReadSource(t *testing.T) {
 	ctx := context.Background()
 
 	// whole file
-	f, err := uc.ReadSource(ctx, "widget", "core/manager/pkg/resolver.go", 0, 0)
+	f, err := uc.ReadSource(ctx, "widget", "core/base/pkg/resolver.go", 0, 0)
 	if err != nil {
 		t.Fatalf("read whole: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestReadSource(t *testing.T) {
 	}
 
 	// line window (the func signature is on line 4)
-	win, err := uc.ReadSource(ctx, "widget", "core/manager/pkg/resolver.go", 4, 4)
+	win, err := uc.ReadSource(ctx, "widget", "core/base/pkg/resolver.go", 4, 4)
 	if err != nil {
 		t.Fatalf("read window: %v", err)
 	}

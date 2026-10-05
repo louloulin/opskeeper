@@ -117,6 +117,7 @@ ENV PATH=/usr/local/go/bin:/go/bin:$PATH \
 # claiming a module that no longer exists; both are red.
 COPY go.mod go.sum ./
 COPY core/go.mod          ./core/
+COPY core/base/go.mod     ./core/base/
 COPY core/edge/go.mod     ./core/edge/
 COPY core/floor/go.mod    ./core/floor/
 COPY core/harness/go.mod  ./core/harness/

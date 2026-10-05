@@ -15,9 +15,9 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	bizsetting "github.com/vincent-wuhan/opskeeper/core/manager/biz/setting"
-	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // SettingService is the narrow surface the handler depends on. The

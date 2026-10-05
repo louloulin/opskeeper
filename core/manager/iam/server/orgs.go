@@ -15,8 +15,8 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/org"
 	"github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/user"
 	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // ----- DTOs -----

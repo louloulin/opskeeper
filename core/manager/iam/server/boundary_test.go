@@ -20,8 +20,16 @@ import (
 // removed.
 const (
 	managerPrefix = "github.com/vincent-wuhan/opskeeper/core/manager/"
+	// basePrefix is the control plane's shared infrastructure, a module of
+	// its own since decision 221. The audit port used to be manager/pkg/audit
+	// and is now base/pkg/audit, and the difference is not cosmetic: a test
+	// that kept resolving the port under managerPrefix would stop finding it,
+	// and a boundary check that only recognised managerPrefix would skip
+	// every base import without saying so. A gate that quietly stops looking
+	// is worse than one that is missing, because it still reports green.
+	basePrefix    = "github.com/vincent-wuhan/opskeeper/core/base/"
 	iamPrefix     = managerPrefix + "iam/"
-	pkgPrefix     = managerPrefix + "pkg/"
+	pkgPrefix     = basePrefix + "pkg/"
 	auditPortPath = pkgPrefix + "audit"
 )
 
@@ -36,7 +44,8 @@ const (
 // below reads the real grants and fails if iam is given anything else, so
 // adding a grant without updating the rule here leaves one of the two red.
 var sharedTrees = []string{
-	managerPrefix + "pkg",       // errors, tenant context, and now the audit port
+	pkgPrefix,
+	basePrefix + "pkg",       // errors, tenant context, and now the audit port
 	managerPrefix + "dataguard", // field sensitivity, shared by authz
 }
 
@@ -116,7 +125,7 @@ func TestThisContextReachesNothingAboveItself(t *testing.T) {
 				t.Errorf("%s: unquote import: %v", pf.path, err)
 				continue
 			}
-			if !strings.HasPrefix(target, managerPrefix) {
+			if !strings.HasPrefix(target, managerPrefix) && !strings.HasPrefix(target, basePrefix) {
 				continue // stdlib, a third party, or another module
 			}
 			if strings.HasPrefix(target, iamPrefix) {

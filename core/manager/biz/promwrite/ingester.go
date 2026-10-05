@@ -12,7 +12,7 @@
 //     requirement; Prom rejects unsorted label sets)
 //   - hand off to the underlying promwrite.Client
 //
-// This package depends on core/manager/pkg/promwrite and core/floor/tunnel
+// This package depends on core/base/pkg/promwrite and core/floor/tunnel
 // (both cross-BC). It does not import any other manager/* subdomain.
 package promwrite
 
@@ -26,7 +26,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	pkgpromwrite "github.com/vincent-wuhan/opskeeper/core/manager/pkg/promwrite"
+	pkgpromwrite "github.com/vincent-wuhan/opskeeper/core/base/pkg/promwrite"
 )
 
 // Health is the lightweight health snapshot the alert pipeline evaluator

@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // Usecase is the manager/device biz-layer facade.

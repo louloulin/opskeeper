@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // Repo 是 hitl/store 的统一仓库入口。

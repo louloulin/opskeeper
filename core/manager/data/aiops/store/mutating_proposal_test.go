@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // newProposalRepo opens an in-memory SQLite DB and applies this

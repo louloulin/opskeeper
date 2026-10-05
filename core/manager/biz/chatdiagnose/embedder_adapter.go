@@ -1,12 +1,12 @@
 // chatdiagnose/embedder_adapter.go — bridge chatdiagnose.Embedder 到
-// core/manager/pkg/embedding.Embedder。
+// core/base/pkg/embedding.Embedder。
 //
 // 接口差异：
 //   chatdiagnose.Embedder : Embed(ctx, string) ([]float64, error)
 //   pkg/embedding.Embedder: Embed(ctx, []string) ([][]float32, error) + Dim() int
 //
 // Adapter 把 (string) 包成单元素 []string，float32 → float64 转换，再透传 Dim()。
-// 复用而非重写：OpenAI / 本地 BGE / retry / batch 都在 core/manager/pkg/embedding 实现，
+// 复用而非重写：OpenAI / 本地 BGE / retry / batch 都在 core/base/pkg/embedding 实现，
 // 这里只做单点 bridge，未来 pkg/embedding 改接口只需改本文件。
 
 package chatdiagnose
@@ -14,10 +14,10 @@ package chatdiagnose
 import (
 	"context"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/embedding"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/embedding"
 )
 
-// EmbedderAdapter bridges chatdiagnose.Embedder ↔ core/manager/pkg/embedding.Embedder.
+// EmbedderAdapter bridges chatdiagnose.Embedder ↔ core/base/pkg/embedding.Embedder.
 type EmbedderAdapter struct {
 	inner embedding.Embedder
 	dim   int

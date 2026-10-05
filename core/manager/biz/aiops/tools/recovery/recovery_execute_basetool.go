@@ -38,7 +38,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
 	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // ToolNameRecoveryExecute is the stable wire name the LLM sees.

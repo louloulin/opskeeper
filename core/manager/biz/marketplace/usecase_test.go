@@ -18,7 +18,7 @@ import (
 
 	chatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/marketplace"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // ----- in-memory repo --------------------------------------------------

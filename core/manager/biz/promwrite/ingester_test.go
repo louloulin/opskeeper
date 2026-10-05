@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	pkgpromwrite "github.com/vincent-wuhan/opskeeper/core/manager/pkg/promwrite"
+	pkgpromwrite "github.com/vincent-wuhan/opskeeper/core/base/pkg/promwrite"
 )
 
 // fakeWriter records the last Write call.

@@ -12,7 +12,7 @@ import (
 	edgestore "github.com/vincent-wuhan/opskeeper/core/manager/data/edge/store"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // newRevokedRepo wires the *real* edge store in as the device store's

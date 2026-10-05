@@ -13,7 +13,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/qdrantx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/qdrantx"
 )
 
 // PatternHit 是 Qdrant Search 的语义化结果。

@@ -29,7 +29,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/llm"
 )
 
 // catalogPublishTimeout bounds the re-publish an admin save triggers.

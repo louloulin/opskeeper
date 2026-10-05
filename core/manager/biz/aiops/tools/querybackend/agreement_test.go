@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tracequery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tracequery"
 )
 
 // These tests exist because for a long time each of these tools had two

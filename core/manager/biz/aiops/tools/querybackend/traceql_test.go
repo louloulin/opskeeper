@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tracequery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tracequery"
 )
 
 func TestQueryTraceQLTool_Info(t *testing.T) {

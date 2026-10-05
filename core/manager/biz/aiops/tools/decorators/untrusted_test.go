@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promptguard"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promptguard"
 )
 
 type stubTool struct {

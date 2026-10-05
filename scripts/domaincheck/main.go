@@ -100,7 +100,13 @@ type rules struct {
 // what makes reaching for it safe. They still have to declare their own
 // outbound edges — being depended upon is a privilege, not an exemption.
 var sharedDomains = map[string]string{
-	"pkg":           "errors, tenant context, credentials, the audit port: no BC imports at all",
+	// pkg is gone from this list because it is no longer a domain *here*.
+	// It was the shared floor the control plane domains rest on, and it
+	// moved out to the core/base module (decision 221) precisely so that
+	// the domains resting on it could be lifted without dragging it along.
+	// A checker that still listed it would be reporting a domain the
+	// tree no longer has — the failure mode that keeps a gate green
+	// while it looks at nothing.
 	"dataguard":     "field sensitivity classification, shared by authz and the report readers",
 	"knowledge":     "the knowledge base and its git-backed model",
 	"middleware":    "the HTTP middleware chain the handlers are wrapped in",

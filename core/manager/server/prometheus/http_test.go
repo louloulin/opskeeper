@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	svc "github.com/vincent-wuhan/opskeeper/core/manager/service/prometheus"
 )
 

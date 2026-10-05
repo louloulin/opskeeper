@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/llm"
 )
 
 // fakeDefaults stubs the LLMSettingsResolver surface the adapter needs.

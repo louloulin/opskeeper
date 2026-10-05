@@ -4,7 +4,7 @@ import (
 	"gorm.io/gorm"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/dbx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/dbx"
 )
 
 // Migrate registers the manager/edge models with gorm's AutoMigrate. It is

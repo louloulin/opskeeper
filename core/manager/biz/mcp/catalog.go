@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/mcp"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/mcpclient"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/mcpclient"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 

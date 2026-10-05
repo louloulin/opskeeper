@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
 )
 
 func TestRankEdgesTool_Info(t *testing.T) {

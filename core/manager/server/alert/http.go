@@ -16,9 +16,9 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/alert/investigator"
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	svc "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 )
 

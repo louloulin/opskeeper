@@ -14,7 +14,7 @@ import (
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/flow"
 	schedulerbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/scheduler"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/flow"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // Repo implements biz/flow.Repo.

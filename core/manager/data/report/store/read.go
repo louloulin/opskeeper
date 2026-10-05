@@ -8,7 +8,7 @@ import (
 
 	bizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // Compile-time check that Repo satisfies the API read surface too.

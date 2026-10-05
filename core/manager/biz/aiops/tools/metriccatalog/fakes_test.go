@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
 )
 
 // fakePromQuerier captures the last QueryRange call.

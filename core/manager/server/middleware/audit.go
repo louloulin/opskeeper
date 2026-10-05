@@ -10,12 +10,12 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
-	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // The request-scoped slot — the key, the value, and the two accessors
-// — now live in core/manager/pkg/audit (decision 109). This middleware
+// — now live in core/base/pkg/audit (decision 109). This middleware
 // installs it; handlers in any bounded context write to it without
 // importing this package. The re-exported functions below keep every
 // existing `auditmw.SetAuditEvent` call site compiling unchanged.

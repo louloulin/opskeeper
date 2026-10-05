@@ -9,7 +9,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 type fakePluginConfigRepo struct {

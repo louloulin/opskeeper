@@ -12,7 +12,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/nodefleet"
 	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
 	middlewareregistry "github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
-	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 )
 
 // recordingEmitter captures what the control plane wrote to the chain.

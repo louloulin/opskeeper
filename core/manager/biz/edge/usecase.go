@@ -16,8 +16,8 @@ import (
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
 	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/passwd"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/passwd"
 )
 
 // Key lengths (bytes of raw entropy before base64 URL-encoding).

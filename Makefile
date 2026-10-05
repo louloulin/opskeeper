@@ -377,7 +377,7 @@ arch-lint: ## 运行 go-arch-lint（校验 BC 边界）
 	else \
 		echo "WARNING: go-arch-lint is not installed, so .go-arch-lint.yml is documentation only."; \
 		echo "         The enforced subset (bounded contexts may not reach each other,"; \
-		echo "         core/manager/pkg and core/floor stay business agnostic,"; \
+		echo "         core/base/pkg and core/floor stay business agnostic,"; \
 		echo "         service goes through biz, and since decision 58 the"; \
 		echo "         service -> biz <- data direction) runs"; \
 		echo "         under 'make module-check'. Install go-arch-lint, or run"; \
@@ -547,7 +547,7 @@ module-race: ## 对新模块跑竞态检测（supervisor 重启循环是并发�
 # A green `make module-test` is a statement about the workspace. This one is a
 # statement about what ships.
 
-PIG_MODULES := . core core/edge core/floor core/harness core/manager core/pig \
+PIG_MODULES := . core core/base core/edge core/floor core/harness core/manager core/pig \
 	core/pig/extensions/opskeeper-gate \
 	core/pig/extensions/opskeeper-sre-readonly \
 	core/pig/extensions/opskeeper-sre-middleware \

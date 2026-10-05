@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/secret"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // Repo is the GORM-backed credentials store. Concurrency-safe.

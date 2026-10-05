@@ -7,11 +7,11 @@ import (
 	"strconv"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // TenantBoundTool wraps inner so the tenant identity from ctx (via
-// core/manager/pkg/tenantctx) is injected into the args JSON when the tool's
+// core/base/pkg/tenantctx) is injected into the args JSON when the tool's
 // declared schema asks for `tenant_id`. ASCII —
 // TenantBoundTool (从 ctx 注入 tenant_id 进 args).
 //

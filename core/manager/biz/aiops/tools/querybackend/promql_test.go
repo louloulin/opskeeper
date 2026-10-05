@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
 )
 
 func TestQueryPromQLTool_Info(t *testing.T) {

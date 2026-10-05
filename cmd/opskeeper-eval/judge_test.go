@@ -11,7 +11,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 	"github.com/vincent-wuhan/opskeeper/core/harness/runner"
 	"github.com/vincent-wuhan/opskeeper/core/harness/vocabulary"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/llm"
 )
 
 // clearProviderEnv removes every provider credential for the duration of a

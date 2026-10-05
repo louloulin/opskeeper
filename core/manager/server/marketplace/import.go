@@ -36,7 +36,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/pluginimport"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // ImportFunc converts one legacy container directory into a PiG package at

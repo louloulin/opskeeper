@@ -19,9 +19,9 @@ import (
 	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tracequery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tracequery"
 )
 
 // ToolNameCorrelateIncident is the stable wire name the LLM sees for the

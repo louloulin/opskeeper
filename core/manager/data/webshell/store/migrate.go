@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // Migrate runs AutoMigrate for the webshell_sessions table.

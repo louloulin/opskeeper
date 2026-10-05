@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // ChangeEventRepo persists ChangeEventRow records reported by edge

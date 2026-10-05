@@ -20,7 +20,7 @@ import (
 	"net"
 	"net/http"
 
-	wsfanout "github.com/vincent-wuhan/opskeeper/core/manager/pkg/wsfanout"
+	wsfanout "github.com/vincent-wuhan/opskeeper/core/base/pkg/wsfanout"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,8 +37,8 @@ import (
 	bizwebshell "github.com/vincent-wuhan/opskeeper/core/manager/biz/webshell"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // AuthzMW is the narrow casbin middleware contract.

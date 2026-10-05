@@ -357,7 +357,7 @@ var _ policygate.Call
 
 func TestTheSharedFloorMayNotReachThePigAdapter(t *testing.T) {
 	// The rule this pins is the second half of a refactor. Moving the three
-	// PiG-facing files out of core/manager/pkg/llm is the fix; refusing them
+	// PiG-facing files out of core/base/pkg/llm is the fix; refusing them
 	// a way back is the part that survives the next person who wants to
 	// "just reuse the settings adapter".
 	root := t.TempDir()
@@ -375,13 +375,13 @@ func TestTheSharedFloorMayNotReachThePigAdapter(t *testing.T) {
 	// the adapter as long as it is embarrassed about it", and the sibling
 	// is what proves the rule is scoped rather than a blanket ban on the
 	// module.
-	write("core/manager/pkg/llm/pigsettings.go", `package llm
+	write("core/base/pkg/llm/pigsettings.go", `package llm
 
 import "github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 
 var _ pigmodel.SettingsSource
 `)
-	write("core/manager/pkg/llm/router_test.go", `package llm
+	write("core/base/pkg/llm/router_test.go", `package llm
 
 import "github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 
@@ -393,7 +393,7 @@ import "github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 
 var _ pigmodel.SettingsSource
 `)
-	write("core/manager/pkg/llm/wire.go", `package llm
+	write("core/base/pkg/llm/wire.go", `package llm
 
 import "github.com/vincent-wuhan/opskeeper/core/ports"
 
@@ -408,8 +408,8 @@ var _ ports.LLMRequest
 		t.Fatalf("want exactly two violations (the production file and the test file), got %v", msgs)
 	}
 	for _, want := range []string{
-		"core/manager/pkg/llm/pigsettings.go",
-		"core/manager/pkg/llm/router_test.go",
+		"core/base/pkg/llm/pigsettings.go",
+		"core/base/pkg/llm/router_test.go",
 	} {
 		found := false
 		for _, m := range msgs {
@@ -423,7 +423,7 @@ var _ ports.LLMRequest
 	}
 	for _, m := range msgs {
 		if strings.Contains(m, "core/manager/llmpig/pigsettings.go") ||
-			strings.Contains(m, "core/manager/pkg/llm/wire.go") {
+			strings.Contains(m, "core/base/pkg/llm/wire.go") {
 			t.Errorf("rule fired on a legal file: %q", m)
 		}
 	}
@@ -709,7 +709,7 @@ func TestPiGBoundaryCatchesADirectPiGImportInTheRootModule(t *testing.T) {
 			"core/pig": "module github.com/vincent-wuhan/opskeeper/core/pig\n",
 		},
 		map[string]string{
-			"core/manager/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
+			"core/base/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
 		},
 	)
 	v, err := checkPiGBoundary(root)
@@ -719,7 +719,7 @@ func TestPiGBoundaryCatchesADirectPiGImportInTheRootModule(t *testing.T) {
 	if len(v) != 1 {
 		t.Fatalf("violations = %v, want exactly one for the root module's PiG import", v)
 	}
-	if !strings.Contains(v[0], "core/manager/pkg/llm/x.go") || !strings.Contains(v[0], "PiG/ai") {
+	if !strings.Contains(v[0], "core/base/pkg/llm/x.go") || !strings.Contains(v[0], "PiG/ai") {
 		t.Errorf("violation = %q, want it to name both the file and the import", v[0])
 	}
 }
@@ -800,13 +800,13 @@ func TestPiGBoundaryAttributesANestedModulesImportsToThatModule(t *testing.T) {
 			".":                                  "module github.com/vincent-wuhan/opskeeper\n",
 			"core/pig":                           "module github.com/vincent-wuhan/opskeeper/core/pig\n",
 			"core/pig/extensions/opskeeper-gate": "module github.com/vincent-wuhan/opskeeper/core/pig/extensions/opskeeper-gate\n",
-			"core/manager/pkg/llm":               "module github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm\n",
+			"core/base/pkg/llm":               "module github.com/vincent-wuhan/opskeeper/core/base/pkg/llm\n",
 		},
 		map[string]string{
 			// A nested module inside the root that is NOT under core/pig and
 			// does reach for PiG: the violation belongs to it, by its own
 			// path, not to the root module.
-			"core/manager/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
+			"core/base/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
 		},
 	)
 	v, err := checkPiGBoundary(root)
@@ -816,12 +816,12 @@ func TestPiGBoundaryAttributesANestedModulesImportsToThatModule(t *testing.T) {
 	if len(v) != 1 {
 		t.Fatalf("violations = %v, want exactly one", v)
 	}
-	if !strings.HasPrefix(v[0], "core/manager/pkg/llm/x.go") {
+	if !strings.HasPrefix(v[0], "core/base/pkg/llm/x.go") {
 		t.Errorf("violation = %q, want the nested module's own path", v[0])
 	}
 	// The exempt module is named in the message text, so only the path can
 	// say who is to blame — and it must be the nested module.
-	if got := v[0][:strings.Index(v[0], ":")]; got != "core/manager/pkg/llm/x.go" {
+	if got := v[0][:strings.Index(v[0], ":")]; got != "core/base/pkg/llm/x.go" {
 		t.Errorf("violation blames %q, want the nested module rather than the pig module", got)
 	}
 }
@@ -835,7 +835,7 @@ func TestPiGBoundaryIsQuietOnATreeWithNoPiGImports(t *testing.T) {
 			".": "module github.com/vincent-wuhan/opskeeper\n",
 		},
 		map[string]string{
-			"core/manager/pkg/llm": "package llm\n\nimport (\n\t\"context\"\n\t\"github.com/vincent-wuhan/opskeeper/core/ports\"\n)\n\nvar _ = context.Background\nvar _ ports.Completer\n",
+			"core/base/pkg/llm": "package llm\n\nimport (\n\t\"context\"\n\t\"github.com/vincent-wuhan/opskeeper/core/ports\"\n)\n\nvar _ = context.Background\nvar _ ports.Completer\n",
 		},
 	)
 	v, err := checkPiGBoundary(root)
@@ -868,7 +868,7 @@ func TestPiGBoundaryActuallyWalksWhenTheRootIsDot(t *testing.T) {
 			".": "module github.com/vincent-wuhan/opskeeper\n",
 		},
 		map[string]string{
-			"core/manager/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
+			"core/base/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/ai\"\n\nvar _ ai.Model\n",
 		},
 	)
 	t.Chdir(root)
@@ -899,7 +899,7 @@ func TestPiGBoundaryFindsAViolationInTheRootModuleWhenInvokedAsDot(t *testing.T)
 			"core/pig": "module github.com/vincent-wuhan/opskeeper/core/pig\n",
 		},
 		map[string]string{
-			"core/manager/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/coding/rpcclient\"\n\nvar _ *rpcclient.RpcClient\n",
+			"core/base/pkg/llm": "package llm\n\nimport \"github.com/MichaelKinsy/PiG/coding/rpcclient\"\n\nvar _ *rpcclient.RpcClient\n",
 		},
 	)
 	t.Chdir(root)

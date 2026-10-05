@@ -13,7 +13,7 @@ import (
 
 	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
-	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 )
 
 // recordingRepo is the writer's seam. The point of the test below is the

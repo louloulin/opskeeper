@@ -11,7 +11,7 @@ import (
 	"time"
 
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/logquery"
 )
 
 // fakeLogQuerier captures the last QueryRange call.

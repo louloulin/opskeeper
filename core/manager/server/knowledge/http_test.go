@@ -16,8 +16,8 @@ import (
 
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/qdrantx"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/qdrantx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // ---- in-memory qdrant ----

@@ -15,7 +15,7 @@ import (
 
 	store "github.com/vincent-wuhan/opskeeper/core/manager/data/audit/store"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
-	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 )
 
 // Repo is the persistence seam the usecase consumes. Implemented by
@@ -36,7 +36,7 @@ type Repo interface {
 type ListFilters = store.ListFilters
 
 // Event is the row shape this usecase accepts. The definition lives in
-// core/manager/pkg/audit (decision 109) because a handler in another
+// core/base/pkg/audit (decision 109) because a handler in another
 // bounded context has to be able to name an audit row without importing
 // this package — see the note on the alias: it is an alias, not a second
 // type, so a value built through the port and a value built here are the

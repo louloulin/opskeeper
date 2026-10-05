@@ -275,7 +275,7 @@ func RegisterManagerMetrics(reg *prometheus.Registry, log *slog.Logger) {
 		prometheus.CounterOpts{
 			// Named opskeeper_llm_router_tokens_total to avoid colliding
 			// with the legacy opskeeper_llm_tokens_total registered by
-			// core/manager/pkg/llm/metrics.go (different labels: legacy
+			// core/base/pkg/llm/metrics.go (different labels: legacy
 			// uses {model,kind}, this one adds provider). v0.7.45
 			// upgrade panic'd on the duplicate-with-different-labels
 			// registration; the suffix disambiguates without breaking

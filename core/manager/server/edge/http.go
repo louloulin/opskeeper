@@ -1,6 +1,6 @@
 // Package edge builds the HTTP routes for the manager/edge sub-domain.
 //
-// The Handler assumes the caller-wide auth middleware (core/manager/pkg/auth)
+// The Handler assumes the caller-wide auth middleware (core/base/pkg/auth)
 // has already populated tenantctx so per-route role checks are a simple
 // tenantctx.From() lookup.
 //
@@ -27,8 +27,8 @@ import (
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // roleAdmin mirrors iam/model.RoleAdmin without crossing the BC boundary

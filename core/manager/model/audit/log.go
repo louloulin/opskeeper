@@ -5,7 +5,7 @@
 // the retention job.
 //
 // The action vocabulary that used to be spelled out here now lives in
-// core/manager/pkg/audit and is re-exported below, so a handler in
+// core/base/pkg/audit and is re-exported below, so a handler in
 // another bounded context can name a row without importing this package
 // (decision 109). The GORM entities stayed: they are storage, not
 // vocabulary, and nothing outside data/audit/store has any business
@@ -15,7 +15,7 @@ package audit
 import (
 	"time"
 
-	auditport "github.com/vincent-wuhan/opskeeper/core/manager/pkg/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 )
 
 // Log is one audit observation.
@@ -106,7 +106,7 @@ const ChainHeadID uint64 = 1
 func (Log) TableName() string { return "audit_logs" }
 
 // The action / resource / status vocabulary below was moved to
-// core/manager/pkg/audit in decision 109 and is re-exported here rather
+// core/base/pkg/audit in decision 109 and is re-exported here rather
 // than duplicated. Two things depend on it being one definition: the
 // middleware buckets an HTTP status into Status* before the writer ever
 // sees the row, and iam's handlers name actions from another bounded

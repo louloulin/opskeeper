@@ -9,7 +9,7 @@ import (
 
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // SessionRepo is the GORM-backed biz/aiops.SessionRepo.

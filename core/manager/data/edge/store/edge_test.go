@@ -12,7 +12,7 @@ import (
 
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // newTestRepo opens an in-memory SQLite DB and applies the edge package's

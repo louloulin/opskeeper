@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // newRevokeTestDB is newTestRepo without the repo, because RevokeIdentities

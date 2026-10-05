@@ -25,7 +25,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact"
 	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
 	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/secretbox"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/secretbox"
 )
 
 // Adapter 是 Git Repository Adapter 实现。

@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 func newReportTestRepo(t *testing.T) *Repo {

@@ -28,7 +28,7 @@ import (
 
 	managerprom "github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // Repo is the persistence contract — implemented by
@@ -271,7 +271,7 @@ func NewUsecase(repo Repo, spawner WorkerRunner, summarizer LLMSummarizer, cfg C
 	}
 	if cfg.SummarizerTimeout == 0 {
 		// Unified with the project-wide LLM timeout floor (see
-		// core/manager/pkg/llm/client.go::defaultTimeout). Was 30 s when
+		// core/base/pkg/llm/client.go::defaultTimeout). Was 30 s when
 		// the default model was Haiku-class; bumped to 120 s once the
 		// cluster default moved to slower reasoning models so the
 		// report extractor's structured-JSON pass stops false-failing.

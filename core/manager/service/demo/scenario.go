@@ -6,7 +6,7 @@ import (
 	"errors"
 
 	bizdemo "github.com/vincent-wuhan/opskeeper/core/manager/biz/demo"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 type StartScenarioInput = bizdemo.StartScenarioInput

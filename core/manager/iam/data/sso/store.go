@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	iamodel "github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // OrgSSOConfigStore persists per-org SSO provider configs. All reads

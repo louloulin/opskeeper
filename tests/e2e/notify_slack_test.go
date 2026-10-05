@@ -3,7 +3,7 @@
 // Catalog: G3 — Slack notification 通道：创建 incoming-webhook 渠道 →
 //
 //	POST /test → 假 Slack endpoint 收到 attachments 富格式 payload
-//	(color rail + fields)。验证 core/manager/pkg/notify/webhook.go
+//	(color rail + fields)。验证 core/base/pkg/notify/webhook.go
 //	formatSlack 的输出与 G3 描述一致，且 testChannel 路径会真的
 //	发到我们传入的 endpoint。
 package e2e

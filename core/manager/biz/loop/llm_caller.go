@@ -36,7 +36,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/llm"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
 

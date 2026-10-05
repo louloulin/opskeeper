@@ -11,8 +11,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // Usecase is the iam/user biz facade. It owns the authentication flows and

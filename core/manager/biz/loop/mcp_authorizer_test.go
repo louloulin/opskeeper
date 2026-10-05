@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 func TestMCPAuthorizer_ServiceIdentityAndToolPolicy(t *testing.T) {

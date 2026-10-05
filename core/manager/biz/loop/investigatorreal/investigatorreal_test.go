@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
 
 	loop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 )

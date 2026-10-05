@@ -16,7 +16,7 @@ import (
 	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	store "github.com/vincent-wuhan/opskeeper/core/manager/data/audit/store"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 const testKey = "audit-http-test-key-0123456789"

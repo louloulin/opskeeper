@@ -12,8 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // taskIDParam reads the {id} path param and percent-decodes it. The unified task

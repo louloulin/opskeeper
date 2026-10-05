@@ -9,7 +9,7 @@ import (
 
 	investigator "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert/investigator"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // InvestigationRepo is the storage layer for investigation_reports.

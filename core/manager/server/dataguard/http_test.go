@@ -16,8 +16,8 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/heuristic"
 	dglabel "github.com/vincent-wuhan/opskeeper/core/manager/dataguard/label"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/store"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // fakeRepo is the in-memory label repo used by these HTTP tests.

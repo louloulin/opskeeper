@@ -13,9 +13,9 @@ import (
 	"time"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/secret"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/credinject"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/secretbox"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/credinject"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/secretbox"
 )
 
 // Repo is the persistence contract (data/secret/store).

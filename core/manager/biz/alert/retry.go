@@ -8,7 +8,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/notify"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/notify"
 )
 
 // RetryWorkerOpts wires the retry worker. MaxAttempts caps the per-delivery

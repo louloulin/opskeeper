@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/qdrantx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/qdrantx"
 )
 
 func TestSearchUsesSignedTenantScopeFilter(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tracequery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tracequery"
 )
 
 // ToolNameQueryTraceQL is the stable wire name the LLM sees for the TraceQL

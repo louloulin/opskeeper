@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/topology"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // Usecase is the biz-layer facade over the four topology repos. HTTP

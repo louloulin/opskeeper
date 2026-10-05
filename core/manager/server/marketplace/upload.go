@@ -20,7 +20,7 @@ import (
 	"strings"
 
 	bizmp "github.com/vincent-wuhan/opskeeper/core/manager/biz/marketplace"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 const (

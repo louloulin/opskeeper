@@ -41,7 +41,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promptguard"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promptguard"
 )
 
 // investigatedOutputSchema 是给 LLMCaller.Call 的 OutputSchema。

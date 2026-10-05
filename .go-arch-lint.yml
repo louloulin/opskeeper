@@ -3,7 +3,7 @@
 #
 # 顶层规则：
 #   - iam / manager 两大 BC 两两禁止互 import（edgeagent 已迁出为 core/edge 模块）
-#   - core/manager/pkg/** 与 core/floor/** 不得 import 任何 BC
+#   - core/base/pkg/** 与 core/floor/** 不得 import 任何 BC
 #   - 同一 BC 内部 service 层禁止越过 biz 直接 import 同 BC 的 data 层
 #     （go-arch-lint v3 支持以独立组件 + deps 表达，见下方 iam_service / manager_service 等）
 #
@@ -48,7 +48,7 @@ allow:
   #   2. cmd 是装配层：把 cmd 里定义的类型注入 manager_biz，判成
   #      "manager_biz 依赖 cmd"，方向恰好相反。
   #
-  # 关掉不等于承认没问题。它抓到的 41 条里有几条是真问题（core/manager/pkg 与
+  # 关掉不等于承认没问题。它抓到的 41 条里有几条是真问题（core/base/pkg 与
   # core/floor/skill 通过包级 Set*Resolver 反向拿到 manager/biz/setting 的
   # 实现，绕过了 import 图）。用 mayDependOn 修这类问题等于给 core/floor/skill
   # 发一张 import manager 的许可证——修法是拆掉包级 setter，那是 manager
@@ -79,7 +79,7 @@ components:
   oxedge_service: { in: core/edge/service/** }
   oxedge_biz:     { in: core/edge/biz/** }
 
-  shared_pkg: { in: core/manager/pkg/** }
+  shared_pkg: { in: core/base/pkg/** }
   # 决策 66：llm 的 PiG 实现从 shared_pkg 里搬出来了。搬之前 shared_pkg 的
   # mayDependOn 里挂着 oxpig_model 例外，理由是"PiG 支撑的 llm.Client 必须落在
   # 控制面"——现在这个实现有自己的组件，例外可以删掉，shared_pkg 也就重新变回
@@ -262,7 +262,7 @@ deps:
     # 三条已经删掉。它们只服务于一件事：core/manager/iam/server/http.go 要能给一行
     # 审计记录命名（动作、资源、结果），而审计链在 manager 的 biz 层（决策 35），
     # 于是叶子 BC 只能反向 import 上层的三个包。现在行的形状改放在 shared_pkg 下的
-    # core/manager/pkg/audit：只剩「怎么写一行」这个形状，写入的咽喉（biz/audit）
+    # core/base/pkg/audit：只剩「怎么写一行」这个形状，写入的咽喉（biz/audit）
     # 一点都没动。
     #
     # 为什么这不是把封装换个地址：原来那三条不是循环，只是因为 biz/audit 恰好没有
@@ -398,7 +398,7 @@ deps:
       - oxfloor
   manager_model:
     # shared_pkg 是决策 109 加的：model/audit 里的动作/资源/状态词表现在是
-    # core/manager/pkg/audit 的常量别名，指针只有一个定义。模型层依赖一个
+    # core/base/pkg/audit 的常量别名，指针只有一个定义。模型层依赖一个
     # 不认识任何 BC 的树节点，和 biz 层依赖它是同一件事——存储不懂业务，
     # 但它得能说出自己这行记录叫什么。
     mayDependOn: [oxfloor, shared_pkg]

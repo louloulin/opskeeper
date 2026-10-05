@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // fakeHostResolver is a stub hostFilesDeviceResolver. Tests

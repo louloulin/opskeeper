@@ -35,10 +35,10 @@ import (
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
 	"github.com/vincent-wuhan/opskeeper/core/manager/observability/otelgenai"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/embedding"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/qdrantx"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/embedding"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/qdrantx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	"go.opentelemetry.io/otel/attribute"
 )
 

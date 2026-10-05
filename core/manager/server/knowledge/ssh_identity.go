@@ -16,7 +16,7 @@ import (
 
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // sshIdentityDTO is the public view of a stored identity. private_key

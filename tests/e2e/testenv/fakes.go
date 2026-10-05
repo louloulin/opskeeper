@@ -406,7 +406,7 @@ func (f *FakeLLM) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 // ─── Fake Slack incoming webhook ───────────────────────────────────────
 //
 // Captures every POST so the test can assert payload shape (e.g. the
-// attachments format from core/manager/pkg/notify/webhook.go). The fake
+// attachments format from core/base/pkg/notify/webhook.go). The fake
 // always returns 200 OK with body "ok", which is what real Slack does.
 
 type FakeSlack struct {

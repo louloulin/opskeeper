@@ -7,7 +7,7 @@ import (
 	"time"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/notify"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/notify"
 )
 
 // TestRuleInputRoundTripsSendPolicy confirms that NotifyWindowSeconds /

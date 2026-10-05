@@ -143,7 +143,7 @@ const defaultPromQueryTimeout = 30 * time.Second
 // /api/v1/query（{status, data:{resultType, result}}），同一份 converter
 // 适用；不引入 client_golang、只用 stdlib net/http + encoding/json 避免
 // 新增 go.mod 依赖。如未来需要 pool / retry / 数据压缩，再切到
-// core/manager/pkg/promquery.Client。
+// core/base/pkg/promquery.Client。
 //
 // 复用基线：
 //   - MetricSpecTable（cpu_usage / mem_usage / qps / latency_p99 → Source="promql"）；

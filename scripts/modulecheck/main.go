@@ -189,6 +189,28 @@ func rules() []rule {
 			},
 			Label: "floor (shared infrastructure)",
 		},
+		{
+			// base is the control plane's own infrastructure, one tier
+			// below the control plane: errors, tenant context, credential
+			// injection, the audit write port, database and cache plumbing,
+			// fanout, the leader lease, and the read-side adapters. It is
+			// the reason the control plane could not be cut into pieces
+			// that evolve on their own — 45 domains rest on it by
+			// production import, so while it sat inside the manager module
+			// every one of them was pinned to the manager's release line.
+			//
+			// It is a module of its own rather than a package under
+			// core/floor because floor is what BOTH planes resolve. Putting
+			// go-redis, JWT, fastembed and a PDF reader there would make
+			// every plugin on every node carry infrastructure it never
+			// calls, which is the reason floor is a module in the first
+			// place.
+			Dir:       "core/base",
+			Module:    "github.com/vincent-wuhan/opskeeper/core/base",
+			Allowed:   []string{coreModulePrefix + "/"},
+			AnyVendor: true,
+			Label:     "base (control-plane infrastructure)",
+		},
 	}
 }
 
@@ -196,7 +218,7 @@ func rules() []rule {
 //
 // The module rules above cover the 2.0 module graph. These cover the split
 // inside the manager module: iam and the control plane proper are two
-// bounded contexts that may not reach each other, core/manager/pkg is the
+// bounded contexts that may not reach each other, core/base/pkg is the
 // shared floor beneath them, and a service layer may not reach past biz
 // into its own data layer.
 //
@@ -235,7 +257,7 @@ type boundedContext struct {
 	// subdirectories the intra-context direction rule compares. It is not
 	// always one of dirs, and the difference is real: the control plane
 	// owns biz/ and service/ one level below core/manager, while
-	// core/manager/pkg is the shared floor rather than part of it.
+	// core/base/pkg is the shared floor rather than part of it.
 	layerRoot string
 }
 
@@ -277,12 +299,12 @@ var bcs = []boundedContext{
 // be added to either that knows what a business is.
 //
 // `internal/pkg` used to be one of these. It is gone: its subpackages moved
-// to core/manager/pkg with the rest of the control plane (decision 62),
+// to core/base/pkg with the rest of the control plane (decision 62),
 // which is also when the walk was rewritten to derive its roots from this
 // table instead of hardcoding `internal` — walking a path that no longer
 // holds the bounded contexts is how a checker keeps reporting "all
 // boundaries hold" while looking at nothing.
-var sharedPkgs = []string{"core/manager/pkg/", "core/floor/"}
+var sharedPkgs = []string{"core/base/pkg/", "core/floor/"}
 
 // repoModule is the root module's own import path.
 const repoModule = "github.com/vincent-wuhan/opskeeper"
@@ -392,10 +414,10 @@ func checkBCImport(rel, imp string) string {
 	// floor is deliberately outside the graph these rules describe.
 	//
 	// Before the move this needed no code: `internal/pkg` matched no context
-	// prefix, so bcOf returned "" on its own. core/manager/pkg does match a
+	// prefix, so bcOf returned "" on its own. core/base/pkg does match a
 	// context whose directories are derived from the tree it sits in, which
 	// is why the exemption is now written out. Without it every use of
-	// core/manager/pkg from within a context would read as a cross-context
+	// core/base/pkg from within a context would read as a cross-context
 	// import, and pkg/auth's use of pkg/tenantctx would read as the floor
 	// knowing what a business is.
 	owner := bcOf(rest)
@@ -560,7 +582,7 @@ var exceptions = map[string]string{
 	// packages above it. The edge was not a cycle only because none of
 	// those three happened to import iam.
 	//
-	// What replaced it: core/manager/pkg/audit holds the shape and the
+	// What replaced it: core/base/pkg/audit holds the shape and the
 	// request-scoped slot, and nothing else. It has no usecase, no
 	// repository, no chain head and no HMAC key, so a caller holding it
 	// can ask to be remembered and cannot write a row. The throat did not
@@ -812,7 +834,7 @@ func checkTestOnlyImports(root string) ([]string, error) {
 // at all — in any file, test or not.
 //
 // This exists because of a specific refactor that would otherwise have been
-// one good decision away from silently undoing itself. core/manager/pkg is
+// one good decision away from silently undoing itself. core/base/pkg is
 // the shared floor: the LLM port, the provider table, the router, the budget
 // hook, every context imports it. Three files in its llm subpackage reached
 // the PiG adapter, which meant a PiG upgrade edited the floor and, through
@@ -833,7 +855,7 @@ var floorIsolation = []struct {
 	Why string
 }{
 	{
-		Dir:    "core/manager/pkg/",
+		Dir:    "core/base/pkg/",
 		Prefix: coreModulePrefix + "/pig",
 		Why: "the shared floor is the control plane's business-agnostic base " +
 			"and every bounded context imports it, so a type it names is a " +

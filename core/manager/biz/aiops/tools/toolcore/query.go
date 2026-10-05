@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tracequery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tracequery"
 )
 
 // The three queriers below are how a tool asks the observability stack

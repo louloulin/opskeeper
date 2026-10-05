@@ -8,7 +8,7 @@ import (
 
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/topology"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // RelationRepo is the GORM-backed biz/topology.RelationRepo.

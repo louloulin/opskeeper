@@ -27,7 +27,7 @@ import (
 	bizsecret "github.com/vincent-wuhan/opskeeper/core/manager/biz/secret"
 	approvalstore "github.com/vincent-wuhan/opskeeper/core/manager/data/approval/store"
 	secretstore "github.com/vincent-wuhan/opskeeper/core/manager/data/secret/store"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/runner"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/runner"
 )
 
 func openDB(t *testing.T) *gorm.DB {

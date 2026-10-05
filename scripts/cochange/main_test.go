@@ -14,7 +14,7 @@ func TestDomainOfUsesTheSameLayerRuleDomaincheckDoes(t *testing.T) {
 		"core/manager/service/federationlink": "federationlink",
 		"core/manager/model/audit":            "audit",
 		"core/manager/data/hitl/store":        "hitl",
-		"core/manager/pkg/audit":              "pkg",
+		"core/base/pkg/audit":              "pkg",
 		"core/manager/knowledge/index":        "knowledge",
 		// Outside the control plane entirely.
 		"core/edge/agentprofile/profile.go": "",

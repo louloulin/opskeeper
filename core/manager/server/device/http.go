@@ -19,8 +19,8 @@ import (
 
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
 	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // roleAdmin mirrors iam/model.RoleAdmin without crossing the BC boundary

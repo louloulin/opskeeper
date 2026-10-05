@@ -12,7 +12,7 @@ import (
 
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/demo"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 func newTestDB(t *testing.T) *gorm.DB {

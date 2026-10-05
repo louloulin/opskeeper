@@ -14,9 +14,9 @@ import (
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/logquery"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/notify"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/promquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/logquery"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/notify"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
 )
 
 // EdgeLister enumerates registered edges. *edgebiz.Usecase satisfies it.

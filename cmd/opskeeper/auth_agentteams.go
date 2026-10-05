@@ -19,7 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	internalagentteams "github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"
 	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
 

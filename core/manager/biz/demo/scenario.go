@@ -21,7 +21,7 @@ import (
 	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	demomodel "github.com/vincent-wuhan/opskeeper/core/manager/model/demo"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 const (

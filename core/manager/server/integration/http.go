@@ -14,9 +14,9 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	bizgrafana "github.com/vincent-wuhan/opskeeper/core/manager/biz/grafana"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	pkggrafana "github.com/vincent-wuhan/opskeeper/core/manager/pkg/grafana"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	pkggrafana "github.com/vincent-wuhan/opskeeper/core/base/pkg/grafana"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // GrafanaService is the narrow surface the handler depends on. *bizgrafana.Service

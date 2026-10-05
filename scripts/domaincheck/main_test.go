@@ -58,9 +58,14 @@ func TestDomainOfCollapsesTheLayerTreesOntoOneName(t *testing.T) {
 		managerPrefix + "iam/biz/user": "iam",
 		managerPrefix + "iam/model":    "iam",
 		// Trees that are already domain-shaped.
-		managerPrefix + "pkg/audit":      "pkg",
 		managerPrefix + "dataguard":      "dataguard",
 		managerPrefix + "knowledge/rule": "knowledge",
+		// The shared floor is not a domain of this tree. It used to be
+		// manager/pkg and is the core/base module now (decision 221), and a
+		// path under it names no bounded context here — which is why it is
+		// absent from sharedDomains rather than listed with a domain that
+		// has no packages.
+		"github.com/vincent-wuhan/opskeeper/core/base/pkg/audit": "",
 		// A package sitting directly in a layer directory is almost
 		// certainly a mistake, but it must still be checked rather than
 		// silently escaping every rule.

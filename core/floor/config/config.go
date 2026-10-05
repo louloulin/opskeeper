@@ -124,7 +124,7 @@ type GrafanaConfig struct {
 // NotificationConfig controls outbound notifications for alerts, scheduled
 // tasks, and future AIOps proactive recommendations.
 //
-// The concrete delivery adapters live in core/manager/pkg/notify. Keeping only
+// The concrete delivery adapters live in core/base/pkg/notify. Keeping only
 // plain configuration here avoids coupling config loading to any transport
 // client.
 type NotificationConfig struct {
@@ -320,7 +320,7 @@ type DBPoolConfig struct {
 }
 
 // RedisConfig is the runtime config for the manager's Redis client
-// (used by core/manager/pkg/redislock + core/manager/pkg/leader). When Addr is
+// (used by core/base/pkg/redislock + core/base/pkg/leader). When Addr is
 // empty the manager skips Redis-dependent features (leader election,
 // distributed lock) and degrades to single-replica behaviour; this
 // is the historical MVP fallback.

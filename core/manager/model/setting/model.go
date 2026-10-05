@@ -131,7 +131,7 @@ const (
 	LLMProviderCustom    = "custom"
 )
 
-// Well-known keys under CategoryProm. core/manager/pkg/promauth reads bearer/
+// Well-known keys under CategoryProm. core/base/pkg/promauth reads bearer/
 // basic on every request via the Resolver; URLs are read at startup (env
 // seed → DB) and changes require a manager restart.
 const (

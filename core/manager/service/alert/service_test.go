@@ -14,8 +14,8 @@ import (
 
 	bizalert "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/notify"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/notify"
 )
 
 func TestServiceGetIncidentRejectsZeroID(t *testing.T) {

@@ -19,7 +19,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
 	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/secretbox"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/secretbox"
 )
 
 const (

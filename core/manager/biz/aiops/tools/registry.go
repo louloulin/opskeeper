@@ -35,7 +35,7 @@ import (
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	topologybiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 

@@ -31,7 +31,7 @@ import (
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 	knowledgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"
 	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
 

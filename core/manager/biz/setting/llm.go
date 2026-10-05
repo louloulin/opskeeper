@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/setting"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/llm"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/llm"
 )
 
 // LLMSettingsResolver shapes per-provider rows in system_settings.llm.*

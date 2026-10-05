@@ -15,7 +15,7 @@ import (
 
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
 	repairpreview "github.com/vincent-wuhan/opskeeper/core/manager/control/repairpreview"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 type Repository interface {

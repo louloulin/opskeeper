@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/manager/control/incident"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/qdrantx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/qdrantx"
 )
 
 func TestSearchPersistsHybridRRFRecall(t *testing.T) {

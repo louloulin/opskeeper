@@ -56,6 +56,7 @@ require (
 	github.com/singchia/geminio v1.2.3-rc.1
 	github.com/stretchr/testify v1.11.1
 	github.com/vincent-wuhan/opskeeper/core v0.0.0
+	github.com/vincent-wuhan/opskeeper/core/base v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/edge v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/floor v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/pig v0.0.0-00010101000000-000000000000
@@ -182,6 +183,7 @@ require (
 )
 
 replace (
+	github.com/vincent-wuhan/opskeeper/core/base => ../base
 	github.com/vincent-wuhan/opskeeper/core => ../
 	github.com/vincent-wuhan/opskeeper/core/edge => ../edge
 	github.com/vincent-wuhan/opskeeper/core/floor => ../floor

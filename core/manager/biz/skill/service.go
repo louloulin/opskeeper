@@ -21,7 +21,7 @@ import (
 
 	skillcore "github.com/vincent-wuhan/opskeeper/core/floor/skill"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // Caller is the narrow auth context the service needs. Mirrors

@@ -12,7 +12,7 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/notify"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/notify"
 )
 
 // observeEval is the per-rule latency timer used by every Phase-A

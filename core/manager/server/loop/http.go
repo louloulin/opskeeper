@@ -34,8 +34,8 @@ import (
 
 	loopbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 	loopmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/loop"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // Orchestrator is the production seam this handler depends on. It

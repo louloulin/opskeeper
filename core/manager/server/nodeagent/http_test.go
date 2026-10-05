@@ -23,7 +23,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/nodeagent"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/nodefleet"
-	"github.com/vincent-wuhan/opskeeper/core/manager/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // fakeFleet stands in for the routing layer.
