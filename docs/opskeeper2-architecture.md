@@ -13184,6 +13184,99 @@ MCP 网关式的混合检索，复用现有知识层 RRF 融合思路」。拆�
 仓库自己的工具——`make deadcode-report` 就是为这件事存在的，它一句话给了结论。
 **当仓库里已经有一个专门回答这个问题的工具时，先用它，再考虑自己写检查。**
 
+### 4.123 决策 190：查「arm64 那条 delivery 腿该怎么加」，查出来的第一件事是我上一轮引用的那个镜像根本不在 registry 上——而真正该问的那个镜像，这台机器问不了.
+
+#### 一、这次要回答的问题
+
+决策 186 把 arm64 登记成缺口时，理由写的是「给 delivery 也上矩阵，代价是公共 registry
+拉 broker 加冷启动编译 PiG，放到第二个从未在 arm 上验过的 runner 上」。这句话把
+**成本**说清楚了，但没把**阻塞点**说清楚：那条腿到底差什么才能加上去。
+
+于是这次不问「值不值得加」，只问一句：**这条腿差的是什么。** 答案是要把
+「没人跑过」换成「一个具体的、可以去问上游或去 CI 里做的事」。
+
+#### 二、第一个动作就否掉了自己上一轮引用的证据
+
+上一轮留下的调查里有两条事实：本地 `singchia/frontier:v1.2.5` 是 `linux/amd64`，
+`1.2.5-local` 是 `linux/arm64`，据此倾向认为「broker 镜像是 amd64-only，这是 arm64
+覆盖的真正阻塞点」。
+
+**那个结论查错了镜像。** `scripts/brokerpin/main.go` 的文档字符串把这件事写得很清楚：
+带 `v` 的 `v1.2.5` 是 **release 从上游 git tag 本地构建后随 tarball 交付**的名字，
+**`v1.2.4`/`v1.2.5` 从来没在 Docker Hub 上存在过**；registry 上发布的是不带 `v` 的
+tag。这条性质还有测试守着（`brokerpin` 的 pin 表 + `TestThePinTableCoversEveryFileThat
+NamesTheBroker`）。
+
+所以「`v1.2.5` 是 amd64」量到的是**本机 release 产物的架构**，而那条产物**按定义
+不会出现在 CI 拉的 registry 里**。拿它当 CI 能否在 arm 上跑通的证据，方向就是错的。
+
+`harness` 真正拉的是 `tests/e2e/testenv/frontier.go:169` 的
+`docker.io/singchia/frontier:1.2.5`（不带 `v`）。
+
+#### 三、这个镜像的架构清单，这台机器答不了
+
+问 registry 要 manifest 清单，两条路都不通：
+
+```
+docker pull singchia/frontier:1.2.5
+  → 403 Forbidden（registry mirror）
+curl auth.docker.io/token
+  → 拿不到 token
+```
+
+`docker manifest inspect` 对带 `v` 的 tag 同样 403——而**那个 403 恰恰印证了第二节**：
+它连引用都解析不了，因为它不在那里。
+
+所以「公共 registry 上的 `1.2.5` 有没有 arm64 manifest」在本轮是一个**诚实的未知**，
+不是「大概率有」也不是「大概率没有」。把它写成任何一个方向都是猜。
+
+#### 四、能证实的四条，指向一个比原来具体得多的下一步
+
+| 问 | 证据 | 结论 |
+|---|---|---|
+| broker 能不能构建 arm64？ | 本机 `1.2.5-local` 是 `linux/arm64`；`deploy/Dockerfile.frontier` 在仓库里 | **能**，且仓库里就有那条构建命令 |
+| 那条构建命令认不认架构？ | `Makefile:19` `PLATFORM ?= $(TARGET_OS)/$(TARGET_ARCH)`，`docker-build-broker` 传 `--platform $(PLATFORM)` | **认**，在 arm runner 上它自动构建 `linux/arm64` |
+| `1.2.5-local` 是不是仓库认可的做法？ | 全仓零引用；`frontier.go:163` 的注释教的是先 `make docker-build-broker` 再用 `OPSKEEPER_E2E_FRONTIER_IMAGE` 指过去 | **是**，覆盖变量就是为它准备的 |
+| 现在的 delivery job 跑在哪？ | `ci.yml` 硬编码 `runs-on: ubuntu-24.04` | amd64 单腿 |
+
+于是「差的是什么」有了具体答案，而且只剩两条岔路：
+
+- **(a)** 上游 `1.2.5` 有 arm64 manifest → delivery 直接上矩阵，一行 `runs-on` 改成
+  `${{ matrix.runner }}` 加两行 include，这是最省的一条。
+- **(b)** 上游只有 amd64 → CI 里必须先 checkout 上游 `frontier` 源码、跑
+  `make docker-build-broker`，再用 `OPSKEEPER_E2E_FRONTIER_IMAGE` 指过去。
+  **代价不是技术未知，是多一个上游 checkout。**
+
+两条都指向具体动作。**原来那句「代价是……放到第二个从未验过的 runner 上」把这个岔路
+藏起来了**——它听起来像「风险未知」，其实风险已知、路径已知，缺的只是一个答案。
+
+#### 五、本轮不改 CI，只改登记
+
+仍然**不加**那条腿。理由和决策 186 相同但更硬：**(a) 与 (b) 哪个成立本轮无法证实**，
+而两条路的 CI 改动量差一个上游 checkout。在答案出来之前加矩阵，是拿一条**可能必然红**
+的夜间去换一个还没问出口的问题——这正是决策 186 拒绝过的那件事。
+
+但登记的措辞必须改。原来那条把阻塞点写成「节点 agent 在 arm 上没被验过」，那只是
+**症状**；症状背后是「能验它的那条命令是 amd64 单腿，而它唯一的外部依赖在 arm 上是否
+可用本轮问不了」。
+
+#### 六、方法论：引用一个镜像之前，先确认它在不在 registry
+
+这是本会话第五次栽在同一个形状上——**拿一个代理指标当直接证据**：
+
+| 轮次 | 初判 | 收紧后 |
+|---|---|---|
+| 184 | 台账五处错一处 | 错五处 |
+| 187 | 七个闸门零覆盖 | 一个真零覆盖 |
+| 188 | 检查自己三个坑 | 四个 |
+| 189 | 拿 deadcode 报告当权威 | 报告本身可信，但结论要再核一遍适用范围 |
+| **190** | **`v1.2.5` 是 amd64，所以 arm64 卡在镜像架构** | **那个 tag 根本不在 registry 上** |
+
+190 这次最值得记的地方在于：**证据本身是真的**（`docker image inspect` 说的架构一字不
+差），错的是**它指向的东西**。前四次是指标算错了，这次是指标没错、问错了对象。
+所以「核实一个数字」不够，还要核实**这个数字描述的是不是你要的那个东西**——
+而这件事仓库里本来就有答案（`brokerpin` 的文档字符串），只是没人问它。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -15369,14 +15462,24 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
   控制面基础设施与两层业务代码都在 `core/manager`（决策 62/63），`internal/`
   已删除。
 - `docs/module-architecture.md` 尚未补 `policygate`/`gatesocket`/信
-- **arm64 上没有验过节点 `pig` 本身**（决策 186 新登记）。计划的端到端清单写的是
-  「amd64 与 arm64 各跑一次完整 e2e」，现在 e2e job 是矩阵（`ubuntu-24.04` /
-  `ubuntu-24.04-arm`），**跑的是那二十八条 manager 用例**——它们**不构建 `pig`**。
-  构建 `pig` 的只有 `make e2e-delivery-check`，它从 `core/pig` **源码编译**
-  （`CGO_ENABLED=0`，不下载预编译包），而 delivery 仍是 amd64 夜间单腿。
+- **arm64 上没有验过节点 `pig` 本身**，而且阻塞点比「没人跑过」更具体（决策 186 登
+  记、决策 190 查实阻塞点）。计划的端到端清单写的是「amd64 与 arm64 各跑一次完整
+  e2e」，现在 e2e job 是矩阵（`ubuntu-24.04` / `ubuntu-24.04-arm`），**跑的是那二十八
+  条 manager 用例**——它们**不构建 `pig`**。构建 `pig` 的只有
+  `make e2e-delivery-check`，它从 `core/pig` **源码编译**（`CGO_ENABLED=0`，不下载
+  预编译包），而 delivery 仍是 amd64 夜间单腿。
   所以现状是：**manager 在 arm 上跑通了，节点 agent 在 arm 上一次都没被跑过。**
-  关掉它要给 delivery 也上矩阵，代价是公共 registry 拉 broker 加冷启动编译 PiG
-  放到第二个从未在 arm 上验过的 runner 上——本轮选**先登记缺口**，不拿一
+  **阻塞点不在「没人敢在第二个 runner 上试」——那条路的风险是已知的。** 卡住的是它
+  唯一的外部依赖：delivery 要拉的 broker 镜像 `singchia/frontier:1.2.5` **在 arm 上
+  是否可用，本轮问不出来**（registry mirror 403，直连也拿不到 token），而
+  `singchia/frontier:v1.2.5` 那个带 `v` 的 tag 是 release 本地构建产物、**从不上
+  registry**，它的架构与 CI 无关（`brokerpin` 文档字符串 + pin 表守着这条性质）。
+  下一步因此收敛成两条具体岔路而不是一句「先登记」：**(a)** 上游 `1.2.5` 有 arm64
+  manifest → delivery 直接上矩阵；**(b)** 只有 amd64 → CI 先 checkout 上游源码跑
+  `make docker-build-broker`（`PLATFORM` 跟随 `TARGET_ARCH`，在 arm runner 上自动
+  构建 `linux/arm64`，本机 `1.2.5-local` 就是这条命令的产物），再用
+  `OPSKEEPER_E2E_FRONTIER_IMAGE` 指过去。**本轮仍不加那条腿**：(a)/(b) 哪个成立还没
+  证实，不拿一条可能必然红的夜间去换一个还没问出口的问题。
 - **混合检索只有缝、没有第二个排序器**（决策 189 查实）。计划阶段 2 的「工具注册表 +
   语义检索」是**两半**：注册表与词法检索在生产路径上（`Catalogue` 经
   `tool_search_tool.go` 接成 agent 可调工具），而 RRF 融合端 `Fuse` **全仓只有测试
