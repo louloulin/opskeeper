@@ -11,20 +11,17 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
-	alertsvc "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 	healthsvc "github.com/vincent-wuhan/opskeeper/core/manager/service/systemhealth"
 )
 
 type stubHealth struct {
 	called bool
-	caller alertsvc.Caller
 	report *healthsvc.Report
 	err    error
 }
 
-func (s *stubHealth) Check(_ context.Context, caller alertsvc.Caller) (*healthsvc.Report, error) {
+func (s *stubHealth) Check(_ context.Context) (*healthsvc.Report, error) {
 	s.called = true
-	s.caller = caller
 	if s.report != nil || s.err != nil {
 		return s.report, s.err
 	}
@@ -60,6 +57,14 @@ func TestCheckRequiresAdmin(t *testing.T) {
 	if anonRec.Code != http.StatusUnauthorized {
 		t.Fatalf("anon status = %d body=%s", anonRec.Code, anonRec.Body.String())
 	}
+	// The removal of the caller from the service signature removed the only
+	// thing this route used to hand the service about who was asking, so the
+	// role check is now the whole of the gate. Both branches assert the
+	// service was not reached, which is what makes that true rather than
+	// merely likely.
+	if svc.called {
+		t.Fatalf("service should not be called for a request with no tenant")
+	}
 }
 
 func TestCheckReturnsReport(t *testing.T) {
@@ -74,8 +79,8 @@ func TestCheckReturnsReport(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !svc.called || svc.caller.UserID != 1 || svc.caller.Role != "admin" {
-		t.Fatalf("caller = %+v called=%v", svc.caller, svc.called)
+	if !svc.called {
+		t.Fatal("an admin request did not reach the service")
 	}
 	var report healthsvc.Report
 	if err := json.Unmarshal(rec.Body.Bytes(), &report); err != nil {

@@ -11,12 +11,11 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
-	alertsvc "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 	healthsvc "github.com/vincent-wuhan/opskeeper/core/manager/service/systemhealth"
 )
 
 type HealthService interface {
-	Check(ctx context.Context, caller alertsvc.Caller) (*healthsvc.Report, error)
+	Check(ctx context.Context) (*healthsvc.Report, error)
 }
 
 type Handler struct {
@@ -33,15 +32,14 @@ func (h *Handler) Register(r chi.Router) {
 }
 
 func (h *Handler) check(w http.ResponseWriter, r *http.Request) {
-	caller, ok := requireAdmin(w, r)
-	if !ok {
+	if !requireAdmin(w, r) {
 		return
 	}
 	if h.svc == nil {
 		writeErr(w, errs.ErrNotWiredYet)
 		return
 	}
-	report, err := h.svc.Check(r.Context(), caller)
+	report, err := h.svc.Check(r.Context())
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -49,17 +47,25 @@ func (h *Handler) check(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
-func requireAdmin(w http.ResponseWriter, r *http.Request) (alertsvc.Caller, bool) {
+// requireAdmin is where the authorization for this route lives.
+//
+// It used to return an alertsvc.Caller, which the handler passed to Check and
+// the service forwarded to two alert calls that both discard it. The check it
+// performs did not move and does not depend on the return value: the role is
+// read from the tenant context here, before the service is reached, and that
+// is the only thing standing between an unauthenticated request and a report
+// that enumerates the platform's configuration.
+func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	t, ok := tenantctx.From(r.Context())
 	if !ok {
 		writeErr(w, errs.ErrUnauthorized)
-		return alertsvc.Caller{}, false
+		return false
 	}
 	if t.Role != "admin" {
 		writeErr(w, errs.ErrForbidden)
-		return alertsvc.Caller{}, false
+		return false
 	}
-	return alertsvc.Caller{UserID: t.UserID, Role: t.Role}, true
+	return true
 }
 
 type errorBody struct {

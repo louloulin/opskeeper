@@ -2654,6 +2654,7 @@ func main() {
 	if errDB == nil {
 		healthDB = sqlDB
 	}
+	healthRules, healthIncidents := newAlertHealthProbe(alertSvc)
 	systemHealthSvc := managersvcsystemhealth.New(managersvcsystemhealth.Config{
 		Version:             version,
 		PromEnabled:         cfg.Prom.Enabled,
@@ -2674,8 +2675,8 @@ func main() {
 		Grafana:   grafanaSvc,
 		Loki:      lokiProbe,
 		Tempo:     tempoProbe,
-		Rules:     alertSvc,
-		Incidents: alertSvc,
+		Rules:     healthRules,
+		Incidents: healthIncidents,
 		Edges:     edgeSvc,
 		LLM:       llmSettingsResolver,
 	})
@@ -6410,10 +6411,10 @@ func (a deploymentHealthAdapter) Health(ctx context.Context) (managerserverversi
 	if a.svc == nil {
 		return managerserverversion.HealthSummary{Overall: "unknown", Note: "systemhealth not wired"}, nil
 	}
-	// systemhealth.Check takes a Caller; we pass zero-value because
-	// the Check method's caller usage is limited to optional admin
-	// gating paths we don't exercise from the deployment probe.
-	report, err := a.svc.Check(ctx, managersvcalert.Caller{})
+	// The probe takes no caller: the health report is the same for
+	// everyone, and the two alert questions it asks discard the identity
+	// they are handed. The admin gate lives in the route handler.
+	report, err := a.svc.Check(ctx)
 	if err != nil {
 		return managerserverversion.HealthSummary{Overall: "unknown", Note: err.Error()}, nil
 	}

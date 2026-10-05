@@ -12,7 +12,6 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/llm"
 	"github.com/vincent-wuhan/opskeeper/core/domain"
-	alertsvc "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 )
 
 type Status string
@@ -70,12 +69,36 @@ type GrafanaTester interface {
 	Test(ctx context.Context) error
 }
 
+// RuleLister answers one question: how many alert rules exist, and how many
+// of them are enabled.
+//
+// It is a count and not a list because the probe never looked at a rule. Of
+// the nineteen columns the alert model carries it read exactly one — Enabled
+// — plus len() on the slice, and the other eighteen are what an operator
+// reads on a page this service never renders. Returning the rows would move
+// nineteen columns across a domain boundary so a health check could add up
+// two numbers, and the next person to add a column to the entity would add
+// it here too and the boundary would widen back without anybody deciding to.
+//
+// The alert service discards the caller on this path (`_ Caller` in both
+// signatures), and the probe reads none of its fields — it only forwarded it —
+// so the port does not carry one. Dropping it is not a lost authorization:
+// the route that reaches this service checks the role itself before calling.
 type RuleLister interface {
-	ListRules(ctx context.Context, caller alertsvc.Caller, scopeType string) ([]*alertsvc.Rule, error)
+	CountRules(ctx context.Context) (total, enabled int, err error)
 }
 
+// IncidentCounter counts incidents that are still open.
+//
+// "open" is in the method name rather than in a filter argument on purpose.
+// The probe sets exactly one field of alert's eight-field IncidentFilter, and
+// the value is the only one it ever wants: an incident that is resolved is
+// not something a liveness check counts. This is the same argument
+// core/domain/openalert.go makes for the agentteams edge, and a filter
+// argument here would let a future caller believe it was asking a general
+// question about incidents.
 type IncidentCounter interface {
-	CountIncidents(ctx context.Context, caller alertsvc.Caller, in alertsvc.IncidentFilter) (int64, error)
+	CountOpenIncidents(ctx context.Context) (int64, error)
 }
 
 // EdgeLister is an alias rather than a local interface for the same reason
@@ -137,7 +160,16 @@ func New(cfg Config, deps Dependencies) *Service {
 	return &Service{cfg: cfg, deps: deps}
 }
 
-func (s *Service) Check(ctx context.Context, caller alertsvc.Caller) (*Report, error) {
+// Check runs every probe and rolls them up.
+//
+// It takes no caller. It used to take alert's Caller and forward it to the
+// two alert calls below, and both of those discard it while this service read
+// none of its fields, so the parameter existed to keep an import alive — the
+// same shape decision 254 deleted elsewhere. The authorization it might have
+// implied was never here: requireAdmin in the HTTP handler checks the role
+// before this is reached, and the deployment probe that calls it with no
+// identity at all was already passing a zero value.
+func (s *Service) Check(ctx context.Context) (*Report, error) {
 	checks := []Check{
 		s.checkManager(ctx),
 		s.checkDatabase(ctx),
@@ -147,7 +179,7 @@ func (s *Service) Check(ctx context.Context, caller alertsvc.Caller) (*Report, e
 		s.checkTempo(ctx),
 		s.checkQdrant(ctx),
 		s.checkFrontier(ctx),
-		s.checkAlerts(ctx, caller),
+		s.checkAlerts(ctx),
 		s.checkEdges(ctx),
 		s.checkLLM(ctx),
 		s.checkEmbedding(ctx),
@@ -280,7 +312,7 @@ func (s *Service) checkFrontier(ctx context.Context) Check {
 	})
 }
 
-func (s *Service) checkAlerts(ctx context.Context, caller alertsvc.Caller) Check {
+func (s *Service) checkAlerts(ctx context.Context) Check {
 	return s.probe(ctx, "alert_engine", "automation", "Alert engine", func(ctx context.Context) (Status, string, map[string]any) {
 		if !s.cfg.AlertEnabled {
 			return StatusDegraded, "alert evaluator is disabled", map[string]any{"enabled": false}
@@ -288,29 +320,23 @@ func (s *Service) checkAlerts(ctx context.Context, caller alertsvc.Caller) Check
 		if s.deps.Rules == nil || s.deps.Incidents == nil {
 			return StatusDegraded, "alert service is not fully wired", nil
 		}
-		rules, err := s.deps.Rules.ListRules(ctx, caller, "")
+		total, enabled, err := s.deps.Rules.CountRules(ctx)
 		if err != nil {
 			return StatusFailed, "alert rules check failed: " + err.Error(), nil
 		}
-		enabled := 0
-		for _, r := range rules {
-			if r != nil && r.Enabled {
-				enabled++
-			}
-		}
-		open, err := s.deps.Incidents.CountIncidents(ctx, caller, alertsvc.IncidentFilter{Status: "open"})
+		open, err := s.deps.Incidents.CountOpenIncidents(ctx)
 		if err != nil {
 			return StatusFailed, "open incident count failed: " + err.Error(), nil
 		}
 		details := map[string]any{
-			"rules":                      len(rules),
+			"rules":                      total,
 			"enabled_rules":              enabled,
 			"open_incidents":             open,
 			"evaluator_interval_seconds": int(s.cfg.EvaluatorInterval.Seconds()),
 			"notify_cooldown_seconds":    int(s.cfg.NotifyCooldown.Seconds()),
 		}
 		switch {
-		case len(rules) == 0:
+		case total == 0:
 			return StatusDegraded, "alert engine is enabled but has no rules", details
 		case open > 0:
 			return StatusDegraded, fmt.Sprintf("%d open incident(s) need attention", open), details

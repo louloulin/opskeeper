@@ -520,11 +520,16 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// consumer's own types and the only thing crossing the boundary was
 	// the adapter — and the adapter was living inside the consumer, so the
 	// domain had a correct seam and a package dependency at the same time,
-	// held open by a line that said `_ = aiopsmodel.Message{}`).
+	// held open by a line that said `_ = aiopsmodel.Message{}`), and decision
+	// 257's (systemhealth -> alert, where the health probe held a
+	// nineteen-column rule model and read one column of it — Enabled, plus
+	// len() on the slice — and threaded a Caller that both alert methods
+	// declare as `_`, so the port asked for rows nobody read and an identity
+	// nobody read).
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "26 edges") {
+	if !strings.Contains(buf.String(), "25 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

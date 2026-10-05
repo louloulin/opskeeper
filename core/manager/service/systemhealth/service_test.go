@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
-	alertsvc "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 )
 
 type fakeDB struct{ err error }
@@ -28,13 +27,18 @@ type fakeGrafana struct{ err error }
 
 func (f fakeGrafana) Test(context.Context) error { return f.err }
 
+// fakeRules answers in counts, the way the port asks. It used to hand back
+// alert's own Rule rows, which meant this file imported the alert domain to
+// describe a fixture; the projection is what the probe actually consumes, so
+// the fixture describes that instead.
 type fakeRules struct {
-	rules []*alertsvc.Rule
-	err   error
+	total   int
+	enabled int
+	err     error
 }
 
-func (f fakeRules) ListRules(context.Context, alertsvc.Caller, string) ([]*alertsvc.Rule, error) {
-	return f.rules, f.err
+func (f fakeRules) CountRules(context.Context) (int, int, error) {
+	return f.total, f.enabled, f.err
 }
 
 type fakeIncidents struct {
@@ -42,7 +46,7 @@ type fakeIncidents struct {
 	err   error
 }
 
-func (f fakeIncidents) CountIncidents(context.Context, alertsvc.Caller, alertsvc.IncidentFilter) (int64, error) {
+func (f fakeIncidents) CountOpenIncidents(context.Context) (int64, error) {
 	return f.count, f.err
 }
 
@@ -80,21 +84,19 @@ func TestCheckAggregatesFailedDependency(t *testing.T) {
 		QdrantURL:           qdrant.URL,
 		QdrantCollection:    "opskeeper_knowledge",
 	}, Dependencies{
-		DB:      fakeDB{},
-		Prom:    fakeProm{err: errors.New("prom down")},
-		Grafana: fakeGrafana{},
-		Loki:    fakeProbe{},
-		Tempo:   fakeProbe{},
-		Rules: fakeRules{rules: []*alertsvc.Rule{
-			{ID: 1, RuleKey: "cpu_high", Enabled: true},
-		}},
+		DB:        fakeDB{},
+		Prom:      fakeProm{err: errors.New("prom down")},
+		Grafana:   fakeGrafana{},
+		Loki:      fakeProbe{},
+		Tempo:     fakeProbe{},
+		Rules:     fakeRules{total: 1, enabled: 1},
 		Incidents: fakeIncidents{},
 		Edges: fakeEdges{edges: []domain.EdgePresence{
 			{ID: 1, Status: domain.EdgeStatusOnline},
 		}},
 	})
 
-	report, err := svc.Check(context.Background(), alertsvc.Caller{UserID: 1, Role: "admin"})
+	report, err := svc.Check(context.Background())
 	if err != nil {
 		t.Fatalf("Check returned error: %v", err)
 	}
@@ -122,15 +124,13 @@ func TestCheckReportsDegradedWhenOptionalCapabilitiesMissing(t *testing.T) {
 		LLMConfigured:       false,
 		EmbeddingConfigured: false,
 	}, Dependencies{
-		DB: fakeDB{},
-		Rules: fakeRules{rules: []*alertsvc.Rule{
-			{ID: 1, RuleKey: "cpu_high", Enabled: true},
-		}},
+		DB:        fakeDB{},
+		Rules:     fakeRules{total: 1, enabled: 1},
 		Incidents: fakeIncidents{},
 		Edges:     fakeEdges{},
 	})
 
-	report, err := svc.Check(context.Background(), alertsvc.Caller{UserID: 1, Role: "admin"})
+	report, err := svc.Check(context.Background())
 	if err != nil {
 		t.Fatalf("Check returned error: %v", err)
 	}
@@ -167,21 +167,19 @@ func TestCheckReportsGrafanaMissingCredentialAsDegraded(t *testing.T) {
 		QdrantURL:           qdrant.URL,
 		QdrantCollection:    "opskeeper_knowledge",
 	}, Dependencies{
-		DB:      fakeDB{},
-		Prom:    fakeProm{},
-		Grafana: fakeGrafana{err: errors.New("grafana: sa_token / api_key empty (create a Grafana service account and paste its token, or paste an api_key for external Grafana)")},
-		Loki:    fakeProbe{},
-		Tempo:   fakeProbe{},
-		Rules: fakeRules{rules: []*alertsvc.Rule{
-			{ID: 1, RuleKey: "cpu_high", Enabled: true},
-		}},
+		DB:        fakeDB{},
+		Prom:      fakeProm{},
+		Grafana:   fakeGrafana{err: errors.New("grafana: sa_token / api_key empty (create a Grafana service account and paste its token, or paste an api_key for external Grafana)")},
+		Loki:      fakeProbe{},
+		Tempo:     fakeProbe{},
+		Rules:     fakeRules{total: 1, enabled: 1},
 		Incidents: fakeIncidents{},
 		Edges: fakeEdges{edges: []domain.EdgePresence{
 			{ID: 1, Status: domain.EdgeStatusOnline},
 		}},
 	})
 
-	report, err := svc.Check(context.Background(), alertsvc.Caller{UserID: 1, Role: "admin"})
+	report, err := svc.Check(context.Background())
 	if err != nil {
 		t.Fatalf("Check returned error: %v", err)
 	}
