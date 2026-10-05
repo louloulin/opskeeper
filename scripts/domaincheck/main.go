@@ -151,7 +151,6 @@ var edges = map[edge]string{
 	{"aiops", "edge"}:       "the agent's tools address nodes through the edge domain; there is no second worth having notion of 'which node'",
 	{"aiops", "hitl"}:       "an investigation that needs a human hands the request to the human-in-the-loop domain instead of blocking on a channel of its own. One direction only since decision 116: the hitl side had reached back into aiops solely through a migration-and-dual-write window that was never wired and has expired, so the cycle is gone while these three imports stay",
 	{"aiops", "loop"}:       "the agent kernel drives the investigation loop, so the agent asks it for a recovery verdict, a loop toolset and what it learned; one direction only since decision 117. The old reason named a package that does not exist — there is no biz/aiops/loop, loop is its own context at biz/loop",
-	{"aiops", "skill"}:      "host skills are executed as tools, so the agent's tool bag is assembled from the skill registry",
 	{"aiops", "topology"}:   "correlation answers 'what is related to this' from the topology domain instead of a private graph",
 
 	{"aiopsconfig", "aiops"}: "the config service assembles the agent's alert-config and tool surfaces: it configures aiops rather than reimplementing it",

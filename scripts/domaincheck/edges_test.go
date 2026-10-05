@@ -624,3 +624,24 @@ func TestTheEdgeDecision238CutIsNotOnTheList(t *testing.T) {
 			"took from aiops was the two shapes that port is made of")
 	}
 }
+
+// TestTheEdgeDecision240CutIsNotOnTheList states the fact about the tree, in
+// the same shape as decisions 235's and 238's.
+//
+// `biz/aiops/tools/skill_bridge.go` had already written its own one-method
+// `SkillRunner`; the only thing its signature named from the skill service were
+// three structs. Those now live in core/domain as SkillCaller / SkillExecution
+// / SkillOutcome, and the bridge holds `domain.SkillExecutor` by alias.
+//
+// The rename is the part worth remembering: `Caller` is declared seven times in
+// this repository for five different things, so putting an eighth one in the
+// namespace every domain shares would have made an already-ambiguous name
+// ambiguous in one more place — and core/domain has a test that refuses a bare
+// `Caller` for exactly that reason.
+func TestTheEdgeDecision240CutIsNotOnTheList(t *testing.T) {
+	if _, ok := edges[edge{from: "aiops", to: "skill"}]; ok {
+		t.Error("aiops -> skill is declared again; if it came back, say what now needs it, " +
+			"because the tool bridge holds a one-method port in core/domain and nothing in it " +
+			"needs the skill service's audit rows, scope routing, tunnel round trip or catalogue")
+	}
+}

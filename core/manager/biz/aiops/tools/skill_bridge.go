@@ -23,15 +23,28 @@ import (
 	"fmt"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	skillcore "github.com/vincent-wuhan/opskeeper/core/floor/skill"
-	skillsvc "github.com/vincent-wuhan/opskeeper/core/manager/biz/skill"
 )
 
 // SkillRunner is the narrow contract the bridge needs. *skillsvc.Service
 // satisfies it; tests inject a fake.
-type SkillRunner interface {
-	Execute(ctx context.Context, caller skillsvc.Caller, in skillsvc.ExecuteInput) (*skillsvc.ExecuteOutput, error)
-}
+//
+// The three types in that signature live in core/domain (decision 239) rather
+// than in the skill service, which is what this file used to import in order to
+// name two field names and one method. The interface was already here and
+// already narrow — this only moves where the shapes it names are declared, and
+// `var _ domain.SkillExecutor = SkillRunner(nil)` below is what stops the two
+// from drifting apart.
+type SkillRunner = domain.SkillExecutor
+
+// SkillRunner used to be a second, hand-written interface with the same one
+// method as domain.SkillExecutor. Two interfaces with the same method set are
+// two types, and a service satisfying one does not satisfy the other — so the
+// alias above is the fix and this is the statement of it. If the port ever
+// grows a method, this stops compiling rather than the bridge quietly keeping
+// the narrower one.
+var _ domain.SkillExecutor = SkillRunner(nil)
 
 // RegisterSafeSkills enumerates every ClassSafe skill in the global
 // registry and adds it as a Tool. Idempotent — re-registration overwrites.
@@ -204,7 +217,7 @@ func (r *Registry) newSkillExecutor(svc SkillRunner, key string, scope skillcore
 			return ExecuteResult{}, fmt.Errorf("skill %q: re-marshal params: %w", key, err)
 		}
 
-		out, err := svc.Execute(ctx, skillsvc.Caller{Role: "system"}, skillsvc.ExecuteInput{
+		out, err := svc.Execute(ctx, domain.SkillCaller{Role: "system"}, domain.SkillExecution{
 			Key:    key,
 			EdgeID: edgeID,
 			Params: params,

@@ -13,9 +13,9 @@
 # 三份的实测价：
 #
 #   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed         98         39         3 / 4
-#   docs/manager-split.constrained        110         27         0 / 4
-#   docs/manager-split.release-floor        111         26         0 / 4
+#   docs/manager-split.proposed         97         39         3 / 4
+#   docs/manager-split.constrained        109         27         0 / 4
+#   docs/manager-split.release-floor        110         26         0 / 4
 #
 # 决策 230 重取了这三行。触发它的是切掉 `flow -> scheduler`（missed-run 端口
 # 下沉到 `core/floor/scheduler`）：proposed 与 constrained 各少一条组内 import，
@@ -128,10 +128,10 @@
 independent = aiopsconfig, cluster, demo, edgeauth, federationchild,
         federationlink, flow, grafana, iam, imbridge, incident, integration,
         llmgw, llmpig, logs, marketplace, metric, nodeagent, plugin,
-        prometheus, promwrite, proposal, report, scheduler, secret,
+        prometheus, promwrite, proposal, report, scheduler, secret, skill,
         systemhealth, systemupgrade, traces, version, webshell
 
-# 其余 29 个：入向有边因而需要真答案的 17 个，加上 10 个 shared 底座组件
+# 其余 28 个：入向有边因而需要真答案的 16 个，加上 10 个 shared 底座组件
 # （它们在 import 图里读作叶子但不是叶子——被依赖不需要声明，所以它们的入度
 # 在这张图里不可测，工具把它们点名排除而不是悄悄跳过），再加上 chatdiagnose
 # 与 frontierbound 这两个「可证明独立发版但写审计链」的域。
@@ -139,4 +139,4 @@ core = agentteams, aiops, alert, approval, audit, chatdiagnose, control,
         dataguard, device, edge, federation, frontierbound,
         higress, hitl, knowledge, loop, mcp, middleware,
         migrate, migrator, monitor, nodefleet, observability, pkg,
-        pluginimport, setting, skill, topology
+        pluginimport, setting, topology

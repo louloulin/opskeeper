@@ -19,17 +19,24 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	skillcore "github.com/vincent-wuhan/opskeeper/core/floor/skill"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
-// Caller is the narrow auth context the service needs. Mirrors
-// service/alert.Caller so the package isn't tightly coupled to iam.
-type Caller struct {
-	UserID uint64
-	Role   string // "admin" | "user"
-}
+// Caller is the narrow auth context the service needs. It *mirrors*
+// service/alert.Caller rather than sharing it, so the package isn't tightly
+// coupled to iam — and the two are not interchangeable, which is why neither of
+// them became a shared type. `Caller` is declared seven times in this
+// repository for five different things, and this is one of them.
+//
+// The declaration moved to core/domain as SkillCaller (decision 239) because
+// the agent's tool bridge in the aiops domain needs to name it, and it used to
+// import this whole package — audit rows, scope routing, the tunnel round trip,
+// the catalogue — to say two field names. It is an alias, so every call site in
+// this package and in server/skill keeps compiling unchanged.
+type Caller = domain.SkillCaller
 
 // EdgeCaller is the narrow surface the service needs to dispatch the
 // cloud->edge RPC. The frontierbound.Client value satisfies it via the
@@ -170,19 +177,20 @@ func (s *Service) Get(_ context.Context, _ Caller, key string) (*SkillSummary, e
 }
 
 // ExecuteInput is the body of an Execute call.
-type ExecuteInput struct {
-	Key    string
-	EdgeID uint64
-	Params json.RawMessage
-}
+//
+// Declared in core/domain as SkillExecution and aliased here; see Caller above
+// for why the names in the shared namespace say which skill they belong to.
+type ExecuteInput = domain.SkillExecution
 
 // ExecuteOutput is the response. Result is the JSON the skill returned;
 // Error is non-empty when the skill returned an error (the RPC itself
 // succeeded — error came from inside skill.Execute).
-type ExecuteOutput struct {
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  string          `json:"error,omitempty"`
-}
+//
+// Declared in core/domain as SkillOutcome and aliased here. The two json tags
+// are a live contract — this struct is the body of
+// POST /v1/skills/{key}/execute — and they are unchanged by the move, because
+// the move changes where the shape is declared, never what goes on the wire.
+type ExecuteOutput = domain.SkillOutcome
 
 // Execute dispatches a skill and records audit. Routing depends on the
 // skill's Scope:
