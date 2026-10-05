@@ -89,6 +89,10 @@ type TestCommand struct {
 	Tags []string
 	// Pkgs are the package patterns it names, in their written form.
 	Pkgs []string
+	// Line is the 0-based index of the physical line the command starts on.
+	// A `-run` filter usually lives on a continued line, so a reader that
+	// wants the whole recipe needs to know where the command began.
+	Line int
 }
 
 // covers reports whether this command would compile the test files of one
@@ -140,7 +144,7 @@ func goTestCommands(src string) []TestCommand {
 	var out []TestCommand
 	target := ""
 	inRecipe := false
-	for _, line := range strings.Split(src, "\n") {
+	for lineNo, line := range strings.Split(src, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -164,12 +168,13 @@ func goTestCommands(src string) []TestCommand {
 			continue
 		}
 		cmd := strings.TrimSpace(strings.TrimPrefix(trimmed, "@"))
+		c := TestCommand{Target: target, Module: ".", Line: lineNo}
 		module := "."
 		if cd := regexp.MustCompile(`(?:^|[;&|]\s*)cd\s+([^\s&|;]+)\s*(?:&&|;)`).FindStringSubmatch(cmd); cd != nil {
 			module = filepath.Clean(cd[1])
 		}
 		rest := cmd[strings.Index(cmd, "go test"):]
-		c := TestCommand{Target: target, Module: module}
+		c.Module = module
 		for _, m := range regexp.MustCompile(`-tags[= ]([^\s\\]+)`).FindAllStringSubmatch(rest, -1) {
 			for _, t := range strings.Split(m[1], ",") {
 				c.Tags = append(c.Tags, strings.TrimSpace(t))

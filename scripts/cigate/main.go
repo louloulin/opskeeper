@@ -303,6 +303,13 @@ func check(root string) error {
 		problems = append(problems, err.Error())
 	}
 
+	// The other way a wired gate asserts nothing: `go test -run 'X'` where X
+	// matches no test prints a warning and exits zero. The Makefile filters
+	// by name in 23 recipes, so the filter is most of what those gates say.
+	if err := checkRunFilters(root, string(makefile), reachableTargets(string(makefile), invoked)); err != nil {
+		problems = append(problems, err.Error())
+	}
+
 	// The gates being wired is only half of what a workflow promises; the other
 	// half is that a push can start it. Reported with the same discipline --
 	// every disagreement, then exit non-zero.
