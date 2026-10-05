@@ -235,20 +235,23 @@ func (s *Service) Execute(ctx context.Context, caller Caller, in ExecuteInput) (
 			out.Result = result
 		}
 	default:
-		body, _ := json.Marshal(struct {
-			Key    string          `json:"key"`
-			Params json.RawMessage `json:"params,omitempty"`
-		}{Key: in.Key, Params: in.Params})
+		// The request and the response below were hand-rolled anonymous
+		// structs with the same two fields and the same two tags as
+		// tunnel.ExecuteSkillRequest / ExecuteSkillResponse, which have been
+		// declared in the tunnel package and used by nobody. So the shape
+		// this RPC actually put on the wire was written down four times and
+		// the one place it was *declared* was dead code (deadcode reports
+		// both as :dead). Four copies means a field added to the declared
+		// contract changes nothing, because the declared contract is not the
+		// one that runs.
+		body, _ := json.Marshal(tunnel.ExecuteSkillRequest{Key: in.Key, Params: in.Params})
 
 		var resp []byte
 		resp, callErr = s.caller.Call(ctx, in.EdgeID, tunnel.MethodExecuteSkill, body)
 		if callErr != nil {
 			out.Error = callErr.Error()
 		} else {
-			var wire struct {
-				Result json.RawMessage `json:"result,omitempty"`
-				Error  string          `json:"error,omitempty"`
-			}
+			var wire tunnel.ExecuteSkillResponse
 			if err := json.Unmarshal(resp, &wire); err != nil {
 				out.Error = "decode skill response: " + err.Error()
 			} else {

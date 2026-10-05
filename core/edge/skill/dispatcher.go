@@ -11,6 +11,7 @@ import (
 	"fmt"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
+	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
 // Dispatch is the body of the edge-side execute_skill handler. It
@@ -22,10 +23,12 @@ import (
 // operator); that keeps the audit trail intact and avoids the caller
 // guessing whether a transport error or a skill error occurred.
 func Dispatch(ctx context.Context, body []byte) ([]byte, error) {
-	var req struct {
-		Key    string          `json:"key"`
-		Params json.RawMessage `json:"params,omitempty"`
-	}
+	// tunnel.ExecuteSkillRequest is the declared shape of this body. It was
+	// declared and used by nobody while this function hand-rolled an
+	// identical anonymous struct, so the contract the manager marshals and
+	// the contract the node reads were two literals that no compiler could
+	// compare. Same for the response below.
+	var req tunnel.ExecuteSkillRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, fmt.Errorf("decode execute_skill body: %w", err)
 	}
@@ -44,10 +47,7 @@ func Dispatch(ctx context.Context, body []byte) ([]byte, error) {
 }
 
 func marshalResp(result json.RawMessage, errMsg string) ([]byte, error) {
-	body, err := json.Marshal(struct {
-		Result json.RawMessage `json:"result,omitempty"`
-		Error  string          `json:"error,omitempty"`
-	}{Result: result, Error: errMsg})
+	body, err := json.Marshal(tunnel.ExecuteSkillResponse{Result: result, Error: errMsg})
 	if err != nil {
 		return nil, fmt.Errorf("marshal execute_skill resp: %w", err)
 	}
