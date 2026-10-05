@@ -52,6 +52,24 @@ const crystallizeBlastRadius = domain.RadiusSingleNS
 // operator has to look at it again. The ledger caps it further.
 const crystallizeTTL = 15 * time.Minute
 
+// crystallizeStatePath is where the ledger's promotion progress is kept.
+//
+// It has a default for the same reason the federation ledger does, and the
+// reason is the one that decides this whole feature. A default of "" would be
+// a technically-correct, practically-empty fix: the environment variable
+// would be read by deployments that set it, which after this change is none
+// of them, and every default deployment would keep re-arming a three-run
+// streak on every restart. That is the failure this path exists to remove, so
+// the path is a default and the empty string is the opt-out.
+//
+// A deployment that wants an in-memory ledger sets it to the empty string.
+// One that cannot write the default path gets a warning at boot and an
+// in-memory ledger, which is what it had before this file existed.
+func crystallizeStatePath() string {
+	return firstNonEmpty(os.Getenv("OPSKEEPER_CRYSTALLIZE_STATE"),
+		"/var/lib/opskeeper/crystallize/ledger.json")
+}
+
 // crystallizedReviewSurface is the console half of the crystalliser: the
 // handler that lists promoted patterns and renders the draft package each
 // one would install.
@@ -136,6 +154,7 @@ func newLoopCrystallization(
 		ToolClass:   riskLevelToToolClass,
 		BlastRadius: crystallizeBlastRadius,
 		TTL:         crystallizeTTL,
+		StatePath:   crystallizeStatePath(),
 	}, log.With(slog.String("comp", "crystallize")))
 	if err != nil {
 		return loopCrystallization{}, err

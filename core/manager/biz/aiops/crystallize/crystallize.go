@@ -344,8 +344,19 @@ func (p Policy) withDefaults() Policy {
 // It is in-memory and it is not a database. A ledger that survives a restart
 // is a store with a migration, a retention policy and an owner, and none of
 // those exist yet; what exists is the decision, and the decision is what this
-// type is. The persistence seam is Record and Runs — a caller that wants a
-// durable ledger replays the trials into a fresh Ledger.
+// type is. Its state is a handful of rows bounded by the number of distinct
+// patterns, so the durable form of it is a document rather than a table —
+// see crystallizehook.FileStore for the one that ships.
+//
+// The seam is Runs and Restore, and it took two fields to find that out. This
+// comment used to claim the seam was Record and Runs, on the theory that a
+// caller replays the runs as trials into a fresh ledger. That theory is wrong
+// in a way worth writing down, because it is the obvious one: Record folds a
+// trial into a running count, and the fold is lossy. Attempts cannot be
+// expanded back into the Outcomes that produced them, and the promotion and
+// retirement timestamps are not recoverable from the counters at all. Restore
+// is therefore the inverse of Runs, not a replay of Record, and it works
+// because snapshot is total — every field of runState reaches a Run.
 type Ledger struct {
 	mu     sync.Mutex
 	policy Policy

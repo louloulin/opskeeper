@@ -71,6 +71,28 @@ type Config struct {
 	// Policy is the ledger's promotion rule. Zero values take the
 	// crystallise package's defaults (three clean runs).
 	Policy crystallize.Policy
+
+	// StatePath is where the ledger's runs are kept across a restart. The
+	// empty string means they are not, and that is a working
+	// configuration rather than a broken one: the drafts this feature
+	// produces are files on disk either way, and only the promotion
+	// progress behind them is lost. Set it when the control plane's
+	// restart rate is low enough that a three-run streak is reachable.
+	StatePath string
+}
+
+// runStore is what the learner needs from a place to keep the ledger.
+//
+// It is an interface rather than a concrete *FileStore for one reason: the
+// write failing is a branch the loop must be right about, and there is no
+// portable way to arrange a genuinely unwritable directory in a test —
+// chmod is advisory to a privileged process, and removing the directory just
+// makes Save rebuild it, which is the correct behaviour and the wrong test.
+// The failure being interesting is the argument for the seam.
+type runStore interface {
+	Path() string
+	Load() ([]crystallize.Run, error)
+	Save([]crystallize.Run) error
 }
 
 // Learner is the loop.RecoveryCrystallizer that owns the ledger.
@@ -82,6 +104,11 @@ type Learner struct {
 	ledger *crystallize.Ledger
 	cfg    Config
 	log    *slog.Logger
+
+	// store persists the ledger across a restart. It is nil when
+	// Config.StatePath is empty, which is why every use is guarded rather
+	// than behind an interface value that would have to be checked anyway.
+	store runStore
 
 	mu       sync.Mutex
 	lastErr  error
@@ -107,12 +134,84 @@ func New(tools ToolSpecSource, cfg Config, log *slog.Logger) (*Learner, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Learner{
+	learner := &Learner{
 		tools:  tools,
 		ledger: crystallize.NewLedger(cfg.Policy),
 		cfg:    cfg,
 		log:    log,
-	}, nil
+	}
+	learner.attachStore(cfg.StatePath, log)
+	return learner, nil
+}
+
+// attachStore gives the learner a durable ledger, degrading to an in-memory
+// one rather than refusing to construct.
+//
+// The degradation is the same choice federation makes about its ledger, and
+// for the same reason: a learner that refuses to build because it cannot
+// write a file has switched off a cost saving over a durability detail, and
+// will do so on every read-only image and every deployment that forgot to
+// mount a volume. A learner that counts in memory is what this package did
+// before persistence existed — it works, and a restart forgets. One line at
+// boot is strictly better than a feature that is mysteriously absent.
+//
+// A file that exists and cannot be read is a different case from a path that
+// cannot be written, and it is NOT swallowed. "The streaks reset" and "the
+// path is unwritable" need different answers, and an operator who is told
+// the second while it is the first will go looking for a permission problem
+// that does not exist.
+func (l *Learner) attachStore(path string, log *slog.Logger) {
+	if path == "" {
+		return
+	}
+	store := NewFileStore(path)
+	if err := store.Probe(); err != nil {
+		log.Warn("crystallize: the state path is not usable, so promotion progress will not survive a restart",
+			slog.String("path", store.Path()),
+			slog.String("remedy", "make the path writable, or point OPSKEEPER_CRYSTALLIZE_STATE at one that is"),
+			slog.Any("err", err),
+		)
+		return
+	}
+	runs, err := store.Load()
+	if err != nil {
+		// Refusing to start on an unreadable state file would be a
+		// stronger guarantee than any other here — it is the one failure
+		// that can lose a decision — and it is still the wrong trade for
+		// the same reason the unwritable path is. The operator is told,
+		// loudly, and the alternative is silently starting a counter at
+		// zero on a ledger that has already promoted things.
+		log.Error("crystallize: the state file could not be read, so this process is counting from zero while an earlier one had not",
+			slog.String("path", store.Path()),
+			slog.String("remedy", "the file is left in place on purpose; move it aside to start over, or restore a readable one"),
+			slog.Any("err", err),
+		)
+		return
+	}
+	if err := l.ledger.Restore(runs); err != nil {
+		log.Error("crystallize: the persisted runs were refused, so this process is counting from zero",
+			slog.String("path", store.Path()),
+			slog.String("remedy", "the file is left in place on purpose; move it aside to start over"),
+			slog.Any("err", err),
+		)
+		return
+	}
+	// The store is attached even when there was nothing to restore, and that
+	// ordering is load-bearing. A missing file is what a deployment that has
+	// never recorded a trial looks like, which is also the state it is in
+	// when it should start writing one — so attaching only on a non-empty
+	// load is a loop that never begins: the first boot finds nothing, skips
+	// the store, records into memory, and the second boot finds nothing
+	// again. The persistence would have looked correct in every test that
+	// exercised FileStore on its own.
+	l.store = store
+	if len(runs) == 0 {
+		return
+	}
+	log.Info("crystallize: promotion progress restored",
+		slog.String("path", store.Path()),
+		slog.Int("runs", len(runs)),
+		slog.Int("promoted", len(l.ledger.Promoted())))
 }
 
 // Ledger exposes the underlying ledger for a console that renders promoted
@@ -153,6 +252,7 @@ func (l *Learner) Learn(_ context.Context, ev loop.RecoveryEvidence) error {
 	l.recorded++
 	l.lastErr = nil
 	l.mu.Unlock()
+	l.persist()
 	l.log.Info("crystallize: recovery recorded",
 		slog.String("incident", ev.IncidentID),
 		slog.String("target", ev.Target),
@@ -160,6 +260,31 @@ func (l *Learner) Learn(_ context.Context, ev loop.RecoveryEvidence) error {
 		slog.String("verdict", string(rep.Verdict)),
 		slog.String("reason", rep.Reason))
 	return nil
+}
+
+// persist writes the ledger out after a trial changed it.
+//
+// A failure here is reported and not returned, and the asymmetry is the
+// point. The trial IS recorded — the counters moved, and a draft may have
+// been earned — so returning an error would tell the orchestrator that the
+// learning failed when what actually happened is that the copy failed. The
+// loop treats Learn's error as advisory and would carry on either way, but
+// the health surface reads it, and a health surface that reports "not
+// recorded" for a run that was recorded is worse than one that reports the
+// narrower truth: the run is in memory, and this restart will lose it.
+func (l *Learner) persist() {
+	if l.store == nil {
+		return
+	}
+	if err := l.store.Save(l.ledger.Runs()); err != nil {
+		l.mu.Lock()
+		l.lastErr = err
+		l.mu.Unlock()
+		l.log.Error("crystallize: the trial was recorded but not written out, so a restart will forget it",
+			slog.String("path", l.store.Path()),
+			slog.Any("err", err),
+		)
+	}
 }
 
 func (l *Learner) note(err error) error {
