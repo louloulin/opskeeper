@@ -12964,6 +12964,95 @@ arm 上跑通了，节点 agent 在 arm 上仍然一次都没被验过。**
 编译 PiG」放到**第二个从未在 arm 上跑过的 runner** 上。本轮不这么做的理由写在
 ci.yml 注释里，不留在台账里当免责声明：**它是一条已知缺口，不是已完成**。
 
+### 4.120 决策 187：枚举出七个「没人跑的闸门」，查下去发现我数错了——只有一个是真的，而错的那次判断比找到的那个洞更值得记...
+
+决策 186 的方法（不查自报分数，去查计划自己写下的东西）本轮继续用，但换了个更大的
+问法：**把 Makefile 里所有闸门目标枚举出来，算它们从任何工作流出发的传递可达性。**
+
+结果是 **19 个闸门目标里有 7 个无人触达**：
+
+```
+audit-port-check   crystallize-check   mcp-surface-check   mysql-migration-check
+node-arch-check    plugin-extension-build-check            promptguard-check
+```
+
+**看上去是一次丰收。** 其中三个正对着计划阶段 2 的条目——成本结晶降本、MCP 兼容层、
+注入防护——看起来就像决策 186 那种「有东西、没人按按钮」的翻版。
+
+**然后我把它写进注释之前，先去验了一件事，结论就变了。**
+
+#### 我的第一版结论是错的
+
+`module-standalone-check` 的配方是：
+
+```make
+( cd $$m && GOWORK=off go build ./... && GOWORK=off go test ./... -count=1 )
+```
+
+**它跑每个模块的全量测试，而且是在关掉 workspace 的条件下跑的。** 所以那五个目标
+选中的测试**本来就在 CI 里跑**。它们是「改一个包时只想快跑这一条」的具名快捷方式
+（`plugin-extension-build-check` 的注释就是这么写的：「This target is the fast,
+named way to run just that gate while working on a package」）。
+
+所以我犯的错是：**把「没被当作具名目标调用」当成了「没被运行」。** 一个可达性分析
+只看了工作流调用了什么，没看构建步骤跑了什么测试——而后者才是覆盖率真正的来源。
+这不是一个小失误：它把五条「本来有覆盖」的属性报成了「零覆盖」，如果照抄进台账，
+它会成为一条**方向相反**的记录。
+
+#### 真正的那一个洞
+
+只有一条是真的：**`mysql-migration-check`**。
+
+它的两个测试文件都带 `//go:build integration`：
+
+```
+cmd/opskeeper/migrations_mysql_test.go:1://go:build integration
+core/manager/data/metric/store/migrate_mysql_test.go:1://go:build integration
+```
+
+`go test ./...` **不编译带 build tag 的文件**。所以无论
+`module-standalone-check` 跑多少遍，**整个「迁移在真 MySQL 上跑一遍」的闸门
+在 CI 里的覆盖率是零**——而这个闸门守的是「SQLite 抓不到方言差异」这件唯一靠它
+才抓得到的事。
+
+修法是给它一个真引擎：ci.yml 的 `build-test` 作业加 `services.mysql`（`mysql:8.0`
++ 健康检查），再用 `OPSKEEPER_TEST_MYSQL_DSN` 调起这个目标。**并且先在本地用
+docker 起了一个真 MySQL 跑通才接进 CI**——把一条从没被人看过结果的迁移闸门挂进
+CI，只会得到一个没人读的红。
+
+#### 那五条也不是白改
+
+它们的**真实**缺陷是另一件事：**用根相对路径写，因此在没有 `go.work` 的检出里
+根本跑不起来**（`setup failed`）。`go.work` 是 gitignored 的，所以这意味着：
+
+- 在任何 CI runner 上跑不了；
+- 在任何新克隆上跑不了；
+- **与它们自己的文档相矛盾**——`plugin-extension-build-check` 的描述就写着
+  「按节点的方式构建（GOWORK=off，节点无本地 checkout）」，而它的配方没关
+  workspace。
+
+改成 `cd <模块> && GOWORK=off go test` 之后，六条全部在 CI 形态下绿，且**不再取决于
+检出里有没有 workspace**。
+
+顺带把这六条**登记成具名属性**：`scripts/cigate` 的闸门登记表 **13 → 14**
+（4 条计划 + 10 条决策）。登记的价值不是覆盖——覆盖本来就有——而是**失败时会指向
+这条性质的名字**，而不是几百个包里一个匿名的失败。
+
+#### 这已经是本会话第三次「有 ≠ 兑现」需要收紧
+
+| 轮次 | 初判 | 收紧后 |
+|---|---|---|
+| 184 | 台账五处里错一处 | 错五处（四处跨行，按行搜看不见） |
+| 186 | 两条计划条目没在 CI 兑现 | 两条都成立，其中一条只缺调度 |
+| **187** | **七个闸门零覆盖** | **一个真零覆盖，五条本来有覆盖** |
+
+三次的共同形状：**用一条代理指标代替了直接证据。** 184 用了「按行 grep」代替
+「读整节」，186 用了「工作流有没有这一步」代替「有没有人在按」，187 用了
+「工作流调没调这个目标」代替「构建跑没跑这些测试」。
+
+所以这一条留在这里当方法，不是当结论：**任何覆盖率判断，必须同时看「谁被调用」
+和「谁被执行」两个面，只看一面得到的是方向可能相反的答案。**
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

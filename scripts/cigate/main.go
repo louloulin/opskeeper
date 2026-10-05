@@ -139,6 +139,49 @@ func DecisionGates() []Gate {
 				"twenty-eight down with them (decision 173)",
 		},
 		{
+			Target: "audit-port-check",
+			Why: "the plan's phase 3 line (extract the audit port and undo the iam -> manager " +
+				"reverse dependency) is a property, and a property nothing re-checks is a comment. " +
+				"The gate asserts the port reaches no writer, the vocabulary is closed and rows " +
+				"still land. It was green only where a go.work file existed, and nothing invoked it " +
+				"(decision 187)",
+		},
+		{
+			Target: "crystallize-check",
+			Why: "the plan's phase 2 (crystallise what keeps being fixed) is only real if a " +
+				"promoted pattern loads as a package, a retired one disappears and an unusable " +
+				"trial changes nothing; reading a manifest afterwards cannot show any of the three " +
+				"(decision 187)",
+		},
+		{
+			Target: "mcp-surface-check",
+			Why: "the plan's phase 2 MCP compatibility layer is a wire contract -- handshake, " +
+				"keepalive, pagination and version refusal, plus the late-seam trap where a tool " +
+				"whose seam is set later must stay absent until it is set (decision 187)",
+		},
+		{
+			Target: "promptguard-check",
+			Why: "marking alert text, log bodies and PR descriptions untrusted is a security " +
+				"claim, and the claim rests on four things a comment cannot hold up: a per-render " +
+				"nonce, a closed-list table of foreign tools, the shipped bag fencing exactly that " +
+				"table, and the investigated prompt nesting its payloads (decision 187)",
+		},
+		{
+			Target: "plugin-extension-build-check",
+			Why: "a package can be signed, admitted and rolled out and still fail to build on the " +
+				"node that installs it, because the node resolves modules through published tags " +
+				"and has no checkout; this builds every packaged extension the way a node does " +
+				"(decision 187)",
+		},
+		{
+			Target: "mysql-migration-check",
+			Why: "the migration list is a list of MySQL statements, and the failures that matter " +
+				"are the ones SQLite cannot see -- a statement the deployment engine rejects, or " +
+				"one a migrator was never wired to call. The gate replays the whole list three " +
+				"times on a real mysql:8.0, and it was run against one before it was wired into " +
+				"CI, because a migration gate nobody has ever seen pass is not a gate (decision 187)",
+		},
+		{
 			Target: "e2e-delivery-check",
 			Why: "the last clause of the plan's acceptance line — the node's install directory and " +
 				"its process environment hold no cloud vendor key — has a test and had nothing " +

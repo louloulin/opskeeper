@@ -220,7 +220,7 @@ eval-axes: ## golden case 是否声明了三个诊断轴（能测才算数）
 # a trial that is not evidence has to change nothing — so the gate runs them.
 .PHONY: crystallize-check
 crystallize-check: ## 结晶：晋升 / 退役 / 拒绝不可用输入 / 草稿能过真实校验器
-	go test ./core/manager/biz/aiops/crystallize/ -count=1 -run \
+	cd core/manager && GOWORK=off go test ./biz/aiops/crystallize/ -count=1 -run \
 		'TestTheEmittedDeclarationIsOneAPackageCanLoad|TestThreeCleanVerificationsPromoteAPattern|TestARollbackRetiresAPromotedPattern|TestADraftRefusesToOverwriteAPackage|TestAnUnusableTrialChangesNothing|TestTrialOfBuildsATrialTheLedgerAccepts'
 	@echo "crystallize-check: promotion, retirement, refusal and load-through-admission are green"
 
@@ -232,13 +232,13 @@ crystallize-check: ## 结晶：晋升 / 退役 / 拒绝不可用输入 / 草稿�
 # inside blocks a payload cannot close.
 .PHONY: promptguard-check
 promptguard-check: ## 外来文本进模型前带 nonce 围栏（prompt injection 一条）
-	go test ./core/manager/pkg/promptguard/ -count=1 -run \
+	cd core/manager && GOWORK=off go test ./pkg/promptguard/ -count=1 -run \
 		'TestABodyContainingTheClosingMarkerCannotCloseTheBlock|TestAMarkerWithAStaleIDCannotCloseThisBlock|TestEveryBlockGetsAFreshID|TestMarkerVariantsAreEscaped|TestParseRejectsWhatIsNotABlock|TestTheInstructionNamesTheTagTheFencerWrites|TestTheFenceCannotReachThePlatform'
-	go test ./core/manager/biz/aiops/tools/decorators/ -count=1 -run \
+	cd core/manager && GOWORK=off go test ./biz/aiops/tools/decorators/ -count=1 -run \
 		'TestTheResultIsFencedWithTheToolsOwnName|TestAnAdversarialResultCannotCloseTheFence|TestAnErrorIsNotFenced|TestInfoPassesThrough'
-	go test ./core/manager/biz/aiops/tools/ -count=1 -run \
+	cd core/manager && GOWORK=off go test ./biz/aiops/tools/ -count=1 -run \
 		'TestTheTableHasNoBlankOrDuplicateRows|TestLookupAgreesWithTheTable|TestMarkUntrustedOutputs|TestEveryNameInTheTableIsFencedInTheShippedBag|TestTheShippedBagFencesRatherThanJustWraps'
-	go test ./core/manager/biz/loop/ -count=1 -run \
+	cd core/manager && GOWORK=off go test ./biz/loop/ -count=1 -run \
 		'TestTheInvestigatedPromptMarksItsForeignBlocks|TestPayloadTextCannotCloseTheInvestigatedFence'
 	@echo "promptguard-check: per-render markers, closed-list table, shipped bag and investigated prompt are green"
 
@@ -251,9 +251,9 @@ promptguard-check: ## 外来文本进模型前带 nonce 围栏（prompt injectio
 # call (including the three whose seams are set last).
 .PHONY: mcp-surface-check
 mcp-surface-check: ## MCP 对外协议面：握手、保活、分页、可见性
-	go test ./core/manager/server/mcp/ -count=1 -run \
+	cd core/manager && GOWORK=off go test ./server/mcp/ -count=1 -run \
 		'TestOurOwnClientCanDriveOurOwnServer|TestPingIsTheEmptyReplyTheSpecDefines|TestInitializeEchoesTheRevisionTheClientAskedFor|TestInitializeStatesTheBoundary|TestEveryNotificationIsAcceptedWithoutABody|TestAStockMCPClientWithoutTheFleetVersionHeaderIsAccepted|TestAStatedForeignVersionIsStillRefused|TestToolsListPagesAndHandsBackACursor|TestAnUnparseableCursorIsAnErrorNotAPageOneRestart'
-	go test ./core/manager/biz/aiops/tools/ -count=1 -run 'TestAToolWhoseSeamIsSetLaterIsAbsentUntilItIsSet'
+	cd core/manager && GOWORK=off go test ./biz/aiops/tools/ -count=1 -run 'TestAToolWhoseSeamIsSetLaterIsAbsentUntilItIsSet'
 	@echo "mcp-surface-check: handshake, keepalive, pagination, visibility and the late-seam trap are green"
 
 # The audit port is a claim about a *boundary*, and the two places that
@@ -270,13 +270,29 @@ mcp-surface-check: ## MCP 对外协议面：握手、保活、分页、可见性
 # table is the difference between a boundary and a convention — it is how
 # the next domain that reaches for the writer finds out before review.
 .PHONY: audit-port-check
+# The five targets below are written the way a node builds: `cd <module> &&
+# GOWORK=off go test ./<pkg>/`. They used to be root-relative (`go test
+# ./core/manager/...`), which resolves only through a go.work file — and go.work
+# is gitignored, so a checkout without one (a CI runner, a fresh clone, anyone
+# following `module-standalone-check`'s own advice to verify without a
+# workspace) made every one of them fail with "setup failed", a message that
+# reads like a broken package rather than an unresolvable path.
+#
+# What that fix is NOT: closing a coverage hole. The tests these targets select
+# already run in CI, because module-standalone-check runs each module's whole
+# suite with the workspace off, and these targets are the fast, named way to
+# run one gate while working on it. Claiming otherwise was wrong, and
+# `mysql-migration-check` — which is behind //go:build integration and
+# therefore genuinely compiled by nothing in CI — is the one that had no
+# coverage at all. See decision 187.
+
 audit-port-check: ## 审计端口：iam 不再反向依赖 manager，词表闭合，行照常落库
-	go test ./core/manager/iam/server/ -count=1 -run \
+	cd core/manager && GOWORK=off go test ./iam/server/ -count=1 -run \
 		'TestThisContextReachesNothingAboveItself|TestEveryAuditRowThisContextEmitsIsNamedThroughThePort|TestTheArchitectureRulesGrantThisContextNothingAboveIt'
-	go test ./core/manager/pkg/audit/ -count=1 -run \
+	cd core/manager && GOWORK=off go test ./pkg/audit/ -count=1 -run \
 		'TestTheSlotSurvivesEveryContextRewrap|TestOutsideAMiddlewareChainNothingIsRemembered|TestThePortCannotReachTheLedger|TestTheVocabularyIsWellFormed|TestOnlyTheThroatHoldsTheWriter|TestNoDomainOutsideTheListsReachesTheWriter'
-	go test ./core/manager/model/audit/ -count=1 -run 'TestTheReExportCoversTheWholeVocabulary'
-	go test ./core/manager/server/middleware/ -count=1 -run \
+	cd core/manager && GOWORK=off go test ./model/audit/ -count=1 -run 'TestTheReExportCoversTheWholeVocabulary'
+	cd core/manager && GOWORK=off go test ./server/middleware/ -count=1 -run \
 		'TestTheRowAHandlerAsksForIsTheRowTheLedgerGets|TestAnUnannotatedRequestIsNotAudited|TestAFailingRequestIsAuditedAsAFailure'
 	@echo "audit-port-check: the port is BC-free, the vocabulary is closed, only the declared holders reach the writer, the grant is gone and rows still land"
 
@@ -305,7 +321,7 @@ mysql-migration-check: ## 迁移在真 MySQL 上跑一遍（SQLite 抓不到方�
 		echo "mysql-migration-check: set OPSKEEPER_TEST_MYSQL_DSN to a scratch MySQL DSN"; \
 		echo "  e.g. opskeeper:opskeeper@tcp(127.0.0.1:13306)/opskeeper_migtest?parseTime=true"; \
 		exit 1; }
-	go test -tags=integration ./core/manager/data/metric/store/ -count=1
+	cd core/manager && GOWORK=off go test -tags=integration ./data/metric/store/ -count=1
 	go test -tags=integration ./cmd/opskeeper/ -count=1 -run 'TestTheManagerSchemaReplays|TestThePassesActuallyBuiltASchema|TestEveryMigratorIsCalledOnEveryBoot'
 	@echo "mysql-migration-check: the whole migration list runs three times on the dialect the deployment uses"
 
@@ -503,7 +519,7 @@ module-standalone-check: ## 关掉 workspace 与代理，按发布条件构建�
 # module-standalone-check. This target is the fast, named way to run just
 # that gate while working on a package.
 plugin-extension-build-check: ## 按节点的方式构建每个打包扩展（GOWORK=off，节点无本地 checkout）
-	@go test ./core/floor/pluginmanifest/ -count=1 -run 'TestEveryPackaged'
+	@cd core/floor && GOWORK=off go test ./pluginmanifest/ -count=1 -run 'TestEveryPackaged'
 	@echo "plugin-extension-build-check: every packaged extension builds the way a node builds it"
 
 pig-dev-pin: ## 本地改 PiG 时用：make pig-dev-pin PIG_DEV_PATH=/path/to/PiG

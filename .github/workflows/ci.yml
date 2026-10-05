@@ -62,7 +62,28 @@ jobs:
   build-test:
     name: build + vet + test
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
+
+    # SQLite cannot see a dialect difference, which is the whole reason this
+    # container is here: the migration list is a list of MySQL statements, and
+    # the failure mode that matters — a statement MySQL accepts and SQLite
+    # silently tolerates, or the reverse — is invisible until it runs on the
+    # engine the deployment actually uses.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: opskeeper
+          MYSQL_DATABASE: opskeeper_migtest
+          MYSQL_USER: opskeeper
+          MYSQL_PASSWORD: opskeeper
+        ports:
+          - '3306:3306'
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uopskeeper -popskeeper"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
 
     steps:
       - name: Checkout
@@ -104,6 +125,39 @@ jobs:
 
       - name: Golden-corpus and diagnostic-axis gates
         run: make eval-gates
+
+      # These five are the plan's phase-2 and phase-3 properties by name:
+      # cost crystallisation, the MCP protocol surface, prompt-injection
+      # fencing, the audit port, and building a package the way a node builds
+      # it. module-standalone-check already ran every one of their tests, so
+      # this step is not new coverage — it is the properties being *named* at
+      # the point of failure instead of failing as one anonymous package among
+      # several hundred, and it is what lets scripts/cigate hold them. Each now
+      # builds the way a node builds (cd <module> && GOWORK=off go test), so it
+      # also works on a checkout that has no go.work — which the root-relative
+      # form did not, on this runner or any fresh clone.
+      - name: Audit port is bounded-context free
+        run: make audit-port-check
+
+      - name: Crystallization promotion and retirement
+        run: make crystallize-check
+
+      - name: MCP protocol surface
+        run: make mcp-surface-check
+
+      - name: Foreign text is fenced before it reaches the model
+        run: make promptguard-check
+
+      - name: Packaged extensions build the way a node builds them
+        run: make plugin-extension-build-check
+
+      # Verified against a real mysql:8.0 before it was wired here, because a
+      # migration gate added to CI without ever having been run is a gate that
+      # reports a verdict nobody has seen.
+      - name: Migrations replay on the dialect the deployment uses
+        env:
+          OPSKEEPER_TEST_MYSQL_DSN: opskeeper:opskeeper@tcp(127.0.0.1:3306)/opskeeper_migtest?parseTime=true
+        run: make mysql-migration-check
 
       - name: Broker version pins agree
         run: make broker-pin-check
