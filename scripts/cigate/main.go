@@ -139,6 +139,15 @@ func DecisionGates() []Gate {
 				"twenty-eight down with them (decision 173)",
 		},
 		{
+			Target: "e2e-delivery-check",
+			Why: "the last clause of the plan's acceptance line — the node's install directory and " +
+				"its process environment hold no cloud vendor key — has a test and had nothing " +
+				"that triggered it, so it had been reporting on nothing since decision 132 parked " +
+				"it behind the broker container. It stays off the per-push job (a Docker Hub rate " +
+				"limit must not block a pull request) and runs nightly in the `delivery` job " +
+				"instead (decision 186)",
+		},
+		{
 			Target: "broker-pin-check",
 			Why: "every file that names the frontier broker names one version, and the shipped " +
 				"spelling (v1.2.5) and the pulled spelling (1.2.5) agree; the release and the " +
@@ -158,7 +167,7 @@ func DecisionGates() []Gate {
 // docker daemon and a real broker container, which is precisely what the
 // fast unit/compile job excludes.
 var NotInCI = map[string]string{
-	"node holds no cloud vendor key (directory + process environment)":  "an e2e assertion: it needs docker and a real broker container, so it lives in make e2e-delivery-check rather than the unit job. See decision 132.",
+	"node holds no cloud vendor key (directory + process environment)":  "an e2e assertion: it needs docker and a real broker container, so it cannot join the per-push job without letting a Docker Hub rate limit block a pull request. It is not absent from CI, though — it runs nightly in the `delivery` job (make e2e-delivery-check), which is where decision 132 put it and where it now has something that triggers it. See decision 132 and decision 186.",
 	"release metadata still describes this commit (make version-check)": "a release-time assertion, not a per-push one: it compares RELEASE_VERSION.json's web_hash and teamharness_source_tree against `git rev-parse HEAD:<tree>`, so it can only be green on the commit that was actually signed. Run on every push it was red by construction AND sat in front of the open-source gate, so a private path or a credential about to ship was never checked at all; it now runs in .github/workflows/release.yml, where its comparisons mean something. See decision 166.",
 }
 

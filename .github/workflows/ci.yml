@@ -37,6 +37,15 @@ on:
   # needs a way to be started on purpose; verifying a fix on a push is one
   # of the two reasons this repository reached 164 with a red gate.
   workflow_dispatch:
+  # Nightly, for the delivery job below. The plan's acceptance list ends with
+  # "the node holds no cloud vendor key", and that assertion lives in
+  # make e2e-delivery-check, which nothing triggered: decision 132 parked it
+  # behind the broker container because a registry rate limit must not be able
+  # to block a pull request. Parking it is right; leaving it with no schedule
+  # at all is not, because a job nothing runs reports on nothing. 03:17 UTC is
+  # deliberately off the hour.
+  schedule:
+    - cron: '17 3 * * *'
 
 permissions:
   contents: read
@@ -117,8 +126,35 @@ jobs:
         run: make verify-plugins PYTHON=python3
 
   e2e:
-    name: end-to-end suite
-    runs-on: ubuntu-24.04
+    name: end-to-end suite (${{ matrix.arch }})
+    # The plan's section 6 asks for a full end-to-end run on both
+    # architectures, and release.yml has been packaging linux/arm64 since it
+    # started packaging anything. A release binary built on one architecture and
+    # a suite that only ever ran on another is the gap that requirement was
+    # written to close, so the suite runs on both now.
+    #
+    # The arm64 leg is a real run and not a build: ubuntu-24.04-arm is an arm
+    # machine, testcontainers pulls the arm64 manifest of mysql:8.0, and the
+    # suite compiles and starts the manager natively.
+    #
+    # What it does NOT cover, stated here so nobody reads more into it than is
+    # there: these twenty-eight tests never build the node's pig agent — only
+    # make e2e-delivery-check does, and it compiles it from source in
+    # core/pig (CGO_ENABLED=0) rather than downloading one. So the arm64 leg
+    # is the manager suite on arm, and the node agent on arm is still not
+    # exercised anywhere. Closing that would mean matrixing the delivery job
+    # too, which puts a public-registry broker pull and a cold PiG build on a
+    # second runner for a test nobody has ever run on arm; it is left as the
+    # next cut rather than shipped as a red nightly. See decision 186.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     # The suite brings up one MySQL container and a manager process per test.
     # Cold it is a pull plus build; warm locally it is under a minute. Twenty
     # minutes is headroom for a cold runner, not an expectation.
@@ -141,3 +177,33 @@ jobs:
       # equal to the set of tests that actually call testenv.SharedFrontier.
       - name: End-to-end suite
         run: make e2e-manager-check
+
+  delivery:
+    # The plan's acceptance list ends with "the node holds no cloud vendor
+    # key", and that assertion has a home — make e2e-delivery-check, which
+    # walks the edge's install directory and the process environment of a
+    # running pig. It had no schedule: decision 132 parked it because it
+    # needs the broker container, and a job nothing triggers is a job that
+    # reports on nothing.
+    #
+    # Nightly rather than per-push, for the same reason it was parked: the
+    # broker image comes from a public registry, and a rate limit should not
+    # be able to block a pull request. It is allowed to go red here, because
+    # a nightly failure is information and a red PR is an obstacle.
+    name: node delivery (broker, nightly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Node delivery and no-cloud-credential assertions
+        run: make e2e-delivery-check
