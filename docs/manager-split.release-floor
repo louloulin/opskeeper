@@ -13,9 +13,9 @@
 # 三份的实测价：
 #
 #   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed          104          42         3 / 4
-#   docs/manager-split.constrained       116          30         0 / 4
-#   docs/manager-split.release-floor     117          29         0 / 4
+#   docs/manager-split.proposed          104          41         3 / 4
+#   docs/manager-split.constrained       116          29         0 / 4
+#   docs/manager-split.release-floor     117          28         0 / 4
 #
 # 三份都合法的那两份里，本文件最便宜；而它便宜不是巧合，见下。
 #
@@ -62,7 +62,7 @@
 #
 # —— 为什么它是最便宜的那一份 ——
 #
-# 28 条跨组 import，比 constrained 的 30 还少两条。这不是巧合，也不是意外：
+# 28 条跨组 import，比 constrained 的 29 还少一条。这不是巧合，也不是意外：
 # 零入度的域**按定义**就是那些不 import 别人的域，把它们各自单成一组，
 # 它们向外的每一条边都会变成跨组边——所以这个分组是**唯一一种可能不是最省的**
 # 才对。

@@ -1518,7 +1518,11 @@ func main() {
 		webshellStreamerAdapter{c: fbClient},
 		webshellRouter,
 		webshellAuditAdapter{repo: webshellAuditRepo},
-		deviceRepo,
+		// The junction repo, not deviceRepo: which edge owns a device is a
+		// fact the edge_devices table owns, and the edge row's device_id is
+		// only a convenience copy of it. The previous wiring passed
+		// deviceRepo, which this handler stored and never read.
+		edgeDeviceRepo,
 		edgeRepo,
 		log.With(slog.String("comp", "webshell")),
 	)

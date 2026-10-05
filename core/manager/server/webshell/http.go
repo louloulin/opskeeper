@@ -32,13 +32,12 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
 
-	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	bizwebshell "github.com/vincent-wuhan/opskeeper/core/manager/biz/webshell"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	bizwebshell "github.com/vincent-wuhan/opskeeper/core/manager/biz/webshell"
+	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
+	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
 )
 
 // AuthzMW is the narrow casbin middleware contract.
@@ -52,17 +51,34 @@ type Streamer interface {
 	OpenStream(ctx context.Context, edgeID uint64) (io.ReadWriteCloser, error)
 }
 
-// DeviceRepo just resolves device existence + ensures the caller
-// targets a real device id.
-type DeviceRepo = devicebiz.Repo
+// DeviceLinks resolves the edge that owns a device.
+//
+// It is the junction (edge_devices), which is the source of truth for that
+// relation. The edge row also carries a device_id column, but the store
+// itself calls it a convenience pointer kept in sync by SetDeviceID — and
+// two copies of one fact is one more than a lookup needs.
+type DeviceLinks interface {
+	LookupEdgeForDevice(ctx context.Context, deviceID uint64, t devicemodel.EdgeDeviceRelationType) (uint64, error)
+}
+
+// EdgeStatusLookup is the whole of what this handler needs from the edge
+// domain: given an edge id, is that agent online right now?
+//
+// Fifteen methods were available here before, and the handler used one of
+// them in a way that was wrong — see resolveEdge below. Narrowing the port
+// to the question actually being asked is what made the wrong answer
+// impossible to keep writing.
+type EdgeStatusLookup interface {
+	GetByID(ctx context.Context, id uint64) (*edgemodel.Edge, error)
+}
 
 // Handler bundles dependencies. *Handler is constructed once at boot.
 type Handler struct {
 	streamer Streamer
 	router   *bizwebshell.Router
 	audit    bizwebshell.Recorder
-	devices  DeviceRepo
-	edges    edgebiz.Repo
+	links    DeviceLinks
+	edges    EdgeStatusLookup
 	authz    AuthzMW
 	log      *slog.Logger
 	upgrader websocket.Upgrader
@@ -70,7 +86,7 @@ type Handler struct {
 
 // NewHandler builds the HTTP handler.
 func NewHandler(streamer Streamer, router *bizwebshell.Router, audit bizwebshell.Recorder,
-	devices DeviceRepo, edges edgebiz.Repo, log *slog.Logger,
+	links DeviceLinks, edges EdgeStatusLookup, log *slog.Logger,
 ) *Handler {
 	if log == nil {
 		log = slog.Default()
@@ -79,7 +95,7 @@ func NewHandler(streamer Streamer, router *bizwebshell.Router, audit bizwebshell
 		streamer: streamer,
 		router:   router,
 		audit:    audit,
-		devices:  devices,
+		links:    links,
 		edges:    edges,
 		log:      log,
 		upgrader: websocket.Upgrader{
@@ -152,6 +168,55 @@ type ctlMsg struct {
 	Rows uint16 `json:"rows,omitempty"`
 }
 
+// resolveEdge answers the only two questions this handler asks about a
+// device: which edge owns it, and is that agent online.
+//
+// It used to ask them the wrong way. The code was
+//
+//	edges, _ := h.edges.List(ctx, edgebiz.ListFilter{Limit: 1000})
+//	for _, e := range edges { if e.DeviceID != nil && *e.DeviceID == deviceID && ... }
+//
+// — list the newest thousand edges and find the one belonging to this device
+// in Go. That is correct for a fleet of ten and silently wrong for a fleet
+// of one thousand and one: the target is not in the page, the loop finds
+// nothing, and the operator is told "device offline or unknown" about a host
+// that is answering heartbeats. The message is the worst part, because it
+// sends the reader to check the host instead of checking the fleet size.
+//
+// Both answers have an index behind them. The junction lookup is a single
+// row read, and the status read is a primary key read, so the cost no longer
+// depends on how many edges exist — which is the only property a lookup is
+// supposed to have.
+//
+// A device with no edge, an edge that is not online, and an edge whose row
+// has gone away all come back as an error, because the handler's contract
+// with the browser is one 503 and the distinct reasons are logged. Collapsing
+// them into a single wire response is deliberate; the information is not lost,
+// it just stops being the operator's only clue.
+func (h *Handler) resolveEdge(ctx context.Context, deviceID uint64) (uint64, error) {
+	if h.links == nil || h.edges == nil {
+		return 0, errors.New("webshell: edge lookup is not wired")
+	}
+	edgeID, err := h.links.LookupEdgeForDevice(ctx, deviceID, devicemodel.EdgeDeviceRelationHost)
+	if err != nil {
+		return 0, fmt.Errorf("no edge registered for device: %w", err)
+	}
+	if edgeID == 0 {
+		return 0, errors.New("no edge registered for device")
+	}
+	edge, err := h.edges.GetByID(ctx, edgeID)
+	if err != nil {
+		return 0, fmt.Errorf("read edge %d: %w", edgeID, err)
+	}
+	if edge == nil {
+		return 0, fmt.Errorf("edge %d is gone", edgeID)
+	}
+	if edge.Status != edgemodel.StatusOnline {
+		return 0, fmt.Errorf("edge %d is %s", edgeID, edge.Status)
+	}
+	return edgeID, nil
+}
+
 // openShell is the WS upgrade handler.
 func (h *Handler) openShell(w http.ResponseWriter, r *http.Request) {
 	tenant, ok := tenantctx.From(r.Context())
@@ -165,21 +230,11 @@ func (h *Handler) openShell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find an online edge bound to this device.
-	edges, err := h.edges.List(r.Context(), edgebiz.ListFilter{Limit: 1000})
+	edgeID, err := h.resolveEdge(r.Context(), deviceID)
 	if err != nil {
-		writeErr(w, fmt.Errorf("list edges: %w", err))
-		return
-	}
-	var edge *edgemodel.Edge
-	for _, e := range edges {
-		if e.DeviceID != nil && *e.DeviceID == deviceID && e.Status == edgemodel.StatusOnline {
-			edge = e
-			break
-		}
-	}
-	if edge == nil {
 		http.Error(w, "device offline or unknown", http.StatusServiceUnavailable)
+		h.log.Info("webshell: no online edge for device",
+			slog.Uint64("device_id", deviceID), slog.String("reason", err.Error()))
 		return
 	}
 
@@ -239,7 +294,7 @@ func (h *Handler) openShell(w http.ResponseWriter, r *http.Request) {
 		OpskeeperUserID: tenant.UserID,
 		SSHUser:         openFrame.SSHUser,
 		DeviceID:        deviceID,
-		EdgeID:          edge.ID,
+		EdgeID:          edgeID,
 		ClientIP:        clientIP(r),
 		StartedAt:       startedAt,
 	}); err != nil {
@@ -252,7 +307,7 @@ func (h *Handler) openShell(w http.ResponseWriter, r *http.Request) {
 		OpskeeperUserID: tenant.UserID,
 		SSHUser:         openFrame.SSHUser,
 		DeviceID:        deviceID,
-		EdgeID:          edge.ID,
+		EdgeID:          edgeID,
 		StartedAt:       startedAt,
 		LastInputAt:     startedAt,
 	})
@@ -260,7 +315,7 @@ func (h *Handler) openShell(w http.ResponseWriter, r *http.Request) {
 
 	// Open frontier stream to the edge with target meta.
 	streamCtx, cancelStreamOpen := context.WithTimeout(r.Context(), 10*time.Second)
-	stream, err := h.streamer.OpenStream(streamCtx, edge.ID)
+	stream, err := h.streamer.OpenStream(streamCtx, edgeID)
 	cancelStreamOpen()
 	if err != nil {
 		h.closeAudit(sid, br, 0, wsmodel.TerminatedByDisconnect)

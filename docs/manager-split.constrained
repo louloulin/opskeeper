@@ -34,8 +34,8 @@
 # 预期是「更贵」——多三个域进 core，它们各自还有别的出边。结果是**更便宜**：
 #
 #   候选                              组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed          104          42         3 / 4
-#   docs/manager-split.constrained       116          30         0 / 4
+#   docs/manager-split.proposed          104          41         3 / 4
+#   docs/manager-split.constrained       116          29         0 / 4
 #
 # 机制不难理解，但方向值得写清楚，因为它是本文件存在的全部理由：
 # 那三个域不是跨组边的**消费者**，是**生产者**。它们在 apps，而它们依赖的东西
@@ -49,7 +49,7 @@
 # 变成了缝——而决策 227 之后这个代价是零：`frontierbound -> metric` 那一条
 # 已经被切掉，端口搬到了 `core/floor/tunnel` 的 `HostMetricPoint` 旁边，
 # 于是 `frontierbound` 一条指向 apps 的边都不剩。
-# 净账是 42 → 30，少 12 条缝，而 30 这个数是实测的：`make split-cost
+# 净账是 42 → 29，少 13 条缝，而 29 这个数是实测的：`make split-cost
 # FILE=docs/manager-split.constrained`。
 #
 # **所以那份提案是在付更高的价，去买一个它自己禁止买的性质。** 这不是「两个
