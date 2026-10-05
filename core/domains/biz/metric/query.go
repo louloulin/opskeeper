@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/metric"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 

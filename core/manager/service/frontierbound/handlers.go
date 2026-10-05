@@ -11,13 +11,13 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	changeeventbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge/changeevent"
-	metricbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/metric"
 )
 
 // PromwriteIngester is the narrow surface the push_prom_samples handler
 // needs from core/manager/biz/promwrite. Declared here as an interface
-// so this package does not import the biz package directly (matches the
-// MetricIngester pattern). A nil value means Prom is disabled - the
+// so this package does not import the biz package directly (MetricIngester
+// below does the same thing one level down, by holding a port rather than a
+// domain type). A nil value means Prom is disabled - the
 // handler still installs but silently 200s so edges back off cleanly.
 //
 // Post-split (May 2026): the deviceID arg is the host device id resolved
@@ -42,7 +42,7 @@ type DeviceResolver interface {
 type Wiring struct {
 	EdgeAuthn      *edgebiz.AccessKeyAuthenticator
 	EdgeUC         *edgebiz.Usecase
-	MetricIngester metricbiz.IngestService
+	MetricIngester tunnel.HostMetricIngest
 	// PromIngester is optional - nil means Prom is disabled. When nil the
 	// push_prom_samples handler still installs but silently accepts and
 	// drops every batch so edges (which don't know the cloud's Prom state)

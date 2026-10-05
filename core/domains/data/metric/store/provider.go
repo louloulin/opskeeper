@@ -3,7 +3,7 @@ package store
 import (
 	"gorm.io/gorm"
 
-	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/metric"
+	biz "github.com/vincent-wuhan/opskeeper/core/domains/biz/metric"
 )
 
 // NewBizWriter returns the biz.Writer interface value, used at wire time

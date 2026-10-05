@@ -164,9 +164,17 @@ var edges = map[edge]string{
 
 	{"flow", "scheduler"}: "a flow step schedules work through the scheduler domain",
 
-	{"frontierbound", "audit"}:  "autonomy replay writes the decisions a node made on its own back into the chain when the tunnel returned (decision 101)",
-	{"frontierbound", "edge"}:   "the frontier is the tunnel's node-facing side: it reads node state and change events",
-	{"frontierbound", "metric"}: "the tunnel heartbeat answers carry metric snapshots",
+	{"frontierbound", "audit"}: "autonomy replay writes the decisions a node made on its own back into the chain when the tunnel returned (decision 101)",
+	{"frontierbound", "edge"}:  "the frontier is the tunnel's node-facing side: it reads node state and change events",
+	// The frontierbound -> metric edge is gone (decision 227), and the
+	// reason it was declared is worth keeping next to the absence: the
+	// tunnel handler held metric.IngestService, but the composition root
+	// has been passing alert.NewNoopHostMetricIngester for a while, because
+	// push_host_metrics survives only for legacy edges while every
+	// host-metric alert is a metric_raw rule the pipeline evaluates on its
+	// own ticker. The edge was being paid for a choice made elsewhere. The
+	// port now lives in core/floor/tunnel next to HostMetricPoint, which is
+	// what let the handler name the call without naming the domain.
 
 	{"federationlink", "federation"}: "the root side of the cluster channel holds the table of which authenticated caller may act for which child, and it answers that question by asking the federation domain's registry. One direction: the registry does not import the link, because whether a cluster exists is the registry's judgement and reaching a cluster is the link's job (decision 123)",
 

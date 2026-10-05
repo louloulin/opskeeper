@@ -11,8 +11,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/metric"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
 )
 
 // fakeWriter is a Writer whose WriteRaw / WriteDeadLetter behaviour is

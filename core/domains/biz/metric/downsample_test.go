@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/metric"
 )
 
 // dsReader is a fakeReader specialised for downsample tests. It captures

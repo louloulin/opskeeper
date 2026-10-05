@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/metric"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
+	biz "github.com/vincent-wuhan/opskeeper/core/domains/biz/metric"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/metric"
 )
 
 // fakeSvc records the RangeQuery it received and returns a configured

@@ -12,7 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/metric"
+	biz "github.com/vincent-wuhan/opskeeper/core/domains/biz/metric"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 

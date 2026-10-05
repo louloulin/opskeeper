@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/metric"
 )
 
 // newRawDB opens an in-memory DB holding a host_metrics_raw table in its

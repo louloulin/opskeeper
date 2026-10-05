@@ -5,7 +5,7 @@ import (
 
 	"gorm.io/gorm"
 
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/metric"
 )
 
 // legacyRawIndex is the non-unique (edge_id, ts) index the raw table carried

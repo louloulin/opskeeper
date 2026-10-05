@@ -6,8 +6,8 @@ import (
 
 	"gorm.io/gorm"
 
-	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/metric"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
+	biz "github.com/vincent-wuhan/opskeeper/core/domains/biz/metric"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/metric"
 )
 
 // Reader is the GORM-backed biz.Reader implementation.

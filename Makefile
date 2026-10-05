@@ -313,7 +313,7 @@ audit-port-check: ## 审计端口：iam 不再反向依赖 manager，词表闭�
 # 决策 126 之后试图把 manager 真正跑起来，boot 第二遍时死在一条迁移上：
 #   DELETE FROM t WHERE id NOT IN (SELECT MIN(id) FROM t GROUP BY ...)
 # 这句话 SQLite 接受，MySQL 直接报 1093。而这条迁移的测试**只有 SQLite**
-# （core/manager/data/metric/store/migrate_test.go 用 glebarez/sqlite），
+# （core/domains/data/metric/store/migrate_test.go 用 glebarez/sqlite），
 # 于是它带着一条绿测试发布，然后在第二次启动时炸——因为 dedupeRaw 在表还
 # 不存在时会提前返回，第一次启动根本走不到那句。
 #
@@ -333,7 +333,7 @@ mysql-migration-check: ## 迁移在真 MySQL 上跑一遍（SQLite 抓不到方�
 		echo "mysql-migration-check: set OPSKEEPER_TEST_MYSQL_DSN to a scratch MySQL DSN"; \
 		echo "  e.g. opskeeper:opskeeper@tcp(127.0.0.1:13306)/opskeeper_migtest?parseTime=true"; \
 		exit 1; }
-	cd core/manager && GOWORK=off go test -tags=integration ./data/metric/store/ -count=1
+	cd core/domains && GOWORK=off go test -tags=integration ./data/metric/store/ -count=1
 	go test -tags=integration ./cmd/opskeeper/ -count=1 -run 'TestTheManagerSchemaReplays|TestThePassesActuallyBuiltASchema|TestEveryMigratorIsCalledOnEveryBoot'
 	@echo "mysql-migration-check: the whole migration list runs three times on the dialect the deployment uses"
 
@@ -359,7 +359,7 @@ integration-check: ## integration build tag 下的全部测试（默认 go test 
 		echo "  e.g. opskeeper:opskeeper@tcp(127.0.0.1:13306)/opskeeper_migtest?parseTime=true"; \
 		exit 1; }
 	cd core/manager && GOWORK=off go test -tags=integration ./agentteams/ -count=1
-	cd core/manager && GOWORK=off go test -tags=integration ./data/metric/store/ -count=1
+	cd core/domains && GOWORK=off go test -tags=integration ./data/metric/store/ -count=1
 	go test -tags=integration ./cmd/opskeeper/ -count=1
 	@echo "integration-check: every test behind //go:build integration has run against a real MySQL"
 

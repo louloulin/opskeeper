@@ -417,12 +417,14 @@ deps:
       - shared_knowledge
       - shared_pkg
       - oxfloor
-  manager_model:
-    # 决策 109 给这里挂过 shared_pkg，理由是 model/audit 的词表是
-    # core/base/pkg/audit 的常量别名。决策 226 把 model/audit 整个抬去了
-    # core/domains，这条授权的唯一使用者跟着走了，于是它死了——**死的
-    # 是边，不是理由**：别名仍然只有一处定义，只是不再由这一层说。
-    mayDependOn: [oxfloor]
+  # manager_model 现在不依赖任何东西。决策 109 给它挂过 shared_pkg（model/audit
+  # 的词表是 core/base/pkg/audit 的常量别名），决策 226 抬走了 model/audit，
+  # 决策 227 又抬走了 model/metric——它是这一层唯一认得 core/floor 的文件，
+  # 因为指标行存的正是一份 tunnel 线上类型。两条授权于是先后死了，**死的
+  # 是边，不是理由**：别名仍然只有一处定义，指标行仍然只认那一个类型，
+  # 只是都不再由这一层说。按 decision 99 的老规矩，依赖为零要**省略整块**
+  # 而不是写 `mayDependOn: []`——go-arch-lint 的 spec 校验把空表读成
+  # 格式错误，然后拒绝运行整份文件。
 
   # ---------------- edge module (was the edgeagent BC) ----------------
   # These four components are the node plane's own layers. They no longer
@@ -737,7 +739,11 @@ deps:
   # wide on purpose — the DTO layer of the release floor may name a row, and
   # nothing else.
   oxdomains_model:
+    # 决策 227 加的 floor 一项：model/metric 的指标行存的是一份 tunnel 线上
+    # 类型（HostMetricPoint 的存储形态）。这不是「模型层认得了一个域」，是
+    # 它认得**自己存的那个词**——而那个词属于传输层，不属于任何一个域。
     mayDependOn:
+      - oxfloor
       - shared_pkg
 
   oxdomains_server:
@@ -762,6 +768,7 @@ deps:
   # systemupgrade, and neither reaches for floor.
   oxdomains_service:
     mayDependOn:
+      - oxdomains_biz
       - oxcore_domain
       - oxcore_ports
       - oxfloor

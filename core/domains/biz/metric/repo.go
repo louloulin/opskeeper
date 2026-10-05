@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/metric"
 )
 
 // Writer persists host metrics. Implemented in

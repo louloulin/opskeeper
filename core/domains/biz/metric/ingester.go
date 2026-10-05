@@ -8,8 +8,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/metric"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/metric"
 )
 
 // Ingester batches incoming samples and flushes them to the Writer every
@@ -37,10 +37,20 @@ type Ingester struct {
 }
 
 // IngestService is the narrow contract the tunnel-side handler consumes.
-// The service package re-exports the same method set.
-type IngestService interface {
-	Push(ctx context.Context, edgeID uint64, points []tunnel.HostMetricPoint) error
-}
+//
+// It is an alias rather than a second declaration, and the difference is the
+// point: the port now lives in core/floor/tunnel next to the message it
+// moves, so a handler can hold it without naming this domain. An alias keeps
+// that one identity — a value satisfying either name satisfies both, and a
+// future edit to the method set cannot leave two interfaces that look
+// interchangeable and are not.
+type IngestService = tunnel.HostMetricIngest
+
+// Compile-time proof that the implementation still satisfies the port the
+// tunnel handler holds. Without this line the alias would typecheck while
+// Push drifted, and the failure would surface as a wiring error in
+// cmd/opskeeper rather than here.
+var _ IngestService = (*Ingester)(nil)
 
 // Defaults
 const (
