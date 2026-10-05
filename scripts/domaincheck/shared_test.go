@@ -9,11 +9,13 @@ import (
 // TestTheSameNameSeveralOwnersListIsReal is the assertion behind the report's
 // most useful column.
 //
-// Four symbols in this tree are selected by more than one domain and declared
-// by more than one domain: `Event`, `Rule`, `Usecase`, `Caller`. Each of those
-// is two or more unrelated types that happen to share a name — alert.Event is
-// not audit.Event, marketplace.Caller carries a TenantID that skill.Caller
-// does not.
+// Four symbols in this tree were selected by more than one domain and reached
+// by more than one: `Event`, `Rule`, `Usecase`, `Caller`. Each of those was two
+// or more unrelated types that happen to share a name — alert.Event is not
+// audit.Event, marketplace.Caller carries a TenantID that skill.Caller does
+// not. Two are still true, and the note below says why the other two left,
+// because the two ways out look the same from the outside and call for
+// opposite next steps.
 //
 // That makes them the most dangerous entries in the shared-symbol list, and
 // the reason a shared-symbol ranking cannot be acted on by sorting it. A move
@@ -34,6 +36,32 @@ import (
 // the failure message below says which one happened — the earlier version
 // reported both as "now has a single declaring domain", which was wrong for
 // the case that actually occurred.
+//
+// Decision 259 removed the last two, and both need the word "targets" pinned
+// down first, because reading it wrong here is how a reader concludes a
+// parallel copy went away when it did not. `targets` is the set of domains the
+// CONSUMERS reach into, not a census of who declares the name anywhere in the
+// tree: a domain selecting its own type is skipped (from == to), so a parallel
+// copy living inside a consuming domain is invisible to this column.
+//
+//   - `Rule` went from three consumers and two targets to two consumers and
+//     one. The consumer that made it ambiguous was the `aiopsconfig` domain,
+//     which reached into `aiops` for `alertconfig.Rule` — the parallel copy
+//     that `service/alert.Rule` also answers to. Moving that adapter to the
+//     composition root removed the only path that put the two in front of one
+//     consumer at the same time. **The copy is still there and is still used
+//     inside aiops**; what changed is that no consumer is now in a position to
+//     confuse them. That is a real improvement, and it is not the same thing as
+//     the ambiguity being settled, so the name is unpinned rather than promoted
+//     to a move candidate.
+//   - `Caller` left the report entirely, for the ordinary reason: fewer than
+//     two consuming domains. It was `aiopsconfig` and `imbridge`, and the
+//     adapter was one of the two. Note what that does NOT mean — the
+//     composition root still selects `service/alert.Caller`, but this graph is
+//     built from core/manager alone and cannot see cmd/, so a move there
+//     legitimately shrinks the report without shrinking the coupling. The same
+//     blindness is stated in the release report; repeating it here is what stops
+//     the next reader from reading "left the report" as "no longer coupled".
 func TestTheSameNameSeveralOwnersListIsReal(t *testing.T) {
 	ambiguous := map[string]bool{}
 	reported := map[string]bool{}
@@ -50,8 +78,8 @@ func TestTheSameNameSeveralOwnersListIsReal(t *testing.T) {
 	// there means the test passes while the thing it exists to watch has
 	// silently changed. It fails instead, and says what changed.
 	if len(ambiguous) == 0 {
-		t.Fatalf("no symbol is declared by more than one domain any more, so the report's trap " +
-			"column is empty; the four names below have all become single-owner and are now " +
+		t.Fatalf("no symbol is reached by more than one domain any more, so the report's trap " +
+			"column is empty; the names below have all become single-target and are now " +
 			"move candidates. Fail on purpose so this is a decision, not a drift")
 	}
 	// Every one of these must still be ambiguous. A name that has become
@@ -60,19 +88,23 @@ func TestTheSameNameSeveralOwnersListIsReal(t *testing.T) {
 	// third state again, with a different cause and a different next step.
 	// The message distinguishes them because "look at this" is only useful
 	// advice if it says which of the two things happened.
-	for _, sym := range []string{"Event", "Rule", "Usecase", "Caller"} {
+	for _, sym := range []string{"Event", "Usecase"} {
 		if ambiguous[sym] {
 			continue
 		}
 		if !reported[sym] {
 			t.Errorf("%s has dropped out of the shared report, which means it no longer has two or "+
-				"more consuming domains; it is not a move candidate, it is edge's private "+
-				"vocabulary again, and whoever reads this should say whether that was intended",
+				"more consuming domains. That is not the same as \"nobody selects it any more\": "+
+				"this graph is built from core/manager alone, so a consumer that moved to the "+
+				"composition root stops being visible to it. Read \"left the report\" as \"fewer "+
+				"than two visible consumers\", not as \"no longer coupled\".",
 				sym)
 			continue
 		}
-		t.Errorf("%s now has a single declaring domain, so it is a real move candidate and "+
-			"belongs at the top of the shared list; it was ambiguous when this was written", sym)
+		t.Errorf("%s now has one target among its remaining consumers, so nothing left in the "+
+			"tree is in a position to confuse two same-named types. Read the note above the list "+
+			"before acting: a parallel copy inside a consuming domain is invisible to this column, "+
+			"so this is not by itself a statement that the copy is gone", sym)
 	}
 }
 

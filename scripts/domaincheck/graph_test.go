@@ -529,12 +529,17 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// signature was already all built-in types — string, bool, error — so
 	// `*setting.Service` satisfied it structurally and no adapter was
 	// needed; the only thing this edge named was the type of one field, which
-	// means this cut needed no seam at all, only a port and eleven
-	// constants).
+	// means this cut needed no seam at all, only a port and thirteen
+	// constants) and decision 259's, which is the first one on this list that
+	// cut no edge at all: the `aiopsconfig` domain was one hundred and ten
+	// lines of translation whose only caller was the composition root, so it
+	// moved there and the domain stopped existing. A cut edge lowers this
+	// number the same way a deleted domain does, and the two are not the same
+	// event — the ledger's 34-of-34 counts cuts, so it needed saying.
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "24 edges") {
+	if !strings.Contains(buf.String(), "22 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

@@ -34,8 +34,8 @@
 # 预期是「更贵」——多三个域进 core，它们各自还有别的出边。结果是**更便宜**：
 #
 #   候选                              组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed         95         22         3 / 4
-#   docs/manager-split.constrained        105         12         0 / 4
+#   docs/manager-split.proposed         95         19         3 / 4
+#   docs/manager-split.constrained        105         9         0 / 4
 #
 # 机制不难理解，但方向值得写清楚，因为它是本文件存在的全部理由：
 # 那三个域不是跨组边的**消费者**，是**生产者**。它们在 apps，而它们依赖的东西
@@ -105,7 +105,7 @@ core = aiops, device, edge, alert, topology, loop, hitl, approval, audit, mcp,
 # 那一侧的接收端。放同一组是因为它们之间那几条边就是这件事本身，拆开等于把
 # 一次绑定的判断留在缝的两侧。都不在 core 组：这一层不讲 agent 内核，它讲的是
 # 控制面怎么把一份签好的策略送到另一个控制面手里。
-apps  = agentteams, aiopsconfig, cluster, control, dataguard,
+apps  = agentteams, cluster, control, dataguard,
         demo, edgeauth, federation, federationchild, federationlink, flow, grafana,
         higress, iam, imbridge, integration, llmgw, llmpig, logs, marketplace,
         metric, migrate, migrator, nodeagent, nodefleet, observability,

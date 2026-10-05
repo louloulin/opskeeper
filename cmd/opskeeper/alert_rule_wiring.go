@@ -1,4 +1,22 @@
-package aiopsconfig
+// The alert-rule adapter that used to be a domain.
+//
+// It lived in core/manager/service/aiopsconfig, a domain of one package and
+// one hundred and ten lines whose only caller was this composition root —
+// the ledger's own rule (decisions 254 and 257) says a translation belongs at
+// the assembly root, because putting one inside a domain teaches that domain
+// about the other one. Decision 259 moved it here, and the domain it was
+// holding open is gone: 57 domains became 56 and 24 declared edges became 22,
+// and neither number moved because anything was deleted from the product.
+//
+// The vocabulary on both sides is still two parallel copies, and that is
+// deliberate: biz/aiops/alertconfig refuses to depend on service-layer DTOs
+// (see the note on AlertRulePort), so the copy is the price of that layering
+// rule and the price is paid here, in one place, where it can be guarded.
+// alert_rule_wiring_test.go is that guard: it proves every field of the
+// source side arrives on the other, so a field added to one struct and
+// forgotten here is a red test rather than a silently zero value.
+
+package main
 
 import (
 	"context"
@@ -13,7 +31,7 @@ type alertRuleService interface {
 	CreateRule(ctx context.Context, caller managersvcalert.Caller, in managersvcalert.RuleInput) (*managersvcalert.Rule, error)
 }
 
-func NewAlertRuleManager(alertSvc alertRuleService) configchange.ConfigManager {
+func newAlertRuleManager(alertSvc alertRuleService) configchange.ConfigManager {
 	if alertSvc == nil {
 		return alertconfig.NewAlertRuleManager(nil)
 	}

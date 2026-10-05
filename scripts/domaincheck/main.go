@@ -151,9 +151,6 @@ var edges = map[edge]string{
 	{"aiops", "loop"}:     "the agent kernel drives the investigation loop, so the agent asks it for a recovery verdict, a loop toolset and what it learned; one direction only since decision 117. The old reason named a package that does not exist — there is no biz/aiops/loop, loop is its own context at biz/loop",
 	{"aiops", "topology"}: "correlation answers 'what is related to this' from the topology domain instead of a private graph",
 
-	{"aiopsconfig", "aiops"}: "the config service assembles the agent's alert-config and tool surfaces: it configures aiops rather than reimplementing it",
-	{"aiopsconfig", "alert"}: "the agent's settings endpoints resolve alert configuration through the alert service",
-
 	{"chatdiagnose", "audit"}: "promoting a chat into an investigation is an operator action and belongs in the chain",
 	{"chatdiagnose", "loop"}:  "promoting a chat hands the work to the loop domain, which owns the investigation; the reverse of that edge used to exist because the loop wrote the knowledge base's own rows (decision 114)",
 

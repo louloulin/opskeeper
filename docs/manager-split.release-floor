@@ -13,9 +13,9 @@
 # 三份的实测价：
 #
 #   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed         95         22         3 / 4
-#   docs/manager-split.constrained        105         12         0 / 4
-#   docs/manager-split.release-floor        99         18         0 / 4
+#   docs/manager-split.proposed         95         19         3 / 4
+#   docs/manager-split.constrained        105         9         0 / 4
+#   docs/manager-split.release-floor        99         15         0 / 4
 #
 # 决策 230 重取了这三行。触发它的是切掉 `flow -> scheduler`（missed-run 端口
 # 下沉到 `core/floor/scheduler`）：proposed 与 constrained 各少一条组内 import，
@@ -175,7 +175,24 @@
 # （`core/floor/tunnel`、`core/domain`、`core/floor/scheduler`），而这一次
 # 搬去的 `core/domain` 早就存在，且里面已经有一个 `grafana.go`。**端口的
 # 正确落点常常是已经有人为别的理由建好的那个包。**
-independent = aiopsconfig, cluster, demo, edgeauth, federationchild,
+#
+# **决策 259 让三份同时降 3**（各 22 → 19 / 12 → 9 / 18 → 15），而 3 是一个域的
+# 两条出向 import——那一刀（`service/aiopsconfig` 整个搬回 `cmd/opskeeper`）
+# **没有切任何一条被声明保留的边，是把一个只有 110 行、一条边都不值的域从树上
+# 拿掉了**。三份各降 3 的机制也相同：那个域的两条 import 在三份分组里都跨组
+# （`aiopsconfig` 落在 apps / apps / independent，而它指向的 `aiops` 与 `alert`
+# 都在另一侧），域一消失，两条都没了。**这是本文件第一次出现「降价」而树里没有
+# 少任何一条被刻意保留的边**，而它与决策 249 那次（`mcp` 入向归零，跨组数反而
+# 涨 1）正好相反：**同样是让一个域独立，一次让报价变好，一次让报价变坏——所以
+# 「报价是分组方式的函数，不是树质量的函数」这句话到这里第三次得到证据。**
+#
+# `aiopsconfig` 是第一个**从 FLOOR 集合里消失而不是进来**的名字（决策 259），
+# 而它消失的方式让本文件的一个读数变了含义：这个域只有 110 行、一条边都不值，
+# 它整个就是一份装配根的翻译，翻译搬回 `cmd/opskeeper` 之后域本身没有了。
+# **FLOOR 集合变小可以是两件完全不同的事**——搬出去了（变好），或者本来就不
+# 是域（更早就不该在里面）。**这一份的表只记「谁在里面」，不记「为什么」，
+# 所以这两种在读数上长得一模一样**，而读这一行的人需要知道是哪一种。
+independent = cluster, demo, edgeauth, federationchild,
         federationlink, flow, grafana, iam, imbridge, incident, integration,
         llmgw, llmpig, logs, marketplace, mcp, metric, monitor, nodeagent,
         plugin, pluginimport, prometheus, promwrite, proposal, report,

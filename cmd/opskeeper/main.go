@@ -222,7 +222,6 @@ import (
 
 	managerserverplugin "github.com/vincent-wuhan/opskeeper/core/domains/server/plugin"
 	managersvcaiops "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
-	manageraiopsconfig "github.com/vincent-wuhan/opskeeper/core/manager/service/aiopsconfig"
 	managersvcalert "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 	managersvcdemo "github.com/vincent-wuhan/opskeeper/core/manager/service/demo"
 	managersvcedge "github.com/vincent-wuhan/opskeeper/core/manager/service/edge"
@@ -1682,7 +1681,7 @@ func main() {
 		}
 	}()
 	toolsReg.AppendExternalBaseTool(gitArtifacts.tool)
-	toolsReg.SetConfigManager(manageraiopsconfig.NewAlertRuleManager(alertSvc))
+	toolsReg.SetConfigManager(newAlertRuleManager(alertSvc))
 	// query_change_events (HLD-013 Phase 2) — RCA "what changed near T".
 	// *audit.Usecase satisfies aiopstools.AuditLister via ListChanges.
 	toolsReg.SetAuditLister(auditUC)

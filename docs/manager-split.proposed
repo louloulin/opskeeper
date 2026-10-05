@@ -257,7 +257,7 @@ core = aiops, device, edge, alert, topology, loop, hitl, approval, audit, mcp,
 # 这张绑定表和两个方向的调用。放同一组是因为它们之间那条边就是这件事本身，
 # 拆开它等于把一次绑定的判断留在缝的两侧。都不在 core 组：这一层不讲 agent
 # 内核，它讲的是控制面怎么把一份签好的策略送到另一个控制面手里。
-apps  = agentteams, aiopsconfig, chatdiagnose, cluster, control, dataguard,
+apps  = agentteams, chatdiagnose, cluster, control, dataguard,
         demo, edgeauth, federation, federationlink, flow, frontierbound, grafana,
         higress, iam, imbridge, integration, llmgw, llmpig, logs, marketplace,
         metric, middleware, migrate, migrator, nodeagent, nodefleet, observability,
