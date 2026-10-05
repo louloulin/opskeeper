@@ -591,6 +591,22 @@ deadcode-report: ## 报出生产代码里只有测试引用的符号（报告，
 	go run ./scripts/deadcode . core core/edge core/pig core/manager core/floor core/harness sdk
 	go test ./scripts/deadcode/ -count=1
 
+# transcheck is the third gauge the ledger says it is missing: a hand-written
+# struct translation is a place where adding a column to the source leaves the
+# literal compiling and ships the new column as a zero value, and nothing in
+# Go or in this repository's gates can see it. Decision 259 wrote that guard
+# by hand for one call site; this reports the other hundred-odd.
+#
+# It is deliberately NOT a gate, and the reason is printed with every run: the
+# first four flags were all false positives, in four distinct structural
+# classes (a value passed as an extra argument, a renamed column, narrowing
+# inside a type switch, and a nested struct flattened into flat columns). A
+# report whose first answers were all wrong is a list of places to look, and
+# calling it a gate would teach people to write "trust me" next to it.
+transcheck-report: ## 报出手写结构体翻译及其未设置的列（报告，不闸门，决策 260）
+	go run ./scripts/transcheck .
+	go test ./scripts/transcheck/ -count=1
+
 # deadcode answers that question per symbol. This one answers the coarser
 # version — which whole packages nothing imports — because that is the
 # question that decides whether a deletion is one file or one directory, and
