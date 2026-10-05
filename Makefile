@@ -185,6 +185,19 @@ broker-pin-check: ## 校验所有提到 frontier broker 版本的地方都指向
 	go run ./scripts/brokerpin .
 	go test ./scripts/brokerpin/ -count=1
 
+# brokerpin asks whether every file names one broker. It cannot answer the
+# question decision 190 narrowed the arm64 gap to: which architectures does the
+# published manifest actually offer. That needs the registry, so it is a
+# report rather than a gate — hence the name: a gate has one right answer and
+# is expected to hold, and this has two legitimate outcomes (arm64 offered or
+# not) plus a third that is not an answer at all. See the exit statuses in its
+# package comment; exit 1 (read it, no arm64) is an answer and exit 3 (could
+# not ask) is not, and the two must never be read as the same thing.
+.PHONY: broker-arch-report
+broker-arch-report: ## 问 registry：broker 镜像提供哪些架构（决策 190；exit 1=无 arm64，exit 3=问不出来）
+	go run ./scripts/brokerarch .
+	go test ./scripts/brokerarch/ -count=1
+
 # The two corpus gates answer different prior questions, and both have to
 # be asked. plugin-coverage asks whether a *plugin package* can serve an
 # expectation; vocabulary asks whether the *system* can serve it at all.

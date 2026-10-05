@@ -263,5 +263,21 @@ jobs:
           go-version: '1.26.x'
           cache: true
 
+      # Decision 190 narrowed the arm64 gap to one question this job is the
+      # only thing that can answer: does the broker image the harness pulls
+      # offer an arm64 manifest? A developer machine behind a registry mirror
+      # cannot answer it — this one asked and got 403 — so the question is
+      # asked here, where the registry is reachable, and the answer is
+      # recorded in the log every night.
+      #
+      # No continue-on-error. The exit statuses are 0 (arm64 offered), 1
+      # (read it, no arm64), 2 (this tool is misused) and 3 (could not ask),
+      # and a red step here is one of those four, not a defect in the delivery
+      # path. Swallowing it would make a nightly that learned nothing look
+      # like a nightly that passed, which is the shape this repository keeps
+      # refusing. Read the VERDICT line, not the colour.
+      - name: Which architectures does the broker image offer?
+        run: make broker-arch-report
+
       - name: Node delivery and no-cloud-credential assertions
         run: make e2e-delivery-check

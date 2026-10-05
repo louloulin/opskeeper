@@ -221,4 +221,11 @@ var referencedOnly = map[string]string{
 	"scripts/brokerpin/main.go":                "the patterns and the prose that explain them",
 	"scripts/brokerpin/main_test.go":           "the fixture a mutation is applied to",
 	"tests/e2e/testenv/frontier_image_test.go": "verbatim daemon error text, quoted on purpose",
+	// The arm64 report asks the registry what the harness pulls, and its
+	// tests have to name a reference to ask about. Decision 190 built that
+	// command specifically so it would read the image out of the harness
+	// constant rather than repeat it — and this is where "rather than
+	// repeat it" is checked, so the repetition is in the test on purpose.
+	// Nothing here decides a version: a fake registry answers every request.
+	"scripts/brokerarch/main_test.go": "the reference a fake registry is asked about; the production path reads the harness constant instead",
 }
