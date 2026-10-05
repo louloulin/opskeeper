@@ -18629,6 +18629,174 @@ being the proven floor and become another judgement call
   事件契约」）。
 - `federationlink → federation`（4 符号）：`Pusher` **已经是接口**，`Member` 7 字段。
 
+### 4.169 决策 237：**上一轮指着要切的那条边，价格是 2，而它真的是 6**——闭包从没被算进去，于是那张排序一直在指错方向
+
+#### 一、上一轮留下的一个数，而它是一个下界被当成价格用的
+
+决策 236 的最后一节把下一刀指给了 `marketplace → pluginimport`，理由写得很清楚：
+**「2 符号、无方法」**。`Options{Source Dest Vendor Targets}` 与
+`Report{15 字段}`，两个纯数据类型，`Report` 是返回值而不是实体，一次下沉就能切。
+
+这句话里每一个判断都对，**只有那个 2 是错的**，而错的方式是本会话第五次同形：
+**量具量了一个下界，然后被当成价格用了。**
+
+`server/marketplace` 确实只写了两个名字。但 `Report` 有两个字段的类型不是它写的：
+
+- `Kind chatruntime.ContainerKind`
+- `Warnings []chatruntime.LoadWarning`
+
+要把 `Report` 放进 `core/domain`，这两个类型也得跟着走。**消费者没写下来的那部分，
+正是搬运时要付的那部分。** 上一轮据此排出的「最便宜三条」里，第一名的位置是错的。
+
+#### 二、`Report` 的两个字段把第三个域拖了进来
+
+实测 `ContainerKind` 与 `LoadWarning` 各自声明在哪：
+
+| 类型 | 声明处 | 消费者 |
+|---|---|---|
+| `ContainerKind` | `biz/aiops/chatruntime`（唯一） | chatruntime + pluginimport |
+| `LoadWarning` | `biz/aiops/chatruntime`（**61 处引用**）与 `biz/marketplace`（唯一镜像） | 4 个包 |
+
+`biz/marketplace/repo.go:141` 那一行注释是这件事的现成答案：
+
+> LoadWarning mirrors chatruntime.LoadWarning so we don't leak that
+> import out of biz/marketplace; the JSON shape is identical.
+
+**这个仓库已经为了同一条边付过一次款了**，用的是「镜像 + 投影」
+（`usecase.go:829` 的 `toBizWarnings`）。所以切 `marketplace → pluginimport`
+不是「下沉两个 DTO」，而是**要么第三次镜像这个类型，要么把 chatruntime 的那一份
+搬成公共词汇**。两种都远比「2 符号」贵。
+
+顺带一个读起来像玩笑但不是的事实：报告说这条边 `reaches aiops marketplace`——
+**拖进去的那个域之一就是消费者自己**。`biz/marketplace` 已经有了一份
+`LoadWarning`，所以它同时是这条边的消费者和被拖动的一方。
+
+#### 三、修法：价格 = 命名的 + 闭包的，而闭包有三条下界
+
+`domaincheck -edges` 的价格列从「命名的类型 + 调用的方法」改成
+**再加一个闭包**：从被命名的类型出发，沿**字段**走到它引用的类型为止。
+
+三条规则，每一条都是判断而不是默认：
+
+- **只走字段。** 只经方法签名到达的类型不计。报告把这条印在表头而不是留给读者发现，
+  因为方法签名与字段是两种不同形状的依赖，混在一起会让这一列有两个意思。
+- **别域声明的命中只记录、不走进。** 那就是「拖」——它意味着这一刀**不停在它被定价的那条边上**。
+  行尾因此会写 `reaches aiops`，汇总行会写「其中 2 条把类型拖出了生产者的域」。
+- **谁都没声明的类型丢掉。** 那是控制面之下模块或第三方的东西，切边搬不动它，
+  算进去等于按一件搬不动的事收费。
+
+**37 条边里 15 条带闭包，2 条跨域。** 排序键同步从直接计数换成价格——
+一个把下界当价格的排序，会持续把下一刀指到错的边上，而那正是这张表唯一的产出。
+
+#### 四、写完第一次运行就撞上自己的洞：未导出字段让一个四字段结构拖了 19 个域
+
+第一次跑出来的 `chatdiagnose → audit` 是 **7**，闭包四行：
+
+```
+closure ChainStamper  via Usecase.chain
+closure ChainStore     via Usecase.chainStore
+closure slog.Logger    via Usecase.log      <-- declared in mcp
+closure Repo           via Usecase.repo     <-- declared in alert|approval|audit|...|webshell
+```
+
+`Usecase` 的形状是 `{repo log chain chainStore}`——**四个字段全是未导出的**。
+
+跨包的消费者读不到未导出字段，切边也不搬它们，所以这四行**全部是虚价**。
+`Repo` 那个名字在 19 个域里各有一份声明，把它们一次性算进来，等于按十九个域收费。
+
+**这是「自己写的量具有洞」的第五次**（前四次：按包名找调用返 0、字段名模式漏匹配、
+注释里的调用被算进去、`shared_test` 把两种状态说成一种）。前四次是**漏**，
+这一次是**多**，方向相反而后果一样：排序被推到错的边上。
+
+修法是一行 `if !id.IsExported() { continue }`，而它的必要性来自本文件里早就写下的一条
+既有纪律——**未导出的名字一律忽略，因为包外的依赖者够不到它们**。新写的闭包忘了守它。
+
+#### 五、同名多声明：字符串不等不是成员关系（决策 233 的形状原样回来一次）
+
+第二个洞更小但更危险。闭包行原来这样判断归属：
+
+```go
+if h.home != c.to { mark = "<-- declared in %s, not in %s" }
+```
+
+`pluginimport.Decision` 的声明处是 **`agentteams|control|nodefleet|pluginimport`**——
+生产者自己**就在那四个里面**。字符串不等于是判成「别域的」，于是报告写下：
+
+> closure Decision via Report.Decisions <-- declared in agentteams|control|nodefleet|pluginimport, **not in pluginimport**
+
+**这句话是假的，而且假在最贵的那一侧**：它告诉读者这个类型要从别处搬来，而搬运方手里已经有了。
+
+修法是成员关系（`ownsType` 沿 `|` 拆开逐个比），并且把两种情况分成两句话：
+- 不含生产者 → `lives in aiops, not in pluginimport`（真的拖出去了）
+- 含生产者但有多个 → `<-- … declares it too, so the shape is not settled`（形状没定，这是真问题）
+
+**决策 233 已经为这个形状写过整整一节**，那里量的是 `ListFilter` 是同名巧合。
+本轮是同一个陷阱从另一个方向回来一次：上回是**一个名字两个声明**被当成共享形状，
+这回是**一个名字四个声明**被当成外部依赖。两回的错误方向相反，共同点是不去数。
+
+#### 六、闸门：六条新测试 + 七条变异，全红
+
+`scripts/domaincheck/edges_test.go` 新增六条，全部按「写完先想它会不会是绿的」的标准写：
+
+| 测试 | 守的是什么 |
+|---|---|
+| `TestAFieldTypeTheConsumerNeverNamesIsInThePrice` | 夹具级：消费者只写 1 个类型，价格必须是 3 |
+| `TestAClosureIntoAnotherDomainIsNamed` | 行汇总与行内都要指名那个域与那个类型 |
+| `TestAnUnexportedFieldIsNotInThePrice` | 未导出字段不进价格（第四节的洞） |
+| `TestATypeNoDomainDeclaresIsDropped` | `time.Time` 不计价 |
+| `TestATypeTheProducerAlsoDeclaresIsNotReportedAsSomebodyElses` | 第五节的洞 |
+| `TestAMarketplacePluginImportIsNotATwoSymbolEdge` | 真树版：这条边不许退回 2 |
+
+七条变异（改坏实现、跑 `go test ./scripts/domaincheck/`、还原）：
+
+| # | 变异 | 结果 |
+|---|---|---|
+| M1 | 价格退回只数直接命名的符号 | ✅ 红（价格测试） |
+| M2 | 闭包跟进未导出字段 | ✅ 红（未导出字段测试） |
+| M3 | 不再丢弃无域声明的类型 | ✅ 红（`time.Time` 测试） |
+| M4 | 同名多声明退回字符串不等 | ✅ 红（生产者自声明测试） |
+| M5 | 行内不再标注跨域 | ✅ 红（第一次**没抓住**，补了断言才抓住） |
+| M6 | 闭包行不再打印字段路径 | ✅ 红（两条） |
+| M7 | 闭包不进排序键（列仍显示） | ✅ 红（排序测试） |
+
+**M5 是本轮唯一一次「没抓住」**：跨域标注写在行内，而当时只有一条测试断言了行汇总的
+`reaches`。一条没人断言的输出等于没有输出——**它当时是一段装饰**。补断言之后才红。
+
+M7 值得单说：它把排序键改回直接计数、只保留列，于是价格列会出现**倒序**
+（后面的行价格更小）。`TestTheReportIsSortedCheapestFirst` 只断言「首列不下降」，
+所以它抓到了。这条测试是决策 235 写的，本轮它第二次发挥作用。
+
+#### 七、新的排序，以及本轮不给分数
+
+修正后的前六条：
+
+| 价格 | 边 | 判读 |
+|---|---|---|
+| **3** | `chatdiagnose → audit` | 2 类型 + 1 方法，**但 `Emit` 落审计链，决策 196 认定硬约束** |
+| **4** | `mcp → aiops` | `ToolStartEvent` / `ToolEndEvent` + 2 方法。**事件形状进 `core/domain` 正是计划 §2.1 给该模块的职责** |
+| 5 | `aiops → skill` | 3 类型 + 2 方法 |
+| 5 | `frontierbound → audit` | 同 3，`RecordAutonomyReplay` / `RecordNodeEntries` 也落链 |
+| 5 | `grafana → monitor` | `Panel` 11 字段 + 3 个 `PanelType*` |
+| 6 | `marketplace → pluginimport` | **上一轮的第一名，掉到并列第七** |
+
+结论有两条，第二条比第一条重要：
+
+1. **上一轮指的那一刀不该切**——它不是不能切，是它按 2 报价而实际是 6，且要第三次
+   处理 `LoadWarning`。等 `LoadWarning` 有了单一词汇（`core/domain` 收口）之后，
+   它会自己变便宜，**顺序应该反过来**。
+2. **最便宜的那一条切不掉。** 三条 `→ audit` 的边（`chatdiagnose` / `frontierbound` /
+   `middleware`）都是审计链持有者，决策 196 已认定。**所以「便宜」这一档实际上是空的**，
+   而决策 231 说的是「便宜的那一类确实空了」——本轮把这句话从**没有便宜的边**
+   改成了**有便宜的边，但没有能切的**，而这两者的区别是：前者是死路，后者是可以排队的。
+
+`mcp → aiops` 是下一刀的候选，理由是形状的性质而不是价格：两个事件形状进
+`core/domain` 是那个模块名册上写着的职责（计划 §2.1「wire DTO、事件契约」），
+而 `Emit` 一个方法可以由消费侧适配器承担。
+
+**本轮不给分数**：没有搬任何代码，没有切任何边，`core/domain` 一个文件没加。
+动的是量具，而量具的改动只改变**下一刀选哪条**，不改变已经切掉的 21 条。
+阶段 3 仍是 **87.0%**，加权仍是 **95.4%**——**把一把错的尺子修好，不是一个阶段的进展**。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -21451,6 +21619,35 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
     （`globalRegistry`），这是全仓 14 个内置技能共用的设计，不是这次的问题。
     `Replace` 是这个设计下唯一需要的例外，已经被限制成"同一个 key 换一次"。
     真正要换成 per-instance 目录，是一次牵动所有技能与 HTTP 路由的改动。
+
+### 阶段 3 剩下的边：价格修正之后，「最便宜」那一档里没有能切的
+
+`domaincheck -edges` 的价格列已改成**命名的 + 闭包的**（决策 237）：一个类型被命名时，
+它的字段类型也要跟着搬，而消费者没写下来的那部分正是要付的那部分。
+**37 条边里 15 条带闭包，2 条把类型拖出了生产者的域。**
+
+修正后的前六条与它们的性质：
+
+| 价格 | 边 | 能不能切 |
+|---|---|---|
+| 3 | `chatdiagnose → audit` | ❌ `Emit` 落审计链，决策 196 认定硬约束 |
+| 4 | `mcp → aiops` | ✅ **两个事件形状进 `core/domain` 是该模块名册上的职责** |
+| 5 | `aiops → skill` | 可切，3 类型 + 2 方法 |
+| 5 | `frontierbound → audit` | ❌ 同 3 |
+| 5 | `grafana → monitor` | `Panel` 11 字段 + 3 个 `PanelType*`，是搬迁不是端口 |
+| 6 | `marketplace → pluginimport` | ⚠️ 上一轮的第一名。实际 6：要第三次处理 `LoadWarning` |
+
+**所以「便宜」这一档不是空的，是没有能切的**——最便宜的三条里有两条是审计链持有者。
+这与决策 231 当时写的「便宜的那一类确实空了」不是同一句话：那一版说的是**没有便宜的边**，
+这一版说的是**有便宜的边但都卡在硬约束上**。区别是可排队的与死路。
+
+**下一刀候选是 `mcp → aiops`**，选它的理由是形状的性质而不是价格：
+`ToolStartEvent` / `ToolEndEvent` 是事件形状，而事件契约正是计划 §2.1 写给
+`core/domain` 的职责之一；剩下的 `Emit` 一个方法由消费侧适配器承担。
+
+**`marketplace → pluginimport` 应当往后排**，等 `LoadWarning` 有了单一词汇
+（`core/domain` 收口，替掉现在的三份：`chatruntime` 权威 + `biz/marketplace` 镜像 +
+本轮发现的第三份）之后它会自己变便宜。**顺序反过来是先付贵的、后付便宜的。**
 
 ---
 
