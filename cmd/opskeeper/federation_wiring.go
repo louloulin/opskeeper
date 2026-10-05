@@ -63,6 +63,30 @@ const (
 	// path the operator chose to spell differently — and one variable
 	// cannot be both the write path and the read path.
 	federationArtifactPrefixEnv = "OPSKEEPER_FEDERATION_ARTIFACT_PREFIX"
+
+	// federationArtifactBaseURLEnv names a store this root publishes into
+	// rather than a directory a child shares with it. It is the switch
+	// between the two delivery shapes, and it is a separate variable rather
+	// than a value of the prefix one because the two are not the same kind
+	// of thing: the prefix is a path this root writes to, and the base is
+	// a place a child fetches from.
+	//
+	// Set it and the root stops handing out file:// URLs and starts
+	// addressing an artifact store — but only after it has compared the
+	// bytes it signed against what the store says it is holding, so a
+	// rollout can never point a child at bytes this root has not checked.
+	federationArtifactBaseURLEnv = "OPSKEEPER_FEDERATION_ARTIFACT_BASE_URL"
+	// federationArtifactManifestEnv is the JSON file the deployment's
+	// publish step writes after uploading an archive, mapping archive name
+	// to sha256. It is a file rather than a cloud client so that whatever
+	// already puts the archive in the store also writes one line, and so
+	// that adding federation does not add a vendor SDK and a second
+	// credential path to the root.
+	//
+	// It is read on every delivery, not cached, because the publish step
+	// runs out of band: a manifest read at boot is a snapshot that is
+	// wrong for the rest of the process's life.
+	federationArtifactManifestEnv = "OPSKEEPER_FEDERATION_ARTIFACT_MANIFEST"
 )
 
 // federationWiring is the assembled root side of the cluster channel.
@@ -224,7 +248,18 @@ func newFederationWiring(fbClient *managersvcfb.Client, log *slog.Logger) (*fede
 		)
 	}
 	if w.canDeliver {
+		// The mode is in the log because the two shapes fail in opposite
+		// directions and an operator reading a delivery failure needs to
+		// know which one they are in. A file:// root fails when the mount
+		// is not shared; a store root fails when the publish step has not
+		// written the manifest yet, which looks like nothing at all from
+		// the outside.
+		mode := "shared-mount file://"
+		if strings.TrimSpace(os.Getenv(federationArtifactBaseURLEnv)) != "" {
+			mode = "artifact store over " + os.Getenv(federationArtifactBaseURLEnv)
+		}
 		log.Info("federation: policy delivery configured",
+			slog.String("mode", mode),
 			slog.String("artifact_dir", w.artifactDir),
 		)
 	}
@@ -246,12 +281,62 @@ func newFederationWiring(fbClient *managersvcfb.Client, log *slog.Logger) (*fede
 // a path and cannot write to it has a real misconfiguration, and running on
 // without saying so would leave an operator believing policy is being
 // delivered when none is.
-func federationDistributor() (*fedbiz.FileDistributor, error) {
+func federationDistributor() (policyDelivery, error) {
 	dir := strings.TrimSpace(os.Getenv(federationArtifactDirEnv))
 	if dir == "" {
 		return nil, nil
 	}
-	return fedbiz.NewFileDistributor(dir, os.Getenv(federationArtifactPrefixEnv))
+	local, err := fedbiz.NewFileDistributor(dir, os.Getenv(federationArtifactPrefixEnv))
+	if err != nil {
+		return nil, err
+	}
+
+	// No base URL means the zero-configuration shape: a root and its
+	// children share a mount, and file:// is the whole of it.
+	base := strings.TrimSpace(os.Getenv(federationArtifactBaseURLEnv))
+	if base == "" {
+		return local, nil
+	}
+
+	// A base with no manifest would hand out URLs whose bytes nobody has
+	// compared against anything, and that is the one thing this path
+	// exists to prevent. So the half that makes it safe is required rather
+	// than defaulted: a deployment that named a store has to say how this
+	// root learns what is in it.
+	manifestPath := strings.TrimSpace(os.Getenv(federationArtifactManifestEnv))
+	if manifestPath == "" {
+		return nil, fmt.Errorf("federation: %s names a store, so %s must say how this root "+
+			"learns what that store is holding; without it every delivery would name a URL "+
+			"whose bytes were never compared against the tree this root signed",
+			federationArtifactBaseURLEnv, federationArtifactManifestEnv)
+	}
+	ledger, err := fedbiz.NewManifestLedger(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	published, err := fedbiz.NewPublishedDistributor(local, base, ledger)
+	if err != nil {
+		return nil, err
+	}
+	return published, nil
+}
+
+// policyDelivery is the root's answer to "where does a child's tree come
+// from", as the two ports the service needs together with the one question
+// the operator's log line asks.
+//
+// It is an interface because the two shapes are different implementations
+// rather than one implementation with a flag, and naming it here is what
+// keeps the wrapping honest: a distributor that implemented only one of the
+// two would fail to satisfy this, at the wiring, rather than at the first
+// redelivery.
+type policyDelivery interface {
+	fedbiz.Distributor
+	fedbiz.Redeliverer
+	// Dir reports where the exact bytes are kept locally, which is
+	// meaningful for both shapes: it is the directory a redelivery reads
+	// rather than repacks.
+	Dir() string
 }
 
 // federationReleaseSigner loads the root's signing key, or nil when none is
