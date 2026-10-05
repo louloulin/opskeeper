@@ -507,6 +507,10 @@ mkdir -p \
     "$OPSKEEPER_DATA_DIR/pages" \
     "$OPSKEEPER_DATA_DIR/workspace" \
     "$OPSKEEPER_DATA_DIR/tools" \
+    "$OPSKEEPER_DATA_DIR/federation" \
+    "$OPSKEEPER_DATA_DIR/crystallize" \
+    "$OPSKEEPER_DATA_DIR/repos" \
+    "$OPSKEEPER_DATA_DIR/plugins" \
     "$OPSKEEPER_LOG_DIR"
 
 # Stage the bundled fastembed model (ADR-027 Phase-2 offline RAG).
@@ -537,6 +541,20 @@ chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/skills" 2>/dev/null || true
 chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/pages" 2>/dev/null || true
 chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/workspace" 2>/dev/null || true
 chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/tools" 2>/dev/null || true
+
+# Records the manager keeps ACROSS restarts. Nothing writes to them at install
+# time, so before they were in the mkdir list above their chown was a no-op on
+# a fresh install and docker created them root-owned on first `up`. The result
+# is not a crash, it is a silent degrade:
+#   federation/  → the root forgets its cluster set and re-enrols everyone
+#   crystallize/ → promotion streaks restart, and nothing says why
+#   repos/       → every knowledge repo is re-cloned (Dockerfile.opskeeper
+#                  already asked for this mount and the manifest did not have it)
+#   plugins/     → agent-teams plugins installed over the API are gone
+chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/federation" 2>/dev/null || true
+chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/crystallize" 2>/dev/null || true
+chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/repos" 2>/dev/null || true
+chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/plugins" 2>/dev/null || true
 
 # Image uids — pinned to what the upstream images run as. Bumping the
 # image tag in docker-compose.yml without updating these here will fail

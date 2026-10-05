@@ -186,6 +186,10 @@ mkdir -p \
     "$OPSKEEPER_DATA_DIR/pages" \
     "$OPSKEEPER_DATA_DIR/workspace" \
     "$OPSKEEPER_DATA_DIR/tools" \
+    "$OPSKEEPER_DATA_DIR/federation" \
+    "$OPSKEEPER_DATA_DIR/crystallize" \
+    "$OPSKEEPER_DATA_DIR/repos" \
+    "$OPSKEEPER_DATA_DIR/plugins" \
     "$OPSKEEPER_LOG_DIR"
 
 # Embedding model cache (ADR-027 Phase-2). Same staging logic as
@@ -204,6 +208,16 @@ chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/skills" 2>/dev/null || true
 chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/pages" 2>/dev/null || true
 chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/workspace" 2>/dev/null || true
 chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/tools" 2>/dev/null || true
+
+# Records the manager keeps ACROSS restarts: a root that forgets its cluster
+# set re-enrols everyone, promotion streaks restart, knowledge repos are
+# re-cloned, and installed agent-teams plugins are gone. mkdir first (the
+# list above), chown second — the reverse order makes the chown a no-op on a
+# fresh install and hands the directory to docker as root-owned.
+chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/federation" 2>/dev/null || true
+chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/crystallize" 2>/dev/null || true
+chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/repos" 2>/dev/null || true
+chown -R 65532:65532 "$OPSKEEPER_DATA_DIR/plugins" 2>/dev/null || true
 if [[ -d "$SCRIPT_DIR/embeddings/fast-bge-small-zh-v1.5" ]]; then
     target="$OPSKEEPER_DATA_DIR/embeddings/fast-bge-small-zh-v1.5"
     if [[ ! -f "$target/model_optimized.onnx" ]]; then

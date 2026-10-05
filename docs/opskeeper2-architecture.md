@@ -15167,6 +15167,167 @@ nightly 也没有覆盖它。
 测试证明 streak 确实跨进程存活、四个真实缺陷。**未交付的**是它的收益量级，而这需要
 一个部署事实，不是代码。
 
+### 4.140 决策 207：把「路径可写」和「重启后还在」分开——**顺带更正本决策两次说错的地方**
+
+#### 一、上一轮结束时说的「成本低」，是没查就说的
+
+决策 206 交付了结晶账本的持久化，结尾写「让它可验证是成本低的一件事」。**那句话没查
+过就写了**，而查完发现它不是一件事，是一个缺口。
+
+先查最要紧的：**我给的那个默认路径，在生产形态下能不能写。**
+`deploy/Dockerfile.opskeeper` 三行给出了答案：
+
+```
+251: RUN mkdir -p /var/lib/opskeeper/repos
+262:     chown -R nonroot:nonroot /var/lib/opskeeper
+268: USER nonroot
+```
+
+**属主是进程自己**，所以容器内 `/var/lib/opskeeper/**` 对 manager 是可写的，创建子目录
+也是。**上一轮的默认路径成立。**
+
+然后查本决策 4.83.4 记的那条实测（`§4.83.4` 段，9265 行）：
+
+```
+Enroll: federation: … mkdir /var/lib/opskeeper: permission denied
+```
+
+**那一段的结论「这不是测试环境问题」是错的，它恰恰就是测试环境问题。** 那条 permission
+denied 来自非容器开发机——本机 `/var/lib` 是系统目录、不可写（实测 `test -w /var/lib`
+为假），而容器里它是 chown 给 nonroot 的应用目录。**作者当时把一个开发机现象写成了生产
+结论**，然后基于它推出「只读镜像、非特权用户、没挂卷的部署会彻底失去联邦功能」。
+
+这个更正的重量不在联邦。**降级设计本身仍然正确**（防御性写法，read-only image 上 Probe
+失败退回内存是对的）；错的是**理由**，而错误理由有后果：它会让下一个来修这件事的人看到
+「联邦已经处理过不可写路径了」而不再往下看——**而真正的问题不在可写性上**。
+
+#### 二、真正的问题：路径可写，但写在会消失的那一层
+
+Dockerfile 已经把话说完了：
+
+```
+248: # Knowledge-base git clones land here. Bind-mount this in production
+249: # to keep them across container restarts.
+250: RUN mkdir -p /var/lib/opskeeper/repos
+```
+
+**镜像里写着「生产要挂载」，install manifest 里没有那个挂载。** 一份文件里的注释断言了
+另一份文件违反的不变量——这正是能通过评审的形状。
+
+于是一份实测清单（把代码里所有 `/var/lib/opskeeper/<dir>` 字面量与 install compose 的
+挂载点对账）：
+
+| 目录 | 写什么 | install compose 挂了吗 |
+|---|---|---|
+| `skills` / `workspace` / `tools` / `embeddings` / `pages` | 用户装的东西、会话文件、模型缓存、报告 | ✅ 五个都有，注释还逐条解释「不挂会怎样」 |
+| `repos` | 知识库 git clone | ❌ **没挂**，而 Dockerfile 明确要求 |
+| `plugins` | agent-teams 装的插件 | ❌ **没挂**，而 helm 挂了 |
+| `federation` | 集群成员表 | ❌ **没挂** |
+| `crystallize` | 晋升 streak（决策 206 加的） | ❌ **没挂** |
+
+**前五个和后四个的区别不是「重要程度」，是「有人想过」**。前五个的注释里写着 MUST
+（`"otherwise installed skills live only in the container layer and are wiped on
+every compose up"`），后四个没有——不是判断它们不需要，是**没有人在这份文件里想过它们**。
+
+其中两个的失效后果值得单独说，因为**它们没有任何表面会报告**：
+
+- `federation/` —— 容器层被抹掉后 root 忘记自己的集群集合，于是**重新注册所有人并轮换
+  所有 token**。台账 4.83.4 自己说这是「静默重新注册所有人并轮换所有 token 的最坏
+  响应」——**而它本来只发生在「文件损坏」时，现在每次 `compose up` 都发生**。
+- `crystallize/` —— 晋升需要连续三次干净恢复。**重启比故障复发更频繁的部署，永远达不
+  到**，且没有任何日志说明原因。这正是决策 206 那个功能的全部意义，而它写在会被抹掉的层
+  上。
+
+`plugins` 是另一个方向的证据：**helm 挂了它（`values.yaml:104`，理由是「PVC 挂载保证 HA
+多副本一致」），install compose 没挂**。同一件事，两个部署形态给了不同答案——**而两个都
+不对**：`compose up` 不比多副本重启更温和。
+
+#### 三、修：4 个挂载 + 2 个脚本各 4 行 mkdir 与 4 行 chown
+
+挂载只是三步里的一步。**这一步我差点漏掉，而漏掉的后果比不挂更糟。**
+
+`install.sh` 的既有注释已经把机制写明了：
+
+```sh
+# Without chown, docker creates them root-owned on first `up` and the nonroot
+# manager can't write
+```
+
+所以顺序必须是 **mkdir → chown → `compose up`**。只加挂载不改脚本，新目录在首次 `up` 时由
+docker 建成 root，**挂载存在、不可写、没有任何报错**——比原来更难查，因为运维看 compose
+里有挂载，会认为已经修好。
+
+补的还有 `install.sh` 自己的一处不一致：`upgrade.sh` 的 mkdir 列表里**显式列了**
+`pages`/`workspace`/`tools`（注释：「An upgrade from a pre-existing install may
+predate these dirs, so create + chown here too」），**`install.sh` 的同名列表里没有**。
+作者在升级路径认了这个需求，在安装路径没认。四个新目录按同一形状补齐两个脚本。
+
+#### 四、钉：第十七与第十八条闸门，三条对账
+
+```
+mount ⊆ 两个脚本的 mkdir 集合
+mount ⊆ 两个脚本的 chown 集合
+code 里的 /var/lib/opskeeper/<dir> ⊆ mount ∪ 带理由的 allowlist
+```
+
+第三条是决策 206 那件事的**反向**问法。allowlist 目前只有一条：
+
+- `db` —— install manifest 跑 `OPSKEEPER_DB_DIALECT=mysql`，`openSQLite` 在这个形态下
+  永远到不了；同一份 manifest 已经告诉要换 sqlite 的人自己在数据卷那行旁边加挂载。
+
+**allowlist 的键不带前导斜杠，而两侧的名字也都不带**——这一条是被坑出来的，见下。
+
+**变异 7/7 全被抓**：删挂载 / 加死挂载 / 两个脚本各删一个 mkdir / 各删一个 chown /
+把 mkdir 的续行状态机短路。`TestTheStateDirectoryReconciliation` 两个测试的第二个问题
+（mkdir）是被一条漏过的变异逼出来的，那条变异见下节。
+
+#### 五、本轮我自己错了三次，一次是判据，一次是推断，一次是并发
+
+**1. 斜杠不一致（今天第二次栽在同一处）。** `mounted` 的键来自正则捕获组、带前导斜杠，
+`chowned` 的来自 chown 行、不带。**后果是九条目录全部报成缺失**，其中五条带着早于本文件
+存在的 chown 行。改成捕获组不带斜杠后绿。
+
+值得记的不是这个错，是**它错的方向**：一个两侧拼写不一致的比较，会朝着「发现了一大批
+问题」的方向失败——**那是最容易被相信的方向**。所以第一次看到九条红时我没有直接改
+compose，而是先写了个临时测试打印出 `chownRE` 的实际匹配，确认正则本身在工作。
+
+**2. 差点把推断写成结论（第三次）。** 看到 `install.sh:537` 是 chown、`docker compose up`
+在 815 行，我判断「chown 对不存在的目录是 no-op，所以 `pages`/`workspace`/`tools` 有既有
+缺陷」。**动手前查了 501-509 行，发现脚本本来就有 mkdir 列表**——目录在 `up` 之前就存在，
+chown 生效，**没有缺陷**。上一轮栽在「未经测量的推断」上（`这在生产上几乎不可达`），
+本轮又差一步栽在同一类上。
+
+**3. 并行发了一个写任务和一个只读校验。** 我在同一条消息里发了「YAML 校验」和「反向验证
+（改文件再恢复）」两个命令，它们竞争同一个文件，**校验读到的是变异进行中的内容**——
+输出里少了一个挂载，而那个挂载在磁盘上一直都在。**这与前两次是同一个形状**：用一个便宜
+的编排换一个更贵的核对，而失败时给出一个看起来很具体的错误结论。
+
+#### 六、分数不动，理由和上一轮不同
+
+**97.00% / 阶段 2 的 96.7% 都不动。** 决策 206 说「还不知道该不该动」，因为没测过部署
+重启频率与故障复现频率；本轮把其中**可测的那一半**测了（默认路径在三种部署形态下可写、
+有挂载、有 mkdir、有 chown），**仍然没测另一半**（那两个频率），所以仍然不知道这个功能的
+**收益量级**。
+
+而**不动的另一个理由是口径**：决策 192 已经确立了「成分必须加得起来且等于该行百分比」，
+而阶段 2 的成分里**没有「部署形态」这一项**。凭空加一项去兑现一个刚交付的东西，是
+决策 164 拒绝过的那种折算。
+
+**登记为已关闭**：决策 206 结句里那个「默认路径没验证过能不能写」的缺口。**它现在有
+四个证据**：Dockerfile 的 chown + USER、install compose 的挂载、两个脚本的 mkdir 与
+chown、以及第十八条闸门会盯着这四者不再分开。
+
+#### 七、两条闸门自己的盲区，写在代码里
+
+- **不解析 compose 的服务归属**。manifest 当文本读，所以别的服务下若挂了
+  `/var/lib/opskeeper/x`，会被算成 manager 的并要求 chown 到 65532。**保守方向**（虚假
+  要求而非漏检），今天没有这种挂载。
+- **只读 install manifest**。`deploy/docker-compose.yml`（开发形态）刻意不持久化
+  `/var/lib/opskeeper`——开发栈 `compose up` 之间丢状态是**期望行为**，持久化会藏起开发
+  者正想丢掉的东西。helm 也没读：它整个挂 PVC，没有逐目录清单可对账。
+- **只查 `chown ... 65532:65532`**。镜像 uid 变了而脚本没跟上时这条会失效——但那正是脚本
+  注释里警告的升级顺序问题，属于另一个闸门该管的形状。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -15205,7 +15366,8 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 | 1 离线与有限自治（P1） | **100%** | **决策 98 关掉了方案 1.2（自治白名单）**：清单里签一份固定 argv 列表，节点只在中心失联超过阈值且**触发器实测成立**时执行它，执行的是声明的 argv、宿主派生幂等键、**先消费后执行**、两阶段落盘审计（`core/edge/autonomy` 41 项 + 装配根 10 项端到端，§4.36）。**13 条具名加载期拒绝**堵住清单侧（argv 含元字符、半径超 single-ns、TTL 超 6h、工具未声明、工具是 read、`offline_after` 低于 30s…）。**决策 99 关掉了方案 1.1（遥测本地 spool）**：先把「追加一行、封顶、按序回放」抽成 `core/edge/spool` 原语（只依赖标准库），再让遥测（`core/edge/telemetrywal`）、变更事件（`changewatcher/tunnel_sink.go`）、自治审计三个用户各自只声明自己的策略——**两份日志、一套丢弃表**（trace 先丢 > metric 30m 保质期 > change event 无保质期）；`Send(ctx, rows) (int, error)` 一个签名同时满足审计的「全有或全无」与遥测的「部分前进」；回放限流 100 行/5s 且**只有满批才限流**；本轮由测试抓出 8 个真实缺陷，其中 `Ack` 的读改写分锁会吞掉并发写入的行（§4.37）。**决策 100 修掉了回放路上的一处数据丢失**：`Accepted=0`（中心还没准备好）原被当成「永久拒绝」，于是断连攒下的积压**在恢复后第一条消息里被 ack 丢弃**——日志扛过了断网、死在握手的样子上；中心侧 `push_prom_samples` 的三条丢弃路径还爱说谎（返回 `Accepted=n`），一并改成「能放报写入数、放不下报 0」。现在 `Accepted=0` 读作「还没有」，批次留在盘上。**决策 101 关掉了审计回放传输**（§4.39）：`agent.audit.replay` 隧道方法 + `AutonomyAuditRow` 契约、中心 `RecordAutonomyReplay`（**整批形状校验在前、逐行 `EmitWithID` 在后**，所以一次重试不产生重复）补 HMAC 链、`buildAutonomy` 接上并启动 `autonomy.Pump`；节点把中心的回答读成三种动作（传输失败/还没收下 → 留住重试；形状拒绝 → 计数跳过不重试；全收 → ack），未进链的行由 `autonomyHealth.ReplayRefused` 上报。接线抓出**两处实现错误**并各有实测会红的回归：① handler 的 `bindEdgeTransport` 会按 body 改绑 transport，一个已绑 42 的连接推送 7 就能把 42 的自愈历史写进 7 的账（`TestInstall_AutonomyReplay_TrustsTheTransportEdgeID` 实测 `edge = 7, want 42`）；② 节点 sender 用 `Accepted+Rejected >= len(rows)` 判断「已交代」，多报一个数就会 ack 掉整批（`TestAutonomyReplaySender_ACountItCannotExplainIsRetried` 实测变红，改为 `== len(rows)`）。顺带修掉一处既有缺陷：`.go-arch-lint.yml` 里 `oxedge_spool` 写成 `mayDependOn: []`，go-arch-lint 的 spec 校验因此**拒绝运行整份文件**——决策 99（`8fefe7b`）之后 `make arch-lint-run` 一次也没通过过，已按同文件既有写法改为 `anyVendorDeps: true`（§4.39.6）。**阶段 1 的代码侧到此完整**。**决策 121 关掉了 at-least-once 的「不重」那一半，而且是两个方向相反的问题里的一个**（§4.59）：① `host_metrics_raw` 的 `(edge_id, ts)` 变**唯一**索引 + `WriteRaw` 用**命名的** `ON CONFLICT (edge_id, ts) DO NOTHING`，`Migrate` 分「折叠已有重复 → AutoMigrate → 删旧非唯一索引」三步（顺序即全部，且幂等）；顺带修掉一个**今天就在损坏数据**的缺陷——`biz/metric.Ingester.flush` 拿同一份 payload 重试四次，而「写进去了但返回错误」与「没写进去」不可区分，而 downsample 对计数器是**求和**，所以一次重试会把那 5 分钟桶的网络吞吐**永久翻倍**（`host_metrics_5m/1h` 是复合主键 + `Save`，永不重算）。② 唯一键让 `MetricsInterval` 的 1 秒下限变成承重项（`HostMetricPoint.Ts` 本来就是 unix 秒，亚秒 tick 会按重复被丢），`NewAgent` clamp + WARN。**7 条变异全部被抓**。**决策 122 关掉另一半**（§4.60）：`edge_change_events` **没有天然键**（两次真实重启可字段全同），所以内容唯一键会删掉真历史——唯一能用的键是节点写前日志的行号。`Seq` 真的过了线（`spool.RecordSeq` 第二个入口 → `deliver` 落盘时打号 → `callOnce` 带上 → 中心行上落 **NULL**（不是 0，否则唯一索引会让一个节点的所有普通事件互相撞上））；中心侧**两层**——usecase 预筛让 `Accepted` 与 per-kind 计数器说真话，DB 唯一索引兜住预筛失败；新增 `opskeeper_change_events_deduped_total`。**本轮抓到最重要的一处**：第一轮中心侧测试 6/6 全绿时，把 handler 里的线路→行交接删掉**仍然 6/6 全绿**——特性在生产里是死的而没有一条测试会红，补的 handler 端到端测试让同一个变异红 3 条。**11 条变异全部被抓** |
 | 2 生态与治理加固（P2） | **96.7%** | 工具注册表：**决策 104 关掉**——`core/manager/biz/aiops/toolregistry`（`Entry` 值类型、唯一适配点 `EntryFromToolInfo`、`Catalogue.Search` 相关性排序、`Filter` 按声明元数据查能力、`Fuse`/`RRFConstant` 混合检索接缝，18 条测试），`ToolSearch` 的 keyword 分支改为排序、`select:` 与响应形状未动（§4.42）；per-tool 配额：**决策 96 已关**（`sdk/manifest.go` 校验 `spec.tools[].limits`，强制点 `core/edge/toolbroker`），本行此前已过期；MCP 兼容层：**决策 108 关掉**——`/api/v1/mcp` 现在是一个真正的 MCP 端点：版本头由必填改为可选（缺失＝普通 MCP 客户端）、`initialize` 按客户端要的版本作答、`ping` 与 `notifications/*` 按规范应答、`tools/list` 可分页，工具面改在接线末尾组装（`cloud_bash`/`send_im_message`/`serve_page` 此前对 MCP 不可见），`docs/mcp-surface.md` 是对外契约；`make mcp-surface-check` 让本仓库自己的 `pkg/mcpclient` 用真 HTTP 打真 handler（§4.46）；成本结晶：**决策 106 落掉机制**——`core/manager/biz/aiops/crystallize` 按连续第一次就通过的 streak 晋升、反证即退役，草稿用真实的 `pluginmanifest.Validate` 自检（53 条测试、`make crystallize-check`）；**平台仍不记录修复的 argv，生产端接线未做**（§4.44）。**决策 154 把这句话追到了根上**：闭环里那条「修复」从来不是接线问题而是**事实问题**——`core/edge/restart_service/handlers.go` 把「拨到真」写成了一个 error 而不是一个实现，且没有任何 env 能到达它，所以节点上唯一的写能力从不改变任何东西，argv 也就从未被产生过。现已把真实执行路径接上（argv 逐词、无 shell、白名单在边端再查、超时按本节点预算归因、失败作为答案返回），线契约带上**真正跑到进程的**那个 `Argv`（mock 时必须为空），并给出三个环境变量（默认值不变，默认仍是假装）。**这一格仍然不动，但理由换了**（决策 205 实测更正）：「闭环调用 `Ledger.Record` 那一步没有做」**这句已不成立**——`orchestrator_walk.go:262` 在 postmortem 阶段调 `learnFromRecovery`，它从 approved 事件的 `raw_outputs` 里读回逐词 argv，组装 `RecoveryEvidence`，`:572` 调 `Crystallizer.Learn`，`crystallizehook.Learner.Learn`（`learner.go:149`）落到 `ledger.Record(trial)`；装配根 `main.go:2555` 把它接进 Orchestrator，评审面 `SetPatterns(learner.Ledger())` 读的是同一个账本。**整条链是通的。**
   结晶账本那一格**已由决策 206 改写**（§4.139）。此前这一段写的三件事，现在三件都不成立：账本不再只是内存的（`Restore` + `crystallizehook.FileStore` 已接进装配，端到端测试证明 streak 跨进程存活）；「接缝是 `Record` 与 `Runs` 的重放」这句注释是**错的**且已更正——`Record` 是有损 fold，`Run` 还原不成 trial 序列，seam 是 `Restore`；「需要事件仓的跨 incident 枚举」也不需要，快照方案一个 key 都不读。
-  **本段此前那句「这在生产上几乎不可达」是未经测量的推断，本轮推翻它**：我不知道部署重启频率，也不知道故障复现频率，**没有测过任何一个**，而「几乎不可达」需要这两个数的比才能说。缺的那半个数字现在是本行剩下的唯一缺口——**默认路径 `/var/lib/opskeeper/crystallize/ledger.json` 没有在本机验证过能不能写，nightly 也不覆盖它**，所以「默认部署真的会持久化」这句话今天还没有证据。分数因此不动（96.7%）。
+  **本段此前那句「这在生产上几乎不可达」是未经测量的推断，本轮推翻它**：我不知道部署重启频率，也不知道故障复现频率，**没有测过任何一个**，而「几乎不可达」需要这两个数的比才能说。**其中可测的那一半已由决策 207 关闭**（§4.140）：默认路径在三种部署形态下可写（`Dockerfile.opskeeper` 把状态根 chown 给进程用户并以其身份运行）、有 bind-mount、install 与 upgrade 两个脚本都 mkdir 且 chown 到 65532，并由第十八条闸门钉住这四者不再分开——**本段此前列为「唯一缺口」的那句「没有验证过能不能写」到此作废**。
+  **未测的那一半仍是部署重启频率与故障复现频率**，所以「这个功能值多少分」仍然不知道，**分数因此不动（96.7%）**——理由与上一轮不同：上一轮是「可测的也没测」，这一轮是「可测的测完了，剩下的需要部署事实」。决策 207 顺带关掉了同一机制下的另外三个目录（`repos`/`plugins`/`federation`），其中 `federation` 的后果最重：容器层被抹掉后 root 会忘记集群集合并重新注册所有人、轮换所有 token，而台账 4.83.4 原本把这个列为「文件损坏时」的最坏响应。
   本轮做的是它的**用户可见后果**：`GET /v1/loops/crystallized` 现在带 `observing_since`，控制台空状态改说「自 <时刻> 起还没有模式被晋升」并点明账本不跨重启，**不再把「这个窗口没有」说成「从来没有过」**——因为这两种读法要求的后续动作正好相反；eval 三维化：**决策 105 关掉**——`core/harness/judge/diagnostic.go` 的 `DiagnosticAxes` 按 Localization × Identification × Reason 打分、`reason` 读轨迹面、`Overall` 未动，`make eval-axes` 20/20（§4.43）；prompt injection 标注：**决策 107 关掉**——`core/manager/biz/aiops/promptguard` 每次渲染现抽 nonce、`Parse` 只认 id 匹配的闭合标签，`core/manager/biz/aiops/tools/untrusted_sources.go` 用 `ToolName*` 常量列出「输出是外来文本」的闭集并由 `MarkUntrustedOutput` 一处适配，四处接线（含 `main.go` 后挂的 `host_bash`/`cloud_bash`）；**`buildInvestigatedPrompt` 的三个块与 system 里的 `Instruction()` 同源**，`make promptguard-check` 是闸门（§4.45）。**决策 125 查过这一格并维持 92%（5.5/6）**：本轮一度记为 83.3%，理由是「插件安装不记账」，而那个理由是错的——发布一侧（`plugin_release_start/advance/halt/rollback`）在 manager 侧一直有审计，成功与失败都记。**真正缺的是节点平面到链的通路**，而它不落在阶段 2 的六条里，所以本轮不因它动这一格（§4.63.8）。**决策 126 已经把那条通路关掉了**（`agent.audit.entries` 全线贯通：策略闸门的每一次放行/拦截/审批、插件安装器的每一次安装与卸载，链上现在各有一条），**并且仍然不动这一格**——四阶段台账里没有这一条，给某一格硬拔高比不改更糟（§4.64.8）。**决策 159 早已关掉本行最后那半条，而本行的叙述没有跟上**：`biz/aiops/crystallizehook.Learner` 是 `Ledger.Record` 的第一个生产调用方，`main.go` 在工具注册表非空时把它接进 `OrchestratorDeps.Crystallizer`，而 `walkPhases` 只在「验证通过的那一次修复」上调用它（§4.96）。**本行此前那句「闭环调用 `Ledger.Record` 那一步没有做」说的是决策 154 之前的世界**；本行的 96.7% 一直把它算进去了，只是最后一句还停在三节之前。剩下的 0.2/6 是晋升后的草稿接进既有 release 通路（§4.98.5），**决策 172 把这一跳补上了一条它此前没有的测试**（§4.108.3） |
 | 3 控制面瘦身与联邦（P3） | **80.3%** | 本行 = (1.00 审计端口 + 0.44 manager 拆分 + 0.97 多集群联邦) / 3，三个分量各自的来历见下。**第一条已关（决策 109/110）**：`iam → manager` 的三条审计边从 `exceptions` 台账与 `iam_server.mayDependOn` 双双删除，行的形状下沉到 `core/manager/pkg/audit`——无 usecase / repo / 链头 / HMAC，`biz/audit` 仍是唯一写入咽喉（§4.47）；**决策 110 把同一缺陷在另外 5 个域关掉**（alert / knowledge / setting / plugin / mcp 此前都为了「给一行记录命名」而 import 写入咽喉），并把「谁可以持有咽喉」变成一张带理由的表，由 `make audit-port-check`（13 条）守住，顺带补上 MCP 五处内联字面量。**第二条已开工但未完成**（**决策 111 当时的读数：55 个域散在 4–5 个 layer 树 / 55 条需声明的跨域边 / 7 对互为依赖的环**（aiops↔alert / aiops↔hitl / aiops↔loop / alert↔demo / chatdiagnose↔loop / device↔edge / loop↔report）——**这三组数早已被决策 112–118 逐条推翻，今天是 58 域 / 43 边 / 0 环，见本节末尾的控制面域图行；下面这一段保留的是「当初为什么要做这件事」而不是今天的读数**。环是「不能独立演进」的最强证据，而 layer 粒度的 arch-lint **看不见它们**；另有 **10 个无人引用的包 / 5,544 行**，实测全是方案自己没接线的半成品（crystallize 897 / critic 386 / proposal 383 / decorator 509），**删死代码这条捷径在包粒度上不存在**。**决策 111 把这份盘点变成闸门**：`scripts/domaincheck` + `make domain-check`——域按层树归并（`biz/alert` 与 `model/alert` 同属 `alert`），50 条跨域边逐条带理由，7 对环必须写明「怎样才切得断」，**表项过期本身也是红**（过期理由比没有理由更糟），检查器自身 13 条夹具测试（§4.49）。**决策 112 切掉了 7 对里的第一对**：实测 `device → edge` 在生产代码里只有一条 import（设备删除里的级联），接缝开在事务中间、由装配根注入 `EdgeIdentityRevoker` 后 **49 条边 / 6 对环**；顺带发现表里那条边的**理由本身是错的**（device 记录里并没有 edge 词汇），一并删掉（§4.50）。**决策 113 切掉了第二对**：`data/alert/store` 曾在自己的事务里推进 `demo_scenario_runs`（生产持久化层知道 demo 存在），把「这条告警是不是某条已开故事」这个问题端口化、由 demo 侧回答后 **48 条边 / 5 对环**；同一条边的理由在表里也指错了方向，一并删掉（§4.51）。**决策 114 切掉了第三对**：`biz/loop` 里那个「本包不 import chatdiagnose」的端口，签名却写着 `*chatdiagnosemodel.IncidentPattern`——接口在消费方声明但类型由生产方词汇决定，跨域 import 只是被藏进签名；改成「postmortem 落库了」并把指纹推导搬回知识库拥有者后 **47 条边 / 4 对环**，顺带补上这条路径此前**完全缺失的测试**，并暴露两个真缺陷（接线处的 nil 指针、`tenant_id` 恒为 `""`）（§4.52）。**决策 115 切掉了第四对**：`biz/loop/gitsink` 的包注释写着「挪进子包 → 包图无环 ✅」，而域是按路径归并的，包图无环不等于域图无环；adapter 改为本地声明 `Sink` 接口后 `main.go` 一字未改，**46 条边 / 3 对环**（§4.53）。**决策 116 切掉了第五对，而且它与前四对不同类**：`aiops ↔ hitl` 的两条边里，`hitl → aiops` **从来就不是真的**——它由一个零生产调用方、且设计文档已删除的迁移窗口（`MigrateLegacy` / `DualWriteRepo`，569 行）撑着，删掉后 **44 条边 / 2 对环**；检查器随即抓出 `hitl → approval` 也是同一个文件撑着的假边（理由「两域共享一个模型」并不成立），一并删除（§4.54）。**决策 117 切掉了第六对，而且它的两半是两种病**：`biz/loop` 渲染提示词要围栏，于是 import 了 agent 的 `promptguard`——而那个零依赖安全原语被三个域共用，正确位置是共享底座（照决策 109 的形状下沉到 `pkg/promptguard`，并补上 `pkg/audit` 那条「用 `go/ast` 断言够不到 BC」的测试，断言收紧到只许标准库）；另一半 `mcp_basetool.go` 把 loop 的 MCP 工具包装成 `basetool.BaseTool`，而**适配器由它的输出定义**，于是搬进 `biz/aiops/tools`（方向从 `loop → aiops` 变成表里本来就有的 `aiops → loop`），**43 条边 / 1 对环**；顺带修好一个已经红了的 `make promptguard-check`（它还在跑旧路径，是闸门第一次在包被移动时发挥作用），以及一处点名了不存在包名的错理由（`biz/aiops/loop` 并不存在，第五例）（§4.55）。**决策 118 切掉了第七对，也是最后一对，域图归零**：`aiops ↔ alert` 的贵的一侧是 14 条 `aiops → alert`，而 `alert → aiops` 只有 1 个文件里的 2 条——`biz/alert/investigator` 拿 `chatruntime.SpawnRequest/Worker` 和 `model/aiops.Message` 换来「告警触发一次自动根因分析」。两个都是 struct，**本地重声明不成立**（决策 114 的同一性墙），所以本轮拆成全标量的 `InvestigationRequest` / `InvestigationOutcome`（方法名也从对方的 `SpawnWorker` 改成自己的 `RunInvestigation`），翻译放在装配根；`MessageReader` 只带三个字段、返回 `[]T` 而非 `[]*T`，于是两处 nil 检查消失；那条**零测试覆盖**的 `worker == nil` 防御分支被值返回消除，运行时仍可能的 `(nil,nil)` 守卫搬到唯一能造出它的那一侧并从静默成功变成 error。**42 条边 / 0 对环**，七轮共切 8 条声明边 / 13 条生产 import（§4.56）。§4.53.4 记的「枢纽」判断就此收口：`aiops` 仍是依赖最多的域（读告警、读 HITL、驱动 loop），但**依赖多不是环，被依赖才是问题**。**决策 119 不改一行代码、也不动百分比，只把「能减的行数」变成一个数**：新增 `scripts/deadcode` + `make deadcode-report`（12 条夹具测试），按**文件粒度**报出生产代码里不可达的符号——这是 `domaincheck`（包粒度）看不见、而决策 116 亲手挖到过 569 行的那一类。读数 **794 个符号（502 dead / 292 test-only）/ 整文件 7 个 138 行**——**决策 199 修正了这条**：工具此前按**名字**而不是按**包**记可达性，于是同名符号互相背书（`Migrate` 在 20+ 个包各有一份、`WithTenant` 两个包、`NewBizRepo` 三个包），486（决策 119 当时）与 510（改动前实测）都是**下界**；改成按包归因后 dead 从 250 翻到 502，新增的 252 个已用同包文本 grep 逐个复核，**0 个有代码引用**。夹具 12 条 → **16 条**（新增的 4 条里有一条专门钉住「方法通过变量调用」这个更危险的误报方向）。工具在 `2140df9` 的 worktree 上被要求报出决策 116 删掉的那两个文件，**两档分类都判对**（`MigrateLegacy:test-only`、`NewDualWriteRepo:dead`）。工具**故意不做成闸门**并把看不见的六类路径（反射 / go:linkname / cgo / struct tag / 嵌入方法提升 / 构建标签）打印在每次输出末尾——不可靠的闸门会训练出「trust me」注释（§4.57）。**第二条仍未完成**：manager **1214 个 Go 文件 / 298,280 行**未搬（口径 `find core/manager -name '*.go' | wc -l` 与同法 `cat {} + | wc -l`，见 §4.54.6；**决策 172 实测重取**——1180 / 287,155 是决策 123 时的数，更早的 1135 / 282,605 停在决策 119，**而分母在拆分一行没动的情况下自己长了 31 个文件 / 9,289 行**；决策 203 又给它加回 39 行（审计闭集的一个动作常量 + 一个资源类型），**第四次**由第 15 条闸门拦下并重取，见 §4.108.8；**决策 194 把这两条命令本身变成闸门**——`TestTheManagerSizeInTheProgressSectionIsTheTreesOwn` 每次 push 都跑，所以这个数不再靠人记得重取）；10 个无人引用的包 / 5,544 行全是方案自己没接线的半成品，删死代码这条捷径在包粒度上不存在（决策 116 顺带证明了**文件粒度**上存在，已记为下一轮候选）；`manager → iam_model`（IM bridge）按原计划保留。**第三条从零到约五分之四（决策 123）**：此前记的是「无联邦（`grep -rn "federation\|multi-cluster"` 只命中注释与知识库文档）」，现在五处落地：`core/floor/federation`（规则与状态机）、`core/manager/biz/federation`（注册表与发布器）、`core/manager/server/federation`（控制面路由）、`core/manager/service/federationchild`（子集群侧代理与原子策略存储，决策 125 从 `core/edge/federation` 搬来）、`core/manager/service/federationlink`（根侧绑定表与两个方向的调用）。签名通道复用 `pluginmanifest`，不另造格式。**决策 124 把联邦那条从 0.80 记到 0.90**：`main` 侧的挂载与 `Forget` 的下线回调已接上（§4.61.9）之后，`PushPolicy` 仍是**零生产调用方**——发布只签名记账，从不推送。补上的两件事是**投递通道**（`Store.Receive` 验摘要在解包之前、`Distributor` 按 cluster+version 命名归档、线契约加一个与 `StagedPath` 互斥的 `Source`）与**根侧接线**（`Publish` 发版本后投递，投递结果作为 `Delivery` 与 error 分开报；`Redeliver` 复用首次投递的字节而不是重打包，因为摘要是子集群在解包之前比对的）。**授权模型不需要新造**：签名本身就是授权，子集群用自己 trust store 验根的 ed25519，URL 只是传输。这两条**零新增跨域依赖**。**剩下的是给 `Source.URL` 一个跨网络可用的托管来源**（本刀交付 `file://`，够共享挂载的部署；跨网络要 CDN 或对象存储——外部条件）——**决策 182 更正了此前的三处陈述**（本段此前写「剩下的是子集群进程本身……缺的是装配进子集群启动路径」以及「`Registry` 全在内存、持久化 `Ledger` 实现不在」，**三处都已不成立**）：子集群 Agent 已装配（`federation_child.go` 的 `newFederationChildWiring` 在 `main.go` 启动路径调用），`Registry` 持有 `Ledger` 端口且 `FileLedger` 实现已交付并接进 `federation_wiring.go`（§4.115）。**分数不动**——把陈述修对是事实，把 79.7% 往上拔是判断（§4.64.8）。**决策 125 把这条从 0.90 记到 0.94，并同时改掉了一个比「缺装配」更靠后的缺口**：实测 `live` 符号链接**没有任何生产代码读它**（`grep LiveLinkName\|\.Switch(` 只命中 `receiver.go:332` 的写入点），也就是**通道 100% 而 enforcement 0%**。补上的是 `core/floor/federation/gate.go` 的 `LiveGate`（只答「在不在策略里」，不重做 `Review`——它会拿 `min_edge_version` 比调用方的版本，而 manager 声明不了节点的版本）接在 `service/plugin` 的 `NodeFleet.Install` 上（**不是** `fetch_package`，那条是边缘二进制升级），加上 `cmd/opskeeper/federation_child.go` 的子集群装配（启动不等根、hello 每次重连重发、策略上限复用边缘那三个变量）。**`make module-check` 顺带抓到一个架构错**：那个包里没有一行边缘代理代码，却在 `core/edge` 模块里被 manager 的装配根 import——已搬到 `core/manager/service/federationchild`，域图 57 → 58 域 / 43 边 / 0 环（§4.63） |
 
