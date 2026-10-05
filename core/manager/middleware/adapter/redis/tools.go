@@ -53,6 +53,10 @@ func runBigKeys(ctx context.Context, a *Adapter, args map[string]interface{}) ([
 	return runCategory(catBigKeys)(ctx, a, args)
 }
 
+func runHotKeys(ctx context.Context, a *Adapter, args map[string]interface{}) ([]map[string]any, string, error) {
+	return runCategory(catHotKeys)(ctx, a, args)
+}
+
 func runSlowLog(ctx context.Context, a *Adapter, args map[string]interface{}) ([]map[string]any, string, error) {
 	return runCategory(catSlowLog)(ctx, a, args)
 }

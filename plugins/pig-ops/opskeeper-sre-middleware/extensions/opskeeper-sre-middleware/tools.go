@@ -926,6 +926,23 @@ var tools = []toolSpec{
 	},
 
 	{
+		Name:        "redis.hot_keys",
+		Label:       "redis.hot_keys",
+		Description: "TOP N 热 key（SCAN 采样 + OBJECT FREQ，需 LFU 淘汰策略）",
+		Parameters: `{
+  "properties": {
+    "limit": {
+      "type": "integer"
+    },
+    "scan_limit": {
+      "type": "integer"
+    }
+  },
+  "type": "object"
+}`,
+	},
+
+	{
 		Name:        "redis.info",
 		Label:       "redis.info",
 		Description: "server info（分段解析）",

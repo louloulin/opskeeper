@@ -270,6 +270,7 @@ const (
 	catServerInfo    = "server_info"
 	catKeyspace      = "keyspace"
 	catBigKeys       = "big_keys"
+	catHotKeys       = "hot_keys"
 	catSlowLog       = "slow_log"
 	catClients       = "clients"
 	catBlocked       = "blocked_clients"
@@ -292,6 +293,8 @@ var diagnoseRoutes = map[string]struct {
 	catKeyspace:   {run: diagnoseKeyspace, summary: "per-database key counts"},
 	catBigKeys: {run: diagnoseBigKeys, summary: "largest keys by sampled memory usage",
 		suggestion: "redis.scan_and_delete is destructive; confirm the key is not a live cache entry before proposing removal"},
+	catHotKeys: {run: diagnoseHotKeys, summary: "hottest keys by sampled LFU access frequency",
+		suggestion: "OBJECT FREQ is only tracked under an LFU maxmemory-policy; a non-LFU instance reports the policy instead of a ranking"},
 	catSlowLog: {run: diagnoseSlowLog, summary: "recent slow commands",
 		suggestion: "redis.client_kill needs the client address the slow-log entry reports"},
 	catClients: {run: diagnoseClients, summary: "connected clients"},
@@ -467,6 +470,8 @@ func RegisterTools(reg *registry.Registry, a *Adapter) error {
 		// L1 诊断
 		makeTool("redis.big_keys", adapter.RiskL1Diagnostic, "TOP N 大 key（SCAN 采样 + MEMORY USAGE）",
 			map[string]string{"limit": "int", "scan_limit": "int"}, readOp(a, runBigKeys)),
+		makeTool("redis.hot_keys", adapter.RiskL1Diagnostic, "TOP N 热 key（SCAN 采样 + OBJECT FREQ，需 LFU 淘汰策略）",
+			map[string]string{"limit": "int", "scan_limit": "int"}, readOp(a, runHotKeys)),
 		makeTool("redis.slow_log", adapter.RiskL1Diagnostic, "Redis 慢日志",
 			map[string]string{"limit": "int"}, readOp(a, runSlowLog)),
 		makeTool("redis.key_space", adapter.RiskL1Diagnostic, "各 db 的 key 分布", nil, readOp(a, runKeyspace)),

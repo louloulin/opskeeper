@@ -132,6 +132,7 @@ spec:
     - { name: redis.connect, class: read }
     - { name: redis.dbsize, class: read }
     - { name: redis.fragmentation_ratio, class: read }
+    - { name: redis.hot_keys, class: read }
     - { name: redis.info, class: read }
     - { name: redis.key_space, class: read }
     - { name: redis.memory_usage, class: read }

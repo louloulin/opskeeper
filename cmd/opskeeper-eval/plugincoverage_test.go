@@ -117,7 +117,14 @@ func fixture(t *testing.T) (casesDir, pluginsDir string, out *os.File) {
 	// be testing its own mutation. Naming a real entry also keeps this
 	// honest: if that entry is ever retired, this fixture's expectation has
 	// to be revisited with it.
-	writeCase(t, casesDir, "redis/hot-key", []string{"redis.hot_keys"}, []string{"redis.scan_and_delete"})
+	//
+	// It was redis.hot_keys until 决策 204 implemented that tool and
+	// retired the entry. The name is now kafka.rebalance_history, which is
+	// the other live entry — a capability Kafka genuinely does not expose,
+	// needing a collector rather than a broker client. A fixture pinned to
+	// a retired entry would go red on a healthy tree, and a gate that is
+	// red on a healthy tree is a gate that gets switched off.
+	writeCase(t, casesDir, "mq/broker-down", []string{"kafka.rebalance_history"}, []string{"kafka.reset_offsets"})
 
 	sink, err := os.Create(filepath.Join(root, "report.txt"))
 	if err != nil {
@@ -170,8 +177,8 @@ func TestTheUnrecordedDiagnoseGateFiresOnARootCauseNobodyPackaged(t *testing.T) 
 	// The recorded gap must not be in there. A flag that fires on the
 	// backlog as well as the regression is red forever, and red forever is
 	// how the previous version of this gate went unread.
-	if strings.Contains(err.Error(), "redis.hot_keys") {
-		t.Errorf("the failure names redis.hot_keys, which is a recorded decision rather than a regression: %v", err)
+	if strings.Contains(err.Error(), "kafka.rebalance_history") {
+		t.Errorf("the failure names kafka.rebalance_history, which is a recorded decision rather than a regression: %v", err)
 	}
 }
 
@@ -202,7 +209,7 @@ func TestTheUnrecordedDiagnoseGateIsGreenOnARecordedFleet(t *testing.T) {
 		"diagnosis axis:   1/2",
 		"remediation axis: 0/2",
 		"joint (passable): 0/2",
-		"OWNED redis.hot_keys",
+		"OWNED kafka.rebalance_history",
 	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("the report does not contain %q.\n%s", want, report)

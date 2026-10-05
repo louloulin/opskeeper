@@ -160,6 +160,7 @@ var toolCapabilities = map[string]string{
 	"redis.connect":             CapRedis,
 	"redis.dbsize":              CapRedis,
 	"redis.fragmentation_ratio": CapRedis,
+	"redis.hot_keys":            CapRedis,
 	"redis.info":                CapRedis,
 	"redis.key_space":           CapRedis,
 	"redis.memory_usage":        CapRedis,
@@ -579,12 +580,20 @@ var DiagnosisGaps = map[string]string{
 	"host.top_cpu_procs":  "same as host.host_processes, and additionally a rename: the adapter calls this read host.top_processes. Not aliased, because an alias would claim coverage from a tool no node ships",
 	"host.host_files":     "no read equivalent exists on either side. The adapter's host.old_log_files answers a narrower question (which old logs) and is excluded with the rest of the host family, and nothing anywhere reads a file inventory for a node",
 
-	// The two below name a capability nothing in this build implements,
-	// which makes them a decision about the corpus or the tool name rather
-	// than a packaging backlog item. They are recorded so the diagnosis
-	// axis can be a gate today, and they stay visible so the decision cannot
-	// be lost by going unrecorded.
-	"redis.hot_keys":          "no implementation of this name exists anywhere in this build, packaged or otherwise: the case asks for it and no adapter registers it. Undecided whether the tool name or the corpus is the thing that is wrong",
+	// redis.hot_keys was on this list until 决策 204: the case asked for a
+	// name no adapter registered, and the entry above recorded the choice
+	// as undecided — implement it or fix the case. It was implemented
+	// (adapter category hot_keys, SCAN + OBJECT FREQ, with the LFU-policy
+	// precondition reported rather than papered over) rather than renamed
+	// away, so the entry is retired here. The map is a list of live
+	// decisions, and a decision that has been carried out still sitting on
+	// it is a second, quieter way for the list to start lying.
+	//
+	// The one below is still undecided and still belongs here: it names a
+	// capability nothing in this build implements, which makes it a
+	// decision about the corpus or the tool name rather than a packaging
+	// backlog item. It stays visible so the decision cannot be lost by
+	// going unrecorded.
 	"kafka.rebalance_history": "Kafka exposes the CURRENT consumer assignment and no history of it. Answering this needs a collector that stores successive DescribeGroups results, which is a collector's job and not a broker client's; undecided",
 }
 

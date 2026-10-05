@@ -669,7 +669,7 @@ func TestTheDiagnosisGapLedgerHasNoStaleEntries(t *testing.T) {
 	}
 }
 
-// TestTheDiagnosisAxisHoldsAtSixteen pins the number the two tests above
+// TestTheDiagnosisAxisHoldsAtSeventeen pins the number the two tests above
 // imply, so that a package change moves this line in the diff rather than
 // turning up one day in a report nobody reads.
 //
@@ -677,8 +677,14 @@ func TestTheDiagnosisGapLedgerHasNoStaleEntries(t *testing.T) {
 // satisfied just as well by a fleet that serves nothing, because nothing
 // would be left to own. Pinning the count is what distinguishes a gate from
 // a rubber stamp.
-func TestTheDiagnosisAxisHoldsAtSixteen(t *testing.T) {
-	const want = 16
+//
+// Seventeen, not sixteen (决策 204): redis.hot_keys was implemented rather
+// than renamed away, which retired its DiagnosisGaps entry and closed the
+// redis/hot-key case. A rise here is a deliberate act — the other two tests
+// in this file both fail if a gap is closed without its entry being
+// retired, and this one fails if the count moves without either of those.
+func TestTheDiagnosisAxisHoldsAtSeventeen(t *testing.T) {
+	const want = 17
 	plugins := shippedPlugins(t)
 	diagnosable, total := 0, 0
 	walkCaseFiles(t, func(caseID, _ string, raw []byte) {

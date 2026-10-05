@@ -209,6 +209,161 @@ func diagnoseBigKeys(ctx context.Context, a *Adapter, q adapter.DiagnoseQuery) (
 	return rows, note, nil
 }
 
+// diagnoseHotKeys ranks keys by the access frequency Redis itself keeps.
+//
+// The honest version of this diagnostic has to begin with what Redis can
+// and cannot answer, because the answer usually depends on how the instance
+// is configured:
+//
+//   - Redis does not index access counts. There is no HOTKEYS command, and
+//     no way to ask "which key is hottest" across the keyspace without
+//     naming the keys first. So this walks a bounded SCAN sample and asks
+//     OBJECT FREQ per key — the same shape as big_keys, with access
+//     frequency where it had MEMORY USAGE.
+//   - OBJECT FREQ only returns a number under an LFU eviction policy. Under
+//     noeviction or any LRU policy the server replies with an error,
+//     because it is not counting. Reading that as "frequency 0" would
+//     report a flat, confident ranking of keys whose frequency was never
+//     measured, which is the worst of the available answers. So the policy
+//     is read first, and an instance that is not counting is told so
+//     instead of being handed a ranking.
+//
+// The policy read is an optimisation, not a precondition. A server that
+// does not implement CONFIG GET (a proxy, a managed endpoint, a test
+// double) must not turn this diagnostic into an error — the per-key
+// OBJECT FREQ calls answer the same question on their own, and if none of
+// them can answer it that is reported as what it is. The shape follows
+// big_keys: a server that refuses the command yields an empty ranking with
+// the reason attached, never a listing with invented numbers.
+func diagnoseHotKeys(ctx context.Context, a *Adapter, q adapter.DiagnoseQuery) ([]map[string]any, string, error) {
+	limit, err := intArg(q.Params, "limit", 20)
+	if err != nil {
+		return nil, "", err
+	}
+	scanLimit, err := intArg(q.Params, "scan_limit", defaultScanLimit)
+	if err != nil {
+		return nil, "", err
+	}
+	client, err := a.handle()
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Read the policy before the scan so that an instance which is
+	// provably not counting costs one CONFIG GET rather than a full
+	// keyspace walk that produces nothing.
+	policy, policyErr := client.ConfigGet(ctx, "maxmemory-policy").Result()
+	policyName := ""
+	if policyErr == nil {
+		policyName = policy["maxmemory-policy"]
+	}
+	if policyName != "" && !lfuPolicy(policyName) {
+		return []map[string]any{{
+			"maxmemory_policy":  policyName,
+			"frequency_tracked": false,
+		}}, fmt.Sprintf(
+			"this instance runs maxmemory-policy %q, which does not track key access frequency, so there "+
+				"is no hot key to rank. Set an LFU policy (allkeys-lfu or an LFU variant) to have Redis count "+
+				"accesses, or read redis.client_list to see which clients are issuing the traffic",
+			policyName), nil
+	}
+
+	keys, sampled, err := a.scanKeys(ctx, "*", scanLimit)
+	if err != nil {
+		return nil, "", err
+	}
+	type entry struct {
+		key   string
+		freq  int64
+		typ   string
+		bytes int64
+	}
+	entries := make([]entry, 0, len(keys))
+	unreadable := 0
+	for _, k := range keys {
+		freq, err := client.ObjectFreq(ctx, k).Result()
+		if err != nil {
+			// Two different things land here and neither is worth
+			// guessing at: a key that expired between the scan and the
+			// follow-up, and a server that does not count frequency. A key
+			// that vanished must not make the report unavailable — it is
+			// most needed under churn — so it is counted and skipped.
+			unreadable++
+			continue
+		}
+		typ, _ := client.Type(ctx, k).Result()
+		var size int64
+		if u, err := client.MemoryUsage(ctx, k).Result(); err == nil {
+			size = u
+		}
+		entries = append(entries, entry{key: k, freq: freq, typ: typ, bytes: size})
+	}
+
+	// Nothing could be read. Say that, rather than returning an empty
+	// ranking that reads as "nothing is hot".
+	if len(entries) == 0 {
+		row := map[string]any{
+			"frequency_readable": false,
+			"keys_scanned":       sampled,
+		}
+		switch {
+		case policyName != "":
+			row["maxmemory_policy"] = policyName
+		case policyErr != nil:
+			row["policy_read_error"] = policyErr.Error()
+		}
+		return []map[string]any{row}, fmt.Sprintf(
+			"read the access frequency of none of the %d key(s) scanned; this server does not report it, "+
+				"which is what an instance that is not counting (or a server that does not implement OBJECT FREQ) "+
+				"looks like. Check maxmemory-policy, or read redis.client_list to see which clients are issuing the traffic",
+			sampled), nil
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].freq != entries[j].freq {
+			return entries[i].freq > entries[j].freq
+		}
+		// A stable tiebreak so two runs over an unchanged keyspace produce
+		// the same order. Without it the ranking reshuffles on every call
+		// and an investigator cannot tell changed traffic from changed
+		// sort.
+		return entries[i].key < entries[j].key
+	})
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	rows := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		rows = append(rows, map[string]any{
+			"key":              e.key,
+			"type":             e.typ,
+			"access_frequency": e.freq,
+			"bytes":            e.bytes,
+		})
+	}
+	note := fmt.Sprintf(
+		"sampled %d key(s) of %d scanned; Redis has no key-frequency index, so this is not a global ranking "+
+			"and a hot key outside the sample will not appear",
+		len(entries), sampled)
+	if unreadable > 0 {
+		note += fmt.Sprintf("; %d scanned key(s) could not be read and are absent from the ranking", unreadable)
+	}
+	return rows, note, nil
+}
+
+// lfuPolicy reports whether a maxmemory-policy value means Redis is
+// counting access frequency.
+//
+// The check is a suffix test rather than an equality list on purpose:
+// Redis has accumulated lfu and volatile-lfu spellings over the years, and
+// a policy this build has never heard of that still ends in "lfu" is
+// telling the truth about itself. An unknown policy that does not end in
+// lfu is treated as non-counting, which is the safe direction — it produces
+// the honest "not tracked" answer instead of a ranking nobody measured.
+func lfuPolicy(policy string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(policy)), "lfu")
+}
+
 func diagnoseSlowLog(ctx context.Context, a *Adapter, q adapter.DiagnoseQuery) ([]map[string]any, string, error) {
 	limit, err := intArg(q.Params, "limit", 50)
 	if err != nil {
