@@ -72,6 +72,18 @@ func Dropped(in src.Input) dst.Input {
 	return dst.Input{Alpha: in.Alpha, Beta: in.Beta, Gamma: in.Gamma, Delta: in.Delta, Epsilon: in.Epsilon}
 }
 `,
+	"use/ghost_type_test.go": `package dst
+
+// Ghost is declared in a test file on purpose: the scan skips _test.go, so
+// this type is indexed nowhere and no report can claim to have read it.
+type Ghost struct {
+	Alpha   string
+	Beta    string
+	Gamma   string
+	Delta   string
+	Epsilon string
+}
+`,
 	"use/local.go": `package use
 
 // A same-package literal is a declaration or a test fixture, not a copy.
@@ -105,6 +117,31 @@ import "example.com/mod/src"
 // likely to be a call site as a copy.
 func Narrow(in src.Input) dst.Input {
 	return dst.Input{Alpha: in.Alpha, Beta: in.Beta, Gamma: in.Gamma}
+}
+`,
+	// The destination has nine columns and every literal in this package
+	// copies eight of them, which is the shape a hole in a contract takes:
+	// the source grows, the literal keeps compiling, and the ninth column
+	// ships as a zero value nobody chose.
+	"use/holed.go": `package use
+
+import dst "example.com/mod/dst"
+import "example.com/mod/src"
+
+func Holed(in src.Input) dst.Input {
+	return dst.Input{Alpha: in.Alpha, Beta: in.Beta, Gamma: in.Gamma, Delta: in.Delta, Epsilon: in.Epsilon, Zeta: in.Zeta, Eta: in.Eta}
+}
+`,
+	"use/ghost.go": `package use
+
+import dst "example.com/mod/dst"
+import "example.com/mod/src"
+
+// Ghost lives in a _test.go file, so the scan never indexed it and the
+// destination cannot be read. That is the third way a site goes missing, and
+// it must be missing rather than reported as complete.
+func Ghost(in src.Input) dst.Ghost {
+	return dst.Ghost{Alpha: in.Alpha, Beta: in.Beta, Gamma: in.Gamma, Delta: in.Delta, Epsilon: in.Epsilon}
 }
 `,
 	"use/unresolved.go": `package use
@@ -238,5 +275,99 @@ func TestTheEmptyRunStillExplainsItself(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "no site resolved its source struct") {
 		t.Error("an empty run does not say that it measured nothing")
+	}
+}
+
+// --- the destination direction -------------------------------------------------
+//
+// The first version of this command read one end and found two real defects
+// that were invisible from it. These cases are what stops the second end from
+// being the same mistake wearing a different hat.
+
+// TestAFullDestinationIsReportedAsFull: a destination with nothing missing has
+// to be visible. A second list that only prints suspects reads exactly like a
+// second list with nothing to say.
+func TestAFullDestinationIsReportedAsFull(t *testing.T) {
+	s := findByFunc(analyseTree(t), "Full")
+	if s == nil {
+		t.Fatal("the complete translation was not found at all")
+	}
+	if !s.destResolved || s.destFields != 8 || len(s.destUnset) != 0 {
+		t.Fatalf("a complete destination read as %d/%d with %v never set; it should read 8/8 with none",
+			s.destFields-len(s.destUnset), s.destFields, s.destUnset)
+	}
+	var buf strings.Builder
+	analyseTree(t).print(writerOf(&buf))
+	out := buf.String()
+	const header = "destination columns that nothing sets"
+	i := strings.Index(out, header)
+	if i < 0 {
+		t.Fatal("the report has no destination section at all, so a reader cannot tell which of " +
+			"the two lists a site came from")
+	}
+	// Scoped to the destination section on purpose. The source list prints
+	// "(all set)" too, so a check for that substring anywhere in the report
+	// passes even when the destination list has stopped printing its
+	// complete entries — which is the mutation that found this assertion
+	// was asking the wrong question.
+	if !strings.Contains(out[i:], "(all set)") {
+		t.Error("the destination list does not print its complete entries, so it cannot be told " +
+			"from a list with nothing to report")
+	}
+	if !strings.Contains(out, "reading from the destination:") {
+		t.Error("the report does not say how many destinations it read, which is the only way to " +
+			"tell a resolved list from a short one")
+	}
+}
+
+// TestADestinationColumnNothingFillsIsNamed is the case that end exists for: a
+// column the destination has, the source has nothing for, and the literal does
+// not set. It ships as a zero value however much the source grows.
+func TestADestinationColumnNothingFillsIsNamed(t *testing.T) {
+	s := findByFunc(analyseTree(t), "Holed")
+	if s == nil {
+		t.Fatal("the site with a hole in its destination was not found")
+	}
+	if !s.destResolved {
+		t.Fatal("the destination did not resolve; the claim that this direction needs no receiver is wrong")
+	}
+	if got := strings.Join(s.destUnset, ","); got != "Theta" {
+		t.Fatalf("never set = %q, want Theta", got)
+	}
+}
+
+// TestTheDestinationDirectionReadsWhatTheSourceCannot: the site's receiver is
+// a local, so the source direction cannot read it. The destination direction
+// does not need a receiver, and that is the whole reason both real defects on
+// this tree were reachable at all.
+func TestTheDestinationDirectionReadsWhatTheSourceCannot(t *testing.T) {
+	s := findByFunc(analyseTree(t), "Unresolved")
+	if s == nil {
+		t.Fatal("the unresolved-source site was not found")
+	}
+	if s.resolved {
+		t.Fatal("precondition: the source was resolved, so this case proves nothing")
+	}
+	if !s.destResolved || s.destFields != 8 || len(s.destUnset) != 0 {
+		t.Fatalf("the destination read as resolved=%v %d/%d with %v never set; it needs no receiver "+
+			"and should read 8/8 with none", s.destResolved, s.destFields-len(s.destUnset), s.destFields, s.destUnset)
+	}
+}
+
+// TestAnUnreadableDestinationIsAbsentRatherThanComplete: a destination the
+// scan never indexed must not appear in the destination list at all. Printing
+// it with zero columns filled would be a claim nobody checked.
+func TestAnUnreadableDestinationIsAbsentRatherThanComplete(t *testing.T) {
+	s := findByFunc(analyseTree(t), "Ghost")
+	if s == nil {
+		t.Fatal("the site with an unindexed destination was not found at all")
+	}
+	if s.destResolved {
+		t.Fatal("a destination declared in a file the scan skips was reported as read")
+	}
+	var buf strings.Builder
+	sites{}.print(writerOf(&buf))
+	if strings.Contains(buf.String(), "dst.Ghost") {
+		t.Error("an unread destination appears in the destination list, which is a clean bill nobody earned")
 	}
 }

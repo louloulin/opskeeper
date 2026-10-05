@@ -56,13 +56,25 @@
 // the analysis can learn to see, and until it does, every flag is a place to
 // look rather than a defect to fix.
 //
-// The two real ones were both in the direction this command does not measure.
-// os_version and disk_total_bytes were zero on every device row because the
-// WIRE struct had no column to carry them, and cache_write_tokens was missing
-// from the usage frame because the frame had no column for it. Neither is a
-// source column left unset — a missing destination column is a hole in a
-// contract, and no amount of watching literals notice it. The sites below are
-// where to look; the direction to add is the other one.
+// The second version of this command reads both ends, and the reason is in
+// the numbers: every real defect found on this tree was in the direction the
+// first version did not measure. os_version and disk_total_bytes were zero on
+// every device row because the WIRE struct had no column to carry them;
+// cache_write_tokens was missing from the usage frame because the frame had
+// no column for it; and a reconnected console's approval card came back with
+// no arguments, no blast radius and no target because Open rebuilt five
+// columns and never decoded the payload the row had been storing all along.
+// None of those is a source column left unset — they are destination columns
+// with nothing to fill them, which is a hole in a contract rather than an
+// omission in a copy.
+//
+// The destination direction needs no receiver, so it resolves where the
+// source direction cannot: 124 of 128 sites against 27. Its own false
+// positives are mostly the classes above recurring — a create statement for a
+// persisted row is not a translation, it is the first half of a two-step
+// write — and one of them, the node-side gate that never fills its own
+// Summary and Target, is a real defect this direction has found and that the
+// next decision has to decide rather than guess.
 //
 // What it cannot see, in full:
 //
@@ -173,6 +185,26 @@ var knownFalsePositives = []struct {
 		"cmd/opskeeper/aiopskernel.go: PersistDeps ← agentKernelInput",
 		"one input struct feeds the persister, the host, the provider and the driver; each literal sees a slice of it",
 	},
+	{
+		"assignment after the literal",
+		"(dest) edge/pigsupervisor/supervisor.go: ProcessHealth.Version",
+		"the same class as the source-side one: the value is only knowable from a live process, so it is set on the next statement",
+	},
+	{
+		"source has no counterpart",
+		"(dest) edge/plugins/databasemetrics/spec.go: metricscommon.Target",
+		"the TLS and credential columns belong to targets this source kind cannot be; there is nothing to copy",
+	},
+	{
+		"two-step write",
+		"(dest) 19 sites over model.* — a create statement writes what this call knows",
+		"ID/CreatedAt/UpdatedAt carry gorm autoIncrement/autoCreateTime/autoUpdateTime; ApprovedBy, DecidedAt, Status, Seq, PrevHash and Hash are written by the later Decide/SetResult/ChainStamper calls. This is the destination-side twin of the fan-out class",
+	},
+	{
+		"two-step write",
+		"(dest) biz/edge/usecase.go: devicemodel.Device seed",
+		"OSVersion and DiskTotalBytes are set by the UpdateHostFacts call two lines below; the seed is the identity and the facts call is the facts",
+	},
 }
 
 // minFields is the width below which a literal is not treated as a
@@ -218,6 +250,18 @@ type site struct {
 	dropped []string
 	// resolved says whether source was established at all.
 	resolved bool
+
+	// The destination direction. The two directions answer different
+	// questions and both were needed: the source direction finds a value
+	// that exists and is not carried, and the destination direction finds
+	// a column with nothing to carry it. Both real defects found on this
+	// tree were in this direction — os_version and disk_total_bytes were
+	// permanently zero because tunnel.HostInfo had no column for them, and
+	// cache_write_tokens was missing because UsageFrame had none — and
+	// neither is visible from the source side at any resolution rate.
+	destResolved bool
+	destFields   int
+	destUnset    []string
 }
 
 func main() {
@@ -399,6 +443,22 @@ func translationAt(lit *ast.CompositeLit, f *goFile, params map[string]string, i
 	for _, c := range carried {
 		set[c] = true
 	}
+	// The destination is written as pkg.Type with pkg an import alias in this
+	// file, so it resolves the same way the source does once that one is
+	// known — and it resolves even when the source does not, which is the
+	// point: a hole in a contract shows up as a destination column nobody
+	// fills whatever the receiver turned out to be.
+	if d, isImport := f.aliases[pkg.Name]; isImport {
+		if fields, ok := lookup(index, dirCandidates(d), sel.Sel.Name); ok {
+			s.destResolved = true
+			s.destFields = len(fields)
+			for _, name := range fields {
+				if !set[name] {
+					s.destUnset = append(s.destUnset, name)
+				}
+			}
+		}
+	}
 	// The receiver is the identifier most of the projections hang off. A
 	// literal that mixes several receivers is still a copy, but the source
 	// is then not one struct and resolving it would be a guess.
@@ -543,15 +603,20 @@ func lookup(index typeIndex, dirs []string, name string) ([]string, bool) {
 }
 
 func (all sites) print(w io.Writer) {
-	fmt.Fprintln(w, "hand-written struct translations, and the columns they do not set")
+	fmt.Fprintln(w, "hand-written struct translations, read from both ends")
 	fmt.Fprintln(w, "  a translation is a composite literal of another package's type whose fields are")
-	fmt.Fprintln(w, "  copied one by one from a struct here. adding a column to the source leaves the")
-	fmt.Fprintln(w, "  literal compiling, and the new column ships as a zero value.")
+	fmt.Fprintln(w, "  copied one by one from a struct here. it fails at either end:")
+	fmt.Fprintln(w, "    - from the source: a column the source has and the literal drops, so the value")
+	fmt.Fprintln(w, "      is computed upstream and never arrives (add a column to the source and the")
+	fmt.Fprintln(w, "      literal keeps compiling, shipping the new column as a zero value);")
+	fmt.Fprintln(w, "    - from the destination: a column the literal's type HAS and nothing can fill,")
+	fmt.Fprintln(w, "      which ships as a zero value no matter how the source grows. on this tree both")
+	fmt.Fprintln(w, "      real defects were of this second kind, and neither is visible from the first.")
 	fmt.Fprintln(w, "")
 	fmt.Fprintf(w, "  %d site(s) with at least %d fields and at least %.0f%% plain projections\n",
 		len(all), minFields, projectionRatio*100)
 
-	resolved, flagged := 0, 0
+	resolved, flagged, destResolved, destFlagged := 0, 0, 0, 0
 	for _, s := range all {
 		if s.resolved {
 			resolved++
@@ -559,12 +624,23 @@ func (all sites) print(w io.Writer) {
 		if len(s.dropped) > 0 {
 			flagged++
 		}
+		if s.destResolved {
+			destResolved++
+		}
+		if len(s.destUnset) > 0 {
+			destFlagged++
+		}
 	}
-	fmt.Fprintf(w, "  %d resolved the source struct, %d of them leave at least one column unset\n", resolved, flagged)
+	fmt.Fprintf(w, "  reading from the source: %d resolved the source struct, %d of them leave at\n", resolved, flagged)
+	fmt.Fprintln(w, "  least one column unset")
 	if resolved < len(all) {
-		fmt.Fprintf(w, "  %d did NOT resolve. they are ABSENT from the list below, which is not the\n", len(all)-resolved)
+		fmt.Fprintf(w, "  %d did NOT resolve. they are ABSENT from that list, which is not the\n", len(all)-resolved)
 		fmt.Fprintln(w, "  same as being clean: a site this command cannot read is a site nobody is checking.")
 	}
+	fmt.Fprintf(w, "  reading from the destination: %d of %d resolved it, %d leave at least one\n",
+		destResolved, len(all), destFlagged)
+	fmt.Fprintln(w, "  column unset. this direction needs no receiver, so it covers the sites the")
+	fmt.Fprintln(w, "  source direction cannot read at all.")
 	fmt.Fprintln(w, "")
 
 	// The four known misses are printed here, above the sites, because the
@@ -573,13 +649,19 @@ func (all sites) print(w io.Writer) {
 	// same failure as a gate whose verdict is wrong, and this one was easier
 	// to catch only because the claim was written down.
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "  four kinds of flag below that are not defects, each one established by reading")
-	fmt.Fprintln(w, "  the site rather than by the analysis:")
+	// The count is derived rather than written down. The first version of
+	// this section said "four kinds" and then printed twelve, which is the
+	// same failure as a gate whose verdict disagrees with its own comment:
+	// nobody notices a stale number in prose, and everybody trusts it.
+	fmt.Fprintf(w, "  %d kinds of flag below that are not defects, each one established by reading\n", len(knownFalsePositives))
+	fmt.Fprintln(w, "  the site rather than by the analysis. most of them were found in the source")
+	fmt.Fprintln(w, "  direction and are known to recur in the destination one; the two entries marked")
+	fmt.Fprintln(w, "  (dest) were found there.")
 	for _, k := range knownFalsePositives {
 		fmt.Fprintf(w, "    - %-16s %s: %s\n", k.kind, k.where, k.because)
 	}
 	fmt.Fprintln(w, "  a report whose first answers were all wrong is not a gate. it is a list of")
-	fmt.Fprintln(w, "  places to look, and the four lines above are the reason to look sceptically.")
+	fmt.Fprintf(w, "  places to look, and the %d lines above are the reason to look sceptically.\n", len(knownFalsePositives))
 
 	for _, s := range all {
 		if !s.resolved {
@@ -595,6 +677,41 @@ func (all sites) print(w io.Writer) {
 	}
 	if resolved == 0 {
 		fmt.Fprintln(w, "  (no site resolved its source struct — the run measured nothing)")
+	}
+
+	// The destination list, printed as its own section rather than as extra
+	// columns on the source one: the two questions have different denominators
+	// and merging them would let a site that resolved one way and not the
+	// other read as a single verdict.
+	dest := sites{}
+	for _, s := range all {
+		if s.destResolved {
+			dest = append(dest, s)
+		}
+	}
+	sort.Slice(dest, func(i, j int) bool {
+		if len(dest[i].destUnset) != len(dest[j].destUnset) {
+			return len(dest[i].destUnset) > len(dest[j].destUnset)
+		}
+		if dest[i].destFields != dest[j].destFields {
+			return dest[i].destFields > dest[j].destFields
+		}
+		return dest[i].file < dest[j].file
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "  destination columns that nothing sets — every one of these ships as a zero value:")
+	for _, s := range dest {
+		head := fmt.Sprintf("  %2d/%2d columns  %-34s <- %-22s %s",
+			s.destFields-len(s.destUnset), s.destFields, s.dest, s.source, s.file)
+		if len(s.destUnset) == 0 {
+			fmt.Fprintln(w, head+"  (all set)")
+			continue
+		}
+		fmt.Fprintln(w, head)
+		fmt.Fprintf(w, "          never set: %s\n", strings.Join(s.destUnset, ", "))
+	}
+	if len(dest) == 0 {
+		fmt.Fprintln(w, "  (no destination struct resolved — the second direction measured nothing)")
 	}
 
 	fmt.Fprintln(w, "")

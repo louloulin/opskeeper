@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	bizapproval "github.com/vincent-wuhan/opskeeper/core/manager/biz/approval"
 	modelapproval "github.com/vincent-wuhan/opskeeper/core/manager/model/approval"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
@@ -47,8 +48,15 @@ const (
 // order changed — which would make every grant fail the kernel's binding
 // check, and read as "the approval did not work".
 type agentToolCallPayload struct {
-	ToolName    string `json:"tool_name"`
-	Digest      string `json:"digest"`
+	ToolName string `json:"tool_name"`
+	Digest   string `json:"digest"`
+	// Class is the tool class the gate decided on. It rides here for the
+	// same reason Arguments does: Open rebuilds the request from this
+	// payload, and a request without its class cannot be rendered as the
+	// destructive call it is. Rows written before this column existed
+	// simply have no class, which is the same as the zero value the port
+	// already had on that path.
+	Class       string `json:"class,omitempty"`
 	Arguments   string `json:"arguments"`
 	BlastRadius string `json:"blast_radius,omitempty"`
 	Target      string `json:"target,omitempty"`
@@ -85,6 +93,7 @@ func (a *InboxUsecase) Propose(ctx context.Context, req ports.ApprovalRequest) (
 	payload := agentToolCallPayload{
 		ToolName:    req.ToolName,
 		Digest:      req.Digest,
+		Class:       string(req.Class),
 		Arguments:   string(req.Arguments),
 		BlastRadius: string(req.BlastRadius),
 		Target:      req.Target,
@@ -196,15 +205,56 @@ func (a *InboxUsecase) Open(ctx context.Context, sessionID string) ([]ports.Appr
 		if row == nil || row.SessionID != sessionID {
 			continue
 		}
-		out = append(out, ports.ApprovalRequest{
-			ID:        row.ID,
-			ToolName:  strings.TrimSpace(row.Title),
-			Digest:    row.PayloadJSON,
-			Summary:   row.Summary,
-			SessionID: row.SessionID,
-		})
+		out = append(out, requestFromRow(row))
 	}
 	return out, nil
+}
+
+// requestFromRow rebuilds the port request from a stored row.
+//
+// Everything a console needs in order to render — and to decide — an
+// outstanding call lives in the row's opaque payload, because that payload is
+// also what the executor runs on approve. This used to set only five columns
+// and put the whole payload into Digest, which meant a console that
+// reconnected after a refresh saw a request with no arguments, no blast
+// radius, no target and no class: an approval card that cannot say what it is
+// asking permission for. And the digest it echoed back was not a digest, so
+// the decision the operator submitted could not bind to the call.
+//
+// The row is the only record of a pending request once the process that
+// proposed it is gone, so a column nobody reads back is a column that was
+// never stored.
+func requestFromRow(row *modelapproval.Approval) ports.ApprovalRequest {
+	req := ports.ApprovalRequest{
+		ID:        row.ID,
+		ToolName:  strings.TrimSpace(row.Title),
+		Summary:   row.Summary,
+		SessionID: row.SessionID,
+	}
+	// A row whose payload cannot be read still has to be listed — it is
+	// pending work, and hiding it is worse than showing it thin. What it
+	// must not do is invent a digest: an empty one fails the recompute on
+	// the decision path, which refuses, rather than a plausible-looking
+	// wrong one that could bind to the wrong call.
+	var payload agentToolCallPayload
+	if err := json.Unmarshal([]byte(row.PayloadJSON), &payload); err != nil {
+		return req
+	}
+	if name := strings.TrimSpace(payload.ToolName); name != "" {
+		req.ToolName = name
+	}
+	req.Digest = payload.Digest
+	req.Class = domain.ToolClass(payload.Class)
+	req.Arguments = []byte(payload.Arguments)
+	req.BlastRadius = domain.BlastRadius(payload.BlastRadius)
+	req.Target = payload.Target
+	if payload.SessionID != "" {
+		req.SessionID = payload.SessionID
+	}
+	if exp, ok := parseExpiry(payload.ExpiresAt); ok {
+		req.ExpiresAt = exp
+	}
+	return req
 }
 
 // inboxOpenLimit caps how many pending rows Open reads. The store is shared
@@ -224,10 +274,17 @@ func (a *InboxUsecase) expiryOf(row *modelapproval.Approval) (time.Time, bool) {
 	if err := json.Unmarshal([]byte(row.PayloadJSON), &payload); err != nil {
 		return time.Time{}, false
 	}
-	if payload.ExpiresAt == "" {
+	return parseExpiry(payload.ExpiresAt)
+}
+
+// parseExpiry reads the request deadline out of the payload's string form.
+// An absent or unparseable value means "no deadline of its own", which is
+// what the caller has always done with it.
+func parseExpiry(s string) (time.Time, bool) {
+	if s == "" {
 		return time.Time{}, false
 	}
-	exp, err := time.Parse(time.RFC3339Nano, payload.ExpiresAt)
+	exp, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
 		return time.Time{}, false
 	}
