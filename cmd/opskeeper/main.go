@@ -1518,11 +1518,15 @@ func main() {
 		webshellStreamerAdapter{c: fbClient},
 		webshellRouter,
 		webshellAuditAdapter{repo: webshellAuditRepo},
-		// The junction repo, not deviceRepo: which edge owns a device is a
-		// fact the edge_devices table owns, and the edge row's device_id is
-		// only a convenience copy of it. The previous wiring passed
-		// deviceRepo, which this handler stored and never read.
-		edgeDeviceRepo,
+		// The device usecase, not edgeDeviceRepo. Both answer the same
+		// question from the same junction table — which edge owns a device
+		// as its host — and the usecase is the one that states the host
+		// relation, so passing the repo made every caller of this port
+		// re-choose it. It also meant this handler talked to the store
+		// directly: the biz layer was in the dependency graph of main and
+		// nowhere else, and a store whose wiring is missing shows up as a
+		// nil dereference at the first shell rather than as a wiring error.
+		deviceUC,
 		edgeRepo,
 		log.With(slog.String("comp", "webshell")),
 	)

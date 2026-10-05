@@ -35,7 +35,6 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	bizwebshell "github.com/vincent-wuhan/opskeeper/core/manager/biz/webshell"
-	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
 )
@@ -53,12 +52,25 @@ type Streamer interface {
 
 // DeviceLinks resolves the edge that owns a device.
 //
-// It is the junction (edge_devices), which is the source of truth for that
-// relation. The edge row also carries a device_id column, but the store
-// itself calls it a convenience pointer kept in sync by SetDeviceID — and
-// two copies of one fact is one more than a lookup needs.
+// The relation this used to be asked about is gone. The port took
+// `t devicemodel.EdgeDeviceRelationType` and this handler passed Host on
+// its one and only call site — the type was a parameter that could not vary,
+// and a parameter that cannot vary is a fact wearing a parameter's clothes.
+// (The test for this file used to assert that the value was Host, which is
+// the clearest possible statement that nobody ever got to choose it.)
+//
+// The answer that parameter was selecting is still there: it is now part of
+// the question the implementation has to answer rather than a choice the
+// caller makes. Which edge owns this device *as its host* is the only
+// relation a shell can be opened against.
+//
+// Which store answers it is the implementer's business, not the port's. The
+// junction (edge_devices) is the source of truth for the relation; the edge
+// row also carries a device_id column, but the store itself calls that a
+// convenience pointer kept in sync by SetDeviceID, and two copies of one
+// fact is one more than a lookup needs.
 type DeviceLinks interface {
-	LookupEdgeForDevice(ctx context.Context, deviceID uint64, t devicemodel.EdgeDeviceRelationType) (uint64, error)
+	LookupEdgeForDevice(ctx context.Context, deviceID uint64) (uint64, error)
 }
 
 // EdgeStatusLookup is the whole of what this handler needs from the edge
@@ -197,7 +209,7 @@ func (h *Handler) resolveEdge(ctx context.Context, deviceID uint64) (uint64, err
 	if h.links == nil || h.edges == nil {
 		return 0, errors.New("webshell: edge lookup is not wired")
 	}
-	edgeID, err := h.links.LookupEdgeForDevice(ctx, deviceID, devicemodel.EdgeDeviceRelationHost)
+	edgeID, err := h.links.LookupEdgeForDevice(ctx, deviceID)
 	if err != nil {
 		return 0, fmt.Errorf("no edge registered for device: %w", err)
 	}

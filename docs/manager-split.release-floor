@@ -13,17 +13,17 @@
 # 三份的实测价：
 #
 #   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed         96         34         3 / 4
-#   docs/manager-split.constrained        108         22         0 / 4
-#   docs/manager-split.release-floor        105         25         0 / 4
+#   docs/manager-split.proposed         96         33         3 / 4
+#   docs/manager-split.constrained        108         21         0 / 4
+#   docs/manager-split.release-floor        105         24         0 / 4
 #
 # 决策 230 重取了这三行。触发它的是切掉 `flow -> scheduler`（missed-run 端口
 # 下沉到 `core/floor/scheduler`）：proposed 与 constrained 各少一条组内 import，
 # 本文件的跨组数少一条——`scheduler` 因为那条边被切掉而自己掉进 FLOOR，于是
 # 进 `independent` 组，而它与 `flow` 之间的那条边已经不存在了。
 #
-# **本文件不再是跨组 import 最少的那一份**（决策 247 起）：本文件 25 条、
-# constrained 22 条。它仍然在另外两个维度上是最省的一份——切断的硬约束 0/4、
+# **本文件不再是跨组 import 最少的那一份**（决策 247 起）：本文件 24 条、
+# constrained 21 条。它仍然在另外两个维度上是最省的一份——切断的硬约束 0/4、
 # 未分配的域 0 个——而这两个维度才是「floor」这个名字的依据。跨组数被反超的
 # 原因见下 §「为什么它在决策 247 之前是最省的那一份」。
 #
@@ -76,7 +76,8 @@
 #
 # —— 为什么它在决策 247 之前是最省的那一份，以及从哪一刀起不是了 ——
 #
-# 一直到这里为止，它比 constrained 少三条跨组 import。这不是巧合，也不是意外：
+# 一直到这里为止，它比 constrained 少三条跨组 import（决策 247 之前实测 25 对 22；
+# 决策 248 又各降 1，是 24 对 21，差值不变）。这不是巧合，也不是意外：
 # 零入度的域**按定义**就是那些不 import 别人的域，把它们各自单成一组，
 # 它们向外的每一条边都会变成跨组边——所以这个分组是**唯一一种可能不是最省的**
 # 才对。

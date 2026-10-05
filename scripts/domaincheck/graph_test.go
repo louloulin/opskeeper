@@ -494,11 +494,14 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// mirror wanted six columns of an eleven-column entity) and decision
 	// 247's (agentteams -> alert, where a recovery closure wanted two columns
 	// of a twenty-five-column entity and a status constant that was a
-	// precondition of the question rather than a filter it set).
+	// precondition of the question rather than a filter it set) and decision
+	// 248's (webshell -> device, where the whole edge was one parameter that
+	// could not vary: the handler passed Host on its only call site, and the
+	// test beside it asserted the value arriving was Host).
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "32 edges") {
+	if !strings.Contains(buf.String(), "31 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

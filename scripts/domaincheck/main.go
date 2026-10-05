@@ -198,8 +198,7 @@ var edges = map[edge]string{
 
 	{"systemhealth", "alert"}: "the health summary counts active alerts through the alert service",
 
-	{"webshell", "device"}: "a terminal session is opened against a device record",
-	{"webshell", "edge"}:   "the webshell reaches the node through the edge transport",
+	{"webshell", "edge"}: "the webshell reaches the node through the edge transport",
 }
 
 // pair canonicalises a mutual pair so that the table can be written in

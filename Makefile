@@ -280,6 +280,27 @@ edge-credential-check: ## 节点进程读不到任何云厂商凭据（决策 24
 		'TestTheNodeOpensTheNodeLoaderAndNeverNamesThePlatformConfiguration'
 	@echo "edge-credential-check: the node reads only OPSKEEPER_EDGE_* and never names config.Config"
 
+# The `webshell -> device` edge was one parameter that could not vary: the
+# handler passed `Host` on its only call site, and the test beside it asserted
+# the value arriving was `Host`. Cutting it also moved the wiring in main.go
+# off the GORM store and onto the device usecase, which is the half neither
+# side of the boundary can see.
+#
+# The structural guard is the reason this needs a gate at all. After the cut
+# the store's method takes a relation, so *store.EdgeDeviceRepo no longer
+# satisfies the consumer's port and the old wiring cannot compile. That is a
+# stronger guard than any test — and it is also invisible, so a reader of
+# main.go sees one argument change and cannot tell what stopped being
+# possible. This target runs both halves: the structural statement and the
+# seam with a real usecase at one end and the real handler at the other.
+.PHONY: webshell-links-check
+webshell-links-check: ## WebShell 不再自己挑关系类型，且只能从 usecase 取（决策 248）
+	cd core/manager && GOWORK=off go test ./server/webshell/ -count=1 -run \
+		'TestNoFileInThisPackageImportsTheDeviceDomain|TestTheDevicePortAsksTwoQuestionsAndNoMore|TestThePortStillAsksTheQuestionItWasCutFor'
+	GOWORK=off go test ./cmd/opskeeper/ -count=1 -run \
+		'TestOnlyTheUsecaseCanFillTheWebshellDevicePort|TestTheShellAsksTheDeviceDomainWhichEdgeItBelongsTo'
+	@echo "webshell-links-check: the relation is the device domain's to state, and only the usecase can say it"
+
 # The plan's first P0 is that a node cannot reach a model. Half of that fix
 # lives in llmgw.Register (the routes) and half in
 # modelEndpointResolver.AgentEndpoint (the string every node is handed), and

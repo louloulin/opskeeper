@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
@@ -32,12 +31,14 @@ type fakeLinks struct {
 	seen   []uint64
 }
 
-func (f *fakeLinks) LookupEdgeForDevice(_ context.Context, deviceID uint64, t devicemodel.EdgeDeviceRelationType) (uint64, error) {
+// The relation argument this fake used to check is gone, and its removal is
+// the point: it asserted that the value arriving was Host, which is a test
+// of a fact the caller had no way to state differently. Asserting a constant
+// looks like coverage and measures nothing — but it is also the only reason
+// anyone ever noticed the parameter was constant.
+func (f *fakeLinks) LookupEdgeForDevice(_ context.Context, deviceID uint64) (uint64, error) {
 	f.calls++
 	f.seen = append(f.seen, deviceID)
-	if t != devicemodel.EdgeDeviceRelationHost {
-		return 0, fmt.Errorf("webshell asked for relation %d, which is not the host relation", t)
-	}
 	return f.edgeID, f.err
 }
 
