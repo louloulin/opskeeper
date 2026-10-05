@@ -15,16 +15,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 	managerbizloop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/loop/investigatorreal"
-	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact"
-	gitadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/git"
-	hostadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/host"
-	k8sadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/k8s"
-	mqadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/mq"
-	kafkaadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/mq/kafka"
-	rabbitmqadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/mq/rabbitmq"
-	pgadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/postgres"
-	redisadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/redis"
-	middlewareregistry "github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/toolset"
 )
 
 // opskeeper-eval vocabulary — can this build produce the answers the golden
@@ -203,52 +194,16 @@ func loopActions(cap vocabulary.Capability) ([]string, bool) {
 // would silently miss a tool registered through any path the scrape does
 // not model — the exact failure a capability gate exists to prevent.
 func middlewareAdapterTools() ([]string, map[string][]string, error) {
-	reg := middlewareregistry.NewRegistry()
-	registrars := []struct {
-		name string
-		fn   func(*middlewareregistry.Registry) error
-	}{
-		// The tool set is read from a live registration, so an adapter
-		// that stopped registering would show up as an empty or shorter
-		// list rather than as a silent pass.
-		{"postgres", func(r *middlewareregistry.Registry) error {
-			return pgadapter.RegisterTools(r, pgadapter.New())
-		}},
-		{"redis", func(r *middlewareregistry.Registry) error {
-			return redisadapter.RegisterTools(r, redisadapter.New())
-		}},
-		{"k8s", func(r *middlewareregistry.Registry) error {
-			return k8sadapter.RegisterTools(r, k8sadapter.New())
-		}},
-		{"mq", func(r *middlewareregistry.Registry) error {
-			return mqadapter.RegisterTools(r, mqadapter.New())
-		}},
-		{"host", func(r *middlewareregistry.Registry) error {
-			return hostadapter.RegisterTools(r, hostadapter.New())
-		}},
-		{"kafka", func(r *middlewareregistry.Registry) error {
-			return kafkaadapter.RegisterTools(r, kafkaadapter.New())
-		}},
-		{"rabbitmq", func(r *middlewareregistry.Registry) error {
-			return rabbitmqadapter.RegisterTools(r, rabbitmqadapter.New())
-		}},
-		{"git", func(r *middlewareregistry.Registry) error {
-			return gitadapter.RegisterTools(r, gitadapter.New(gitartifact.NewLinkerRegistry()))
-		}},
-	}
-	for _, r := range registrars {
-		if err := r.fn(reg); err != nil {
-			return nil, nil, fmt.Errorf("register %s adapter tools: %w", r.name, err)
-		}
+	// The list of adapters is toolset.Sources, not a copy of it. The gate
+	// and the control plane have to agree about which namespaces exist —
+	// that agreement is the whole reason the product-namespaced MQ families
+	// are wired at boot — and two handwritten lists agree only until the
+	// first adapter is added to one of them.
+	reg, err := toolset.Registry()
+	if err != nil {
+		return nil, nil, err
 	}
 	tools := reg.ListTools("")
-	if len(tools) == 0 {
-		// An empty registry means the registration silently stopped
-		// happening, and every case would then look unservable. Failing
-		// here keeps that from being reported as a finding about the
-		// corpus.
-		return nil, nil, fmt.Errorf("the middleware adapter registry came back empty")
-	}
 	// The required arguments come from the same live registration, because
 	// they are the difference between "a tool by this name exists" and
 	// "a loop action naming it can actually be performed". A

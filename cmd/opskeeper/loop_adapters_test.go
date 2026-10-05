@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	middlewareregistry "github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/toolset"
 )
 
 // clearLoopAdapterEnv pins every adapter DSN to a known state for the
@@ -16,8 +17,8 @@ import (
 // assertions describe the shell rather than the code.
 func clearLoopAdapterEnv(t *testing.T) {
 	t.Helper()
-	for _, src := range loopAdapterSources() {
-		t.Setenv(src.env, "")
+	for _, src := range toolset.Sources() {
+		t.Setenv(src.Env, "")
 	}
 }
 
@@ -89,13 +90,19 @@ func TestConfiguredHostAdapterRegistersItsTools(t *testing.T) {
 // The list is the deployment contract: these names are documented to
 // operators, so a rename here is a breaking change and should be a
 // deliberate one.
+//
+// The keys are family prefixes — the namespaces the tools actually live
+// under — rather than adapter product names. They used to be the product
+// names ("postgres" for the adapter, "pg" for its tools), and the boot log
+// named an operator's database by a word that appears nowhere in the tool
+// names they would then have to look up.
 func TestLoopAdapterEnvNames(t *testing.T) {
 	want := map[string]string{
-		"postgres": "OPSKEEPER_LOOP_PG_DSN",
-		"redis":    "OPSKEEPER_LOOP_REDIS_DSN",
-		"k8s":      "OPSKEEPER_LOOP_K8S_DSN",
-		"mq":       "OPSKEEPER_LOOP_MQ_DSN",
-		"host":     "OPSKEEPER_LOOP_HOST_DSN",
+		"pg":    "OPSKEEPER_LOOP_PG_DSN",
+		"redis": "OPSKEEPER_LOOP_REDIS_DSN",
+		"k8s":   "OPSKEEPER_LOOP_K8S_DSN",
+		"mq":    "OPSKEEPER_LOOP_MQ_DSN",
+		"host":  "OPSKEEPER_LOOP_HOST_DSN",
 		// git carries no remediation action — the loop's vocabulary is
 		// host/pg/redis/mq/k8s only — but its tools are what let an
 		// investigator check a claim against the source of truth, so it
@@ -109,8 +116,8 @@ func TestLoopAdapterEnvNames(t *testing.T) {
 		"rabbitmq": "OPSKEEPER_LOOP_RABBITMQ_DSN",
 	}
 	got := map[string]string{}
-	for _, src := range loopAdapterSources() {
-		got[src.name] = src.env
+	for _, src := range toolset.Sources() {
+		got[string(src.Name)] = src.Env
 	}
 	if len(got) != len(want) {
 		t.Fatalf("wired adapters = %v, want %v", got, want)
@@ -137,13 +144,13 @@ func TestLoopAdapterEnvNames(t *testing.T) {
 // subject: they used to be on the gate's side only.
 func TestTheProductNamespacesAreWiredNotJustCounted(t *testing.T) {
 	wired := map[string]bool{}
-	for _, src := range loopAdapterSources() {
-		wired[src.name] = true
+	for _, src := range toolset.Sources() {
+		wired[string(src.Name)] = true
 	}
 	// These are the namespaces cmd/opskeeper-eval vocabulary counts from
 	// the adapter registries. If one is ever removed from the control
 	// plane without being removed from the gate's list, this fails.
-	for _, namespace := range []string{"postgres", "redis", "k8s", "mq", "kafka", "rabbitmq", "host", "git"} {
+	for _, namespace := range []string{"pg", "redis", "k8s", "mq", "kafka", "rabbitmq", "host", "git"} {
 		if !wired[namespace] {
 			t.Errorf("the capability gate counts the %q namespace, but the control plane does not wire it; "+
 				"the gate would then report a capability no deployment has", namespace)

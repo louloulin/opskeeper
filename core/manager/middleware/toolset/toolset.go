@@ -29,20 +29,12 @@
 package toolset
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact"
 	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
-	gitadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/git"
-	hostadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/host"
-	k8sadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/k8s"
-	mqadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/mq"
-	kafkaadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/mq/kafka"
-	rabbitmqadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/mq/rabbitmq"
-	pgadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/postgres"
-	redisadapter "github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter/redis"
 	middlewareregistry "github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 )
 
@@ -66,24 +58,31 @@ const (
 
 // families is every prefix a middleware adapter registers under.
 //
-// Order is fixed rather than mapped: the list is small, it is read in
-// reports, and a map would make the printed order vary between runs.
-var families = []Family{
-	FamilyPostgres,
-	FamilyRedis,
-	FamilyK8s,
-	FamilyMQ,
-	FamilyKafka,
-	FamilyRabbitMQ,
-	FamilyHost,
-	FamilyGit,
+// It is read off Sources rather than written out, because "which families
+// exist" and "which adapters are wired" are the same question: a family that
+// is not in the catalog is a prefix nothing registers, and a family in the
+// catalog that is not in this list is one whose tools parse to "" and are
+// therefore invisible to ParseFamily. Two lists would let those two states
+// exist separately, and each is silent.
+//
+// Order is the catalog's, and it is fixed rather than mapped: the list is
+// small, it is read in reports, and a map would make the printed order vary
+// between runs.
+func families() []Family {
+	srcs := Sources()
+	out := make([]Family, 0, len(srcs))
+	for _, s := range srcs {
+		out = append(out, s.Name)
+	}
+	return out
 }
 
 // FamilyNames returns every middleware family, in the order they are
 // reported.
 func FamilyNames() []string {
-	out := make([]string, 0, len(families))
-	for _, f := range families {
+	fs := families()
+	out := make([]string, 0, len(fs))
+	for _, f := range fs {
 		out = append(out, string(f))
 	}
 	return out
@@ -101,7 +100,7 @@ func ParseFamily(tool string) Family {
 			continue
 		}
 		prefix := tool[:i]
-		for _, f := range families {
+		for _, f := range families() {
 			if string(f) == prefix {
 				return f
 			}
@@ -132,26 +131,14 @@ func IsRead(rl adapter.RiskLevel) bool {
 // whoever happened to run the generator.
 func Registry() (*middlewareregistry.Registry, error) {
 	reg := middlewareregistry.NewRegistry()
-	registrars := []struct {
-		name string
-		fn   func(*middlewareregistry.Registry) error
-	}{
-		{"postgres", func(r *middlewareregistry.Registry) error { return pgadapter.RegisterTools(r, pgadapter.New()) }},
-		{"redis", func(r *middlewareregistry.Registry) error { return redisadapter.RegisterTools(r, redisadapter.New()) }},
-		{"k8s", func(r *middlewareregistry.Registry) error { return k8sadapter.RegisterTools(r, k8sadapter.New()) }},
-		{"mq", func(r *middlewareregistry.Registry) error { return mqadapter.RegisterTools(r, mqadapter.New()) }},
-		{"kafka", func(r *middlewareregistry.Registry) error { return kafkaadapter.RegisterTools(r, kafkaadapter.New()) }},
-		{"rabbitmq", func(r *middlewareregistry.Registry) error {
-			return rabbitmqadapter.RegisterTools(r, rabbitmqadapter.New())
-		}},
-		{"host", func(r *middlewareregistry.Registry) error { return hostadapter.RegisterTools(r, hostadapter.New()) }},
-		{"git", func(r *middlewareregistry.Registry) error {
-			return gitadapter.RegisterTools(r, gitadapter.New(gitartifact.NewLinkerRegistry()))
-		}},
-	}
-	for _, r := range registrars {
-		if err := r.fn(reg); err != nil {
-			return nil, fmt.Errorf("register %s adapter tools: %w", r.name, err)
+	for _, src := range Sources() {
+		// dsn == "" is the whole point of this function: it registers each
+		// adapter's tools against an adapter that is not connected, so what
+		// comes back is a fact about the binary. It also returns a closer
+		// for an adapter that was never connected; there is nothing to
+		// close, so it is dropped here rather than collected.
+		if _, err := src.Wire(context.Background(), reg, ""); err != nil {
+			return nil, fmt.Errorf("register %s adapter tools: %w", src.Name, err)
 		}
 	}
 	if len(reg.ListTools("")) == 0 {

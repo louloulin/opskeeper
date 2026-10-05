@@ -106,14 +106,26 @@ Casbin 各判一次。
 
 ---
 
-## 六、装配根与能力检查是三份清单
+## 六、装配根与能力检查读同一份 catalog
 
-「有哪些适配器」这个事实在仓库里有三份：`toolset.Registry()`（空实例表）、
-`cmd/opskeeper/loop_adapters.go`（带真实依赖的装配）、`cmd/opskeeper-eval/vocabulary.go`
-（能力检查用）。**三份目前一致，但没有守卫保证它们一致**——这是本文件记下的下一项，
-不是已关的账。加一个新适配器而只改其中一份，今天不会红。
+「有哪些适配器」这个事实**只有一份**：`toolset.Sources()`（`core/manager/middleware/toolset/sources.go`），
+八个族各一条 `Source{Name, Env, Wire}`。三处读它，都不再自带清单：
 
----
+| 读法 | 调用方 | `dsn` | 用途 |
+|---|---|---|---|
+| `toolset.Registry()` | manifest 生成、`pluginmanifest`、能力检查 | `""` | 「这个二进制提供哪些工具」——与谁接了库无关 |
+| `toolset.Sources()[i].Wire(ctx, reg, dsn)` | `cmd/opskeeper` 启动路径 | 环境变量值 | 配了就连、连不上跳过，返回 closer |
+| `toolset.Sources()` | `cmd/opskeeper-eval vocabulary` | — | 经 `Registry()` 读同一批工具与必填参数 |
+
+`dsn == ""` 与 `dsn != ""` 是**同一个 `Wire` 的两条路**，不是两份实现：不传 DSN 时只注册工具、
+不连接，这样 manifest 与能力闸门量的是二进制而不是「谁刚好接了库」。
+
+**已关的账**（决策 268）：此前 `Registry()` / `loop_adapters.go` / `vocabulary.go` 各有一份内联
+registrar 表，三份今天一致但没有任何东西保证它们一致。现在守卫是
+`core/manager/middleware/toolset/catalog_test.go`：除 catalog 外任何文件不得 import 具体适配器包
+（唯一例外是 `cmd/opskeeper/gitartifact_runtime.go` 的 git 适配器，它要一个已填充 linker 的私有注册表，
+与 boot 路径的空 linker 不是同一件事），加上 Env 名逐条钉死、`Registry()` 与走一遍 `Sources()` 的工具集
+必须逐名相同、以及「给了 DSN 就必须真的连」的行为断言。
 
 ## 七、未交付
 
