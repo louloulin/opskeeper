@@ -184,8 +184,6 @@ var edges = map[edge]string{
 
 	{"imbridge", "aiops"}: "the IM bridge delivers an agent finding into a chat channel, so it formats the agent's output",
 
-	{"integration", "grafana"}: "the integration tests build a real grafana client against a real endpoint",
-
 	{"loop", "alert"}: "an investigation starts from an alert and closes it, so the loop reads and updates alert state",
 
 	{"marketplace", "aiops"}:        "the marketplace lists what an agent can install, which is the agent's tool vocabulary",

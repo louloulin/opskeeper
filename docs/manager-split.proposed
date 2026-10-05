@@ -2,7 +2,7 @@
 #
 # 状态：已定价的候选，不是已批准的决定。
 # 定价：make split-cost FILE=docs/manager-split.proposed
-#   → 100 条 import 留在组内，39 条跨组，最重的一条缝 4 条 import。
+#   → 99 条 import 留在组内，39 条跨组，最重的一条缝 4 条 import。
 #   （决策 147 复核：原文此处写 41 条，已陈旧；当时实测 42，组内 102 条未变。
 #     决策 235 切掉 alert -> edge 与 systemhealth -> edge 之后，两条边此前都是跨组的那
 #     一类，所以组内与跨组各降 2：**100 / 39**。这两行是当前读数，不是历史快照。）

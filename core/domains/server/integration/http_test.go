@@ -10,9 +10,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	pkggrafana "github.com/vincent-wuhan/opskeeper/core/base/pkg/grafana"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/grafana"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
-	bizgrafana "github.com/vincent-wuhan/opskeeper/core/domains/biz/grafana"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 // stubGrafana implements GrafanaService with overridable hooks. Each hook
@@ -20,12 +20,12 @@ import (
 // loudly instead of silently passing.
 type stubGrafana struct {
 	test           func(ctx context.Context) error
-	sync           func(ctx context.Context) (*bizgrafana.SyncResult, error)
+	sync           func(ctx context.Context) (*domain.GrafanaSyncResult, error)
 	fetchDashboard func(ctx context.Context, uid string) ([]byte, error)
 }
 
-func (s stubGrafana) Test(ctx context.Context) error                           { return s.test(ctx) }
-func (s stubGrafana) Sync(ctx context.Context) (*bizgrafana.SyncResult, error) { return s.sync(ctx) }
+func (s stubGrafana) Test(ctx context.Context) error                              { return s.test(ctx) }
+func (s stubGrafana) Sync(ctx context.Context) (*domain.GrafanaSyncResult, error) { return s.sync(ctx) }
 func (s stubGrafana) FetchDashboardJSON(ctx context.Context, uid string) ([]byte, error) {
 	return s.fetchDashboard(ctx, uid)
 }
@@ -42,7 +42,7 @@ func TestFetchDashboardPassesUIDAndReturnsRawJSON(t *testing.T) {
 	gotUID := ""
 	g := stubGrafana{
 		test: func(_ context.Context) error { return nil },
-		sync: func(_ context.Context) (*bizgrafana.SyncResult, error) { return nil, nil },
+		sync: func(_ context.Context) (*domain.GrafanaSyncResult, error) { return nil, nil },
 		fetchDashboard: func(_ context.Context, uid string) ([]byte, error) {
 			gotUID = uid
 			return body, nil
@@ -76,7 +76,7 @@ func TestFetchDashboardRequiresAuthContext(t *testing.T) {
 	t.Parallel()
 	g := stubGrafana{
 		test: func(_ context.Context) error { return nil },
-		sync: func(_ context.Context) (*bizgrafana.SyncResult, error) { return nil, nil },
+		sync: func(_ context.Context) (*domain.GrafanaSyncResult, error) { return nil, nil },
 		fetchDashboard: func(_ context.Context, _ string) ([]byte, error) {
 			t.Fatal("FetchDashboardJSON should not be invoked without auth")
 			return nil, nil
@@ -98,9 +98,9 @@ func TestFetchDashboardMapsNotFoundTo404(t *testing.T) {
 	t.Parallel()
 	g := stubGrafana{
 		test: func(_ context.Context) error { return nil },
-		sync: func(_ context.Context) (*bizgrafana.SyncResult, error) { return nil, nil },
+		sync: func(_ context.Context) (*domain.GrafanaSyncResult, error) { return nil, nil },
 		fetchDashboard: func(_ context.Context, _ string) ([]byte, error) {
-			return nil, pkggrafana.ErrDashboardNotFound
+			return nil, grafana.ErrDashboardNotFound
 		},
 	}
 	h := NewHandler(g, nil, nil, nil, nil)
@@ -120,7 +120,7 @@ func TestFetchDashboardMapsTransportErrorTo502(t *testing.T) {
 	t.Parallel()
 	g := stubGrafana{
 		test: func(_ context.Context) error { return nil },
-		sync: func(_ context.Context) (*bizgrafana.SyncResult, error) { return nil, nil },
+		sync: func(_ context.Context) (*domain.GrafanaSyncResult, error) { return nil, nil },
 		fetchDashboard: func(_ context.Context, _ string) ([]byte, error) {
 			return nil, errors.New("connection refused")
 		},

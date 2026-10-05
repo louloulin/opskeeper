@@ -27,6 +27,7 @@ import (
 	"time"
 
 	pkggrafana "github.com/vincent-wuhan/opskeeper/core/base/pkg/grafana"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	settingbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/setting"
 	monitormodel "github.com/vincent-wuhan/opskeeper/core/domains/model/monitor"
 	settingmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/setting"
@@ -167,13 +168,11 @@ func (s *Service) BootstrapEmbedded(ctx context.Context, adminUser, adminPasswor
 	s.log.Info("grafana bootstrap done", slog.String("sa", saName), slog.Int64("sa_id", sa.ID))
 }
 
-// SyncResult summarises what Sync did. The wire-shape mirrors this struct
-// (server/integration/http.go).
-type SyncResult struct {
-	Folder     string   `json:"folder"`
-	Datasource string   `json:"datasource"`
-	Dashboards []string `json:"dashboards"` // titles synced
-}
+// The port is satisfied or the tree does not build: `server/integration` holds a
+// domain.GrafanaQuery, and this is the only thing in the tree that can satisfy
+// it. Without this line a rename here would surface as a wiring failure in a
+// different module, which is a much later place to find out.
+var _ domain.GrafanaQuery = (*Service)(nil)
 
 // Test reads root_url + sa_token from system_settings, builds a client,
 // and calls /api/health. Returns an error with a human-readable cause on
@@ -187,7 +186,7 @@ func (s *Service) Test(ctx context.Context) error {
 }
 
 // Sync runs the full bootstrap flow.
-func (s *Service) Sync(ctx context.Context) (*SyncResult, error) {
+func (s *Service) Sync(ctx context.Context) (*domain.GrafanaSyncResult, error) {
 	c, err := s.client(ctx)
 	if err != nil {
 		return nil, err
@@ -243,7 +242,7 @@ func (s *Service) Sync(ctx context.Context) (*SyncResult, error) {
 		return nil, err
 	}
 
-	res := &SyncResult{
+	res := &domain.GrafanaSyncResult{
 		Folder:     folderTitle,
 		Datasource: datasourceName,
 		Dashboards: titles,

@@ -449,21 +449,25 @@ func TestTheShippedTreeIsADagFiveLevelsDeep(t *testing.T) {
 	if !strings.Contains(buf.String(), "the graph is a DAG") {
 		t.Error("the shipped tree is no longer a DAG and the report does not say so")
 	}
-	// 38 = decision 118's 42, plus the edge decision 123 added when the root
-	// side of the cluster channel became a domain of its own, minus the five
+	// 37 = decision 118's 42, plus the edge decision 123 added when the root
+	// side of the cluster channel became a domain of its own, minus the six
 	// since cut: decision 227 (frontierbound -> metric, whose port moved
 	// next to HostMetricPoint in core/floor/tunnel), decision 229
 	// (imbridge -> iam, the only remaining edge that selected nothing but a
 	// constant, cut by moving the role vocabulary down to tenantctx), decision
 	// 230 (flow -> scheduler, whose MissedRunInfo/Repo port moved down to
 	// core/floor/scheduler because the flow data store is the only
-	// implementor and lives in a different domain), and decision 235's two
+	// implementor and lives in a different domain), decision 235's two
 	// (alert -> edge and systemhealth -> edge, both cut by moving the
 	// six-column node presence projection down to core/domain and giving
-	// both domains the one-method domain.EdgeQuery port). A cut edge lowers
-	// this number the same way an added one raises it, which is the whole
-	// reason this assertion is written as a number and not as a direction.
-	if !strings.Contains(buf.String(), "38 edges") {
+	// both domains the one-method domain.EdgeQuery port), and decision 236's
+	// (integration -> grafana, cut the same way: the consumer had already
+	// written its own three-method interface and the only thing its
+	// signature named from the producer was one three-field struct). A cut
+	// edge lowers this number the same way an added one raises it, which is
+	// the whole reason this assertion is written as a number and not as a
+	// direction.
+	if !strings.Contains(buf.String(), "37 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

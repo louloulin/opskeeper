@@ -16,16 +16,17 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	pkggrafana "github.com/vincent-wuhan/opskeeper/core/base/pkg/grafana"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
-	bizgrafana "github.com/vincent-wuhan/opskeeper/core/domains/biz/grafana"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
-// GrafanaService is the narrow surface the handler depends on. *bizgrafana.Service
-// satisfies it structurally.
-type GrafanaService interface {
-	Test(ctx context.Context) error
-	Sync(ctx context.Context) (*bizgrafana.SyncResult, error)
-	FetchDashboardJSON(ctx context.Context, uid string) ([]byte, error)
-}
+// GrafanaService is the narrow surface the handler depends on.
+//
+// It is an alias rather than a local interface for the same reason alert's and
+// systemhealth's are: the previous signature named bizgrafana.SyncResult, so
+// declaring the seam here still compiled this package against the producer's
+// package. The port now lives in core/domain, which is what makes this a client
+// of a contract rather than a caller of a location.
+type GrafanaService = domain.GrafanaQuery
 
 // PromQuerier is the narrow surface used to exercise the configured
 // Prometheus on the test endpoint. *promquery.Client satisfies it.
