@@ -380,3 +380,31 @@ func newTestRegistryWithAdapter(t *testing.T, a *Adapter) *registry.Registry {
 	}
 	return reg
 }
+
+// 工具返回的可选键在没值时必须缺席，不能是空串。
+//
+// 模型读一个空串的 author 会得出「这个提交没有作者」，而真相是「这条 CI 没有
+// 透传作者」。这两种读法会导致完全不同的下一步动作（前者去查提交，后者去改
+// 流水线），所以缺席与空值在这里不是同一件事，工具面必须把它区分开。
+func TestFindRuntimeLink_OptionalKeysAbsentWhenUnset(t *testing.T) {
+	reg := gitartifact.NewLinkerRegistry()
+	pg := gitartifact.NewPGQueryLinker()
+	pg.AddIndex("select", &gitartifact.LinkResult{Commit: "def456", Confidence: 0.95})
+	if err := reg.Register(pg); err != nil {
+		t.Fatalf("register pg linker failed: %v", err)
+	}
+	tool, _ := newTestRegistryWithAdapter(t, New(reg)).GetTool("git.find_runtime_link")
+	out, err := tool.Handler(context.Background(), map[string]interface{}{
+		"symbol_type": "pg_query",
+		"input":       map[string]interface{}{"query": "select"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m, _ := out.(map[string]interface{})
+	for _, key := range []string{"author", "commit_msg", "needs_human_confirm"} {
+		if _, ok := m[key]; ok {
+			t.Errorf("key %q must be absent when the pipeline passed nothing, got %v", key, m[key])
+		}
+	}
+}

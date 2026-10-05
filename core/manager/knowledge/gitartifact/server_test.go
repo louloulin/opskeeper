@@ -200,6 +200,10 @@ func TestServer_RuntimeLink_PGQueryHit(t *testing.T) {
 	}
 }
 
+// 低置信度命中必须只用一个键讲人工确认。协议 v0 早先把这件事写成 flag 列，
+// 而 flag 的唯一写者在这个 HTTP 路径、唯一读者在工具通道，于是工具通道恒读
+// 到空 flag、HTTP 通道恒读不到 needs_human_confirm。现在判断单源（NeedsHumanConfirm），
+// 两条通道各自投影同一个布尔。
 func TestServer_RuntimeLink_LowConfidenceFlag(t *testing.T) {
 	s, reg := newTestServer(t)
 	mux := http.NewServeMux()
@@ -223,8 +227,11 @@ func TestServer_RuntimeLink_LowConfidenceFlag(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 	data := resp["data"].(map[string]interface{})
 	link := data["link"].(map[string]interface{})
-	if link["flag"] != "needs_human_confirm" {
-		t.Errorf("expected flag=needs_human_confirm, got %v", link["flag"])
+	if needs, _ := link["needs_human_confirm"].(bool); !needs {
+		t.Errorf("expected needs_human_confirm=true (confidence 0.4 < 0.7), got %v", link["needs_human_confirm"])
+	}
+	if _, ok := link["flag"]; ok {
+		t.Errorf("flag key must be gone: the judgment now has one source and one key, got %v", link["flag"])
 	}
 }
 

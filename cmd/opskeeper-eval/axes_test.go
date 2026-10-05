@@ -258,3 +258,23 @@ func containsToken(tokens []string, want string) bool {
 	}
 	return false
 }
+
+// case 自报的 rca_accuracy 阈值必须过桥到达judge。
+//
+// rubric.rca_accuracy 在 30+ 个随仓库发布的 case.yaml 里都写了（0.8 / 0.85 /
+// 0.9），schema 也校验它，但这条桥接此前不传它，于是每一个阈值都是一句没有
+// 执行者的声明：judge 收不到，也就无从比对，而 case 之间的门槛差异对评分
+// 完全不可见。
+func TestJudgeCaseOfCarriesTheDeclaredThreshold(t *testing.T) {
+	caseObj, err := schema.NewLoader(shippedCasesDir).LoadByID("pg/lock-waits")
+	if err != nil {
+		t.Fatalf("load pg/lock-waits: %v", err)
+	}
+	if caseObj.Rubric.RCAAccuracy <= 0 {
+		t.Fatalf("fixture assumption broken: the shipped case declares no threshold (%v)",
+			caseObj.Rubric.RCAAccuracy)
+	}
+	if got := judgeCaseOf(caseObj).RCAThreshold; got != caseObj.Rubric.RCAAccuracy {
+		t.Errorf("RCAThreshold = %v, want the case's declared %v", got, caseObj.Rubric.RCAAccuracy)
+	}
+}

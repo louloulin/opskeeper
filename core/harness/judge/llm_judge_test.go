@@ -433,3 +433,50 @@ func (a *alwaysFailJudge) Name() string { return "always-fail" }
 func (a *alwaysFailJudge) Score(_ context.Context, _ *Case, _ *AgentResponse) (*Score, error) {
 	return nil, errors.New("fallback always fails")
 }
+
+// 阈值必须在LLM 路径上同样承重。
+//
+// LLM judge 只算 rca_accuracy 一个维度，其余靠启发式；一个只在启发式路径上
+// 生效的阈值，会让同一个 case 在两条路径给出相反的verdict，而 leaderboard
+// 把两条路径的行混在一起平均。
+func TestLLMJudge_DeclaredThresholdFlagsBelowBar(t *testing.T) {
+	llm := &fakeLLMClient{responses: []string{`{"rca_accuracy": 0.42}`}}
+	j := NewLLMJudge(llm, NewHeuristicJudge(), nil)
+	c := &Case{
+		ID:                "pg/lock-waits",
+		ExpectedRootCause: []string{"pg.lock_waits"},
+		RCAThreshold:      0.9,
+	}
+	s, err := j.Score(context.Background(), c, &AgentResponse{RootCause: []string{"pg.lock_waits"}})
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if !s.Flagged {
+		t.Errorf("Flagged = false, want true: the LLM scored 0.42 against a declared 0.9")
+	}
+	if !strings.Contains(s.FlagReason, "0.900") {
+		t.Errorf("FlagReason = %q, want it to name the declared threshold", s.FlagReason)
+	}
+}
+
+// 模型给分达标时不 flag：阈值是 case 的下界，不是模型的许可。
+func TestLLMJudge_DeclaredThresholdNotFlaggedWhenMet(t *testing.T) {
+	llm := &fakeLLMClient{responses: []string{`{"rca_accuracy": 0.95}`}}
+	j := NewLLMJudge(llm, NewHeuristicJudge(), nil)
+	c := &Case{
+		ID:                "pg/lock-waits",
+		ExpectedRootCause: []string{"pg.lock_waits"},
+		RCAThreshold:      0.9,
+	}
+	r := &AgentResponse{
+		RootCause: []string{"pg.lock_waits"},
+		ToolCalls: []ToolCall{{Name: "pg.lock_waits"}},
+	}
+	s, err := j.Score(context.Background(), c, r)
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if s.Flagged {
+		t.Errorf("Flagged = true at 0.95 against a declared 0.9: %s", s.FlagReason)
+	}
+}

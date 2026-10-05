@@ -58,6 +58,9 @@ func (j *HeuristicJudge) Score(ctx context.Context, c *Case, r *AgentResponse) (
 	// 三个诊断轴由规则算出，与四个过程维度同源：Localization 与
 	// Identification 读结论，Reason 读 tool call 轨迹。见 diagnostic.go。
 	applyDiagnostic(score, c, r)
+	// case 自报的rca_accuracy 阈值在这里承重；它此前被声明、被 case.yaml
+	// 校验、被两条桥接读取，却没有任何 judge 比对过。
+	applyDeclaredGates(score, c)
 	return score, nil
 }
 

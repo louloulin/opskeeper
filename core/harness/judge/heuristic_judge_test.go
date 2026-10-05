@@ -2,6 +2,7 @@ package judge
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -109,5 +110,79 @@ func TestHeuristicJudge_EmptyExpectedAllowsPartialCredit(t *testing.T) {
 	// Empty expected + actual given → 0.5 partial credit
 	if s.Dimensions["rca_accuracy"] != 0.5 {
 		t.Errorf("rca_accuracy = %f, want 0.5 for empty expected", s.Dimensions["rca_accuracy"])
+	}
+}
+
+// case 自报的 rca_accuracy 阈值必须真的拦住一次运行。
+//
+// 这个字段此前是一条纯声明：schema 校验它、两条桥接（runner / opskeeper-eval）
+// 曾经不传它、两个 judge 都不读它。case.yaml 里写 rubric.rca_accuracy: 0.8 与
+// 写0.5 对评分完全一样，而 e2e 只能断言一个硬编码的 0.5。
+func TestHeuristicJudge_DeclaredThresholdFlagsBelowBar(t *testing.T) {
+	j := NewHeuristicJudge()
+	c := &Case{
+		ID:                "pg/lock-waits",
+		ExpectedRootCause: []string{"pg.lock_waits", "pg.active_sessions"},
+		RCAThreshold:      0.8,
+	}
+	// 轨迹里两条观测都在，所以 Reason 轴不flag：本用例要验的只有阈值这条路。
+	r := &AgentResponse{
+		RootCause: []string{"pg.lock_waits"}, // rca = 0.5
+		ToolCalls: []ToolCall{{Name: "pg.lock_waits"}, {Name: "pg.active_sessions"}},
+	}
+	s, err := j.Score(context.Background(), c, r)
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if !s.Flagged {
+		t.Errorf("Flagged = false, want true: rca_accuracy 0.5 is under the declared 0.8")
+	}
+	if !strings.Contains(s.FlagReason, "0.800") {
+		t.Errorf("FlagReason = %q, want it to name the declared threshold", s.FlagReason)
+	}
+}
+
+// 恰好压线不算违规；阈值是下界不是目标值。
+func TestHeuristicJudge_DeclaredThresholdNotFlaggedAtBar(t *testing.T) {
+	j := NewHeuristicJudge()
+	c := &Case{
+		ID:                "pg/lock-waits",
+		ExpectedRootCause: []string{"pg.lock_waits"},
+		RCAThreshold:      1.0,
+	}
+	// 带一条真实观测的 tool call：否则 Reason 轴会因为「结论正确但轨迹没有
+	// 证据」而独立flag，那条路径与本用例要验的阈值无关。
+	r := &AgentResponse{
+		RootCause: []string{"pg.lock_waits"},
+		ToolCalls: []ToolCall{{Name: "pg.lock_waits"}},
+	}
+	s, err := j.Score(context.Background(), c, r)
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if s.Flagged {
+		t.Errorf("Flagged = true at rca_accuracy == threshold: %s", s.FlagReason)
+	}
+}
+
+// 0 表示「case 没有声明阈值」，不是「阈值是 0」。否则每个没写 rubric 的 case
+// 的每一次运行都会被 flag，flag 就失去了筛选力。
+func TestHeuristicJudge_ZeroThresholdMeansUndeclared(t *testing.T) {
+	j := NewHeuristicJudge()
+	c := &Case{
+		ID:                "pg/lock-waits",
+		ExpectedRootCause: []string{"pg.lock_waits", "pg.active_sessions"},
+		RCAThreshold:      0,
+	}
+	r := &AgentResponse{
+		RootCause: []string{"pg.lock_waits"},
+		ToolCalls: []ToolCall{{Name: "pg.lock_waits"}, {Name: "pg.active_sessions"}},
+	}
+	s, err := j.Score(context.Background(), c, r)
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if s.Flagged {
+		t.Errorf("Flagged = true with no declared threshold: %s", s.FlagReason)
 	}
 }

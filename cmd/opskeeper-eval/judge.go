@@ -326,6 +326,7 @@ func judgeCaseOf(c *schema.Case) *judge.Case {
 		ExpectedRemediations: c.Expect.RemediationOptions,
 		ExpectedDetectSec:    c.Expect.TimeToDetect,
 		ExpectedRemediateSec: c.Expect.TimeToRemediate,
+		RCAThreshold:         c.Rubric.RCAAccuracy,
 		NoCollateralDamage:   c.Rubric.NoCollateralDamage,
 		ExpectedLocus:        expectations.Locus,
 		ExpectedFaultType:    expectations.FaultType,

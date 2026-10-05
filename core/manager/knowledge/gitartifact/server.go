@@ -285,19 +285,28 @@ func (s *Server) handleRuntimeLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 低置信度标注
-	if result.NeedsHumanConfirm() {
-		result.Flag = "needs_human_confirm"
-	}
+	// 低置信度标注。判断只有 NeedsHumanConfirm 一个真值源，协议 v0 的
+	// flag 键与工具通道的 needs_human_confirm 键都是它的投影——两条通道
+	// 讲同一件事，缺席不再是「未实现」的伪装。
+	link := linkWire{LinkResult: *result, NeedsHumanConfirm: result.NeedsHumanConfirm()}
 
 	resp := map[string]interface{}{
 		"code":    0,
 		"message": "ok",
-		"data":    map[string]interface{}{"link": result},
+		"data":    map[string]interface{}{"link": link},
 	}
 	w.Header().Set("X-GitArtifact-Version", "v0")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// linkWire 是 HTTP 响应里 data.link 的投影：内嵌结构体提供 commit / repo /
+// file:line / author / commit_msg / confidence 六列，needs_human_confirm 是由
+// confidence 推导出的判断列。它替代曾经的 flag 列——flag 与 needs_human_confirm
+// 讲同一件事，两列并存时模型会看到两个键 disagree，而它们其实同源。
+type linkWire struct {
+	LinkResult
+	NeedsHumanConfirm bool `json:"needs_human_confirm"`
 }
 
 // --- helpers ---

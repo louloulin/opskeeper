@@ -545,7 +545,7 @@ func dispatchLink(ctx context.Context, reg *gitartifact.LinkerRegistry, t gitart
 	if result == nil {
 		return map[string]interface{}{"hit": false, "symbol_type": string(t)}, nil
 	}
-	// 转换为 map 便于序列化（保留 confidence + flag）
+	// 转换为 map 便于序列化（保留 confidence + needs_human_confirm）
 	out := map[string]interface{}{
 		"hit":         true,
 		"symbol_type": string(t),
@@ -556,15 +556,18 @@ func dispatchLink(ctx context.Context, reg *gitartifact.LinkerRegistry, t gitart
 		"line_end":    result.LineEnd,
 		"confidence":  result.Confidence,
 	}
+	// author / commit_msg 由 indexer 从 Artifact.Meta（CI 透传）写入，
+	// 缺席表示这条流水线没透传这两项，而不是这个提交没有作者。
 	if result.Author != "" {
 		out["author"] = result.Author
 	}
 	if result.CommitMsg != "" {
 		out["commit_msg"] = result.CommitMsg
 	}
-	if result.Flag != "" {
-		out["flag"] = result.Flag
-	}
+	// needs_human_confirm 是这个端点唯一的人工确认信号，由 confidence 算出，
+	// 不再由结构体上的 flag 列携带——那份拷贝的唯一写者在 HTTP 路径、唯一
+	// 读者在这个工具路径，两条通道互不相交，于是同一个判断在两条通道各用
+	// 一个键讲，其中一条还恒为空。
 	if result.NeedsHumanConfirm() {
 		out["needs_human_confirm"] = true
 	}

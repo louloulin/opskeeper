@@ -84,8 +84,22 @@ type Case struct {
 	ExpectedRemediations []string
 	ExpectedDetectSec    int
 	ExpectedRemediateSec int
-	RCAThreshold         float64
-	NoCollateralDamage   bool
+
+	// RCAThreshold is the minimum rca_accuracy the case itself declares
+	// (schema.Rubric.RCAAccuracy, "评分阈值"). Below it the run is flagged for
+	// human review — the same remedy this package already applies to a judge it
+	// does not trust, and the same Flagged/FlagReason vocabulary the leaderboard
+	// already consumes.
+	//
+	// 0 means "the case declared no threshold", not "the threshold is zero".
+	// The same unmeasured-is-not-zero rule the diagnostic axes follow: a case
+	// that never said anything about rca_accuracy must not have every run
+	// flagged for missing a bar it never set. Producers are responsible for
+	// copying schema.Rubric.RCAAccuracy across; both production bridges
+	// (runner.caseToJudgeCase, opskeeper-eval.judgeCaseOf) do.
+	RCAThreshold float64
+
+	NoCollateralDamage bool
 
 	// ExpectedLocus is the set of resource identities the case's fault
 	// happened to — the "where" of the Localization axis. Populated by the
@@ -102,6 +116,38 @@ type Case struct {
 	//
 	// Empty means the case declared no type, and the axis is absent.
 	ExpectedFaultType []string
+}
+
+// applyDeclaredGates enforces the thresholds the case itself declares.
+//
+// Only rca_accuracy has one today, and the mechanism is deliberately the same
+// as the diagnostic flag: it annotates a score for human review instead of
+// silently moving Overall. Rewriting Overall to "pass/fail" would retroactively
+// invalidate every stored score, and a case that declares a threshold wants
+// the reviewer to see *how far* it fell, not just that it fell.
+//
+// Called by every judge, so a threshold cannot hold on one scoring path and be
+// ignored on the other.
+func applyDeclaredGates(s *Score, c *Case) {
+	if s == nil || c == nil || c.RCAThreshold <= 0 {
+		return
+	}
+	rca, measured := s.Dimensions["rca_accuracy"]
+	if !measured {
+		return
+	}
+	if rca >= c.RCAThreshold {
+		return
+	}
+	note := fmt.Sprintf(
+		"rca_accuracy %.3f is below the threshold the case declares (%.3f)",
+		rca, c.RCAThreshold)
+	if s.FlagReason != "" {
+		s.FlagReason += "; " + note
+	} else {
+		s.FlagReason = note
+	}
+	s.Flagged = true
 }
 
 // ComputeResponseHash 计算 AgentResponse 哈希（缓存 key 的一部分）。

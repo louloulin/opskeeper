@@ -79,6 +79,12 @@ type Event struct {
 	Title          string    `json:"title,omitempty"`
 	Message        string    `json:"message,omitempty"`
 	ActorType      string    `json:"actor_type"`
+	// OperatorUserID is the user who did it, which is model.Event.ActorID
+	// on a user-actor row. It was projected from a second, never-written
+	// column of the same name for months, so the field was structurally
+	// absent from every response the console ever received while the row
+	// underneath it had the value. The JSON name stays: the wire contract
+	// is not the thing that was wrong.
 	OperatorUserID *uint64   `json:"operator_user_id,omitempty"`
 	Reason         string    `json:"reason,omitempty"`
 	OccurredAt     time.Time `json:"occurred_at"`
@@ -934,7 +940,10 @@ func toServiceEvent(r *model.Event) *Event {
 		Severity:       r.Severity,
 		Title:          r.Title,
 		ActorType:      r.ActorType,
-		OperatorUserID: r.OperatorUserID,
+		// ActorID, not the model's own operator_user_id column — see the
+		// note on that column. The JSON name is unchanged, so the console
+		// asks the same question and now gets an answer.
+		OperatorUserID: r.ActorID,
 		Reason:         r.Reason,
 		OccurredAt:     r.OccurredAt,
 		CreatedAt:      r.CreatedAt,

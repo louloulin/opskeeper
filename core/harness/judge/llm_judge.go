@@ -105,6 +105,7 @@ func (j *LLMJudge) Score(ctx context.Context, c *Case, r *AgentResponse) (*Score
 	// 这个资源名/故障名/这些观测"的核对，而模型的判断严格劣于 substring。
 	// 两个 judge 因此带着同一组轴，差异只留在判断成分更重的 rca_accuracy。
 	applyDiagnostic(score, c, r)
+	applyDeclaredGates(score, c)
 	return score, nil
 }
 

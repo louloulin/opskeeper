@@ -551,7 +551,10 @@ func caseToJudgeCase(c *schema.Case) *judge.Case {
 		ExpectedRemediations: c.Expect.RemediationOptions,
 		ExpectedDetectSec:    c.Expect.TimeToDetect,
 		ExpectedRemediateSec: c.Expect.TimeToRemediate,
-		NoCollateralDamage:   c.Rubric.NoCollateralDamage,
+		// case 自报的阈值必须过桥：它此前在这里被丢掉，于是
+		// rubric.rca_accuracy 只在 case.yaml 里存在，从没到达任何 judge。
+		RCAThreshold:       c.Rubric.RCAAccuracy,
+		NoCollateralDamage: c.Rubric.NoCollateralDamage,
 	}
 }
 

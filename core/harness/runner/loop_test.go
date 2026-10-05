@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/harness/judge"
+	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
 )
 
 // stubLoopOrchestrator is a tiny in-memory LoopOrchestrator for tests.
@@ -218,5 +219,17 @@ func TestFileSafeCaseID(t *testing.T) {
 		if got := fileSafeCaseID(in); got != want {
 			t.Errorf("fileSafeCaseID(%q): got %q want %q", in, got, want)
 		}
+	}
+}
+
+// runner 的桥接同样必须把case 自报的阈值带过去（eval CLI 那条桥有对应的守卫）。
+func TestCaseToJudgeCaseCarriesTheDeclaredThreshold(t *testing.T) {
+	c := &schema.Case{
+		ID:     "pg/lock-waits",
+		Expect: schema.Expect{RootCauseLines: []string{"pg.lock_waits"}},
+		Rubric: schema.Rubric{RCAAccuracy: 0.85},
+	}
+	if got := caseToJudgeCase(c).RCAThreshold; got != 0.85 {
+		t.Errorf("RCAThreshold = %v, want 0.85", got)
 	}
 }

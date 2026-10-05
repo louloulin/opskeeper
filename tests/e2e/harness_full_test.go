@@ -96,10 +96,18 @@ func TestHarness_FullFlow_OneCase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("judge.Score: %v", err)
 	}
-	if score.Overall < 0.5 {
-		t.Errorf("Overall = %f, want >= 0.5 (mock response matches case)", score.Overall)
+	// 断言对的是 case 自己声明的阈值，而不是写死的 0.5。此前这个 case 的
+	// rubric.rca_accuracy 从未参与判定，e2e 只能拿一个魔数兜着，于是
+	// 「阈值被忽略」这件事在整个测试套件里没有任何一处会红。
+	if bar := target.Rubric.RCAAccuracy; bar > 0 {
+		if rca := score.Dimensions["rca_accuracy"]; rca < bar {
+			t.Errorf("rca_accuracy = %f, want >= declared %f", rca, bar)
+		}
+		if score.Flagged {
+			t.Errorf("Flagged = true although rca_accuracy met the declared bar: %s", score.FlagReason)
+		}
 	}
-	t.Logf("judge score: overall=%.3f dims=%+v", score.Overall, score.Dimensions)
+	t.Logf("judge score: overall=%.3f rca_threshold=%.3f dims=%+v", score.Overall, target.Rubric.RCAAccuracy, score.Dimensions)
 
 	// 2. Record 到 leaderboard
 	lb := leaderboard.NewLeaderboard()
@@ -296,9 +304,14 @@ func TestHarness_HeuristicJudge_AllCases(t *testing.T) {
 			t.Errorf("%s: judge failed: %v", c.ID, err)
 			continue
 		}
-		// 完美 agent 应得高分
-		if score.Overall < 0.5 {
-			t.Errorf("%s: Overall=%.3f, want >= 0.5 (perfect agent)", c.ID, score.Overall)
+		// 完美 agent 应得满分档：rca 压住 case 自报的阈值，且不被 flag。
+		if bar := c.Rubric.RCAAccuracy; bar > 0 {
+			if rca := score.Dimensions["rca_accuracy"]; rca < bar {
+				t.Errorf("%s: rca_accuracy=%.3f, want >= declared %.3f", c.ID, rca, bar)
+			}
+			if score.Flagged {
+				t.Errorf("%s: Flagged=true on a perfect response: %s", c.ID, score.FlagReason)
+			}
 		}
 		// Record (用不同 RunID 避免后续 Record 触发 baseline 替换)
 		e := &leaderboard.Entry{

@@ -252,3 +252,59 @@ func TestIndexer_Config_Defaults(t *testing.T) {
 		t.Error("extractor should default to MetaExtractor")
 	}
 }
+
+// CI 透传的作者与提交信息必须一路走到反查结果里。
+//
+// 这两个字段此前在 LinkResult 上有读者（工具返回的 author / commit_msg 键、
+// ResolvedCommit.BlameAuthor）却没有写者：indexer 是唯一生产者，而它填不出
+// 作者，因为 ExtractedSymbol 是逐符号的、作者是逐 commit 的。两个键从
+// Artifact.Meta 取，是把制品级信息落到符号级结果的唯一通路。断言走Link()
+// 这条真实读路径，而不是直接翻索引 map。
+func TestIndexer_Index_FillsAuthorFromArtifactMeta(t *testing.T) {
+	ix, reg, st := setupIndexer(t, []model.ExtractedSymbol{
+		{Type: "pg_query", Input: map[string]interface{}{"query": "SELECT 1"},
+			FilePath: "x.go", LineStart: 1, LineEnd: 2, Confidence: 0.95},
+	})
+	a := sampleArtifact("ga-author")
+	a.Meta[MetaKeyCommitAuthor] = "alice@opskeeper.io"
+	a.Meta[MetaKeyCommitMessage] = "fix: slow query path"
+	st.Put(context.Background(), a)
+	if err := ix.Index(context.Background(), "ga-author"); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	linker, _ := reg.Get(gitartifact.SymbolTypePGQuery)
+	lr, err := linker.Link(context.Background(), gitartifact.PGQuery{Query: "SELECT 1"})
+	if err != nil || lr == nil {
+		t.Fatalf("Link: %v (result=%v)", err, lr)
+	}
+	if lr.Author != "alice@opskeeper.io" {
+		t.Errorf("Author = %q, want alice@opskeeper.io", lr.Author)
+	}
+	if lr.CommitMsg != "fix: slow query path" {
+		t.Errorf("CommitMsg = %q, want the CI-passthrough message", lr.CommitMsg)
+	}
+}
+
+// 缺键时留空：缺席的含义是「这条流水线没透传」，工具返回里author /
+// commit_msg 键随之缺席。绝不能凭空造一个值，也不能把别处的值串过来。
+func TestIndexer_Index_MetaWithoutAuthorLeavesFieldsEmpty(t *testing.T) {
+	ix, reg, st := setupIndexer(t, []model.ExtractedSymbol{
+		{Type: "pg_query", Input: map[string]interface{}{"query": "SELECT 2"},
+			FilePath: "y.go", Confidence: 0.95},
+	})
+	a := sampleArtifact("ga-noauthor")
+	st.Put(context.Background(), a)
+	if err := ix.Index(context.Background(), "ga-noauthor"); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	linker, _ := reg.Get(gitartifact.SymbolTypePGQuery)
+	lr, err := linker.Link(context.Background(), gitartifact.PGQuery{Query: "SELECT 2"})
+	if err != nil || lr == nil {
+		t.Fatalf("Link: %v (result=%v)", err, lr)
+	}
+	if lr.Author != "" || lr.CommitMsg != "" {
+		t.Errorf("Author=%q CommitMsg=%q, want both empty", lr.Author, lr.CommitMsg)
+	}
+}

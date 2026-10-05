@@ -225,6 +225,28 @@ func (ix *Indexer) Index(ctx context.Context, publicID string) error {
 	return nil
 }
 
+// CI 透传元数据里承载作者与提交信息的可选键。
+//
+// ExtractedSymbol 是逐符号粒度的（一个制品可产出多个符号），但作者与提交
+// 信息是**逐 commit** 粒度的，所以它们只能来自制品级的 Artifact.Meta。这两个
+// 键是可选的：CI 不传时留空，工具返回与 link 结果里的 author / commit_msg
+// 键随之缺席，缺席的含义是「这条流水线没有透传」，而不是「这个提交没有作者」。
+const (
+	// MetaKeyCommitAuthor 是 CI 透传的提交作者键。
+	MetaKeyCommitAuthor = "commit_author"
+	// MetaKeyCommitMessage 是 CI 透传的提交信息键。
+	MetaKeyCommitMessage = "commit_message"
+)
+
+// metaString 从制品元数据里取一个字符串键，缺失或类型不符时返回空串。
+func metaString(meta map[string]interface{}, key string) string {
+	if meta == nil {
+		return ""
+	}
+	v, _ := meta[key].(string)
+	return v
+}
+
 // addSymbolToLinker 把单个 ExtractedSymbol 注册到对应 Linker。
 func (ix *Indexer) addSymbolToLinker(ctx context.Context, sym model.ExtractedSymbol, a *model.Artifact) error {
 	linker, ok := ix.registry.Get(gitartifact.SymbolType(sym.Type))
@@ -238,6 +260,8 @@ func (ix *Indexer) addSymbolToLinker(ctx context.Context, sym model.ExtractedSym
 		FilePath:   sym.FilePath,
 		LineStart:  sym.LineStart,
 		LineEnd:    sym.LineEnd,
+		Author:     metaString(a.Meta, MetaKeyCommitAuthor),
+		CommitMsg:  metaString(a.Meta, MetaKeyCommitMessage),
 		Confidence: sym.Confidence,
 	}
 	// 构造 AddIndex 调用（各 Linker 接受不同参数，用类型断言分发）

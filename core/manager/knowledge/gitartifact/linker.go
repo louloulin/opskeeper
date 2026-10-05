@@ -4,7 +4,7 @@
 //
 // 关联 Design Doc：docs/superpowers/specs/2026-07-13-unified-platform-path-a-design.md §2.3
 // 关联 spec：openspec/changes/unified-platform-base-selection/specs/git-artifact-linker/spec.md
-// 关联协议：openspec/changes/unified-platform-base-selection/protocols/git-artifact-v0.md
+// 关联协议：docs/api/git-artifact.md
 package gitartifact
 
 import (
@@ -27,19 +27,31 @@ const (
 
 // LinkResult 是反查命中结果。
 //
-// 完整协议字段见 protocols/git-artifact-v0.md §"POST /api/v1/runtime-link"。
+// 关于四个历史字段（Author / CommitMsg / Flag / Evidence）的处置：
+//
+//   - Author、CommitMsg 保留。它们有真实读者——middleware/adapter/git 放进给
+//     模型的工具返回，link_runtime_to_commit 映射为 ResolvedCommit.BlameAuthor。
+//     它们此前没有写者：唯一生产者 api/indexer 构造本结构时只填得出 commit /
+//     repo / file:line / confidence，因为源 ExtractedSymbol 没有作者列。现在
+//     indexer 从 Artifact.Meta（CI 透传）取可选的 commit_author /
+//     commit_message 两键补齐，读者与写者对上。
+//   - Flag 删除。它承载的判断（needs_human_confirm）已经由
+//     NeedsHumanConfirm() 从 Confidence 算出，Flag 是同一判断的第二份拷贝：
+//     唯一写者 server.go 在 HTTP 路径写它，读者 middleware/adapter/git 在工具
+//     路径读它，两条路径互不相交，于是 HTTP 响应只有 flag、工具返回只有
+//     needs_human_confirm。判断收敛到 NeedsHumanConfirm，两条通道各自投影。
+//   - Evidence 删除。它没有任何写者，也没有非测试读者；工具返回里的
+//     evidence 键恒缺席，缺席被模型读成「无证据」而不是「未实现」。
 type LinkResult struct {
-	TenantID   uint64   `json:"-"`
-	Commit     string   `json:"commit"`
-	Repo       string   `json:"repo"`
-	FilePath   string   `json:"file_path"`
-	LineStart  int      `json:"line_start"`
-	LineEnd    int      `json:"line_end"`
-	Author     string   `json:"author,omitempty"`
-	CommitMsg  string   `json:"commit_msg,omitempty"`
-	Confidence float64  `json:"confidence"`
-	Flag       string   `json:"flag,omitempty"` // needs_human_confirm
-	Evidence   []string `json:"evidence,omitempty"`
+	TenantID   uint64  `json:"-"`
+	Commit     string  `json:"commit"`
+	Repo       string  `json:"repo"`
+	FilePath   string  `json:"file_path"`
+	LineStart  int     `json:"line_start"`
+	LineEnd    int     `json:"line_end"`
+	Author     string  `json:"author,omitempty"`
+	CommitMsg  string  `json:"commit_msg,omitempty"`
+	Confidence float64 `json:"confidence"`
 }
 
 // PGQuery 是 PG 慢查询反查输入。

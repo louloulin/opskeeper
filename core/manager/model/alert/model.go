@@ -247,22 +247,33 @@ type Incident struct {
 func (Incident) TableName() string { return "alert_incidents" }
 
 type Event struct {
-	ID             uint64         `gorm:"column:id;primaryKey;autoIncrement"`
-	IncidentID     uint64         `gorm:"column:incident_id;not null;index:idx_alert_events_incident_created,priority:1"`
-	EventType      string         `gorm:"column:event_type;size:24;not null;default:''"`
-	StatusAfter    string         `gorm:"column:status_after;size:16;not null;default:''"`
-	Severity       string         `gorm:"column:severity;size:16;not null;default:''"`
-	Title          string         `gorm:"column:title;size:256;not null;default:''"`
-	Message        *string        `gorm:"column:message;type:text"`
-	ActorType      string         `gorm:"column:actor_type;size:16;not null;default:system"`
-	ActorID        *uint64        `gorm:"column:actor_id"`
-	OperatorUserID *uint64        `gorm:"column:operator_user_id"`
-	SnapshotJSON   string         `gorm:"column:snapshot_json;type:text;not null"`
-	Reason         string         `gorm:"column:reason;type:text;not null"`
-	OccurredAt     time.Time      `gorm:"column:occurred_at"`
-	CreatedAt      time.Time      `gorm:"column:created_at;autoCreateTime;index:idx_alert_events_incident_created,priority:2"`
-	UpdatedAt      time.Time      `gorm:"column:updated_at;autoUpdateTime"`
-	DeletedAt      gorm.DeletedAt `gorm:"column:deleted_at;index"`
+	ID          uint64  `gorm:"column:id;primaryKey;autoIncrement"`
+	IncidentID  uint64  `gorm:"column:incident_id;not null;index:idx_alert_events_incident_created,priority:1"`
+	EventType   string  `gorm:"column:event_type;size:24;not null;default:''"`
+	StatusAfter string  `gorm:"column:status_after;size:16;not null;default:''"`
+	Severity    string  `gorm:"column:severity;size:16;not null;default:''"`
+	Title       string  `gorm:"column:title;size:256;not null;default:''"`
+	Message     *string `gorm:"column:message;type:text"`
+	ActorType   string  `gorm:"column:actor_type;size:16;not null;default:system"`
+	// ActorID is who did it: the user id on a user-actor row, NULL on a
+	// system-actor one. ActorType already says which of the two it is, so
+	// this column does not need a second companion to be unambiguous.
+	//
+	// It used to have one. operator_user_id held the same fact, no code
+	// ever wrote it, and the events API projected that empty column while
+	// hiding this one — so an incident timeline said "a user did this" and
+	// then declined to say which user. Two columns for one fact, one
+	// producer path and one reader path, and they never met. The column
+	// stays in databases that already have it: it is nullable and nothing
+	// writes it, so leaving it costs nothing and dropping it is a separate
+	// migration decision rather than something to smuggle in here.
+	ActorID      *uint64        `gorm:"column:actor_id"`
+	SnapshotJSON string         `gorm:"column:snapshot_json;type:text;not null"`
+	Reason       string         `gorm:"column:reason;type:text;not null"`
+	OccurredAt   time.Time      `gorm:"column:occurred_at"`
+	CreatedAt    time.Time      `gorm:"column:created_at;autoCreateTime;index:idx_alert_events_incident_created,priority:2"`
+	UpdatedAt    time.Time      `gorm:"column:updated_at;autoUpdateTime"`
+	DeletedAt    gorm.DeletedAt `gorm:"column:deleted_at;index"`
 }
 
 func (Event) TableName() string { return "alert_events" }

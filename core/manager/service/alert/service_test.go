@@ -434,3 +434,61 @@ func TestServiceTestChannelReportsFailure(t *testing.T) {
 		t.Fatalf("TestChannel().Message = %q, want 503 detail", got.Message)
 	}
 }
+
+
+// The incident timeline told the console that a user had done something and
+// then declined to say which user, for as long as the events API existed.
+//
+// The cause was two columns for one fact. Every user-actor producer wrote
+// ActorID; the DTO projected a second column called OperatorUserID that no
+// code in the repository has ever written — not in Go, not in SQL. So the
+// field was structurally absent from every response while the row underneath
+// it held the value, and `omitempty` made the absence look deliberate.
+//
+// This test is behavioural on purpose. A test asserting that the projection
+// reads a particular field would have passed against the broken code, which
+// is the failure mode decision 264's tool found twice in one sitting: the
+// question worth asking is whether the value arrives, not whether the line
+// that was supposed to fetch it still exists.
+func TestAUserActorEventCarriesTheUserWhoDidIt(t *testing.T) {
+	who := uint64(4242)
+	out := toServiceEvent(&model.Event{
+		ID:        1,
+		ActorType: model.ActorTypeUser,
+		ActorID:   &who,
+	})
+	if out.OperatorUserID == nil {
+		t.Fatal("operator_user_id is absent on a user-actor event: the timeline says a user " +
+			"did it and not which one, and omitempty makes that look like a deliberate omission")
+	}
+	if *out.OperatorUserID != who {
+		t.Fatalf("operator_user_id = %d, want %d", *out.OperatorUserID, who)
+	}
+	// The wire name is the contract the console already codes against, so
+	// this is checked on the marshalled form rather than the struct field.
+	body, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(body), `"operator_user_id":4242`) {
+		t.Fatalf("marshalled event = %s, want the operator id under the name the console reads", body)
+	}
+}
+
+// A system-actor row has no user, and saying so by omitting the field is the
+// right answer — the mirror image of the case above. Without this the fix
+// would be satisfied by a projection that always emits a value.
+func TestASystemActorEventCarriesNoUser(t *testing.T) {
+	out := toServiceEvent(&model.Event{ID: 2, ActorType: model.ActorTypeSystem})
+	if out.OperatorUserID != nil {
+		t.Fatalf("operator_user_id = %d on a system-actor event, want it absent — a system did "+
+			"it and there is no user to name", *out.OperatorUserID)
+	}
+	body, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(body), "operator_user_id") {
+		t.Fatalf("marshalled event = %s, want the key omitted entirely", body)
+	}
+}
