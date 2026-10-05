@@ -23229,6 +23229,106 @@ router 上——本仓库就有这种代码（`cmd/opskeeper` 里为测试构造
 测试专用 120、三份拆分报价与各阶段百分比全部未动；CI 闸门仍是 **15 道**（没有新闸门，
 是一道已有闸门多了第二层）；`core/manager` **未动**（本轮只动 `scripts/` 与 `docs/`）。
 
+### 4.204 决策 270：把「阶段 3 剩下的 0.3%」问成一道可以回答的问题——**切哪几个包、要付什么、卡在哪一行**
+
+#### 一、这一轮问的是什么
+
+阶段 3 是 99.7%，剩下 0.3% 记的是「`core/manager` 947 个 Go 文件 / 240,578 行未搬」。
+从决策 147 到 249，台账反复写同一句话：**第三问（哪些域能真正独立发版）需要人回答，
+本仓测不出**（控制面 git 历史只有一天）。于是这一轮不再问那个测不出的问题，改问一个
+测得出的：**按 `docs/manager-split.release-floor` 的分组，还剩哪些域住在 `core/manager` 里，
+它们各自缝在什么上面，搬走要动几行。**
+
+答案不是一个百分比，是一个**带价格的清单**。
+
+#### 二、量出来的剩余面
+
+`release-floor` 的 `independent` 组共 34 个域。**其中 24 个已经在 `core/domains`**（决策 223
+起搬的），**还剩 10 个住在 `core/manager`**：
+
+| 域 | 生产行 | 包 | 跨域生产 import（逐条量过） | 装配根要改 |
+|---|---|---|---|---|
+| `report` | 5,137 | 4 | `knowledge` 3、`loop` 2、`dataguard` 1 | 3 imports / 1 文件 |
+| `iam` | 4,524 | 13 | `dataguard` 1 | 10 imports / 1 文件 |
+| `imbridge` | 3,234 | 7 | `aiops` 4 | 6 imports / 1 文件 |
+| `mcp` | 2,752 | 5 | `loop` 1 | 5 imports / 2 文件 |
+| `marketplace` | 2,555 | 4 | `aiops` 2（即 `chatruntime`） | 3 imports / 1 文件 |
+| `demo` | 2,482 | 5 | `alert` 3、`control` 3 | 4 imports / 1 文件 |
+| `webshell` | 1,244 | 4 | **0** | 4 imports / 1 文件 |
+| `pluginimport` | 677 | 1 | **0** | 1 import / 1 文件 |
+| `skill` | 590 | 2 | **0** | 2 imports / 1 文件 |
+| `systemhealth` | 580 | 2 | **0** | 3 imports / 2 文件 |
+| **合计** | **23,775** | **47** | **20 条** | 41 imports / 6 文件 |
+
+**四个域的跨域生产 import 是 0**：`pluginimport` / `skill` / `systemhealth` / `webshell`。
+逐文件核过之后还要再加一句：它们对 `core/manager` 的 6 处 import **全部是域内自引用**
+（`server/skill` → `biz/skill`、`server/webshell` → `biz/webshell` 与 `model/webshell`、
+`server/systemhealth` → `service/systemhealth`）。**这四个域是干净的叶子**，
+它们只依赖 `core/domain`、`core/base`、`core/floor`。
+
+所以「第一刀」在价格上是明确的：**4 个域 / 9 个包 / 3,091 行 / 零条缝**。
+台账此前列的「最便宜的一刀是 3 个文件 / 50 行」（决策 220）说的是 `independent` 整组；
+**剩下的不是 26 个域一起搬得动，而是这 4 个先走。**
+
+#### 三、动手之后量到的阻塞点：不是搬文件，是插件类型系统
+
+`pluginimport` + `skill` 看起来是零设计风险的一刀。**动手才发现它们的测试文件 import 了
+AI 聊天运行时**——而 `pluginimport/importer_test.go` 里有一行注释：
+
+> The chatruntime import this adds is test-only, so it does not put the [module] in a cycle.
+
+**这句话在 `core/manager` 内部成立，跨模块就不成立**，而它没有说明自己只在同模块内成立。
+搬进新模块的那一刻，一个 test-only 的 import 变成了模块环。这是本轮唯一一个**推翻了
+既有判断**的发现，所以单列。
+
+顺着这条线量下去，阻塞点的形状是这样的：
+
+| 事实 | 出处 |
+|---|---|
+| `domain.ContainerLoader` **端口早就存在** | 决策 241 已把 `ContainerSource` / `ContainerKind` / `LoadWarning` 抽进 `core/domain` |
+| `pluginimport.New` **已经是按端口注入的** | 注释写着「no container loader is wired; the composition root must pass one」 |
+| **但端口的实现住在 `chatruntime`** | `ContainerLoader` 是个零尺寸适配器，包着一组对目录做纯函数的加载器 |
+| 加载器用到的类型是一个**闭包** | `PluginManifest` / `Skill` / `Agent` / `Pack` / `LoadResult` / `SkillMetadata` / `ToolDecl` / `Provenance`，再加 `Activation` |
+| `Activation` 又拖出 | `Policy` / `Requires` / `CredentialRequirement` / `CredentialInject` / `CredentialFile` / `OpskeeperExt` |
+| 最后一根刺 | `ToolClass` 在 `chatruntime` 与 `core/domain` **各有一个**，搬的时候要决定谁是哪个 |
+
+也就是说：**让 `marketplace` 不再依赖 AI 聊天运行时（那 2 条 import），代价是把插件类型
+系统整体搬出 `chatruntime`**——约 1,000 行、12 个文件、跨一个闭包型依赖。这是设计工作，
+不是搬文件，理由与 `core/domains` 头注释里那句「lifting them means extracting an interface
+first … That is design work and it is priced separately」完全一致。
+
+**本轮没有做这一刀。** 半途的搬移比不搬更糟：它会把一个可证明的边界变成一个编译不过的
+中间态。工作树已恢复干净（`git status` 空），量到的东西写在这里，供下一刀直接用。
+
+#### 四、下一刀该怎么切（按依赖顺序，不是按行数）
+
+1. **先做零设计风险的那一刀**：`pluginimport` + `skill` + `systemhealth` + `webshell`
+   四个叶子域搬进新模块 `core/extension`（9 包 / 3,091 行 / 零条缝），把模块机器跑通——
+   `go.work`、`PIG_MODULES`、`modulecheck` 的模块表、`domaincheck` 的 `controlPlanePrefixes`。
+   **唯一的障碍是 `pluginimport` 的测试**，而它有一个不需要动类型系统的解法：让
+   `chatruntime` 反过来依赖新模块里的加载器实现（决策 241 已经为 `LoadWarning` 做过一次
+   同形状的「留下别名」），测试改用那个实现，而不是反向 import。
+2. **再做插件类型系统的搬迁**：`chatruntime` 的插件类型 + 容器加载器整体进 `core/extension`，
+   `chatruntime` 留别名。这一刀完成之后 `marketplace → chatruntime` 那 2 条 import 自动消失，
+   `marketplace`（4 包 / 2,555 行）跟着进来，`mcp` 只剩 `loop` 那 1 条。
+3. **最后是 `iam` / `report` / `demo` / `imbridge`**：这四个每个都有 1–6 条缝，且
+   `iam` 的 13 个包是全表最大的一块。**这四个不是「切边」问题，是「先抽接口」问题**，
+   每一刀都要单独定价。
+
+**一句该写下来的话**：台账从决策 147 起就在等「第三问」的答案，本轮证明**第三问不是
+阻塞点，类型系统才是**。release floor 的分组早就把该搬的东西分好了，价格也早就量好了；
+挡住搬迁的一直是**搬一个域要连带搬多少个类型**，而这件事此前没有被量过。
+
+#### 五、分数不动
+
+阶段 3 仍 **99.7%**，加权仍 **98.6%**。理由与前六轮相同，但这一轮要多说一句：
+**本轮没有搬任何一行代码，所以它离「可独立演进」的距离一步也没变近。**
+域图 56/22/0、生产跨域 import 114 / 测试专用 120、CI 闸门 15 道、
+`core/manager` 947 文件 / 240,578 行——**全部未动**。
+
+**做对的是把一个「需要人回答」的问题换成了「已量出价格的清单」。**
+没有做的是那一刀。两者都要记。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -23276,6 +23376,30 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 
 加权合计 ≈ **98.6%**（四阶段等比 98 / 100 / 96.7 / 99.7 的均值 98.6）。这一栏按
 决策倒序追加，每一条只说自己动的那一分量：
+
+- **决策 270 把「阶段 3 剩下的 0.3%」问成了一道能回答的问题，而这一格一分不动、树里一行没动。**
+  台账从决策 147 起就在等「第三问——哪些域能真正独立发版」的答案，并记着「本仓测不出」。
+  本轮不问它了，改问一个测得出的：**按 `release-floor` 分组，还剩哪些域住在 `core/manager`。**
+  答案是**还剩 10 个 / 47 个包 / 23,775 生产行**，逐条量出它们的跨域 import：
+  `report` 6、`demo` 6、`imbridge` 4、`marketplace` 2、`mcp` 1、`iam` 1，**共 20 条**；
+  而 **`pluginimport` / `skill` / `systemhealth` / `webshell` 四个域是 0**，
+  逐文件核过后确认它们对 `core/manager` 的 6 处 import **全部是域内自引用**——
+  **干净的叶子，合计 9 个包 / 3,091 行**。第一刀的价格到此明确。
+  **然后动手，发现了阻塞点的真身，而它不是搬文件**：`pluginimport` 的**测试** import 了
+  AI 聊天运行时，注释写着「test-only 所以不成环」——**这句话只在 `core/manager` 内部成立，
+  跨模块立刻变成模块环**。顺着量下去：`domain.ContainerLoader` 端口决策 241 早就抽好了、
+  `pluginimport` 早就按端口注入，**但实现在 `chatruntime`**，而它拖的是一个闭包型依赖
+  （`PluginManifest`/`Skill`/`Agent`/`Pack`/`LoadResult` + `Activation` → `Policy`/`Requires`/
+  `Credential*`），最后一根刺是 `ToolClass` 在两处各有一个。
+  **换句话说：让 `marketplace` 不再依赖 AI 聊天运行时（2 条 import）的代价，是把插件类型系统
+  整体搬出 `chatruntime`，约 1,000 行 / 12 个文件——是设计工作 priced separately，
+  与 `core/domains` 头注释里那句话同源。本轮没有做这一刀**：半途的搬移会把一个可证明的
+  边界变成编译不过的中间态，工作树已恢复干净，量到的东西写进台账供下一刀直接用。
+  域图 56/22/0、生产 import 114 / 测试 120、三份报价与各阶段百分比全部未动；
+  `core/manager` 947 文件 / 240,578 行未动；CI 闸门仍 15 道。
+  **不改进度百分比，而且理由比前几轮更直接：本轮没有搬任何一行代码，
+  离「可独立演进」一步也没变近。** 做对的是把一个「需要人回答」的问题换成了
+  「已量出价格的清单」；没做的是那一刀——两者都记。详见 §4.204。
 
 - **决策 269 给 `apidoc-check` 加了第二层，而这一格一分不动。** 上一轮自己记下的边界是
   「一条没人挂载的路由字面量能骗过它」——本轮量了：闸门报的 459 条「源码里的路由」里，
