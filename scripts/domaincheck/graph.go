@@ -691,7 +691,92 @@ func (g *domainGraph) printCut(w io.Writer, grouping map[string]string, order []
 	fmt.Fprintln(w, "  Weight is the number of import statements behind it, so a crossing edge worth 25")
 	fmt.Fprintln(w, "  is a different proposition from one worth 1.")
 
+	g.printCutWiring(w, grouping, order)
 	g.printCutVerdict(w, grouping)
+}
+
+// printCutWiring is the third price on a split, and it is the one that was
+// missing long enough for a proposal to look cheap.
+//
+// The other two prices are both measured inside core/manager: edges severed,
+// and lines that have to move. A grouping can score well on both — cut
+// nothing, move nothing — and still make every file under cmd/ stop
+// compiling, because a domain that changes module path is a domain the
+// composition root has to be told about. That edit is not a seam somebody
+// holds open; it is a line somebody changes, and it is per wired domain.
+//
+// So the price is asked per group: how many of the domains in this group are
+// wired from outside core/manager, across how many files, how many import
+// statements. A group full of unwired domains is free to move; a group full
+// of wired ones is a diff in cmd/ that nobody has budgeted for.
+func (g *domainGraph) printCutWiring(w io.Writer, grouping map[string]string, order []string) {
+	if len(g.wiring) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "\n  the third price — what the composition roots above have to edit:")
+	fmt.Fprintln(w, "  Edges and lines are both measured inside core/manager. A grouping can score")
+	fmt.Fprintln(w, "  well on both and still break every build that imports these domains, because a")
+	fmt.Fprintln(w, "  domain that changes module path is a domain cmd/ has to be told about. That is")
+	fmt.Fprintln(w, "  an edit per wired domain, not a seam, and it is the price nobody was printing.")
+
+	var totalDomains, totalImports int
+	wiredFiles := map[string]bool{}
+	for _, name := range order {
+		members, wired, files, imports := 0, 0, map[string]bool{}, 0
+		for d, gname := range grouping {
+			if gname != name {
+				continue
+			}
+			members++
+			if len(g.wiring[d]) == 0 {
+				continue
+			}
+			wired++
+			for f, n := range g.wiring[d] {
+				files[f] = true
+				imports += n
+			}
+		}
+		totalDomains += wired
+		totalImports += imports
+		for f := range files {
+			wiredFiles[f] = true
+		}
+		fmt.Fprintf(w, "    %-14s %2d of %2d domains wired from outside, across %2d file(s), %3d import(s)\n",
+			name, wired, members, len(files), imports)
+	}
+	fmt.Fprintf(w, "\n  %d wired domain(s) in total, %d file(s) outside core/manager to edit, %d import(s).\n",
+		totalDomains, len(wiredFiles), totalImports)
+
+	heaviest := make([]string, 0, len(wiredFiles))
+	for f := range wiredFiles {
+		heaviest = append(heaviest, f)
+	}
+	sort.Strings(heaviest)
+	shown := 0
+	for _, f := range heaviest {
+		n := 0
+		for d, gname := range grouping {
+			if gname == "" {
+				continue
+			}
+			if c, ok := g.wiring[d][f]; ok {
+				n += c
+			}
+		}
+		if n < 20 {
+			continue
+		}
+		fmt.Fprintf(w, "    %-40s %3d import(s)\n", f, n)
+		shown++
+	}
+	if shown == 0 {
+		return
+	}
+	fmt.Fprintln(w, "  Every file listed above is a single place one person has to be right about.")
+	fmt.Fprintln(w, "  That is a small, bounded cost and it is not a reason not to split — but it is")
+	fmt.Fprintln(w, "  a real line item, and a proposal that does not name it is quoting a price for")
+	fmt.Fprintln(w, "  a different, cheaper operation than the one being proposed.")
 }
 
 // printCutVerdict is the second price on a split, and the one the edge

@@ -347,3 +347,107 @@ var _ = iam.New
 			"ships against. got %v", files)
 	}
 }
+
+// cutFixture is a two-domain tree with an external composition root, which is
+// the smallest shape that can show all three prices at once.
+func cutFixture(t *testing.T) *domainGraph {
+	t.Helper()
+	root := writeTree(t, map[string]string{
+		"biz/a/a.go": `package a
+
+type A struct{}
+`,
+		"biz/b/b.go": `package b
+
+import "%Mbiz/a"
+
+var _ = a.A{}
+`,
+	})
+	sources, _, err := parseTree(root, rules{})
+	if err != nil {
+		t.Fatalf("parse the tree: %v", err)
+	}
+	g := buildGraph(sources, rules{})
+	g.wiring = map[string]map[string]int{
+		"a": {"cmd/app/main.go": 30},
+		"b": {"cmd/app/main.go": 2, "cmd/other/main.go": 1},
+	}
+	return g
+}
+
+func cutOutput(t *testing.T, g *domainGraph, body string) string {
+	t.Helper()
+	grouping, order, err := loadGrouping(groupingFile(t, body))
+	if err != nil {
+		t.Fatalf("load the grouping: %v", err)
+	}
+	var buf bytes.Buffer
+	g.printCut(&buf, grouping, order, nil)
+	return buf.String()
+}
+
+// TestTheThirdPriceCountsEachGroupsWiredDomains pins the arithmetic of the
+// section decision 219 added: per group, how many of its domains the outside
+// world imports, in how many files, worth how many import statements.
+func TestTheThirdPriceCountsEachGroupsWiredDomains(t *testing.T) {
+	g := cutFixture(t)
+	out := cutOutput(t, g, "left  = a\nright = b\n")
+
+	if !strings.Contains(out, "1 of  1 domains wired from outside, across  1 file(s),  30 import(s)") {
+		t.Fatalf("group left should carry a's 3 imports in one file:\n%s", out)
+	}
+	if !strings.Contains(out, "1 of  1 domains wired from outside, across  2 file(s),   3 import(s)") {
+		t.Fatalf("group right should carry b's 2+1 imports across two files:\n%s", out)
+	}
+	if !strings.Contains(out, "2 wired domain(s) in total, 2 file(s) outside core/manager to edit, 33 import(s).") {
+		t.Fatalf("the totals must add across groups:\n%s", out)
+	}
+	// The single file carrying most of the work is named, because "21 files to
+	// edit" and "one 6606-line file is all of it" are different conversations.
+	if !strings.Contains(out, "cmd/app/main.go") {
+		t.Fatalf("the heaviest file must be named rather than left inside a count:\n%s", out)
+	}
+}
+
+// TestASplitThatSeversNothingCanStillBeExpensiveOutsideTheTree is the reason
+// the section exists at all.
+//
+// Both groupings below put a and b in the same group, so neither severs a
+// single edge and neither moves a line of code. The first two prices are
+// therefore both zero, and a report with only those two prices would call them
+// free. They are not free: two domains have to be re-pointed in three files
+// under cmd/. A price that reads zero for an operation with real work in it is
+// worse than no price, because it is believed.
+func TestASplitThatSeversNothingCanStillBeExpensiveOutsideTheTree(t *testing.T) {
+	g := cutFixture(t)
+	out := cutOutput(t, g, "one = a, b\n")
+
+	if !strings.Contains(out, "0 cross one") {
+		t.Fatalf("this grouping is meant to sever nothing, so the edge price must read zero:\n%s", out)
+	}
+	if !strings.Contains(out, "2 wired domain(s) in total, 2 file(s) outside core/manager to edit, 33 import(s).") {
+		t.Fatalf("the composition-root price must not be zero just because the edge price is:\n%s", out)
+	}
+}
+
+// TestTheThirdPriceIsAbsentWhenNothingIsWired keeps the section from printing
+// an empty, alarming paragraph over a tree that has no composition roots.
+func TestTheThirdPriceIsAbsentWhenNothingIsWired(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"biz/a/a.go": `package a
+
+type A struct{}
+`,
+	})
+	sources, _, err := parseTree(root, rules{})
+	if err != nil {
+		t.Fatalf("parse the tree: %v", err)
+	}
+	g := buildGraph(sources, rules{})
+	out := cutOutput(t, g, "one = a\n")
+	if strings.Contains(out, "the third price") {
+		t.Fatalf("with nothing wired there is no third price to print, and an empty section reads\n"+
+			"as a warning about a tree that has no problem:\n%s", out)
+	}
+}
