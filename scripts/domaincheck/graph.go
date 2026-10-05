@@ -61,6 +61,17 @@ type domainGraph struct {
 	// whose internals are the interface. Both cost the same to break and
 	// only one of them is cheap to split.
 	entryUse map[string]map[string]map[string]bool
+	// doorUse is, for each domain reached through a single package, whether
+	// the symbols its dependents select from that package are interfaces.
+	//
+	// It is the difference between a door and a naming convention, and the
+	// difference is the whole content of the claim. A package whose exported
+	// surface is interfaces can have what is behind it replaced and nothing
+	// on the far side notices. A package whose surface is structs and
+	// functions is a boundary in the file system only: every dependent names
+	// a concrete type that would have to travel with it, so "the seam
+	// already exists" is true of the import and false of the design.
+	doorUse map[string]map[string]map[string]declKind
 }
 
 // pkgSize is one package's share of the tree. domain is kept alongside it
@@ -81,6 +92,15 @@ type ranked struct {
 }
 
 func buildGraph(sources []source, r rules) *domainGraph {
+	// The exported surface of every package, keyed by import path, so the
+	// per-import classification below can ask what kind of thing a dependent
+	// is holding rather than only where it reached for it.
+	pkgDeclared := map[string]map[string]declKind{}
+	for _, src := range sources {
+		if src.declared != nil {
+			pkgDeclared[pkgKey(src)] = src.declared
+		}
+	}
 	g := &domainGraph{
 		weight:    map[edge]int{},
 		domains:   map[string]bool{},
@@ -88,6 +108,7 @@ func buildGraph(sources []source, r rules) *domainGraph {
 		pkgs:      map[string]pkgSize{},
 		sharedUse: map[string]map[string]bool{},
 		entryUse:  map[string]map[string]map[string]bool{},
+		doorUse:   map[string]map[string]map[string]declKind{},
 	}
 	for _, src := range sources {
 		from := domainOf(src.path)
@@ -132,6 +153,19 @@ func buildGraph(sources []source, r rules) *domainGraph {
 				g.entryUse[to][imp] = map[string]bool{}
 			}
 			g.entryUse[to][imp][from] = true
+			if g.doorUse[to] == nil {
+				g.doorUse[to] = map[string]map[string]declKind{}
+			}
+			if g.doorUse[to][imp] == nil {
+				g.doorUse[to][imp] = map[string]declKind{}
+			}
+			for sym := range src.used[imp] {
+				if pkgDeclared[imp][sym] == kindInterface {
+					g.doorUse[to][imp][sym] = kindInterface
+				} else {
+					g.doorUse[to][imp][sym] = kindOther
+				}
+			}
 		}
 	}
 	return g
@@ -844,11 +878,41 @@ func (g *domainGraph) printReleaseFloor(w io.Writer, shared map[string]string) {
 	fmt.Fprintln(w, "  evidence that exists, and note that it needs more than a single day of history.")
 
 	if len(single) > 0 {
-		fmt.Fprintf(w, "\n  of those, %d are reached through exactly ONE package — the seam already\n", len(single))
-		fmt.Fprintln(w, "  exists, so a split would preserve it rather than invent it. This is a")
-		fmt.Fprintln(w, "  NECESSARY condition for extraction, not a proof of it: one package today is")
-		fmt.Fprintln(w, "  not a promised-stable interface, and only a person can say it will be one.")
-		fmt.Fprintln(w, "  What it buys is an ordering — these are the ones to try first:")
+		fmt.Fprintf(w, "\n  of those, %d are reached through exactly ONE package. That is worth having,\n", len(single))
+		fmt.Fprintln(w, "  and it is worth less than it looks: one package is a boundary in the import")
+		fmt.Fprintln(w, "  graph, not necessarily in the design. The last column says what the symbols")
+		fmt.Fprintln(w, "  the far side actually selects are made of:")
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, "    interface door  every selected symbol is an interface, so what is behind it")
+		fmt.Fprintln(w, "                    could be replaced and nothing over there would notice")
+		fmt.Fprintln(w, "    concrete door   they are structs and functions, so the door is a package")
+		fmt.Fprintln(w, "                    boundary in the file system only — every dependent names a")
+		fmt.Fprintln(w, "                    type that would have to travel with it")
+		fmt.Fprintln(w, "    mixed door      both, which is the answer that should make a reader")
+		fmt.Fprintln(w, "                    suspicious rather than reassured")
+		fmt.Fprintln(w, "")
+		// The headline number, because the two counts say opposite things and
+		// the reader should not have to add them up. Most doors being
+		// concrete is the finding: the seam exists as a package and not as a
+		// substitutable interface, so "preserve the door" for those means
+		// keeping a shared package across the split, not preserving an
+		// interface.
+		var substitutable, notSubstitutable int
+		for _, d := range single {
+			if len(g.doorUse[d]) == 1 {
+				if classifyDoor(g.doorUse[d][firstKey(g.doorUse[d])]) == "interface" {
+					substitutable++
+				} else {
+					notSubstitutable++
+				}
+			}
+		}
+		fmt.Fprintf(w, "  %d of these %d have an interface door. The other %d have a concrete one, which\n",
+			substitutable, len(single), notSubstitutable)
+		fmt.Fprintln(w, "  is a real seam and not a promise: splitting them means the two sides keep")
+		fmt.Fprintln(w, "  importing one package, not that anything can be swapped behind it.")
+		fmt.Fprintln(w, "  This is a NECESSARY condition for extraction, not a proof of it, and only a")
+		fmt.Fprintln(w, "  person can say whether a door stays one package. What it buys is an ordering:")
 		for _, d := range single {
 			fmt.Fprintf(w, "    %s\n", g.entryRow(d))
 		}
@@ -860,6 +924,15 @@ func (g *domainGraph) printReleaseFloor(w io.Writer, shared map[string]string) {
 			fmt.Fprintf(w, "    %s\n", g.entryRow(d))
 		}
 	}
+}
+
+// firstKey is the single entry package of a domain reached through one, which
+// is the only case the substitutable count asks about.
+func firstKey(m map[string]map[string]declKind) string {
+	for k := range m {
+		return k
+	}
+	return ""
 }
 
 // entryRow is one line of the coupled-domain report.
@@ -880,9 +953,74 @@ func (g *domainGraph) entryRow(domain string) string {
 			importers++
 		}
 	}
-	return fmt.Sprintf("%-14s %d entr%s, %d importer%s",
+	return fmt.Sprintf("%-14s %d entr%s, %d importer%s  %s",
 		domain, len(entries), plural(len(entries), "y", "ies"),
-		importers, plural(importers, "", "s"))
+		importers, plural(importers, "", "s"),
+		strings.Join(g.doorSummary(domain), ", "))
+}
+
+// doorSummary is what a domain's door is made of, in the words the report
+// needs.
+//
+// The three answers are deliberately blunt. "interface" means every symbol
+// selected from the entry package is an interface, so what sits behind the
+// door could be replaced without a dependent noticing. "concrete" means none
+// of them is, so the door is a package boundary in the file system and
+// nothing more: every dependent names a type that would have to move with it.
+// "mixed" is the honest answer when both appear, and it is the answer that
+// should make a reader suspicious rather than reassured.
+//
+// A package whose dependents select nothing from it — through a dot-import,
+// or through a name this checker does not model — reports as "unknown" rather
+// than being folded into one of the other two. Guessing here would be the one
+// error this whole report cannot afford: a domain reported as substitutable
+// that is not would be sent down a split that then breaks.
+func (g *domainGraph) doorSummary(domain string) []string {
+	counts := map[string]int{}
+	for _, syms := range g.doorUse[domain] {
+		counts[classifyDoor(syms)]++
+	}
+	// Ordered worst-to-best rather than alphabetically: a reader scanning
+	// this column is asking "how much of this domain's surface is substitutable",
+	// and the answer should lead with the part that is not. Repeating the
+	// same word once per package was the first version of this and it made
+	// aiops print the same two words seven times, which is noise shaped
+	// like information.
+	order := []string{"unknown", "concrete", "mixed", "interface"}
+	var out []string
+	for _, kind := range order {
+		if counts[kind] == 0 {
+			continue
+		}
+		label := kind + " door"
+		if counts[kind] > 1 {
+			label = fmt.Sprintf("%d %ss", counts[kind], kind)
+		}
+		out = append(out, label)
+	}
+	return out
+}
+
+func classifyDoor(syms map[string]declKind) string {
+	if len(syms) == 0 {
+		return "unknown"
+	}
+	ifaces, others := 0, 0
+	for _, k := range syms {
+		if k == kindInterface {
+			ifaces++
+		} else {
+			others++
+		}
+	}
+	switch {
+	case others == 0:
+		return "interface"
+	case ifaces == 0:
+		return "concrete"
+	default:
+		return "mixed"
+	}
 }
 
 // plural is the report's whole agreement about grammar: it picks the suffix

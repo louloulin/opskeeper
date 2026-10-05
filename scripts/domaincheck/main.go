@@ -44,6 +44,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -62,6 +63,20 @@ const managerPrefix = "github.com/vincent-wuhan/opskeeper/core/manager/"
 var layerDirs = map[string]bool{
 	"biz": true, "server": true, "data": true, "model": true, "service": true,
 }
+
+// declKind is what an exported name is: something a dependent can hold
+// without knowing the implementation, or something it cannot.
+type declKind int
+
+const (
+	// kindOther is a struct, a function, a constant, a variable, or a type
+	// whose shape this checker could not resolve. All of those are named
+	// concretely by whoever uses them.
+	kindOther declKind = iota
+	// kindInterface is an interface, which is the one exported thing a
+	// dependent can hold while knowing nothing about what is behind it.
+	kindInterface
+)
 
 // edge is one declared dependency from one domain to another.
 type edge struct{ from, to string }
@@ -237,6 +252,28 @@ type source struct {
 	// severs forty imports and relocates three per cent of the tree is
 	// not a split; it is a rename with a diagram.
 	lines int
+	// declared is every exported name this file's package declares, mapped
+	// to whether it is an interface.
+	//
+	// It is here for one question: when a domain is reached through a single
+	// package, is that package a *substitutable* door or only a
+	// package-shaped one? A door whose exported surface is all interfaces can
+	// have its implementation replaced without a dependent noticing; a door
+	// whose surface is structs and functions is a naming convention, and
+	// everything on the far side of it names concrete types that would have
+	// to move with it.
+	declared map[string]declKind
+	// used is which symbols of an imported package this file actually
+	// selects, keyed by import path. The empty string holds the selectors
+	// made through dot-imports and through the package's own name, which
+	// are rare enough here that counting them as unattributed is the
+	// honest answer rather than a guess about which package they meant.
+	used map[string]map[string]bool
+	// file is the parsed tree, kept only long enough to resolve type
+	// aliases after every file in a package has been seen — an alias may
+	// name a type declared in a sibling file, so it cannot be resolved while
+	// a single file is in hand.
+	file *ast.File
 	// pkg is the package directory, which is a different axis from
 	// domain: domainOf collapses biz/aiops/tools into the domain "aiops",
 	// and a domain can hide one enormous package among fifty small
@@ -477,6 +514,100 @@ type treeStats struct {
 	testOnlyEdges int
 }
 
+// resolveDeclared fills in each source's exported surface, after every file in
+// a package has been seen.
+//
+// It is a second pass because a type alias may name a type declared in a
+// sibling file: `type Repo = store.Repo` written next to a file that declares
+// `store.Repo` is one fact spread over two files, and a checker that resolved
+// it per file would call the alias a concrete type and then go on to say that
+// a door is concrete when it is not.
+//
+// Unexported names are ignored throughout, because a dependent outside the
+// package cannot reach them and this question is entirely about what the other
+// side of the door can hold.
+func pkgKey(src source) string {
+	if src.pkg == "" {
+		return strings.TrimSuffix(managerPrefix, "/")
+	}
+	return managerPrefix + src.pkg
+}
+
+func resolveDeclared(sources []source) {
+	// byPkg collects the raw type specs first, so an alias can be resolved
+	// against the package it lives in rather than the file it was written in.
+	typeSpecs := map[string]map[string]*ast.TypeSpec{}
+	for _, src := range sources {
+		if src.file == nil || src.test {
+			continue
+		}
+		key := pkgKey(src)
+		if typeSpecs[key] == nil {
+			typeSpecs[key] = map[string]*ast.TypeSpec{}
+		}
+		for _, decl := range src.file.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok || !ts.Name.IsExported() {
+					continue
+				}
+				typeSpecs[key][ts.Name.Name] = ts
+			}
+		}
+	}
+
+	resolved := map[string]map[string]declKind{}
+	for pkg, specs := range typeSpecs {
+		resolved[pkg] = map[string]declKind{}
+		// Two passes: an alias can point at another alias, so resolution has
+		// to settle before it can trust a chain. A cycle would otherwise
+		// recurse forever, so the seen set is the bound.
+		for name, ts := range specs {
+			resolved[pkg][name] = kindOf(ts, specs, map[string]bool{})
+		}
+	}
+
+	for i := range sources {
+		key := pkgKey(sources[i])
+		if sources[i].declared == nil && !sources[i].test && resolved[key] != nil {
+			sources[i].declared = map[string]declKind{}
+			for name, kind := range resolved[key] {
+				sources[i].declared[name] = kind
+			}
+		}
+	}
+}
+
+// kindOf is one declared type's kind, following an alias to whatever it names.
+func kindOf(ts *ast.TypeSpec, specs map[string]*ast.TypeSpec, seen map[string]bool) declKind {
+	if ts.Assign.IsValid() {
+		// A type alias: `type Repo = store.Repo`. If the right-hand side is
+		// an identifier naming a type in this same package, follow it; if it
+		// names a type elsewhere, this checker cannot see it, and calling it
+		// concrete is the safe direction — a false "concrete" costs a
+		// candidate its place in the substitutable tier, while a false
+		// "interface" would have promised a boundary that may not be there.
+		if ident, ok := ts.Type.(*ast.Ident); ok {
+			if seen[ident.Name] {
+				return kindOther
+			}
+			if next, ok := specs[ident.Name]; ok {
+				seen[ident.Name] = true
+				return kindOf(next, specs, seen)
+			}
+		}
+		return kindOther
+	}
+	if _, ok := ts.Type.(*ast.InterfaceType); ok {
+		return kindInterface
+	}
+	return kindOther
+}
+
 func parseTree(dir string, r rules) ([]source, treeStats, error) {
 	fset := token.NewFileSet()
 	var sources []source
@@ -490,14 +621,21 @@ func parseTree(dir string, r rules) ([]source, treeStats, error) {
 		if d.IsDir() || !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		// One read feeds both the imports and the line count. Parsing the
-		// file a second time to count its lines would be the kind of
-		// waste that is harmless once and annoying forever.
+		// One read feeds the line count, the imports and the declarations.
+		// Parsing the file a second time for any of those would be the
+		// kind of waste that is harmless once and annoying forever.
+		//
+		// The parse is a full one rather than ImportsOnly because the
+		// interface question needs the declarations and the selector
+		// expressions, and both of those are behind the ImportsOnly cut.
+		// Everything else in this file — the weights, the sizes, the
+		// violations — reads the same fields it read before, because a
+		// full parse reports the same imports a narrow one does.
 		body, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		file, err := parser.ParseFile(fset, path, body, parser.ImportsOnly)
+		file, err := parser.ParseFile(fset, path, body, 0)
 		if err != nil {
 			return err
 		}
@@ -521,11 +659,48 @@ func parseTree(dir string, r rules) ([]source, treeStats, error) {
 			lines: countLines(body),
 			pkg:   pkg,
 		}
+		alias := map[string]string{}
 		for _, imp := range file.Imports {
-			if v, err := strconv.Unquote(imp.Path.Value); err == nil {
-				src.imports = append(src.imports, v)
+			v, err := strconv.Unquote(imp.Path.Value)
+			if err != nil {
+				continue
 			}
+			src.imports = append(src.imports, v)
+			name := ""
+			if imp.Name != nil {
+				name = imp.Name.Name
+			}
+			if name == "_" || name == "." {
+				continue
+			}
+			if name == "" {
+				name = v[strings.LastIndex(v, "/")+1:]
+			}
+			alias[name] = v
 		}
+		if len(alias) > 0 {
+			src.used = map[string]map[string]bool{}
+			ast.Inspect(file, func(n ast.Node) bool {
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				ident, ok := sel.X.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				path, ok := alias[ident.Name]
+				if !ok {
+					return true
+				}
+				if src.used[path] == nil {
+					src.used[path] = map[string]bool{}
+				}
+				src.used[path][sel.Sel.Name] = true
+				return true
+			})
+		}
+		src.file = file
 		sources = append(sources, src)
 		if d := domainOf(importPath); d != "" {
 			domains[d] = true
@@ -547,5 +722,6 @@ func parseTree(dir string, r rules) ([]source, treeStats, error) {
 	if len(sources) == 0 {
 		return nil, treeStats{}, fmt.Errorf("no Go files under %s; the walk is broken, not the boundaries", dir)
 	}
+	resolveDeclared(sources)
 	return sources, treeStats{domains: len(domains), testOnlyEdges: testOnly}, nil
 }
