@@ -31,6 +31,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	gopath "path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -66,8 +67,22 @@ var knownContracts = map[string]bool{
 //  6. Build tags. A file excluded by the current GOOS/GOARCH is still
 //     parsed here, so its symbols are counted as live. That errs toward
 //     reporting less, which is the right direction for a report.
+//  7. An import this walk cannot map to a directory it walked — a dot
+//     import, or a module it was not pointed at — drops that whole file
+//     back to name-only matching. In those files two same-named symbols in
+//     different packages can still vouch for each other, which is how
+//     middleware/adapter/decorator's WithTenant stayed invisible for as
+//     long as it did: basetool has a WithTenant too.
+//
+// A receiver that is a value rather than a package (svc.Method(),
+// pkg.Constructor().Field) is not on this list: those names count
+// everywhere, because the use site genuinely does not say which package
+// declared them. Reporting them as dead was the false positive this
+// attribution had to avoid — cmd/opskeeper calls setting.AgentWriteEnabled
+// through a variable, and the first version of this walk called it
+// unreachable.
 const falsePositives = `reflection · go:linkname · cgo //export · struct-tag codecs ·
-embedded-method promotion · build tags`
+embedded-method promotion · build tags · unmappable imports (name-only fallback)`
 
 // decl is one symbol a file declares.
 type decl struct {
@@ -82,8 +97,28 @@ type fileRecord struct {
 	test  bool
 	decls []decl
 	// refs counts, per name, how many times this file names it somewhere
-	// that is not a declaration.
+	// that is not a declaration. A bare name reaches only this file's own
+	// package; pkg.Name reaches the package that import resolves to.
 	refs map[string]int
+	// qualified counts "<import path>.<Symbol>" references, which are the
+	// only ones that may reach another package.
+	qualified map[string]int
+	// pkgDir is the file's directory, which is how this walk names a
+	// package. Directory rather than package clause: two files in one
+	// directory are one package even when one of them is package foo_test.
+	pkgDir string
+	// imports maps the local name of each import to its path. A file with
+	// a dot or blank import sets nameOnly, because a dot import reaches
+	// symbols this walk cannot attribute to a package.
+	imports  map[string]string
+	nameOnly bool
+	// unattributed counts selector names whose receiver is a value rather
+	// than a package: svc.Method(), pkg.Constructor().Field. Nothing at the
+	// use site says which package declared the symbol, so these names count
+	// everywhere. That is the conservative direction, and it is what keeps
+	// a live method from being reported dead just because it is called
+	// through a variable.
+	unattributed map[string]int
 	// lines is the file's line count, used to size the report.
 	lines int
 }
@@ -158,10 +193,30 @@ func parseFile(path string) (*fileRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	abs, aerr := filepath.Abs(path)
+	if aerr != nil {
+		return nil, aerr
+	}
 	rec := &fileRecord{
-		path: filepath.ToSlash(path),
-		test: strings.HasSuffix(path, "_test.go"),
-		refs: map[string]int{},
+		path:         filepath.ToSlash(path),
+		test:         strings.HasSuffix(path, "_test.go"),
+		refs:         map[string]int{},
+		qualified:    map[string]int{},
+		pkgDir:       filepath.ToSlash(filepath.Dir(abs)),
+		imports:      map[string]string{},
+		unattributed: map[string]int{},
+	}
+	for _, imp := range src.Imports {
+		ipath := strings.Trim(imp.Path.Value, `"`)
+		local := gopath.Base(ipath)
+		if imp.Name != nil {
+			local = imp.Name.Name
+		}
+		if local == "." || local == "_" {
+			rec.nameOnly = true
+			continue
+		}
+		rec.imports[local] = ipath
 	}
 	rec.lines = fset.Position(src.End()).Line
 
@@ -196,13 +251,83 @@ func parseFile(path string) (*fileRecord, error) {
 	// are not parsed as idents, so a symbol mentioned only in prose does
 	// not count as used — which is the whole point: a name in a comment is
 	// a claim, not a call.
+	// Pass 2a: qualified references. Recorded against the import path so
+	// that pkg.Foo reaches the package that import names, and is removed
+	// from the bare-name pass below — otherwise the same symbol would also
+	// count as a mention inside the referencing file's own package.
+	qualifiedIdents := map[token.Pos]bool{}
 	ast.Inspect(src, func(node ast.Node) bool {
-		if id, ok := node.(*ast.Ident); ok && !isDeclarationIdent(src, id) {
+		sel, ok := node.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if qual, isIdent := sel.X.(*ast.Ident); isIdent {
+			if ipath, imported := rec.imports[qual.Name]; imported {
+				rec.qualified[ipath+"."+sel.Sel.Name]++
+				qualifiedIdents[qual.Pos()] = true
+				qualifiedIdents[sel.Sel.Pos()] = true
+				return true
+			}
+		}
+		// Either the receiver is a value (svc.Method) or it is a chain
+		// (pkg.Constructor().Method). Neither names the declaring package,
+		// so the symbol name counts everywhere rather than only here.
+		rec.unattributed[sel.Sel.Name]++
+		qualifiedIdents[sel.Sel.Pos()] = true
+		return true
+	})
+
+	ast.Inspect(src, func(node ast.Node) bool {
+		if id, ok := node.(*ast.Ident); ok && !isDeclarationIdent(src, id) && !qualifiedIdents[id.Pos()] {
 			rec.refs[id.Name]++
 		}
 		return true
 	})
 	return rec, nil
+}
+
+// moduleOf returns the module path and the module root directory for the
+// module containing dir, by walking up to the nearest go.mod. Results are
+// memoised per directory because a tree of 300 packages would otherwise walk
+// the same ancestors thousands of times.
+func moduleOf(dir string) (modulePath string, root string, ok bool) {
+	return moduleOfCached(dir, map[string]moduleInfo{})
+}
+
+// moduleInfo is one directory's answer: the module that contains it, and
+// whether there was one at all.
+type moduleInfo struct {
+	path string
+	root string
+	ok   bool
+}
+
+// moduleOfCached answers for dir, asking the parent directory when dir is
+// not itself a module root. The order matters: this repository is
+// multi-module, so a nested go.mod has to win over whatever module encloses
+// it.
+func moduleOfCached(dir string, cache map[string]moduleInfo) (string, string, bool) {
+	if hit, seen := cache[dir]; seen {
+		return hit.path, hit.root, hit.ok
+	}
+	if raw, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "module ") {
+				mpath := strings.TrimSpace(strings.TrimPrefix(line, "module "))
+				cache[dir] = moduleInfo{path: mpath, root: dir, ok: true}
+				return mpath, dir, true
+			}
+		}
+	}
+	parent := filepath.Dir(dir)
+	if parent != dir {
+		mpath, mroot, ok := moduleOfCached(parent, cache)
+		cache[dir] = moduleInfo{path: mpath, root: mroot, ok: ok}
+		return mpath, mroot, ok
+	}
+	cache[dir] = moduleInfo{}
+	return "", "", false
 }
 
 func receiverName(fn *ast.FuncDecl) string {
@@ -317,24 +442,83 @@ func analyse(records []*fileRecord) *result {
 		collectInterfaceMethods(rec, res.methodNames)
 	}
 
-	// name -> set of non-test files that mention it.
-	prodMentions := map[string]map[string]bool{}
-	// name -> set of test files that mention it.
-	testMentions := map[string]map[string]bool{}
-	note := func(into map[string]map[string]bool, path string, names map[string]int) {
-		for name := range names {
-			if into[name] == nil {
-				into[name] = map[string]bool{}
+	// Package directories the walk saw, and the import path that names each
+	// one. A reference is attributed to a package through this index, not
+	// through the name it happens to share with a symbol elsewhere.
+	pkgDirs := map[string]bool{}
+	for _, rec := range records {
+		pkgDirs[rec.pkgDir] = true
+	}
+	moduleCache := map[string]moduleInfo{}
+	importIndex := map[string]string{}
+	for dir := range pkgDirs {
+		mpath, mroot, ok := moduleOfCached(dir, moduleCache)
+		if !ok {
+			continue
+		}
+		rel, err := filepath.Rel(mroot, dir)
+		if err != nil {
+			continue
+		}
+		ipath := mpath
+		if rel != "." {
+			ipath = mpath + "/" + filepath.ToSlash(rel)
+		}
+		importIndex[ipath] = dir
+	}
+
+	// pkgDir -> name -> mentioned. prodPkg is what non-test files named,
+	// testPkg what test files named.
+	prodPkg := map[string]map[string]bool{}
+	testPkg := map[string]map[string]bool{}
+	// prodAnywhere / testAnywhere hold the mentions from files whose
+	// imports could not be resolved, which keep the old tree-wide matching
+	// rather than inventing a dead symbol out of a walk that gave up.
+	prodAnywhere := map[string]bool{}
+	testAnywhere := map[string]bool{}
+	mention := func(pkg map[string]map[string]bool, anywhere map[string]bool, rec *fileRecord) {
+		byName := pkg[rec.pkgDir]
+		if byName == nil {
+			byName = map[string]bool{}
+			pkg[rec.pkgDir] = byName
+		}
+		for name := range rec.refs {
+			byName[name] = true
+			if rec.nameOnly {
+				anywhere[name] = true
 			}
-			into[name][path] = true
+		}
+		for name := range rec.unattributed {
+			anywhere[name] = true
+		}
+		for ref := range rec.qualified {
+			// Split at the LAST dot: an import path is full of dots
+			// ("example.com/x/pkg") and a Go identifier has none, so the
+			// last one is the only place the two can be told apart.
+			cut := strings.LastIndex(ref, ".")
+			if cut <= 0 {
+				continue
+			}
+			ipath, name := ref[:cut], ref[cut+1:]
+			dir, resolved := importIndex[ipath]
+			if !resolved {
+				anywhere[name] = true
+				continue
+			}
+			target := pkg[dir]
+			if target == nil {
+				target = map[string]bool{}
+				pkg[dir] = target
+			}
+			target[name] = true
 		}
 	}
 	for _, rec := range records {
 		if rec.test {
-			note(testMentions, rec.path, rec.refs)
+			mention(testPkg, testAnywhere, rec)
 			continue
 		}
-		note(prodMentions, rec.path, rec.refs)
+		mention(prodPkg, prodAnywhere, rec)
 	}
 
 	for _, rec := range records {
@@ -343,7 +527,7 @@ func analyse(records []*fileRecord) *result {
 		}
 		var fs []symbolFinding
 		for _, d := range rec.decls {
-			why := classify(d, rec, prodMentions, testMentions, res.methodNames)
+			why := classify(d, rec, prodPkg, testPkg, prodAnywhere, testAnywhere, res.methodNames)
 			if why == live {
 				continue
 			}
@@ -399,7 +583,8 @@ func worst(fs []symbolFinding) verdict {
 func classify(
 	d decl,
 	rec *fileRecord,
-	prodMentions, testMentions map[string]map[string]bool,
+	prodPkg, testPkg map[string]map[string]bool,
+	prodAnywhere, testAnywhere map[string]bool,
 	ifaces map[string]bool,
 ) verdict {
 	switch d.name {
@@ -414,17 +599,17 @@ func classify(
 	if knownContracts[d.name] {
 		return live
 	}
-	for f := range prodMentions[d.name] {
-		if f != rec.path {
-			return live
-		}
+	if prodPkg[rec.pkgDir][d.name] || prodAnywhere[d.name] {
+		// Named by another file of the same package, or by a file that
+		// reached it through an import.
+		return live
 	}
 	if rec.refs[d.name] > 0 {
 		// Named inside its own file outside the declaration: a same-file
 		// call is still a call.
 		return live
 	}
-	for range testMentions[d.name] {
+	if testPkg[rec.pkgDir][d.name] || testAnywhere[d.name] {
 		return testOnly
 	}
 	return dead

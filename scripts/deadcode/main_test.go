@@ -223,3 +223,93 @@ func TestTheShippedTreeHasNothingTheToolCannotExplain(t *testing.T) {
 		t.Fatalf("%d unreachable symbols in a 400-line tool; the walk is probably wrong", res.deadSymbols)
 	}
 }
+
+// TestASameNameInAnotherPackageDoesNotVouchForThisOne is the fixture for the
+// blind spot decision 199 found, and it is the reason references are
+// attributed to a package instead of to a name.
+//
+// middleware/adapter/decorator has a WithTenant that no production file has
+// called since it was written — the package has no importers at all, and its
+// own tests are the only callers. It never showed up in the report because
+// biz/aiops/tools/basetool has a WithTenant too, and a name-based walk let
+// basetool's call sites vouch for the decorator's. Five of the six calls into
+// that package are the same kind of fiction: a test injecting a value that
+// production never writes.
+//
+// A same-named symbol in a package that *is* called must therefore not make
+// this one look called.
+func TestASameNameInAnotherPackageDoesNotVouchForThisOne(t *testing.T) {
+	res := analyseTree(t, tree(t, map[string]string{
+		"go.mod":     "module example.com/x\n\ngo 1.21\n",
+		"alpha/a.go": "package alpha\n\nfunc WithTenant() int { return 1 }\n",
+		"beta/b.go":  "package beta\n\nfunc WithTenant() int { return 2 }\n",
+		"gamma/g.go": "package gamma\n\nimport \"example.com/x/beta\"\n\nfunc Use() int { return beta.WithTenant() }\n",
+	}))
+	if v, ok := finding(res, "b.go", "WithTenant"); ok && v != live {
+		t.Fatalf("beta.WithTenant is called through an import, reported as %v", v)
+	}
+	if v, ok := finding(res, "a.go", "WithTenant"); !ok || v != dead {
+		t.Fatalf("alpha.WithTenant: got (%v, %v), want (dead, true) — beta's "+
+			"production call to its own WithTenant must not vouch for this one", v, ok)
+	}
+}
+
+// TestATestInAnotherPackageStillCounts pins the tier rather than the verdict:
+// once the same-name hole is closed, a cross-package *test* reference has to
+// keep reporting test-only, which is the signal that somebody wrote down what
+// the symbol was for.
+func TestATestInAnotherPackageStillCounts(t *testing.T) {
+	res := analyseTree(t, tree(t, map[string]string{
+		"go.mod":         "module example.com/x\n\ngo 1.21\n",
+		"alpha/a.go":     "package alpha\n\nfunc WithTenant() int { return 1 }\n",
+		"beta/b_test.go": "package beta\n\nimport (\n\t\"testing\"\n\n\t\"example.com/x/alpha\"\n)\n\nfunc TestIt(t *testing.T) {\n\tif alpha.WithTenant() != 1 {\n\t\tt.Fail()\n\t}\n}\n",
+	}))
+	if v, ok := finding(res, "a.go", "WithTenant"); !ok || v != testOnly {
+		t.Fatalf("alpha.WithTenant: got (%v, %v), want (test-only, true)", v, ok)
+	}
+}
+
+// TestADotImportFallsBackToNameOnly documents limitation 7 on
+// falsePositives rather than leaving it as prose. A dot import reaches
+// symbols this walk cannot attribute to a package, so that whole file keeps
+// the old tree-wide matching — and a same-named symbol elsewhere can still
+// vouch for one through it. The assertion is that the hole is still there:
+// if this test ever starts failing because the hole was closed, move it to
+// testTwoDotImportsAndWhateverCaveatApplies.
+func TestADotImportFallsBackToNameOnly(t *testing.T) {
+	res := analyseTree(t, tree(t, map[string]string{
+		"go.mod":     "module example.com/x\n\ngo 1.21\n",
+		"alpha/a.go": "package alpha\n\nfunc WithTenant() int { return 1 }\n",
+		"beta/b.go":  "package beta\n\nimport . \"example.com/x/alpha\"\n\nfunc Use() int { return WithTenant() }\n",
+	}))
+	// ok == false means the symbol was not reported at all, which is what
+	// live looks like from out here.
+	if v, ok := finding(res, "a.go", "WithTenant"); ok {
+		t.Fatalf("alpha.WithTenant reported as %v, want no finding — limitation 7 "+
+			"says a dot-importing file keeps name-only matching, so this is the hole "+
+			"being pinned, not a bug being fixed", v)
+	}
+}
+
+// TestAMethodCalledThroughAVariableInAnotherPackageIsLive pins the false
+// positive that the first version of package attribution introduced, and it
+// is the more important of the two directions to pin.
+//
+// Attributing a reference to a package is only sound for a reference that
+// names one. `settingSvc.AgentWriteEnabled(ctx)` names a variable, not a
+// package, so the first version of this walk looked up the method in the
+// caller's package, found nothing, and reported a method that
+// cmd/opskeeper calls on every request as unreachable. A deadness tool that
+// calls live code dead is the failure that gets code deleted, which is why a
+// selector whose receiver is a value counts everywhere.
+func TestAMethodCalledThroughAVariableInAnotherPackageIsLive(t *testing.T) {
+	res := analyseTree(t, tree(t, map[string]string{
+		"go.mod":     "module example.com/x\n\ngo 1.21\n",
+		"alpha/a.go": "package alpha\n\ntype Service struct{}\n\nfunc (s Service) Enabled() bool { return true }\n",
+		"gamma/g.go": "package gamma\n\nimport \"example.com/x/alpha\"\n\nfunc Use(svc alpha.Service) bool {\n\treturn svc.Enabled()\n}\n",
+	}))
+	if v, ok := finding(res, "a.go", "Enabled"); ok {
+		t.Fatalf("alpha.Service.Enabled reported as %v, want no finding — it is "+
+			"called through a variable and the use site names no package", v)
+	}
+}
