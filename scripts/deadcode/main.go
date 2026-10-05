@@ -33,6 +33,8 @@ import (
 	"os"
 	gopath "path"
 	"path/filepath"
+
+	"github.com/vincent-wuhan/opskeeper/scripts/internal/modpath"
 	"sort"
 	"strings"
 )
@@ -286,50 +288,6 @@ func parseFile(path string) (*fileRecord, error) {
 	return rec, nil
 }
 
-// moduleOf returns the module path and the module root directory for the
-// module containing dir, by walking up to the nearest go.mod. Results are
-// memoised per directory because a tree of 300 packages would otherwise walk
-// the same ancestors thousands of times.
-func moduleOf(dir string) (modulePath string, root string, ok bool) {
-	return moduleOfCached(dir, map[string]moduleInfo{})
-}
-
-// moduleInfo is one directory's answer: the module that contains it, and
-// whether there was one at all.
-type moduleInfo struct {
-	path string
-	root string
-	ok   bool
-}
-
-// moduleOfCached answers for dir, asking the parent directory when dir is
-// not itself a module root. The order matters: this repository is
-// multi-module, so a nested go.mod has to win over whatever module encloses
-// it.
-func moduleOfCached(dir string, cache map[string]moduleInfo) (string, string, bool) {
-	if hit, seen := cache[dir]; seen {
-		return hit.path, hit.root, hit.ok
-	}
-	if raw, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
-		for _, line := range strings.Split(string(raw), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "module ") {
-				mpath := strings.TrimSpace(strings.TrimPrefix(line, "module "))
-				cache[dir] = moduleInfo{path: mpath, root: dir, ok: true}
-				return mpath, dir, true
-			}
-		}
-	}
-	parent := filepath.Dir(dir)
-	if parent != dir {
-		mpath, mroot, ok := moduleOfCached(parent, cache)
-		cache[dir] = moduleInfo{path: mpath, root: mroot, ok: ok}
-		return mpath, mroot, ok
-	}
-	cache[dir] = moduleInfo{}
-	return "", "", false
-}
-
 func receiverName(fn *ast.FuncDecl) string {
 	if fn.Recv == nil || len(fn.Recv.List) == 0 {
 		return ""
@@ -449,10 +407,15 @@ func analyse(records []*fileRecord) *result {
 	for _, rec := range records {
 		pkgDirs[rec.pkgDir] = true
 	}
-	moduleCache := map[string]moduleInfo{}
+	moduleCache := map[string]modpath.Answer{}
 	importIndex := map[string]string{}
 	for dir := range pkgDirs {
-		mpath, mroot, ok := moduleOfCached(dir, moduleCache)
+		ans, cached := moduleCache[dir]
+		if !cached {
+			ans = modpath.Of(dir)
+			moduleCache[dir] = ans
+		}
+		mpath, mroot, ok := ans.Path, ans.Root, ans.OK
 		if !ok {
 			continue
 		}

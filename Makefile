@@ -441,6 +441,15 @@ deadcode-report: ## 报出生产代码里只有测试引用的符号（报告，
 	go run ./scripts/deadcode . core core/edge core/pig core/manager core/floor core/harness sdk
 	go test ./scripts/deadcode/ -count=1
 
+# deadcode answers that question per symbol. This one answers the coarser
+# version — which whole packages nothing imports — because that is the
+# question that decides whether a deletion is one file or one directory, and
+# because a package can be unreferenced and still be a check rather than dead
+# weight (see the standalone-suite tier).
+deadpkg-report: ## 报出无人导入的包（报告，不闸门）
+	go run ./scripts/deadpkg . core core/edge core/pig core/manager core/floor core/harness sdk
+	go test ./scripts/deadpkg/ -count=1
+
 # A split proposal written on the day it is wrong is a proposal nobody
 # argues with, because the tool that says it is wrong also breaks the
 # build. So these two are reports: the gate above keeps its verdict, and
