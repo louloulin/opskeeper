@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	model "github.com/vincent-wuhan/opskeeper/core/domains/model/monitor"
 )
 
@@ -52,8 +53,51 @@ type Repo interface {
 // method added alongside this package. Optional: when nil, the service
 // degrades to "persist only" with no sync — useful in tests and for
 // deployments that disable Grafana entirely.
+//
+// The parameter is a core/domain projection, not this package's entity
+// (decision 242). It used to be []*model.Panel, which is why the mirror
+// imported the model package at all: it read six of the entity's eleven
+// columns and had no business knowing about the other five, three of which
+// are timestamps recording whether the mirror itself worked. The seam was
+// already declared here and already narrow; only the type in its signature
+// named the producer. panelSpecs below is now the only place that
+// translation happens, and it is twelve lines long.
 type GrafanaSyncer interface {
-	SyncMonitorPanels(ctx context.Context, panels []*model.Panel) error
+	SyncMonitorPanels(ctx context.Context, panels []domain.MonitorPanelSpec) error
+}
+
+// panelSpecs projects the stored rows onto the six columns a dashboard
+// renderer reads. It is a function rather than a method because it has no
+// receiver: the translation is a property of the two shapes, not of this
+// service.
+//
+// The five columns it drops are named here rather than left to the absence of
+// code, because "the fields that are not copied" is the part of a projection
+// that decays. Ordinal is the SPA's row order and the Grafana layout is
+// computed from slice position, so it is not merely unused here — using it
+// would be a bug. LastSyncError and LastSyncAt are how this domain records
+// whether the mirror worked; handing them to the mirror would be handing it
+// the answer to the question it is being asked. UpdatedAt and CreatedAt are
+// row bookkeeping.
+func panelSpecs(panels []*model.Panel) []domain.MonitorPanelSpec {
+	if len(panels) == 0 {
+		return nil
+	}
+	out := make([]domain.MonitorPanelSpec, 0, len(panels))
+	for _, p := range panels {
+		if p == nil {
+			continue
+		}
+		out = append(out, domain.MonitorPanelSpec{
+			ID:     p.ID,
+			Title:  p.Title,
+			Type:   p.Type,
+			PromQL: p.PromQL,
+			Legend: p.Legend,
+			Unit:   p.Unit,
+		})
+	}
+	return out
 }
 
 // Service is the biz-layer orchestrator.
@@ -236,7 +280,7 @@ func (s *Service) SyncNow(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return s.syncer.SyncMonitorPanels(ctx, panels)
+	return s.syncer.SyncMonitorPanels(ctx, panelSpecs(panels))
 }
 
 // kickSync starts the Grafana mirror on a detached goroutine. The
@@ -265,7 +309,7 @@ func (s *Service) kickSync(op string, panelID uint64) {
 			)
 			return
 		}
-		if err := s.syncer.SyncMonitorPanels(ctx, panels); err != nil {
+		if err := s.syncer.SyncMonitorPanels(ctx, panelSpecs(panels)); err != nil {
 			s.log.Warn("monitor sync: grafana mirror failed",
 				slog.String("op", op),
 				slog.Uint64("panel_id", panelID),

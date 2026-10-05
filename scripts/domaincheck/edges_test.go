@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -654,27 +655,32 @@ func TestTheEdgeDecision241CutIsNotOnTheList(t *testing.T) {
 
 // TestNoMarketplaceFileImportsTheConverter is the guard that would have caught
 // the original shape, whichever way the declaration table was edited.
+//
+// It ran for one decision looking at zero files; see domainFiles at the bottom
+// of this file for why, and for the rule that came out of it. It is written on
+// the shared helper now, and it fails loudly rather than silently if the
+// domain ever moves out from under the walk.
 func TestNoMarketplaceFileImportsTheConverter(t *testing.T) {
-	sources, _, err := parseTree("../..", managerPrefix, testRules())
-	if err != nil {
-		t.Fatalf("parse the shipped tree: %v", err)
-	}
-	const producer = managerPrefix + "biz/pluginimport"
-	for _, src := range sources {
-		if src.test || domainOf(src.path) != "marketplace" {
-			continue
-		}
-		for _, imp := range src.imports {
+	const producer = "github.com/vincent-wuhan/opskeeper/core/manager/biz/pluginimport"
+	// Both roots, because the marketplace domain spans two modules today — the
+	// usecase under core/manager/biz and the import route under
+	// core/manager/server. A guard that only covered whichever one happened to
+	// hold the offending import would pass the day the import moves to the
+	// other, which is the same green problem in a smaller box.
+	files := domainFiles(t, "marketplace", "../../core/manager", "../../core/domains")
+	for path, imports := range files {
+		for _, imp := range imports {
 			if imp == producer || strings.HasPrefix(imp, producer+"/") {
-				t.Errorf("%s imports %s. One HTTP file naming two type names was the whole "+
-					"reason this edge existed; main.go is the one place allowed to wire the "+
-					"converter, and it hands it over as a function", src.path, imp)
+				t.Errorf("%s imports %s. One HTTP file naming two type names was the "+
+					"whole reason this edge existed; main.go is the one place allowed to "+
+					"wire the converter, and it hands it over as a function", path, imp)
 			}
 		}
 	}
 }
 
 // TestLoadWarningIsDeclaredOnce guards the second half of the cut, which is
+
 // not about an edge at all.
 //
 // `biz/marketplace` used to carry its own `LoadWarning`, copied field for field
@@ -758,5 +764,125 @@ func TestLoadWarningIsDeclaredOnce(t *testing.T) {
 			"three domains hand it to a client. A second struct declaration is the shape "+
 			"decision 241 deleted: two types with the same name, the same three fields and "+
 			"the same three tags, kept in step by nothing", owners, want)
+	}
+}
+
+// The grafana -> monitor cut is the second one in this file whose guard reads
+// the tree rather than the table, and it is the one where the table was least
+// to blame: the declaration said "grafana monitors are configured from the
+// monitor model", which is true and not why the edge existed.
+//
+// What existed instead is eleven columns crossing a boundary whose entire job
+// is to render six of them. So the guard is on the width, not on the import —
+// and there are two directions, which is why there are two tests. An import
+// that comes back is a boundary that widened; a projection that stops
+// covering the spec is a dashboard that goes quietly blank.
+func TestTheEdgeDecision242CutIsNotOnTheList(t *testing.T) {
+	if _, ok := edges[edge{from: "grafana", to: "monitor"}]; ok {
+		t.Error("grafana -> monitor is declared again. The mirror used to take the " +
+			"monitor domain's eleven-column entity and read six of it; it now takes a " +
+			"core/domain value projection of exactly those six, and the projection is " +
+			"built in one place in the monitor domain. If the edge came back, say which " +
+			"of the other five columns the dashboard now needs — and add it to the " +
+			"six-field guard in core/domain rather than to the type")
+	}
+}
+
+// TestNoGrafanaFileImportsTheMonitorModel is the structural half: the reason
+// the edge existed was one file naming one struct, so that file not importing
+// the model package is the fact worth keeping, whatever the declaration table
+// says.
+//
+// The first version of this test was looking at zero files and reported green
+// through the exact regression it was written for. See domainFiles at the
+// bottom of this file.
+func TestNoGrafanaFileImportsTheMonitorModel(t *testing.T) {
+	const producer = "github.com/vincent-wuhan/opskeeper/core/domains/model/monitor"
+	files := domainFiles(t, "grafana", "../../core/domains")
+	for path, imports := range files {
+		for _, imp := range imports {
+			if imp == producer {
+				t.Errorf("%s imports the monitor model. The mirror reads a panel's id, "+
+					"title, type, query, legend and unit; ordinal, last_sync_error, "+
+					"last_sync_at, updated_at and created_at are the monitor domain's own "+
+					"bookkeeping, and two of those five record whether the mirror worked",
+					path)
+			}
+		}
+	}
+}
+
+// domainFiles walks one of the control-plane module roots and returns the
+// non-test files of one domain, keyed by repo-relative path.
+//
+// It exists because two guards in this file were, until decision 242,
+// silently looking at nothing, and both were wrong in the same way: they used
+// parseTree, which is rooted at core/manager and reconstructs a file's path as
+// `managerPrefix + relative`, so a file under core/domains came back as
+//
+//	.../core/manager/core/domains/biz/grafana/service
+//
+// and domainOf — which matches the layer-tree prefixes — returned "" for it.
+// The guard's filter then excluded everything, the body never ran, and the
+// test reported green. The grafana one passed through the exact regression it
+// was written for; the marketplace one, committed a decision earlier, had
+// never examined a file at all.
+//
+// The general lesson is worth more than the helper: **an assertion over a
+// filtered set has to assert the filter matched something.** "No offending
+// file" and "no candidate file" are different facts, and only the second one
+// is a bug in the test. Every guard here that walks a tree now fails loudly on
+// an empty candidate set.
+func domainFiles(t *testing.T, domain string, roots ...string) map[string][]string {
+	t.Helper()
+	out := map[string][]string{}
+	for _, root := range roots {
+		collectDomainFiles(t, root, domain, out)
+	}
+	if len(out) == 0 {
+		t.Fatalf("no non-test file of domain %q was found under %v, so the guard that "+
+			"asked for it is looking at nothing. A filter that stopped matching and a "+
+			"regression that is absent are the same green unless the first one is ruled out",
+			domain, roots)
+	}
+	return out
+}
+
+// collectDomainFiles does the walking for one root.
+func collectDomainFiles(t *testing.T, root, domain string, out map[string][]string) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, rerr := filepath.Rel(root, path)
+		if rerr != nil {
+			return rerr
+		}
+		// <root>/<layer>/<domain>/... — the layer segment is one of a fixed
+		// set and is the only part of the path that is not a domain name.
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if len(parts) < 3 || parts[1] != domain {
+			return nil
+		}
+		file, perr := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if perr != nil {
+			return nil //nolint:nilerr // a file that does not parse fails the build elsewhere
+		}
+		imports := make([]string, 0, len(file.Imports))
+		for _, spec := range file.Imports {
+			if v, uerr := strconv.Unquote(spec.Path.Value); uerr == nil {
+				imports = append(imports, v)
+			}
+		}
+		repo := strings.TrimPrefix(strings.TrimPrefix(filepath.ToSlash(path), "../"), "../../")
+		out[repo] = imports
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
 	}
 }

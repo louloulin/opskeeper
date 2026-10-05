@@ -461,9 +461,9 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	if !strings.Contains(buf.String(), "the graph is a DAG") {
 		t.Error("the shipped tree is no longer a DAG and the report does not say so")
 	}
-	// 34 = decision 118's 42, plus the edge decision 123 added when the root
+	// 33 = decision 118's 42, plus the edge decision 123 added when the root
 	// side of the cluster channel became a domain of its own, minus the eight
-	// since cut (nine): decision 227 (frontierbound -> metric, whose port moved
+	// since cut (ten): decision 227 (frontierbound -> metric, whose port moved
 	// next to HostMetricPoint in core/floor/tunnel), decision 229
 	// (imbridge -> iam, the only remaining edge that selected nothing but a
 	// constant, cut by moving the role vocabulary down to tenantctx), decision
@@ -494,7 +494,7 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "34 edges") {
+	if !strings.Contains(buf.String(), "33 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

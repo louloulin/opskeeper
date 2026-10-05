@@ -778,7 +778,20 @@ deps:
     # 决策 227 加的 floor 一项：model/metric 的指标行存的是一份 tunnel 线上
     # 类型（HostMetricPoint 的存储形态）。这不是「模型层认得了一个域」，是
     # 它认得**自己存的那个词**——而那个词属于传输层，不属于任何一个域。
+    #
+    # 决策 242 加的 core/domain 一项，理由与上面那行**逐字同形**：model/monitor
+    # 的三个面板类型常量（PanelTypeTimeseries / Stat / Gauge）现在声明在
+    # core/domain，因为两个域需要它们——本层存它们，Grafana 镜像把它们映射
+    # 到 Grafana 自己的词汇。仍然是「认得自己存的那个词」，而那个词属于一个
+    # 不属于任何域的共享命名空间。本层是 alias，值只有一处定义。
+    #
+    # 为什么是常量而不是别的：它不是「模型层开始 import 别人的实体」。如果
+    # 哪天 core/domain 里出现了一个本层需要 GORM 标签的东西，那才是另一回事，
+    # 而 core/domain 自己也有一条守卫断言它不 import 任何非标准库包、
+    # 且任何字段都不得带 gorm tag（TestThisPackageImportsNothingButTheStandardLibrary
+    # 与 TestMonitorPanelSpecHasExactlySixFields）。
     mayDependOn:
+      - oxcore_domain
       - oxfloor
       - shared_pkg
 

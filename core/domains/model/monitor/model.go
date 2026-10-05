@@ -9,15 +9,25 @@
 // changes must round-trip through the opskeeper UI.
 package monitor
 
-import "time"
+import (
+	"time"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+)
 
 // PanelType enumerates the renderable panel shapes. The SPA's
 // PromQLPanel uses the same identifiers; values map 1:1 onto Grafana
 // panel types so the mirror dashboard renders identically.
+//
+// The three values moved to core/domain as MonitorPanelType* (decision 242)
+// because two domains need them: this one stores them, and the Grafana mirror
+// maps them onto Grafana's own vocabulary. They are aliases, so every use in
+// this package and in the SPA's request bodies keeps its spelling, and there
+// is still exactly one place a value is written down.
 const (
-	PanelTypeTimeseries = "timeseries"
-	PanelTypeStat       = "stat"
-	PanelTypeGauge      = "gauge"
+	PanelTypeTimeseries = domain.MonitorPanelTypeTimeseries
+	PanelTypeStat       = domain.MonitorPanelTypeStat
+	PanelTypeGauge      = domain.MonitorPanelTypeGauge
 )
 
 // Panel is one user-defined Monitor panel.

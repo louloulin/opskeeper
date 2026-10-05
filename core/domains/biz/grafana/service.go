@@ -29,7 +29,6 @@ import (
 	pkggrafana "github.com/vincent-wuhan/opskeeper/core/base/pkg/grafana"
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	settingbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/setting"
-	monitormodel "github.com/vincent-wuhan/opskeeper/core/domains/model/monitor"
 	settingmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/setting"
 )
 
@@ -366,7 +365,14 @@ func dashboardTitle(raw []byte, fallback string) string {
 // caller (biz/monitor.Service.kickSync) can record them on
 // last_sync_error. We do NOT retry here; the next user edit re-triggers
 // a sync, and a manual "重新同步" button can be added later if needed.
-func (s *Service) SyncMonitorPanels(ctx context.Context, panels []*monitormodel.Panel) error {
+//
+// The parameter is domain.MonitorPanelSpec rather than the monitor domain's
+// entity (decision 242). This file used to import that model package to name
+// one eleven-field struct, and read six of its columns: Ordinal,
+// LastSyncError, LastSyncAt, UpdatedAt and CreatedAt were crossing a boundary
+// whose only job is to render, and three of them are timestamps recording
+// whether this function succeeded last time.
+func (s *Service) SyncMonitorPanels(ctx context.Context, panels []domain.MonitorPanelSpec) error {
 	c, err := s.client(ctx)
 	if err != nil {
 		return err
@@ -403,9 +409,9 @@ func (s *Service) SyncMonitorPanels(ctx context.Context, panels []*monitormodel.
 // the opskeeper-monitor dashboard. $__rate_interval resolves natively in
 // Grafana. IDs are offset to 9000+ so they never collide with the
 // auto-increment monitor_panels row ids. KEEP IN LOCKSTEP WITH Monitor.tsx.
-func coreMonitorPanels() []*monitormodel.Panel {
-	const ts = monitormodel.PanelTypeTimeseries
-	return []*monitormodel.Panel{
+func coreMonitorPanels() []domain.MonitorPanelSpec {
+	const ts = domain.MonitorPanelTypeTimeseries
+	return []domain.MonitorPanelSpec{
 		{ID: 9001, Type: ts, Title: "CPU 使用率", Unit: "percent",
 			PromQL: `100 * (1 - avg by (device_id) (rate(node_cpu_seconds_total{mode="idle"}[$__rate_interval])))`},
 		{ID: 9002, Type: ts, Title: "内存使用率", Unit: "percent",
@@ -436,7 +442,7 @@ func coreMonitorPanels() []*monitormodel.Panel {
 //
 // Layout: 2-column 12-col-wide grid (matches Monitor.tsx's PanelGrid),
 // each panel 12 wide × 8 high, ordinal driving the row order.
-func buildMonitorDashboardJSON(uid, title string, panels []*monitormodel.Panel) map[string]any {
+func buildMonitorDashboardJSON(uid, title string, panels []domain.MonitorPanelSpec) map[string]any {
 	gPanels := make([]map[string]any, 0, len(panels))
 	for i, p := range panels {
 		col := (i % 2) * 12
@@ -493,11 +499,11 @@ func buildMonitorDashboardJSON(uid, title string, panels []*monitormodel.Panel) 
 // timeseries.
 func mapPanelType(t string) string {
 	switch t {
-	case monitormodel.PanelTypeStat:
+	case domain.MonitorPanelTypeStat:
 		return "stat"
-	case monitormodel.PanelTypeGauge:
+	case domain.MonitorPanelTypeGauge:
 		return "gauge"
-	case monitormodel.PanelTypeTimeseries:
+	case domain.MonitorPanelTypeTimeseries:
 		return "timeseries"
 	}
 	return "timeseries"

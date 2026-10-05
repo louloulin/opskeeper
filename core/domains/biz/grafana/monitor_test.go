@@ -3,7 +3,7 @@ package grafana
 import (
 	"testing"
 
-	monitormodel "github.com/vincent-wuhan/opskeeper/core/domains/model/monitor"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 // TestBuildMonitorDashboardJSON verifies the renderer maps each opskeeper
@@ -13,10 +13,10 @@ import (
 // tests / manual smoke against an embedded Grafana.
 func TestBuildMonitorDashboardJSON(t *testing.T) {
 	t.Parallel()
-	panels := []*monitormodel.Panel{
-		{ID: 1, Title: "CPU", Type: monitormodel.PanelTypeTimeseries, PromQL: "cpu_pct", Legend: "{{device_id}}", Unit: "percent"},
-		{ID: 2, Title: "Mem", Type: monitormodel.PanelTypeStat, PromQL: "mem_pct", Unit: "percent"},
-		{ID: 3, Title: "Disk", Type: monitormodel.PanelTypeGauge, PromQL: "disk_pct", Unit: "percent"},
+	panels := []domain.MonitorPanelSpec{
+		{ID: 1, Title: "CPU", Type: domain.MonitorPanelTypeTimeseries, PromQL: "cpu_pct", Legend: "{{device_id}}", Unit: "percent"},
+		{ID: 2, Title: "Mem", Type: domain.MonitorPanelTypeStat, PromQL: "mem_pct", Unit: "percent"},
+		{ID: 3, Title: "Disk", Type: domain.MonitorPanelTypeGauge, PromQL: "disk_pct", Unit: "percent"},
 	}
 	out := buildMonitorDashboardJSON("opskeeper-monitor", "Title", panels)
 
@@ -73,11 +73,11 @@ func TestBuildMonitorDashboardJSON(t *testing.T) {
 func TestMapPanelType(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		monitormodel.PanelTypeTimeseries: "timeseries",
-		monitormodel.PanelTypeStat:       "stat",
-		monitormodel.PanelTypeGauge:      "gauge",
-		"":                               "timeseries",
-		"nonsense":                       "timeseries",
+		domain.MonitorPanelTypeTimeseries: "timeseries",
+		domain.MonitorPanelTypeStat:       "stat",
+		domain.MonitorPanelTypeGauge:      "gauge",
+		"":                                "timeseries",
+		"nonsense":                        "timeseries",
 	}
 	for in, want := range cases {
 		if got := mapPanelType(in); got != want {
