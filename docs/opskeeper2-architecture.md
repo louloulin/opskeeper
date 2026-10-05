@@ -12814,6 +12814,87 @@ review root 并送审）。**后者是产品决定**（自动送审意味着一�
 且错的那处和改过的那处是同一个数」这件事留在台账里——**下次有人再动这个数，
 他会知道要动的是两处，而不是一处。**
 
+### 4.118 决策 185：决策 184 说「错了一处」，它数少了——同一件事在 §六 错了五处，而旧检查恰好只盯着唯一正确的那一处...
+
+决策 184 修掉「当前真实缺口」小节里那个 53，写下「五处里错一处」，并把它归因成
+「改了来源行、没回头看复述行」。本轮去装那道闸门时才发现：**那个归因本身是抽样
+得来的**。把 §六 全部数过一遍，错的是五处，不是五分之四——决策 184 当时只碰到了
+其中一处，因为它是按行搜 `53 个` 搜出来的，而其中三处**跨了换行**，按行搜索根本
+看不见。
+
+§六 五处，逐条列出现在的数与它原来的数：
+
+| 位置 | 原 | 现 | 性质 |
+|---|---|---|---|
+| A–E 表 D 行「B2 中间件工具集」 | 53 | 54 | 决策 179 已改过，**是对的** |
+| 「当前真实缺口」B1/B2/B3 行 | 53 | 54 | 决策 184 修的 |
+| 第 59 条「一个生成器、两份排除账本」 | 53 | 54 | 本轮 |
+| 第 59 条「跑活注册（8 个适配器、…）」 | 53 个读工具 | **100 个工具 / 68 个只读 / 打包 54** | 本轮 |
+| 「upcall 通道那 N 个工具」及其复述（2 处） | 65（12 + 53） | **66（12 + 54）** | 本轮 |
+
+**第四条不是抄错一个数，是把三件事说成了一件。** 原句「跑活注册（8 个适配器、53
+个读工具）」读起来像在描述 registry，实测 `toolset.Registry()` 跑活注册的是
+**100 个工具**，其中只读 68（L0 35 + L1 33），写 32（L2 5 / L3 24 / L4 3）；
+**生成进节点的只是 68 里的 54 个**。三个数都是真的，原句把最小的那个当成了全体。
+
+这个差值本身已被一份双向守卫钉住：`TestTheNotPackagedLedgerIsCurrent` 要求
+「被排除的读工具」与「没被解释的读工具」**两头都报**，账上是 `NotPackagedFamilies
+= {host}` 与 `NotPackaged = 7 个 git.*`。所以 **68 = 54 打包 + 7 个 host.* + 7 个
+git.* = 68**，与实测逐项对得上——**打包侧一直是活的，漂的是台账**。
+
+#### 11 条检查：把「一个行」升级成「一节」
+
+旧的第 6 条只锚定 A–E 表的插件行。它在两件事上同时**正确**与**无用**：那行确实是
+对的，而 §六 另外五处复述它。所以新检查换了一个提问方式——不是「那一行对不对」，
+而是「**§六 里任何一处把某个数和某个包连起来的说法，都对不对**」。
+
+代价是必须承认 §六 用了很多种句式，于是规则必须覆盖它们真实存在的六种：
+
+| 句式 | 例子 | 对应规则 |
+|---|---|---|
+| `<n> 个<角色>只读工具` | 18 个节点本地只读工具 | 角色别名 ×3 |
+| 包名 + 紧邻的数 | `opskeeper-sre-repair`， 5 个工具 | 包名式 |
+| upcall 计数（**不带「个」**） | 12 可观测 + 54 中间件 | 角色别名 + 尾部排除 |
+| 批次标题里的数 | **B2 可观测工具集**（12 只读工具 | 标题式 |
+| 角色 + 换行 + 只读工具 | 54 个中间件\n  只读工具 | 词内 `\\s*` |
+| 粗体标记夹在中间 | 工具集**（12 | `[*\\s]*` |
+
+后两行**不是设计出来的，是被自己的变异抓出来的**：第一轮变异里
+「中间件 54→53」**漏过**，因为别名写死成 `中间件只读工具`，而台账恰好在那里折行，
+于是这条别名**一条都没匹配上**，而其他守卫仍然报告「五个包都覆盖到了」——
+**一条从不匹配的正则，会伪装成一条已生效的守卫**。第二轮里
+「B2 可观测工具集 12→11」漏过，因为 `工具集` 与 `（` 之间还有 `**`。
+
+**还有一处是工具给的限制**：Go 的正则引擎是 RE2，**没有前后向断言**。想排除
+「**B2** 里的 2 是批次编号不是计数」，`(?!工具集)` 和 `(?<![A-Za-z])` 都用不了。
+最后改成在代码里排除（取到尾部文本再判断），这反而更好：排除的理由写在代码里，
+而正则里的一句负向断言只会让人猜。
+
+**十一条变异全部被抓住**（前两轮各 4 条与 7 条，外加两条兜底）：
+
+| 变异 | 报出 |
+|---|---|
+| §六 B1/B2/B3 中间件 54→53 | quotes 53 for middleware（角色别名） |
+| §六 B2 中间件 54→53 | quotes 53 for middleware（包名式） |
+| §六 节点本地只读 18→17 | quotes 17 for readonly |
+| A–E 表 D 行 middleware 54→53 | quotes 53 for middleware（包名式） |
+| 可观测 12→11 | quotes 11 for observability |
+| 修复包 5→4 | quotes 4 for repair |
+| 自治包 1→2 | quotes 2 for autonomy |
+| A–E 表 D 行 readonly 18→19 | quotes 19 for readonly |
+| upcall 中间件 54→53 | quotes 53 for middleware |
+| upcall 可观测 12→11 | quotes 11 for observability |
+| B2 可观测工具集 12→11 | quotes 11 for observability |
+| §六 抹掉 autonomy 的全部出现 | never states how many tools autonomy ships |
+
+**这道检查仍然做不到的一件事**：它只认得 §六 使用的六种句式。某天有人用第七种
+句式说「这个包装了 55 个工具」，检查**不会报**——它只会在那一天新增包时抱怨
+「§六 从未声明过这个包」。所以它是**减速带不是护栏**：它把漂移从「安静地错很久」
+变成「新增包那天就报」。
+
+**数字与分数不变**：A–E 合计仍是 97.0%，四阶段仍是 93.6%。本决策修的是台账陈述，
+不是任何一件已交付能力的量。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -12989,7 +13070,7 @@ replace、纯模块缓存（`GOPROXY=off`）也能构建**。这是 CI 与发布
 | **A 模块化地基** | `go.work` + 7 个模块 `go.mod`（`core` / `pig` / `edge` / **`floor`**（决策 60）/ **`manager`**（决策 62+63）/ `harness` / `sdk`）+ 5 个 extension 模块；`core`（domain/ports/wire）；`sdk` 清单准入 | ✅ **已完成**——`internal/` 已清空（决策 63），模块依赖方向由 `modulecheck`（可执行）+ `.go-arch-lint.yml`（文档）双重钉住；遗留两条债务（底座包级 setter、arch-lint 债务清单无守卫）见「当前真实缺口」 |
 | **B PiG 适配层** | `pigmodel`（settings→`*ai.Model`）、`pigagent`（含 `buildPrompt` 历史回放，见决策 25）、`pigrpc`（`pig --mode rpc` 客户端）、`pigwire`（SSE 帧翻译）；**`go-openai` 已整包移除**（`core/manager/pkg/llm` 自持 HTTP wire，见决策 22）；**工具治理已抽成与内核无关的装饰器**（见决策 24）；**PiG 支撑的 `llm.Client` 已落地并接入装配层**（`core/manager/pkg/llm/pigclient.go` + `pigsettings.go` + `pigregistry.go`，`OPSKEEPER_LLM_BACKEND=pig` 切换，见决策 26）；**内核侧宿主绑定已落地**（`core/manager/biz/aiops/agentkernel/`：`ToolBag` + `Persister`（同时是 `ToolCallRecorder`）；`core/manager/biz/aiops/chatruntime/kernelsink.go`：`ports.EventSink` → 控制面事件，含准入/结算两帧的 join，见决策 27/28；审计/预算/审批/依赖装配四件套落在 `agentkernel`，见决策 30；历史回放改为一计划两渲染，见决策 31；**换内核接缝已开**：`Runtime.Handle` 第 5d 步分流 + `kernelpath.go` 驱动 `ports.Agent`，见决策 32） | ⚠️ 部分——模型接口与**编排接缝**都已就位，**装配层已接线**（`OPSKEEPER_AGENT_KERNEL=pig`，见决策 33）；**eino 已彻底移除**：`go.mod`/`go.sum` 中 `cloudwego/eino` 与 `eino-contrib/jsonschema` 双双消失，`chatruntime` 只剩内核一条路（见决策 34） | ✅ 已落地 |
 | **C 节点 Agent** | `pigsupervisor`（崩溃重启/退避/Degraded）、`policygate`（白名单+审批+digest）、`gatesocket`（unix socket 准入）、准入信使 extension、tunnel 7 个 `agent.*` 方法 + `agent.decide`、控制面 `NodeFleet` + `Service.Decide` + HTTP 决策端点、per-session 角色表、**profile piglet**（`tools: []` 摘除 PiG 8 个内置工具含 `bash`，真实二进制 A/B 验证 0/8 active，见决策 48）、**内置具名 piglet**（`plugins/pig-ops/opskeeper-sre-readonly/pig-opskeeper-ops.yaml`：18 只读工具 + 8 skill + 信使，见决策 56） | ✅ 已落地——节点侧生成 profile 与内置具名 piglet 并存（决策 56） |
-| **D 插件生态** | L1 只读 profile（18 工具 + 7 persona + 信使）、`pluginimport` 导入器（`/v1/marketplace/import` 入口，见决策 55；覆盖面见决策 88：8 类资源全部派生自 `domain.PackageResources`，源清单读而不复制）、**B1 只读工具集**（工具集 extension + `toolbroker` + `agent.tool` 反向调用 + 双向漂移测试）、**B2 可观测工具集**（12 只读工具，schema 由控制面 registry 生成，全量 upcall）、**B2 中间件工具集**（`opskeeper-sre-middleware`：53 个只读工具，由 `core/manager/middleware/toolset` 从适配器活注册生成；此包把 `plugin-coverage` 从 2/20 带到 20/20，但那 20/20 是**家族级 join 的产物，已被决策 69 推翻**，按方法名 join 的真实读数是 0/20，见决策 69 / 80）、**B3 修复包**（L2/5 工具/`approval.required`/`pod` 半径/pin 安装 + 审批回执 + 写操作全部走控制面）、**审核流水线**（ed25519 树签名 + 信任库 + 签名→清单→准入三段审核 + 灰度波次闸门 + 节点侧 `admitPackages` 接线）、**发布运输通道**（`plugin.install` / `plugin.remove` / `plugin.list` + 节点 `pluginStore` + 控制面 `ReleaseManager` + 6 条 `/v1/plugins/releases` 路由）、**控制面适配器真实化**（pg/redis/k8s/mq/host 五条，见「闭环修复派发链路」）、**git 适配器真实化**（8 工具全实现，只读，见决策 45）、**`sdk` 发布面**（清单类型 + 注册 API + 版本协商，见决策 46） | ✅ B1/B2/B3/审核流水线/运输通道全部完成；`git` 适配器 8/8 工具真实；`sdk` 三个发布物齐全；**四个只读包**（readonly / observability / middleware / 修复包的只读半边）在 `plugins/pig-ops` 下齐备 |
+| **D 插件生态** | L1 只读 profile（18 工具 + 7 persona + 信使）、`pluginimport` 导入器（`/v1/marketplace/import` 入口，见决策 55；覆盖面见决策 88：8 类资源全部派生自 `domain.PackageResources`，源清单读而不复制）、**B1 只读工具集**（工具集 extension + `toolbroker` + `agent.tool` 反向调用 + 双向漂移测试）、**B2 可观测工具集**（12 只读工具，schema 由控制面 registry 生成，全量 upcall）、**B2 中间件工具集**（`opskeeper-sre-middleware`：54 个只读工具，由 `core/manager/middleware/toolset` 从适配器活注册生成；此包把 `plugin-coverage` 从 2/20 带到 20/20，但那 20/20 是**家族级 join 的产物，已被决策 69 推翻**，按方法名 join 的真实读数是 0/20，见决策 69 / 80）、**B3 修复包**（L2/5 工具/`approval.required`/`pod` 半径/pin 安装 + 审批回执 + 写操作全部走控制面）、**审核流水线**（ed25519 树签名 + 信任库 + 签名→清单→准入三段审核 + 灰度波次闸门 + 节点侧 `admitPackages` 接线）、**发布运输通道**（`plugin.install` / `plugin.remove` / `plugin.list` + 节点 `pluginStore` + 控制面 `ReleaseManager` + 6 条 `/v1/plugins/releases` 路由）、**控制面适配器真实化**（pg/redis/k8s/mq/host 五条，见「闭环修复派发链路」）、**git 适配器真实化**（8 工具全实现，只读，见决策 45）、**`sdk` 发布面**（清单类型 + 注册 API + 版本协商，见决策 46） | ✅ B1/B2/B3/审核流水线/运输通道全部完成；`git` 适配器 8/8 工具真实；`sdk` 三个发布物齐全；**四个只读包**（readonly / observability / middleware / 修复包的只读半边）在 `plugins/pig-ops` 下齐备 |
 | **E 生态治理** | 兼容矩阵（edge 轴 + **PiG 轴**）、跨云 profile 模板（金融/SaaS）、插件能力 × golden case 覆盖报告 | ✅ 已落地 |
 
 ### 闭环修复派发链路
@@ -14460,14 +14541,14 @@ ToolReplay{Args, Result}                      （复盘里记的是"实际发了
       ——债务被逐条写进了两处账本，可查、可核销。
 
 59. **中间件适配器打包成节点插件包 `opskeeper-sre-middleware`：一个生成器、两份
-    排除账本、53 个只读工具**。
+    排除账本、54 个只读工具**。
     - **为什么要单独成包**：控制面 registry 里一直有 pg / redis / k8s / mq / kafka /
       rabbitmq 六个适配器的只读工具，但它们只存在于控制面，节点侧 persona 看不到，
       golden case 的 pg / redis / k8s / mq 家族因此一条包都命中不了——`plugin-coverage`
       上一轮是 **2/20**。这一轮把它们（52 个 middleware 读 + `git.find_runtime_link`）
       生成进一个独立 extension 包，数字变成 **20/20**。
     - **真相源是适配器本身，不是清单**：`core/manager/middleware/toolset.Registry()` 跑活
-      注册（8 个适配器、53 个读工具），`core/pig/extensions/opskeeper-sre-middleware/tools.go`
+      注册（8 个适配器、100 个工具，其中 68 个只读；生成进包的是其中 54 个），`core/pig/extensions/opskeeper-sre-middleware/tools.go`
       由它生成，`TestToolsetMatchesTheAdapters` 逐字节比对；重新生成是
       `OPSKEEPER_UPDATE_TOOLSET=1 go test ./core/manager/middleware/toolset/ -run Toolset`。
       手写清单会漂，而漂的方式恰好是"包声明了一个适配器已经改名的工具"——一个只有
@@ -14874,6 +14955,7 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
 | 决策 106（成本结晶机制落地） | 四阶段表 阶段 2 行「0.2 的形状」 | ✅ 决策 181 已回核 |
 | 决策 141/168（节点工具链 0/18 关闭） | A–E 表 C 行「0/18」 | ✅ 决策 178 已回核 |
 | 决策 179（中间件 53→54，自主关闭的审计项） | §六「当前真实缺口」B1/B2/B3 行 | ✅ 决策 184 已回核 |
+| 决策 179（同一处 53→54） | §六 第 59 条与 upcall 计数各处 | ✅ 决策 185 已回核 |
 
 ### 当前真实缺口
 
@@ -14941,7 +15023,7 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
   `cmd/opskeeper/main.go:2878` 的启动期发现（连每个 enabled server，把工具
   挂进聊天工具袋）。
   此前把「PiG 没有」直接写成「我们没有」，是这一条被记成缺口的唯一原因——
-  而 upcall 通道那 65 个工具（12 可观测 + 53 中间件）是**并行的另一条**路，
+  而 upcall 通道那 66 个工具（12 可观测 + 54 中间件）是**并行的另一条**路，
   不是替代品。两条都在，见 §4.23。
 - **可观测覆盖的真实边界**：`opskeeper-sre-observability` 的 12 个 upcall 工具
   **不含** K8s 对象与消息队列——它读的是控制面已采集的指标 / 日志 / trace /
@@ -15187,7 +15269,7 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
    §4.15。
 3. ~~**MCP 运行时**~~ **此前记为缺口，决策 85 更正：它一直存在。**
    `mcpclient` + `biz/mcp` + `tools.MCPTool` + 启动期发现是完整的一整套，
-   65 个工具的 extension toolset 是**并行的另一条**路而非替代品。真正缺的
+   66 个工具的 extension toolset 是**并行的另一条**路而非替代品。真正缺的
    是**第三条路**：PiG 原生的那条（`core/pig/pigmcp`，本轮新增），因为
    `basetool.BaseTool` 形状在控制面内核换成 `coding.Session` 之后接不上。
    详见 §4.23。
