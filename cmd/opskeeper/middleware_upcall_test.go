@@ -30,7 +30,10 @@ func registerMiddlewareTools(t *testing.T, reg *middlewareregistry.Registry, res
 // something an operator can act on and "no such tool" is not.
 func TestAMiddlewareToolWithNoAdapterBehindItSaysSo(t *testing.T) {
 	a := &agentToolUpcall{}
-	_, err := a.runMiddlewareTool("pg.lock_waits", nil)
+	_, denied, reason, err := a.runMiddlewareTool(context.Background(), "pg.lock_waits", nil)
+	if !denied || reason == "" {
+		t.Error("a call with no adapter behind it was not reported as denied with a reason")
+	}
 	if err == nil {
 		t.Fatal("a tool call was dispatched with no middleware registry at all")
 	}
@@ -41,7 +44,7 @@ func TestAMiddlewareToolWithNoAdapterBehindItSaysSo(t *testing.T) {
 	// A registry that exists but holds nothing is the same deployment seen
 	// from the other side: built, wired, and connected to nothing.
 	a.middleware = middlewareregistry.NewRegistry()
-	_, err = a.runMiddlewareTool("pg.lock_waits", nil)
+	_, _, _, err = a.runMiddlewareTool(context.Background(), "pg.lock_waits", nil)
 	if err == nil {
 		t.Fatal("a tool no adapter registered was dispatched anyway")
 	}
@@ -77,9 +80,15 @@ func TestAWriteOnTheAgentToolChannelIsRefused(t *testing.T) {
 	a := &agentToolUpcall{middleware: reg}
 
 	for name, level := range levels {
-		_, err := a.runMiddlewareTool(name, nil)
+		_, denied, reason, err := a.runMiddlewareTool(context.Background(), name, nil)
 		if err == nil {
 			t.Fatalf("%s (%s) was dispatched", name, level)
+		}
+		// A write tool arriving on a read-only channel is the refusal an
+		// operator most wants to read back, so it has to arrive as denied
+		// rather than as a plain failure (决策 203).
+		if !denied || !strings.Contains(reason, "write-classed") {
+			t.Errorf("%s (%s) was not reported as a denied write on a read-only channel: denied=%v reason=%q", name, level, denied, reason)
 		}
 		for _, want := range []string{name, string(level), "approved remediation path"} {
 			if !strings.Contains(err.Error(), want) {
@@ -102,7 +111,10 @@ func TestAMiddlewareReadReachesItsAdapterAndComesBackAsJSON(t *testing.T) {
 	})
 	a := &agentToolUpcall{middleware: reg}
 
-	body, err := a.runMiddlewareTool("redis.info", json.RawMessage(`{"section":"memory"}`))
+	body, denied, _, err := a.runMiddlewareTool(context.Background(), "redis.info", json.RawMessage(`{"section":"memory"}`))
+	if denied {
+		t.Error("a read that ran was reported as denied")
+	}
 	if err != nil {
 		t.Fatalf("runMiddlewareTool: %v", err)
 	}
@@ -128,7 +140,7 @@ func TestAMiddlewareCallWithNonObjectArgumentsIsRefused(t *testing.T) {
 		},
 	})
 	a := &agentToolUpcall{middleware: reg}
-	if _, err := a.runMiddlewareTool("redis.info", json.RawMessage(`[1,2,3]`)); err == nil {
+	if _, _, _, err := a.runMiddlewareTool(context.Background(), "redis.info", json.RawMessage(`[1,2,3]`)); err == nil {
 		t.Fatal("an array was accepted as a tool argument object")
 	}
 }

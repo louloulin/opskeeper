@@ -1393,7 +1393,15 @@ func main() {
 	// The control-plane half of every node's toolset. Built here and
 	// filled in below: the aiops registry needs the tunnel client that
 	// Install brings up, so the two cannot be constructed in one step.
-	agentTools := &agentToolUpcall{fleet: nodeFleet}
+	agentTools := &agentToolUpcall{
+		fleet: nodeFleet,
+		// Every tool this channel runs on a node's behalf is recorded
+		// here. It is the only place in the control plane that executes
+		// something on a node's say-so, and until it wrote a row the
+		// answer to "what did this host make us read" lived nowhere
+		// (决策 203).
+		audit: &agentToolAudit{emitter: auditUC},
+	}
 
 	// Plugin releases. Built after the fleet because a release drives the
 	// same tunnel the node agents use, and wired into HTTP below. The
@@ -6438,6 +6446,14 @@ type agentToolUpcall struct {
 	// error: the node's package then offers tools that answer "not
 	// configured", which is the correct answer.
 	middleware *middlewareregistry.Registry
+
+	//
+	// audit is the record of what this channel ran on a node's behalf.
+	// Every exit below goes through it, including the two refusals, so
+	// that "the control plane did this for my host" is a question the
+	// ledger can answer (决策 203). nil-safe: a deployment with no audit
+	// repository still serves tool calls.
+	audit *agentToolAudit
 }
 
 // RunAgentTool runs one tool a node's agent asked for.
@@ -6453,15 +6469,51 @@ type agentToolUpcall struct {
 // a health probe, a package install check — has no conversation to name and
 // is not thereby impersonating one.
 func (a *agentToolUpcall) RunAgentTool(ctx context.Context, edgeID uint64, sessionID, tool string, args json.RawMessage) (json.RawMessage, error) {
+	started := time.Now()
+	result, denied, reason, err := a.dispatchAgentTool(ctx, edgeID, sessionID, tool, args)
+	a.audit.record(ctx, agentToolCall{
+		EdgeID:    edgeID,
+		SessionID: sessionID,
+		Tool:      tool,
+		Surface:   agentToolSurface(tool),
+		Args:      args,
+		Result:    result,
+		Started:   started,
+		Duration:  time.Since(started),
+		Denied:    denied,
+		Reason:    reason,
+		Err:       err,
+	})
+	return result, err
+}
+
+// agentToolSurface names which of the two registries served the call, for
+// the audit row. A reader asking "what did the control plane run" needs to
+// know whether the answer came from a tool that knows about the fleet or
+// one that reaches into a customer's database, and inferring that from the
+// tool name prefix would make the ledger depend on a naming convention.
+func agentToolSurface(tool string) string {
+	if toolset.ParseFamily(tool) != "" {
+		return "middleware"
+	}
+	return "aiops"
+}
+
+// dispatchAgentTool is the whole of RunAgentTool's decision-making, kept
+// separate so that the audit write has exactly one place to happen. A
+// second `return` added to RunAgentTool later cannot skip it, which is the
+// failure mode this shape exists to prevent.
+func (a *agentToolUpcall) dispatchAgentTool(ctx context.Context, edgeID uint64, sessionID, tool string, args json.RawMessage) (json.RawMessage, bool, string, error) {
 	if a.reg == nil {
 		// A call in the window between the transport coming up and the
 		// registry being built. Refusing is right: a half-built registry
 		// would answer for the tools it happened to have registered so far.
-		return nil, fmt.Errorf("%s is not available: the control plane is still starting", tool)
+		return nil, true, "the control plane is still starting", fmt.Errorf(
+			"%s is not available: the control plane is still starting", tool)
 	}
 	if a.fleet != nil && sessionID != "" {
 		if _, ok := a.fleet.Stats(edgeID, sessionID); !ok {
-			return nil, fmt.Errorf(
+			return nil, true, "the node named a session it does not own", fmt.Errorf(
 				"%s was not run: this node has no open conversation %q, so the call cannot be attributed to an operator",
 				tool, sessionID)
 		}
@@ -6472,7 +6524,7 @@ func (a *agentToolUpcall) RunAgentTool(ctx context.Context, edgeID uint64, sessi
 	// aiops tool of the same name, and the two surfaces are reviewed by
 	// different people for different reasons.
 	if toolset.ParseFamily(tool) != "" {
-		return a.runMiddlewareTool(tool, args)
+		return a.runMiddlewareTool(ctx, tool, args)
 	}
 
 	res, err := a.reg.Invoke(ctx, tool, args)
@@ -6481,9 +6533,9 @@ func (a *agentToolUpcall) RunAgentTool(ctx context.Context, edgeID uint64, sessi
 		// rather than flattened into a transport failure. "no such tool"
 		// and "the alert service is down" are different sentences and the
 		// model reacts to them differently.
-		return nil, fmt.Errorf("%s: %w", tool, err)
+		return nil, false, "", fmt.Errorf("%s: %w", tool, err)
 	}
-	return res.ResultJSON, nil
+	return res.ResultJSON, false, "", nil
 }
 
 // runMiddlewareTool dispatches a middleware tool the node's agent asked for.
@@ -6512,19 +6564,22 @@ func (a *agentToolUpcall) RunAgentTool(ctx context.Context, edgeID uint64, sessi
 // The class is re-derived here rather than trusted from the manifest for
 // the reason the node's gate re-derives it: a manifest is a claim, and a
 // claim that can widen a channel is worth checking twice.
-func (a *agentToolUpcall) runMiddlewareTool(tool string, args json.RawMessage) (json.RawMessage, error) {
+func (a *agentToolUpcall) runMiddlewareTool(ctx context.Context, tool string, args json.RawMessage) (json.RawMessage, bool, string, error) {
 	if a.middleware == nil {
-		return nil, fmt.Errorf(
+		return nil, true, "no middleware adapters are configured on this control plane", fmt.Errorf(
 			"%s is a middleware tool and this control plane wired no adapters, so it cannot run", tool)
 	}
 	spec, ok := a.middleware.GetTool(tool)
 	if !ok {
-		return nil, fmt.Errorf(
+		return nil, true, "the adapter backing this tool is not configured", fmt.Errorf(
 			"%s is not available on this deployment: the %s adapter is not configured",
 			tool, toolset.ParseFamily(tool))
 	}
+	// The one refusal on this channel that is a security decision rather
+	// than a configuration fact, and so the one an operator most wants to
+	// see afterwards: a node's agent reaching for a write tool.
 	if !toolset.IsRead(spec.RiskLevel) {
-		return nil, fmt.Errorf(
+		return nil, true, "a write-classed tool was offered on a read-only channel", fmt.Errorf(
 			"%s is a %s tool and this channel does not carry writes; it is reachable through the "+
 				"approved remediation path, where the change is reviewed before it runs",
 			tool, spec.RiskLevel)
@@ -6532,16 +6587,20 @@ func (a *agentToolUpcall) runMiddlewareTool(tool string, args json.RawMessage) (
 	var parsed map[string]interface{}
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &parsed); err != nil {
-			return nil, fmt.Errorf("%s: the arguments were not an object: %w", tool, err)
+			return nil, false, "", fmt.Errorf("%s: the arguments were not an object: %w", tool, err)
 		}
 	}
-	out, err := a.middleware.CallTool(context.Background(), tool, parsed)
+	// The caller's ctx, not context.Background(). Dropping it here meant a
+	// handler that wanted the tenant, the deadline or the request id had
+	// nothing to read them from, and the audit row written one frame up
+	// was the only thing that could say who asked.
+	out, err := a.middleware.CallTool(ctx, tool, parsed)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", tool, err)
+		return nil, false, "", fmt.Errorf("%s: %w", tool, err)
 	}
 	body, err := json.Marshal(out)
 	if err != nil {
-		return nil, fmt.Errorf("%s ran, but its result could not be encoded for the agent: %w", tool, err)
+		return nil, false, "", fmt.Errorf("%s ran, but its result could not be encoded for the agent: %w", tool, err)
 	}
-	return body, nil
+	return body, false, "", nil
 }

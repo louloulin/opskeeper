@@ -229,6 +229,31 @@ const (
 	ActionNodePluginLoad      = "node_plugin_load"
 	ActionNodeProposalCreate  = "node_proposal_create"
 	ActionNodeRecoveryApply   = "node_recovery_apply"
+
+	// ActionAgentToolCall is the control plane recording a tool it ran on
+	// a node's behalf (决策 203).
+	//
+	// The node_* family above is not a substitute. Those are rows a node
+	// writes about work it did ITSELF, into a local ledger, replayed over
+	// agent.audit.entries when the link comes back. This row is the
+	// control plane's own record of executing a tool because a node's
+	// agent asked it to (the agent.tool RPC), and the node never learns
+	// whether the call succeeded, so it cannot write this row itself.
+	//
+	// The distinction matters the moment a node is compromised. "What did
+	// this host do" is answered by the node_* rows; "what did someone
+	// else's host make MY control plane read" is answered only by this
+	// one, and it is the question with the worse answer if it is missing.
+	//
+	// A single action rather than a call/failed/blocked trio, unlike the
+	// node_* set: those three were split because an operator filters them
+	// separately on the node's console. Here the outcome is carried by
+	// status (success / failure / denied), which is what the 2026-05-20
+	// cleanup asked for, and the two denial reasons this channel can
+	// produce — a node naming a session it does not own, and a write-
+	// classed tool arriving on a read-only channel — are both legible
+	// from the payload without a second filter entry.
+	ActionAgentToolCall = "agent_tool_call"
 )
 
 // ResourceType buckets used in the resource_type column. Same flat-list
@@ -260,6 +285,16 @@ const (
 	// resource id is the tool name the caller asked for, which is what an
 	// operator searches for when a tenant claims a tool "does not exist".
 	ResourceMCPTool = "mcp_tool"
+
+	// ResourceAgentTool buckets the rows written by the agent.tool proxy
+	// (ActionAgentToolCall). It is separate from ResourceMCPTool because
+	// the two are different trust directions and an operator triaging one
+	// never wants the other: an MCP row is an external client calling in,
+	// this is a node we already authenticated reaching back into the
+	// control plane. Keeping them apart is the difference between "an
+	// unknown caller is using my tools" and "my fleet is using my tools",
+	// which are different pages.
+	ResourceAgentTool = "agent_tool"
 )
 
 // contextKey points to a mutable *slot in the request context.

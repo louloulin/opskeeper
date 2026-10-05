@@ -178,6 +178,8 @@ const (
 	ActionNodeProposalCreate  = auditport.ActionNodeProposalCreate
 	ActionNodeRecoveryApply   = auditport.ActionNodeRecoveryApply
 
+	ActionAgentToolCall = auditport.ActionAgentToolCall
+
 	ResourceUser     = auditport.ResourceUser
 	ResourceDevice   = auditport.ResourceDevice
 	ResourceIncident = auditport.ResourceIncident
@@ -195,4 +197,6 @@ const (
 	ResourcePlugin   = auditport.ResourcePlugin
 	ResourceEdge     = auditport.ResourceEdge
 	ResourceMCPTool  = auditport.ResourceMCPTool
+
+	ResourceAgentTool = auditport.ResourceAgentTool
 )
