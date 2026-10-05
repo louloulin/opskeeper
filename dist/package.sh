@@ -130,8 +130,26 @@ if [ -f "${REPO_ROOT}/deploy/install/state-dirs.sh" ]; then
 else
     die "deploy/install/state-dirs.sh missing: install.sh and upgrade.sh source it, and the stack cannot be installed without it"
 fi
-copy_opt "${REPO_ROOT}/deploy/install/docker-compose.yml"  "${STAGE_DIR}/docker-compose.yml"
-copy_opt "${REPO_ROOT}/deploy/install/.env.example"        "${STAGE_DIR}/.env.example"
+# docker-compose.yml and .env.example are NOT optional, and copy_opt's
+# warn-and-continue is wrong for them in the same way it is wrong for
+# state-dirs.sh. install.sh and upgrade.sh reference both without an
+# `if [[ -f … ]]` guard — a `docker compose up` with no compose file is an
+# install that cannot start, and a generated .env with no example to copy from
+# is a stack whose variables are silently unset. The other copy_opt entries
+# below ARE optional: every one of them is read behind a guard, and the guard's
+# message is the right thing to see when a tarball is assembled without them.
+require_asset() {
+    local src="$1" dst="$2" mode="${3:-}"
+    if [ ! -f "$src" ]; then
+        die "$src missing: it is staged as a required asset, and a tarball without it cannot install"
+    fi
+    cp "$src" "$dst"
+    if [ -n "$mode" ]; then chmod "$mode" "$dst"; fi
+    log "  + $(basename "$dst")"
+}
+
+require_asset "${REPO_ROOT}/deploy/install/docker-compose.yml" "${STAGE_DIR}/docker-compose.yml"
+require_asset "${REPO_ROOT}/deploy/install/.env.example"       "${STAGE_DIR}/.env.example"
 copy_opt "${REPO_ROOT}/deploy/install/frontier.yaml"       "${STAGE_DIR}/frontier.yaml"
 
 # --- systemd mode (--mode=systemd dispatch target) --------------------------

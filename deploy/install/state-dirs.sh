@@ -57,10 +57,18 @@ opskeeper_ensure_state_dirs() {
     done < "$conf"
 }
 
-# --- the manager (uid 65532 = nonroot in Dockerfile.opskeeper) ---
-# Format: <dir-under-data-dir>  <uid:gid|->  [chmod-mode]
-# `-` means create without chown, for a service whose container process runs
-# as root and would be broken by one.
+# Format: <dir-under-data-dir>  <uid:gid>  [chmod-mode]
+#
+# The uid column decides two things at once, and that is deliberate. It is
+# the owner install gives the directory, and it is also what tells uninstall.sh
+# whether the directory is the manager's (keep — an operator parks other state
+# under the data root and a re-install reuses it) or a service's own persistent
+# data (purge). An earlier revision carried a `-` for "create but do not chown"
+# and that third kind broke the question: qdrant runs as root, so `-` said
+# nothing about whether its volumes were the manager's or its own, and the two
+# readings had to be settled by reading uninstall.sh. Writing 0:0 says the
+# same thing as `-` did in practice — the directory ended up root-owned
+# either way, because install.sh runs as root — and now it is answerable.
 #
 # embeddings carries a mode because fastembed-go reads the staged model and
 # needs it world-readable. Bumping an image tag in docker-compose.yml without
@@ -82,6 +90,36 @@ prometheus   65534:65534
 loki         10001:10001
 tempo        10001:10001
 grafana      472:472
-qdrant       -
+qdrant       0:0
 LIST
+}
+
+# opskeeper_manager_uid is the uid Dockerfile.opskeeper gives the state root
+# and then runs as. Every directory in that uid is the manager's own state.
+opskeeper_manager_uid() { printf '65532:65532\n'; }
+
+# opskeeper_purge_dirs lists the directories uninstall.sh deletes: every one
+# that is NOT the manager's, because those hold a service's own persistent
+# data and keeping them is the bug a re-install walks into.
+#
+# The rule used to live only as a hand-written list inside uninstall.sh, with
+# nothing connecting it to this file. The two agreed by hand on six entries,
+# and the consequence of them drifting is the incident uninstall.sh's own
+# comment records from 2026-05-20: a fresh install picks up the previous mysql
+# data directory, which still holds the old password, while the new .env gets
+# a new one, and the manager crashloops on "Access denied for user
+# 'opskeeper'@…". Nothing about that failure points at this list.
+opskeeper_purge_dirs() {
+    local manager uid
+    manager="$(opskeeper_manager_uid)"
+    local dir rest
+    while read -r dir rest; do
+        case "$dir" in
+            ''|'#'*) continue ;;
+        esac
+        uid="${rest%% *}"
+        if [[ "$uid" != "$manager" ]]; then
+            printf '%s\n' "$dir"
+        fi
+    done < <(opskeeper_state_dirs)
 }
