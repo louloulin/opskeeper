@@ -2,7 +2,7 @@
 #
 # 状态：已定价的候选，不是已批准的决定。
 # 定价：make split-cost FILE=docs/manager-split.proposed
-#   → 95 条 import 留在组内，28 条跨组，最重的一条缝 4 条 import。
+#   → 95 条 import 留在组内，26 条跨组，最重的一条缝 4 条 import。
 #   （决策 147 复核：原文此处写 41 条，已陈旧；当时实测 42，组内 102 条未变。
 #     决策 235 切掉 alert -> edge 与 systemhealth -> edge 之后，两条边此前都是跨组的那
 #     一类，所以组内与跨组各降 2：**100 / 39**。决策 240 切掉 aiops -> skill 之后再降
@@ -22,7 +22,13 @@
 #     `generator.go -> chatruntime` 是组内的，而 chatruntime 自己的其余入向全在
 #     core 侧。**跨组数一次降 3 而这一刀只切了一条边**——组内与跨组不是同一个量，
 #     一次切边可以只动其中一个，而两份候选的表格行是「internal + crossing」两列，
-#     读者容易以为它们同步。
+#     读者容易以为它们同步。决策 254 切掉 chatdiagnose -> aiops 之后组内不变、
+#     跨组再降 2：**95 / 26**。这一刀降的是组外的两条而组内一条没动，因为被删掉的
+#     是 `biz/chatdiagnose/chatruntime_adapter.go` 的**两个** import（`chatruntime`
+#     与 `model/aiops`）加 `server/marketplace` 之外的一整份翻译代码，而 chatdiagnose
+#     与 chatruntime 在这份分组里本来就在同一侧。**一次切边让「跨组」降 2 而
+#     「声明边」只降 1**，因为一个文件里有两个 import 指向同一个域——**这两个数
+#     量的不是同一件事**，而报价表把它们并排印在一起。
 #     决策 249 切掉 agentteams -> mcp 之后再降 3：**96 / 30**。这一刀一次降 3，
 #     因为 agentteams 的三个生产文件各引一次 mcp 域的中间件包，而那条边此前
 #     **根本没有端口可以收窄**——依赖是三个包级函数，包级函数不能被注入。这三行是当前读数，不是历史快照。**注意这行曾经自己陈旧**——

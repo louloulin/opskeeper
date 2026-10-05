@@ -154,7 +154,6 @@ var edges = map[edge]string{
 	{"aiopsconfig", "aiops"}: "the config service assembles the agent's alert-config and tool surfaces: it configures aiops rather than reimplementing it",
 	{"aiopsconfig", "alert"}: "the agent's settings endpoints resolve alert configuration through the alert service",
 
-	{"chatdiagnose", "aiops"}: "chat diagnosis runs on the agent's chat runtime",
 	{"chatdiagnose", "audit"}: "promoting a chat into an investigation is an operator action and belongs in the chain",
 	{"chatdiagnose", "loop"}:  "promoting a chat hands the work to the loop domain, which owns the investigation; the reverse of that edge used to exist because the loop wrote the knowledge base's own rows (decision 114)",
 

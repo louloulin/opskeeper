@@ -515,11 +515,16 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// one-method port and the only thing its signature named from the
 	// producer was two structs holding fourteen fields of which it read
 	// ten — and where a value return deleted a nil-worker branch that no
-	// implementation in this tree could produce).
+	// implementation in this tree could produce) and decision 254's
+	// (chatdiagnose -> aiops, where the port was already written in the
+	// consumer's own types and the only thing crossing the boundary was
+	// the adapter — and the adapter was living inside the consumer, so the
+	// domain had a correct seam and a package dependency at the same time,
+	// held open by a line that said `_ = aiopsmodel.Message{}`).
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "27 edges") {
+	if !strings.Contains(buf.String(), "26 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

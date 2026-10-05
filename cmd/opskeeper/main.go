@@ -2609,7 +2609,15 @@ func main() {
 		// production wire-up when sqlDB is set).
 		chatDiagRepo = managerbizchatdiagnose.NewInMemoryConversationRepo()
 	}
-	chatDiagRuntime := managerbizchatdiagnose.NewChatRuntimeAdapter(chatRT)
+	// The nil check is load-bearing, not defensive: a nil *Runtime put
+	// straight into the interface field would compare unequal to nil inside
+	// ReAct and panic on the first diagnostic of a boot with no LLM
+	// configured. See the note on chatDiagnoseReAct.ReAct.
+	chatDiagReAct := chatDiagnoseReAct{}
+	if chatRT != nil {
+		chatDiagReAct.rt = chatRT
+	}
+	chatDiagRuntime := chatDiagReAct
 	chatDiagSvc := managerbizchatdiagnose.NewChatDiagnoseService(
 		chatDiagRepo,
 		chatDiagKB,
