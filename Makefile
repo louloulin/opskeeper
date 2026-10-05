@@ -281,10 +281,9 @@ mcp-surface-check: ## MCP 对外协议面：握手、保活、分页、可见性
 # What that fix is NOT: closing a coverage hole. The tests these targets select
 # already run in CI, because module-standalone-check runs each module's whole
 # suite with the workspace off, and these targets are the fast, named way to
-# run one gate while working on it. Claiming otherwise was wrong, and
-# `mysql-migration-check` — which is behind //go:build integration and
-# therefore genuinely compiled by nothing in CI — is the one that had no
-# coverage at all. See decision 187.
+# run one gate while working on it. Claiming otherwise was wrong. What did have
+# no coverage was the //go:build integration tag, which `go test ./...` compiles
+# none of — see integration-check, and decisions 187 and 188.
 
 audit-port-check: ## 审计端口：iam 不再反向依赖 manager，词表闭合，行照常落库
 	cd core/manager && GOWORK=off go test ./iam/server/ -count=1 -run \
@@ -324,6 +323,32 @@ mysql-migration-check: ## 迁移在真 MySQL 上跑一遍（SQLite 抓不到方�
 	cd core/manager && GOWORK=off go test -tags=integration ./data/metric/store/ -count=1
 	go test -tags=integration ./cmd/opskeeper/ -count=1 -run 'TestTheManagerSchemaReplays|TestThePassesActuallyBuiltASchema|TestEveryMigratorIsCalledOnEveryBoot'
 	@echo "mysql-migration-check: the whole migration list runs three times on the dialect the deployment uses"
+
+# Everything behind //go:build integration, which `go test ./...` compiles none
+# of.
+#
+# This exists because the migration gate covered only half its own tag. Decision
+# 187 wired mysql-migration-check into CI, and that command named two packages;
+# `go list` reports a third under the same tag — core/manager/agentteams — that
+# nothing named, so its 48 cases had never run in CI. Nothing was red, because
+# a build tag removes coverage without removing a line of code.
+#
+# Three separate commands on purpose. Go runs the packages of one invocation in
+# parallel, and two of these share one scratch database, so a single
+# `go test -tags=integration ./a/ ./b/` is a different test run from two
+# sequential ones — and a failure that names one package beats one that names
+# two. scripts/cigate asks this question per file rather than trusting the
+# target to be complete, because splitting it back in two is how the half came
+# to be missing.
+integration-check: ## integration build tag 下的全部测试（默认 go test 不编译）
+	@test -n "$(OPSKEEPER_TEST_MYSQL_DSN)" || { \
+		echo "integration-check: set OPSKEEPER_TEST_MYSQL_DSN to a scratch MySQL DSN"; \
+		echo "  e.g. opskeeper:opskeeper@tcp(127.0.0.1:13306)/opskeeper_migtest?parseTime=true"; \
+		exit 1; }
+	cd core/manager && GOWORK=off go test -tags=integration ./agentteams/ -count=1
+	cd core/manager && GOWORK=off go test -tags=integration ./data/metric/store/ -count=1
+	go test -tags=integration ./cmd/opskeeper/ -count=1
+	@echo "integration-check: every test behind //go:build integration has run against a real MySQL"
 
 # ----------------------------------------------------------------------------
 # lint

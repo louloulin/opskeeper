@@ -153,11 +153,15 @@ jobs:
 
       # Verified against a real mysql:8.0 before it was wired here, because a
       # migration gate added to CI without ever having been run is a gate that
-      # reports a verdict nobody has seen.
-      - name: Migrations replay on the dialect the deployment uses
+      # reports a verdict nobody has seen. The target is the whole
+      # //go:build integration tag, not the two packages the first version
+      # named: the third one had 48 cases that no CI run had ever compiled,
+      # and nothing was red, because a build tag removes coverage without
+      # removing a line of code. scripts/cigate now asks that per file.
+      - name: Everything behind the integration build tag, on the dialect the deployment uses
         env:
           OPSKEEPER_TEST_MYSQL_DSN: opskeeper:opskeeper@tcp(127.0.0.1:3306)/opskeeper_migtest?parseTime=true
-        run: make mysql-migration-check
+        run: make integration-check
 
       - name: Broker version pins agree
         run: make broker-pin-check

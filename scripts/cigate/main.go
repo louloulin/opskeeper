@@ -174,12 +174,14 @@ func DecisionGates() []Gate {
 				"(decision 187)",
 		},
 		{
-			Target: "mysql-migration-check",
+			Target: "integration-check",
 			Why: "the migration list is a list of MySQL statements, and the failures that matter " +
 				"are the ones SQLite cannot see -- a statement the deployment engine rejects, or " +
-				"one a migrator was never wired to call. The gate replays the whole list three " +
-				"times on a real mysql:8.0, and it was run against one before it was wired into " +
-				"CI, because a migration gate nobody has ever seen pass is not a gate (decision 187)",
+				"one a migrator was never wired to call. It replays the whole list on a real " +
+				"mysql:8.0, and it was run against one before it was wired in, because a " +
+				"migration gate nobody has ever seen pass is not a gate. The target covers the " +
+				"whole //go:build integration tag rather than the two packages decision 187 named: " +
+				"the third one had 48 cases that no CI run had ever compiled (decision 188)",
 		},
 		{
 			Target: "e2e-delivery-check",
@@ -279,6 +281,16 @@ func check(root string) error {
 	// rather than read from the Makefile, because a skip list that checks
 	// itself is a skip list that can grow.
 	if err := brokerSkipAgrees(root, string(makefile)); err != nil {
+		problems = append(problems, err.Error())
+	}
+
+	// A build tag removes coverage without removing a line of code. The
+	// migration gate sat behind //go:build integration and was never compiled
+	// by `go test ./...`; wiring it up then exposed a second file in the same
+	// tag that the newly wired command did not name. Both are invisible to
+	// every other check here, because every other check asks whether a target
+	// is wired -- not whether the tests inside it are compiled at all.
+	if err := checkBuildTagCoverage(root, string(makefile), reachableTargets(string(makefile), invoked)); err != nil {
 		problems = append(problems, err.Error())
 	}
 
