@@ -478,8 +478,9 @@ func addGroup(path string, line int, text string, group map[string]string, order
 }
 
 // printCut prices a proposed split: how many edges it severs, weighted by
-// the imports behind them, and which domains the grouping forgets.
-func (g *domainGraph) printCut(w io.Writer, grouping map[string]string, order []string) {
+// the imports behind them, which domains the grouping forgets, and which hard
+// process constraints it severs anyway.
+func (g *domainGraph) printCut(w io.Writer, grouping map[string]string, order []string, hard map[edge]string) {
 	// A domain nobody assigned is the thing most likely to be wrong with
 	// the proposal, so it is reported first and loudly.
 	var unassigned []string
@@ -553,6 +554,50 @@ func (g *domainGraph) printCut(w io.Writer, grouping map[string]string, order []
 		fmt.Fprintf(w, "\n  %d name(s) in the grouping that are not domains here: %s\n",
 			len(unknown), strings.Join(unknown, " "))
 	}
+	// A severed hard constraint is reported above the price, not below it,
+	// because the price is a cost and this is an impossibility. The two are
+	// different in kind: a cut edge can be paid for with a seam, and a cut
+	// hard constraint cannot be paid for at all without giving up the property
+	// that made it hard.
+	//
+	// This is reported and does not fail the run. -cut is a report mode by
+	// design — a proposal that is wrong should be priced and argued about, not
+	// turned into a red build on the day it is written — and that stays true
+	// here. What changes is that a reader of `make split-cost` now sees the
+	// contradiction in the same output as the number it contradicts.
+	type severedHard struct {
+		e       edge
+		fromGrp string
+		toGrp   string
+		why     string
+	}
+	var severed []severedHard
+	for e, why := range hard {
+		gf, gto := grouping[e.from], grouping[e.to]
+		if gf == "" || gto == "" || gf == gto {
+			continue
+		}
+		severed = append(severed, severedHard{e, gf, gto, why})
+	}
+	sort.Slice(severed, func(i, j int) bool {
+		if severed[i].e.from != severed[j].e.from {
+			return severed[i].e.from < severed[j].e.from
+		}
+		return severed[i].e.to < severed[j].e.to
+	})
+	for _, sh := range severed {
+		fmt.Fprintf(w, "\n  HARD CONSTRAINT SEVERED  %s -> %s  (%s -> %s)\n", sh.e.from, sh.e.to,
+			sh.fromGrp, sh.toGrp)
+		fmt.Fprintf(w, "    %s\n", sh.why)
+		fmt.Fprintln(w, "    This edge is one a process boundary may not cut. Either these two")
+		fmt.Fprintln(w, "    domains go in the same group, or the constraint has to be given up")
+		fmt.Fprintln(w, "    deliberately and the reason rewritten — not left to be cut by accident.")
+	}
+	if len(severed) > 0 {
+		fmt.Fprintf(w, "\n  %d of %d hard process constraints are cut by this grouping.\n",
+			len(severed), len(hard))
+	}
+
 	fmt.Fprintf(w, "\n  %d import statements stay inside a group, %d cross one\n", internal, crossing)
 	fmt.Fprintln(w, "\n  the edges this split severs, heaviest first:")
 	for i, c := range cuts {

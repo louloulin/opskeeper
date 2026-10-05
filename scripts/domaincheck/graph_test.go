@@ -29,12 +29,20 @@ func groupingFile(t *testing.T, body string) string {
 
 func reportCut(t *testing.T, g *domainGraph, body string) string {
 	t.Helper()
+	return reportCutWithHard(t, g, body, nil)
+}
+
+// reportCutWithHard is reportCut with the hard-constraint set the caller wants
+// priced. The shipped set is nil by default so the edge tests, which are about
+// cost, do not have to know the constraint exists.
+func reportCutWithHard(t *testing.T, g *domainGraph, body string, hard map[edge]string) string {
+	t.Helper()
 	grouping, order, err := loadGrouping(groupingFile(t, body))
 	if err != nil {
 		t.Fatalf("load the grouping: %v", err)
 	}
 	var buf bytes.Buffer
-	g.printCut(&buf, grouping, order)
+	g.printCut(&buf, grouping, order, hard)
 	return buf.String()
 }
 

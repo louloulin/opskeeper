@@ -74,6 +74,7 @@ type rules struct {
 	shared map[string]string
 	edges  map[edge]string
 	cycles map[[2]string]string
+	hard   map[edge]string
 }
 
 // sharedDomains may be depended on by any domain without a declaration.
@@ -188,9 +189,41 @@ func pair(a, b string) [2]string {
 // change to cut it.
 var cycles = map[[2]string]string{}
 
+// hardConstraints are the declared edges that a process boundary may not cut.
+//
+// Every other edge in the table is a seam somebody could pay to hold open. These
+// four cannot, and the difference is physical rather than stylistic.
+//
+// The audit chain is one ordered tamper-evident chain: a single head, an order
+// that means something, and every record carrying the digest of the one before
+// it. Those three properties together are what make two processes writing it
+// concurrently a distributed-coordination problem — an election, a consensus, or
+// at minimum a cross-process lock — and that bill is larger than the one it
+// saves. `biz/audit` is the only write throat in the tree, and
+// `make audit-port-check` exists to keep it that way.
+//
+// The nearest miss is not this shape. `agentteams -> alert` and `loop -> alert`
+// share *rows*, not a *chain*: rows have no chaining property, so a split can
+// be bridged with an interface and eventual consistency. A chain has one, so a
+// split has to coordinate. That is a real technical difference, not a
+// distinction in vocabulary — and it is the reason this table is declared
+// rather than inferred, because inferring it from the reason strings was tried
+// and got `aiops -> hitl` wrong (its reason contains the word "chain").
+//
+// This is decision 196's reading of all 43 reasons, transcribed. It is not a
+// new judgement about the code, and it is deliberately not extended by
+// keyword: a constraint that is guessed is a constraint that appears and
+// disappears as prose is edited.
+var hardConstraints = map[edge]string{
+	{from: "aiops", to: "audit"}:         "the agent kernel's LedgerWriter appends agent actions to the chain an operator reads",
+	{from: "chatdiagnose", to: "audit"}:  "promoting a chat into an investigation is an operator action and lands in the chain",
+	{from: "frontierbound", to: "audit"}: "a node's autonomous replay writes the decisions it made back into the chain",
+	{from: "middleware", to: "audit"}:    "the audit middleware is the only thing that turns a handled request into a chain record",
+}
+
 // defaultRules is the shipped boundary.
 func defaultRules() rules {
-	return rules{shared: sharedDomains, edges: edges, cycles: cycles}
+	return rules{shared: sharedDomains, edges: edges, cycles: cycles, hard: hardConstraints}
 }
 
 // source is one parsed file: where it is, and what it imports.
@@ -276,6 +309,28 @@ func check(sources []source, r rules) []string {
 			violations = append(violations, fmt.Sprintf(
 				"%s -> %s is declared but no longer happens (%s). Delete the entry and the reason "+
 					"with it: a stale justification is worse than none", e.from, e.to, why))
+		}
+	}
+
+	// A hard constraint is checked in both directions for the same reason the
+	// edge table is. One that names an edge nobody declared is a constraint on
+	// nothing; one whose edge no longer happens is a constraint that will
+	// silently stop applying at exactly the moment somebody relies on it, and
+	// the reason it is a gate rather than a comment is that nothing else would
+	// notice either event.
+	for e, why := range r.hard {
+		if _, ok := r.edges[e]; !ok {
+			violations = append(violations, fmt.Sprintf(
+				"%s -> %s is declared a hard process constraint but is not a declared edge "+
+					"(%s). A constraint on an undeclared edge constrains nothing: add the edge, "+
+					"or drop the constraint", e.from, e.to, why))
+		}
+		if !observed[e] {
+			violations = append(violations, fmt.Sprintf(
+				"%s -> %s is declared a hard process constraint but no longer happens (%s). "+
+					"The constraint is stale: whatever made these two inseparable is gone, so "+
+					"delete the entry and re-read the reason before believing it",
+				e.from, e.to, why))
 		}
 	}
 
@@ -389,14 +444,16 @@ func main() {
 				fmt.Fprintln(os.Stderr, "domaincheck: "+err.Error())
 				os.Exit(2)
 			}
-			g.printCut(os.Stdout, grouping, order)
+			g.printCut(os.Stdout, grouping, order, r.hard)
 		}
 		return
 	}
 	violations := check(sources, r)
 	fmt.Printf("domaincheck: %d domains, %d shared, %d declared edges, %d declared cycles, "+
-		"%d test-only cross-domain imports (excluded, as in .go-arch-lint.yml)\n",
-		stats.domains, len(r.shared), len(r.edges), len(r.cycles), stats.testOnlyEdges)
+		"%d hard process constraints, %d test-only cross-domain imports "+
+		"(excluded, as in .go-arch-lint.yml)\n",
+		stats.domains, len(r.shared), len(r.edges), len(r.cycles), len(r.hard),
+		stats.testOnlyEdges)
 
 	if len(violations) == 0 {
 		fmt.Println("domaincheck: every domain boundary holds")
