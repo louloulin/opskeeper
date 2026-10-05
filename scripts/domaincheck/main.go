@@ -189,8 +189,7 @@ var edges = map[edge]string{
 	{"marketplace", "aiops"}:        "the marketplace lists what an agent can install, which is the agent's tool vocabulary",
 	{"marketplace", "pluginimport"}: "installing from the marketplace is the plugin-import domain's job",
 
-	{"mcp", "aiops"}: "an MCP tool call is observed through the agent's tool decorators, so its receipt carries the same gate events a native call does",
-	{"mcp", "loop"}:  "an investigation started over MCP enters the same loop as a chat one",
+	{"mcp", "loop"}: "an investigation started over MCP enters the same loop as a chat one",
 
 	{"middleware", "audit"}: "the audit middleware is the only thing that turns a handler's request into a write to the chain",
 

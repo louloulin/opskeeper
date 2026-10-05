@@ -344,9 +344,15 @@ deps:
       # 而 core/manager/server 这一层今天确实不认识 domains 的 biz 与
       # model——它要认识，得先有第二条 manager → domains 的边，那是
       # 另一刀的事。
-      # oxcore_domain 撤掉：它唯一的使用者 server/flow 与 server/nodeagent
-      # 随 flow / nodeagent 搬去了 core/domains（决策 223），授权留着就是
-      # 一条没人行使的口子。
+      # 决策 238 把 oxcore_domain 加回来，而它被撤掉过（决策 223）。
+      # 撤掉的理由是「唯一的使用者随 flow / nodeagent 搬走了」，这次使用者
+      # 是一个新的：server/mcp 的审计 sink。为了命名两个没有行为的事件形状，
+      # 它此前 import 整个 biz/aiops/tools/decorators（治理、评审闸、限流、
+      # 不可信输出标记全在那个包里），那正是 mcp → aiops 这条边存在的
+      # 全部理由。形状下沉到 core/domain 之后这条 import 没有了，于是这条
+      # 授权第一次有了行使者——按决策 74 的同一条判据，有人行使的口子
+      # 才留下，没人行使的必须撤。
+      - oxcore_domain
       - oxcore_ports
       # 决策 67：query_translate 端点直接发一次补全（不建 Session），
       # http.go 读回 stored-ledger 的用量。这两处与控制面其他调用方看到

@@ -4,8 +4,25 @@ import (
 	"context"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 )
+
+// The three names below are aliases, not declarations.
+//
+// They used to be declared here, and one consumer outside this package needed
+// them: the MCP server's audit sink, which writes the same pending/success
+// pair a native call writes. Holding `decorators.ToolStartEvent` in its method
+// signature meant satisfying a two-struct seam by importing the whole
+// decorators package — governance, review gates, rate limiters and all — so
+// the `mcp -> aiops` edge existed to carry two structs with no behaviour in
+// them (decision 238).
+//
+// The shapes moved to core/domain, which the plan already gives event
+// contracts to (plan §2.1). The field lists did not change, and because a Go
+// alias *is* the type it names rather than a copy of it, every call site and
+// every test fake in this repository keeps compiling unchanged — including
+// the ones that were never part of the edge being cut.
 
 // AuditSink is the interface-only seam that the audit decorator writes
 // through. The production binding (later PR) implements this against
@@ -18,43 +35,20 @@ import (
 // BaseTool path. When the agent loop migrates to eino + ToolsNode the
 // implementation may switch to eino callbacks; the AuditSink contract
 // stays the same.
-type AuditSink interface {
-	// OnToolStart records the start of a tool invocation. id is an
-	// opaque correlation token returned to the caller and passed back
-	// to OnToolEnd; implementations typically map it to the
-	// chat_tool_calls.id (UUID). When the sink wants to short-circuit
-	// the call (e.g. quota exceeded) it returns a non-nil error and
-	// the decorator skips InvokableRun entirely, surfacing the error.
-	OnToolStart(ctx context.Context, ev ToolStartEvent) (id string, err error)
+//
+// It is an alias rather than a second declaration, which is the point:
+// two identical interfaces with two identical method sets are two types, and
+// a sink satisfying one would not satisfy the other.
+type AuditSink = domain.ToolCallAuditSink
 
-	// OnToolEnd records the end of a tool invocation. id is the value
-	// returned from OnToolStart. Errors here are logged but do NOT
-	// override the tool's own outcome — audit failures must not cause
-	// tool failures (可观测性: audit best-effort).
-	OnToolEnd(ctx context.Context, id string, ev ToolEndEvent) error
-}
+// ToolStartEvent is what the audit sink sees at the start of a call —
+// captures the inputs needed to write the pending chat_tool_calls row.
+type ToolStartEvent = domain.ToolStartEvent
 
-// ToolStartEvent is what the audit sink sees at the start of a call.
-// — captures the inputs needed to write the pending
-// chat_tool_calls row.
-type ToolStartEvent struct {
-	ToolName  string
-	ArgsJSON  string
-	Tenant    string
-	UserID    uint64
-	DeviceID  *uint64
-	StartedAt time.Time
-}
-
-// ToolEndEvent is what the audit sink sees at the end of a call.
-// — captures the result/error needed to update the
-// chat_tool_calls row to status=success/error/timeout.
-type ToolEndEvent struct {
-	ResultJSON string
-	Err        error // nil on success
-	EndedAt    time.Time
-	Duration   time.Duration
-}
+// ToolEndEvent is what the audit sink sees at the end of a call —
+// captures the result/error needed to update the chat_tool_calls row to
+// status=success/error/timeout.
+type ToolEndEvent = domain.ToolEndEvent
 
 // AuditTool wraps inner so OnToolStart fires before InvokableRun and
 // OnToolEnd fires after (regardless of inner error). —

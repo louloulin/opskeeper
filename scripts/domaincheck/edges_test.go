@@ -608,3 +608,19 @@ func (h *Handler) unanswered() int { return len(h.Report.Decisions) }
 			"ambiguity.\n%s", out)
 	}
 }
+
+// TestTheEdgeDecision238CutIsNotOnTheList states the fact about the tree rather
+// than about a commit, in the same shape as decision 235's test.
+//
+// `server/mcp` needed two event structs and an interface, and all three lived
+// in `biz/aiops/tools/decorators` — the package that also holds governance,
+// review gates, rate limiters and untrusted-output marking. So the edge
+// existed to carry two structs with no behaviour in them. They now live in
+// core/domain, which the plan already gives event contracts to.
+func TestTheEdgeDecision238CutIsNotOnTheList(t *testing.T) {
+	if _, ok := edges[edge{from: "mcp", to: "aiops"}]; ok {
+		t.Error("mcp -> aiops is declared again; if it came back, say what now needs it, because " +
+			"the tool-call audit seam is a port in core/domain and the only thing server/mcp " +
+			"took from aiops was the two shapes that port is made of")
+	}
+}

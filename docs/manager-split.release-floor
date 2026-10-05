@@ -13,9 +13,9 @@
 # 三份的实测价：
 #
 #   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed         99         39         3 / 4
-#   docs/manager-split.constrained        111         27         0 / 4
-#   docs/manager-split.release-floor        112         26         0 / 4
+#   docs/manager-split.proposed         98         39         3 / 4
+#   docs/manager-split.constrained        110         27         0 / 4
+#   docs/manager-split.release-floor        111         26         0 / 4
 #
 # 决策 230 重取了这三行。触发它的是切掉 `flow -> scheduler`（missed-run 端口
 # 下沉到 `core/floor/scheduler`）：proposed 与 constrained 各少一条组内 import，

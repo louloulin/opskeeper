@@ -10,22 +10,29 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
-	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 type AuditEmitter interface {
-	Emit(ctx context.Context, event auditport.Event)
+	Emit(ctx context.Context, event audit.Event)
 }
 
 type SyncAuditEmitter interface {
-	EmitWithID(ctx context.Context, event auditport.Event) (uint64, error)
+	EmitWithID(ctx context.Context, event audit.Event) (uint64, error)
 }
 
 type AuditSink struct {
 	emitter AuditEmitter
 }
+
+// The assertion is the gate for this file's reason to exist. Before decision
+// 238 this sink satisfied the seam by importing the decorators package, which
+// is what made the `mcp -> aiops` edge carry two structs with no behaviour in
+// them. Now it names the port in core/domain, and if the two drift apart this
+// stops compiling rather than a sink silently ceasing to be wired.
+var _ domain.ToolCallAuditSink = (*AuditSink)(nil)
 
 type auditReceiptContextKey struct{}
 
@@ -77,7 +84,7 @@ func NewAuditSink(emitter AuditEmitter) *AuditSink {
 	return &AuditSink{emitter: emitter}
 }
 
-func (s *AuditSink) OnToolStart(ctx context.Context, event decorators.ToolStartEvent) (string, error) {
+func (s *AuditSink) OnToolStart(ctx context.Context, event domain.ToolStartEvent) (string, error) {
 	if s == nil || s.emitter == nil {
 		return "", errors.New("mcp audit sink is not configured")
 	}
@@ -97,15 +104,15 @@ func (s *AuditSink) OnToolStart(ctx context.Context, event decorators.ToolStartE
 		}
 	}
 	correlationID := newAuditCorrelationID()
-	auditEvent := auditport.Event{
+	auditEvent := audit.Event{
 		UserID:       &userID,
 		UserEmail:    "",
 		Role:         role,
-		Action:       auditport.ActionMCPToolCall,
-		ResourceType: auditport.ResourceMCPTool,
+		Action:       audit.ActionMCPToolCall,
+		ResourceType: audit.ResourceMCPTool,
 		ResourceID:   event.ToolName,
 		ResourceName: event.ToolName,
-		Status:       auditport.StatusSuccess,
+		Status:       audit.StatusSuccess,
 		RequestID:    correlationID,
 		Payload: map[string]any{
 			"phase":            "start",
@@ -133,17 +140,17 @@ func (s *AuditSink) OnToolStart(ctx context.Context, event decorators.ToolStartE
 	return newAuditCorrelationID(), nil
 }
 
-func (s *AuditSink) OnToolEnd(ctx context.Context, correlationID string, event decorators.ToolEndEvent) error {
+func (s *AuditSink) OnToolEnd(ctx context.Context, correlationID string, event domain.ToolEndEvent) error {
 	if s == nil || s.emitter == nil || correlationID == "" {
 		return errors.New("mcp audit sink is not configured")
 	}
-	status := auditport.StatusSuccess
+	status := audit.StatusSuccess
 	if event.Err != nil {
-		status = auditport.StatusFailure
+		status = audit.StatusFailure
 	}
-	s.emitter.Emit(ctx, auditport.Event{
-		Action:       auditport.ActionMCPToolCall,
-		ResourceType: auditport.ResourceMCPTool,
+	s.emitter.Emit(ctx, audit.Event{
+		Action:       audit.ActionMCPToolCall,
+		ResourceType: audit.ResourceMCPTool,
 		ResourceID:   "mcp",
 		Status:       status,
 		ErrorCode:    auditErrorCode(event.Err),
