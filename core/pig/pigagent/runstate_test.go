@@ -718,11 +718,11 @@ func TestToolSummaryAndTarget(t *testing.T) {
 		{`{"target":42}`, "restart_service", ""},
 	}
 	for _, tc := range cases {
-		if got := toolSummary("restart_service", json.RawMessage(tc.args)); got != tc.wantSummary {
-			t.Errorf("toolSummary(%s) = %q, want %q", tc.args, got, tc.wantSummary)
+		if got := wire.ToolSummary("restart_service", json.RawMessage(tc.args)); got != tc.wantSummary {
+			t.Errorf("ToolSummary(%s) = %q, want %q", tc.args, got, tc.wantSummary)
 		}
-		if got := toolTarget(json.RawMessage(tc.args)); got != tc.wantTarget {
-			t.Errorf("toolTarget(%s) = %q, want %q", tc.args, got, tc.wantTarget)
+		if got := wire.ToolTarget(json.RawMessage(tc.args)); got != tc.wantTarget {
+			t.Errorf("ToolTarget(%s) = %q, want %q", tc.args, got, tc.wantTarget)
 		}
 	}
 }

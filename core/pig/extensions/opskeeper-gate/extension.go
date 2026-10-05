@@ -118,8 +118,8 @@ func (c *courier) onToolCall(ctx sdk.Context, data map[string]any) (any, error) 
 		SessionID: session,
 		ToolName:  tool,
 		Arguments: args,
-		Target:    targetOf(args),
-		Summary:   summaryOf(tool, args),
+		Target:    wire.ToolTargetMap(args),
+		Summary:   wire.ToolSummaryMap(tool, args),
 	})
 	if err != nil {
 		// Fail closed, and say why in terms the model can act on. "The
@@ -151,33 +151,15 @@ func sessionOf(ctx sdk.Context) string {
 	return id
 }
 
-// targetOf pulls a human-readable target out of a call's arguments.
+// The target and the summary this file sends are display hints for the
+// operator deciding an approval, never inputs to policy: the host assesses
+// the blast radius itself, from the tool's class and what the call site can
+// see. Naming the resource here only saves the operator from being shown
+// "restart_service(service=orders-api)".
 //
-// It is a display hint for the operator deciding an approval, never an
-// input to policy: the host assesses the blast radius itself, from the
-// tool's class and what the call site can see. Reading it here only saves
-// the operator from being shown "restart_service(service=orders-api)".
-func targetOf(args map[string]any) string {
-	for _, key := range []string{"service", "target", "pod", "namespace", "name", "path", "query"} {
-		if v, ok := args[key].(string); ok && v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-// summaryOf is the one line an operator reads before deciding.
-//
-// The tool's own name is the most reliable part of it. Anything richer —
-// a command line, a query — belongs in Target where the console can render
-// it with the escaping it deserves, rather than in a sentence the host has
-// to guess how to display.
-func summaryOf(tool string, args map[string]any) string {
-	if target := targetOf(args); target != "" {
-		return fmt.Sprintf("%s on %s", tool, target)
-	}
-	return tool
-}
+// They are derived by core/domain rather than here, because the control
+// plane derives the same two strings for the same call and the two copies
+// used to disagree about which argument names the resource.
 
 // block is the refusal the agent sees.
 func block(reason string) map[string]any {

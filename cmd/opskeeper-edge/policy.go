@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/wire"
 	"github.com/vincent-wuhan/opskeeper/core/edge/policygate"
 	"github.com/vincent-wuhan/opskeeper/core/edge/toolbroker"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
@@ -94,6 +95,16 @@ func toolAuthorizer(registry *policygate.Registry, gate ReceiptClaimer, obs auto
 			ToolName:  c.ToolName,
 			Arguments: c.Arguments,
 			Actor:     c.Actor,
+			// The same derivation the control plane and the packaged
+			// courier use (wire.ToolSummary / wire.ToolTarget). They
+			// each had their own copy once, with different key orders, so
+			// one call could be described two ways; and this one filled in
+			// neither, which put an approval card in front of an operator
+			// with no target and no summary at all. What the call reaches is
+			// derived from the arguments the HOST re-encoded, never from
+			// what the agent claimed.
+			Target:  wire.ToolTarget(c.Arguments),
+			Summary: wire.ToolSummary(c.ToolName, c.Arguments),
 			// The arguments are the host's re-encoding, so the class this
 			// assessment produces is a judgement about what will actually
 			// run, not about what the agent said it would run.

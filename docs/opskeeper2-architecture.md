@@ -22434,6 +22434,125 @@ Target+BlastRadius、读不出 payload 就不列出、`Propose` 不再存 Class�
 3. **`go/types` 现在排第三**：两个方向都读完之后，剩下的 4 处目标未解析与 101 处源未解析
    才是它的活。
 
+### 4.197 决策 263：把一段派生逻辑从三份收到一份——**而其中两份的键序不同**
+
+#### 上一条留的「需要裁决」，答案已经在代码里
+
+决策 262 记下：节点侧闸门不填 `Summary`/`Target`，而「正确来源需要人裁决」。本轮先去
+取证，**发现不需要裁决——控制面早就在派生它们**：
+
+`core/pig/pigagent/runstate.go` 里有一对纯函数（`toolSummary` / `toolTarget`），控制面
+每次构造 `ports.ApprovalRequest` 都调它们。而 `core/pig/extensions/opskeeper-gate` 是节点
+上打进 agent 进程、按源码在节点构建的**信使扩展**，它也有一对（`summaryOf` /
+`targetOf`）。
+
+| 副本 | 位置 | 键序（前四个） |
+|---|---|---|
+| 控制面内核 | `core/pig/pigagent/runstate.go` | `target, resource, host, node` |
+| 节点信使扩展 | `core/pig/extensions/opskeeper-gate/extension.go` | `service, target, pod, namespace` |
+| 节点进程内工具 | `cmd/opskeeper-edge/policy.go` | **没有——两列都空** |
+
+**所以真正的缺陷比上一条记的更大一层**：不是「一处没填」，而是**同一段规则写了两遍、
+而且两遍的键序不同**。同一次调用（`{"target":"prod-cluster","service":"orders-api"}`）在
+控制面显示 `prod-cluster`、在节点显示 `orders-api`——**同一次审批，被描述成两次**。
+第三处干脆什么都没填，于是节点内工具的审批卡片没有目标也没有摘要。
+
+**两份副本 + 一处空白 = 这段规则被决定了三次。** 正确做法不是第四次决定，而是让它只有
+一个决定点：并集键序写进 （见下节：落点最终是 `core/wire/tooltarget.go`）——三处都调它。**这与决策 71 的形状相同**：
+管理侧预检与节点裁决必须是同一个函数，而不是两份看起来一样的实现。
+
+#### 键序为什么是「并集 + 固定顺序」而不是挑一份
+
+两份旧键表的并集是 `target, resource, host, node, pod, service, namespace, path, name,
+query`。选一份就等于让另一份的工具少显示目标（信使那三键 `pod`/`name`/`query` 是宿主工具
+与数据库工具真正带的东西）。顺序按「越具体越靠前」固定，并且**顺序本身被一条测试钉住**
+（`TestTheTargetKeyOrderIsFixed`）：两份副本之所以能漂移，就是因为键表从来没有被当成
+契约。文档化的取舍写在函数注释里：尾部三键是刻意宽松的，而宽松正是顺序必须固定的原因。
+
+#### 守卫：先钉名字，再钉性质（而第一版只钉了名字）
+
+三个包各一条守卫（`pigagent`、`opskeeper-gate`、`cmd/opskeeper-edge`），内容相同：
+
+1. 本包**不得声明** `toolSummary`/`toolTarget`/`summaryOf`/`targetOf` 这四个曾用名；
+2. 本包**不得构造**一份「≥3 个来自共享词表的字符串」的切片字面量——**那才是重新实现的
+   形状，与函数叫什么无关**；
+3. 本包**必须调用** `domain.ToolSummary` / `domain.ToolTarget`（扩展是 Map 版本）。
+
+**第一版只写了第 1、3 条，变异打绿了两次**：给 pigagent 加一个叫 `localSummary` 的本地
+实现、把扩展改成调 `localTarget`——两个守卫都没红，因为**名字不在那四个里**。这与本会话
+前面三次是同一个病：夹具问的是「那几个名字还在不在」，而该问的是「这段规则是不是又实现
+了一遍」。第 2 条就是按性质问的，改完两个变异全红。
+
+**一处诚实的保留**：一个「改名后转发给 `domain.*`」的包装仍然绕过第 1 条，也绕过第 2 条
+（它没有自己的键表）。**但它不是漂移**——行为与共享实现逐字相同，所以本轮认为它不该红；
+真要拦住它得改成「本包不得声明任何返回 display target 的函数」，而那会把一个正确的写法
+也拦下来。**这一格写的是「按性质拦住重新实现，不拦住转发」**。
+
+#### 落点：先写在 `core/domain`，被架构闸门挡回 `core/wire`
+
+第一版把共享实现放在 `core/domain/tooltarget.go`。`scripts/modulecheck` 立刻红了：
+
+```
+oxpig_ext imports github.com/vincent-wuhan/opskeeper/core/domain (oxcore_domain),
+which no rule in .go-arch-lint.yml permits
+```
+
+信使扩展的 `go.mod` 注释写明「对 core 的依赖是刻意且窄的：只用闸门协议类型」，
+`.go-arch-lint.yml:924` 里 `oxpig_ext: mayDependOn: [oxcore_wire]` —— **它只被允许 import
+`core/wire`**。
+
+**这里唯一正确的反应是换落点，不是加规则。** 一个能自己回答「这个调用打到哪里」的信使就
+不是闸门了：闸门之所以是闸门，正因为它**只会转述，不会判断**。给它开 `core/domain` 等于
+为了让代码好放而削掉那条边界。放宽规则的诱惑很具体——「只是读两个纯函数」——而它恰好是
+最不该被让步的那一类让步。
+
+而 `core/wire` 本身也就是正确的家：`Target` 与 `Summary` 是 `wire.GateRequest` 的两列、
+是 `wire.ApprovalFrame` 的两列，这份派生算的**就是这两个字段该填什么**。放在
+`core/domain` 时它是一个「没人特别准许也能读」的通用工具；放在 `core/wire` 时它是协议
+词汇的一部分——**允许读它的人，本来就是协议的两端**。挡回之后依赖面一点没变宽，还变窄了。
+
+改法：`core/wire/tooltarget.go`（`wire.ToolSummary` / `wire.ToolTarget` / `…Map`），
+删掉 `core/domain/tooltarget*`；三处调用与三条守卫的前缀一起改；五份打包副本用
+`scripts/sync-pig-ops.sh` 重新同步（gate 扩展本来就打的是 wire 文件，所以节点上的产物
+一个字节都没变）。守卫的第 3 条也跟着换了前缀——**换前缀这件事本身是一次变异**，
+已实测：把守卫里的 `"wire"` 改回 `"domain"`，守卫立刻变绿放过（M7）。
+
+#### 一次事故：把一个已经存在的文件覆盖掉了
+
+写共享实现时用了 `cat > core/domain/tooltarget.go` 的写法——但文件写成了
+`toolcall.go`，**而 `core/domain/toolcall.go` 已经存在**，内容是决策 238 的工具调用审计缝
+（`ToolStartEvent` / `ToolEndEvent` / `ToolCallAuditSink`，85 行）。那次写入把它截断了，
+`core/manager` 的两个包立刻编译失败（`undefined: domain.ToolCallAuditSink`）。
+
+**它被抓到是因为编译错误够响，而我读的是错误本身而不是去绕开它。** 三条教训写在这里：
+
+1. **落笔前先看这个路径有没有文件**。一次 `git status` 或一次 `ls` 的成本是零。
+2. **文件名撞主题是有信号的**：我要写的也是「工具调用」，而那个已存在的文件讲的正是
+   工具调用——**这本来是一次命名检查能发现的**。
+3. 恢复用 `git checkout HEAD -- <file>`，然后把新内容放到真的新名字下。**已提交的历史是
+   唯一可靠的恢复源**，所以这份台账里凡是「引用一个文件里的符号」都是廉价的。
+
+#### 读数
+
+| 读数 | 值 |
+|---|---|
+| 域 / 声明边 / 环 / 生产跨域 import / 测试专用 | **56 / 22 / 0 / 114 / 120（全部未动）** |
+| 三份拆分报价 | **95 / 19、105 / 9、99 / 15（全部未动）** |
+| `core/manager` | **941 文件 / 239,322 行（本轮一字未动）** |
+| 阶段 3 / 加权 | **99.7% / 98.6%（一分不动）** |
+
+**本轮生产代码净减少**：删掉两份派生实现（约 40 行）、换成一份共享实现加三处调用，
+而 `core/manager` 一个字没碰。
+
+#### 下一步
+
+1. **19 个 ORM 站点里没追到 writer 的那些**（决策 262 的第 2 项），或给 `transcheck` 一个
+   「这一列在别处被写过」的跨文件判据。
+2. **`go/types`** 排第三。
+3. **推分支**：累计 50 个 commit 未推送（`git rev-list --count origin/feature/pig..HEAD`；
+   此前这里写的 66 是笔误，第一次真正去数它的时候才发现），这是第 67 条决策之后仍然没做的事，而它不依赖任何
+   待裁决项。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -22495,6 +22614,24 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
   存在**。三份报价各降 3：**95 / 19**、**105 / 9**、**99 / 15**。
   **把这一刀记成分数上涨会是最容易的一种造假**，理由与 §4.192 那句
   「把「切边」记成搬运进度会掩盖这件事」同源，见 §4.193。
+
+- **决策 263 把一段派生规则从三份收到一份**：控制面内核（`pigagent.toolSummary`/
+  `toolTarget`）与节点上打进 agent 进程的信使扩展（`opskeeper-gate.summaryOf`/`targetOf`）
+  **各有一份，而且键序不同**——`{"target":"prod-cluster","service":"orders-api"}` 在控制面
+  显示前者、在节点显示后者，**同一次审批被描述成两次**；第三处（`cmd/opskeeper-edge`
+  的进程内工具）两列都空，审批卡片因此既无目标也无摘要。现统一到
+  **`core/wire/tooltarget.go`**（`wire.ToolSummary`/`wire.ToolTarget`/`…Map`，并集键序，
+  顺序被测试钉住），三处都调它。落点**先写的是 `core/domain`，被 `scripts/modulecheck` 挡回
+  `core/wire`**：信使扩展只被允许 import 闸门协议包（`.go-arch-lint.yml:924`），而
+  **为了让代码好放而给一个能自答「这个调用打到哪里」的信使开 `core/domain`，削掉的正是
+  闸门本身**；且 `Target`/`Summary` 本就是 `wire.GateRequest` 与 `wire.ApprovalFrame` 的
+  词汇，放进 wire 反而让依赖面变窄。三个包各加一条
+  守卫：**不许声明那四个曾用名 + 不许构造 ≥3 个共享词表的切片字面量 + 必须调用共享
+  实现**——第一版只写前两条里的名字那条，变异打绿了两次，问错了问题（钉名字而不是钉
+  「这段规则是不是又实现了一遍」），补上键表扫描后全红；改前缀本身也算一次变异（把守卫
+  里的 `"wire"` 改回 `"domain"`，实测同样变红）。本决策**不改进度百分比**：56 域 /
+  22 声明边 / 0 环 / 生产跨域 import 114 / 测试专用 120 / 三份报价全部逐字未动，
+  `core/manager` 一字未碰，而生产代码净减少。详见 §4.197。
 
 - **决策 262 给 `transcheck` 装上第二个方向（目标列）**，**读数 128 处站点里解析出
   124 处、46 处至少有一列没人填**（源方向是 27 / 14），而它第一天就抓到一条真缺陷：

@@ -371,11 +371,11 @@ func TestATargetIsPulledOutForTheOperatorToRead(t *testing.T) {
 		{"path", "/var/log/orders.log"},
 		{"query", "pg_stat_activity"},
 	} {
-		if got := targetOf(map[string]any{tc.key: tc.want}); got != tc.want {
-			t.Errorf("targetOf(%q) = %q, want %q", tc.key, got, tc.want)
+		if got := wire.ToolTargetMap(map[string]any{tc.key: tc.want}); got != tc.want {
+			t.Errorf("ToolTargetMap(%q) = %q, want %q", tc.key, got, tc.want)
 		}
 	}
-	if got := targetOf(map[string]any{"unrelated": "x"}); got != "" {
-		t.Errorf("targetOf = %q, want empty for arguments with no target", got)
+	if got := wire.ToolTargetMap(map[string]any{"unrelated": "x"}); got != "" {
+		t.Errorf("ToolTargetMap = %q, want empty for arguments with no target", got)
 	}
 }

@@ -28,10 +28,16 @@ func manifestOf(plugin string, tools ...domain.ToolDecl) []domain.PluginManifest
 type fakeReceipts struct {
 	granted map[string]bool
 	claims  int
+	// seen is the last call handed to the gate. An approval card is
+	// rendered from this struct, so a column nobody fills is a card that
+	// cannot say what it is asking permission for — and the gate is the
+	// only place that knows the arguments were ever there.
+	seen policygate.Call
 }
 
 func (f *fakeReceipts) ClaimReceipt(c policygate.Call) bool {
 	f.claims++
+	f.seen = c
 	if f.granted == nil {
 		return false
 	}
@@ -266,5 +272,52 @@ func TestRoleCeilingPutsUnknownRolesAtTheBottom(t *testing.T) {
 		if got := roleCeiling(role); got != domain.ClassRead {
 			t.Errorf("role %q ceiling = %q, want read", role, got)
 		}
+	}
+}
+
+// TestTheNodeDerivesWhatTheCallTouches: the in-package tool path used to hand
+// the gate a call with no Target and no Summary, and the gate passes both
+// straight into the approval request it emits. So an operator was asked to
+// approve a card that named no resource — and the ledger entry fell back to
+// naming the call by its tool name, because targetOf had nothing else.
+//
+// The derivation itself is not this file's business: the control plane's
+// kernel and the packaged gate courier both call wire.ToolSummary /
+// wire.ToolTarget, which is what stops the same call from being described
+// three ways. What this test pins is that the node's own path calls it too.
+func TestTheNodeDerivesWhatTheCallTouches(t *testing.T) {
+	receipts := &fakeReceipts{}
+	auth := toolAuthorizer(registryOf(t,
+		manifestOf("repair", domain.ToolDecl{Name: "host_restart_service", Class: domain.ClassWrite})...),
+		receipts, nil)
+
+	permit(auth, RoleAdmin, "sess-1", "host_restart_service", []byte(`{"service":"orders-api"}`))
+
+	if receipts.seen.Target != "orders-api" {
+		t.Errorf("the gate was handed target %q, want the service the arguments name — an "+
+			"approval card with no target is a card nobody can judge", receipts.seen.Target)
+	}
+	if want := "host_restart_service on orders-api"; receipts.seen.Summary != want {
+		t.Errorf("summary = %q, want %q", receipts.seen.Summary, want)
+	}
+}
+
+// A call whose arguments name no resource still gets a summary: the tool's
+// own name is the one part that is always true, and an empty card is worse
+// than a bare one.
+func TestACallWithNoResourceStillSaysWhatItIs(t *testing.T) {
+	receipts := &fakeReceipts{}
+	auth := toolAuthorizer(registryOf(t,
+		manifestOf("repair", domain.ToolDecl{Name: "host_restart_service", Class: domain.ClassWrite})...),
+		receipts, nil)
+
+	permit(auth, RoleAdmin, "sess-1", "host_restart_service", []byte(`{"reason":"nightly"}`))
+
+	if receipts.seen.Target != "" {
+		t.Errorf("target = %q, want empty: nothing in those arguments names a resource, and "+
+			"inventing one is the thing this derivation must not do", receipts.seen.Target)
+	}
+	if receipts.seen.Summary != "host_restart_service" {
+		t.Errorf("summary = %q, want the tool's own name", receipts.seen.Summary)
 	}
 }

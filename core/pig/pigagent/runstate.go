@@ -241,7 +241,7 @@ func (r *runState) beforeToolCall(ctx context.Context, toolCallID, toolName stri
 	}
 
 	digest := CallDigest(toolName, args)
-	summary := toolSummary(toolName, args)
+	summary := wire.ToolSummary(toolName, args)
 	req := ports.ApprovalRequest{
 		ID:        toolCallID,
 		ToolName:  toolName,
@@ -259,7 +259,7 @@ func (r *runState) beforeToolCall(ctx context.Context, toolCallID, toolName stri
 		// target. A tool never sets it, so the narrowest admissible
 		// radius is used until the host policy widens it.
 		BlastRadius: domain.RadiusNone,
-		Target:      toolTarget(args),
+		Target:      wire.ToolTarget(args),
 		ExpiresAt:   r.host.now().Add(approvalTTL),
 	}
 	_ = r.sink.Emit(ctx, r.mapper.Approval(ApprovalProjection{
@@ -449,32 +449,6 @@ func CallDigest(toolName string, args json.RawMessage) string {
 }
 
 // toolSummary renders a one-line operator-facing description of a call.
-func toolSummary(name string, args json.RawMessage) string {
-	summary := name
-	if t := toolTarget(args); t != "" {
-		summary += " on " + t
-	}
-	return summary
-}
-
-// toolTarget pulls a display target out of the arguments, if the tool
-// declared one. It is presentation only: the digest, not this string, is
-// what binds an approval.
-func toolTarget(args json.RawMessage) string {
-	var m map[string]any
-	if err := json.Unmarshal(args, &m); err != nil {
-		return ""
-	}
-	for _, key := range []string{"target", "resource", "host", "node", "namespace", "service", "path"} {
-		if v, ok := m[key]; ok {
-			if s, ok := v.(string); ok && s != "" {
-				return s
-			}
-		}
-	}
-	return ""
-}
-
 // isGateReason reports whether err carries the given approval reason.
 func isGateReason(err error, reason string) bool {
 	var ge *ports.GateError
