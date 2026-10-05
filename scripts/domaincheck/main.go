@@ -544,10 +544,11 @@ func main() {
 	}
 	violations := check(sources, r)
 	fmt.Printf("domaincheck: %d domains, %d shared, %d declared edges, %d declared cycles, "+
-		"%d hard process constraints, %d test-only cross-domain imports "+
+		"%d hard process constraints, %d production cross-domain imports, "+
+		"%d test-only cross-domain imports "+
 		"(excluded, as in .go-arch-lint.yml)\n",
 		stats.domains, len(r.shared), len(r.edges), len(r.cycles), len(r.hard),
-		stats.testOnlyEdges)
+		stats.prodCrossDomain, stats.testOnlyEdges)
 
 	if len(violations) == 0 {
 		fmt.Println("domaincheck: every domain boundary holds")
@@ -581,6 +582,13 @@ type treeStats struct {
 	// repeat. A gate that disagrees with the graph it gates is the defect.
 	domains       int
 	testOnlyEdges int
+	// prodCrossDomain is the number the ledger's stage-3 component is
+	// derived from: production import statements whose two ends are in
+	// different bounded contexts, shared base components excluded. It is a
+	// different unit from the edge count the -edges report prices, and the
+	// two were never reconciled — the ledger carried "已切 N / 34" as a
+	// hand-maintained tally while every cut incremented it by hand.
+	prodCrossDomain int
 }
 
 // resolveDeclared fills in each source's exported surface, after every file in
@@ -771,6 +779,7 @@ func parseControlPlane(root string) ([]source, treeStats, error) {
 			seen[domainOf(src.path)] = true
 		}
 		stats.testOnlyEdges += st.testOnlyEdges
+		stats.prodCrossDomain += st.prodCrossDomain
 	}
 	stats.domains = len(seen)
 	return sources, stats, nil
@@ -781,6 +790,7 @@ func parseTree(dir, modulePrefix string, r rules) ([]source, treeStats, error) {
 	var sources []source
 	domains := map[string]bool{}
 	testOnly := 0
+	prodCrossDomain := 0
 
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -873,13 +883,22 @@ func parseTree(dir, modulePrefix string, r rules) ([]source, treeStats, error) {
 		if d := domainOf(importPath); d != "" {
 			domains[d] = true
 		}
-		if isTest {
-			from := domainOf(importPath)
-			for _, imp := range src.imports {
-				to := domainOf(imp)
-				if to != "" && to != from && r.shared[to] == "" {
-					testOnly++
-				}
+		// One walk, two counters, and the same predicate for both. The
+		// test-only one already existed and is what the summary line
+		// reports; the production one is the number the ledger's headline
+		// counter ("已切 N / 34") is made of, and until now nothing in this
+		// repository could produce it. A tally that only a person can
+		// increment is a tally that eventually stops matching the tree.
+		from := domainOf(importPath)
+		for _, imp := range src.imports {
+			to := domainOf(imp)
+			if to == "" || to == from || r.shared[to] != "" {
+				continue
+			}
+			if isTest {
+				testOnly++
+			} else {
+				prodCrossDomain++
 			}
 		}
 		return nil
@@ -891,5 +910,5 @@ func parseTree(dir, modulePrefix string, r rules) ([]source, treeStats, error) {
 		return nil, treeStats{}, fmt.Errorf("no Go files under %s; the walk is broken, not the boundaries", dir)
 	}
 	resolveDeclared(sources)
-	return sources, treeStats{domains: len(domains), testOnlyEdges: testOnly}, nil
+	return sources, treeStats{domains: len(domains), testOnlyEdges: testOnly, prodCrossDomain: prodCrossDomain}, nil
 }
