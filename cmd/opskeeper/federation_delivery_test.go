@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	fedbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/federation"
+	fedbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/federation"
 )
 
 // How a root decides where a child's policy tree comes from, and what happens

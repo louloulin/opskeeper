@@ -19,9 +19,9 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 
-	fedbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/federation"
-	managerserverfed "github.com/vincent-wuhan/opskeeper/core/manager/server/federation"
-	managersvcfedlink "github.com/vincent-wuhan/opskeeper/core/manager/service/federationlink"
+	fedbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/federation"
+	managerserverfed "github.com/vincent-wuhan/opskeeper/core/domains/server/federation"
+	managersvcfedlink "github.com/vincent-wuhan/opskeeper/core/domains/service/federationlink"
 	managersvcfb "github.com/vincent-wuhan/opskeeper/core/manager/service/frontierbound"
 )
 

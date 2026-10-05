@@ -14,11 +14,11 @@ import (
 	"io"
 	"log/slog"
 
+	fedbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/federation"
+	managersvcfedlink "github.com/vincent-wuhan/opskeeper/core/domains/service/federationlink"
 	floorfed "github.com/vincent-wuhan/opskeeper/core/floor/federation"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	fedbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/federation"
-	managersvcfedlink "github.com/vincent-wuhan/opskeeper/core/manager/service/federationlink"
 	managersvcfb "github.com/vincent-wuhan/opskeeper/core/manager/service/frontierbound"
 )
 

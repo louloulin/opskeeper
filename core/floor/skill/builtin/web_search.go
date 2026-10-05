@@ -22,7 +22,7 @@ import (
 func init() { skill.Register(NewWebSearch(WebSearchDeps{})) }
 
 // Provider names — lowercased canonical form. Mirrors
-// core/manager/model/setting.ProviderXxx but kept locally to avoid
+// core/domains/model/setting.ProviderXxx but kept locally to avoid
 // the skill package depending on the manager-side model package
 // (layering rule, see TavilyKeyResolver comment).
 const (

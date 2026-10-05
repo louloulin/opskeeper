@@ -41,7 +41,7 @@ const (
 //
 // The struct is the wire shape decoded from the install request body
 // — keeping it flat (no nested oneOf) matches the openapi style we
-// already use elsewhere (see core/manager/server/integration).
+// already use elsewhere (see core/domains/server/integration).
 type Source struct {
 	Type SourceType `json:"type"`
 

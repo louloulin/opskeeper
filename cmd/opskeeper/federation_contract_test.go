@@ -27,12 +27,12 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	fedbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/federation"
 	edgefed "github.com/vincent-wuhan/opskeeper/core/domains/service/federationchild"
+	managersvcfedlink "github.com/vincent-wuhan/opskeeper/core/domains/service/federationlink"
 	floorfed "github.com/vincent-wuhan/opskeeper/core/floor/federation"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	fedbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/federation"
-	managersvcfedlink "github.com/vincent-wuhan/opskeeper/core/manager/service/federationlink"
 )
 
 // loopbackCaller is the one hop between the two real halves: what the root

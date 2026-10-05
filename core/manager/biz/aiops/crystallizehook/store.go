@@ -23,7 +23,7 @@ import (
 // re-arms itself every time the control plane rolls is not a cost saving, it
 // is a cost saving nobody can ever collect.
 //
-// The durability pattern is core/manager/biz/federation's FileLedger, and for
+// The durability pattern is core/domains/biz/federation's FileLedger, and for
 // the same reason: write a temporary file, fsync it, rename over the target,
 // then fsync the directory. A process killed halfway through leaves either
 // the whole previous ledger or the whole new one, never a half-written file

@@ -11,7 +11,7 @@ func TestDomainOfUsesTheSameLayerRuleDomaincheckDoes(t *testing.T) {
 	for path, want := range map[string]string{
 		"core/manager/biz/aiops/loop":         "aiops",
 		"core/manager/server/federation/http": "federation",
-		"core/manager/service/federationlink": "federationlink",
+		"core/domains/service/federationlink": "federationlink",
 		"core/manager/model/audit":            "audit",
 		"core/manager/data/hitl/store":        "hitl",
 		"core/base/pkg/audit":              "pkg",
