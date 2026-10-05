@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
 	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
 
@@ -54,7 +54,7 @@ func TestRecordIncidentEventClosesLinkedAlert(t *testing.T) {
 			LabelsJSON: `{"incident_id":"incident-live-pool-smoke","target":"pg:pool-fixture"}`,
 		}},
 	}
-	handler := NewHandler(newMemBackend(), nil, "")
+	handler := NewHandler(newMemBackend(), nil, "", mcpauth.ContextIdentity{})
 	handler.SetIncidentRecorder(recorder)
 	handler.SetAlertIncidentResolver(resolver)
 	router := newRouter(handler)
@@ -115,7 +115,7 @@ func TestRecordIncidentEventClosesLinkedAlert(t *testing.T) {
 }
 
 func TestRecordIncidentEventRejectsFutureOccurredAt(t *testing.T) {
-	handler := NewHandler(newMemBackend(), nil, "")
+	handler := NewHandler(newMemBackend(), nil, "", mcpauth.ContextIdentity{})
 	handler.SetIncidentRecorder(&memIncidentRecorder{})
 	router := newRouter(handler)
 	body := fmt.Sprintf(
@@ -150,7 +150,7 @@ func TestListIncidentEventsUsesBusinessIncidentID(t *testing.T) {
 		Status:     "completed",
 	}}
 	_ = recorder.Append(context.Background(), events[0])
-	handler := NewHandler(newMemBackend(), nil, "")
+	handler := NewHandler(newMemBackend(), nil, "", mcpauth.ContextIdentity{})
 	handler.SetIncidentRecorder(recorder)
 	router := newRouter(handler)
 
@@ -177,7 +177,7 @@ func TestListIncidentEventsUsesBusinessIncidentID(t *testing.T) {
 }
 
 func TestListIncidentEventsRestrictedToTimelineReaders(t *testing.T) {
-	handler := NewHandler(newMemBackend(), nil, "")
+	handler := NewHandler(newMemBackend(), nil, "", mcpauth.ContextIdentity{})
 	handler.SetIncidentRecorder(&memIncidentRecorder{})
 	router := newRouter(handler)
 	request := httptest.NewRequest(http.MethodGet, "/v1/incidents/inc-1/events", nil)
@@ -193,7 +193,7 @@ func TestListIncidentEventsRestrictedToTimelineReaders(t *testing.T) {
 }
 
 func TestRecordIncidentEventRejectsInvalidRecoverySignal(t *testing.T) {
-	handler := NewHandler(newMemBackend(), nil, "")
+	handler := NewHandler(newMemBackend(), nil, "", mcpauth.ContextIdentity{})
 	handler.SetIncidentRecorder(&memIncidentRecorder{})
 	router := newRouter(handler)
 

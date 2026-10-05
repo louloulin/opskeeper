@@ -13,17 +13,21 @@
 # 三份的实测价：
 #
 #   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed         96         33         3 / 4
-#   docs/manager-split.constrained        108         21         0 / 4
-#   docs/manager-split.release-floor        105         24         0 / 4
+#   docs/manager-split.proposed         96         30         3 / 4
+#   docs/manager-split.constrained        108         18         0 / 4
+#   docs/manager-split.release-floor        101         25         0 / 4
 #
 # 决策 230 重取了这三行。触发它的是切掉 `flow -> scheduler`（missed-run 端口
 # 下沉到 `core/floor/scheduler`）：proposed 与 constrained 各少一条组内 import，
 # 本文件的跨组数少一条——`scheduler` 因为那条边被切掉而自己掉进 FLOOR，于是
 # 进 `independent` 组，而它与 `flow` 之间的那条边已经不存在了。
 #
-# **本文件不再是跨组 import 最少的那一份**（决策 247 起）：本文件 24 条、
-# constrained 21 条。它仍然在另外两个维度上是最省的一份——切断的硬约束 0/4、
+# **本文件不再是跨组 import 最少的那一份**（决策 247 起）：本文件 25 条、
+# constrained 18 条。**决策 249 之后本文件的跨组数反而涨了 1**（24 → 25），
+# 而树在变好——原因是 `mcp` 从 `core` 组搬进了 `independent` 组（它切完之后
+# 入向归零 became 可证明独立发版），它向 core 组的那些出向 import 于是从组内
+# 变成跨组。**这一份的报价是分组方式的函数，不是树质量的函数**，所以分组一改，
+# 报价就动，而这一次是往坏的方向动。它仍然在另外两个维度上是最省的一份——切断的硬约束 0/4、
 # 未分配的域 0 个——而这两个维度才是「floor」这个名字的依据。跨组数被反超的
 # 原因见下 §「为什么它在决策 247 之前是最省的那一份」。
 #
@@ -77,7 +81,8 @@
 # —— 为什么它在决策 247 之前是最省的那一份，以及从哪一刀起不是了 ——
 #
 # 一直到这里为止，它比 constrained 少三条跨组 import（决策 247 之前实测 25 对 22；
-# 决策 248 又各降 1，是 24 对 21，差值不变）。这不是巧合，也不是意外：
+# 决策 248 各降 1，是 24 对 21；决策 249 是 25 对 18，差值反而拉大到 7——
+# 因为 mcp 换组把本文件的组内 import 变成了跨组，而 constrained 的分组没动）。这不是巧合，也不是意外：
 # 零入度的域**按定义**就是那些不 import 别人的域，把它们各自单成一组，
 # 它们向外的每一条边都会变成跨组边——所以这个分组是**唯一一种可能不是最省的**
 # 才对。
@@ -141,17 +146,30 @@
 # 可替换接口门），门后面那个实现甚至从来没被装配过——装配根传的是 alert 域的
 # no-op。把端口挪到 `core/floor/tunnel` 的 `HostMetricPoint` 旁边之后，这条边
 # 消失，域自己掉进 FLOOR 集合。**被证明的独立性有时候是切出来的，不是等来的。**
+#
+# `mcp` 是第二个这样进来的（决策 249），而且它的进法比 `metric` 更能说明这件事：
+# `metric` 是**搬**走的——把端口挪到别处，这条边就没了。`mcp` 是**问对了问题**
+# 才没的。切 `agentteams -> mcp` 之前，这个域的入向只有那一条边，而那条边的
+# 依赖是三个**包级函数**——`FromContext`、`TraceFromContext`、`HasTrace`。
+# 包级函数不能被注入，所以没有端口可以收窄它，那条边也就没有「收窄」这个动作
+# 可做。改成端口（消费者声明 `MCPCallerLookup`，生产侧用 `ContextIdentity`
+# 结构化满足）之后，最后一条入向跨域 import 归零，域自己掉进 FLOOR 集合。
+#
+# **这一条同时是那把尺子第一次给出正面结果**：切边之前 `mcp` 在入向表上，
+# 切完之后不在了。前面十一刀里有十刀是「让一条边变便宜」，这一刀是「让一个域
+# 变得可以被证明独立发版」，而这件事只有在你先问对了问题的时候才会发生。
 independent = aiopsconfig, cluster, demo, edgeauth, federationchild,
         federationlink, flow, grafana, iam, imbridge, incident, integration,
-        llmgw, llmpig, logs, marketplace, metric, monitor, nodeagent, plugin,
-        pluginimport, prometheus, promwrite, proposal, report, scheduler,
-        secret, skill, systemhealth, systemupgrade, traces, version, webshell
+        llmgw, llmpig, logs, marketplace, mcp, metric, monitor, nodeagent,
+        plugin, pluginimport, prometheus, promwrite, proposal, report,
+        scheduler, secret, skill, systemhealth, systemupgrade, traces, version,
+        webshell
 
-# 其余 26 个：入向有边因而需要真答案的 14 个，加上 10 个 shared 底座组件
+# 其余 25 个：入向有边因而需要真答案的 13 个，加上 10 个 shared 底座组件
 # （它们在 import 图里读作叶子但不是叶子——被依赖不需要声明，所以它们的入度
 # 在这张图里不可测，工具把它们点名排除而不是悄悄跳过），再加上 chatdiagnose
 # 与 frontierbound 这两个「可证明独立发版但写审计链」的域。
 core = agentteams, aiops, alert, approval, audit, chatdiagnose, control,
         dataguard, device, edge, federation, frontierbound,
-        higress, hitl, knowledge, loop, mcp, middleware,
+        higress, hitl, knowledge, loop, middleware,
         migrate, migrator, nodefleet, observability, pkg, setting, topology

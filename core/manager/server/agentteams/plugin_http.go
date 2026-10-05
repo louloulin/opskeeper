@@ -31,8 +31,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	internalagentteams "github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
-	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
 
 // PluginSyncClient 在 core/manager/agentteams 包定义（本文件复用）
@@ -55,20 +55,31 @@ type PluginHandler struct {
 	sync        PluginSyncClient
 	log         *slog.Logger
 	maxZipBytes int64 // 单个 plugin zip 上限（HTTP body + 持久化 .payload.zip 复用）
+	callers     MCPCallerLookup
+}
+
+// caller is the nil-safe read of the port, for the same reason as Handler's:
+// a plugin route with no identity source has no way to know who is asking, and
+// the honest answer to that is the 401 an unauthenticated request gets.
+func (h *PluginHandler) caller(ctx context.Context) (domain.MCPCaller, bool) {
+	if h.callers == nil {
+		return domain.MCPCaller{}, false
+	}
+	return h.callers.CallerFrom(ctx)
 }
 
 // NewPluginHandler 构造 PluginHandler。
 //
 // maxZipBytes <= 0 时使用 DefaultMaxPluginZipBytes（10MB），可被
 // OPSKEEPER_PLUGIN_MAX_ZIP_BYTES env（opskeeper 端）或 helm values 覆盖。
-func NewPluginHandler(registry *PluginRegistry, sync PluginSyncClient, log *slog.Logger, maxZipBytes int64) *PluginHandler {
+func NewPluginHandler(registry *PluginRegistry, sync PluginSyncClient, log *slog.Logger, maxZipBytes int64, callers MCPCallerLookup) *PluginHandler {
 	if maxZipBytes <= 0 {
 		maxZipBytes = DefaultMaxPluginZipBytes
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &PluginHandler{registry: registry, sync: sync, log: log, maxZipBytes: maxZipBytes}
+	return &PluginHandler{registry: registry, sync: sync, log: log, maxZipBytes: maxZipBytes, callers: callers}
 }
 
 // MaxZipBytes 返回 handler 当前配置的 zip 上限（bytes）。
@@ -102,8 +113,8 @@ func (h *PluginHandler) Register(r chi.Router) {
 // 两者不冲突。
 func (h *PluginHandler) auditPluginEvent(r *http.Request, action string, id string, attrs ...slog.Attr) {
 	consumer := ""
-	if ident, ok := mcpauth.FromContext(r.Context()); ok {
-		consumer = ident.ConsumerName
+	if identity, ok := h.caller(r.Context()); ok {
+		consumer = identity.Consumer
 	}
 	all := make([]slog.Attr, 0, 3+len(attrs))
 	all = append(all,
@@ -198,8 +209,8 @@ func (h *PluginHandler) installPlugin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 透传 caller identity 到 audit
-	if id, ok := mcpauth.FromContext(r.Context()); ok {
-		h.log.Info("plugin install requested", "consumer", id.ConsumerName, "filename", header.Filename, "replace", replace)
+	if identity, ok := h.caller(r.Context()); ok {
+		h.log.Info("plugin install requested", "consumer", identity.Consumer, "filename", header.Filename, "replace", replace)
 	}
 
 	source := "upload:" + header.Filename
@@ -379,8 +390,8 @@ func (h *PluginHandler) uninstallPlugin(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if ident, ok := mcpauth.FromContext(r.Context()); ok {
-		h.log.Info("plugin uninstalled", "consumer", ident.ConsumerName, "plugin", id)
+	if identity, ok := h.caller(r.Context()); ok {
+		h.log.Info("plugin uninstalled", "consumer", identity.Consumer, "plugin", id)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

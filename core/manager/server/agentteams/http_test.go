@@ -16,9 +16,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
 	"github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
 	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
 	knowledgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
 	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
@@ -81,9 +81,16 @@ func newRouter(h *Handler) *chi.Mux {
 	return r
 }
 
+// Every handler in this package's tests is built with middleware.ContextIdentity
+// — the mcp domain's real adapter, not a fake. It is passed to NewHandler
+// because that is where it belongs: the read is a port, the port is
+// unconditional, and a fake here would be testing a shape the product never
+// uses while being unable to see a wiring nobody wrote (NewHandler now asks
+// for it, so a missing one is a compile error rather than a 401 at runtime).
+
 func TestPutGetState(t *testing.T) {
 	backend := newMemBackend()
-	h := NewHandler(backend, nil, "")
+	h := NewHandler(backend, nil, "", mcpauth.ContextIdentity{})
 	r := newRouter(h)
 
 	// put
@@ -117,7 +124,7 @@ func TestPutGetState(t *testing.T) {
 func TestHitlDecideRequiresIdentity(t *testing.T) {
 	backend := newMemBackend()
 	backend.data["incident-123"] = []byte(`{"phase":"repair","version":1}`)
-	h := NewHandler(backend, nil, "")
+	h := NewHandler(backend, nil, "", mcpauth.ContextIdentity{})
 	r := newRouter(h)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/hitl/decide",
@@ -141,7 +148,7 @@ func TestGetSkillReadsFromDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewHandler(nil, nil, skillDir)
+	h := NewHandler(nil, nil, skillDir, mcpauth.ContextIdentity{})
 	r := newRouter(h)
 	req := httptest.NewRequest(http.MethodGet, "/v1/skills/opskeeper-alerter", nil)
 	w := httptest.NewRecorder()
@@ -163,7 +170,7 @@ func TestGetSkillReadsFromDisk(t *testing.T) {
 }
 
 func TestCreateKnowledgeDocRequiresAllowedRole(t *testing.T) {
-	h := NewHandler(nil, nil, "")
+	h := NewHandler(nil, nil, "", mcpauth.ContextIdentity{})
 	h.SetKnowledgeWriter(&memKnowledgeWriter{})
 	r := newRouter(h)
 	req := httptest.NewRequest(http.MethodPost, "/v1/knowledge/docs",
@@ -180,7 +187,7 @@ func TestCreateKnowledgeDocRequiresAllowedRole(t *testing.T) {
 
 func TestCreateKnowledgeDocForReporter(t *testing.T) {
 	writer := &memKnowledgeWriter{}
-	h := NewHandler(nil, nil, "")
+	h := NewHandler(nil, nil, "", mcpauth.ContextIdentity{})
 	h.SetKnowledgeWriter(writer)
 	r := newRouter(h)
 	body := `{"title":"PG pool saturation","content":"restart pgbouncer","tags":["postmortem"],"source":"postmortem-worker:inc-1","fingerprint":"pg-pool-2026"}`
@@ -204,7 +211,7 @@ func TestCreateKnowledgeDocForReporter(t *testing.T) {
 
 func TestRecordIncidentEventRecordsSixRoleBoundStages(t *testing.T) {
 	recorder := &memIncidentRecorder{}
-	handler := NewHandler(nil, nil, "")
+	handler := NewHandler(nil, nil, "", mcpauth.ContextIdentity{})
 	handler.SetIncidentRecorder(recorder)
 	router := newRouter(handler)
 	base := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
@@ -252,7 +259,7 @@ func TestRecordIncidentEventRecordsSixRoleBoundStages(t *testing.T) {
 }
 
 func TestRecordIncidentEventRejectsMissingTraceAndOutOfOrderStage(t *testing.T) {
-	handler := NewHandler(nil, nil, "")
+	handler := NewHandler(nil, nil, "", mcpauth.ContextIdentity{})
 	handler.SetIncidentRecorder(&memIncidentRecorder{})
 	router := newRouter(handler)
 
@@ -283,7 +290,7 @@ func TestRecordIncidentEventRejectsMissingTraceAndOutOfOrderStage(t *testing.T) 
 
 func TestRecordIncidentEventAllowsInvestigatorEvidenceRefresh(t *testing.T) {
 	recorder := &memIncidentRecorder{}
-	handler := NewHandler(nil, nil, "")
+	handler := NewHandler(nil, nil, "", mcpauth.ContextIdentity{})
 	handler.SetIncidentRecorder(recorder)
 	router := newRouter(handler)
 	base := time.Now().UTC().Truncate(time.Second)
@@ -333,7 +340,7 @@ func TestRecordIncidentEventAllowsInvestigatorEvidenceRefresh(t *testing.T) {
 
 func TestRecordIncidentEventEnforcesRecoverySignalBoundary(t *testing.T) {
 	recorder := &memIncidentRecorder{}
-	handler := NewHandler(nil, nil, "")
+	handler := NewHandler(nil, nil, "", mcpauth.ContextIdentity{})
 	handler.SetIncidentRecorder(recorder)
 	router := newRouter(handler)
 	base := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)

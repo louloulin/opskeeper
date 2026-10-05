@@ -31,7 +31,6 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	knowledgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"
-	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
 
 // StateBackend 是 MinIO / state store 的接口。
@@ -47,6 +46,36 @@ type KnowledgeWriter interface {
 type IncidentRecorder interface {
 	Append(ctx context.Context, event incidentcontrol.Event) error
 	ListIncident(ctx context.Context, tenantID, incidentID string) ([]incidentcontrol.Event, error)
+}
+
+// MCPCallerLookup is this package's own port, and it names nothing from the
+// mcp domain.
+//
+// The shape it replaces was three package-level functions called directly:
+// mcpauth.FromContext, mcpauth.TraceFromContext and TraceContext.HasTrace.
+// They could not be anything else — a package-level function cannot be
+// injected, so the dependency was structural rather than declared, and
+// "who is calling" arrived as a six-field credential struct with an API key id
+// and a resolution timestamp attached.
+//
+// What these routes ask is narrower. Three of the six fields decide anything:
+// the consumer name is the actor written to audit, the role decides whether
+// the route answers at all, and the tenant id partitions every read and write.
+// And the two trace signals were one signal wearing two hats — a TraceContext
+// is always present once the middleware has run, and its TraceID may still be
+// empty, so every call site asked ok && tc.HasTrace() and the projection
+// folds that into the bool.
+//
+// middleware.ContextIdentity satisfies this structurally; cmd/opskeeper hands
+// one over. Neither domain names the other.
+type MCPCallerLookup interface {
+	// CallerFrom returns who is calling. False means nobody was resolved,
+	// which these routes answer 401.
+	CallerFrom(ctx context.Context) (domain.MCPCaller, bool)
+	// TraceFrom returns the trace to correlate with. False means there is
+	// none — not "there is an empty one", which the old two-signal shape
+	// made expressible.
+	TraceFrom(ctx context.Context) (domain.MCPTrace, bool)
 }
 
 // AlertIncidentResolver is this package's own port, and it names nothing
@@ -77,14 +106,45 @@ type Handler struct {
 	knowledge KnowledgeWriter
 	incident  IncidentRecorder
 	alerts    AlertIncidentResolver
+	callers   MCPCallerLookup
+}
+
+// caller is the nil-safe read of the port. A handler with no lookup wired has
+// no way to know who is asking, and the honest answer to that is the same one
+// an unauthenticated request gets — not a panic on the first call, and not a
+// route that quietly serves everyone.
+func (h *Handler) caller(ctx context.Context) (domain.MCPCaller, bool) {
+	if h.callers == nil {
+		return domain.MCPCaller{}, false
+	}
+	return h.callers.CallerFrom(ctx)
+}
+
+// trace is the nil-safe read of the port, for the same reason as caller.
+func (h *Handler) trace(ctx context.Context) (domain.MCPTrace, bool) {
+	if h.callers == nil {
+		return domain.MCPTrace{}, false
+	}
+	return h.callers.TraceFrom(ctx)
 }
 
 // NewHandler 构造。
-func NewHandler(backend StateBackend, log *slog.Logger, skillDir string) *Handler {
+//
+// callers is a parameter and not a setter on purpose. It is the one
+// dependency here that is unconditional — the other three are all optional, and
+// a bot that has no knowledge writer is a degraded bot, not a broken one — and
+// an unconditional dependency passed through a setter is a dependency a boot
+// path can forget. As a parameter it is unfillable-by-omission: the compiler
+// asks for it at every construction site, and the only way to get a handler
+// that answers 401 everywhere is to pass nil deliberately.
+//
+// nil is still allowed, and still means 401, because a test may want to prove
+// what that looks like. But it is now a decision rather than an oversight.
+func NewHandler(backend StateBackend, log *slog.Logger, skillDir string, callers MCPCallerLookup) *Handler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Handler{backend: backend, log: log, skillDir: skillDir}
+	return &Handler{backend: backend, log: log, skillDir: skillDir, callers: callers}
 }
 
 func (h *Handler) SetKnowledgeWriter(writer KnowledgeWriter) {
@@ -98,6 +158,7 @@ func (h *Handler) SetIncidentRecorder(recorder IncidentRecorder) {
 func (h *Handler) SetAlertIncidentResolver(resolver AlertIncidentResolver) {
 	h.alerts = resolver
 }
+
 
 // Register 注册路由到 chi.Router。
 //
@@ -152,10 +213,10 @@ func (h *Handler) putState(w http.ResponseWriter, r *http.Request) {
 	probe["task_id"] = taskID
 	// Inject LoongSuite / W3C trace context (如 plugin stdio MCP 已透传)
 	// 这样 state.json 自带 trace_id，可与 LoongSuite / Tempo trace 关联。
-	if tc, ok := mcpauth.TraceFromContext(r.Context()); ok && tc.HasTrace() {
-		probe["trace_id"] = tc.TraceID
-		if tc.SpanID != "" {
-			probe["span_id"] = tc.SpanID
+	if trace, ok := h.trace(r.Context()); ok {
+		probe["trace_id"] = trace.TraceID
+		if trace.SpanID != "" {
+			probe["span_id"] = trace.SpanID
 		}
 	}
 	out, err := json.Marshal(probe)
@@ -174,13 +235,13 @@ func (h *Handler) putState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) hitlDecide(w http.ResponseWriter, r *http.Request) {
-	id, ok := mcpauth.FromContext(r.Context())
+	identity, ok := h.caller(r.Context())
 	if !ok {
 		writeJSONError(w, http.StatusUnauthorized, "no resolved identity")
 		return
 	}
 	// 透传 trace context 到 audit log（如果有）
-	tc, _ := mcpauth.TraceFromContext(r.Context())
+	trace, _ := h.trace(r.Context())
 	var req struct {
 		TaskID   string   `json:"task_id"`
 		Decision string   `json:"decision"`
@@ -220,10 +281,10 @@ func (h *Handler) hitlDecide(w http.ResponseWriter, r *http.Request) {
 	state.HITL.DecidedAt = &now
 	state.Audit = append(state.Audit, agentteams.AuditEvent{
 		Event:   "hitl_decision",
-		Actor:   id.ConsumerName,
+		Actor:   identity.Consumer,
 		Reason:  fmt.Sprintf("decision=%s signers=%v reason=%s", req.Decision, req.Signers, req.Reason),
 		At:      now,
-		TraceID: tc.TraceID,
+		TraceID: trace.TraceID,
 	})
 	state.UpdatedAt = now
 	state.Version++
@@ -290,7 +351,7 @@ type knowledgeDocDTO struct {
 }
 
 func (h *Handler) createKnowledgeDoc(w http.ResponseWriter, r *http.Request) {
-	identity, ok := mcpauth.FromContext(r.Context())
+	identity, ok := h.caller(r.Context())
 	if !ok {
 		writeJSONError(w, http.StatusUnauthorized, "no resolved identity")
 		return

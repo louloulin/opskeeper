@@ -167,6 +167,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promptguard"
 	managerserverimbridge "github.com/vincent-wuhan/opskeeper/core/manager/server/imbridge"
 	managerserverknowledge "github.com/vincent-wuhan/opskeeper/core/manager/server/knowledge"
+	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 	managerwebshellserver "github.com/vincent-wuhan/opskeeper/core/manager/server/webshell"
 
 	internalagentteams "github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
@@ -3511,9 +3512,20 @@ func main() {
 				os.Getenv("OPSKEEPER_MINIO_BUCKET"),
 				os.Getenv("OPSKEEPER_MINIO_SECURE") == "true",
 			)
+			// The identity source is a constructor argument, not a setter.
+			// Before the cut these routes called mcpauth.FromContext as a
+			// package function, which is a dependency no port can narrow;
+			// now that the read is a port, an unconditional port passed
+			// through a setter is a port a boot path can forget. As an
+			// argument the compiler asks for it at every construction site.
+			//
+			// ContextIdentity is a zero-size struct, so there is nothing to
+			// keep in sync — it reads the same request context the
+			// authenticator below fills.
 			agentteamsHandler := managerserveragentteams.NewHandler(
 				agentteamsMinIO, nil,
 				os.Getenv("OPSKEEPER_SKILLS_DIR"),
+				mcpauth.ContextIdentity{},
 			)
 			if knowledgeUC != nil {
 				agentteamsHandler.SetKnowledgeWriter(knowledgeUC)
@@ -3532,8 +3544,13 @@ func main() {
 			pluginRegistry := managerserveragentteams.NewPluginRegistry(os.Getenv("OPSKEEPER_PLUGINS_DIR"))
 			pluginSync := buildPluginSyncClient(os.Getenv("OPSKEEPER_PLUGIN_SYNC_MODE"), log)
 			pluginMaxZipBytes := parsePluginMaxZipBytes(os.Getenv("OPSKEEPER_PLUGIN_MAX_ZIP_BYTES"))
+			// Same source as the routes above, and for the same reason: the
+			// plugin routes log which consumer asked, so an unwired identity
+			// there writes an empty consumer name into the audit trail
+			// rather than refusing the request.
 			agentteamsPluginHandler := managerserveragentteams.NewPluginHandler(
 				pluginRegistry, pluginSync, nil, pluginMaxZipBytes,
+				mcpauth.ContextIdentity{},
 			)
 
 			bearerAuth := newAgentTeamsAuthenticator(nil, signer)

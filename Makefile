@@ -301,6 +301,33 @@ webshell-links-check: ## WebShell 不再自己挑关系类型，且只能从 use
 		'TestOnlyTheUsecaseCanFillTheWebshellDevicePort|TestTheShellAsksTheDeviceDomainWhichEdgeItBelongsTo'
 	@echo "webshell-links-check: the relation is the device domain's to state, and only the usecase can say it"
 
+# The `agentteams -> mcp` edge was three package functions — FromContext,
+# TraceFromContext and HasTrace — which no port can narrow, because a package
+# function cannot be injected. Six credential fields arrived whole for routes
+# that read three, and "is there a trace" was two signals (ok && HasTrace) for
+# one fact.
+#
+# Turning the read into a port bought the narrower question and cost a new
+# failure mode: a boot path that never calls SetCallerLookup, after which every
+# AgentTeams route answers 401 with a message that reads like an auth problem
+# and is a wiring one. That is the half this target exists for. It runs the
+# consumer's guards (including the fold — a present-but-empty TraceContext must
+# read as no trace), the producer's projection tests, and the assembly root's
+# structural and end-to-end seam checks.
+#
+# The side effect worth knowing about: cutting this edge took the mcp domain's
+# last inbound cross-domain import to zero, so it is now provably independently
+# shippable and moved into the release-floor candidate's independent group.
+.PHONY: agentteams-identity-check
+agentteams-identity-check: ## AgentTeams 路由不再直接读 mcp 中间件，且只能从端口取（决策 249）
+	cd core/manager && GOWORK=off go test ./server/agentteams/ -count=1 -run \
+		'TestNoProductionFileInThisPackageImportsTheMCPDomain|TestTheCallerPortAsksTwoQuestionsAndNoMore|TestTheProjectionsStayThreeAndTwoColumns|TestTheTraceBoolAnswersOneQuestionAndNotTwo|TestAHandlerWithNoCallerWiredAnswersUnauthorized|TestThePortStillHasCallers'
+	cd core/manager && GOWORK=off go test ./server/mcp/middleware/ -count=1 -run \
+		'TestCallerFrom|TestTraceFromFoldsPresenceAndEmptiness|TestTheProjectionsCarryNoCredential'
+	GOWORK=off go test ./cmd/opskeeper/ -count=1 -run \
+		'TestTheMCPDomainSatisfiesTheAgentTeamsPort|TestTheAgentTeamsRoutesSeeTheCallerTheMiddlewareResolved|TestThePluginRoutesGetTheSameCaller'
+	@echo "agentteams-identity-check: who is calling is a question with a port, and the boot path fills it"
+
 # The plan's first P0 is that a node cannot reach a model. Half of that fix
 # lives in llmgw.Register (the routes) and half in
 # modelEndpointResolver.AgentEndpoint (the string every node is handed), and

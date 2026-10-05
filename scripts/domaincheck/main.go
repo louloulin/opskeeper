@@ -142,7 +142,6 @@ var sharedDomains = map[string]string{
 // convenient. A domain that cannot say why it reaches into another one is a
 // domain that should not be reaching.
 var edges = map[edge]string{
-	{"agentteams", "mcp"}: "the middleware that authenticates an AgentTeams worker over MCP lives in server/mcp; splitting it would mean two auth chains for one protocol",
 	{"aiops", "alert"}:    "the agent raises and silences alerts through the platform's rules rather than carrying a second alert implementation. One direction only since decision 118, which was the last cycle in the tree: the alert domain used to call the agent kernel's own SpawnRequest/Worker structs, and it now asks for one investigation in its own value types",
 	{"aiops", "approval"}: "a remediation the agent wants to run is queued in the approval domain, which is the HITL path it must not be able to route around",
 	{"aiops", "audit"}:    "the agent kernel's LedgerWriter writes agent actions (tool calls, turns) into the same chain an operator reads",

@@ -15,7 +15,6 @@ import (
 
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"
-	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 )
 
 type recordIncidentEventReq struct {
@@ -54,7 +53,7 @@ var incidentEventByRole = map[string]incidentEventSpec{
 }
 
 func (h *Handler) recordIncidentEvent(w http.ResponseWriter, r *http.Request) {
-	identity, ok := mcpauth.FromContext(r.Context())
+	identity, ok := h.caller(r.Context())
 	if !ok {
 		writeJSONError(w, http.StatusUnauthorized, "no resolved identity")
 		return
@@ -74,8 +73,8 @@ func (h *Handler) recordIncidentEvent(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusForbidden, "tenant could not be derived")
 		return
 	}
-	trace, hasTrace := mcpauth.TraceFromContext(r.Context())
-	if !hasTrace || !trace.HasTrace() {
+	trace, hasTrace := h.trace(r.Context())
+	if !hasTrace {
 		writeJSONError(w, http.StatusBadRequest, "trace context is required")
 		return
 	}
@@ -143,7 +142,7 @@ func (h *Handler) recordIncidentEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	actor := identity.ConsumerName
+	actor := identity.Consumer
 	if actor == "" {
 		actor = auth.AgentTeamsWorkerForRole(identity.Role)
 	}
@@ -187,7 +186,7 @@ func (h *Handler) recordIncidentEvent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listIncidentEvents(w http.ResponseWriter, r *http.Request) {
-	identity, ok := mcpauth.FromContext(r.Context())
+	identity, ok := h.caller(r.Context())
 	if !ok {
 		writeJSONError(w, http.StatusUnauthorized, "no resolved identity")
 		return

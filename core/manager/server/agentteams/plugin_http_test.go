@@ -122,7 +122,7 @@ func makeMultipart(t *testing.T, filename string, content []byte) (*bytes.Buffer
 func TestPluginInstallListGetDelete(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(filepath.Join(tmp, "plugins"))
-	h := NewPluginHandler(registry, nil, nil, 0)
+	h := NewPluginHandler(registry, nil, nil, 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	// 1. 空 list
@@ -219,7 +219,7 @@ func TestPluginInstallListGetDelete(t *testing.T) {
 func TestPluginInstallDuplicateReturns409(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(filepath.Join(tmp, "plugins"))
-	h := NewPluginHandler(registry, nil, nil, 0)
+	h := NewPluginHandler(registry, nil, nil, 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 	zipBytes := makeZip(t, map[string]string{"plugin.yaml": samplePluginYAML})
 
@@ -245,7 +245,7 @@ func TestPluginInstallDuplicateReturns409(t *testing.T) {
 func TestPluginInstallInvalidManifest(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(filepath.Join(tmp, "plugins"))
-	h := NewPluginHandler(registry, nil, nil, 0)
+	h := NewPluginHandler(registry, nil, nil, 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 	badYAML := `apiVersion: wrong/v1
 kind: NotAPlugin
@@ -268,7 +268,7 @@ func TestPluginSyncCallsClient(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(filepath.Join(tmp, "plugins"))
 	sync := &stubSync{}
-	h := NewPluginHandler(registry, sync, nil, 0)
+	h := NewPluginHandler(registry, sync, nil, 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	zipBytes := makeZip(t, map[string]string{"plugin.yaml": samplePluginYAML})
@@ -306,7 +306,7 @@ func TestPluginSyncClientErrorMarksError(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(filepath.Join(tmp, "plugins"))
 	sync := &stubSync{err: io.ErrUnexpectedEOF}
-	h := NewPluginHandler(registry, sync, nil, 0)
+	h := NewPluginHandler(registry, sync, nil, 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	zipBytes := makeZip(t, map[string]string{"plugin.yaml": samplePluginYAML})
@@ -334,7 +334,7 @@ func TestPluginSyncClientErrorMarksError(t *testing.T) {
 func TestPluginInstallZipWithoutPluginYAML(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(filepath.Join(tmp, "plugins"))
-	h := NewPluginHandler(registry, nil, nil, 0)
+	h := NewPluginHandler(registry, nil, nil, 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	zipBytes := makeZip(t, map[string]string{"readme.md": "no manifest"})
@@ -354,7 +354,7 @@ func TestPluginInstallZipWithoutPluginYAML(t *testing.T) {
 func TestPluginInstallZipSlipRejected(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(filepath.Join(tmp, "plugins"))
-	h := NewPluginHandler(registry, nil, nil, 0)
+	h := NewPluginHandler(registry, nil, nil, 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	var buf bytes.Buffer
@@ -513,7 +513,7 @@ func TestPluginAuditEventsEmitted(t *testing.T) {
 
 	var auditEntries []map[string]any
 	captureHandler := &slogCaptureHandler{captured: &auditEntries}
-	h := NewPluginHandler(registry, &stubSync{}, slog.New(captureHandler), 0)
+	h := NewPluginHandler(registry, &stubSync{}, slog.New(captureHandler), 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	// install
@@ -609,7 +609,7 @@ func TestPluginPushHappyPath(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(tmp)
 	sync := &stubSync{}
-	h := NewPluginHandler(registry, sync, slog.New(slog.NewTextHandler(io.Discard, nil)), 0)
+	h := NewPluginHandler(registry, sync, slog.New(slog.NewTextHandler(io.Discard, nil)), 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	zipBytes := makePluginZipBytes(t)
@@ -659,7 +659,7 @@ func TestPluginPush404WhenPluginMissing(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(tmp)
 	sync := &stubSync{}
-	h := NewPluginHandler(registry, sync, slog.New(slog.NewTextHandler(io.Discard, nil)), 0)
+	h := NewPluginHandler(registry, sync, slog.New(slog.NewTextHandler(io.Discard, nil)), 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	res := doRequest(r, "POST", "/v1/plugins/nonexistent/push", nil, "")
@@ -675,7 +675,7 @@ func TestPluginPush502WhenSyncFails(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(tmp)
 	sync := &stubSync{pushErr: errors.New("worker offline")}
-	h := NewPluginHandler(registry, sync, slog.New(slog.NewTextHandler(io.Discard, nil)), 0)
+	h := NewPluginHandler(registry, sync, slog.New(slog.NewTextHandler(io.Discard, nil)), 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	zipBytes := makePluginZipBytes(t)
@@ -697,7 +697,7 @@ func TestPluginPush502WhenSyncFails(t *testing.T) {
 func TestPluginPushNoSyncConfigured(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(tmp)
-	h := NewPluginHandler(registry, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), 0)
+	h := NewPluginHandler(registry, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	zipBytes := makePluginZipBytes(t)
@@ -759,7 +759,7 @@ func TestReadInstallPayloadRoundTrip(t *testing.T) {
 // ----------------------------------------------------------------------
 
 func TestNewPluginHandler_MaxZipBytesDefault(t *testing.T) {
-	h := NewPluginHandler(nil, nil, nil, 0)
+	h := NewPluginHandler(nil, nil, nil, 0, mcpauth.ContextIdentity{})
 	if got := h.MaxZipBytes(); got != DefaultMaxPluginZipBytes {
 		t.Errorf("default maxZipBytes = %d, want %d", got, DefaultMaxPluginZipBytes)
 	}
@@ -767,14 +767,14 @@ func TestNewPluginHandler_MaxZipBytesDefault(t *testing.T) {
 
 func TestNewPluginHandler_MaxZipBytesOverride(t *testing.T) {
 	custom := int64(2 * 1024 * 1024)
-	h := NewPluginHandler(nil, nil, nil, custom)
+	h := NewPluginHandler(nil, nil, nil, custom, mcpauth.ContextIdentity{})
 	if got := h.MaxZipBytes(); got != custom {
 		t.Errorf("override maxZipBytes = %d, want %d", got, custom)
 	}
 }
 
 func TestNewPluginHandler_MaxZipBytesNegativeFallsBackToDefault(t *testing.T) {
-	h := NewPluginHandler(nil, nil, nil, -1)
+	h := NewPluginHandler(nil, nil, nil, -1, mcpauth.ContextIdentity{})
 	if got := h.MaxZipBytes(); got != DefaultMaxPluginZipBytes {
 		t.Errorf("negative maxZipBytes should fall back to default, got %d", got)
 	}
@@ -785,7 +785,7 @@ func TestInstallPlugin_RejectsZipExceedingConfigurableLimit(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(tmp)
 	const limit = 1024
-	h := NewPluginHandler(registry, nil, nil, limit)
+	h := NewPluginHandler(registry, nil, nil, limit, mcpauth.ContextIdentity{})
 
 	// 构造一个看起来合法的 zip 但超 1KB
 	var buf bytes.Buffer
@@ -833,7 +833,7 @@ func TestInstallPlugin_AutoPushByDefault(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(tmp)
 	sync := &stubSync{}
-	h := NewPluginHandler(registry, sync, slog.New(slog.NewTextHandler(io.Discard, nil)), 0)
+	h := NewPluginHandler(registry, sync, slog.New(slog.NewTextHandler(io.Discard, nil)), 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	zipBytes := makePluginZipBytes(t)
@@ -869,7 +869,7 @@ func TestInstallPlugin_AutoPushFalseDisabled(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(tmp)
 	sync := &stubSync{}
-	h := NewPluginHandler(registry, sync, slog.New(slog.NewTextHandler(io.Discard, nil)), 0)
+	h := NewPluginHandler(registry, sync, slog.New(slog.NewTextHandler(io.Discard, nil)), 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	zipBytes := makePluginZipBytes(t)
@@ -900,7 +900,7 @@ func TestInstallPlugin_AutoPushFailsDoesNotFailInstall(t *testing.T) {
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(tmp)
 	sync := &stubSync{pushErr: errors.New("simulated worker failure")}
-	h := NewPluginHandler(registry, sync, slog.New(slog.NewTextHandler(io.Discard, nil)), 0)
+	h := NewPluginHandler(registry, sync, slog.New(slog.NewTextHandler(io.Discard, nil)), 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	zipBytes := makePluginZipBytes(t)
@@ -930,7 +930,7 @@ func TestInstallPlugin_AutoPushNoSyncConfigured(t *testing.T) {
 	// h.sync 为 nil (stub 模式) → push_result.pushed=false + reason
 	tmp := t.TempDir()
 	registry := NewPluginRegistry(tmp)
-	h := NewPluginHandler(registry, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), 0)
+	h := NewPluginHandler(registry, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	zipBytes := makePluginZipBytes(t)
@@ -978,7 +978,7 @@ func TestUninstallPlugin_LogDoesNotConfuseConsumerWithPluginName(t *testing.T) {
 	// capture handler 收集 slog 记录
 	var captured []map[string]any
 	capHandler := &slogCaptureHandler{captured: &captured}
-	h := NewPluginHandler(registry, nil, slog.New(capHandler), 0)
+	h := NewPluginHandler(registry, nil, slog.New(capHandler), 0, mcpauth.ContextIdentity{})
 	r := newPluginRouter(h)
 
 	// 1) install 一个 plugin
