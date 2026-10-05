@@ -355,6 +355,16 @@ type Ranked struct {
 // produce comparable numbers, and every attempt to normalise them imports a
 // calibration nobody can justify.
 //
+// As of decision 189 no production code passes a second list: the only caller
+// in the tree is this package's own test, and `scripts/deadcode` reports
+// `Fuse:test-only` for this file. So there is a working lexical ranker and a
+// tested fusion, and **no hybrid retrieval actually running**. The seam is
+// ready for the second ranker; the plan's premise for needing it -- plugins in
+// the hundreds -- is not what this fleet is at, and building the second ranker
+// early would be a guess about a scale this repository has not reached. The
+// sentence above is a promise about what Fuse accepts, not a report that
+// anything supplies it.
+//
 // What it is not is a second implementation of the incident recall's
 // selection. That one is coupled to `runbook:` / `knowledge:` source
 // priorities, which is a policy about incident evidence and has no meaning for
