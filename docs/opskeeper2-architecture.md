@@ -14087,6 +14087,107 @@ func patternTenantFromCtx(_ context.Context) string { return "" }
 **这一条本身值得记**：**没有被追踪的缺口，比被追踪的缺口更难发现**，因为前者的
 「进度」是隐形的。而 §五 是唯一一处计划点名了却没有对应追踪栏的地方。
 
+### 4.131 决策 198：撤回上一轮那句「类型要用户拍板」——类型早就定了，而 loop 的租户键是一个**写明了「以后再换」的占位**....
+
+上一轮（决策 197）在多租户这条线上留了一个「卡住的决策」交给用户：**租户用 `string`
+还是 `uint64`**。这一轮的第一件事是去查它凭什么是卡点。查完的结论是：**它不是卡点，
+它早就被答完了**，而我把答案当成了问题。
+
+#### 一、类型这件事，生产代码里早就统一了
+
+| 证据 | 内容 |
+|---|---|
+| `core/manager/model/chatdiagnose/turn.go:103` | `TenantID string` + `gorm:"size:64;not null;uniqueIndex:uniq_tenant_fingerprint..."` → 列是 `VARCHAR(64)`，Go 侧 `string` |
+| `core/manager/biz/aiops/tools/decorators/tenant_bind.go:56-61` | **权威派生规则**：先 `strconv.FormatUint(tenant.UserID, 10)`，若 `AgentTeams.TenantID` 非空则改用它 → **恒为 `string`** |
+| `core/manager/biz/aiops/tools/decorators/decorators_test.go:262` | `TestTenantBind_UsesAgentTeamsTenant` —— 上面那条规则**有行为测试** |
+
+也就是说：**权威规则在工具装饰器里、被测试守着、输出类型是 `string`、落库的列也是
+`VARCHAR`。** 决策 197 说的「同一个概念有两种类型」，是以两个**少数派**载体
+（下面两条）为证据推广到全体的。
+
+#### 二、把三条通道重新归类（其中一条根本没有调用方）
+
+| 载体 | 上一轮的判定 | 实际判定 | 证据 |
+|---|---|---|---|
+| `core/manager/pkg/tenantctx` | **不存在**（我说「没有共享机制」） | **它就是共享机制**，且是权威：auth 中间件写，`ratelimit` / `tenant_bind` / `recovery` / `investigator` / `config_tools` / loop 的 MCP 授权都读，20+ 处调用 | `pkg/tenantctx/tenantctx.go`，`tenantctx.From` 的调用点遍布 `biz/` |
+| `basetool.WithTenant(string)` | 「类型对，但没有共享机制」 | **完全合规**：类型对，且值就是上面那条权威规则填的 | `tenant_bind.go:58` 调 `basetool.WithTenant(uidStr)` |
+| `decorator.WithTenant(ctx, uint64)` | 「三套互不相通之一」 | **死代码：全仓零调用方**，生产与测试都没有 | `middleware/adapter/decorator/audit.go:112`，`grep` 全仓 0 命中 |
+| `gitartifact.WithTenant / tenantFromContext` | 「另一个私有 key，独立通道」 | **不是独立通道**：生产读的 `tenantFromContext` 会 fallback 到 `tenantctx.From(ctx)`；`WithTenant(ctx, uint64)` 只有 **3 个测试调用方**（`postmortem_test.go:463`、`postmortem_sink_test.go:164/262`）。它把 `UserID` 收窄成 `uint64`，**丢掉了 `AgentTeams.TenantID` 那个字符串** | `knowledge/gitartifact/server.go:409-415`、`:138/:206/:247`、`linker.go:122/200/240/283` |
+
+**两条「通道」里，一条零调用方，一条只有测试在用。** 生产路径上真正承载租户的只有
+`tenantctx` 一条，而它早就是 `string` 世界。
+
+#### 三、真正的分叉不在类型，在「派生规则」，而它有两份
+
+同一个调用者身份，仓库里有**两条互不相同的字符串派生规则**：
+
+| 规则 | 位置 | 输出 | 有测试吗 |
+|---|---|---|---|
+| A（工具链，权威） | `tenant_bind.go:56-61` | `AgentTeams.TenantID`，否则 `"7"` | ✅ `TestTenantBind_UsesAgentTeamsTenant` |
+| B（loop 的 HTTP 层） | `core/manager/server/loop/http.go:537-552` | `"user-7"`，否则 `"default"` | ❌ **零** |
+
+B 处的注释把自己的性质写得很清楚：
+
+> `Single-tenant MVP — Tenant struct carries the user identity but the loop
+> tables are not yet tenant-partitioned. ... We use UserID as the tenant_id
+> key — Day 6+ will replace with the real multi-tenant resolver.`
+
+**loop 表的租户键是一个写明了「以后再换」的占位，而它决定了 loop 生态里每一行的
+`tenant_id`**，包括 `incident_pattern` 本该填的那个值。规则 B 一个测试都没有，
+改掉它不会有任何东西变红。
+
+#### 四、于是「卡住的决策」换了一个问法，而且窄得多
+
+租户在 loop 边界上**已经存在、且被强制要求非空**：
+
+| 事实 | 位置 |
+|---|---|
+| `RunOptions.TenantID` 为空直接报错 `is required` | `biz/loop/orchestrator.go:594-596` |
+| HTTP 入口取不到租户键就 401 | `server/loop/http.go:225-228` |
+| Planner 已经把租户拿在手里 | `orchestrator_walk.go:127` `TenantID: opts.TenantID` |
+| 但 `Plan` 结构里**没有** `TenantID` 字段 | `phase_worker.go:131-145` |
+| 而 learner 只收 `ctx` | `pattern_learner.go:42` → `:69` |
+
+所以接线点是明确的（`walk` 手上有 `opts.TenantID`，`Executor(ctx, plan)` 里没有），
+**不需要新造任何机制，也不需要给 `Plan` 加字段以外的架构改动**。
+
+真正待决的变成一句话：**`incident_pattern.tenant_id` 该填规则 A 的值还是规则 B 的值？**
+而这取决于一个更上游、代码里明说「Day 6+ 才做」的东西：**真正的多租户 resolver**
+（租户从哪来、租户与用户是什么关系）。那是产品决定，**不是类型决定**——上一轮把后者
+当成了阻塞点。
+
+#### 五、第十八条闸门
+
+`scripts/ledgercheck/tenantkey_test.go`：**租户派生函数的生产定义数 == 台账登记的数**。
+
+台账 §六 登记「生产代码里 `tenantFromContext` 的定义共 **2** 处」，闸门走 `core/` 与
+`cmd/` 数一遍。当前实测**恰好 2**（`server/loop/http.go:537`、`knowledge/gitartifact/
+server.go:409`）。它抓的是本轮这条错误链的**真实成因**：一个租户键的派生规则可以
+在任何一个包里悄悄长出第三份，而没有任何一处会红。第三份出现时，闸门要求先在台账里
+说明它是什么、和前两份什么关系。
+
+顺带守住 §六 那条登记不许被改写成不含两个占位字面量的版本——`user-%d` 与 `default`
+是这条缺口**可被指认**的原因，写掉了就等于把缺口重新变成隐形的。
+
+#### 六、诚实的边界
+
+- 本轮**仍未改任何生产代码**。改法现在是清楚的（一处，或在 `walk` 上按权威规则装
+  `tenantctx`），但它会改写持久化字节，且**填什么取决于尚未定的 resolver**。
+- 决策 197 第四节的推断（「新旧行索引键不同，迁移可能不需要」）**本轮没有推进**——
+  它依赖「填的值是什么」，而那个值还没定，所以它仍然是可检验的推断而不是结论。
+- 撤回的只是「类型待决」。**没有**撤回的是 §4.52.2 的事实部分：`tenant_id` 确实恒为 `""`。
+- 决策 197「根因是没有共享的租户传递机制」这句话**是错的**，`tenantctx` 就在那儿。
+  §四 只追加不修剪，所以这句话留在原地由本条更正——这正是它该被读到的方式。
+
+#### 七、顺带纠正一条方法论
+
+这是本会话第七次「用代理指标代替直接证据，得出方向相反的结论」。这一次的形态很
+典型：**我数了三个载体的类型，把两个少数派当成了全体**。如果第一眼先问「这个类型在
+权威位置上是什么」，而不是「有哪些地方用了不同类型」，一句话就能查到
+`tenant_bind.go:56-61`，整条「需要用户拍板」的escalation 根本不会发生。
+
+**规律：判断一个类型/契约是否「有争议」，先找权威位置（schema、权威实现），再数
+偏离点——顺序反过来就会把少数派当成分歧。**
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -16162,6 +16263,8 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
 | 决策 196（manager 拆分方案的前两问有了答案） | `docs/manager-split.proposed`「还没写下来的东西」段 | ✅ 同决策已回核 |
 | 决策 197（多租户是症状，根因是没有共享的租户传递机制） | §六「当前真实缺口」新登记条目 | ✅ 同决策已回核 |
 | 决策 197（§五 点名的支柱必须在 §六 有登记） | §六「当前真实缺口」多租户条目 | ✅ 同决策已回核 |
+| 决策 198（撤回「类型待用户拍板」，机制与类型早已存在） | §六「当前真实缺口」多租户条目**上一条** | ✅ 同决策已回核（更正 197 的两处结论） |
+| 决策 198（租户派生规则只有一份才够） | §六「当前真实缺口」新登记条目 + 第 18 条闸门 | ✅ 同决策已回核 |
 
 ### 当前真实缺口
 
@@ -16319,6 +16422,35 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
   `incident_pattern` 的列类型、所有读它的查询、三条通道的签名，**不是能顺手定的**。
   本轮没有改任何生产代码。**这一条登记在这里本身是有意的**：它之前不在四阶段表的任何
   一栏里，而**没有被追踪的缺口比被追踪的更难发现，因为它的进度是隐形的**。
+- **更正决策 197 的两处结论：租户机制存在、类型早已是 `string`，真正缺的是「派生规则
+  只有一份」**（决策 198 新登记）。上一条把多租户登记成「三套互不相通的传递机制、没有
+  共享的那一套」，并把「租户用 `string` 还是 `uint64`」当成需要用户拍板的阻塞点。**两条
+  都不成立**：
+  - 共享机制就是 `core/manager/pkg/tenantctx`（auth 中间件写、20+ 处业务读），它不是
+    「不存在」，而是我把「三处各自造私有 key」当成了「没有共享的那套」。
+  - 类型早已统一为 `string`：schema 是 `TenantID string` + `gorm:"size:64"`（列即
+    `VARCHAR(64)`，`model/chatdiagnose/turn.go:103`），权威派生规则在
+    `decorators/tenant_bind.go:56-61`（`AgentTeams.TenantID` 优先，否则
+    `strconv.FormatUint(UserID)`）**恒为 `string`**，且有行为测试
+    `TestTenantBind_UsesAgentTeamsTenant` 守着。所谓「两种类型」的两个载体里，
+    `middleware/adapter/decorator` 的 `WithTenant(ctx, uint64)` **全仓零调用方**，
+    `gitartifact` 的同名函数生产上 fallback 到 `tenantctx.From`，它的 `WithTenant`
+    只有 3 个**测试**调用方。
+  - **真正缺的是派生规则只有一份**：同一个身份有两条互不相同的字符串规则——工具链那条
+    （上面引的）与 loop HTTP 层那条，而**后者决定了 loop 生态每一行的 `tenant_id`**，
+    包括 `incident_pattern` 本该填的值。它把用户 id 拼成 `user-%d`，而 `t.UserID == 0`
+    时返回 `default`
+    （`server/loop/http.go:537-552`），**一个测试都没有**，而它的注释自己写明这是占位：
+    *the loop tables are not yet tenant-partitioned ... Day 6+ will replace with the
+    real multi-tenant resolver*。
+  - 因此待决问题从「用什么类型」变成「**填规则 A 还是规则 B 的值**」，而它取决于一个代码
+    里明说「Day 6+ 才做」的**真正的多租户 resolver**——那是产品决定（租户从哪来），不是
+    类型决定。接线点本身已清楚：租户在 loop 边界上被强制非空（`orchestrator.go:594`），
+    `walk` 手上有 `opts.TenantID`，而 `Plan` 没有该字段、learner 只收 `ctx`。
+  - 生产代码里 `tenantFromContext` 的定义共 **2** 处（`server/loop/http.go:537` 的
+    `string` 版、`knowledge/gitartifact/server.go:409` 的 `uint64` 版），这个数由第 18 条
+    闸门实测。**没有撤回的**是 §4.52.2 的事实：`tenant_id` 确实恒为 `""`。
+
 - **四阶段里只有一个的百分比可复算，另一个三个不是**（决策 192 新登记）。决策 192
   给阶段 3 补了成分声明并加了闸门（组成必须加得起来且等于该行百分比），于是
   **80.3% 第一次能被独立验算**。阶段 0 的 98% / 阶段 1 的 100% / 阶段 2 的 96.7%
