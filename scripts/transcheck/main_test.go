@@ -160,11 +160,12 @@ func Unresolved() dst.Input {
 func analyseTree(t *testing.T) sites {
 	t.Helper()
 	root := writeTree(t, tree)
-	files, index, err := scan([]string{root})
+	files, index, tags, columns, err := scan([]string{root})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	return analyse(files, index)
+	all, _, _ := analyse(files, index, tags, columns)
+	return all
 }
 
 func findByFunc(all sites, fn string) *site {
@@ -232,7 +233,7 @@ func TestAnUnresolvedSiteIsAbsentRatherThanClean(t *testing.T) {
 		t.Fatal("a local receiver was resolved; the claim that resolution needs a parameter is wrong")
 	}
 	var buf strings.Builder
-	all.print(writerOf(&buf))
+	all.print(writerOf(&buf), updateReport{})
 	out := buf.String()
 	if !strings.Contains(out, "did NOT resolve") {
 		t.Error("the report does not say that some sites went unread")
@@ -254,7 +255,7 @@ func writerOf(b *strings.Builder) *stringWriter { return &stringWriter{b: b} }
 // this file.
 func TestTheKnownMissesArePrinted(t *testing.T) {
 	var buf strings.Builder
-	sites{}.print(writerOf(&buf))
+	sites{}.print(writerOf(&buf), updateReport{})
 	out := buf.String()
 	for _, k := range knownFalsePositives {
 		if !strings.Contains(out, k.kind) {
@@ -271,7 +272,7 @@ func TestTheKnownMissesArePrinted(t *testing.T) {
 // a clean bill.
 func TestTheEmptyRunStillExplainsItself(t *testing.T) {
 	var buf strings.Builder
-	sites{}.print(writerOf(&buf))
+	sites{}.print(writerOf(&buf), updateReport{})
 	out := buf.String()
 	if !strings.Contains(out, "no site resolved its source struct") {
 		t.Error("an empty run does not say that it measured nothing")
@@ -297,7 +298,7 @@ func TestAFullDestinationIsReportedAsFull(t *testing.T) {
 			s.destFields-len(s.destUnset), s.destFields, s.destUnset)
 	}
 	var buf strings.Builder
-	analyseTree(t).print(writerOf(&buf))
+	analyseTree(t).print(writerOf(&buf), updateReport{})
 	out := buf.String()
 	const header = "destination columns that nothing sets"
 	i := strings.Index(out, header)
@@ -366,8 +367,276 @@ func TestAnUnreadableDestinationIsAbsentRatherThanComplete(t *testing.T) {
 		t.Fatal("a destination declared in a file the scan skips was reported as read")
 	}
 	var buf strings.Builder
-	sites{}.print(writerOf(&buf))
+	sites{}.print(writerOf(&buf), updateReport{})
 	if strings.Contains(buf.String(), "dst.Ghost") {
 		t.Error("an unread destination appears in the destination list, which is a clean bill nobody earned")
+	}
+}
+
+// The third direction's fixture. Its destination type has one column of each
+// kind this analysis has to tell apart, because the mistake it exists to
+// prevent is exactly the confusion between them: a gorm tag that maps a
+// column is not a gorm tag that fills it.
+var writesTree = map[string]string{
+	"row/row.go": `package row
+
+import "time"
+
+type Row struct {
+	ID      string    ` + "`" + `gorm:"primaryKey;type:char(36);column:id"` + "`" + `
+	Name    string
+	Stamped time.Time ` + "`" + `gorm:"column:stamped_at"` + "`" + `
+	Created time.Time ` + "`" + `gorm:"autoCreateTime"` + "`" + `
+	Seq     int64     ` + "`" + `gorm:"autoIncrement"` + "`" + `
+	Note    string    ` + "`" + `gorm:"type:text"` + "`" + `
+	Who     string
+	When    time.Time
+	Extra   string
+	Kind    string
+	Label   string
+	Filler  string
+}
+`,
+	"src/input.go": sourcePkg,
+	"use/site.go": `package use
+
+import row "example.com/mod/row"
+import "example.com/mod/src"
+
+func Site(in src.Input) row.Row {
+	r := row.Row{Name: in.Alpha, Extra: in.Heta, Kind: in.Beta, Label: in.Gamma, Filler: in.Epsilon}
+	r.Who = "operator"
+	return r
+}
+`,
+	"use/other.go": `package use
+
+import row "example.com/mod/row"
+
+// A sibling constructor that fills two of the columns the site above leaves
+// out. One field is below the report's own threshold, so this is not a site;
+// it is still a construction, and that is all the index needs it for.
+func Other() row.Row {
+	return row.Row{ID: "fixed", Note: "sibling"}
+}
+`,
+}
+
+func analyseWrites(t *testing.T) sites {
+	t.Helper()
+	root := writeTree(t, writesTree)
+	files, index, tags, columns, err := scan([]string{root})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	all, _, _ := analyse(files, index, tags, columns)
+	return all
+}
+
+func verdictsOf(t *testing.T, all sites, fn string) map[string]columnVerdict {
+	t.Helper()
+	s := findByFunc(all, fn)
+	if s == nil {
+		t.Fatalf("the site %s was not found at all", fn)
+	}
+	out := map[string]columnVerdict{}
+	for _, v := range s.verdicts {
+		out[v.column] = v
+	}
+	return out
+}
+
+// This is the one that matters most. `column:stamped_at` maps the column and
+// says nothing about whether anything ever puts a time in it, and the first
+// version of this analysis believed any gorm tag was evidence. It would have
+// cleared the two columns on the hitl proposal row that are worth knowing
+// about, which is how a tool ends up reassuring people about a hole.
+func TestAMappingTagIsNotCreditedAsAWriter(t *testing.T) {
+	got := verdictsOf(t, analyseWrites(t), "Site")
+	stamped, ok := got["Stamped"]
+	if !ok {
+		t.Fatalf("Stamped was not reported at all; the site reads %v", got)
+	}
+	if stamped.reason != verdictNowhere {
+		t.Fatalf("Stamped was credited to %v on the strength of a mapping tag; a column that "+
+			"exists is not a column that is filled", stamped.reason)
+	}
+}
+
+// The three tag options that do make the library write a value, and they have
+// to be credited — a report that flags an autoCreateTime as a hole sends the
+// reader to look at code that is already correct.
+func TestTheTagOptionsThatActuallyWriteAreCredited(t *testing.T) {
+	got := verdictsOf(t, analyseWrites(t), "Site")
+	for column, want := range map[string]verdictReason{
+		"Created": verdictORM,
+		"Seq":     verdictORM,
+	} {
+		if got[column].reason != want {
+			t.Errorf("%s = %v, want %v — the orm fills this one and saying otherwise is as "+
+				"wrong as crediting a tag that only maps", column, got[column].reason, want)
+		}
+	}
+}
+
+// A column another constructor of the same type fills is the two-step write
+// class, and it is the reason the destination direction cannot stand alone:
+// the site is not a hole, it is half of a two-part write.
+func TestAColumnAnotherLiteralSetsIsFoundWithItsPlace(t *testing.T) {
+	got := verdictsOf(t, analyseWrites(t), "Site")
+	for _, column := range []string{"ID", "Note"} {
+		v := got[column]
+		if v.reason != verdictElsewhere {
+			t.Errorf("%s = %v, want %v", column, v.reason, verdictElsewhere)
+		}
+		if !strings.Contains(v.evidence, "other.go") {
+			t.Errorf("%s was found elsewhere but the place printed is %q, and a finding "+
+				"without its location is a claim", column, v.evidence)
+		}
+	}
+}
+
+// Same function, not just same file: the two-step write this stands for is
+// three statements long, and ranking it above a write in another function of
+// the same file is what makes the ordering worth printing.
+func TestAColumnAssignedInTheSameFunctionIsFound(t *testing.T) {
+	got := verdictsOf(t, analyseWrites(t), "Site")
+	if v := got["Who"]; v.reason != verdictSameFunc {
+		t.Fatalf("Who = %v, want %v — it is assigned on the next line of the same function",
+			v.reason, verdictSameFunc)
+	}
+	if v := got["When"]; v.reason != verdictNowhere {
+		t.Errorf("When = %v, want it unaccounted: nothing sets it anywhere in the fixture", v.reason)
+	}
+}
+
+// The count is the number a reader takes away, so it has to be derived from
+// the verdicts rather than written next to them — the first version of the
+// destination section printed a fixed sentence and a moving list.
+func TestTheUnaccountedCountIsDerivedFromTheVerdicts(t *testing.T) {
+	all := analyseWrites(t)
+	var buf strings.Builder
+	all.print(&buf, updateReport{})
+	out := buf.String()
+	if !strings.Contains(out, "2 are unaccounted for") {
+		t.Errorf("the report does not carry the derived count; it reads:\n%s",
+			portionAfter(out, "are not set at the site"))
+	}
+}
+
+func portionAfter(s, marker string) string {
+	i := strings.Index(s, marker)
+	if i < 0 {
+		return "(marker not found)"
+	}
+	return s[i:min(i+400, len(s))]
+}
+
+// The untyped-key check needs its own fixture because its failure mode is
+// silence: a key that names no column updates nothing, and nothing about the
+// program that wrote it changes. The fixture therefore contains one correct
+// call and one with a misspelled key, so a walk that stopped matching is
+// distinguishable from a tree that is clean.
+var updateTree = map[string]string{
+	"row/row.go": `package row
+
+import "time"
+
+type Row struct {
+	ID     string    ` + "`" + `gorm:"primaryKey;column:id"` + "`" + `
+	Name   string    ` + "`" + `gorm:"column:name"` + "`" + `
+	Result string    ` + "`" + `gorm:"type:text"` + "`" + `
+	SeenAt time.Time ` + "`" + `gorm:"autoCreateTime"` + "`" + `
+}
+`,
+	"store/store.go": `package store
+
+import (
+	"context"
+
+	row "example.com/mod/row"
+)
+
+type DB struct{}
+
+func (DB) Model(v any) DB                          { return DB{} }
+func (DB) Where(q string, a ...any) DB             { return DB{} }
+func (DB) Updates(v map[string]any) error          { return nil }
+func (DB) Save(v any) error                        { return nil }
+
+func good(ctx context.Context, db DB) error {
+	return db.Model(&row.Row{}).Where("id = ?", 1).Updates(map[string]any{
+		"name":   "n",
+		"result": "r",
+	}).Error
+}
+
+func alsoGood(ctx context.Context, db DB) error {
+	updates := map[string]any{"name": "n"}
+	updates["seen_at"] = nil
+	return db.Model(&row.Row{}).Where("id = ?", 1).Updates(updates).Error
+}
+
+// The misspelling is the point. "reslut" names no column, so gorm emits it
+// into the SQL as a column name and updates zero rows.
+func typo(ctx context.Context, db DB) error {
+	return db.Model(&row.Row{}).Where("id = ?", 1).Updates(map[string]any{
+		"reslut": "r",
+	}).Error
+}
+`,
+}
+
+func analyseUpdates(t *testing.T) updateReport {
+	t.Helper()
+	root := writeTree(t, updateTree)
+	files, index, _, columns, err := scan([]string{root})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	_, _, rep := analyse(files, index, nil, columns)
+	return rep
+}
+
+func TestAMisspelledUpdateKeyIsNamed(t *testing.T) {
+	rep := analyseUpdates(t)
+	if len(rep.findings) != 1 {
+		t.Fatalf("found %d mismatches, want 1: %v", len(rep.findings), rep.findings)
+	}
+	f := rep.findings[0]
+	if f.column != "reslut" || !strings.Contains(f.model, "row.Row") {
+		t.Errorf("the finding names %q on %q, want reslut on row.Row", f.column, f.model)
+	}
+	if !strings.Contains(f.where, "store.go") {
+		t.Errorf("the finding is at %q, which does not say which call it came from", f.where)
+	}
+}
+
+// Both correct shapes have to pass: the map written inline, and the map
+// built up and then indexed into. The second is the one this repository
+// actually uses for the state machine, so a check that only understood the
+// first would report the repository as clean and mean nothing.
+func TestBothUntypedUpdateShapesAreChecked(t *testing.T) {
+	rep := analyseUpdates(t)
+	if rep.checked != 3 {
+		t.Errorf("checked %d calls, want 3 — the fixture has two shapes and one misspelling, "+
+			"and a walk that reads one of them reports the other as clean", rep.checked)
+	}
+	if rep.skipped != 0 {
+		t.Errorf("skipped %d calls, want 0: the fixture's chains are all readable", rep.skipped)
+	}
+}
+
+// A zero with no denominator is the failure this whole command is written
+// against, so the counts are part of the output rather than a debugging aid.
+func TestTheCoverageCountsArePrintedEvenWhenNothingIsWrong(t *testing.T) {
+	var buf strings.Builder
+	sites{}.print(&buf, updateReport{checked: 47, skipped: 2})
+	out := buf.String()
+	for _, want := range []string{"47 call(s) checked", "2 skipped"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report does not carry %q; without the denominator a clean run and a "+
+				"broken walk print the same line", want)
+		}
 	}
 }

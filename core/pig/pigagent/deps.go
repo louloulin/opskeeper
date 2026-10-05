@@ -5,20 +5,33 @@ import (
 
 	"github.com/MichaelKinsy/PiG/agent"
 
-	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
 // Deps are the host services one turn runs against.
 //
-// They live here rather than in core/ports for one reason: Deps carries a
-// model client. Ports is stdlib-only by design — a plugin compiled against
-// core must not have to re-resolve PiG's module graph — so a port that
-// named an ai.Model or a completion client would break that. Moving the turn
-// vocabulary in here means the kernel, its services and the model it calls
-// are one module with one dependency edge, and core/ports is left holding
-// only the two things that are genuinely the host's: the stored transcript
-// and the streaming sink.
+// They live here rather than in core/ports for one reason, and it used to be
+// written down wrongly. This struct used to carry a Model completer, and the
+// comment said the type had to be in this module because of it. Nothing ever
+// read that field: both kernels resolve the model from their own
+// k.opts.Models against the turn's ModelSelection, and no assembly anywhere
+// in the repository filled it in. A field that is never read is not a reason
+// to move a type between modules, and the reason it is written here now is
+// the one that is still true — a host that holds an Agent holds a
+// *TurnResult whose Reply is a *ai.AssistantMessage, so the turn's own
+// vocabulary cannot be expressed in a package that must not depend on PiG.
+// Ports is stdlib-only by design, and it is left holding the two things that
+// are genuinely the host's: the stored transcript and the streaming sink.
+//
+// What Deps is, precisely, is the turn's POLICY surface: which tools the
+// turn may reach, who audits them, who may refuse one, what the day's budget
+// is, and who watches a call from admission to settle. Every one of those is
+// a decision the host makes and the kernel must not re-derive. The model is
+// not on that list — it arrives on the request as a ModelSelection and is
+// resolved through the kernel's own model registry, because the model is a
+// property of the deployment rather than of the turn's permissions. Putting
+// it in Deps as well would have been a second place for the same choice to
+// be made, and a second place is a drift waiting for a reason.
 //
 // A kernel that reaches for anything outside this struct is bypassing the
 // host's policy and audit guarantees.
@@ -31,10 +44,6 @@ type Deps struct {
 	// Gate is the sole path for a gated call to execute. A kernel that
 	// finds no gate must refuse every non-read tool rather than run it.
 	Gate ports.ApprovalGate
-	// Model is the completion path the loop uses for the turns it drives
-	// itself. It is PiG's own completer, so a kernel asking for a reply
-	// receives an *ai.AssistantMessage and not a translated copy of one.
-	Model pigmodel.Completer
 	// Budget is consulted before each model call. Returning false ends the
 	// turn with TurnToolBudget.
 	Budget ports.BudgetChecker

@@ -521,8 +521,15 @@ deps:
   # grants no project dependency at all (anyVendorDeps below), so pigcoding
   # cannot reach back into pigagent. That is what lets the agent component
   # depend on the embedding layer without creating a cycle.
+  # oxpig_model was on this list because Deps carried a pigmodel.Completer.
+  # Nothing read that field and nothing filled it — the model is resolved per
+  # request from the kernel's own registry — so the import went with it and
+  # the grant went with the import. Re-adding it "in case" is how a boundary
+  # stops being a boundary: the check that removed this one is the same
+  # modulecheck that would have to notice the next import, and it only
+  # notices because the grant is not there to authorise it.
   oxpig_agent:
-    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxpig_model, oxpig_coding]
+    mayDependOn: [oxcore_domain, oxcore_ports, oxcore_wire, oxpig_coding]
   # pigai is aliases over PiG's ai package and nothing else. The list is its
   # own name and nothing else: it reaches no OpsKeeper package, which is what
   # makes it safe for every other component to import without a cycle. (The
