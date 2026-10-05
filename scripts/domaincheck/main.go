@@ -401,12 +401,15 @@ func domainOf(path string) string {
 func main() {
 	root := "."
 	graph := false
+	release := false
 	cut := ""
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
 		case a == "-graph":
 			graph = true
+		case a == "-release":
+			release = true
 		case a == "-cut":
 			if i+1 >= len(args) {
 				fmt.Fprintln(os.Stderr, "domaincheck: -cut needs a grouping file")
@@ -433,10 +436,13 @@ func main() {
 	// change the gate's verdict: a proposed split that is wrong should be
 	// priced and argued about, not turned into a red build on the day it is
 	// written, which is a red build people turn off.
-	if graph || cut != "" {
+	if graph || release || cut != "" {
 		g := buildGraph(sources, r)
 		if graph {
 			g.printStructure(os.Stdout)
+		}
+		if release {
+			g.printReleaseFloor(os.Stdout, r.shared)
 		}
 		if cut != "" {
 			grouping, order, err := loadGrouping(cut)

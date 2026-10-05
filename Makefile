@@ -415,6 +415,19 @@ node-arch-check: ## 校验 bin/<os>-<arch>/ 里节点的 pig 与 edge 真的是�
 # importing biz/loop is manager_biz -> manager_biz and every rule allows it.
 # Seven pairs of domains in the tree already reach each other both ways.
 # This gate makes those edges declared, and a new one red.
+# The release floor is the part of "which domains ship independently" that is a
+# theorem about the import graph rather than a question about people: a domain
+# with no inbound cross-domain import provably can be released without
+# coordinating with any bounded context. It is a floor and the report says so —
+# a domain with inbound edges may still be independently shippable behind a
+# stable interface, and nothing in the graph can see that.
+#
+# It is here because the third question of the split proposal has no evidence
+# at all behind it (the control plane's entire git history is one day, see
+# make domain-cochange), and a floor is the part that can be had for free.
+domain-release-report: ## 打印可证明独立发版的域（入向跨域 import 为零）
+	go run ./scripts/domaincheck . -release
+
 .PHONY: domain-check
 domain-check: ## 校验 control plane 的域边界（55 个域 / 42 条声明边 / 0 对环，决策 118 起）
 	go run ./scripts/domaincheck .

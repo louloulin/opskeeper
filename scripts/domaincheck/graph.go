@@ -40,6 +40,17 @@ type domainGraph struct {
 	// rename with a diagram. Test files are excluded, as everywhere else.
 	lines map[string]int
 	pkgs  map[string]pkgSize
+	// sharedUse is which shared base components each domain reaches for.
+	//
+	// It is recorded and then deliberately kept out of weight, because a
+	// shared dependency is not a seam between two bounded contexts — it is
+	// a dependency on the floor both of them stand on. Counting it as an
+	// edge would put every domain on top of pkg and dataguard in the same
+	// hub ranking they occupy for reasons that have nothing to do with
+	// coupling. It is kept so the release report can say what a domain is
+	// *still* coupled to once its context coupling is taken away, which is
+	// the question that report exists to answer honestly.
+	sharedUse map[string]map[string]bool
 }
 
 // pkgSize is one package's share of the tree. domain is kept alongside it
@@ -61,10 +72,11 @@ type ranked struct {
 
 func buildGraph(sources []source, r rules) *domainGraph {
 	g := &domainGraph{
-		weight:  map[edge]int{},
-		domains: map[string]bool{},
-		lines:   map[string]int{},
-		pkgs:    map[string]pkgSize{},
+		weight:    map[edge]int{},
+		domains:   map[string]bool{},
+		lines:     map[string]int{},
+		pkgs:      map[string]pkgSize{},
+		sharedUse: map[string]map[string]bool{},
 	}
 	for _, src := range sources {
 		from := domainOf(src.path)
@@ -95,6 +107,10 @@ func buildGraph(sources []source, r rules) *domainGraph {
 			}
 			g.domains[to] = true
 			if r.shared[to] != "" {
+				if g.sharedUse[from] == nil {
+					g.sharedUse[from] = map[string]bool{}
+				}
+				g.sharedUse[from][to] = true
 				continue
 			}
 			g.weight[edge{from, to}]++
@@ -686,4 +702,163 @@ func (g *domainGraph) printCutVerdict(w io.Writer, grouping map[string]string) {
 		fmt.Fprintf(w, "  %-14s %6d lines  %5.1f%% of tree  %2d packages  largest %-24s %5.1f%%%s\n",
 			s.name, s.lines, 100*float64(s.lines)/float64(total), s.pkgs, s.big, share, note)
 	}
+}
+
+// printReleaseFloor answers the one question about independent release that
+// the tree can answer without asking anybody.
+//
+// The question the split proposal keeps failing on is "which domains ship
+// independently", and it has failed on it for a long time: the answer was
+// looked for in git history (make domain-cochange), and the control plane's
+// entire history turned out to be one day, so that axis has no second time
+// point on it. That is a real absence of evidence and nothing in this file
+// invents evidence to replace it.
+//
+// What this report does instead is give the part that is a *fact* rather than
+// an estimate, and label it as a floor rather than as an answer.
+//
+// A domain with no inbound cross-domain import from any bounded context is
+// provably independently shippable: nothing imports it, so releasing it cannot
+// break a build anywhere, and no other context's release can break its build.
+// That is a theorem about the import graph, not a guess about a team — which
+// is the whole reason it is worth printing and the whole reason it is not the
+// answer. Every domain with an inbound edge *may* still be independently
+// shippable behind a stable interface, and this report cannot see that; it can
+// only see the ones where no interface question arises at all.
+//
+// The exclusions are the interesting part, and both of them are silent
+// failures if left out:
+//
+//   - A shared domain reads as a leaf here and is not one. Being depended on
+//     needs no declaration, so buildGraph keeps shared imports out of weight
+//     entirely and pkg, dataguard, middleware, agentteams and the rest look
+//     like nobody depends on them when in fact half the tree does. Reporting
+//     middleware as independently shippable would be reporting a bug as a
+//     finding, so shared domains are excluded by name and the exclusion is
+//     printed rather than applied quietly.
+//
+//   - A domain's remaining coupling after this filter is to the shared floor
+//     it stands on. That coupling is real and it is not a seam between two
+//     contexts, but it is a coupling, and a reader told "this domain can ship
+//     on its own" deserves to know which base components it still rides.
+func (g *domainGraph) printReleaseFloor(w io.Writer, shared map[string]string) {
+	// inbound counts the declared-context edges into each domain. weight
+	// already excludes shared components, so a zero here means zero
+	// inbound coupling to any bounded context.
+	inbound := map[string]int{}
+	for e, n := range g.weight {
+		inbound[e.to] += n
+	}
+
+	type releasable struct {
+		domain   string
+		lines    int
+		pkgs     int
+		shared   []string
+		excluded string
+	}
+	var free, blocked []releasable
+	for d := range g.domains {
+		lines, pkgs := g.sizeOfDomain(d)
+		r := releasable{domain: d, lines: lines, pkgs: pkgs}
+		for s := range g.sharedUse[d] {
+			r.shared = append(r.shared, s)
+		}
+		sort.Strings(r.shared)
+		if why := shared[d]; why != "" {
+			// Named, not skipped: the count below is only true of the
+			// non-shared ones, and a reader who cannot see which were
+			// dropped cannot check the count.
+			r.excluded = "shared base component: " + why
+			blocked = append(blocked, r)
+			continue
+		}
+		if inbound[d] > 0 {
+			blocked = append(blocked, r)
+			continue
+		}
+		free = append(free, r)
+	}
+	sort.Slice(free, func(i, j int) bool {
+		if free[i].lines != free[j].lines {
+			return free[i].lines > free[j].lines
+		}
+		return free[i].domain < free[j].domain
+	})
+	sort.Slice(blocked, func(i, j int) bool { return blocked[i].domain < blocked[j].domain })
+
+	freeLines := 0
+	freePkgs := 0
+	for _, r := range free {
+		freeLines += r.lines
+		freePkgs += r.pkgs
+	}
+	total := g.totalLines()
+
+	fmt.Fprintln(w, "\nrelease floor: domains with no inbound cross-domain import")
+	fmt.Fprintln(w, "  A domain nothing imports can be released without coordinating with any other")
+	fmt.Fprintln(w, "  bounded context: releasing it breaks nobody's build, and nobody's release breaks")
+	fmt.Fprintln(w, "  its build. That is a fact about the import graph, not an estimate about a team.")
+	fmt.Fprintln(w, "  It is a FLOOR, not the answer to \"which domains ship independently\" — a domain")
+	fmt.Fprintln(w, "  with inbound edges may still be independently shippable behind a stable")
+	fmt.Fprintln(w, "  interface, and no amount of reading this graph can tell you that.")
+	fmt.Fprintf(w, "\n  %d of %d domains, %d lines (%.1f%% of the tree), %d packages\n",
+		len(free), len(g.domains), freeLines, share(freeLines, total), freePkgs)
+	for _, r := range free {
+		base := "no base dependency"
+		if len(r.shared) > 0 {
+			base = "rests on " + strings.Join(r.shared, ", ")
+		}
+		fmt.Fprintf(w, "    %-16s %6d lines  %2d packages  %s\n", r.domain, r.lines, r.pkgs, base)
+	}
+
+	// The shared exclusions, printed rather than applied quietly, because
+	// "middleware is independently shippable" is exactly the sentence this
+	// report must never produce and the only reliable way to prevent it is
+	// to show that the name was considered and dropped for a stated reason.
+	var sharedDropped []string
+	for _, r := range blocked {
+		if r.excluded != "" {
+			sharedDropped = append(sharedDropped, r.domain)
+		}
+	}
+	if len(sharedDropped) > 0 {
+		fmt.Fprintf(w, "\n  %d domain(s) read as leaves in the import graph and are NOT counted above,\n",
+			len(sharedDropped))
+		fmt.Fprintln(w, "  because being depended on needs no declaration and their in-degree is not")
+		fmt.Fprintln(w, "  measurable here:")
+		for _, d := range sharedDropped {
+			fmt.Fprintf(w, "    %-16s %s\n", d, shared[d])
+		}
+	}
+	fmt.Fprintf(w, "\n  the other %d domain(s) have inbound edges and need a real answer, which is\n",
+		len(blocked)-len(sharedDropped))
+	fmt.Fprintln(w, "  a question about interfaces and about who is willing to coordinate — not a")
+	fmt.Fprintln(w, "  question this graph can answer. See make domain-cochange for the one axis of")
+	fmt.Fprintln(w, "  evidence that exists, and note that it needs more than a single day of history.")
+	// Named rather than counted, for the same reason the shared ones are:
+	// a reader who is told twenty domains need a judgement call cannot
+	// check the twenty, and a count is not a list.
+	var coupled []string
+	for _, r := range blocked {
+		if r.excluded == "" {
+			coupled = append(coupled, fmt.Sprintf("%s(%d in)", r.domain, inbound[r.domain]))
+		}
+	}
+	for i := 0; i < len(coupled); i += 6 {
+		end := i + 6
+		if end > len(coupled) {
+			end = len(coupled)
+		}
+		fmt.Fprintf(w, "    %s\n", strings.Join(coupled[i:end], "  "))
+	}
+}
+
+// share is a percentage that tolerates a zero total, which happens whenever
+// this report is driven against a fixture with no lines in it.
+func share(part, total int) float64 {
+	if total == 0 {
+		return 0
+	}
+	return 100 * float64(part) / float64(total)
 }

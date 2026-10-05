@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -86,6 +87,7 @@ func countOf(t *testing.T, out, pattern string) int {
 
 const constrainedCandidate = "docs/manager-split.constrained"
 const correctedCandidate = "docs/manager-split.proposed"
+const releaseFloorCandidate = "docs/manager-split.release-floor"
 
 // TestTheConstrainedCandidateSeversNoHardConstraint is the reason the other file
 // exists. The four hard constraints all point at `audit`, so a legal grouping
@@ -153,70 +155,87 @@ func TestTheConstrainedCandidateIsNoMoreExpensiveThanTheOneItCorrects(t *testing
 	}
 }
 
-// TestThePriceQuotedInTheCandidateIsThePriceThePricerComputes is the anti-stale
-// half. The candidate file states a table — 105/42/3 for the original, 116/31/0
-// for the corrected one — in prose, in a comment, where nothing checks it. That
-// is exactly the shape of number that goes stale: the tree moves, the pricer
-// prints something new, and the document keeps asserting the old figure.
+// TestThePriceQuotedInAnyCandidateIsThePriceThePricerComputes is the
+// anti-stale half.
 //
-// So the table is parsed and compared. A drift here does not mean the grouping
-// is wrong; it means the file is describing a tree that no longer exists, and a
-// reader has no way to tell which of the two moved.
+// The candidate files state a table — 105/42/3, 116/31/0, 118/29/0 — in prose,
+// in a comment, where nothing checks it. That is exactly the shape of number
+// that goes stale: the tree moves, the pricer prints something new, and the
+// document keeps asserting the old figure.
 //
-// Both rows are checked, and that is not redundancy. The first version of this
-// test checked only the row describing this file, and the reverse verification
-// immediately found the hole: rewriting 105 to 999 in the row describing the
-// *other* proposal went green. A table that quotes a neighbour is a claim about
-// that neighbour, and a gate that only watches its own column is a gate that
-// lets the other column rot.
-func TestThePriceQuotedInTheCandidateIsThePriceThePricerComputes(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", constrainedCandidate))
-	if err != nil {
-		t.Fatalf("read the candidate: %v", err)
+// Every row is looked for in *every* candidate file, and every row found has
+// to agree with what the pricer computes. That is deliberately wider than
+// "check the row in the file being described". The first version of this gate
+// checked only the row describing the file it was reading, and the reverse
+// verification found the hole immediately: rewriting a number in a row that
+// described a *different* candidate went green. A table that quotes a
+// neighbour is a claim about that neighbour, and a gate that only watches its
+// own column lets the other columns rot.
+//
+// The denominator is checked too, and it is the one number in a row that does
+// not come from the pricer at all — it is the size of the hard-constraint
+// table — so it is the one that can rot with nothing else noticing.
+func TestThePriceQuotedInAnyCandidateIsThePriceThePricerComputes(t *testing.T) {
+	hosts := []string{correctedCandidate, constrainedCandidate, releaseFloorCandidate}
+	bodies := map[string]string{}
+	for _, h := range hosts {
+		raw, err := os.ReadFile(filepath.Join("..", "..", h))
+		if err != nil {
+			t.Fatalf("read %s: %v", h, err)
+		}
+		bodies[h] = string(raw)
 	}
 
-	for _, row := range []struct{ file string }{
-		{correctedCandidate},
-		{constrainedCandidate},
-	} {
-		quoted := quotedRow(t, string(raw), row.file)
-
-		if quoted.denominator != len(hardConstraints) {
-			t.Errorf("the candidate quotes %d/%d hard constraints for %s, but the table this "+
-				"repository ships declares %d; the denominator is the one number in the row that "+
-				"does not come from the pricer, so it is the one that can rot silently",
-				quoted.severed, quoted.denominator, row.file, len(hardConstraints))
+	for _, described := range hosts {
+		got := priceFile(t, described)
+		found := 0
+		for _, host := range hosts {
+			row := quotedRow(bodies[host], described)
+			if row == nil {
+				continue
+			}
+			found++
+			where := host
+			if host != described {
+				where = host + " (quoting " + described + ")"
+			}
+			if row.internal != got.internal || row.crossing != got.crossing || row.severed != got.severed {
+				t.Errorf("%s quotes %s as internal=%d crossing=%d severed=%d, and the pricer "+
+					"computes internal=%d crossing=%d severed=%d. One of the two is describing a "+
+					"tree that no longer exists, and a reader cannot tell which",
+					where, described, row.internal, row.crossing, row.severed,
+					got.internal, got.crossing, got.severed)
+			}
+			if row.denominator != len(hardConstraints) {
+				t.Errorf("%s quotes %d/%d hard constraints for %s, but this repository ships %d; "+
+					"the denominator is the one number in the row the pricer does not produce",
+					where, row.severed, row.denominator, described, len(hardConstraints))
+			}
 		}
-
-		got := priceFile(t, row.file)
-		if quoted.internal != got.internal || quoted.crossing != got.crossing || quoted.severed != got.severed {
-			t.Errorf("the candidate quotes %s as internal=%d crossing=%d severed=%d, and the "+
-				"pricer computes internal=%d crossing=%d severed=%d. One of the two is describing "+
-				"a tree that no longer exists, and a reader cannot tell which",
-				row.file, quoted.internal, quoted.crossing, quoted.severed,
-				got.internal, got.crossing, got.severed)
+		if found == 0 {
+			t.Errorf("no candidate file quotes a price row for %s, so its price is asserted "+
+				"nowhere a reader can check it", described)
 		}
 	}
 }
 
-// quotedRow pulls one line of the price table out of a candidate file. The table
-// is a comment block aligned with spaces rather than a markdown table, because
-// it is read by a person pricing a split and by this test, and a pipe table
-// would have meant either losing the alignment or parsing the pipes.
-func quotedRow(t *testing.T, raw, file string) price {
-	t.Helper()
+// quotedRow pulls one line of the price table out of a candidate file, or nil
+// if that file does not quote that candidate. The table is a comment block
+// aligned with spaces rather than a markdown table, because it is read by a
+// person pricing a split and by this test, and a pipe table would have meant
+// either losing the alignment or parsing the pipes.
+func quotedRow(raw, file string) *price {
 	row := regexp.MustCompile(`(?m)^#\s+` + regexp.QuoteMeta(file) +
 		`\s+(\d+)\s+(\d+)\s+(\d+)\s*/\s*(\d+)\s*$`).FindStringSubmatch(raw)
 	if row == nil {
-		t.Fatalf("%s has no price row for %s; the table is the one place the file makes a "+
-			"claim about the current tree, so it has to be findable", constrainedCandidate, file)
+		return nil
 	}
-	return price{
-		internal:    atoiOrFail(t, row[1]),
-		crossing:    atoiOrFail(t, row[2]),
-		severed:     atoiOrFail(t, row[3]),
+	return &price{
+		internal:    atoiOrFailT(row[1]),
+		crossing:    atoiOrFailT(row[2]),
+		severed:     atoiOrFailT(row[3]),
 		unassigned:  0,
-		denominator: atoiOrFail(t, row[4]),
+		denominator: atoiOrFailT(row[4]),
 	}
 }
 
@@ -227,4 +246,163 @@ func atoiOrFail(t *testing.T, s string) int {
 		t.Fatalf("parse %q: %v", s, err)
 	}
 	return n
+}
+
+// atoiOrFailT is the same for the row parser, which is reached from a table
+// walk rather than from a test body and so has no *testing.T to hand. A row
+// that does not parse means the file's own formatting drifted, and the honest
+// answer is to stop rather than to read it as zero — a zero here would look
+// like a legitimate reading of the table.
+func atoiOrFailT(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		panic("the price table in a candidate file has a non-numeric cell: " + err.Error())
+	}
+	return n
+}
+
+// releaseFloor is the set the report calls a floor: every domain nothing
+// imports, minus the shared base components whose in-degree is not measurable
+// here. It is recomputed rather than read back out of the report's own
+// output, so a test cannot pass by agreeing with a stale print.
+func releaseFloor(t *testing.T) map[string]bool {
+	t.Helper()
+	root := filepath.Join("..", "..")
+	sources, _, err := parseTree(filepath.Join(root, "core", "manager"), defaultRules())
+	if err != nil {
+		t.Fatalf("parse the tree: %v", err)
+	}
+	r := defaultRules()
+	g := buildGraph(sources, r)
+	inbound := map[string]int{}
+	for e, n := range g.weight {
+		inbound[e.to] += n
+	}
+	floor := map[string]bool{}
+	for d := range g.domains {
+		if r.shared[d] != "" {
+			continue
+		}
+		if inbound[d] == 0 {
+			floor[d] = true
+		}
+	}
+	if len(floor) == 0 {
+		t.Fatal("the release floor came out empty, and every assertion below would pass against nothing")
+	}
+	return floor
+}
+
+// TestTheReleaseFloorCandidateIsExactlyTheProvenFloorLessTheAuditWriters is the
+// one assertion that makes this candidate a different kind of artifact from the
+// other two.
+//
+// The proposed and constrained groupings both rest on a cost reading — "cut
+// here is cheap" — and a reader has to take on trust that the grouping is
+// principled at all. This one rests on a theorem: a domain with no inbound
+// cross-domain import provably can be released without coordinating with any
+// bounded context. That is checkable, and this test is the check.
+//
+// The subtraction is the other half, and it is the half that is easy to get
+// wrong. Two of the floor domains — chatdiagnose and frontierbound — write the
+// audit chain, and the audit chain is a hard process constraint. Shipping them
+// independently is fine; *deploying* them apart from audit is not, because one
+// chain written by two processes needs an election, a consensus, or at least a
+// cross-process lock. So "independently shippable" and "independently
+// deployable" part company exactly here, and a candidate that quietly kept
+// those two in its independent group would be trading a build-level property
+// for a correctness one.
+func TestTheReleaseFloorCandidateIsExactlyTheProvenFloorLessTheAuditWriters(t *testing.T) {
+	root := filepath.Join("..", "..")
+	grouping, _, err := loadGrouping(filepath.Join(root, releaseFloorCandidate))
+	if err != nil {
+		t.Fatalf("load the grouping: %v", err)
+	}
+	floor := releaseFloor(t)
+
+	// The audit writers are taken from the constraint table rather than listed,
+	// so this stays true if that table ever grows: a hard constraint's source
+	// is by definition a domain that has to be placeable in the same deployment
+	// unit as the thing it writes.
+	auditWriters := map[string]bool{}
+	for e := range hardConstraints {
+		auditWriters[e.from] = true
+	}
+
+	want := map[string]bool{}
+	for d := range floor {
+		if !auditWriters[d] {
+			want[d] = true
+		}
+	}
+	got := map[string]bool{}
+	for d, g := range grouping {
+		if g == "independent" {
+			got[d] = true
+		}
+	}
+
+	if len(got) != len(want) {
+		var inGroup, missing []string
+		for d := range got {
+			if !want[d] {
+				inGroup = append(inGroup, d)
+			}
+		}
+		for d := range want {
+			if !got[d] {
+				missing = append(missing, d)
+			}
+		}
+		sort.Strings(inGroup)
+		sort.Strings(missing)
+		t.Errorf("the independent group has %d domains, want the %d that are both provably "+
+			"independently shippable and not audit writers.\n  in the group but not provable: %v\n"+
+			"  provable but not in the group: %v", len(got), len(want), inGroup, missing)
+	}
+	for d := range want {
+		if !got[d] {
+			t.Errorf("%s is provably independently shippable and is not an audit writer, but the "+
+				"candidate does not put it in the independent group; the grouping has stopped being "+
+				"the proven floor and become another judgement call", d)
+		}
+	}
+	for d := range got {
+		if want[d] {
+			continue
+		}
+		reason := "something imports it, so it is not provably independently shippable"
+		if auditWriters[d] {
+			reason = "it writes the audit chain, which is a hard process constraint — shipping it " +
+				"independently is fine, deploying it apart from audit is not"
+		} else if defaultRules().shared[d] != "" {
+			reason = "it is a shared base component, so its in-degree is not measurable in the import graph"
+		}
+		t.Errorf("%s is in the independent group but %s", d, reason)
+	}
+}
+
+// TestTheReleaseFloorCandidateIsNoMoreExpensiveThanTheOtherTwo keeps that
+// comparison honest the way gate 24 keeps the other pair honest. The claim in
+// the candidate file is that this is the cheapest of the three, and a later
+// refactor that makes it otherwise is a finding to write down, not a threshold
+// to quietly relax.
+func TestTheReleaseFloorCandidateIsNoMoreExpensiveThanTheOtherTwo(t *testing.T) {
+	floor := priceFile(t, releaseFloorCandidate)
+	constrained := priceFile(t, constrainedCandidate)
+	proposed := priceFile(t, correctedCandidate)
+
+	if floor.crossing > constrained.crossing || floor.crossing > proposed.crossing {
+		t.Errorf("the release-floor candidate crosses %d import statements, the constrained one "+
+			"%d and the proposed one %d; the candidate file claims it is the cheapest of the three, "+
+			"and if that stopped being true the file is quoting a stale reason",
+			floor.crossing, constrained.crossing, proposed.crossing)
+	}
+	if floor.severed != 0 {
+		t.Errorf("the release-floor candidate severs %d hard constraints; by construction it should "+
+			"sever none, because every audit writer is held back into the core group", floor.severed)
+	}
+	if floor.unassigned != 0 {
+		t.Errorf("the release-floor candidate leaves %d domain(s) unassigned", floor.unassigned)
+	}
 }

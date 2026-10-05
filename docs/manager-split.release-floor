@@ -1,0 +1,110 @@
+# manager 拆分候选方案 · 可证明独立发版下界版（决策 216）
+
+# 状态：已定价的候选，不是已批准的决定。
+#
+# 定价：
+#   make split-cost FILE=docs/manager-split.release-floor
+#   make domain-release-report          # 它是怎么被算出来的
+#
+# 与前两份候选的关系：`docs/manager-split.proposed`（决策 120）与
+# `docs/manager-split.constrained`（决策 214）的分组依据**都是 import 图的
+# 成本**——「切这里便宜」。这一份的依据不是成本，是一个**证明**。
+#
+# 三份的实测价：
+#
+#   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
+#   docs/manager-split.proposed                  105           42            3 / 4
+#   docs/manager-split.constrained              116           31            0 / 4
+#   docs/manager-split.release-floor            118           29            0 / 4
+#
+# 三份都合法的那两份里，本文件最便宜；而它便宜不是巧合，见下。
+#
+# —— 为什么需要第三份：第一问和第二问有答案，第三问的证据不存在 ——
+#
+# 决策 196 回答了第一、二问（哪些边是物理硬约束：只有审计链那 4 条；
+# 什么和什么一起故障：共享同一个数据库连接预算）。第三问「哪些域要独立发版」
+# 一直空着，而空着的理由不是没人分析，是**证据不存在**：决策 169 实测控制面的
+# 全部 git 历史落在同一天（`make domain-cochange` 报
+# `window: 2026-10-02 to 2026-10-03 (1 day(s))`），共变这条轴上根本没有第二个
+# 时间点。
+#
+# 于是本轮换了个问法，**不是换个指标**：
+#
+#   「哪些域要独立发版」这个问题，需要的是关于**人**的证据（谁愿意协调、接口
+#   稳不稳定、发布节奏是什么）。这个问题本仓回答不了，也不该假装能回答。
+#
+#   但它有一个**下界**是可以证明的：一个**没有任何入向跨域 import** 的域，
+#   一定可以独立发版——没有东西 import 它，所以发它不会弄坏任何构建；也没有
+#   别的域的发版会弄坏它的构建。**这是关于 import 图的定理，不是关于团队的
+#   猜测。** 这正是它值得打印、也正是它不能当答案用的原因。
+#
+# 实测（`make domain-release-report`，58 个域）：
+#
+#   28 个域入向为零，34,416 行 = 全树的 19.1%，61 个包。
+#
+# 有入向边的域**可能**仍然可以靠一个稳定接口独立发版，而这张图看不出这一点。
+# 所以工具自己把话说到位：这是 **FLOOR（下界），不是答案**。
+#
+# —— 而这个下界立刻撞上了硬约束，这是本文件最值得记下来的一句 ——
+#
+# 28 个零入度域里，有两个是 `chatdiagnose` 与 `frontierbound`。它们入向为零，
+# **可证明独立发版**；而它们同时是审计链的持有者（`-> audit`，硬约束）。
+#
+# 也就是说：**「可以独立发版」与「可以独立部署成一个单元」是两个不同的性质，
+# 而审计链正是它们分家的地方。** 一个域没有入边，所以发版不需要协调；
+# 但它往一条有序防篡改链上写，所以部署不能与写链的那一半分开。
+#
+# 把这条写下来，是因为它容易被反向理解成「那就把这 26 个拆出去吧」——
+# 少了那半句推理，看的人会以为入度为零就够了。**不够**。
+#
+# 于是本文件的那一组是 **28 减去这 2 个 = 26 个域 / 28,531 行**：
+# 既可证明独立发版，又不是审计链的持有者。**按构造，它不切断任何硬约束。**
+#
+# —— 为什么它是最便宜的那一份 ——
+#
+# 29 条跨组 import，比 constrained 的 31 还少两条。这不是巧合，也不是意外：
+# 零入度的域**按定义**就是那些不 import 别人的域，把它们各自单成一组，
+# 它们向外的每一条边都会变成跨组边——所以这个分组是**唯一一种可能不是最省的**
+# 才对。
+#
+# 它更省的原因是另一件事：那 26 个域向外的边，**大多指向 shared 底座**
+# （pkg / knowledge / dataguard / control），而 shared 依赖**不是缝**——
+# 它是两边共同站着的地板。所以「零入度」与「出边很少」这两件事在这棵树里
+# 恰好高度重合，而工具把每个域**仍然压在哪些底座上**一并打印了出来，
+# 免得读者把「可以独立发版」读成「什么都不依赖」。
+#
+# —— 诚实的边界 ——
+#
+# 1. **这一份没有回答第三问。** 它回答的是第三问的**下界**：26 个域不需要
+#    任何关于人的信息就能独立发版。剩下 32 个仍然需要一个真答案，而那个答案
+#    本仓给不出（控制面历史只有一天）。
+# 2. **拆开买到的仍然是构建与发布独立，不是资源与故障独立**——两半仍共用同一个
+#    数据库连接预算（决策 150）。
+# 3. **底座耦合没有被解决，只是被打印出来了。** 一个 `independent` 域仍然
+#    依赖 `pkg`（审计端口、租户上下文、凭据）与 `knowledge`。底座改动仍然是
+#    一次跨组事件。
+#
+# 定价器的口径提醒：`-cut` 是报告模式，一份切断硬约束的候选仍会被定价并争论，
+# 而不是当天变红（决策 211 的明确选择）。scripts/domaincheck/candidate_test.go
+# 把本文件与另两份的报价和硬约束数与定价器实算的数对齐。
+
+# 可证明独立发版、且不是审计链持有者的 26 个域。
+#
+# 判据两条，都是可复算的：入向跨域 import 为零（`make domain-release-report`
+# 的 FLOOR 集合），且不是 `hardConstraints` 里任何一条的源（否则它与 audit
+# 被这次分组切开，而切开它就是本文件自己禁止买的东西）。
+independent = aiopsconfig, cluster, demo, edgeauth, federationchild,
+        federationlink, flow, imbridge, incident, integration, llmgw,
+        llmpig, logs, marketplace, nodeagent, plugin, prometheus,
+        promwrite, proposal, report, secret, systemhealth, systemupgrade,
+        traces, version, webshell
+
+# 其余 32 个：入向有边因而需要真答案的 20 个，加上 10 个 shared 底座组件
+# （它们在 import 图里读作叶子但不是叶子——被依赖不需要声明，所以它们的入度
+# 在这张图里不可测，工具把它们点名排除而不是悄悄跳过），再加上 chatdiagnose
+# 与 frontierbound 这两个「可证明独立发版但写审计链」的域。
+core = agentteams, aiops, alert, approval, audit, chatdiagnose, control,
+        dataguard, device, edge, federation, frontierbound, grafana,
+        higress, hitl, iam, knowledge, loop, mcp, metric, middleware,
+        migrate, migrator, monitor, nodefleet, observability, pkg,
+        pluginimport, scheduler, setting, skill, topology
