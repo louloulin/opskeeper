@@ -8,10 +8,10 @@ import (
 
 	chimw "github.com/go-chi/chi/v5/middleware"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
 	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 )
 
 // The request-scoped slot — the key, the value, and the two accessors
@@ -37,7 +37,7 @@ var (
 // To audit a new operation, the handler must call SetAuditEvent with
 // a canonical Action constant. Examples already wired:
 //   - auth_login / auth_login_failed (iam/server/http.go)
-//   - audit_view (manager/server/audit/http.go)
+//   - audit_view (domains/server/audit/http.go)
 //   - alert/rule/channel/knowledge/user/settings CRUD (see each
 //     handler — they pass model.Action* into SetAuditEvent)
 //

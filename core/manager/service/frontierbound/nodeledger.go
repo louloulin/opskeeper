@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	auditbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	auditbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 

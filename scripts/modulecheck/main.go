@@ -285,6 +285,12 @@ type boundedContext struct {
 	// owns biz/ and service/ one level below core/manager, while
 	// core/base/pkg is the shared floor rather than part of it.
 	layerRoot string
+	// module is the Go module the context's directories live in, and it is
+	// what tells two contexts apart when the rule below has to decide
+	// whether reaching across them is a boundary violation or a module
+	// dependency somebody already declared. iam is a context inside the
+	// manager module; domains is a context in a module of its own.
+	module string
 }
 
 var bcs = []boundedContext{
@@ -292,6 +298,7 @@ var bcs = []boundedContext{
 		label:     "iam",
 		dirs:      []string{"core/manager/iam/"},
 		layerRoot: "core/manager/iam/",
+		module:    "core/manager",
 	},
 	{
 		// The control plane's context is the five layer directories, not
@@ -316,6 +323,33 @@ var bcs = []boundedContext{
 		// this root, which is the manager module itself and not the
 		// context's five directories — the layers sit one level below.
 		layerRoot: "core/manager/",
+		module:    "core/manager",
+	},
+	{
+		// The release floor is the control plane's other half and it is
+		// laid out in the same five layers, so the same rule has to reach
+		// it (decision 226). Without this entry the walk covered
+		// core/manager and core/base/pkg only, and the two audit files
+		// that moved to core/domains/biz/audit left the layer debt ledger
+		// pointing at paths that no longer exist — a boundary that stops
+		// being enforced exactly when the code crosses a module line is
+		// the failure this table exists to prevent.
+		//
+		// The Go module graph already stops domains from reaching
+		// manager. This entry is about the other direction: a use case
+		// inside domains reaching for its own store, which no compiler
+		// objects to and which is the debt layerDebt exists to name.
+		label: "domains",
+		dirs: []string{
+			"core/domains/biz/",
+			"core/domains/data/",
+			"core/domains/model/",
+			"core/domains/server/",
+			"core/domains/service/",
+			"core/domains/control/",
+		},
+		layerRoot: "core/domains/",
+		module:    "core/domains",
 	},
 }
 
@@ -429,7 +463,7 @@ func checkAllBC(root string) ([]string, error) {
 // checkBCImport reports why imp is out of bounds for a file at rel, or "".
 func checkBCImport(rel, imp string) string {
 	if !strings.HasPrefix(imp, repoModule+"/") {
-		return "" // another OpsKeeper module (core/*) or the standard library
+		return "" // not an OpsKeeper import at all: the standard library or a vendor
 	}
 	rest := strings.TrimPrefix(imp, repoModule+"/")
 
@@ -474,6 +508,23 @@ func checkBCImport(rel, imp string) string {
 		return fmt.Sprintf("%s imports %s; only a bounded context may reach one", rel, imp)
 	}
 	if from != owner {
+		// Two contexts in two modules are not one context reaching into
+		// another; they are two modules with a declared dependency, and the
+		// Go module system is what refuses the ones nobody meant. This
+		// branch only became reachable on decision 225, which opened the
+		// first `manager -> domains` edge on purpose, and on decision 226,
+		// which gave domains a table entry so the layer rule above would
+		// reach it too. Without the two the BC rule reads that declared
+		// dependency as 21 violations, and the obvious way to silence them
+		// is an exceptions list — a third copy of a list that already lives
+		// in the module rules and that the compiler already enforces.
+		//
+		// Within one module nothing changes: iam reaching manager's data
+		// layer is still red, which is the case these rules were written
+		// for.
+		if fm, om := bcModule(from), bcModule(owner); fm != "" && om != "" && fm != om {
+			return ""
+		}
 		if reason, ok := exceptions[imp]; ok {
 			// The exception is for a test unless the reason says otherwise:
 			// a production file matching a test-only reason is still red.
@@ -540,8 +591,8 @@ func checkBCImport(rel, imp string) string {
 var layerDebt = map[string]string{
 	"core/manager/iam/biz/sso/service.go":                    "holds *ssostore.OrgSSOConfigStore directly; the store belongs behind a biz-declared interface",
 	"core/manager/biz/aiops/proposal/expiry.go":              "holds *store.MutatingProposalRepo and builds store.ProposalAuditEntry values; both are repository types",
-	"core/manager/biz/audit/chain.go":                        "seals rows with store.Head / store.Seal, the persistence layer's own types",
-	"core/manager/biz/audit/usecase.go":                      "same edge: the audit use case names the store it persists through",
+	"core/domains/biz/audit/chain.go":                        "seals rows with store.Head / store.Seal, the persistence layer's own types",
+	"core/domains/biz/audit/usecase.go":                      "same edge: the audit use case names the store it persists through",
 	"core/manager/biz/edge/changeevent/usecase.go":           "names edgestore.ChangeEventRepoIface, an interface that is declared in data rather than in biz",
 	"core/manager/biz/loop/contractloader/contractloader.go": "is an adapter over *loopstore.ContractRepoDB; its whole job is the edge it is on, but the type should be an interface it declares",
 }
@@ -642,6 +693,17 @@ func inSharedFloor(rel string) bool {
 		}
 	}
 	return false
+}
+
+// bcModule returns the Go module a bounded context lives in, or "" when the
+// label names no context at all.
+func bcModule(label string) string {
+	for _, bc := range bcs {
+		if bc.label == label {
+			return bc.module
+		}
+	}
+	return ""
 }
 
 // bcOf returns the bounded context an import path (or a file path) belongs

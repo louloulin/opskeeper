@@ -43,11 +43,11 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	edgefed "github.com/vincent-wuhan/opskeeper/core/domains/service/federationchild"
+	managersvcplugin "github.com/vincent-wuhan/opskeeper/core/domains/service/plugin"
 	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 	floorfed "github.com/vincent-wuhan/opskeeper/core/floor/federation"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	managersvcplugin "github.com/vincent-wuhan/opskeeper/core/manager/service/plugin"
 )
 
 const (

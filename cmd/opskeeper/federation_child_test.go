@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	managersvcplugin "github.com/vincent-wuhan/opskeeper/core/domains/service/plugin"
 	"github.com/vincent-wuhan/opskeeper/core/floor/config"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
-	managersvcplugin "github.com/vincent-wuhan/opskeeper/core/manager/service/plugin"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 

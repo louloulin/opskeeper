@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 

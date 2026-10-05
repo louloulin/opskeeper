@@ -1,34 +1,44 @@
 // Module domains is the release floor of the control plane, cut loose.
 //
 // The grouping criterion is a property of the import graph, not a guess about
-// cohesion: these are the domains with no inbound cross-domain import inside
-// core/manager. Nothing imported them, so extracting them cannot break a
-// build that imports the module they leave, and `go build` here is what turns
-// that measured fact into an enforced one — from now on the module system,
-// not a reviewer's memory, is what keeps a new importer out.
+// cohesion. It was originally stated as "no inbound cross-domain import inside
+// core/manager", and that sentence is now history rather than the rule: the
+// first domains lifted here were exactly the ones that satisfied it, and the
+// next three arrived with inbound edges of their own (decision 226 moved
+// audit, middleware and plugin, and core/manager reaches all three).
 //
-// Measured before the move (scripts/domaincheck -release):
+// The criterion that survived contact with the tree is the one the Go module
+// system can actually enforce, and it is a single edge: **this module does not
+// depend on core/manager.** Not "nothing imports these domains" — several
+// things do — but "nothing in here reaches back up into the module above".
+// Everything else in the dependency list below follows from that one fact.
+//
+// Measured before the first move (scripts/domaincheck -release):
 //
 //   - zero inbound imports from the rest of core/manager, production and test
 //   - zero cross-domain imports among themselves
 //   - zero references to any other core/manager domain, in tests too
 //
-// which is why the dependency set below is only the four modules underneath
-// the control plane: core (contracts), base (infrastructure), floor (shared
+// which is why the dependency set is only the four modules underneath the
+// control plane: core (contracts), base (infrastructure), floor (shared
 // runtime) and pig (the only module allowed to import PiG). There is no edge
 // back into core/manager, so this module can be released on its own line.
 //
-// The other half of the release floor is NOT here. Thirteen domains also have
-// no inbound import, but each of them imports concrete packages out of the
-// domains that stay — report reads knowledge/gitartifact/store, flow reads
-// biz/scheduler, imbridge reads iam/model. Those are implementations, not
-// ports, so lifting them means extracting an interface first. That is design
-// work and it is priced separately; putting them here now would have made
-// this module depend on the module it was extracted from.
+// After decision 225 the reverse edge exists — core/manager requires this
+// module — and it is allowed to, because that is the direction a released
+// floor is for. One direction of a module edge is a floor; the other is a
+// cycle the toolchain refuses. `go.mod` is where that asymmetry is written
+// down, which is why the rule is stated as an edge and not as a property of
+// the import graph.
 //
-// What is deliberately not here: iam, audit, approval, knowledge, control and
-// the rest of the control plane proper. They are depended upon, so they are
-// not independently shippable, and this module is not a home for them.
+// Still not here, and still for the same reason as before: iam, approval,
+// knowledge, control and the rest of the control plane proper have inbound
+// edges from domains that stayed, and lifting them means extracting an
+// interface first (report reads knowledge/gitartifact/store, imbridge reads
+// iam/model). That is design work and it is priced separately. audit is the
+// exception that proves the rule rather than breaking it — it was lifted
+// *with* its inbound edges, because the four domains that needed it were
+// lifted in the same cut.
 
 // Module manager is the control plane: the API, the identity system, the
 // approval and audit ledgers, the topology graph, the knowledge base, and

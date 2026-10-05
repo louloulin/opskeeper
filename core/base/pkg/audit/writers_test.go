@@ -12,14 +12,30 @@ import (
 )
 
 const (
-	throatPath  = "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
-	rowTypePath = "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
-	// The manager tree is two modules away now, not one directory up: this
-	// package moved out to core/base so that the domains resting on it can be
-	// lifted out with it. The test walks the manager tree, so the path has to
+	throatPath  = "github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
+	rowTypePath = "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
+	// The control plane is three modules away from here, not one directory
+	// up. This package moved out to core/base so the domains resting on it
+	// could be lifted after it (decision 221), and the audit ledger itself
+	// moved to core/domains after that (decision 226) — it is depended upon
+	// by four domains, so it could never have been part of the release
+	// floor, but it does not depend on core/manager and that is the edge the
+	// module system enforces. The test walks the tree, so the path has to
 	// follow the tree and not the package.
 	managerRoot = "../../../manager"
+	domainsRoot = "../../../domains"
 )
+
+// controlPlaneRoots is walked in order. The control plane is two Go modules
+// now, and a key in the tables below is qualified by which one it lives in —
+// not because the directory names collide today (they do not) but because a
+// single unqualified key would silently start matching a same-named directory
+// in the other tree the day one appears, and this test reports on trust
+// rather than on error.
+//
+// It is a var and not a third const because a []string is not a constant
+// expression, which is the kind of thing the compiler says out loud.
+var controlPlaneRoots = []string{managerRoot, domainsRoot}
 
 // throatHolders are the packages allowed to hold the write path.
 //
@@ -41,19 +57,19 @@ const (
 // ever does, that is a cycle and the compiler will say so before this test
 // gets a chance to.
 var throatHolders = map[string]string{
-	"server/middleware": "the audit middleware enriches the request (status, IP, request id) " +
+	"domains/server/middleware": "the audit middleware enriches the request (status, IP, request id) " +
 		"and is the only thing that turns a handler's request into a call to the writer",
-	"server/audit": "the ledger's own reader: it lists rows, reports chain state and " +
+	"domains/server/audit": "the ledger's own reader: it lists rows, reports chain state and " +
 		"surfaces ErrChainDisabled, so it holds the usecase rather than a copy of it",
-	"biz/chatdiagnose": "AuditAdapter wraps the usecase to satisfy chatdiagnose's own " +
+	"manager/biz/chatdiagnose": "AuditAdapter wraps the usecase to satisfy chatdiagnose's own " +
 		"logger port; the seam is the interface, the write is still the writer's",
-	"biz/aiops/agentkernel": "LedgerWriter is the agent kernel's writer seam, and the row " +
+	"manager/biz/aiops/agentkernel": "LedgerWriter is the agent kernel's writer seam, and the row " +
 		"it writes is an agent action rather than a user action",
-	"service/frontierbound": "autonomy replay writes the decisions a node made on its own " +
+	"manager/service/frontierbound": "autonomy replay writes the decisions a node made on its own " +
 		"back into the chain when the tunnel came back (decision 101), and a node's own " +
 		"ledger — every tool call, block, agent turn and plugin install it recorded — " +
 		"travels the same way (decision 126)",
-	"server/plugin": "its test builds a real usecase to assert a plugin release lands in " +
+	"domains/server/plugin": "its test builds a real usecase to assert a plugin release lands in " +
 		"the chain; the production handler uses the port",
 }
 
@@ -66,12 +82,12 @@ var throatHolders = map[string]string{
 // lists it, and the change-event tool that joins a configuration change to
 // the operator who made it.
 var rowTypeReaders = map[string]string{
-	"data/audit/store":         "persistence: the entity, the chain head, the migration",
-	"server/audit":             "the ledger view lists and filters rows",
-	"biz/audit":                "the writer maps an Event onto the entity",
-	"biz/aiops/tools/alerting": "query_change_events joins a change to the row that authorised it",
-	"server/plugin":            "its test asserts on persisted rows",
-	"server/middleware":        "its test asserts on the row the middleware emitted",
+	"domains/data/audit/store":         "persistence: the entity, the chain head, the migration",
+	"domains/server/audit":             "the ledger view lists and filters rows",
+	"domains/biz/audit":                "the writer maps an Event onto the entity",
+	"manager/biz/aiops/tools/alerting": "query_change_events joins a change to the row that authorised it",
+	"domains/server/plugin":            "its test asserts on persisted rows",
+	"domains/server/middleware":        "its test asserts on the row the middleware emitted",
 }
 
 // TestOnlyTheThroatHoldsTheWriter is the manager-wide form of the rule
@@ -88,7 +104,7 @@ var rowTypeReaders = map[string]string{
 // The check walks the whole module rather than one context, because the
 // defect was never context-local: each domain looked fine on its own.
 func TestOnlyTheThroatHoldsTheWriter(t *testing.T) {
-	files := walkManager(t)
+	files := walkControlPlane(t)
 	if len(files) == 0 {
 		t.Fatal("no files were parsed; the walk is broken, not the boundary")
 	}
@@ -96,7 +112,7 @@ func TestOnlyTheThroatHoldsTheWriter(t *testing.T) {
 	seenThroat := map[string]bool{}
 	seenRow := map[string]bool{}
 	for _, pf := range files {
-		dir := rel(pf.path)
+		dir := pf.dir
 		for _, imp := range pf.file.Imports {
 			target, err := strconv.Unquote(imp.Path.Value)
 			if err != nil {
@@ -148,10 +164,10 @@ func TestOnlyTheThroatHoldsTheWriter(t *testing.T) {
 // The list above is the whole remaining set; if this count grows, a domain
 // has started depending on the audit implementation again.
 func TestNoDomainOutsideTheListsReachesTheWriter(t *testing.T) {
-	files := walkManager(t)
+	files := walkControlPlane(t)
 	domains := map[string]bool{}
 	for _, pf := range files {
-		dir := rel(pf.path)
+		dir := pf.dir
 		if _, ok := throatHolders[dir]; ok {
 			continue
 		}
@@ -176,41 +192,52 @@ func TestNoDomainOutsideTheListsReachesTheWriter(t *testing.T) {
 // is how the two tables above are keyed. The walk yields "../.."-prefixed
 // paths; the tables read like paths in the repository, and a table that
 // says "../../../.." is a table nobody can check against a file path.
-func rel(path string) string {
+// rel names the package that holds a file, qualified by the module it lives
+// in. The qualification is the point: a table entry reads "domains/server/
+// middleware" rather than "server/middleware", so moving a package between
+// the two control-plane modules makes the entry wrong loudly instead of
+// making it quietly describe a different directory.
+func rel(root, path string) string {
 	dir := filepath.Dir(path)
-	if trimmed := strings.TrimPrefix(filepath.ToSlash(dir), managerRoot+"/"); trimmed != dir {
-		return trimmed
-	}
-	return filepath.ToSlash(dir)
+	trimmed := strings.TrimPrefix(filepath.ToSlash(dir), filepath.ToSlash(root)+"/")
+	return filepath.Base(root) + "/" + trimmed
 }
 
 type walkedFile struct {
 	path string
 	file *ast.File
+	// dir is the tree-qualified package key, e.g. "domains/server/plugin".
+	dir string
 }
 
-// walkManager parses every Go file of the manager module. parser.ParseDir is
-// not recursive and this tree is four levels deep at minimum.
-func walkManager(t *testing.T) []walkedFile {
+// walkControlPlane parses every Go file of both control-plane modules.
+// parser.ParseDir is not recursive and these trees are four levels deep at
+// minimum. The two roots are walked as one list on purpose: the rule being
+// checked — only the throat writes an audit row — is a property of the
+// control plane, and checking half of it would report the same green whether
+// or not the other half had started reaching for the writer.
+func walkControlPlane(t *testing.T) []walkedFile {
 	t.Helper()
 	fset := token.NewFileSet()
 	var out []walkedFile
-	err := filepath.WalkDir(managerRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || !strings.HasSuffix(path, ".go") {
+	for _, root := range controlPlaneRoots {
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() || !strings.HasSuffix(path, ".go") {
+				return nil
+			}
+			file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+			if err != nil {
+				t.Fatalf("parse %s: %v", path, err)
+			}
+			out = append(out, walkedFile{path: path, file: file, dir: rel(root, path)})
 			return nil
-		}
-		file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		})
 		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
+			t.Fatalf("walk the %s module: %v", filepath.Base(root), err)
 		}
-		out = append(out, walkedFile{path: path, file: file})
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk the manager module: %v", err)
 	}
 	return out
 }

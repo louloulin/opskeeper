@@ -11,10 +11,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
 	managerbizaiops "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
 	managersvcaiops "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigagent"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigcoding"

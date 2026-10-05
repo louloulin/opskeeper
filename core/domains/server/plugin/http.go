@@ -34,7 +34,7 @@ import (
 	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
-	release "github.com/vincent-wuhan/opskeeper/core/manager/service/plugin"
+	release "github.com/vincent-wuhan/opskeeper/core/domains/service/plugin"
 )
 
 // roleAdmin mirrors iam/model.RoleAdmin without crossing the BC boundary.

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 

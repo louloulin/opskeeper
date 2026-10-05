@@ -13,8 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )

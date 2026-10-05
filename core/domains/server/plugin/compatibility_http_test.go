@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/service/plugin"
+	"github.com/vincent-wuhan/opskeeper/core/domains/service/plugin"
 )
 
 // The compatibility matrix's route-level tests. What is being protected is

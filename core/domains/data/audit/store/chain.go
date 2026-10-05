@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 )
 
 // ErrHeadConflict reports that another writer advanced the chain head

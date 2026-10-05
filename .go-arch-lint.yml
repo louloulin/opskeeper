@@ -327,6 +327,12 @@ deps:
       - manager_model
       - manager_server
       - manager_service
+      # 决策 226：oxdomains_biz / oxdomains_model 撤掉。它们唯一的使用者是
+      # server/{audit,middleware,plugin} 三个只依赖 audit 自己的读侧/写侧
+      # 目录，随整簇搬去了 core/domains。授权留着就是两条没人行使的口子，
+      # 而 core/manager/server 这一层今天确实不认识 domains 的 biz 与
+      # model——它要认识，得先有第二条 manager → domains 的边，那是
+      # 另一刀的事。
       # oxcore_domain 撤掉：它唯一的使用者 server/flow 与 server/nodeagent
       # 随 flow / nodeagent 搬去了 core/domains（决策 223），授权留着就是
       # 一条没人行使的口子。
@@ -347,10 +353,10 @@ deps:
       - manager_biz
       - manager_model
       - manager_service
-      - oxcore_domain
       - oxcore_ports
-      - shared_pkg
+      - oxdomains_biz
       - oxfloor
+      - shared_pkg
   # 决策 123：根侧集群通道的授权面是 manager_service 那几条的子集。
   # 单独写出来而不是「它归 oxdomains_service 管」是有意的——它读的是
   # biz/federation 的注册表和 floor 的线上类型，一旦哪天它开始 import
@@ -388,6 +394,8 @@ deps:
       - oxcore_domain
       - oxcore_ports
       - oxcore_wire
+      - oxdomains_biz
+      - oxdomains_model
       - oxpig_agent
       - oxpig_ai
       - oxpig_model
@@ -410,11 +418,11 @@ deps:
       - shared_pkg
       - oxfloor
   manager_model:
-    # shared_pkg 是决策 109 加的：model/audit 里的动作/资源/状态词表现在是
-    # core/base/pkg/audit 的常量别名，指针只有一个定义。模型层依赖一个
-    # 不认识任何 BC 的树节点，和 biz 层依赖它是同一件事——存储不懂业务，
-    # 但它得能说出自己这行记录叫什么。
-    mayDependOn: [oxfloor, shared_pkg]
+    # 决策 109 给这里挂过 shared_pkg，理由是 model/audit 的词表是
+    # core/base/pkg/audit 的常量别名。决策 226 把 model/audit 整个抬去了
+    # core/domains，这条授权的唯一使用者跟着走了，于是它死了——**死的
+    # 是边，不是理由**：别名仍然只有一处定义，只是不再由这一层说。
+    mayDependOn: [oxfloor]
 
   # ---------------- edge module (was the edgeagent BC) ----------------
   # These four components are the node plane's own layers. They no longer
@@ -707,6 +715,7 @@ deps:
       - oxcore_domain
       - oxcore_ports
       - oxcore_wire
+      - oxdomains_data
       - oxdomains_model
       - oxfloor
       - shared_pkg
@@ -717,13 +726,20 @@ deps:
       - oxdomains_model
       - shared_pkg
 
-  # oxdomains_model imports nothing outside itself: it is the DTO layer of
-  # the domains that moved. It is registered with no grant at all rather
-  # than with `mayDependOn: []`, because go-arch-lint's spec check reads an
-  # empty list as a malformed file and refuses to run any of it — the same
-  # trap decision 99 hit. An omitted block is the way to say "depends on
-  # nothing", and manager_biz / manager_model / manager_server already say
-  # it that way.
+  # oxdomains_model was registered with no grant at all rather than with
+  # `mayDependOn: []`, because go-arch-lint's spec check reads an empty list
+  # as a malformed file and refuses to run any of it — the same trap
+  # decision 99 hit. An omitted block is the way to say "depends on nothing".
+  #
+  # Decision 226 ended that: model/audit came across with the audit ledger,
+  # and its vocabulary is still a set of aliases onto core/base/pkg/audit, so
+  # this layer now does reach for one shared tree. The grant is one entry
+  # wide on purpose — the DTO layer of the release floor may name a row, and
+  # nothing else.
+  oxdomains_model:
+    mayDependOn:
+      - shared_pkg
+
   oxdomains_server:
     mayDependOn:
       - oxdomains_biz
@@ -746,6 +762,9 @@ deps:
   # systemupgrade, and neither reaches for floor.
   oxdomains_service:
     mayDependOn:
+      - oxcore_domain
+      - oxcore_ports
+      - oxfloor
       - shared_pkg
 
   # ---------------- 装配层 ----------------

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	store "github.com/vincent-wuhan/opskeeper/core/manager/data/audit/store"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	store "github.com/vincent-wuhan/opskeeper/core/domains/data/audit/store"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 

@@ -13,9 +13,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
-	store "github.com/vincent-wuhan/opskeeper/core/manager/data/audit/store"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
+	store "github.com/vincent-wuhan/opskeeper/core/domains/data/audit/store"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 

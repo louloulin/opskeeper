@@ -221,9 +221,30 @@ func TestABizPackageMayNotReachItsOwnDataLayer(t *testing.T) {
 			red:  false,
 		},
 		{
+			// The ledger's one audit entry moved to the release floor with
+			// the rest of the audit chain (decision 226), and the debt
+			// ledger moved with it — which is only visible here, because
+			// this is the case that reads a path out of layerDebt.
 			name: "a file in the debt ledger is known, not refused",
-			rel:  "core/manager/biz/audit/chain.go",
-			imp:  repoModule + "/core/manager/data/audit/store",
+			rel:  "core/domains/biz/audit/chain.go",
+			imp:  repoModule + "/core/domains/data/audit/store",
+			red:  false,
+		},
+		{
+			// And the same edge is still red where no entry names it, so
+			// the relocation cannot have quietly turned the rule off for
+			// the module the entry moved into.
+			name: "an unlisted biz reaching the floor's data layer",
+			rel:  "core/domains/biz/audit/unlisted.go",
+			imp:  repoModule + "/core/domains/data/audit/store",
+			red:  true,
+		},
+		{
+			// manager reaching domains is a declared module dependency
+			// (decision 225), not one context reaching into another.
+			name: "a declared cross-module dependency is not a context leak",
+			rel:  "core/manager/biz/knowledge/usecase.go",
+			imp:  repoModule + "/core/domains/biz/secret",
 			red:  false,
 		},
 		{
@@ -800,7 +821,7 @@ func TestPiGBoundaryAttributesANestedModulesImportsToThatModule(t *testing.T) {
 			".":                                  "module github.com/vincent-wuhan/opskeeper\n",
 			"core/pig":                           "module github.com/vincent-wuhan/opskeeper/core/pig\n",
 			"core/pig/extensions/opskeeper-gate": "module github.com/vincent-wuhan/opskeeper/core/pig/extensions/opskeeper-gate\n",
-			"core/base/pkg/llm":               "module github.com/vincent-wuhan/opskeeper/core/base/pkg/llm\n",
+			"core/base/pkg/llm":                  "module github.com/vincent-wuhan/opskeeper/core/base/pkg/llm\n",
 		},
 		map[string]string{
 			// A nested module inside the root that is NOT under core/pig and

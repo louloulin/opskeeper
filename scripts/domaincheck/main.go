@@ -545,6 +545,24 @@ func main() {
 }
 
 type treeStats struct {
+	// domains is the number of distinct bounded contexts the walk saw. It is
+	// a set, not a sum, and the difference matters as soon as one context
+	// spans two modules.
+	//
+	// parseTree counts per tree because inside one tree `biz/audit` and
+	// `server/audit` are the same context reached through two layers. When
+	// the release floor was cut out of core/manager the same context started
+	// spanning two modules (middleware: the HTTP chain in core/domains, the
+	// chain and the tool adapters in core/manager), and summing the two
+	// walks reported 58 while buildGraph — which keys contexts by name, the
+	// same way the layering table does — reported 57. One tool, two
+	// numbers, and the release report already printed the smaller one.
+	//
+	// Counting the union is not a softer gate. Every other reader in this
+	// tool (buildGraph, the layering levels, the release report, the split
+	// pricing) already counts the name once; this counter was the only place
+	// that counted it twice, and it is the number the ledger is asked to
+	// repeat. A gate that disagrees with the graph it gates is the defect.
 	domains       int
 	testOnlyEdges int
 }
@@ -723,6 +741,7 @@ func wiringUse(root string) (map[string]map[string]int, error) {
 func parseControlPlane(root string) ([]source, treeStats, error) {
 	var sources []source
 	stats := treeStats{}
+	seen := map[string]bool{}
 	for _, mod := range []struct{ dir, prefix string }{
 		{"core/manager", controlPlanePrefixes[0]},
 		{"core/domains", controlPlanePrefixes[1]},
@@ -732,9 +751,12 @@ func parseControlPlane(root string) ([]source, treeStats, error) {
 			return nil, treeStats{}, err
 		}
 		sources = append(sources, got...)
-		stats.domains += st.domains
+		for _, src := range got {
+			seen[domainOf(src.path)] = true
+		}
 		stats.testOnlyEdges += st.testOnlyEdges
 	}
+	stats.domains = len(seen)
 	return sources, stats, nil
 }
 

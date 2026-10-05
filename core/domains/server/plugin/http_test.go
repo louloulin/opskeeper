@@ -18,11 +18,11 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
-	auditmw "github.com/vincent-wuhan/opskeeper/core/manager/server/middleware"
-	release "github.com/vincent-wuhan/opskeeper/core/manager/service/plugin"
+	auditmw "github.com/vincent-wuhan/opskeeper/core/domains/server/middleware"
+	release "github.com/vincent-wuhan/opskeeper/core/domains/service/plugin"
 )
 
 // fakeService is a scripted release manager. The rollout's own behaviour is

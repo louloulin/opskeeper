@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	"github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
 )
 
 // AuditAdapter 包装 *audit.Usecase 实现 chatdiagnose.AuditLogger。

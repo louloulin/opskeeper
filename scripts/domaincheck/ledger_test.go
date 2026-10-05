@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"testing"
 )
@@ -83,4 +84,51 @@ func TestTheLedgerStatesTheDomainGraphThisTreeHas(t *testing.T) {
 				said, c.what, c.want)
 		}
 	}
+}
+
+// A domain that spans two modules is still one domain.
+//
+// Cutting the release floor out of core/manager put a bounded context on both
+// sides of a module line: middleware is the HTTP chain in core/domains
+// (server/middleware) and the chain plus the tool adapters in core/manager
+// (middleware/adapter). The walk used to count domains per tree and add the
+// two totals, so that one context was counted twice and the counter printed
+// 58 while the graph, the layering levels and the release report all said 57.
+//
+// The number that reached the ledger was the sum, so this is the test that
+// keeps the counter and the graph from drifting apart again: the counter must
+// equal the number of distinct context names, and the graph is what the rest
+// of the tool believes.
+func TestAContextSpanningTwoModulesIsCountedOnce(t *testing.T) {
+	sources, stats, err := parseControlPlane("../..")
+	if err != nil {
+		t.Fatalf("parse the control plane: %v", err)
+	}
+	names := map[string]bool{}
+	for _, src := range sources {
+		if d := domainOf(src.path); d != "" {
+			names[d] = true
+		}
+	}
+	if stats.domains != len(names) {
+		t.Errorf("the walk counted %d domains but the tree holds %d distinct names %v; "+
+			"a context that spans two modules is one context, and a counter that says "+
+			"otherwise is the number the ledger is asked to repeat",
+			stats.domains, len(names), sortedKeys(names))
+	}
+	if g := buildGraph(sources, defaultRules()); len(g.levels()) != stats.domains {
+		t.Errorf("the counter says %d domains and the graph places %d; the two must be "+
+			"the same set, because the layering table has one row per name and cannot "+
+			"hold a name twice",
+			stats.domains, len(g.levels()))
+	}
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

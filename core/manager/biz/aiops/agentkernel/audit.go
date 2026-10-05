@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 

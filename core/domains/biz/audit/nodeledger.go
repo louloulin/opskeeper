@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 

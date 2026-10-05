@@ -11,8 +11,8 @@ import (
 
 	chimw "github.com/go-chi/chi/v5/middleware"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/core/manager/biz/audit"
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	bizaudit "github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
+	auditmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 )
 

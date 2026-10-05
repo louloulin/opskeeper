@@ -7,8 +7,8 @@ import (
 
 	"gorm.io/gorm"
 
-	store "github.com/vincent-wuhan/opskeeper/core/manager/data/audit/store"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/audit"
+	store "github.com/vincent-wuhan/opskeeper/core/domains/data/audit/store"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 )
 
 // allRows reads every audit row, chained or not, oldest first.

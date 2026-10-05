@@ -152,9 +152,14 @@ var planItems = []planItem{
 
 	// --- 阶段 3 ---
 	{
-		name:    "审计端口",
-		what:    "3 抽出审计端口，解开 iam 反向依赖 manager 的那条边",
-		anchors: []string{"core/manager/biz/audit"},
+		name: "审计端口",
+		what: "3 抽出审计端口，解开 iam 反向依赖 manager 的那条边",
+		// The port itself is core/base/pkg/audit (decision 109) and the
+		// single throat that writes through it is the audit domain, which
+		// moved to the release floor with the rest of the chain (decision
+		// 226). Both are named: the port is what let iam stop importing
+		// the writer, and the throat is what still holds it.
+		anchors: []string{"core/base/pkg/audit", "core/domains/biz/audit"},
 	},
 	{
 		name:    "联邦",
