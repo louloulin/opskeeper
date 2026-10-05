@@ -11,25 +11,76 @@ import (
 // honest: it is checked in both directions so it cannot rot, and it is reported
 // by the cut pricer so a proposal that severs one is visibly wrong.
 
-// TestTheShippedHardConstraintSetIsNotEmpty is the first line of defence
-// against a table that has been emptied by accident. Every other test here
-// builds its own set; this one looks at the shipped one, because a constraint
-// table with nothing in it still reports a clean tree and still prices every
-// split as though nothing were impossible.
-func TestTheShippedHardConstraintSetIsNotEmpty(t *testing.T) {
-	if len(hardConstraints) == 0 {
-		t.Fatal("hardConstraints is empty; every check below still passes, because an empty " +
-			"constraint set is indistinguishable from a tree with no uncuttable edges")
+// dissolvedHardConstraints is the table's own history, kept here rather than
+// deleted with the entries.
+//
+// Decision 196 declared four hard process constraints, all four of them writes
+// to the ordered HMAC chain, and read all 43 declared edges to conclude that
+// those four were the only physical ones. Decision 272 removed all four by
+// giving the throat a port: the four holders now hold interfaces from
+// core/base/pkg/audit instead of the ledger's concrete façade.
+//
+// The argument for all four was the same and it was about CONCURRENT WRITES —
+// two processes appending to one chain is a distributed-coordination problem,
+// and that bill is larger than the one it saves. A port does not have that
+// problem. The process without the throat calls it, the way it calls any other
+// service: a seam with a known shape and a transport to pay for. So the
+// constraints did not become false when the imports went; they were never
+// about the imports.
+//
+// They are recorded here for the same reason the constraint set used to be
+// pinned by value rather than by count: an empty set has nothing in it to
+// disagree with a later edit, and "the table is empty" is indistinguishable
+// from "somebody emptied it". This list is what makes the emptiness a dated
+// decision instead of a drift. If one of these four comes back, the check below
+// says which one and prints the reason it was dissolved.
+var dissolvedHardConstraints = map[edge]string{
+	{from: "aiops", to: "audit"}:         "the agent kernel's LedgerWriter named bizaudit.Event, which is an alias of auditport.Event; decision 272 spells it auditport.IDSink / auditport.Verifier and the import is gone",
+	{from: "chatdiagnose", to: "audit"}:  "AuditAdapter wrapped *audit.Usecase to call one method; it now holds auditport.Sink",
+	{from: "frontierbound", to: "audit"}: "the two replay paths could not be called without naming the row, so the rows moved to core/base/pkg/audit and it holds auditport.NodeLedgerSink",
+	{from: "middleware", to: "audit"}:    "AuditMiddleware took the concrete façade to call Emit; it now takes auditport.Sink, and the three status constants it also read are re-declared from the port",
+}
+
+// TestTheShippedHardConstraintSetIsEmptyAndSaysWhy replaces a test that
+// asserted the set was not empty.
+//
+// That test existed because an empty constraint set is indistinguishable from
+// a tree with no uncuttable edges: every other check here would pass, the
+// pricer would price every split as though nothing were impossible, and the
+// ledger would keep citing a property the tree no longer had. That is exactly
+// what decision 272 caused, and the assertion is what named it.
+//
+// Asserting "non-empty" would now be asserting the bug back into place. What
+// replaces it pins the emptiness against the four entries that produced it, so
+// the state is checkable in both directions: re-adding one of the four fails,
+// and so does a fifth that nobody argued for.
+func TestTheShippedHardConstraintSetIsEmptyAndSaysWhy(t *testing.T) {
+	if len(hardConstraints) != 0 {
+		t.Errorf("there are %d hard process constraints and this test says there are none: %v. "+
+			"One of them is a new claim about the tree, and a new claim needs the same physical "+
+			"argument decision 196 read all 43 reasons for — not just a line in the table",
+			len(hardConstraints), hardConstraints)
 	}
-	for e, why := range hardConstraints {
-		if strings.TrimSpace(why) == "" {
+	for e, reason := range hardConstraints {
+		if strings.TrimSpace(reason) == "" {
 			t.Errorf("%s -> %s is a hard constraint with no reason. A constraint nobody can "+
 				"read the reasoning for is a constraint the next reader will delete", e.from, e.to)
 		}
 	}
-	// The four are the audit chain, and the reason they are hard is the same
-	// physical property in all four cases. If a fifth arrives, it needs the
-	// same argument, so the test asks for the shape rather than the count.
+	// Every dissolved constraint must be recorded, or the emptiness is just
+	// an absence. This is the direction that catches the table being
+	// trimmed by a refactor that believed the entries were redundant.
+	for e, reason := range dissolvedHardConstraints {
+		if _, still := hardConstraints[e]; still {
+			t.Errorf("%s -> %s is a hard constraint again, and dissolvedHardConstraints still "+
+				"records why it was dissolved: %s. One of the two is out of date — if the "+
+				"constraint is back, the port it was dissolved by is gone, and the reason is "+
+				"worth re-deriving rather than deleting", e.from, e.to, reason)
+		}
+	}
+	// And if a fifth ever arrives it is an audit-chain edge or it is a new
+	// decision. This asks for the shape rather than the count, because a
+	// count is a number somebody edits to match.
 	for e := range hardConstraints {
 		if e.to != "audit" && e.from != "audit" {
 			t.Errorf("%s -> %s is declared a hard process constraint but is not one of the "+
@@ -81,7 +132,7 @@ func TestAHardConstraintWhoseEdgeNoLongerHappensIsAViolation(t *testing.T) {
 }
 
 // TestTheShippedHardConstraintsHoldInTheRealTree is the one test here that
-// looks at the repository rather than a fixture. The other three prove the rule
+// looks at the repository rather than a fixture. The other tests prove the rule
 // fires; this one proves the shipped table is actually true of the shipped
 // tree, so the constraint list cannot describe a codebase that no longer exists.
 //
@@ -89,67 +140,18 @@ func TestAHardConstraintWhoseEdgeNoLongerHappensIsAViolation(t *testing.T) {
 // that is the enforcement. This test exists so the failure names the constraint
 // instead of arriving as one line inside a checker that also reports unrelated
 // things.
-// TestTheHardConstraintSetIsTheFourTheTreeActuallyHas is the count guard, and
-// it exists because the test below it cannot notice its own subject being
-// deleted.
 //
-// TestTheShippedHardConstraintsHoldInTheRealTree asks `check` whether any
-// *declared* hard constraint is violated. Delete a declaration and the answer
-// is "none of the remaining ones are violated" — a pass. The whole point of a
-// hard constraint is that a particular dependency is not severable, so a set
-// that quietly shrinks has not relaxed a price, it has deleted a property the
-// ledger has been citing since decision 196.
+// It is the test that could not notice its own subject being deleted, which is
+// why the set is now pinned by value in dissolvedHardConstraints above: remove
+// a declaration and this one still answers "none of the remaining ones are
+// violated" — a pass. It was the price quotes that went red, and only because
+// the arithmetic moved; delete a constraint in a way that left the prices alone
+// and nothing would have said which property was given up.
 //
-// It is caught, but not by anything that claims to: removing the
-// `middleware -> audit` declaration turns
-// TestThePriceQuotedInAnyCandidateIsThePriceThePricerComputes red, because
-// the severed-edge count in the three candidate files stops matching. That is
-// an accident of arithmetic — the price moved, so the quote is stale. Delete a
-// constraint in a way that leaves the prices alone and nothing catches it, and
-// the tests that do go red do not say which property was given up.
-//
-// So the set is pinned the way decision 240 pinned a declaration count: by
-// value, with the reason next to it. Four, named, because a count that is only
-// a count gets edited to whatever the current number happens to be.
-func TestTheHardConstraintSetIsTheFourTheTreeActuallyHas(t *testing.T) {
-	want := map[edge]string{
-		{from: "aiops", to: "audit"}:         "the agent kernel's LedgerWriter appends agent actions to the chain an operator reads",
-		{from: "chatdiagnose", to: "audit"}:  "promoting a chat into an investigation is an operator action and lands in the chain",
-		{from: "frontierbound", to: "audit"}: "a node's autonomous replay writes the decisions it made back into the chain",
-		{from: "middleware", to: "audit"}:    "the audit middleware is the only thing that turns a handled request into a chain record",
-	}
-	if len(hardConstraints) != len(want) {
-		t.Errorf("there are %d hard process constraints, want %d. Each one is a dependency "+
-			"the plan decided cannot be severed for any price, and the four are all writes to "+
-			"the ordered HMAC chain. Removing one does not relax a cost — it gives up a "+
-			"property the ledger has cited since decision 196, and the test that checks the "+
-			"remaining ones hold will report green",
-			len(hardConstraints), len(want))
-	}
-	for e, reason := range want {
-		got, ok := hardConstraints[e]
-		if !ok {
-			t.Errorf("the hard constraint %s -> %s is gone. It was there because: %s",
-				e.from, e.to, reason)
-			continue
-		}
-		if got != reason {
-			t.Errorf("the hard constraint %s -> %s now reads %q; it was %q. The reason is "+
-				"the part a reader argues with when the set changes, so it is pinned with it",
-				e.from, e.to, got, reason)
-		}
-	}
-	// And the reverse: a fifth constraint is as much a decision as a missing
-	// one, and it needs the same treatment.
-	for e := range hardConstraints {
-		if _, ok := want[e]; !ok {
-			t.Errorf("%s -> %s is declared a hard constraint but is not in the pinned set. "+
-				"If it is one now, say here why it cannot be severed — a constraint whose "+
-				"reason is only in a commit message is a constraint nobody will defend when "+
-				"the next proposal wants to cut it", e.from, e.to)
-		}
-	}
-}
+// With the set empty it has nothing to check, and that is a real loss of
+// coverage rather than a formality. What replaced it lives where the property
+// is: core/base/pkg/audit's writers_test.go holds the table of packages
+// permitted to reach the writer at all, and it fails on any new one.
 
 func TestTheShippedHardConstraintsHoldInTheRealTree(t *testing.T) {
 	sources, _, err := parseControlPlane("../..")

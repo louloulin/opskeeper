@@ -98,6 +98,35 @@
 #   21. frontierbound  -> audit        节点自主重放把决定写回这条链
 #   35. middleware     -> audit        审计中间件是把请求变成写链的唯一东西
 #
+# —— 决策 272 更正：上面这 4 条里，4 条都不再是写边 ——
+#
+# 这四行是决策 196 当时的读法，保留在这里作为记录。**当前指向 audit 域的声明边
+# 只有一条，而且它不是写边：**
+#
+# 下面这段是**当前**清单，`scripts/ledgercheck` 的 TestTheCurrentAuditEdgesAreNamedInTheSplitProposal
+# 机器读的就是它；上面那四行是历史，机器不读，所以两份不会互相污染。
+#
+#   now  1.  aiops  -> audit   读边：change-events 工具把一次配置变更关联到授权它的人，
+#                              所以它读的是落库的行（domains/model/audit 的实体）。
+#                              行没有链式性质，可以用投影跨进程桥接；链有。
+#
+# 写边为什么全部消失：决策 272 给审计咽喉加了端口。chatdiagnose、aiops 的
+# agentkernel、middleware、frontierbound 四个持有方此前各自持有具体的
+# `*audit.Usecase`（其中一个甚至只调一个方法），现在各自持有 core/base/pkg/audit
+# 里的接口：Sink / IDSink / Verifier / NodeLedgerSink。**咽喉没有移动、没有变弱、
+# 也没有长出第二条写路径**——变的只是这四个调用方不再知道它住在哪里。
+#
+# 决策 196 的论证一个字都没被推翻：它说的是「两个进程**同时写**同一条链」需要分布式
+# 协调。端口不是并发写——没有咽喉的那个进程是**调用**它，像调用任何别的服务一样，
+# 那是一条有已知形状的缝加一笔传输成本，比一次选主便宜。**所以这 4 条硬约束不是
+# 「失效了」，是「从来就不是关于 import 的」。**
+#
+# 咽喉唯一性现在由三处守着，都在「谁能碰到写路径」这个真正的问题上：
+# core/base/pkg/audit 的 writers_test.go（允许碰到 façade 的包白名单）、`make
+# audit-port-check`、以及 biz/audit 本身没有第二条写路径。硬约束表因此清空，
+# 而 domaincheck 的 `dissolvedHardConstraints` 逐条记着每一条是被什么解掉的——
+# **空表和「表被人删空了」必须能区分开**，否则下一次它会安静地空着。
+#
 # 为什么这 4 条不能拆到不同进程，而其余 39 条可以：
 #
 # 审计链是**一条有序的防篡改链**——链头唯一、顺序有意义、每条记录带前一节点的

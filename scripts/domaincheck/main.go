@@ -157,22 +157,19 @@ var sharedDomains = map[string]string{
 var edges = map[edge]string{
 	{"aiops", "alert"}:    "the agent raises and silences alerts through the platform's rules rather than carrying a second alert implementation. One direction only since decision 118, which was the last cycle in the tree: the alert domain used to call the agent kernel's own SpawnRequest/Worker structs, and it now asks for one investigation in its own value types",
 	{"aiops", "approval"}: "a remediation the agent wants to run is queued in the approval domain, which is the HITL path it must not be able to route around",
-	{"aiops", "audit"}:    "the agent kernel's LedgerWriter writes agent actions (tool calls, turns) into the same chain an operator reads",
 	{"aiops", "device"}:   "an alert names a device and a tool call resolves it to a machine; the agent needs the device vocabulary to say which one",
 	{"aiops", "edge"}:     "the agent's tools address nodes through the edge domain; there is no second worth having notion of 'which node'",
 	{"aiops", "hitl"}:     "an investigation that needs a human hands the request to the human-in-the-loop domain instead of blocking on a channel of its own. One direction only since decision 116: the hitl side had reached back into aiops solely through a migration-and-dual-write window that was never wired and has expired, so the cycle is gone while these three imports stay",
 	{"aiops", "loop"}:     "the agent kernel drives the investigation loop, so the agent asks it for a recovery verdict, a loop toolset and what it learned; one direction only since decision 117. The old reason named a package that does not exist — there is no biz/aiops/loop, loop is its own context at biz/loop",
 	{"aiops", "topology"}: "correlation answers 'what is related to this' from the topology domain instead of a private graph",
 
-	{"chatdiagnose", "audit"}: "promoting a chat into an investigation is an operator action and belongs in the chain",
-	{"chatdiagnose", "loop"}:  "promoting a chat hands the work to the loop domain, which owns the investigation; the reverse of that edge used to exist because the loop wrote the knowledge base's own rows (decision 114)",
+	{"chatdiagnose", "loop"}: "promoting a chat hands the work to the loop domain, which owns the investigation; the reverse of that edge used to exist because the loop wrote the knowledge base's own rows (decision 114)",
 
 	{"demo", "alert"}: "the scenario seeds and narrates real incident rows, so it writes the production alert model rather than a fixture of it. The alert side asks the scenario whether it owns a firing through a correlator port instead of importing it back (decision 113)",
 
 	{"edge", "device"}: "the edge register flow resolves, creates and updates the host Device behind a node (biz/edge, server/edge). One direction only: a device deletion reaches the edge identities through a revoker the composition root injects rather than by importing them (decision 112)",
 
-	{"frontierbound", "audit"}: "autonomy replay writes the decisions a node made on its own back into the chain when the tunnel returned (decision 101)",
-	{"frontierbound", "edge"}:  "the frontier is the tunnel's node-facing side: it reads node state and change events",
+	{"frontierbound", "edge"}: "the frontier is the tunnel's node-facing side: it reads node state and change events",
 	// The frontierbound -> metric edge is gone (decision 227), and the
 	// reason it was declared is worth keeping next to the absence: the
 	// tunnel handler held metric.IngestService, but the composition root
@@ -183,6 +180,28 @@ var edges = map[edge]string{
 	// port now lives in core/floor/tunnel next to HostMetricPoint, which is
 	// what let the handler name the call without naming the domain.
 
+	// This is the SECOND aiops -> audit edge and it is not the one decision
+	// 196 read. That one was the agent kernel writing rows, and decision 272
+	// cut it: agentkernel now holds auditport.IDSink / auditport.Verifier
+	// instead of the ledger's concrete façade.
+	//
+	// What is left is a different seam with a different name. The
+	// change-events tool joins a configuration change to the operator who
+	// authorised it, so it reads the persisted row — core/domains/model/
+	// audit's GORM entity — rather than asking the writer to write one.
+	// Readers of a table are not writers of it, and decision 109 already
+	// drew this line: model/audit holds the entities, and "storage has to be
+	// readable by exactly the code that already understood the table". The
+	// store that writes it, the ledger view that lists it, and this tool are
+	// that set.
+	//
+	// It is NOT a hard process constraint, and the distinction is the whole
+	// point of the 272 write-up: rows have no chaining property, so a split
+	// bridges them with a projection, while the chain has one and needed a
+	// single writer. The writer seam is closed; the reader seam is open and
+	// priced.
+	{"aiops", "audit"}: "the change-events tool joins a configuration change to the operator who authorised it, so it reads the persisted row rather than asking the writer to write one. Readers of the table are not writers of it, and rows carry no chaining property — this is the reader seam, not the writer seam decision 272 closed",
+
 	{"federationlink", "federation"}: "the root side of the cluster channel holds the table of which authenticated caller may act for which child, and it answers that question by asking the federation domain's registry. One direction: the registry does not import the link, because whether a cluster exists is the registry's judgement and reaching a cluster is the link's job (decision 123)",
 
 	{"imbridge", "aiops"}: "the IM bridge delivers an agent finding into a chat channel, so it formats the agent's output",
@@ -190,8 +209,6 @@ var edges = map[edge]string{
 	{"loop", "alert"}: "an investigation starts from an alert and closes it, so the loop reads and updates alert state",
 
 	{"mcp", "loop"}: "an investigation started over MCP enters the same loop as a chat one",
-
-	{"middleware", "audit"}: "the audit middleware is the only thing that turns a handler's request into a write to the chain",
 
 	{"nodeagent", "nodefleet"}: "the node-agent endpoints are the fleet's session handles",
 
@@ -221,35 +238,52 @@ var cycles = map[[2]string]string{}
 
 // hardConstraints are the declared edges that a process boundary may not cut.
 //
-// Every other edge in the table is a seam somebody could pay to hold open. These
-// four cannot, and the difference is physical rather than stylistic.
+// There are none, and the reason they are gone is the most useful thing
+// decision 272 found, so it is written down here rather than left as a
+// number that went to zero.
 //
-// The audit chain is one ordered tamper-evident chain: a single head, an order
-// that means something, and every record carrying the digest of the one before
-// it. Those three properties together are what make two processes writing it
-// concurrently a distributed-coordination problem — an election, a consensus, or
-// at minimum a cross-process lock — and that bill is larger than the one it
-// saves. `biz/audit` is the only write throat in the tree, and
-// `make audit-port-check` exists to keep it that way.
+// Decision 196 read all 43 declared edges and concluded that exactly four
+// were physical hard constraints, and that all four were the same fact: the
+// HLD-010 audit chain is ONE ordered tamper-evident chain — a single head, an
+// order that means something, and every row carrying the digest of the one
+// before it. Its words for why that blocks a split: "those three properties
+// together are what make two processes writing it concurrently a
+// distributed-coordination problem — an election, a consensus, or at minimum a
+// cross-process lock — and that bill is larger than the one it saves."
 //
-// The nearest miss is not this shape. `loop -> alert` shares *rows* with
-// `biz/audit`, not a *chain*: rows have no chaining property, so a split can
-// be bridged with an interface and eventual consistency. A chain has one, so a
-// split has to coordinate. That is a real technical difference, not a
-// distinction in vocabulary — and it is the reason this table is declared
-// rather than inferred, because inferring it from the reason strings was tried
-// and got `aiops -> hitl` wrong (its reason contains the word "chain").
+// That argument is about CONCURRENT WRITES, and it is still correct. What
+// changed is that the four holders stopped being writers. chatdiagnose,
+// aiops, middleware and frontierbound each held `*audit.Usecase` — the
+// concrete façade — and each called one or two methods on it. They now hold
+// an interface from core/base/pkg/audit: Sink, IDSink, Verifier, and
+// NodeLedgerSink for the two replay paths. The chain is still written in one
+// place by one process; the callers are no longer coupled to where that place
+// is.
 //
-// This is decision 196's reading of all 43 reasons, transcribed. It is not a
-// new judgement about the code, and it is deliberately not extended by
-// keyword: a constraint that is guessed is a constraint that appears and
-// disappears as prose is edited.
-var hardConstraints = map[edge]string{
-	{from: "aiops", to: "audit"}:         "the agent kernel's LedgerWriter appends agent actions to the chain an operator reads",
-	{from: "chatdiagnose", to: "audit"}:  "promoting a chat into an investigation is an operator action and lands in the chain",
-	{from: "frontierbound", to: "audit"}: "a node's autonomous replay writes the decisions it made back into the chain",
-	{from: "middleware", to: "audit"}:    "the audit middleware is the only thing that turns a handled request into a chain record",
-}
+// So a control-plane split no longer has to keep those four on one side. The
+// process that ends up without the throat calls it, the way it would call any
+// other service — which is a seam with a known shape and a transport to pay
+// for, not a distributed-coordination problem. That transport is the honest
+// successor to this table, and it is cheaper than an election.
+//
+// The throat itself is still exactly one, and that is now enforced where the
+// property actually lives rather than here:
+//
+//   - core/base/pkg/audit's writers_test.go holds a table of the packages
+//     permitted to import the façade at all, and fails on any new one
+//   - make audit-port-check is the same rule at the Makefile level
+//   - core/domains/biz/audit still has no second write path
+//
+// All three are about *packages reaching the writer*, which is the question
+// this table used to answer by proxy. A constraint declared against an import
+// edge cannot survive the port that removes the import, and pretending
+// otherwise would leave a constraint in a table that the tool itself has to
+// report as stale on the next run.
+//
+// This is not "the problem went away". It is "the problem moved from a
+// constraint to a seam", and the seam is visible in the priced edge table
+// while the constraint was not priced at all.
+var hardConstraints = map[edge]string{}
 
 // defaultRules is the shipped boundary.
 func defaultRules() rules {

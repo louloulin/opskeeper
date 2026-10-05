@@ -13,9 +13,9 @@ import (
 	"strconv"
 	"time"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	store "github.com/vincent-wuhan/opskeeper/core/domains/data/audit/store"
 	model "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
-	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 )
 
 // Repo is the persistence seam the usecase consumes. Implemented by
@@ -185,29 +185,10 @@ func (u *Usecase) chainEnabled() bool {
 // domain, and the transport type agrees with the wire. The frontierbound
 // adapter converts, which keeps a wire change from rippling into the audit
 // ledger's vocabulary.
-type AutonomyReplayRow struct {
-	At        time.Time
-	Action    string
-	Package   string
-	Tool      string
-	Target    string
-	Argv      []string
-	Kind      string
-	Metric    string
-	Threshold float64
-	Key       string
-	Verdict   string
-	Reason    string
-	Phase     string
-	Result    string
-	ExitCode  int
-}
+type AutonomyReplayRow = auditport.AutonomyReplayRow
 
 // AutonomyReplayResult reports how a batch was taken.
-type AutonomyReplayResult struct {
-	Accepted int
-	Rejected int
-}
+type AutonomyReplayResult = auditport.AutonomyReplayResult
 
 // RecordAutonomyReplay writes a node's self-heal rows into the chain.
 //

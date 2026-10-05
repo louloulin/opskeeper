@@ -10,8 +10,6 @@ import (
 
 	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
-	"github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
-	auditmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 )
 
 // The request-scoped slot — the key, the value, and the two accessors
@@ -44,7 +42,12 @@ var (
 // Anything not annotated is silently NOT audited. This is by design:
 // audit_logs is a curated trail of user-meaningful actions, not an
 // access log.
-func AuditMiddleware(uc *audit.Usecase) func(http.Handler) http.Handler {
+// uc is the port's Sink, not the ledger's façade. Holding *audit.Usecase
+// here is what made server/middleware a declared cross-domain edge into the
+// audit domain (decision 272), and it bought nothing: the only method called
+// is Emit. The chain head, the HMAC key and the repository all stay on the
+// host side, which is the property the port is for.
+func AuditMiddleware(uc auditport.Sink) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ww := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
@@ -78,7 +81,7 @@ func AuditMiddleware(uc *audit.Usecase) func(http.Handler) http.Handler {
 	}
 }
 
-func enrichFromRequest(ev *audit.Event, r *http.Request, ctx context.Context, status int) {
+func enrichFromRequest(ev *auditport.Event, r *http.Request, ctx context.Context, status int) {
 	if t, ok := tenantctx.From(ctx); ok {
 		uid := t.UserID
 		if uid != 0 && ev.UserID == nil {
@@ -108,13 +111,13 @@ func enrichFromRequest(ev *audit.Event, r *http.Request, ctx context.Context, st
 func statusBucket(status int) string {
 	switch {
 	case status >= 500:
-		return auditmodel.StatusFailure
+		return auditport.StatusFailure
 	case status == http.StatusForbidden:
-		return auditmodel.StatusDenied
+		return auditport.StatusDenied
 	case status >= 400:
-		return auditmodel.StatusFailure
+		return auditport.StatusFailure
 	default:
-		return auditmodel.StatusSuccess
+		return auditport.StatusSuccess
 	}
 }
 

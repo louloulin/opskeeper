@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
@@ -19,11 +19,11 @@ var _ ports.AuditSink = (*AuditLedger)(nil)
 // recordingLedger captures the rows the adapter emitted. It records rather
 // than asserts so a test can inspect the mapping the adapter chose.
 type recordingLedger struct {
-	events []bizaudit.Event
+	events []auditport.Event
 	err    error
 }
 
-func (l *recordingLedger) EmitWithID(_ context.Context, ev bizaudit.Event) (uint64, error) {
+func (l *recordingLedger) EmitWithID(_ context.Context, ev auditport.Event) (uint64, error) {
 	l.events = append(l.events, ev)
 	if l.err != nil {
 		return 0, l.err

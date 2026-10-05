@@ -297,6 +297,80 @@ const (
 	ResourceAgentTool = "agent_tool"
 )
 
+// The write side: what a bounded context holds to declare that something
+// happened.
+//
+// The package header says this one "cannot write a row", and that is still
+// true — there is no usecase here, no repository, no chain head, no HMAC.
+// What these three interfaces add is the *other* half of the sentence: a
+// caller that holds only this package can still say "this happened", and
+// the host decides whether that becomes a record.
+//
+// They exist because of decision 272, and the thing they replace is worth
+// naming. Four bounded contexts — chatdiagnose, aiops, middleware and
+// frontierbound — each reached for `*audit.Usecase`, the concrete façade in
+// core/domains/biz/audit. That is four declared cross-domain edges pointing
+// at the ledger, and the price the tool computed for them was 3 + 5 + 6 +
+// 6 = 20 to cut, which reads cheap until you notice what the number
+// measures: named types plus called methods. Three of the four were calling
+// exactly one method on it.
+//
+// The edges were not decoration. `middleware` is in core/domains and the
+// façade is in core/domains, so that one happens to be legal; the other
+// three reach from core/manager down into a domain it is not, and the only
+// reason the module graph tolerates it is that core/manager already depends
+// on core/domains for unrelated reasons. A reader of the import alone sees a
+// control plane that writes audit rows directly, which is the same shape as
+// the iam → manager back-edge decision 38 spent a module split removing.
+//
+// Three interfaces rather than one, and the split is not tidiness:
+//
+//   - Sink and IDSink differ in whether the row's sequence number comes
+//     back. The agent kernel needs it (it correlates its own entries with
+//     the ones the middleware wrote); the HTTP middleware and chatdiagnose
+//     do not, and handing them a method that returns a value they discard
+//     is how a binding ends up depending on chain state it has no business
+//     knowing about.
+//   - Verifier is separate for the reason agentkernel's own comment already
+//     gave: "a binding that could both write and check its own writes is a
+//     binding whose Verify result means nothing". Folding VerifyChain into
+//     Sink would hand every writer the ability to certify the chain.
+//
+// None of them is satisfied by anything in this package. There is no
+// implementation here to find, and that is the point — a caller can be
+// built, tested and reasoned about holding one of these without a database
+// anywhere in the picture.
+type Sink interface {
+	// Emit records one event. It does not return an error and must not
+	// block: a handler that fails because a log row could not be written
+	// has turned a storage hiccup into a failed request. A deployment
+	// that wants failures surfaced wires the binding to report them
+	// out of band.
+	Emit(ctx context.Context, ev Event)
+}
+
+// IDSink is a Sink that stamps the row's chain sequence number and hands
+// it back. Callers that interleave their own rows with the host's — the
+// agent kernel's gate decisions sit between two HTTP rows and an incident
+// review has to order all three — need the number; everything else should
+// hold a Sink.
+//
+// The error is returned to the caller rather than swallowed because the
+// kernel's own Record treats it as advisory (it ignores it) while its
+// *tests* assert on it, and an interface that cannot express the difference
+// forces one of those two to be wrong.
+type IDSink interface {
+	EmitWithID(ctx context.Context, ev Event) (uint64, error)
+}
+
+// Verifier walks the host's tamper-evident chain and reports the first row
+// that does not check out.
+//
+// It is deliberately not part of Sink. See the note above.
+type Verifier interface {
+	VerifyChain(ctx context.Context) error
+}
+
 // contextKey points to a mutable *slot in the request context.
 //
 // The slot is installed by the audit middleware before the inner

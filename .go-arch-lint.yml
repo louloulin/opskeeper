@@ -406,7 +406,6 @@ deps:
       # 「每条 mayDependOn 至少被一个真实 import 使用」不变式会守着它。
       - oxcore_domain
       - oxcore_ports
-      - oxdomains_biz
       - oxfloor
       - shared_pkg
   # 决策 123：根侧集群通道的授权面是 manager_service 那几条的子集。
@@ -446,7 +445,6 @@ deps:
       - oxcore_domain
       - oxcore_ports
       - oxcore_wire
-      - oxdomains_biz
       - oxdomains_model
       # oxextension_container: 插件容器加载器（决策 271）。chatruntime、
       # biz/marketplace 与 biz/pluginimport 从 chatruntime 里那套重复声明
@@ -764,8 +762,15 @@ deps:
     #
     # oxedge_policygate 仍在：清单校验要读闸门的决策类型，才不会对"批准"
     # 有一套自己的理解。
+    #
+    # 决策 272 给了它 oxcore_ports，这是 shared_pkg 的**第一条**契约层出边。
+    # 触发它的是 core/extension 的节点账本行类型：Action 字段用的是
+    # core/ports 的 AuditAction 而不是 string，因为"节点自己发明了一个动作名"
+    # 必须由形状检查抓住，而不是被一个静默默认值吞掉。契约层与业务无关，
+    # 依赖它不把任何业务语义带进底座——这也是它属于这一类而不是例外的原因。
     mayDependOn:
       - shared_pkg
+      - oxcore_ports
       - oxfloor
 
   # 控制面里唯一绑定 PiG 适配层与 LLM 底座的包（决策 66）。

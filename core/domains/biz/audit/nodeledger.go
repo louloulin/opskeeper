@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	model "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
@@ -25,22 +26,15 @@ import (
 // package could not interpret — so the work here is a translation, and a
 // translation is exactly where a silently dropped field becomes a lie.
 
-// NodeLedgerRow is one row as a node wrote it.
+// NodeLedgerRow is one row as a node wrote it. The shape moved to
+// core/base/pkg/audit in decision 272 — a caller cannot hand this package a
+// batch without naming the row, so the row is part of what the port has to
+// carry. The alias keeps every spelling in this package unchanged.
 //
-// It mirrors ports.AuditEntry minus the two chain fields. The node cannot
-// compute a hash and is not asked to: a link is the center's to write, and a
-// node that could sign one could forge a chain. The action is kept as the
-// port's own AuditAction rather than a string, so a node that invents a
-// value is caught by the shape pass below and not by a silent default.
-type NodeLedgerRow struct {
-	At      time.Time
-	Actor   string
-	Action  ports.AuditAction
-	Target  string
-	Outcome string
-	Class   string
-	Detail  json.RawMessage
-}
+// The two chain fields are deliberately absent: the node cannot compute a
+// hash and is not asked to. A link is the center's to write, and a node that
+// could sign one could forge a chain.
+type NodeLedgerRow = auditport.NodeLedgerRow
 
 // nodeActionMap is the whole translation, and it is a map rather than a
 // fallthrough switch so that "unmapped" is a value the shape pass can test.
@@ -70,10 +64,7 @@ var nodeActionMap = map[ports.AuditAction]struct {
 }
 
 // NodeLedgerResult reports how a batch was taken.
-type NodeLedgerResult struct {
-	Accepted int
-	Rejected int
-}
+type NodeLedgerResult = auditport.NodeLedgerResult
 
 // RecordNodeEntries writes a node's own ledger rows into the chain.
 //

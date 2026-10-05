@@ -52,23 +52,36 @@ var controlPlaneRoots = []string{managerRoot, domainsRoot}
 // a row required importing the writer, so six domains imported it to say
 // "this happened". The list below is what is left after that, and it is
 // short enough to read.
+//
+// Decision 272 removed three more of the six, and they are worth naming
+// because they were the ones that looked most justified:
+//
+//   - chatdiagnose's AuditAdapter wrapped *audit.Usecase and called Emit
+//   - agentkernel declared LedgerWriter and LedgerVerifier and then spelled
+//     the argument in bizaudit.Event, which is an alias of auditport.Event
+//   - frontierbound handed the ledger []NodeLedgerRow, so the call could not
+//     be made without naming the row
+//
+// Each of those was a real dependency on the audit *domain* to say one
+// thing, and each is now an interface in this package. The list below went
+// from six entries to three, and two of the three that remain are tests.
+// The throat did not move, did not weaken, and gained no second write path —
+// what moved is the four callers' knowledge of where it lives, which is the
+// only thing that was ever wrong.
 // biz/audit is absent on purpose: it is the definition of the throat, not a
 // holder of it, and a package never imports itself. If a file inside it
 // ever does, that is a cycle and the compiler will say so before this test
 // gets a chance to.
 var throatHolders = map[string]string{
 	"domains/server/middleware": "the audit middleware enriches the request (status, IP, request id) " +
-		"and is the only thing that turns a handler's request into a call to the writer",
+		"and is the only thing that turns a handler's request into a call to the writer. " +
+		"Decision 272 moved the middleware itself onto the port — AuditMiddleware now takes " +
+		"an auditport.Sink and its production file imports core/domains/biz/audit no more. " +
+		"What is left here is the test, which builds a real usecase to assert a row actually " +
+		"lands; a test that ran against a fake would prove the middleware called something, " +
+		"not that anything was written",
 	"domains/server/audit": "the ledger's own reader: it lists rows, reports chain state and " +
 		"surfaces ErrChainDisabled, so it holds the usecase rather than a copy of it",
-	"manager/biz/chatdiagnose": "AuditAdapter wraps the usecase to satisfy chatdiagnose's own " +
-		"logger port; the seam is the interface, the write is still the writer's",
-	"manager/biz/aiops/agentkernel": "LedgerWriter is the agent kernel's writer seam, and the row " +
-		"it writes is an agent action rather than a user action",
-	"manager/service/frontierbound": "autonomy replay writes the decisions a node made on its own " +
-		"back into the chain when the tunnel came back (decision 101), and a node's own " +
-		"ledger — every tool call, block, agent turn and plugin install it recorded — " +
-		"travels the same way (decision 126)",
 	"domains/server/plugin": "its test builds a real usecase to assert a plugin release lands in " +
 		"the chain; the production handler uses the port",
 }

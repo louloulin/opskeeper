@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	auditbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
@@ -19,17 +19,20 @@ import (
 // reaches the ledger only if somebody decides it should, rather than
 // arriving there by aliasing.
 //
-// The type carries no state beyond the usecase. A recorder that buffered,
+// The type carries no state beyond the sink. Decision 272 replaced the
+// concrete *audit.Usecase with the port's NodeLedgerSink: the call and the
+// row shape travel together, and both belong in the package that owns the
+// row. A recorder that buffered,
 // retried, or reordered would be a second policy about the chain's order,
 // and the node's pump already owns that policy: it sends a prefix, it
 // waits, and it retries the whole prefix or none of it.
 type AutonomyReplay struct {
-	uc *auditbiz.Usecase
+	sink auditport.NodeLedgerSink
 }
 
 // NewAutonomyReplay returns the recorder the frontierbound Wiring wants.
-func NewAutonomyReplay(uc *auditbiz.Usecase) *AutonomyReplay {
-	return &AutonomyReplay{uc: uc}
+func NewAutonomyReplay(sink auditport.NodeLedgerSink) *AutonomyReplay {
+	return &AutonomyReplay{sink: sink}
 }
 
 // RecordAutonomyReplay converts and records one batch.
@@ -42,12 +45,12 @@ func NewAutonomyReplay(uc *auditbiz.Usecase) *AutonomyReplay {
 // "keep trying" — the same instruction, but one that names who is at
 // fault.
 func (a *AutonomyReplay) RecordAutonomyReplay(ctx context.Context, edgeID uint64, rows []tunnel.AutonomyAuditRow) (int, int, error) {
-	if a == nil || a.uc == nil {
-		return 0, 0, errors.New("frontierbound: autonomy replay has no audit usecase behind it")
+	if a == nil || a.sink == nil {
+		return 0, 0, errors.New("frontierbound: autonomy replay has no audit sink behind it")
 	}
-	converted := make([]auditbiz.AutonomyReplayRow, 0, len(rows))
+	converted := make([]auditport.AutonomyReplayRow, 0, len(rows))
 	for _, r := range rows {
-		converted = append(converted, auditbiz.AutonomyReplayRow{
+		converted = append(converted, auditport.AutonomyReplayRow{
 			At:        r.At,
 			Action:    r.Action,
 			Package:   r.Package,
@@ -65,7 +68,7 @@ func (a *AutonomyReplay) RecordAutonomyReplay(ctx context.Context, edgeID uint64
 			ExitCode:  r.ExitCode,
 		})
 	}
-	res, err := a.uc.RecordAutonomyReplay(ctx, edgeID, converted)
+	res, err := a.sink.RecordAutonomyReplay(ctx, edgeID, converted)
 	if err != nil {
 		return res.Accepted, res.Rejected, fmt.Errorf("autonomy replay: edge %d: %w", edgeID, err)
 	}

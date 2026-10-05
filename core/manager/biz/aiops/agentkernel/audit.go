@@ -5,25 +5,29 @@ import (
 	"encoding/json"
 	"errors"
 
-	bizaudit "github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
-// LedgerWriter is the narrow seam onto the host's durable audit row
-// writer. It is one method so a test can substitute a recorder and so the
-// binding cannot reach the rest of the audit usecase.
-type LedgerWriter interface {
-	EmitWithID(ctx context.Context, ev bizaudit.Event) (uint64, error)
-}
-
-// LedgerVerifier is the seam onto the host's chain verification. It is
-// separate from LedgerWriter on purpose: a binding that could both write
-// and check its own writes is a binding whose Verify result means
-// nothing, and the host's verifier walks the table rather than any
-// in-memory state the writer kept.
-type LedgerVerifier interface {
-	VerifyChain(ctx context.Context) error
-}
+// LedgerWriter and LedgerVerifier used to be declared here, one method
+// each, and decision 272 deleted both in favour of the two port types that
+// say the same thing in the package that owns the row shape. The split is
+// preserved rather than merged into one interface, and the reason is the one
+// the old comment on LedgerVerifier gave and is worth keeping verbatim: "a
+// binding that could both write and check its own writes is a binding whose
+// Verify result means nothing". The host's verifier walks the table rather
+// than any in-memory state the writer kept.
+//
+// Deleting them rather than aliasing them is the point. An alias would have
+// left two names for one interface, and the next reader would have had to
+// work out which one a new binding should satisfy.
+type (
+	// LedgerWriter is the narrow seam onto the host's durable audit row
+	// writer — the port's IDSink, named for the kernel's own vocabulary.
+	LedgerWriter = auditport.IDSink
+	// LedgerVerifier is the seam onto the host's chain verification.
+	LedgerVerifier = auditport.Verifier
+)
 
 // AuditLedger adapts the host's audit_logs writer to the kernel's ledger
 // port.
@@ -85,7 +89,7 @@ func (l *AuditLedger) Record(ctx context.Context, entry ports.AuditEntry) error 
 			payload["detail_raw"] = string(entry.Detail)
 		}
 	}
-	_, err := l.writer.EmitWithID(ctx, bizaudit.Event{
+	_, err := l.writer.EmitWithID(ctx, auditport.Event{
 		Action:       string(entry.Action),
 		ResourceType: "tool",
 		ResourceName: entry.Target,

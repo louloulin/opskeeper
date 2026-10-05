@@ -9,27 +9,35 @@ import (
 	"testing"
 )
 
-// TestEveryEdgeIntoTheAuditChainIsInTheSplitProposal keeps decision 196's
-// conclusion from rotting.
+// TestTheCurrentAuditEdgesAreNamedInTheSplitProposal keeps the split
+// proposal's audit-chain list from rotting against the declared edges.
 //
-// That decision read all 43 declared cross-domain edges and concluded that
-// exactly four of them are physical constraints: the four that write the one
-// ordered HMAC chain, which is why they cannot be split across processes
-// without a distributed lock. The other 39 share rows or vocabulary, and rows
-// can be reached over an interface while an ordered chain cannot.
+// The list used to be decision 196's four physical constraints — the four
+// writers of the one ordered HMAC chain, which is why they could not be split
+// across processes without a distributed lock. Decision 272 gave the throat a
+// port (core/base/pkg/audit), all four of those holders now hold interfaces
+// rather than the concrete façade, and the four edges are gone. What is left
+// pointing at the audit domain is one READER: the change-events tool joins a
+// change to the operator who authorised it, and rows carry no chaining
+// property, so a projection bridges them and a chain would not.
 //
-// "The four that point at audit" is mechanically checkable even though "which
-// edges are physical constraints" is not. So this gate checks the part that
-// is: every edge whose target is the audit domain has to be named in the split
-// proposal's constraint list. A new `something -> audit` edge — a sixth writer
-// of the chain, which is exactly the change that would make the proposal's
-// five-domain lower bound wrong — turns this red instead of quietly making a
-// document stale.
-var proposalHardEdgeRE = regexp.MustCompile(`(?m)^#\s+(\d+)\.\s+([a-z0-9]+)\s*->\s*audit\b`)
+// So the gate's subject changed and its purpose did not. It still asks the one
+// mechanically checkable half of "which edges into the chain are physical":
+// every declared edge whose target is the audit domain has to be named in the
+// proposal's list. A new `something -> audit` edge — a second writer, which is
+// exactly the change that would make the proposal's lower bound wrong again —
+// turns this red instead of quietly making a document stale.
+//
+// The `now` prefix on the lines it reads is what keeps the two lists apart.
+// The proposal keeps decision 196's original four lines as a record, and a
+// regex that matched both would demand the document name three edges that no
+// longer exist — which is the same class of error as a stale price quote, in
+// the opposite direction.
+var proposalHardEdgeRE = regexp.MustCompile(`(?m)^#\s+now\s+(\d+)\.\s+([a-z0-9]+)\s*->\s*audit\b`)
 
 var edgeRE = regexp.MustCompile(`\{"([a-z0-9]+)",\s*"([a-z0-9]+)"\}`)
 
-func TestEveryEdgeIntoTheAuditChainIsInTheSplitProposal(t *testing.T) {
+func TestTheCurrentAuditEdgesAreNamedInTheSplitProposal(t *testing.T) {
 	// The edges the checker itself declares.
 	raw, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "domaincheck", "main.go"))
 	if err != nil {
@@ -55,7 +63,9 @@ func TestEveryEdgeIntoTheAuditChainIsInTheSplitProposal(t *testing.T) {
 		named[m[2]] = true
 	}
 	if len(named) == 0 {
-		t.Fatal("the split proposal names no edges into the audit chain, so this gate is looking at nothing")
+		t.Fatal("the split proposal's current list names no edges into the audit chain, so this " +
+			"gate is looking at nothing. The `now` prefix is what the regex reads; if the list was " +
+			"reformatted, restore it rather than deleting the list")
 	}
 
 	var missing, extra []string
@@ -75,12 +85,13 @@ func TestEveryEdgeIntoTheAuditChainIsInTheSplitProposal(t *testing.T) {
 	var problems []string
 	if len(missing) > 0 {
 		problems = append(problems, "these domains have a declared edge into the audit chain but the split "+
-			"proposal does not name them among the writers: "+strings.Join(missing, ", ")+
-			". A sixth writer changes the five-domain lower bound decision 196 derived")
+			"proposal's current list does not name them: "+strings.Join(missing, ", ")+
+			". A second writer of the chain changes the lower bound the proposal derives")
 	}
 	if len(extra) > 0 {
-		problems = append(problems, "the split proposal names these as audit-chain writers but no such edge "+
-			"is declared: "+strings.Join(extra, ", ")+". The proposal's lower bound is resting on an edge that moved")
+		problems = append(problems, "the split proposal's current list names these but no such edge is "+
+			"declared: "+strings.Join(extra, ", ")+". The proposal's lower bound is resting on an edge "+
+			"that moved; the four decision-196 writer lines above it are history and are not read here")
 	}
 	if len(problems) > 0 {
 		t.Errorf("the split proposal and the declared domain edges disagree about who writes the audit chain:\n  %s",

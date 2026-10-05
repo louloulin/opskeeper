@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	auditbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
@@ -27,11 +27,11 @@ import (
 // here as a value no map entry matches and is refused by the BC's shape pass
 // — as a fact about the vocabulary, not as a string that got stored.
 type NodeLedger struct {
-	uc *auditbiz.Usecase
+	sink auditport.NodeLedgerSink
 }
 
 // NewNodeLedger returns the recorder the frontierbound Wiring wants.
-func NewNodeLedger(uc *auditbiz.Usecase) *NodeLedger { return &NodeLedger{uc: uc} }
+func NewNodeLedger(sink auditport.NodeLedgerSink) *NodeLedger { return &NodeLedger{sink: sink} }
 
 // RecordNodeEntries converts and records one batch.
 //
@@ -40,12 +40,12 @@ func NewNodeLedger(uc *auditbiz.Usecase) *NodeLedger { return &NodeLedger{uc: uc
 // batch, which it retries, rather than the center took nothing, which it
 // also retries but logs as a refusal that is not happening.
 func (n *NodeLedger) RecordNodeEntries(ctx context.Context, edgeID uint64, rows []tunnel.AuditEntry) (int, int, error) {
-	if n == nil || n.uc == nil {
-		return 0, 0, errors.New("frontierbound: the node ledger has no audit usecase behind it")
+	if n == nil || n.sink == nil {
+		return 0, 0, errors.New("frontierbound: the node ledger has no audit sink behind it")
 	}
-	converted := make([]auditbiz.NodeLedgerRow, 0, len(rows))
+	converted := make([]auditport.NodeLedgerRow, 0, len(rows))
 	for _, r := range rows {
-		entry := auditbiz.NodeLedgerRow{
+		entry := auditport.NodeLedgerRow{
 			At:      r.At,
 			Actor:   r.Actor,
 			Action:  ports.AuditAction(r.Action),
@@ -61,7 +61,7 @@ func (n *NodeLedger) RecordNodeEntries(ctx context.Context, edgeID uint64, rows 
 		entry.Detail = r.Detail
 		converted = append(converted, entry)
 	}
-	res, err := n.uc.RecordNodeEntries(ctx, edgeID, converted)
+	res, err := n.sink.RecordNodeEntries(ctx, edgeID, converted)
 	if err != nil {
 		return res.Accepted, res.Rejected, fmt.Errorf("node ledger: edge %d: %w", edgeID, err)
 	}
