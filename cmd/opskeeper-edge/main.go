@@ -70,16 +70,18 @@ func main() {
 
 	fmt.Fprintf(os.Stderr, "opskeeper-edge %s starting\n", version)
 
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "config load: %v\n", err)
-		os.Exit(1)
-	}
+	// The node reads its own configuration and nothing else. config.Load
+	// would also read every model-vendor API key, the admin password, the
+	// JWT secret and the database DSN into this process, and this process
+	// runs restart_service and a bash sandbox on a customer host. The
+	// loader's own comment says why; the short version is that a node which
+	// cannot represent a vendor key cannot be handed one.
+	cfg := config.LoadEdge()
 
 	log := logger.WithService(logger.New(slog.LevelInfo), "opskeeper-edge")
 	log.Info("configuration loaded",
-		slog.String("cloud_addr", cfg.Edge.CloudAddr),
-		slog.String("collector_mode", cfg.Edge.CollectorMode),
+		slog.String("cloud_addr", cfg.CloudAddr),
+		slog.String("collector_mode", cfg.CollectorMode),
 		slog.String("version", version),
 	)
 
@@ -87,9 +89,9 @@ func main() {
 
 	// Tunnel client.
 	client := tunnel.NewClient(tunnel.ClientConfig{
-		CloudAddr: cfg.Edge.CloudAddr,
-		AccessKey: cfg.Edge.AccessKey,
-		SecretKey: cfg.Edge.SecretKey,
+		CloudAddr: cfg.CloudAddr,
+		AccessKey: cfg.AccessKey,
+		SecretKey: cfg.SecretKey,
 		Log:       log,
 	})
 
@@ -128,11 +130,11 @@ func main() {
 	// the capability, not the boot: the edge can still scrape metrics and
 	// read files without it.
 	restartSandbox := &edgerestartservice.SandboxConfig{
-		Mocked:        cfg.Edge.RestartService.Mocked,
-		SystemctlPath: cfg.Edge.RestartService.SystemctlPath,
+		Mocked:        cfg.RestartService.Mocked,
+		SystemctlPath: cfg.RestartService.SystemctlPath,
 	}
-	if len(cfg.Edge.RestartService.AllowedUnits) > 0 {
-		restartSandbox.AllowedUnits = cfg.Edge.RestartService.AllowedUnits
+	if len(cfg.RestartService.AllowedUnits) > 0 {
+		restartSandbox.AllowedUnits = cfg.RestartService.AllowedUnits
 	} else {
 		restartSandbox.AllowedUnits = edgerestartservice.DefaultAllowedUnits()
 	}
@@ -208,7 +210,7 @@ func main() {
 		slog.Duration("gives_up_after", tunables.tolerance()))
 
 	agentCfg := edgebiz.Config{
-		MetricsInterval:   cfg.Edge.CollectorInterval,
+		MetricsInterval:   cfg.CollectorInterval,
 		AgentVersion:      version,
 		TelemetryWALDir:   telemetryWALDir,
 		ChangeEventWALDir: changeEventWALDir,
@@ -400,7 +402,7 @@ func main() {
 	log.Info("opskeeper-edge shutdown complete")
 }
 
-// buildCollector constructs the collector matching cfg.Edge.CollectorMode.
+// buildCollector constructs the collector matching cfg.CollectorMode.
 // For scrape mode the per-target scrape goroutines are added to eg so
 // they share the agent's lifecycle.
 //
@@ -416,8 +418,8 @@ func main() {
 //	auto — legacy: embedded (gopsutil push) + scraper.
 //	embedded — embedded push only.
 //	scrape — scraper only.
-func buildCollector(ctx context.Context, cfg *config.Config, log *slog.Logger, eg *errgroup.Group) (edgebiz.Collector, *edgecollector.Scraper, error) {
-	switch cfg.Edge.CollectorMode {
+func buildCollector(ctx context.Context, cfg *config.EdgeConfig, log *slog.Logger, eg *errgroup.Group) (edgebiz.Collector, *edgecollector.Scraper, error) {
+	switch cfg.CollectorMode {
 	case "off", "none", "":
 		// Default for fresh installs: don't push anything periodically.
 		// On-demand RPCs still hit gopsutil via the wrapped embedded
@@ -433,7 +435,7 @@ func buildCollector(ctx context.Context, cfg *config.Config, log *slog.Logger, e
 		if err != nil {
 			return nil, nil, fmt.Errorf("embedded collector: %w", err)
 		}
-		sc, err := edgecollector.LoadScrapeConfig(cfg.Edge.ScrapeConfigFile)
+		sc, err := edgecollector.LoadScrapeConfig(cfg.ScrapeConfigFile)
 		if err != nil {
 			log.Warn("scrape config unavailable; using embedded baseline only", slog.Any("err", err))
 			return collectorAdapter{c: em}, nil, nil
@@ -443,7 +445,7 @@ func buildCollector(ctx context.Context, cfg *config.Config, log *slog.Logger, e
 		return collectorAdapter{c: edgecollector.NewComposite(em, scraper, log)}, scraper, nil
 
 	case "scrape":
-		sc, err := edgecollector.LoadScrapeConfig(cfg.Edge.ScrapeConfigFile)
+		sc, err := edgecollector.LoadScrapeConfig(cfg.ScrapeConfigFile)
 		if err != nil {
 			return nil, nil, fmt.Errorf("scrape config: %w", err)
 		}
@@ -458,7 +460,7 @@ func buildCollector(ctx context.Context, cfg *config.Config, log *slog.Logger, e
 		}
 		return collectorAdapter{c: em}, nil, nil
 	default:
-		return nil, nil, fmt.Errorf("unknown collector mode %q", cfg.Edge.CollectorMode)
+		return nil, nil, fmt.Errorf("unknown collector mode %q", cfg.CollectorMode)
 	}
 }
 

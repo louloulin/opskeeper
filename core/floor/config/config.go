@@ -597,15 +597,7 @@ func Load() (*Config, error) {
 	c.Admin.Email = getEnv("OPSKEEPER_ADMIN_EMAIL", "")
 	c.Admin.Password = getEnv("OPSKEEPER_ADMIN_PASSWORD", "")
 
-	c.Edge.CloudAddr = getEnv("OPSKEEPER_EDGE_CLOUD_ADDR", "127.0.0.1:40012")
-	c.Edge.AccessKey = getEnv("OPSKEEPER_EDGE_ACCESS_KEY", "")
-	c.Edge.SecretKey = getEnv("OPSKEEPER_EDGE_SECRET_KEY", "")
-	c.Edge.CollectorMode = getEnv("OPSKEEPER_EDGE_COLLECTOR_MODE", "off")
-	c.Edge.ScrapeConfigFile = getEnv("OPSKEEPER_EDGE_SCRAPE_CONFIG_FILE", "/etc/opskeeper-edge/scrape.yaml")
-	c.Edge.CollectorInterval = getEnvDuration("OPSKEEPER_EDGE_COLLECTOR_INTERVAL", 10*time.Second)
-	c.Edge.RestartService.Mocked = getEnvBool("OPSKEEPER_EDGE_RESTART_SERVICE_MOCKED", true)
-	c.Edge.RestartService.AllowedUnits = getEnvCSV("OPSKEEPER_EDGE_RESTART_SERVICE_ALLOWED_UNITS", nil)
-	c.Edge.RestartService.SystemctlPath = getEnv("OPSKEEPER_EDGE_RESTART_SERVICE_SYSTEMCTL", "systemctl")
+	c.Edge = *loadEdge()
 
 	c.FrontierClient.Addr = getEnv("OPSKEEPER_FRONTIER_ADDR", "frontier:40011")
 	c.FrontierClient.ServiceName = getEnv("OPSKEEPER_FRONTIER_SERVICE_NAME", "opskeeper-manager")
@@ -787,6 +779,47 @@ func mysqlTLSParam(sslMode string) (string, error) {
 
 // getEnvBool parses a boolean env var. Accepts the usual strconv.ParseBool
 // values (1/0, t/f, true/false, TRUE/FALSE …); any other value returns def.
+// LoadEdge reads a node's own configuration and nothing else.
+//
+// It exists because Load is the wrong door for a node, and the wrongness is
+// not stylistic. Load reads the whole platform configuration into one struct,
+// and that struct carries six model-vendor API keys, the admin password, the
+// JWT signing secret and the database DSN. A node runs on a customer host
+// with root-level tools — restart_service, a bash sandbox, a webshell — so
+// calling Load on a node means the process holds every secret the control
+// plane holds, whether or not the operator put them in the environment.
+//
+// "Whether or not" is the whole problem. Nothing stops an operator exporting
+// OPSKEEPER_OPENAI_API_KEY from a profile that also starts the edge, and
+// nothing in the node's code says it should not. The plan this repository
+// wrote states the principle directly — the edge does not hold cloud-vendor
+// credentials, it holds a 30-minute node token — and until this function
+// existed, that principle was true only because no deployment happened to set
+// the variables, not because the node refused them.
+//
+// So the node reads its own nine variables and gets a struct that has no
+// field a vendor key could occupy. There is nothing to strip later, because
+// there is nothing to strip.
+func LoadEdge() *EdgeConfig { return loadEdge() }
+
+// loadEdge is the body both doors share. Load needs it for the Edge section
+// of a full configuration, and a node needs it directly; two copies of nine
+// assignments would be two answers to "which variables does a node read",
+// and only one of them would survive an edit to the other.
+func loadEdge() *EdgeConfig {
+	e := &EdgeConfig{}
+	e.CloudAddr = getEnv("OPSKEEPER_EDGE_CLOUD_ADDR", "127.0.0.1:40012")
+	e.AccessKey = getEnv("OPSKEEPER_EDGE_ACCESS_KEY", "")
+	e.SecretKey = getEnv("OPSKEEPER_EDGE_SECRET_KEY", "")
+	e.CollectorMode = getEnv("OPSKEEPER_EDGE_COLLECTOR_MODE", "off")
+	e.ScrapeConfigFile = getEnv("OPSKEEPER_EDGE_SCRAPE_CONFIG_FILE", "/etc/opskeeper-edge/scrape.yaml")
+	e.CollectorInterval = getEnvDuration("OPSKEEPER_EDGE_COLLECTOR_INTERVAL", 10*time.Second)
+	e.RestartService.Mocked = getEnvBool("OPSKEEPER_EDGE_RESTART_SERVICE_MOCKED", true)
+	e.RestartService.AllowedUnits = getEnvCSV("OPSKEEPER_EDGE_RESTART_SERVICE_ALLOWED_UNITS", nil)
+	e.RestartService.SystemctlPath = getEnv("OPSKEEPER_EDGE_RESTART_SERVICE_SYSTEMCTL", "systemctl")
+	return e
+}
+
 func getEnvBool(key string, def bool) bool {
 	v, ok := os.LookupEnv(key)
 	if !ok || v == "" {

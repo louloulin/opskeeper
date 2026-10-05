@@ -20010,6 +20010,184 @@ var cerr error
 - 测试：根模块 `cmd/opskeeper` +1 条顶层用例（737 → **738**，均值为 `go test ./...` 的计数）。
 
 
+### 4.178 决策 246：节点读到的是全平台配置——**计划 §六 的最后一条验收条款，靠「没人配」成立**，以及**第十一次量具洞，由我在写完它的十一分钟后犯下**
+
+#### 一、接缝审计的第三条：自治仲裁的顺序，先给一个否定结果
+
+决策 244/245 的判据是「A 把东西交给 B 的接缝，有没有测试把 A 的真产出喂给 B 的真消费」。
+本轮先审了计划 1.2 那条被点名的顺序声明——**「autonomy 仲裁器插在 `policygate` 之前」**。
+
+**结论：这一条没有缺口，有证据。**
+
+| 层 | 事实 |
+|---|---|
+| broker 侧 | `cmd/opskeeper-edge/policy.go:121`：`c.ToolName == builtin.ToolKey && autonomyIsLocal(obs)` 时跳过收据 |
+| `autonomyIsLocal` | `cmd/opskeeper-edge/autonomyrouting.go:50`：裸 `!online`，`offlineSince` 被丢弃（`_`） |
+| 仲裁器 | `core/edge/autonomy/autonomy.go` `Adjudicate`：`centerIsAway(reach, now)` **带阈值**，`!Run` 即 `Defer` |
+| 执行 | `execute.go:65`：`if d.Verdict != Run { return }`——**`Defer` 不执行** |
+
+所以「阈值」在仲裁器一层，`autonomyIsLocal` 只是「值不值得问仲裁器」。
+短暂抖动时 broker 跳过收据、仲裁器 `Defer`、命令不跑，**fail-closed**；
+`obs == nil` 也返回 `false`（去问审批），**同样是 fail-closed**。
+`execute_test.go:146` 的 `TestPerformOnAConnectedNodeRunsNothing` 钉住了其中一半。
+
+**一个记账上的细节**：broker 与 `tools.go:81` 各有一份
+`ToolName == builtin.ToolKey && autonomyIsLocal(...)`，**两处条件相同**。
+它们是同一个旁路条件的两份拷贝，值得记一笔，但本轮**没有**证据说其中一份
+已经漂移，所以按「已记录、未裁决」记，而不是按缺口记。
+
+#### 二、接缝审计的第四条：计划 §六 验收门槛的最后一条没有闸门
+
+计划 §六 的验收门槛原文：
+
+> `make module-check` + `make eval-gates` + `make module-standalone-check` 全绿；
+> **节点上 `/etc/opskeeper-edge` 与进程环境经审计确认无云厂商密钥。**
+
+前半句的三道闸门**都在**（实测 `Makefile` 三个目标俱在）。后半句**没有任何闸门**。
+
+那就去看节点到底读什么：
+
+```
+$ grep -n "cfg\." cmd/opskeeper-edge/main.go
+→ 全部是 cfg.Edge.*（15 处），agent.go 里的 cfg 是另一个局部类型
+$ grep -n "cfg, err := config.Load()" cmd/opskeeper-edge/main.go
+→ 73: cfg, err := config.Load()
+```
+
+**节点用的是 `config.Load()`**——读整个平台配置。而 `config.Load()` 读的是：
+
+```
+$ grep -oE 'getEnv\("OPSKEEPER_[A-Z_]*(API_KEY|TOKEN)"' core/floor/config/config.go | sort -u
+OPSKEEPER_ANTHROPIC_API_KEY
+OPSKEEPER_DEEPSEEK_API_KEY
+OPSKEEPER_GEMINI_API_KEY
+OPSKEEPER_KIMI_API_KEY
+OPSKEEPER_OPENAI_API_KEY
+OPSKEEPER_ZHIPU_API_KEY
+OPSKEEPER_ALERT_WEBHOOK_TOKEN
+```
+
+**六个云厂商 API key，加上管理员密码、JWT 签名密钥、数据库 DSN**，
+在**每一个节点进程的启动路径上**被读进内存。
+
+而这个进程在客户主机上以 root 权限运行 `restart_service`、一个 bash 沙箱和一个
+webshell。**一个读不到厂商密钥的节点，是一个可以被递上密钥的节点。**
+
+那为什么验收条款一直算「成立」？因为：
+
+- `deploy/install/edge/opskeeper-edge.env.example` 里**一个厂商变量都没有**；
+- `docker-compose.yml` **不跑 edge**（grep 不到 edge 服务，也没有 env_file）。
+
+**所以这条验收是靠「没人配」成立的，不是靠构造保证的。** 计划 §三 的原则写的是
+「边缘不持云厂商密钥」，而代码里**没有任何东西拒绝这件事**——只要有人在一个
+被 edge 也 source 的 profile 里 `export OPSKEEPER_OPENAI_API_KEY`，密钥就进了每个节点。
+
+这与决策 245 是同一族的洞，但**方向相反**：245 是「两半之间没有证人」，
+这一条是「安全属性成立的原因是一个没有任何守卫的空集」。
+
+#### 三、修法：给节点一扇自己的门
+
+`core/floor/config/config.go` 新增 `LoadEdge() *EdgeConfig`，
+把 `Edge` 段那九行抽成 `loadEdge()`，**`Load()` 与 `LoadEdge()` 共用同一个 body**
+（两份拷贝会变成两个答案，而只有一个能在对方被改后活下来）。
+`cmd/opskeeper-edge/main.go:73` 改用它，`buildCollector` 的参数类型从
+`*config.Config` 收窄到 `*config.EdgeConfig`。
+
+改完之后：**节点返回的结构体里没有任何一个字段是厂商密钥能占的位置**，
+所以不是「读进来再过滤」，而是**没有可读之处**。`config.Config` 这个类型
+在 `cmd/opskeeper-edge` 里已经**一次都不出现**（grep 为 0）。
+
+行为未变：`config_test.go:165` 的 `TestLoadEdgeCollectorOverrides`
+仍然直接调 `Load()` 并检查 `cfg.Edge.*`，**它绿**——说明抽函数没有改语义。
+
+#### 四、**第十一次量具洞：这一次的守卫是我自己写坏的，而且是在写完它十一分钟之后**
+
+第一条守卫写在 `core/floor/config/edge_loader_test.go`，做法是走
+`LoadEdge` 的**调用闭包**（而不是只看 `LoadEdge` 的函数体——因为把读取挪进它调用的
+函数是最容易骗过「只看本函数」的写法），把闭包里所有 `getEnv*` 家族的第一个
+字符串实参收集起来。
+
+第一遍跑，绿。然后做变异：
+
+> 在 `loadEdge` 里加一行 `_ = getEnv("OPSKEEPER_OPENAI_API_KEY", "")`
+> ——**正是这条守卫存在的理由那一条编辑**
+
+**结果：绿。**
+
+原因在数据结构上：
+
+```go
+// 错的第一版
+reads := map[string]string{}                 // func name -> env var, first one seen
+...
+if name, ok := envVarName(ident.Name, call.Args); ok {
+    if _, seen := reads[ident.Name]; !seen {  // ← 键是「被调函数名」
+        reads[ident.Name] = name
+    }
+}
+```
+
+`reads` 用**被调函数名**（`getEnv`）做键，于是**每个 getter 只记下第一个变量，
+其余全部静默丢弃**。`loadEdge` 里第一个是 `OPSKEEPER_EDGE_CLOUD_ADDR`，
+第二个之后的每一个都不进 map。**守卫量的是「每种 getter 的第一个变量」，
+而它的失败消息说的是「闭包里所有变量」**——量具和它声称的东西差了九个。
+
+改成按**外层函数**做键、每个函数存一个**切片**，重测：两个位置
+（`getEnv` 与 `getEnvDuration`，函数首行与末行）**都红**。
+
+**这一条值得单独记，因为它和前十条的读法不一样：**
+
+- 前十条的洞是**写好之后一直没人测**；
+- 第十一条的洞是**写好之后十一分钟就被测了，而测它的动作本身是变异**——
+  是**变异这个动作救了它**，不是「记得写测试」救了它。
+
+也就是说：**在这个仓库里，「加了守卫」和「守卫是对的」是两个事件**，
+而唯一区分它们的东西是变异实测。台账 §4.176 末尾那张三命题表因此要加第四行：
+
+> 一个守卫**测过**它自己要守的东西吗？没有变异实测的守卫，其「已覆盖」状态
+> 与它没写之前是同一个状态。
+
+#### 五、两条闸门（两半，因为这个仓库的失败形状就是只测一半）
+
+| 闸门 | 覆盖 |
+|---|---|
+| `make edge-credential-check` 第一条 | `core/floor/config`：走 `LoadEdge` 闭包，拒绝任何 `OPSKEEPER_EDGE_` 之外的变量；**闭包为空时 `t.Fatalf`**（决策 243 的判据） |
+| 同上第二条 | `cmd/opskeeper-edge`：拒绝 `config.Load()`，并**拒绝节点出现 `config.Config` 这个类型名** |
+
+第二条里「拒绝 `config.Config`」比「拒绝调用 `Load()`」更强：
+**一个拼不出这个类型名的进程，没有字段可以从中读出厂商密钥。**
+它还断言**至少有一个文件调用 `LoadEdge()`**——因为「删掉全部读取」
+是让安全测试转绿的一条路，**钉住地板才能堵住这条路**
+（`TestLoadEdgeReadsAtLeastTheVariablesTheNodeNeeds` 钉
+`CLOUD_ADDR` / `ACCESS_KEY` / `SECRET_KEY` 三条）。
+
+厂商前缀用**前缀表**而不是精确名单，是有意的：明天 `Load` 里新增一个 provider，
+正是这条必须抓住的编辑，而精确名单要跟泄漏同一个 commit 改。
+
+变异实测（五条全红）：
+
+| 变异 | 结果 |
+|---|---|
+| M1 `loadEdge` 加 `OPSKEEPER_OPENAI_API_KEY` | RED（**修守卫之前是 GREEN**） |
+| M1b 换位置、换 getter（`getEnvDuration` + `OPSKEEPER_ANTHROPIC_API_KEY`） | RED |
+| M2 删光 `loadEdge` 的全部读取 | RED（地板测试） |
+| M3 节点改回 `config.Load()` | RED（两条断言同时报出） |
+| 闸门级 M1 / M3 | 各自 `make edge-credential-check` **转红**，还原后回绿 |
+
+#### 六、口径与分数
+
+- **分数一个数都不动**：阶段 3 维持 **91.0%**，加权维持 **96.4%**。
+  但**这是本文件第一次在「不改分数」的同时改了生产代码**——前几刀都是纯测试与
+  台账。理由仍然是同一条：计划 §四 五阶段的验收闸门没有因为这一刀前进一格，
+  **它修的是 §六 验收门槛里的一条安全条款**。分数不动，不等于这一刀不重。
+- **计划 §六 的最后一条从「无闸门」变成「有闸门且有变异实测」**。但要如实记：
+  它**覆盖的是「节点代码读不到厂商凭据」**，**不覆盖**「节点上 `/etc/opskeeper-edge`
+  目录里没有别人的密钥文件」——**那一条仍然依赖部署侧，本轮没有做，也不该由
+  代码测试来假装做了**。
+- 测试：`core/floor/config` 25 → **27**；`cmd/opskeeper-edge` 177 → **178**；
+  根模块 738 → **739**；`core/manager` 3305 未动。
+
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -20057,6 +20235,31 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 
 加权合计 ≈ **96.4%**（四阶段等比 98 / 100 / 96.7 / 91.0 的均值 96.4）。这一栏按
 决策倒序追加，每一条只说自己动的那一分量：
+
+- **决策 246 第一次在「分数不动」的同时改了生产代码**——接缝审计的第三条先给了一个
+  **否定结果**：计划 1.2 写「autonomy 仲裁器插在 `policygate` 之前」，实测**没有缺口**：
+  broker 侧 `autonomyIsLocal` 只是「值不值得问」（裸 `!online`），阈值与 `Defer` 在仲裁器
+  一层，而 `execute.go:65` 的 `if d.Verdict != Run { return }` 保证 `Defer` 不执行，
+  `obs == nil` 也 fail-closed。**第四条是缺口**：计划 §六 验收门槛最后一条
+  「节点上无云厂商密钥」**没有任何闸门**，去看代码发现 `cmd/opskeeper-edge/main.go:73`
+  调的是 **`config.Load()`**——它在**每个节点进程的启动路径上**读进 **6 个云厂商 API key**
+  + 管理员密码 + JWT 密钥 + 数据库 DSN，而这个进程在客户主机上以 root 跑
+  `restart_service` / bash 沙箱 / webshell。**验收条款今天是靠「没人配」成立的**：
+  env 示例里一个厂商变量都没有，compose 也不跑 edge。修法是给节点一扇自己的门
+  `config.LoadEdge()`（与 `Load()` 共用同一个 `loadEdge()` body），
+  `buildCollector` 参数收窄到 `*config.EdgeConfig`——**不是读进来再过滤，
+  是没有可读之处**，`config.Config` 在节点命令里一次都不出现。
+  **但这一刀真正的内容是第十一次量具洞，而且是我自己写坏的**：
+  新守卫的 `reads` map 用了**被调函数名**做键，于是**每个 getter 只记第一个变量、
+  其余静默丢弃**——在 `loadEdge` 里加一行厂商 key（正是它存在的理由那条编辑）
+  **测试仍然绿**。改按外层函数做键、每函数存切片后，两个位置都红。
+  **这一条和前十条的读法不一样**：前十条是写好之后一直没人测；这一次是
+  **写好十一分钟后就被测了，而救它的是变异这个动作，不是「记得写测试」**。
+  所以三命题表要加第四行：**「加了守卫」与「守卫是对的」是两个事件**，
+  唯一区分它们的是变异实测。新增 `make edge-credential-check`（两半：闭包侧 +
+  节点侧，含「拒绝 `config.Load()`」与「拒绝节点出现 `config.Config`」，
+  外加钉住地板防「删光读取」）。五条变异全红。**如实记：它覆盖的是「节点代码读不到
+  厂商凭据」，不覆盖「节点目录里没有别人的密钥文件」——那一条仍依赖部署侧**（§4.178）。
 
 - **决策 245 不动任何分数，但把决策 244 的判据用在了计划自己的头号 P0 上，并发现
   这一次连量具都不存在**——P0-1（LLM 凭据断链）的两半分属两个文件：

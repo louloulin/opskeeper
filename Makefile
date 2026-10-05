@@ -248,6 +248,38 @@ crystallize-check: ## 结晶：晋升 / 退役 / 拒绝不可用输入 / 草稿�
 		'TestTheCrystallizerTheBootBuildsIsTheOneTheOrchestratorIsGiven|TestANilAlertRepoLeavesTheFeatureOffRatherThanTakingTheProcessDown'
 	@echo "crystallize-check: promotion, retirement, refusal, load-through-admission and the boot wiring are green"
 
+# The plan's acceptance clause for the edge is that no cloud-vendor
+# credential exists under /etc/opskeeper-edge or in the node's process
+# environment, and its stated principle is that the edge holds a short-lived
+# node token rather than somebody else's model key.
+#
+# That clause was true for the wrong reason. The node called config.Load(),
+# which reads six vendor API keys, the admin password, the JWT secret and the
+# database DSN into a process that runs restart_service and a bash sandbox on
+# a customer host. Nothing had been set — the env example names none of them
+# and the compose file runs no node — so the audit passed on the absence of
+# configuration rather than on anything refusing it. One exported variable in
+# a shared profile would have put a key in every node, and nothing would have
+# said so.
+#
+# The gate has two halves because the property has two ends, and the shape of
+# this repository's failures is that one end gets tested and the other does
+# not (decisions 244 and 245). The config half walks LoadEdge's call closure
+# and refuses any variable outside OPSKEEPER_EDGE_; the node half refuses
+# config.Load and refuses the node naming config.Config at all. The first
+# version of the config half keyed its findings by the getter's name instead
+# of the enclosing function, so it recorded one variable per callee and
+# dropped the rest — adding the vendor key it exists to catch left it green.
+# That is the eleventh hole of this shape here, and it was written eleven
+# minutes after the tenth.
+.PHONY: edge-credential-check
+edge-credential-check: ## 节点进程读不到任何云厂商凭据（决策 246）
+	cd core/floor/config && GOWORK=off go test ./... -count=1 -run \
+		'TestLoadEdgeReadsNothingButTheNodesOwnVariables|TestLoadEdgeReadsAtLeastTheVariablesTheNodeNeeds'
+	GOWORK=off go test ./cmd/opskeeper-edge/ -count=1 -run \
+		'TestTheNodeOpensTheNodeLoaderAndNeverNamesThePlatformConfiguration'
+	@echo "edge-credential-check: the node reads only OPSKEEPER_EDGE_* and never names config.Config"
+
 # The plan's first P0 is that a node cannot reach a model. Half of that fix
 # lives in llmgw.Register (the routes) and half in
 # modelEndpointResolver.AgentEndpoint (the string every node is handed), and
