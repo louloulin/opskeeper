@@ -46,7 +46,7 @@ type price struct {
 func priceFile(t *testing.T, rel string) price {
 	t.Helper()
 	root := filepath.Join("..", "..")
-	sources, _, err := parseTree(filepath.Join(root, "core", "manager"), managerPrefix, defaultRules())
+	sources, _, err := parseControlPlane(root)
 	if err != nil {
 		t.Fatalf("parse the tree: %v", err)
 	}

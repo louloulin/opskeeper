@@ -9,7 +9,7 @@ import (
 	"time"
 
 	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/nodefleet"
+	"github.com/vincent-wuhan/opskeeper/core/domains/biz/nodefleet"
 	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/adapter"
 	middlewareregistry "github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"

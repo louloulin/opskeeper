@@ -8,8 +8,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	flowbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/flow"
-	flowmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/flow"
+	flowbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/flow"
+	flowmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/flow"
 )
 
 func setupScheduleRepo(t *testing.T) *Repo {

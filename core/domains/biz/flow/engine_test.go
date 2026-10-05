@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/flow"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/flow"
 )
 
 // --- fakes ---------------------------------------------------------------

@@ -153,7 +153,7 @@ func TestACheckerNamingTheImportPrefixIsNotADependentOfAnything(t *testing.T) {
 // while describing a tree that no longer existed — the same failure the door
 // headline had, and the reason that number is watched rather than trusted.
 func TestTheFloorTellsTheReaderHowManyOfItsRowsAreWired(t *testing.T) {
-	sources, _, err := parseTree("../../core/manager", managerPrefix, defaultRules())
+	sources, _, err := parseControlPlane("../..")
 	if err != nil {
 		t.Fatalf("parse the tree: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestTheFloorTellsTheReaderHowManyOfItsRowsAreWired(t *testing.T) {
 // reason the door headline needed one: a number pasted into a format string
 // produces byte-identical output and stays green.
 func TestTheWiredCountMovesWhenTheWiringMoves(t *testing.T) {
-	sources, _, err := parseTree("../../core/manager", managerPrefix, defaultRules())
+	sources, _, err := parseControlPlane("../..")
 	if err != nil {
 		t.Fatalf("parse the tree: %v", err)
 	}
@@ -256,7 +256,7 @@ func wiredCountOf(out string) int {
 // claim a reader cannot check by looking. If someone edits the wording back,
 // this goes red.
 func TestTheReportMayNotSayNothingBreaksWhenSomethingIsWired(t *testing.T) {
-	sources, _, err := parseTree("../../core/manager", managerPrefix, defaultRules())
+	sources, _, err := parseControlPlane("../..")
 	if err != nil {
 		t.Fatalf("parse the tree: %v", err)
 	}

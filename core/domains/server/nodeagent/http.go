@@ -31,10 +31,10 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/nodeagent"
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/nodefleet"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	"github.com/vincent-wuhan/opskeeper/core/domains/biz/nodeagent"
+	"github.com/vincent-wuhan/opskeeper/core/domains/biz/nodefleet"
 )
 
 // Handler exposes /v1/node-agents/*.

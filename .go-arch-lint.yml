@@ -327,7 +327,9 @@ deps:
       - manager_model
       - manager_server
       - manager_service
-      - oxcore_domain
+      # oxcore_domain 撤掉：它唯一的使用者 server/flow 与 server/nodeagent
+      # 随 flow / nodeagent 搬去了 core/domains（决策 223），授权留着就是
+      # 一条没人行使的口子。
       - oxcore_ports
       # 决策 67：query_translate 端点直接发一次补全（不建 Session），
       # http.go 读回 stored-ledger 的用量。这两处与控制面其他调用方看到
@@ -702,12 +704,16 @@ deps:
 
   oxdomains_biz:
     mayDependOn:
+      - oxcore_domain
+      - oxcore_ports
+      - oxcore_wire
       - oxdomains_model
       - oxfloor
       - shared_pkg
 
   oxdomains_data:
     mayDependOn:
+      - oxdomains_biz
       - oxdomains_model
       - shared_pkg
 
@@ -721,8 +727,10 @@ deps:
   oxdomains_server:
     mayDependOn:
       - oxdomains_biz
+      - oxdomains_model
       - oxdomains_service
       - oxcore_domain
+      - oxcore_ports
       - oxfloor
       - oxpig_ai
       - oxpig_model

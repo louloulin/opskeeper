@@ -247,7 +247,7 @@ func TestTheShippedTablesDescribeTheShippedTree(t *testing.T) {
 	// The same walk main() does, so the checker's own gate is a test: a
 	// new cross-domain import, a new cycle, or a table that stopped
 	// matching the tree all fail here with a message naming the domain.
-	sources, stats, err := parseTree("../../core/manager", managerPrefix, defaultRules())
+	sources, stats, err := parseControlPlane("../..")
 	if err != nil {
 		t.Fatalf("parse the manager module: %v", err)
 	}

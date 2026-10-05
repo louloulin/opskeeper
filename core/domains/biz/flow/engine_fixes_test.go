@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/flow"
+	model "github.com/vincent-wuhan/opskeeper/core/domains/model/flow"
 )
 
 // TestEngineConcurrentSetVarsNoRace fans a trigger out to many `set` nodes
