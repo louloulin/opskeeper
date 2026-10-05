@@ -305,7 +305,7 @@ export default function LiveIncidentPage() {
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-2xl">
             <p className="font-mono text-xs uppercase tracking-wider text-accent-300">
-              {translate('决赛演示 · PostgreSQL 连接池耗尽', 'Final Demo · PostgreSQL pool exhaustion')}
+              {translate('场景演示 · PostgreSQL 连接池耗尽', 'Final Demo · PostgreSQL pool exhaustion')}
             </p>
             <h1 className="mt-3 text-balance text-3xl font-semibold tracking-tight text-white sm:text-4xl">
               {translate('业务体感与事故闭环控制台', 'Business Impact & Incident Console')}
