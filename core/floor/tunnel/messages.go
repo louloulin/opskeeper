@@ -249,6 +249,27 @@ type HostInfo struct {
 	// cannot determine a suitable address (e.g. no non-loopback
 	// interface found).
 	IPAddress string `json:"ip_address,omitempty"`
+
+	// OSVersion is the platform release below OS: "22.04" on Ubuntu,
+	// "14.4.1" on macOS, the build number on Windows. It is a separate
+	// column rather than part of OS because that is how the device table
+	// stores it and because "linux" alone cannot answer "which kernel
+	// bug is this host on".
+	//
+	// Added after the first agents shipped, so it is omitempty: an older
+	// agent simply does not send it and the column stays empty. The
+	// cloud must not require it (see the projection guard in
+	// core/manager/biz/edge/hostinfo_projection_test.go, which fails if a
+	// column is added here without a decision about where it lands).
+	OSVersion string `json:"os_version,omitempty"`
+
+	// DiskTotalBytes is the capacity of the root filesystem, as opposed
+	// to the free/gauge percentages that arrive on the metric path. The
+	// device list shows "used / total" and the total has to come from
+	// somewhere: it used to come from here, which is how two device
+	// columns ended up permanently zero while the API still returned
+	// them.
+	DiskTotalBytes uint64 `json:"disk_total_bytes,omitempty"`
 }
 
 // RegisterEdgeRequest is the first RPC the edge sends after connecting.

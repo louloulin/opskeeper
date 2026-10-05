@@ -116,11 +116,20 @@ type DoneFrame struct {
 // aggregate-per-turn: a console must not need to sum assistant frames to
 // show a cost.
 type UsageFrame struct {
-	InputTokens     int     `json:"input_tokens"`
-	OutputTokens    int     `json:"output_tokens"`
-	CacheReadTokens int     `json:"cache_read_tokens,omitempty"`
-	CostUSD         float64 `json:"cost_usd,omitempty"`
-	Model           string  `json:"model,omitempty"`
+	InputTokens     int `json:"input_tokens"`
+	OutputTokens    int `json:"output_tokens"`
+	CacheReadTokens int `json:"cache_read_tokens,omitempty"`
+	// CacheWriteTokens is the prompt half a provider wrote into its cache
+	// during this turn. It is billable prompt work, so a frame that omits it
+	// under-reports the turn's cost for exactly the providers that cache
+	// (Anthropic, DeepSeek) — the ones where it is largest.
+	//
+	// It was absent while ports.TranscriptUsage already carried it and the
+	// stored transcript already reported it, so the live frame and the
+	// reloaded history disagreed for the same turn.
+	CacheWriteTokens int     `json:"cache_write_tokens,omitempty"`
+	CostUSD          float64 `json:"cost_usd,omitempty"`
+	Model            string  `json:"model,omitempty"`
 }
 
 // ErrorFrame carries a terminal failure.

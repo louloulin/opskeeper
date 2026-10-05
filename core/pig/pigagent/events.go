@@ -94,8 +94,13 @@ func (m *Mapper) SetUsage(u ports.TranscriptUsage, model string) {
 		InputTokens:     u.InputTokens,
 		OutputTokens:    u.OutputTokens,
 		CacheReadTokens: u.CacheReadTokens,
-		CostUSD:         u.CostUSD,
-		Model:           model,
+		// Cache-write tokens are part of the billable prompt half and the
+		// frame has a column for them; the live counter used to stop at
+		// cache reads, so a caching provider's turn looked cheaper while it
+		// was running than it did after a reload.
+		CacheWriteTokens: u.CacheWriteTokens,
+		CostUSD:          u.CostUSD,
+		Model:            model,
 	}
 }
 

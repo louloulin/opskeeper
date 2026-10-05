@@ -42,12 +42,27 @@
 //     own comment: a nested struct on the wire would be a second place for the
 //     trigger vocabulary to drift.
 //
-// All four are printed on every run, so a reader meets them before the numbers
+// Reading all fourteen flagged sites settled the rest, and the tally is the
+// argument for keeping this a report: twelve are structural, two were real.
+// The six further classes are all in the list below — a derived identity
+// column, an envelope projection, a closure capture, a fan-out across sibling
+// constructors, an assignment after the literal, and a rename that is only a
+// rename because the source column is spelled differently.
+//
+// All ten are printed on every run, so a reader meets them before the numbers
 // rather than after. A gate that reports two of two wrong teaches people to
 // write "trust me" next to it, and the ledger has a rule about exactly that.
 // The classes are also what an extension has to handle: each one is a shape
 // the analysis can learn to see, and until it does, every flag is a place to
 // look rather than a defect to fix.
+//
+// The two real ones were both in the direction this command does not measure.
+// os_version and disk_total_bytes were zero on every device row because the
+// WIRE struct had no column to carry them, and cache_write_tokens was missing
+// from the usage frame because the frame had no column for it. Neither is a
+// source column left unset — a missing destination column is a hole in a
+// contract, and no amount of watching literals notice it. The sites below are
+// where to look; the direction to add is the other one.
 //
 // What it cannot see, in full:
 //
@@ -85,7 +100,9 @@ import (
 
 const limitations = `renamed or derived columns · values passed as extra parameters · ` +
 	`receivers that are not parameters (see the resolution rate) · builder-style ` +
-	`assembly · thresholds rather than definitions`
+	`assignment · columns set after the literal · source columns read as identity or ` +
+	`envelope by sibling code · destination columns with no source counterpart (invisible) · ` +
+	`thresholds rather than definitions`
 
 // knownFalsePositives is the pair of misses this command's own first reading
 // produced on this tree. They are printed on every run for the reason given in
@@ -107,14 +124,54 @@ var knownFalsePositives = []struct {
 		"Payload arrives as PayloadJSON, a renamed and serialised column",
 	},
 	{
+		"rename",
+		"service/plugin/fleet.go: PluginInstallRequest ← PluginSpec, and its mirror in core/edge/biz/plugin.go",
+		"the same rename at both ends of one hop: Plugin: spec.Name here, Name: req.Plugin there",
+	},
+	{
+		"rename",
+		"pigcoding/session.go: SessionStartOptions ← Start",
+		"Tools and SessionLog arrive as PiG's ExtraTools and SessionManager; both renames carry their reasons inline",
+	},
+	{
+		"assignment after the literal",
+		"pigcoding/session.go: SessionStartOptions.CWDOverride",
+		"set on the next statement, and only when the caller asked for one — nil means inherit",
+	},
+	{
 		"narrowing",
 		"service/aiops/service.go (3 sites)",
 		"a literal inside a type switch copies the branch's own case out of a wider struct",
 	},
 	{
+		"narrowing",
+		"service/aiops/service.go: ToolEvent",
+		"the fourth site in the same file, and the only one that copies more than the case's own field",
+	},
+	{
 		"flattening",
 		"cmd/opskeeper-edge/autonomy.go: autonomyAuditRow",
 		"Row.Trigger is spread across the wire's Kind/Metric/Threshold triple, on purpose",
+	},
+	{
+		"derived identity",
+		"biz/edge/usecase.go: HostFacts ← HostInfo (Fingerprint, HardwareFingerprint)",
+		"both are hashed into fp, which keys the row through the seed literal and the legacy rebind; neither is a fact to copy",
+	},
+	{
+		"envelope projection",
+		"biz/nodefleet/tunnelprocess.go: ProjectEvent",
+		"EdgeID, Frame and At are the transport envelope, and the port's shape is the raw record underneath it",
+	},
+	{
+		"closure capture",
+		"edge/auditlog/pump.go and edge/autonomy/pump.go: PumpOptions",
+		"Sink, Sender and Link are dereferenced once and captured into the destination's Send func",
+	},
+	{
+		"fan-out",
+		"cmd/opskeeper/aiopskernel.go: PersistDeps ← agentKernelInput",
+		"one input struct feeds the persister, the host, the provider and the driver; each literal sees a slice of it",
 	},
 }
 

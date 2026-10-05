@@ -82,6 +82,10 @@ func (c *EmbeddedCollector) HostInfo(ctx context.Context) (tunnel.HostInfo, erro
 	if info, err := host.InfoWithContext(ctx); err == nil && info != nil {
 		hi.Hostname = info.Hostname
 		hi.KernelVersion = info.KernelVersion
+		// PlatformVersion is the release below OS ("22.04", "14.4.1").
+		// Empty on platforms gopsutil cannot resolve, hence omitempty on
+		// the wire column.
+		hi.OSVersion = info.PlatformVersion
 		if info.OS != "" {
 			hi.OS = info.OS
 		}
@@ -105,6 +109,8 @@ func (c *EmbeddedCollector) HostInfo(ctx context.Context) (tunnel.HostInfo, erro
 	if vm, err := mem.VirtualMemoryWithContext(ctx); err == nil && vm != nil {
 		hi.MemTotalBytes = vm.Total
 	}
+	// Root filesystem capacity. See rootDiskTotalBytes.
+	hi.DiskTotalBytes = rootDiskTotalBytes(ctx)
 	if logical, err := cpu.CountsWithContext(ctx, true); err == nil && logical > 0 {
 		hi.CPUCount = logical
 	}

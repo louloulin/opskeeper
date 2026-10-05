@@ -302,14 +302,28 @@ func (u *Usecase) HandleRegister(ctx context.Context, edgeID uint64, info tunnel
 	if err != nil {
 		return fmt.Errorf("upsert device: %w", err)
 	}
+	// Every column of tunnel.HostInfo is either projected here or listed in
+	// hostinfo_projection_test.go's exempt set with a reason. The two
+	// fingerprint columns are the exemptions and they are consumed above,
+	// not here: `fp` is the identity this row is keyed on, so it travels
+	// through the seed rather than through the facts update.
+	//
+	// OSVersion and DiskTotalBytes were the columns this projection used to
+	// omit while the port comment promised them and the device API returned
+	// them — the stored values were permanently "" and 0. They are here
+	// because tunnel.HostInfo now carries them; an older agent sends
+	// neither and the columns keep whatever they had, which is the same
+	// best-effort contract the rest of HostInfo has.
 	if err := u.devices.UpdateHostFacts(ctx, dev.ID, devicebiz.HostFacts{
-		Hostname:      info.Hostname,
-		OS:            info.OS,
-		Arch:          info.Arch,
-		KernelVersion: info.KernelVersion,
-		CPUCount:      info.CPUCount,
-		MemTotalBytes: info.MemTotalBytes,
-		IPAddress:     info.IPAddress,
+		Hostname:       info.Hostname,
+		OS:             info.OS,
+		OSVersion:      info.OSVersion,
+		Arch:           info.Arch,
+		KernelVersion:  info.KernelVersion,
+		CPUCount:       info.CPUCount,
+		MemTotalBytes:  info.MemTotalBytes,
+		DiskTotalBytes: info.DiskTotalBytes,
+		IPAddress:      info.IPAddress,
 	}); err != nil {
 		return fmt.Errorf("update device host facts: %w", err)
 	}

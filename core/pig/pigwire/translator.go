@@ -271,11 +271,12 @@ func (t *Translator) foldUsage(usage *usageRecord, model string) {
 		return
 	}
 	t.usage = wire.UsageFrame{
-		InputTokens:     usage.Input,
-		OutputTokens:    usage.Output,
-		CacheReadTokens: usage.CacheRead,
-		CostUSD:         usage.Cost.Total,
-		Model:           model,
+		InputTokens:      usage.Input,
+		OutputTokens:     usage.Output,
+		CacheReadTokens:  usage.CacheRead,
+		CacheWriteTokens: usage.CacheWrite,
+		CostUSD:          usage.Cost.Total,
+		Model:            model,
 	}
 }
 
@@ -301,7 +302,12 @@ type usageRecord struct {
 	Input     int `json:"input"`
 	Output    int `json:"output"`
 	CacheRead int `json:"cacheRead"`
-	Cost      struct {
+	// CacheWrite mirrors PiG's ai.Usage.CacheWrite. It was missing here as
+	// well as in the frame, so the loss happened twice on this path: the
+	// unmarshalled record could not carry it even once the frame had a
+	// column to put it in.
+	CacheWrite int `json:"cacheWrite"`
+	Cost       struct {
 		Total float64 `json:"total"`
 	} `json:"cost"`
 }
