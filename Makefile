@@ -439,6 +439,17 @@ domain-release-report: ## 打印可证明独立发版的域（入向跨域 impor
 domain-seam-report: ## 逐条判定跨域边承载的是端口还是数据（决策 231）
 	go run ./scripts/domaincheck . -seams
 
+# What makes a data shape worth moving: other domains already carry it. A shape
+# N domains select is N edges one move can close; a shape only one domain
+# selects is that domain's private vocabulary and moving it buys nothing. The
+# report also marks the same-named types that have more than one declaring
+# domain, which a ranking by consumer count puts at the top and which cannot be
+# moved mechanically — alert.Event is not audit.Event, and a move that misses
+# the collision compiles and silently changes meaning.
+.PHONY: domain-shared-report
+domain-shared-report: ## 列出被多个域共享的数据形状与同名歧义（决策 232）
+	go run ./scripts/domaincheck . -shared
+
 .PHONY: domain-check
 domain-check: ## 校验 control plane 的域边界（57 个域 / 40 条声明边 / 0 对环，决策 231 起）
 	go run ./scripts/domaincheck .

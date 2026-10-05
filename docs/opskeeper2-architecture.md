@@ -18005,6 +18005,127 @@ port-opposite」→ **红**，并把 37 条边全部列了出来。
 所以它们能不能切，取决于 `aiops` 愿不愿意把自己的数据形状下沉，而不是取决于
 任何一条边有多重。这是本轮给出的下一轮问题，**但它不再是切边问题**。
 
+### 4.165 决策 232：量 `aiops` 的出边扇出，**并且发现那份共享符号排名里最重的那几行是不能动的**
+
+#### 一、上一轮留的问题是「切边」，这一轮发现它已经不是切边问题
+
+决策 231 的结论是 `port-opposite` 归零，并说剩下 40 条边最重的是
+`aiops → edge`（26 条 import）与 `aiops → device`（24 条），**「这已经不是切边
+问题」**。它没有说那是什么问题。这一轮去量了。
+
+`aiops` 的出边实测：**9 条边、81 条 import 声明**（`edge` 26、`device` 24、
+`alert` 15、`loop` 4、`topology` 4、`hitl` 3、`approval` 2、`audit` 2、`skill` 1）。
+**此前报告里的「14 条」是错的，正确读数是 9 条 81 条 import。**
+
+然后问了一个决定性的问题：**这 81 条里，有多少只选中了一个 `Usecase`？**
+
+**答案：0。** 9 条边**每一条**都同时选中数据形状：
+
+| 边 | import | 选中符号数 | 除 `Usecase` 外的数据形状 |
+|---|---|---|---|
+| `aiops → edge` | 26 | 6 | `ChangeEventRow` `Edge` `ListFilter` `PluginRow` `StatusOnline` |
+| `aiops → device` | 24 | 13 | `Device` `EdgeDeviceRelationHost` `RoleBit*` `Role*` `ListFilter` `DecodeRoles` |
+| `aiops → alert` | 15 | 13 | `Incident` `IncidentFilter` `Rule` `Event` `*Status*` `ActorTypeSystem` … |
+| `aiops → loop` | 4 | 8 | `RootCauseJSON` `RootCauseObject` `RemediationOption` `VerifiedDelta` `MCPTool` … |
+
+**「把 `Usecase` 降级成一个 aiops 自己声明的端口、由装配根注入」这条路完全不存在**——
+没有一条边只选 `Usecase`。这排除了阶段 3 里最大的一块最省力的想象。
+
+#### 二、那么杠杆在共享形状上，而「共享」是可以量的
+
+如果 `aiops` 的每一扇出边都拖着别的域的数据形状，那么唯一能一次切掉多条边的
+杠杆就是**那些形状本身**。而一个形状值不值得搬，取决于一件可测的事：**还有
+几个域也在搬它**。被 N 个域选中的形状，一次下沉就可能关掉 N 条边；只被一个域
+选中的形状是那个域的私有词汇，搬它什么也不买——那条边换个路径继续选它。
+
+新增 `domaincheck -shared`（`scripts/domaincheck/shared.go`）来量这件事。工具的
+答案：**31 个符号被一个以上的域选中。**
+
+#### 三、这份排名里最重的几行**不能动**，而这件事排序本身不会告诉你
+
+| 消费者数 | 符号 | 声明方 | |
+|---|---|---|---|
+| 5 | `Event` | **aiops / alert / audit 三个域各自有** | ⚠️ |
+| 4 | `Caller` | **aiops / alert / skill** | ⚠️ |
+| 4 | `Rule` | **aiops / alert** | ⚠️ |
+| 4 | `Usecase` | **6 个域各有一个** | ⚠️ |
+| 3 | `ListFilter` | **device / edge** | ⚠️ |
+| 2 | `Repo` | **alert / device** | ⚠️ |
+| 2 | `RunOptions` | **aiops / loop** | ⚠️ |
+| 2 | `Service` | **aiops / setting** | ⚠️ |
+| 4 | `Edge` | edge（单一） | ✅ |
+| 4 | `Incident` / `IncidentFilter` | alert（单一） | ✅ |
+| 3 | `EdgeDeviceRelationHost` | device（单一） | ✅ |
+| 3 | `IncidentStatusOpen` | alert（单一） | ✅ |
+| 3 | `RemediationOption` / `RootCauseJSON` | loop（单一） | ✅ |
+| 3 | `StatusOnline` | edge（单一） | ✅ |
+
+**左半边是最危险的一格，而一个按消费者数排序的排名会让人先看它。** `alert.Event`
+不是 `audit.Event`，`device.ListFilter` 不是 `edge.ListFilter`——它们是**互不相关
+的同名类型**。
+
+所以「把 `ListFilter` 下沉到共享层」这件事**不会编译失败，它会编译通过，然后
+静默地改变其中之一的含义**，而下游没有任何东西看得见。**这是本轮唯一一条不能
+靠工具自动决定的判断，也是这份排名最容易被误用的地方。**
+
+这一条钉成测试 `TestTheSameNameSeveralOwnersListIsReal`，并给工具加了
+`same name, several owners` 的标记列。
+
+#### 四、第二次变异抓到**我自己写的守卫里的一个洞**
+
+给这条测试做变异实测时：把报告改成「只打印第一个声明方」（于是所有同名歧义都
+被藏起来），**测试没有红——它走了 `t.Skip`。**
+
+那个 Skip 本来是给「陷阱列已经空了」准备的，但**陷阱列空掉恰恰就是那五个名字
+变成可搬候选的时刻**，在那里 Skip 等于「它要守的东西已经悄悄变了，测试却绿」。
+这与决策 231 给 `TestTheReportCoversEveryDeclaredEdge` 写的那条理由是同一条：
+**一个会对自己的失效耸肩的守卫比没有守卫更坏，因为它读起来像一句肯定。**
+已改成 `t.Fatalf`，重跑变异即红。
+
+#### 五、剩下的真问题是一个**策略决定**，不是一次搬运
+
+单声明方里最重的是 `Edge`（4 个消费者）与 `Incident` / `IncidentFilter`
+（4 个）。它们看起来正是该搬的那一批。搬之前查了一件事：
+
+```
+$ grep -rl "gorm.io" core/domain/     # 无输出
+core/domain: 9 files / 1743 lines
+```
+
+**`core/domain` 今天一个 GORM 实体都没有。** 它装的是 `safety`（安全等级）、
+`plugin`（清单）、`provider`（模型提供方配置）、`version`、`autonomy`、
+`pkgresources`——全是值类型，没有一張表。
+
+而 `Edge` 是货真价实的持久化实体（`soft_delete.DeletedAt`、`delete_marker` 列、
+`device_id` 外键），`Incident` 同理。
+
+所以「把这批形状搬到 `core/domain`」**不是一个搬运决定，是一个策略决定**：
+*契约层要不要持有带外键和表结构的持久化实体？* 计划 §二 对 `core` 的定义是
+「领域类型、端口接口、wire DTO、事件契约，零基础设施依赖」——GORM 是第三方依赖
+不是 opskeeper 模块，字面上不违反，**但 `core/domain` 至今的实践是「只放值」，
+而这次要破例**。
+
+**本轮不擅自决定这件事**，按 §4.64.8 把它摆出来。两条路：
+
+| | `core/domain` 收 GORM 实体 | 只搬纯值形状 |
+|---|---|---|
+| 能切掉的边 | `Edge` / `Incident` / `IncidentFilter` 覆盖的 4+4+4 | 只剩 `StatusOnline` 这类常量与 `RemediationOption` / `RootCauseJSON` 这类已无外键的 JSON 值 |
+| 代价 | 契约层与表结构耦合；`Edge` 的 `device_id` 外键指向 device 域，于是 `core/domain` 的类型会指向 device 域的表 | 阶段 3 剩下的边基本切不动 |
+| 判据 | 计划 §二 的模块表只禁「import 任何其他 opskeeper 模块」，字面允许 | 与 `core/domain` 至今 9 个文件全是值类型一致 |
+
+**这是本轮给出的下一轮问题，而且它是唯一一个需要人来拍板的问题**——之前 227
+到 231 每一轮的问题都可以从代码里读出答案。
+
+#### 六、闸门
+
+- `go test ./scripts/... -count=1` ✅ **321 passed**（+2）
+- `make module-check` ✅；`go run ./scripts/domaincheck` ✅ **57 域 / 40 边 / 0 环**
+- 变异实测两次：一次抓到 `t.Skip` 漏洞（§四），一次确认陷阱列断言在歧义消失时
+  会红而不是静默通过
+- 本轮阶段 3 仍 **84.0%**、加权仍 **94.7%**——**一行生产代码没搬，而这是对的**：
+  这一轮交付的是「搬什么」这个问题第一次有了可复算的答案，以及一个必须由人拍
+  板的策略问题
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

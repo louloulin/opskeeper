@@ -38,6 +38,7 @@
 //
 //	go run ./scripts/domaincheck [repo-root]
 //	go run ./scripts/domaincheck . -seams     classify each cross-domain edge
+//	go run ./scripts/domaincheck . -shared    types more than one domain selects
 //	go run ./scripts/domaincheck . -graph     the layering, DAG and edge table
 //	go run ./scripts/domaincheck . -release   domains with no inbound edge
 //	go run ./scripts/domaincheck . -cut FILE  price a split proposal
@@ -474,6 +475,7 @@ func main() {
 	graph := false
 	release := false
 	seams := false
+	shared := false
 	cut := ""
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
@@ -484,6 +486,8 @@ func main() {
 			release = true
 		case a == "-seams":
 			seams = true
+		case a == "-shared":
+			shared = true
 		case a == "-cut":
 			if i+1 >= len(args) {
 				fmt.Fprintln(os.Stderr, "domaincheck: -cut needs a grouping file")
@@ -510,7 +514,7 @@ func main() {
 	// change the gate's verdict: a proposed split that is wrong should be
 	// priced and argued about, not turned into a red build on the day it is
 	// written, which is a red build people turn off.
-	if graph || release || seams || cut != "" {
+	if graph || release || seams || shared || cut != "" {
 		g := buildGraph(sources, r)
 		// The floor is measured over core/manager, so the files that would
 		// break if a domain moved are outside what it walked. They are read
@@ -530,6 +534,9 @@ func main() {
 		}
 		if seams {
 			printSeams(os.Stdout, sources, r)
+		}
+		if shared {
+			printShared(os.Stdout, sources, r)
 		}
 		if cut != "" {
 			grouping, order, err := loadGrouping(cut)
