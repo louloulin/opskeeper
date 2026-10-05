@@ -72,7 +72,7 @@ func TestGenerator_DeliversReadyReportToChannels(t *testing.T) {
 	}
 	llmOut := `{"version":"1","hero":[],"narrative":{"headline":"本周平稳"},"actions_summary":{}}`
 	deliverer := &recordingDeliverer{}
-	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, &fakeSpawner{result: llmOut}, GeneratorConfig{PublicURL: "https://h"}, nil).
+	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, &fakeRunner{result: llmOut}, GeneratorConfig{PublicURL: "https://h"}, nil).
 		WithDeliverer(deliverer)
 
 	gen.Generate(context.Background(), rpt.ID)
@@ -101,7 +101,7 @@ func TestGenerator_NoDeliveryWhenNoChannels(t *testing.T) {
 	repo.schedules[1] = &model.ReportSchedule{ID: 1, Kind: model.KindWeekly, Timezone: "UTC", ChannelIDsJSON: "[]"}
 	deliverer := &recordingDeliverer{}
 	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()},
-		&fakeSpawner{result: `{"version":"1","narrative":{"headline":"ok"}}`}, GeneratorConfig{}, nil).
+		&fakeRunner{result: `{"version":"1","narrative":{"headline":"ok"}}`}, GeneratorConfig{}, nil).
 		WithDeliverer(deliverer)
 
 	gen.Generate(context.Background(), rpt.ID)
@@ -115,7 +115,7 @@ func TestGenerator_NoDeliveryForManualReport(t *testing.T) {
 	repo := newGenTestRepo(rpt)
 	deliverer := &recordingDeliverer{}
 	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()},
-		&fakeSpawner{result: `{"version":"1","narrative":{"headline":"ok"}}`}, GeneratorConfig{}, nil).
+		&fakeRunner{result: `{"version":"1","narrative":{"headline":"ok"}}`}, GeneratorConfig{}, nil).
 		WithDeliverer(deliverer)
 
 	gen.Generate(context.Background(), rpt.ID)
@@ -133,7 +133,7 @@ func TestGenerator_NoDeliveryForFailedReport(t *testing.T) {
 	deliverer := &recordingDeliverer{}
 	// Spawn error → failed report.
 	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()},
-		&fakeSpawner{result: "not json"}, GeneratorConfig{}, nil).
+		&fakeRunner{result: "not json"}, GeneratorConfig{}, nil).
 		WithDeliverer(deliverer)
 
 	gen.Generate(context.Background(), rpt.ID)

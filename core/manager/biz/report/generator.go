@@ -8,17 +8,78 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
 )
 
-// WorkerSpawner is the narrow seam onto chatruntime.Runtime that the
-// generator uses to run the reporter persona. Mirrors the investigator's
-// WorkerSpawner so the wiring in main.go is the same shim. Kept as an
-// interface so tests inject a fake that returns canned ContentJSON
-// without standing up the whole graph kernel.
-type WorkerSpawner interface {
-	SpawnWorker(ctx context.Context, req chatruntime.SpawnRequest) (*chatruntime.Worker, error)
+// ReporterRequest is the whole of what the report domain asks the agent
+// kernel for: run this prompt as this persona, in a session of this kind,
+// owned by this user, answering in this language.
+//
+// These are local value types on purpose, and this is the report
+// domain's copy of decision 114 ('the fourth shape of the same
+// self-deception'). The port below was already declared here, in the
+// consumer, so the file read as though this package never named the agent
+// — and then two struct names sat in its signature. That cannot be fixed
+// by redeclaring them: a struct redeclared here is a different type and the
+// runtime stops satisfying the method. So the seam is stated in this
+// domain's own words and the composition root translates.
+//
+// The old comment here said this seam "mirrors the investigator's
+// WorkerSpawner so the wiring in main.go is the same shim". It was the same
+// shim, but the investigator's seam had already been cut in decision 114
+// and this one had not, so the two domains had drifted into naming the
+// same dependency differently and the comment had quietly become false.
+// Now both sides are stated in their own domain's words, and the two
+// translators in main.go are separate types because the two requests are
+// separate types: the alert domain has no locale (its transcripts are
+// salvaged, not shown), this one is generated for a person to read.
+type ReporterRequest struct {
+	// AgentName is the persona to run as (frontmatter `name`).
+	AgentName string
+	// Prompt is the initial user message — the fully built report
+	// prompt, facts included.
+	Prompt string
+	// SessionKind tags the persisted session so scheduled report
+	// transcripts stay out of the operator's /chat list.
+	SessionKind string
+	// OwnerUserID 0 marks the session system-owned (scheduled fires have
+	// no requester).
+	OwnerUserID uint64
+	// Locale is the UI language the prose is written in. Empty = no
+	// directive, the persona's implicit language wins.
+	Locale string
+}
+
+// ReporterOutcome is what came back.
+//
+// Result and Err are separate fields rather than one error for the same
+// reason the investigator's outcome keeps them apart: a worker that ran
+// out of step budget still left a trail, and collapsing the two would force
+// the salvage path to parse a string nobody controls. This domain does not
+// salvage — it fails the row — but it still needs to know which
+// question to answer, and a non-empty Err is the answer.
+type ReporterOutcome struct {
+	// SessionID is where the transcript lives. Persisted on the report
+	// row so an operator can read the run that produced it.
+	SessionID string
+	// WorkerID is the id the runner would accept in a stop call.
+	WorkerID string
+	// Result is the worker's final assistant content — the raw
+	// ContentJSON, not yet parsed.
+	Result string
+	// Err is the worker's own failure reason, empty if it finished.
+	Err string
+}
+
+// ReporterRunner is the report domain's whole dependency on the agent
+// kernel. Kept as an interface so tests inject a fake that returns canned
+// ContentJSON without standing up the whole graph kernel.
+type ReporterRunner interface {
+	// RunReporter blocks until the worker reaches a terminal state or
+	// ctx expires. The blocking is the contract, not an accident: this
+	// goroutine owns the report row's lifecycle and has to choose between
+	// ready and failed before it can flip the row.
+	RunReporter(ctx context.Context, req ReporterRequest) (ReporterOutcome, error)
 }
 
 // GeneratorConfig tunes the worker generator.
@@ -49,7 +110,7 @@ type GeneratorConfig struct {
 type workerGenerator struct {
 	repo      Repo
 	facts     FactsCollector
-	spawner   WorkerSpawner
+	runner    ReporterRunner
 	deliverer Deliverer // nil = in-app only
 	ready     func(context.Context) error
 	cfg       GeneratorConfig
@@ -59,8 +120,8 @@ type workerGenerator struct {
 // NewWorkerGenerator builds the real generator. A nil spawner or facts
 // collector is a wiring error and panics — main.go always supplies both.
 // The Deliverer is optional (nil = in-app only, no IM push).
-func NewWorkerGenerator(repo Repo, facts FactsCollector, spawner WorkerSpawner, cfg GeneratorConfig, log *slog.Logger) *workerGenerator {
-	if repo == nil || facts == nil || spawner == nil {
+func NewWorkerGenerator(repo Repo, facts FactsCollector, runner ReporterRunner, cfg GeneratorConfig, log *slog.Logger) *workerGenerator {
+	if repo == nil || facts == nil || runner == nil {
 		panic("report: nil dependency to NewWorkerGenerator")
 	}
 	if cfg.Persona == "" {
@@ -75,7 +136,7 @@ func NewWorkerGenerator(repo Repo, facts FactsCollector, spawner WorkerSpawner, 
 	if log == nil {
 		log = slog.Default()
 	}
-	return &workerGenerator{repo: repo, facts: facts, spawner: spawner, cfg: cfg, log: log.With(slog.String("comp", "report-generator"))}
+	return &workerGenerator{repo: repo, facts: facts, runner: runner, cfg: cfg, log: log.With(slog.String("comp", "report-generator"))}
 }
 
 // WithDeliverer attaches the IM deliverer. Returns the receiver for
@@ -138,10 +199,12 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	}
 
 	prompt := g.buildPrompt(rpt, facts)
-	worker, err := g.spawner.SpawnWorker(ctx, chatruntime.SpawnRequest{
+	// Background is false and that is the contract, not a preference: this
+	// goroutine owns the report row's lifecycle and has to choose between
+	// ready and failed before it can flip the row.
+	outcome, err := g.runner.RunReporter(ctx, ReporterRequest{
 		AgentName:   g.cfg.Persona,
 		Prompt:      prompt,
-		Background:  false, // sync — this goroutine owns the lifecycle
 		SessionKind: "report",
 		OwnerUserID: rpt.CreatedBy,
 		Locale:      g.localeFor(rpt),
@@ -149,20 +212,17 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	if err != nil {
 		return fmt.Errorf("spawn worker: %w", err)
 	}
-	if worker == nil {
-		return fmt.Errorf("spawn worker: nil worker")
-	}
-	if sid := worker.SessionID; sid != "" {
+	if sid := outcome.SessionID; sid != "" {
 		rpt.AuditSessionID = &sid
 	}
-	if wid := worker.ID; wid != "" {
+	if wid := outcome.WorkerID; wid != "" {
 		rpt.WorkerID = &wid
 	}
-	if werr := strings.TrimSpace(worker.Err); werr != "" {
+	if werr := strings.TrimSpace(outcome.Err); werr != "" {
 		return fmt.Errorf("worker: %s", werr)
 	}
 
-	content, err := ParseContent(extractJSON(worker.Result))
+	content, err := ParseContent(extractJSON(outcome.Result))
 	if err != nil {
 		return fmt.Errorf("parse content: %w", err)
 	}

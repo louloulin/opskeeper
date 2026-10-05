@@ -2172,7 +2172,7 @@ func main() {
 		reportGen = managerbizreport.NewWorkerGenerator(
 			reportRepo,
 			managerreportdata.NewFactsCollector(db, reportProm),
-			reportRT,
+			reportRunner{rt: reportRT},
 			managerbizreport.GeneratorConfig{
 				DefaultLocale: firstNonEmpty(os.Getenv("OPSKEEPER_DEFAULT_LOCALE"), "en"),
 				PublicURL:     cfg.PublicURL,
@@ -4406,6 +4406,59 @@ func (s *chatruntimeReviewSpawner) SpawnReviewer(ctx context.Context, req aiopst
 		TaskID: w.ID,
 		Result: w.Result,
 		Err:    w.Err,
+	}, nil
+}
+
+// reportRunner is the second place where a domain's words meet the agent
+// kernel's, and for the same reason as investigationRunner above: decision
+// 253 gave biz/report a port stated in its own value types, and a
+// translation still has to happen somewhere. It lives in the composition
+// root so neither domain learns the other's struct names.
+//
+// It is deliberately a separate type from investigationRunner rather than a
+// second method on it. The two requests genuinely differ — this one carries
+// a Locale (a report is written for a person to read) and the alert domain's
+// does not (its transcripts are salvaged into a summary, not shown) — so one
+// shared type would have to carry both fields with one of them always zero,
+// which is the mirror image of the problem decision 253 just fixed.
+//
+// Background is hard-coded false and that is the contract both callers
+// share: the caller owns the row's lifecycle and has to choose a terminal
+// state before it can flip it.
+type reportRunner struct {
+	rt *aiopschatruntime.Runtime
+}
+
+func (r reportRunner) RunReporter(
+	ctx context.Context,
+	req managerbizreport.ReporterRequest,
+) (managerbizreport.ReporterOutcome, error) {
+	worker, err := r.rt.SpawnWorker(ctx, aiopschatruntime.SpawnRequest{
+		AgentName:   req.AgentName,
+		Prompt:      req.Prompt,
+		Background:  false,
+		SessionKind: req.SessionKind,
+		OwnerUserID: req.OwnerUserID,
+		Locale:      req.Locale,
+	})
+	if err != nil {
+		return managerbizreport.ReporterOutcome{}, err
+	}
+	if worker == nil {
+		// The nil-worker guard that used to live in the report generator,
+		// written as a defensive check against a fake, belongs here: this
+		// is the only side that can produce that value. Turning it into
+		// an error keeps the old behaviour — the report row still
+		// reaches a terminal state — now that a value return can no
+		// longer smuggle a silent success past the caller, which is what
+		// a nil worker with a nil error used to do.
+		return managerbizreport.ReporterOutcome{}, errors.New("report runner: runtime returned no worker")
+	}
+	return managerbizreport.ReporterOutcome{
+		SessionID: worker.SessionID,
+		WorkerID:  worker.ID,
+		Result:    worker.Result,
+		Err:       worker.Err,
 	}, nil
 }
 

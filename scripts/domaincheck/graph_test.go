@@ -510,11 +510,16 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// strings and was importing a 692-line container detector plus two
 	// parsed skill trees it never read — and where the two calls it used to
 	// make meant the `kind` in the conversion report came from a second
-	// reading of the same directory).
+	// reading of the same directory) and decision 253's
+	// (report -> aiops, where the consumer had already written its own
+	// one-method port and the only thing its signature named from the
+	// producer was two structs holding fourteen fields of which it read
+	// ten — and where a value return deleted a nil-worker branch that no
+	// implementation in this tree could produce).
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "28 edges") {
+	if !strings.Contains(buf.String(), "27 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

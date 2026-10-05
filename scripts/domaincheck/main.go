@@ -190,8 +190,7 @@ var edges = map[edge]string{
 
 	{"nodeagent", "nodefleet"}: "the node-agent endpoints are the fleet's session handles",
 
-	{"report", "aiops"}: "a report is produced out of an agent conversation",
-	{"report", "loop"}:  "a report is produced out of an agent conversation or a loop investigation, and the postmortem service renders the loop's own postmortem contract (PostmortemDoc / RootCauseJSON / CritiqueScore) — one direction only since decision 115",
+	{"report", "loop"}: "a report is produced out of a loop investigation, and the postmortem service renders the loop's own postmortem contract (PostmortemDoc / RootCauseJSON / CritiqueScore) — one direction only since decision 115",
 
 	{"systemhealth", "alert"}: "the health summary counts active alerts through the alert service",
 }

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
 )
 
@@ -20,21 +19,21 @@ func (f fakeFacts) Collect(context.Context, Period, Period, Scope) (*ReportFacts
 	return f.facts, f.err
 }
 
-// fakeSpawner returns a canned worker (Result / Err).
-type fakeSpawner struct {
-	result   string
-	werr     string
-	spawnErr error
-	gotReq   chatruntime.SpawnRequest
+// fakeRunner returns a canned outcome (Result / Err).
+type fakeRunner struct {
+	result string
+	werr   string
+	runErr error
+	gotReq ReporterRequest
 }
 
-func (s *fakeSpawner) SpawnWorker(_ context.Context, req chatruntime.SpawnRequest) (*chatruntime.Worker, error) {
+func (s *fakeRunner) RunReporter(_ context.Context, req ReporterRequest) (ReporterOutcome, error) {
 	s.gotReq = req
-	if s.spawnErr != nil {
-		return nil, s.spawnErr
+	if s.runErr != nil {
+		return ReporterOutcome{}, s.runErr
 	}
-	return &chatruntime.Worker{
-		ID:        "agent-deadbeef",
+	return ReporterOutcome{
+		WorkerID:  "agent-deadbeef",
 		SessionID: "sess-1",
 		Result:    s.result,
 		Err:       s.werr,
@@ -91,8 +90,8 @@ func TestGenerator_HappyPath_OverwritesNumbersFromFacts(t *testing.T) {
 		"actions_summary":{"mutating_total":0},
 		"advice":[{"text":"挪 backup 窗口"}]
 	}` + "\n```"
-	spawner := &fakeSpawner{result: llmOut}
-	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, spawner, GeneratorConfig{}, nil)
+	runner := &fakeRunner{result: llmOut}
+	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, runner, GeneratorConfig{}, nil)
 
 	gen.Generate(context.Background(), "rpt-1")
 
@@ -136,19 +135,19 @@ func TestGenerator_HappyPath_OverwritesNumbersFromFacts(t *testing.T) {
 		t.Errorf("audit session id not captured")
 	}
 	// Spawn used the report persona + report session kind + owner.
-	if spawner.gotReq.AgentName != model.DefaultReporterPersona {
-		t.Errorf("persona = %q", spawner.gotReq.AgentName)
+	if runner.gotReq.AgentName != model.DefaultReporterPersona {
+		t.Errorf("persona = %q", runner.gotReq.AgentName)
 	}
-	if spawner.gotReq.SessionKind != "report" || spawner.gotReq.OwnerUserID != 42 {
-		t.Errorf("spawn req = %+v", spawner.gotReq)
+	if runner.gotReq.SessionKind != "report" || runner.gotReq.OwnerUserID != 42 {
+		t.Errorf("spawn req = %+v", runner.gotReq)
 	}
 }
 
 func TestGenerator_SpawnError_MarksFailed(t *testing.T) {
 	rpt := pendingReport()
 	repo := newGenTestRepo(rpt)
-	spawner := &fakeSpawner{spawnErr: errors.New("boom")}
-	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, spawner, GeneratorConfig{}, nil)
+	runner := &fakeRunner{runErr: errors.New("boom")}
+	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, runner, GeneratorConfig{}, nil)
 
 	gen.Generate(context.Background(), "rpt-1")
 
@@ -164,8 +163,8 @@ func TestGenerator_SpawnError_MarksFailed(t *testing.T) {
 func TestGenerator_WorkerErr_MarksFailed(t *testing.T) {
 	rpt := pendingReport()
 	repo := newGenTestRepo(rpt)
-	spawner := &fakeSpawner{werr: "exceeds max steps"}
-	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, spawner, GeneratorConfig{}, nil)
+	runner := &fakeRunner{werr: "exceeds max steps"}
+	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, runner, GeneratorConfig{}, nil)
 
 	gen.Generate(context.Background(), "rpt-1")
 	got, _ := repo.GetReport(context.Background(), "rpt-1")
@@ -177,8 +176,8 @@ func TestGenerator_WorkerErr_MarksFailed(t *testing.T) {
 func TestGenerator_BadJSON_MarksFailed(t *testing.T) {
 	rpt := pendingReport()
 	repo := newGenTestRepo(rpt)
-	spawner := &fakeSpawner{result: "this is not json at all"}
-	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, spawner, GeneratorConfig{}, nil)
+	runner := &fakeRunner{result: "this is not json at all"}
+	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, runner, GeneratorConfig{}, nil)
 
 	gen.Generate(context.Background(), "rpt-1")
 	got, _ := repo.GetReport(context.Background(), "rpt-1")
@@ -196,8 +195,8 @@ func TestGenerator_CalmReport_StillGenerates(t *testing.T) {
 		Actions: ActionsSummary{},
 	}
 	llmOut := `{"version":"1","hero":[],"narrative":{"headline":"本周无异常，一切平稳"},"key_incidents":[],"actions_summary":{},"advice":[]}`
-	spawner := &fakeSpawner{result: llmOut}
-	gen := NewWorkerGenerator(repo, fakeFacts{facts: calmFacts}, spawner, GeneratorConfig{}, nil)
+	runner := &fakeRunner{result: llmOut}
+	gen := NewWorkerGenerator(repo, fakeFacts{facts: calmFacts}, runner, GeneratorConfig{}, nil)
 
 	gen.Generate(context.Background(), "rpt-1")
 	got, _ := repo.GetReport(context.Background(), "rpt-1")
@@ -213,12 +212,12 @@ func TestGenerator_NonPendingIsNoOp(t *testing.T) {
 	rpt := pendingReport()
 	rpt.Status = model.StatusReady // already done
 	repo := newGenTestRepo(rpt)
-	spawner := &fakeSpawner{result: "{}"}
-	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, spawner, GeneratorConfig{}, nil)
+	runner := &fakeRunner{result: "{}"}
+	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, runner, GeneratorConfig{}, nil)
 
 	gen.Generate(context.Background(), "rpt-1")
 	// Spawner must not have been called.
-	if spawner.gotReq.AgentName != "" {
+	if runner.gotReq.AgentName != "" {
 		t.Error("generator ran on a non-pending report")
 	}
 }
