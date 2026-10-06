@@ -17,26 +17,23 @@ import (
 	"log/slog"
 	"strconv"
 	"time"
-
-	manberalbizalert "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
-	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // AlertRepoAdapter 把 manberalbizalert.Repo 适配到 loop.AlertRepository。
 type AlertRepoAdapter struct {
-	repo manberalbizalert.Repo
-	log  *slog.Logger
+	alerts AlertReader
+	log    *slog.Logger
 }
 
 // NewAlertRepoAdapter 构造。repo 不得为 nil。
-func NewAlertRepoAdapter(repo manberalbizalert.Repo, log *slog.Logger) *AlertRepoAdapter {
-	if repo == nil {
-		panic("loop: NewAlertRepoAdapter: repo is nil")
+func NewAlertRepoAdapter(alerts AlertReader, log *slog.Logger) *AlertRepoAdapter {
+	if alerts == nil {
+		panic("loop: NewAlertRepoAdapter: alerts is nil")
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &AlertRepoAdapter{repo: repo, log: log.With(slog.String("comp", "loop.alert_repo_adapter"))}
+	return &AlertRepoAdapter{alerts: alerts, log: log.With(slog.String("comp", "loop.alert_repo_adapter"))}
 }
 
 // Compile-time interface satisfaction check.
@@ -55,7 +52,7 @@ func (a *AlertRepoAdapter) FindByLabelsetkey(ctx context.Context, key string, si
 		since = time.Now().UTC().Add(-24 * time.Hour)
 	}
 
-	filter := manberalbizalert.IncidentFilter{
+	filter := AlertIncidentFilter{
 		Limit: 100,
 	}
 	if key != "" {
@@ -63,7 +60,7 @@ func (a *AlertRepoAdapter) FindByLabelsetkey(ctx context.Context, key string, si
 	}
 	// Status 留空 → ListIncidents 默认不过滤；Day 5+ 加 "firing" 状态精确匹配。
 
-	incidents, err := a.repo.ListIncidents(ctx, filter)
+	incidents, err := a.alerts.ListIncidents(ctx, filter)
 	if err != nil {
 		a.log.Warn("alert_repo_adapter: ListIncidents failed (non-fatal)",
 			slog.String("labelsetkey", key),
@@ -86,7 +83,7 @@ func (a *AlertRepoAdapter) FindByLabelsetkey(ctx context.Context, key string, si
 
 // incidentToDetectionEvent 把 alert.Incident 转 loop.DetectionEvent。
 // 简化映射：Rule 作为 labelsetkey、DeviceID 推断 resource_type、Severity 直接透传。
-func incidentToDetectionEvent(inc *alertmodel.Incident) DetectionEvent {
+func incidentToDetectionEvent(inc *AlertIncident) DetectionEvent {
 	return DetectionEvent{
 		AlertID:     strconv.FormatInt(int64(inc.ID), 10),
 		Severity:    inc.Severity,
@@ -101,7 +98,7 @@ func incidentToDetectionEvent(inc *alertmodel.Incident) DetectionEvent {
 //   - Scope=="app" → "app"
 //   - Scope=="pg/redis/k8s/mq" → Scope
 //   - 默认 → "unknown"
-func resourceFromIncident(inc *alertmodel.Incident) string {
+func resourceFromIncident(inc *AlertIncident) string {
 	switch inc.Scope {
 	case "host", "app", "pg", "redis", "k8s", "mq":
 		return inc.Scope

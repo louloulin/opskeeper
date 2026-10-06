@@ -2401,7 +2401,7 @@ func main() {
 		// dispatch for want of a pod name, queue or unit the firing alert
 		// already carried.
 		loopInvestigatorToolset = managerbizloopinvestigatorreal.NewWithLabels(
-			promQuerier, logQuerier, managerbizloop.NewAlertLabelsAdapter(alertRepo), log).
+			promQuerier, logQuerier, managerbizloop.NewAlertLabelsAdapter(loopAlertReader{repo: alertRepo}), log).
 			// The probes are how the investigation learns which table is
 			// bloating and which node is NotReady, instead of inferring
 			// it from a restart rate that looks the same either way.
@@ -2535,7 +2535,7 @@ func main() {
 		PauseHook:                   managerbizloop.NoopPauseHook{},
 		Logger:                      log.With(slog.String("comp", "loop")),
 		LLMCaller:                   loopLLMCaller,
-		AlertRepo:                   managerbizloop.NewAlertRepoAdapter(alertRepo, log),
+		AlertRepo:                   managerbizloop.NewAlertRepoAdapter(loopAlertReader{repo: alertRepo}, log),
 		CurrentDetectionEventLoader: managerbizloop.NewContractDetectionEventLoader(loopContractRepo),
 		InvestigatorToolset:         loopInvestigatorToolset,
 		CorrelatedGroupLoader:       loopCorrelatedGroupLoader,

@@ -22,8 +22,6 @@ import (
 	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
-	manberalbizalert "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
-	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
 // AlertTriggerAdapter turns an incident's firing rule into an
@@ -34,19 +32,19 @@ import (
 // is declined: a runbook binds to one signal, and picking the first of
 // several would be choosing a trigger the operator did not.
 type AlertTriggerAdapter struct {
-	repo manberalbizalert.Repo
-	log  *slog.Logger
+	alerts AlertReader
+	log    *slog.Logger
 }
 
 // NewAlertTriggerAdapter constructs the adapter. repo is required.
-func NewAlertTriggerAdapter(repo manberalbizalert.Repo, log *slog.Logger) *AlertTriggerAdapter {
-	if repo == nil {
-		panic("loop: NewAlertTriggerAdapter: repo is nil")
+func NewAlertTriggerAdapter(alerts AlertReader, log *slog.Logger) *AlertTriggerAdapter {
+	if alerts == nil {
+		panic("loop: NewAlertTriggerAdapter: alerts is nil")
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &AlertTriggerAdapter{repo: repo, log: log.With(slog.String("comp", "loop.alert_trigger_adapter"))}
+	return &AlertTriggerAdapter{alerts: alerts, log: log.With(slog.String("comp", "loop.alert_trigger_adapter"))}
 }
 
 var _ AutonomyTriggerSource = (*AlertTriggerAdapter)(nil)
@@ -61,7 +59,7 @@ func (a *AlertTriggerAdapter) AutonomyTriggerFor(ctx context.Context, _ string, 
 		// non-numeric id simply has no rule, which is not an error.
 		return domain.AutonomyTrigger{}, false
 	}
-	incident, err := a.repo.GetIncidentByID(ctx, id)
+	incident, err := a.alerts.GetIncidentByID(ctx, id)
 	if err != nil || incident == nil {
 		if err != nil && !errors.Is(err, errNotFound) {
 			a.log.Warn("alert_trigger_adapter: load incident failed (non-fatal)",
@@ -72,7 +70,7 @@ func (a *AlertTriggerAdapter) AutonomyTriggerFor(ctx context.Context, _ string, 
 	if incident.RuleID == nil || *incident.RuleID == 0 {
 		return domain.AutonomyTrigger{}, false
 	}
-	rule, err := a.repo.GetRuleByID(ctx, *incident.RuleID)
+	rule, err := a.alerts.GetRuleByID(ctx, *incident.RuleID)
 	if err != nil || rule == nil {
 		if err != nil {
 			a.log.Warn("alert_trigger_adapter: load rule failed (non-fatal)",
@@ -90,11 +88,11 @@ func (a *AlertTriggerAdapter) AutonomyTriggerFor(ctx context.Context, _ string, 
 var errNotFound = errors.New("not found")
 
 // triggerFromRule reads one metric comparison out of a rule's conditions.
-func triggerFromRule(rule *alertmodel.Rule) (domain.AutonomyTrigger, bool) {
+func triggerFromRule(rule *AlertRule) (domain.AutonomyTrigger, bool) {
 	if rule == nil || strings.TrimSpace(rule.ConditionsJSON) == "" {
 		return domain.AutonomyTrigger{}, false
 	}
-	var conds []alertmodel.RuleCondition
+	var conds []ruleCondition
 	if err := json.Unmarshal([]byte(rule.ConditionsJSON), &conds); err != nil {
 		return domain.AutonomyTrigger{}, false
 	}

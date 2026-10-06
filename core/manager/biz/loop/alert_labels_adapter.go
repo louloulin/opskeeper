@@ -21,22 +21,20 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-
-	manberalbizalert "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
 )
 
 // AlertLabelsAdapter adapts the alert repository to the loop's subject
 // lookup.
 type AlertLabelsAdapter struct {
-	repo manberalbizalert.Repo
+	alerts AlertReader
 }
 
 // NewAlertLabelsAdapter constructs the adapter. repo must not be nil.
-func NewAlertLabelsAdapter(repo manberalbizalert.Repo) *AlertLabelsAdapter {
-	if repo == nil {
-		panic("loop: NewAlertLabelsAdapter: repo is nil")
+func NewAlertLabelsAdapter(alerts AlertReader) *AlertLabelsAdapter {
+	if alerts == nil {
+		panic("loop: NewAlertLabelsAdapter: alerts is nil")
 	}
-	return &AlertLabelsAdapter{repo: repo}
+	return &AlertLabelsAdapter{alerts: alerts}
 }
 
 // AlertLabels implements investigatorreal.AlertLabelsProvider structurally.
@@ -49,14 +47,14 @@ func (a *AlertLabelsAdapter) AlertLabels(ctx context.Context, alertID string) (m
 	if err != nil {
 		return nil, fmt.Errorf("loop: alert id %q is not an alert_incidents id: %w", idText, err)
 	}
-	incident, err := a.repo.GetIncidentByID(ctx, id)
+	incident, err := a.alerts.GetIncidentByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("loop: read alert incident %d: %w", id, err)
 	}
 	if incident == nil {
 		return nil, fmt.Errorf("loop: alert incident %d does not exist, so it names no object", id)
 	}
-	labels, err := incident.Labels()
+	labels, err := parseIncidentLabels(incident.LabelsJSON)
 	if err != nil {
 		return nil, fmt.Errorf("loop: alert incident %d has unreadable labels: %w", id, err)
 	}

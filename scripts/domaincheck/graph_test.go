@@ -539,7 +539,7 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "14 edges") {
+	if !strings.Contains(buf.String(), "13 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

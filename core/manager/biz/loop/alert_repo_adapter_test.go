@@ -7,26 +7,31 @@ import (
 	"log/slog"
 	"testing"
 	"time"
-
-	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
-	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
-// stubAlertRepo 是 alertbiz.Repo 的最小内存实现：
-//   - ListIncidents 由调用方注入行为
-//   - 其他方法返回零值（AlertRepoAdapter 不调用，不会触达）
+// stubAlertRepo 是 AlertReader 的最小内存实现：只有 ListIncidents 被注入
+// 行为，另外两个方法返回零值（AlertRepoAdapter 不调用，不会触达）。
 //
-// 用途：让 AlertRepoAdapter 的测试可以只关心 ListIncidents 的入参/出参映射。
+// 它实现的是 loop 自己的端口而不是 alert 的仓库接口——这是决策 279 之后
+// 这些测试能留在本包的原因：端口在本包，替身就在本包，而替身与生产
+// 转换（cmd/opskeeper/loop_alert_wiring.go）之间的距离由那边的测试负责。
 type stubAlertRepo struct {
-	alertbiz.Repo // 嵌入以继承其他方法（panic-on-call 行为由 alert.Repo nil 检查兜底）
-	listIncidents func(ctx context.Context, filter alertbiz.IncidentFilter) ([]*alertmodel.Incident, error)
+	listIncidents func(ctx context.Context, filter AlertIncidentFilter) ([]*AlertIncident, error)
 }
 
-func (s *stubAlertRepo) ListIncidents(ctx context.Context, filter alertbiz.IncidentFilter) ([]*alertmodel.Incident, error) {
+func (s *stubAlertRepo) GetIncidentByID(context.Context, uint64) (*AlertIncident, error) {
+	return nil, nil
+}
+
+func (s *stubAlertRepo) ListIncidents(ctx context.Context, filter AlertIncidentFilter) ([]*AlertIncident, error) {
 	if s.listIncidents == nil {
 		return nil, nil
 	}
 	return s.listIncidents(ctx, filter)
+}
+
+func (s *stubAlertRepo) GetRuleByID(context.Context, uint64) (*AlertRule, error) {
+	return nil, nil
 }
 
 func discardLogger() *slog.Logger {
@@ -37,8 +42,8 @@ func discardLogger() *slog.Logger {
 func TestAlertRepoAdapter_FindByLabelsetkey_DefaultSince(t *testing.T) {
 	now := time.Now().UTC()
 	repo := &stubAlertRepo{
-		listIncidents: func(_ context.Context, _ alertbiz.IncidentFilter) ([]*alertmodel.Incident, error) {
-			return []*alertmodel.Incident{
+		listIncidents: func(_ context.Context, _ AlertIncidentFilter) ([]*AlertIncident, error) {
+			return []*AlertIncident{
 				{ID: 1, Rule: "host.cpu", Scope: "host", Severity: "warning", FirstFiredAt: now, UpdatedAt: now},
 				{ID: 2, Rule: "host.disk", Scope: "host", Severity: "critical", FirstFiredAt: now, UpdatedAt: now},
 			}, nil
@@ -65,8 +70,8 @@ func TestAlertRepoAdapter_FindByLabelsetkey_SinceFilter(t *testing.T) {
 	now := time.Now().UTC()
 	old := now.Add(-2 * time.Hour)
 	repo := &stubAlertRepo{
-		listIncidents: func(_ context.Context, _ alertbiz.IncidentFilter) ([]*alertmodel.Incident, error) {
-			return []*alertmodel.Incident{
+		listIncidents: func(_ context.Context, _ AlertIncidentFilter) ([]*AlertIncident, error) {
+			return []*AlertIncident{
 				{ID: 1, Rule: "r1", Scope: "app", Severity: "warning", FirstFiredAt: old, UpdatedAt: old},
 				{ID: 2, Rule: "r2", Scope: "app", Severity: "warning", FirstFiredAt: now, UpdatedAt: now},
 			}, nil
@@ -88,9 +93,9 @@ func TestAlertRepoAdapter_FindByLabelsetkey_SinceFilter(t *testing.T) {
 
 // 3. labelsetkey 非空 → 透传给 filter.RuleKey
 func TestAlertRepoAdapter_FindByLabelsetkey_KeyPropagated(t *testing.T) {
-	var captured alertbiz.IncidentFilter
+	var captured AlertIncidentFilter
 	repo := &stubAlertRepo{
-		listIncidents: func(_ context.Context, f alertbiz.IncidentFilter) ([]*alertmodel.Incident, error) {
+		listIncidents: func(_ context.Context, f AlertIncidentFilter) ([]*AlertIncident, error) {
 			captured = f
 			return nil, nil
 		},
@@ -111,7 +116,7 @@ func TestAlertRepoAdapter_FindByLabelsetkey_KeyPropagated(t *testing.T) {
 // 4. ListIncidents 返回 error → slog warn + 返回 nil, nil（KB 风格：不阻塞 correlated worker）
 func TestAlertRepoAdapter_FindByLabelsetkey_ListError(t *testing.T) {
 	repo := &stubAlertRepo{
-		listIncidents: func(_ context.Context, _ alertbiz.IncidentFilter) ([]*alertmodel.Incident, error) {
+		listIncidents: func(_ context.Context, _ AlertIncidentFilter) ([]*AlertIncident, error) {
 			return nil, errors.New("synthetic db error")
 		},
 	}
@@ -141,7 +146,7 @@ func TestAlertRepoAdapter_resourceFromIncident(t *testing.T) {
 		{"", "unknown"},
 	}
 	for _, tc := range cases {
-		inc := &alertmodel.Incident{Scope: tc.scope}
+		inc := &AlertIncident{Scope: tc.scope}
 		if got := resourceFromIncident(inc); got != tc.want {
 			t.Errorf("scope=%q → %q, want %q", tc.scope, got, tc.want)
 		}

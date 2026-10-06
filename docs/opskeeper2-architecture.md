@@ -24545,6 +24545,129 @@ M-B 那条值得单说：**把 `model` 从 `layerDirs` 移出去，`domaincheck`
 **新加的 4 行就是那把钳子。**
 
 
+### 4.213 决策 279：切掉 `loop → alert`——**「换个包不算换域」的教训第二次付款，而它抓到的是我第四句假注释**
+
+#### 一、为什么在没有「切一条边换一个域」的刀之后还切这一刀
+
+决策 277 八节说过收益模型归零。剩下的候选里 `loop → alert` 仍是最便宜的
+（价 11），而它买到的东西与前几刀不同，值得说清楚买到了什么：
+
+**它买到的是 loop 这个域的出度归零。** 切完之后 `-graph` 报告里 loop 是
+`in 10 across 4 edges  out 0 across 0`——**全树唯一一个出度为零的域**。
+在此之前 loop 的 5 条出向 import 里有 5 条指向 alert。
+
+这不是「更干净」这种说法，而是一个可陈述的事实：**loop 依赖的域，
+现在全部在它上游。** 对一个负责调查与自愈的域来说，这意味着它的下游
+（写结论、发动作、留证据）已经全部搬进它自己或者它的上游，
+而它自己不再伸手去别人的地盘改状态。
+
+#### 二、真实面：三个适配器，一个端口就够
+
+定价器报 5 类型 + 5 方法 + 1 closure。真实面是**三个早已存在的适配器**
+（`AlertLabelsAdapter` / `AlertTriggerAdapter` / `AlertRepoAdapter`），
+它们本来就在 `biz/loop` 里，名字就叫 adapter——**这条边早就被切成端口的形状，
+只是端口的那一端仍然指着 alert 的类型**。所以这一刀不是新写接缝，
+是把三个接缝的**远端**换成本地投影。
+
+三个适配器合计真正读的字段：`ID` `Severity` `Scope` `Rule` `RuleID` `FirstFiredAt`
+`UpdatedAt` `LabelsJSON`（incident）、`ConditionsJSON`（rule）、
+`RuleKey` + `Limit`（filter）、三个方法。**一个 `AlertReader` 端口覆盖三者**，
+理由写在端口注释里：三个适配器由同一个装配点构造，拆成三个接口只会得到
+三个套在同一个仓库上的适配器。
+
+**那一条 closure 是个警告**：`RuleCondition` 经 `Rule.Conditions` 被带进来，
+而定价器标注「aiops 也声明这个名字，上面那个形状是 alert 的」。
+**切完之后 aiops 与 loop 各自持有一份同名不同型的 `RuleCondition`**——
+这是本仓已有的形状重名问题的又一次出现（决策 274 照出过四个），
+记在这里而不是假装没有。
+
+#### 三、两份声明：解析与 JSON tag，两种都不会编译失败
+
+跨边界的两样东西是**原始 JSON 字符串**而不是解析后的值：
+`LabelsJSON` 与 `ConditionsJSON`。理由是两边各有一样东西该归自己——
+**alert 拥有这些字节的格式，loop 拥有报错的措辞**。带解析后的值过去，
+等于把 alert 的存储格式搬进 loop；带整张表过去，等于把 alert 的表搬进 loop。
+
+代价是两处重复，各配一条钉子：
+
+- **`parseIncidentLabels` 对 `alertmodel.Incident.Labels()`**：七个夹具，
+  其中 `""` 是关键——alert 对空列返回**空 map 而不是 nil**。
+  少写了这一条，nil map 与空 map 对 `reflect.DeepEqual` 是相等的，
+  所以测试里必须**单独断言 `ours != nil`**，否则这条规则可以在测试全绿下丢掉。
+- **`ruleCondition` 的三个 JSON tag 对 `alertmodel.RuleCondition`**：
+  tag 改名不报错、也不解析失败，它解析成零值，然后**自治触发器安静地不再触发**。
+  这条比少一个字段更危险，所以用反射比 tag 而不是比字段名。
+
+#### 四、第四句我自己写的假注释
+
+装配端第一版的 `ListIncidents` 写着：
+
+```go
+if inc == nil {
+    out = append(out, nil)
+    continue
+}
+```
+
+注释说：**「nils 原样透传而不是被过滤掉，所以这个分支很重要」**。
+我跑了变异，**它活了**——把这个分支删掉，测试照样全绿。
+
+原因很直白：**真正让 nil 活下来的是 `incidentFrom` 里的 nil 检查**，
+那个分支只是在做同一件事的第二遍。**注释把功劳记在了一个多余分支上。**
+同一轮里还有第二个无效变异：删掉 `GetIncidentByID` 里的 `inc == nil` 检查，
+测试也全绿——因为 `incidentFrom` 已经挡住了。
+
+两处收敛成一处（`incidentFrom` 是唯一的判据），注释改成说实话，
+然后跑**真正有意义的**两个变异：
+
+| 变异 | 结果 |
+|---|---|
+| `incidentFrom` 对 nil 返回零值结构体而不是 nil | 两个测试红：`TestAMissingIncidentStaysMissing` 与 `TestTheListingPassesNilsThrough…` |
+| `ListIncidents` 跳过 nil（真正过滤） | `TestTheListingPassesNilsThroughRatherThanCompactingThem` 红（`got 2 entries, want 3`） |
+
+**这一刀四个假注释里有三个是「说了做了什么、实际做的是另一件事」，
+而三个都被同一个动作抓住：把注释声称保护的东西真的改坏，看它变不变红。**
+这已经是第四句了（275 / 276 / 278 / 279），**形态仍然一致**：
+**断言与注释检查的不是同一件事**。
+
+#### 五、读数
+
+| | 之前 | 之后 |
+|---|---|---|
+| 域 / shared / 声明边 / 环 / 分层 | 57 / 10 / 14 / 0 / 4 | **57 / 10 / 13 / 0 / 4** |
+| 硬约束 | 0 | **0**（未变） |
+| 生产跨域 import | 97 | **92** |
+| 测试专用跨域 import | 120 | **118**（-2：两个 loop 测试不再 import alert） |
+| **可证明独立发版的域** | **40 / 57** | **40 / 57**（未变——loop 与 alert 的入度都非零） |
+| release floor 体量 | 56,964 行 / 33.0% / 111 包 | **未变** |
+| 三份报价 | 85/12/0 · 90/7/0 · 80/17/0 | **80/12/0 · 85/7/0 · 75/17/0** |
+| `alert` 入度 | 23 条 import / 3 条边 | **18 / 2** |
+| `loop` 出度 | 5 条 import / 1 条边 | **0 / 0** |
+| in-degree 非零的域 | 7 | **7**（未变） |
+| `core/manager` | 941 文件 / 238,185 行 | **943 文件 / 238,411 行**（+2 文件：`loop/alertport.go` 与它的测试） |
+
+**floor 与 in-degree 都没动，而三份报价各降 5、跨组数仍然一条未动。**
+这是第三次出现同一形态（前两次各降 3）。**三刀共降 11 条组内 import，
+跨组数始终是 12 / 7 / 17。** 结论已经在 §4.211 七节写过，
+现在有了第三个实例：**`loop` 与 `aiops` 的出边都指向「谁都要」的域，
+所以切它们的入边或出边都只动组内计数。** 换句话说，
+**这三份报价的跨组数要降，只能靠搬域进 `independent` 组，
+不能靠切边**——而搬组的条件是入度归零，那条路已经在决策 277 走完。
+
+#### 六、下一刀
+
+剩下的边里最便宜的是 `aiops → approval`（12）。**但 §4.211 八节已经算过：
+`approval` 入度是 2（`aiops` + 1 条别的），切掉之后剩 1，它不会进 floor。**
+所以它买到的是「aiops 出度 71 → 更少」与三份报价各降若干，
+**买不到一个域的独立性**。
+
+**从这里开始，切边的边际收益要重新估**：前 8 刀每刀都换来一个可发版的域，
+第 9 刀起只能换来组内 import 的减少。**而跨组数不降。**
+真正还剩的大块是四个多边大域（`device` 28/2、`edge` 28/2、`alert` 18/2、
+`loop` 10/4），它们的入向高度集中在 2–4 条边上——
+**下一次真正值钱的一刀应该是把 `device` 或 `edge` 的 2 条入边之一切掉，
+而不是继续按单价从低到高排。**
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -24593,6 +24716,27 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 加权合计 ≈ **98.6%**（四阶段等比 98 / 100 / 96.7 / 99.7 的均值 98.6）。这一栏按
 决策倒序追加，每一条只说自己动的那一分量：
 
+- **决策 279 切掉了 `loop → alert`，而它买到的东西与前八刀不同**：
+  **loop 的出度归零**（`in 10 across 4 edges out 0 across 0`，全树唯一一个
+  出度为零的域）——**loop 依赖的域现在全部在它上游**。这条边早就被切成端口的
+  形状（三个 `*_adapter`），这一刀是把**远端**换成本地投影：
+  一个 `AlertReader` 端口 + 三份投影，跨边界的两样东西是原始 JSON 字符串
+  （`LabelsJSON` / `ConditionsJSON`）而不是解析后的值——**alert 拥有字节的
+  格式，loop 拥有报错的措辞**。两份声明各配一条钉子：空列必须返回空 map
+  而不是 nil（`DeepEqual` 分不出两者，所以单独断言非 nil），
+  以及 `ruleCondition` 的三个 JSON tag（tag 改名会解析成零值，
+  然后**自治触发器安静地不再触发**）。
+  **抓到第四句我自己写的假注释**：装配端 `ListIncidents` 里那个
+  `if inc == nil` 分支被注释说成「nil 透传的关键」，
+  **而删掉它测试全绿——真正让 nil 活下来的是 `incidentFrom` 的 nil 检查**。
+  连同另一个无效变异（删方法里的 nil 检查也全绿），两处收敛成一处，
+  再跑真正有意义的两个变异，两个都红。**四句假注释的形态完全一致：
+  断言与注释检查的不是同一件事。**
+  **floor 与 in-degree 都没动，三份报价却各降 5、跨组数仍然一条未动**——
+  这是连续第三次（276/277/279），**三刀共降 11 条组内 import，
+  跨组数始终 12 / 7 / 17**。结论：**跨组数要降只能靠搬域进 `independent`，
+  不能靠切边，而搬组的条件是入度归零——那条路决策 277 已经走完。**
+  从这里开始切边的边际收益要重新估（详见 §4.213）。
 - **决策 278 平了两笔账，树一行未动**。第一笔是**账实不符**：§九 那一格写
   「诊断轴 16/20、4 个 GAP（2+2）」，实测 17/20、3 个 GAP 用例，
   而**同一份台账的 §六 早已写着 17/20**——**一份文件里两个读数，只有一个对**。
@@ -27521,7 +27665,7 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
 
 | 读数 | 当前值 | 口径 / 主人 |
 |---|---|---|
-| 控制面域图 | **57 域 / 14 边 / 0 环** | `make domain-check`；`scripts/domaincheck` 的测试逐条核对这三个数。**决策 238 切 `mcp → aiops`（37 → 36）、决策 240 切 `aiops → skill`（36 → 35）、决策 241 切 `marketplace → pluginimport`（35 → 34）、决策 242 切 `grafana → monitor`（34 → 33）、决策 247 切 `agentteams → alert`（33 → 32）、决策 248 切 `webshell → device`（32 → 31）、决策 249 切 `agentteams → mcp`（31 → 30）、决策 251 切 `webshell → edge`（31 → 30）、决策 254 切 `chatdiagnose → aiops`（28 → 27）、决策 253 切 `report → aiops`（29 → 28）、决策 252 切 `pluginimport → aiops`（30 → 29）**、**决策 257 切 `systemhealth → alert`（26 → 25）**、**决策 258 切 `grafana → setting`（25 → 24）**，**决策 259 让 57 域变 56 域、24 边变 22 边——这是第一次域数变化，而它不是切边，是一个只有 110 行的域整体搬回了装配根**（见 §4.193），环数未变。**决策 247 是第一条切完还要把声明与理由一起删掉的边**：`domaincheck` 报「declared but no longer happens」并要求删表项，理由写在命令的输出里——**过期理由比没有理由更糟**（§4.179）。**决策 271 让 56 域变 57 域、22 边变 21 边，shared 从 9 变 10**：容器加载器从 `biz/aiops/chatruntime` 切到新模块 `core/extension/biz/container`，域数加一是因为多了一个真域，边数减一是因为 `marketplace → aiops` 整条消失（marketplace 过去是借 chatruntime 借插件符号的，现在直接读加载器）。新的 `container` 是 **shared**，不是声明边——它同时被 aiops 与 marketplace 依赖，而这两边隔着其他所有边界。**环数与分层深度均未变**。**决策 276 切 `aiops → topology`（16 → 15）：`topology` 入度归零，可证明独立发版的域 38 → 39。****决策 277 切 `aiops → hitl`（15 → 14）：`hitl` 入度归零，可证明独立发版的域 39 → 40，而它承载的闸门在生产里从未被构造。**|
+| 控制面域图 | **57 域 / 13 边 / 0 环** | `make domain-check`；`scripts/domaincheck` 的测试逐条核对这三个数。**决策 238 切 `mcp → aiops`（37 → 36）、决策 240 切 `aiops → skill`（36 → 35）、决策 241 切 `marketplace → pluginimport`（35 → 34）、决策 242 切 `grafana → monitor`（34 → 33）、决策 247 切 `agentteams → alert`（33 → 32）、决策 248 切 `webshell → device`（32 → 31）、决策 249 切 `agentteams → mcp`（31 → 30）、决策 251 切 `webshell → edge`（31 → 30）、决策 254 切 `chatdiagnose → aiops`（28 → 27）、决策 253 切 `report → aiops`（29 → 28）、决策 252 切 `pluginimport → aiops`（30 → 29）**、**决策 257 切 `systemhealth → alert`（26 → 25）**、**决策 258 切 `grafana → setting`（25 → 24）**，**决策 259 让 57 域变 56 域、24 边变 22 边——这是第一次域数变化，而它不是切边，是一个只有 110 行的域整体搬回了装配根**（见 §4.193），环数未变。**决策 247 是第一条切完还要把声明与理由一起删掉的边**：`domaincheck` 报「declared but no longer happens」并要求删表项，理由写在命令的输出里——**过期理由比没有理由更糟**（§4.179）。**决策 271 让 56 域变 57 域、22 边变 21 边，shared 从 9 变 10**：容器加载器从 `biz/aiops/chatruntime` 切到新模块 `core/extension/biz/container`，域数加一是因为多了一个真域，边数减一是因为 `marketplace → aiops` 整条消失（marketplace 过去是借 chatruntime 借插件符号的，现在直接读加载器）。新的 `container` 是 **shared**，不是声明边——它同时被 aiops 与 marketplace 依赖，而这两边隔着其他所有边界。**环数与分层深度均未变**。**决策 276 切 `aiops → topology`（16 → 15）：`topology` 入度归零，可证明独立发版的域 38 → 39。****决策 277 切 `aiops → hitl`（15 → 14）：`hitl` 入度归零，可证明独立发版的域 39 → 40，而它承载的闸门在生产里从未被构造。****决策 279 切 `loop → alert`（14 → 13）。**|
 | 生产跨域 import | **121** | `make domain-check`；`scripts/domaincheck` 的汇总行直接打印它，**决策 250 才让它第一次可被计算**（§4.182），**决策 251 第一次在切边之后动它：126 → 125，决策 252 第二次：125 → 124，决策 253 第三次：124 → 123，决策 254 第四次：123 → 121**。口径：生产文件（`_test.go` 除外）中两端落在不同有界上下文、`to != from`、且**目标不是 9 个 shared 底座**的 import 语句数。它**不是**声明边数（30），**也不是**台账头条「已切 28 / 34」的那个 34——**后者从未有任何量具，是逐次手写累加的**，且 §4.56.8 记的旧读数（42 边时为 19）与今天的 126 **从来不是同一个量**（今天边更少而 import 多 6.6 倍）。三次复现尝试（生产 import 语句 149 / 去重域对 44 / 去重发起文件 85 / 去重被导入包 13）**没有一个等于 19 或 34**。守卫：`scripts/domaincheck/prodimport_test.go` 三条（独立遍历复核 / 非零且严格小于生产 import 总数的上界 / prod 与 test-only 各自独立计数），六次变异实测见 §4.182。**可复现的复核命令**：`GOWORK=off go run ./scripts/domaincheck .` |
 | 开源门槛违规 | **13 项** | `make audit-open-source`；`scripts/audit_open_source.py` 自己核对这一行。**本轮 17 → 13**：自主关掉 4 项明确无争议的（私有演示租户 2 处——`scenario_test.go` 与 `verify-final-demo.sh` 里的私有租户名是自包含合成 fixture，改中性名 `demo-tenant`；赛事语言 2 处——`site/app/live-incident` 的演示页文案与 `archive-route.jsx` 注释，改中性词）。**剩 13 项仍待人拍板**（决策 179）：赛事材料 10 处（`FINAL_DEMO_SCRIPT.md` / `PPT_*.md` / `openspec/changes/**`）与私有属主 3 处（`docs/ACKNOWLEDGMENTS.md` / `site/app/**/open-source`）——前者按规则属「私有交付证据」，改词不足以让它变成产品文档，需决定删/改/从发布集排除；后者「抹掉属主不等于抹掉致谢」（§4.104.9） |
 

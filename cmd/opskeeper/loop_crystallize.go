@@ -162,7 +162,7 @@ func newLoopCrystallization(
 
 	out.learner = learner
 	out.crystallizer = learner
-	out.triggers = managerbizloop.NewAlertTriggerAdapter(alerts, log)
+	out.triggers = managerbizloop.NewAlertTriggerAdapter(loopAlertReader{repo: alerts}, log)
 	// The review surface reads from the same ledger the loop writes to.
 	review.SetPatterns(learner.Ledger())
 	review.SetDraftRoot(os.Getenv("OPSKEEPER_PLUGIN_IMPORT_DIR"))

@@ -3,13 +3,11 @@ package loop
 import (
 	"context"
 	"testing"
-
-	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 )
 
-func ruleWith(t *testing.T, conds string) *alertmodel.Rule {
+func ruleWith(t *testing.T, conds string) *AlertRule {
 	t.Helper()
-	return &alertmodel.Rule{ConditionsJSON: conds}
+	return &AlertRule{ConditionsJSON: conds}
 }
 
 // TestTriggerFromRuleReadsTheOneComparison: a runbook's "when" is the

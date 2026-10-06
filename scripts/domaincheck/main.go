@@ -257,8 +257,6 @@ var edges = map[edge]string{
 
 	{"imbridge", "aiops"}: "the IM bridge delivers an agent finding into a chat channel, so it formats the agent's output",
 
-	{"loop", "alert"}: "an investigation starts from an alert and closes it, so the loop reads and updates alert state",
-
 	{"mcp", "loop"}: "an investigation started over MCP enters the same loop as a chat one",
 
 	{"nodeagent", "nodefleet"}: "the node-agent endpoints are the fleet's session handles",
