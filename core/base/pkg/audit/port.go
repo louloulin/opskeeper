@@ -180,6 +180,25 @@ const (
 	// 那一次尝试本身就是运维想看到的事件。
 	ActionCrystallizePromote = "crystallize_promote"
 
+	// The propose-confirm inbox's two decisions (HLD-017).
+	//
+	// 这一对是整张表里**后果最重**的两行，而它们此前完全不在链上。
+	// approve 不是"把一条记录标成已批准"：`approval.Usecase.Approve` 在标记之后
+	// **直接调用该 Kind 的 executor 并记录结果**。也就是说，这个按钮就是
+	// "让一条云上命令真的跑起来"的那一下。
+	//
+	// 而事后能回答的问题里，最要命的那一个恰恰答不了：
+	// "**谁批准了这条命令，它逐词是什么，跑成了没有**"——
+	// approval 行里有 approver 与时间，但没有链上那份防篡改的记录，
+	// 也没有把"被批准的东西"与"节点上后来发生的动作"对起来的凭据。
+	//
+	// 分成两个动作而不是一个带 payload 的动作，理由与 plugin_release 的
+	// halt/rollback 一样：**"谁批准的"与"谁驳回的"是两个被分开问的问题**，
+	// 合成一行就都退化成 payload 扫描。而驳回带理由、不执行，
+	// 与批准带执行结果，是两种完全不同形状的事件。
+	ActionApprovalApprove = "approval_approve"
+	ActionApprovalReject  = "approval_reject"
+
 	// ActionAgentTeamsTokenIssue covers minting a bearer token for an
 	// AgentTeams worker: a credential with a TTL and a tool allow-list.
 	//
@@ -293,6 +312,15 @@ const (
 	// ResourcePlugin names a plugin release. The resource id is the
 	// package name, which is what an operator searches for.
 	ResourcePlugin = "plugin"
+	// ResourceApproval names one propose-confirm row. The resource id is
+	// the proposal's own uuid, because that is what the inbox, the
+	// executor and the resulting audit row all have to be able to name.
+	//
+	// 它与 ResourcePlugin 并列而不是折进去：一条批准放行的是**一次执行**，
+	// 而发布放行的是**一批节点上的代码变更**。把前者记成后者，
+	// "谁批准了这条命令"就会变成对插件行做 payload 扫描。
+	ResourceApproval = "approval"
+
 	// ResourceEdge names a node. The resource id is the numeric edge id as
 	// a string, which is how every other edge-scoped row in this table
 	// already identifies itself.

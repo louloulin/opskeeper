@@ -180,6 +180,11 @@ const (
 
 	ActionAgentToolCall = auditport.ActionAgentToolCall
 
+	ActionCrystallizePromote = auditport.ActionCrystallizePromote
+
+	ActionApprovalApprove = auditport.ActionApprovalApprove
+	ActionApprovalReject  = auditport.ActionApprovalReject
+
 	ResourceUser     = auditport.ResourceUser
 	ResourceDevice   = auditport.ResourceDevice
 	ResourceIncident = auditport.ResourceIncident
@@ -196,6 +201,7 @@ const (
 	ResourceAuth     = auditport.ResourceAuth
 	ResourcePlugin   = auditport.ResourcePlugin
 	ResourceEdge     = auditport.ResourceEdge
+	ResourceApproval = auditport.ResourceApproval
 	ResourceMCPTool  = auditport.ResourceMCPTool
 
 	ResourceAgentTool = auditport.ResourceAgentTool
