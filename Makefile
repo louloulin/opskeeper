@@ -788,10 +788,21 @@ split-cost: ## 给一份分组方案定价：跨组 import 语句数 + 被切断
 # overtaken is correct history. Decision 249's entry sits after decision 257's
 # because the log grew as cuts landed, so a checker reaching for "the last
 # number in the file" would fail a correct document.
-.PHONY: split-price-check
+.PHONY: split-price-check pending-check
 split-price-check: ## 校验拆分方案头部的价格与树实测一致（决策 404；只查头条，不查历史日志）
 	go run ./scripts/splitprice docs/manager-split.proposed .
 	go test ./scripts/splitprice/ -count=1
+
+# The list of what a person still has to decide lives in the ledger, and this is
+# the gate for it. Four turns in a row started from what the previous turn
+# happened to remember and reported an already-written decision as an
+# unfinished item; the ledger recorded the lesson each time, and prose did not
+# run. This runs: the list must exist, every item must name something
+# recomputable and say where the authority for it is, and the open-source count
+# in the list must equal what the auditor finds now (decision 416).
+pending-check: ## 台账里那张「待人拍板清单」的形状与数字（决策 416）
+	go run ./scripts/pending .
+	go test ./scripts/pending/ -count=1
 
 # The other half of what split-cost cannot say. That number prices a cut by
 # import edges, which say two packages must be BUILT together and say nothing

@@ -341,6 +341,18 @@ func DecisionGates() []Gate {
 				"(decisions 134, 348)",
 		},
 		{
+			Target: "pending-check",
+			Why: "what a person still has to decide is a list, and a list that lives only in a chat " +
+				"transcript is a memory rather than a fact. Four turns in a row (decisions 413-416) " +
+				"reported an item the ledger had already decided -- a version tag that was two " +
+				"spellings of one version, a release base that was red by construction, a split " +
+				"proposal that was never approved -- each time after a check that in fact cleared it. " +
+				"Each of those turns wrote the lesson down and none of them stopped the next one, " +
+				"because prose does not run. This gate runs: the list must exist in the ledger, every " +
+				"item must name something recomputable and cite where its authority lives, and the " +
+				"open-source count it states must equal what the auditor finds today (decision 416)",
+		},
+		{
 			Target: "split-price-check",
 			Why: "the split proposal states its own price in its first line, and that price sat on " +
 				"95 internal / 26 crossing while the tree had moved to 50 / 6 through the cuts after " +

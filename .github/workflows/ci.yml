@@ -146,6 +146,13 @@ jobs:
       - name: Split proposal price matches the tree
         run: make split-price-check
 
+      # The pending list is the one place this repository says what a person
+      # still has to decide. Four turns in a row started from memory instead of
+      # from it, and each time the "unfinished item" turned out to be an old
+      # decision already written down (decision 416).
+      - name: The pending list is shaped and its count matches the auditor
+        run: make pending-check
+
       # The per-symbol reachability verdict stays a report, and always has
       # (decision 199: the walk cannot see six kinds of indirection, and a
       # gate that cries wolf teaches its reader to skip it). What this runs is
