@@ -184,7 +184,33 @@ var edges = map[edge]string{
 	{"aiops", "alert"}:    "the agent raises and silences alerts through the platform's rules rather than carrying a second alert implementation. One direction only since decision 118, which was the last cycle in the tree: the alert domain used to call the agent kernel's own SpawnRequest/Worker structs, and it now asks for one investigation in its own value types",
 	{"aiops", "approval"}: "a remediation the agent wants to run is queued in the approval domain, which is the HITL path it must not be able to route around",
 	{"aiops", "device"}:   "an alert names a device and a tool call resolves it to a machine; the agent needs the device vocabulary to say which one",
-	{"aiops", "edge"}:     "the agent's tools address nodes through the edge domain; there is no second worth having notion of 'which node'",
+	// The aiops -> edge edge is gone (decision 283), and the reason it
+	// survived 272 and 273 is the one those two left standing. Reads and
+	// writes looked like different problems to the earlier cuts, and for
+	// aiops only the read half was left: nothing in the agent domain wrote
+	// an edge, it just listed nodes, resolved a name and read plugin
+	// health. So the question was never whether a port was wanted — it was
+	// whether the port was one.
+	//
+	// It was not, and the shape of the evidence is worth writing down
+	// because the interface declaration looked like a boundary the whole
+	// time. The RCA tools held `*edgebiz.Usecase` outright, and the two
+	// that had been given a locally-declared interface instead declared
+	// `[]edgemodel.ChangeEventRow` and `edgebiz.PluginRow` in their return
+	// types — a port whose signature reaches past the port into the store's
+	// entity. A caller compiling against those was compiling against eleven
+	// change-event columns and an index per filter, to read seven and three.
+	//
+	// So the rows moved to core/domain (ChangeEvent, PluginRow) and the
+	// node estate became domain.EdgeCatalog, four methods over the six
+	// columns the tools actually named. Two of the three filter fields went
+	// with it: name and last-seen-window used to be post-filters over a
+	// full table load, and the edge domain is the only place that knows what
+	// its LastSeenAt column means. One of the four methods
+	// (PluginHealth) was not new — it is why the cut is a cut rather than a
+	// deletion, and the guard in biz/edge pins the method set and walks
+	// every signature to make sure none of them names a core/manager
+	// package again.
 	{"aiops", "loop"}:     "the agent kernel drives the investigation loop, so the agent asks it for a recovery verdict, a loop toolset and what it learned; one direction only since decision 117. The old reason named a package that does not exist — there is no biz/aiops/loop, loop is its own context at biz/loop",
 
 	{"chatdiagnose", "loop"}: "promoting a chat hands the work to the loop domain, which owns the investigation; the reverse of that edge used to exist because the loop wrote the knowledge base's own rows (decision 114)",

@@ -23,12 +23,21 @@ package main
 //     it — the case the doc names, where a new manager_biz → manager_data
 //     store is red nowhere.
 //
-// The second case is not hypothetical. core/manager/biz/imbridge/adapter.go
-// reaches up into core/manager/service/aiops today and nothing objects:
-// modulecheck's layer rule only covers service→data and biz→data, and the
-// yml's component-granular grant waves the imbridge edge through. That edge
-// is a real inversion — a use case holding a concrete HTTP-layer service —
-// and until this file existed it was debt nobody had named.
+// The second case is not hypothetical, and it is the reason this file is
+// written in the past tense. core/manager/biz/imbridge/adapter.go reached up
+// into core/manager/service/aiops and nothing objected: modulecheck's layer
+// rule only covers service→data and biz→data, and the yml's
+// component-granular grant waved the imbridge edge through. That edge was a
+// real inversion — a use case holding a concrete HTTP-layer service — and
+// until this file existed it was debt nobody had named.
+//
+// Decision 280 deleted the file (the wiring moved to the composition root)
+// and the entry in the file-granular ledger outlived it by two decisions,
+// because the test that reports a stale entry had not been run since. So
+// this paragraph said "today" about a file that no longer existed — a
+// narration that reads as a live claim and is indistinguishable from one.
+// The tense here is load-bearing: a reader has to be able to tell, without
+// running anything, whether the example is still in the tree.
 //
 // So this file reads the yml and checks it, and it holds a file-granular
 // ledger for the edges that exist to pay for a known inversion rather than

@@ -1,13 +1,13 @@
 package host
 
 import (
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promptguard"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promptguard"
 )
 
 // AppendHostFilesTools registers the three edge-scope host_files
@@ -28,7 +28,7 @@ import (
 // in the "specialty" tier (per tierByName) so its schema is redacted
 // by default. Below threshold it stays in core alongside everything
 // else.
-func AppendHostFilesTools(bag *toolcore.ToolBag, c toolcore.Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *toolcore.ToolBag {
+func AppendHostFilesTools(bag *toolcore.ToolBag, c toolcore.Caller, e domain.EdgeCatalog, d *devicebiz.Usecase, log *slog.Logger) *toolcore.ToolBag {
 	if bag == nil {
 		return bag
 	}

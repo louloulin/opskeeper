@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	repairpreview "github.com/vincent-wuhan/opskeeper/core/domains/control/repairpreview"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/chat2query"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/configchange"
@@ -28,13 +30,11 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/querybackend"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/recovery"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
-	repairpreview "github.com/vincent-wuhan/opskeeper/core/domains/control/repairpreview"
 	"log/slog"
 
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
@@ -46,7 +46,7 @@ import (
 // tests can inject a fake without standing up the full alert biz repo.
 type Registry struct {
 	caller     Caller
-	edges      *edgebiz.Usecase
+	edges      domain.EdgeCatalog
 	devices    *devicebiz.Usecase
 	alertUC    alerting.AlertUsecase
 	promQuery  PromQuerier
@@ -235,7 +235,7 @@ func (r *Registry) SetConfigManager(m configchange.ConfigManager) { r.configMana
 // query_traceql tool is also registered. The composite correlate_incident
 // tool is registered when prom + log + trace + alertUC are ALL non-nil.
 // Callers may Register additional tools afterwards.
-func NewRegistry(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Usecase,
+func NewRegistry(caller Caller, edges domain.EdgeCatalog, devices *devicebiz.Usecase,
 	promQuery PromQuerier, logQuery LogQuerier, traceQuery TraceQuerier,
 	alertUC alerting.AlertUsecase,
 	log *slog.Logger) *Registry {

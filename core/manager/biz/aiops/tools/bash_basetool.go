@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
@@ -197,13 +197,13 @@ type BashTool struct {
 
 // NewBashTool builds a new BaseTool. Pass nil log to default to
 // slog.Default().
-func NewBashTool(c Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *BashTool {
+func NewBashTool(c Caller, e domain.EdgeCatalog, d *devicebiz.Usecase, log *slog.Logger) *BashTool {
 	return NewBashToolWithProposer(c, e, d, nil, log)
 }
 
 // NewBashToolWithProposer builds host_bash with the optional mutating-command
 // approval seam wired.
-func NewBashToolWithProposer(c Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, proposer HostBashProposer, log *slog.Logger) *BashTool {
+func NewBashToolWithProposer(c Caller, e domain.EdgeCatalog, d *devicebiz.Usecase, proposer HostBashProposer, log *slog.Logger) *BashTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -394,7 +394,7 @@ func isHostBashWriteCommand(cmd string) bool {
 // when the dependency triple is wired. Returns the slice unchanged
 // when any dep is nil (graceful degradation — without the tunnel +
 // device junction we can't address an edge).
-func AppendBashTool(out []basetool.BaseTool, c Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) []basetool.BaseTool {
+func AppendBashTool(out []basetool.BaseTool, c Caller, e domain.EdgeCatalog, d *devicebiz.Usecase, log *slog.Logger) []basetool.BaseTool {
 	if c == nil || e == nil || d == nil {
 		return out
 	}

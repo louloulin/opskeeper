@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	"log/slog"
 	"math"
 	"sort"
@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
-	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/logquery"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tracequery"
+	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
+	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
+	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 )
 
 // ToolNameCorrelateIncident is the stable wire name the LLM sees for the
@@ -548,8 +548,12 @@ func (f *Fanout) queryEdgeSnapshot(ctx context.Context, edgeID uint64, firedAt t
 	snap := &edgeSnapshot{ID: edgeID}
 	edgeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	edge, err := f.Edges.Get(edgeCtx, edgeID)
-	if err == nil && edge != nil {
+	// Presence reports a node that is not registered as found=false with a
+	// nil error, so the `else if` below no longer fires for it — a node that
+	// was never registered is not a lookup failure, and logging it as one
+	// filled this bundle's log with a line nobody could act on.
+	edge, found, err := f.Edges.Presence(edgeCtx, edgeID)
+	if err == nil && found {
 		snap.Name = edge.Name
 		snap.Status = edge.Status
 		snap.LastSeenAt = edge.LastSeenAt
@@ -712,7 +716,7 @@ type Fanout struct {
 	PromQuery  toolcore.PromQuerier
 	LogQuery   toolcore.LogQuerier
 	TraceQuery toolcore.TraceQuerier
-	Edges      *edgebiz.Usecase
+	Edges      domain.EdgeCatalog
 	Devices    *devicebiz.Usecase
 	Log        *slog.Logger
 }

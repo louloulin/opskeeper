@@ -12,10 +12,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
 	"time"
-
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // executeFindOutlierEdges builds a z-score PromQL of the shape
@@ -88,7 +87,7 @@ func (r *Registry) executeFindOutlierEdges(ctx context.Context, args json.RawMes
 	}
 
 	// Decorate with edge name.
-	edges, err := r.edges.List(callCtx, edgebiz.ListFilter{Limit: 500})
+	edges, err := r.edges.ListCatalog(callCtx, domain.EdgeFilter{Limit: 500})
 	if err == nil {
 		nameByID := make(map[uint64]string, len(edges))
 		for _, e := range edges {

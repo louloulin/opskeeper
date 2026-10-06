@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/host"
 )
@@ -45,9 +46,17 @@ func (r *Registry) executeGetProcessList(ctx context.Context, args json.RawMessa
 		return ExecuteResult{}, fmt.Errorf("get_process_list: sort_by must be cpu or mem (got %q)", in.SortBy)
 	}
 
-	edge, err := r.edges.GetByName(ctx, in.EdgeName)
+	// PresenceByName reports a name that matches no node as found=false with
+	// a nil error, because "no such node" is an answer. The tool still has to
+	// turn it into the error it has always returned, and it turns it into
+	// the same one: errs.ErrNotFound wrapped with the tool's own prefix, so
+	// the message a model reads is unchanged.
+	edge, found, err := r.edges.PresenceByName(ctx, in.EdgeName)
 	if err != nil {
 		return ExecuteResult{}, fmt.Errorf("get_process_list: resolve edge: %w", err)
+	}
+	if !found {
+		return ExecuteResult{}, fmt.Errorf("get_process_list: resolve edge: %w", errs.ErrNotFound)
 	}
 
 	req := tunnel.GetProcessListRequest{TopN: in.TopN, SortBy: in.SortBy}

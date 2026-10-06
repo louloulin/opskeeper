@@ -7,10 +7,10 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // host_load_basetool.go — N+15 batch refactor (2026-05-07). The BaseTool
@@ -33,7 +33,7 @@ import (
 // GetHostLoadTool is the BaseTool form of get_host_load.
 type GetHostLoadTool struct {
 	caller   toolcore.Caller
-	edges    *edgebiz.Usecase
+	edges    domain.EdgeCatalog
 	resolver DeviceResolver
 	log      *slog.Logger
 }
@@ -42,7 +42,7 @@ type GetHostLoadTool struct {
 // (degrades to slog.Default()). devices is required for device_id →
 // edge_id resolution; edges is consulted as the legacy fallback path
 // when a device row has no junction link.
-func NewGetHostLoadTool(caller toolcore.Caller, edges *edgebiz.Usecase, devices *devicebiz.Usecase, log *slog.Logger) *GetHostLoadTool {
+func NewGetHostLoadTool(caller toolcore.Caller, edges domain.EdgeCatalog, devices *devicebiz.Usecase, log *slog.Logger) *GetHostLoadTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -56,7 +56,7 @@ func NewGetHostLoadTool(caller toolcore.Caller, edges *edgebiz.Usecase, devices 
 // build for itself, and a test on the other side of the package boundary
 // that wants a fake would otherwise have to reach into an unexported
 // field. That reach is exactly the coupling this package exists to end.
-func NewGetHostLoadToolWithResolver(caller toolcore.Caller, edges *edgebiz.Usecase, resolver DeviceResolver, log *slog.Logger) *GetHostLoadTool {
+func NewGetHostLoadToolWithResolver(caller toolcore.Caller, edges domain.EdgeCatalog, resolver DeviceResolver, log *slog.Logger) *GetHostLoadTool {
 	if log == nil {
 		log = slog.Default()
 	}

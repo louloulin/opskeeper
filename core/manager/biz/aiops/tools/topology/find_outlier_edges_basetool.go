@@ -4,24 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // FindOutlierEdgesTool is the BaseTool form of find_outlier_edges.
 // Mirrors executeFindOutlierEdges in find_outlier_edges.go.
 type FindOutlierEdgesTool struct {
 	promQuery toolcore.PromQuerier
-	edges     *edgebiz.Usecase
+	edges     domain.EdgeCatalog
 	log       *slog.Logger
 }
 
 // NewFindOutlierEdgesTool builds the BaseTool variant.
-func NewFindOutlierEdgesTool(promQuery toolcore.PromQuerier, edges *edgebiz.Usecase, log *slog.Logger) *FindOutlierEdgesTool {
+func NewFindOutlierEdgesTool(promQuery toolcore.PromQuerier, edges domain.EdgeCatalog, log *slog.Logger) *FindOutlierEdgesTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -107,7 +107,7 @@ func (t *FindOutlierEdgesTool) InvokableRun(ctx context.Context, argsJSON string
 		})
 	}
 
-	edges, err := t.edges.List(callCtx, edgebiz.ListFilter{Limit: 500})
+	edges, err := t.edges.ListCatalog(callCtx, domain.EdgeFilter{Limit: 500})
 	if err == nil {
 		nameByID := make(map[uint64]string, len(edges))
 		for _, e := range edges {

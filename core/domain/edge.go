@@ -109,3 +109,74 @@ type EdgeStatusQuery interface {
 	// make claims the edges table already makes.
 	PresenceStatus(ctx context.Context, id uint64) (string, error)
 }
+
+// EdgeFilter is what the RCA tools are allowed to ask for when they list the
+// node estate.
+//
+// It is a projection of the edge domain's own five-field ListFilter, and the
+// three columns it drops are the three nothing on this side sets: CreatedBy
+// (every RCA tool lists every node, not one operator's), and Offset (every
+// caller here takes the whole result and cuts it itself, because each of them
+// has a different notion of "enough" — 500 for the tools that join against
+// metrics, 5000 for the one that draws a topology, and a caller's own limit
+// for the query tool).
+//
+// SeenAfter is the one field that did not exist in ListFilter. Two of the
+// callers used to fetch every row and then drop the ones whose LastSeenAt was
+// older than a cutoff, which means the edge domain was loading the whole table
+// to answer a question about a window. It is a pointer because "no window" and
+// "the window that includes everything" are different requests, and only the
+// caller knows which one it meant.
+type EdgeFilter struct {
+	// Status is EdgeStatusOnline or EdgeStatusOffline, or empty for both.
+	Status string
+	// NameContains is a substring match on the node's display name.
+	NameContains string
+	// SeenAfter keeps only nodes last seen at or after this instant. A
+	// node that has never reported in has no stamp and is dropped, which
+	// is the rule the post-filter had before it became a filter.
+	SeenAfter *time.Time
+	// Limit caps the result. Zero means the edge domain's own default.
+	Limit int
+}
+
+// EdgeCatalog is the port the RCA tool set holds, and it is a second port
+// rather than a wider EdgeQuery for the reason the file above gives: alert and
+// systemhealth count stale nodes, and this consumer enumerates the estate to
+// join it against metrics, logs and alerts. Handing the first pair a
+// point lookup, or this consumer a method that only counts, would be the same
+// accretion one method later.
+//
+// It is one port with four methods rather than four one-method ports
+// because it has one holder. The file above's own precedent runs both ways —
+// EdgeStatusQuery is a single method for a single holder, and that is right
+// because nobody else would ever want it — but a consumer that asks three
+// questions about the same subject should hold one thing, not three, or every
+// tool struct in the package has to carry three fields that are never used
+// independently.
+//
+// Every type in these three signatures is declared in this package or the
+// standard library, which is what makes them expressible at all: before
+// decision 283 the tools held *edgebiz.Usecase outright, and the reason is
+// that the answer to "list the estate" was a []*model.Edge, so a tool that
+// wanted six columns had no way to ask for six.
+type EdgeCatalog interface {
+	// ListCatalog returns the nodes matching f, most useful first as the
+	// edge domain orders them.
+	ListCatalog(ctx context.Context, f EdgeFilter) ([]EdgePresence, error)
+	// Presence returns one node. A node that is not registered is reported
+	// as found=false with a nil error, not as a nil row: the projection
+	// principle in this file says the port may not make a claim the table
+	// does not make, and "no such node" is an answer rather than a failure.
+	Presence(ctx context.Context, id uint64) (EdgePresence, bool, error)
+	// PresenceByName is Presence with a different key, and it is a fourth
+	// method rather than a filter on the first because three of the tools
+	// are handed a node's name by an operator and have nothing else to look
+	// it up by. It was a fifth method on the concrete type before, named
+	// GetByName, and folding it into ListCatalog would have meant every
+	// name lookup loading the whole estate to find one row.
+	PresenceByName(ctx context.Context, name string) (EdgePresence, bool, error)
+	// PluginHealth returns the last health snapshot a node reported for its
+	// plugins, or nil if none has arrived yet.
+	PluginHealth(edgeID uint64) []PluginHealth
+}

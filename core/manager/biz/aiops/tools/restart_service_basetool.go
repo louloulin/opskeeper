@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // restart_service_basetool.go is the manager-side BaseTool that pairs
@@ -170,7 +170,7 @@ type RestartServiceTool struct {
 
 // NewRestartServiceTool builds a new BaseTool. Pass nil log to default
 // to slog.Default(). Same dependency triple shape as host_files.
-func NewRestartServiceTool(c Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *RestartServiceTool {
+func NewRestartServiceTool(c Caller, e domain.EdgeCatalog, d *devicebiz.Usecase, log *slog.Logger) *RestartServiceTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -275,7 +275,7 @@ func (t *RestartServiceTool) InvokableRun(ctx context.Context, argsJSON string, 
 // The caller is responsible for wrapping the returned tool in the
 // decorator chain (chain.go's Wrap), which automatically applies the
 // ReviewGate decorator when Class="write"|"destructive".
-func AppendRestartServiceTool(out []basetool.BaseTool, c Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) []basetool.BaseTool {
+func AppendRestartServiceTool(out []basetool.BaseTool, c Caller, e domain.EdgeCatalog, d *devicebiz.Usecase, log *slog.Logger) []basetool.BaseTool {
 	if c == nil || e == nil || d == nil {
 		return out
 	}

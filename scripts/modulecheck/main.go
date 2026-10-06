@@ -645,9 +645,22 @@ var layerDebt = map[string]string{
 // layerDebt — an entry disappears when the edge is gone, and
 // TestTheLayerInversionLedgerIsCurrent refuses an entry that has gone stale
 // or a file that no longer exists.
-var layerInversion = map[string]string{
-	"core/manager/biz/imbridge/adapter.go": "holds *svcaiops.Service and calls CreateSession / PostMessageStreamWithOpts on it; the IM bridge is a use case reaching into the HTTP layer. Fixing it means moving the Caller and CreateSessionInput DTOs out of service, which is why it is listed rather than quietly left to the component-granular grant",
-}
+// The map is empty as of decision 283, and it was not empty for free: its only
+// entry, core/manager/biz/imbridge/adapter.go, stopped existing two decisions
+// earlier, when decision 280 moved the IM bridge's agent wiring into the
+// composition root (cmd/opskeeper/imbridge_agent_wiring.go) instead of
+// leaving a use case holding a concrete HTTP-layer service.
+//
+// The entry outlived the file by two decisions. Nothing failed for two full
+// rounds because the check that reports a stale entry
+// (TestTheLayerInversionLedgerIsCurrent) lives in this package and the last
+// recorded run of it predates 280 — which is the second time in this ledger
+// that "the gate is green" and "the gate was run after the change" turned out
+// to be different claims. An empty map is still declared rather than deleted,
+// because a rule with no instances today is a rule with instances tomorrow,
+// and a check that only exists while it has something to say is a check that
+// stops existing on the day it is needed.
+var layerInversion = map[string]string{}
 
 // bcDir returns the directory whose service/, biz/ and data/ subdirectories
 // the layer rule compares, from a context label ("iam" -> "core/manager/iam/",

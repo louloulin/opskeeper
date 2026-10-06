@@ -467,7 +467,17 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// that got simpler in a meaningful way — it is a graph where one more
 	// domain has nothing depending on it, and the depth fell because the
 	// thing that was deep was a single chain of length four with two members.
-	if max+1 != 3 {
+	//
+	// Decision 283 took it from three to two, and for the third time by the
+	// same mechanism, which is why the number keeps moving without the
+	// architecture getting simpler. Cutting `aiops -> edge` left edge with an
+	// in-degree of zero, so edge drops to level 0 — and edge was the only
+	// thing holding `device` at level 2, because `edge -> device` is still
+	// declared. Two levels with 54 of 57 domains on level 0: what is left of
+	// the depth is one domain (device) that something depends on, and it
+	// depends on exactly one thing. Read the in-degree column for this
+	// number; the level count is downstream of it.
+	if max+1 != 2 {
 		t.Errorf("the tree is %d levels deep, want 3: a level appearing or disappearing changes what a split costs", max+1)
 	}
 	var buf bytes.Buffer
@@ -475,7 +485,7 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	if !strings.Contains(buf.String(), "the graph is a DAG") {
 		t.Error("the shipped tree is no longer a DAG and the report does not say so")
 	}
-	// 10 = decision 118's 42, plus the edge decision 123 added when the root
+	// 9 = decision 118's 42, plus the edge decision 123 added when the root
 	// side of the cluster channel became a domain of its own, minus the eight
 	// since cut: decision 227 (frontierbound -> metric, whose port moved
 	// next to HostMetricPoint in core/floor/tunnel), decision 229
@@ -569,11 +579,20 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// single-inbound domains to come free — and the reason the in-degree
 	// column is the one worth watching is that it is the only one that
 	// predicts a domain's release independence without a judgement call.
+	// 283 (aiops -> edge) is the third of that kind, and the largest of
+	// them: the RCA tool set held `*edgebiz.Usecase` outright across
+	// twenty-two production files and named three more types besides, and
+	// the cut moved two of them (ChangeEvent, PluginRow) down to
+	// core/domain while the estate became domain.EdgeCatalog. It is also
+	// what emptied the production cross-domain import column from 84 to
+	// 58 — the largest single move in that column since the count
+	// started being tracked, and the reason the number is worth reading
+	// next to the edge count rather than instead of it.
 	//
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "10 edges") {
+	if !strings.Contains(buf.String(), "9 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

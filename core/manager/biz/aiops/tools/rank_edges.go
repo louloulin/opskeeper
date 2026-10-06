@@ -11,10 +11,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/topology"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // executeRankEdges builds a topk()/bottomk() PromQL, runs it through the
@@ -73,7 +73,7 @@ func (r *Registry) executeRankEdges(ctx context.Context, args json.RawMessage) (
 
 	// Decorate with edge name. List with a wide limit and build a small
 	// id->name map; cheaper than per-row GetByID for typical fleets.
-	edges, err := r.edges.List(callCtx, edgebiz.ListFilter{Limit: 500})
+	edges, err := r.edges.ListCatalog(callCtx, domain.EdgeFilter{Limit: 500})
 	if err == nil {
 		nameByID := make(map[uint64]string, len(edges))
 		for _, e := range edges {

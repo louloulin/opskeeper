@@ -7,10 +7,10 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // host_processes_basetool.go — N+15 batch refactor. The BaseTool form
@@ -26,14 +26,14 @@ import (
 // GetProcessListTool is the BaseTool form of get_process_list.
 type GetProcessListTool struct {
 	caller   toolcore.Caller
-	edges    *edgebiz.Usecase
+	edges    domain.EdgeCatalog
 	resolver DeviceResolver
 	log      *slog.Logger
 }
 
 // NewGetProcessListTool builds the BaseTool variant. devices is required
 // for device_id → edge_id resolution.
-func NewGetProcessListTool(caller toolcore.Caller, edges *edgebiz.Usecase, devices *devicebiz.Usecase, log *slog.Logger) *GetProcessListTool {
+func NewGetProcessListTool(caller toolcore.Caller, edges domain.EdgeCatalog, devices *devicebiz.Usecase, log *slog.Logger) *GetProcessListTool {
 	if log == nil {
 		log = slog.Default()
 	}

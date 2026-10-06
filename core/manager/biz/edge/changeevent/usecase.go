@@ -182,6 +182,40 @@ func (u *Usecase) ListByWindow(ctx context.Context, from, to time.Time, kind str
 	return u.repo.ListByWindow(ctx, from, to, kind, limit)
 }
 
+// ListChangeWindow is ListByWindow projected for the aiops domain.
+//
+// It exists because query_change_events is the one consumer outside this
+// domain that reads change events, and until decision 283 it read them
+// through a port that still returned *edgemodel.ChangeEventRow — an
+// interface whose method signature reached into this domain's model package,
+// so the "port" cost the caller a cross-domain import anyway. The projection
+// keeps the eleven-column row on this side, where the write path, the replay
+// dedup and the retention cleaner all need the sequence number, and hands
+// the reader the seven columns it actually names.
+//
+// The one method rather than a conversion the caller does itself is the point:
+// a caller-side conversion means every future caller re-derives which seven
+// of the eleven it wanted, and the answer would be allowed to drift.
+func (u *Usecase) ListChangeWindow(ctx context.Context, from, to time.Time, kind string, limit int) ([]domain.ChangeEvent, error) {
+	rows, err := u.ListByWindow(ctx, from, to, kind, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.ChangeEvent, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, domain.ChangeEvent{
+			EdgeID:    r.EdgeID,
+			Kind:      r.Kind,
+			Subject:   r.Subject,
+			Action:    r.Action,
+			Timestamp: r.Timestamp,
+			Severity:  r.Severity,
+			Labels:    r.Labels,
+		})
+	}
+	return out, nil
+}
+
 // ListByEdge returns events for one edge in [from, to].
 // from/to zero = no bound. limit <= 0 = default 200.
 func (u *Usecase) ListByEdge(ctx context.Context, edgeID uint64, from, to time.Time, limit int) ([]ChangeEventRow, error) {

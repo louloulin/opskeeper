@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // correlate_incident_basetool.go — N+15 batch refactor. Outer fan-out
@@ -33,7 +33,7 @@ func NewCorrelateIncidentTool(
 	promQuery toolcore.PromQuerier,
 	logQuery toolcore.LogQuerier,
 	traceQuery toolcore.TraceQuerier,
-	edges *edgebiz.Usecase,
+	edges domain.EdgeCatalog,
 	devices *devicebiz.Usecase,
 	log *slog.Logger,
 ) *CorrelateIncidentTool {

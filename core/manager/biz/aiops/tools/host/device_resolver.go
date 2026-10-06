@@ -3,8 +3,8 @@ package host
 import (
 	"context"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 )
 
@@ -49,14 +49,14 @@ type DeviceResolver interface {
 // (e.g. add a cache) without touching call sites.
 type junctionDeviceResolver struct {
 	devices *devicebiz.Usecase
-	edges   *edgebiz.Usecase
+	edges   domain.EdgeCatalog
 }
 
 // NewDeviceResolver builds the production DeviceResolver from the
 // device + edge usecases. Either may be nil; the resolver degrades
 // gracefully (a nil devices usecase skips the junction lookup, a nil
 // edges usecase skips the legacy fallback).
-func NewDeviceResolver(devices *devicebiz.Usecase, edges *edgebiz.Usecase) DeviceResolver {
+func NewDeviceResolver(devices *devicebiz.Usecase, edges domain.EdgeCatalog) DeviceResolver {
 	return junctionDeviceResolver{devices: devices, edges: edges}
 }
 
@@ -82,7 +82,7 @@ func (r junctionDeviceResolver) ResolveEdgeID(ctx context.Context, deviceID uint
 		}
 	}
 	if r.edges != nil {
-		if edge, err := r.edges.Get(ctx, deviceID); err == nil && edge != nil {
+		if edge, found, err := r.edges.Presence(ctx, deviceID); err == nil && found {
 			return edge.ID, nil
 		}
 	}

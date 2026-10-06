@@ -51,6 +51,29 @@ type PluginTargetHealth struct {
 	UpdatedAt     time.Time `json:"updated_at,omitempty"`
 }
 
+// PluginRow is one node's entry in its plugin configuration: which plugin it
+// is, whether the operator has it switched on, and the free-form spec that
+// plugin's own settings live in.
+//
+// It lives here rather than in the edge domain because the database RCA tool
+// asks for the same three columns the HTTP handler renders, and until
+// decision 283 the tool's port returned the edge domain's own row type, so a
+// port that looked like a boundary still forced a cross-domain import on the
+// caller. The HTTP handler keeps using the edge domain's name, which is an
+// alias for this type, so nothing on that side moved.
+//
+// The spec stays a decoded map and is not narrowed per plugin: the set of
+// plugins is a property of the node's installed binaries, not something this
+// contract can enumerate, and a per-plugin struct would make adding a plugin a
+// change to a shared contract type. A consumer that knows what it wants reads
+// the keys it needs — the database tool reads its metric-source keys out of
+// the same map the UI does.
+type PluginRow struct {
+	PluginName string                 `json:"plugin_name"`
+	Enabled    bool                   `json:"enabled"`
+	Spec       map[string]interface{} `json:"spec,omitempty"`
+}
+
 // PluginConfigSnapshot is one edge's plugin configuration, as the edge sees it.
 // It is the same shape core/floor/tunnel puts on the wire, and it is here
 // because the edge domain produced it before the wire type was written down.

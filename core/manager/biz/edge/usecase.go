@@ -187,9 +187,12 @@ func (u *Usecase) Get(ctx context.Context, id uint64) (*model.Edge, error) {
 	return u.repo.GetByID(ctx, id)
 }
 
-// GetByName returns a single edge by its human-readable name. The aiops
-// tool registry uses this to resolve edge_name -> edge.ID before dispatching
-// a tunnel RPC.
+// GetByName returns a single edge by its human-readable name.
+//
+// The RCA tools no longer come through here: they hold
+// domain.EdgeCatalog.PresenceByName, which projects this same read into the
+// six columns they are allowed to see (decision 283). This method stays for
+// the writers inside this domain, which do need the full row.
 func (u *Usecase) GetByName(ctx context.Context, name string) (*model.Edge, error) {
 	if u.repo == nil {
 		return nil, errs.ErrNotWiredYet

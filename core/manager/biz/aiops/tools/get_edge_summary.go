@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
 	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 // ToolNameGetEdgeSummary is the stable wire name the LLM sees.
@@ -105,9 +105,16 @@ func (r *Registry) executeGetEdgeSummary(ctx context.Context, args json.RawMessa
 	callCtx, cancel := context.WithTimeout(ctx, edgeSummaryCallTimeout)
 	defer cancel()
 
-	edge, err := resolveEdgeForDevice(callCtx, r, in.DeviceID, in.DeviceName)
+	edge, found, err := resolveEdgeForDevice(callCtx, r, in.DeviceID, in.DeviceName)
 	if err != nil {
 		return ExecuteResult{}, err
+	}
+	if !found {
+		// Unreachable: resolveEdgeForDevice returns a not-found as an error
+		// carrying a hint the model can read. It is here so that a future
+		// edit which returns (zero, false, nil) fails here rather than
+		// answering about a node with no id.
+		return ExecuteResult{}, fmt.Errorf("get_edge_summary: no node resolved for device_id=%d name=%q", in.DeviceID, in.DeviceName)
 	}
 
 	// Roles now live on the host Device (post device-split). Look it up
@@ -137,7 +144,7 @@ func (r *Registry) executeGetEdgeSummary(ctx context.Context, args json.RawMessa
 	// get_host_load but inline-decode here so we don't reach into the
 	// other tool's executor signature. A missing fbClient (caller) or
 	// an offline edge yields host_load=null.
-	if r.caller != nil && edge.Status == edgemodel.StatusOnline {
+	if r.caller != nil && edge.Status == domain.EdgeStatusOnline {
 		body, marshalErr := json.Marshal(tunnel.GetHostLoadRequest{})
 		if marshalErr == nil {
 			respBody, callErr := r.caller.Call(callCtx, edge.ID, tunnel.MethodGetHostLoad, body)
@@ -214,55 +221,63 @@ func (r *Registry) executeGetEdgeSummary(ctx context.Context, args json.RawMessa
 //
 // All "not found" returns carry an actionable hint so the LLM has
 // something better to say than "not found".
-func resolveEdgeForDevice(ctx context.Context, r *Registry, deviceID uint64, deviceName string) (*edgemodel.Edge, error) {
-	tryEdgeForDeviceID := func(id uint64) (*edgemodel.Edge, error) {
+//
+// The answer is a found flag rather than a nil row. This used to return
+// the edge domain row, and all four call sites carried an `err == nil && edge !=
+// nil` — a check for a state the port cannot produce, spelled four times.
+// The flag is the same information and it is one type.
+func resolveEdgeForDevice(ctx context.Context, r *Registry, deviceID uint64, deviceName string) (domain.EdgePresence, bool, error) {
+	tryEdgeForDeviceID := func(id uint64) (domain.EdgePresence, bool, error) {
 		if r.devices == nil {
-			return nil, nil
+			return domain.EdgePresence{}, false, nil
 		}
 		dev, dErr := r.devices.Get(ctx, id)
 		if dErr != nil || dev == nil {
-			return nil, dErr
+			return domain.EdgePresence{}, false, dErr
 		}
 		links := r.devices.Links()
 		if links == nil {
-			return nil, fmt.Errorf("device %d has no edge link configured", id)
+			return domain.EdgePresence{}, false, fmt.Errorf("device %d has no edge link configured", id)
 		}
 		eid, lErr := links.LookupEdgeForDevice(ctx, id, devicemodel.EdgeDeviceRelationHost)
 		if lErr != nil {
-			return nil, fmt.Errorf("device %d (%s) has no host-edge link", id, dev.Name)
+			return domain.EdgePresence{}, false, fmt.Errorf("device %d (%s) has no host-edge link", id, dev.Name)
 		}
-		edge, eErr := r.edges.Get(ctx, eid)
+		edge, found, eErr := r.edges.Presence(ctx, eid)
 		if eErr != nil {
-			return nil, fmt.Errorf("device %d → edge %d lookup: %w", id, eid, eErr)
+			return domain.EdgePresence{}, false, fmt.Errorf("device %d → edge %d lookup: %w", id, eid, eErr)
 		}
-		return edge, nil
+		if !found {
+			return domain.EdgePresence{}, false, fmt.Errorf("device %d → edge %d: no such node", id, eid)
+		}
+		return edge, true, nil
 	}
 
 	if deviceID != 0 {
 		// Preferred path: id is a device id.
-		if edge, err := tryEdgeForDeviceID(deviceID); err == nil && edge != nil {
-			return edge, nil
+		if edge, found, err := tryEdgeForDeviceID(deviceID); err == nil && found {
+			return edge, true, nil
 		}
 		// Fallback: legacy callers may have passed an edge id directly.
-		if edge, err := r.edges.Get(ctx, deviceID); err == nil && edge != nil {
-			return edge, nil
+		if edge, found, err := r.edges.Presence(ctx, deviceID); err == nil && found {
+			return edge, true, nil
 		}
-		return nil, fmt.Errorf("get_edge_summary: device_id=%d not found (try query_devices first to list available device ids)", deviceID)
+		return domain.EdgePresence{}, false, fmt.Errorf("get_edge_summary: device_id=%d not found (try query_devices first to list available device ids)", deviceID)
 	}
 
 	// By name.
 	if r.devices != nil {
 		devs, _ := r.devices.List(ctx, devicebizListByName(deviceName))
 		for _, d := range devs {
-			if edge, err := tryEdgeForDeviceID(d.ID); err == nil && edge != nil {
-				return edge, nil
+			if edge, found, err := tryEdgeForDeviceID(d.ID); err == nil && found {
+				return edge, true, nil
 			}
 		}
 	}
-	if edge, err := r.edges.GetByName(ctx, deviceName); err == nil && edge != nil {
-		return edge, nil
+	if edge, found, err := r.edges.PresenceByName(ctx, deviceName); err == nil && found {
+		return edge, true, nil
 	}
-	return nil, fmt.Errorf("get_edge_summary: no device or edge named %q (try query_devices to list)", deviceName)
+	return domain.EdgePresence{}, false, fmt.Errorf("get_edge_summary: no device or edge named %q (try query_devices to list)", deviceName)
 }
 
 // devicebizListByName builds a name-substring filter for device.Usecase.List

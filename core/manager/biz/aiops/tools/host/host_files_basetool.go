@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // host_files_basetool.go is PR-8 of the manager-side BaseTool
@@ -169,7 +169,7 @@ type FindLargeFilesTool struct {
 // to slog.Default(). edges may be nil if devices is wired with a real
 // junction; the fallback path is only triggered when the junction is
 // missing rows (legacy deployment grace).
-func NewFindLargeFilesTool(c toolcore.Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *FindLargeFilesTool {
+func NewFindLargeFilesTool(c toolcore.Caller, e domain.EdgeCatalog, d *devicebiz.Usecase, log *slog.Logger) *FindLargeFilesTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -348,7 +348,7 @@ type DuSummaryTool struct {
 }
 
 // NewDuSummaryTool builds a new BaseTool. See NewFindLargeFilesTool.
-func NewDuSummaryTool(c toolcore.Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *DuSummaryTool {
+func NewDuSummaryTool(c toolcore.Caller, e domain.EdgeCatalog, d *devicebiz.Usecase, log *slog.Logger) *DuSummaryTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -577,7 +577,7 @@ type StatFileTool struct {
 }
 
 // NewStatFileTool builds a new BaseTool. See NewFindLargeFilesTool.
-func NewStatFileTool(c toolcore.Caller, e *edgebiz.Usecase, d *devicebiz.Usecase, log *slog.Logger) *StatFileTool {
+func NewStatFileTool(c toolcore.Caller, e domain.EdgeCatalog, d *devicebiz.Usecase, log *slog.Logger) *StatFileTool {
 	if log == nil {
 		log = slog.Default()
 	}

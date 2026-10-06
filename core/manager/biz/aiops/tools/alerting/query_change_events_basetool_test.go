@@ -9,7 +9,7 @@ import (
 	"time"
 
 	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 type fakeAuditLister struct {
@@ -99,11 +99,11 @@ func TestQueryChangeEventsTool_BadArgs(t *testing.T) {
 
 // fakeEdgeLister 实现 EdgeChangeLister 用于测试.
 type fakeEdgeLister struct {
-	rows []edgemodel.ChangeEventRow
+	rows []domain.ChangeEvent
 	err  error
 }
 
-func (f *fakeEdgeLister) ListByWindow(_ context.Context, _, _ time.Time, _ string, _ int) ([]edgemodel.ChangeEventRow, error) {
+func (f *fakeEdgeLister) ListChangeWindow(_ context.Context, _, _ time.Time, _ string, _ int) ([]domain.ChangeEvent, error) {
 	return f.rows, f.err
 }
 
@@ -112,10 +112,10 @@ func TestQueryChangeEvents_MergesAuditAndEdge(t *testing.T) {
 		{OccurredAt: time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC), Action: "rule_update", ResourceType: "rule", Status: "ok"},
 		{OccurredAt: time.Date(2026, 7, 14, 10, 5, 0, 0, time.UTC), Action: "setting_update", ResourceType: "setting", Status: "ok"},
 	}}
-	edge := &fakeEdgeLister{rows: []edgemodel.ChangeEventRow{
-		{EdgeID: 1, Source: "journald", Kind: "ssh_login", Subject: "alice", Action: "login",
+	edge := &fakeEdgeLister{rows: []domain.ChangeEvent{
+		{EdgeID: 1, Kind: "ssh_login", Subject: "alice", Action: "login",
 			Timestamp: time.Date(2026, 7, 14, 10, 3, 0, 0, time.UTC), Severity: "info"},
-		{EdgeID: 1, Source: "packagemgr", Kind: "package_install", Subject: "nginx",
+		{EdgeID: 1, Kind: "package_install", Subject: "nginx",
 			Timestamp: time.Date(2026, 7, 14, 10, 1, 0, 0, time.UTC), Severity: "warn"},
 	}}
 	tool := NewQueryChangeEventsTool(audit, edge, nil)

@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 )
 
 // ToolNameGetTopology is the stable wire name the LLM sees.
@@ -63,11 +62,11 @@ func (r *Registry) executeGetTopology(ctx context.Context, _ json.RawMessage) (E
 
 	// Edge fleet size + online count.
 	if r.edges != nil {
-		all, err := r.edges.List(callCtx, edgebiz.ListFilter{Limit: 5000})
+		all, err := r.edges.ListCatalog(callCtx, domain.EdgeFilter{Limit: 5000})
 		if err == nil {
 			online := 0
 			for _, e := range all {
-				if e.Status == edgemodel.StatusOnline {
+				if e.Status == domain.EdgeStatusOnline {
 					online++
 				}
 			}

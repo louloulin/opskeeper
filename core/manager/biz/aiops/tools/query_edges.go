@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"strings"
 	"time"
 
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 )
 
@@ -185,32 +185,30 @@ func (r *Registry) executeQueryEdges(ctx context.Context, args json.RawMessage) 
 	}
 
 	// Legacy fallback: list edges (no roles filter possible).
-	all, err := r.edges.List(callCtx, edgebiz.ListFilter{
-		Status: in.Status,
-		Name:   in.NameContains,
-		Limit:  in.Limit,
+	// The last-seen window and the name match are part of the filter now
+	// rather than a post-filter over every row: the two used to pull the
+	// whole table and drop most of it here, and the edge domain is the only
+	// place that knows what its LastSeenAt column means.
+	var seenAfter *time.Time
+	if in.LastSeenWithinMinutes > 0 {
+		cutoff := time.Now().UTC().Add(-time.Duration(in.LastSeenWithinMinutes) * time.Minute)
+		seenAfter = &cutoff
+	}
+	all, err := r.edges.ListCatalog(callCtx, domain.EdgeFilter{
+		Status:       in.Status,
+		NameContains: in.NameContains,
+		SeenAfter:    seenAfter,
+		Limit:        in.Limit,
 	})
 	if err != nil {
 		return ExecuteResult{}, fmt.Errorf("query_devices: list edges: %w", err)
 	}
-	var cutoff time.Time
-	if in.LastSeenWithinMinutes > 0 {
-		cutoff = time.Now().UTC().Add(-time.Duration(in.LastSeenWithinMinutes) * time.Minute)
-	}
 	rows := make([]EdgeRow, 0, len(all))
 	for _, e := range all {
-		if !cutoff.IsZero() {
-			if e.LastSeenAt == nil || e.LastSeenAt.Before(cutoff) {
-				continue
-			}
-		}
-		if in.NameContains != "" && !strings.Contains(e.Name, in.NameContains) {
-			continue
-		}
 		rows = append(rows, EdgeRow{
 			ID:         e.ID,
 			Name:       e.Name,
-			Online:     e.Status == "online",
+			Online:     e.Status == domain.EdgeStatusOnline,
 			LastSeenAt: e.LastSeenAt,
 		})
 		if len(rows) >= in.Limit {

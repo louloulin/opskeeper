@@ -9,13 +9,12 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	alertbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 // get_edge_summary_basetool.go — N+15 batch refactor. The BaseTool form
@@ -40,14 +39,14 @@ const edgeSummaryBatchTimeout = 90 * time.Second
 // GetEdgeSummaryTool is the BaseTool form of get_edge_summary.
 type GetEdgeSummaryTool struct {
 	caller  Caller
-	edges   *edgebiz.Usecase
+	edges   domain.EdgeCatalog
 	devices *devicebiz.Usecase
 	alertUC alerting.AlertUsecase
 	log     *slog.Logger
 }
 
 // NewGetEdgeSummaryTool builds the BaseTool variant.
-func NewGetEdgeSummaryTool(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Usecase, alertUC alerting.AlertUsecase, log *slog.Logger) *GetEdgeSummaryTool {
+func NewGetEdgeSummaryTool(caller Caller, edges domain.EdgeCatalog, devices *devicebiz.Usecase, alertUC alerting.AlertUsecase, log *slog.Logger) *GetEdgeSummaryTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -127,9 +126,13 @@ func (t *GetEdgeSummaryTool) singleEdgeSummary(ctx context.Context, deviceID uin
 	callCtx, cancel := context.WithTimeout(ctx, edgeSummaryCallTimeout)
 	defer cancel()
 
-	edge, err := t.resolveEdgeForDevice(callCtx, deviceID, "")
+	edge, found, err := t.resolveEdgeForDevice(callCtx, deviceID, "")
 	if err != nil {
 		entry.Error = err.Error()
+		return entry
+	}
+	if !found {
+		entry.Error = "edge not found"
 		return entry
 	}
 
@@ -154,7 +157,7 @@ func (t *GetEdgeSummaryTool) singleEdgeSummary(ctx context.Context, deviceID uin
 		},
 	}
 
-	if t.caller != nil && edge.Status == edgemodel.StatusOnline {
+	if t.caller != nil && edge.Status == domain.EdgeStatusOnline {
 		body, marshalErr := json.Marshal(tunnel.GetHostLoadRequest{})
 		if marshalErr == nil {
 			respBody, callErr := t.caller.Call(callCtx, edge.ID, tunnel.MethodGetHostLoad, body)
@@ -253,15 +256,12 @@ func (t *GetEdgeSummaryTool) InvokableRun(ctx context.Context, argsJSON string, 
 // device_id; falls back to the edge id, which resolveEdgeForDevice resolves via
 // its edge-id fallback.
 func (t *GetEdgeSummaryTool) allEdgeDeviceIDs(ctx context.Context) ([]uint64, error) {
-	edges, err := t.edges.List(ctx, edgebiz.ListFilter{})
+	edges, err := t.edges.ListCatalog(ctx, domain.EdgeFilter{})
 	if err != nil {
 		return nil, err
 	}
 	ids := make([]uint64, 0, len(edges))
 	for _, e := range edges {
-		if e == nil {
-			continue
-		}
 		if e.DeviceID != nil && *e.DeviceID != 0 {
 			ids = append(ids, *e.DeviceID)
 		} else {
@@ -277,38 +277,45 @@ func (t *GetEdgeSummaryTool) allEdgeDeviceIDs(ctx context.Context) ([]uint64, er
 // resolveEdgeForDevice mirrors the closure path's helper but operates
 // on the BaseTool's struct fields. Only the by-id path is exercised in
 // the batch tool — by-name lookups were never exposed in the new schema.
-func (t *GetEdgeSummaryTool) resolveEdgeForDevice(ctx context.Context, deviceID uint64, _ string) (*edgemodel.Edge, error) {
-	tryEdgeForDeviceID := func(id uint64) (*edgemodel.Edge, error) {
+// It answers with a found flag rather than a nil row, for the same reason its
+// twin in get_edge_summary.go does: the two used to each spell the same
+// `err == nil && edge != nil` at every call site, and the port removed the
+// state the check was guarding.
+func (t *GetEdgeSummaryTool) resolveEdgeForDevice(ctx context.Context, deviceID uint64, _ string) (domain.EdgePresence, bool, error) {
+	tryEdgeForDeviceID := func(id uint64) (domain.EdgePresence, bool, error) {
 		if t.devices == nil {
-			return nil, nil
+			return domain.EdgePresence{}, false, nil
 		}
 		dev, dErr := t.devices.Get(ctx, id)
 		if dErr != nil || dev == nil {
-			return nil, dErr
+			return domain.EdgePresence{}, false, dErr
 		}
 		links := t.devices.Links()
 		if links == nil {
-			return nil, fmt.Errorf("device %d has no edge link configured", id)
+			return domain.EdgePresence{}, false, fmt.Errorf("device %d has no edge link configured", id)
 		}
 		eid, lErr := links.LookupEdgeForDevice(ctx, id, devicemodel.EdgeDeviceRelationHost)
 		if lErr != nil {
-			return nil, fmt.Errorf("device %d (%s) has no host-edge link", id, dev.Name)
+			return domain.EdgePresence{}, false, fmt.Errorf("device %d (%s) has no host-edge link", id, dev.Name)
 		}
-		edge, eErr := t.edges.Get(ctx, eid)
+		edge, found, eErr := t.edges.Presence(ctx, eid)
 		if eErr != nil {
-			return nil, fmt.Errorf("device %d → edge %d lookup: %w", id, eid, eErr)
+			return domain.EdgePresence{}, false, fmt.Errorf("device %d → edge %d lookup: %w", id, eid, eErr)
 		}
-		return edge, nil
+		if !found {
+			return domain.EdgePresence{}, false, fmt.Errorf("device %d → edge %d: no such node", id, eid)
+		}
+		return edge, true, nil
 	}
 
 	if deviceID != 0 {
-		if edge, err := tryEdgeForDeviceID(deviceID); err == nil && edge != nil {
-			return edge, nil
+		if edge, found, err := tryEdgeForDeviceID(deviceID); err == nil && found {
+			return edge, true, nil
 		}
-		if edge, err := t.edges.Get(ctx, deviceID); err == nil && edge != nil {
-			return edge, nil
+		if edge, found, err := t.edges.Presence(ctx, deviceID); err == nil && found {
+			return edge, true, nil
 		}
-		return nil, fmt.Errorf("device_id=%d not found (try query_devices first)", deviceID)
+		return domain.EdgePresence{}, false, fmt.Errorf("device_id=%d not found (try query_devices first)", deviceID)
 	}
-	return nil, fmt.Errorf("device_id required")
+	return domain.EdgePresence{}, false, fmt.Errorf("device_id required")
 }

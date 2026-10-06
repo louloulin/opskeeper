@@ -11,11 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 const ToolNameAnalyzeDatabaseStatus = "analyze_database_status"
@@ -216,32 +215,32 @@ type DatabaseStatusFinding struct {
 // PluginConfigLister is the narrow seam used to discover configured metric
 // sources. *edge.PluginConfigUC satisfies it.
 type PluginConfigLister interface {
-	ListForUI(ctx context.Context, edgeID uint64) ([]edgebiz.PluginRow, error)
+	ListForUI(ctx context.Context, edgeID uint64) ([]domain.PluginRow, error)
 }
 
 type AnalyzeDatabaseStatusTool struct {
 	promQuery     toolcore.PromQuerier
-	edges         *edgebiz.Usecase
+	edges         domain.EdgeCatalog
 	devices       *devicebiz.Usecase
 	pluginConfigs PluginConfigLister
 	log           *slog.Logger
 }
 
 type ListDatabaseSourcesTool struct {
-	edges         *edgebiz.Usecase
+	edges         domain.EdgeCatalog
 	devices       *devicebiz.Usecase
 	pluginConfigs PluginConfigLister
 	log           *slog.Logger
 }
 
-func NewAnalyzeDatabaseStatusTool(p toolcore.PromQuerier, edges *edgebiz.Usecase, devices *devicebiz.Usecase, plugins PluginConfigLister, log *slog.Logger) *AnalyzeDatabaseStatusTool {
+func NewAnalyzeDatabaseStatusTool(p toolcore.PromQuerier, edges domain.EdgeCatalog, devices *devicebiz.Usecase, plugins PluginConfigLister, log *slog.Logger) *AnalyzeDatabaseStatusTool {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &AnalyzeDatabaseStatusTool{promQuery: p, edges: edges, devices: devices, pluginConfigs: plugins, log: log}
 }
 
-func NewListDatabaseSourcesTool(edges *edgebiz.Usecase, devices *devicebiz.Usecase, plugins PluginConfigLister, log *slog.Logger) *ListDatabaseSourcesTool {
+func NewListDatabaseSourcesTool(edges domain.EdgeCatalog, devices *devicebiz.Usecase, plugins PluginConfigLister, log *slog.Logger) *ListDatabaseSourcesTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -299,14 +298,14 @@ func (t *AnalyzeDatabaseStatusTool) InvokableRun(ctx context.Context, argsJSON s
 
 type DatabaseStatusRunner struct {
 	PromQuery     toolcore.PromQuerier
-	Edges         *edgebiz.Usecase
+	Edges         domain.EdgeCatalog
 	Devices       *devicebiz.Usecase
 	PluginConfigs PluginConfigLister
 	Log           *slog.Logger
 }
 
 type DatabaseSourceInventoryRunner struct {
-	Edges         *edgebiz.Usecase
+	Edges         domain.EdgeCatalog
 	Devices       *devicebiz.Usecase
 	PluginConfigs PluginConfigLister
 	Log           *slog.Logger
@@ -530,15 +529,17 @@ func (r DatabaseStatusRunner) resolveCandidates(ctx context.Context, deviceIDs [
 		return out, nil
 	}
 
-	edges, err := r.Edges.List(ctx, edgebiz.ListFilter{Limit: 500})
+	edges, err := r.Edges.ListCatalog(ctx, domain.EdgeFilter{Limit: 500})
 	if err != nil {
 		return nil, fmt.Errorf("%s: list edges: %w", ToolNameAnalyzeDatabaseStatus, err)
 	}
 	out := make([]databaseDeviceCandidate, 0, len(edges))
 	for _, e := range edges {
-		if e == nil {
-			continue
-		}
+		// A value, not a pointer, so there is no nil to skip: the
+		// projection drops an absent row at the port rather than handing
+		// this loop a nil it would have to remember to check. The `if e ==
+		// nil` that used to be here was a check for a state no repo
+		// implementation in this tree can produce.
 		deviceID := e.ID
 		if e.DeviceID != nil && *e.DeviceID != 0 {
 			deviceID = *e.DeviceID
@@ -562,15 +563,19 @@ func (r DatabaseStatusRunner) resolveCandidate(ctx context.Context, deviceID uin
 		}
 	}
 	if r.Edges != nil {
-		e, err := r.Edges.Get(ctx, deviceID)
-		if err == nil && e != nil {
+		e, found, err := r.Edges.Presence(ctx, deviceID)
+		if err == nil && found {
 			return candidateFromEdge(e), nil
 		}
 	}
 	return databaseDeviceCandidate{}, fmt.Errorf("%s: device_id=%d not found", ToolNameAnalyzeDatabaseStatus, deviceID)
 }
 
-func candidateFromEdge(e *edgemodel.Edge) databaseDeviceCandidate {
+// candidateFromEdge takes the projection by value. It used to take
+// the edge domain row and therefore had to be handed a nil check by every caller
+// — two of which wrote `if err == nil && e != nil` on a port that answers
+// (nil, nil) for a row that cannot be missing.
+func candidateFromEdge(e domain.EdgePresence) databaseDeviceCandidate {
 	deviceID := e.ID
 	if e.DeviceID != nil && *e.DeviceID != 0 {
 		deviceID = *e.DeviceID
@@ -610,7 +615,7 @@ func (r DatabaseStatusRunner) discoverSources(ctx context.Context, candidates []
 	return out, errs
 }
 
-func discoverDatabaseMetricsSources(c databaseDeviceCandidate, row edgebiz.PluginRow, dbTypes, sourceIDs map[string]struct{}, includeDisabled bool) []databaseMetricSource {
+func discoverDatabaseMetricsSources(c databaseDeviceCandidate, row domain.PluginRow, dbTypes, sourceIDs map[string]struct{}, includeDisabled bool) []databaseMetricSource {
 	raw, ok := row.Spec["sources"].([]interface{})
 	if !ok || len(raw) == 0 {
 		return nil
@@ -660,7 +665,7 @@ func discoverDatabaseMetricsSources(c databaseDeviceCandidate, row edgebiz.Plugi
 	return out
 }
 
-func discoverCustomMetricSources(c databaseDeviceCandidate, row edgebiz.PluginRow, dbTypes, sourceIDs map[string]struct{}, includeDisabled bool) []databaseMetricSource {
+func discoverCustomMetricSources(c databaseDeviceCandidate, row domain.PluginRow, dbTypes, sourceIDs map[string]struct{}, includeDisabled bool) []databaseMetricSource {
 	raw, ok := row.Spec["targets"].([]interface{})
 	if !ok || len(raw) == 0 {
 		return nil

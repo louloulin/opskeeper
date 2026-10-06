@@ -4,18 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/alerting"
 	"log/slog"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 // GetTopologyTool is the BaseTool form of get_topology. Mirrors
 // executeGetTopology in get_topology.go.
 type GetTopologyTool struct {
-	edges    *edgebiz.Usecase
+	edges    domain.EdgeCatalog
 	alertUC  alerting.AlertUsecase
 	topology TopologyInfo
 	log      *slog.Logger
@@ -25,7 +24,7 @@ type GetTopologyTool struct {
 // be nil — the tool degrades to whatever it can populate. topology is a
 // value type so callers pass the resolved deployment-level facts at
 // construction time (mirrors Registry.SetTopologyInfo).
-func NewGetTopologyTool(edges *edgebiz.Usecase, alertUC alerting.AlertUsecase, topology TopologyInfo, log *slog.Logger) *GetTopologyTool {
+func NewGetTopologyTool(edges domain.EdgeCatalog, alertUC alerting.AlertUsecase, topology TopologyInfo, log *slog.Logger) *GetTopologyTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -65,11 +64,11 @@ func (t *GetTopologyTool) InvokableRun(ctx context.Context, _ string, _ ...baset
 	}
 
 	if t.edges != nil {
-		all, err := t.edges.List(callCtx, edgebiz.ListFilter{Limit: 5000})
+		all, err := t.edges.ListCatalog(callCtx, domain.EdgeFilter{Limit: 5000})
 		if err == nil {
 			online := 0
 			for _, e := range all {
-				if e.Status == edgemodel.StatusOnline {
+				if e.Status == domain.EdgeStatusOnline {
 					online++
 				}
 			}

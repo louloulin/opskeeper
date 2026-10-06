@@ -10,9 +10,9 @@ import (
 	"time"
 
 	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
 
 // query_change_events_basetool.go — HLD-013 Phase 2. Gives the RCA
@@ -45,14 +45,19 @@ type AuditLister = auditport.ChangeLister
 
 // EdgeChangeLister is the seam for the A.3 follow-up: edge-side
 // change events captured by the changewatcher (journald / dockerd /
-// packagemgr) and pushed to the manager over the tunnel. Satisfied
-// by *biz/edge/changeevent.Usecase via a tiny adapter in main.go so
-// the tools package stays off the data/store layer.
+// packagemgr) and pushed to the manager over the tunnel. Satisfied directly
+// by *biz/edge/changeevent.Usecase — no adapter, and the comment that used
+// to claim there was one in main.go was wrong: main.go hands the usecase
+// over as-is, and the port is satisfied only because the usecase grew a
+// projection method of its own (decision 283).
 //
-// Returned rows are the edge-domain model type; the tool merges
-// them with audit log rows in InvokableRun.
+// Returned rows are domain.ChangeEvent, seven columns of the eleven the edge
+// stores; the tool merges them with audit log rows in InvokableRun and never
+// reads the other four. Naming the edge domain's GORM entity here, as this
+// declaration used to, made the seam look like a boundary while still costing
+// the caller a cross-domain import.
 type EdgeChangeLister interface {
-	ListByWindow(ctx context.Context, from, to time.Time, kind string, limit int) ([]edgemodel.ChangeEventRow, error)
+	ListChangeWindow(ctx context.Context, from, to time.Time, kind string, limit int) ([]domain.ChangeEvent, error)
 }
 
 // ToolNameQueryChangeEvents is the registered tool name.
@@ -205,7 +210,7 @@ func (t *QueryChangeEventsTool) InvokableRun(ctx context.Context, argsJSON strin
 	if t.edge != nil {
 		start := time.Now()
 		edgeKind := in.Action // resource_type param maps loosely to kind for edge side
-		edgeRows, err := t.edge.ListByWindow(callCtx, from, to, edgeKind, limit)
+		edgeRows, err := t.edge.ListChangeWindow(callCtx, from, to, edgeKind, limit)
 		if err != nil {
 			// edge source failure should not fail the whole query — log and skip.
 			t.log.Warn("query_change_events: edge list failed; audit-only result",

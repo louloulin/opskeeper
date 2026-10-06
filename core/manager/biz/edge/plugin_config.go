@@ -89,12 +89,13 @@ func (uc *PluginConfigUC) SetDatabaseMetricsSecretWriter(w DatabaseMetricsSecret
 	uc.secretWriter = w
 }
 
-// PluginRow is the UI/HTTP-friendly view of one plugin row.
-type PluginRow struct {
-	PluginName string                 `json:"plugin_name"`
-	Enabled    bool                   `json:"enabled"`
-	Spec       map[string]interface{} `json:"spec,omitempty"`
-}
+// PluginRow is the UI/HTTP-friendly view of one plugin row. The shape moved
+// to core/domain in decision 283 so the database RCA tool could ask for it
+// through a port without importing this package; the name stays here as an
+// alias because the HTTP handler, the Set return value and three call sites in
+// this file all say it out loud, and renaming a type nobody moved is churn
+// dressed up as progress.
+type PluginRow = domain.PluginRow
 
 // pluginDefaultEnabled declares the on-by-default policy for fresh
 // edges that don't yet have a row in edge_plugin_configs. Every

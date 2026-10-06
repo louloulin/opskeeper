@@ -4,24 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/toolcore"
 	"log/slog"
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 )
 
 // RankEdgesTool is the BaseTool form of rank_edges. Mirrors
 // executeRankEdges in rank_edges.go.
 type RankEdgesTool struct {
 	promQuery toolcore.PromQuerier
-	edges     *edgebiz.Usecase
+	edges     domain.EdgeCatalog
 	log       *slog.Logger
 }
 
 // NewRankEdgesTool builds the BaseTool variant.
-func NewRankEdgesTool(promQuery toolcore.PromQuerier, edges *edgebiz.Usecase, log *slog.Logger) *RankEdgesTool {
+func NewRankEdgesTool(promQuery toolcore.PromQuerier, edges domain.EdgeCatalog, log *slog.Logger) *RankEdgesTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -99,7 +99,7 @@ func (t *RankEdgesTool) InvokableRun(ctx context.Context, argsJSON string, _ ...
 		return "", fmt.Errorf("rank_edges: decode: %w", err)
 	}
 
-	edges, err := t.edges.List(callCtx, edgebiz.ListFilter{Limit: 500})
+	edges, err := t.edges.ListCatalog(callCtx, domain.EdgeFilter{Limit: 500})
 	if err == nil {
 		nameByID := make(map[uint64]string, len(edges))
 		for _, e := range edges {
