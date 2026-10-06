@@ -251,6 +251,29 @@ type ToolLimits struct {
 	TimeoutSeconds int `json:"timeout_seconds,omitempty" yaml:"timeout_seconds,omitempty"`
 }
 
+// 这个结构**没有** memory 字段，而且缺席是判定的结果，不是遗漏。
+//
+// 计划里写的是「per-tool 内存/输出上限，否则 PB 级数据会爆 context」——
+// 两个字段，一个后果。已落地的 output_bytes 解决的就是这句话写下的那个后果：
+// 爆的是模型的 context window，而那是回复体积的问题，broker 在 tool socket
+// 的宿主侧按包截断并落盘（toolbroker.replyFor / skill.Spill）。
+//
+// 内存是另一回事，而它**在当前的隔离粒度下无法按 tool 执行**：
+// `core/edge/plugins.SubprocessPlugin.runOnce` 是每个**插件**起一个受监管的
+// 进程（崩溃后退避重启），不是一个 tool 一个进程。同一个扩展里的八个
+// host_* 工具共享同一个地址空间，所以一个 "host_strace 最多 256 MiB" 的字段
+// 没有可以施加它的对象——真要施加，得到的是八个工具共用的一个上限，
+// 而 manifest 上写着的是 per tool。**一个兑现不了的 per-tool 承诺，
+// 比没有这个字段更糟**：包作者会照着它调大工具的查询范围，而宿主并不执行。
+//
+// 真的要有内存上限，条件是隔离粒度先变成**每次调用一个进程**，
+// 或者宿主改用 cgroup / systemd-run 给整个扩展设上限——后者是 per-extension，
+// 不是 per-tool，字段名得跟着改。这两件都不在本仓当前形态里，
+// 所以字段不加，理由留在这里：**加它的人应该先读这段，而不是先看计划。**
+//
+// `pluginmanifest/limits_test.go` 里的 TestTheToolLimitVocabularyIsClosed
+// 会在有人加字段时立刻失败，并在失败信息里把这三件事一起说出来。
+
 // Valid reports whether the limits are expressible.
 //
 // Negative is invalid rather than "unlimited": a manifest that says

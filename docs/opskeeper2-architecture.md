@@ -3807,6 +3807,64 @@ do not delete it」。**数字对上之后，唯一诚实的动作是不要动�
 
 **对进度的影响。** 架构尺 97.75% / 四阶段交付尺 99.5% **不动**——本刀没有移动
 任何架构边界。登记表 8 行里现在有 **6 行是真的在跑**。
+
+### 4.77 决策 367：`limits.memory` 不加——而理由要写在会被读到的地方，不留在计划里
+
+计划阶段 2 写的是「在 `pig-ops.yaml` 增加 `limits.memory` / `limits.output_bytes`，
+edge 侧强制」。`output_bytes` 与 `timeout_seconds` 已落地并被
+`pluginmanifest/limits_test.go` 逐条比对（yaml 与 executor 元数据必须一致）。
+**`memory` 一直没有。** 此前记为「不做且理由成立」，但理由不在树里——
+这一刀把它找出来、写进去，并且钉住。
+
+#### 4.77.1 计划要两个字段，是为了解决一个后果
+
+> 「必须有 per-tool 内存/输出上限，否则 PB 级数据会爆 context」
+
+爆的是**模型的 context window**，而那是回复体积的问题。`toolbroker.replyFor`
+在 tool socket 的宿主侧按包截断并落盘（`skill.Spill`），已经覆盖了这句话写下的
+那个后果。内存是另一回事。
+
+#### 4.77.2 而它在当前隔离粒度下无法按 tool 执行
+
+`core/edge/plugins.SubprocessPlugin.runOnce` 是**每个插件**起一个受监管的进程
+（崩溃后退避重启），不是一个 tool 一个进程。同一个扩展里的八个 `host_*`
+工具共享同一个地址空间。
+
+所以 manifest 上写 `host_strace: {memory_mb: 256}` 时，**没有可以施加它的对象**。
+真要施加，得到的是八个工具共用的一个上限，而字段挂在 per-tool 的结构上。
+包作者会照着它调大查询范围，宿主并不执行——**多出来的是一个兑现不了的承诺，
+而不是一个控制。**
+
+#### 4.77.3 词表是闭合的，而且闭合有守卫
+
+`TestTheToolLimitVocabularyIsClosed` 用反射枚举 `domain.ToolLimits` 的字段，
+与 `{OutputBytes, TimeoutSeconds}` 比对。有人在 struct 上加一个字段时，
+它立刻失败，并在失败信息里把三件事一起说出来：
+
+1. **有没有可以施加它的对象**——今天 per-tool 的对象只有 tool socket 上的
+   那个回复与这次调用的 context，内存上限需要一个进程或一个 cgroup；
+2. **执行点在不在宿主侧、能不能被 `policygate` 在工具跑之前够到**——
+   yaml 的注释写着「a limit this file declares is a limit the host applies,
+   not a request the tool may honour」；
+3. **名字说的粒度是不是它真能保证的粒度**——一个 per-extension 的上限
+   叫 `Memory` 挂在 per-tool 的 struct 上，承诺的比兑现的多。
+
+这条守卫**不是"提醒别加"，是"加的时候让测试把话说完"**。判据不是纪律，
+是"这个字段能不能被执行"。
+
+#### 4.77.4 真要做的前置条件
+
+隔离粒度先变成**每次调用一个进程**，或者宿主改用 cgroup / `systemd-run`
+给整个扩展设上限——后者是 per-extension，**字段名得跟着改**。
+这两件都不在本仓当前形态里，所以字段不加。
+
+#### 4.77.5 验证
+
+变异：加一个 `MemoryMB` 字段 → 守卫立刻红，且红的信息里有上面三段。
+`core` 全模块绿；七道闸门全绿。
+
+**对进度的影响。** 架构尺 97.75% / 四阶段交付尺 99.5% 不动。
+登记表不动——**计划里的一个字段被判定为不该加，本身不是承诺，也就不该占一行。**
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，

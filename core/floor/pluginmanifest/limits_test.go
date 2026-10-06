@@ -2,6 +2,7 @@ package pluginmanifest
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
@@ -79,5 +80,47 @@ func TestEveryHighCardinalityReadDeclaresACeilingInBothPlacesItExists(t *testing
 				name, fromManifest.OutputBytes, fromManifest.TimeoutSeconds,
 				fromCode.OutputBytes, fromCode.TimeoutSeconds)
 		}
+	}
+}
+
+// 工具配额的**词表是闭合的**，而闭不闭合只有一条判据：这个字段能不能被执行。
+//
+// 这条守卫存在的理由是一条真实的失效路径：计划里写着「per-tool 内存/输出
+// 上限」，看到 output_bytes 落地而 memory 缺席的人，很容易把缺席读成一个
+// 还没填的坑，然后补上一个字段——**而那个字段在当前隔离粒度下无法执行**
+// （`plugins.SubprocessPlugin.runOnce` 每个插件一个进程，同一扩展里的八个
+// 工具共享地址空间）。包作者会照着它调大查询范围，宿主并不执行，
+// 于是多出来的是一个兑现不了的承诺，而不是一个控制。
+//
+// 所以这里不是"提醒别加"，是"加的时候让这条测试把三件事一起说出来"：
+// 隔离粒度、执行点、以及新字段的名字是否与它实际能保证的粒度相符。
+func TestTheToolLimitVocabularyIsClosed(t *testing.T) {
+	want := map[string]bool{"OutputBytes": true, "TimeoutSeconds": true}
+
+	typ := reflect.TypeOf(domain.ToolLimits{})
+	for i := 0; i < typ.NumField(); i++ {
+		name := typ.Field(i).Name
+		if want[name] {
+			delete(want, name)
+			continue
+		}
+		t.Errorf("domain.ToolLimits gained a field %q. Before shipping it, all three of these "+
+			"have to be true, and the field name has to match the one that is not:\n"+
+			"  1. there is an object the host can apply it to — today the only per-tool object "+
+			"is the reply at the tool socket (toolbroker.replyFor) and the call's context "+
+			"(ToolBinding.Timeout); a memory ceiling needs a process or a cgroup, and "+
+			"plugins.SubprocessPlugin.runOnce gives one process per *extension*, not per tool;\n"+
+			"  2. the enforcement is on the host side, reachable by policygate before the "+
+			"tool runs — the yaml comment says a declared limit is a limit the host applies, "+
+			"not a request the tool may honour;\n"+
+			"  3. the name says the granularity it can actually guarantee. A per-extension "+
+			"ceiling called Memory on a per-tool struct promises more than it delivers, and a "+
+			"package author will size their queries against the promise.\n"+
+			"See the ToolLimits doc comment in core/domain/plugin.go for the full argument.",
+			name)
+	}
+	for name := range want {
+		t.Errorf("domain.ToolLimits no longer has %q; the manifest schema and every "+
+			"pig-ops.yaml in plugins/ still declare it", name)
 	}
 }
