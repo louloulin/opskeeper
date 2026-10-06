@@ -158,6 +158,33 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Status, error) {
 	return plan.Status(), nil
 }
 
+// each calls fn for every release, in package-name order, with no lock
+// held.
+//
+// The ordering is the same one List uses, so an automatic driver and a
+// console polling at the same time walk the releases in the same order and
+// cannot disagree about which one is "first". The lock is released before
+// fn runs because fn drives a release, and driving one calls out to the
+// fleet — holding the manager's mutex across a fleet call would let a
+// console's status read block on a node that is down.
+func (m *Manager) each(fn func(*Rollout)) {
+	m.mu.Lock()
+	names := make([]string, 0, len(m.releases))
+	for name := range m.releases {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	plans := make([]*Rollout, 0, len(names))
+	for _, name := range names {
+		plans = append(plans, m.releases[name])
+	}
+	m.mu.Unlock()
+
+	for _, plan := range plans {
+		fn(plan)
+	}
+}
+
 // Advance sends the next wave, if the current one is accounted for.
 //
 // It returns false with no error when the wave is still waiting on a node.

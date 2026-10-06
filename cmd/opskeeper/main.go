@@ -640,6 +640,31 @@ func main() {
 			auditRetentionDays = n
 		}
 	}
+	// Plugin release driver timing. Both are optional and both default to
+	// the driver's own constants rather than to something restated here:
+	// a second copy of "how often" is a second thing to forget to change.
+	//
+	// A zero interval or stall budget means "use the default", so the
+	// knob cannot be set to disable the driver. That is deliberate — an
+	// unset driver is the failure this whole thing exists to remove, and
+	// turning it off should be a deliberate act in code, not an env var
+	// someone set during an incident and forgot.
+	pluginReleaseDriverInterval := time.Duration(0)
+	pluginReleaseStallAfter := time.Duration(0)
+	if v := os.Getenv("OPSKEEPER_PLUGIN_RELEASE_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			pluginReleaseDriverInterval = d
+		} else {
+			log.Warn("ignoring OPSKEEPER_PLUGIN_RELEASE_INTERVAL", slog.String("value", v), slog.Any("err", err))
+		}
+	}
+	if v := os.Getenv("OPSKEEPER_PLUGIN_RELEASE_STALL_AFTER"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			pluginReleaseStallAfter = d
+		} else {
+			log.Warn("ignoring OPSKEEPER_PLUGIN_RELEASE_STALL_AFTER", slog.String("value", v), slog.Any("err", err))
+		}
+	}
 	if err := settingSvc.SetIfAbsent(rootCtx, settingmodel.CategoryLLM, settingmodel.KeyOpenAIAPIKey, cfg.OpenAI.APIKey, true); err != nil {
 		log.Warn("seed llm api key", slog.Any("err", err))
 	}
@@ -1445,6 +1470,23 @@ func main() {
 		WithVersions(&edgeVersionInventory{svc: edgeSvc})
 	pluginReleaseHandler.SetService(pluginReleaseMgr)
 	pluginReleaseHandler.SetInventory(pluginNodeFleet)
+
+	// The release driver. Without it a rolling release only moves when a
+	// person presses Advance, so an operator who starts one and walks away
+	// leaves a package on the canary and a fleet that will not hear about
+	// it. It is built unconditionally and started further down: the
+	// release manager has no releases at boot, so a driver running over an
+	// empty map costs one map lookup a tick.
+	pluginReleaseDriver, err := managersvcplugin.NewDriver(pluginReleaseMgr,
+		managersvcplugin.Options{
+			Interval:   pluginReleaseDriverInterval,
+			StallAfter: pluginReleaseStallAfter,
+			Log:        log.With(slog.String("comp", "plugin-release-driver")),
+		})
+	if err != nil {
+		log.Error("plugin release: driver", slog.Any("err", err))
+		os.Exit(1)
+	}
 
 	// The root side of the cluster channel. Built here rather than next to
 	// the routes because it needs the tunnel client, and mounted even when
@@ -3705,6 +3747,20 @@ func main() {
 				}
 			}
 		}
+	})
+
+	// The plugin release driver. It returns ctx.Err() on cancellation so
+	// that stopping is never mistaken for finishing — its work is never
+	// finished — but every other background loop here returns nil on
+	// egCtx.Done() so that Ctrl-C is not reported as a failure. The
+	// translation happens at this call site rather than inside Run, which
+	// keeps Run honest for a caller that *wants* the distinction.
+	eg.Go(func() error {
+		err := pluginReleaseDriver.Run(egCtx)
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
 	})
 
 	// HLD-010: audit retention sweep — drops audit_logs rows older than
