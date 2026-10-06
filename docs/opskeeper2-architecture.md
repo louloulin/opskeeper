@@ -26531,6 +26531,136 @@ for j := c.Line + 1; j < len(lines) && continuationRE.MatchString(lines[c.Line])
    不改交付面；按原判据它不该动，也确实没动。
 4. **五个待拍板的产品决定**（决策 291–293 已记）仍然待拍板。
 
+### 4.229 决策 295：把回归基线接到命令行上——**一份 269 行、只被自己的测试调用过的实现**
+
+#### 一、起点：决策 294 顺手量出来的一件事
+
+决策 294 在改文档时把 `core/harness/leaderboard` 打开看了一遍，因为
+`docs/harness-guide.md` §6.3 写着一段"基线 API 在库里、命令行没接线"。
+写那段话的时候我是照着源码说的，**这一轮是第一次真去数**：
+
+```
+partial  269 lines  core/harness/leaderboard/leaderboard.go
+         NewLeaderboard:test-only SetBaseline:test-only CheckRegression:test-only
+         LastEntry:test-only FlaggedEntries:test-only Blockers:test-only Warns:test-only
+```
+
+**269 行，零生产调用方。** 它的全部状态在三个 map 里，进程一退就没了。
+而 `printUsage` 里那一行写的是「leaderboard  显示排行榜 + 回归基线」——
+**声明在帮助里，实现不在**。`docs/api/harness.md` §3.5 的 flag 表里也只有
+`--dir` / `--out-dir` / `--threshold` 三个，与事实相符，但整个文档的标题是
+"排行榜与回归基线"。
+
+**这比决策 294 报出的十一条文档谎报更重一条**：那十一条是文档说错了，
+这一条是**代码本身没有**，而文档还替它说了好话。
+
+#### 二、这一刀做了什么
+
+1. **`core/harness/leaderboard/baseline.go`（新）**：把基线从内存 map 变成一份
+   **可以被 CI 提交进仓库的文件**。harness 的其他产物（LoopResult JSON、
+   Markdown 看板）本来就在磁盘上当唯一事实源，基线是这条链上唯一一处例外。
+   写入走临时文件 + rename，同目录内原子。
+2. **聚合口径**：`rca_accuracy` / `approval_rate` / `recovery_pass_rate` /
+   `kb_hit_rate` 四个已测指标的均值。`time_to_remediate` 不参与——它越短越好，
+   和其余四个"越大越好"的平均到一起没有意义。**未测量的指标被跳过而不是当 0**。
+3. **CLI**：`--lock-baseline` / `--baselines` / `--check-regression` /
+   `--fail-on-warn` / `--baseline-file`。
+4. **删掉那个孤岛**：`leaderboard.go` 里剩下的 `Leaderboard` 类型（269 行）与
+   只测它的 `leaderboard_test.go` 一并删除。`Regression` / `Severity` /
+   两个阈值留下——**基线检测只有这一处定义**。
+
+#### 三、三个"不算回归"必须被说出来，否则就是谎报
+
+一次对照的结果被拆成四类，混成一句"无回归"是这条命令最容易犯的错：
+
+| 分类 | 是什么 | 为什么不能算"没退步" |
+|---|---|---|
+| `new` | 这次在跑、基线里没有 | 从没锁过基线，比较无从谈起 |
+| `missing` | 基线里有、这次没跑 | **一次漏跑通过了一次回归检查** |
+| `unmeasured` | 跑了，但四个指标一个都没测出 | 分数未知，被当成 0 的话下次任何非负分数都是 100% 回归 |
+| `improved` | 高于基线 | 真的没退步，但也不该混在"无回归"里 |
+
+锁基线时 `unmeasured` 的 case **不进基线**（锁成 0 的危害同上），
+并且在输出里被点名。
+
+#### 四、两个"没有基线就不许说通过"
+
+1. **基线文件不存在 → `--check-regression` 非零退出**，错误里带一句
+   "run `opskeeper-eval leaderboard --lock-baseline` first"。
+   把它读成"零回归"发生在最需要它说实话的时刻：**一次刚引入回归的 CI**。
+2. **基线是 0.000 → block，不是 none。**
+   这里的顺序是刻意的：`CheckRegressionFor` 里 0 基线的判断必须在
+   `current >= baseline` 之前。0.000 的基线让 drop% 无定义，而
+   `current 0.5 >= baseline 0.0` 看起来像一次**提升**——
+   把无定义读成提升，是这条命令能给出的最贵的一个假阳性。
+   **它发生在有人把某个 case 的基线锁成 0 之后。**
+
+#### 五、顺带修掉一个 panic
+
+接线之后第一次真跑 `leaderboard`，撞上一个从未被触发的崩溃：
+
+```
+panic: runtime error: invalid memory address or nil pointer dereference
+  leaderboard.(*LoopBoard).Render  loop_board.go:189
+```
+
+`thresholdMarker(*e.RecoveryPassRate, ...)` 在**进入函数之前**就解引用了。
+**同一行代码里，`formatFloatPtr` 就在前一个参数的位置，它对 nil 返回 "—"**——
+两处对同一个 nil 的态度相反，而先执行的那个赢了。任何一个没跑出
+`recovery_pass_rate` 的 LoopResult（judge 没跑完，或 case 本来就不产出这个
+指标）会让 leaderboard 直接崩。改成收指针，nil 返回空 marker。
+
+**这条缺陷和基线功能无关**——它一直在，只是此前没有任何一次真实运行走到过它。
+
+#### 六、闸门：11 条新测试，三次变异验证都红
+
+`core/harness/leaderboard/baseline_test.go`（8 条，库层）+
+`cmd/opskeeper-eval/leaderboard_baseline_test.go`（4 条，走完整命令路径）。
+
+库层钉住的：
+- 没测出指标的 case 不被算成 0 分，锁基线时被点名且不进基线
+- 聚合只取已测量的那几个（只有 rca 的 case 得 0.8，不是 0.2）
+- `new` / `missing` / `unmeasured` 三类分开计数，`Unaccounted()` 把它们汇总
+- 0 基线 → block
+- 阈值边界：1.25% → none，5.0% → warn，15.0% → block
+- 缺文件 / 空文件都被拒
+- 基线落盘往返，指标口径与锁定人被记下来
+- 渲染一个没有 recovery_pass_rate 的 entry 不 panic
+
+命令层钉住的：锁完原样对照必须通过；25% 下降必须非零；
+6% 下降默认放过、加 `--fail-on-warn` 才拦；**没有基线时检查必须非零**；
+一个被删掉的 case 不该自己把检查搞挂，且基线文件里必须还留着它。
+
+| 变异 | 结果 |
+|---|---|
+| `CheckRegressionFor` 恒返回 none | 红：`check on a 25% drop returned nil, want a non-zero exit` |
+| `LoadBaseline` 缺文件时返回空基线 | 红：`check with no baseline returned nil, want a non-zero exit` |
+| 把 `thresholdMarker` 改回解引用 | 红，且**是 panic**（变异验证本身复现了原始缺陷） |
+
+第二条变异是这一刀的核心断言：**"没有基线"与"零回归"在返回值上曾经完全一样**
+（一个 `nil` 错误），改掉它才让"不许谎报通过"这句话有牙齿。
+
+#### 七、读数
+
+| 项 | 变化 |
+|---|---|
+| 死代码 | 785 → **777**（test-only 269 → 262），孤岛整文件删除 |
+| `core/harness/leaderboard` 测试 | **13 条**，模块 14 包全绿 |
+| `cmd/opskeeper-eval` 测试 | **62 passed**（+4） |
+| 脚本测试 | 443（未变） |
+| `core/manager` | 942 文件 / 239,569 行（未变） |
+| `make apidoc-check` | 绿（97 条命令行 flag + 4 条端点全部核对） |
+| 加权进度 | **98.6%，连续第二十一轮未动** |
+
+#### 八、这一刀没有解决的
+
+1. **`inject` 仍然是骨架**（决策 294 已在文档里写明）：无审批、无时间窗、
+   `--target` 不解析。这是 harness 侧最大的一个功能缺口。
+2. **harness 仍然没有 HTTP 接口**，CI 集成走本地进程（决策 294 已写明）。
+3. **加权 98.6% 与原计划 97.0% 仍是一分未动。** 本轮把一个"库里有、命令行
+   没有"的能力接上了线，按 §六 的判据这属于阶段 0/2 内部，不改变加权值——
+   **但它确实让"leaderboard 回归基线"这句话第一次是真的。**
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

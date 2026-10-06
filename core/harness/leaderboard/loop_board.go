@@ -186,7 +186,7 @@ func (b *LoopBoard) Render() string {
 			formatFloatPtr(e.RCAAccuracy),
 			e.TimeToRemediate,
 			formatFloatPtr(e.ApprovalRate),
-			formatFloatPtrWithReason(e.RecoveryPassRate, thresholdMarker(*e.RecoveryPassRate, b.RecoveryPassRateThreshold)),
+			formatFloatPtrWithReason(e.RecoveryPassRate, thresholdMarker(e.RecoveryPassRate, b.RecoveryPassRateThreshold)),
 			formatFloatPtr(e.KBHitRate),
 			formatIntPtr(e.FollowUpDepth),
 			status,
@@ -247,8 +247,18 @@ func formatIntPtr(p *int) string {
 	return fmt.Sprintf("%d", *p)
 }
 
-func thresholdMarker(v, threshold float64) string {
-	if v < threshold {
+// thresholdMarker 收指针而不是值。
+//
+// 上一版收的是 float64，调用点写 thresholdMarker(*e.RecoveryPassRate, ...)：
+// 解引用发生在进入函数之前，所以一个没有 recovery_pass_rate 的 LoopResult
+// ——也就是 judge 没跑完、或者 case 本来就不产出这个指标的那一种——会让
+// leaderboard 直接 panic。formatFloatPtr 就在旁边一行，它对 nil 返回 "—"，
+// 于是同一个表格单元格里两处对同一个 nil 的态度相反，而先执行的那个赢了。
+func thresholdMarker(v *float64, threshold float64) string {
+	if v == nil {
+		return ""
+	}
+	if *v < threshold {
 		return "⚠️"
 	}
 	return ""

@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -96,6 +97,9 @@ SUBCOMMANDS:
   inject       手动触发 fault-injector（仅 staging）
   judge        对已有 incident 报告重跑 judge
   leaderboard  显示排行榜 + 回归基线
+               leaderboard --lock-baseline     把当前分数锁成基线
+               leaderboard --baselines         打印基线表
+               leaderboard --check-regression  对照基线检查回归（block 时非零退出）
   run-loop     harness loop-mode 跑闭环（Day 6+）
                run-loop --execution-mode=real-agentteams 需要 --incident-id/--trace-id 与六类证据文件
   list-cases   列出所有 golden case
@@ -208,6 +212,11 @@ func cmdLeaderboard(ctx context.Context, args []string) error {
 	dir := fs.String("dir", "harness/result/loop", "LoopResult JSON 目录")
 	outDir := fs.String("out-dir", "harness/result", "Markdown 报告输出目录")
 	threshold := fs.Float64("threshold", 0.5, "recovery_pass_rate 门槛（低于则 NOT QUALIFIED）")
+	baselinePath := fs.String("baseline-file", "harness/result/baseline.json", "回归基线文件（lock / check 都读写它）")
+	lockBaseline := fs.Bool("lock-baseline", false, "把当前分数写成本次基线")
+	showBaselines := fs.Bool("baselines", false, "打印基线表后退出")
+	checkRegression := fs.Bool("check-regression", false, "对照基线检查回归；有 block 时非零退出")
+	failOnWarn := fs.Bool("fail-on-warn", false, "--check-regression 下 warn 也非零退出")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -216,6 +225,36 @@ func cmdLeaderboard(ctx context.Context, args []string) error {
 		return fmt.Errorf("leaderboard: %w", err)
 	}
 	b.RecoveryPassRateThreshold = *threshold
+
+	if *lockBaseline {
+		by := os.Getenv("GIT_AUTHOR_NAME")
+		if by == "" {
+			by = os.Getenv("USER")
+		}
+		locked, unmeasured := harnessleaderboard.LockBaseline(b, by)
+		if err := harnessleaderboard.SaveBaseline(*baselinePath, locked); err != nil {
+			return err
+		}
+		fmt.Printf("baseline locked: %s (%d cases, metrics %s)\n",
+			*baselinePath, len(locked.Scores), strings.Join(locked.Metrics, "+"))
+		if len(unmeasured) > 0 {
+			// 说出来，而不是让它们安静地不出现：下一次这些 case 有分数了，
+			// 它们会被当成新 case，而这与"基线里本来就有"不是一回事。
+			fmt.Printf("  not locked (no metric measured): %s\n", strings.Join(unmeasured, ", "))
+		}
+	}
+	if *showBaselines {
+		if err := printBaselines(*baselinePath); err != nil {
+			return err
+		}
+	}
+	if *checkRegression {
+		// 基线读不出来就是非零退出。把它当成"零回归"是这条命令最容易犯的错，
+		// 而且发生在最需要它说实话的时刻：一次刚引入回归的 CI。
+		if err := reportRegressions(b, *baselinePath, *failOnWarn); err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		return fmt.Errorf("leaderboard: mkdir %s: %w", *outDir, err)
 	}
@@ -229,6 +268,76 @@ func cmdLeaderboard(ctx context.Context, args []string) error {
 		countQualified(b.Entries),
 		len(b.Entries)-countQualified(b.Entries))
 	return nil
+}
+
+// printBaselines 打印基线表。
+func printBaselines(path string) error {
+	base, err := harnessleaderboard.LoadBaseline(path)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("baseline %s\n  locked_at: %s\n  locked_by: %s\n  metrics: %s\n",
+		path, base.LockedAt.Format(time.RFC3339), base.LockedBy, strings.Join(base.Metrics, " + "))
+	ids := make([]string, 0, len(base.Scores))
+	for id := range base.Scores {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		fmt.Printf("  %-44s %.3f\n", id, base.Scores[id])
+	}
+	fmt.Printf("  (%d cases)\n", len(ids))
+	return nil
+}
+
+// reportRegressions 对照基线并按严重程度决定退出码。
+func reportRegressions(b *harnessleaderboard.LoopBoard, path string, failOnWarn bool) error {
+	base, err := harnessleaderboard.LoadBaseline(path)
+	if err != nil {
+		return err
+	}
+	rep := harnessleaderboard.CheckBoard(b, base)
+	for _, r := range rep.Regressions {
+		fmt.Printf("  [%s] %-44s %s\n", r.Severity, r.CaseID, r.Message)
+	}
+	fmt.Printf("regressions: %d (warn %d / block %d)  improved: %d  "+
+		"new: %d  missing: %d  unmeasured: %d\n",
+		len(rep.Regressions), countSeverity(rep, harnessleaderboard.SeverityWarn),
+		countSeverity(rep, harnessleaderboard.SeverityBlock),
+		len(rep.Improved), len(rep.New), len(rep.Missing), len(rep.Unmeasured))
+	// 这三类都不是回归，但它们是"这次没被判定过"。全部为零时这句话才有意义，
+	// 所以它在总数里被单独说出来，而不是被并进"无回归"。
+	if n := rep.Unaccounted(); n > 0 {
+		fmt.Printf("  note: %d case(s) were not judged this run — new: %s | missing: %s | unmeasured: %s\n",
+			n, joinOrNone(rep.New), joinOrNone(rep.Missing), joinOrNone(rep.Unmeasured))
+	}
+	switch rep.Worst() {
+	case harnessleaderboard.SeverityBlock:
+		return fmt.Errorf("regression check: %d regression(s), %d of them blocking",
+			len(rep.Regressions), countSeverity(rep, harnessleaderboard.SeverityBlock))
+	case harnessleaderboard.SeverityWarn:
+		if failOnWarn {
+			return fmt.Errorf("regression check: %d regression(s) at or above the warn threshold", len(rep.Regressions))
+		}
+	}
+	return nil
+}
+
+func countSeverity(rep *harnessleaderboard.RegressionReport, sev harnessleaderboard.Severity) int {
+	n := 0
+	for _, r := range rep.Regressions {
+		if r.Severity == sev {
+			n++
+		}
+	}
+	return n
+}
+
+func joinOrNone(ids []string) string {
+	if len(ids) == 0 {
+		return "none"
+	}
+	return strings.Join(ids, ", ")
 }
 
 func countQualified(es []*harnessleaderboard.LoopBoardEntry) int {

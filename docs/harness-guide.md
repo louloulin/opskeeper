@@ -432,10 +432,30 @@ Overall: 0.90 (baseline 0.91, Δ -0.01)
 
 ### 6.3 基线更新
 
-基线写入与回归检查目前**只存在于库里**：`core/harness/leaderboard` 提供 `SetBaseline` / `Baseline` / `CheckRegression` / `History`，`cmd/opskeeper-eval` 的 `leaderboard` 子命令目前只读 `harness/result/loop` 并渲染一张看板，没有任何 flag 写入或读取基线。本体还没接线，所以这里不写命令行——写一条跑不成的命令，比不写更坏。
+```bash
+# 把当前分数锁成新基线（每月一次，基线文件建议提交进仓库）
+opskeeper-eval leaderboard --lock-baseline
 
-可用的 leaderboard 参数：`--dir`（LoopResult 目录）、`--out-dir`（Markdown 输出目录）、`--threshold`（recovery_pass_rate 门槛）。
+# 查看基线表
+opskeeper-eval leaderboard --baselines
 
+# CI：对照基线检查回归，有 block 时非零退出
+opskeeper-eval leaderboard --check-regression
+```
+
+基线落在 `harness/result/baseline.json`（`--baseline-file` 可改），记下锁定时间、
+锁定人（`GIT_AUTHOR_NAME` 或 `USER`）、聚合口径，以及每个 case 的分数。
+**聚合口径是 `rca_accuracy` / `approval_rate` / `recovery_pass_rate` /
+`kb_hit_rate` 四个已测指标的均值**——未测量的指标被跳过而不是当 0，
+所以"只跑了 rca 的 case"不会看起来掉了一半。
+
+退出码：出现 **block**（下降 >= 15%）非零；**warn**（5%-15%）默认放过，
+加 `--fail-on-warn` 才拦。
+
+**基线尚未锁定时 `--check-regression` 直接非零退出**，不会报"零回归"。
+一个这次没跑的 case、一个从未锁过的新 case、一个一个指标都没测出来的 case，
+三者都被单列出来（`missing` / `new` / `unmeasured`）——它们都不是"没退步"，
+混成一句"无回归"就等于让一次漏跑通过了一次回归检查。
 ---
 
 ## 七、CI 集成
@@ -469,12 +489,10 @@ jobs:
         run: |
           ./opskeeper-eval run --suite pr-baseline --env staging --output eval-report.json
       - name: Check regression
-        # 当前 leaderboard 只从 harness/result/loop 聚合并渲染一张看板，
-        # 并在 recovery_pass_rate 低于 --threshold 时把 case 标为 NOT QUALIFIED。
-        # “与基线比较”的自动回归检查尚未接线（见 6.3），
-        # 这一步只负责在阀值下非零退出。
+        # 基线文件提交进仓库；下降 >= 15% 阻断，5%-15% 只告警。
+        # 基线文件不存在时这条命令非零退出，而不是报"零回归"。
         run: |
-          ./opskeeper-eval leaderboard --threshold 0.5
+          ./opskeeper-eval leaderboard --check-regression
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4

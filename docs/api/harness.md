@@ -99,9 +99,14 @@ opskeeper-eval run-loop --case host/cpu-spike --execution-mode=real-agentteams \
 
 | flag | 作用 |
 |---|---|
-| `-dir` | leaderboard 目录 |
-| `-out-dir` | 报告输出目录 |
-| `-threshold` | 回归阈值 |
+| `--dir` | LoopResult JSON 目录（默认 `harness/result/loop`） |
+| `--out-dir` | Markdown 报告输出目录 |
+| `--threshold` | `recovery_pass_rate` 门槛，低于则 NOT QUALIFIED |
+| `--baseline-file` | 回归基线文件（默认 `harness/result/baseline.json`） |
+| `--lock-baseline` | 把当前分数写成本次基线 |
+| `--baselines` | 打印基线表 |
+| `--check-regression` | 对照基线检查回归；有 block 时非零退出 |
+| `--fail-on-warn` | `--check-regression` 下 warn 也非零退出 |
 
 ### 3.6 `list-cases` — 列出语料
 
