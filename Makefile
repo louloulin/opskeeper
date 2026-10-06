@@ -425,10 +425,10 @@ audit-port-check: ## 审计端口：iam 不再反向依赖 manager，词表闭�
 	# 里而不是 scripts/ 下——**闸门住在它要看的东西旁边，还是住在离它最远的
 	# 目录里，决定了有人改那个东西时会不会同时看见闸门**。
 	cd core/domains && GOWORK=off go test ./biz/audit/ -count=1 -run \
-		'TestEveryChainKeyEnvVarIsDeclaredWithItsProcess|TestOnlyTheDeclaredHoldersOpenTheChainDoors|TestTheNodeSideCannotReachTheChainKey'
+		'TestEveryChainKeyEnvVarIsDeclaredWithItsProcess|TestOnlyTheDeclaredHoldersOpenTheChainDoors|TestTheNodeSideCannotReachTheChainKey|TestEveryDeclaredChainHasAVerifierThatSomebodyCalls|TestTheGatewayProcessHandsItsChainToSomethingThatCanBeAsked'
 	cd core/domains && GOWORK=off go test ./server/middleware/ -count=1 -run \
 		'TestTheRowAHandlerAsksForIsTheRowTheLedgerGets|TestAnUnannotatedRequestIsNotAudited|TestAFailingRequestIsAuditedAsAFailure'
-	@echo "audit-port-check: the port is BC-free, the vocabulary is closed, only the declared holders reach the writer, the grant is gone, rows still land, and the node side cannot reach the chain key"
+	@echo "audit-port-check: the port is BC-free, the vocabulary is closed, only the declared holders reach the writer, the grant is gone, rows still land, and the node side cannot reach the chain key, and every chain has a verifier"
 
 # 决策 127：迁移必须在**生产的那个方言**上跑一次。
 #

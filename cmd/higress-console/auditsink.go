@@ -38,7 +38,7 @@ import (
 // control plane's chain could forge control-plane audit rows, so a
 // compromise here would silently buy an attacker the ability to rewrite
 // what the control plane says happened to it. Two chains, two keys, two
-// verifiers: the gateway's rows answer "what did this gateway do", the
+// databases: the gateway's rows answer "what did this gateway do", the
 // control plane's answer "what did my control plane do", and neither can
 // speak for the other.
 //

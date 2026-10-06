@@ -116,9 +116,13 @@ func runServe(args []string) int {
 	}
 
 	srv, err := higress.NewServer(higress.Config{
-		Addr:          *addr,
-		Store:         store,
-		JWTSecret:     secret,
+		Addr:      *addr,
+		Store:     store,
+		JWTSecret: secret,
+		// 决策 328：把这条链交给它的路由，让运维能问「我这条链还完整吗」。
+		// 立链是 324 做的，验证端是这一刀补的——**在那之前这条链从来没有被
+		// 走过一遍**，而下面那段注释还写着「two verifiers」。
+		Chain:         auditSink,
 		AdminUser:     adminUser,
 		AdminPassword: adminPass,
 	})

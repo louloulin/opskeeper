@@ -41,6 +41,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"net/http"
 )
 
@@ -507,16 +509,16 @@ const (
 	// the consumer name, which is what the gateway's own admin routes key
 	// on and what an operator greps for.
 	ResourceGatewayConsumer = "gateway_consumer"
-	ResourceRule         = "rule"
-	ResourceChannel      = "channel"
-	ResourceRepo         = "repo"
-	ResourceSkill        = "skill"
-	ResourceLLM          = "llm"
-	ResourceGitKey       = "git_ssh_key"
-	ResourceGrafana      = "grafana"
-	ResourceRAG          = "rag"
-	ResourceAudit        = "audit"
-	ResourceAuth         = "auth"
+	ResourceRule            = "rule"
+	ResourceChannel         = "channel"
+	ResourceRepo            = "repo"
+	ResourceSkill           = "skill"
+	ResourceLLM             = "llm"
+	ResourceGitKey          = "git_ssh_key"
+	ResourceGrafana         = "grafana"
+	ResourceRAG             = "rag"
+	ResourceAudit           = "audit"
+	ResourceAuth            = "auth"
 	// ResourcePlugin names a plugin release. The resource id is the
 	// package name, which is what an operator searches for.
 	ResourcePlugin = "plugin"
@@ -626,6 +628,69 @@ type IDSink interface {
 // It is deliberately not part of Sink. See the note above.
 type Verifier interface {
 	VerifyChain(ctx context.Context) error
+}
+
+// ErrChainDisabled reports that a deployment has no chain key configured,
+// so rows are being written unchained.
+//
+// It is deliberately distinct from a nil result. "The chain is intact"
+// and "there is no chain" are different facts, and the caller that most
+// needs to know which is true is an operator asking whether a record was
+// tampered with — so the two shapes moved here in decision 328 rather than
+// staying in the domain, where the second process that has to render the
+// answer (the gateway) would have had to import the writer to name them.
+var ErrChainDisabled = errors.New("audit: hash chain disabled (no HMAC key configured)")
+
+// ErrChainBroken reports the first entry whose digest did not match, or
+// whose PrevHash did not match its predecessor's Hash.
+type ErrChainBroken struct {
+	// Seq is the position of the first bad entry. Damage extends from
+	// here to the end of the chain, so a caller that wants the full
+	// extent repairs this entry and verifies again.
+	Seq uint64
+	// Reason is operator-facing: what was expected, what was found.
+	Reason string
+}
+
+func (e *ErrChainBroken) Error() string {
+	return fmt.Sprintf("audit: chain broken at seq %d: %s", e.Seq, e.Reason)
+}
+
+// ChainVerifier is a Verifier that can also say whether the chain is on.
+//
+// It exists because decision 327 found a chain nobody ever asked: the
+// gateway process grew its own audit chain (decision 324, and rightly so —
+// it holds the control plane's JWT secret), and no production code anywhere
+// called VerifyChain on it. **A chain that is written but never verified is
+// decoration**: it costs an HMAC per row and buys nothing, and the comment
+// that introduced it claimed "two chains, two keys, two verifiers" when
+// there was one verifier. Writing the type here is what lets a second
+// process hold one without importing the domain that owns it — the same
+// reason Sink and Verifier are here rather than in biz/audit.
+type ChainVerifier interface {
+	Verifier
+	// ChainState reports whether the chain is on and how much of it is
+	// still present. Returned rather than inferred from an error so a
+	// console can render "verification unavailable" without string-matching.
+	ChainState(ctx context.Context) (ChainState, error)
+}
+
+// ChainState is what an operator-facing surface reports about a chain.
+//
+// The shape moved here in decision 327 for the same reason NodeLedgerRow
+// moved here in decision 272: a second process has to be able to hold and
+// report on a chain, and an alias keeps every existing spelling in
+// biz/audit unchanged.
+type ChainState struct {
+	Enabled bool
+	// HeadSeq is the position of the newest chained entry, 0 when the
+	// chain is empty.
+	HeadSeq uint64
+	// AnchorSeq is the position of the oldest entry still present. It is
+	// greater than 1 after a retention sweep, which means the chain is
+	// verifiable only from there — a fact the operator needs, because
+	// "verified" over a window is weaker than "verified" over all time.
+	AnchorSeq uint64
 }
 
 // contextKey points to a mutable *slot in the request context.

@@ -45,6 +45,18 @@ type Config struct {
 	AdminPassword string        // session-login password (hashed at startup)
 	CookieName    string        // session cookie name (default "_hi_sess")
 	CookieMaxAge  time.Duration // session lifetime
+
+	// Chain is this process's own audit chain, handed over by whoever
+	// assembles the binary (决策 328). Optional: nil means the gateway
+	// mounts no verification route at all, which is the same shape the
+	// audit sink itself uses — a package cannot decide for every deployment
+	// that links it whether an audit chain exists (决策 321, 324).
+	//
+	// It is the *gateway's* chain and never the control plane's: this
+	// process holds OPSKEEPER_JWT_SECRET, so letting it read the control
+	// plane's chain would not add anything an operator could not already
+	// read, and would put two authorities in one place.
+	Chain auditport.ChainVerifier
 }
 
 // Server is the HTTP layer for the Higress console.
@@ -183,6 +195,12 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/consumers", s.handleAdminCreate)
 		r.Get("/consumers/{name}", s.handleAdminGet)
 		r.Delete("/consumers/{name}", s.handleAdminDelete)
+		// 决策 328：这条链从 324 就在了，从来没有人验证过它。一条只写不验的
+		// 链是装饰品。GET 是只读的，所以它不需要审计槽——但它要会话，
+		// 因为它回答的是「谁动过我的数据」。
+		if s.cfg.Chain != nil {
+			r.Get("/audit-chain", s.handleChain)
+		}
 	})
 	return r
 }

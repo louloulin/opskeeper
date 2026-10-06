@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	store "github.com/vincent-wuhan/opskeeper/core/domains/data/audit/store"
 	model "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
 )
@@ -39,22 +40,17 @@ import (
 // and "there is no chain" are different facts, and the caller that most
 // needs to know which is true is an operator asking whether a record was
 // tampered with.
-var ErrChainDisabled = errors.New("audit: hash chain disabled (no HMAC key configured)")
+var ErrChainDisabled = auditport.ErrChainDisabled
 
 // ErrChainBroken reports the first entry whose digest did not match, or
 // whose PrevHash did not match its predecessor's Hash.
-type ErrChainBroken struct {
-	// Seq is the position of the first bad entry. Damage extends from
-	// here to the end of the chain, so a caller that wants the full
-	// extent repairs this entry and verifies again.
-	Seq uint64
-	// Reason is operator-facing: what was expected, what was found.
-	Reason string
-}
-
-func (e *ErrChainBroken) Error() string {
-	return fmt.Sprintf("audit: chain broken at seq %d: %s", e.Seq, e.Reason)
-}
+//
+// The shape moved to core/base/pkg/audit in decision 328 for the same
+// reason ChainState did: the gateway's own verification surface has to name
+// these two to answer an operator, and it must not import this package to
+// do it — a reporting surface that has to reach the writer to describe the
+// writer's failures is a dependency the throat table is right to refuse.
+type ErrChainBroken = auditport.ErrChainBroken
 
 // GenesisHash is the PrevHash of the first chained entry. It is the empty
 // string rather than a constant digest so that "this row starts a chain"
@@ -154,17 +150,11 @@ type ChainStore interface {
 // whether it is on, and if not, why. It is returned rather than inferred
 // from a nil error so a console can render "verification unavailable"
 // without having to string-match an error value.
-type ChainState struct {
-	Enabled bool
-	// HeadSeq is the position of the newest chained entry, 0 when the
-	// chain is empty.
-	HeadSeq uint64
-	// AnchorSeq is the position of the oldest entry still present. It is
-	// greater than 1 after a retention sweep, which means the chain is
-	// verifiable only from there — a fact the operator needs, because
-	// "verified" over a window is weaker than "verified" over all time.
-	AnchorSeq uint64
-}
+// The shape moved to core/base/pkg/audit in decision 327: a second process
+// (the gateway, which holds its own chain) has to be able to hold and report
+// on one without importing this package, and an alias keeps every spelling
+// here unchanged.
+type ChainState = auditport.ChainState
 
 // VerifyChain walks the whole chain and reports the first entry that
 // does not check out, or nil when every entry does.

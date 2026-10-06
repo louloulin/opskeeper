@@ -275,3 +275,107 @@ func TestTheNodeSideCannotReachTheChainKey(t *testing.T) {
 			strings.Join(offenders, "\n  "))
 	}
 }
+
+// 4. 决策 328：**每条链都必须有验证者。**
+//
+// 这一刀就是从违反这条规则开始的：决策 324 给网关立了一条链，写它的注释说
+// 「Two chains, two keys, two verifiers」，而全仓 VerifyChain 的生产调用方
+// 只有一个，在控制面那侧。**一条只写不验的链是装饰品**——它给每行算一次
+// HMAC，什么也没换回来，因为能改数据库的人可以把改过的那一行的摘要重算成
+// 自洽的样子，只要没有人去走一遍。
+//
+// 所以这道闸门与 4.260 的那三道是同一个思路的另一半：那三道问「谁能**拿到**钥匙」，
+// 这一道问「拿到之后有没有人**用**它」。**一把只有锁没有人的钥匙，和没有锁一样。**
+var verifierCallRE = regexp.MustCompile(`\.VerifyChain\(`)
+
+// declaredChainVerifiers says, for each chain, which files are allowed to
+// verify it — and therefore which chains are required to have a row here.
+var declaredChainVerifiers = map[string]struct {
+	// Env is the key whose holder owns this chain.
+	Env string
+	// Callers are the files allowed to walk this chain.
+	Callers map[string]string
+}{
+	"OPSKEEPER_AUDIT_HMAC_KEY": {
+		Env: "OPSKEEPER_AUDIT_HMAC_KEY",
+		Callers: map[string]string{
+			"core/domains/server/audit/http.go": "GET /v1/admin/audit-logs/chain —— 运维问「这份记录被改过吗」的那一端",
+			// 这一行是**这道闸门自己抓出来的**，此前从来没有出现在任何表里：
+			// agent kernel 早就拿着 verifier 在验链了，而且它的注释写得比谁都清楚
+			// （「内核的条目只在它们所在的那条链还可信时才可信」），只是没有任何
+			// 闸门要求它被登记。一个已经做对了的事被查出来时，先登记再问它对不对
+			// ——而不是因为它不在表上就当它没有发生过。
+			"core/manager/biz/aiops/agentkernel/audit.go": "agent kernel 在回答「这次工具调用被篡改过吗」。它的 Verify 在没有 verifier 时返回 ErrNoChainVerifier 而不是 nil——**一个因为没人给它检查办法就报「链完整」的账本，正是这个方法要防的事**，而它比本仓任何一版文档都先写下了这句",
+		},
+	},
+	"OPSKEEPER_HIGRESS_AUDIT_HMAC_KEY": {
+		Env: "OPSKEEPER_HIGRESS_AUDIT_HMAC_KEY",
+		Callers: map[string]string{
+			"core/manager/higress/chain.go": "GET /admin/audit-chain —— 决策 328 补上的那一端，与控制面逐字同义",
+		},
+	},
+}
+
+func TestEveryDeclaredChainHasAVerifierThatSomebodyCalls(t *testing.T) {
+	root := repoRoot(t)
+	var callers []string
+	for _, rel := range productionFiles(t, root) {
+		src, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if verifierCallRE.Match(src) {
+			callers = append(callers, rel)
+		}
+	}
+	// 每一把钥匙都必须有一份「谁来验它」，而且那份名单不许是空的：
+	// 一条没有验证者的链不是「暂时没人关心」，是它根本没有存在的理由。
+	declaredCallers := map[string]string{}
+	for name, spec := range declaredChainVerifiers {
+		if len(spec.Callers) == 0 {
+			t.Errorf("the chain held by %s has no declared verifier; a chain nobody walks is decoration", name)
+			continue
+		}
+		for rel, why := range spec.Callers {
+			declaredCallers[rel] = why
+		}
+	}
+	checkDeclared(t, "walks a chain", callers, declaredCallers)
+}
+
+// 5. 立了链还得把它接到能被问到的那一端。
+//
+// 上一条问「有没有人验」，这一条问「验的那一端在不在这个进程里」。网关那条链
+// 之所以曾经无人验证，是因为它虽然立了，却根本没有被交给任何路由——
+// **一个只被构造出来、没有被任何人拿到的对象，和不存在是同一个东西**。
+func TestTheGatewayProcessHandsItsChainToSomethingThatCanBeAsked(t *testing.T) {
+	root := repoRoot(t)
+	rel := "cmd/higress-console/main.go"
+	src, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	body := string(src)
+	// Both halves: the sink is built (the chain exists) AND it is handed to
+	// the server (something can ask about it). A buildAuditSink that never
+	// reaches higress.Config is the exact shape decision 324 shipped.
+	if !strings.Contains(body, "buildAuditSink(") {
+		t.Errorf("%s no longer builds the gateway's chain", rel)
+	}
+	// 第一版这条判据是 `Chain:\s*\w`，而变异把 main.go 改成 `Chain: nil` 之后
+	// 它照样通过——**一个能匹配 nil 的「有没有交出去」判据，量的不是有没有交出去**。
+	// 现在它必须指出那个变量名，并且那个变量必须是从 buildAuditSink 得到的那个。
+	sinkVar := gatewaySinkVarRE.FindStringSubmatch(body)
+	if len(sinkVar) == 0 {
+		t.Errorf("%s no longer captures the sink built by buildAuditSink; the handover check below has nothing to check", rel)
+		return
+	}
+	handover := regexp.MustCompile(`Chain:\s*` + regexp.QuoteMeta(sinkVar[1]) + `\b`)
+	if !handover.MatchString(body) {
+		t.Errorf("%s builds the gateway's chain into %s and never hands it to the server; a chain nothing can ask about is not a chain (决策 328)",
+			rel, sinkVar[1])
+	}
+}
+
+// gatewaySinkHandoverRE captures the variable buildAuditSink's result lands in.
+var gatewaySinkVarRE = regexp.MustCompile(`(\w+),\s*err\s*:?=\s*buildAuditSink\(`)
