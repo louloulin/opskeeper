@@ -164,7 +164,7 @@ func TestEveryRunFlagInTheRealMakefileIsParsed(t *testing.T) {
 		}
 		lines := strings.Split(src, "\n")
 		text := lines[c.Line]
-		for j := c.Line + 1; j < len(lines) && continuationRE.MatchString(lines[c.Line]); j++ {
+		for j := c.Line + 1; j < len(lines) && continuationRE.MatchString(lines[j-1]); j++ {
 			text += " " + lines[j]
 		}
 		if runRE.MatchString(text) {

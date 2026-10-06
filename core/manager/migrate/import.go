@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/migrate/clients"
 )
@@ -94,11 +95,20 @@ func Import(ctx context.Context, opts ImportOptions) (*ImportResult, error) {
 	if len(entities) == 0 {
 		entities = MigrationOrder()
 	}
+	if !opts.DryRun {
+		if err := requireImportable(entities); err != nil {
+			return nil, err
+		}
+	}
 
 	for _, et := range entities {
 		meta := GetEntityMeta(et)
 		if meta == nil {
 			return nil, fmt.Errorf("未知实体: %s", et)
+		}
+		endpoint, err := targetEndpoint(et)
+		if err != nil && !opts.DryRun {
+			return nil, err
 		}
 		rows := snap.GetEntity(et)
 		for _, row := range rows {
@@ -131,7 +141,7 @@ func Import(ctx context.Context, opts ImportOptions) (*ImportResult, error) {
 			}
 
 			// 幂等校验
-			exists, err := client.EntityExists(ctx, targetEndpoint(et), srcID(row))
+			exists, err := client.EntityExists(ctx, endpoint, srcID(row))
 			if err != nil {
 				result.Failed++
 				if len(result.Failures) < 100 {
@@ -147,7 +157,7 @@ func Import(ctx context.Context, opts ImportOptions) (*ImportResult, error) {
 			}
 
 			// 写入 opskeeper
-			createdID, err := client.CreateEntity(ctx, targetEndpoint(et), tenantID, translated)
+			createdID, err := client.CreateEntity(ctx, endpoint, tenantID, translated)
 			if err != nil {
 				result.Failed++
 				if len(result.Failures) < 100 {
@@ -205,17 +215,62 @@ func srcID(row map[string]any) string {
 	return ""
 }
 
-// targetEndpoint 返回 opskeeper 的写入端点。
-func targetEndpoint(et EntityType) string {
+// targetEndpoint 返回 opskeeper 的写入端点，形如 "/v1/users"。
+//
+// 它读的是 TargetRoute 而不是 Target。两个字段曾经只有一个，Target 是
+// 自由文本，于是 "tenants" / "schedules" / "middleware_resources" 被
+// 原样拼进 URL——这三个名字在 manager 的路由表里都没有对应物，import
+// 会为每一行记一条 "失败: 404"，而 404 被记成一行数据错误，不是一个
+// 端点不存在的事实（决策 291）。
+func targetEndpoint(et EntityType) (string, error) {
 	meta := GetEntityMeta(et)
 	if meta == nil {
-		return string(et)
+		return "", fmt.Errorf("未知实体: %s", et)
 	}
-	// 注意：middleware_resources 同表多类型，按 type 子路径
-	if et == EntityPGConnections || et == EntityRedisConns ||
-		et == EntityMQConnections || et == EntityK8sClusters ||
-		et == EntityGitRepos {
-		return meta.Target + "?type=" + string(et)
+	if !meta.IsImportable() {
+		return "", fmt.Errorf("%s 无法导入 opskeeper：%s", et, meta.TargetMissing)
 	}
-	return meta.Target
+	return meta.TargetRoute, nil
+}
+
+// requireImportable 在动任何一行数据之前先问一遍端点存不存在。
+//
+// 一个迁移工具对"目标端没有这个实体"say 出来的必须是这件事本身，而不是
+// 把它摊成 N 条逐行的失败——后者读起来像数据脏，前者才是真的。
+func requireImportable(entities []EntityType) error {
+	var missing []string
+	for _, et := range entities {
+		meta := GetEntityMeta(et)
+		if meta == nil {
+			return fmt.Errorf("未知实体: %s", et)
+		}
+		if !meta.IsImportable() {
+			missing = append(missing, fmt.Sprintf("%s → %s（%s）", et, meta.Target, meta.TargetMissing))
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("以下实体的目标端在 opskeeper 里不存在，未执行任何写入:\n  - %s\n"+
+		"用 --entity 只选可导入的实体（%s），或先决定这些实体的落点。",
+		strings.Join(missing, "\n  - "), strings.Join(importableEntityStrings(), ", "))
+}
+
+// ImportableEntities 返回当前真的能导入的实体类型（依赖顺序）。
+func ImportableEntities() []EntityType {
+	var out []EntityType
+	for _, et := range MigrationOrder() {
+		if GetEntityMeta(et).IsImportable() {
+			out = append(out, et)
+		}
+	}
+	return out
+}
+
+func importableEntityStrings() []string {
+	var out []string
+	for _, et := range ImportableEntities() {
+		out = append(out, string(et))
+	}
+	return out
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/migrate/clients"
@@ -91,11 +92,30 @@ func Rollback(ctx context.Context, opts RollbackOptions) (*RollbackResult, error
 		DeletedAt: time.Now().UTC(),
 	}
 
+	// 回滚只删得掉当初真的写进去过的东西，所以它按导入端的同一份
+	// TargetRoute 解析端点：目标端不存在的实体在导入时就被挡住了，
+	// 这里同样不拼一个必然 404 的 URL（决策 291）。
+	//
+	// 判据取自快照里实际出现的实体类型，而不是注册表的全体——一份
+	// 只含 users 的回滚快照不该因为 pg_connections 没有落点而拒绝回滚。
+	present := make([]EntityType, 0, len(snap.Entities))
+	for et := range snap.Entities {
+		present = append(present, et)
+	}
+	sort.Slice(present, func(i, j int) bool { return present[i] < present[j] })
+	if err := requireImportable(present); err != nil {
+		return nil, err
+	}
+
 	for et, ids := range snap.Entities {
 		// 注意：rollback snapshot 的 Entities 字段语义：
 		// key=entity type, value=[created_id] 列表
 		// 但当前 snapshot 设计中 value 是 []map[string]any。
 		// 兼容：仅当 row["_kind"] == "created_id" 时视为 ID 列表
+		endpoint, eerr := targetEndpoint(et)
+		if eerr != nil {
+			return nil, eerr
+		}
 		for _, row := range ids {
 			if id, ok := row["_id"].(string); ok {
 				result.Total++
@@ -103,7 +123,7 @@ func Rollback(ctx context.Context, opts RollbackOptions) (*RollbackResult, error
 					result.Deleted++
 					continue
 				}
-				if err := client.DeleteEntity(ctx, targetEndpoint(et), id); err != nil {
+				if err := client.DeleteEntity(ctx, endpoint, id); err != nil {
 					result.Failed++
 					if len(result.Failures) < 100 {
 						result.Failures = append(result.Failures, RollbackFailure{

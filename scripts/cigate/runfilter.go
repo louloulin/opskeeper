@@ -76,7 +76,7 @@ func goTestRunFilters(src string, reachable map[string]bool) []RunFilter {
 		// Walk forward from the command's own line over the continuations
 		// the recipe actually declares, and no further.
 		text := lines[c.Line]
-		for j := c.Line + 1; j < len(lines) && continuationRE.MatchString(lines[c.Line]); j++ {
+		for j := c.Line + 1; j < len(lines) && continuationRE.MatchString(lines[j-1]); j++ {
 			text += " " + lines[j]
 		}
 		m := runRE.FindStringSubmatch(text)

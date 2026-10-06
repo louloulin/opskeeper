@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/migrate/clients"
 )
@@ -100,13 +101,16 @@ func Verify(ctx context.Context, opts VerifyOptions) (*VerifyResult, error) {
 	if len(entities) == 0 {
 		entities = MigrationOrder()
 	}
+	if err := requireImportable(entities); err != nil {
+		return nil, err
+	}
 
 	for _, et := range entities {
 		rows := snap.GetEntity(et)
 		result.TotalSource += len(rows)
-		meta := GetEntityMeta(et)
-		if meta == nil {
-			continue
+		endpoint, err := targetEndpoint(et)
+		if err != nil {
+			return nil, err
 		}
 		for _, row := range rows {
 			tenantID, terr := translateTenant(row, mapper)
@@ -118,7 +122,7 @@ func Verify(ctx context.Context, opts VerifyOptions) (*VerifyResult, error) {
 			}
 			srcIDStr := srcID(row)
 			// 通过 by-source-id 查询目标
-			exists, err := client.EntityExists(ctx, targetEndpoint(et), srcIDStr)
+			exists, err := client.EntityExists(ctx, endpoint, srcIDStr)
 			if err != nil {
 				continue
 			}
@@ -151,8 +155,15 @@ func verifyFromClients(ctx context.Context, opts VerifyOptions) (*VerifyResult, 
 	if len(entities) == 0 {
 		entities = MigrationOrder()
 	}
+	if err := requireImportable(entities); err != nil {
+		return nil, err
+	}
 
 	for _, et := range entities {
+		endpoint, err := targetEndpoint(et)
+		if err != nil {
+			return nil, err
+		}
 		rows, err := src.ListAll(ctx, string(et))
 		if err != nil {
 			continue
@@ -163,7 +174,7 @@ func verifyFromClients(ctx context.Context, opts VerifyOptions) (*VerifyResult, 
 				continue
 			}
 			srcIDStr := srcID(row)
-			exists, err := dst.EntityExists(ctx, targetEndpoint(et), srcIDStr)
+			exists, err := dst.EntityExists(ctx, endpoint, srcIDStr)
 			if err != nil {
 				continue
 			}
@@ -195,6 +206,7 @@ func (r *VerifyResult) String() string {
 		}
 		out += fmt.Sprintf("  %s: 命中 %d, 缺失 %d\n", et, matched, missing)
 	}
+	out += skippedEntityReport()
 
 	if len(r.FieldDiffs) > 0 {
 		out += fmt.Sprintf("\n字段差异: %d\n", len(r.FieldDiffs))
@@ -225,4 +237,22 @@ func sumMap(m map[EntityType]int) int {
 		n += v
 	}
 	return n
+}
+
+// skippedEntityReport 把"目标端不存在因而根本没查"的实体列出来。
+//
+// 不列的话，一份 9 类实体的 verify 报告会只印出查过的那几类，读起来
+// 像"其余的都命中了"——被跳过的和核对过的在纸面上无法区分（决策 291）。
+func skippedEntityReport() string {
+	var missing []string
+	for _, et := range MigrationOrder() {
+		if meta := GetEntityMeta(et); !meta.IsImportable() {
+			missing = append(missing, fmt.Sprintf("  %s → %s：%s", et, meta.Target, meta.TargetMissing))
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n未核对（opskeeper 里没有对应端点）：%d 类\n%s\n",
+		len(missing), strings.Join(missing, "\n"))
 }

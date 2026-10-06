@@ -147,17 +147,28 @@ CI → cmd/opskeeper-eval → fault-injector → Coordinator 自主响应
 
 ### 4.2 支持的实体（9 类）
 
-| # | ops-keeper 实体 | opskeeper 目标 | 字段映射 |
-|---|---|---|---|
-| 1 | `users` | `users` | 1:1 |
-| 2 | `projects` | `tenants` | name → name, owner → owner_id |
-| 3 | `pg_connections` | `middleware_resources`（type=postgres） | DSN 加密重存 |
-| 4 | `redis_connections` | `middleware_resources`（type=redis） | 同上 |
-| 5 | `mq_connections` | `middleware_resources`（type=rabbitmq/kafka） | 同上 |
-| 6 | `k8s_clusters` | `middleware_resources`（type=k8s） | kubeconfig 重加密 |
-| 7 | `git_repos` | `middleware_resources`（type=git） | URL + token 加密 |
-| 8 | `inspection_schedules` | `schedules` | cron 表达式保留 |
-| 9 | `alert_rules` | `alert_rules` | 表达式翻译 |
+**只有前两类真的可导入。** 决策 291 之前这张表把九类实体一律写成"可迁移",
+而 manager 的路由表里没有其中六个的落点：五个连接类实体指向
+`middleware_resources`（那张表从未接线，决策 287 已删；中间件适配器读的是 DSN
+环境变量），`inspection_schedules` 指向 `schedules`（唯一相近的端点是
+`/v1/report-schedules`，那是报告计划）。照旧写出去，`import` 会为每一行记一条
+404——而 404 读起来像数据错误，不像"这个工具写错了地方"。
+
+| # | ops-keeper 实体 | opskeeper 端点 | 可导入 | 说明 |
+|---|---|---|---|---|
+| 1 | `users` | `POST /v1/users` | ✅ | email → email，name → display_name |
+| 2 | `projects` | `POST /v1/orgs` | ✅ | name → name；**owner_id 不迁**（组织成员关系走 `/v1/orgs/{id}/members`） |
+| 3 | `pg_connections` | — | ❌ | 目标端不存在 |
+| 4 | `redis_connections` | — | ❌ | 目标端不存在 |
+| 5 | `mq_connections` | — | ❌ | 目标端不存在 |
+| 6 | `k8s_clusters` | — | ❌ | 目标端不存在 |
+| 7 | `git_repos` | — | ❌ | 目标端不存在 |
+| 8 | `inspection_schedules` | — | ❌ | 巡检计划落哪张表是一次产品决定 |
+| 9 | `alert_rules` | — | ❌ | expr/for → rule_key/conditions 是规则语义翻译，不是字段改名 |
+
+不带 `--entity` 的 `import` 会在写入第一行之前拒绝执行并列出不可导入的实体；
+`opskeeper-migrate list-entities` 打印同一份清单。注册表与真实路由 / 请求结构
+的一致性由 `make migrate-target-check` 守住。
 
 ### 4.3 迁移流程
 

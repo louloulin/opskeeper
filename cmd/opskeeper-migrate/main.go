@@ -303,7 +303,11 @@ func cmdListEntities(_ []string) error {
 		}
 		fmt.Printf("  %d. %s\n", i+1, et)
 		fmt.Printf("     源: ops-keeper %s\n", meta.Source)
-		fmt.Printf("     目标: opskeeper %s\n", meta.Target)
+		if meta.IsImportable() {
+			fmt.Printf("     目标: opskeeper %s（%s）\n", meta.Target, meta.TargetRoute)
+		} else {
+			fmt.Printf("     目标: opskeeper %s —— 不可导入：%s\n", meta.Target, meta.TargetMissing)
+		}
 		if len(meta.DependsOn) > 0 {
 			deps := make([]string, len(meta.DependsOn))
 			for j, d := range meta.DependsOn {
@@ -315,8 +319,22 @@ func cmdListEntities(_ []string) error {
 			fmt.Printf("     加密: ✓（凭据加密重存）\n")
 		}
 	}
-	fmt.Printf("\n共 %d 类\n", len(order))
+	importable := migrate.ImportableEntities()
+	fmt.Printf("\n共 %d 类，其中可导入 %d 类：%s\n",
+		len(order), len(importable), strings.Join(entityStrings(importable), ", "))
+	if len(importable) < len(order) {
+		fmt.Printf("不可导入的 %d 类需要 --entity 显式排除，否则 import 会在写入前拒绝执行。\n",
+			len(order)-len(importable))
+	}
 	return nil
+}
+
+func entityStrings(list []migrate.EntityType) []string {
+	out := make([]string, len(list))
+	for i, e := range list {
+		out[i] = string(e)
+	}
+	return out
 }
 
 // parseEntities 解析命令行 --entity 标志（多次）。

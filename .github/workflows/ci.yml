@@ -149,6 +149,17 @@ jobs:
       - name: No table is claimed by two models
         run: make table-check
 
+      # A migration target has to exist, and the fields written into it have
+      # to be fields its handler actually decodes. entity.go carried a single
+      # free-text Target that import, verify and rollback all pasted into a
+      # URL: six of the nine entities pointed at endpoints this router does
+      # not register, and the three that did exist rejected most of the mapped
+      # fields. Both failures land in the result as one bad row -- a 404 or a
+      # 400 read as dirty source data rather than as this tool aiming at the
+      # wrong place (decision 291).
+      - name: Migration targets exist and accept their mapped fields
+        run: make migrate-target-check
+
       - name: Golden-corpus and diagnostic-axis gates
         run: make eval-gates
 

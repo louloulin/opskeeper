@@ -623,6 +623,18 @@ table-check: ## 闸门：一张表不允许被两个 GORM 模型声明（决策 
 	go run ./scripts/tablecheck .
 	go test ./scripts/tablecheck/ -count=1
 
+# opskeeper-migrate 的目标端点与字段映射必须真实存在。这道闸门做两件事：
+# 注册表里每一条 TargetRoute 都要在 manager 的路由表里注册过；每一条 FieldMap
+# 的目标字段都要是那个端点的 handler 真正解码的请求结构里的 json tag。
+# 决策 291 之前 entity.go 只有一个自由文本 Target 字段，import / verify /
+# rollback 三个命令一律把它拼进 URL，而九个实体里有六个在路由表里没有对应物，
+# 剩下的三个字段也大半对不上——每一次失败都会被记成一行数据错误，而不是
+# 「这个工具写错了地方」。
+.PHONY: migrate-target-check
+migrate-target-check: ## 闸门：迁移注册表的目标端点与字段映射必须真实存在（决策 291）
+	cd core/manager && GOWORK=off go test ./migrate/ -count=1 \
+		-run 'TestEveryMigrationTargetRouteIsRegistered|TestEveryMappedFieldIsAcceptedByTheEndpoint|TestAnEntityWithNoRouteSaysWhy'
+
 # docs/api 是这个仓库里唯一一处「可以写出一份完整交付、而没有任何东西会红」的地方：
 # harness.md 描述过十三个从未注册的 HTTP 端点，middleware.md 描述过九个，而两者
 # 读起来都像已交付的契约。这道闸门读文档围栏里的每一行 `METHOD /path` 与每一次

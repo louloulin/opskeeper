@@ -14,15 +14,20 @@ import (
 // TargetClient 写入 opskeeper 数据。
 //
 // 通过 opskeeper 现有 REST API 写入，避免直接 SQL 操作。
-// 端点（与 spec 对齐）：
 //
-//	POST   /api/v1/middleware                  创建中间件资源
-//	POST   /api/v1/tenants                     创建 tenant
-//	POST   /api/v1/users                       创建 user
-//	POST   /api/v1/schedules                   创建 schedule
-//	POST   /api/v1/alert-rules                 创建 alert rule
-//	GET    /api/v1/{entity}/{id}               查询（幂等校验）
-//	POST   /api/v1/{entity}/{id}:rollback      撤销（rollback snapshot 用）
+// entityType 是注册表里的 TargetRoute，形如 "/v1/users"，也就是 handler
+// 自己注册的那一段；本客户端负责把它挂到 manager 的 "/api" 组下。改动
+// 之前这里拼的是一段自由文本，于是 "tenants" / "schedules" /
+// "middleware_resources" 三个名字被原样当成端点，而它们在路由表里没有
+// 对应物（决策 291）。
+//
+// 真实端点（core/manager/iam/server/http.go 与 server/alert/http.go）：
+//
+//	POST   /api/v1/users         创建 user
+//	POST   /api/v1/orgs          创建 org（原 tenants）
+//	POST   /api/v1/alert-rules   创建 alert rule
+//	GET    /api/v1/{route}/by-source-id/{id}   幂等查询
+//	DELETE /api/v1/{route}/{id}                回滚删除
 type TargetClient struct {
 	baseURL string
 	token   string
@@ -46,7 +51,7 @@ func NewTargetClient(baseURL, token string) *TargetClient {
 func (c *TargetClient) EntityExists(ctx context.Context, entityType, sourceID string) (bool, error) {
 	// 通过 Idempotency-Key 头透传 ops-keeper source ID
 	req, err := http.NewRequestWithContext(ctx, "GET",
-		c.baseURL+"/api/v1/"+entityType+"/by-source-id/"+sourceID, nil)
+		c.baseURL+apiPath(entityType, "by-source-id/"+sourceID), nil)
 	if err != nil {
 		return false, err
 	}
@@ -89,7 +94,7 @@ func (c *TargetClient) CreateEntity(
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
-		c.baseURL+"/api/v1/"+entityType, bytes.NewReader(raw))
+		c.baseURL+apiPath(entityType, ""), bytes.NewReader(raw))
 	if err != nil {
 		return "", err
 	}
@@ -136,7 +141,7 @@ func (c *TargetClient) CreateEntity(
 // 用于 rollback 阶段：snapshot 记录原始 ID，回滚时按 ID 删除 opskeeper 实体。
 func (c *TargetClient) DeleteEntity(ctx context.Context, entityType, id string) error {
 	req, err := http.NewRequestWithContext(ctx, "DELETE",
-		c.baseURL+"/api/v1/"+entityType+"/"+id, nil)
+		c.baseURL+apiPath(entityType, id), nil)
 	if err != nil {
 		return err
 	}
@@ -173,4 +178,16 @@ func (c *TargetClient) HealthCheck(ctx context.Context) error {
 		return fmt.Errorf("opskeeper /healthz 返回 %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// apiPath 把一条注册表里的路由加后缀拼成 manager 实际服务的路径。
+//
+// route 形如 "/v1/users"，manager 把所有 BC 挂在 "/api" 组下，所以结果是
+// "/api/v1/users"。空后缀就是集合路径本身（POST 创建）。
+func apiPath(route, suffix string) string {
+	path := "/api" + route
+	if suffix == "" {
+		return path
+	}
+	return path + "/" + suffix
 }

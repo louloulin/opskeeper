@@ -216,23 +216,28 @@ func TestIntegration_ExportImportRoundtrip(t *testing.T) {
 		Target:        mocks.Opskeeper.URL,
 		TenantMapping: "42=1,100=2",
 		RatePerSec:    1000,
+		Entities:      importableEntities(),
 	})
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
-	if result.Imported != 5 {
-		t.Errorf("Imported=%d want 5", result.Imported)
+	// 快照里 5 行，其中 pg_connections 那一行落在没有写入端点的实体上，
+	// 所以只搬得过去 4 行。这不是数据问题：这个 mock 会给任何路径回
+	// 201，而真实的 manager 根本没有 /api/v1/middleware_resources，
+	// 决策 291 把这一类挡在写入之前了。
+	if result.Imported != 4 {
+		t.Errorf("Imported=%d want 4", result.Imported)
 	}
 	if result.Failed != 0 {
 		t.Errorf("Failed=%d want 0 (failures=%v)", result.Failed, result.Failures)
 	}
 
-	// Opskeeper mock 应记录 5 个创建 + 5 个 by-source-id 查询
-	if mocks.OpskeeperH.createdTotal != 5 {
-		t.Errorf("opskeeper created=%d want 5", mocks.OpskeeperH.createdTotal)
+	// Opskeeper mock 应记录 4 个创建 + 4 个 by-source-id 查询
+	if mocks.OpskeeperH.createdTotal != 4 {
+		t.Errorf("opskeeper created=%d want 4", mocks.OpskeeperH.createdTotal)
 	}
-	if mocks.OpskeeperH.checksTotal < 5 {
-		t.Errorf("opskeeper checks=%d want >= 5", mocks.OpskeeperH.checksTotal)
+	if mocks.OpskeeperH.checksTotal < 4 {
+		t.Errorf("opskeeper checks=%d want >= 4", mocks.OpskeeperH.checksTotal)
 	}
 }
 
@@ -260,6 +265,7 @@ func TestIntegration_Idempotency(t *testing.T) {
 		Target:        mocks.Opskeeper.URL,
 		TenantMapping: "42=1",
 		RatePerSec:    1000,
+		Entities:      []migrate.EntityType{migrate.EntityUsers},
 	}
 
 	// 第一次 import
@@ -314,6 +320,7 @@ func TestIntegration_TenantMapping_Undeclared(t *testing.T) {
 		Target:        mocks.Opskeeper.URL,
 		TenantMapping: "42=1",
 		RatePerSec:    1000,
+		Entities:      []migrate.EntityType{migrate.EntityUsers},
 	})
 	if err != nil {
 		t.Fatalf("Import: %v", err)
@@ -384,6 +391,7 @@ func TestIntegration_VerifyAfterImport(t *testing.T) {
 		Target:        mocks.Opskeeper.URL,
 		TenantMapping: "42=1",
 		RatePerSec:    1000,
+		Entities:      importableEntities(),
 	})
 	if err != nil {
 		t.Fatalf("Import: %v", err)
@@ -394,6 +402,7 @@ func TestIntegration_VerifyAfterImport(t *testing.T) {
 		SnapshotPath:  snapshotPath,
 		Target:        mocks.Opskeeper.URL,
 		TenantMapping: "42=1",
+		Entities:      importableEntities(),
 	})
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
@@ -438,3 +447,9 @@ func TestIntegration_Clients_Direct(t *testing.T) {
 		t.Fatalf("Opskeeper.HealthCheck: %v", err)
 	}
 }
+
+// importableEntities 是这一组集成测试真正搬得过去的那几类。
+//
+// 它问的是注册表而不是抄一份名字，所以 opskeeper 侧一旦真的有了连接配置
+// 或巡检计划的写入端点，这些用例会跟着把新端点也走一遍，而不用改测试。
+func importableEntities() []migrate.EntityType { return migrate.ImportableEntities() }

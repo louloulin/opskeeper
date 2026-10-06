@@ -72,31 +72,58 @@ type EntityMeta struct {
 	DependsOn  []EntityType                        // 依赖的前置实体（先迁）
 	Encryption bool                                // 目标是否含加密凭据
 	VerifyFn   func(src, dst map[string]any) error // 导入后校验函数（可选）
+
+	// TargetRoute 是这一类实体在 opskeeper 上真实存在的写入端点，形如
+	// "/v1/users"。客户端把它挂在 "/api" 组下再拼上 baseURL。
+	//
+	// 它为空表示目标端在这个代码库里不存在，导入必须拒绝，而不是发一个
+	// 必然 404 的请求再把 404 记成一行 "失败"。决策 291 之前这里只有一个
+	// 自由文本 Target，于是 "tenants" / "schedules" /
+	// "middleware_resources" 被 import、verify、rollback 三个命令一律
+	// 当成端点拼进 URL，而它们在 manager 的路由表里没有对应物。
+	TargetRoute string
+
+	// TargetNote 记录这条实体迁过去时**丢掉了什么**。TargetRoute 存在只
+	// 说明端点在，丢字段是另一件事，不写下来的话迁移报告会显示"全部命中"。
+	TargetNote string
+
+	// TargetMissing 说明 TargetRoute 为什么为空，写给人看：迁进来的连接
+	// 配置存哪张表、巡检计划与报告计划是不是一回事，这是一次产品决定，
+	// 不是重构可以替谁做的选择。
+	TargetMissing string
 }
+
+// IsImportable 报告这一类实体当前能否真的导入 opskeeper。
+func (m *EntityMeta) IsImportable() bool { return m != nil && m.TargetRoute != "" }
 
 // entityRegistry 全局实体元信息注册表。
 var entityRegistry = map[EntityType]EntityMeta{
 	EntityUsers: {
-		Type:   EntityUsers,
-		Source: "users",
-		Target: "users",
+		Type:        EntityUsers,
+		Source:      "users",
+		Target:      "users",
+		TargetRoute: "/v1/users",
 		FieldMap: map[string]string{
-			"id":         "id",
-			"email":      "email",
-			"name":       "name",
-			"created_at": "created_at",
+			// POST /v1/users 的请求体是 createUserReq（iam/server/orgs.go），
+			// 它收 display_name 而不是 name。id 与 created_at 由服务端分配，
+			// 不在请求体里，所以不映射——映过去也只会被 json 解码丢掉，
+			// 却让闸门以为对得上。
+			"email": "email",
+			"name":  "display_name",
 		},
 		DependsOn: nil,
 	},
 	EntityProjects: {
-		Type:   EntityProjects,
-		Source: "projects",
-		Target: "tenants",
+		Type:        EntityProjects,
+		Source:      "projects",
+		Target:      "orgs",
+		TargetRoute: "/v1/orgs",
 		FieldMap: map[string]string{
-			"id":         "id",
-			"name":       "name",
-			"owner_id":   "owner_id",
-			"created_at": "created_at",
+			// POST /v1/orgs 的请求体是 createOrgReq（name / description /
+			// parent_id）。owner_id 没有位置：ops-keeper 的项目负责人对应的是
+			// 组织成员关系，走另一个端点 /v1/orgs/{id}/members，导入这一步
+			// 不写它——见 TargetNote。
+			"name": "name",
 		},
 		DependsOn: []EntityType{EntityUsers},
 	},
@@ -104,6 +131,8 @@ var entityRegistry = map[EntityType]EntityMeta{
 		Type:   EntityPGConnections,
 		Source: "pg_connections",
 		Target: "middleware_resources",
+		TargetMissing: "manager 没有承载连接配置的写入端点——中间件适配器读的是 DSN " +
+			"环境变量而不是数据库（决策 287 删掉了从未接线的 middleware_resources 表）。",
 		FieldMap: map[string]string{
 			"id":         "id",
 			"project_id": "tenant_id",
@@ -122,6 +151,8 @@ var entityRegistry = map[EntityType]EntityMeta{
 		Type:   EntityRedisConns,
 		Source: "redis_connections",
 		Target: "middleware_resources",
+		TargetMissing: "manager 没有承载连接配置的写入端点——中间件适配器读的是 DSN " +
+			"环境变量而不是数据库（决策 287 删掉了从未接线的 middleware_resources 表）。",
 		FieldMap: map[string]string{
 			"id":         "id",
 			"project_id": "tenant_id",
@@ -138,6 +169,8 @@ var entityRegistry = map[EntityType]EntityMeta{
 		Type:   EntityMQConnections,
 		Source: "mq_connections",
 		Target: "middleware_resources",
+		TargetMissing: "manager 没有承载连接配置的写入端点——中间件适配器读的是 DSN " +
+			"环境变量而不是数据库（决策 287 删掉了从未接线的 middleware_resources 表）。",
 		FieldMap: map[string]string{
 			"id":         "id",
 			"project_id": "tenant_id",
@@ -156,6 +189,8 @@ var entityRegistry = map[EntityType]EntityMeta{
 		Type:   EntityK8sClusters,
 		Source: "k8s_clusters",
 		Target: "middleware_resources",
+		TargetMissing: "manager 没有承载连接配置的写入端点——中间件适配器读的是 DSN " +
+			"环境变量而不是数据库（决策 287 删掉了从未接线的 middleware_resources 表）。",
 		FieldMap: map[string]string{
 			"id":         "id",
 			"project_id": "tenant_id",
@@ -170,6 +205,8 @@ var entityRegistry = map[EntityType]EntityMeta{
 		Type:   EntityGitRepos,
 		Source: "git_repos",
 		Target: "middleware_resources",
+		TargetMissing: "manager 没有承载连接配置的写入端点——中间件适配器读的是 DSN " +
+			"环境变量而不是数据库（决策 287 删掉了从未接线的 middleware_resources 表）。",
 		FieldMap: map[string]string{
 			"id":         "id",
 			"project_id": "tenant_id",
@@ -184,6 +221,8 @@ var entityRegistry = map[EntityType]EntityMeta{
 		Type:   EntityInspectionSched,
 		Source: "inspection_schedules",
 		Target: "schedules",
+		TargetMissing: "manager 唯一的计划类端点是 /v1/report-schedules（报告计划），" +
+			"与巡检计划不是同一件事；落哪张表是一次产品决定。",
 		FieldMap: map[string]string{
 			"id":         "id",
 			"project_id": "tenant_id",
@@ -198,14 +237,12 @@ var entityRegistry = map[EntityType]EntityMeta{
 		Type:   EntityAlertRules,
 		Source: "alert_rules",
 		Target: "alert_rules",
-		FieldMap: map[string]string{
-			"id":         "id",
-			"project_id": "tenant_id",
-			"name":       "name",
-			"expr":       "expression",
-			"severity":   "severity",
-			"for":        "for_duration",
-		},
+		TargetMissing: "POST /v1/alert-rules 的请求体是 ruleReq" +
+			"（server/alert/http.go），它要 rule_key / kind / scope_type /" +
+			" join_mode / conditions 这几组字段，而 ops-keeper 的 expr / for /" +
+			" severity 到它们的翻译是一次规则语义决定（一条 PromQL 表达式拆成" +
+			"哪几个 condition、scope 取什么），不是字段改名。照旧映射写出去" +
+			"只会得到一条 400，而 400 读起来像源数据不合法。",
 		DependsOn: []EntityType{EntityProjects},
 	},
 }

@@ -228,6 +228,19 @@ func DecisionGates() []Gate {
 				"TableName() with different column sets and different primary key types, and " +
 				"the shadow had no importers, so nothing had ever broken (decision 288)",
 		},
+		{
+			Target: "migrate-target-check",
+			Why: "a migration tool that names an endpoint nobody serves fails one row at a " +
+				"time, and the failure it reports is a 404 or a 400 -- which read as dirty " +
+				"source data rather than as the tool aiming at the wrong place. " +
+				"core/manager/migrate/entity.go carried a single free-text Target field that " +
+				"import, verify and rollback all pasted into a URL; six of the nine entities " +
+				"pointed at endpoints this router does not register, and the three that did " +
+				"exist rejected most of the mapped fields. The integration test could not " +
+				"catch either, because its mock answers 201 to anything. The gate reads the " +
+				"registry against the routes the tree registers and against the json tags " +
+				"each handler decodes (decision 291)",
+		},
 	}
 }
 
