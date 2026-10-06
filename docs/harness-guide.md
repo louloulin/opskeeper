@@ -330,7 +330,7 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 | `redis.` | `inject_big_key` / `inject_hot_key` / `inject_memory_burst` / `inject_slow_commands` | ✅ **真实现**（go-redis 连真库，决策 298） |
 | `host.` | `fill_disk` / `cpu_stress` | ✅ **真实现**（决策 299；**最危险的一个**，见 4.4） |
 | `k8s.` | `cordon_node` / `fill_pv` / `inject_memory_pressure` / `set_bad_image` | 骨架 |
-| `rabbitmq.` | `inject_message_burst` | 骨架 |
+| `rabbitmq.` | `inject_message_burst` | ✅ **真实现**（amqp091-go 连真 broker，决策 301） |
 | `kafka.` | `inject_consumer_lag` / `inject_partition_skew` | ✅ **真实现**（kafka-go 连真 broker，决策 300） |
 | `kafka.` | `kill_broker` | ⚠️ 大声拒绝：停掉 broker 撤不回来 |
 
@@ -356,11 +356,14 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 | `host.cpu_stress` | `getrusage` 的 CPU 时间增量；利用率按 worker 归一后不低于 `target_load - 25` 个百分点 |
 | `kafka.inject_consumer_lag` | `OffsetFetch` 的 committed 与 `ListOffsets` 的 latest 之差 ≈ `产出量 × (produce_rate−consume_rate)/produce_rate`（±15%） |
 | `kafka.inject_partition_skew` | 每个分区 `Last − First` 的记录条数；最忙分区 ≥ 次忙 `skew_factor` 倍，且落在 `target_partition` |
+| `rabbitmq.inject_message_burst` | 独立连接上 `QueueInspect` 的深度**精确等于** `message_count − 1`（那一条被取出来量了字节数）；取出的那条 `len(Body) == message_size_bytes` |
 
 连接来自 `OPSKEEPER_HARNESS_PG_DSN` 与
 `OPSKEEPER_HARNESS_REDIS_ADDR`（口令走 `OPSKEEPER_HARNESS_REDIS_PASSWORD`）；
 `host` 来自 `OPSKEEPER_HARNESS_HOST_ROOT`；
-`kafka` 来自 `OPSKEEPER_HARNESS_KAFKA_BROKERS`（逗号分隔的 `host:port`）。
+`kafka` 来自 `OPSKEEPER_HARNESS_KAFKA_BROKERS`（逗号分隔的 `host:port`）；
+`rabbitmq` 来自 `OPSKEEPER_HARNESS_RABBITMQ_URL`（完整 AMQP URL，
+**口令不许出现在任何一条会被打印出来的错误里**——错误里只回 host）。
 **没设就一步都不走**——`host` 尤其不猜：在节点 agent 上，
 任何形式的默认目录都极可能就是节点的根文件系统。
 
@@ -386,6 +389,34 @@ Kafka 的故障内容是**记录**，而记录删不掉。所以这一组的设�
 `RequiredAcks: RequireNone`（fire-and-forget），`WriteMessages` 返回 nil **不等于**
 记录落盘——实测 400 条会稳定少 28 条而错误为 nil。所以两条注入的判据分母都取自
 **现读的 offset**，不是"我请求写了几条"，并且少写超过 10% 直接判失败。
+
+### 4.1.2 RabbitMQ 侧：可逆的是一个队列，不是一条消息
+
+RabbitMQ 的故障内容是**消息**，而消息也删不掉——但它与 Kafka 的差别恰好给了
+撤销一个出口：`QueueDelete` 一次调用就干净了。**代价是这个出口只对"自己的"
+队列安全**：一条已经存在的队列里可能有运维真正的积压，把它删掉不是撤销故障，
+是"把故障连同它掩盖的东西一起处理了"。所以 `inject_message_burst` 打在注入器
+自己建的队列上，case 点名的 `queue` 只是个人类可读的标签——与 redis 的
+`key_prefix`（决策 298）、kafka 的 `topic`（决策 300）同一个形状。
+
+**这个 broker 上也有一个与 kafka 完全同类的坑，而且这次是写之前就知道的**：
+`Channel.Publish` 不开 publisher confirm 时，帧写进 socket 就返回 nil，
+broker 还在收——"发完了"是一个没人验证过的说法。所以每一条 publish 都等一个
+confirm，分批等（每批 200）以免在 channel 上堆一个十万深的缓冲，而确认的**总数**
+一个不少。判据的深度取自**另一条连接**的 `QueueInspect`。
+
+还有两个协议层的坑，都写在代码注释里：
+
+- **`QueueDeclarePassive` 的 404 会关掉整条 channel。** 所以"先 passive 探测、
+  再在同一条 channel 上声明"在协议层就走不通，第二句会拿到
+  `Exception (504) Reason: "channel/connection is not open"`——而那句话看起来
+  像 broker 挂了，不像协议规定。探测与声明必须各开一条连接。
+- **`QueueDeclare` 对一条已存在的 durable 队列是幂等的、不报错**，所以它答不了
+  "这条队列是不是我的"。存在性必须单独问。
+
+判据是**精确等于**而不是"至少"，前提是**先量内容再量数量**：判据要取一条消息
+出来量它自己的字节数（深度对得上而全是空 body 是一种真的可能的故障），而取出来
+的那条就不在队列里了。反过来做就得在判据里减一——那是一个要靠注释维持的常数。
 
 ### 4.2 环境限制
 

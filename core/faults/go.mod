@@ -31,6 +31,7 @@ go 1.26.0
 
 require (
 	github.com/jackc/pgx/v5 v5.8.0
+	github.com/rabbitmq/amqp091-go v1.15.0
 	github.com/vincent-wuhan/opskeeper/core/harness v0.0.0
 )
 

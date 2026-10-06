@@ -347,7 +347,8 @@ func newInjectorRegistry() *injector.Registry {
 			redisinjector.WithPassword(os.Getenv(redisinjector.PasswordEnv)),
 		),
 		kafkainjector.New(kafkainjector.WithBrokers(splitBrokers(os.Getenv(kafkainjector.BrokersEnv))...)),
-		k8sinjector.New(), rabbitmqinjector.New(),
+		rabbitmqinjector.New(rabbitmqinjector.WithURL(os.Getenv(rabbitmqinjector.URLEnv))),
+		k8sinjector.New(),
 	} {
 		if err := reg.Register(impl); err != nil {
 			// 注册冲突是编程错误，不是运行时状态：拼错前缀会在这里炸，

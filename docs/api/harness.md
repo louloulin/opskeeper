@@ -138,8 +138,22 @@ case 点名的 topic 只是个人类可读的标签。`kill_broker` **大声拒�
 "没做"，也不交一份"做了但收不回来"。case 本身没有被删——它还在语料里，
 `CheckAvailable` / `Inject` 会在执行前就说明原因并以非零退出。
 
-**另外两个（k8s / rabbitmq）仍然是骨架**，
-它们不碰任何真实系统——没有 kubectl、没有 amqp 客户端——
+**RabbitMQ 这一路也是真实现**（决策 301），连的是
+`OPSKEEPER_HARNESS_RABBITMQ_URL`：
+
+| 类型 | 判据 |
+|---|---|
+| `rabbitmq.inject_message_burst` | 独立连接上 `QueueInspect` 的深度**精确等于** `message_count − 1`；取出的那条 `len(Body) == message_size_bytes` |
+
+它与 Kafka 那一路是同一个形状的问题（故障内容是消息，消息删不掉），但 RabbitMQ
+多给了一个出口：`QueueDelete` 一次就干净了——**代价是这个出口只对"自己的"队列
+安全**，所以故障打在注入器自己建的队列上，case 点名的 `queue` 只是标签。
+
+publish 这一步**开 publisher confirm**：不开的时候 `Publish` 只等帧写进 socket，
+"发完了"是一个没人验证过的说法。这与 kafka 那边 `RequiredAcks` 默认
+`RequireNone` 是同一个坑，这次是在写它的时候就知道的。
+
+**另外 k8s 仍然是骨架**，它不碰任何真实系统——没有 kubectl——
 并通过 `CheckAvailable` 说明缺什么。
 
 一个认不出的类型报 `ErrUnsupportedType` 而不是"不可用"：那是接线问题，

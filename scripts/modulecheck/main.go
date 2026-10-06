@@ -178,6 +178,9 @@ func rules() []rule {
 				// 的理由和 host 不用 stress-ng 一样——关闭是 Close()
 				// 而不是"杀一个子进程然后祈祷"，而且它不需要 cgo。
 				"github.com/segmentio/kafka-go/",
+				// amqp091-go 是第五个注入器（决策 301）需要的客户端，同一类：
+				// 一个故障目标。纯 Go、无 cgo，关连接是 Close()。
+				"github.com/rabbitmq/amqp091-go/",
 			},
 			Label: "faults (fault injection)",
 		},

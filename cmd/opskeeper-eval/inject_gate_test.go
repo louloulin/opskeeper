@@ -84,10 +84,11 @@ func TestNoInjectorClaimsItCanInject(t *testing.T) {
 // 它是**数据**而不是散在测试里的 if：每接上一个注入器，
 // 在这里加一行，它"必须点名自己缺什么"这条要求就自动跟着它走。
 var wiredInjectors = map[string]string{
-	"pg.":    pginjector.DSNEnv,
-	"redis.": redisinjector.AddrEnv,
-	"host.":  hostinjector.RootEnv,
-	"kafka.": kafkainjector.BrokersEnv,
+	"pg.":       pginjector.DSNEnv,
+	"redis.":    redisinjector.AddrEnv,
+	"host.":     hostinjector.RootEnv,
+	"kafka.":    kafkainjector.BrokersEnv,
+	"rabbitmq.": rabbitmqinjector.URLEnv,
 }
 
 // wiredInjectorEnvs 是 wiredInjectors 里那些环境变量的并集。
