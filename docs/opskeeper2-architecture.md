@@ -6189,6 +6189,89 @@ means something while moving it costs a sentence."*——而本轮的情况连�
 判据因此可以写下来了：**汇报"全绿"时必须说清是哪一种绿。**
 `go test` 绿和 `make module-standalone-check` 绿之间隔着 30 道闸门，
 而本轮那 30 道里有一道是红的，我一句"全量 0 FAIL"就把它盖过去了。
+### 4.331 决策 397：CI 第一次**只红在那一件等人拍板的事上**——此前它还红在我自己弄坏的地方
+
+4.330 修掉了自己的 deadcode 棘轮问题。本轮把 CI 完整跑完，拿到一个
+**此前十二轮都没有过的状态**。
+
+#### 4.331.1 run `37501842126`（`3fc01e4`，含全部改动）
+
+```
+✓ end-to-end suite (amd64)  in 3m39s     真实 amd64 runner
+✓ end-to-end suite (arm64)  in 3m43s     真实 arm64 runner
+X build + vet + test         in 11m18s
+    open-source gate failed: 13 violation(s) in the tracked tree
+    make: *** [Makefile:96: verify-plugins] Error 1
+```
+
+**11m18s 这个时长本身就是证据**：4.330 那次失败在 3m7s，因为 deadcode 棘轮
+在 `module-standalone-check` 里、排在前面。修完之后这一个 job 跑满了
+11m18s 才停在最后一步——**前面每一道都过了**。
+
+而最后那一步停的，是 4.329 已经记过的那 13 处开源门槛，**与本轮改动无关，
+与前两轮改动无关，与台账无关**。它是决策 179 写着"待人拍板"的那一条。
+
+#### 4.331.2 于是这条分支的状态，第一次可以被一句话说清
+
+> **CI 红，且只红在开源门槛那 13 处上——那是唯一一件需要人拍板的事。**
+
+这句话在此前十二轮里**从来没有成立过**：
+
+- 4.321 到 4.328：本地七道闸门全绿，我据此写"全绿"，而 CI 一直红着，
+  **我一次都没有看过**（4.329）；
+- 4.330：CI 红在**我自己造成的** deadcode 棘轮上，那是一件纯粹的我的错；
+- 4.331：CI 红在**唯一一件要人拍板的事**上。
+
+**这三者的区别是本轮的全部价值**：前两种红可以靠我继续写代码消掉，
+第三种不能——它要的是一个人决定"这 13 处赛事材料与私有属主要不要留在
+开源版本里"，而我无权替人决定，**也不该替**。
+
+#### 4.331.3 本轮把 CI 的命令序列在本机跑完了
+
+因为 4.330 的教训是"我挑的闸门和 CI 的闸门不是同一组"，本轮从
+`ci.yml:67-305` 里把 build-test job 的命令**原样抽出来**逐条跑：
+
+| 闸门 | 本机 | 备注 |
+|---|---|---|
+| module-check / deadcode-ratchet-check / table-check / ledger-check | ✓ | |
+| route-audit / rpc-match-check / node-arch-check | ✓ | |
+| agent-llm-path-check / agentteams-identity-check / edge-credential-check | ✓ | |
+| webshell-links-check / domain-cochange / domain-check | ✓ | |
+| promptguard-check / mcp-surface-check / audit-port-check | ✓ | |
+| crystallize-check / plan-security-check / roadmap-delivery-check | ✓ | |
+| compliance-claims-check / ci-gate-check / apidoc-check | ✓ | |
+| module-standalone-check / race-check / migrate-target-check | ✓ | |
+| pig-tool-scoping-check / plugin-extension-build-check / broker-pin-check | ✓ | |
+| **integration-check** | ✓（补跑） | 见下 |
+| **verify-plugins** | ✗ | **开源门槛 13 处，唯一红项** |
+
+**`integration-check` 本轮补上了。** 它第一次跑是红的，但红的理由不是缺陷：
+
+```
+integration-check: set OPSKEEPER_TEST_MYSQL_DSN to a scratch MySQL DSN
+```
+
+`ci.yml:77-85` 用 `services: mysql: image: mysql:8.0` 提供这个 DSN。本机有
+docker，所以起了一个 `mysql:8.0` 容器补上环境变量重跑：
+
+```
+integration-check: every test behind //go:build integration has run against a real MySQL
+```
+
+**所以本机现在和 CI 的差别只剩一个：开源门槛那 13 处。** 而那 13 处
+需要的是决定，不是环境。
+
+#### 4.331.4 一条要留给自己的操作纪律
+
+本轮还犯了一个操作错误，值得单记：4.330 修完之后我立刻 push，
+**而 8ca45b9 的 CI run 当时正在跑**。`ci.yml:63-64` 的 concurrency 组是
+`cancel-in-progress: true`，于是那个 run 被我自己的新 push 取消了
+（`X Canceling since a higher priority waiting request ... exists`）。
+
+**它没有造成后果**——我随后等的是最新那个 run，它包含全部改动。
+但**一次"验证中"被我自己的操作打断，而打断之后我没有立刻意识到那一次的
+结论是"被取消"而不是"通过"**，是一个很容易在别的场景里变成误判的地方。
+本轮的正确顺序应该是：**push 之后不再动仓库，盯到那个 run 出终态。**
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
