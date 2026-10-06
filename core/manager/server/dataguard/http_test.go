@@ -12,12 +12,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/heuristic"
 	dglabel "github.com/vincent-wuhan/opskeeper/core/manager/dataguard/label"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/store"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // fakeRepo is the in-memory label repo used by these HTTP tests.
@@ -360,3 +361,145 @@ func TestGET_Labels_EffectiveParserWithComplianceTags(t *testing.T) {
 	}
 	_ = tagsJSON // silence unused warning
 }
+
+// --- 决策 312：脱敏规则变更上宿主链 -----------------------------------------
+//
+// 这三个路由改的是**脱敏规则本身**。测试要钉住的不是"能写进去"，
+// 而是「谁把什么从什么降到了什么」——而这只有载荷里带 effective_before 才答得出。
+
+// issueAudited is issue() plus the audit slot, so the test can read the
+// event back off the request's own context after the handler returned.
+func issueAudited(t *testing.T, router http.Handler, method, target string, body any, ten *tenantctx.Tenant) (*httptest.ResponseRecorder, auditport.Event, bool) {
+	t.Helper()
+	var bodyReader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bodyReader = bytes.NewReader(b)
+	}
+	req := httptest.NewRequest(method, target, bodyReader)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	ctx := auditport.WithSlot(req.Context())
+	if ten != nil {
+		ctx = tenantctx.With(ctx, *ten)
+	}
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	ev, set := auditport.GetAuditEvent(req.Context())
+	return rec, ev, set
+}
+
+// TestOverride_AuditCarriesTheDowngrade is the load-bearing one.
+// 把一个资源的生效脱敏级别降下来，是这套系统里最需要事后可查的动作，
+// 而"降级"这两个字只存在于 before/after 这一对里。
+func TestOverride_AuditCarriesTheDowngrade(t *testing.T) {
+	router, _ := newTestHandlerRouter()
+	admin := tenant("admin")
+
+	if rec := issue(t, router, http.MethodPost, "/v1/data-guard/labels",
+		LabelRequest{ResourceType: "pg", ResourceID: "orders", Sensitivity: "TopSecret"}, &admin); rec.Code != http.StatusOK {
+		t.Fatalf("seed label: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec, ev, set := issueAudited(t, router, http.MethodPut, "/v1/data-guard/labels/pg/orders",
+		LabelRequest{Sensitivity: "Public", OverrideReason: "已确认不含 PII"}, &admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("override: %d %s", rec.Code, rec.Body.String())
+	}
+	if !set || ev.Action != auditport.ActionDataGuardLabelOverride || ev.Status != auditport.StatusSuccess {
+		t.Fatalf("ev = %+v (set=%v)", ev, set)
+	}
+	if ev.ResourceType != auditport.ResourceDataGuardLabel || ev.ResourceID != "pg/orders" {
+		t.Fatalf("resource = %q/%q", ev.ResourceType, ev.ResourceID)
+	}
+	p := ev.Payload.(map[string]any)
+	if p["effective_before"] != "TopSecret" || p["effective_after"] != "Public" {
+		t.Fatalf("before/after = %v → %v；没有这一对就答不出「降级发生过」", p["effective_before"], p["effective_after"])
+	}
+	if p["override_reason"] != "已确认不含 PII" {
+		t.Fatalf("override_reason = %v — 降级没有理由等于没有理由", p["override_reason"])
+	}
+	if p["actor_user_id"] != uint64(42) {
+		t.Fatalf("actor_user_id = %v", p["actor_user_id"])
+	}
+}
+
+func TestUpsertLabel_PlainSetIsNotAnOverride(t *testing.T) {
+	router, _ := newTestHandlerRouter()
+	_, ev, set := issueAudited(t, router, http.MethodPost, "/v1/data-guard/labels",
+		LabelRequest{ResourceType: "pg", ResourceID: "orders", Sensitivity: "Internal"},
+		ptr(tenant("admin")))
+	if !set || ev.Action != auditport.ActionDataGuardLabelSet {
+		t.Fatalf("ev = %+v (set=%v), want dataguard_label_set", ev, set)
+	}
+	p := ev.Payload.(map[string]any)
+	if p["override"] == true {
+		t.Fatal("a plain label was recorded as an override")
+	}
+	if p["sensitivity"] != "Internal" || p["resource_type"] != "pg" {
+		t.Fatalf("payload = %v", p)
+	}
+}
+
+func TestUpsertLabel_WithOverrideFlagUsesTheOverrideAction(t *testing.T) {
+	router, _ := newTestHandlerRouter()
+	issue(t, router, http.MethodPost, "/v1/data-guard/labels",
+		LabelRequest{ResourceType: "pg", ResourceID: "orders", Sensitivity: "TopSecret"}, ptr(tenant("admin")))
+	// The POST path routes to UpdateOverride when Override is set — the same
+	// operation as the PUT, and it must not be filed as an ordinary set.
+	_, ev, set := issueAudited(t, router, http.MethodPost, "/v1/data-guard/labels",
+		LabelRequest{ResourceType: "pg", ResourceID: "orders", Sensitivity: "Public", Override: true, OverrideReason: "r"},
+		ptr(tenant("admin")))
+	if !set || ev.Action != auditport.ActionDataGuardLabelOverride {
+		t.Fatalf("ev = %+v (set=%v)", ev, set)
+	}
+	if ev.Payload.(map[string]any)["effective_before"] != "TopSecret" {
+		t.Fatalf("before = %v", ev.Payload.(map[string]any)["effective_before"])
+	}
+}
+
+// 删除之后这条资源就不再被脱敏，而"它之前是什么"是唯一还问得出的问题。
+func TestDeleteLabel_AuditRecordsWhatStoppedBeingMasked(t *testing.T) {
+	router, _ := newTestHandlerRouter()
+	admin := tenant("admin")
+	issue(t, router, http.MethodPost, "/v1/data-guard/labels",
+		LabelRequest{ResourceType: "pg", ResourceID: "orders", Sensitivity: "TopSecret"}, &admin)
+
+	_, ev, set := issueAudited(t, router, http.MethodDelete, "/v1/data-guard/labels/pg/orders", nil, &admin)
+	if !set || ev.Action != auditport.ActionDataGuardLabelDelete {
+		t.Fatalf("ev = %+v (set=%v)", ev, set)
+	}
+	p := ev.Payload.(map[string]any)
+	if p["effective_before"] != "TopSecret" || p["effective_after"] != "unset" {
+		t.Fatalf("before/after = %v → %v", p["effective_before"], p["effective_after"])
+	}
+}
+
+// 「有人在反复试着摘掉一条脱敏规则」与「没人试过」在链上必须长得不一样。
+func TestNonAdminLabelMutationsAreAudited(t *testing.T) {
+	router, _ := newTestHandlerRouter()
+	user := tenant("user")
+	for _, tc := range []struct {
+		method, target string
+		body           any
+	}{
+		{http.MethodPost, "/v1/data-guard/labels", LabelRequest{ResourceType: "t", ResourceID: "i", Sensitivity: "Public"}},
+		{http.MethodPut, "/v1/data-guard/labels/t/i", LabelRequest{Sensitivity: "Public"}},
+		{http.MethodDelete, "/v1/data-guard/labels/t/i", nil},
+	} {
+		rec, ev, set := issueAudited(t, router, tc.method, tc.target, tc.body, &user)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s: code = %d, want 403", tc.method, tc.target, rec.Code)
+		}
+		if !set || ev.Status != auditport.StatusFailure {
+			t.Fatalf("%s %s: a forbidden label change left no failure row: %+v (set=%v)", tc.method, tc.target, ev, set)
+		}
+	}
+}
+
+func ptr(t tenantctx.Tenant) *tenantctx.Tenant { return &t }

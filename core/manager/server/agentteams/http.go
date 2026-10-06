@@ -25,12 +25,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
 	"github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
 	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
-	"github.com/vincent-wuhan/opskeeper/core/domain"
 	knowledgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"
 )
 
 // StateBackend 是 MinIO / state store 的接口。
@@ -159,7 +160,6 @@ func (h *Handler) SetAlertIncidentResolver(resolver AlertIncidentResolver) {
 	h.alerts = resolver
 }
 
-
 // Register 注册路由到 chi.Router。
 //
 // 调用方应在 Register 之前先注册 mcpauth.Authenticator.Middleware。
@@ -234,9 +234,80 @@ func (h *Handler) putState(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(out)
 }
 
+// hitlDecide records a human decision on a task that is waiting for one.
+//
+// 它此前**看起来已经审计了**：下面几行会把一条 `hitl_decision` 追加进
+// `state.Audit`。那不是审计，两个理由都要说清楚：
+//
+//  1. `state.Audit` 在这个任务状态 blob 里，而这个 blob **由同一个 handler
+//     重写**。一份能被写入者自己覆盖的记录，证明不了任何事——
+//     `core/base/pkg/audit` 的 Verifier 之所以独立于 Sink，理由就是这个。
+//  2. 全仓没有任何代码读 `state.Audit`：它是只写字段。
+//
+// 所以决定必须落在宿主的防篡改链上。
+//
+// 这里用**一个** `hitl_decide` 动作而不是像决策 309 那样分成 approve/reject，
+// 理由与那条不同，值得写下来：决策 309 分两个是因为批准与驳回的**形状不同**
+// （批准会调 executor 并带回执行结果，驳回不带执行）。这条 handler 不执行任何东西，
+// 它只是把一个决定写进任务状态，于是「批准还是驳回」是同一种事件的子形态——
+// 而 `port.go` 的约定正是把子形态放进载荷，不让动作名发散。
+// 附带的好处是：鉴权失败发生在解码请求体**之前**，那时根本不知道 decision 是什么，
+// 一个动作名在这里才写得出来。
+// auditHITL puts one HITL decision attempt on the host chain.
+//
+// payload 里带 reason 与 signers：ADR-019 的双签设计意味着**谁签的**是这件事的一半，
+// 只记「某人批准了」会让双签退化成一个签名。version 一起带上，因为它是这次写入
+// 落到状态里的并发位置——同一个任务被两次决定时，version 说得出哪一次在前。
+func auditHITL(r *http.Request, action, taskID string, identity domain.MCPCaller, decision string, state *agentteams.State, cause error) {
+	payload := map[string]any{}
+	if taskID != "" {
+		payload["task_id"] = taskID
+	}
+	if decision != "" {
+		payload["decision"] = decision
+	}
+	if identity.Consumer != "" {
+		payload["consumer"] = identity.Consumer
+		payload["role"] = identity.Role
+	}
+	if identity.TenantID != "" {
+		payload["tenant_id"] = identity.TenantID
+	}
+	if state != nil {
+		if state.HITL != nil {
+			if len(state.HITL.Signers) > 0 {
+				payload["signers"] = state.HITL.Signers
+			}
+			if state.HITL.Reason != "" {
+				payload["reason"] = state.HITL.Reason
+			}
+			if state.HITL.DecidedAt != nil {
+				payload["decided_at"] = state.HITL.DecidedAt.UTC().Format(time.RFC3339)
+			}
+		}
+		payload["version"] = state.Version
+		if state.Phase != "" {
+			payload["phase"] = state.Phase
+		}
+	}
+	status := auditport.StatusSuccess
+	if cause != nil {
+		status = auditport.StatusFailure
+		payload["error"] = cause.Error()
+	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       action,
+		ResourceType: auditport.ResourceAgentTeamsTask,
+		ResourceID:   taskID,
+		Status:       status,
+		Payload:      payload,
+	})
+}
+
 func (h *Handler) hitlDecide(w http.ResponseWriter, r *http.Request) {
 	identity, ok := h.caller(r.Context())
 	if !ok {
+		auditHITL(r, auditport.ActionHITLDecide, "", identity, "", nil, errors.New("no resolved identity"))
 		writeJSONError(w, http.StatusUnauthorized, "no resolved identity")
 		return
 	}
@@ -249,25 +320,34 @@ func (h *Handler) hitlDecide(w http.ResponseWriter, r *http.Request) {
 		Reason   string   `json:"reason,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		auditHITL(r, auditport.ActionHITLDecide, req.TaskID, identity, req.Decision, nil, errors.New("invalid json: "+err.Error()))
 		writeJSONError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
 	if req.TaskID == "" {
+		auditHITL(r, auditport.ActionHITLDecide, "", identity, req.Decision, nil, errors.New("missing task_id"))
 		writeJSONError(w, http.StatusBadRequest, "missing task_id")
 		return
 	}
 	if req.Decision != "approve" && req.Decision != "reject" {
+		auditHITL(r, auditport.ActionHITLDecide, req.TaskID, identity, req.Decision, nil,
+			errors.New("decision must be approve or reject"))
 		writeJSONError(w, http.StatusBadRequest, "decision must be approve or reject")
 		return
 	}
 
 	raw, err := h.backend.Get(r.Context(), req.TaskID)
 	if err != nil {
+		// 任务不存在也要入账：不入账的话，「有人在反复批准一个不存在的任务」
+		// 与「没人试过」在链上长得一样。
+		auditHITL(r, auditport.ActionHITLDecide, req.TaskID, identity, req.Decision, nil, errors.New("state not found"))
 		writeJSONError(w, http.StatusNotFound, "state not found")
 		return
 	}
 	var state agentteams.State
 	if err := json.Unmarshal(raw, &state); err != nil {
+		auditHITL(r, auditport.ActionHITLDecide, req.TaskID, identity, req.Decision, nil,
+			fmt.Errorf("unmarshal state: %w", err))
 		writeJSONError(w, http.StatusInternalServerError, "unmarshal state: "+err.Error())
 		return
 	}
@@ -292,9 +372,11 @@ func (h *Handler) hitlDecide(w http.ResponseWriter, r *http.Request) {
 	out, _ := json.Marshal(state)
 	if err := h.backend.Put(r.Context(), req.TaskID, out); err != nil {
 		h.log.Warn("hitlDecide put failed", "task_id", req.TaskID, "err", err.Error())
+		auditHITL(r, auditport.ActionHITLDecide, req.TaskID, identity, req.Decision, &state, err)
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	auditHITL(r, auditport.ActionHITLDecide, req.TaskID, identity, req.Decision, &state, nil)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{

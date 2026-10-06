@@ -241,8 +241,42 @@ func (i *Injector) fillDisk(ctx context.Context, spec injector.InjectSpec, l *li
 	if err != nil {
 		return err
 	}
+	if err := fillDiskObservable(target, before, after, written); err != nil {
+		return err
+	}
+	return nil
+}
+
+// fillDiskObservable decides whether a fill actually moved the needle, and
+// says which of the two failures it is when it did not.
+//
+// 这两个判据量的都是**整卷**的剩余字节数，而写盘的是我们、读盘的也是我们，
+// 被观测的却不是我们的那个量：同一卷上任何别的进程（另一个测试包、
+// 一次 go build、一条编译缓存写入）都会往这个数里加减。于是
+// 「我们写了 4 MiB 而剩余空间没掉」有两种解释，而它们必须被分开：
+//
+//  1. 写入没生效（实现坏了）——要报红；
+//  2. 别人在这段时间里写了至少同样多（这台机器正忙）——要报忙。
+//
+// 分流用的是 `written`：write 一个字节都没返回时没有别的解释，报红；
+// 而写入全部成功返回、剩余空间却没有相应下降时，剩下的解释只有两个——
+// 别人抵消了它，或者（写不到一块时）块对齐让这次写真的不占空间。
+// 第二个解释我们分不出来，所以那种情形也报忙：一个分不出来的事实报成红，
+// 会让人先去查一段正确的代码。cpu_stress 的利用率判据有
+// 同一个问题，也已经有 ErrMachineBusy 在管这件事（见 verifyCPU），
+// 所以这里沿用同一个出口，而不是让调用方去猜错误字符串。
+//
+// 拆成独立函数是为了让这条分类能被单测——它在集成测试里只在机器恰好忙的
+// 那一瞬间才走到，而"只在偶发时走到"的分支正是最需要被固定下来的那种。
+func fillDiskObservable(target string, before, after, written int64) error {
 	drop := before - after
 	if drop <= 0 {
+		if written > 0 {
+			return fmt.Errorf("%w: fill_disk: wrote %d byte(s) to %s but free space went %d -> %d; "+
+				"our writes landed and something else on this volume wrote at least as much in the same window, "+
+				"so the remaining-byte count cannot be attributed to this injection",
+				ErrMachineBusy, written, target, before, after)
+		}
 		return fmt.Errorf("fill_disk: free space did not move (%d -> %d) after writing %d byte(s); "+
 			"the fault is not observable", before, after, written)
 	}
@@ -250,6 +284,12 @@ func (i *Injector) fillDisk(ctx context.Context, spec injector.InjectSpec, l *li
 	// 后者会因为文件系统的块对齐、稀疏回填与别的进程的并发而在一个
 	// 永远到不了的数字上红——而那不是实现错了，是判据写错了。
 	if drop < chunkBytes {
+		if written >= chunkBytes {
+			return fmt.Errorf("%w: fill_disk: wrote %d byte(s) but free space dropped by only %d; "+
+				"concurrent writers on this volume are masking the change, so the drop cannot be "+
+				"attributed to this injection",
+				ErrMachineBusy, written, drop)
+		}
 		return fmt.Errorf("fill_disk: free space dropped by only %d byte(s) after writing %d; "+
 			"a fault nobody can see in `df` is not a fault", drop, written)
 	}

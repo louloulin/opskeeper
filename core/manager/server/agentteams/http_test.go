@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
 	"github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
 	knowledgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
@@ -25,6 +27,9 @@ import (
 
 type memBackend struct {
 	data map[string][]byte
+	// putErr lets a test fail the write on purpose — decision 312's point is
+	// that the chain follows the write, not the intent.
+	putErr error
 }
 
 type memKnowledgeWriter struct {
@@ -71,6 +76,9 @@ func (m *memBackend) Get(_ context.Context, taskID string) ([]byte, error) {
 }
 
 func (m *memBackend) Put(_ context.Context, taskID string, body []byte) error {
+	if m.putErr != nil {
+		return m.putErr
+	}
 	m.data[taskID] = body
 	return nil
 }
@@ -394,3 +402,146 @@ func TestRecordIncidentEventEnforcesRecoverySignalBoundary(t *testing.T) {
 // 强制 import 使用（避免 unused 编译错误）
 var _ = mcpauth.FromContext
 var _ = io.Discard
+
+// --- 决策 312：HITL 决定上宿主链 -------------------------------------------
+//
+// 这条路由此前**看起来已经审计了**：它把一条 hitl_decision 追加进 state.Audit。
+// 那不是审计——state.Audit 在任务状态 blob 里面，而这个 blob 由同一个 handler
+// 重写（全仓也没有任何代码读它）。下面的测试因此不是"给已有行为加保险"，
+// 而是第一次证明这个决定落在防篡改链上。
+
+func hitlRequest(t *testing.T, body string, withIdentity bool) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/v1/hitl/decide", bytes.NewReader([]byte(body)))
+	ctx := auditport.WithSlot(req.Context())
+	if withIdentity {
+		ctx = mcpauth.WithIdentity(ctx, mcpauth.ResolvedIdentity{
+			TenantID: "tenant-a", ConsumerName: "opskeeper-sre", Role: "sre",
+		})
+	}
+	return req.WithContext(ctx)
+}
+
+func TestHitlDecideIsAuditedOnTheHostChain(t *testing.T) {
+	backend := newMemBackend()
+	backend.data["incident-123"] = []byte(`{"phase":"repair","version":1}`)
+	h := NewHandler(backend, nil, "", mcpauth.ContextIdentity{})
+	r := newRouter(h)
+
+	req := hitlRequest(t,
+		`{"task_id":"incident-123","decision":"approve","signers":["admin1","admin2"],"reason":"回滚已验证"}`,
+		true)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", w.Code, w.Body.String())
+	}
+	ev, set := auditport.GetAuditEvent(req.Context())
+	if !set {
+		t.Fatal("a HITL decision left nothing on the chain")
+	}
+	if ev.Action != auditport.ActionHITLDecide || ev.Status != auditport.StatusSuccess {
+		t.Fatalf("ev = %+v", ev)
+	}
+	if ev.ResourceType != auditport.ResourceAgentTeamsTask || ev.ResourceID != "incident-123" {
+		t.Fatalf("resource = %q/%q", ev.ResourceType, ev.ResourceID)
+	}
+	p := ev.Payload.(map[string]any)
+	// 双签是 ADR-019 的核心设计：只记"某人批准了"会把双签退化成一个签名。
+	signers, _ := p["signers"].([]string)
+	if len(signers) != 2 || signers[0] != "admin1" {
+		t.Fatalf("signers = %v, want both of them", p["signers"])
+	}
+	if p["decision"] != "approve" {
+		t.Fatalf("decision = %v", p["decision"])
+	}
+	if p["reason"] != "回滚已验证" {
+		t.Fatalf("reason = %v — 没有理由的批准说了什么", p["reason"])
+	}
+	if p["consumer"] != "opskeeper-sre" || p["tenant_id"] != "tenant-a" {
+		t.Fatalf("identity not carried: %v", p)
+	}
+	if p["version"] != int64(2) {
+		t.Fatalf("version = %v, want 2 — 它是这次写入落到状态里的并发位置", p["version"])
+	}
+}
+
+func TestHitlDecideAuditStatusFollowsTheWriteNotTheIntent(t *testing.T) {
+	backend := newMemBackend()
+	backend.data["incident-123"] = []byte(`{"phase":"repair","version":1}`)
+	// 一个 Put 一定失败的 backend：状态没写进去，链上必须看得见。
+	backend.putErr = errors.New("object store unreachable")
+	h := NewHandler(backend, nil, "", mcpauth.ContextIdentity{})
+	r := newRouter(h)
+
+	req := hitlRequest(t, `{"task_id":"incident-123","decision":"approve"}`, true)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("code = %d, want 500", w.Code)
+	}
+	ev, set := auditport.GetAuditEvent(req.Context())
+	if !set || ev.Status != auditport.StatusFailure {
+		t.Fatalf("a failed write left no failure row: %+v (set=%v)", ev, set)
+	}
+}
+
+// 「有人在反复批准一个不存在的任务」与「没人试过」在链上必须长得不一样。
+func TestHitlDecideOnAMissingTaskIsAudited(t *testing.T) {
+	h := NewHandler(newMemBackend(), nil, "", mcpauth.ContextIdentity{})
+	r := newRouter(h)
+
+	req := hitlRequest(t, `{"task_id":"no-such-task","decision":"reject"}`, true)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("code = %d, want 404", w.Code)
+	}
+	ev, set := auditport.GetAuditEvent(req.Context())
+	if !set || ev.Status != auditport.StatusFailure || ev.ResourceID != "no-such-task" {
+		t.Fatalf("ev = %+v (set=%v)", ev, set)
+	}
+}
+
+// 鉴权失败发生在解码请求体之前，所以载荷里没有 decision——
+// 这正是这个动作没有拆成 hitl_approve / hitl_reject 的原因。
+func TestHitlDecideWithoutIdentityIsAudited(t *testing.T) {
+	h := NewHandler(newMemBackend(), nil, "", mcpauth.ContextIdentity{})
+	r := newRouter(h)
+
+	req := hitlRequest(t, `{"task_id":"incident-123","decision":"approve"}`, false)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("code = %d, want 401", w.Code)
+	}
+	ev, set := auditport.GetAuditEvent(req.Context())
+	if !set || ev.Status != auditport.StatusFailure {
+		t.Fatalf("an unauthenticated decision attempt left no failure row: %+v (set=%v)", ev, set)
+	}
+	if _, ok := ev.Payload.(map[string]any)["decision"]; ok {
+		t.Fatal("payload claims a decision for a request whose body was never decoded")
+	}
+}
+
+func TestHitlDecideRejectsABadDecisionAndAuditsIt(t *testing.T) {
+	backend := newMemBackend()
+	backend.data["incident-123"] = []byte(`{"phase":"repair","version":1}`)
+	h := NewHandler(backend, nil, "", mcpauth.ContextIdentity{})
+	r := newRouter(h)
+
+	req := hitlRequest(t, `{"task_id":"incident-123","decision":"yolo"}`, true)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400", w.Code)
+	}
+	ev, set := auditport.GetAuditEvent(req.Context())
+	if !set || ev.Status != auditport.StatusFailure {
+		t.Fatalf("ev = %+v (set=%v)", ev, set)
+	}
+	// 试图批准还是试图驳回，是被分开问的两个问题——哪怕这次尝试无效。
+	if ev.Payload.(map[string]any)["decision"] != "yolo" {
+		t.Fatalf("payload loses the attempted decision: %v", ev.Payload)
+	}
+}

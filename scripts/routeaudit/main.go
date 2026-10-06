@@ -203,10 +203,19 @@ var Verdicts = []Verdict{
 	{File: "aiops/http.go", Route: "/v1/agents/{name}",
 		Backlog: "see /v1/agents/custom"},
 
+	// --- decision 312: the three the ledger called out by name --------------
+	// These were the backlog entries with a shape worth naming: a HITL
+	// decision (the class decision 309 closed on the approval inbox), the
+	// masking rules themselves (a security control), and arbitrary skill
+	// execution (the same shape as the execute the inbox guards). All three
+	// now audit on the host chain.
+	{File: "agentteams/http.go", Route: "/v1/hitl/decide"},
+	{File: "dataguard/http.go", Route: "/v1/data-guard/labels"},
+	{File: "dataguard/http.go", Route: "/v1/data-guard/labels/{type}/{id}"},
+	{File: "skill/http.go", Route: "/v1/skills/{key}/execute"},
+
 	{File: "agentteams/http.go", Route: "/v1/state/{task_id}",
 		Backlog: "AgentTeams worker scratch state, rewritten constantly by running workers; a row per write would drown the chain"},
-	{File: "agentteams/http.go", Route: "/v1/hitl/decide",
-		Backlog: "a HITL decision — the same class decision 309 closed on the approval inbox; the next one to fix"},
 	{File: "agentteams/http.go", Route: "/v1/knowledge/docs",
 		Backlog: "knowledge ingest"},
 	{File: "agentteams/http.go", Route: "/v1/incidents/events",
@@ -235,14 +244,6 @@ var Verdicts = []Verdict{
 		Backlog: "see /v1/marketplace/install"},
 	{File: "marketplace/http.go", Route: "/v1/marketplace/installed/{pack_id}/bindings",
 		Backlog: "tool bindings for an installed pack — decides which tools are reachable"},
-
-	{File: "dataguard/http.go", Route: "/v1/data-guard/labels",
-		Backlog: "data-masking label — a security control, so high consequence and not long to wait"},
-	{File: "dataguard/http.go", Route: "/v1/data-guard/labels/{type}/{id}",
-		Backlog: "label override and delete share one path; see /v1/data-guard/labels"},
-
-	{File: "skill/http.go", Route: "/v1/skills/{key}/execute",
-		Backlog: "arbitrary skill execution — the same shape as the execute the approval inbox guards"},
 
 	{File: "loop/http.go", Route: "/v1/loops/{incident_id}/trigger",
 		Backlog: "starts a remediation loop, which can reach the executors the approval inbox guards"},

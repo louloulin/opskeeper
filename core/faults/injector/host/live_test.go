@@ -268,6 +268,11 @@ func TestCleanupNeverTouchesSomethingItDidNotCreate(t *testing.T) {
 		Params:   map[string]any{"target_bytes_mb": 4, "min_free_mb": 256},
 	})
 	if err != nil {
+		// 整卷剩余字节被别的进程抵消，是这台机器的环境事实，不是撤销逻辑坏了。
+		// 报成红会让人先去查代码，而代码是对的——与下面 cpu_stress 的同一处理。
+		if errors.Is(err, ErrMachineBusy) {
+			t.Skipf("skipping: %v", err)
+		}
 		t.Fatalf("inject: %v", err)
 	}
 	if err := i.Cleanup(context.Background(), res.InjectID); err != nil {

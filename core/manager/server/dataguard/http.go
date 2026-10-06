@@ -19,11 +19,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 	dglabel "github.com/vincent-wuhan/opskeeper/core/manager/dataguard/label"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/store"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // Handler serves /v1/data-guard/labels.
@@ -87,9 +88,70 @@ type LabelResponse struct {
 	ViaInherited        bool                        `json:"via_inherited"`
 }
 
+// auditLabel puts one data-guard label change on the chain.
+//
+// 这三个路由改的是**数据脱敏规则本身**——它是安全控制，不是元数据。
+// 一个 override 可以把某个资源的 effective sensitivity 从 SECRET 降成 PUBLIC，
+// 于是链上必须能回答「谁把什么从什么降到了什么」。这也是载荷里带
+// `effective_before` 的唯一理由：只记 after 的行答不出降级这件事发生过。
+//
+// 非 admin 的尝试同样入账：拒绝发生在链上之前，而「有人在反复试着摘掉一条脱敏规则」
+// 恰恰是最该被看见的模式。
+func auditLabel(r *http.Request, action string, cl caller, rt, rid string, req *LabelRequest, before, after string, cause error) {
+	payload := map[string]any{}
+	if rt != "" {
+		payload["resource_type"] = rt
+	}
+	if rid != "" {
+		payload["resource_id"] = rid
+	}
+	if cl.UserID != 0 {
+		payload["actor_user_id"] = cl.UserID
+	}
+	if req != nil {
+		if req.Sensitivity != "" {
+			payload["sensitivity"] = req.Sensitivity
+		}
+		if req.Override {
+			payload["override"] = true
+		}
+		if req.OverrideReason != "" {
+			payload["override_reason"] = req.OverrideReason
+		}
+		if len(req.ComplianceTags) > 0 {
+			payload["compliance_tags"] = req.ComplianceTags
+		}
+		if req.Notes != "" {
+			payload["notes"] = req.Notes
+		}
+	}
+	if before != "" {
+		payload["effective_before"] = before
+	}
+	if after != "" {
+		payload["effective_after"] = after
+	}
+	status := auditport.StatusSuccess
+	if cause != nil {
+		status = auditport.StatusFailure
+	}
+	ev := auditport.Event{
+		Action:       action,
+		ResourceType: auditport.ResourceDataGuardLabel,
+		ResourceID:   rt + "/" + rid,
+		Status:       status,
+		Payload:      payload,
+	}
+	if cause != nil {
+		ev.ErrorMessage = cause.Error()
+	}
+	auditport.SetAuditEvent(r, ev)
+}
+
 func (h *Handler) upsertLabel(w http.ResponseWriter, r *http.Request) {
 	cl, ok := requireAdmin(w, r)
 	if !ok {
+		auditLabel(r, actionForLabelReq(nil, ""), cl, "", "", nil, "", "", errors.New("caller is not an admin"))
 		return
 	}
 	var req LabelRequest
@@ -119,6 +181,14 @@ func (h *Handler) upsertLabel(w http.ResponseWriter, r *http.Request) {
 		Notes:          req.Notes,
 	}
 
+	// 降级之前先把当前生效值取出来：override 的全部信息量都在「从什么降到什么」，
+	// 而那件事发生之后就查不到了。
+	beforeEff, _, _, _ := h.mgr.ResolveEffective(r.Context(), req.ResourceType, req.ResourceID)
+	before := ""
+	if beforeEff.String() != "" {
+		before = beforeEff.String()
+	}
+
 	var saved *store.DataSensitivityLabel
 	if req.Override {
 		saved, err = h.mgr.UpdateOverride(r.Context(), req.ResourceType, req.ResourceID, dataguard.MustParse(req.Sensitivity), usernameFromCaller(cl), req.OverrideReason)
@@ -127,10 +197,12 @@ func (h *Handler) upsertLabel(w http.ResponseWriter, r *http.Request) {
 		saved = l
 	}
 	if err != nil {
+		auditLabel(r, actionForLabelReq(&req, ""), cl, req.ResourceType, req.ResourceID, &req, before, "", err)
 		writeErr(w, err)
 		return
 	}
 	eff, conf, via, _ := h.mgr.ResolveEffective(r.Context(), req.ResourceType, req.ResourceID)
+	auditLabel(r, actionForLabelReq(&req, ""), cl, req.ResourceType, req.ResourceID, &req, before, eff.String(), nil)
 	writeJSON(w, http.StatusOK, LabelResponse{
 		Label:               saved,
 		Effective:           eff.String(),
@@ -142,6 +214,7 @@ func (h *Handler) upsertLabel(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) overrideLabel(w http.ResponseWriter, r *http.Request) {
 	cl, ok := requireAdmin(w, r)
 	if !ok {
+		auditLabel(r, auditport.ActionDataGuardLabelOverride, cl, "", "", nil, "", "", errors.New("caller is not an admin"))
 		return
 	}
 	rt := chi.URLParam(r, "type")
@@ -159,12 +232,20 @@ func (h *Handler) overrideLabel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errs.ErrInvalid)
 		return
 	}
+	req.Override = true
+	beforeEff, _, _, _ := h.mgr.ResolveEffective(r.Context(), rt, rid)
+	before := ""
+	if beforeEff.String() != "" {
+		before = beforeEff.String()
+	}
 	saved, err := h.mgr.UpdateOverride(r.Context(), rt, rid, dataguard.MustParse(req.Sensitivity), usernameFromCaller(cl), req.OverrideReason)
 	if err != nil {
+		auditLabel(r, auditport.ActionDataGuardLabelOverride, cl, rt, rid, &req, before, "", err)
 		writeErr(w, err)
 		return
 	}
 	eff, conf, via, _ := h.mgr.ResolveEffective(r.Context(), rt, rid)
+	auditLabel(r, auditport.ActionDataGuardLabelOverride, cl, rt, rid, &req, before, eff.String(), nil)
 	writeJSON(w, http.StatusOK, LabelResponse{
 		Label:               saved,
 		Effective:           eff.String(),
@@ -244,16 +325,37 @@ func (h *Handler) listOrGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteLabel(w http.ResponseWriter, r *http.Request) {
-	if _, ok := requireAdmin(w, r); !ok {
+	cl, ok := requireAdmin(w, r)
+	if !ok {
+		auditLabel(r, auditport.ActionDataGuardLabelDelete, cl, "", "", nil, "", "", errors.New("caller is not an admin"))
 		return
 	}
 	rt := chi.URLParam(r, "type")
 	rid := chi.URLParam(r, "id")
+	// 删掉之后这条资源就不再被脱敏，而"删之前它是什么"是唯一问得出的问题。
+	beforeEff, _, _, _ := h.mgr.ResolveEffective(r.Context(), rt, rid)
+	before := ""
+	if beforeEff.String() != "" {
+		before = beforeEff.String()
+	}
 	if err := h.mgr.Delete(r.Context(), rt, rid); err != nil {
+		auditLabel(r, auditport.ActionDataGuardLabelDelete, cl, rt, rid, nil, before, "", err)
 		writeErr(w, err)
 		return
 	}
+	auditLabel(r, auditport.ActionDataGuardLabelDelete, cl, rt, rid, nil, before, "unset", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// actionForLabelReq picks the action for a POST that may be either a fresh
+// label or an override. Override is separated because it can only *lower* a
+// classification, and "谁把 SECRET 降成了 PUBLIC" is a question the chain
+// should answer with its own filter rather than a payload scan.
+func actionForLabelReq(req *LabelRequest, _ string) string {
+	if req != nil && req.Override {
+		return auditport.ActionDataGuardLabelOverride
+	}
+	return auditport.ActionDataGuardLabelSet
 }
 
 func usernameFromCaller(c caller) string {

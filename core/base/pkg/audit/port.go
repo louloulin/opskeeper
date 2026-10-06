@@ -133,6 +133,7 @@ const (
 	ActionRepoSync   = "repo_sync"
 
 	ActionSkillInstall   = "skill_install"
+	ActionSkillExecute   = "skill_execute"
 	ActionSkillUninstall = "skill_uninstall"
 
 	// Plugin releases. A release is the action that puts new code —
@@ -220,6 +221,31 @@ const (
 	// only this row can answer, and folding it into incident_update would
 	// make it a payload scan. Found by scripts/routeaudit, not by reading.
 	ActionIncidentInvestigate = "incident_investigate"
+
+	// ActionHITLDecide records a human approve/reject on an AgentTeams task
+	// that is waiting for one. Decision 312.
+	//
+	// One action rather than a pair, unlike approval_approve /
+	// approval_reject, and the difference is worth stating because the two
+	// look like the same decision: the approval inbox *executes* on approve
+	// and hands back an execution result, so approve and reject are
+	// different shapes of event. This handler executes nothing — it writes a
+	// decision into task state — so approve/reject is a sub-flavour of one
+	// event, and port.go's own convention puts sub-flavours in the payload.
+	//
+	// It also has to be one action: the identity check runs *before* the
+	// request body is decoded, so where an unauthenticated attempt is
+	// recorded there is no decision available to put in a name.
+	ActionHITLDecide = "hitl_decide"
+
+	// Data-guard labels are the masking rules themselves, so they are
+	// separated from the generic CRUD verbs for the same reason the approval
+	// inbox is: an override can only *lower* a classification, and "who
+	// turned this resource from SECRET into PUBLIC" is a question the chain
+	// should answer with its own filter rather than a payload scan.
+	ActionDataGuardLabelSet      = "dataguard_label_set"
+	ActionDataGuardLabelOverride = "dataguard_label_override"
+	ActionDataGuardLabelDelete   = "dataguard_label_delete"
 
 	ActionIMAppCreate       = "im_app_create"
 	ActionIMAppUpdate       = "im_app_update"
@@ -346,8 +372,10 @@ const (
 	// 它与 ResourcePlugin 并列而不是折进去：一条批准放行的是**一次执行**，
 	// 而发布放行的是**一批节点上的代码变更**。把前者记成后者，
 	// "谁批准了这条命令"就会变成对插件行做 payload 扫描。
-	ResourceApproval = "approval"
-	ResourceIMApp    = "im_app"
+	ResourceApproval       = "approval"
+	ResourceIMApp          = "im_app"
+	ResourceAgentTeamsTask = "agentteams_task"
+	ResourceDataGuardLabel = "dataguard_label"
 
 	// ResourceEdge names a node. The resource id is the numeric edge id as
 	// a string, which is how every other edge-scoped row in this table

@@ -151,6 +151,7 @@ const (
 
 	ActionSkillInstall   = auditport.ActionSkillInstall
 	ActionSkillUninstall = auditport.ActionSkillUninstall
+	ActionSkillExecute   = auditport.ActionSkillExecute
 
 	ActionPluginReleaseStart    = auditport.ActionPluginReleaseStart
 	ActionPluginReleaseAdvance  = auditport.ActionPluginReleaseAdvance
@@ -187,30 +188,37 @@ const (
 
 	ActionIncidentInvestigate = auditport.ActionIncidentInvestigate
 
-	ActionIMAppCreate       = auditport.ActionIMAppCreate
-	ActionIMAppUpdate       = auditport.ActionIMAppUpdate
-	ActionIMAppDelete       = auditport.ActionIMAppDelete
+	ActionIMAppCreate            = auditport.ActionIMAppCreate
+	ActionIMAppUpdate            = auditport.ActionIMAppUpdate
+	ActionIMAppDelete            = auditport.ActionIMAppDelete
+	ActionHITLDecide             = auditport.ActionHITLDecide
+	ActionDataGuardLabelSet      = auditport.ActionDataGuardLabelSet
+	ActionDataGuardLabelOverride = auditport.ActionDataGuardLabelOverride
+	ActionDataGuardLabelDelete   = auditport.ActionDataGuardLabelDelete
+
 	ActionIMAppSecretReveal = auditport.ActionIMAppSecretReveal
 
-	ResourceUser     = auditport.ResourceUser
-	ResourceDevice   = auditport.ResourceDevice
-	ResourceIncident = auditport.ResourceIncident
-	ResourceSetting  = auditport.ResourceSetting
-	ResourceRule     = auditport.ResourceRule
-	ResourceChannel  = auditport.ResourceChannel
-	ResourceRepo     = auditport.ResourceRepo
-	ResourceSkill    = auditport.ResourceSkill
-	ResourceLLM      = auditport.ResourceLLM
-	ResourceGitKey   = auditport.ResourceGitKey
-	ResourceGrafana  = auditport.ResourceGrafana
-	ResourceRAG      = auditport.ResourceRAG
-	ResourceAudit    = auditport.ResourceAudit
-	ResourceAuth     = auditport.ResourceAuth
-	ResourcePlugin   = auditport.ResourcePlugin
-	ResourceEdge     = auditport.ResourceEdge
-	ResourceApproval = auditport.ResourceApproval
-	ResourceIMApp    = auditport.ResourceIMApp
-	ResourceMCPTool  = auditport.ResourceMCPTool
+	ResourceUser           = auditport.ResourceUser
+	ResourceDevice         = auditport.ResourceDevice
+	ResourceIncident       = auditport.ResourceIncident
+	ResourceSetting        = auditport.ResourceSetting
+	ResourceRule           = auditport.ResourceRule
+	ResourceChannel        = auditport.ResourceChannel
+	ResourceRepo           = auditport.ResourceRepo
+	ResourceSkill          = auditport.ResourceSkill
+	ResourceLLM            = auditport.ResourceLLM
+	ResourceGitKey         = auditport.ResourceGitKey
+	ResourceGrafana        = auditport.ResourceGrafana
+	ResourceRAG            = auditport.ResourceRAG
+	ResourceAudit          = auditport.ResourceAudit
+	ResourceAuth           = auditport.ResourceAuth
+	ResourcePlugin         = auditport.ResourcePlugin
+	ResourceEdge           = auditport.ResourceEdge
+	ResourceApproval       = auditport.ResourceApproval
+	ResourceIMApp          = auditport.ResourceIMApp
+	ResourceAgentTeamsTask = auditport.ResourceAgentTeamsTask
+	ResourceDataGuardLabel = auditport.ResourceDataGuardLabel
+	ResourceMCPTool        = auditport.ResourceMCPTool
 
 	ResourceAgentTool = auditport.ResourceAgentTool
 )
