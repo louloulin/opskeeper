@@ -78,7 +78,7 @@ func seedGraph(t *testing.T, uc *topologybiz.Usecase) (appID, orderID, dbID, hos
 func TestExpandTopologyOnlyPropagating(t *testing.T) {
 	uc := newTopologyUC(t)
 	_, orderID, dbID, hostID := seedGraph(t, uc)
-	tool := topology.NewExpandTopologyTool(uc, nil, nil)
+	tool := topology.NewExpandTopologyTool(&testGraphAdapter{uc: uc}, nil, nil)
 
 	args, _ := json.Marshal(map[string]any{
 		"node_id": orderID,
@@ -125,7 +125,7 @@ func TestExpandTopologyOnlyPropagating(t *testing.T) {
 func TestExpandTopologyIncludesNonPropagating(t *testing.T) {
 	uc := newTopologyUC(t)
 	appID, orderID, _, _ := seedGraph(t, uc)
-	tool := topology.NewExpandTopologyTool(uc, nil, nil)
+	tool := topology.NewExpandTopologyTool(&testGraphAdapter{uc: uc}, nil, nil)
 
 	args, _ := json.Marshal(map[string]any{
 		"node_id":          orderID,
@@ -159,7 +159,7 @@ func TestExpandTopologyIncludesNonPropagating(t *testing.T) {
 
 func TestExpandTopologyRequiresStart(t *testing.T) {
 	uc := newTopologyUC(t)
-	tool := topology.NewExpandTopologyTool(uc, nil, nil)
+	tool := topology.NewExpandTopologyTool(&testGraphAdapter{uc: uc}, nil, nil)
 
 	if _, err := tool.InvokableRun(context.Background(), `{}`); err == nil {
 		t.Fatalf("expected error when neither node_id nor device_id supplied")
@@ -169,7 +169,7 @@ func TestExpandTopologyRequiresStart(t *testing.T) {
 func TestFindTopologyNodeSubstring(t *testing.T) {
 	uc := newTopologyUC(t)
 	_, orderID, _, _ := seedGraph(t, uc)
-	tool := topology.NewFindTopologyNodeTool(uc, nil)
+	tool := topology.NewFindTopologyNodeTool(&testGraphAdapter{uc: uc}, nil)
 
 	out, err := tool.InvokableRun(context.Background(), `{"name":"order"}`)
 	if err != nil {

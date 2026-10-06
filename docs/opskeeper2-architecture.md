@@ -24114,6 +24114,163 @@ the grant is dead — delete it, or it keeps authorising the next import for fre
 **它已经是本计划里最确定的一条待改项，而不是一条备注。**
 
 
+### 4.210 决策 276：切掉 `aiops → topology`——**端口不能只换类型，`model/topology` 和 `biz/topology` 是同一个域**
+
+#### 一、这一刀为什么排在 `aiops → hitl` 前面
+
+决策 275 之后的报价清单里有两条同一种形状的候选：`aiops → hitl`（10）与
+`aiops → topology`（11），**都是单边**——切掉之后各自让一个域入度归零。
+先切贵的那条，因为**一个域的入度归零是能被任何分量记下来的数，而省下的
+1 是什么都不是**。差价 1，形状相同，所以先做 11。
+
+#### 二、定价器报的 6 个方法里，有 2 个是上界误计
+
+`aiops → topology` 报价 11（5 类型 + 6 方法）。工具自己写着「a same-named
+call on an unrelated value would be counted」，所以这一刀先量真实调用面：
+
+只有 3 个生产文件 import `biz/topology`（第 4 个是测试文件），真实方法集是
+**4 个**：`GetNode` / `ListNodes` / `ListRelations` / `ListRelationTypes`。
+`Get on NodeRepo` 与 `Register on Handler` 是**按裸方法名数出来的上界**——
+它们在 `NodeRepo` 与 `Handler` 上，不在 `Usecase` 上，而这两个接口在
+aiops 这条边上根本没有被命名。**决策 274 修的是「按裸类型名跨域归属」，
+这一刀看到的是同一类问题的另一面：按裸方法名跨接口计数。** 修量具的收益
+第二次兑现——11 里有 2 是噪声。
+
+#### 三、删掉声明边之后，量具立刻报出还有 4 处 import——而它们不是 `biz/topology`
+
+第一次跑 `domaincheck` 报的是：
+
+```
+aiops imports topology, which is not a declared domain edge
+```
+
+因为**两个工具文件 import 的是 `core/manager/model/topology`，不是
+`biz/topology`**。而 `domainOf` 的实现里 `layerDirs` 包含 `model`，所以
+`model/topology` 与 `biz/topology` **是同一个域**（`topology`）。
+**这是一件此前没人写下过的事**：`topology` 域有两个包（`biz/topology` 4 个包
++ `model/topology`），`domaincheck` 一直知道，`release-floor` 报告里的
+「4 packages」也是把它们数在一起的——但没有任何一份文档说过
+**「换一个包 import 不算换域」**。
+
+所以第一版端口（照抄 `*model.Node` 等返回类型）**是错的**，而且是
+**在被声明边删掉之后才变错的**：声明边在时它合法，边一删它立刻非法。
+**这比先删边后改代码更好**——量具把错误挡在了端口落地之前，
+而不是让两域各自带着一条非法 import 活到下一次有人跑闸门。
+
+#### 四、端口长什么样，以及每个投影为什么只有这几个字段
+
+`core/manager/biz/aiops/tools/topology/graphport.go` 现在是本包唯一的
+形状来源：
+
+| 投影 | 字段 | 谁在读 | 被刻意拿掉的 |
+|---|---|---|---|
+| `Node` | `ID` `Type` `Name` | 两个工具的 JSON 输出 | `PropsJSON`——**没有任何工具把它写进输出**，为一个没人读的字段跨域拖一整个 JSON blob 过去，是让它变成第二真相源的标准做法 |
+| `Relation` | `SrcID` `DstID` `Type` | BFS 走边 | `Direction`——**BFS 走的方向是「哪个端点匹配上了」推出来的**，投影上行里那个方向字段等于给同一个问题第二个答案 |
+| `RelationType` | `Name` `SemanticsTag` `PropagatesFailure` | 语义标签 + 传播过滤 | 其余列 |
+| `NodeListFilter` | `Type` `Q` `Limit` | find 工具 | `Offset`——**没有调用方要它**；补进端口是一次编译期安全的改动，而适配器那一行是唯一需要知道这件事的地方 |
+| `RelationListFilter` | `Limit` | expand 工具（上限 10000） | 四个端点/类型字段 |
+
+**`PropagatesFailure` 单独说一句**：这个字段被投影漏掉不会让工具报错，
+它只会**让爆炸半径悄悄变大**（`onlyPropagating` 过滤会放行所有边）。
+所以它是下面那组变异里专门挑的一个。
+
+#### 五、两份转换，两个测试，两次变异各抓一次
+
+`*topology.Usecase` **不能直接满足这个接口**：它的两个 list 方法收
+`biz/topology` 自己的 filter 类型，而 Go 不在两个同构不同名的 struct 之间
+做转换。所以转换是两份——生产一份在 `cmd/opskeeper/aiops_topology_wiring.go`，
+测试一份在 `graphport_test.go`（`core/manager` 不能 import package main）。
+
+**为什么工具测试自己抓不到**：两个工具每次只设一个 filter 字段，
+**被丢掉的那个字段是零值，而零值不筛掉任何行**——所以转换少搬一个字段时，
+工具照常返回一份看起来合理的 JSON。决策 275 已经吃过一次同形的亏
+（夹具在结构上无法区分两个字段），这一次直接按那个教训设计：
+
+- 生产那份：`TestTheProductionTopologyFilterConversionsCarryEveryField` 逐字段断言，
+  `Type`/`Q` 给不同字面量、`Limit` 给 7 与 9，并**断言端口刻意不带的
+  `Offset` / `SrcID` / `DstID` / `SrcOrDstID` / `Type` 仍然是零**——
+  让「补字段」以后必须是一次显眼的决定；
+  `TestTheProductionRowProjectionsCarryEveryField` 逐字段钉三个行投影，
+  `SrcID` 与 `DstID` 给 11 与 12（**这两个字段互换是这份转换里唯一
+  会产出「仍然连通、但方向全反」的图**，所以必须不同）；
+  `TestTheProductionRowProjectionsPassNilThrough` 钉 nil 行——nil 行配 nil error
+  会在 BFS 里变成一次解引用。
+- 测试那份：`TestTheTestGraphAdapterCarriesEveryFilterField` 走**真 usecase**，
+  `Q="checkout"`（app 的名字）与 `Type="service"`（类型）**刻意给成会互相
+  证伪的一对**：`Q=checkout, Type=service` 必须返回 0 行，
+  `Q=checkout, Type=app` 必须返回那一行。**两个字段互换的话，
+  这两个断言里必有一个红**，而只看正向断言是看不出来的。
+
+**变异跑了两次，两次都被抓**（不是「应该能抓」）：
+
+| 变异 | 结果 |
+|---|---|
+| 生产转换删掉 `Q: f.Q` | `TestTheProductionTopologyFilterConversionsCarryEveryField` 红（`Q: got "", want "order-api"`） |
+| 测试转换删掉 `Q: f.Q` | **两个**测试红：`TestFindTopologyNodeSubstring`（工具层，红得最直接）与 `TestTheTestGraphAdapterCarriesEveryFilterField`（`Q and Type look crossed`） |
+
+第二条变异顺带证实了一件事：**这次两个工具测试不再是瞎的**——决策 275 那次
+变异全绿的原因是夹具无法区分，而这里 `Q` 一丢，find 工具立刻把
+4 行全列出来（它本该只列 `order-api`）。**夹具能区分，测试就抓得住；
+夹具不能区分，再多的注释也是§4.209 三节里那种假话。**
+
+#### 六、装配根上多了一个真陷阱：typed nil 进了接口
+
+`SetTopologyGraph` 的参数从 `*topologybiz.Usecase` 变成接口之后，
+`main.go` 里那一行**原样保留就会引入一个 panic**：
+
+```go
+toolsReg.SetTopologyGraph(topologyUC)   // topologyUC 是 nil
+```
+
+字段是**指针**时，赋一个 nil 指针等于 nil，`registry_basetool.go` 的
+`if r.topologyGraph == nil` 门禁照常生效；字段是**接口**时，
+`&topologyGraphAdapter{uc: nil}` 是**非 nil 接口**（它带着类型和值，
+只是值为 nil），门禁放行、两个 BaseTool 被注册、第一次调用时解引用 nil。
+**这是「把具体类型换成接口」这一类改动最常见的副作用，而它编译期完全安静。**
+现在装配处显式分两支，并且注释写明为什么不能图省事。
+
+#### 七、读数
+
+| | 之前 | 之后 |
+|---|---|---|
+| 域 / shared / 声明边 / 环 / 分层 | 57 / 10 / 16 / 0 / 4 | **57 / 10 / 15 / 0 / 4** |
+| 硬约束 | 0 | **0**（未变） |
+| 生产跨域 import | 104 | **100** |
+| 测试专用跨域 import | 118 | **120**（+2 是新测试文件） |
+| **可证明独立发版的域** | **38 / 57** | **39 / 57** |
+| release floor 体量 | 52,638 行 / 30.6% / 103 包 | **54,642 / 31.7% / 107** |
+| 三份报价 | 92/12/0 · 97/7/0 · 87/17/0 | **88/12/0 · 93/7/0 · 83/17/0** |
+| release-floor 独立组 | 38 个域 | **39 个域** |
+| in-degree 非零的域 | 9 | **8**（`device` `edge` `alert` `loop` `aiops` `hitl` `approval` `nodefleet`） |
+| `core/manager` | 935 文件 / 237,583 行 | **未变** |
+
+**floor 体量首次越过 31.5%**，而 in-degree 非零的域只剩 8 个。
+**三份报价同时降**：proposed 92 → 88、constrained 97 → 93、release-floor
+87 → 83，**跨组数一条都没动**（12 / 7 / 17 不变）——被切掉的那 4 条 import
+在三份分组里**全都是组内的**。这是决策 249 那次「让报价变坏」的反面：
+**同样是让一个域独立，这一次三份同时变好**，而它变好的原因不是树变干净了，
+是**那 4 条 import 恰好都指向一个谁都要的域**。`topology` 被 5 个域导入
+（`webshell` / `monitor` / `edge` / …），所以它留在 `core` 组时那些 import
+是组内的，搬进 `independent` 组之后它自己的出边变成跨组——**而它出边只有
+0 条跨组**（`-graph` 报告里 `topology` 不在「most dependent」里）。
+**这就是为什么这一刀三份全降而跨组不动：切边减的是入边，搬组动的是出边，
+而这一次两个数分别减了 4 和 0。**
+
+#### 八、这一刀没有解决的，以及留给下一刀的
+
+- **「换个包 import 不算换域」这条知识此前不在任何文档里**，现在只写在
+  §4.210 三节。**它值得变成 `domaincheck` 输出里的一句话**——工具已经知道
+  （`layerDirs` 就是这条规则的实现），但它只在报错时才让人看见形状。
+  下一刀顺手做。
+- **定价器仍然按裸方法名跨接口计数**（`Get on NodeRepo`、`Register on Handler`
+  是本轮实测的两个误计）。决策 274 修了类型归属，这一面还没修。
+- **下一刀：`aiops → hitl`（价 10，单边，切完 `hitl` 入度归零 → floor 39 → 40）。**
+  它是清单上**最后一条「单边 + 低价 + 让一个域入度归零」的边**——切完之后，
+  剩下 7 个入度非零的域全部是多边域（`device` 2 / `edge` 2 / `alert` 3 /
+  `loop` 4 / `aiops` 1 但出度 74 / `approval` 1 / `nodefleet` 1），
+  **「切一条边换一个域」的收益到这里归零**，剩下的每一刀都要重新算形状。
+
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -24162,6 +24319,22 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 加权合计 ≈ **98.6%**（四阶段等比 98 / 100 / 96.7 / 99.7 的均值 98.6）。这一栏按
 决策倒序追加，每一条只说自己动的那一分量：
 
+- **决策 276 切掉了 `aiops → topology`，而它带来的第一个事实是
+  「`model/topology` 与 `biz/topology` 是同一个域」**——这一条此前不在任何
+  文档里，是删掉声明边之后 `domaincheck` 立刻报出来的。第一版端口照抄
+  `*model.Node` 这类返回类型，因此**在被声明边删掉之后才是错的**；
+  改成端口自带 `Node` / `Relation` / `RelationType` 三个只含使用中字段的投影。
+  定价器报的 6 个方法里有 2 个是上界误计（`Get on NodeRepo`、
+  `Register on Handler`——**按裸方法名跨接口计数**，是决策 274 修的
+  「按裸类型名跨域归属」的另一面），真实方法面 4 个。
+  **换具体类型为接口时，typed nil 会静默穿过 `== nil` 门禁**，
+  装配处因此显式分两支。两份转换各配一个逐字段测试，**变异跑了两次都被抓**：
+  删掉 `Q` 后生产那份红了转换测试，测试那份红了**两个**——其中
+  `TestFindTopologyNodeSubstring` 说明这次夹具在结构上能区分，
+  而决策 275 那次不能。**可独立发版域 38 → 39**（52,638 → **54,642 行 /
+  30.6% → 31.7% / 103 → 107 包**），in-degree 非零的域 9 → **8**，
+  **三份报价同时降**（92→88 / 97→93 / 87→83）而**跨组数一条没动**——
+  被切的 4 条 import 在三份里都是组内的（详见 §4.210 七节）。
 - **决策 275 切掉了 `federationlink → federation`，而它的价格是决策 274 修好之后
   才变成 4 的**（此前报 6）。**修量具的收益在这一刀上第一次兑现成实物。**
   link 对 federation 的生产依赖只有两个符号：`Clusters.Authenticate` 的返回类型
@@ -27038,7 +27211,7 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
 
 | 读数 | 当前值 | 口径 / 主人 |
 |---|---|---|
-| 控制面域图 | **57 域 / 16 边 / 0 环** | `make domain-check`；`scripts/domaincheck` 的测试逐条核对这三个数。**决策 238 切 `mcp → aiops`（37 → 36）、决策 240 切 `aiops → skill`（36 → 35）、决策 241 切 `marketplace → pluginimport`（35 → 34）、决策 242 切 `grafana → monitor`（34 → 33）、决策 247 切 `agentteams → alert`（33 → 32）、决策 248 切 `webshell → device`（32 → 31）、决策 249 切 `agentteams → mcp`（31 → 30）、决策 251 切 `webshell → edge`（31 → 30）、决策 254 切 `chatdiagnose → aiops`（28 → 27）、决策 253 切 `report → aiops`（29 → 28）、决策 252 切 `pluginimport → aiops`（30 → 29）**、**决策 257 切 `systemhealth → alert`（26 → 25）**、**决策 258 切 `grafana → setting`（25 → 24）**，**决策 259 让 57 域变 56 域、24 边变 22 边——这是第一次域数变化，而它不是切边，是一个只有 110 行的域整体搬回了装配根**（见 §4.193），环数未变。**决策 247 是第一条切完还要把声明与理由一起删掉的边**：`domaincheck` 报「declared but no longer happens」并要求删表项，理由写在命令的输出里——**过期理由比没有理由更糟**（§4.179）。**决策 271 让 56 域变 57 域、22 边变 21 边，shared 从 9 变 10**：容器加载器从 `biz/aiops/chatruntime` 切到新模块 `core/extension/biz/container`，域数加一是因为多了一个真域，边数减一是因为 `marketplace → aiops` 整条消失（marketplace 过去是借 chatruntime 借插件符号的，现在直接读加载器）。新的 `container` 是 **shared**，不是声明边——它同时被 aiops 与 marketplace 依赖，而这两边隔着其他所有边界。**环数与分层深度均未变**。|
+| 控制面域图 | **57 域 / 15 边 / 0 环** | `make domain-check`；`scripts/domaincheck` 的测试逐条核对这三个数。**决策 238 切 `mcp → aiops`（37 → 36）、决策 240 切 `aiops → skill`（36 → 35）、决策 241 切 `marketplace → pluginimport`（35 → 34）、决策 242 切 `grafana → monitor`（34 → 33）、决策 247 切 `agentteams → alert`（33 → 32）、决策 248 切 `webshell → device`（32 → 31）、决策 249 切 `agentteams → mcp`（31 → 30）、决策 251 切 `webshell → edge`（31 → 30）、决策 254 切 `chatdiagnose → aiops`（28 → 27）、决策 253 切 `report → aiops`（29 → 28）、决策 252 切 `pluginimport → aiops`（30 → 29）**、**决策 257 切 `systemhealth → alert`（26 → 25）**、**决策 258 切 `grafana → setting`（25 → 24）**，**决策 259 让 57 域变 56 域、24 边变 22 边——这是第一次域数变化，而它不是切边，是一个只有 110 行的域整体搬回了装配根**（见 §4.193），环数未变。**决策 247 是第一条切完还要把声明与理由一起删掉的边**：`domaincheck` 报「declared but no longer happens」并要求删表项，理由写在命令的输出里——**过期理由比没有理由更糟**（§4.179）。**决策 271 让 56 域变 57 域、22 边变 21 边，shared 从 9 变 10**：容器加载器从 `biz/aiops/chatruntime` 切到新模块 `core/extension/biz/container`，域数加一是因为多了一个真域，边数减一是因为 `marketplace → aiops` 整条消失（marketplace 过去是借 chatruntime 借插件符号的，现在直接读加载器）。新的 `container` 是 **shared**，不是声明边——它同时被 aiops 与 marketplace 依赖，而这两边隔着其他所有边界。**环数与分层深度均未变**。**决策 276 切 `aiops → topology`（16 → 15）：`topology` 入度归零，可证明独立发版的域 38 → 39。**|
 | 生产跨域 import | **121** | `make domain-check`；`scripts/domaincheck` 的汇总行直接打印它，**决策 250 才让它第一次可被计算**（§4.182），**决策 251 第一次在切边之后动它：126 → 125，决策 252 第二次：125 → 124，决策 253 第三次：124 → 123，决策 254 第四次：123 → 121**。口径：生产文件（`_test.go` 除外）中两端落在不同有界上下文、`to != from`、且**目标不是 9 个 shared 底座**的 import 语句数。它**不是**声明边数（30），**也不是**台账头条「已切 28 / 34」的那个 34——**后者从未有任何量具，是逐次手写累加的**，且 §4.56.8 记的旧读数（42 边时为 19）与今天的 126 **从来不是同一个量**（今天边更少而 import 多 6.6 倍）。三次复现尝试（生产 import 语句 149 / 去重域对 44 / 去重发起文件 85 / 去重被导入包 13）**没有一个等于 19 或 34**。守卫：`scripts/domaincheck/prodimport_test.go` 三条（独立遍历复核 / 非零且严格小于生产 import 总数的上界 / prod 与 test-only 各自独立计数），六次变异实测见 §4.182。**可复现的复核命令**：`GOWORK=off go run ./scripts/domaincheck .` |
 | 开源门槛违规 | **13 项** | `make audit-open-source`；`scripts/audit_open_source.py` 自己核对这一行。**本轮 17 → 13**：自主关掉 4 项明确无争议的（私有演示租户 2 处——`scenario_test.go` 与 `verify-final-demo.sh` 里的私有租户名是自包含合成 fixture，改中性名 `demo-tenant`；赛事语言 2 处——`site/app/live-incident` 的演示页文案与 `archive-route.jsx` 注释，改中性词）。**剩 13 项仍待人拍板**（决策 179）：赛事材料 10 处（`FINAL_DEMO_SCRIPT.md` / `PPT_*.md` / `openspec/changes/**`）与私有属主 3 处（`docs/ACKNOWLEDGMENTS.md` / `site/app/**/open-source`）——前者按规则属「私有交付证据」，改词不足以让它变成产品文档，需决定删/改/从发布集排除；后者「抹掉属主不等于抹掉致谢」（§4.104.9） |
 

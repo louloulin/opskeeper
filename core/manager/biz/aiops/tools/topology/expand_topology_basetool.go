@@ -9,8 +9,6 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	topologybiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
-	topologymodel "github.com/vincent-wuhan/opskeeper/core/manager/model/topology"
 )
 
 const (
@@ -106,12 +104,12 @@ type expandTopologyResult struct {
 // being wired; device resolution is best-effort (nil device UC = the
 // device_id path errors clearly).
 type ExpandTopologyTool struct {
-	topology *topologybiz.Usecase
+	topology Graph
 	devices  *devicebiz.Usecase
 	log      *slog.Logger
 }
 
-func NewExpandTopologyTool(topology *topologybiz.Usecase, devices *devicebiz.Usecase, log *slog.Logger) *ExpandTopologyTool {
+func NewExpandTopologyTool(topology Graph, devices *devicebiz.Usecase, log *slog.Logger) *ExpandTopologyTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -192,7 +190,7 @@ func (t *ExpandTopologyTool) InvokableRun(ctx context.Context, argsJSON string, 
 	if err != nil {
 		return "", fmt.Errorf("expand_topology: list relation types: %w", err)
 	}
-	typeMeta := make(map[string]*topologymodel.RelationType, len(rts))
+	typeMeta := make(map[string]*RelationType, len(rts))
 	for _, rt := range rts {
 		typeMeta[rt.Name] = rt
 	}
@@ -200,7 +198,7 @@ func (t *ExpandTopologyTool) InvokableRun(ctx context.Context, argsJSON string, 
 	// Pull all relations once. For tenant-scale (≤10k relations per
 	// working assumption) this is cheaper than N+1 per-node
 	// lookups and keeps the BFS in-memory.
-	allRel, _, err := t.topology.ListRelations(callCtx, topologybiz.RelationListFilter{Limit: 10000})
+	allRel, _, err := t.topology.ListRelations(callCtx, RelationListFilter{Limit: 10000})
 	if err != nil {
 		return "", fmt.Errorf("expand_topology: list relations: %w", err)
 	}
@@ -331,8 +329,8 @@ func (t *ExpandTopologyTool) InvokableRun(ctx context.Context, argsJSON string, 
 
 // fetchNodesByIDs is a thin loop calling GetNode N times. The topology
 // Usecase doesn't expose GetMany today; if this becomes hot we add one.
-func (t *ExpandTopologyTool) fetchNodesByIDs(ctx context.Context, ids []uint64) (map[uint64]*topologymodel.Node, error) {
-	out := make(map[uint64]*topologymodel.Node, len(ids))
+func (t *ExpandTopologyTool) fetchNodesByIDs(ctx context.Context, ids []uint64) (map[uint64]*Node, error) {
+	out := make(map[uint64]*Node, len(ids))
 	for _, id := range ids {
 		n, err := t.topology.GetNode(ctx, id)
 		if err != nil {

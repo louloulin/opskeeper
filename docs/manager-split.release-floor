@@ -13,9 +13,9 @@
 # 三份的实测价：
 #
 #   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed 92 12 0 / 0
-#   docs/manager-split.constrained 97 7 0 / 0
-#   docs/manager-split.release-floor 87 17 0 / 0
+#   docs/manager-split.proposed 88 12 0 / 0
+#   docs/manager-split.constrained 93 7 0 / 0
+#   docs/manager-split.release-floor 83 17 0 / 0
 #
 # 决策 230 重取了这三行。触发它的是切掉 `flow -> scheduler`（missed-run 端口
 # 下沉到 `core/floor/scheduler`）：proposed 与 constrained 各少一条组内 import，
@@ -197,7 +197,7 @@ independent = audit, chatdiagnose, cluster, demo, edgeauth, federation, federati
         llmgw, llmpig, logs, marketplace, mcp, metric, monitor, nodeagent,
         plugin, pluginimport, prometheus, promwrite, proposal, report,
         scheduler, secret, setting, skill, systemhealth, systemupgrade,
-        traces, version, webshell
+        topology, traces, version, webshell
 
 # **决策 273 把 `audit` 从这一组搬进了 `independent`**，于是本组 36 → 37 个域，
 # 而「其余」那一组相应地少了一个。这一搬不是判断，是**读数**：`audit` 的入向
@@ -245,4 +245,4 @@ independent = audit, chatdiagnose, cluster, demo, edgeauth, federation, federati
 core = agentteams, aiops, alert, approval, container, control,
         dataguard, device, edge,
         higress, hitl, knowledge, loop, middleware,
-        migrate, migrator, nodefleet, observability, pkg, topology
+        migrate, migrator, nodefleet, observability, pkg

@@ -34,7 +34,6 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	topologybiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
@@ -69,7 +68,7 @@ type Registry struct {
 	// the naming overlap is unfortunate but the two surfaces address
 	// different audiences. nil-safe — the two BaseTools simply aren't
 	// registered when this is nil.
-	topologyGraph *topologybiz.Usecase
+	topologyGraph topology.Graph
 
 	// spawner is the WorkerSpawner seam used by AgentTool / SendMessage /
 	// TaskStop. Wired post-construction (cmd/main.go) via
@@ -399,7 +398,7 @@ func (r *Registry) SetKnowledgeSearcher(k KnowledgeSearcher) {
 // expand_topology / find_topology_node. Same post-construction pattern
 // as the other setters — cmd/main.go invokes it after topologyUC is
 // built so NewRegistry's signature stays stable.
-func (r *Registry) SetTopologyGraph(t *topologybiz.Usecase) {
+func (r *Registry) SetTopologyGraph(t topology.Graph) {
 	r.topologyGraph = t
 }
 

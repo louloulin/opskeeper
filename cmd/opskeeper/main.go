@@ -1706,7 +1706,14 @@ func main() {
 	// Wire the topology graph usecase so expand_topology /
 	// find_topology_node show up in the BaseTool roster. nil-safe — the
 	// two BaseTools are gated on this exact field.
-	toolsReg.SetTopologyGraph(topologyUC)
+	// The port is an interface now, so a bare `&adapter{uc: nil}` would
+	// satisfy the nil check that gates the two BaseTools and then panic on
+	// first use. Guard at the one place the concrete usecase is in hand.
+	if topologyUC != nil {
+		toolsReg.SetTopologyGraph(&topologyGraphAdapter{uc: topologyUC})
+	} else {
+		toolsReg.SetTopologyGraph(nil)
+	}
 	aiopsAgent := aiopsagent.New(
 		llmClient,
 		toolsReg,

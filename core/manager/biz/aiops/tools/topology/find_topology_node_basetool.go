@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	topologybiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
 )
 
 const (
@@ -73,11 +72,11 @@ type findTopologyNodeResult struct {
 }
 
 type FindTopologyNodeTool struct {
-	topology *topologybiz.Usecase
+	topology Graph
 	log      *slog.Logger
 }
 
-func NewFindTopologyNodeTool(topology *topologybiz.Usecase, log *slog.Logger) *FindTopologyNodeTool {
+func NewFindTopologyNodeTool(topology Graph, log *slog.Logger) *FindTopologyNodeTool {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -118,7 +117,7 @@ func (t *FindTopologyNodeTool) InvokableRun(ctx context.Context, argsJSON string
 	callCtx, cancel := context.WithTimeout(ctx, findTopologyNodeCallTimeout)
 	defer cancel()
 
-	nodes, total, err := t.topology.ListNodes(callCtx, topologybiz.NodeListFilter{
+	nodes, total, err := t.topology.ListNodes(callCtx, NodeListFilter{
 		Type:  strings.TrimSpace(in.Type),
 		Q:     in.Name,
 		Limit: in.Limit,
