@@ -185,6 +185,13 @@ const (
 	ActionApprovalApprove = auditport.ActionApprovalApprove
 	ActionApprovalReject  = auditport.ActionApprovalReject
 
+	ActionIncidentInvestigate = auditport.ActionIncidentInvestigate
+
+	ActionIMAppCreate       = auditport.ActionIMAppCreate
+	ActionIMAppUpdate       = auditport.ActionIMAppUpdate
+	ActionIMAppDelete       = auditport.ActionIMAppDelete
+	ActionIMAppSecretReveal = auditport.ActionIMAppSecretReveal
+
 	ResourceUser     = auditport.ResourceUser
 	ResourceDevice   = auditport.ResourceDevice
 	ResourceIncident = auditport.ResourceIncident
@@ -202,6 +209,7 @@ const (
 	ResourcePlugin   = auditport.ResourcePlugin
 	ResourceEdge     = auditport.ResourceEdge
 	ResourceApproval = auditport.ResourceApproval
+	ResourceIMApp    = auditport.ResourceIMApp
 	ResourceMCPTool  = auditport.ResourceMCPTool
 
 	ResourceAgentTool = auditport.ResourceAgentTool

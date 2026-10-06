@@ -623,6 +623,16 @@ table-check: ## 闸门：一张表不允许被两个 GORM 模型声明（决策 
 	go run ./scripts/tablecheck .
 	go test ./scripts/tablecheck/ -count=1
 
+# 每一条 mutating 路由都必须有一份写下来的裁决：要么它审计了，要么它有理由不审计。
+# 决策 309 与 310 都是靠人手点文件点出来的，而"靠人记得看"的清单会长；这道闸门把
+# 那份清单变成仓库里的一个文件，新 mutating 路由不再能悄悄进来。
+# 裁决表不能腐坏：标记为 backlog 的路由若已审计（stale）、路由已删（orphan）、
+# 文件整体消失（gone），一样判红——一份在撒谎的清单比没有清单更坏。
+.PHONY: route-audit
+route-audit: ## 闸门：每条 mutating 路由都有审计裁决，新路由不能悄悄进来（决策 311）
+	go run ./scripts/routeaudit .
+	go test ./scripts/routeaudit/ -count=1
+
 # opskeeper-migrate 的目标端点与字段映射必须真实存在。这道闸门做两件事：
 # 注册表里每一条 TargetRoute 都要在 manager 的路由表里注册过；每一条 FieldMap
 # 的目标字段都要是那个端点的 handler 真正解码的请求结构里的 json tag。

@@ -416,6 +416,21 @@ func (h *Handler) triggerIncidentInvestigation(w http.ResponseWriter, r *http.Re
 		writeErr(w, fmt.Errorf("%w: %s", errs.ErrInvalid, err))
 		return
 	}
+	// ForceEnqueue 不是"记一条笔记"，它会**杀掉正在跑的 worker** 再拉起一个
+	// 新的调查，并真的花掉一次模型调用。所以谁按下了这个按钮、针对哪个事故、
+	// 用什么语言问的，都要在链上——而这正是 scripts/routeaudit 在这一轮
+	// 揪出来的那条漏网路由（决策 311）。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionIncidentInvestigate,
+		ResourceType: auditport.ResourceIncident,
+		ResourceID:   strconv.FormatUint(id, 10),
+		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			"trigger": "force_enqueue",
+			"locale":  opts.Locale,
+			"title":   incident.Title,
+		},
+	})
 
 	// Best-effort echo of the current row state (post-enqueue) so the
 	// SPA can avoid one extra round-trip. Read may race the row insert

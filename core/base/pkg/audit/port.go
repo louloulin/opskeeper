@@ -199,6 +199,33 @@ const (
 	ActionApprovalApprove = "approval_approve"
 	ActionApprovalReject  = "approval_reject"
 
+	// IM 应用（飞书 / Telegram / Slack 接入）的四个动作。决策 310。
+	//
+	// 单独开这一组，而不是把它们塞进既有的 auth/plugin 类，是因为
+	// `POST /v1/im/apps/{id}/reveal` **把明文 app_secret 原样回给管理员**——
+	// 那是全控制面唯一一个"读一次就能拿到凭据本身"的路由，
+	// 而它此前不留任何审计。一个 webhook 的 app_secret 泄漏之后，
+	// "谁在什么时候把它读了出来"是必须能回答的，
+	// 而"泄漏之后有没有人在链上查过"是两个不同的问题。
+	//
+	// 载荷里**只有 `app_secret_set: bool`，没有密钥本身**。
+	// 把明文密钥写进链，等于给一个明文密钥多找了一个存储位置，
+	// 并且让审计日志本身变成第二个泄漏面——那样这条链记录的是
+	// "谁泄漏了密钥"这件事的一个副本。这与 port.go 顶部
+	// "caller 在传进来之前负责脱敏"是同一条规矩。
+	// ActionIncidentInvestigate covers manually starting the AI investigation
+	// on an incident. It is separated from resolve/silence because
+	// ForceEnqueue kills a running worker and spends a model call: "who
+	// stopped that investigation and started it again" is a question that
+	// only this row can answer, and folding it into incident_update would
+	// make it a payload scan. Found by scripts/routeaudit, not by reading.
+	ActionIncidentInvestigate = "incident_investigate"
+
+	ActionIMAppCreate       = "im_app_create"
+	ActionIMAppUpdate       = "im_app_update"
+	ActionIMAppDelete       = "im_app_delete"
+	ActionIMAppSecretReveal = "im_app_secret_reveal"
+
 	// ActionAgentTeamsTokenIssue covers minting a bearer token for an
 	// AgentTeams worker: a credential with a TTL and a tool allow-list.
 	//
@@ -320,6 +347,7 @@ const (
 	// 而发布放行的是**一批节点上的代码变更**。把前者记成后者，
 	// "谁批准了这条命令"就会变成对插件行做 payload 扫描。
 	ResourceApproval = "approval"
+	ResourceIMApp    = "im_app"
 
 	// ResourceEdge names a node. The resource id is the numeric edge id as
 	// a string, which is how every other edge-scoped row in this table

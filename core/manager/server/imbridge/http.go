@@ -11,9 +11,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	bizbridge "github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge"
@@ -408,6 +411,7 @@ func (h *Handler) getApp(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) createApp(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
+		auditApp(w, r, auditport.ActionIMAppCreate, 0, nil, errors.New("caller is not an admin"))
 		return
 	}
 	var p appPayload
@@ -417,10 +421,67 @@ func (h *Handler) createApp(w http.ResponseWriter, r *http.Request) {
 	}
 	app, err := h.uc.CreateApp(r.Context(), p.toInput())
 	if err != nil {
+		auditApp(w, r, auditport.ActionIMAppCreate, 0, nil, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	auditApp(w, r, auditport.ActionIMAppCreate, app.ID, app, nil)
 	writeJSON(w, http.StatusOK, toAppDTO(app))
+}
+
+// auditApp puts one IM-app mutation on the chain.
+//
+// 载荷里带 app_id / provider / mode / enabled，以及 `app_secret_set`
+// ——**有没有**设了密钥，而不是密钥本身。见 port.go 里这组常量的说明：
+// 一个把明文密钥抄进审计日志的实现，等于把审计日志变成第二个泄漏面，
+// 而这件事在这里尤其讽刺，因为这条路由的全部意义就是"少泄漏"。
+//
+// verify_token 与 encrypt_key 同理，只记存在性。它们在 appPayload 里
+// 是明文进来的（同一个字段集），所以统一按"存在性"处理，
+// 不在这里做逐字段的白名单——那会让新增字段**默认进链**，
+// 而正确的默认是**默认不进链**。
+func auditApp(w http.ResponseWriter, r *http.Request, action string, id uint64, app *model.ImApp, cause error) {
+	payload := map[string]any{}
+	if app != nil {
+		payload["app_id"] = app.AppID
+		payload["provider"] = app.Provider
+		payload["mode"] = app.Mode
+		payload["name"] = app.Name
+		payload["enabled"] = app.Enabled
+		payload["app_secret_set"] = app.AppSecret != ""
+		payload["verify_token_set"] = app.VerifyToken != ""
+		payload["encrypt_key_set"] = app.EncryptKey != ""
+		payload["allow_from_count"] = len(strings.Split(app.AllowFrom, ","))
+	} else if id != 0 {
+		payload["app_id"] = id
+	}
+	status := auditport.StatusSuccess
+	if cause != nil {
+		status = auditport.StatusFailure
+	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       action,
+		ResourceType: auditport.ResourceIMApp,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: appIDOf(app),
+		Status:       status,
+		Payload:      payload,
+		ErrorMessage: errText(cause),
+	})
+}
+
+func appIDOf(a *model.ImApp) string {
+	if a == nil {
+		return ""
+	}
+	return a.AppID
+}
+
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func (h *Handler) updateApp(w http.ResponseWriter, r *http.Request) {
@@ -429,6 +490,7 @@ func (h *Handler) updateApp(w http.ResponseWriter, r *http.Request) {
 	}
 	id, ok := parseIDFromURL(r)
 	if !ok {
+		auditApp(w, r, auditport.ActionIMAppUpdate, 0, nil, errors.New("bad id"))
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
@@ -439,25 +501,34 @@ func (h *Handler) updateApp(w http.ResponseWriter, r *http.Request) {
 	}
 	app, err := h.uc.UpdateApp(r.Context(), id, p.toInput())
 	if err != nil {
+		auditApp(w, r, auditport.ActionIMAppUpdate, id, nil, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	auditApp(w, r, auditport.ActionIMAppUpdate, id, app, nil)
 	writeJSON(w, http.StatusOK, toAppDTO(app))
 }
 
 func (h *Handler) deleteApp(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
+		auditApp(w, r, auditport.ActionIMAppDelete, 0, nil, errors.New("caller is not an admin"))
 		return
 	}
 	id, ok := parseIDFromURL(r)
 	if !ok {
+		auditApp(w, r, auditport.ActionIMAppDelete, 0, nil, errors.New("bad id"))
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
+	// 先读一次：删掉之后 app_id / provider 就没法从库里取回来了，
+	// 而"删掉的是哪个 webhook"正是事后唯一问得出的问题。
+	before, _ := h.uc.GetApp(r.Context(), id)
 	if err := h.uc.DeleteApp(r.Context(), id); err != nil {
+		auditApp(w, r, auditport.ActionIMAppDelete, id, before, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	auditApp(w, r, auditport.ActionIMAppDelete, id, before, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -465,19 +536,26 @@ func (h *Handler) deleteApp(w http.ResponseWriter, r *http.Request) {
 // SystemSetting reveal flow — the list endpoint only returns
 // has_secret=true to avoid logging secrets every page render.
 func (h *Handler) revealAppSecret(w http.ResponseWriter, r *http.Request) {
+	// 一个**没有权限的人试图读出一个明文密钥**，是这个 handler 里最该被看见
+	// 的一行。非 admin 的尝试同样入账：拒绝发生在链上之前，
+	// 只记成功就等于"这个端点从没人试过"。
 	if !requireAdmin(w, r) {
+		auditApp(w, r, auditport.ActionIMAppSecretReveal, 0, nil, errors.New("caller is not an admin"))
 		return
 	}
 	id, ok := parseIDFromURL(r)
 	if !ok {
+		auditApp(w, r, auditport.ActionIMAppSecretReveal, 0, nil, errors.New("bad id"))
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
 	app, err := h.uc.GetApp(r.Context(), id)
 	if err != nil {
+		auditApp(w, r, auditport.ActionIMAppSecretReveal, id, nil, err)
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	auditApp(w, r, auditport.ActionIMAppSecretReveal, id, app, nil)
 	writeJSON(w, http.StatusOK, map[string]string{"app_secret": app.AppSecret})
 }
 
