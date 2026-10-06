@@ -8641,6 +8641,65 @@ if !strings.Contains(text, publishedSDK+" v0.3.0") {
 
 它关掉的是 §4.359 留下的一半：**"插件 SDK 与宿主版本必须一致"现在由两处从同一处读取
 来保证**，而剩下的另一半（wire 协议兼容窗口）仍然需要人来划，仍然没有被写下。
+### 4.361 决策 427：把「版本被复制而不是被继承」变成闸门——**插件 SDK 与宿主必须同版，而这条此前谁都不管**
+
+#### 4.361.1 为什么需要一道闸门，而不是一次升级
+
+上一条（§4.360）把 16 个插件模块升到了 `v0.4.0`，并修掉了生成器里那个写死的版本号。
+**但那是一次性的**：修完之后，没有任何东西会在下一次升级时拦住同类事情。
+
+而这类事情在本仓库的历史上有前例：**§4.347 的发布基线、§4.348 的拆分报价、
+§4.359 的插件版本面**——三个不同的实例，同一个形状：
+**一个会漂的事实被写在多处，其中没有一处会去看另一处。**
+
+#### 4.361.2 这条不变式为什么必须自动判
+
+"插件的 SDK 版本必须等于宿主 `core/pig` 的 PiG 版本"——**它是可以自动判的**，
+而它之前没有被判，原因是它**看起来不像缺陷**：
+
+> 扩展宿主是 subprocess，走 JSONL。**插件用另一个 SDK 版本编译，照样能构建、
+> 照样能安装、照样能被 `pig` 加载**——Go 类型的差异不是 wire 的差异。
+
+**所以版本分裂不产生任何失败信号。** 它已经在树里存在过（宿主 v0.4.0 / 插件 v0.3.0，
+跨越十个打包副本），而所有闸门全绿。若不是这次作者要求升级，
+**它可以再存在很久，且没有任何一条消息会说"这里有东西不对"。**
+
+#### 4.361.3 加进 `modulecheck` 的那条检查
+
+`checkPiGSDKPinAgreement` 以 `core/pig/go.mod` 的 PiG 版本为准，遍历全仓模块，
+凡 `require github.com/MichaelKinsy/PiG/extensions/sdk` 的，逐个比对：
+
+```
+plugins/pig-ops/opskeeper-sre-readonly/extensions/opskeeper-sre-readonly requires
+github.com/MichaelKinsy/PiG/extensions/sdk v0.3.0 while core/pig (the module the
+node agent is built from) requires github.com/MichaelKinsy/PiG v0.4.0; a plugin
+compiled against another SDK still installs and still loads, so nothing else
+reports the split -- bump both, or run scripts/sync-pig-ops.sh after bumping the canonical one
+```
+
+**真实陷阱验证**：把一个打包副本改回 `v0.3.0` → `module-check` 报红并给出上面那句；
+改回 → 绿。**这条检查在真实树上被证明会红，不是"理论上会红"。**
+
+四条的单元测试里，最要紧的一条是**前缀边界**：
+宿主 `require PiG` 与插件 `require PiG/extensions/sdk` 是两个模块，
+**一个把短的当前缀匹配长的检查，会在干净的树上把每个宿主模块都读成过期插件。**
+`TestRequiringPiGIsNotRequiringTheExtensionSDK` 钉住这一条。
+另一条钉住"宿主不再 pin 任何版本时必须报错"——
+**那时比较没有对象，静默通过等于报告了一个从未做过的核对。**
+
+#### 4.361.4 §4.359 剩下的另一半，仍然需要人
+
+本刀关掉的是"两侧版本必须一致"。**另一半是"一致还不够"**：
+`v0.4.0` 与 `v0.4.0` 之间 wire 纯增量（§4.359.2 实测），
+而**下一个版本是否还纯增量，无法自动判定**。
+
+**能自动化的只有"有人定过"这件事**，不能自动化"兼容"。
+所以那条兼容窗口的声明格式与人工划窗仍然缺着，**本刀不假装它已经关了**。
+
+#### 4.361.5 进度影响：两把尺不动
+
+**架构尺 97.75% / 四阶段交付尺 99.5% 不动。** 本刀不关闭任何计划内未交付项；
+它把一个**从未被检查过的不变式**接进了 CI 已在跑的那道闸门。
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
