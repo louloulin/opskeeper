@@ -73,11 +73,77 @@ func TestToolsetMatchesTheAdapters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v\n\nregenerate it with OPSKEEPER_UPDATE_TOOLSET=1 go test ./core/manager/middleware/toolset/ -run Toolset", path, err)
 	}
-	if !bytes.Equal(got, want) {
+	switch classifyDrift(got, want) {
+	case driftNone:
+		return
+	case driftBanner:
+		// 这一支的存在理由见 classifyDrift：**重新生成会把坏头部固化**，
+		// 而原来那句"regenerate it"会正好把人引到那一步。
+		t.Fatalf("%s disagrees with the generator, and the difference is the banner "+
+			"alone — every tool in it is exactly what the adapters register.\n\n"+
+			"Do NOT regenerate: regenerating writes this banner into the file and the "+
+			"gate goes green on a corrupted header. Look at generatedHeader at the bottom "+
+			"of this file instead — it is the source of the banner, and something moved "+
+			"into it. This is how a scripted edit anchored on a comment line that appears "+
+			"both in generatedHeader and above a test function put a test's doc comment "+
+			"inside the shipped banner.", path)
+	default:
 		t.Fatalf("%s is stale: the adapters and the packaged toolset disagree.\n\n"+
 			"Regenerate it with OPSKEEPER_UPDATE_TOOLSET=1 go test ./core/manager/middleware/toolset/ -run Toolset,\n"+
 			"then run scripts/sync-pig-ops.sh.", path)
 	}
+}
+
+// generationDrift is how the committed file differs from what the generator
+// writes today. Two shapes, and the difference is the whole point: they need
+// opposite remedies.
+type generationDrift int
+
+const (
+	driftNone generationDrift = iota
+	// driftTools means the tool table moved: regenerate.
+	driftTools
+	// driftBanner means only the header moved: do not regenerate.
+	driftBanner
+)
+
+// bannerBoundary ends the header. Everything up to and including it is the
+// banner; everything after it is the generated table.
+const bannerBoundary = "\npackage opskeepermiddleware\n"
+
+// classifyDrift separates "the adapters moved" from "the banner moved",
+// because the second one must not be answered by regenerating.
+//
+// 这不是假想的一条分支。本轮真的撞上过：脚本化编辑按注释行做锚点，
+// 而那一行注释**同时**出现在 `generatedHeader`（它是被写进生成文件的头部）
+// 和某个测试函数上方，于是编辑把测试的文档注释注入了 shipped banner。
+// 逐字节闸门抓住了它——但它给出的补救是"重新生成"，
+// 而重新生成恰好会把那个坏 banner 写进文件并让闸门转绿。
+//
+// **一条闸门把自己引到错误 remedies 上，比闸门本身红更坏**：
+// 红会让人去查，绿会让人把它提交下去。所以两种漂移必须分开，
+// 而且分开之后要有一条测试证明这个区分是真的（TestClassifyDrift）。
+//
+// 边界取 `package opskeepermiddleware` 这一行：它同时是包名断言的对象
+// （packageName 常量）和 banner 的末尾，所以两边都能切在这一行，
+// 不会出现"切出来的头部里混着表"的情况。
+func classifyDrift(got, want []byte) generationDrift {
+	if bytes.Equal(got, want) {
+		return driftNone
+	}
+	gotBanner, gotRest, gotOK := bytes.Cut(got, []byte(bannerBoundary))
+	wantBanner, wantRest, wantOK := bytes.Cut(want, []byte(bannerBoundary))
+	if gotOK && wantOK && bytes.Equal(gotBanner, wantBanner) {
+		// 头部一致、表不一致：适配器动了，该重新生成。
+		_ = gotRest
+		_ = wantRest
+		return driftTools
+	}
+	if gotOK && wantOK && bytes.Equal(gotRest, wantRest) {
+		// 表一致、头部不一致：有人挪了 generatedHeader，重新生成只会固化它。
+		return driftBanner
+	}
+	return driftTools
 }
 
 // TestTheNotPackagedLedgerIsCurrent keeps the exclusion list honest in both
@@ -136,6 +202,70 @@ func TestTheNotPackagedLedgerIsCurrent(t *testing.T) {
 				"name: the exclusion is obsolete, delete it", name)
 		}
 	}
+}
+
+// TestClassifyDrift proves the two drift shapes really are told apart,
+// because the whole point of splitting them is that one of them must not
+// be answered by regenerating.
+//
+// 每一条都写成"照着 remedy 做一遍，看结果是不是它承诺的样子"：
+// 一个只断言枚举值的测试，说的是这个 switch 有几个分支；
+// 一个断言"重新生成之后闸门会绿"的测试，说的是**这个陷阱是真的**。
+func TestClassifyDrift(t *testing.T) {
+	const banner = "// GENERATED FILE — do not edit.\n" + bannerBoundary
+	table := banner + "var tools = []toolSpec{{Name: \"pg.lock_waits\"}}\n"
+
+	t.Run("in sync", func(t *testing.T) {
+		if got := classifyDrift([]byte(table), []byte(table)); got != driftNone {
+			t.Errorf("classifyDrift on two identical files = %v, want driftNone", got)
+		}
+	})
+
+	t.Run("the adapters moved", func(t *testing.T) {
+		changed := banner + "var tools = []toolSpec{{Name: \"pg.lock_waits\"}, {Name: \"redis.big_keys\"}}\n"
+		got := classifyDrift([]byte(table), []byte(changed))
+		if got != driftTools {
+			t.Errorf("classifyDrift after an adapter gained a tool = %v, want driftTools", got)
+		}
+		if drift := classifyDrift([]byte(changed), []byte(changed)); drift != driftNone {
+			t.Errorf("regenerating after driftTools does not clear it: %v", drift)
+		}
+	})
+
+	// 这一条是本测试存在的理由。
+	t.Run("only the banner moved", func(t *testing.T) {
+		mangled := "// GENERATED FILE — do not edit.\n// (a test's doc comment)\n" +
+			bannerBoundary + "var tools = []toolSpec{{Name: \"pg.lock_waits\"}}\n"
+		got := classifyDrift([]byte(mangled), []byte(table))
+		if got != driftBanner {
+			t.Errorf("classifyDrift with an identical tool table and a mangled banner = %v, "+
+				"want driftBanner — told driftTools, the failure message would tell the "+
+				"reader to regenerate", got)
+		}
+		// 陷阱本身，而且它正是这句话要成立的原因：
+		//
+		// 照着原来那句"重新生成"做，文件被写成生成器现在会产出的样子——
+		// 也就是那个坏 banner——于是逐字节比对**转绿**，而 shipped banner 是坏的。
+		// 闸门此后会一直为一个损坏的头部背书，直到有人再改一次 generatedHeader。
+		//
+		// 所以"头部漂移"必须被单独认出来：它要的不是重新生成，是去看
+		// generatedHeader 里混进了什么。
+		if drift := classifyDrift([]byte(mangled), []byte(mangled)); drift != driftNone {
+			t.Errorf("after regenerating, the gate reports %v rather than passing; "+
+				"the synthetic case no longer describes what regeneration would produce", drift)
+		}
+		if drift := classifyDrift([]byte(table), []byte(mangled)); drift != driftBanner {
+			t.Errorf("a regeneration is exactly the banner-only case, got %v", drift)
+		}
+	})
+
+	// 一个两边都切不出边界的文件不该被当成"只是 banner 变了"。
+	t.Run("neither side has the boundary", func(t *testing.T) {
+		if got := classifyDrift([]byte("package other\n"), []byte("package other\nmore\n")); got != driftTools {
+			t.Errorf("classifyDrift on unparseable files = %v, want driftTools "+
+				"(an unknown shape is never a banner-only drift)", got)
+		}
+	})
 }
 
 // TestTheMiddlewareToolsetIsReadOnly is the negative control for the claim

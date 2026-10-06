@@ -27,11 +27,28 @@
 //     would silence that check. This one cannot.
 //
 // Every tool in this package is classified L0 or L1 by the adapter that
-// implements it, and the package ships only those. The generated file
-// carries the class per tool and TestTheMiddlewareToolsetIsReadOnly fails
-// if an adapter reclassifies one upward, because the way this package could
-// become dangerous is not a malicious edit to the manifest — it is a
-// routine change to an adapter that nobody thinks to re-check.
+// implements it, and the package ships only those. The way this package
+// could become dangerous is not a malicious edit to the manifest — it is a
+// routine change to an adapter that nobody thinks to re-check — so the
+// class is asserted where it is decided, not here.
+//
+// **Where the check actually lives**, because this paragraph used to get it
+// wrong in a way that sends the next reader looking in the wrong tree: the
+// generated tools.go carries no class field, and the test that enforces
+// this is not in this package. It is
+// core/manager/middleware/toolset:
+//
+//   - TestTheMiddlewareToolsetIsReadOnly asserts, per tool and against the
+//     adapters' own registration, that no write-classified tool reached the
+//     read toolset — and that the registry is non-empty and does contain
+//     writes, so it cannot pass for the wrong reason;
+//   - TestToolsetMatchesTheAdapters compares this package's file with what
+//     the generator produces, byte for byte, so a reclassification shows up
+//     as a failing diff rather than as a line nobody notices in a 52-entry
+//     diff.
+//
+// Two of those live in a different module from this one, so a reader who
+// greps only the extension packages concludes there is no guard. There is.
 //
 // The writes those adapters also offer (pg.kill_session, k8s.drain,
 // redis.flushdb) deliberately do not appear here at any version. They are
