@@ -56,26 +56,32 @@ permissions:
   contents: read
 
 concurrency:
-  # Keyed on the head branch so the push run and the pull-request run for the
-  # same commit are one run instead of two.
+  # cancel-in-progress: a newer run on this branch stops an older one, so a
+  # run left half-finished from four minutes ago does not hold a runner while
+  # the code it was checking has already moved.
   #
-  # It used to read `github.event.pull_request.head.ref || github.ref`, and
-  # that fallback is what defeated the intent: on a pull_request event the
-  # first term is `feature/pig`, and on a push event the second is
-  # `refs/heads/feature/pig`. Two different strings are two different groups,
-  # so the two runs never cancelled each other and never collapsed into one.
-  # Measured on 8638514: one commit, two runs -- 37544456628 (push) and
-  # 37544466294 (pull_request) -- both in_progress at the same moment. The
-  # comment above that line described a merge that the expression did not do.
+  # This used to claim more than it could do. The comment here said keying on
+  # the head branch made "the push run and the pull-request run for the same
+  # commit one run instead of two", and it did not: 8638514, ed85313 and
+  # 00abc18 each produced two CI runs, and two attempts at the key
+  # (`github.event.pull_request.head.ref || github.ref`, then
+  # `github.head_branch || github.ref_name`) left both runs in_progress side by
+  # side, which is what two different concurrency groups look like.
   #
-  # `github.head_branch` is the head branch on a pull_request event but is
-  # undefined on a push, where the fallback has to be the branch name without
-  # its refs/heads/ prefix. That is `github.ref_name`, not `github.ref`: a first
-  # attempt at this fix used `github.head_branch || github.ref`, which is the
-  # same mistake wearing a new hat -- on a push both terms are the wrong thing,
-  # because head_branch is empty there and ref still carries the prefix. The
-  # next push after that attempt produced two runs again (37544982326 and
-  # 37544975021), which is how it was caught.
+  # The reason is not the key. A concurrency group queues and cancels; it does
+  # not de-duplicate. Two events for one commit are two runs whatever the
+  # group is, and the "one run instead of two" sentence described a merge this
+  # mechanism does not perform. Removing it is the fix -- the sentence was
+  # read as a guarantee for as long as it stood (decision 420).
+  #
+  # On which the key goes: what has actually been observed is cancelling within
+  # one event, which any per-branch key gives. Whether one key also cancels a
+  # push against its own pull request is NOT established -- two runs on the
+  # same commit were still in_progress together under both candidate keys, and
+  # the run API does not report the group a run was placed in. So this line
+  # states the mechanism and not a cross-event effect nobody has measured: the
+  # cancelling this file relies on is within-event, and the key is here because
+  # per-branch is the intent, not because the cross-event case was verified.
   group: ci-${{ github.head_branch || github.ref_name }}
   cancel-in-progress: true
 
