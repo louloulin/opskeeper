@@ -427,9 +427,9 @@ var Verdicts = []Verdict{
 	{File: "core/manager/server/hitl/http.go", Route: "/v1/hitl/proposals/{id}/expire", Handler: "h.expire"},
 	{File: "core/manager/server/hitl/http.go", Route: "/v1/hitl/proposals/{id}/reject", Handler: "h.reject"},
 	{File: "core/manager/server/loop/admin.go", Route: "/{incident_id}/increment", Handler: "deps.incrementRetryCount",
-		Backlog: "洞：手工加一次重试次数。它直接决定自愈循环还会不会再试一次，是执行面的一次真实推动"},
+},
 	{File: "core/manager/server/loop/admin.go", Route: "/{incident_id}/reset", Handler: "deps.resetRetryCount",
-		Backlog: "洞：手工清零重试次数。增和减必须成对入账——只记其一等于没记"},
+},
 }
 
 // Result is what one run found.

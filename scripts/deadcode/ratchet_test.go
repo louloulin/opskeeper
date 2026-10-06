@@ -23,6 +23,26 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 826 / 558 / 268 as of decision 319: the two self-healing-loop retry
+// actions (recovery_retry_increment, recovery_retry_reset). Both are dead
+// for the same reason decisions 311, 312, 314, 317 and 318 give — the
+// declaration is in core/base/pkg/audit, the caller is in core/manager, and
+// nothing inside the measured tree reaches across that line.
+//
+// The third number moved for a different reason, and it is the reason this
+// decision measured instead of predicted. The budget said 270 and the tool
+// said 268 *before this decision changed anything*, so the test-only class
+// did not shrink; the ratchet had been carrying two of slack since it was
+// set. Two things follow. A budget is not a measurement, and a class that
+// drifts below its budget is invisible to a gate whose job is to trip on
+// growth — which is why this comment states the measured triple rather than
+// the movement.
+//
+// (The expected reading — two constants added, both dead, test-only
+// unchanged — is what the tool then confirmed, so the prediction was right
+// this time. That is luck, not method, and §4.251 already records the two
+// times it was not.)
+//
 // 824 / 556 as of decision 318: the five node-agent conversation actions
 // (agent_session_open, agent_message_send, agent_session_stop,
 // agent_session_close, agent_decide) plus the agent_session resource type.
@@ -66,9 +86,9 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 824
-	deadSymbolBudget     = 556
-	testOnlySymbolBudget = 270
+	unreachableBudget    = 826
+	deadSymbolBudget     = 558
+	testOnlySymbolBudget = 268
 )
 
 // TestTheUnreachableSymbolCountNeverGrows is the gate decision 199 declined to

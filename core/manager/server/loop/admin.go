@@ -25,6 +25,8 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 )
 
 // RecoveryStateAdmin is the narrow seam exposed to the admin route.
@@ -98,12 +100,23 @@ type IncrementResponse struct {
 func (d AdminRouteDeps) incrementRetryCount(w http.ResponseWriter, r *http.Request) {
 	incidentID := chi.URLParam(r, "incident_id")
 	if incidentID == "" {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionRecoveryRetryIncrement,
+			ResourceType: auditport.ResourceIncident,
+			Payload:      map[string]any{"applied": 0},
+		}, errors.New("missing incident_id"))
 		writeJSONError(w, http.StatusBadRequest, "missing incident_id")
 		return
 	}
 	var req IncrementRequest
 	if r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			auditFail(r, auditport.Event{
+				Action:       auditport.ActionRecoveryRetryIncrement,
+				ResourceType: auditport.ResourceIncident,
+				ResourceID:   incidentID,
+				Payload:      map[string]any{"applied": 0},
+			}, fmt.Errorf("invalid json: %w", err))
 			writeJSONError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 			return
 		}
@@ -112,6 +125,15 @@ func (d AdminRouteDeps) incrementRetryCount(w http.ResponseWriter, r *http.Reque
 		req.Times = 1
 	}
 	if req.Times > 100 {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionRecoveryRetryIncrement,
+			ResourceType: auditport.ResourceIncident,
+			ResourceID:   incidentID,
+			// The rejected value is the point of this row: it is the only
+			// place a caller can see that it asked for 500 attempts and was
+			// stopped, rather than having it quietly clamped.
+			Payload: map[string]any{"requested": req.Times, "applied": 0},
+		}, errors.New("times must be in [1, 100]"))
 		writeJSONError(w, http.StatusBadRequest, "times clamped to [1, 100]")
 		return
 	}
@@ -119,12 +141,41 @@ func (d AdminRouteDeps) incrementRetryCount(w http.ResponseWriter, r *http.Reque
 	for i := 0; i < req.Times; i++ {
 		n, err := d.StateStore.Increment(r.Context(), incidentID)
 		if err != nil {
+			// `applied` is i, not req.Times, and this is the load-bearing
+			// number in the row. The loop is not transactional: a store that
+			// fails on the third call has already moved the counter twice
+			// and this handler still answers 500. A failure row carrying the
+			// requested count would read as "nothing happened" and the
+			// escalation it caused would arrive with no cause.
+			auditFail(r, auditport.Event{
+				Action:       auditport.ActionRecoveryRetryIncrement,
+				ResourceType: auditport.ResourceIncident,
+				ResourceID:   incidentID,
+				Payload: map[string]any{
+					"requested":   req.Times,
+					"applied":     i,
+					"retry_count": final,
+				},
+			}, fmt.Errorf("increment #%d: %w", i+1, err))
 			writeJSONError(w, http.StatusInternalServerError,
 				fmt.Sprintf("increment #%d: %s", i+1, err.Error()))
 			return
 		}
 		final = n
 	}
+	auditOK(r, auditport.Event{
+		Action:       auditport.ActionRecoveryRetryIncrement,
+		ResourceType: auditport.ResourceIncident,
+		ResourceID:   incidentID,
+		Payload: map[string]any{
+			"requested":   req.Times,
+			"applied":     req.Times,
+			"retry_count": final,
+			// The flag the caller is really after: whether the counter is
+			// now past MaxRetryCount and the next loop turn escalates.
+			"escalated": final > 3, // MaxRetryCount = 3 (orchestrator.go:79)
+		},
+	})
 	writeJSON(w, http.StatusOK, IncrementResponse{
 		IncidentID:  incidentID,
 		RetryCount:  final,
@@ -163,13 +214,43 @@ func (d AdminRouteDeps) getRetryCount(w http.ResponseWriter, r *http.Request) {
 func (d AdminRouteDeps) resetRetryCount(w http.ResponseWriter, r *http.Request) {
 	incidentID := chi.URLParam(r, "incident_id")
 	if incidentID == "" {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionRecoveryRetryReset,
+			ResourceType: auditport.ResourceIncident,
+		}, errors.New("missing incident_id"))
 		writeJSONError(w, http.StatusBadRequest, "missing incident_id")
 		return
 	}
+	// Read the count before clearing it. The reset itself is the row's whole
+	// content — after it there is no state left that could say what was
+	// discarded — and without the before-value a reader cannot tell a routine
+	// runner cleanup from the wipe of a genuine escalation. The read is best
+	// effort: a store that will not answer a Get must still be allowed to
+	// take the Reset, and the row says which of the two happened rather than
+	// pretending the number is zero when it is unknown.
+	previous, getErr := d.StateStore.Get(r.Context(), incidentID)
+	known := getErr == nil
+	payload := map[string]any{"previous_known": known}
+	if known {
+		payload["previous"] = previous
+	}
 	if err := d.StateStore.Reset(r.Context(), incidentID); err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionRecoveryRetryReset,
+			ResourceType: auditport.ResourceIncident,
+			ResourceID:   incidentID,
+			Payload:      payload,
+		}, err)
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	payload["retry_count"] = 0
+	auditOK(r, auditport.Event{
+		Action:       auditport.ActionRecoveryRetryReset,
+		ResourceType: auditport.ResourceIncident,
+		ResourceID:   incidentID,
+		Payload:      payload,
+	})
 	writeJSON(w, http.StatusOK, GetRetryCountResponse{
 		IncidentID: incidentID,
 		RetryCount: 0,

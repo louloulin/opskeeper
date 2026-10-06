@@ -158,6 +158,9 @@ const (
 	ActionAgentSessionClose = auditport.ActionAgentSessionClose
 	ActionAgentDecide       = auditport.ActionAgentDecide
 
+	ActionRecoveryRetryIncrement = auditport.ActionRecoveryRetryIncrement
+	ActionRecoveryRetryReset     = auditport.ActionRecoveryRetryReset
+
 	ActionChannelCreate = auditport.ActionChannelCreate
 	ActionChannelUpdate = auditport.ActionChannelUpdate
 	ActionChannelDelete = auditport.ActionChannelDelete

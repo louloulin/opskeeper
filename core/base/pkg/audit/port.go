@@ -261,6 +261,26 @@ const (
 	// make it a payload scan. Found by scripts/routeaudit, not by reading.
 	ActionIncidentInvestigate = "incident_investigate"
 
+	// ActionRecoveryRetryIncrement / ActionRecoveryRetryReset cover the
+	// closed loop's retry_count, the integer that decides whether the
+	// orchestrator tries the repair again or escalates to a human.
+	//
+	// They are two actions and not one, because the loop's own view is not
+	// the operator's: pushing the counter up is what *starts* an attempt,
+	// pushing it back to zero is what *re-arms* one. A row that merged them
+	// would answer "did retry_count change" and not "who put it back, and
+	// when the next attempt became possible again" — which is the question
+	// that matters when a loop that keeps escalating turns out to be
+	// resetting itself on a schedule.
+	//
+	// Increment records how many increments actually landed, not how many
+	// were asked for. The handler loops, so a failure on the third of four
+	// leaves the counter two higher than it was and still answers 500; a
+	// failure row that said "4 requested" would let that pass unremarked.
+	// Decision 319.
+	ActionRecoveryRetryIncrement = "recovery_retry_increment"
+	ActionRecoveryRetryReset     = "recovery_retry_reset"
+
 	// ActionHITLDecide records a human approve/reject on an AgentTeams task
 	// that is waiting for one. Decision 312.
 	//
