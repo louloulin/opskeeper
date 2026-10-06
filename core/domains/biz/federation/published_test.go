@@ -33,6 +33,16 @@ type fakeStore struct {
 	asked   []string
 }
 
+// RecordPublished is the write half, which the manifest-backed ledger has and
+// a read-only one does not. Tests that need the "store took it and does not
+// serve it" state use a store without this method rather than a store with it
+// and an empty map — those are different situations and only one of them is a
+// ledger that forgot.
+func (s *fakeStore) RecordPublished(name, digest string) error {
+	s.digests[name] = digest
+	return nil
+}
+
 func (s *fakeStore) PublishedDigest(name string) (string, bool) {
 	s.asked = append(s.asked, name)
 	d, ok := s.digests[name]

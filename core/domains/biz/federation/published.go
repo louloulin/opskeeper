@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/federation"
@@ -241,6 +242,57 @@ func (m ManifestLedger) PublishedDigest(name string) (string, bool) {
 		return "", false
 	}
 	return digest, true
+}
+
+// RecordPublished writes the digest the store is serving for one name.
+//
+// It is the write half of the same file PublishedDigest re-reads on every
+// call, and it exists because a root that publishes its own trees has to
+// remember that it did. Without it the loop is open at the last step: the
+// publisher uploads, the store serves, and the very next delivery still reads
+// "not there" because the only record of the upload was in a process that
+// exited.
+//
+// The write is a read-modify-write of the whole map, which is the right shape
+// for a file this small and is also the shape that can lose a concurrent
+// writer's entry. That is accepted rather than solved: this file is written
+// by one root, at publish time, and a deployment that wants more than one
+// writer wants a store with an index, which is the thing this file stands in
+// for until then.
+func (m ManifestLedger) RecordPublished(name, digest string) error {
+	trimmedName := strings.TrimSpace(name)
+	if trimmedName == "" {
+		return errors.New("federation: record a published tree under no name")
+	}
+	trimmedDigest := strings.TrimSpace(digest)
+	if trimmedDigest == "" {
+		return fmt.Errorf("federation: record %s with no digest; a child that fetched it would "+
+			"have nothing to compare against", trimmedName)
+	}
+	manifest := map[string]string{}
+	if raw, err := os.ReadFile(m.path); err == nil {
+		// A missing file is the normal first-publish case. An unreadable or
+		// unparseable one is not, and silently replacing it would drop every
+		// other tree this root has published.
+		if len(strings.TrimSpace(string(raw))) > 0 {
+			if err := json.Unmarshal(raw, &manifest); err != nil {
+				return fmt.Errorf("federation: the published manifest at %s is not readable as JSON: %w",
+					m.path, err)
+			}
+		}
+	}
+	manifest[trimmedName] = trimmedDigest
+	encoded, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("federation: render the published manifest: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(m.path), 0o750); err != nil {
+		return fmt.Errorf("federation: create the published manifest's directory: %w", err)
+	}
+	if err := os.WriteFile(m.path, append(encoded, '\n'), 0o640); err != nil {
+		return fmt.Errorf("federation: write the published manifest at %s: %w", m.path, err)
+	}
+	return nil
 }
 
 // NewManifestLedger reads digests from the manifest at path.

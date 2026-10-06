@@ -88,6 +88,15 @@ const (
 	// runs out of band: a manifest read at boot is a snapshot that is
 	// wrong for the rest of the process's life.
 	federationArtifactManifestEnv = "OPSKEEPER_FEDERATION_ARTIFACT_MANIFEST"
+
+	// The two that make this root able to fill the store it addresses.
+	//
+	// 它们是「有没有发布端」的开关，而此前这个包里根本没有发布端：一个
+	// 命名了 BASE_URL 的根只能把 URL 指给子集群，然后永远停在
+	// ErrNotPublished，直到有人用命令行把文件传上去。写下这两个变量等于
+	// 说「这个根自己负责把树放进 store」，而没写就是既有的只读形状。
+	federationArtifactStoreURLEnv   = "OPSKEEPER_FEDERATION_ARTIFACT_STORE_URL"
+	federationArtifactStoreTokenEnv = "OPSKEEPER_FEDERATION_ARTIFACT_STORE_TOKEN"
 )
 
 // federationWiring is the assembled root side of the cluster channel.
@@ -319,7 +328,28 @@ func federationDistributor() (policyDelivery, error) {
 	if err != nil {
 		return nil, err
 	}
-	return published, nil
+
+	// No store credentials means the read-only shape: this root knows what
+	// the store holds and refuses to name a URL for anything else, which is
+	// exactly right for a deployment where something else publishes.
+	storeURL := strings.TrimSpace(os.Getenv(federationArtifactStoreURLEnv))
+	if storeURL == "" {
+		return published, nil
+	}
+	sink, err := fedbiz.NewHTTPSink(storeURL, os.Getenv(federationArtifactStoreTokenEnv), nil)
+	if err != nil {
+		return nil, fmt.Errorf("federation: %s names a store this root publishes to: %w",
+			federationArtifactStoreURLEnv, err)
+	}
+	publisher, err := fedbiz.NewPublishedPublisher(published, sink)
+	if err != nil {
+		return nil, err
+	}
+	selfPublishing, err := fedbiz.NewPublishingDistributor(published, publisher)
+	if err != nil {
+		return nil, err
+	}
+	return selfPublishing, nil
 }
 
 // policyDelivery is the root's answer to "where does a child's tree come
