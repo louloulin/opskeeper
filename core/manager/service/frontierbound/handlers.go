@@ -8,9 +8,8 @@ import (
 	"net"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	edgebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
-	changeeventbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge/changeevent"
 )
 
 // PromwriteIngester is the narrow surface the push_prom_samples handler
@@ -40,8 +39,8 @@ type DeviceResolver interface {
 // Wiring is the set of biz dependencies the manager-side handlers need.
 // It is supplied by cmd/opskeeper/main.go and consumed by Install.
 type Wiring struct {
-	EdgeAuthn      *edgebiz.AccessKeyAuthenticator
-	EdgeUC         *edgebiz.Usecase
+	EdgeAuthn      EdgeAuthenticator
+	EdgeUC         EdgeLifecycle
 	MetricIngester tunnel.HostMetricIngest
 	// PromIngester is optional - nil means Prom is disabled. When nil the
 	// push_prom_samples handler still installs but silently accepts and
@@ -59,7 +58,7 @@ type Wiring struct {
 	// ChangeEventUC receives batches of edge change events
 	// (journald / dockerd / packagemgr). Optional - when nil, the
 	// push_change_events handler does not install (A.3 disabled).
-	ChangeEventUC *changeeventbiz.Usecase
+	ChangeEventUC ChangeEventIngestor
 	// DeviceResolver, when non-nil, is consulted on every push to map
 	// the tunnel session's edge_id to the host device_id used as the
 	// metric/log/trace label. nil falls back to edge_id == device_id
@@ -222,7 +221,7 @@ type WebshellRouter interface {
 
 // the edge biz PluginConfigUC. *edgebiz.PluginConfigUC satisfies it.
 type PluginConfigFetcher interface {
-	FetchForEdge(ctx context.Context, edgeID uint64) (*edgebiz.WireSnapshot, error)
+	FetchForEdge(ctx context.Context, edgeID uint64) (*domain.PluginConfigSnapshot, error)
 }
 
 // Install registers all manager-side reverse-call handlers and the three
@@ -413,11 +412,11 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 		// UI show "logs: crashed - binary missing" instead of silent empty
 		// telemetry. Never fail the heartbeat on this.
 		if len(in.Plugins) > 0 {
-			items := make([]edgebiz.PluginHealth, 0, len(in.Plugins))
+			items := make([]domain.PluginHealth, 0, len(in.Plugins))
 			for _, p := range in.Plugins {
-				targets := make([]edgebiz.PluginTargetHealth, 0, len(p.Targets))
+				targets := make([]domain.PluginTargetHealth, 0, len(p.Targets))
 				for _, t := range p.Targets {
-					targets = append(targets, edgebiz.PluginTargetHealth{
+					targets = append(targets, domain.PluginTargetHealth{
 						ID:            t.ID,
 						Name:          t.Name,
 						Kind:          t.Kind,
@@ -428,7 +427,7 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 						UpdatedAt:     unixOrZero(t.UpdatedAt),
 					})
 				}
-				items = append(items, edgebiz.PluginHealth{
+				items = append(items, domain.PluginHealth{
 					Name:         p.Name,
 					State:        p.State,
 					LastError:    p.LastError,
@@ -544,18 +543,18 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 				// edge retries once binding is set up.
 				return json.Marshal(tunnel.PushChangeEventsResponse{Accepted: 0})
 			}
-			rows := make([]changeeventbiz.ChangeEventRow, 0, len(in.Events))
+			events := make([]domain.ChangeEventInput, 0, len(in.Events))
 			var rejected uint32
 			for _, e := range in.Events {
 				if e.Source == "" || e.Kind == "" || e.Timestamp.IsZero() {
 					rejected++
 					continue
 				}
-				// seq 0 is "this node never logged it", and the row stores
-				// NULL for that rather than 0. It has to be NULL: a unique
-				// index over (edge_id, seq) with 0 in it would make every
-				// ordinary event on a node collide with every other one.
-				row := changeeventbiz.ChangeEventRow{
+				// seq 0 is "this node never logged it", and the edge domain
+				// stores NULL for that rather than 0 — see
+				// changeevent.Usecase.Ingest. The handler only has to say
+				// "absent", and the pointer is how it says it.
+				ev := domain.ChangeEventInput{
 					EdgeID:    canonicalEdgeID,
 					Source:    e.Source,
 					Kind:      e.Kind,
@@ -563,15 +562,15 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 					Action:    e.Action,
 					Timestamp: e.Timestamp,
 					Severity:  e.Severity,
-					Labels:    changeeventbiz.MarshalLabels(e.Labels),
+					Labels:    e.Labels,
 				}
 				if e.Seq != 0 {
 					seq := e.Seq
-					row.Seq = &seq
+					ev.Seq = &seq
 				}
-				rows = append(rows, row)
+				events = append(events, ev)
 			}
-			accepted, err := w.ChangeEventUC.BatchInsert(rpcCtx, rows)
+			accepted, err := w.ChangeEventUC.Ingest(rpcCtx, events)
 			if err != nil {
 				return nil, fmt.Errorf("push_change_events: insert: %w", err)
 			}

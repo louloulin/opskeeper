@@ -454,6 +454,10 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// dependency weaker; what changed is that a domain nothing depends on
 	// any more no longer holds another one down.
 	//
+	// Decision 281 did not change the depth — cutting frontierbound -> edge
+	// removed an edge between two domains that were already on the same level,
+	// which is the case where the layer count is the wrong number to watch.
+	//
 	// Decision 280 took it from four to three, and it is the same mechanism a
 	// second time, which is why it is worth saying rather than just moving the
 	// number. That cut removed `imbridge -> aiops`, the last edge into aiops,
@@ -471,7 +475,7 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	if !strings.Contains(buf.String(), "the graph is a DAG") {
 		t.Error("the shipped tree is no longer a DAG and the report does not say so")
 	}
-	// 12 = decision 118's 42, plus the edge decision 123 added when the root
+	// 11 = decision 118's 42, plus the edge decision 123 added when the root
 	// side of the cluster channel became a domain of its own, minus the eight
 	// since cut: decision 227 (frontierbound -> metric, whose port moved
 	// next to HostMetricPoint in core/floor/tunnel), decision 229
@@ -557,12 +561,15 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// -> alert) took loop's out-degree to zero, the only domain in the tree
 	// that has it, and 280 (imbridge -> aiops) took aiops's in-degree to zero
 	// and moved the only remaining `Event` target out of the shared-symbol
-	// trap column.
+	// trap column. 281 (frontierbound -> edge) then emptied the trap column
+	// entirely: the cut took Usecase's second consuming domain with it, so the
+	// name left the report rather than becoming single-owner, and its finding
+	// moved to a direct assertion.
 	//
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "12 edges") {
+	if !strings.Contains(buf.String(), "11 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

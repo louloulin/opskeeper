@@ -1,6 +1,10 @@
 package edge
 
-import "time"
+import (
+	"time"
+
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+)
 
 // PluginHealth is one plugin's last-reported runtime health, shipped by the
 // edge on its heartbeat. It is intentionally ephemeral — kept in memory only,
@@ -8,30 +12,16 @@ import "time"
 // (~30s). The point of the type is operator visibility: State + LastError turn
 // "the logs plugin silently ships nothing" into "logs: crashed — subprocess
 // binary missing".
-type PluginHealth struct {
-	Name         string               `json:"name"`
-	State        string               `json:"state"` // stopped|starting|running|crashed
-	LastError    string               `json:"last_error,omitempty"`
-	RestartCount int                  `json:"restart_count,omitempty"`
-	PID          int                  `json:"pid,omitempty"`
-	StartedAt    time.Time            `json:"started_at,omitempty"`
-	UpdatedAt    time.Time            `json:"updated_at,omitempty"`  // edge-side update time
-	ReportedAt   time.Time            `json:"reported_at,omitempty"` // manager receive time
-	Targets      []PluginTargetHealth `json:"targets,omitempty"`
-}
-
-// PluginTargetHealth is a per-source health row for metric sub-plugins
-// that multiplex several scrape targets under one plugin config.
-type PluginTargetHealth struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name,omitempty"`
-	Kind          string    `json:"kind,omitempty"`
-	State         string    `json:"state"`
-	LastError     string    `json:"last_error,omitempty"`
-	Samples       int       `json:"samples,omitempty"`
-	LastSuccessAt time.Time `json:"last_success_at,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at,omitempty"`
-}
+//
+// The declaration moved to core/domain (decision 281): the tunnel handler in
+// service/frontierbound builds these rows and could only name them by importing
+// this package, which made the seam a package boundary rather than an
+// interface one. These are aliases, not copies — one declaration, two names —
+// so the import is genuinely gone rather than redirected.
+type (
+	PluginHealth       = domain.PluginHealth
+	PluginTargetHealth = domain.PluginTargetHealth
+)
 
 // RecordPluginHealth stores the latest per-plugin health for one edge,
 // overwriting any prior snapshot. Stamps ReportedAt with the manager clock so

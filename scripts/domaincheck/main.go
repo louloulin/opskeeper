@@ -193,7 +193,17 @@ var edges = map[edge]string{
 
 	{"edge", "device"}: "the edge register flow resolves, creates and updates the host Device behind a node (biz/edge, server/edge). One direction only: a device deletion reaches the edge identities through a revoker the composition root injects rather than by importing them (decision 112)",
 
-	{"frontierbound", "edge"}: "the frontier is the tunnel's node-facing side: it reads node state and change events",
+	// The frontierbound -> edge edge is gone (decision 281). It was declared
+	// as "the frontier is the tunnel's node-facing side: it reads node state
+	// and change events", which is true of the tunnel and false of the
+	// dependency: the handler called seven methods, and every one of them
+	// already had a signature made of tunnel's types, the standard library's
+	// and three rows that now live in core/domain. What was left importing
+	// biz/edge was the two row types and a GORM model — a persistence shape a
+	// transport handler was building column by column, including the rule that
+	// an absent sequence number must be NULL so it does not collide with every
+	// other event on the node under the (edge_id, seq) unique index. That rule
+	// now lives next to the index.
 	// The frontierbound -> metric edge is gone (decision 227), and the
 	// reason it was declared is worth keeping next to the absence: the
 	// tunnel handler held metric.IngestService, but the composition root

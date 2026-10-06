@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	edgestore "github.com/vincent-wuhan/opskeeper/core/manager/data/edge/store"
 	edgemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
@@ -61,6 +62,42 @@ func (u *Usecase) BatchInsert(ctx context.Context, events []ChangeEventRow) (int
 		prom.ChangeEventsDedupedTotal.Add(float64(duplicates))
 	}
 	return len(fresh), nil
+}
+
+// Ingest takes the shape a transport can honestly build and turns it into
+// rows. It exists because the tunnel handler used to do this conversion
+// itself, and the two things it had to know are not transport questions:
+//
+//   - the labels map has to be JSON-encoded, because labels is a text column;
+//   - an event the node never logged must be stored as NULL, not 0, because a
+//     unique index sits on (edge_id, seq) and SQL treats NULL as distinct from
+//     NULL while treating every 0 as the same key. A handler that stored 0 for
+//     "no seq" would make every ordinary event on a node collide with every
+//     other one.
+//
+// Decision 281 moved the whole conversion here, so the rule that the index
+// depends on lives next to the index rather than in a handler three packages
+// away. BatchInsert keeps taking rows: it is the shape the repo and the query
+// tools already speak, and the replay split needs the stored form.
+func (u *Usecase) Ingest(ctx context.Context, events []domain.ChangeEventInput) (int, error) {
+	if len(events) == 0 {
+		return 0, nil
+	}
+	rows := make([]ChangeEventRow, 0, len(events))
+	for _, e := range events {
+		rows = append(rows, ChangeEventRow{
+			EdgeID:    e.EdgeID,
+			Source:    e.Source,
+			Kind:      e.Kind,
+			Subject:   e.Subject,
+			Action:    e.Action,
+			Timestamp: e.Timestamp,
+			Severity:  e.Severity,
+			Labels:    MarshalLabels(e.Labels),
+			Seq:       e.Seq,
+		})
+	}
+	return u.BatchInsert(ctx, rows)
 }
 
 // splitReplays separates events the center already has from events it does

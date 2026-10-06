@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
@@ -327,17 +328,15 @@ func (uc *PluginConfigUC) notify(ctx context.Context, edgeID uint64, plugin stri
 // Endpoint is server-derived; auth_user/auth_pass are filled in by the
 // edge from its own access_key/secret_key (already in env), so secrets
 // never traverse the wire on this RPC.
-type WireSnapshot struct {
-	EdgeID  uint64                `json:"edge_id"`
-	Configs map[string]WireConfig `json:"configs"`
-}
-
-// WireConfig is one plugin's config as the edge sees it.
-type WireConfig struct {
-	Enabled  bool                   `json:"enabled"`
-	Endpoint string                 `json:"endpoint,omitempty"`
-	Spec     map[string]interface{} `json:"spec,omitempty"`
-}
+//
+// The declaration moved to core/domain (decision 281). The consumer read three
+// fields off this and immediately re-projected them into tunnel's own wire
+// type, so the copy existed only to be converted away — and it cost the tunnel
+// handler a package import to name it. Aliases, not copies: one declaration.
+type (
+	WireSnapshot = domain.PluginConfigSnapshot
+	WireConfig   = domain.PluginConfig
+)
 
 func decodeSpec(raw string) map[string]interface{} {
 	if raw == "" {

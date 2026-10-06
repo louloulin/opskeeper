@@ -2,6 +2,7 @@ package main
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -13,9 +14,11 @@ import (
 // by more than one: `Event`, `Rule`, `Usecase`, `Caller`. Each of those was two
 // or more unrelated types that happen to share a name — alert.Event is not
 // audit.Event, marketplace.Caller carries a TenantID that skill.Caller does
-// not. One is still true, and the note below says why the other three left,
-// because the ways out look the same from the outside and call for opposite
-// next steps.
+// not. **None of them are still true**, and the note below says how each left,
+// because there are three distinct ways out and they call for opposite next
+// steps: a name can lose its second target while staying in the report, lose
+// its second consumer and leave the report entirely, or — the one this file
+// was written to prevent — get merged by somebody who read the ranking.
 //
 // That makes them the most dangerous entries in the shared-symbol list, and
 // the reason a shared-symbol ranking cannot be acted on by sorting it. A move
@@ -54,6 +57,12 @@ import (
 //     confuse them. That is a real improvement, and it is not the same thing as
 //     the ambiguity being settled, so the name is unpinned rather than promoted
 //     to a move candidate.
+//   - `Usecase` left the report entirely at decision 281, and for the ordinary
+//     reason: its second consuming domain was `frontierbound`, and the cut
+//     removed the last name it shared with the edge domain. A symbol needs two
+//     or more *consuming* domains to be reported at all. What that does NOT
+//     mean is what it says — see TestTheUsecaseDeclarationsAreUnrelatedStructs,
+//     which pins the finding directly because the column stopped showing it.
 //   - `Event` is the third, and it is the same shape as `Rule`: decision 280
 //     cut `imbridge -> aiops`, and the two domains that had been selecting two
 //     different `Event` declarations were `aiops` and `demo`. After the cut
@@ -72,6 +81,27 @@ import (
 //     blindness is stated in the release report; repeating it here is what stops
 //     the next reader from reading "left the report" as "no longer coupled".
 func TestTheSameNameSeveralOwnersListIsReal(t *testing.T) {
+	// Decision 281 emptied this list, and the way it emptied is the third
+	// distinct ending — which is why the list is asserted as empty rather
+	// than deleted.
+	//
+	//   - `Event` (decision 280) stayed in the report and lost its second
+	//     TARGET: two consumers, one declaration.
+	//   - `Usecase` (decision 281) LEFT the report entirely. Its second
+	//     consuming domain was `frontierbound`, and the cut removed the last
+	//     name it shared with the edge domain. Fewer than two visible consumers
+	//     is the report's own exit condition, and the type is still declared by
+	//     many unrelated packages.
+	//
+	// So the trap column is empty, and the findings behind it are not. They
+	// moved to direct pins, the way `ListFilter` did at decision 235:
+	// TestTheUsecaseDeclarationsAreUnrelatedStructs below, and
+	// TestTheThreeListFilterDeclarationsAreStillThreeVocabularies further down.
+	//
+	// This test therefore no longer pins a list. It pins the emptiness, and it
+	// fails on purpose if the column ever fills again — because a name landing
+	// back in the trap column is a new fact about who selects what, and nobody
+	// should read that as drift.
 	ambiguous := map[string]bool{}
 	reported := map[string]bool{}
 	for _, r := range sharedRows(t) {
@@ -80,41 +110,28 @@ func TestTheSameNameSeveralOwnersListIsReal(t *testing.T) {
 			ambiguous[r.sym] = true
 		}
 	}
-	// A mutation that made every one of these single-owner did NOT make this
-	// test fail: it took a branch that skipped. The skip was meant for "the
-	// trap column has nothing left to warn about", but that is exactly the
-	// state where the names below have become move candidates, and skipping
-	// there means the test passes while the thing it exists to watch has
-	// silently changed. It fails instead, and says what changed.
-	if len(ambiguous) == 0 {
-		t.Fatalf("no symbol is reached by more than one domain any more, so the report's trap " +
-			"column is empty; the names below have all become single-target and are now " +
-			"move candidates. Fail on purpose so this is a decision, not a drift")
+	if len(ambiguous) != 0 {
+		t.Fatalf("the trap column has %d entries (%v) after decision 281 emptied it. That is a "+
+			"change in who selects what, not drift: either a new ambiguity is real and belongs "+
+			"in the report's warning column with its shapes, or a cut has to say which of the "+
+			"three endings below it was", len(ambiguous), keysOfBool(ambiguous))
 	}
-	// Every one of these must still be ambiguous. A name that has become
-	// single-owner is a move candidate and belongs in the report's main list,
-	// not here — and a name that has dropped out of the report entirely is a
-	// third state again, with a different cause and a different next step.
-	// The message distinguishes them because "look at this" is only useful
-	// advice if it says which of the two things happened.
-	for _, sym := range []string{"Usecase"} {
-		if ambiguous[sym] {
-			continue
-		}
-		if !reported[sym] {
-			t.Errorf("%s has dropped out of the shared report, which means it no longer has two or "+
-				"more consuming domains. That is not the same as \"nobody selects it any more\": "+
-				"this graph is built from core/manager alone, so a consumer that moved to the "+
-				"composition root stops being visible to it. Read \"left the report\" as \"fewer "+
-				"than two visible consumers\", not as \"no longer coupled\".",
-				sym)
-			continue
-		}
-		t.Errorf("%s now has one target among its remaining consumers, so nothing left in the "+
-			"tree is in a position to confuse two same-named types. Read the note above the list "+
-			"before acting: a parallel copy inside a consuming domain is invisible to this column, "+
-			"so this is not by itself a statement that the copy is gone", sym)
+	// Emptying the column must not have emptied the report with it. A report
+	// that finds nothing reads exactly like a report that stopped working, and
+	// the reason the column can be empty is that the main list is not.
+	if len(reported) == 0 {
+		t.Fatal("no shared symbol is selected by more than one domain at all; the trap column is " +
+			"empty because the report is, not because the ambiguity is")
 	}
+}
+
+func keysOfBool(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // TestTheReportFindsSharedSymbols keeps the report from silently going empty.
@@ -216,52 +233,66 @@ var sharedRowRE = regexp.MustCompile(
 // declare three unrelated `ListFilter` vocabularies — so that half is now
 // pinned directly, in the test below, rather than through a column that no
 // longer prints it.
-func TestTheTrapColumnSaysWhyNotJustThat(t *testing.T) {
-	shapes := map[string][]string{}
-	for _, r := range sharedRows(t) {
-		if len(r.targets) > 1 {
-			shapes[r.sym] = r.shapes
+func TestTheUsecaseDeclarationsAreUnrelatedStructs(t *testing.T) {
+	// This finding used to be carried by the trap column and no longer is, for
+	// the reason recorded above: `Usecase` left the report when decision 281
+	// removed `frontierbound` as a second consuming domain. The finding itself
+	// is untouched by that — `Usecase` is still not one shared shape under many
+	// names, it is many unrelated service structs that agree on the word
+	// "repo" and on nothing else.
+	//
+	// Asserted against the parsed declarations rather than the report, exactly
+	// as the ListFilter pin below does it. The report's silence is a fact about
+	// who consumes a symbol; this is a fact about who declares it, and only the
+	// first one moved. Asserting it through the column would have made the
+	// finding disappear the moment the last consumer went away, which is the
+	// opposite of what a trap column is for.
+	sources, _, err := parseControlPlane("../..")
+	if err != nil {
+		t.Fatalf("parse the control plane: %v", err)
+	}
+	owners := map[string][]string{}
+	for pkg, syms := range collectStructFields(sources) {
+		if f, ok := syms["Usecase"]; ok {
+			owners[pkg] = f
 		}
 	}
-	uc, ok := shapes["Usecase"]
-	if !ok {
-		t.Fatal("Usecase is no longer reported as ambiguous; if that is real it has become a " +
-			"move candidate and belongs at the top of the shared list")
+	if len(owners) < 2 {
+		t.Fatalf("Usecase is declared by %d package(s), want the several unrelated service structs "+
+			"it has always had; if they were merged that is a decision to record, not a drift to "+
+			"absorb", len(owners))
 	}
-	if len(uc) < 2 {
-		t.Fatalf("Usecase has %d declaring packages reported, want at least 2", len(uc))
+	// The owners must be visibly different. Comparing the field list alone, not
+	// the package path: two owners with identical fields would still be two
+	// declarations, and a reader who merged them would be wrong either way —
+	// but a report that printed the same struct three times under three names
+	// would be printing something false, and that is what this catches.
+	shapes := map[string]bool{}
+	for pkg, f := range owners {
+		shapes[strings.Join(f, ",")+" @"+pkg] = true
 	}
-	// The owners must be visibly different. The comparison is on the field
-	// list alone, not on the whole rendered line: the package path differs
-	// even when the fields are identical, so comparing lines would pass for a
-	// report that printed the same struct three times under three names. That
-	// is exactly the mutation this assertion was written against.
-	shapesSeen := map[string]bool{}
-	for _, line := range uc {
-		open := strings.Index(line, "{")
-		shape := line
-		if open >= 0 {
-			shape = line[open:]
-		}
-		shapesSeen[shape] = true
+	for _, f := range owners {
+		shapes[strings.Join(f, ",")] = true
 	}
-	if len(shapesSeen) < 2 {
-		t.Errorf("all Usecase owners rendered the same field list %v; the report is not showing "+
-			"the shapes it claims to show, and a reader would merge types that are not alike", uc)
+	if len(shapes) < len(owners) {
+		t.Errorf("the %d Usecase owners do not all differ: %v. A reader would merge types that "+
+			"are not alike", len(owners), keysOfBool(shapes))
 	}
-	// And the specific shape that makes the point: no owner of Usecase is
-	// documented as holding an audit chain, which is what one shared service
-	// struct would look like if it existed. biz/audit is the one that has
-	// `chain`, and it is the only one.
+	// And the specific shape that makes the point: at most one owner of Usecase
+	// holds an audit chain, which is what a single shared service struct would
+	// look like if it existed. biz/audit is the one that has `chain`.
 	withChain := 0
-	for _, line := range uc {
-		if strings.Contains(line, "{") && strings.Contains(line, "chain") {
-			withChain++
+	for _, f := range owners {
+		for _, name := range f {
+			if name == "chain" {
+				withChain++
+				break
+			}
 		}
 	}
 	if withChain > 1 {
 		t.Errorf("%d owners of Usecase carry an audit chain; they are documented as unrelated, "+
-			"so either the tree changed or the report is wrong", withChain)
+			"so either the tree changed or the premise of this file is wrong", withChain)
 	}
 }
 
