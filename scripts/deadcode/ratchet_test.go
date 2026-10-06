@@ -23,6 +23,12 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 858 / 590 / 268 as of decision 335: the seven flow actions plus the flow
+// resource type. A flow is an ordered set of tool calls that one click sets
+// off, so flow_run and flow_test_node are the two rows the platform most needs
+// and were the two most conspicuously missing. Eight re-exports, same shape as
+// every line below: vocabulary whose writers live elsewhere.
+
 // 850 / 582 / 268 as of decision 334: edge_register and edge_delete, the two
 // ends of a node's lifecycle (the middle — bytes, plugins, credential — was
 // written by 332 and 333). Same shape as the lines below: vocabulary
@@ -164,8 +170,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 850
-	deadSymbolBudget     = 582
+	unreachableBudget    = 858
+	deadSymbolBudget     = 590
 	testOnlySymbolBudget = 268
 )
 

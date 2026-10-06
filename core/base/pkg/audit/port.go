@@ -538,6 +538,34 @@ const (
 	// does not already have.
 	ActionEdgeDelete = "edge_delete"
 
+	// The orchestration surface (决策 335).
+	//
+	// A flow is the closest thing this platform has to a loaded weapon: it is
+	// an ordered set of tool calls that a single click will execute, and the
+	// executor it reaches is the same one the approval inbox guards. So the
+	// two rows that matter most are **flow_run** (somebody set it off) and
+	// **flow_test_node** (somebody ran one node in isolation, which really
+	// does reach the tools even though it "changes nothing").
+	//
+	// flow_generate is its own action because the interesting question is not
+	// "a flow was created" but "a model drafted this graph from this prompt":
+	// that is the row that says who decided what the automation should be.
+	// The definition rows (create / update / delete / toggle) are the ordinary
+	// CRUD trio-plus-a-switch around it.
+	//
+	// Seven actions rather than one `flow_change` is deliberate and is the last
+	// time this vocabulary takes that shape: they are asked apart constantly,
+	// and folding them would make each of them a payload scan. The sprawl rule
+	// that keeps this from becoming a mess is the one already in force — a new
+	// action needs a question an operator actually asks, not a verb.
+	ActionFlowCreate   = "flow_create"
+	ActionFlowGenerate = "flow_generate"
+	ActionFlowUpdate   = "flow_update"
+	ActionFlowDelete   = "flow_delete"
+	ActionFlowToggle   = "flow_toggle"
+	ActionFlowRun      = "flow_run"
+	ActionFlowTestNode = "flow_test_node"
+
 	ActionEdgeRotateSecret = "edge_rotate_secret"
 	ActionEdgePluginSet    = "edge_plugin_set"
 
@@ -637,6 +665,11 @@ const (
 	// The resource id is the session id the kill route carries in its path —
 	// the same string an operator sees in the URL they clicked.
 	ResourceWebshellSession = "webshell_session"
+	// ResourceFlow names one orchestration (决策 335). The resource id is the
+	// flow id; a run's own id travels in the payload rather than becoming a
+	// second resource type, because an operator filtering "which automation was
+	// this" wants flows, and the run is an attribute of one.
+	ResourceFlow = "flow"
 
 	// ResourceMCPTool names a tool reached over the MCP endpoint. The
 	// resource id is the tool name the caller asked for, which is what an

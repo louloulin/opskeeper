@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	bizflow "github.com/vincent-wuhan/opskeeper/core/domains/biz/flow"
@@ -197,6 +198,15 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 335：编排定义落库。graph 不进 payload —— 它是一份会被反复改写的大块
+	// JSON，而链上留一份「当时的图」只会让人误以为那是事实；要回查就查 flows 表。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionFlowCreate,
+		ResourceType: auditport.ResourceFlow,
+		ResourceID:   strconv.FormatUint(f.ID, 10),
+		ResourceName: f.Name,
+		Status:       auditport.StatusSuccess,
+	})
 	writeJSON(w, http.StatusCreated, toFlowDTO(f, true))
 }
 
@@ -223,6 +233,17 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 335：这一行的价值不在「创建了一个编排」，而在「**是模型根据这句话
+	// 决定了这个自动化该长什么样**」。prompt 进 payload：它是这次决定的全部输入，
+	// 且不长；而 graph 不进——它已经落库，而且会被人接着改。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionFlowGenerate,
+		ResourceType: auditport.ResourceFlow,
+		ResourceID:   strconv.FormatUint(f.ID, 10),
+		ResourceName: f.Name,
+		Status:       auditport.StatusSuccess,
+		Payload:      map[string]any{"prompt": in.Prompt},
+	})
 	writeJSON(w, http.StatusCreated, toFlowDTO(f, true))
 }
 
@@ -263,6 +284,14 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionFlowUpdate,
+		ResourceType: auditport.ResourceFlow,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: f.Name,
+		Status:       auditport.StatusSuccess,
+		Payload:      map[string]any{"version": f.Version},
+	})
 	writeJSON(w, http.StatusOK, toFlowDTO(f, true))
 }
 
@@ -272,10 +301,24 @@ func (h *Handler) del(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 名字先读：删除之后行里剩下的只有数字 id，而「删的是哪份自动化」正是
+	// 事后第一个要回答的问题。读不到不是不写这行的理由。
+	existing, _ := h.uc.Get(r.Context(), id)
+	name := ""
+	if existing != nil {
+		name = existing.Name
+	}
 	if err := h.uc.Delete(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionFlowDelete,
+		ResourceType: auditport.ResourceFlow,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: name,
+		Status:       auditport.StatusSuccess,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -296,6 +339,16 @@ func (h *Handler) toggle(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 335：开与关不是同一个动词的两面。**enable=true 决定这份自动化此后
+	// 会不会自己动手**（告警与 cron 触发器扫的是 enabled 的编排），所以这一行
+	// 单独可查；disable 记在同一个动作的 payload 里，靠 enabled 字段区分。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionFlowToggle,
+		ResourceType: auditport.ResourceFlow,
+		ResourceID:   strconv.FormatUint(id, 10),
+		Status:       auditport.StatusSuccess,
+		Payload:      map[string]any{"enabled": in.Enabled},
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": in.Enabled})
 }
 
@@ -316,6 +369,17 @@ func (h *Handler) run(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 335：整个平台里后果最重的一行——** somebody 按下了一次执行**。
+	// input 不进 payload：运行输入本身已经作为 run 的 TriggerJSON 落库，
+	// 而它也可能含凭据；链上记的是「谁在什么时候让哪份编排跑了起来」，run_id
+	// 让执行细节可以被查到，而不必把它复制一份到链上。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionFlowRun,
+		ResourceType: auditport.ResourceFlow,
+		ResourceID:   strconv.FormatUint(id, 10),
+		Status:       auditport.StatusSuccess,
+		Payload:      map[string]any{"run_id": run.ID, "trigger": bizflow.NodeTriggerManual},
+	})
 	writeJSON(w, http.StatusAccepted, toRunDTO(run))
 }
 
@@ -340,9 +404,29 @@ func (h *Handler) testNode(w http.ResponseWriter, r *http.Request) {
 	}
 	out, runErr := h.uc.TestNode(r.Context(), id, in.NodeType, in.Config, in.TriggerInput)
 	if runErr != nil {
+		// 决策 335：这个失败是**带内**的——HTTP 200，错误在响应体的 error 字段里。
+		// 于是任何靠状态码判断成败的东西（中间件、网关、指标、告警）都会把它当成
+		// 一次成功。**而它其实真的动了手**：testNode 会执行那个节点，会触到工具。
+		// 所以这里必须显式写一行 failure；否则「试了一下，没成」这件事在链上
+		// 一次也不会出现，而它恰恰是最值得被看见的那种试探。
+		auditport.SetAuditEvent(r, auditport.Event{
+			Action:       auditport.ActionFlowTestNode,
+			ResourceType: auditport.ResourceFlow,
+			ResourceID:   strconv.FormatUint(id, 10),
+			Status:       auditport.StatusFailure,
+			ErrorMessage: runErr.Error(),
+			Payload:      map[string]any{"node_type": in.NodeType},
+		})
 		writeJSON(w, http.StatusOK, map[string]any{"error": runErr.Error()})
 		return
 	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionFlowTestNode,
+		ResourceType: auditport.ResourceFlow,
+		ResourceID:   strconv.FormatUint(id, 10),
+		Status:       auditport.StatusSuccess,
+		Payload:      map[string]any{"node_type": in.NodeType},
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"output": out})
 }
 

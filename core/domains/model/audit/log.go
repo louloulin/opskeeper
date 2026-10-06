@@ -202,7 +202,17 @@ const (
 	ActionEdgeRotateSecret = auditport.ActionEdgeRotateSecret
 	ActionEdgeRegister     = auditport.ActionEdgeRegister
 	ActionEdgeDelete       = auditport.ActionEdgeDelete
-	ActionEdgePluginSet    = auditport.ActionEdgePluginSet
+
+	// 决策 335：编排面。flow_run 与 flow_test_node 是整个平台后果最重的两行——
+	// 一份编排是一串工具调用，按一次就真的发生。
+	ActionFlowCreate    = auditport.ActionFlowCreate
+	ActionFlowGenerate  = auditport.ActionFlowGenerate
+	ActionFlowUpdate    = auditport.ActionFlowUpdate
+	ActionFlowDelete    = auditport.ActionFlowDelete
+	ActionFlowToggle    = auditport.ActionFlowToggle
+	ActionFlowRun       = auditport.ActionFlowRun
+	ActionFlowTestNode  = auditport.ActionFlowTestNode
+	ActionEdgePluginSet = auditport.ActionEdgePluginSet
 
 	// 决策 333：供应链面（谁把哪段字节推到了哪台机器上）与「谁掐掉了这个会话」。
 	ActionEdgeAgentUpgrade    = auditport.ActionEdgeAgentUpgrade
@@ -280,6 +290,7 @@ const (
 	ResourceDataGuardLabel   = auditport.ResourceDataGuardLabel
 	ResourceHITLProposal     = auditport.ResourceHITLProposal
 	ResourceWebshellSession  = auditport.ResourceWebshellSession
+	ResourceFlow             = auditport.ResourceFlow
 	ResourceMCPTool          = auditport.ResourceMCPTool
 
 	ResourceAgentTool = auditport.ResourceAgentTool
