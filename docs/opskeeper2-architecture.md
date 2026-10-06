@@ -7238,6 +7238,82 @@ D 是「**更多插件迁移**」。
 - 本节是**一次核查的记录**，不是一次改造
 - 两把尺不动：四阶段交付尺 **99.5%**、架构尺 **97.75%**
 
+### 4.342 决策 408：`node delivery` 在 CI 里**第一次真的跑了**——于是 arm64 那条从「UNKNOWN」变成了**有答案的「没有」**
+
+#### 4.342.1 触发与做法
+
+`cigate` 一直挂着同一句话：**1 gate(s) are wired but no push can reach them:
+`e2e-delivery-check`**，理由是"等 schedule，而 schedule 只对默认分支触发"。
+而 `feature/pig` 恰恰不是默认分支，**所以那条 schedule 从来没有在这条分支上跑过一次**。
+
+但 `ci.yml` 的 `delivery` job 的 `if` 写的是：
+
+```yaml
+if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+```
+
+**`workflow_dispatch` 也在条件里。** 也就是说这道闸门**一直是可手动触发的**，
+缺的只是"有人按了那个按钮"——而那是一件不需要任何人做决定的事。
+`gh workflow run ci.yml --ref feature/pig` 之后，run `37540153252`：
+
+| step | 结果 |
+|---|---|
+| `Which architectures does the broker image offer?` | success（诊断步，`continue-on-error`） |
+| **`Node delivery and no-cloud-credential assertions`** | **success** |
+| `Re-raise the broker architecture verdict` | **failure**（刻意抬起，见下） |
+
+**中间那一条是本轮真正的东西**：`make e2e-delivery-check` **在真实 CI runner 上、
+用真 broker 容器跑通了**。这是这道闸门自加入以来第一次执行，
+而**它一次就过，没有为了让它变绿改任何代码**（决策 403 在本机量过一次，CI 这一次是同一结论的独立复现）。
+
+#### 4.342.2 真正的收获：arm64 那条不再是 UNKNOWN
+
+本机跑 `make broker-arch-report` 得到的是 **3（UNKNOWN，`registry-1.docker.io` 不可达）**，
+而 4.332 那一节自己写着 **1 和 3 不可混**——一个够不到的 registry 没有对 arm64 说过任何话。
+
+**CI 的 registry 是够得到的，于是它说了：**
+
+```
+brokerarch: asking https://registry-1.docker.io about docker.io/singchia/frontier:1.2.5
+VERDICT: no arm64 linux manifest is offered. An arm64 delivery leg has to ...
+```
+
+**所以四码里的答案是 1（读到了，但没有 arm64），不是 3（问不出来）。**
+这条缺口的状态从「**没人问过**」变成「**问过了，答案是没有**」——
+**这是一个真实的推进：它把决策二（frontier 源码从哪来）的前置条件确认了。**
+在那之前那个决定的成本是估的；**现在它是确定的**：
+`singchia/frontier:1.2.5` 没有 arm64 清单，**arm64 腿必须从源码构建，没有捷径。**
+
+#### 4.342.3 那个 failure 是设计，不是缺陷
+
+最后那一步 `Re-raise the broker architecture verdict` 是**决策 399 加的**：
+诊断步用 `continue-on-error` 免得挡掉后面的 e2e，**然后在末尾按判词重新抬起红**，
+**理由原文是「so the gap stays visible」**。
+
+**本轮它第一次真的抬起来了。** 一个只写着"缺口存在"的注释，
+和一个每天自己回答一次、把答案打在 job log 里的红，是两件事——
+**这是决策 191 立这道诊断步时想要的效果，现在第一次兑现。**
+
+#### 4.342.4 顺带更正 `cigate` 那句话的适用面
+
+`cigate` 报的是「wired but **no push** can reach them」，**这句话仍然为真**：
+push 腿确实到不了它。**但它没说的是"只有 schedule 能到"**——
+`workflow_dispatch` 也能到，而本轮按了一下就得到了一个此前不存在的读数。
+
+**因此本轮不修改 `cigate` 的措辞**（它陈述的是 push 腿的事实，且为真），
+**而是在这里记下一条更实用的形状**：
+
+> 一道只挂在 schedule 上的闸门，**不是不可运行的闸门，是一条没人按过的按钮**。
+> `workflow_dispatch` 让它随时可跑——而"随时可跑"与"有人跑过"之间的距离，
+> **就是本轮这 15 分钟与 382 个提交之间的距离。**
+
+#### 4.342.5 净变化
+
+- **生产代码零改动**；未新增闸门、检查或测试
+- `make e2e-delivery-check` 的 CI 首次执行结果：**绿**
+- arm64 broker 判词：从本机 **3（UNKNOWN）** 变为 CI 的 **1（确实没有 arm64）**
+- 两把尺不动：四阶段交付尺 **99.5%**、架构尺 **97.75%**
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
