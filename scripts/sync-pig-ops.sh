@@ -76,6 +76,7 @@ for pkg_dir in "$packages_root"/*/; do
 		SYNC_PKG="$pkg" SYNC_EXT="$ext" python3 - <<'PYTHON'
 import io
 import os
+import re
 import shutil
 
 src = os.environ["SYNC_SRC"]
@@ -131,6 +132,33 @@ wire_files = copy_go_files(wire_root, dst, subdir="wire")
 # cannot honour, and the honest way to drop a dependency is to delete it.
 # What is left is the one module PiG itself stages, so the go.sum carries
 # its hashes and nothing else.
+# The SDK version is read from the canonical go.mod rather than written here.
+# It used to be a literal, and that literal was v0.3.0 while the host had
+# already moved to v0.4.0: ten packaged extensions kept building against a
+# different SDK than the pig they run beside, and nothing said so, because
+# re-running this script re-wrote the same stale version with the same
+# confidence. A generator that repeats a fact nobody reads is a second place
+# where that fact can go out of date.
+#
+# Reading it makes the two sides share one source, and failing loudly when the
+# source no longer requires the SDK at all is better than writing a plausible
+# version into a file no test can check.
+sdk_version = None
+with io.open(os.path.join(src, "go.mod"), encoding="utf-8") as handle:
+    for line in handle:
+        found = re.match(
+            r"\s*github\.com/MichaelKinsy/PiG/extensions/sdk\s+(v\S+)", line
+        )
+        if found:
+            sdk_version = found.group(1)
+            break
+if sdk_version is None:
+    raise SystemExit(
+        "sync-pig-ops: %s no longer requires the PiG extension SDK, so there is "
+        "no version to write into %s -- update this script rather than guess one"
+        % (os.path.join(src, "go.mod"), os.path.join(dst, "go.mod"))
+    )
+
 header = [
     "// %s, as the agent runtime builds it on a node." % ext.replace("_", "-"),
     "//",
@@ -149,7 +177,7 @@ header = [
     "",
     "go 1.26.0",
     "",
-    "require github.com/MichaelKinsy/PiG/extensions/sdk v0.3.0",
+    "require github.com/MichaelKinsy/PiG/extensions/sdk %s" % sdk_version,
     "",
 ]
 with io.open(os.path.join(dst, "go.mod"), "w", encoding="utf-8") as handle:

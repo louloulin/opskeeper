@@ -19,10 +19,8 @@ module github.com/vincent-wuhan/opskeeper/core/pig/extensions/opskeeper-sre-obse
 go 1.26.0
 
 require (
-	github.com/MichaelKinsy/PiG/extensions/sdk v0.3.0
+	github.com/MichaelKinsy/PiG/extensions/sdk v0.4.0
 	github.com/vincent-wuhan/opskeeper/core v0.0.0
 )
 
-replace (
-	github.com/vincent-wuhan/opskeeper/core => ../../../
-)
+replace github.com/vincent-wuhan/opskeeper/core => ../../../

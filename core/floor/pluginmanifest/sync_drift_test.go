@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -275,10 +276,16 @@ func TestEveryPackagedGoModResolvesOnANode(t *testing.T) {
 		if !strings.Contains(text, "module "+packagedModule(pkg, ext)) {
 			t.Errorf("%s/%s/go.mod does not declare the packaged module path; run %s", pkg, ext, syncScript)
 		}
-		if !strings.Contains(text, publishedSDK+" v0.3.0") {
-			t.Errorf("%s/%s/go.mod does not require %s v0.3.0; PiG stages that SDK from its own "+
-				"tree, so it is the one dependency a node can actually resolve; run %s",
-				pkg, ext, publishedSDK, syncScript)
+		// The expected version is the canonical module's, not a literal here.
+		// This assertion used to name v0.3.0 while the host had moved to v0.4.0,
+		// and the generator wrote the same literal -- so the two agreed with
+		// each other and with neither. A check that pins a version in a second
+		// place keeps that version alive after it stops being true.
+		want := canonicalSDKVersion(t, canonical)
+		if !strings.Contains(text, publishedSDK+" "+want) {
+			t.Errorf("%s/%s/go.mod does not require %s %s (the version %s requires); PiG stages that "+
+				"SDK from its own tree, so it is the one dependency a node can actually resolve; run %s",
+				pkg, ext, publishedSDK, want, canonical, syncScript)
 		}
 
 		// The go.sum is what lets the SDK resolve before PiG's staging
@@ -493,7 +500,7 @@ func TestEveryPackageResourceEntryExistsOnDisk(t *testing.T) {
 				t.Fatalf("read the package manifest: %v", err)
 			}
 			var manifest struct {
-				Pi map[string][]string `json:"pi"`
+				Pi  map[string][]string `json:"pi"`
 				Pig map[string][]string `json:"pig"`
 			}
 			if err := json.Unmarshal(raw, &manifest); err != nil {
@@ -516,4 +523,22 @@ func TestEveryPackageResourceEntryExistsOnDisk(t *testing.T) {
 			}
 		})
 	}
+}
+
+// canonicalSDKVersion reads the PiG extension SDK version the canonical
+// extension module requires. Both the generator and this test read it there,
+// so the packaged copy cannot drift to a version the host never asked for.
+func canonicalSDKVersion(t *testing.T, canonical string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(canonical, "go.mod"))
+	if err != nil {
+		t.Fatalf("%s: %v", canonical, err)
+	}
+	re := regexp.MustCompile(`github\.com/MichaelKinsy/PiG/extensions/sdk\s+(v\S+)`)
+	found := re.FindSubmatch(raw)
+	if found == nil {
+		t.Fatalf("%s/go.mod no longer requires the PiG extension SDK; update %s rather than guessing a version",
+			canonical, syncScript)
+	}
+	return string(found[1])
 }

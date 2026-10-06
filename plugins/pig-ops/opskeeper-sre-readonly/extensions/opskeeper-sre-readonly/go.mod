@@ -15,4 +15,4 @@ module github.com/vincent-wuhan/opskeeper/plugins/pig-ops/opskeeper-sre-readonly
 
 go 1.26.0
 
-require github.com/MichaelKinsy/PiG/extensions/sdk v0.3.0
+require github.com/MichaelKinsy/PiG/extensions/sdk v0.4.0

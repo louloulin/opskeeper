@@ -774,7 +774,7 @@ func TestPiGBoundaryAllowsAPluginExtensionModule(t *testing.T) {
 	root := pigFixture(t,
 		map[string]string{
 			".":                                  "module github.com/vincent-wuhan/opskeeper\n",
-			"plugins/pig-ops/pkg/extensions/ext": "module github.com/vincent-wuhan/opskeeper/plugins/pig-ops/pkg/extensions/ext\n\nrequire github.com/MichaelKinsy/PiG/extensions/sdk v0.3.0\n",
+			"plugins/pig-ops/pkg/extensions/ext": "module github.com/vincent-wuhan/opskeeper/plugins/pig-ops/pkg/extensions/ext\n\nrequire github.com/MichaelKinsy/PiG/extensions/sdk v0.4.0\n",
 		},
 		map[string]string{
 			"plugins/pig-ops/pkg/extensions/ext": "package ext\n\nimport sdk \"github.com/MichaelKinsy/PiG/extensions/sdk\"\n\nvar _ sdk.Extension\n",
@@ -797,7 +797,7 @@ func TestPiGBoundaryDoesNotLetTheExtensionSDKAloneBeABackdoor(t *testing.T) {
 	root := pigFixture(t,
 		map[string]string{
 			".":                                  "module github.com/vincent-wuhan/opskeeper\n",
-			"plugins/pig-ops/pkg/extensions/ext": "module github.com/vincent-wuhan/opskeeper/plugins/pig-ops/pkg/extensions/ext\n\nrequire github.com/MichaelKinsy/PiG/extensions/sdk v0.3.0\n",
+			"plugins/pig-ops/pkg/extensions/ext": "module github.com/vincent-wuhan/opskeeper/plugins/pig-ops/pkg/extensions/ext\n\nrequire github.com/MichaelKinsy/PiG/extensions/sdk v0.4.0\n",
 		},
 		map[string]string{
 			"plugins/pig-ops/pkg/extensions/ext": "package ext\n\nimport (\n\tsdk \"github.com/MichaelKinsy/PiG/extensions/sdk\"\n\t\"github.com/MichaelKinsy/PiG/ai\"\n)\n\nvar _ sdk.Extension\nvar _ ai.Model\n",
