@@ -4473,6 +4473,71 @@ no live process environment was readable on this platform; the constructed envir
 是编码量**：`0.4` 的真机（物理机/真实云环境）复跑与 arm64 那一腿（决策 190/191
 已把它变成每天自己回答一次的命令）、值侧脱敏的代价、开源门槛 13 处。
 
+### 4.308 决策 374：arm64 那一腿——本机能答的那一半，答掉了
+
+方案 §四 0.3 留了一句条件式的话：「distroless 下需确认 glibc/musl 匹配，否则
+改用对应基础镜像」。决策 190/191 把 arm64 的问题拆成两半，其中一半是「broker
+镜像提供哪些架构」，另一半是**我们自己出的二进制在 arm64 上到底能不能跑**。
+这一轮跑的是后一半——而它比之前以为的更接近可答：**这台机器本身就是 arm64**
+（`uname -m` = arm64），所以 darwin/arm64 那一腿不用交叉、不用模拟，可以直接跑。
+
+#### 4.308.1 四个目标都构建，且两个 arm64 目标确实可执行
+
+```
+$ make build-edge-darwin-arm64        # 同时带出 pig
+$ file bin/darwin-arm64/pig bin/darwin-arm64/opskeeper-edge
+  bin/darwin-arm64/pig:            Mach-O 64-bit executable arm64
+  bin/darwin-arm64/opskeeper-edge: Mach-O 64-bit executable arm64
+$ ./bin/darwin-arm64/pig --version
+  0.4.0+1.0.0
+$ ./bin/darwin-arm64/opskeeper-edge --version
+  opskeeper-edge v2026.09.14-rc4
+
+$ make build-edge-linux-arm64
+$ file bin/linux-arm64/pig bin/linux-arm64/opskeeper-edge
+  ELF 64-bit LSB executable, ARM aarch64, statically linked
+```
+
+**「能不能编译」与「能不能跑」是两个问题**，而交付面关心的是后者：台账与
+`core/floor/delivery` 此前证明的是产物在清单里、有 sha256，而 `install-edge.sh`
+之所以要真的 spawn 一次 `pig --version`（决策 92 写下的理由：截断的拷贝、错误
+libc、noexec 挂载都能过 `-x` 而在第一次对话时炸），正是因为**清单证明不了可跑**。
+本轮把 darwin/arm64 这一格的「可跑」补上了；linux/arm64 在这台机器上无法执行，
+它的可跑性仍由 CI 的 linux 腿与真机承担。
+
+顺带把 0.3 那句条件式的话**关掉**：交叉编译用 `CGO_ENABLED=0`，产出的 linux
+二进制是 `statically linked`，因此 distroless 的 glibc/musl 问题不存在——不是
+「换了基础镜像」，是**没有 libc 可不匹配**。
+
+#### 4.308.2 另一半本轮答不出来，而且它**知道自己答不出来**
+
+```
+$ make broker-arch-report
+brokerarch: asking https://registry-1.docker.io about docker.io/singchia/frontier:1.2.5
+VERDICT: UNKNOWN — the registry did not answer, so this run says nothing about arm64.
+  cause: fetch manifest: ... context deadline exceeded
+  exit 3 is not exit 1: a registry that cannot be reached has not reported a
+  single-architecture image.
+exit status 3
+```
+
+这是本轮唯一一处**外部网络**参与的检查，它在网络不可达时选择退出 3 并把话说
+清楚，而不是退化成「没有 arm64」。决策 190/191 把它做成每天自己回答一次的命令，
+本轮它答了「答不出来」，并且没有假装答了。`make docker-build-broker` 是另一条
+出路（从源码构建 broker，天然双架构）。
+
+#### 4.308.3 进度更新
+
+方案 §六「跨架构：amd64 与 arm64 各跑一次完整 e2e」这一条，现在的准确状态是：
+
+| 腿 | 状态 | 证据 |
+|---|---|---|
+| amd64 完整 e2e | ✅ 已跑 | 决策 373 的三条 e2e（真 MySQL + 真 frontier + 真 manager） |
+| arm64 构建（linux + darwin） | ✅ 已跑 | 本节四个目标全部构建成功 |
+| arm64 可执行（darwin） | ✅ 已跑 | `pig --version` → `0.4.0+1.0.0`，edge → `v2026.09.14-rc4` |
+| arm64 完整 e2e | ⏳ 需要 linux/arm64 执行环境 | 需要 CI 的 linux 腿或一台 arm64 机器；不是编码量 |
+| broker 镜像架构 | ⏳ 需要能出网的 registry 查询 | 本轮 exit 3，命令行为正确 |
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
