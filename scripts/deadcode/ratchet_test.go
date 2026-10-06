@@ -24,9 +24,9 @@ import (
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
 const (
-	unreachableBudget    = 823
-	deadSymbolBudget     = 529
-	testOnlySymbolBudget = 294
+	unreachableBudget    = 803
+	deadSymbolBudget     = 527
+	testOnlySymbolBudget = 276
 )
 
 // TestTheUnreachableSymbolCountNeverGrows is the gate decision 199 declined to
