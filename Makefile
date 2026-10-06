@@ -526,6 +526,16 @@ module-check: ## 校验 OpsKeeper 2.0 模块边界（唯一 PiG 导入点 / core
 # happens to be built, so this gate is useful after build-pig-all alone. When
 # no edge is present the report says the pair rule did not run rather than
 # letting a green line stand in for coverage that was never exercised.
+# ROADMAP.md carries twelve ticks. Nothing executable connected a tick to the
+# thing it claims, which is how C.1 shipped as delivered while no deployment
+# had ever registered the tool: the capability existed, was built, was tested,
+# and was offered to nobody. This gate makes the tick a claim that has to hold
+# against the bag this binary actually assembles (manager tools) and against
+# the manifest an edge actually installs from (node tools).
+.PHONY: roadmap-delivery-check
+roadmap-delivery-check: ## ROADMAP 声称已交付的每一项，都要能在真工具袋 / 出厂 manifest 里指出证据（决策 351）
+	GOWORK=off go test ./cmd/opskeeper/ -count=1 -run 'TestEveryDelivered|TestEveryWitness'
+
 .PHONY: node-arch-check
 node-arch-check: ## 校验 bin/<os>-<arch>/ 里节点的 pig 与 edge 真的是该架构（决策 134）
 	go run ./scripts/nodearch .

@@ -1660,17 +1660,32 @@ func main() {
 	if cfg.Traces.URL != "" {
 		traceQuerier = pkgtracequery.New(cfg.Traces.URL, log.With(slog.String("comp", "aiops-tracequery")))
 	}
-	toolsReg := aiopstools.NewRegistry(fbClient, edgeUC, deviceUC, promQuerier, logQuerier, traceQuerier, alertUC, log)
+	// The one tool-registry wiring for this binary, as a value rather than
+	// as a constructor call: the fields that exist now are filled now, and
+	// the ones that only exist after the approval queue, the alert channel
+	// store and the LLM client are filled further down. See
+	// cmd/opskeeper/toolwiring.go for why it is a value.
+	toolWiring := toolRegistryWiring{
+		Caller:  fbClient,
+		Edges:   edgeUC,
+		Devices: deviceUC,
+		Prom:    promQuerier,
+		Logs:    logQuerier,
+		Trace:   traceQuerier,
+		Alerts:  alertUC,
+		Log:     log,
+	}
+	toolsReg := toolWiring.buildRegistry()
 	agentTools.reg = toolsReg
 	repairPreviewRepository := repairpreviewcontrol.NewSQLRepository(db)
 	hitlProposalRepo := managerdatahitlstore.NewRepo(db)
 	hitlProposalSvc := managerbizhitl.NewService(hitlProposalRepo)
 	hitlProposalHandler := managerserverhitl.NewHandler(hitlProposalSvc)
-	toolsReg.SetRecoveryAuditRepo(hitlRecoveryAuditRepo{repo: hitlProposalRepo})
-	toolsReg.SetRepairPreviewGate(repairpreviewcontrol.NewGate(
+	toolWiring.RecoveryAudit = hitlRecoveryAuditRepo{repo: hitlProposalRepo}
+	toolWiring.RepairPreview = repairpreviewcontrol.NewGate(
 		repairPreviewRepository,
 		strings.TrimSpace(os.Getenv("OPSKEEPER_REPAIR_PREVIEW_WORKLOAD_FINGERPRINT")),
-	))
+	)
 	hostFixtureURL := strings.TrimSpace(os.Getenv("OPSKEEPER_HOST_FIXTURE_URL"))
 	hostFixtureToken := strings.TrimSpace(os.Getenv("OPSKEEPER_HOST_FIXTURE_TOKEN"))
 	if hostFixtureURL != "" || hostFixtureToken != "" {
@@ -1678,7 +1693,7 @@ func main() {
 			log.Error("host fixture client config requires both URL and token")
 			os.Exit(1)
 		}
-		toolsReg.SetHostFixtureTerminator(aiopshost.NewHostFixtureClient(hostFixtureURL, hostFixtureToken))
+		toolWiring.HostTerminator = aiopshost.NewHostFixtureClient(hostFixtureURL, hostFixtureToken)
 	}
 	poolFixtureURL := strings.TrimSpace(os.Getenv("OPSKEEPER_POOL_FIXTURE_URL"))
 	poolFixtureToken := strings.TrimSpace(os.Getenv("OPSKEEPER_POOL_FIXTURE_TOKEN"))
@@ -1688,7 +1703,7 @@ func main() {
 			log.Error("pool fixture client config requires both URL and token")
 			os.Exit(1)
 		}
-		toolsReg.SetPoolRecoveryExecutor(recovery.NewPoolFixtureClient(poolFixtureURL, poolFixtureToken))
+		toolWiring.PoolRecovery = recovery.NewPoolFixtureClient(poolFixtureURL, poolFixtureToken)
 	}
 	demoAPIToken := strings.TrimSpace(os.Getenv("OPSKEEPER_DEMO_API_TOKEN"))
 	if poolFixtureURL != "" && poolFixtureToken != "" && demoAPIToken != "" {
@@ -1737,7 +1752,7 @@ func main() {
 	} else if demoAPIToken != "" {
 		log.Warn("demo scenario API disabled: pool fixture URL/token is required")
 	}
-	toolsReg.SetPluginConfigLister(pluginConfigUC)
+	toolWiring.PluginConfig = pluginConfigUC
 	gitArtifacts, err := newGitArtifactRuntime(os.Getenv("OPSKEEPER_GIT_ARTIFACT_STORE_PATH"), log)
 	if err != nil {
 		log.Error("git-artifact runtime init failed", slog.Any("err", err))
@@ -1749,16 +1764,16 @@ func main() {
 		}
 	}()
 	toolsReg.AppendExternalBaseTool(gitArtifacts.tool)
-	toolsReg.SetConfigManager(newAlertRuleManager(alertSvc))
+	toolWiring.ConfigManager = newAlertRuleManager(alertSvc)
 	// query_change_events (HLD-013 Phase 2) — RCA "what changed near T".
 	// *audit.Usecase satisfies aiopstools.AuditLister via ListChanges.
-	toolsReg.SetAuditLister(auditUC)
+	toolWiring.AuditLister = auditUC
 	// A.3 follow-up: feed the edge changewatcher side of query_change_events.
-	toolsReg.SetEdgeChangeLister(changeEventUC)
+	toolWiring.EdgeChanges = changeEventUC
 	// Populate deployment-level facts for the get_topology tool. Channel
 	// counter pulls from the alert repo's enabled-channel listing so the
 	// number reflects what notify_router actually fans out to.
-	toolsReg.SetTopologyInfo(aiopstools.TopologyInfo{
+	toolWiring.TopologyInfo = aiopstools.TopologyInfo{
 		ManagerVersion:     version,
 		ConfiguredPromURL:  cfg.Prom.QueryURL,
 		ConfiguredLokiURL:  cfg.Logs.URL,
@@ -1770,7 +1785,7 @@ func main() {
 			}
 			return len(rows), nil
 		},
-	})
+	}
 	// Wire the topology graph usecase so expand_topology /
 	// find_topology_node show up in the BaseTool roster. nil-safe — the
 	// two BaseTools are gated on this exact field.
@@ -1778,9 +1793,7 @@ func main() {
 	// satisfy the nil check that gates the two BaseTools and then panic on
 	// first use. Guard at the one place the concrete usecase is in hand.
 	if topologyUC != nil {
-		toolsReg.SetTopologyGraph(&topologyGraphAdapter{uc: topologyUC})
-	} else {
-		toolsReg.SetTopologyGraph(nil)
+		toolWiring.TopologyGraph = &topologyGraphAdapter{uc: topologyUC}
 	}
 	aiopsAgent := aiopsagent.New(
 		llmClient,
@@ -1888,7 +1901,7 @@ func main() {
 		} else {
 			knowledgeUC = uc
 			knowledgeUC.WithRecallRepository(incidentcontrol.NewSQLRepository(db))
-			toolsReg.SetKnowledgeSearcher(knowledgeUC)
+			toolWiring.Knowledge = knowledgeUC
 			// GitHub-PAT-via-GIT_ASKPASS resolver wiring
 			// removed. SSH-style repos use ssh_identities; HTTPS auth
 			// returns in P3 via credential.helper.
@@ -1999,10 +2012,8 @@ func main() {
 			// — chatruntime.filterToolsForAgent strips them
 			// unconditionally via coordinatorOnlyTools (see
 			// chatruntime/worker.go).
-			toolsReg.SetWorkerSpawner(
-				chatruntimeSpawnerShim{rt: rt},
-				agentRegistryShim{inner: rt.AgentRegistry()},
-			)
+			toolWiring.WorkerSpawner = chatruntimeSpawnerShim{rt: rt}
+			toolWiring.Subagents = agentRegistryShim{inner: rt.AgentRegistry()}
 			// SendMessage / TaskStop are control-plane micro-ops; 15s
 			// is plenty. AgentTool is the odd one out: synchronous
 			// dispatch blocks until the worker LLM finishes its full
@@ -3077,35 +3088,17 @@ func main() {
 		})
 		return string(out), nil
 	})
-	toolsReg.SetCloudBashProposer(cloudBashProposerShim{uc: approvalUC})
-	toolsReg.SetHostBashProposer(hostBashProposerShim{uc: approvalUC})
-	// chat_to_query: the natural-language query tool. It is registered only
-	// when the translator has an LLM client, and the two setters that hand it
-	// one had no caller for the life of the deployment — so ROADMAP C.1,
-	// marked done, was absent from every manager that ever ran. The table, the
-	// store, the translator, the validator and the executor were all built,
-	// migrated and tested; the last twenty lines of wiring were the ones
-	// nobody wrote, and the tool bag is built from whatever the registry holds
-	// at this exact point, so nothing downstream could compensate.
-	toolsReg.SetChatToQueryLLM(modelRegistry)
-	toolsReg.SetChatToQueryTemplateStore(manageraiopsdata.NewQueryTemplateStore(db))
-	// send_im_message: the assistant can proactively push to a configured
-	// channel (飞书/钉钉/…), reusing the same BuildSenderFromChannel path the
-	// alert notifier + flow notify node use.
-	toolsReg.SetIMSender(imSenderShim{channels: alertRepo, router: notifyRouter})
-	// serve_page: the assistant can host a generated HTML report at an
-	// internal /pages/<token> URL. Pages live on the persistent volume; the
-	// route is registered on the mux below.
-	pagesDir := "/var/lib/opskeeper/pages"
-	if d := os.Getenv("OPSKEEPER_PAGES_DIR"); d != "" {
-		pagesDir = d
-	}
-	pageStore := filePageStore{dir: pagesDir, log: log.With(slog.String("comp", "serve_page"))}
-	if err := os.MkdirAll(pagesDir, 0o755); err != nil {
-		log.Warn("serve_page: mkdir pages dir failed; serve_page disabled", slog.String("dir", pagesDir), slog.Any("err", err))
-	} else {
-		toolsReg.SetPageStore(pageStore)
-	}
+	// Everything that decides what the tool bag contains is in
+	// toolRegistryWiring.apply — the one place those setters run, so a test
+	// can assert a capability the roadmap calls delivered is actually in the
+	// bag. See toolwiring.go for why that seam had to exist.
+	toolWiring.Approval = approvalUC
+	toolWiring.Channels = alertRepo
+	toolWiring.Router = notifyRouter
+	toolWiring.DB = db
+	toolWiring.LLM = modelRegistry
+	toolWiring.PagesDir = os.Getenv("OPSKEEPER_PAGES_DIR")
+	pageStore := toolWiring.apply(toolsReg)
 	// The MCP surface is assembled HERE, not where mcpHandler was built.
 	// Everything that changes what the registry yields — SetHostBashProposer,
 	// SetCloudBashProposer, SetIMSender, SetPageStore — runs after the handler

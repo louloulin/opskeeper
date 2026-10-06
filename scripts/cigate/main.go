@@ -139,6 +139,14 @@ func DecisionGates() []Gate {
 				"twenty-eight down with them (decision 173)",
 		},
 		{
+			Target: "roadmap-delivery-check",
+			Why: "a tick in ROADMAP.md is a claim about what a deployment serves, and for C.1 " +
+				"the claim held for a release while no deployment had ever registered the tool. " +
+				"The gate asserts each tick against the bag this binary assembles and against the " +
+				"manifest an edge installs from, which is the first time the twelve ticks have been " +
+				"connected to anything executable (decision 351)",
+		},
+		{
 			Target: "audit-port-check",
 			Why: "the plan's phase 3 line (extract the audit port and undo the iam -> manager " +
 				"reverse dependency) is a property, and a property nothing re-checks is a comment. " +

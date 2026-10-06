@@ -35287,3 +35287,93 @@ deadcode ratchet **871 → 867（dead 603 → 600）**，**连续第五次下降
 
 本决策**不改进度百分比**：它恢复的是一项被标记为已交付、而计划 §五 从未列为验收项的能力。
 但它关闭的是决策 348 那条线的同一个问题——**「有」与「在跑」之间的差距**——的另一个实例。
+
+#### 4.284 决策 351：把 ROADMAP 上的一个 ☑ 变成一句可执行的话——**「已交付」从此必须指出证据**
+
+##### 4.284.1 上一刀留下的问题
+
+决策 350 修好了 C.1 **这一个**工具，也补上了 deadcode 反向闸门的方法分支。但那道闸门管的是
+**注释**：「这个符号自称有生产接线，而它不可达吗」。它管不到另一种形状——
+
+**代码在树里、编译得过、有测试、有迁移、ROADMAP 上标着 ☑，而生产装配根里没有人调它。**
+
+C.1 是靠人读代码发现的，不是靠闸门发现的。**一次靠人发现，就意味着下一次还可以靠人漏掉。**
+
+##### 4.284.2 挡路的不是策略，是没有接缝
+
+要写一道「这个工具在真袋里吗」的检查，第一步就会撞墙：**测试建不出生产的那一袋**。
+`cmd/opskeeper` 里 19 个 setter 散在两千行启动代码中间，没有一个函数持有它们。于是任何测试
+都只能自己拼一个 registry——而**用 nil 拼出来的 registry 只注册七分之一的工具，剩下那七分之
+一恰好是不需要接线的部分，也就是不会烂掉的那部分**。上一刀把它叫「the seventh is the part
+that needs no wiring」。
+
+本刀新增 `cmd/opskeeper/toolwiring.go`：`toolRegistryWiring` 一个结构体持有构造依赖与全部
+19 个 setter 依赖，`buildRegistry()` 造、`apply(reg)` 注。main 只改成两处——`buildRegistry()`
+与 `apply()`——**调用时机没有动**，而 19 个 `toolsReg.SetX(v)` 变成 `toolWiring.X = v`。
+`main.go` 里所有 `BuildBaseTools()` 调用点都在 `apply` 之后，行为等价已逐点核对。
+
+**这是本刀唯一的生产代码改动，而它的全部意义是给测试一个接缝。**
+
+##### 4.284.3 三类证人
+
+证人表是**手写**的：从 ROADMAP 派生等于自证。十二项各有各的证据面，所以有三种证人：
+
+| 证人 | 断言对象 | 覆盖项 |
+|---|---|---|
+| `ManagerTools` | 本二进制**真正装配**出来的 `ToolBag` | A.1 A.2 C.1 D.4 |
+| `NodeTools` | `plugins/pig-ops/opskeeper-sre-readonly/pig-ops.yaml` 的 `spec.tools` | B.2 B.3 |
+| `Packages` | 树里的路径存在 | A.3 B.4 D.1 D.2 D.3 I.1 |
+
+节点侧断言的是**出厂 manifest**而不是 Go 源码，也不是生成它的那份拷贝。理由写进了注释：
+manifest 是节点**实际安装的那个产物**，代码里有、manifest 里没有的工具，就是没有任何节点会被
+提供的工具——**这正是源码级检查看不见的那种腐烂**。这一刀先试过直接 import
+`core/pig/extensions/opskeeper-sre-readonly`（它有现成的 `ToolNames()`），被 `GOWORK=off`
+下的模块边界挡住：`core/pig` 是独立模块，根模块引不到。**边界挡住了这次走捷径，是边界在
+对的地方生效**。
+
+##### 4.284.4 袋从 7 个工具涨到 25 个
+
+第一次量到的数是 **7**。补上 `AuditLister` / `EdgeChanges` / `ConfigManager` 三个桩之后是
+**25**。这 18 个差额**全是真实存在、此前无人检查的能力**：`query_change_events`（A.2）、
+`apply_config_change`（D.4）以及它们依赖的边缘变更事件窗口。
+
+值得记下来的是**中间那一次红**：只接了构造函数依赖、没接三个 setter 时，A.2 与 D.4 报红，
+而红的理由是「产品不提供这两个工具」——**一句为真但无用的话**。闸门因为自己的理由失败，
+谁也学不到东西，所以三个桩必须补上。**这三个桩本身也是有话说的**：留 nil 会让检查以它自己
+的缺陷冒充产品缺陷。
+
+##### 4.284.5 变异验证
+
+四条断言，每条都验证过会红，且红的都是**断言本身**而不是编译错误：
+
+| 变异 | 红的测试与它的第一行 |
+|---|---|
+| 撤掉 `apply` 里的 `SetAuditLister` 一段 | `the bag holds 24 tools and none is that one`（A.2 `query_change_events`） |
+| 把节点证人改成 `host_dmesgX` | `the manifest an edge installs from does not offer it: it declares 18 tools`（B.3） |
+| 删掉 D.1 整行证人 | `ROADMAP.md marks D.1 delivered and nothing in this file says what it delivered` |
+| 把 `roadmapItemRE` 改成永不匹配 | `no delivered items parsed out of ROADMAP.md: the marker set drifted and this check would pass by finding nothing` |
+
+最后一条最要紧。**一道「ROADMAP 声称已交付的东西在不在」的闸门，如果标记集漂移了就什么也
+找不到，然后全绿**——那么它测的就是「我能在文件里找到十二个 ☑」，而这恰恰是它本该取代的
+那种人工核对。空结果守卫把这个形状钉死了。
+
+（M3 的第一次尝试是删 A.2 那行，编译失败——因为 `alerting` 导入变成孤儿。**编译错误不算红**，
+所以换成删 D.1 那行重做。）
+
+##### 4.284.6 接上闸门
+
+新目标 `make roadmap-delivery-check`，进 `.github/workflows/ci.yml`，并按决策 348 立的规矩
+**同时登记进 `scripts/cigate` 的 `DecisionGates()`**——否则 `ci-gate-check` 会红。
+`ci-gate-check` 现在的读数是 **27 道验收闸门（计划指名 4 + 决策认领 23→24）**。
+
+##### 4.284.7 读数
+
+deadcode **867 symbols / 600 dead**（与上一刀相同——本刀在生产代码里只搬了接线，没增删符号）；
+`make ledger-check` / `ci-gate-check` / `module-check` / `route-audit` / `rpc-match-check` /
+`audit-port-check` / `node-arch-check` / `deadcode-ratchet-check` 八道全绿；根模块与
+`core` / `core/manager` / `core/edge` / `core/pig` / `core/floor` / `core/harness`
+七个模块 `go build ./...` 与 `go test ./... -count=1` 全绿；`core/manager` 尺寸闸门无变化
+（本刀一行未动 manager）。
+
+本决策**不改进度百分比**：它没有新增一项计划内的能力，它给十二项**已声称交付**的能力接上了
+第一道可执行的核对。计划 §五 的验收项里没有这一条。
