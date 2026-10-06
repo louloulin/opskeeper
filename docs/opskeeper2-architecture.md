@@ -23806,6 +23806,161 @@ import 被投影换掉之后，树里就少了一条 import 语句，所以三�
 **本轮不做，记在这里作为分量定义待改的第一条。**
 
 
+### 4.208 决策 274：定价器按**裸类型名**跨域归属——**最便宜的那条边，恰恰是最可能被报错价的那条**
+
+#### 一、这不是切边的一刀，是把量具本身修对的一刀
+
+上一刀结束时的下一步被写成「量 `device` 与 `edge` 的入向集中度」。量之前先跑了一次
+`make domain-release-report` 的邻居——`domaincheck -edges`，那个给每条声明边定价、
+并按价格排序的报告。**排序是它唯一的交付物**，因为下一刀切哪条边只看这张表。
+
+然后表里最便宜的那一条自己站了出来：
+
+```
+ 6  federationlink -> federation   2 type(s) (1 ifc) + 2 method(s) + 2 closure (reaches aiops plugin)
+        closure federation.Bundle  via Member.IssuedBundle  <-- lives in aiops, not in federation
+        closure federation.Outcome via Member.LastAck       <-- lives in aiops|plugin, not in federation
+```
+
+**那两行 closure 是假的。** `core/domains/biz/federation/registry.go` 的 `Member` 有两个
+字段，类型是 `core/floor/federation.Bundle` 与 `core/floor/federation.Outcome`
+（registry.go 顶部就 import 了 `core/floor/federation`）。**floor 类型不随切边移动**，
+报告自己的规则写着「控制面没有声明的命中一律丢弃，因为切边不动它」。
+
+而报告把它们归属到了 `aiops` 和 `aiops|plugin`，原因是：**控制面里恰好也有同名的
+`Bundle`（`biz/aiops/tools/correlate/fanout.go`）与 `Outcome`
+（`biz/aiops/crystallize` 与 `service/plugin`）。** 闭包遍历按**裸类型名**跨域解析
+归属，裸名字不说明它来自哪个包，于是撞上了同名的那一份。
+
+#### 二、为什么这个错的方向比它的大小更要紧
+
+报告自己的头一句话就是它存在的理由：
+
+> an edge that carries one or two types is a candidate for a port […] the ranking that
+> follows from that number sends the next cut at the wrong edge
+
+而 closure 列**就是排序键**（`price() = symbols() + len(closure)`）。于是这个缺陷同时做了
+三件事，每一件都指向不同的错误方向：
+
+1. **虚高**。`federationlink -> federation` 从 4 报成 6，**排序里最便宜的那条边被报高了**。
+2. **假警告**。`reaches aiops plugin` 是报告里唯一一句「这一刀切不出去」的话，而它指向的
+   缝**不存在**。一个每刀都在喊「这里拖着一个别的域」的量具，会训练出「这条大概真的很大」
+   的注释——决策 57 记录的正是这种注释。
+3. **它自己承认过不会犯错**。被删掉的 `nameHomes` 的文档写着「一个有两个归属的名字
+   **刻意不**解析成其中之一，选边就是猜测，而决策 233 整节都在讲一个这种形状的猜测
+   被当成事实报出来」。**而调用方做的正是那个猜测。** 索引刻意不决定，遍历决定了，
+   而遍历用的正是那个索引。**一个刻意不做决定的索引，被一个必须做决定的调用方拿来做了决定。**
+
+#### 三、修法：让字段引用带上它解析后的 import 路径
+
+`fieldRef` 多一列 `imp`——`pkg.Name` 里的 `pkg` **解析成完整 import 路径**；
+`importQualifiers` 负责从文件的 import 声明里查本地名，**点导入与下划线导入不解析也不猜**
+（它们没有可被限定名指称的包，猜就是把这个 bug 换一种形式）。
+裸写的字段类型由 `closureOf` 的折叠步骤补上它所在的那个包。
+
+归属随之从「这个名字谁声明过」变成「这个字段 import 的是哪个包」，`seen` 的键也
+从裸名字换成 `包 + 名字`（裸名字做键会**静默跳过**同名的控制面类型）。
+
+`nameHomes` 随之删除——它的存在理由就是那套按名字归属的做法，留着是给下一次修改留一个
+可以直接复用的错误入口。名字索引以 `nameOwners` 的形式**窄化回归**，只做一件事：
+告诉读者这个名字有歧义。
+
+#### 四、结果与预期相反：修完之后，八条边里有六条**变贵**了
+
+| 边 | 之前 | 之后 | |
+|---|---|---|---|
+| `federationlink → federation` | 6 | **4** | 两条假 closure 消失 |
+| `loop → alert` | 10 | **11** | |
+| `frontierbound → edge` | 16 | **17** | |
+| `aiops → loop` | 17 | **20** | |
+| `report → loop` | 21 | **23** | |
+| `chatdiagnose → loop` | 20 | **26** | |
+| `imbridge → aiops` | 25 | **29** | |
+| 其余 10 条 | — | 未变 | |
+
+**变贵的原因是旧代码在漏计。** 旧的 `seen[ref.typ]` 用裸名字做键：一个同名类型先被
+走到，后面真正该走的那个控制面类型就被跳过了。`aiops → loop` 的 `RootCauseJSON`（生产方
+是 `loop`）有 `EvidenceChain []EvidenceItem` / `TimeWindow TimeWindow` /
+`RemediationOptions []RemediationOption` 三个字段，而这三个名字 **aiops 也声明**，
+于是 `homes` 给出两个域、`len(hs) == 1` 不成立，**整棵子树不再往下走**。
+
+**所以这一刀同时修了两个方向的错**：一个虚高的假阳性（federationlink），和六个被静默
+跳过的假阴性。**而它对下一刀的影响是反向的**——修好之前，最便宜的那条边正是最可能
+被报错价的那条；修好之后，`federationlink -> federation` 稳定地是最便宜的（4 =
+2 类型 + 2 方法，零 closure，零跨域）。
+
+#### 五、修好之后量具照出来的东西：一份**手抄的线上契约**
+
+`aiops → loop` 的类型清单里，`RootCauseJSON` 的字段是
+`{SchemaVersion RootCauseObject Confidence EvidenceChain TimeWindow RemediationOptions LegacySummaryText}`
+——**带 `LegacySummaryText`，这是 `loop` 那一份**。而 `aiops` 在
+`biz/aiops/investigator/worker_output.go` 里另有一份 `RootCauseJSON`，**没有**这个字段。
+
+四个类型名各有两个主人，而**它们不是同一个类型**：
+
+| 类型 | `aiops` 那份 | `loop` 那份 |
+|---|---|---|
+| `TimeWindow` | `Start/End string` | `Start/End time.Time` |
+| `EvidenceItem` | `Timestamp string`、`Value float64` | `Timestamp time.Time`、`Value any` |
+| `RootCauseJSON` | `RootCauseObject string`、多一个 `SourceLinks` | `RootCauseObject *RootCauseObject`、多一个 `LegacySummaryText` |
+| `RemediationOption` | 4 字段 | 4 字段（**唯一真正相同的一个**） |
+
+**JSON tag 相同、Go 类型不同。** 这是一份跨域手抄的序列化契约：它今天能工作，代价是
+**任何一边加字段都不会让另一边失败**——`chatdiagnose` 也在声明其中三个名字，
+`report` 在读 `loop` 的那一份。**而旧的按名字遍历在结构上不可能说出这件事**：
+它看到的只有一个名字和一堆主人，它没有「哪一份」这个概念。
+
+现在报告把歧义打印出来，落在**每一条**命中上：
+
+```
+closure EvidenceItem via RootCauseJSON.EvidenceChain <-- aiops chatdiagnose also declares this name; the shape above is loop's
+```
+
+**「上面的形状是 loop 的」这句话，是这一刀真正的产出。** 它把一个此前只能靠人去比对
+两个文件才能发现的事实，变成读报告时必然看见的一行。**而它不改变任何行为**——
+这一刀一行生产代码都没动。
+
+#### 六、读数与百分比
+
+**声明边、硬约束、跨域 import、域数、环、分层、release floor 全部未变**：这一刀动的是
+量具，不是树。`core/manager` 仍是 935 文件 / 237,583 行。
+
+**阶段 3 仍 99.7%，加权仍 98.6%。** 理由与决策 273 相同但更明确：**这一刀不在任何分量的
+判据里**，因为所有分量的判据都是「树是什么样」，而这一刀改的是「怎么看树」。
+**一个把量具修对的提交让百分比不动，是应该出现而不是应该解释的结果**——
+真正该被记下来的是下面这句：
+
+> **修量具的这一刀，让下一刀的价目表整体上移了 6 条边。** 也就是说：此前的排序里，
+> 除了最便宜的那条，其余位置都是偏低的。**「还有 16 条边没切」这句话此前的单位是不准的。**
+
+#### 七、变异实测 1/1
+
+| # | 变异 | 谁抓住 | 说了什么 |
+|---|---|---|---|
+| 1 | 把 `fieldRef.home()` 退回按裸名字归属（复现旧行为） | `TestAFloorTypeIsNotAttributedToAControlPlaneDomainThatSharesItsName` ×2 | 「floor 类型被归属到一个声明了同名的控制面域，报告说这一刀切出了自己的边」+「floor 类型居然进了 closure」 |
+
+**新测试断言的是「没有那一行」，不是「总数等于 N」**，因为一个价格可以因为错误的理由
+而恰好是对的。两条断言分别盯住「跨域警告」与「closure 行」——**盯住的是域边界这个断言，
+不是加法结果**。
+
+顺带记一次自己踩的坑：第一版断言写的是 `strings.Contains(out, "closure")`，
+而**报告自己的说明文字里就有 closure 这个词**，于是它读着说明文字报红。
+已收紧成匹配行首前缀 `\n        closure `。**一个因为断言太宽而报红的测试，是那种
+会被「把断言删掉」修掉的测试**——所以值得写下来。
+
+#### 八、这一刀买到了什么，没买到什么
+
+**买到的**：`federationlink -> federation` 的真实价格是 **4**（2 类型 + 2 方法，零 closure，
+零跨域），**它稳定地是全树最便宜的边**，而切掉它会让 `federation` 入度归零 →
+**可证明独立发版的域 37 → 38**。以及一份跨域手抄契约第一次出现在报告里。
+以及一道有牙的测试：变异退回旧行为时它两道断言同时红。
+
+**没买到的**：树一行未动，17 条声明边、57 域、0 环、`core/manager` 935 文件全部不变。
+`federationlink -> federation` 那一刀本身**本轮没做**——它是下一刀，而它便宜到
+4，值得单独一刀而不是搭在量具修复里（**搭在一起会让「量具变了所以价格变了」和
+「树变了所以价格变了」混在同一次提交里，而这份台账的全部价值就是不让这两件事混在一起**）。
+
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -23853,6 +24008,33 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 
 加权合计 ≈ **98.6%**（四阶段等比 98 / 100 / 96.7 / 99.7 的均值 98.6）。这一栏按
 决策倒序追加，每一条只说自己动的那一分量：
+
+- **决策 274 修的是量具不是树：闭包遍历按裸类型名跨域归属，把一个 floor 类型判给了
+  aiops。** `federation.Member` 的 `IssuedBundle` / `LastAck` 是
+  `core/floor/federation` 的类型，而控制面里恰好也声明着同名的 `Bundle`（aiops 的
+  correlate 工具）与 `Outcome`（aiops 的 crystallize、service/plugin）——**裸名字不说明
+  它来自哪个包**，于是撞上了同名的那一份。报告因此把「floor 类型不随切边移动」这条规则
+  漏掉，价目虚高，并打印了一句**指向不存在的缝**的「reaches aiops plugin」。
+  **而 closure 列就是这张表的排序键。** 修法是让字段引用带上解析后的 import 路径：
+  `fieldRef.imp` + `importQualifiers`（点导入与下划线导入不解析也不猜），
+  `home()` 从路径判断，`seen` 的键从裸名字换成「包 + 名字」。`nameHomes` 删除——
+  它的文档写着「一个有两个归属的名字刻意不解析成其中之一」，**而调用方做的正是那个
+  猜测**；名字索引以 `nameOwners` 窄化回归，只负责说出歧义。
+  **结果与预期相反：8 条边里 6 条变贵**（`imbridge → aiops` 25 → 29、
+  `chatdiagnose → loop` 20 → 26、`report → loop` 21 → 23、`aiops → loop` 17 → 20），
+  因为旧的 `seen` 裸名字键在**静默跳过**同名的控制面类型；只有
+  `federationlink → federation` 变便宜（6 → **4**），那是两条假 closure 消失。
+  **修好之前，全树最便宜的那条边恰恰是最可能被报错价的那条。**
+  量具修对之后照出来的东西是一份**跨域手抄的线上契约**：`RootCauseJSON` /
+  `EvidenceItem` / `TimeWindow` / `RemediationOption` 各有两个主人（aiops 与 loop，
+  `chatdiagnose` 还声明其中三个），**JSON tag 相同而 Go 类型不同**
+  （`Timestamp string` vs `time.Time`、`RootCauseObject string` vs `*RootCauseObject`、
+  一边有 `SourceLinks` 一边有 `LegacySummaryText`）。报告现在每条命中都打印
+  「aiops also declares this name; the shape above is loop's」。
+  **树一行未动，百分比不动**——17 边 / 57 域 / 0 环 / manager 935 文件全部不变。
+  下一刀是 `federationlink → federation`（价 4，切掉后 `federation` 入度归零 →
+  **可独立发版域 37 → 38**），**刻意不与这一刀合并**：合并会让「量具变了」与「树变了」
+  混在同一次提交里，而这份台账的全部价值就是不让这两件事混在一起（§4.208）。
 
 - **决策 273 切掉了 `audit` 域的最后一条入向边，而这是三十七刀里第一次有域因为「被读」
   而获得发版独立**（`aiops → audit`，一条**读边**）。它的形状和决策 272 的四条不一样，

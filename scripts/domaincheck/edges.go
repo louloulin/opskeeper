@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -118,6 +119,21 @@ type closureHit struct {
 	// control plane does — a type from a module below the control plane
 	// does not move when an edge is cut, so it is not a cost.
 	home string
+	// alsoIn names the OTHER control-plane domains that declare a type with
+	// this same bare name, when there are any.
+	//
+	// It is printed, not used to decide anything. The walk already resolved
+	// the field through its import path, so `home` is not in doubt — the
+	// consumer imports one specific package and that package's type is the one
+	// the cut carries. What a reader cannot see without this is that the name
+	// was ambiguous to begin with, and that matters here: RootCauseJSON,
+	// EvidenceItem, TimeWindow and RemediationOption are each declared by BOTH
+	// aiops and loop, as two different Go types that happen to serialise under
+	// the same JSON tags. A closure count that reads as a plain number cannot
+	// tell a reader the number is about one of two, and a pricer that silently
+	// picked one would be the same guess decision 233 is a whole section
+	// about — so the resolution is package-based and the ambiguity is shown.
+	alsoIn []string
 }
 
 // builtinTypeNames are the predeclared identifiers. They are excluded from
@@ -144,6 +160,38 @@ type fieldRef struct {
 	// qual is the package qualifier when the type was written as
 	// `pkg.Name`, empty when it was a bare identifier.
 	qual string
+	// imp is that qualifier RESOLVED to an import path, and empty when the
+	// type was written bare.
+	//
+	// This field exists because of a wrong answer the report printed, not
+	// because a struct needed one more column. `typ` is a bare name, and a
+	// bare name does not say which package it lives in — so a walk that
+	// resolved homes by name alone could not tell a control-plane type from a
+	// floor type, and when the control plane happened to contain a same-named
+	// type it picked that one. `federation.Member` has two fields whose types
+	// are `core/floor/federation.Bundle` and `.Outcome`; the control plane
+	// also declares a `Bundle` in aiops' correlate tool and an `Outcome` in
+	// aiops' crystallize ledger, so the walk resolved both to aiops and the
+	// report printed
+	//
+	//     closure federation.Bundle  via Member.IssuedBundle  <-- lives in aiops
+	//
+	// as though cutting the edge would drag an aiops type behind it. It would
+	// not: the field is a floor type, cutting the edge does not move it, and
+	// the documented rule ("a hit nothing declares is dropped, because it
+	// belongs to a module below the control plane") says to drop it. The rule
+	// was being applied to a name rather than to a type, and a name that some
+	// other domain also declares is never "nothing".
+	//
+	// The direction of that error matters more than its size. The closure
+	// column drives the ranking, and a hit attributed to a third domain is
+	// what the report says means "the cut does not stay inside the edge it was
+	// priced for" — so this one column was sending the next cut at a
+	// federation/aiops seam that does not exist, and inflating the one edge
+	// that is cheapest to cut. A pricer that misprices the cheapest edge is
+	// worse than a pricer that prices nothing, because the ranking is the only
+	// reason to read it.
+	imp string
 }
 
 // collectFieldTypes indexes every struct field by package, struct and field
@@ -158,6 +206,7 @@ func collectFieldTypes(sources []source) map[string]map[string][]fieldRef {
 		if out[pkg] == nil {
 			out[pkg] = map[string][]fieldRef{}
 		}
+		quals := importQualifiers(src.file)
 		for _, decl := range src.file.Decls {
 			gd, ok := decl.(*ast.GenDecl)
 			if !ok || gd.Tok != token.TYPE {
@@ -193,12 +242,53 @@ func collectFieldTypes(sources []source) map[string]map[string][]fieldRef {
 							continue
 						}
 						out[pkg][ts.Name.Name] = append(out[pkg][ts.Name.Name], fieldRef{
-							field: id.Name, typ: typ, qual: qual,
+							field: id.Name, typ: typ, qual: qual, imp: quals[qual],
 						})
 					}
 				}
 			}
 		}
+	}
+	return out
+}
+
+// importQualifiers maps the local name of every import in a file to its full
+// import path, so a field written `federation.Bundle` can be attributed to the
+// package that declares Bundle rather than to whichever domain happens to
+// declare a Bundle too.
+//
+// The two shapes that cannot be resolved are skipped rather than guessed. A
+// dot-import puts the file's declarations in this file's namespace, and an
+// underscore import deliberately binds nothing, so neither can be attributed
+// to a package by the qualifier — and a guess in either direction is the bug
+// this function exists to remove. A type reached through one of those two
+// forms is not walked, which is the same honest limit the rest of the closure
+// walk already has and the report already prints.
+func importQualifiers(f *ast.File) map[string]string {
+	out := map[string]string{}
+	if f == nil {
+		return out
+	}
+	for _, imp := range f.Imports {
+		if imp.Name != nil {
+			// `.` and `_` bind nothing a qualifier can name.
+			if imp.Name.Name == "." || imp.Name.Name == "_" {
+				continue
+			}
+		}
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		local := ""
+		if imp.Name != nil {
+			local = imp.Name.Name
+		} else if i := strings.LastIndex(path, "/"); i >= 0 {
+			local = path[i+1:]
+		} else {
+			local = path
+		}
+		out[local] = path
 	}
 	return out
 }
@@ -249,13 +339,57 @@ func baseTypeOf(expr ast.Expr) (typ, qual string) {
 	return "", ""
 }
 
-// nameHomes indexes, for every declared name in the control plane, the domains
-// that declare it.
+func dedupeStrings(in []string) []string {
+	var out []string
+	for i, s := range in {
+		if i == 0 || in[i-1] != s {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// home reports which bounded context declares the type this field refers to,
+// and whether it is one of them at all.
 //
-// A name with two homes is deliberately not resolved to one of them. Choosing
-// between them would be a guess, and decision 233 is a whole section about a
-// guess of exactly this shape being reported as a fact.
-func nameHomes(kind map[string]map[string]declKind) map[string][]string {
+// The second answer is the one the price depends on, and it is why this is a
+// method on the reference rather than a lookup in a name table: "is this a
+// control-plane type" and "does some domain declare a type with this name" are
+// different questions, and only the first one is about the code. domainOf
+// returns "" for an import path outside the control plane — the floor, the
+// edge agent, a third-party module — and those are exactly the types a cut
+// does not move.
+//
+// For an unqualified reference imp is the declaring package itself, which the
+// fold in closureOf fills in, so this returns the producer's own domain and
+// the walk continues.
+func (r fieldRef) home() (domain string, inControlPlane bool) {
+	if r.imp == "" {
+		// Not resolved and not folded: there is no package to attribute it
+		// to, so it is dropped rather than assumed. Reachable only through a
+		// dot-import, which importQualifiers deliberately does not resolve.
+		return "", false
+	}
+	d := domainOf(r.imp)
+	if d == "" {
+		return "", false
+	}
+	return d, true
+}
+
+// nameOwners indexes, for every declared name in the control plane, the
+// domains that declare it.
+//
+// It exists to say "that name is ambiguous", and for nothing else. It was
+// once the thing that DECIDED a type's home, which is how a floor type came
+// back attributed to a domain that merely declared something of the same name
+// — see fieldRef.imp for that one. Deciding by name is not available any more
+// and cannot be made available: a bare name does not say which package it came
+// from, so any resolution built on one is a guess.
+//
+// A name with two owners is therefore not resolved here either. It is
+// reported, and the report says which package the walk actually followed.
+func nameOwners(kind map[string]map[string]declKind) map[string][]string {
 	out := map[string][]string{}
 	for pkg, names := range kind {
 		d := domainOf(pkg)
@@ -273,11 +407,22 @@ func nameHomes(kind map[string]map[string]declKind) map[string][]string {
 	return out
 }
 
-func dedupeStrings(in []string) []string {
+// otherOwners is the domains declaring this name apart from the one the walk
+// resolved to, which is empty in the ordinary case.
+//
+// The point of returning it is that a name owned by two domains is a fact
+// about the tree, not about the walk: the walk did the right thing by
+// following the import, and printing nothing would leave a reader believing
+// the number was about a name with one owner. RootCauseJSON and its three
+// siblings are declared by both aiops and loop, as two different Go types
+// under the same JSON tags, so this column is where that becomes visible
+// instead of being something a maintainer finds out from a failed
+// deserialisation.
+func otherOwners(all []string, resolved string) []string {
 	var out []string
-	for i, s := range in {
-		if i == 0 || in[i-1] != s {
-			out = append(out, s)
+	for _, d := range all {
+		if d != resolved {
+			out = append(out, d)
 		}
 	}
 	return out
@@ -296,11 +441,14 @@ func dedupeStrings(in []string) []string {
 //   - A hit whose home is a *different* domain is recorded and not walked
 //     further. That is the drag: it means cutting this edge does not stay
 //     inside this edge.
-//   - A hit nothing declares is dropped. It is a type from a module below
-//     the control plane or from a third-party module, and cutting an edge
-//     does not move it, so counting it would inflate the price with
-//     something nobody has to carry.
-func closureOf(selected []string, to string, ftypes map[string]map[string][]fieldRef, homes map[string][]string) []closureHit {
+//   - A hit that is not a control-plane type is dropped, and "is not" is
+//     decided by the field's RESOLVED import path rather than by its name.
+//     It is a type from a module below the control plane or from a
+//     third-party module, and cutting an edge does not move it, so counting
+//     it would inflate the price with something nobody has to carry. The
+//     name-based version of this rule was wrong in one direction only, and
+//     wrong it in the direction that matters: see fieldRef.imp.
+func closureOf(selected []string, to string, ftypes map[string]map[string][]fieldRef, owners map[string][]string) []closureHit {
 	// The producer's own fields, folded across its packages: a domain is
 	// reached through one package or several and the closure is the same
 	// walk either way.
@@ -310,7 +458,18 @@ func closureOf(selected []string, to string, ftypes map[string]map[string][]fiel
 			continue
 		}
 		for name, refs := range byType {
-			prod[name] = append(prod[name], refs...)
+			for _, r := range refs {
+				// An unqualified field type is declared in the same package
+				// as the struct that holds it, and folding the producer's
+				// packages together would otherwise lose that — which is the
+				// one case where "same domain" is not the same answer as
+				// "this package", so it has to be recovered here rather than
+				// guessed below.
+				if r.imp == "" {
+					r.imp = pkg
+				}
+				prod[name] = append(prod[name], r)
+			}
 		}
 	}
 	seen := map[string]bool{}
@@ -327,14 +486,26 @@ func closureOf(selected []string, to string, ftypes map[string]map[string][]fiel
 			return
 		}
 		for _, ref := range prod[name] {
-			if seen[ref.typ] {
+			// The identity of a reached type is its package plus its name, and
+			// the package is what decides everything below. Keying `seen` on
+			// the bare name is the same collision this function used to
+			// misattribute homes by, and it would silently skip a control-plane
+			// type because a floor type of the same name was reached first.
+			key := ref.imp + "." + ref.typ
+			if seen[key] {
 				continue
 			}
-			seen[ref.typ] = true
-			hs := homes[ref.typ]
-			if len(hs) == 0 {
-				// Declared nowhere in the control plane: it is not a
-				// control-plane type and cutting the edge does not move it.
+			seen[key] = true
+
+			home, inControlPlane := ref.home()
+			if !inControlPlane {
+				// Not a control-plane type at all — a floor type, a shared
+				// module, or a third party. Cutting an edge does not move it,
+				// so counting it would inflate the price with something
+				// nobody has to carry. This is the rule that used to be
+				// applied to a name, which meant a floor type escaped it
+				// whenever the control plane declared something of the same
+				// name. See fieldRef.imp.
 				continue
 			}
 			disp := ref.typ
@@ -342,8 +513,11 @@ func closureOf(selected []string, to string, ftypes map[string]map[string][]fiel
 				disp = ref.qual + "." + ref.typ
 			}
 			via := path + "." + ref.field
-			out = append(out, closureHit{via: via, name: disp, home: strings.Join(hs, "|")})
-			if len(hs) == 1 && hs[0] == to {
+			out = append(out, closureHit{
+				via: via, name: disp, home: home,
+				alsoIn: otherOwners(owners[ref.typ], home),
+			})
+			if home == to {
 				walk(ref.typ, via, depth+1)
 			}
 		}
@@ -403,10 +577,13 @@ func (e edgeCost) price() int { return e.symbols() + len(e.closure) }
 // foreignDomains lists the domains a cut reaches into besides the producer's,
 // sorted and deduplicated.
 //
-// A name declared by two domains at once is reported as both, joined by a
-// pipe, rather than resolved to one of them: the ambiguity is the answer when
-// the question is "whose type is this", because picking a side is the guess
-// decision 233 is about.
+// Every entry here is a domain the cut drags a type into, and each one used to
+// be printed with the two halves of the same name joined by a pipe — the
+// ambiguity was standing in for an answer instead of being reported next to
+// one. Now the walk resolves the field through its import path, so a hit has
+// exactly one home, and a name with a second owner is carried on the hit
+// itself as alsoIn. The list is therefore the set of domains this cut really
+// reaches, which is the number that says whether a cut stays inside its edge.
 //
 // The comparison is membership and not string inequality. `Decision` is
 // declared in pluginimport and in three other domains, so printing it as
@@ -418,25 +595,20 @@ func (e edgeCost) foreignDomains() []string {
 		if e.ownsType(h.home) {
 			continue
 		}
-		for _, d := range strings.Split(h.home, "|") {
-			out = append(out, d)
-		}
+		out = append(out, h.home)
 	}
 	sort.Strings(out)
 	return dedupeStrings(out)
 }
 
-// ownsType reports whether the producer's own domain is one of a name's
-// declaring domains. A name with several owners is owned, and the row says so
-// separately, because "ambiguous" and "somebody else's" are different
-// amounts of work.
+// ownsType reports whether a reached type is the producer's own.
+//
+// It used to split `home` on "|" because a name could resolve to several
+// domains at once, and a split that had to be read as "owned if any of them
+// is mine" is exactly the ambiguity this file stopped having: the walk now
+// follows one import path, so `home` is one domain and this is an equality.
 func (e edgeCost) ownsType(home string) bool {
-	for _, d := range strings.Split(home, "|") {
-		if d == e.to {
-			return true
-		}
-	}
-	return false
+	return home == e.to
 }
 
 // printEdges writes every declared edge with what the consumer selects from the
@@ -452,7 +624,7 @@ func printEdges(w io.Writer, sources []source, r rules) {
 	fields := collectStructFields(sources)
 	kind := collectDeclKinds(sources)
 	ftypes := collectFieldTypes(sources)
-	homes := nameHomes(kind)
+	owners := nameOwners(kind)
 
 	var costs []edgeCost
 	for e, reason := range r.edges {
@@ -521,7 +693,7 @@ func printEdges(w io.Writer, sources []source, r rules) {
 		// because it starts from the *set* of selected types: a type two
 		// selected structs both reach is one piece of work, not two, and
 		// per-file computation would count it once per file that names it.
-		c.closure = closureOf(c.types, e.to, ftypes, homes)
+		c.closure = closureOf(c.types, e.to, ftypes, owners)
 		costs = append(costs, c)
 	}
 	sort.Slice(costs, func(i, j int) bool {
@@ -622,11 +794,14 @@ func printEdges(w io.Writer, sources []source, r rules) {
 				// this is the line that says the cut is bigger than the
 				// edge it was priced under.
 				mark = fmt.Sprintf("  <-- lives in %s, not in %s", h.home, c.to)
-			case strings.Contains(h.home, "|"):
-				// Owned, but by four packages at once. The type still has
-				// to move; what is unresolved is which of the four shapes
-				// the mover is carrying.
-				mark = fmt.Sprintf("  <-- %s declares it too, so the shape is not settled", h.home)
+			case len(h.alsoIn) > 0:
+				// The producer owns this one, so the cut stays inside its
+				// edge — but another domain declares a type of the same
+				// name, and the two are not the same type. Printed because
+				// the price counts one shape and a reader has no other way
+				// to learn there are two.
+				mark = fmt.Sprintf("  <-- %s also declares this name; the shape above is %s's",
+					strings.Join(h.alsoIn, " "), h.home)
 			}
 			fmt.Fprintf(w, "        closure %-24s via %s%s\n", h.name, h.via, mark)
 		}

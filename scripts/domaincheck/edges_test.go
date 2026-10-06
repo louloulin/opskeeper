@@ -45,6 +45,11 @@ func treeWith(t *testing.T, files map[string]string) []source {
 
 const producerPkg = managerPrefix + "biz/producer"
 
+// floorPkg is a module path BELOW the control plane. It is only ever an import
+// in a fixture: no file is written for it, and none has to be, because the
+// question the closure walk asks about it is answered by its path.
+const floorPkg = "github.com/vincent-wuhan/opskeeper/core/floor/bundle"
+
 func edgeReport(t *testing.T, sources []source, r rules) string {
 	t.Helper()
 	var sb strings.Builder
@@ -589,9 +594,91 @@ func (h *Handler) unanswered() int { return len(h.Report.Decisions) }
 	}
 	// The ambiguity is still worth saying, because "which of the four shapes"
 	// is a real question — but it is a different sentence from "not yours".
-	if !strings.Contains(out, "so the shape is not settled") {
+	//
+	// Decision 274 changed what this sentence can say, and the change is the
+	// point rather than a rewording. The old marker named the pipe-joined list
+	// of every domain declaring the name, because the walk itself could not
+	// say which one it had followed: it resolved by bare name, so a name with
+	// four owners came back as four owners. The walk now follows the field's
+	// import path, which means it knows, and a marker that said "not settled"
+	// would now be understating what the tool knows. So the test asks for the
+	// stronger sentence — the ambiguity is named AND the resolved owner is
+	// named — and a marker that only did the first would fail here.
+	if !strings.Contains(out, "also declares this name") {
 		t.Errorf("a name declared by two domains is reported with no word about the "+
 			"ambiguity.\n%s", out)
+	}
+	if !strings.Contains(out, "the shape above is producer's") {
+		t.Errorf("the marker does not say which owner's shape the walk followed, so a reader "+
+			"cannot tell which of the two declarations the price is about.\n%s", out)
+	}
+}
+
+// TestAFloorTypeIsNotAttributedToAControlPlaneDomainThatSharesItsName is
+// decision 274, the half of the fix that is not about wording.
+//
+// The fixture is the real one: a producer whose field is typed with a type
+// from a module BELOW the control plane, while a control-plane domain declares
+// a type of the same name. The documented rule is that a type the cut does not
+// move is not part of the cut's price, and before this test there was no way
+// to tell whether the rule held: the walk resolved homes by bare name, found
+// the same-named control-plane declaration, and reported a foreign drag that
+// does not exist.
+//
+// The assertion is on the ABSENCE of a foreign line rather than on a price,
+// because a price can be right for the wrong reason. "not in producer" and
+// "reaches" are both claims about a domain boundary, and a fixture that
+// asserted only the total would pass whether the closure was dropped, counted
+// as the producer's own, or counted as somebody else's.
+func TestAFloorTypeIsNotAttributedToAControlPlaneDomainThatSharesItsName(t *testing.T) {
+	sources := treeWith(t, map[string]string{
+		"biz/producer/p.go": `package producer
+
+import floor "` + floorPkg + `"
+
+type Member struct {
+	Issued floor.Bundle
+	Plain  string
+}
+`,
+		// A control-plane domain that declares a Bundle of its own. This is
+		// the collision that used to capture the field above.
+		"biz/other/o.go": `package other
+
+type Bundle struct {
+	Tool string
+	Argv []string
+}
+`,
+		"biz/consumer/c.go": `package consumer
+
+import pb "` + producerPkg + `"
+
+type Handler struct{ Member *pb.Member }
+
+func (h *Handler) unanswered() int { return len(h.Member.Plain) }
+`,
+	})
+	r := testRules()
+	r.edges[edge{from: "consumer", to: "producer"}] = "a fixture edge"
+	out := edgeReport(t, sources, r)
+
+	if strings.Contains(out, "reaches") {
+		t.Errorf("a floor type was attributed to a control-plane domain that declares a type "+
+			"of the same name, and the report says this cut reaches outside its edge.\n%s\n"+
+			"a bare type name does not say which package it came from; the field's import path "+
+			"does, and cutting this edge does not move a floor type", out)
+	}
+	// Matched on the row prefix rather than on the word: the report's own
+	// header explains what a closure is, so a bare Contains("closure") reads
+	// the explanation and calls it a finding. An earlier version of this
+	// assertion did exactly that, which is worth writing down because the
+	// failure it produced — a red test on a correct tool — is the kind that
+	// gets "fixed" by deleting the assertion.
+	if strings.Contains(out, "\n        closure ") {
+		t.Errorf("the floor type is in the closure at all.\n%s\n"+
+			"the rule this violates is the one the report already states: a type from a module "+
+			"below the control plane is not a cost, because cutting an edge does not move it", out)
 	}
 }
 
