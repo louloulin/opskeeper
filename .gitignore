@@ -160,3 +160,9 @@ plugins/opskeeper-teamharness/eval/reports/
 /splitprice
 /tablecheck
 /transcheck
+
+# Local run artifacts. backend.env holds a JWT secret and an admin password,
+# and backend.log plus the built binary are per-machine output -- none of it
+# belongs in the index. A `git add -A` before this line existed put all three
+# into a commit; it was caught before it was pushed (decision 420).
+.devrun/

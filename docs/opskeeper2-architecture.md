@@ -8061,6 +8061,94 @@ CI 仍在跑。**这给了本 PR 一个我在决策 419.2 里没有写进去的�
 **一个打印出布尔值的聚合查询，和它读起来的样子不一样**——这与 §4.352.1 是同一条：
 先确认这一行的内容是什么，再把它当成结论。
 
+### 4.354 决策 420：`ci.yml` 的 concurrency 组**从来没有做过它注释里写的那件事**——同一个 commit 每次 push 跑两遍完整 CI
+
+#### 4.354.1 发现路径：先看 CI 到底跑没跑
+
+上一轮开 PR 后我说「CI 在跑，跑完告诉你」。轮询时看到的是：
+
+```
+CI  status=completed  conclusion=cancelled
+CI  status=completed  conclusion=cancelled
+```
+
+**两个都 `cancelled`，不是 failure 也不是 success。** 全量枚举（`per_page=100&page=1..2`）
+按时间排开，看到的不是孤立事件，而是一条规律：
+
+```
+22:39:47  push         c1aaebb  cancelled
+22:42:07  push         678d203  cancelled
+22:43:18  push         353edb8  cancelled
+22:51:32  push         60ef998  cancelled
+22:54:29  push         3c37d96  cancelled
+22:58:21  push         4527d5c  cancelled
+23:00:15  push         5b8015b  cancelled
+23:03:45  pull_request 5b8015b  cancelled
+23:04:02  push         4887cd8  cancelled
+23:04:07  pull_request 4887cd8  cancelled
+23:04:18  push         8638514  in_progress
+23:04:24  pull_request 8638514  in_progress
+```
+
+**两条线索各指向一个不同的结论。**
+
+#### 4.354.2 线索一：连续 cancelled 是我自己的推送节奏造成的
+
+八次 cancelled 全部落在 25 分钟内、间隔 2–4 分钟——**正是我这几轮连续 push 的节奏**。
+决策 4.331 早就记过 `cancel-in-progress: true` 会取消正在跑的 run，并留了一条操作纪律
+「push 之后不再动仓库，盯到那个 run 出终态」。
+
+**这一条不是缺陷**，而且它说明我上一轮那句「`feature/pig` 上的每次 push 早就在跑 CI」
+要打折：**大部分 run 从未跑完就被下一次 push 取消了**。「被触发」不等于「跑完并报告」。
+
+#### 4.354.3 线索二（真缺陷）：同一个 sha 产生了**两个** run
+
+```
+23:04:18  push         8638514  in_progress
+23:04:24  pull_request 8638514  in_progress
+```
+
+**同一个 commit、同时在跑、两个 run id。** 而 `ci.yml:58-64` 的注释写着：
+
+> Keyed on the head branch rather than the ref, so the push run and the
+> pull-request run for the same commit are **one run instead of two**.
+
+**注释描述的那个合并，表达式没有做到。** 逐项展开 `ci-${{ github.event.pull_request.head.ref || github.ref }}`：
+
+| 事件 | `pull_request.head.ref` | `github.ref` | 实际 group |
+|---|---|---|---|
+| `push` | 空 | `refs/heads/feature/pig` | `ci-refs/heads/feature/pig` |
+| `pull_request` | `feature/pig` | — | `ci-feature/pig` |
+
+**两个字符串不是同一个 group。** 所以两次运行既不会互相取消，也不会合并——
+**每次 push 都跑两遍完整 CI**（这个 workflow 的 job 上限是 35 分钟）。
+
+修法是 `github.head_branch`：它在两个事件上都是**分支名**，`feature/pig`。
+那正是注释一直想说的东西。
+
+#### 4.354.4 为什么这一条不是又一次「数对结论错」
+
+这四轮里我反复犯的错是：看到一个数就下结论，而那个数答的不是被问的问题（决策 417/418）。
+这一条不同，**判据有三层，缺一层都不成立**：
+
+1. **实测**——同一个 sha 出现两个 run id（`37544456628` / `37544466294`），这是数据不是推断；
+2. **机制**——两个 group 字符串逐项展开，不同，所以不合并；
+3. **意图**——注释明写「one run instead of two」，所以现状与意图相反。
+
+**只有第 1 层是「一个数」，而它指向的正是被测的那件事。** 前四轮的错都是第 1 层成立、
+第 2 层不成立；这一次三层都成立，且第 2 层可被任何人独立重算。
+
+**代价是可感知的**：这一轮之前，每次 push 多跑一遍带 MySQL service 的完整矩阵。
+
+#### 4.354.5 进度影响：两把尺不动
+
+**架构尺 97.75% / 四阶段交付尺 99.5% 不动。** 本刀修的是 CI 配置，关闭了一个
+**从未在台账里被记成欠账**的开销项——它此前只表现为「CI 好像老在取消」，
+而那个症状被归因成了推送节奏（线索一，**那个归因是对的，只是不完整**）。
+
+**一个症状有两个成因，而观察只看到了其中一个**——这是本轮真正的教训，
+也是为什么线索二必须靠全量枚举才浮出来：单看 `pull_request` 视图，两条 run 长得一模一样。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，

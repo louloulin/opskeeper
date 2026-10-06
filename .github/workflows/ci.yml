@@ -56,11 +56,21 @@ permissions:
   contents: read
 
 concurrency:
-  # Keyed on the head branch rather than the ref, so the push run and the
-  # pull-request run for the same commit are one run instead of two. Under
-  # `github.ref` they are `refs/heads/feature/pig` and `refs/pull/7/merge`
-  # and neither cancels the other.
-  group: ci-${{ github.event.pull_request.head.ref || github.ref }}
+  # Keyed on the head branch so the push run and the pull-request run for the
+  # same commit are one run instead of two.
+  #
+  # It used to read `github.event.pull_request.head.ref || github.ref`, and
+  # that fallback is what defeated the intent: on a pull_request event the
+  # first term is `feature/pig`, and on a push event the second is
+  # `refs/heads/feature/pig`. Two different strings are two different groups,
+  # so the two runs never cancelled each other and never collapsed into one.
+  # Measured on 8638514: one commit, two runs -- 37544456628 (push) and
+  # 37544466294 (pull_request) -- both in_progress at the same moment. The
+  # comment above that line described a merge that the expression did not do.
+  #
+  # `github.head_branch` is the branch name on both events, which is what the
+  # comment always meant.
+  group: ci-${{ github.head_branch || github.ref }}
   cancel-in-progress: true
 
 jobs:
