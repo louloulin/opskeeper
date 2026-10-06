@@ -45,6 +45,29 @@ type Approval struct {
 	ProposedBy uint64  `gorm:"not null;default:0" json:"proposed_by"`
 	ApprovedBy *uint64 `gorm:"" json:"approved_by,omitempty"`
 
+	// SignersJSON is the list of people who have signed so far, as a JSON
+	// array of {"user_id","role","at"}.
+	//
+	// It exists because the two columns above are single-valued: ADR-019's
+	// dual sign has nowhere to put a second signature, which is why
+	// TestDualSignCannotBeEnforcedBecauseNowhereStoresTwoSigners was written
+	// and why the boot log said the policy was UNENFORCED. A row that has
+	// been signed once and is still pending carries its first signer here and
+	// its ApprovedBy NULL, so "approved by" and "signed by" never disagree.
+	SignersJSON *string `gorm:"column:signers_json;type:text" json:"signers,omitempty"`
+
+	// RiskClass and BlastRadius are the producer's own statement of how far
+	// this action reaches: "read" / "write" / "destructive", and
+	// "pod" / "namespace" / "cluster" / "tenant_wide".
+	//
+	// They were already being produced — the agent tool call carries both,
+	// ADR-019 keys on both — and they were being written into PayloadJSON,
+	// where no policy can read them. That is the other half of why dual sign
+	// was unenforced: not only could a row not hold two signers, it could not
+	// say what it was asking to be signed for.
+	RiskClass   string `gorm:"size:32;not null;default:'';index" json:"risk_class,omitempty"`
+	BlastRadius string `gorm:"size:32;not null;default:''" json:"blast_radius,omitempty"`
+
 	// Reason is the approver's note / reject rationale. ResultJSON holds
 	// the execution outcome after an approve runs the action.
 	Reason     *string `gorm:"type:text" json:"reason,omitempty"`

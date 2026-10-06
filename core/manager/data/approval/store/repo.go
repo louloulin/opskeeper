@@ -75,6 +75,24 @@ func (r *Repo) Decide(ctx context.Context, id string, fields map[string]any) err
 	return nil
 }
 
+// AddSigner writes the accumulated signer list onto a row that is still
+// pending. The guard is the same one Decide uses and for the same reason: two
+// people clicking at once must not let the second overwrite a decision the
+// first already completed, and the caller has to be able to tell that it lost
+// that race rather than believing it recorded a signature.
+func (r *Repo) AddSigner(ctx context.Context, id, signersJSON string) error {
+	res := r.db.WithContext(ctx).Model(&model.Approval{}).
+		Where("id = ? AND status = ?", id, model.StatusPending).
+		Update("signers_json", signersJSON)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errs.ErrNotFound
+	}
+	return nil
+}
+
 // SetResult records the execution outcome after an approved action runs.
 func (r *Repo) SetResult(ctx context.Context, id, status, resultJSON string, executedAt time.Time) error {
 	return r.db.WithContext(ctx).Model(&model.Approval{}).Where("id = ?", id).

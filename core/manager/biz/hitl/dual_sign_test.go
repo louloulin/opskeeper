@@ -129,19 +129,69 @@ func TestValidate_DualSign_SameRoleGroup(t *testing.T) {
 	}
 }
 
+// One person wearing two hats is still one person.
+//
+// This test used to assert the opposite — that the validator lets a repeated
+// UserID through because "the caller enforces distinct userids". That
+// contract is only as good as every caller remembering it, and the whole
+// point of a rule that says "two people must sign" is that it does not
+// depend on the code around it remembering. Decision 362 moved the
+// deduplication into Validate, and this is the receipt.
 func TestValidate_DualSign_SameUserDifferentRole(t *testing.T) {
 	p := NewDualSignPolicy()
 	p.Add(DualSignRule{
 		Resource: "tenant_wide", Action: "approve", Effect: "allow",
 		Requires: []string{"opskeeper-admin", "opskeeper-observer"},
 	})
-	// 同 UserID 在不同角色下签 → 角色覆盖，但调用方应禁止（test 验证逻辑不禁止）。
 	signers := []Signer{
 		{UserID: 1, Role: "opskeeper-admin"},
 		{UserID: 1, Role: "opskeeper-observer"},
 	}
+	err := p.Validate("tenant_wide", "approve", signers)
+	if err == nil {
+		t.Fatal("one person signing twice satisfied a two-person rule")
+	}
+	dse, ok := err.(*DualSignError)
+	if !ok {
+		t.Fatalf("err = %v, want *DualSignError", err)
+	}
+	if dse.Kind != "insufficient_signers" {
+		t.Errorf("Kind = %q, want insufficient_signers", dse.Kind)
+	}
+}
+
+// The same person signing twice under the same role is the same hole with a
+// less interesting disguise.
+func TestValidate_DualSign_SameUserTwiceIsOneSigner(t *testing.T) {
+	p := NewDualSignPolicy()
+	p.Add(DualSignRule{
+		Resource: "tenant_wide", Action: "approve", Effect: "allow",
+		Requires: []string{"opskeeper-admin"},
+	})
+	// Requires 只有一组，所以"两个人"的约束来自 len(signers) >= 2 这条。
+	signers := []Signer{
+		{UserID: 1, Role: "opskeeper-admin"},
+		{UserID: 1, Role: "opskeeper-admin"},
+	}
+	if err := p.Validate("tenant_wide", "approve", signers); err == nil {
+		t.Fatal("one person signing twice satisfied a two-person rule")
+	}
+}
+
+// Two different people still pass, so the deduplication did not turn the rule
+// into "impossible".
+func TestValidate_DualSign_TwoDistinctUsersPass(t *testing.T) {
+	p := NewDualSignPolicy()
+	p.Add(DualSignRule{
+		Resource: "tenant_wide", Action: "approve", Effect: "allow",
+		Requires: []string{"opskeeper-admin"},
+	})
+	signers := []Signer{
+		{UserID: 1, Role: "opskeeper-admin"},
+		{UserID: 2, Role: "opskeeper-admin"},
+	}
 	if err := p.Validate("tenant_wide", "approve", signers); err != nil {
-		t.Errorf("policy should pass (caller enforces distinct userids), got %v", err)
+		t.Errorf("two distinct admins were refused: %v", err)
 	}
 }
 
@@ -235,5 +285,87 @@ func TestDualSignError_Message(t *testing.T) {
 	e2 := &DualSignError{}
 	if got := e2.Error(); got != "dual_sign: unknown error" {
 		t.Errorf("empty Error() = %q", got)
+	}
+}
+
+// A rule's `role` field used to be decorative: collectRequires read only
+// resource, action and effect, so the most prominent field on every line of
+// the shipped rule file did nothing at all. Decision 362 checks it, and this
+// is the receipt — two signatures that satisfy every `requires` group are
+// still not a valid pair when neither signer holds the role the rule named.
+func TestARuleRoleThatNobodySignedIsRefused(t *testing.T) {
+	p := NewDualSignPolicy()
+	p.Add(DualSignRule{
+		Role: "opskeeper-admin", Resource: "tenant_wide", Action: "approve", Effect: "allow",
+		Requires: []string{"opskeeper-admin"},
+	})
+	signers := []Signer{
+		{UserID: 1, Role: "opskeeper-observer"},
+		{UserID: 2, Role: "opskeeper-observer"},
+	}
+	err := p.Validate("tenant_wide", "approve", signers)
+	if err == nil {
+		t.Fatal("two signers nobody with the named role signed satisfied the rule")
+	}
+	dse, ok := err.(*DualSignError)
+	if !ok {
+		t.Fatalf("err = %v, want *DualSignError", err)
+	}
+	if dse.Kind != "role_not_signed" {
+		t.Errorf("Kind = %q, want role_not_signed", dse.Kind)
+	}
+}
+
+// The same rule with one of the two holding the named role passes, so the
+// check is a filter and not a veto on everything.
+func TestARuleRoleHeldByOneSignerIsEnough(t *testing.T) {
+	p := NewDualSignPolicy()
+	p.Add(DualSignRule{
+		Role: "opskeeper-admin", Resource: "tenant_wide", Action: "approve", Effect: "allow",
+		Requires: []string{"opskeeper-admin"},
+	})
+	signers := []Signer{
+		{UserID: 1, Role: "opskeeper-admin"},
+		{UserID: 2, Role: "opskeeper-observer"},
+	}
+	if err := p.Validate("tenant_wide", "approve", signers); err != nil {
+		t.Errorf("a valid pair was refused: %v", err)
+	}
+}
+
+// A rule with no role names none, and that stays the "anybody may sign this
+// one" case — otherwise every rule in the tree would silently require the
+// same one role. The `requires` groups are a separate axis: a rule that names
+// none of those is a single-signature rule, and any single signature covers
+// it whatever role it carries.
+func TestARuleWithNoRoleAndNoRequiresIsSatisfiedByAnybody(t *testing.T) {
+	p := NewDualSignPolicy()
+	p.Add(DualSignRule{
+		Resource: "tenant_wide", Action: "approve", Effect: "allow",
+	})
+	if err := p.Validate("tenant_wide", "approve",
+		[]Signer{{UserID: 1, Role: "whoever"}}); err != nil {
+		t.Errorf("a rule naming neither a role nor a requires group refused one signature: %v", err)
+	}
+}
+
+// Naming a role does not replace the requires groups: the two are separate
+// statements, and a rule that names only one of them asks for only that one.
+func TestARuleRoleAndRequiresAreCheckedSeparately(t *testing.T) {
+	p := NewDualSignPolicy()
+	p.Add(DualSignRule{
+		Resource: "tenant_wide", Action: "approve", Effect: "allow",
+		Requires: []string{"opskeeper-admin"},
+	})
+	// Neither signer is an admin, so the requires group is uncovered — and
+	// saying so is the point: the error names the group, not the role field
+	// that was never written.
+	err := p.Validate("tenant_wide", "approve", []Signer{
+		{UserID: 1, Role: "whoever"},
+		{UserID: 2, Role: "anyone"},
+	})
+	var dse *DualSignError
+	if !errors.As(err, &dse) || dse.Kind != "role_groups_uncovered" {
+		t.Fatalf("err = %v, want role_groups_uncovered", err)
 	}
 }

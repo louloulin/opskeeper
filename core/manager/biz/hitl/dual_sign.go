@@ -10,34 +10,34 @@
 //   - ShouldPause 决定"要不要停"（输出 PauseReason.Metadata.dual_sign_required）
 //   - DualSignPolicy.Validate 决定"签得够不够"（按角色组覆盖校验）
 //
-// **以上是设计。设计没有实现，而这一段曾经写成已实现。**
+// **这一段曾经是"以上是设计"，因为设计没有实现。决策 362 实现了它。**
 //
-// 决策 285 量到的实况（`TestDualSignCannotBeEnforcedBecauseNowhereStoresTwoSigners`
-// 是它的收据）：
+// 决策 285 量到的实况（当时是 `TestDualSignCannotBeEnforcedBecauseNowhereStoresTwoSigners`，
+// 今天改名了，原因见该文件）：
 //   - `Validate` 的调用方是 **0 个**。启动时 `cmd/opskeeper` 载入规则文件、
 //     校验语法、打一行 "dual sign policy loaded"，然后那个局部变量出作用域。
 //   - `Service.Approve` 第一次调用就把 `StatusApproved` 写下去并返回。
 //   - `model.Approval` 只有 `ApprovedBy *uint64`，`model.Proposal` 只有
-//     `ApprovedBy *uint64` 与 `ResumedBy *uint64`。**三列都是单值，没有一处
-//     能放下第二个签名**——所以这不是「忘了接线」，是存储里没有接线要用的地方。
-//   - `PausePolicyImpl.ShouldPause` 输出的 `dual_sign_required` 同样没有消费者：
-//     闸门本身由 `pigagent.beforeToolCall` 判定，而它判的是 `read` 与「非 read」，
-//     不读 severity。
+//     `ApprovedBy *uint64` 与 `ResumedBy *uint64`。**三列都是单值。**
 //
-// **因此「高风险动作需要两个不同角色组签核」这条 ADR-019 的核心结论，今天在
-// 本仓里一次都没有生效过。** 唯一生效的审批栅栏是单签的：任何非只读的工具调用
-// 都要一个人批准，批准时 `pigagent` 校验摘要绑定，**没有栅门时直接拒绝**
-// （fail closed，见 `core/pig/pigagent/runstate.go`）。那段栅栏是真的，
-// 本文件曾经描述的那段不是。
+// 决策 362 补上的三件：
+//  1. **存储**：`model.Approval` 新增 `signers_json`，一行放得下 N 个签名人；
+//     同时新增 `risk_class` 与 `blast_radius` 两列——它们本来就以 payload 字节的
+//     形式存在，而一条要按风险匹配的规则去解析它自己要批准的东西，
+//     迟早会解析错。
+//  2. **闸门**：`biz/approval` 的 `Sign` 累积签名、调用闸门、缺口未补齐时保持
+//     pending（HTTP 202）而不是返回。装配在 `cmd/opskeeper/dualsigngate.go`。
+//  3. **声明**：启动日志与本段同时改成"已生效"，并说明怎么关掉。
 //
-// 要让本文件描述的东西成真，需要三件事同时发生，缺一件就仍然是「配置了但没开」：
-//  1. 存储：给 proposal 行一个能放下 N 个签名人的地方（迁移 + 模型列）；
-//  2. 闸门：approve 路径上累积签名并调用 `Validate`，未签齐时保持 pending
-//     而不是返回；
-//  3. 声明：启动日志与本文件同时改成「已生效」。
+// 验证器本身在同一次决策里修了两个洞，两者都曾经让"双签"成为一句空话：
+//   - **按 UserID 去重**。此前 `Validate` 接受同一个人的两条签名记录，理由写的是
+//     "调用方负责去重"——而一个把控制交给周围代码记得去做的规则，等于没有规则。
+//   - **真的去读 `rule.Role`**。此前 `collectRequires` 只看 resource/action/effect，
+//     于是规则文件里最显眼的那个字段从未被读过。
 //
-// 第 3 件是前两件的收据，而**它今天已经在说谎**——决策 285 改掉了它，
-// 在实现之前。
+// 仍然没有实现的是 `sensitivity.escalates-severity`：敏感度把审批升级成 dangerous
+// 那条路径的生产者仍然是零，见 dataguard 登记表。
+//
 package hitl
 
 import (
@@ -54,8 +54,12 @@ type Signer struct {
 	// UserID 在审计日志里作为 approved_by 写入。
 	UserID uint64
 
-	// Role 是 Casbin role（"opskeeper-admin" / "opskeeper-observer" / 等）。
-	// 来自 iam/biz/authz HydrateMemberships 同步。
+	// Role 是 iam 的系统角色（"admin" / "user" / "viewer"），
+	// 来自 tenantctx，即签名人**当时以什么身份登录**。
+	//
+	// 决策 362 之前这里写的是 Casbin role 并举例 "opskeeper-admin"——
+	// 一个系统里从来没有人持有的名字。规则文件当时也在用这个名字，
+	// 于是整份配置没有一条规则可能被满足。
 	Role string
 
 	// ApprovedAt 仅用于审计与限速；不影响校验逻辑。
@@ -66,8 +70,8 @@ type Signer struct {
 //
 // JSON 形态：
 //
-//	{"role":"opskeeper-admin","resource":"tenant_wide","action":"approve",
-//	 "effect":"allow","requires":["opskeeper-admin","opskeeper-observer"]}
+//	{"role":"admin","resource":"destructive","action":"approve",
+//	 "effect":"allow","requires":["admin"]}
 type DualSignRule struct {
 	// Role 主签角色（policy.sub）；为空表示该 rule 不绑定主签角色，
 	// 只看 resource+action+requires。
@@ -160,6 +164,25 @@ func (p *DualSignPolicy) Rules() []DualSignRule {
 //   - 同一 role 出现多次只算一组
 //   - signers 顺序无关（验证后审计日志按 ApprovedAt 排序输出）
 func (p *DualSignPolicy) Validate(resource, action string, signers []Signer) error {
+	// One person is one signature. The rule exists to stop a single operator
+	// from being the whole control, and a validator that counts a repeated
+	// signer twice hands that control back to exactly the person it was
+	// written for. Deduplicating here rather than in the caller is a
+	// deliberate choice: every caller that forgets is a caller that has just
+	// disabled the control it called.
+	signers = dedupeSigners(signers)
+	// The `role` on a rule was never checked by Validate: collectRequires
+	// reads only resource, action and effect, so a rule file that named
+	// "opskeeper-admin" on every line was a file whose most prominent field
+	// did nothing. It is checked here, where the rest of the rule is, and a
+	// row of rules that names a role is now a statement about who may sign.
+	if !p.roleSigned(resource, action, signers) {
+		return &DualSignError{
+			Kind:    "role_not_signed",
+			Detail:  fmt.Sprintf("no signer holds a role the rule requires for %s/%s", resource, action),
+			Missing: p.collectRoles(resource, action),
+		}
+	}
 	requires := p.collectRequires(resource, action)
 	if len(requires) == 0 {
 		// 无双签规则：单签即合规（调用方负责其它层校验）。
@@ -199,6 +222,69 @@ func (p *DualSignPolicy) Validate(resource, action string, signers []Signer) err
 		}
 	}
 	return nil
+}
+
+// roleSigned reports whether some signer holds one of the roles the matching
+// rules name. A rule with no role names none, which is the "anybody may sign
+// this one" case and is why the field is optional.
+func (p *DualSignPolicy) roleSigned(resource, action string, signers []Signer) bool {
+	need := p.collectRoles(resource, action)
+	if len(need) == 0 {
+		return true
+	}
+	for _, s := range signers {
+		for _, role := range need {
+			if strings.EqualFold(s.Role, role) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// collectRoles 取所有匹配 resource+action 的 allow rules 的 Role 并集。
+func (p *DualSignPolicy) collectRoles(resource, action string) []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	seen := map[string]struct{}{}
+	for _, r := range p.rules {
+		if !strings.EqualFold(r.Effect, "allow") {
+			continue
+		}
+		if !matchResource(r.Resource, resource) || !matchAction(r.Action, action) {
+			continue
+		}
+		if r.Role != "" {
+			seen[r.Role] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	return out
+}
+
+// dedupeSigners keeps the first record per user and drops the rest. "First"
+// is the earliest signature on the row, which is the one the audit chain
+// already names.
+func dedupeSigners(ss []Signer) []Signer {
+	seen := make(map[uint64]struct{}, len(ss))
+	out := make([]Signer, 0, len(ss))
+	for _, s := range ss {
+		if _, ok := seen[s.UserID]; ok {
+			continue
+		}
+		seen[s.UserID] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
+// RequiresFor 返回 resource+action 匹配到的角色组要求。导出的原因是 approve
+// 路径需要把"还差什么"讲给人听，而那正是 collectRequires 在算的东西。
+func (p *DualSignPolicy) RequiresFor(resource, action string) []string {
+	return p.collectRequires(resource, action)
 }
 
 // collectRequires 取所有匹配 resource+action 的 allow rules 的 Requires 并集。

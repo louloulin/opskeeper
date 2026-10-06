@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
 	bizapproval "github.com/vincent-wuhan/opskeeper/core/manager/biz/approval"
@@ -101,12 +102,36 @@ func (f *fakeApprovalRepo) Decide(_ context.Context, id string, fields map[strin
 	if !ok {
 		return errors.New("not found")
 	}
+	if a.Status != modelapproval.StatusPending {
+		// The real repo guards on pending so two people clicking at once
+		// cannot overwrite each other. A fake that skipped the guard would
+		// have let the race this file's tests are about look impossible.
+		return errs.ErrNotFound
+	}
 	if s, ok := fields["status"].(string); ok {
 		a.Status = s
 	}
 	if r, ok := fields["reason"].(string); ok {
 		a.Reason = &r
 	}
+	if u, ok := fields["approved_by"].(uint64); ok {
+		a.ApprovedBy = &u
+	}
+	if blob, ok := fields["signers_json"].(string); ok {
+		a.SignersJSON = &blob
+	}
+	return nil
+}
+
+func (f *fakeApprovalRepo) AddSigner(_ context.Context, id, signersJSON string) error {
+	a, ok := f.rows[id]
+	if !ok {
+		return errors.New("not found")
+	}
+	if a.Status != modelapproval.StatusPending {
+		return errs.ErrNotFound
+	}
+	a.SignersJSON = &signersJSON
 	return nil
 }
 

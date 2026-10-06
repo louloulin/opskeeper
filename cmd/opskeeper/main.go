@@ -492,7 +492,7 @@ func main() {
 		log.Error("iam: seed role policies", slog.Any("err", err))
 		os.Exit(1)
 	}
-	// ADR-019 tenant_wide 双签策略：启动时校验语法。
+	// ADR-019 双签策略：启动时加载、校验语法、并**把它接到审批路径上**。
 	//
 	// 决策 285 改掉了这三条日志的措辞，因为它们原来会说谎。原来打的是
 	// "dual sign policy loaded (N rules)"——一行绿的、像是控制已生效的日志，
@@ -501,24 +501,28 @@ func main() {
 	// 提案行的存储里也没有放第二个签名人的地方。**一个会把自己记成已启用
 	// 的控制，比一个不存在的控制更危险，因为它让运维不再去查。**
 	//
-	// 这里保留加载与语法校验，是因为规则文件写错了应该在启动时炸而不是在
-	// 第一次用到时炸——**即使那个「用到」还没有发生**。但措辞必须说真话：
-	// 加载成功不等于生效。生效需要提案行能存 N 个签名、approve 路径上累积
-	// 并调用 Validate，两件都还没做，见 biz/hitl/dual_sign.go 的包注释与
-	// TestDualSignCannotBeEnforcedBecauseNowhereStoresTwoSigners。
+	// 决策 362 让那两件事成真了：approvals 行能存 N 个签名，Sign 路径上累积
+	// 并调用 Validate。所以下面这段日志第一次可以描述一件**正在发生**的事，
+	// 而不是一件计划中的事。仍然保留"加载失败即启动失败"，是因为规则文件
+	// 写错了应该在启动时炸而不是在第一次用到时炸。
 	dsp, dsErr := managerbizhitl.LoadDualSignPolicies("policy/opskeeper/casbin/tenant_wide.json")
 	if dsErr != nil {
-		log.Error("hitl: dual sign policy file is unreadable or malformed; it is NOT enforced at "+
-			"runtime either, so this only fails the boot early", slog.Any("err", dsErr))
+		log.Error("hitl: dual sign policy file is unreadable or malformed; the gate stays "+
+			"unwired, so every approval would fall back to single-signer — failing here "+
+			"instead is the whole point of loading it at boot", slog.Any("err", dsErr))
 		os.Exit(1)
 	}
-	if n := len(dsp.Rules()); n == 0 {
-		log.Warn("hitl: no dual sign rules; UNENFORCED — every approval is single-signer " +
-			"regardless of this file (decision 285)")
-	} else {
-		log.Warn("hitl: parsed " + strconv.Itoa(n) + " dual sign rules; UNENFORCED — no approve " +
-			"path calls Validate and no proposal row can hold a second signature " +
-			"(decision 285); tenant_wide approvals are single-signer today")
+	switch {
+	case len(dsp.Rules()) == 0:
+		log.Warn("hitl: no dual sign rules parsed; every approval is single-signer. " +
+			"The gate is wired, it has nothing to enforce (decision 362)")
+	case dualSignDisabled():
+		log.Warn("hitl: dual sign is DISABLED by OPSKEEPER_DUAL_SIGN; destructive " +
+			"approvals pass on one signature and every such pass is logged as a warning")
+	default:
+		log.Info("hitl: dual sign ENFORCED — " + strconv.Itoa(len(dsp.Rules())) +
+			" rules; destructive and cluster-scope approvals need two different " +
+			"administrators, and a row with only one signature stays pending (decision 362)")
 	}
 	orgRepo := iamdataorg.NewRepo(db)
 	membershipRepo := iamdatamembership.NewRepo(db)
@@ -634,7 +638,12 @@ func main() {
 	// runtime's kernel gate needs it and the runtime is assembled far
 	// earlier than this BC's handlers. Producers register their
 	// execute-on-approve executor below, where those subsystems are built.
-	approvalUC := managerbizapproval.NewUsecase(managerapprovaldata.NewRepo(db), log.With(slog.String("comp", "approval")))
+	// 决策 362：双签接上了。规则文件在第 509 行载入，那里的日志过去写的是
+	// "UNENFORCED"——今天不再如此，而一个还在说 UNENFORCED 的启动日志比
+	// 没有日志更坏，因为它让运维以为这件事已经处理过了。
+	approvalUC := managerbizapproval.NewUsecase(managerapprovaldata.NewRepo(db),
+		log.With(slog.String("comp", "approval"))).
+		WithDualSignGate(newDualSignGate(dsp, log.With(slog.String("comp", "dualsign"))))
 	auditRetentionDays := 180
 	if v := os.Getenv("OPSKEEPER_AUDIT_RETENTION_DAYS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -5291,6 +5300,10 @@ func (s cloudBashProposerShim) ProposeAndAwait(ctx context.Context, command stri
 		Source:     "agent",
 		SessionID:  sessionID,
 		ProposedBy: userID,
+		// 这个工具自己声明 Class="read"，理由是"审批收件箱就是它的控制"。
+		// 对**这一次提案**来说，落地的是一条任意命令，所以它按 destructive
+		// 记账——双签规则看的正是这一行，而不是工具的自我声明。
+		RiskClass: string(domain.ClassDestructive),
 	})
 	if err != nil {
 		return "", err
@@ -5334,6 +5347,10 @@ func (s hostBashProposerShim) ProposeAndAwait(ctx context.Context, deviceIDs []u
 		Source:     "agent",
 		SessionID:  sessionID,
 		ProposedBy: userID,
+		RiskClass:  string(domain.ClassDestructive),
+		// 命中设备数由 payload 决定，而 payload 是审批执行时才读的；这里
+		// 记的是"面向设备"这一类，规则按它决定要不要双签。
+		BlastRadius: "devices",
 	})
 	if err != nil {
 		return "", err
@@ -5422,6 +5439,9 @@ func (s installSkillProposerShim) ProposeInstall(ctx context.Context, url, sourc
 		Source:     "agent",
 		SessionID:  sessionID,
 		ProposedBy: userID,
+		// 工具自己的 Info 就是 Class="destructive"：装一个 skill 等于装一段
+		// 会执行的代码。这里抄的是那份声明，不是另一次判断。
+		RiskClass: string(domain.ClassDestructive),
 	})
 	if err != nil {
 		return "", err

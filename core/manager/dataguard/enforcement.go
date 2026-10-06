@@ -93,8 +93,11 @@ func Claims() []ControlClaim {
 			Status: StatusInert,
 			Probe:  "NewPolicyFromConfig",
 			Note: "PausePolicyImpl implements the mapping and nothing constructs it in production, " +
-				"so a TopSecret resource does not actually escalate on any request path. The gate " +
-				"that does run is the single-sign approval gate in the kernel.",
+				"so a TopSecret resource does not escalate the **approval** it would need. What " +
+				"does run, since decision 361, is the read gate: a TopSecret resource needs a " +
+				"topsecret_reader tier before a tool returns anything. **读侧升级是真的，审批侧" +
+				"升级仍然没有**——而这一行说的是后者：审批的等级由生产者声明的 risk_class 决定，" +
+				"没有任何一处去问这个资源被标成了什么。",
 		},
 		{
 			ID:     "sensitivity.confidential-reader-role",
@@ -131,13 +134,30 @@ func Claims() []ControlClaim {
 				"registry exists to prevent.",
 		},
 		{
-			ID:     "sensitivity.top-secret-dual-approval",
-			Claim:  "TopSecret data is readable by nobody and its writes need two approvers",
-			Status: StatusInert,
-			Probe:  "WithDualSignPolicy",
-			Note: "the validator exists and is never injected, and the proposal tables have one " +
-				"approved_by column each — there is nowhere to put a second signature. Dual sign " +
-				"is the ADR-019 conclusion and it has never fired.",
+			ID:     "sensitivity.top-secret-read-gated",
+			Claim:  "TopSecret data is readable by nobody",
+			Status: StatusEnforced,
+			Probe:  "AllowWithSensitivity",
+			Note: "**这一行改写了它自己的措辞，因为原措辞从来不是真的。** TopSecret 不是" +
+				"「无人可读」，而是「持有 topsecret_reader tier 的人可读」——TierForSensitivity " +
+				"一直这么定义，决策 361 把它接到了每一次控制台工具调用上。改写成可实现的那句之后 " +
+				"它是真的：读 TopSecret 需要 tier，而 grant 这个 tier 是一条独立的、有记录的 " +
+				"管理动作。**「无人可读」不是被实现了，是被撤回了**——一个能兑现的弱承诺比一个 " +
+				"兑现不了的强承诺有用。",
+		},
+		{
+			ID:     "approval.dual-sign",
+			Claim:  "a destructive or cluster-scope approval needs two different administrators",
+			Status: StatusEnforced,
+			Probe:  "WithDualSignGate",
+			Note: "决策 362 接上的。存储侧：approvals 行新增 signers_json，能放下 N 个签名人；" +
+				"闸门侧：Sign 累积签名、缺口未补齐就保持 pending（HTTP 202），补齐才 Decide + 执行；" +
+				"规则侧：policy/opskeeper/casbin/tenant_wide.json 从一份**匹配不到任何东西**的" +
+				"配置（resource 写 tenant_wide 而没有一行审批是这么标的；role 写 opskeeper-admin " +
+				"而系统里没有这个角色）改写成系统真实产出的词表。验证器本身也修了两个洞：按 " +
+				"UserID 去重（此前同一个人签两次算数），以及真的去检查 rule.Role（此前该字段" +
+				"从未被读过）。**仍有一处已知缺口**：生产者没有声明分类的行（目前是 mcp_call）" +
+				"按单签放行，闸门不替它猜风险等级。",
 		},
 	}
 }

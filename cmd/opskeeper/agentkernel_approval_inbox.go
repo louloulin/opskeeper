@@ -117,6 +117,12 @@ func (a *InboxUsecase) Propose(ctx context.Context, req ports.ApprovalRequest) (
 		Payload:   payload,
 		Source:    modelapproval.SourceAgent,
 		SessionID: req.SessionID,
+		// 分类与影响面从闸门给的请求提升成**行上的列**。它们本来就在
+		// payload 里，而 payload 是给 executor 读的：一条要按风险匹配的
+		// 规则，去解析它自己要批准的东西才能知道自己要批准什么，
+		// 迟早会解析错。决策 362 把这两样搬到了列上。
+		RiskClass:   string(req.Class),
+		BlastRadius: string(req.BlastRadius),
 	})
 	if err != nil {
 		return "", err

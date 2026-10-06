@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -78,11 +79,22 @@ func (h *Handler) approve(w http.ResponseWriter, r *http.Request) {
 			0, id, nil, errors.New("caller is not an admin"))
 		return
 	}
-	a, err := h.uc.Approve(r.Context(), c.UserID, id)
+	a, decided, err := h.uc.Sign(r.Context(), bizapproval.Signer{
+		UserID: c.UserID, Role: c.Role, At: time.Now().UTC(),
+	}, id)
 	if err != nil {
 		auditDecision(r, auditport.ActionApprovalApprove, auditport.StatusFailure,
 			c.UserID, id, nil, err)
 		writeErr(w, err)
+		return
+	}
+	if !decided {
+		// 一次签名记下了，但这行还没到能执行的时候。**这不是失败**：审计
+		// 记 success，HTTP 记 202，因为"我签了"是一件完成了的事，而把它
+		// 报成错误会训练运维把双签当成故障。
+		auditDecision(r, auditport.ActionApprovalApprove, auditport.StatusSuccess,
+			c.UserID, id, a, nil)
+		writeJSON(w, http.StatusAccepted, a)
 		return
 	}
 	// 审计状态跟着**执行结果**走，而不是跟着 HTTP 走。
