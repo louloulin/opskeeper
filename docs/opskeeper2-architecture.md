@@ -4892,6 +4892,56 @@ out: {"api_key":"<redacted:api_key>",
 | 散文值形状**替换** | ⏳ `declared`，等人拍板（代价是真文档被毁） |
 | **整条链的生产接线** | ⏳ `PostmortemService` 无生产调用方 |
 
+### 4.315 决策 381：模块清单只和台账对，**不和树对**——两份文件互相作证，就都不算证据
+
+顺着决策 377 那条线（跨文件的断言没人守）继续找。这轮的候选是
+`Makefile` 的 `PIG_MODULES`：`module-standalone-check` 逐个 `cd` 进去
+`go build ./... && go test ./...`，**所以那份清单就是「什么被构建过」的唯一定义**。
+
+已经有闸门在管它——`scripts/ledgercheck` 的
+`TestTheProgressTableCountsTheModulesTheMakefileDeclares` 比的是
+**台账里写的模块数 ↔ Makefile 清单的条目数**。它比得对，比得严，它绿着。
+
+**而它比的是两份文件。** 于是：加一个带 `go.mod` 的模块、忘了加进 `PIG_MODULES`
+→ 台账的数与清单的数**一起描述同一个更小的现实** → 闸门绿 →
+`module-standalone-check` 从此不再构建它 → **没有任何东西会红**。
+**两份文件互相作证，就都不算证据。**
+
+#### 4.315.1 本轮先量，再写
+
+```
+PIG_MODULES: 18
+树上的 go.mod（除 plugins/ 下的打包副本）: 18
+差集: 空
+```
+
+**所以这个洞是潜伏的，不是开着的。** 这恰好是补检查的最好时机——补一个还没人
+踩进去的洞，而不是补一个已经有人踩进去的洞。实测也印证了决策 186 那句判断：
+这类问题**自己长出来的检查抓不住自己**，只能换一张比较的对象。
+
+#### 4.315.2 补的是第三段比较：清单 ↔ 树
+
+`TestTheStandaloneListCoversEveryModuleInTheTree` 遍历仓库找每一份 `go.mod`，
+两个方向都比：
+
+- 树上有、清单里没有 → 「`module-standalone-check` 从不构建它，而所有闸门照样绿」
+- 清单里有、树上没有 → 「standalone 会在一个不存在的目录上失败」
+
+`plugins/` 被排除，理由写进代码而不是留白：那里的 `go.mod` 是
+`core/pig/extensions/*` 的打包副本，由 `make plugin-extension-build-check` 构建，
+把它们算进来，这道检查就变成在数 vendored 副本，而不是在数要发布的模块。
+
+**在真实仓库上验过它会响**：从 `PIG_MODULES` 里去掉 `core/faults`，立刻得到
+
+```
+core/faults has a go.mod but is not in PIG_MODULES, so module-standalone-check
+never builds or tests it; every gate is still green
+```
+
+恢复后全绿。`ledger-check` 没有 `-run` 过滤（整包跑），所以这条检查**不需要**再被
+接进任何名单——决策 348 那个「新测试没进 `-run` 所以 CI 不跑」的坑在这里不存在，
+这一点也是量出来的而不是假设的。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，

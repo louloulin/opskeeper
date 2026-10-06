@@ -1,9 +1,12 @@
 package ledgercheck
 
 import (
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -123,4 +126,101 @@ func progressRow(t *testing.T, ledger, prefix string) string {
 	}
 	t.Fatalf("no line starting with %q inside %q; the progress table's shape changed", prefix, progressHeading)
 	return ""
+}
+
+// moduleDirsInTree returns every directory in the repository that carries a
+// go.mod, as repository-relative paths with "." for the root.
+//
+// `plugins/` is excluded, and the exclusion is a fact about the tree rather
+// than a convenience: those are packaged copies of the extension modules that
+// already exist under core/pig/extensions, and they are built and checked by
+// make plugin-extension-build-check. Counting them would make this a check
+// about vendored duplicates rather than about the modules that ship.
+func moduleDirsInTree(t *testing.T) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	// The root is derived from the Makefile this package already reads, not
+	// found by walking upwards for a marker: a marker walk is a second way to
+	// answer "where is the repository", and this package has no reason to own
+	// one.
+	absMakefile, errAbs := filepath.Abs(filepath.FromSlash(makefilePath))
+	if errAbs != nil {
+		t.Fatalf("abs %s: %v", makefilePath, errAbs)
+	}
+	root := filepath.Dir(absMakefile)
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if path != root && (name == ".git" || name == "node_modules") {
+			return fs.SkipDir
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "." {
+			return nil
+		}
+		if strings.HasPrefix(rel, "plugins/") {
+			return fs.SkipDir
+		}
+		if _, statErr := os.Stat(filepath.Join(path, "go.mod")); statErr == nil {
+			out[rel] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk for go.mod: %v", err)
+	}
+	out["."] = true
+	return out
+}
+
+// TestTheStandaloneListCoversEveryModuleInTheTree is the third link.
+//
+// The gate above compares the progress table against PIG_MODULES, and that
+// pair is kept in step — so a new module that nobody adds to PIG_MODULES leaves
+// both numbers describing the same, smaller reality, and everything is green
+// while `module-standalone-check` quietly stops building and testing it. Two
+// documents agreeing with each other is not evidence that they describe the
+// tree.
+//
+// Measured this round before writing it: the list and the tree were both 18, so
+// the hole was latent, not open. That is exactly the state a check should be
+// added in — a hole nobody has walked into yet, rather than one somebody has.
+func TestTheStandaloneListCoversEveryModuleInTheTree(t *testing.T) {
+	_, declared := declaredModules(t)
+	tree := moduleDirsInTree(t)
+
+	inList := map[string]bool{}
+	for _, m := range declared {
+		inList[m] = true
+	}
+
+	var problems []string
+	for module := range tree {
+		if !inList[module] {
+			problems = append(problems, fmt.Sprintf(
+				"%s has a go.mod but is not in PIG_MODULES, so module-standalone-check never "+
+					"builds or tests it; every gate is still green", module))
+		}
+	}
+	for _, module := range declared {
+		if !tree[module] {
+			problems = append(problems, fmt.Sprintf(
+				"PIG_MODULES names %s, which has no go.mod in the tree; the standalone check "+
+					"would fail there for a directory that does not exist", module))
+		}
+	}
+	if len(problems) > 0 {
+		sort.Strings(problems)
+		t.Errorf("the standalone module list does not match the tree:\n  %s",
+			strings.Join(problems, "\n  "))
+	}
 }
