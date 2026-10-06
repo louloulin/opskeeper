@@ -417,6 +417,46 @@ func truncate(s string, n int) string {
 // A chain that only ever loses its oldest entries has a describable
 // boundary, the anchor, which ChainState reports. A chain with a hole has
 // a mystery.
+// recordTruncation writes the chain's own receipt for having cut its front.
+//
+// This is the only operation in the repository that deletes rows from an
+// append-only ledger, and until decision 329 it left behind exactly one
+// thing: a log line. That is not a record. It is not covered by the digest,
+// it lives wherever logs live, and — the case that matters — **it does not
+// survive a restore from a backup taken before the deletion**. An operator
+// who finds a chain that starts at seq 40,000 and asks "did retention do
+// that, or did somebody?" had no way to answer, and the honest answer is
+// that the ledger had thrown away the very row that would have said.
+//
+// So the chain records its own truncation: one row, appended after the cut
+// (so it lands on the new head and is itself sealed), naming how many rows
+// went, where the new anchor is, and what the cutoff was. **唯一能删掉证据的
+// 操作，必须在链上留下「我删过」的证据。**
+//
+// It cannot fail the sweep. A sweep that deleted rows and then returned an
+// error would be retried, and the second run would find nothing to delete
+// and report success — losing the receipt for the rows already gone. The
+// failure is logged loudly instead, because the alternative (refusing to
+// report the truncation) is what this method exists to prevent.
+func (u *Usecase) recordTruncation(ctx context.Context, removed int64, anchor uint64, cutoff time.Time) {
+	u.Emit(ctx, Event{
+		Action:       model.ActionRetentionTruncate,
+		ResourceType: model.ResourceAuditChain,
+		// The resource id is the new anchor: "what this row replaced" is
+		// the first thing an operator wants to know, and putting it in the
+		// id column means it is searchable the way every other resource in
+		// this ledger is.
+		ResourceID:   strconv.FormatUint(anchor, 10),
+		ResourceName: "audit_chain",
+		Status:       model.StatusSuccess,
+		Payload: map[string]any{
+			"rows_removed":   removed,
+			"new_anchor_seq": anchor,
+			"cutoff":         cutoff.UTC().Format(time.RFC3339Nano),
+		},
+	})
+}
+
 func (u *Usecase) sweep(ctx context.Context, cutoff time.Time) (int64, error) {
 	var removed int64
 	if u.chainEnabled() {
@@ -429,6 +469,7 @@ func (u *Usecase) sweep(ctx context.Context, cutoff time.Time) (int64, error) {
 			u.log.Info("audit retention: chain truncated at the front",
 				slog.Int64("rows_removed", cut),
 				slog.Uint64("new_anchor_seq", anchor))
+			u.recordTruncation(ctx, cut, anchor, cutoff)
 		}
 	}
 	// Pre-chain rows sit outside the chain and are swept by age alone.

@@ -211,6 +211,7 @@ const (
 	ActionNodePluginInstall   = auditport.ActionNodePluginInstall
 	ActionNodePluginRemove    = auditport.ActionNodePluginRemove
 	ActionNodePluginLoad      = auditport.ActionNodePluginLoad
+	ActionRetentionTruncate   = auditport.ActionRetentionTruncate
 	ActionNodeProposalCreate  = auditport.ActionNodeProposalCreate
 	ActionNodeRecoveryApply   = auditport.ActionNodeRecoveryApply
 
@@ -260,6 +261,7 @@ const (
 	ResourceAuth             = auditport.ResourceAuth
 	ResourcePlugin           = auditport.ResourcePlugin
 	ResourceEdge             = auditport.ResourceEdge
+	ResourceAuditChain       = auditport.ResourceAuditChain
 	ResourceApproval         = auditport.ResourceApproval
 	ResourceIMApp            = auditport.ResourceIMApp
 	ResourceAgentTeamsTask   = auditport.ResourceAgentTeamsTask

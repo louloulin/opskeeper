@@ -456,6 +456,20 @@ const (
 	ActionNodeProposalCreate  = "node_proposal_create"
 	ActionNodeRecoveryApply   = "node_recovery_apply"
 
+	// ActionRetentionTruncate is the audit chain recording that its own
+	// front was cut (决策 329).
+	//
+	// It is the one action in this vocabulary that describes something the
+	// chain did to itself, and it is here because the alternative is worse:
+	// before it, the retention sweep removed rows from an append-only ledger
+	// and left nothing but a log line. **一个能删掉证据的操作，如果不留下
+	// 「我删过」的记录，那么事后没人能区分「保留期到了」与「有人删了」。**
+	// And the log line is not a record — it goes wherever logs go, it is not
+	// covered by the digest, and it does not survive a restore from a backup
+	// taken before the deletion, which is precisely the case where the
+	// question arises.
+	ActionRetentionTruncate = "audit_retention_truncate"
+
 	// ActionAgentToolCall is the control plane recording a tool it ran on
 	// a node's behalf (决策 203).
 	//
@@ -544,6 +558,15 @@ const (
 	// resource id is the tool name the caller asked for, which is what an
 	// operator searches for when a tenant claims a tool "does not exist".
 	ResourceMCPTool = "mcp_tool"
+
+	// ResourceAuditChain names the chain itself rather than any row in it.
+	// The retention marker is the only action whose subject is the ledger
+	// as a whole: everything else is filed under a device, a user, a plugin
+	// or a node. Filing it under "audit_log" alongside ordinary rows would
+	// put the record of the ledger's own mutation among the things it
+	// recorded — and an operator asking "did the ledger shrink?" would have
+	// to filter a bucket that also holds every entry.
+	ResourceAuditChain = "audit_chain"
 
 	// ResourceAgentTool buckets the rows written by the agent.tool proxy
 	// (ActionAgentToolCall). It is separate from ResourceMCPTool because
