@@ -6824,6 +6824,83 @@ open-source gate failed: 15 violation(s) in the tracked tree
 而本轮闸门报出来的两条新违规**都不在那两类里**——
 它报的是"家目录路径"和"计数不一致"，**一条都没落在 4.334 说的那 13 处上**。
 **这说明 4.334 的分类是完整的：确实只有那两条规则在命中这棵树。**
+### 4.337 决策 403：`e2e-delivery-check` 在本机第一次跑完，而且是绿的——**同时把 arm64 那条缺口的性质从"跑不了"改写成"跑得了但不是单架构"**
+
+#### 4.337.1 触发
+
+`scripts/cigate` 一直报一句话：**29 of 30 gates reachable from a push**，
+外加 **1 gate(s) wired but no push can reach them: `e2e-delivery-check`**。
+决策 399 把它归因于「这道闸门要 Docker，CI 的 push 腿没有」，
+于是它被登记成一条**结构上 push 到不了**的闸门（决策 398 的原话是
+「从加入 CI 到现在，一次都没有跑过，且在结构上跑不了」）。
+
+**本轮发现那个归因是错的。** 差的不是 CI 的能力，是**这台机器上 Docker 没被启动**。
+`docker info` 在启动前不可用，`open -a Docker` 之后立刻返回
+**29.6.1 / aarch64**。也就是说 §六登记的那句「唯一还需要外部条件的一条是
+0.4 的 `make compose-up` 那一版——本机没有 Docker」，
+**前提是错的：本机有 Docker，只是没开。**
+
+#### 4.337.2 实测
+
+```
+make e2e-delivery-check
+  → ok  github.com/vincent-wuhan/opskeeper/tests/e2e  85.713s
+```
+
+三条用例一起绿：`TestTheGatewayServesAStreamToANodeCredential`、
+`TestNodeAgentDelivery`、`TestANodeKeepsItsTelemetryThroughAnOutage`。
+`TestNodeAgentDelivery` 的七条子用例逐条过，包括
+「节点不持任何 provider 凭据」「进程环境里没有诱饵凭据」
+「回合一帧不少地流回控制台」「没有 watcher 的回合被拒」。
+
+**这是这道闸门在本分支上的第一次真跑，且一次通过——没有为了让它变绿改任何代码。**
+
+#### 4.337.3 但它同时把 arm64 缺口的**性质**改了
+
+子用例 `the run declares the architectures it covered` 自己打印了这句话：
+
+```
+architecture: node/manager arm64 (host), broker x86_64 (container)
+MIXED leg: broker x86_64 under emulation on an arm64 host
+            — this is not a single-architecture run
+```
+
+**这条用例的存在值得单独记**：它不是断言通过就算完，
+它**在通过的同时报出自己的腿是混的**。仓库把
+「这一次跑覆盖了哪些架构」写成测试输出的一部分，
+于是"绿"和"单架构"变成两件可以分开读的事，而不是一件被合并掉的事。
+
+所以 arm64 那条缺口的准确说法是：
+
+- ❌ 不是「跑不了」——在 arm64 宿主上它**跑得了，而且是绿的**
+- ✅ 是「broker 镜像只有 `linux/amd64`，这一腿是模拟执行的」
+
+这与 `scripts/brokerarch` 的四码退出**完全一致**：
+**0 = 有 arm64、1 = 读到了但没有、2 = 用法错、3 = 问不出来**。
+本轮实跑该报告得到 **3（UNKNOWN）**，因为 `registry-1.docker.io` 不可达
+（`context deadline exceeded`）。**1 和 3 不可混**：
+一个够不到的 registry 没有对 arm64 说过任何话。
+所以这条缺口**本轮一条也没关**，关掉它仍然要等 nightly 从够得着的网络问出 0 或 1。
+
+#### 4.337.4 三条读数被改写
+
+| 原读数 | 现读数 | 依据 |
+|---|---|---|
+| `e2e-delivery-check` 结构上跑不了 | **跑得了，本机一次通过** | `make e2e-delivery-check` 85.713s |
+| 阶段 0 验收 0.4 差一个外部条件（本机无 Docker） | **外部条件不成立，已跑通** | 同上 |
+| arm64 缺口 = broker 镜像无 arm64，测试跑不了 | **= 同一件事，但这不是"跑不了"** | MIXED leg 自报 |
+
+#### 4.337.5 净变化
+
+- **未改任何生产代码。** 本轮是一次测量，不是一次改造。
+- §六那条「本机没有 Docker」的登记**前提写错了**，本节更正它；
+  该行本身没有被删——**删一行"缺什么"比更正它更容易让下一次读数骗人**。
+- `cigate` 那句「1 gate wired but no push can reach them」**仍然成立**：
+  push 腿确实到不了它，本节没有改变可达性，只证明了它本身是绿的。
+- 一条新的通用形状：**「某道闸门跑不了」与「某道闸门没被跑过」是两件事，
+  而「本机缺工具」与「本机工具没启动」也是两件事。**
+  两者都被写成了"不存在"，而它们的修法一个在 CI 配置里、一个在一条命令里。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
