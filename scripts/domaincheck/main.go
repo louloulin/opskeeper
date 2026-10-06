@@ -83,8 +83,34 @@ const managerPrefix = "github.com/vincent-wuhan/opskeeper/core/manager/"
 // layerDirs are the trees a domain's code is scattered across. A path whose
 // first segment is one of them names its domain in the second segment;
 // anything else is already domain-shaped and names itself.
+//
+// The consequence people get wrong: the layer is not part of the domain's
+// identity. model/hitl and biz/hitl are the SAME domain, so moving an import
+// from one to the other changes no boundary and cuts no edge — it only moves
+// the line the reader has to draw in their head. Decision 276 hit this the
+// expensive way: a port that borrowed model/topology's structs looked like a
+// clean cut until the declared edge was deleted and the tool reported an
+// undeclared import from a package that had never moved. Hence the sentence
+// domaincheck now prints on every run.
 var layerDirs = map[string]bool{
 	"biz": true, "server": true, "data": true, "model": true, "service": true,
+}
+
+// layerRuleSentence states the rule above in the reader's terms, and is
+// built from layerDirs rather than written out: a hardcoded list of layers
+// is one more thing in this repository that can go stale while the code it
+// describes keeps moving. Printed on every run, not only on failure — the
+// rule is the one a reader cannot infer from a package path, and decision
+// 276 lost a knife to exactly that inference.
+func layerRuleSentence() string {
+	layers := make([]string, 0, len(layerDirs))
+	for name := range layerDirs {
+		layers = append(layers, name+"/")
+	}
+	sort.Strings(layers)
+	return "domaincheck: a domain is named by the segment after " + strings.Join(layers, " ") +
+		" — so model/hitl and biz/hitl are the SAME domain, and moving an import" +
+		" between those layers cuts nothing"
 }
 
 // declKind is what an exported name is: something a dependent can hold
@@ -628,13 +654,14 @@ func main() {
 
 	if len(violations) == 0 {
 		fmt.Println("domaincheck: every domain boundary holds")
-		return
+	} else {
+		fmt.Fprintf(os.Stderr, "domaincheck: %d domain violation(s):\n", len(violations))
+		for _, v := range violations {
+			fmt.Fprintln(os.Stderr, "  "+v)
+		}
+		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "domaincheck: %d domain violation(s):\n", len(violations))
-	for _, v := range violations {
-		fmt.Fprintln(os.Stderr, "  "+v)
-	}
-	os.Exit(1)
+	fmt.Println(layerRuleSentence())
 }
 
 type treeStats struct {

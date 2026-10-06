@@ -24435,6 +24435,116 @@ proposal 与错误**同时**返回，proposal id 只出现在这一处。
      同义反复，而**同义反复的测试比没有测试更费时间**。
 
 
+### 4.212 决策 278：平两笔账——**一处账实不符，和一条谁也没说出口的规则**
+
+这一刀不动生产代码的形状。它做两件事，两件都是前两刀欠下的：
+
+1. **§九 的诊断轴读数与实测不符**（决策 277 末尾查出的账实不符）。
+2. **让 `domaincheck` 把「层不是域身份的一部分」这条规则说出来**
+   （决策 276 §4.210 八节留下的待办）。
+
+第二件做完后，**本轮抓到的第三个我自己写的假守卫**出现了。
+
+#### 一、账实不符：同一份台账里有两个读数，只有一个是对的
+
+§九 的可插件化边界表里那一格此前写「诊断轴实测 **16/20**，4 个 GAP
+……（2 个 host 家族语义不对 + 2 个明确「未裁决」）」。实测是：
+
+```
+diagnosis axis: 17/20
+GAP  host/cpu-spike   undiagnosed: 2
+GAP  host/disk-full   undiagnosed: 2
+GAP  mq/broker-down   undiagnosed: 1
+```
+
+**而同一份台账的 §六 阶段表写的是 17/20**（决策 204 那次退役
+`redis.hot_keys` 条目时更新的），并且把余下 3 条 GAP 的归属说清楚了：
+host 家族按设计排除 + `kafka.rebalance_history` 需要一个采集器而非
+broker 客户端。`pluginmanifest.DiagnosisGaps` 里现在是 **4 条条目**
+（3 条 host 家族 + 1 条 kafka），而 eval 报的是 **3 个 GAP 用例**——
+两个数不一样，因为**条目按能力记，用例按场景记**，`host/cpu-spike` 与
+`host/disk-full` 共用同一条 host 家族条目。
+
+所以这一格有三个错处，而它们不是同一处写错：
+**分子分母错了（16 → 17）**、**GAP 的计数单位混了（条目 vs 用例）**、
+**括号里的归属拆分错了（2+2 → 3+1）**。**只改数字是不够的**，
+而「只改数字」正是上一版台账最容易做的事。
+
+**为什么会漏**：决策 204 改了 `DiagnosisGaps`（它有双向守卫，
+新增红、过期也红），也更新了 §六，**但没有更新 §九**。
+**登记表有守卫、进度表有闸门，唯独跨小节的手抄读数两者都不管**——
+而这一格是**全仓唯一一处把 eval 的输出复述进台账的地方**。
+
+#### 二、那条规则：`layerDirs` 是实现，不是文档
+
+决策 276 的第一版端口照抄 `model/topology` 的类型，删掉声明边之后
+`domaincheck` 报「aiops imports topology, which is not a declared domain
+edge」——**因为 `model/topology` 与 `biz/topology` 是同一个域**。
+`domainOf` 的实现是 `layerDirs[parts[0]] && len(parts) > 1 → parts[1]`，
+也就是说**层目录是实现细节，而「层不是身份」是一条规则**。
+**工具知道，人不知道**——而人是在写代码时需要知道的那个。
+
+现在每次运行都会打印这一句：
+
+```
+domaincheck: a domain is named by the segment after biz/ data/ model/ server/ service/
+— so model/hitl and biz/hitl are the SAME domain, and moving an import between those
+layers cuts nothing
+```
+
+两处设计选择：
+
+- **每次都打印，不只在失败时打印**。失败时打印的话，只有撞上它的人会看到，
+  而撞上它的人通常已经在一个错误的模型里了。
+- **句子从 `layerDirs` 派生**（`layerRuleSentence()`），不是手写。
+  **一份手写的层名单就是本仓库里又一件会 stale 的东西**，
+  而它 stale 的后果是「告诉读者的规则里有一个洞」。
+
+#### 三、第三个我自己写的假守卫，被变异抓住
+
+给这句话写的第一版测试是这样：
+
+```go
+for name := range layerDirs {
+    if !strings.Contains(got, name+"/") { t.Errorf(...) }
+}
+```
+
+**它有一个假阳性通道，而变异立刻找到了它**：把 `model` 从打印的层名单里
+去掉（模拟「层名单与 `layerDirs` 不同步」），**测试照样绿**——
+因为例句里的 `model/hitl` 也包含 `model/`，`strings.Contains` 命中的是
+**例句而不是名单**。**检查整句话就是检查错了对象。**
+
+修法不是把断言改严，是**先把对象切出来**：层名单是
+`"segment after "` 与 `" — so "` 之间的那一段，只在那一段里找。
+改完再跑同一个变异，红了。
+
+**这是决策 275、276、277 之后的第三个。** 三个里有三个的形态相同：
+**一句看起来像规则的断言，在它声称保护的东西上有一个具体的漏洞**，
+而漏洞的共同点是「检查了包含关系，却没检查归属」。
+**如果要给这三刀之后的自己留一条规则，就是这一条**：
+断言要么检查归属，要么它检查的东西必须能唯一地定位到被检查的对象。
+
+#### 四、读数
+
+**树未变**：57 域 / 14 边 / 0 环 / 97 条生产跨域 import / floor 40 / 57 /
+56,964 行 / 33.0% / 111 包。`core/manager` 未变（`scripts/` 不在其中）。
+本刀只动 `scripts/domaincheck`（1 个函数 + 注释 + 2 处测试）与台账。
+
+**新增测试 2 条**（层规则句子的派生性、`domainOf` 表里新增的 4 个用例
+`biz/hitl` / `model/hitl` / `biz/topology` / `model/topology`）。
+**变异 2 次**：删掉打印名单里的 `model` → 句子测试红（第一版**没红**）；
+从 `layerDirs` 里删掉 `model` → `TestDomainOfCollapsesTheLayerTreesOntoOneName`
+红，报 `model/topology = "model", want "topology"`。
+
+M-B 那条值得单说：**把 `model` 从 `layerDirs` 移出去，`domaincheck` 不会
+报任何错**。**这是一个能通过全部九道闸门的错误**：实测 `core/manager/model` 下有
+**17 个带 Go 文件的子包**（`hitl` `topology` `alert` `loop` `device` `edge` …），
+删掉 `model` 之后它们会**各自变成一个域**，域数从 57 变成 73，
+而没有一处会红——直到有人在表里写下一个 `model/...` 的用例。
+**新加的 4 行就是那把钳子。**
+
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -24483,6 +24593,21 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 加权合计 ≈ **98.6%**（四阶段等比 98 / 100 / 96.7 / 99.7 的均值 98.6）。这一栏按
 决策倒序追加，每一条只说自己动的那一分量：
 
+- **决策 278 平了两笔账，树一行未动**。第一笔是**账实不符**：§九 那一格写
+  「诊断轴 16/20、4 个 GAP（2+2）」，实测 17/20、3 个 GAP 用例，
+  而**同一份台账的 §六 早已写着 17/20**——**一份文件里两个读数，只有一个对**。
+  三个错处分别是分子分母、GAP 的计数单位（登记表按能力 4 条 vs eval 按场景
+  3 个用例）、以及归属拆分（2+2 → 3 条 host 家族 + 1 条 kafka）。
+  根因是**决策 204 更新了登记表与 §六，唯独漏了这一格**：
+  **登记表有双向守卫、进度表有闸门，跨小节的手抄读数两者都不管**。
+  第二笔是**让 `domaincheck` 每次运行都说出「层不是域身份的一部分」**
+  （决策 276 的遗留），句子**从 `layerDirs` 派生**而不是手写。
+  删掉 `model` 之后它们会各自变成一个域，域数从 57 变成 73。**本轮抓到第三个我自己写的假守卫**：给那句话的第一版测试用
+  `strings.Contains(整句话, "model/")`，而例句里也有 `model/`——
+  **删掉打印名单里的 `model` 层，测试照样绿**。修法是先切出层名单那一段再找。
+  **三个假守卫（275/276/278）形态相同：断言检查了包含关系却没检查归属**。
+  变异 2 次，其中**从 `layerDirs` 删掉 `model` 是能通过全部九道闸门的错误**
+  （12 个 model 包会安静地变成 12 个域），新加的 4 行表就是那把钳子。
 - **决策 277 切掉了 `aiops → hitl`，而动手前量出来的第一件事是：
   这条边承载的闸门在生产里从未被构造**——`hitl.NewCoordinator` 零调用方，
   `Deps.PauseCoordinator` 在全部 5 个 `Deps{}` 字面量里都没有出现，
@@ -28630,7 +28755,7 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
 | 告警规则 / 草稿 | ✅ 可插件化 | extension tool + command |
 | 拓扑图 | ✅ 可插件化 | extension tool |
 | 可观测栈（Prom/Loki/Tempo） | ✅ 可插件化 | extension tool（**已用**）；PiG 的 `mcp` 仅声明 |
-| 中间件适配（pg/redis/k8s/mq/git） | ✅ 可插件化 | 控制面 registry 里**真实存在**（`middleware-adapter` 100 个符号，骨架已清零，§4.85.6）；**打包形态已定**：**54 个工具全部 `class: read`**，随 `opskeeper-sre-middleware` 一个包下发，写工具**刻意不打包**——upcall 通道对任何 package 的非读工具一律拒绝，理由是审批队列只有一扇门。诊断轴实测 **16/20**，4 个 GAP **全部已登记**在 `pluginmanifest.DiagnosisGaps`（2 个 host 家族语义不对 + 2 个明确「未裁决」），闸门 `--fail-on-unrecorded-diagnose-gap` 因此是绿的（原文写「18 个 GAP 全部来自这一条」已过期） |
+| 中间件适配（pg/redis/k8s/mq/git） | ✅ 可插件化 | 控制面 registry 里**真实存在**（`middleware-adapter` 100 个符号，骨架已清零，§4.85.6）；**打包形态已定**：**54 个工具全部 `class: read`**，随 `opskeeper-sre-middleware` 一个包下发，写工具**刻意不打包**——upcall 通道对任何 package 的非读工具一律拒绝，理由是审批队列只有一扇门。诊断轴实测 **17/20**，3 个 GAP 用例 **全部已登记**在 `pluginmanifest.DiagnosisGaps`（4 条条目：3 条 host 家族按设计排除 + 1 条 `kafka.rebalance_history` 需要采集器而非 broker 客户端），闸门 `--fail-on-unrecorded-diagnose-gap` 因此是绿的。**此处此前写「16/20、4 个 GAP、2+2」的拆分，是决策 204 退役 `redis.hot_keys` 条目时漏改的一处**——而同一份台账的 §六 当时写的是 17/20，所以**同一件事在一份文件里有两个读数，只有一个是对的**（§4.212） |
 | Web 控制台 | ❌ 不可 | 保留 manager 侧 |
 | 身份/租户/权限 | ❌ 不可 | 保留宿主 |
 | 审计 HMAC chain | ❌ 不可下放 | 宿主强制，插件只读 |

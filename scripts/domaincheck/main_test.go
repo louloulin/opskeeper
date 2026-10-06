@@ -53,6 +53,14 @@ func TestDomainOfCollapsesTheLayerTreesOntoOneName(t *testing.T) {
 		managerPrefix + "server/mcp/middleware":  "mcp",
 		managerPrefix + "service/alert/whatever": "alert",
 		managerPrefix + "data/audit/store":       "audit",
+		// The layer is not part of a domain's identity. These four are the
+		// same two domains, and decision 276 is what made them explicit:
+		// a port that borrowed model/topology's structs cut nothing, and
+		// only the deleted declared edge revealed it.
+		managerPrefix + "biz/hitl":       "hitl",
+		managerPrefix + "model/hitl":     "hitl",
+		managerPrefix + "biz/topology":   "topology",
+		managerPrefix + "model/topology": "topology",
 		// A domain-shaped context names itself, and its own layer
 		// directories do not turn it into five domains.
 		managerPrefix + "iam/biz/user": "iam",
@@ -256,5 +264,54 @@ func TestTheShippedTablesDescribeTheShippedTree(t *testing.T) {
 	}
 	if stats.domains < 40 {
 		t.Errorf("only %d domains found; the walk is broken, not the tree small", stats.domains)
+	}
+}
+
+// The sentence domaincheck prints on every run is the only place a reader
+// is told that the layer is not part of a domain's identity, and decision
+// 276 is the knife that made it worth saying. It is built from layerDirs,
+// so this test is about the derivation: every layer the walk understands has
+// to appear in the sentence, because a layer added to the map without
+// appearing there is a reader who is told a rule that has a hole in it.
+func TestTheLayerRuleSentenceNamesEveryLayerTheWalkKnows(t *testing.T) {
+	got := layerRuleSentence()
+	// The layer list is the clause between "segment after " and " — so ",
+	// and only that clause. Checking the whole sentence is a check that
+	// passes for the wrong reason: the example pair also contains "model/",
+	// so a list that had dropped the model layer still looked complete.
+	// That false pass was found by mutating the sentence, not by reading
+	// the test.
+	start := strings.Index(got, "segment after ")
+	end := strings.Index(got, " — so ")
+	if start < 0 || end < 0 || end < start {
+		t.Fatalf("the printed rule has no layer clause: %s", got)
+	}
+	list := got[start+len("segment after ") : end]
+	for name := range layerDirs {
+		if !strings.Contains(list, name+"/") {
+			t.Errorf("the printed layer list does not mention %q: %q", name, list)
+		}
+	}
+	if !strings.Contains(got, "SAME domain") {
+		t.Errorf("the printed rule does not say the two layers are one domain: %s", got)
+	}
+	// It has to name a concrete pair, because a rule that names none reads
+	// as a rule about nothing in particular — and the pair it names has to
+	// be a real one, checked through domainOf rather than against a list
+	// written here. A second example was tried and dropped: a sentence that
+	// grows one clause per knife eventually stops being read, which is the
+	// whole reason this is printed instead of filed.
+	first := strings.Index(got, " — so ")
+	if first < 0 {
+		t.Fatalf("the printed rule has no example clause: %s", got)
+	}
+	example := got[first+len(" — so ") : strings.Index(got[first:], " are the SAME domain")+first]
+	pair := strings.SplitN(example, " and ", 2)
+	if len(pair) != 2 {
+		t.Fatalf("the example clause is not a pair: %q", example)
+	}
+	left, right := domainOf(managerPrefix+pair[0]), domainOf(managerPrefix+pair[1])
+	if left == "" || left != right {
+		t.Errorf("the printed example %q / %q does not name one domain (%q vs %q)", pair[0], pair[1], left, right)
 	}
 }
