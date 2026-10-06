@@ -5892,6 +5892,91 @@ if err := cmd.Start(); err != nil {
 **新加的两条测试都指向了本轮真实改动的路径（一个测上界、一个测启动失败），
 而不是又给解析函数加了一条同形状的测试。** 这是把 4.387 那个诱饵技巧
 用在自己身上。
+### 4.328 决策 394：把剩下三处 `CombinedOutput` **判为不是缺陷**——以及补上 4.326 漏掉的那次 e2e
+
+4.326 改了四个工具的捕获方式。同一模式全仓还有三处，本轮逐处判了一次，
+结论是**都不该改**。记下来是为了防止下一个读到「还有三处 CombinedOutput」
+的人去"修"它们。
+
+#### 4.328.1 三处，以及它们各自为什么不是缺陷
+
+| 位置 | 是什么 | 判定 |
+|---|---|---|
+| `core/edge/restart_service/handlers.go:258` | `systemctl restart <unit>` | **不是缺陷**：输出被 argv 本身限死。注释写明 `canonical` 已经过 `canonicalUnit`，拒绝任何路径分隔符和空白，所以除了 `argv[0]` 之外没有自由文本能进到命令里——一个被限死形状的 `systemctl` 不可能喷出无界输出。回复侧另有1MB 兜底（见 4.328.2） |
+| `core/manager/biz/knowledge/usecase.go:1773` | `git` 操作 | **不是缺陷**，而且是**不能动**的。那里有一段硬换来的修复注释：mainland↔github 卡死时 `CommandContext` 杀了 `git`，但 `git` 的子进程 `ssh`/`git-remote-https` 继承着输出管道不放，`CombinedOutput()` 会在 60s 截止之后继续阻塞在 EOF 上（实测挂过 >280s），所以必须 `WaitDelay = 10s` 强制关掉继承的管道。**换掉 `CombinedOutput` 就等于换掉那个修复** |
+| `core/manager/biz/marketplace/usecase.go:681` | 插件市场操作 | **不是缺陷**：manager 侧管理面操作，不在节点的工具执行路径上，方案的 P1-5 管的是「per-tool 资源配额」，管不到这里 |
+
+**三条里最值得记的是第二条。** 它说明「`CombinedOutput` 无界」这条规则**有
+例外**，而例外的形状是**踩过坑才知道的**。一个只按规则行事的后来者会把它
+一起改掉，然后在一个跨网络边界的仓库克隆上重新挂一次。
+
+#### 4.328.2 回复侧的兜底是有的，而且是有意设计的
+
+`host_restart_service` 是 repair 包里**唯一没声明任何 `limits:` 的工具**，
+看上去像个缺口。查了 `core/edge/policygate/policy.go:43`：
+
+```go
+func (b ToolBinding) Budget() int64 {
+	if b.Limits.OutputBytes <= 0 {
+		return floorSkill.DefaultMaxOutputBytes   // 1 MiB
+	}
+	return b.Limits.OutputBytes
+}
+```
+
+**注释解释了为什么默认在 lookup 处应用而不是在调用点**：
+*"so that 'the package declared nothing' and 'the package declared nothing and
+nobody applied a default' cannot both be true"*——**这两种情况不允许同时为真**。
+所以"manifest 没写 limits"不是"没有上界"，是"用 1MB 的上界"。
+
+**这一条与 4.326 修的是两件不同的事，值得分开记**：`output_bytes` 砍的是
+**回复**（JSON 交给模型之前），`cappedWriter` 砍的是**捕获**（子进程写进内存
+的那一刻）。前者管模型上下文，后者管 edge 进程的内存。**4.326 之前只有前者**，
+而后者对四个工具缺失——那才是那个真实缺陷。
+
+#### 4.328.3 本轮补上的是 4.326 漏掉的那次验证
+
+4.326 改了**节点上执行的工具代码**，验证只做了 `core/floor` 的单元测试和
+三个模块的 build。**这是不够的**：单元测试跑在开发机上，而改的是节点上
+pig 进程实际会走的捕获路径。
+
+本轮实跑 `TestNodeAgentDelivery`（docker 可用）：
+
+```
+--- PASS: TestNodeAgentDelivery                              24.16s
+    ├ the run declares the architectures it covered
+    ├ the agent is an independent process
+    ├ the node holds no provider credential
+    ├ the node's process environment holds no provider credential
+    ├ the turn streams back on the console's frame contract
+    ├ the reply came through the manager's gateway
+    └ a turn with no watcher is refused
+ok  github.com/vincent-wuhan/opskeeper/tests/e2e               35.87s
+```
+
+**七个子用例全绿，改动在真实节点上成立。** 这是 4.326 那个提交在写的时候
+**没有**拥有的证据——它是在下一个提交里补上的。
+
+**这条记录的形状和 4.327 一样**：4.326 的改动全绿之后，
+本轮又做了两件事——问「三处同模式是不是也是缺陷」（答案：不是，各有理由），
+以及问「我改的这条路径在真实节点上跑过吗」（答案：现在跑了）。
+**两件都不是"再写一个测试"，而是"把上一轮的结论再审一次"。**
+
+#### 4.328.4 于是 P1-5 这一项的最终状态
+
+方案的 §二 P1-5「工具级资源配额缺失」和 §四阶段2「加 `limits.memory` /
+`limits.output_bytes`，edge 侧强制」：
+
+- `limits.output_bytes` / `limits.timeout_seconds` —— **早已落地**（4.319 核实）
+- 捕获侧内存无界 —— **4.326 已修**（四个工具），**4.328 判定其余三处不是缺陷**
+- `limits.memory` 字段名 —— **不加**，且 4.325.4/4.326.6 已论证**现在不该加**：
+  流式工具内存 O(1)，缓冲工具的子进程峰值 2.6MB，而真正会吃掉内存的那条路
+  已经被 `cappedWriter` 堵上了。**加一个不生效的字段比不加更坏**
+
+**所以 P1-5 现在是"要防的事已防住"，而不是"字段名没打上"。** 剩下唯一
+没关严的是 4.326.7 记的那条：进程内工具（`tail_file` 一类）跑在 edge 进程里，
+一个 edge 被 OOM 会带走所有工具能力——**那不是配额问题，是进程边界问题**，
+要解决就得把这类工具挪出edge 进程，是一个架构决定，不是一个补丁。
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
