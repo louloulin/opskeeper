@@ -68,9 +68,15 @@ concurrency:
   # 37544466294 (pull_request) -- both in_progress at the same moment. The
   # comment above that line described a merge that the expression did not do.
   #
-  # `github.head_branch` is the branch name on both events, which is what the
-  # comment always meant.
-  group: ci-${{ github.head_branch || github.ref }}
+  # `github.head_branch` is the head branch on a pull_request event but is
+  # undefined on a push, where the fallback has to be the branch name without
+  # its refs/heads/ prefix. That is `github.ref_name`, not `github.ref`: a first
+  # attempt at this fix used `github.head_branch || github.ref`, which is the
+  # same mistake wearing a new hat -- on a push both terms are the wrong thing,
+  # because head_branch is empty there and ref still carries the prefix. The
+  # next push after that attempt produced two runs again (37544982326 and
+  # 37544975021), which is how it was caught.
+  group: ci-${{ github.head_branch || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
