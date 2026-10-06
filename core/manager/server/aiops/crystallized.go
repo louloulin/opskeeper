@@ -36,6 +36,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/crystallize"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
@@ -314,17 +315,76 @@ func (h *Handler) promoteCrystallized(w http.ResponseWriter, r *http.Request) {
 			// EEXIST; a re-promotion is a conflict, not a silent overwrite
 			// of a draft a human may already have edited.
 			if errors.Is(err, os.ErrExist) {
+				auditPromote(r, auditport.StatusFailure, "conflict", err.Error(),
+					ptr(h.wirePattern(run)))
 				writeErr(w, errors.Join(errs.ErrConflict, err))
 				return
 			}
+			auditPromote(r, auditport.StatusFailure, "write_failed", err.Error(),
+				ptr(h.wirePattern(run)))
 			writeErr(w, err)
 			return
 		}
+		auditPromote(r, auditport.StatusSuccess, "", "", ptr(h.wirePattern(run)))
 		writeJSON(w, http.StatusOK, CrystallizedPromoteResponse{Name: name, Dir: dir})
 		return
 	}
+	// 名字对不上任何已晋升的模式：这也是一次尝试，而且是最值得看到的一种——
+	// 它说明有人在晋升一个不存在的东西（手写错了名字，或者模式已被退役）。
+	// 不入账的话，链上只剩"什么都没发生"，而真实发生过一次请求。
+	auditPromote(r, auditport.StatusFailure, "not_found", "no promoted pattern has that name", nil)
 	writeErr(w, errs.ErrNotFound)
 }
+
+// auditPromote puts a promotion on the audit chain.
+//
+// 载荷直接取自 **wirePattern**——审核页读的那一份视图，而不是另取一套字段。
+// 两个来源各写一遍字段，是"审计行说的"和"人看到的"有一天开始不一致的
+// 标准做法；这里让它们**只能是同一份**。
+//
+// 载荷里带 **argv**：那是节点将要逐词执行的那份文档，也就是这个模式
+// "不再经过模型"之后系统到底会做什么。事后追问"这个不停重启的服务是谁
+// 决定改成现在这样的"，答案就在这一行里——而没有这一行，链上根本没有
+// 这个事件。
+//
+// 它审计的是**晋升**而不是**发布**：草稿落到审核目录之后仍然什么也没发生，
+// 真正的上线要走 release 路由，那条路自己已经入账。两行合起来才读得出
+// "谁把这份文档变成了 40 台机器上的行为"；分开读则各自成立。
+func auditPromote(r *http.Request, status, code, message string, pattern *CrystallizedPattern) {
+	payload := map[string]any{}
+	var name string
+	if pattern != nil {
+		name = pattern.Name
+		payload["tool"] = pattern.Tool
+		payload["class"] = pattern.Class
+		// argv 逐词进链：一份文档与它实际会执行的命令之间不应该有转换。
+		payload["argv"] = pattern.Argv
+		payload["target"] = pattern.Target
+		payload["blast_radius"] = pattern.BlastRadius
+		payload["ttl_seconds"] = pattern.TTLSeconds
+		payload["streak"] = pattern.Streak
+		payload["fault_kind"] = pattern.FaultKind
+	}
+	if name == "" {
+		name = chi.URLParam(r, "name")
+		payload["name"] = name
+	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionCrystallizePromote,
+		ResourceType: auditport.ResourcePlugin,
+		ResourceID:   name,
+		ResourceName: name,
+		Status:       status,
+		Payload:      payload,
+		ErrorCode:    code,
+		ErrorMessage: message,
+	})
+}
+
+// ptr is a one-line helper so the audit call sites read as values rather
+// than as addresses. A pointer here means "there is a pattern behind this
+// event"; nil means the request never reached one.
+func ptr[T any](v T) *T { return &v }
 
 // writePatternsRoutes mounts the crystallised surface. Called from Register.
 func (h *Handler) writePatternsRoutes(r chi.Router) {

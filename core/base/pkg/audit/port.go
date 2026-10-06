@@ -163,6 +163,23 @@ const (
 	// have covered it.
 	ActionAutonomyExecute = "autonomy_execute"
 
+	// ActionCrystallizePromote covers promoting a proven (fault, fix) pair
+	// into a runbook draft.
+	//
+	// 它落进这张闭表的理由与 plugin_release_* 同一族，但**更靠前**：
+	// 那四个动词是把代码放到主机上，而晋升是把"以后由平台按这份文档执行、
+	// 不再经过模型"这件事写进审核目录。计划里"高频场景零推理成本"这句话
+	// 落到代码上就是这一个路由——而它是整条 crystallize 链路上唯一一个
+	// 改变系统行为的动作，此前**不留任何审计**。
+	//
+	// 一个不留痕的晋升，其后果是：事后问"这台机器上那个不停重启的服务
+	// 是谁决定改成现在这样的"，链上没有答案；而答案本来是存在的——
+	// 晋升时的 argv 就是节点将要逐词执行的那份文档。
+	//
+	// 失败与冲突同样入账：重晋升返回 409（草稿已存在，可能已被人工编辑），
+	// 那一次尝试本身就是运维想看到的事件。
+	ActionCrystallizePromote = "crystallize_promote"
+
 	// ActionAgentTeamsTokenIssue covers minting a bearer token for an
 	// AgentTeams worker: a credential with a TTL and a tool allow-list.
 	//

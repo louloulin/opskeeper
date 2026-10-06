@@ -9,6 +9,7 @@
 package aiops
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,9 +18,10 @@ import (
 	"testing"
 	"time"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/crystallize"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 var crystallizedBase = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
@@ -371,5 +373,149 @@ func TestCrystallized_UnwiringClearsTheObservationWindow(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status after unwiring = %d, want 503", w.Code)
+	}
+}
+
+// promoteWithAudit runs the promote route with an audit slot installed and
+// returns the event the handler chose to record, if any.
+//
+// 装 slot 是必要的：这个 handler 通过 SetAuditEvent 往请求上下文里写，
+// 而 slot 由中间件安装。一条**没有**经过中间件的请求里 SetAuditEvent
+// 会静默无操作——所以"没有事件"必须能被测试与"事件是空的"区分开，
+// 下面那条 noEvent 就是为此存在的对照。
+func promoteWithAudit(t *testing.T, r http.Handler, path string) (int, *auditport.Event) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, nil).
+		WithContext(auditport.WithSlot(reqCtx()))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	ev, ok := auditport.GetAuditEvent(req.Context())
+	if !ok {
+		return w.Code, nil
+	}
+	return w.Code, &ev
+}
+
+func reqCtx() context.Context { return context.Background() }
+
+// 晋升是"以后由平台按这份文档执行、不再经过模型"这个决定的落点。
+// 它此前不留任何审计，而同一个仓库里推进一个发布波次会留——
+// 那条不对称就是本轮要关的洞。
+func TestAPromotionIsAuditedWithTheArgvItWillRun(t *testing.T) {
+	t.Parallel()
+	ledger := promotedLedger(t)
+	h := NewHandler(&fakeService{})
+	h.SetPatterns(ledger)
+	h.SetDraftRoot(t.TempDir())
+	draft, err := ledger.DraftFor(ledger.Promoted()[0])
+	if err != nil {
+		t.Fatalf("DraftFor: %v", err)
+	}
+	want := ledger.Promoted()[0].Pattern.Action
+
+	code, ev := promoteWithAudit(t, buildRouter(h, adminTenant()),
+		"/v1/loops/crystallized/"+draft.Name()+"/promote")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if ev == nil {
+		t.Fatal("the promotion left no audit event; a promotion is the one action on " +
+			"this surface that changes what the platform will do, and it has to be on the chain")
+	}
+	if ev.Action != auditport.ActionCrystallizePromote {
+		t.Errorf("action = %q, want %q", ev.Action, auditport.ActionCrystallizePromote)
+	}
+	if ev.Status != auditport.StatusSuccess {
+		t.Errorf("status = %q, want %q", ev.Status, auditport.StatusSuccess)
+	}
+	if ev.ResourceID != draft.Name() {
+		t.Errorf("resource id = %q, want the promoted package name %q", ev.ResourceID, draft.Name())
+	}
+
+	// argv 是这一行存在的理由：它就是节点将要逐词执行的那份文档。
+	payload, ok := ev.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload is %T, want a map", ev.Payload)
+	}
+	argv, ok := payload["argv"].([]string)
+	if !ok {
+		t.Fatalf("payload has no argv: %v", payload)
+	}
+	if strings.Join(argv, "\x00") != strings.Join(want.Argv, "\x00") {
+		t.Errorf("audited argv = %q, want the declaration's own %q", argv, want.Argv)
+	}
+	if payload["tool"] != want.Tool {
+		t.Errorf("audited tool = %v, want %q", payload["tool"], want.Tool)
+	}
+}
+
+// 一次失败的尝试也是事件。不入账的话，链上只剩"什么都没发生"，
+// 而真实发生过一次请求——而且是那种最需要被看见的请求。
+func TestAFailedPromotionIsAuditedToo(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		path     string
+		wantCode int
+		wantErr  string
+	}{
+		{"unknown name", "/v1/loops/crystallized/not-a-real-pattern/promote",
+			http.StatusNotFound, "not_found"},
+		{"refuses to overwrite an edited draft", "", http.StatusConflict, "conflict"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ledger := promotedLedger(t)
+			h := NewHandler(&fakeService{})
+			h.SetPatterns(ledger)
+			h.SetDraftRoot(t.TempDir())
+			draft, err := ledger.DraftFor(ledger.Promoted()[0])
+			if err != nil {
+				t.Fatalf("DraftFor: %v", err)
+			}
+			path := tc.path
+			if path == "" {
+				path = "/v1/loops/crystallized/" + draft.Name() + "/promote"
+				// 先成功一次，第二次才是冲突。
+				if code, _ := promoteWithAudit(t, buildRouter(h, adminTenant()), path); code != http.StatusOK {
+					t.Fatalf("first promote = %d, want 200", code)
+				}
+			}
+			code, ev := promoteWithAudit(t, buildRouter(h, adminTenant()), path)
+			if code != tc.wantCode {
+				t.Fatalf("status = %d, want %d body=%s", code, tc.wantCode, http.StatusText(code))
+			}
+			if ev == nil {
+				t.Fatalf("a failed promotion left no audit event; the attempt is the event")
+			}
+			if ev.Status != auditport.StatusFailure {
+				t.Errorf("status = %q, want %q", ev.Status, auditport.StatusFailure)
+			}
+			if ev.ErrorCode != tc.wantErr {
+				t.Errorf("error code = %q, want %q", ev.ErrorCode, tc.wantErr)
+			}
+		})
+	}
+}
+
+// 对照：一次根本没有晋升发生（没装草稿目录）时，路由 503 且**不应该**
+// 伪造一条事件。这条测试同时证明上面的断言真的能区分"有事件"与"没事件"，
+// 而不是 SetAuditEvent 在任何情况下都写点什么。
+func TestAPromoteThatNeverHappenedWritesNoEvent(t *testing.T) {
+	t.Parallel()
+	ledger := promotedLedger(t)
+	h := NewHandler(&fakeService{})
+	h.SetPatterns(ledger)
+	// 没有 SetDraftRoot：路由在动手之前就 503。
+	draft, err := ledger.DraftFor(ledger.Promoted()[0])
+	if err != nil {
+		t.Fatalf("DraftFor: %v", err)
+	}
+	code, ev := promoteWithAudit(t, buildRouter(h, adminTenant()),
+		"/v1/loops/crystallized/"+draft.Name()+"/promote")
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", code)
+	}
+	if ev != nil {
+		t.Errorf("a promotion that never happened wrote an audit event: %+v", ev)
 	}
 }
