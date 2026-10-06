@@ -1,4 +1,4 @@
-package pg
+package kafka
 
 import (
 	"context"
@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/harness/injector"
+	"github.com/vincent-wuhan/opskeeper/core/faults/injector"
 )
 
 func TestInjector_Type(t *testing.T) {
 	i := New()
-	if got := i.Type(); got != "pg." {
-		t.Errorf("Type() = %q, want %q", got, "pg.")
+	if got := i.Type(); got != "kafka." {
+		t.Errorf("Type() = %q, want %q", got, "kafka.")
 	}
 }
 
@@ -37,7 +37,7 @@ func TestInjector_CheckAvailableRefuses(t *testing.T) {
 func TestInjector_InjectRefusesWhenUnavailable(t *testing.T) {
 	i := New()
 	res, err := i.Inject(context.Background(), injector.InjectSpec{
-		Type:     "pg.inject_lock_chain",
+		Type:     "kafka.kill_broker",
 		Duration: 30 * time.Second,
 		Params:   map[string]interface{}{"sessions": 5},
 	})
@@ -52,7 +52,7 @@ func TestInjector_InjectRefusesWhenUnavailable(t *testing.T) {
 func TestInjector_Inject_UnsupportedType(t *testing.T) {
 	i := New()
 	_, err := i.Inject(context.Background(), injector.InjectSpec{
-		Type: "pg.does_not_exist",
+		Type: "kafka.does_not_exist",
 	})
 	if err == nil || !errors.Is(err, injector.ErrUnsupportedType) {
 		t.Errorf("expected ErrUnsupportedType, got %v", err)

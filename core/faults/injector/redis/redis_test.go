@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/harness/injector"
+	"github.com/vincent-wuhan/opskeeper/core/faults/injector"
 )
 
 func TestInjector_Type(t *testing.T) {

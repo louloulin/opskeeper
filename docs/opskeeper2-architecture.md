@@ -26782,6 +26782,98 @@ return nil
 4. **harness 仍然没有 HTTP 接口**（决策 294 已写明）。
 5. **加权 98.6% 与原计划 97.0% 仍是一分未动。**
 
+### 4.231 决策 297：把注入器搬出 `core/harness`，并给 pg 写**第一个会真的弄坏数据库**的实现
+
+上一节 §4.230 留下的清单里，第一条是「注入器仍然不碰任何真实系统」。
+这一节动它，而且只动了 PostgreSQL 这一路——**不是**因为它最容易，
+而是因为它是唯一一种「故障本身就是一组真实会话」的注入：
+一条锁链就是一排攥着行锁的 backend，一个长事务就是一个永远不提交的
+`BEGIN`，慢查询就是一条 `pg_sleep`。这三种东西用 mock 造不出来，
+而用 mock 造出来的锁链什么也证明不了。
+
+#### 一、为什么必须搬模块
+
+`core/harness/go.mod` 自己写着一条不变式：**这个模块不连任何数据库**。
+在一个不连库的模块里放一个必须连库的包，那条不变式就只是文档，
+而 `go build` 不会替任何人发现它。所以注入器整体搬到新的 `core/faults`，
+模块数 17 → 18，依赖方向（`faults → harness`）进 `.go-arch-lint.yml`，
+`scripts/modulecheck` 的模块表同步。搬的目的不是整洁，
+是**让「harness 不连库」这句话重新变成一句编译器会替你检查的话**。
+
+#### 二、真实现里被真库逼出来的四个错误
+
+这一节的四个 bug 全部**不是**读代码读出来的，是真 PostgreSQL 上跑出来的。
+它们共享一个形状：**语句成功返回，而故障并不存在**。
+
+1. **锁链按 `k+1` 去锁行，而表的自增序列早已跑过第 16 行。**
+   `ensureRows` 交回真实 id（16/17/18），锁链却去锁第 1/2/3 行。
+   `SELECT ... FOR UPDATE` 匹配零行是**成功返回**的，于是一把锁都没取到，
+   链"搭好了"，`pg_locks` 里空空如也，注入报告成功。
+   现在锁的是真实 id，而且每一环都断言 `RowsAffected() == 1`——
+   拿不到行就当场失败，绝不往下走。
+2. **表膨胀的 UPDATE 全塞在一个不提交的事务里。**
+   新版本行只存在于自己的事务中，别的 backend 看不见，
+   `pg_stat_user_tables.n_dead_tup` 读出来是 0，表也没有变大——
+   膨胀没有落到磁盘上，而注入报告成功。现在它提交，并且
+   **由做出变更的那条连接自己**调 `pg_stat_force_next_flush()`：
+   换一条连接去问，问到的是那条连接自己的空统计。
+3. **校验认得下划线写法，SQL 只认空格。**
+   `read_committed` 通过了校验，拼进 `SET TRANSACTION ISOLATION LEVEL`
+   之后是一个语法错误。一个只会在真库上暴露、而它一暴露就让整个 case 失败的错。
+4. **膨胀与 vacuum 卡住都作用在一张可能是空表上。**
+   没有行就没有死元组，「表膨胀」退化成一个没有任何可观测后果的开关。
+   两处都先播种，且登记撤销。
+
+判据全部改成**从外面看得见的东西**：`pg_locks` / `pg_stat_activity`
+的 `wait_event_type='Lock'`、表上的 `n_dead_tup`、以及
+`Cleanup` 之后它们必须归零。`pg.inject_replica_lag` 保持
+**大声拒绝**并说明为什么：复制延迟需要一条真实的流复制副本与一个被拖住的
+WAL 发送进程，单节点造不出来，造一个假的会让 `pg/replication-lag`
+这个 case 在没有副本的机器上"通过"。
+
+#### 三、命令行那一半：故障的寿命属于还活着的那个进程
+
+`inject` 真的注入之后，本节又发现一件事：**它一退出，故障就没了。**
+一条锁链的"存在"就是那几条攥着行锁的连接，连接属于进程，进程一死锁就松开。
+于是在诊断开始之前，故障已经自己好了——而一次自己会好的故障，
+它的诊断结论是关于空气的。
+
+`--hold` 补上这另一半：按住指定时长（或者到 Ctrl-C），然后**逆序撤销**。
+不默认按住，是因为默认挂 3 分钟会让 CI 里的这条命令变成一个陷阱；
+但命令会**明确告诉人**「这 N 步是真的改了目标环境，故障活在本进程的连接上，
+进程退出即撤销，要让它活到诊断结束请加 `--hold`」。
+
+#### 四、顺手堵上的一个真实危险
+
+`cmd/opskeeper-eval` 的注入闸门此前**在开发者本机配了 DSN 时会拿他的真库当靶子**：
+`TestInjectFailsLoudlyOnAShippedCase` 真的走一遍注入路径，
+而 pg 注入器会读 `OPSKEEPER_HARNESS_PG_DSN`。现在这一组测试先把这个状态钉死
+（`t.Setenv(DSNEnv, "")`，空串与"没设"在 `New()` 眼里是同一件事），
+于是它在任何开发机上的结论都一样。
+
+顺带把 DSN 的读取**从注入器挪到装配根**：`cmd/opskeeper-eval` 现在用
+`pginjector.New(pginjector.WithDSN(os.Getenv(pginjector.DSNEnv)))` 建实例，
+而不是让注入器自己去读全局环境。两边都读的话，「这台机器上有没有配库」
+就变成一个藏在 `pgx.Connect` 里的事实——命令行看不到它，
+测试也没法用 `t.Setenv` 把它钉住。挪完之后 `WithDSN` 有了生产调用方，
+死代码数维持在 **781**，而不是因为多一个只有测试用的公开选项而 +1。
+
+同时 `TestNoInjectorClaimsItCanInject` 的守的东西变了：它守的不再是
+「六个都还没接线」，而是「**任何一个在环境撑不住时都必须拒绝，且说清差什么**」。
+pg 缺的是连接，所以它必须点名那个环境变量；一个已经接好线的注入器
+说自己是骨架，跟没接线一样误导人。
+
+#### 五、这一刀没有解决的
+
+1. **另外五个注入器仍然是骨架**（redis / host / k8s / rabbitmq / kafka）。
+   它们的 `CheckAvailable` 会说清缺哪个客户端，**不会**谎报成功。
+2. **双人审批仍未实现**（只有一个布尔 `--confirm-prod`）。
+3. **harness 仍然没有 HTTP 接口**（决策 294 已写明）。
+4. **加权 98.6% 这一版仍然没有动。** 这次动的是「注入能不能真的落地」，
+   而它原先被计在阶段 3 的 0.3% 里；把它算进总进度会让一个 98.6% 的读数
+   靠一次重构往上跳，那比不动更不诚实。
+
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -26796,7 +26888,7 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 
 | 阶段 | 权重 | 完成度 | 判据与剩余 |
 |---|---|---|---|
-| A 模块化地基 | 20% | **100%** | 17 个模块落地（与 Makefile 的 `PIG_MODULES` 同数，决策 172 实测；此处此前记 13，`sdk` 独立成模块后没人回头改，见 §4.108.8）、`internal/` 清空、`modulecheck` + `go-arch-lint` 两个闸门可执行且非空转——**决策 89 补上了最后一块：`modulecheck` 现在也检查「每个文件必须属于某个组件」，两个闸门回答同一个问题，而每次都会跑的那个是更严的那个**（§4.27）、共享底座的两条反向边已清并由 `floorIsolation` 钉住（决策 66）、**两个闸门之间的最后一处不对称已消除：`.go-arch-lint.yml` 有了读者，104 条无人行使的授权已删，逆向边按文件记名**（决策 74）。A 阶段无剩余项 |
+| A 模块化地基 | 20% | **100%** | **18 个模块落地**（与 Makefile 的 `PIG_MODULES` 同数，决策 172 实测；`core/faults` 是决策 297 新增的第八个独立模块——注入器必须握着一个数据库客户端，而 harness 的 go.mod 把"reaches no database"写成了不变量，详见 §4.231；此处此前记 13，`sdk` 独立成模块后没人回头改，见 §4.108.8）、`internal/` 清空、`modulecheck` + `go-arch-lint` 两个闸门可执行且非空转——**决策 89 补上了最后一块：`modulecheck` 现在也检查「每个文件必须属于某个组件」，两个闸门回答同一个问题，而每次都会跑的那个是更严的那个**（§4.27）、共享底座的两条反向边已清并由 `floorIsolation` 钉住（决策 66）、**两个闸门之间的最后一处不对称已消除：`.go-arch-lint.yml` 有了读者，104 条无人行使的授权已删，逆向边按文件记名**（决策 74）。A 阶段无剩余项 |
 | B PiG 适配层 | 20% | **100%** | `pigmodel` / `pigagent` / `pigrpc` / `pigwire` 四件套齐、eino 与 go-openai 清零、内核接缝（决策 32/33）打开、契约套件 `core/pig/pigcontract` 落地（决策 64）、**PiG 已换成固定 tag 并在发布条件下被验证**（决策 65）、**AI 层已原生化：第二套模型词汇全部删除，宿主直接用 PiG 的 `ai` 类型**（决策 67，见 §4.5）。**决策 84 把这个 100% 重新打开：控制面的 turn 仍跑在 `pigagent.Kernel`（自研装配 + `ports` 平行形状）而不是文档里的 `coding.Session`，「彻底改成 pig 风格」这一条尚未完成**。决策 75 当年判「维持 Kernel」的两条理由已在 §4.22 被逐条推翻，方向已定、内核未换，剩三步（拆 Mapper/ports 形状、行 id 改由 `TurnEndEvent` 分配并重验 SSE golden、四处装配重接）。**决策 86 落地了 SDK 驱动**：`pigagent.SessionKernel` 跑 `coding.Session`，与 `Kernel` 并存、共用 `Mapper`/`runState`/`buildPrompt`/`NewAdapters`，逐帧 golden + 逐行 transcript 的差分闸门已绿（见 §4.24）。**决策 86 已完成接线**：驱动由 `OPSKEEPER_AGENT_KERNEL` 选，`pig` 走裸循环、`pig-sdk` 走 `coding.Session`，`newAgentKernel` 返回 `Agent` 接口且宿主绑定对两者相同（§4.24.6）。`pigmcp` **判定不接控制面**（控制面的 MCP 已经过 `basetool` 路径到达 Session driver，再接会产出两份同能力工具），其位置是节点侧 `pig --mode rpc`（§4.24.7）。顺带修掉一个真实数据竞争（`Mapper` 序号计数器在工具 goroutine 上无锁）。**B 阶段已 100%**：`coding` 的形状由 `pigcontract/contract.go` 钉住，类型系统表达不了的四条语义假设由 `pigcontract/session_contract_test.go` 在真 `coding.Session` 上钉住，9 条变异全抓（§4.24.11）。往后只剩**跟随上游增量补钉**，不是缺口 |
 | C 节点 Agent | 20% | **95%** | `pig --mode rpc` 运维 profile + supervisor + `policygate` + 7 个 `agent.*` 隧道方法 + `NodeFleet` + 只读 piglet，三个剧本在新拓扑下通过；连接规模三项（连接池上限 / 心跳重连 / 风暴抑制）已全部落地（决策 78/79）。**决策 85 更正了此处的「剩下」**：MCP 运行时**一直都在**（`mcpclient` + `biz/mcp` + `tools.MCPTool` + 启动期发现），此前把「PiG 没有」误记成「我们没有」。本轮补的第三条路 `core/pig/pigmcp`（PiG 原生工具形状）**已就位，且已判定不接控制面**：控制面的 MCP 已经过 `basetool` 路径到达 Session driver，再接会产出两份同能力工具；它的位置是节点侧 `pig --mode rpc`（§4.24.7）——**这一段此前写「详见 §4.23」是错指**：§4.23 是 MCP 那条修正，与 C 的剩余无关（决策 178）。**C 阶段曾记为剩余的三条现已全部关闭**：连接规模三项（决策 78/79）、节点侧审计回传（决策 126 的 `agent.audit.entries` 全线贯通）、**节点工具链 0/18**（§4.77/4.78 那个上游缺陷随 PiG v0.4.0 修复后，`make pig-tool-scoping-check` 转绿——实测 5 包 / 90 工具全被提供给模型，本轮重跑 21 条全绿）；计划 §五 C 的验收闸门（alert_storm / rca_loop / recovery_verify 三个剧本）在 `core/manager/biz/nodefleet/e2e` 六个剧本全绿且由 CI 每次 push 跑到。**剩下：无计划内未交付项**——本行 95% 扣的是计划外雄心，不是计划 §五 里的欠账（决策 178） |
 | D 插件生态 | 25% | **95%** | B1/B2/B3 全部闭环（opskeeper-sre-readonly 18 + opskeeper-sre-observability 12 + opskeeper-sre-middleware 55 + opskeeper-sre-repair 5 + opskeeper-sre-autonomy 1 = 91 个工具；决策 168 起这 90 个由 `make pig-tool-scoping-check` 对着真二进制逐条核对，而这里此前记的「18 + 12 + 53 + 5」既漏了自治包、也少算了一个中间件工具，§4.108.7）、审核流水线（签名 → 清单 → 准入 → 灰度 → 回滚）、运输通道 6 条路由、`sdk` 三个发布物、**能力声明已从「家族」升级到「逐方法」，五个包的「声明 == 实际」全部有守卫**（决策 69；决策 168 把这道守卫从第一个包扩到全部已发布包，并登记成 CI 决策闸门）。**诊断轴现读数 17/20**（决策 204：`redis.hot_keys` 实现而非改名，退役其 `DiagnosisGaps` 条目，`redis/hot-key` 用例由 GAP 转 ok；余下 3 条 GAP 全部 OWNED——host 家族按设计排除、`kafka.rebalance_history` 需要一个采集器而非 broker 客户端）。**覆盖率闸门从「冻结的 0/20」拆成两条轴，诊断轴成为真正的回归闸门**（决策 87，§4.25），并由它查出一个真实缺陷：`k8s.describe_pod` 被误划为 L2 软写，导致节点只读包发不出这个工具、`k8s/deployment-failed` 无法诊断。**导入器的覆盖面已收口**（决策 88，§4.26）：8 类资源全部派生自 `domain.PackageResources`，`core/pig/pigcontract` 对着 PiG 的 `Kind` 常量逐类核对，`themes` / `agent-environments` 不再被静默丢弃，源 `package.json` 改为「读而不复制」（复制会把清单的发现抑制带到节点上），撞名目录从静默跳过变成可读警告。剩下：更多插件迁移 |

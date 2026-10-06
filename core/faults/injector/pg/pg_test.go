@@ -1,4 +1,4 @@
-package kafka
+package pg
 
 import (
 	"context"
@@ -6,20 +6,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/harness/injector"
+	"github.com/vincent-wuhan/opskeeper/core/faults/injector"
 )
 
 func TestInjector_Type(t *testing.T) {
 	i := New()
-	if got := i.Type(); got != "kafka." {
-		t.Errorf("Type() = %q, want %q", got, "kafka.")
+	if got := i.Type(); got != "pg." {
+		t.Errorf("Type() = %q, want %q", got, "pg.")
 	}
 }
 
 // 一个还没接线的注入器必须自报不可用。上一版这个测试断言 IsAvailable() == true，
 // 断言的是一个"它能干活"的谎——而 Inject 那时只是往 map 里写了一行。
 func TestInjector_CheckAvailableRefuses(t *testing.T) {
-	i := New()
+	// 显式给一个空 DSN，而不是靠"环境里没有"——
+	// 一台真的跑着 PG 的机器上跑这一组测试，断言的对象必须仍然是
+	// "没有连接的那个注入器"，而不是"这台机器恰好没配"。
+	i := New(WithDSN(""))
 	err := i.CheckAvailable(context.Background())
 	if err == nil {
 		t.Fatal("CheckAvailable returned nil for an injector that touches no real system")
@@ -35,9 +38,9 @@ func TestInjector_CheckAvailableRefuses(t *testing.T) {
 // 不可用就必须一步都不走。不在这里拦住，一次"注入成功"会一路走到 judge 那里，
 // 变成一个假的回归结论。
 func TestInjector_InjectRefusesWhenUnavailable(t *testing.T) {
-	i := New()
+	i := New(WithDSN(""))
 	res, err := i.Inject(context.Background(), injector.InjectSpec{
-		Type:     "kafka.kill_broker",
+		Type:     "pg.inject_lock_chain",
 		Duration: 30 * time.Second,
 		Params:   map[string]interface{}{"sessions": 5},
 	})
@@ -52,7 +55,7 @@ func TestInjector_InjectRefusesWhenUnavailable(t *testing.T) {
 func TestInjector_Inject_UnsupportedType(t *testing.T) {
 	i := New()
 	_, err := i.Inject(context.Background(), injector.InjectSpec{
-		Type: "kafka.does_not_exist",
+		Type: "pg.does_not_exist",
 	})
 	if err == nil || !errors.Is(err, injector.ErrUnsupportedType) {
 		t.Errorf("expected ErrUnsupportedType, got %v", err)
@@ -82,7 +85,7 @@ func TestInjector_Cleanup_UnknownIDFails(t *testing.T) {
 // 一旦有人接了线，这一条会红，那是它该红的时候。
 func TestInjector_AllSupportedTypesAreRefusedAlike(t *testing.T) {
 	for _, typ := range SupportedTypes() {
-		i := New()
+		i := New(WithDSN(""))
 		_, err := i.Inject(context.Background(), injector.InjectSpec{Type: typ})
 		if !errors.Is(err, injector.ErrUnavailable) {
 			t.Errorf("%s: error = %v, want ErrUnavailable", typ, err)

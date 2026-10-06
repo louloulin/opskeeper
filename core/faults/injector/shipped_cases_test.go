@@ -17,7 +17,10 @@ import (
 // injection would have run with defaults while the case file said `table:
 // orders`. Both halves are pinned here against the corpus itself.
 func TestEveryShippedCaseProducesAnInjectSpec(t *testing.T) {
-	cases, err := schema.NewLoader(filepath.Join("..", "cases")).LoadAll()
+	// 语料住在 core/harness（决策 297 之后），注入器在 core/faults。
+	// 相对路径要跨一个模块——这正是"语料可以被第三方 fork 走、注入器不行"
+	// 这条边界的形状。
+	cases, err := schema.NewLoader(filepath.Join("..", "..", "harness", "cases")).LoadAll()
 	if err != nil {
 		t.Fatalf("load corpus: %v", err)
 	}

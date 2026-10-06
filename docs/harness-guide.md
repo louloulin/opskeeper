@@ -323,28 +323,49 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 
 ### 4.1 内置注入器
 
-| 类型 | 适用资源 | 关键参数 |
+| 前缀 | 注入类型 | 状态 |
 |---|---|---|
-| `host.fill_disk` | host | path, target_percent, duration |
-| `host.cpu_spike` | host | cpu_percent, duration, processes |
-| `pg.open_long_tx` | postgres | sql, duration |
-| `pg.lock_table` | postgres | table, lock_mode, duration |
-| `pg.create_bloat` | postgres | table, bloat_factor |
-| `redis.big_key` | redis | key, size_mb |
-| `redis.slow_cmd` | redis | cmd, sleep_ms |
-| `mq.backlog` | rabbitmq / kafka | queue/topic, message_count |
-| `k8s.pod_oom` | k8s | namespace, deployment, memory_limit |
-| `k8s.node_notready` | k8s | node_name, duration |
+| `pg.` | `inject_lock_chain` / `begin_txn_hold` / `hold_old_txn` / `run_slow_queries` / `inject_table_bloat` / `run_autovacuum` | ✅ **真实现**（pgx 连真库，决策 297） |
+| `pg.` | `inject_replica_lag` | ⚠️ 大声拒绝：单节点造不出复制延迟 |
+| `redis.` | `inject_big_key` / `inject_hot_key` / `inject_memory_burst` / `inject_slow_commands` | 骨架 |
+| `host.` | `fill_disk` / `cpu_stress` | 骨架 |
+| `k8s.` | `cordon_node` / `fill_pv` / `inject_memory_pressure` / `set_bad_image` | 骨架 |
+| `rabbitmq.` | `inject_message_burst` | 骨架 |
+| `kafka.` | `inject_consumer_lag` / `inject_partition_skew` / `kill_broker` | 骨架 |
+
+这张表是从代码里读出来的，不是手写的：每个注入器都导出 `SupportedTypes()`，
+而 `cmd/opskeeper-eval` 的测试逐条断言「注册表里的每一个类型都能路由回它自己」——
+一份从不执行、也没人能查询的清单不叫清单。
+
+**骨架**的意思是：这个注入器不碰任何真实系统，它通过 `CheckAvailable`
+自报不可用并说明缺哪个客户端。`inject` 因此以非零退出，逐条打出没执行的原因，
+**不会打印任何"注入成功"**。
+
+**真实现**的意思是：它真的连库、真的改数据，而每一种故障都能从数据库外面看见——
+`pg_locks` 里有没有它、`pg_stat_activity` 里有没有它、表上有没有死元组。
+连接来自 `OPSKEEPER_HARNESS_PG_DSN`；**没设就一步都不走**。
 
 ### 4.2 环境限制
 
 - **staging / dev**：默认允许
-- **prod**：必须 `--confirm-prod` + 双人审批
-- **注入时间窗**：默认 5 分钟（`--max-duration` 可调，但不超过 10 分钟）
+- **prod**：必须 `--confirm-prod`。**双人审批仍未实现**——只有一个布尔开关，
+  没有第二个人、没有审批记录、没有留痕
+- **注入时间窗**：**没有**。`--max-duration` 不存在，命令行不限制时长
 
 ### 4.3 自动清理
 
-注入器在 `duration` 到期后自动回滚（kill session / release lock / delete key）。若回滚失败，强制告警并人工介入。
+`InjectSpec.Duration` 现在**第一次被读到**（决策 297）：pg 注入器在它到期时
+自己撤销——关掉攥着锁的连接、删掉自己建的表、删掉自己播种的行、还原 autovacuum。
+撤销步骤按注册顺序记下、**逆序执行**，因为后注入的那一步往往依赖先注入的那一步。
+
+故障同时受两重约束：`Duration` 到期自动撤销，以及 `Cleanup` 显式撤销
+（命令行用 `--hold` 走的是后一条）。任一步失败都会**大声报出来**，
+而不是把一次失败的撤销当成成功。
+
+注入器**不碰**不是自己建的表：表名在 case 里，而 case 是可以手写的 YAML。
+表在就直接用；表不在才建，**并且在撤销时只删自己建的那一张**
+（靠表上的 marker 认领，不靠表名——万一有人在注入之后建了同名表，
+按表名删就是在删别人的东西）。表名走标识符校验，不是标识符直接拒绝。
 
 ---
 
@@ -519,7 +540,7 @@ CI 集成走 7.1 的本地进程，不走 HTTP。未来如果要这个接口，
 `inject` 现在读真实的 case 文件、走真实的注入器注册表路由，
 并按注入器自己的 `CheckAvailable` 决定能不能注入。
 
-**但注入器本身全部是骨架**（见 8.2），所以真注入一定失败，而且是**大声地失败**：
+**没配 DSN 时，注入一步都不走，而且是**大声地失败**：**
 
 ```bash
 $ opskeeper-eval inject --case pg/lock-waits
@@ -527,9 +548,30 @@ inject: case=pg/lock-waits env=staging steps=1
 
 inject: 以下 1 步没有执行：
   step 1  pg.inject_lock_chain             action=inject_lock_chain        duration=3m0s
-      injector: not available in current env: pg injector is a skeleton — 没有配置 admin DSN（需要一条能执行 pg_sleep / pg_terminate_backend 的连接）
+      injector: not available in current env: 没有配置 PostgreSQL 连接（设 OPSKEEPER_HARNESS_PG_DSN，或用 WithDSN / WithPool 传进来）
 error: inject: 1 of 1 step(s) not executed
 ```
+
+配了 DSN，它就**真的**注入——所以故障必须被按住：
+
+```bash
+$ export OPSKEEPER_HARNESS_PG_DSN='postgres://opskeeper:opskeeper@127.0.0.1:5432/opskeeper?sslmode=disable'
+$ opskeeper-eval inject --case pg/lock-waits --hold 3m
+inject: case=pg/lock-waits env=staging steps=1
+  step 1  pg.inject_lock_chain             action=inject_lock_chain        duration=3m0s  inject_id=pg-inj-...
+inject: 按住 1 步故障 3m0s（Ctrl-C 提前结束并撤销）
+```
+
+此时从另一条连接上查得到故障真的在：
+
+```sql
+SELECT count(*) FROM pg_stat_activity
+ WHERE wait_event_type = 'Lock' AND application_name LIKE 'chain-%';  -- 3
+```
+
+不给 `--hold` 时命令会明确提示：故障活在本进程的连接上，进程退出即撤销。
+**这不是可以省略的一步**——一次在诊断开始之前就自己好了的故障，
+它的诊断结论是关于空气的。
 
 prod 的拦截是真的，且与注入器是否接线无关：
 
@@ -543,13 +585,14 @@ error: refusing to inject in prod without --confirm-prod
 
 ### 8.2 时间窗限制
 
-**未实现。** `inject` 没有 `--max-duration`，也没有时间窗。
-`InjectSpec.Duration` 已经在库里有字段，case 的 `inject.duration` 也已经
-被解析并打印出来（上面输出里的 `duration=3m0s`）——**但没有任何东西读它**。
-时间窗不是 CLI 上加一个 flag 的事：它需要注入器在超时后自己把故障撤掉，
-而注入器现在连故障都还没有。
+**部分实现。** `inject` 仍然没有 `--max-duration`，命令行不限制时长。
+但 `InjectSpec.Duration` 已经不再是一个没人读的字段了：pg 注入器在它到期时
+自己把故障撤掉（见 4.3），而 `--hold` 让命令行能把故障按住那么久。
 
-`--dry-run` 是这条命令现在唯一能真正完成的事，它不假装任何事：
+时间窗不是一个 flag 的事——它要求「故障到点自毁」这条语义真的存在。
+骨架注入器给不了这条语义，所以对它们来说时间窗仍然不存在。
+
+`--dry-run` 仍然不假装任何事：
 
 ```bash
 $ opskeeper-eval inject --case pg/lock-waits --dry-run

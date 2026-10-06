@@ -1,11 +1,12 @@
-// Package rabbitmq 是 RabbitMQ 故障注入器（路径 A 阶段 2 任务 2.6）。
+// Package host 是 主机故障注入器（路径 A 阶段 2 任务 2.6）。
 //
-// 1 类 RABBITMQ 故障（覆盖黄金 case）：
-//   - rabbitmq.inject_message_burst
+// 2 类 HOST 故障（覆盖黄金 case）：
+//   - host.cpu_stress
+//   - host.fill_disk
 //
-// 当前骨架：接口契约 + 1 个注入方法清单 + 错误处理。
-// 完整实现在 Task 2.6 followup PR（amqp091-go + publish flood）。
-package rabbitmq
+// 当前骨架：接口契约 + 2 个注入方法清单 + 错误处理。
+// 完整实现在 Task 2.6 followup PR（ssh + stress-ng / dd + trap）。
+package host
 
 import (
 	"context"
@@ -14,10 +15,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/harness/injector"
+	"github.com/vincent-wuhan/opskeeper/core/faults/injector"
 )
 
-// Injector 是 RabbitMQ 故障注入器。
+// Injector 是 主机故障注入器。
 type Injector struct {
 	mu     sync.Mutex
 	active map[string]injector.InjectResult
@@ -25,13 +26,13 @@ type Injector struct {
 	// adminDB *client // 完整实现：admin 连接
 }
 
-// New 创建 rabbitmq Injector。
+// New 创建 host Injector。
 func New() *Injector {
 	return &Injector{active: make(map[string]injector.InjectResult)}
 }
 
 // Type 返回 type prefix。
-func (i *Injector) Type() string { return "rabbitmq." }
+func (i *Injector) Type() string { return "host." }
 
 // CheckAvailable 自报不可用。
 //
@@ -39,7 +40,7 @@ func (i *Injector) Type() string { return "rabbitmq." }
 // 会让每一个调用方都以为故障真的注进去了。理由写进错误里，
 // 是为了让人知道差什么，而不是只知道一句 false。
 func (i *Injector) CheckAvailable(ctx context.Context) error {
-	return fmt.Errorf("%w: rabbitmq injector is a skeleton — 没有配置 AMQP 连接",
+	return fmt.Errorf("%w: host injector is a skeleton — 没有可用的压力注入器（需要 stress-ng / fallocate，且需要 root 权限）",
 		injector.ErrUnavailable)
 }
 
@@ -63,7 +64,7 @@ func (i *Injector) Inject(ctx context.Context, spec injector.InjectSpec) (*injec
 	}
 	id := spec.InjectID
 	if id == "" {
-		id = fmt.Sprintf("rabbitmq-inj-%d", len(i.active)+1)
+		id = fmt.Sprintf("host-inj-%d", len(i.active)+1)
 	}
 	res := injector.InjectResult{
 		InjectID:  id,
@@ -82,7 +83,8 @@ func (i *Injector) Inject(ctx context.Context, spec injector.InjectSpec) (*injec
 // 它原先是 Inject 里一个 switch 的 case 列表。清单从"死代码"变成"数据"之后，
 // 调用方能列出它，也能被测试逐条覆盖——上一版那份清单没有任何东西能读它。
 var supportedTypes = map[string]bool{
-	"rabbitmq.inject_message_burst": true,
+	"host.cpu_stress": true,
+	"host.fill_disk":  true,
 }
 
 // SupportedTypes 返回这个 injector 认识的全部注入类型（已排序）。

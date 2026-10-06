@@ -241,7 +241,7 @@ components:
   oxpig_wire:       { in: core/pig/pigwire/** }
   oxplugin_sdk:     { in: sdk/** }
   oxharness_schema:    { in: core/harness/schema/** }
-  oxharness_injector:  { in: core/harness/injector/** }
+  oxfaults_injector:  { in: core/faults/injector/** }
   oxharness_judge:     { in: core/harness/judge/** }
   oxharness_runner:    { in: core/harness/runner/** }
   oxharness_leaderboard: { in: core/harness/leaderboard/** }
@@ -728,8 +728,16 @@ deps:
     # turns the file back into a statement about the architecture
     # rather than a list of permissions nobody exercised.
     anyVendorDeps: true
-  oxharness_injector:
-    mayDependOn: [oxharness_injector, oxharness_schema]
+  # 决策 297：注入器从 core/harness 搬到 core/faults。harness 的 go.mod 把
+  # "reaches no database" 写成了不变量，而注入器是唯一一个必须握着一个数据库
+  # 客户端的组件——PG 锁链是一组持有行锁的会话，慢查询是一次 pg_sleep，
+  # 长事务是一个永不提交的 BEGIN。它们不是故障的描述，是故障本身。
+  #
+  # 它对 harness 的唯一依赖是 schema.InjectStep（它从语料格式里读注入步骤），
+  # 对外则是那个装配它的 CLI。够不到控制面：一个能被控制面指挥的注入器，
+  # 就等于一条绕开审批往生产注入的路。
+  oxfaults_injector:
+    mayDependOn: [oxfaults_injector, oxharness_schema]
   # 决策 67：harness 从"只依赖 core + 标准库"放宽到"依赖 core + core/pig"。
   # 放宽的理由不是方便——judge 收到的是 PiG 的 *AssistantMessage 并从内容块
   # 里读文本，在 harness 外面再声明一个单方法接口、背后放一个手写的响应结构，
@@ -977,11 +985,10 @@ deps:
       - oxharness_schema
       - oxharness_runner
       - oxharness_leaderboard
-      # 决策 296：inject 子命令第一次真的用上了注入器注册表。cmd/opskeeper-eval
-      # 是 harness 的 CLI，而注入器是 harness 的库——与上面四条同一条理由。
-      # 此前它不 import 注入器，是因为 inject 什么都不做：打印一行就返回 0。
-      # 授权面按实际 import 记，不按将来可能要 import 的记。
-      - oxharness_injector
+      # 决策 297：inject 子命令真的用上了注入器注册表。注入器搬出了 core/harness
+      # （那个模块写着"reaches no database"，而一个 PG 锁链就是一组持有行锁的
+      # 会话），现在是 core/faults 里的独立模块。cmd 是它的装配根。
+      - oxfaults_injector
 
   # ---------------- 底座 / 运行时 / 工具链 ----------------
   # 这些组件此前没有 deps 条目，于是每一次合法 import 都报一条 warning。

@@ -5,17 +5,22 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/harness/injector"
-	hostinjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/host"
-	k8sinjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/k8s"
-	kafkainjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/mq/kafka"
-	rabbitmqinjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/mq/rabbitmq"
-	pginjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/pg"
-	redisinjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/redis"
+	"github.com/vincent-wuhan/opskeeper/core/faults/injector"
+	hostinjector "github.com/vincent-wuhan/opskeeper/core/faults/injector/host"
+	k8sinjector "github.com/vincent-wuhan/opskeeper/core/faults/injector/k8s"
+	kafkainjector "github.com/vincent-wuhan/opskeeper/core/faults/injector/mq/kafka"
+	rabbitmqinjector "github.com/vincent-wuhan/opskeeper/core/faults/injector/mq/rabbitmq"
+	pginjector "github.com/vincent-wuhan/opskeeper/core/faults/injector/pg"
+	redisinjector "github.com/vincent-wuhan/opskeeper/core/faults/injector/redis"
 )
 
-// 这一组测试守的是一句话：**harness 的故障注入没有接线，所以它不许说"注入成功"。**
+// 这一组测试守的是一句话：**环境撑不住注入时，它不许说"注入成功"。**
+//
+// 决策 297 把 pg 从骨架变成了真实现，所以下面这条守的不再是
+// "六个都还没接线"，而是"任何一个在环境不支持时都必须拒绝"——
+// 拒绝的理由还必须说清差什么。
 //
 // 上一版六个注入器的 IsAvailable() 全部 `return true`，Inject 把一条记录写进
 // 内存 map 并打上 skeleton 标记，六个测试里还有三个在断言这个假动作
@@ -38,15 +43,30 @@ func TestEveryRegisteredInjectorIsPresent(t *testing.T) {
 }
 
 // 每一个注入器都必须自报不可用，并且说清差什么。
+//
+// 注意这条断言的前提：**没有 DSN**。pg 已经不是骨架了，它会真的连库、
+// 真的改数据；而这一组测试要的是一个"环境不支持注入"的状态。
+// 所以下面先把这个状态钉死——不钉的话，开发者本机配了
+// OPSKEEPER_HARNESS_PG_DSN 之后，这条测试会拿他的真库当靶子。
 func TestNoInjectorClaimsItCanInject(t *testing.T) {
+	pinNoPG(t)
 	for _, impl := range allRegistered() {
 		err := impl.CheckAvailable(context.Background())
 		if err == nil {
-			t.Errorf("%s: CheckAvailable returned nil, but this injector touches no real system", impl.Type())
+			t.Errorf("%s: CheckAvailable returned nil, but nothing here is available", impl.Type())
 			continue
 		}
 		if !errors.Is(err, injector.ErrUnavailable) {
 			t.Errorf("%s: error = %v, want it to wrap ErrUnavailable", impl.Type(), err)
+		}
+		if impl.Type() == "pg." {
+			// pg 的实现是真的，所以它缺的不是"实现"，是连接。
+			// 它必须点名那个环境变量，而不是含糊地说自己是骨架——
+			// 一个已经接好线的注入器说自己是骨架，跟没接线一样误导人。
+			if !strings.Contains(err.Error(), pginjector.DSNEnv) {
+				t.Errorf("pg: error = %q, want it to name %s", err, pginjector.DSNEnv)
+			}
+			continue
 		}
 		if !strings.Contains(err.Error(), "skeleton") {
 			t.Errorf("%s: error = %q, want it to say it is a skeleton", impl.Type(), err)
@@ -54,8 +74,18 @@ func TestNoInjectorClaimsItCanInject(t *testing.T) {
 	}
 }
 
+// pinNoPG 把 pg 注入器钉在"没有连接"这个状态上。
+//
+// t.Setenv 设成空串而不是 Unsetenv：New() 读的是 os.Getenv，空串与"没设"
+// 在它眼里是同一件事，于是这一组测试在任何开发机上跑出来的结论都一样。
+func pinNoPG(t *testing.T) {
+	t.Helper()
+	t.Setenv(pginjector.DSNEnv, "")
+}
+
 // 不可用就必须一步都不走：既不返回结果，也不留下可被 Cleanup 认领的 ID。
 func TestNoInjectorProducesAResultWhileUnavailable(t *testing.T) {
+	pinNoPG(t)
 	ctx := context.Background()
 	// 用注册表里**同一批实例**去比：另建一批再比较身份，六个指针两两不等，
 	// 断言会红在一个与被测行为无关的地方——这种失败会让人怀疑被测代码而不是怀疑测试。
@@ -94,6 +124,7 @@ func TestNoInjectorProducesAResultWhileUnavailable(t *testing.T) {
 // 六个都要试。只试注册表里的第一个（host）的话，把 pg 的两个检查调换顺序
 // 这条断言照样是绿的，而它守的正是"顺序"这件事。
 func TestAnUnknownTypeIsReportedAsUnsupportedNotUnavailable(t *testing.T) {
+	pinNoPG(t)
 	ctx := context.Background()
 	for _, impl := range allRegistered() {
 		_, err := impl.Inject(ctx, injector.InjectSpec{Type: impl.Type() + "does_not_exist"})
@@ -109,6 +140,10 @@ func TestAnUnknownTypeIsReportedAsUnsupportedNotUnavailable(t *testing.T) {
 // inject 子命令必须以非零退出，并且不许在输出里出现 "skeleton: true" 之外的成功迹象。
 // 上一版它打印一行 "inject: case=... confirm_prod=false" 就返回 0。
 func TestInjectFailsLoudlyOnAShippedCase(t *testing.T) {
+	// 这一条会真的走一遍注入路径，所以必须先把 pg 钉成没有连接：
+	// 否则一个配了 DSN 的开发机上，`go test ./cmd/...` 会把锁链
+	// 打进他自己的开发库，然后把表留在那儿。
+	pinNoPG(t)
 	err := cmdInject(context.Background(), []string{"--case", "pg/lock-waits", "--cases-dir", shippedCasesDir})
 	if err == nil {
 		t.Fatal("cmdInject returned nil on a shipped case, want a non-zero exit")
@@ -121,6 +156,7 @@ func TestInjectFailsLoudlyOnAShippedCase(t *testing.T) {
 // --dry-run 是这条命令现在唯一能真正完成的事：它读真实的 case 文件、
 // 走真实的注册表路由、打印真实的注入类型，不假装注入发生过。
 func TestInjectDryRunListsRealStepsAndSucceeds(t *testing.T) {
+	pinNoPG(t)
 	if err := cmdInject(context.Background(),
 		[]string{"--case", "pg/lock-waits", "--cases-dir", shippedCasesDir, "--dry-run"}); err != nil {
 		t.Fatalf("dry-run: %v", err)
@@ -179,3 +215,65 @@ var (
 )
 
 func mustTypes(f func() []string) []string { return f() }
+
+// stubInjector 只记录自己被清理过没有。
+type stubInjector struct {
+	prefix  string
+	cleaned *[]string
+}
+
+func (s *stubInjector) Type() string                         { return s.prefix }
+func (s *stubInjector) CheckAvailable(context.Context) error { return nil }
+func (s *stubInjector) Cleanup(_ context.Context, id string) error {
+	*s.cleaned = append(*s.cleaned, id)
+	return nil
+}
+func (s *stubInjector) Inject(_ context.Context, spec injector.InjectSpec) (*injector.InjectResult, error) {
+	return &injector.InjectResult{InjectID: spec.InjectID, Type: spec.Type}, nil
+}
+
+// 已经落到目标上的故障必须被撤销，而且**逆序**撤销。
+//
+// 上一版 cmdInject 注入完就返回，进程一退出连接就关、锁就松开，
+// 故障在诊断开始之前就自己好了。命令行的另一半是"把它按住再收掉"，
+// 收的顺序也得对：后注入的那一步往往依赖先注入的那一步。
+func TestHoldFaultsCleansUpInReverseOrder(t *testing.T) {
+	var cleaned []string
+	impl := &stubInjector{prefix: "stub.", cleaned: &cleaned}
+	staged := []stagedFault{
+		{impl: impl, res: &injector.InjectResult{InjectID: "a"}, until: time.Minute},
+		{impl: impl, res: &injector.InjectResult{InjectID: "b"}, until: time.Minute},
+		{impl: impl, res: &injector.InjectResult{InjectID: "c"}, until: time.Minute},
+	}
+	holdFaults(context.Background(), staged, 0, nil)
+	want := []string{"c", "b", "a"}
+	if len(cleaned) != len(want) {
+		t.Fatalf("cleaned %v, want %v", cleaned, want)
+	}
+	for i := range want {
+		if cleaned[i] != want[i] {
+			t.Fatalf("cleaned %v, want %v (reverse order: a later step may depend on an earlier one)",
+				cleaned, want)
+		}
+	}
+}
+
+// 按住的时间到了就收；中途 ctx 被取消也要收——
+// 一个被 Ctrl-C 打断的注入如果把故障留在真库上，那比不注入更难收拾。
+func TestHoldFaultsReturnsEarlyOnCancelAndStillCleansUp(t *testing.T) {
+	var cleaned []string
+	impl := &stubInjector{prefix: "stub.", cleaned: &cleaned}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	holdFaults(ctx, []stagedFault{{impl: impl, res: &injector.InjectResult{InjectID: "only"}}}, time.Hour, nil)
+	if elapsed := time.Since(start); elapsed > 30*time.Second {
+		t.Fatalf("holdFaults waited %v after cancel; it should return as soon as the context is done", elapsed)
+	}
+	if len(cleaned) != 1 || cleaned[0] != "only" {
+		t.Fatalf("cleaned %v, want [only] — a cancelled hold must still undo the fault", cleaned)
+	}
+}

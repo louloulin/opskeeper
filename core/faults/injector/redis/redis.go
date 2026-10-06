@@ -1,17 +1,14 @@
-// Package pg 是 PostgreSQL 故障注入器（路径 A 阶段 2 任务 2.6）。
+// Package redis 是 Redis 故障注入器（路径 A 阶段 2 任务 2.6）。
 //
-// 7 类 PG 故障（覆盖黄金 case）：
-//   - pg.inject_lock_chain
-//   - pg.begin_txn_hold
-//   - pg.inject_replica_lag
-//   - pg.run_slow_queries
-//   - pg.inject_table_bloat
-//   - pg.hold_old_txn
-//   - pg.run_autovacuum
+// 4 类 REDIS 故障（覆盖黄金 case）：
+//   - redis.inject_big_key
+//   - redis.inject_hot_key
+//   - redis.inject_memory_burst
+//   - redis.inject_slow_commands
 //
-// 当前骨架：接口契约 + 7 个注入方法清单 + 错误处理。
-// 完整实现在 Task 2.6 followup PR（pgxpool + admin conn + 事务/Hold SQL）。
-package pg
+// 当前骨架：接口契约 + 4 个注入方法清单 + 错误处理。
+// 完整实现在 Task 2.6 followup PR（go-redis + DEBUG SLEEP / 大 key 写入 / monitor）。
+package redis
 
 import (
 	"context"
@@ -20,10 +17,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/harness/injector"
+	"github.com/vincent-wuhan/opskeeper/core/faults/injector"
 )
 
-// Injector 是 PostgreSQL 故障注入器。
+// Injector 是 Redis 故障注入器。
 type Injector struct {
 	mu     sync.Mutex
 	active map[string]injector.InjectResult
@@ -31,13 +28,13 @@ type Injector struct {
 	// adminDB *client // 完整实现：admin 连接
 }
 
-// New 创建 pg Injector。
+// New 创建 redis Injector。
 func New() *Injector {
 	return &Injector{active: make(map[string]injector.InjectResult)}
 }
 
 // Type 返回 type prefix。
-func (i *Injector) Type() string { return "pg." }
+func (i *Injector) Type() string { return "redis." }
 
 // CheckAvailable 自报不可用。
 //
@@ -45,7 +42,7 @@ func (i *Injector) Type() string { return "pg." }
 // 会让每一个调用方都以为故障真的注进去了。理由写进错误里，
 // 是为了让人知道差什么，而不是只知道一句 false。
 func (i *Injector) CheckAvailable(ctx context.Context) error {
-	return fmt.Errorf("%w: pg injector is a skeleton — 没有配置 admin DSN（需要一条能执行 pg_sleep / pg_terminate_backend 的连接）",
+	return fmt.Errorf("%w: redis injector is a skeleton — 没有配置 Redis 连接（没有客户端，也没有地址）",
 		injector.ErrUnavailable)
 }
 
@@ -69,7 +66,7 @@ func (i *Injector) Inject(ctx context.Context, spec injector.InjectSpec) (*injec
 	}
 	id := spec.InjectID
 	if id == "" {
-		id = fmt.Sprintf("pg-inj-%d", len(i.active)+1)
+		id = fmt.Sprintf("redis-inj-%d", len(i.active)+1)
 	}
 	res := injector.InjectResult{
 		InjectID:  id,
@@ -88,13 +85,10 @@ func (i *Injector) Inject(ctx context.Context, spec injector.InjectSpec) (*injec
 // 它原先是 Inject 里一个 switch 的 case 列表。清单从"死代码"变成"数据"之后，
 // 调用方能列出它，也能被测试逐条覆盖——上一版那份清单没有任何东西能读它。
 var supportedTypes = map[string]bool{
-	"pg.inject_lock_chain":  true,
-	"pg.begin_txn_hold":     true,
-	"pg.inject_replica_lag": true,
-	"pg.run_slow_queries":   true,
-	"pg.inject_table_bloat": true,
-	"pg.hold_old_txn":       true,
-	"pg.run_autovacuum":     true,
+	"redis.inject_big_key":       true,
+	"redis.inject_hot_key":       true,
+	"redis.inject_memory_burst":  true,
+	"redis.inject_slow_commands": true,
 }
 
 // SupportedTypes 返回这个 injector 认识的全部注入类型（已排序）。

@@ -1,14 +1,11 @@
-// Package k8s 是 Kubernetes 故障注入器（路径 A 阶段 2 任务 2.6）。
+// Package rabbitmq 是 RabbitMQ 故障注入器（路径 A 阶段 2 任务 2.6）。
 //
-// 4 类 K8S 故障（覆盖黄金 case）：
-//   - k8s.set_bad_image
-//   - k8s.cordon_node
-//   - k8s.inject_memory_pressure
-//   - k8s.fill_pv
+// 1 类 RABBITMQ 故障（覆盖黄金 case）：
+//   - rabbitmq.inject_message_burst
 //
-// 当前骨架：接口契约 + 4 个注入方法清单 + 错误处理。
-// 完整实现在 Task 2.6 followup PR（client-go + Deployment patch / Memory Limit / PVC fill）。
-package k8s
+// 当前骨架：接口契约 + 1 个注入方法清单 + 错误处理。
+// 完整实现在 Task 2.6 followup PR（amqp091-go + publish flood）。
+package rabbitmq
 
 import (
 	"context"
@@ -17,10 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/harness/injector"
+	"github.com/vincent-wuhan/opskeeper/core/faults/injector"
 )
 
-// Injector 是 Kubernetes 故障注入器。
+// Injector 是 RabbitMQ 故障注入器。
 type Injector struct {
 	mu     sync.Mutex
 	active map[string]injector.InjectResult
@@ -28,13 +25,13 @@ type Injector struct {
 	// adminDB *client // 完整实现：admin 连接
 }
 
-// New 创建 k8s Injector。
+// New 创建 rabbitmq Injector。
 func New() *Injector {
 	return &Injector{active: make(map[string]injector.InjectResult)}
 }
 
 // Type 返回 type prefix。
-func (i *Injector) Type() string { return "k8s." }
+func (i *Injector) Type() string { return "rabbitmq." }
 
 // CheckAvailable 自报不可用。
 //
@@ -42,7 +39,7 @@ func (i *Injector) Type() string { return "k8s." }
 // 会让每一个调用方都以为故障真的注进去了。理由写进错误里，
 // 是为了让人知道差什么，而不是只知道一句 false。
 func (i *Injector) CheckAvailable(ctx context.Context) error {
-	return fmt.Errorf("%w: k8s injector is a skeleton — 没有 kubeconfig，也没有 kubectl 二进制",
+	return fmt.Errorf("%w: rabbitmq injector is a skeleton — 没有配置 AMQP 连接",
 		injector.ErrUnavailable)
 }
 
@@ -66,7 +63,7 @@ func (i *Injector) Inject(ctx context.Context, spec injector.InjectSpec) (*injec
 	}
 	id := spec.InjectID
 	if id == "" {
-		id = fmt.Sprintf("k8s-inj-%d", len(i.active)+1)
+		id = fmt.Sprintf("rabbitmq-inj-%d", len(i.active)+1)
 	}
 	res := injector.InjectResult{
 		InjectID:  id,
@@ -85,10 +82,7 @@ func (i *Injector) Inject(ctx context.Context, spec injector.InjectSpec) (*injec
 // 它原先是 Inject 里一个 switch 的 case 列表。清单从"死代码"变成"数据"之后，
 // 调用方能列出它，也能被测试逐条覆盖——上一版那份清单没有任何东西能读它。
 var supportedTypes = map[string]bool{
-	"k8s.set_bad_image":          true,
-	"k8s.cordon_node":            true,
-	"k8s.inject_memory_pressure": true,
-	"k8s.fill_pv":                true,
+	"rabbitmq.inject_message_burst": true,
 }
 
 // SupportedTypes 返回这个 injector 认识的全部注入类型（已排序）。

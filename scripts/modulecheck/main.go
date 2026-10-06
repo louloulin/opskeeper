@@ -151,6 +151,26 @@ func rules() []rule {
 			Label: "harness (evaluation)",
 		},
 		{
+			// faults stages the failures the evaluation measures an agent
+			// against, so it is the one harness-side module that holds a
+			// database client. harness states "reaches no database" as an
+			// invariant; a lock chain is a set of sessions holding row
+			// locks, which cannot be described without a connection.
+			//
+			// It may reach harness for the corpus format it stages from and
+			// one database client, and nothing else — in particular no
+			// control plane, because a fault injector reachable from the
+			// manager is a path to injecting into production that does not
+			// go through approval.
+			Dir:    "core/faults",
+			Module: "github.com/vincent-wuhan/opskeeper/core/faults",
+			Allowed: []string{
+				coreModulePrefix + "/",
+				"github.com/jackc/pgx/",
+			},
+			Label: "faults (fault injection)",
+		},
+		{
 			// sdk is what third-party plugins compile against. Reaching an
 			// internal implementation would hand every plugin OpsKeeper's
 			// whole dependency graph.

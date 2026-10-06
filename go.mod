@@ -17,7 +17,7 @@ require (
 	github.com/vincent-wuhan/opskeeper/core/domains v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/edge v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/floor v0.0.0
-	github.com/vincent-wuhan/opskeeper/core/harness v0.0.0-00010101000000-000000000000
+	github.com/vincent-wuhan/opskeeper/core/harness v0.0.0
 	github.com/vincent-wuhan/opskeeper/core/manager v0.0.0-00010101000000-000000000000
 	github.com/vincent-wuhan/opskeeper/core/pig v0.0.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.68.0
@@ -185,6 +185,7 @@ require (
 	github.com/singchia/frontier v1.2.3-rc.2 // indirect
 	github.com/singchia/go-timer/v2 v2.2.1 // indirect
 	github.com/singchia/yafsm v1.0.1 // indirect
+	github.com/vincent-wuhan/opskeeper/core/faults v0.0.0
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
@@ -213,3 +214,5 @@ replace (
 	github.com/vincent-wuhan/opskeeper/core/pig => ./core/pig
 	github.com/vincent-wuhan/opskeeper/sdk => ./sdk
 )
+
+replace github.com/vincent-wuhan/opskeeper/core/faults => ./core/faults

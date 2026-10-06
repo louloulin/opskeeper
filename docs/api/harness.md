@@ -61,15 +61,38 @@ opskeeper-eval run --suite middleware-baseline --concurrency 4
 # 列出 k8s/pod-oom 会注入什么（这一步现在真的能跑通）
 opskeeper-eval inject --case k8s/pod-oom --dry-run
 
-# 真注入
+# 真注入（k8s 仍是骨架，这一步会以非零退出并说明缺 kubectl）
 opskeeper-eval inject --case k8s/pod-oom --target ns=test deploy=order-svc
+
+# 真注入并按住（pg 已有真实现；需要 OPSKEEPER_HARNESS_PG_DSN）
+export OPSKEEPER_HARNESS_PG_DSN='postgres://opskeeper:opskeeper@127.0.0.1:5432/opskeeper?sslmode=disable'
+opskeeper-eval inject --case pg/lock-waits --hold 3m
 ```
 
-**未交付：六个注入器全部是骨架。** `core/harness/injector` 下的
-pg / redis / host / k8s / rabbitmq / kafka 都不碰任何真实系统——没有 pgx 连接、
-没有 redis 客户端、没有 kubectl、没有 stress-ng。它们通过
-`CheckAvailable` 自报不可用并说明缺什么，`inject` 因此以非零退出，
-把每一步没执行的原因逐条打出来。**不会打印任何"注入成功"。**
+**`--hold` 不是可有可无的。** 一条锁链的"存在"就是那几条攥着行锁的连接，
+连接属于进程：不给 `--hold`，进程一退出故障就撤销了，
+而一次在诊断开始之前就自己好了的故障，诊断结论是关于空气的。
+
+| `--hold` | 注入后把故障按住多久，然后逆序撤销（默认 `0` = 进程退出即撤销） |
+
+**PostgreSQL 这一路是**真实现**（决策 297）。** `core/faults/injector/pg`
+用 pgx 连真库，注入的每一种故障都能从数据库外面看见：
+
+| 类型 | 故障在数据库里的样子 |
+|---|---|
+| `pg.inject_lock_chain` | 一排 backend 停在 `pg_stat_activity.wait_event_type='Lock'` |
+| `pg.begin_txn_hold` / `pg.hold_old_txn` | backend 停在 `state='idle in transaction'` |
+| `pg.run_slow_queries` | N 个 backend 在跑一条给定的长查询 |
+| `pg.inject_table_bloat` | 提交后的死元组，`pg_stat_user_tables.n_dead_tup > 0` |
+| `pg.run_autovacuum` | `autovacuum_enabled=false` **加上**一个压着 xmin 的长事务 |
+| `pg.inject_replica_lag` | **大声拒绝**：单节点造不出复制延迟 |
+
+连接来自 `OPSKEEPER_HARNESS_PG_DSN`。**没设就一步都不走**——不设的时候
+`inject` 以非零退出，并把每一步没执行的原因逐条打出来，**不会打印任何"注入成功"**。
+
+**另外五个（redis / host / k8s / rabbitmq / kafka）仍然是骨架**，
+它们不碰任何真实系统——没有 redis 客户端、没有 kubectl、没有 stress-ng——
+并通过 `CheckAvailable` 说明缺什么。
 
 一个认不出的类型报 `ErrUnsupportedType` 而不是"不可用"：那是接线问题，
 与当前环境无关，报成不可用会把人引去查环境。

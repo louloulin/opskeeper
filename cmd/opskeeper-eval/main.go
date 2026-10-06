@@ -27,13 +27,13 @@ import (
 
 	harnessleaderboard "github.com/vincent-wuhan/opskeeper/core/harness/leaderboard"
 
-	"github.com/vincent-wuhan/opskeeper/core/harness/injector"
-	hostinjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/host"
-	k8sinjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/k8s"
-	kafkainjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/mq/kafka"
-	rabbitmqinjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/mq/rabbitmq"
-	pginjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/pg"
-	redisinjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/redis"
+	"github.com/vincent-wuhan/opskeeper/core/faults/injector"
+	hostinjector "github.com/vincent-wuhan/opskeeper/core/faults/injector/host"
+	k8sinjector "github.com/vincent-wuhan/opskeeper/core/faults/injector/k8s"
+	kafkainjector "github.com/vincent-wuhan/opskeeper/core/faults/injector/mq/kafka"
+	rabbitmqinjector "github.com/vincent-wuhan/opskeeper/core/faults/injector/mq/rabbitmq"
+	pginjector "github.com/vincent-wuhan/opskeeper/core/faults/injector/pg"
+	redisinjector "github.com/vincent-wuhan/opskeeper/core/faults/injector/redis"
 	"github.com/vincent-wuhan/opskeeper/core/harness/runner"
 	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
 )
@@ -202,6 +202,7 @@ func cmdInject(ctx context.Context, args []string) error {
 	confirmProd := fs.Bool("confirm-prod", false, "确认在 prod 环境注入")
 	target := fs.String("target", "", "target spec（key=value 空格分隔，如 ns=test deploy=order-svc）")
 	dryRun := fs.Bool("dry-run", false, "只列出这个 case 会注入什么，不真注入")
+	hold := fs.Duration("hold", 0, "注入后把这个故障按住多久（0 = 进程退出即消失）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -226,6 +227,7 @@ func cmdInject(ctx context.Context, args []string) error {
 
 	fmt.Printf("inject: case=%s env=%s steps=%d\n", *caseID, *env, len(c.Inject))
 	var blocked []string
+	var staged []stagedFault
 	for i, step := range c.Inject {
 		spec, serr := injector.FromSchemaStep(step, 0, *env)
 		if serr != nil {
@@ -258,15 +260,72 @@ func cmdInject(ctx context.Context, args []string) error {
 			continue
 		}
 		fmt.Printf("%s  inject_id=%s\n", line, res.InjectID)
+		staged = append(staged, stagedFault{impl: impl, res: res, until: spec.Duration})
 	}
-	if len(blocked) > 0 {
+	if len(staged) > 0 && *hold == 0 {
+		// 一条锁链的"存在"就是那几条还攥着行锁的连接。
+		// 它们属于本进程，所以本进程一退出，故障就撤销了——
+		// 而一次在诊断开始之前就自己好了的故障，诊断结论是关于空气的。
+		// 不默认按住，是因为默认挂 3 分钟会让 CI 里的这条命令变成一个陷阱；
+		// 但必须把这件事说出来，而不是让人以为注入还生效着。
+		fmt.Fprintf(os.Stderr, "\ninject: 注意：这 %d 步是**真的**改了目标环境，但故障活在"+
+			"本进程的连接上，进程退出即撤销。要让它活到诊断结束，请加 --hold。\n", len(staged))
+	}
+	if len(blocked) > 0 && len(staged) == 0 {
 		fmt.Fprintf(os.Stderr, "\ninject: 以下 %d 步没有执行：\n", len(blocked))
 		for _, b := range blocked {
 			fmt.Fprintln(os.Stderr, b)
 		}
 		return fmt.Errorf("inject: %d of %d step(s) not executed", len(blocked), len(c.Inject))
 	}
+	holdFaults(ctx, staged, *hold, blocked)
 	return nil
+}
+
+// stagedFault 是已经落到目标环境上、还等着被撤销的一次注入。
+type stagedFault struct {
+	impl  injector.Injector
+	res   *injector.InjectResult
+	until time.Duration
+}
+
+// holdFaults 把已注入的故障按住，然后逆序撤销。
+//
+// 这是"注入"这个动作的另一半。注入器把故障的寿命定义成"从 Inject 到
+// Cleanup 之间的这段时间"，而 Cleanup 的触发者只能是还活着的那个进程。
+// 所以一个必须活过诊断的故障，得由一个不退出进程来按住——
+// 顺手也把撤销做掉：故障留在一台真库上比从未注入过更难收拾。
+//
+// 有几步没注入成功时照样按住成功的那几步：已经落下去的故障
+// 不能因为邻居失败就不管了。
+func holdFaults(ctx context.Context, staged []stagedFault, hold time.Duration, blocked []string) {
+	if len(staged) == 0 {
+		return
+	}
+	if hold < 0 {
+		hold = 0
+	}
+	if hold > 0 {
+		fmt.Printf("inject: 按住 %d 步故障 %s（Ctrl-C 提前结束并撤销）\n", len(staged), hold)
+		if len(blocked) > 0 {
+			fmt.Fprintf(os.Stderr, "\ninject: 以下 %d 步没有执行：\n", len(blocked))
+			for _, b := range blocked {
+				fmt.Fprintln(os.Stderr, b)
+			}
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(hold):
+		}
+	}
+	for i := len(staged) - 1; i >= 0; i-- {
+		if err := staged[i].impl.Cleanup(context.Background(), staged[i].res.InjectID); err != nil {
+			fmt.Fprintf(os.Stderr, "inject: 撤销 %s 失败: %v\n", staged[i].res.InjectID, err)
+		}
+	}
+	if hold > 0 {
+		fmt.Printf("inject: 已撤销 %d 步\n", len(staged))
+	}
 }
 
 // newInjectorRegistry 装上全部六个注入器。
@@ -276,8 +335,13 @@ func cmdInject(ctx context.Context, args []string) error {
 // 而 printUsage 把它写成"手动触发 fault-injector"。
 func newInjectorRegistry() *injector.Registry {
 	reg := injector.NewRegistry()
+	// DSN 在**装配根**读，不让注入器自己读全局环境。
+	// 两边都读的话，"这台机器上有没有配库"就变成一个藏在
+	// pgx.Connect 里的事实：命令行看不到它，测试也没法用 t.Setenv 钉住它。
 	for _, impl := range []injector.Injector{
-		hostinjector.New(), pginjector.New(), redisinjector.New(),
+		hostinjector.New(),
+		pginjector.New(pginjector.WithDSN(os.Getenv(pginjector.DSNEnv))),
+		redisinjector.New(),
 		k8sinjector.New(), rabbitmqinjector.New(), kafkainjector.New(),
 	} {
 		if err := reg.Register(impl); err != nil {
