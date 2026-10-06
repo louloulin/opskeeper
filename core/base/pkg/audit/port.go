@@ -281,6 +281,25 @@ const (
 	ActionRecoveryRetryIncrement = "recovery_retry_increment"
 	ActionRecoveryRetryReset     = "recovery_retry_reset"
 
+	// Chat diagnose entry points (决策 320). Three actions, and the split is
+	// the point rather than a refinement: diagnose STARTS an AI
+	// investigation, promote turns a chat conclusion into an execution-plane
+	// loop run, and push_report writes a finished postmortem back into the
+	// conversation. An operator asking "why did the system repair this
+	// without anyone filing a ticket" is answered by the promote row, and one
+	// asking "who turned this conversation into work" would otherwise have to
+	// read the diagnose row and guess.
+	//
+	// None of the three carries the text. user_message is an instruction to
+	// a ReAct agent with tool access, report_markdown is unbounded markdown,
+	// and both arrive by paste from an incident page — which is where
+	// credentials are. The rows carry a length and a digest instead, the
+	// same bargain decision 318 struck for agent instructions; the tool calls
+	// the conversation went on to make are what carries the consequences.
+	ActionChatDiagnose = "chat_diagnose"
+	ActionChatPromote  = "chat_promote"
+	ActionChatReport   = "chat_report"
+
 	// ActionHITLDecide records a human approve/reject on an AgentTeams task
 	// that is waiting for one. Decision 312.
 	//
@@ -429,6 +448,12 @@ const (
 	ResourceSecret       = "secret"
 	ResourceOrg          = "org"
 	ResourceAgentSession = "agent_session"
+	// ResourceChatConversation names one chat thread. It is not folded into
+	// ResourceAgentSession: that bucket is the node-side conversation rows
+	// from decision 318, whose ids are node session ids, and an operator
+	// filtering "which host session" would otherwise keep meeting rows from
+	// a browser tab. The resource id is the conversation id.
+	ResourceChatConversation = "chat_conversation"
 	ResourceRule         = "rule"
 	ResourceChannel      = "channel"
 	ResourceRepo         = "repo"

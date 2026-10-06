@@ -23,6 +23,30 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 830 / 562 / 268 as of decision 320: the three chat-diagnose actions
+// (chat_diagnose, chat_promote, chat_report) plus the chat_conversation
+// resource type. Four symbols, four dead — exactly the count, and the
+// test-only class did not move, which is what the measured triple now says
+// rather than what a prediction says.
+//
+// Four constants produced exactly four, and the mechanism took a measurement
+// to find rather than a reading to confirm. The four re-exports in
+// core/domains/model/audit name the same four symbols, yet they are not
+// counted again — not because the tool de-duplicates by name, but because
+// `ActionChatDiagnose = auditport.ActionChatDiagnose` mentions the symbol
+// inside its own package's non-test file, and a symbol mentioned that way is
+// reachable by definition. The copies in log.go are precisely the reason the
+// originals in port.go are still listed as dead: nothing inside the
+// measured tree reaches core/base/pkg/audit from core/manager, but
+// log.go does.
+//
+// This is the whole reason the number is measured every time instead of
+// derived: a symbol count here depends on whether a re-export line happens
+// to sit in a package's production files, and no amount of arithmetic on
+// "constants added" gets there. Decisions 311 and 317 moved the total by
+// more than their constant count for the same reason, in the opposite
+// direction.
+//
 // 826 / 558 / 268 as of decision 319: the two self-healing-loop retry
 // actions (recovery_retry_increment, recovery_retry_reset). Both are dead
 // for the same reason decisions 311, 312, 314, 317 and 318 give — the
@@ -86,8 +110,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 826
-	deadSymbolBudget     = 558
+	unreachableBudget    = 830
+	deadSymbolBudget     = 562
 	testOnlySymbolBudget = 268
 )
 

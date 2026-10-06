@@ -161,6 +161,10 @@ const (
 	ActionRecoveryRetryIncrement = auditport.ActionRecoveryRetryIncrement
 	ActionRecoveryRetryReset     = auditport.ActionRecoveryRetryReset
 
+	ActionChatDiagnose = auditport.ActionChatDiagnose
+	ActionChatPromote  = auditport.ActionChatPromote
+	ActionChatReport   = auditport.ActionChatReport
+
 	ActionChannelCreate = auditport.ActionChannelCreate
 	ActionChannelUpdate = auditport.ActionChannelUpdate
 	ActionChannelDelete = auditport.ActionChannelDelete
@@ -222,31 +226,32 @@ const (
 
 	ActionIMAppSecretReveal = auditport.ActionIMAppSecretReveal
 
-	ResourceUser           = auditport.ResourceUser
-	ResourceDevice         = auditport.ResourceDevice
-	ResourceIncident       = auditport.ResourceIncident
-	ResourceSetting        = auditport.ResourceSetting
-	ResourceSecret         = auditport.ResourceSecret
-	ResourceOrg            = auditport.ResourceOrg
-	ResourceAgentSession   = auditport.ResourceAgentSession
-	ResourceRule           = auditport.ResourceRule
-	ResourceChannel        = auditport.ResourceChannel
-	ResourceRepo           = auditport.ResourceRepo
-	ResourceSkill          = auditport.ResourceSkill
-	ResourceLLM            = auditport.ResourceLLM
-	ResourceGitKey         = auditport.ResourceGitKey
-	ResourceGrafana        = auditport.ResourceGrafana
-	ResourceRAG            = auditport.ResourceRAG
-	ResourceAudit          = auditport.ResourceAudit
-	ResourceAuth           = auditport.ResourceAuth
-	ResourcePlugin         = auditport.ResourcePlugin
-	ResourceEdge           = auditport.ResourceEdge
-	ResourceApproval       = auditport.ResourceApproval
-	ResourceIMApp          = auditport.ResourceIMApp
-	ResourceAgentTeamsTask = auditport.ResourceAgentTeamsTask
-	ResourceDataGuardLabel = auditport.ResourceDataGuardLabel
-	ResourceHITLProposal   = auditport.ResourceHITLProposal
-	ResourceMCPTool        = auditport.ResourceMCPTool
+	ResourceUser             = auditport.ResourceUser
+	ResourceDevice           = auditport.ResourceDevice
+	ResourceIncident         = auditport.ResourceIncident
+	ResourceSetting          = auditport.ResourceSetting
+	ResourceSecret           = auditport.ResourceSecret
+	ResourceOrg              = auditport.ResourceOrg
+	ResourceAgentSession     = auditport.ResourceAgentSession
+	ResourceChatConversation = auditport.ResourceChatConversation
+	ResourceRule             = auditport.ResourceRule
+	ResourceChannel          = auditport.ResourceChannel
+	ResourceRepo             = auditport.ResourceRepo
+	ResourceSkill            = auditport.ResourceSkill
+	ResourceLLM              = auditport.ResourceLLM
+	ResourceGitKey           = auditport.ResourceGitKey
+	ResourceGrafana          = auditport.ResourceGrafana
+	ResourceRAG              = auditport.ResourceRAG
+	ResourceAudit            = auditport.ResourceAudit
+	ResourceAuth             = auditport.ResourceAuth
+	ResourcePlugin           = auditport.ResourcePlugin
+	ResourceEdge             = auditport.ResourceEdge
+	ResourceApproval         = auditport.ResourceApproval
+	ResourceIMApp            = auditport.ResourceIMApp
+	ResourceAgentTeamsTask   = auditport.ResourceAgentTeamsTask
+	ResourceDataGuardLabel   = auditport.ResourceDataGuardLabel
+	ResourceHITLProposal     = auditport.ResourceHITLProposal
+	ResourceMCPTool          = auditport.ResourceMCPTool
 
 	ResourceAgentTool = auditport.ResourceAgentTool
 )

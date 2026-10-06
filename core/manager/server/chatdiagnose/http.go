@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	chatdiagnosebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/chatdiagnose"
 )
 
@@ -91,14 +93,48 @@ func (h *Handler) Register(r chi.Router) {
 func (h *Handler) diagnose(w http.ResponseWriter, r *http.Request) {
 	var body ChatDiagnoseRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionChatDiagnose,
+			ResourceType: auditport.ResourceChatConversation,
+			Payload:      map[string]any{"message_len": 0},
+		}, err)
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// The message itself is deliberately absent from the row. It is an
+	// instruction to an agent that can run tools, it has no length limit, and
+	// operators paste it from whatever the incident page showed them — which
+	// is regularly a credential or a token. The row carries the length and a
+	// digest, so two identical questions are comparable and neither is
+	// readable. The conversation's own turns and the tool calls they caused
+	// carry what actually happened.
+	//
+	// The cost is stated rather than hidden: on its own this row cannot say
+	// what was asked. It says that an investigation was started, by whom,
+	// against which conversation, and the tool rows answer the rest.
+	diagPayload := map[string]any{
+		"message_len":     len(body.UserMessage),
+		"message_digest":  auditport.ValueDigest(body.UserMessage),
+		"mentioned_agent": body.MentionedAgent,
+	}
+	if body.ConversationID != "" {
+		diagPayload["requested_conversation_id"] = body.ConversationID
+	}
 	if strings.TrimSpace(body.TenantID) == "" {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionChatDiagnose,
+			ResourceType: auditport.ResourceChatConversation,
+			Payload:      diagPayload,
+		}, chatdiagnosebiz.ErrMissingTenant)
 		writeErr(w, http.StatusBadRequest, "tenant_id is required")
 		return
 	}
 	if strings.TrimSpace(body.UserMessage) == "" {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionChatDiagnose,
+			ResourceType: auditport.ResourceChatConversation,
+			Payload:      diagPayload,
+		}, chatdiagnosebiz.ErrEmptyMessage)
 		writeErr(w, http.StatusBadRequest, "user_message is required")
 		return
 	}
@@ -107,6 +143,12 @@ func (h *Handler) diagnose(w http.ResponseWriter, r *http.Request) {
 	for _, raw := range body.ContextRefs {
 		t, id, err := splitWireRef(raw)
 		if err != nil {
+			auditFail(r, auditport.Event{
+				Action:       auditport.ActionChatDiagnose,
+				ResourceType: auditport.ResourceChatConversation,
+				ResourceID:   body.ConversationID,
+				Payload:      diagPayload,
+			}, fmt.Errorf("bad context_ref %q: %w", raw, err))
 			writeErr(w, http.StatusBadRequest, "bad context_ref: "+err.Error())
 			return
 		}
@@ -120,11 +162,28 @@ func (h *Handler) diagnose(w http.ResponseWriter, r *http.Request) {
 		TenantID:       body.TenantID,
 		UserID:         body.UserID,
 	}
+	diagPayload["context_ref_count"] = len(refs)
 	resp, err := h.svc.Diagnose(r.Context(), req)
 	if err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionChatDiagnose,
+			ResourceType: auditport.ResourceChatConversation,
+			ResourceID:   body.ConversationID,
+			Payload:      diagPayload,
+		}, err)
 		writeErr(w, mapStatus(err), err.Error())
 		return
 	}
+	// The conversation id comes from the response, not the request: the first
+	// message of a thread creates it, and a row keyed on the request's empty
+	// string would leave every new investigation filed under no thread at
+	// all — which is exactly the one an operator searches for.
+	auditOK(r, auditport.Event{
+		Action:       auditport.ActionChatDiagnose,
+		ResourceType: auditport.ResourceChatConversation,
+		ResourceID:   resp.ConversationID,
+		Payload:      diagPayload,
+	})
 	writeOK(w, resp)
 }
 
@@ -149,18 +208,51 @@ func (h *Handler) promote(w http.ResponseWriter, r *http.Request) {
 	convID := chi.URLParam(r, "id")
 	var body PromoteRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionChatPromote,
+			ResourceType: auditport.ResourceChatConversation,
+			ResourceID:   convID,
+		}, err)
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// The turn id is load-bearing: promote is "this reply in this thread
+	// becomes an execution-plane run", and without the turn a row says only
+	// that some conversation was promoted, which is any of its turns.
+	promotePayload := map[string]any{"turn_id": body.TurnID}
 	if strings.TrimSpace(body.TenantID) == "" || convID == "" {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionChatPromote,
+			ResourceType: auditport.ResourceChatConversation,
+			ResourceID:   convID,
+			Payload:      promotePayload,
+		}, chatdiagnosebiz.ErrMissingTenant)
 		writeErr(w, http.StatusBadRequest, "conversation_id and tenant_id are required")
 		return
 	}
 	res, err := h.svc.PromoteToLoop(r.Context(), convID, body.TurnID, body.TenantID)
 	if err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionChatPromote,
+			ResourceType: auditport.ResourceChatConversation,
+			ResourceID:   convID,
+			Payload:      promotePayload,
+		}, err)
 		writeErr(w, mapStatus(err), err.Error())
 		return
 	}
+	// The run it started is named on the row, so the chain answers "which
+	// incident did this conversation cause to be worked" without a join into
+	// the loop's own tables.
+	promotePayload["incident_id"] = res.IncidentID
+	promotePayload["first_loop_event_id"] = res.FirstLoopEventID
+	promotePayload["final_phase"] = res.FinalPhase
+	auditOK(r, auditport.Event{
+		Action:       auditport.ActionChatPromote,
+		ResourceType: auditport.ResourceChatConversation,
+		ResourceID:   convID,
+		Payload:      promotePayload,
+	})
 	writeOK(w, res)
 }
 
@@ -185,17 +277,48 @@ func (h *Handler) pushReport(w http.ResponseWriter, r *http.Request) {
 	convID := chi.URLParam(r, "id")
 	var body ReportRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionChatReport,
+			ResourceType: auditport.ResourceChatConversation,
+			ResourceID:   convID,
+			Payload:      map[string]any{"report_len": 0},
+		}, err)
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Same bargain as diagnose, for the same reason: the postmortem is
+	// unbounded markdown assembled from an automated run, and it is written
+	// into a thread that other people read. Length and digest, not the text.
+	reportPayload := map[string]any{
+		"report_len":    len(body.ReportMarkdown),
+		"report_digest": auditport.ValueDigest(body.ReportMarkdown),
+	}
 	if strings.TrimSpace(body.TenantID) == "" || convID == "" {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionChatReport,
+			ResourceType: auditport.ResourceChatConversation,
+			ResourceID:   convID,
+			Payload:      reportPayload,
+		}, chatdiagnosebiz.ErrMissingTenant)
 		writeErr(w, http.StatusBadRequest, "conversation_id and tenant_id are required")
 		return
 	}
 	if err := h.svc.PushReportToConversation(r.Context(), convID, body.TenantID, body.ReportMarkdown); err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionChatReport,
+			ResourceType: auditport.ResourceChatConversation,
+			ResourceID:   convID,
+			Payload:      reportPayload,
+		}, err)
 		writeErr(w, mapStatus(err), err.Error())
 		return
 	}
+	auditOK(r, auditport.Event{
+		Action:       auditport.ActionChatReport,
+		ResourceType: auditport.ResourceChatConversation,
+		ResourceID:   convID,
+		Payload:      reportPayload,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
