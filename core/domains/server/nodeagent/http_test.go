@@ -17,12 +17,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 	"github.com/vincent-wuhan/opskeeper/core/wire"
 
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	"github.com/vincent-wuhan/opskeeper/core/domains/biz/nodeagent"
-	"github.com/vincent-wuhan/opskeeper/core/domains/biz/nodefleet"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
@@ -43,7 +43,7 @@ type fakeFleet struct {
 	// decide records the last approval answer the handler sent down, so a
 	// test can prove the operator's grant reached the node rather than
 	// being swallowed by the handler.
-	decide    nodefleet.Decision
+	decide    domain.AgentDecision
 	decideErr error
 }
 
@@ -51,18 +51,18 @@ func newFakeFleet() *fakeFleet {
 	return &fakeFleet{sinks: map[string]ports.EventSink{}}
 }
 
-func (f *fakeFleet) Open(req nodefleet.PromptRequest, sink ports.EventSink) (*nodefleet.TunelledProcess, error) {
+func (f *fakeFleet) Open(req domain.AgentPrompt, sink ports.EventSink) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.openErr != nil {
-		return nil, f.openErr
+		return f.openErr
 	}
 	f.opens++
 	f.sinks[req.SessionID] = sink
-	return nil, nil
+	return nil
 }
 
-func (f *fakeFleet) Prompt(_ context.Context, req nodefleet.PromptRequest) error {
+func (f *fakeFleet) Prompt(_ context.Context, req domain.AgentPrompt) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.promptErr
@@ -82,7 +82,7 @@ func (f *fakeFleet) Abort(context.Context, uint64, string) error {
 	return nil
 }
 
-func (f *fakeFleet) Decide(_ context.Context, _ uint64, _ string, d nodefleet.Decision) error {
+func (f *fakeFleet) Decide(_ context.Context, _ uint64, _ string, d domain.AgentDecision) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.decide = d
@@ -103,7 +103,7 @@ func (f *fakeFleet) Close(_ uint64, sessionID string) {
 	f.closed = append(f.closed, sessionID)
 }
 
-func (f *fakeFleet) AllStats() []nodefleet.SessionStats { return nil }
+func (f *fakeFleet) AllStats() []domain.AgentSessionStats { return nil }
 
 func (f *fakeFleet) push(sessionID string, ev wire.StreamEvent) error {
 	f.mu.Lock()
@@ -174,7 +174,7 @@ func TestARefusedOpenIsABadGatewayNotAnInternalError(t *testing.T) {
 	// console's node is reachable, and saying "internal error" sends an
 	// operator to the manager's logs instead of the node's.
 	srv, fleet := newTestServer(t)
-	fleet.openErr = &nodefleet.RemoteError{Code: nodefleet.CodeAgentUnavailable, Message: "this node's agent is not running", EdgeID: 7}
+	fleet.openErr = &domain.AgentRefusal{Code: "agent_unavailable", Message: "this node's agent is not running", EdgeID: 7}
 	resp, err := http.Post(srv.URL+"/v1/node-agents/sessions", "application/json", strings.NewReader(`{"edge_id":7}`))
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -191,7 +191,11 @@ func TestARefusedOpenIsABadGatewayNotAnInternalError(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body.Error.Code != nodefleet.CodeAgentUnavailable {
+	// The code is whatever the node sent, passed through verbatim. The
+	// handler does not own a list of them and must not grow one: a new node
+	// code is a new string, and a console that cannot render an unknown one
+	// should still be able to show it.
+	if body.Error.Code != "agent_unavailable" {
 		t.Errorf("code = %q, want the node's own code so the console can render it", body.Error.Code)
 	}
 }
@@ -502,7 +506,7 @@ func TestANodeRefusalOnADecisionIsABadGateway(t *testing.T) {
 	// "that request is gone" rather than "try again".
 	srv, fleet := newTestServer(t)
 	id := openConversation(t, srv, `{"edge_id":7}`)
-	fleet.decideErr = &nodefleet.RemoteError{
+	fleet.decideErr = &domain.AgentRefusal{
 		Code: "agent_bad_decision", Message: "no pending approval", EdgeID: 7,
 	}
 
@@ -555,14 +559,21 @@ func TestAFullFleetIsReportedAsTooManyRequests(t *testing.T) {
 		code   string
 	}{
 		{
-			name:   "per-node cap",
-			err:    &nodefleet.LimitError{Scope: "edge", EdgeID: 7, Open: 32, Limit: 32},
+			name: "per-node cap",
+			// What the port actually produces. The fleet's LimitError is
+			// translated into this sentinel by the composition-root adapter
+			// (decision 282), and that translation is tested where it
+			// lives — in cmd/opskeeper. Asserting the mapping from the
+			// fleet's raw error here would pin a path production does not
+			// take, and it would keep passing after the adapter was
+			// deleted.
+			err:    nodeagent.ErrConversationLimit,
 			status: http.StatusTooManyRequests,
 			code:   "conversation_limit",
 		},
 		{
 			name:   "fleet cap",
-			err:    &nodefleet.LimitError{Scope: "fleet", Open: 512, Limit: 512},
+			err:    nodeagent.ErrConversationLimit,
 			status: http.StatusTooManyRequests,
 			code:   "conversation_limit",
 		},
@@ -572,7 +583,7 @@ func TestAFullFleetIsReportedAsTooManyRequests(t *testing.T) {
 			// mapping silently stops applying the moment someone adds
 			// context to an error message.
 			name:   "wrapped",
-			err:    fmt.Errorf("open conversation: %w", &nodefleet.LimitError{Scope: "edge", EdgeID: 9, Open: 3, Limit: 3}),
+			err:    fmt.Errorf("open conversation: %w", nodeagent.ErrConversationLimit),
 			status: http.StatusTooManyRequests,
 			code:   "conversation_limit",
 		},

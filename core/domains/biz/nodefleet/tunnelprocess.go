@@ -12,10 +12,10 @@ package nodefleet
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sync"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
@@ -53,53 +53,20 @@ const (
 // console says something different for each, and an operator debugging a
 // fleet needs the difference: the first is a configuration or node problem,
 // the second is a network one.
-type RemoteError struct {
-	// Code is the node's machine-readable reason.
-	Code string
-	// Message is the node's human-facing explanation, carried verbatim:
-	// "plugin manifest not found" tells an operator what to fix.
-	Message string
-	// EdgeID is the node that refused.
-	EdgeID uint64
-	// Restarts and Degraded are echoed from the node's supervisor when it
-	// has them, so a refusal can say "crash-looping" rather than
-	// "unavailable" without a second round trip.
-	Restarts int
-	Degraded bool
-}
-
-func (e *RemoteError) Error() string {
-	msg := e.Message
-	if msg == "" {
-		msg = e.Code
-	}
-	return fmt.Sprintf("node %d refused: %s", e.EdgeID, msg)
-}
-
-// Retryable reports whether retrying could plausibly succeed.
-//
-// Every refusal the node sends is a statement about the node's own state —
-// it has no agent, its agent is crash-looping, its request was malformed —
-// and none of them is fixed by trying again in a second. A transport
-// failure is the retryable case, and is reported through the wrapped error
-// instead of here.
-func (e *RemoteError) Retryable() bool { return false }
+// RemoteError is a node declining a call. The declaration moved to core/domain
+// (decision 282) with the rest of the fleet's port vocabulary: the console's
+// HTTP layer branches on a refusal to answer 409 rather than 500, and a reader
+// of that handler should not have to know which package holds the router.
+// Alias, not copy — one declaration, so IsRefusal and AsRefusal below recover
+// the same type the node produced.
+type RemoteError = domain.AgentRefusal
 
 // IsRefusal reports whether err is a node's deliberate refusal rather than a
 // failure to reach it.
-func IsRefusal(err error) bool {
-	var remote *RemoteError
-	return errors.As(err, &remote)
-}
+func IsRefusal(err error) bool { return domain.IsAgentRefusal(err) }
 
 // AsRefusal extracts a node's refusal from err, if there is one.
-func AsRefusal(err error) (*RemoteError, bool) {
-	var remote *RemoteError
-	if errors.As(err, &remote) {
-		return remote, true
-	}
-	return nil, false
-}
+func AsRefusal(err error) (*RemoteError, bool) { return domain.AsAgentRefusal(err) }
 
 // TunelledProcess is a node's agent, reached over the tunnel.
 //

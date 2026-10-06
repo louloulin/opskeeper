@@ -34,7 +34,6 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	"github.com/vincent-wuhan/opskeeper/core/domains/biz/nodeagent"
-	"github.com/vincent-wuhan/opskeeper/core/domains/biz/nodefleet"
 )
 
 // Handler exposes /v1/node-agents/*.
@@ -284,7 +283,7 @@ func writeErr(w http.ResponseWriter, err error) {
 		code, status = "no_session", http.StatusNotFound
 	case errors.Is(err, nodeagent.ErrSessionExists):
 		code, status = "session_exists", http.StatusConflict
-	case errors.Is(err, nodefleet.ErrFleetFull):
+	case errors.Is(err, nodeagent.ErrConversationLimit):
 		// 429 rather than 503: nothing is broken and retrying in a moment
 		// changes nothing, because the conversations already open are not
 		// going to close themselves. The console has to close one, which
@@ -305,8 +304,8 @@ func writeErr(w http.ResponseWriter, err error) {
 		code, status = "unauthorized", http.StatusUnauthorized
 	case errors.Is(err, errs.ErrForbidden):
 		code, status = "forbidden", http.StatusForbidden
-	case nodefleet.IsRefusal(err):
-		remote, _ := nodefleet.AsRefusal(err)
+	case domain.IsAgentRefusal(err):
+		remote, _ := domain.AsAgentRefusal(err)
 		code, status = remote.Code, http.StatusBadGateway
 	case errors.Is(err, ports.ErrSinkClosed):
 		code, status = "closed", http.StatusGone
@@ -355,7 +354,7 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, fmt.Errorf("%w: request_id is required", errs.ErrInvalid))
 		return
 	}
-	err := h.svc.Decide(r.Context(), chi.URLParam(r, "sid"), nodefleet.Decision{
+	err := h.svc.Decide(r.Context(), chi.URLParam(r, "sid"), domain.AgentDecision{
 		RequestID: req.RequestID,
 		Digest:    req.Digest,
 		Grant:     req.Grant,

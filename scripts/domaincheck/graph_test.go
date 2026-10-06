@@ -475,7 +475,7 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	if !strings.Contains(buf.String(), "the graph is a DAG") {
 		t.Error("the shipped tree is no longer a DAG and the report does not say so")
 	}
-	// 11 = decision 118's 42, plus the edge decision 123 added when the root
+	// 10 = decision 118's 42, plus the edge decision 123 added when the root
 	// side of the cluster channel became a domain of its own, minus the eight
 	// since cut: decision 227 (frontierbound -> metric, whose port moved
 	// next to HostMetricPoint in core/floor/tunnel), decision 229
@@ -564,12 +564,16 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// trap column. 281 (frontierbound -> edge) then emptied the trap column
 	// entirely: the cut took Usecase's second consuming domain with it, so the
 	// name left the report rather than becoming single-owner, and its finding
-	// moved to a direct assertion.
+	// moved to a direct assertion. 282 (nodeagent -> nodefleet) took
+	// nodefleet's in-degree to zero, which is the second of the two remaining
+	// single-inbound domains to come free — and the reason the in-degree
+	// column is the one worth watching is that it is the only one that
+	// predicts a domain's release independence without a judgement call.
 	//
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "11 edges") {
+	if !strings.Contains(buf.String(), "10 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

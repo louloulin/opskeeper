@@ -13,9 +13,9 @@
 # 三份的实测价：
 #
 #   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed 80 6 0 / 0
-#   docs/manager-split.constrained 83 3 0 / 0
-#   docs/manager-split.release-floor 4 82 0 / 0
+#   docs/manager-split.proposed 78 6 0 / 0
+#   docs/manager-split.constrained 81 3 0 / 0
+#   docs/manager-split.release-floor 4 80 0 / 0
 #
 # 决策 230 重取了这三行。触发它的是切掉 `flow -> scheduler`（missed-run 端口
 # 下沉到 `core/floor/scheduler`）：proposed 与 constrained 各少一条组内 import，
@@ -197,6 +197,7 @@ independent = aiops, audit, chatdiagnose, cluster, demo, edgeauth, federation, f
         llmgw, llmpig, logs, marketplace, mcp, metric, monitor, nodeagent,
         hitl,
         plugin, pluginimport, prometheus, promwrite, proposal, report,
+        nodefleet,
         scheduler, secret, setting, skill, systemhealth, systemupgrade,
         topology, traces, version, webshell
 
@@ -219,12 +220,13 @@ independent = aiops, audit, chatdiagnose, cluster, demo, edgeauth, federation, f
 # 其余 16 个。**这个数字此前写的是 20，账是 9 + 10 + 1，而三项全错**，本轮由闸门
 # 一次点出来，值得把每一项的错法都写下来：
 #
-#   - 应当是 **6** 个入向有边、因而需要真答案的域（`alert` `approval` `device`
-#     `edge` `loop` `nodefleet`），加起来正好是 `-graph` 报告里 in-degree 非零的
-#     那 6 行。**决策 275 让它从 10 变成 9**（`federation` 切掉最后一条入边），
-#     **决策 276、277、280 各让一个域归零**：`topology`（`aiops -> topology`）、
-#     `hitl`（`aiops -> hitl`）、以及 `aiops` 本身（`imbridge -> aiops`）。这三刀把
-#     9 变成 6，散文却停在 9——**因为散文没有随树动，而闸门会**。
+#   - 应当是 **5** 个入向有边、因而需要真答案的域（`alert` `approval` `device`
+#     `edge` `loop`），加起来正好是 `-graph` 报告里 in-degree 非零的那 5 行。
+#     **决策 275 让它从 10 变成 9**（`federation` 切掉最后一条入边），
+#     **决策 276、277、280、282 各让一个域归零**：`topology`（`aiops -> topology`）、
+#     `hitl`（`aiops -> hitl`）、`aiops` 本身（`imbridge -> aiops`）、以及 `nodefleet`
+#     （`nodeagent -> nodefleet`）。这四刀把 9 变成 5，散文却停在 9——
+#     **因为散文没有随树动，而闸门会**。
 #   - 10 个 shared 底座组件（`agentteams` `container` `control` `dataguard`
 #     `higress` `knowledge` `migrate` `migrator` `middleware` `observability`）。
 #     它们在 import 图里读作叶子但不是叶子——被依赖不需要声明，所以它们的入度
@@ -239,7 +241,7 @@ independent = aiops, audit, chatdiagnose, cluster, demo, edgeauth, federation, f
 #     错误的两面**。散文里早就把 `agentteams` 点进了那 10 个 shared 组件，**说的
 #     和做的不是同一件事**。
 #
-# 6 + 10 = 16。
+# 5 + 10 = 15。
 #
 # **这段散文此前写的是「其余 25 个 = 13 + 10 + 2」，四个数字全错**，而它错在
 # 一个已经发生过的事件上：它描述的是一个把 `chatdiagnose` 与 `frontierbound`
@@ -254,4 +256,4 @@ independent = aiops, audit, chatdiagnose, cluster, demo, edgeauth, federation, f
 core = agentteams, alert, approval, container, control,
         dataguard, device, edge,
         higress, knowledge, loop, middleware,
-        migrate, migrator, nodefleet, observability
+        migrate, migrator, observability

@@ -22,24 +22,11 @@ import (
 var ErrNoSession = errors.New("nodefleet: no open session")
 
 // PromptRequest is one operator turn, addressed to a node.
-type PromptRequest struct {
-	// EdgeID is the node whose agent should answer.
-	EdgeID uint64
-	// SessionID scopes the conversation. The fleet mints it when a console
-	// opens a conversation and reuses it for every turn after.
-	SessionID string
-	// UserText is the turn, after any mention rendering.
-	UserText string
-	// Role is the caller's system role. It is recorded on the request and
-	// is the node's to enforce: the edge filters the agent's tool set by
-	// it before the turn starts, so a viewer's turn cannot reach a
-	// mutating tool no matter what the console asked for.
-	Role string
-	// Locale is the console language the reply must use.
-	Locale string
-	// Selection optionally pins the model for this conversation.
-	Selection domain.ModelSelection
-}
+// PromptRequest is one console turn. The declaration moved to core/domain
+// (decision 282): nodeagent drove the fleet through an interface whose
+// arguments all named this package, which made the seam a package boundary
+// wearing an interface's clothes. Alias, not copy — one declaration.
+type PromptRequest = domain.AgentPrompt
 
 // Conversation limits.
 //
@@ -413,19 +400,9 @@ func (f *Fleet) countLocked() int {
 }
 
 // SessionStats describes one open conversation.
-type SessionStats struct {
-	EdgeID    uint64
-	SessionID string
-	// Frames counts what has reached the console.
-	Frames int64
-	// Dropped counts frames the node could not translate and this fleet
-	// therefore did not emit. A non-zero value means the console is
-	// showing a conversation with holes, and somebody debugging that
-	// needs to know the gaps are translation, not silence from the agent.
-	Dropped int64
-	// Terminal is true once the agent reported the turn finished.
-	Terminal bool
-}
+// SessionStats is one conversation's counters. Moved to core/domain with the
+// rest of the fleet's port vocabulary (decision 282); alias, not copy.
+type SessionStats = domain.AgentSessionStats
 
 // Stats reports on one conversation.
 func (f *Fleet) Stats(edgeID uint64, sessionID string) (SessionStats, bool) {
@@ -522,7 +499,7 @@ func (f *Fleet) Decide(ctx context.Context, edgeID uint64, sessionID string, d D
 	if _, err := f.lookup(edgeID, sessionID); err != nil {
 		return err
 	}
-	return NewTunelledProcess(edgeID, sessionID, f.dial).Decide(ctx, d.Wire())
+	return NewTunelledProcess(edgeID, sessionID, f.dial).Decide(ctx, decisionWire(d))
 }
 
 // Decision is an operator's answer to one approval request.
@@ -531,24 +508,18 @@ func (f *Fleet) Decide(ctx context.Context, edgeID uint64, sessionID string, d D
 // recomputes the digest and refuses anything that does not match the call
 // it holds, so nothing here is trusted. Keeping the two apart means a bug
 // in this layer can fail to deliver a decision but cannot forge one.
-type Decision struct {
-	// RequestID is the handle the node minted for the pending call.
-	RequestID string
-	// Digest is echoed from the frame the console rendered. The node
-	// refuses a decision whose digest does not match the request it names.
-	Digest string
-	// Grant is true to allow the call and false to refuse it. A bool rather
-	// than a string, because the only two answers the gate accepts are
-	// these two, and a third one should not be expressible here.
-	Grant bool
-	// DecidedBy is the operator's identity, for the node's audit ledger.
-	DecidedBy string
-	// Note is free text recorded with the decision.
-	Note string
-}
+// Decision is the operator's answer to a node's request for permission.
+// Moved to core/domain (decision 282); alias, not copy. The Wire method below
+// stays here because it names the tunnel's request type, and the tunnel is this
+// domain's own wire.
+type Decision = domain.AgentDecision
 
-// Wire renders the decision as the tunnel body.
-func (d Decision) Wire() tunnel.AgentDecideRequest {
+// decisionWire is a function rather than a method on Decision because the type
+// now belongs to core/domain, and a method cannot be declared on a type from
+// another package. The conversion stays here rather than moving to core/domain
+// because it names tunnel.AgentDecideRequest — the wire is this domain's own,
+// and core/domain does not know how a node is asked.
+func decisionWire(d Decision) tunnel.AgentDecideRequest {
 	word := ports.ApprovalDenied
 	if d.Grant {
 		word = ports.ApprovalGranted

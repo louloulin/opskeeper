@@ -11,7 +11,6 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 	"github.com/vincent-wuhan/opskeeper/core/wire"
 
-	"github.com/vincent-wuhan/opskeeper/core/domains/biz/nodefleet"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
@@ -29,35 +28,35 @@ type fakeFleet struct {
 	// openErr, when set, is what Open returns.
 	openErr error
 
-	prompts   []nodefleet.PromptRequest
+	prompts   []domain.AgentPrompt
 	steers    []string
 	abortCall int
 	closed    []string
-	stats     []nodefleet.SessionStats
+	stats     []domain.AgentSessionStats
 
 	// decide records what the last approval answer carried and which node
 	// it was routed to. Both matter: the edge id proves the answer went to
 	// the node running the turn rather than to whichever node was
 	// convenient.
-	decide     nodefleet.Decision
+	decide     domain.AgentDecision
 	decideEdge uint64
 	decideErr  error
 }
 
 func newFakeFleet() *fakeFleet { return &fakeFleet{sinks: map[string]ports.EventSink{}} }
 
-func (f *fakeFleet) Open(req nodefleet.PromptRequest, sink ports.EventSink) (*nodefleet.TunelledProcess, error) {
+func (f *fakeFleet) Open(req domain.AgentPrompt, sink ports.EventSink) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.openErr != nil {
-		return nil, f.openErr
+		return f.openErr
 	}
 	f.opens++
 	f.sinks[req.SessionID] = sink
-	return nil, nil
+	return nil
 }
 
-func (f *fakeFleet) Prompt(_ context.Context, req nodefleet.PromptRequest) error {
+func (f *fakeFleet) Prompt(_ context.Context, req domain.AgentPrompt) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.prompts = append(f.prompts, req)
@@ -78,7 +77,7 @@ func (f *fakeFleet) Abort(context.Context, uint64, string) error {
 	return nil
 }
 
-func (f *fakeFleet) Decide(_ context.Context, edgeID uint64, _ string, d nodefleet.Decision) error {
+func (f *fakeFleet) Decide(_ context.Context, edgeID uint64, _ string, d domain.AgentDecision) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.decideEdge = edgeID
@@ -104,10 +103,10 @@ func (f *fakeFleet) Close(_ uint64, sessionID string) {
 	delete(f.sinks, sessionID)
 }
 
-func (f *fakeFleet) AllStats() []nodefleet.SessionStats {
+func (f *fakeFleet) AllStats() []domain.AgentSessionStats {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]nodefleet.SessionStats(nil), f.stats...)
+	return append([]domain.AgentSessionStats(nil), f.stats...)
 }
 
 // push delivers a frame as the fleet would, from the node's relay.
@@ -533,7 +532,7 @@ func TestADecisionGoesToTheNodeRunningTheTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := s.Decide(context.Background(), id, nodefleet.Decision{
+	if err := s.Decide(context.Background(), id, domain.AgentDecision{
 		RequestID: "ar-1", Digest: "d-1", Grant: true, DecidedBy: "alice",
 	}); err != nil {
 		t.Fatalf("Decide: %v", err)
@@ -561,7 +560,7 @@ func TestADenialIsRoutedAsADenial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := s.Decide(context.Background(), id, nodefleet.Decision{RequestID: "ar-9", Grant: false}); err != nil {
+	if err := s.Decide(context.Background(), id, domain.AgentDecision{RequestID: "ar-9", Grant: false}); err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
 	fleet.mu.Lock()
@@ -574,7 +573,7 @@ func TestADenialIsRoutedAsADenial(t *testing.T) {
 func TestADecisionForAnUnknownConversationIsRefused(t *testing.T) {
 	fleet := newFakeFleet()
 	s := newService(t, fleet)
-	err := s.Decide(context.Background(), "s-none", nodefleet.Decision{RequestID: "ar-1"})
+	err := s.Decide(context.Background(), "s-none", domain.AgentDecision{RequestID: "ar-1"})
 	if !errors.Is(err, ErrNoSession) {
 		t.Errorf("err = %v, want ErrNoSession: there is no node to send it to", err)
 	}
@@ -590,7 +589,7 @@ func TestADecisionWithNoRequestIDIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := s.Decide(context.Background(), id, nodefleet.Decision{}); err == nil {
+	if err := s.Decide(context.Background(), id, domain.AgentDecision{}); err == nil {
 		t.Error("a decision naming no request was accepted")
 	}
 }
@@ -607,7 +606,7 @@ func TestANodeRefusalIsPassedBackRatherThanSwallowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := s.Decide(context.Background(), id, nodefleet.Decision{RequestID: "ar-1"}); err == nil {
+	if err := s.Decide(context.Background(), id, domain.AgentDecision{RequestID: "ar-1"}); err == nil {
 		t.Error("a node refusal was reported as a decision applied")
 	}
 }

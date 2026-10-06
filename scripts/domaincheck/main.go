@@ -267,7 +267,20 @@ var edges = map[edge]string{
 
 	{"mcp", "loop"}: "an investigation started over MCP enters the same loop as a chat one",
 
-	{"nodeagent", "nodefleet"}: "the node-agent endpoints are the fleet's session handles",
+	// The nodeagent -> nodefleet edge is gone (decision 282). It was declared
+	// as "the node-agent endpoints are the fleet's session handles", which is
+	// true and irrelevant: the reason it was a declared edge is that nodeagent
+	// drove the fleet through an interface whose five arguments all named
+	// nodefleet's own types, so the only way to satisfy the port was to import
+	// the package. A port that cannot be satisfied without its producer is a
+	// package boundary wearing an interface's clothes.
+	//
+	// Two of the nine methods are also narrower than the fleet's, on purpose.
+	// Open dropped a *TunelledProcess the single call site discarded, and
+	// dropped the fleet's ErrFleetFull in favour of nodeagent's own
+	// ErrConversationLimit — because a port may not carry the producer's
+	// vocabulary. Both translations happen at the composition root, which is
+	// the only place that legitimately knows there are two domains here.
 
 	{"report", "loop"}: "a report is produced out of a loop investigation, and the postmortem service renders the loop's own postmortem contract (PostmortemDoc / RootCauseJSON / CritiqueScore) — one direction only since decision 115",
 }

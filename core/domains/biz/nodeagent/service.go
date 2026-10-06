@@ -22,7 +22,6 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 	"github.com/vincent-wuhan/opskeeper/core/wire"
 
-	"github.com/vincent-wuhan/opskeeper/core/domains/biz/nodefleet"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
@@ -41,6 +40,18 @@ var ErrNoStream = errors.New("nodeagent: no console is watching this conversatio
 // console renders the id it was given, so a clash here is a real
 // misconfiguration rather than a race to paper over.
 var ErrSessionExists = errors.New("nodeagent: conversation id is already open")
+
+// ErrConversationLimit means the control plane is already holding as many
+// conversations as it is willing to hold.
+//
+// It is this package's sentinel rather than the fleet's, and the reason is the
+// port rule: an interface may not carry the producer's vocabulary. The console
+// asks "may I open another conversation", and the answer that matters to it is
+// the cap, not which of the two internal counters (per-edge or whole-fleet)
+// ran out — that distinction lives in the error's wrapped LimitError and in
+// the log line, where an operator debugging a fleet needs it, and nowhere the
+// HTTP layer has to import a package it does not own.
+var ErrConversationLimit = errors.New("nodeagent: conversation limit reached")
 
 // ErrNoSession means the console named a conversation nobody has open.
 var ErrNoSession = errors.New("nodeagent: no such conversation")
@@ -64,19 +75,36 @@ const DefaultQueueDepth = 256
 // worse than one that reconnects.
 const TerminalGrace = 2 * time.Second
 
-// Fleet is the routing layer this service drives. Declared as an interface
-// so the console surface can be tested without a tunnel, and so the fleet's
+// Fleet is the routing layer this service drives. Declared as an interface so
+// the console surface can be tested without a tunnel, and so the fleet's
 // session bookkeeping is not reimplemented here.
+//
+// Every type in these nine signatures is a tunnel type, a ports type, a
+// core/domain type or a built-in — and that is the whole point of decision
+// 282. Four of them used to be nodefleet types, which meant the only way to
+// satisfy this interface was to import nodefleet, so the seam was a package
+// boundary wearing an interface's clothes.
+//
+// Two of the nine are narrower than the fleet's own methods on purpose:
+//
+//   - Open drops its *TunelledProcess result. The only call site discards it
+//     (`if _, err := s.fleet.Open(...)`), so a handle the console never sees
+//     was the one type in the seam nobody could explain.
+//   - Open's error is this package's ErrConversationLimit, not the fleet's
+//     ErrFleetFull. A port may not carry the producer's vocabulary, so the
+//     composition root supplies an adapter that translates one into the other.
+//     The console-facing meaning ("the cap was reached") belongs to the
+//     console surface; which internal counter ran out belongs to the fleet.
 type Fleet interface {
-	Open(nodefleet.PromptRequest, ports.EventSink) (*nodefleet.TunelledProcess, error)
-	Prompt(ctx context.Context, req nodefleet.PromptRequest) error
+	Open(domain.AgentPrompt, ports.EventSink) error
+	Prompt(ctx context.Context, req domain.AgentPrompt) error
 	Steer(ctx context.Context, edgeID uint64, sessionID, text string) error
 	Abort(ctx context.Context, edgeID uint64, sessionID string) error
-	Decide(ctx context.Context, edgeID uint64, sessionID string, d nodefleet.Decision) error
+	Decide(ctx context.Context, edgeID uint64, sessionID string, d domain.AgentDecision) error
 	State(ctx context.Context, edgeID uint64) (*ports.ProcessState, error)
 	Health(ctx context.Context, edgeID uint64) (*tunnel.AgentHealthResponse, error)
 	Close(edgeID uint64, sessionID string)
-	AllStats() []nodefleet.SessionStats
+	AllStats() []domain.AgentSessionStats
 }
 
 // Service owns the console-facing conversations.
@@ -214,14 +242,14 @@ func (s *Service) Open(req OpenRequest) (string, error) {
 	s.sessions[id] = conv
 	s.mu.Unlock()
 
-	prompt := nodefleet.PromptRequest{
+	prompt := domain.AgentPrompt{
 		EdgeID:    req.EdgeID,
 		SessionID: id,
 		Role:      req.Role,
 		Locale:    req.Locale,
 		Selection: req.Selection,
 	}
-	if _, err := s.fleet.Open(prompt, conv); err != nil {
+	if err := s.fleet.Open(prompt, conv); err != nil {
 		s.forget(id)
 		return "", err
 	}
@@ -250,7 +278,7 @@ func (s *Service) Send(ctx context.Context, sessionID, text string, steer bool) 
 	if steer {
 		return s.fleet.Steer(ctx, conv.edgeID, sessionID, text)
 	}
-	return s.fleet.Prompt(ctx, nodefleet.PromptRequest{
+	return s.fleet.Prompt(ctx, domain.AgentPrompt{
 		EdgeID:    conv.edgeID,
 		SessionID: sessionID,
 		UserText:  text,
@@ -353,7 +381,7 @@ func (s *Service) AllStats() []NodeStats {
 	// The fleet's own counters are authoritative for what reached the
 	// console; this service's is for what the node could not place.
 	fleetStats := s.fleet.AllStats()
-	byKey := make(map[agentKey]nodefleet.SessionStats, len(fleetStats))
+	byKey := make(map[agentKey]domain.AgentSessionStats, len(fleetStats))
 	for _, st := range fleetStats {
 		byKey[agentKey{edge: st.EdgeID, session: st.SessionID}] = st
 	}
@@ -584,7 +612,7 @@ func (st *Stream) Next(ctx context.Context) (wire.StreamEvent, bool) {
 // names a request it no longer holds. A service that applied it locally
 // would have to duplicate the digest check, and the second copy would be
 // the one that drifts.
-func (s *Service) Decide(ctx context.Context, sessionID string, d nodefleet.Decision) error {
+func (s *Service) Decide(ctx context.Context, sessionID string, d domain.AgentDecision) error {
 	conv, err := s.lookup(sessionID)
 	if err != nil {
 		return err

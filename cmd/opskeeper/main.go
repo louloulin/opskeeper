@@ -1370,7 +1370,11 @@ func main() {
 		// telemetry collection, which does not depend on any of this.
 		log.Error("node agent fleet unavailable; the console cannot reach node agents", slog.Any("err", ferr))
 	}
-	nodeAgentSvc, err := managerbiznodeagent.New(managerbiznodeagent.Options{Fleet: nodeFleet})
+	// The fleet is adapted rather than passed: decision 282 turned
+	// nodeagent's nine-method dependency on it into a port, and a port may not
+	// name the producer's types. See nodeagent_fleet_wiring.go for the two
+	// translations that costs.
+	nodeAgentSvc, err := managerbiznodeagent.New(managerbiznodeagent.Options{Fleet: nodeAgentFleetAdapter{fleet: nodeFleet}})
 	var nodeAgentHandler *managerservernodeagent.Handler
 	if err != nil {
 		// The console then simply has no node-agent routes. Nodes keep
