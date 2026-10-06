@@ -608,8 +608,8 @@ deadcode-report: ## 报出生产代码里只有测试引用的符号（报告，
 	go test ./scripts/deadcode/ -count=1 -skip TestTheUnreachableSymbolCountNeverGrows
 
 .PHONY: deadcode-ratchet-check
-deadcode-ratchet-check: ## 闸门：不可达符号的总数不得增长（决策 285；逐符号判定仍是报告）
-	go test ./scripts/deadcode/ -count=1 -run 'TestTheUnreachableSymbolCountNeverGrows'
+deadcode-ratchet-check: ## 闸门：不可达符号的总数不得增长，且不得有符号自称已接线却不可达（决策 285；决策 290）
+	go test ./scripts/deadcode/ -count=1 -run 'TestTheUnreachableSymbolCountNeverGrows|TestNoSymbolClaimsProductionWiringWhileBeingUnreachableFromIt'
 
 # 一张表只能有一个 GORM 模型。core/domains/model/proposal 与
 # core/manager/model/hitl 的 Proposal.TableName() 都返回 "proposal\”，而两个

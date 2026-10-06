@@ -91,6 +91,12 @@ type decl struct {
 	name     string
 	receiver string // "" for a top-level symbol
 	pos      token.Position
+	// doc is the declaration's own doc comment, and it is read for one
+	// reason only: a comment that tells a reader this symbol is how the
+	// running binary gets the thing it builds is a claim about
+	// reachability, and the walk that produced the verdict is the thing
+	// that can check it. Nothing else here looks at prose.
+	doc string
 }
 
 // fileRecord is one parsed .go file.
@@ -191,7 +197,12 @@ func parseAll(dirs []string) ([]*fileRecord, error) {
 
 func parseFile(path string) (*fileRecord, error) {
 	fset := token.NewFileSet()
-	src, err := parser.ParseFile(fset, path, nil, 0)
+	// ParseComments is required and not optional: without it every Doc field
+	// is nil, so the production-claim check below would see no comments at
+	// all and report "nothing claims production" on a tree where something
+	// does. That is the same failure shape as a gate that greps for a string
+	// the build already stripped: green, and wrong.
+	src, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +243,7 @@ func parseFile(path string) (*fileRecord, error) {
 				})
 			} else {
 				rec.decls = append(rec.decls, decl{
-					name: n.Name.Name, pos: fset.Position(n.Name.Pos()),
+					name: n.Name.Name, pos: fset.Position(n.Name.Pos()), doc: docText(n.Doc),
 				})
 			}
 		case *ast.GenDecl:
@@ -395,6 +406,12 @@ type fileFinding struct {
 type symbolFinding struct {
 	name string
 	why  verdict
+	line int
+	// claimDoc is the declaration's doc comment, carried only so the
+	// production-claim check can compare what the comment asserts against
+	// the verdict the walk reached. It is empty for symbols whose comment
+	// says nothing about production, which is nearly all of them.
+	claimDoc string
 }
 
 func analyse(records []*fileRecord) *result {
@@ -503,7 +520,7 @@ func analyse(records []*fileRecord) *result {
 			if why == live {
 				continue
 			}
-			fs = append(fs, symbolFinding{name: d.name, why: why})
+			fs = append(fs, symbolFinding{name: d.name, why: why, line: d.pos.Line, claimDoc: d.doc})
 		}
 		if len(fs) == 0 {
 			continue
@@ -620,6 +637,14 @@ func (r *result) print(w *os.File) {
 	fmt.Fprintf(w, "deadcode: of those, %d are dead and %d are test-only\n", r.deadOnlySymbols, r.testOnlySymbols)
 	fmt.Fprintf(w, "deadcode: %d whole files / %d lines are unreachable (%d files name nothing at all, %d are named only by tests)\n",
 		r.unreachableFiles, r.unreachableLines, r.deadFiles, r.testOnlyFiles)
+	if claims := productionClaimViolations(r); len(claims) > 0 {
+		fmt.Fprintf(w, "deadcode: %d symbols whose doc comment claims production wiring are unreachable from it\n", len(claims))
+		for _, c := range claims {
+			fmt.Fprintf(w, "  CLAIMS-PRODUCTION %s:%d  %s  (%s)\n", c.path, c.line, c.name, c.why)
+		}
+	} else {
+		fmt.Fprintf(w, "deadcode: no symbol claims production wiring while being unreachable from it\n")
+	}
 	for _, f := range r.files {
 		kind := "partial"
 		if f.unreachable {
@@ -634,4 +659,77 @@ func (r *result) print(w *os.File) {
 	}
 	fmt.Fprintf(w, "deadcode: this walk cannot see %s\n", falsePositives)
 	fmt.Fprintln(w, "deadcode: report only, exit 0 — see the package comment before turning this into a gate")
+}
+
+// docText flattens a doc comment. Only the first line of each sentence group
+// is kept by the caller that cares, but flattening here means the claim
+// check does not have to know how go/ast splits a comment into groups.
+func docText(g *ast.CommentGroup) string {
+	if g == nil {
+		return ""
+	}
+	return g.Text()
+}
+
+// productionClaims are the phrases that assert a symbol is how the running
+// binary reaches what it builds.
+//
+// It is a list, and a list is the weak point: a comment can say "this is what
+// main() calls" in a hundred ways and the walk will not see any of them. What
+// the list buys is narrower and real -- when one of these exact phrases is
+// written, the verdict has to agree with it or the comment is wrong. The
+// failure this catches is not an unusual phrasing, it is the one this
+// repository already shipped: core/manager/biz/report/postmortem.go's
+// NewPostmortemService was documented as "the production constructor" while
+// having no caller outside tests, and the type it returns had none at all
+// (decision 290).
+var productionClaims = []string{
+	"production constructor",
+	"production entry point",
+	"the production wiring",
+	"生产构造函数",
+	"生产入口",
+}
+
+// claimsProduction reports whether a doc comment asserts production wiring.
+func claimsProduction(doc string) bool {
+	lowered := strings.ToLower(doc)
+	for _, phrase := range productionClaims {
+		if strings.Contains(lowered, strings.ToLower(phrase)) {
+			return true
+		}
+	}
+	return false
+}
+
+// claimVerdict pairs a production claim with what the walk found.
+type claimVerdict struct {
+	path string
+	line int
+	name string
+	doc  string
+	why  string
+}
+
+// productionClaimViolations returns every symbol whose doc comment claims it is
+// production wiring while the walk found it unreachable from production.
+//
+// The check is deliberately one-directional. A reachable constructor whose
+// comment does not mention production is ordinary; an unreachable one whose
+// comment says it is the production constructor is a reader being told to
+// believe something the running binary does not do.
+func productionClaimViolations(res *result) []claimVerdict {
+	var out []claimVerdict
+	for _, f := range res.files {
+		for _, sym := range f.findings {
+			if sym.claimDoc == "" || !claimsProduction(sym.claimDoc) {
+				continue
+			}
+			out = append(out, claimVerdict{
+				path: f.path, line: sym.line, name: sym.name, doc: sym.claimDoc, why: sym.why.String(),
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].path < out[j].path })
+	return out
 }

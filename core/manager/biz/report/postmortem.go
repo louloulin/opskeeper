@@ -213,10 +213,20 @@ type PostmortemService struct {
 	rawTmpl  string
 }
 
-// NewPostmortemService is the production constructor. It panics
+// NewPostmortemService builds the service. It panics
 // on nil critical deps (loaders / resolver / sink) so misconfig
 // surfaces at startup; nil redactor / insights are tolerated and
 // replaced with safe defaults.
+//
+// It is NOT wired into the running binary. As of decision 290 this
+// constructor had no caller outside _test.go, and neither PostmortemService
+// nor PostmortemConfig is named anywhere else in the tree -- the 1,027 lines
+// of this file are a finished feature that nothing turns on. What production
+// does construct from this area is NewGitArtifactSink, which main.go:2511
+// passes to the loop's postmortem sink adapter; that is the sink, not this
+// service. The old comment here named itself as the constructor the binary
+// uses, which is why scripts/deadcode now fails the build on any symbol whose
+// doc claims production wiring while being unreachable from it.
 func NewPostmortemService(
 	loaders loop.Loaders,
 	redactor dataguard.Redactor,
