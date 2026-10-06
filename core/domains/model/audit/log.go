@@ -201,6 +201,11 @@ const (
 	ActionEdgeRotateSecret = auditport.ActionEdgeRotateSecret
 	ActionEdgePluginSet    = auditport.ActionEdgePluginSet
 
+	// 决策 333：供应链面（谁把哪段字节推到了哪台机器上）与「谁掐掉了这个会话」。
+	ActionEdgeAgentUpgrade    = auditport.ActionEdgeAgentUpgrade
+	ActionEdgePackageUpgrade  = auditport.ActionEdgePackageUpgrade
+	ActionWebshellSessionKill = auditport.ActionWebshellSessionKill
+
 	ActionMCPToolCall      = auditport.ActionMCPToolCall
 	ActionMCPToolAuthorize = auditport.ActionMCPToolAuthorize
 
@@ -271,6 +276,7 @@ const (
 	ResourceAgentTeamsTask   = auditport.ResourceAgentTeamsTask
 	ResourceDataGuardLabel   = auditport.ResourceDataGuardLabel
 	ResourceHITLProposal     = auditport.ResourceHITLProposal
+	ResourceWebshellSession  = auditport.ResourceWebshellSession
 	ResourceMCPTool          = auditport.ResourceMCPTool
 
 	ResourceAgentTool = auditport.ResourceAgentTool

@@ -3,11 +3,19 @@ package webshell
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	bizwebshell "github.com/vincent-wuhan/opskeeper/core/manager/biz/webshell"
+	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
 )
 
 // fleetBeyondTheOldPage is the number this whole file is about.
@@ -243,5 +251,78 @@ func TestTheThreeWaysAShellCannotOpenSayDifferentThings(t *testing.T) {
 func TestAnUnwiredLookupRefusesRatherThanGuessing(t *testing.T) {
 	if _, err := (&Handler{}).resolveEdge(context.Background(), 1); err == nil {
 		t.Fatal("a handler with no lookups wired resolved a device; it must refuse instead")
+	}
+}
+
+// --- 决策 333：谁掐掉了这个会话 --------------------------------------------------
+//
+// webshell 是通向生产机器的一条交互线路，线路里坐着某个人的凭据。关掉它不是
+// 状态变化，是一个动作——调查时问的正是这个动作。所以这一行必须存在，且必须
+// 带上「是哪台机器、是谁、转发给了哪个副本」。
+//
+// 跨副本那条路径尤其要记：转发之后，事后无法区分「这里杀掉的」与「那里杀掉的」。
+
+type killableSink struct{ killedWith string }
+
+func (k *killableSink) OnOutput([]byte) error { return nil }
+func (k *killableSink) OnExit(int, string)    {}
+func (k *killableSink) Kill(reason string)    { k.killedWith = reason }
+
+func TestKillSessionWritesWhoCutWhoseSession(t *testing.T) {
+	router := bizwebshell.NewRouter()
+	sink := &killableSink{}
+	router.Register("sess-42", sink, bizwebshell.ActiveSession{
+		SessionID: "sess-42", OpskeeperUserID: 9, SSHUser: "ops", EdgeID: 4,
+	})
+	h := NewHandler(nil, router, nil, nil, nil, nil)
+	// Through the real router, not straight into the handler: the handler
+	// reads the session id out of the chi route context, and calling it
+	// directly would hand it an empty id — which would then 404 for a reason
+	// that has nothing to do with the thing under test.
+	r := chi.NewRouter()
+	h.Register(r)
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/webshell/sessions/sess-42", nil)
+	req = req.WithContext(tenantctx.With(req.Context(), tenantctx.Tenant{UserID: 1, Role: "admin"}))
+	req = req.WithContext(auditport.WithSlot(req.Context()))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	ev, ok := auditport.GetAuditEvent(req.Context())
+	if !ok {
+		t.Fatal("no row: \"who cut this person off\" is the question an investigation asks first")
+	}
+	if ev.Action != auditport.ActionWebshellSessionKill {
+		t.Errorf("action = %q, want webshell_session_kill", ev.Action)
+	}
+	if ev.ResourceType != auditport.ResourceWebshellSession || ev.ResourceID != "sess-42" {
+		t.Errorf("resource = %q/%q, want webshell_session/sess-42", ev.ResourceType, ev.ResourceID)
+	}
+	if sink.killedWith != wsmodel.TerminatedByAdminKill {
+		t.Errorf("the session was closed with %q; the row and the act must agree", sink.killedWith)
+	}
+}
+
+// 杀不掉就不该有成功行——这条测的是「没发生的事不会被记成发生了」。
+func TestKillSessionThatFindsNothingLandsNoRow(t *testing.T) {
+	router := bizwebshell.NewRouter()
+	h := NewHandler(nil, router, nil, nil, nil, nil)
+	r := chi.NewRouter()
+	h.Register(r)
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/webshell/sessions/nope", nil)
+	req = req.WithContext(tenantctx.With(req.Context(), tenantctx.Tenant{UserID: 1, Role: "admin"}))
+	req = req.WithContext(auditport.WithSlot(req.Context()))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	if ev, ok := auditport.GetAuditEvent(req.Context()); ok {
+		t.Errorf("a kill that found nothing still wrote %s/%s", ev.Action, ev.ResourceID)
 	}
 }

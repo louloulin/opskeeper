@@ -472,3 +472,75 @@ package authzmw
 		t.Fatalf("findUnscannedRoots = %v, want exactly the file with a real route", unscanned)
 	}
 }
+
+// --- 决策 333：闸门第三次答错了问题 ----------------------------------------------
+//
+// `reachesAudit` 问的是「这个处理器写不写行」，但它实现成了「有没有出现
+// SetAuditEvent 这个词」。批量升级两条路由只调用 AddAuditEvent——那也是写行——
+// 于是它们在闸门眼里和「什么都不写的处理器」一模一样。
+//
+// 这是同一个函数第三次答偏：324 是接收者写死成 `r`，331 是认不出链式接收者，
+// 这一次是**把「怎么写」当成了「写没写」**。前两次改的是正则，这一次要改的是
+// 问题本身：**只要端口再加一个写行的方法，这个闸门就会再错一次。**
+
+func TestAHandlerThatOnlyAppendsRowsCountsAsAudited(t *testing.T) {
+	appendOnly := map[string]string{
+		"fleet/http.go": `package fleet
+
+import auditport "example.com/audit"
+
+func (h *Handler) Register(r chi.Router) {
+	r.Post("/v1/fleet/batch", h.batchUpgrade)
+}
+func (h *Handler) batchUpgrade(w http.ResponseWriter, r *http.Request) {
+	for _, id := range h.ids {
+		auditport.AddAuditEvent(r, auditport.Event{ResourceID: id})
+	}
+	w.WriteHeader(http.StatusOK)
+}
+`,
+	}
+	silent := map[string]string{
+		"fleet/http.go": `package fleet
+
+func (h *Handler) Register(r chi.Router) {
+	r.Post("/v1/fleet/batch", h.batchUpgrade)
+}
+func (h *Handler) batchUpgrade(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+`,
+	}
+	verdict := Verdict{
+		File: "core/manager/server/fleet/http.go", Route: "/v1/fleet/batch", Handler: "h.batchUpgrade",
+	}
+
+	saved := Verdicts
+	defer func() { Verdicts = saved }()
+
+	// A verdict that claims "audited" on a handler whose only writing is the
+	// append call. **This is the assertion that fails on the old gate**, and
+	// the earlier version of this test missed it entirely: it only ever
+	// checked routes with no verdict, and a route with no verdict is reported
+	// as missing whether the gate thinks it is audited or not — so it passed
+	// against the exact bug it was written for. A test that cannot tell the
+	// two behaviours apart is a test of nothing.
+	Verdicts = append(append([]Verdict{}, saved...), verdict)
+	if res := Run(tree(t, appendOnly)); len(res.Missing) != 0 {
+		t.Fatalf("an append-only handler was called unaudited: %v", res.Missing)
+	}
+
+	// The claim must still be caught when there is no writing at all.
+	if res := Run(tree(t, silent)); len(res.Missing) != 1 ||
+		!strings.Contains(res.Missing[0], "never records a row") {
+		t.Fatalf("missing = %v, want the false audit claim caught when nothing writes", res.Missing)
+	}
+
+	// And a route nobody has judged is still a route somebody has to judge —
+	// "the handler writes rows" must not turn into "no verdict needed".
+	Verdicts = saved
+	if res := Run(tree(t, appendOnly)); len(res.Missing) != 1 ||
+		!strings.Contains(res.Missing[0], "/v1/fleet/batch") {
+		t.Fatalf("missing = %v, want the append-only route to await a verdict", res.Missing)
+	}
+}

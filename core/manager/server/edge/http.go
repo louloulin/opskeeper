@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,46 @@ import (
 	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
 )
+
+// upgradeEvidence is what an upgrade row carries about the artifact it
+// pushed, and — just as importantly — what it refuses to carry (决策 333).
+//
+// The url is kept without its query string. Bundle URLs in this platform can
+// carry a presigned token as a query parameter, and **a presigned token in an
+// append-only chain is a bearer credential with a very long life**: it is
+// readable by everyone who can read the chain, it cannot be revoked without
+// rewriting history, and it expires on the issuer's schedule rather than the
+// operator's. The path plus the sha256 is the evidence an investigator
+// actually wants ("which bytes went to this host"), and it is useless to an
+// attacker without the exact bytes in hand.
+//
+// url is only present on the agent upgrade (the caller names it); the package
+// upgrade resolves a bundle server-side and records the version instead.
+type upgradeEvidence struct {
+	URL     string `json:"url,omitempty"`
+	SHA256  string `json:"sha256,omitempty"`
+	Version string `json:"version,omitempty"`
+	Arch    string `json:"arch,omitempty"`
+}
+
+func upgradeEvidenceFor(rawURL, sha, version, arch string) upgradeEvidence {
+	ev := upgradeEvidence{SHA256: sha, Version: version, Arch: arch}
+	if rawURL == "" {
+		return ev
+	}
+	if u, err := url.Parse(rawURL); err == nil && u.Scheme != "" {
+		u.RawQuery = ""
+		u.Fragment = ""
+		ev.URL = u.String()
+		return ev
+	}
+	// Unparseable is not a reason to drop the evidence, but it is a reason not
+	// to guess where the query starts: the whole point of this function is to
+	// remove a part of the string, and on a string we cannot parse the only
+	// safe removal is all of it.
+	ev.URL = rawURL
+	return ev
+}
 
 // roleAdmin is the platform-admin role, named through the vocabulary
 // tenantctx owns (decision 229). It used to be a local literal kept in
@@ -590,6 +631,14 @@ func (h *Handler) upgradeAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 333：谁把哪段字节推到了这台机器上。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionEdgeAgentUpgrade,
+		ResourceType: auditport.ResourceEdge,
+		ResourceID:   strconv.FormatUint(id, 10),
+		Status:       auditport.StatusSuccess,
+		Payload:      upgradeEvidenceFor(strings.TrimSpace(req.URL), strings.TrimSpace(req.SHA256), "", ""),
+	})
 	writeJSON(w, http.StatusOK, upgradeResp{
 		StagedPath: resp.StagedPath,
 		Bytes:      resp.Bytes,
@@ -650,8 +699,36 @@ func (h *Handler) upgradePackage(w http.ResponseWriter, r *http.Request) {
 			Applied:       false,
 			ApplyError:    err.Error(),
 		})
+		// 决策 333：这一行是本刀最想留下的那种。字节到了、机器没换——
+		// 磁盘上躺着一份没人运行的新版本，而界面上那一列还写着旧版本。
+		// 没有行的时候，这个状态只存在于一个 HTTP 响应体里，刷新即逝。
+		auditport.SetAuditEvent(r, auditport.Event{
+			Action:       auditport.ActionEdgePackageUpgrade,
+			ResourceType: auditport.ResourceEdge,
+			ResourceID:   strconv.FormatUint(id, 10),
+			ResourceName: ver,
+			Status:       auditport.StatusFailure,
+			Payload: map[string]any{
+				"evidence": upgradeEvidenceFor("", sha, ver, arch),
+				"staged":   true,
+				"applied":  false,
+			},
+		})
 		return
 	}
+	// 决策 333：控制台替这台机器决定换成哪一版。两行——把字节搬过去的，和
+	// 让它生效的——合成一行，因为这两个动作在产品上就是一次点击，而分成
+	// 两行只会让「谁升的」这个查询多一个 join。真正需要分开的是**失败**：
+	// 上面那个 202 分支写的是一行 failure，含义是「字节已经在盘上了，但这台
+	// 机器还没换」——而这正是下一次事故里最需要被提前看见的那种状态。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionEdgePackageUpgrade,
+		ResourceType: auditport.ResourceEdge,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: ver,
+		Status:       auditport.StatusSuccess,
+		Payload:      upgradeEvidenceFor("", sha, ver, arch),
+	})
 	writeJSON(w, http.StatusOK, upgradePkgResp{
 		Version:       ver,
 		StagedPath:    stageResp.StagedPath,
@@ -715,7 +792,13 @@ type batchResultItem struct {
 	Code          string `json:"code,omitempty"`
 	Version       string `json:"version,omitempty"`
 	ManifestFiles int    `json:"manifest_files,omitempty"`
-	Applied       bool   `json:"applied,omitempty"`
+	// Staged says the bytes reached the node, whatever happened after that.
+	// It is set explicitly by the upgrade-package closure rather than inferred
+	// from ManifestFiles or from the error code (决策 333): an audit row that
+	// has to guess which of three states it is in is an audit row that will
+	// eventually be wrong about exactly the state nobody re-checks.
+	Staged  bool `json:"staged,omitempty"`
+	Applied bool `json:"applied,omitempty"`
 }
 
 type batchResp struct {
@@ -816,12 +899,35 @@ func (h *Handler) batchUpgradeAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	url, sha := strings.TrimSpace(req.URL), strings.TrimSpace(req.SHA256)
+	// 决策 333：批量升级一行一个节点，而不是一行一个请求。
+	//
+	// 一个请求覆盖最多 500 台机器，而审计槽原本只能放一行。记一行计数的话，
+	// 「哪台没升上去」就只剩 HTTP 响应体与日志能回答——而**审计链存在的意义
+	// 恰恰是回答那些日志回答不了的问题**。所以这里每台机器一行，成功失败各是
+	// 自己的状态：**一次点按五百分身，不等于一次事件。**
+	evidence := upgradeEvidenceFor(url, sha, "", "")
+	recordBatch := func(r *http.Request, items []batchResultItem) {
+		for _, it := range items {
+			status := auditport.StatusSuccess
+			if !it.OK {
+				status = auditport.StatusFailure
+			}
+			auditport.AddAuditEvent(r, auditport.Event{
+				Action:       auditport.ActionEdgeAgentUpgrade,
+				ResourceType: auditport.ResourceEdge,
+				ResourceID:   strconv.FormatUint(it.ID, 10),
+				Status:       status,
+				Payload:      evidence,
+			})
+		}
+	}
 	resp := runEdgeBatch(r.Context(), ids, func(ctx context.Context, id uint64) batchResultItem {
 		if _, err := h.svc.UpgradeAgent(ctx, id, url, sha); err != nil {
 			return batchResultItem{ID: id, OK: false, Error: err.Error(), Code: errCode(err)}
 		}
 		return batchResultItem{ID: id, OK: true}
 	})
+	recordBatch(r, resp.Results)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -869,6 +975,7 @@ func (h *Handler) batchUpgradePackage(w http.ResponseWriter, r *http.Request) {
 				Code:          errCode(err),
 				Version:       ver,
 				ManifestFiles: stageResp.ManifestFiles,
+				Staged:        true,
 				Applied:       false,
 			}
 		}
@@ -876,9 +983,35 @@ func (h *Handler) batchUpgradePackage(w http.ResponseWriter, r *http.Request) {
 			ID: id, OK: applyResp.Accepted,
 			Version:       ver,
 			ManifestFiles: stageResp.ManifestFiles,
+			Staged:        true,
 			Applied:       applyResp.Accepted,
 		}
 	})
+	// 决策 333：每台机器一行。status 只回答「这台换没换成」，而 payload 里的
+	// staged/applied 回答的是另一件事——**批量升级里最容易出事的状态不是失败，
+	// 是「字节到了但没生效」**：那一列版本号还是旧的，磁盘上却已经躺着一份
+	// 没人运行的新文件。把它和「彻底失败」混成同一个 failure，五百行里就再也
+	// 分不出哪一半需要重新触发。
+	batchEvidence := upgradeEvidenceFor("", sha, ver, arch)
+	for _, it := range resp.Results {
+		status := auditport.StatusSuccess
+		if !it.OK {
+			status = auditport.StatusFailure
+		}
+		payload := map[string]any{
+			"evidence": batchEvidence,
+			"applied":  it.Applied,
+			"staged":   it.Staged,
+		}
+		auditport.AddAuditEvent(r, auditport.Event{
+			Action:       auditport.ActionEdgePackageUpgrade,
+			ResourceType: auditport.ResourceEdge,
+			ResourceID:   strconv.FormatUint(it.ID, 10),
+			ResourceName: ver,
+			Status:       status,
+			Payload:      payload,
+		})
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

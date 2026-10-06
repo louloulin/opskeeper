@@ -24,6 +24,8 @@ var (
 	SetAuditEvent = auditport.SetAuditEvent
 	// GetAuditEvent returns the stashed Event, if any.
 	GetAuditEvent = auditport.GetAuditEvent
+	// AddAuditEvent appends a row for the same request (决策 333).
+	AddAuditEvent = auditport.AddAuditEvent
 )
 
 // AuditMiddleware records HLD-010 audit_logs rows for **explicitly-
@@ -66,19 +68,45 @@ func AuditMiddleware(uc auditport.Sink) func(http.Handler) http.Handler {
 			ctx = tenantctx.WithSlot(ctx)
 			next.ServeHTTP(ww, r.WithContext(ctx))
 
-			ev, set := auditport.GetAuditEvent(ctx)
-			if uc == nil || !set {
+			if uc == nil {
 				return
 			}
-			// IMPORTANT: pass the wrapped ctx (the one carrying the
-			// tenant slot pointer) into enrichFromRequest, not the
-			// outer r.Context() — the outer ctx doesn't have the slot
-			// key. The slot itself is a pointer so the mutation by
-			// auth.Middleware deeper in the chain is visible here.
-			enrichFromRequest(&ev, r, ctx, ww.Status())
-			uc.Emit(ctx, ev)
+			// 决策 333：一个请求可以产生多行。之前这里只取一行，因为当时
+			// 每一行都对应「一个人按了一次按钮」；而批量升级一次动五百台
+			// 机器，一行说不清「哪台没升上去」，所以处理器现在能追加行。
+			//
+			// 顺序有讲究：主行先落，追加行随后，且**每行各自独立过一次
+			// enrich**——actor / IP / request_id 必须每行都有，否则一批
+			// 五百行里只有一行能回答「谁干的」，那五百行就只是噪声。
+			for _, ev := range eventsFor(ctx) {
+				// IMPORTANT: pass the wrapped ctx (the one carrying the
+				// tenant slot pointer) into enrichFromRequest, not the
+				// outer r.Context() — the outer ctx doesn't have the slot
+				// key. The slot itself is a pointer so the mutation by
+				// auth.Middleware deeper in the chain is visible here.
+				row := ev
+				enrichFromRequest(&row, r, ctx, ww.Status())
+				uc.Emit(ctx, row)
+			}
 		})
 	}
+}
+
+// eventsFor returns every row this request owes the chain: the primary event
+// the handler set, if any, followed by the appended ones. Returning nil for a
+// request that audited nothing is what lets the caller skip straight through.
+func eventsFor(ctx context.Context) []auditport.Event {
+	ev, set := auditport.GetAuditEvent(ctx)
+	extra := auditport.ExtraAuditEvents(ctx)
+	if !set {
+		if len(extra) == 0 {
+			return nil
+		}
+		return extra
+	}
+	out := make([]auditport.Event, 0, 1+len(extra))
+	out = append(out, ev)
+	return append(out, extra...)
 }
 
 func enrichFromRequest(ev *auditport.Event, r *http.Request, ctx context.Context, status int) {

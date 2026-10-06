@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	wsfanout "github.com/vincent-wuhan/opskeeper/core/base/pkg/wsfanout"
 	"strconv"
 	"strings"
@@ -668,6 +669,22 @@ func (h *Handler) killSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errs.ErrNotFound)
 		return
 	}
+	// 决策 333：谁掐掉了这个会话。
+	//
+	// 这一行与「会话存在」「会话打开」不是同一类记录：webshell 是通向生产机器的
+	// 一条交互线路，线路里坐着某个人的凭据。关掉它不是状态变化，**是一个动作**，
+	// 而调查时问的正是这个动作——不是「这个会话是什么」，是「谁把这个人切断了、
+	// 什么时候」。所以它有自己的动作，而不是 session_update 里的一个值。
+	//
+	// forwarded_to 一并记上：跨副本时这一行是本副本转发的结果，不写的话，
+	// 事后无法区分「这里杀掉的」与「那里杀掉的」。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionWebshellSessionKill,
+		ResourceType: auditport.ResourceWebshellSession,
+		ResourceID:   id,
+		Status:       auditport.StatusSuccess,
+		Payload:      map[string]any{"forwarded_to": owningPod},
+	})
 	if owningPod != "" {
 		body, _ := json.Marshal(map[string]any{
 			"killed":       true,

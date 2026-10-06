@@ -78,7 +78,7 @@ func (h *Handler) drop(w http.ResponseWriter, r *http.Request) { w.WriteHeader(2
 	if len(res.Missing) != 1 {
 		t.Fatalf("missing = %v, want the false audit claim", res.Missing)
 	}
-	if !strings.Contains(res.Missing[0], "never calls SetAuditEvent") {
+	if !strings.Contains(res.Missing[0], "never records a row") {
 		t.Fatalf("missing = %q, want the claim to be named as false", res.Missing[0])
 	}
 }

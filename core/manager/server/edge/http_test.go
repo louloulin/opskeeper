@@ -123,6 +123,8 @@ type fakeSvc struct {
 	upgradeIDs    []uint64        // every id passed to UpgradeAgent
 	fetchIDs      []uint64        // every id passed to FetchPackage
 	deleteFailIDs map[uint64]bool // ids for which Delete returns ErrNotFound
+	fetchFailIDs  map[uint64]bool // ids for which FetchPackage fails (nothing staged)
+	applyFailIDs  map[uint64]bool // ids for which ApplyPackage fails (staged, not applied)
 	applyAccepted bool            // ApplyPackage.Accepted to report
 	fetchManifest int             // FetchPackage.ManifestFiles to report
 }
@@ -169,12 +171,19 @@ func (f *fakeSvc) FetchPackage(_ context.Context, id uint64, _ string, _ string,
 	f.fetchIDs = append(f.fetchIDs, id)
 	mf := f.fetchManifest
 	f.mu.Unlock()
+	if f.fetchFailIDs[id] {
+		return tunnel.FetchPackageResponse{}, errs.ErrEdgeOffline
+	}
 	return tunnel.FetchPackageResponse{ManifestFiles: mf}, nil
 }
-func (f *fakeSvc) ApplyPackage(_ context.Context, _ uint64) (tunnel.ApplyPackageResponse, error) {
+func (f *fakeSvc) ApplyPackage(_ context.Context, id uint64) (tunnel.ApplyPackageResponse, error) {
 	f.mu.Lock()
 	accepted := f.applyAccepted
+	fail := f.applyFailIDs[id]
 	f.mu.Unlock()
+	if fail {
+		return tunnel.ApplyPackageResponse{}, errs.ErrEdgeOffline
+	}
 	return tunnel.ApplyPackageResponse{Accepted: accepted}, nil
 }
 func (f *fakeSvc) GetProcessList(_ context.Context, _ uint64, _ uint32, _ string) (tunnel.GetProcessListResponse, error) {
@@ -711,4 +720,122 @@ func dumpForAssertion(v any) string {
 		return ""
 	}
 	return string(b)
+}
+
+// --- 决策 333：供应链面，以及「一次点按不等于一次事件」 --------------------------
+//
+// 批量升级一次最多动 500 台机器。这一批用例要钉住的是四件事：
+//
+//  1. **每台机器一行**，不是一个请求一行 —— 否则「哪台没升上去」只能去翻日志；
+//  2. **URL 的 query 被剥掉** —— 里面常常是预签名参数，而**预签名令牌落进
+//     append-only 的链，就是一个寿命很长、且无法撤销的持有者凭证**；
+//  3. **「字节到了但没生效」单独可辨** —— 批量升级里最危险的不是失败，是这种；
+//  4. 成功与失败各是各的状态。
+
+func TestBatchAgentUpgradeLandsOneRowPerNodeAndStripsTheQuery(t *testing.T) {
+	svc := &fakeSvc{}
+	h := NewHandler(svc, newFakeDeviceRepo(), nil)
+	router := buildRouter(h, tenantctx.Tenant{UserID: 1, Role: "admin"})
+
+	const signed = "https://mirror.example.com/edge/agent.tar.gz?X-Amz-Signature=DEADBEEF&X-Amz-Expires=900"
+	body := `{"ids":[3,4,5],"url":"` + signed + `","sha256":"aabbcc"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges/batch/upgrade", strings.NewReader(body))
+	req = req.WithContext(auditport.WithSlot(req.Context()))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+
+	extra := auditport.ExtraAuditEvents(req.Context())
+	if len(extra) != 3 {
+		t.Fatalf("landed %d rows for 3 nodes, want one each: %+v", len(extra), extra)
+	}
+	for i, want := range []string{"3", "4", "5"} {
+		row := extra[i]
+		if row.Action != auditport.ActionEdgeAgentUpgrade || row.ResourceID != want {
+			t.Errorf("row %d = %s/%s, want edge_agent_upgrade/%s", i, row.Action, row.ResourceID, want)
+		}
+		if row.Status != auditport.StatusSuccess {
+			t.Errorf("row %d status = %q, want success", i, row.Status)
+		}
+		blob := dumpForAssertion(row.Payload)
+		if strings.Contains(blob, "X-Amz-Signature") || strings.Contains(blob, "DEADBEEF") {
+			t.Errorf("row %d kept the presigned token: %s", i, blob)
+		}
+		if !strings.Contains(blob, "agent.tar.gz") {
+			t.Errorf("row %d lost the artifact path, which is the evidence worth keeping: %s", i, blob)
+		}
+		if !strings.Contains(blob, "aabbcc") {
+			t.Errorf("row %d lost the digest: %s", i, blob)
+		}
+	}
+}
+
+func TestBatchPackageUpgradeDistinguishesStagedFromFailed(t *testing.T) {
+	// 5 fails to download (nothing on disk), 6 downloads but refuses to apply
+	// (bytes on disk, still running the old bundle), 7 is clean.
+	svc := &fakeSvc{
+		fetchManifest: 12,
+		fetchFailIDs:  map[uint64]bool{5: true},
+		applyFailIDs:  map[uint64]bool{6: true},
+		applyAccepted: true,
+	}
+	h := NewHandler(svc, newFakeDeviceRepo(), nil)
+	h.SetPackageResolver(fakePkgResolver{})
+	router := buildRouter(h, tenantctx.Tenant{UserID: 1, Role: "admin"})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges/batch/upgrade-package", strings.NewReader(`{"ids":[5,6,7]}`))
+	req = req.WithContext(auditport.WithSlot(req.Context()))
+	router.ServeHTTP(httptest.NewRecorder(), req)
+
+	extra := auditport.ExtraAuditEvents(req.Context())
+	if len(extra) != 3 {
+		t.Fatalf("landed %d rows for 3 nodes: %+v", len(extra), extra)
+	}
+	type want struct {
+		id     string
+		status string
+		staged bool
+	}
+	for i, w := range []want{
+		{"5", auditport.StatusFailure, false}, // never arrived
+		{"6", auditport.StatusFailure, true},  // arrived, did not take effect
+		{"7", auditport.StatusSuccess, true},
+	} {
+		row := extra[i]
+		if row.ResourceID != w.id || row.Status != w.status {
+			t.Errorf("row %d = %s/%s, want %s/%s", i, row.ResourceID, row.Status, w.id, w.status)
+		}
+		payload, _ := row.Payload.(map[string]any)
+		if got, _ := payload["staged"].(bool); got != w.staged {
+			t.Errorf("row %d staged = %v, want %v — \"failed\" and \"staged but not applied\" are different states", i, got, w.staged)
+		}
+	}
+}
+
+func TestSinglePackageUpgradeRecordsStagedButNotApplied(t *testing.T) {
+	svc := &fakeSvc{applyFailIDs: map[uint64]bool{8: true}, fetchManifest: 3}
+	h := NewHandler(svc, newFakeDeviceRepo(), nil)
+	h.SetPackageResolver(fakePkgResolver{})
+	router := buildRouter(h, tenantctx.Tenant{UserID: 1, Role: "admin"})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges/8/upgrade-package", strings.NewReader(""))
+	req = req.WithContext(auditport.WithSlot(req.Context()))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (staged, not applied); body=%s", rec.Code, rec.Body.String())
+	}
+	ev, ok := auditport.GetAuditEvent(req.Context())
+	if !ok {
+		t.Fatal("no row: \"the bytes are on the node but the node did not change\" is exactly the state an investigation needs")
+	}
+	if ev.Status != auditport.StatusFailure {
+		t.Errorf("status = %q, want failure", ev.Status)
+	}
+	payload, _ := ev.Payload.(map[string]any)
+	if staged, _ := payload["staged"].(bool); !staged {
+		t.Errorf("payload = %v, want staged=true", ev.Payload)
+	}
 }

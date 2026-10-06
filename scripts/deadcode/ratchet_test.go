@@ -23,6 +23,13 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 848 / 580 / 268 as of decision 333: two supply-chain actions
+// (edge_agent_upgrade, edge_package_upgrade), one webshell action
+// (webshell_session_kill), their resource type (webshell_session), and the
+// AddAuditEvent re-export in server/middleware. All five are re-exports and
+// vocabulary constants whose writers live in core/manager, which is outside
+// this module by design — same shape as every line below.
+//
 // 843 / 575 / 268 as of decision 332: the two edge actions (edge_rotate_secret,
 // edge_plugin_set). Same shape as every line below it — a new action is a new
 // constant in core/base/pkg/audit, and core/domains/model/audit must re-export
@@ -152,8 +159,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 843
-	deadSymbolBudget     = 575
+	unreachableBudget    = 848
+	deadSymbolBudget     = 580
 	testOnlySymbolBudget = 268
 )
 

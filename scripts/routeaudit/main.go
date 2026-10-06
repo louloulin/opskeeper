@@ -201,8 +201,17 @@ func reachesAudit(pkg map[string]string, entry string) bool {
 			return false
 		}
 		done[name] = true
+		// AddAuditEvent counts as writing a row (决策 333). Excluding it made
+		// this gate call a batch handler unaudited: both upgrade-batch routes
+		// record one row per node and nothing else, so they looked exactly like
+		// a handler that writes nothing. That is the third time this function
+		// has answered a slightly different question than the one being asked —
+		// once for a hard-coded receiver (324), once for a chained one (331),
+		// and now for a second way to write the same thing. **A gate that
+		// encodes "how rows are written" instead of "whether rows are written"
+		// will be wrong again the next time the port grows a method.**
 		for _, body := range bodiesNamed(pkg, name) {
-			if strings.Contains(body, "SetAuditEvent") {
+			if strings.Contains(body, "SetAuditEvent") || strings.Contains(body, "AddAuditEvent") {
 				return true
 			}
 		}
@@ -666,13 +675,13 @@ var Verdicts = []Verdict{
 	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}/roles", Handler: "h.updateRoles", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/edge/http.go", Route: "/v1/edges", Handler: "h.createEdge", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/batch/delete", Handler: "h.batchDelete", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/batch/upgrade", Handler: "h.batchUpgradeAgent", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/batch/upgrade-package", Handler: "h.batchUpgradePackage", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/batch/upgrade", Handler: "h.batchUpgradeAgent"},
+	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/batch/upgrade-package", Handler: "h.batchUpgradePackage"},
 	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}", Handler: "h.deleteEdge", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}/plugins/{name}", Handler: "h.setPlugin"},
 	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}/rotate-secret", Handler: "h.rotateSecret"},
-	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}/upgrade", Handler: "h.upgradeAgent", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}/upgrade-package", Handler: "h.upgradePackage", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}/upgrade", Handler: "h.upgradeAgent"},
+	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}/upgrade-package", Handler: "h.upgradePackage"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs", Handler: "h.createDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs/{id}", Handler: "h.deleteDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs/{id}", Handler: "h.updateDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
@@ -703,7 +712,7 @@ var Verdicts = []Verdict{
 	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relations", Handler: "h.createRelation", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relations/{id}", Handler: "h.deleteRelation", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relations/{id}", Handler: "h.updateRelation", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/webshell/http.go", Route: "/v1/webshell/sessions/{id}", Handler: "h.killSession", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/webshell/http.go", Route: "/v1/webshell/sessions/{id}", Handler: "h.killSession"},
 }
 
 // Result is what one run found.
@@ -824,9 +833,9 @@ func Run(root string) Result {
 				case !ok:
 					res.Missing = append(res.Missing, key+" — no verdict recorded in scripts/routeaudit")
 				case v.Backlog == "" && !audited:
-					res.Missing = append(res.Missing, key+" — recorded as audited, but "+rel+"'s handler "+m[4]+" never calls SetAuditEvent")
+					res.Missing = append(res.Missing, key+" — recorded as audited, but "+rel+"'s handler "+m[4]+" never records a row (neither SetAuditEvent nor AddAuditEvent)")
 				case v.Backlog != "" && audited:
-					res.Stale = append(res.Stale, key+" — "+rel+"'s handler "+m[4]+" calls SetAuditEvent now, so its backlog reason no longer describes it")
+					res.Stale = append(res.Stale, key+" — "+rel+"'s handler "+m[4]+" records a row now, so its backlog reason no longer describes it")
 				}
 			}
 			return nil

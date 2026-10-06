@@ -11,9 +11,10 @@ import (
 
 	chimw "github.com/go-chi/chi/v5/middleware"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	bizaudit "github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
 	auditmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/audit"
-	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 )
 
 // recordingRepo is the writer's seam. The point of the test below is the
@@ -154,5 +155,106 @@ func TestAFailingRequestIsAuditedAsAFailure(t *testing.T) {
 	}
 	if got := repo.rows[0].Status; got != auditmodel.StatusFailure {
 		t.Errorf("status = %q, want failure for a 500", got)
+	}
+}
+
+// --- 决策 333：一个请求可以产生多行 ------------------------------------------------
+//
+// 批量升级一次动五百台机器。审计槽里原本只有一行，于是「哪台没升上去」这个问题
+// 只能靠不带摘要、不跟链走的日志去回答——**而审计链存在的全部意义，就是那些日志
+// 回答不了的问题**。
+//
+// 下面这条用例钉住四件事，缺一件这条能力就没意义：
+//
+//	追加行真的落到链上（不是攒在内存里）；
+//	主行仍然只落一行（否则一次点按变成两行）；
+//	只有追加行、没有主行的请求也能落（处理器不必硬造一条主行）；
+//	**每一行各自带 actor** —— 五百行里只有一行能回答「谁干的」，那五百行就是噪声。
+
+func TestABatchRequestLandsOneRowPerThingItChanged(t *testing.T) {
+	repo := &recordingRepo{}
+	// The actor arrives the way it does in production: auth middleware
+	// mutates the tenant slot, and the audit middleware fills it into every
+	// row afterwards. Setting it here rather than in the handler is the whole
+	// point — **if the handler had to name the actor, "each row carries it"
+	// would be trivially true and prove nothing.**
+	stack := newAuditStack(t, repo, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tenantctx.SetOnSlot(r.Context(), tenantctx.Tenant{UserID: 42, Email: "ops@example.com", Role: "admin"})
+		auditport.SetAuditEvent(r, auditport.Event{
+			Action:       auditport.ActionEdgePackageUpgrade,
+			ResourceType: auditport.ResourceEdge,
+			ResourceID:   "0",
+			Status:       auditport.StatusSuccess,
+			Payload:      map[string]any{"scope": "batch"},
+		})
+		for _, id := range []string{"11", "12", "13"} {
+			auditport.AddAuditEvent(r, auditport.Event{
+				Action:       auditport.ActionEdgePackageUpgrade,
+				ResourceType: auditport.ResourceEdge,
+				ResourceID:   id,
+				Status:       auditport.StatusSuccess,
+				Payload:      map[string]any{"version": "v1.2.3"},
+			})
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges/batch/upgrade-package", nil)
+	stack.ServeHTTP(rec, req)
+
+	if len(repo.rows) != 4 {
+		t.Fatalf("landed %d rows, want 4 (one primary + three appended): %+v", len(repo.rows), repo.rows)
+	}
+	if repo.rows[0].ResourceID != "0" || repo.rows[1].ResourceID != "11" || repo.rows[3].ResourceID != "13" {
+		t.Errorf("row order = %s,%s,%s,%s; the primary must come first and the rest in the order they were added",
+			repo.rows[0].ResourceID, repo.rows[1].ResourceID, repo.rows[2].ResourceID, repo.rows[3].ResourceID)
+	}
+	for i, row := range repo.rows {
+		if row.UserID == nil || *row.UserID == 0 {
+			t.Errorf("row %d carries no actor: a batch of 500 rows where only one answers \"who did this\" is noise", i)
+		}
+		if row.Action != auditport.ActionEdgePackageUpgrade {
+			t.Errorf("row %d action = %q", i, row.Action)
+		}
+	}
+}
+
+func TestExtraRowsAloneAreEnoughToRecordARequest(t *testing.T) {
+	repo := &recordingRepo{}
+	stack := newAuditStack(t, repo, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tenantctx.SetOnSlot(r.Context(), tenantctx.Tenant{UserID: 42, Role: "admin"})
+		auditport.AddAuditEvent(r, auditport.Event{
+			Action:       auditport.ActionWebshellSessionKill,
+			ResourceType: auditport.ResourceWebshellSession,
+			ResourceID:   "sess-9",
+			Status:       auditport.StatusSuccess,
+		})
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	rec := httptest.NewRecorder()
+	stack.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/v1/webshell/sessions/sess-9", nil))
+
+	if len(repo.rows) != 1 || repo.rows[0].ResourceID != "sess-9" {
+		t.Fatalf("rows = %+v, want the one appended row and nothing invented", repo.rows)
+	}
+	if repo.rows[0].Status != auditport.StatusSuccess {
+		t.Errorf("status = %q, want the 2xx-derived success", repo.rows[0].Status)
+	}
+}
+
+// A request that audits nothing must still land nothing. The loop version of
+// the middleware can forget this — `for range nil` is a no-op, which is right,
+// but only as long as nobody replaces it with something that emits a blank row
+// per iteration.
+func TestARequestThatAuditsNothingLandsNothing(t *testing.T) {
+	repo := &recordingRepo{}
+	stack := newAuditStack(t, repo, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	stack.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/edges", nil))
+	if len(repo.rows) != 0 {
+		t.Fatalf("landed %d rows for a request nobody annotated", len(repo.rows))
 	}
 }

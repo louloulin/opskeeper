@@ -520,6 +520,40 @@ const (
 	// would make both a payload scan.
 	ActionEdgeRotateSecret = "edge_rotate_secret"
 	ActionEdgePluginSet    = "edge_plugin_set"
+
+	// The node plane's supply chain (决策 333).
+	//
+	// 332 answered "who turned this plugin on". These two answer the question
+	// one step further out: **who changed what code this host runs.** A host
+	// whose agent binary or bundle was replaced by an operator is a host whose
+	// entire trust footprint moved, and until these existed the chain could
+	// show that somebody pressed a button without showing what was pressed.
+	//
+	// Two actions, not one, because the two carry different evidence. The agent
+	// upgrade is a caller-supplied URL + sha256: the operator named the
+	// artifact. The package upgrade is resolved by the manager from an
+	// arch + version pair: the operator named a version and the platform chose
+	// the bytes. "Which host runs v1.2.3" and "who pushed this sha256 onto
+	// that host" are different investigations, and the batch version of this
+	// question is the one an incident actually asks.
+	//
+	// They deliberately do not reuse node_plugin_install. That family is rows a
+	// **node writes about its own work**; these are rows the **console writes
+	// about a decision it made on the node's behalf**, replayed through the
+	// same chain but answering the other direction of the question.
+	ActionEdgeAgentUpgrade   = "edge_agent_upgrade"
+	ActionEdgePackageUpgrade = "edge_package_upgrade"
+
+	// ActionWebshellSessionKill is an administrator terminating somebody
+	// else's live session (决策 333).
+	//
+	// It is worth its own action rather than a session_update because the
+	// question it answers is the one asked during an investigation: not "what
+	// is this session" but "**who cut this person off, and when**". A webshell
+	// session is an interactive line onto a production host with someone's
+	// credentials in it; ending one is not a state change, it is an act, and
+	// the audit trail should read that way.
+	ActionWebshellSessionKill = "webshell_session_kill"
 )
 
 // ResourceType buckets used in the resource_type column. Same flat-list
@@ -579,6 +613,10 @@ const (
 	// a string, which is how every other edge-scoped row in this table
 	// already identifies itself.
 	ResourceEdge = "edge"
+	// ResourceWebshellSession names one live webshell session (决策 333).
+	// The resource id is the session id the kill route carries in its path —
+	// the same string an operator sees in the URL they clicked.
+	ResourceWebshellSession = "webshell_session"
 
 	// ResourceMCPTool names a tool reached over the MCP endpoint. The
 	// resource id is the tool name the caller asked for, which is what an
@@ -757,6 +795,10 @@ type contextKey struct{}
 type slot struct {
 	ev  Event
 	set bool
+	// extra holds rows a handler appends in addition to the primary one
+	// (决策 333). See AddAuditEvent for why a request that changes five
+	// hundred nodes cannot honestly be recorded as one row.
+	extra []Event
 }
 
 // WithSlot installs the empty slot the audit middleware will read after
@@ -799,6 +841,45 @@ func SetAuditEvent(r *http.Request, ev Event) {
 	}
 	s.ev = ev
 	s.set = true
+}
+
+// AddAuditEvent appends a row to the same request's slot.
+//
+// It exists because of decision 333, and the thing it fixes is not a
+// convenience. Three of the node-plane's mutating routes are **batch** routes:
+// upgrade the agent on up to 500 nodes in one call, replace the bundle on up
+// to 500, delete up to 500. One request, one slot, one row — so the only
+// honest-looking options were both dishonest:
+//
+//   - record one row with a count, and the operator asking "which host did not
+//     get the new agent" has to go re-derive it from logs that are not covered
+//     by the chain;
+//   - record one row per node inside a loop that has no slot to write to.
+//
+// The second is what this function exists to make possible. **A batch operation
+// over N things is N events**, and a tool that can only say "something
+// happened, 500 times" has thrown away the only part anybody will ask for.
+//
+// It no-ops without a slot, exactly like SetAuditEvent, so handlers that call
+// it do not have to know whether they are running under an audit middleware.
+func AddAuditEvent(r *http.Request, ev Event) {
+	if r == nil {
+		return
+	}
+	s, ok := r.Context().Value(contextKey{}).(*slot)
+	if !ok || s == nil {
+		return
+	}
+	s.extra = append(s.extra, ev)
+}
+
+// ExtraAuditEvents returns the appended rows in the order they were added.
+func ExtraAuditEvents(ctx context.Context) []Event {
+	s, ok := ctx.Value(contextKey{}).(*slot)
+	if !ok || s == nil {
+		return nil
+	}
+	return s.extra
 }
 
 // GetAuditEvent returns the stashed Event, if any.
