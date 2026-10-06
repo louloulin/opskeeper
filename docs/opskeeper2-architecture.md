@@ -5492,6 +5492,100 @@ B 依赖部署形态，本机是 Docker Desktop，cgroup 可写性我还没有�
 **这比"十二项零缺口"难看，但它是准的。** 而一份好看的账和一份准的账之间，
 本仓库的规矩一直是选后者——决策 384 把一条阻塞理由的成本量清楚了才让人拍板，
 本节是把一条"已完成"降级回"未完成"，理由是它的依据没有核实。
+### 4.324 决策 390：`limits.memory` 的选型不再是「待定」——本轮把cgroup 探了，并量了真实改动面
+
+4.323 说这一项卡在「缺一个关于部署形态的判断」。本轮去测了那个判断，
+结论出来了，而且它把B 方案否掉了。
+
+#### 4.324.1 探测结果：容器内 cgroup v2 只读，B 方案（cgroup）不成立
+
+在 alpine 容器里探（docker 可用）：
+
+```
+$ cat /sys/fs/cgroup/cgroup.controllers
+cpuset cpu io memory hugetlb pids rdma          # v2 在，memory 控制器在
+$ cat /sys/fs/cgroup/cgroup.subtree_control
+                                                # 空
+$ mkdir /sys/fs/cgroup/probe.$$
+mkdir: can't create directory: Read-only file system   # MKDIR_DENIED
+```
+
+**控制器在，但不能建cgroup。** Docker 默认不给写cgroup fs 的权限，
+所以「每个工具调用一个 cgroup，`memory.max` 写死上限」这条最干净的路线，
+在edge 的容器形态下**做不了**。
+
+那非容器形态呢？`deploy/docker-compose.yml:388` 的注释给了答案：
+
+> opskeeper-edge is intentionally NOT defined here — in real deployments the
+> edge agent runs on the user's own host, not on the cloud side.
+
+**edge 生产上跑在用户自己的宿主机（systemd 服务），不在容器里。**
+宿主机上 cgroup v2 通常由 systemd 委派、可写——但那是**客户机器的属性**，
+不是我们能假设的。而且本仓库的 e2e 恰恰跑在容器里（`testenv` 起docker），
+所以两条腿的可写性相反。**B 方案在一个腿上不成立、在另一个腿上不确定，
+它不能作为交付方案。**
+
+#### 4.324.2 改动面比 4.323 估的大：不是一个漏斗，是十几个
+
+4.323 说「限流点只有一处（`toolbroker/server.go:391` 的 replyFor）」——**那句话
+只对 output 成立，对 memory 不成立。** memory 必须在**进程内**限制，而每个
+内置工具各自 spawn 自己的子进程：
+
+- `core/floor/skill/subprocess.go:215` 有 `configureSubprocessCommand(cmd)`，
+  看上去像个统一漏斗；
+- 但 `core/floor/skill/builtin/dmesg.go:77` 是**直接** `exec.CommandContext(ctx, "dmesg", ...)`，
+  绕过了它；
+- 整个 `core/floor` 里直接 `exec.CommandContext` 的地方有 **15 处**，
+  `core/edge` 里另有 `host_files/sandbox.go`、`cmdpolicy/sandbox.go`、
+  `plugins/subprocess.go` 等若干。
+
+**所以「加一个 memory 字段并强制」不是改一个函数，是给每个 spawn 点接上同一个
+限流机制。** 这是 4.323 说的「顺序问题」的真实代价——**它不是顺序问题，
+它是工作量问题**，而 4.323 用一个错误的前提（见 4.323.2）把它说小了。
+
+#### 4.324.3 A 方案能做到不碰 autonomy 那条 argv 比对
+
+4.323 担心 A 方案（`sh -c 'ulimit -v N && exec ...'`）会破坏 autonomy 的
+argv 逐字节比对。**这个担心可以消掉，走Go 自己的 re-exec**：
+
+用标准库 `syscall.Setrlimit(RLIMIT_AS)`（Unix 上在`syscall` 包里，不需要
+`golang.org/x/sys`，虽然 `x/sys` 已经在 go.mod 里），在**exec 之前**由edge
+进程自己设好，然后 `syscall.Exec` 换成目标程序——
+
+```
+edge --opskeeper-rlimit-exec <bytes> -- <argv[0]> <argv[1]> ...
+```
+
+argv 数组**逐字节透传**，不经过任何 shell，所以 autonomy 那条「按字节比对
+manifest 里写的 argv」的约束完全不受影响。代价是每个 spawn 点要决定
+「这次要不要走 re-exec」——而这个决定正好可以由 manifest 的
+`limits.memory` 驱动：**声明了 memory 的工具走 re-exec，没声明的走原路径**。
+
+#### 4.324.4 于是这一项的状态改了：从「待选型」变成「有方案、有代价、待开工」
+
+| | 4.323 的说法 | 本轮更正 |
+|---|---|---|
+| B（cgroup） | 「最干净，但要 cgroup v2 可写」 | **实测不可用**：容器腿只读，宿主腿不可假设 |
+| A（限流） | 担心破坏 argv 比对 | **担心可消**：Go re-exec 设rlimit 再 `syscall.Exec`，argv 不经 shell |
+| 改动面 | 「一个工具调用一个 cgroup」 | **十几个 spawn 点**，不是一处 |
+| 状态 | 选型待定 | **方案已定（A + re-exec），工作量已量，待开工** |
+
+**它仍然没交付，这一轮也没有交付它。** 但它从「等人/等形态」变成了
+「按A 做，触及N 个 spawn 点」。这是本轮的全部进展——**不是把这个缺口补上，
+是把它从模糊变成可开工。** 补上它是下一个明确的任务，代价已知。
+
+#### 4.324.5 为什么不在这轮直接写
+
+因为它要碰的是**安全关键的执行路径**：十几个 spawn 点，每一个都要确认
+「加了 rlimit 之后，这个工具的正常输出不会因为超过虚拟内存而被 OOM kill」。
+`host_sosreport`（524288 字节输出、600s 超时）和 `host_strace` 这类工具，
+内存曲线不测过就加 rlimit，是有可能把**正常诊断**变成**被杀进程**的。
+
+RLIMIT_AS 限制的是**虚拟地址空间**，而 Go runtime 和许多工具会预留远超实际
+RSS 的地址空间——用 RLIMIT_AS 卡 Go 程序或JVM 是经典的自伤。
+**这一条必须先量后写，不能凭推断上。** 下一轮的正确做法是：先写一个
+测真实内存曲线的探针（跑那 9 个工具，记录峰值），再决定用 RLIMIT_AS
+还是换成 cgroup（宿主腿）或别的机制。**现在写代码是本末倒置。**
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
