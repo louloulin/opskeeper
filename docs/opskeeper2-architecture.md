@@ -8332,7 +8332,7 @@ FAIL 42: Verify plugins and open-source gate
 而它同时意外地给决策 421 补了一条**正面证据**：被取消的那次里，
 四个 job 全部 `cancelled` 而新的 push run 进入 `pending`——
 **cancel-in-progress 在同事件内确实生效**（push 之间同组、互相取消），
-**而 push 与 pull_request 之间的两个 run 从头到尾没有互相取消过**（§4.421.2 的结论）。
+**而 push 与 pull_request 之间的两个 run 从头到尾没有互相取消过**（§4.355.2 的结论）。
 
 **一次操作错误买到的证据，比一次正确操作的多**——这不能推广为"错误有益"，
 但它说明**纪律的价值不在于不出错，而在于知道自己出了错并把它记下来**。
