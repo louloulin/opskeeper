@@ -7930,6 +7930,64 @@ cochange: 163 commits examined, 163 touched the control plane
 **这不是清单变差，是清单变准**——上一轮它看起来"其中一件我马上能做"，
 而那件正是我做不出来的那件（§4.64.8）。
 
+### 4.352 决策 418：为开源那 13 项做出决策材料时，两次差点把「数」当「结论」——一次是 grep 命中，一次是「删不掉」的硬约束
+
+#### 4.352.1 第一次：`git grep -l` 命中 5 个文件，差点断言「openspec/changes 被生产代码读取」
+
+`git grep -ln "openspec/changes" -- ':!openspec'` 命中 `cmd/opskeeper/main.go`、
+`core/faults/injector/injector.go`、`cmd/opskeeper-eval/main.go`、
+`cmd/agentteams-matrix/main.go`、`CHANGELOG.md`——**5 个生产 Go 文件**。
+按这个数，那 6 个 openspec 文件「不能删，因为运行时读它」，处置只剩改词或永久留在发布集里。
+
+**看了一行内容就推翻了**：那 5 处**全部是注释里的 spec 指针**
+（`main.go:375` 是 `// ... （spec: openspec/changes/websocket-fanout）`）。
+`openspec/changes` **不被任何生产代码在运行时读取**。
+
+**所以 grep 命中的是文件，代价在那一行是什么。** 一个只读文件名的判断，
+会把「删掉它只会让注释指向不存在的目录」说成「删掉它会坏掉」。
+§4.64.8 说的是「事实与判断分开」，而这条更靠前：**文件级的命中连事实都算不上**，
+它只是一个候选，得逐行看过才能算事实。
+
+#### 4.352.2 第二次：`docs/ACKNOWLEDGMENTS.md` 不能删——它是审计器的 REQUIRED_FILES
+
+要把第三方署名那 2 项清掉，最省事的动作是删掉致谢文件。**那条路是死的**：
+`ACKNOWLEDGMENTS.md` 是 `scripts/audit_open_source.py` 的七个 `REQUIRED_FILES` 之一
+（连同 LICENSE / NOTICE.md / TRADEMARK.md / RELEASE_VERSION.json /
+OPEN_SOURCE_GATE.md / README.md），缺一个就是 `fail()` 直接中止。
+
+而且它被 `README.md`、`README_ZH.md`、`docs/BRAND_GOVERNANCE.md` 三处引用。
+
+**一个 12 行、只命中 1 行的文件，是全清单里最不能删的一个**——
+它的体量与它的不可删性完全不成比例。这一条只有查 `REQUIRED_FILES` 才看得见，
+而「12 行小文件」这个第一印象会引导到相反的处置。
+
+#### 4.352.3 因此这 13 项的选项集合是**不均匀**的，不能给同一组选项
+
+按实测的连带代价分成四档（行数与命中行号为当读数，可复算）：
+
+| 档 | 命中 | 体量 | 可选项 |
+|---|---|---|---|
+| 路演材料 | `FINAL_DEMO_SCRIPT.md` / `PPT_FULL.md` / `PPT_SCRIPT.md` / `PPT_SLIDES.md` | 184 / 1823 / 579 / 327 行 = **2913 行** | 删、或从发布集排除。仓库内仅 `FINAL_DEMO_SCRIPT.md` 被另一个待决文件与台账引用，其余只被台账引用——**不触及构建与运行** |
+| openspec 变更记录 | `openspec/changes/**` 6 个文件 | 90 / 42 / 51 / 257 / 44 / 60 行 | 删、或 `export-ignore`。代价是**注释指针断链**，不是运行时故障（§4.352.1） |
+| 第三方署名（致谢） | `docs/ACKNOWLEDGMENTS.md` | 12 行，命中 1 行 | **只能豁免或改写，不能删**（REQUIRED_FILES + 三处引用） |
+| 第三方署名（站点页面） | `site/app/**/open-source/page.tsx` | 255 / 248 行 | 豁免、或删掉「开源成果推荐」那一节 |
+
+**第五项**——site 对外宣称的属主与真实 remote 不是同一个（§4.349）——
+**在现有判据下抓不到**，所以它既不在上面四档里，也不能靠跑审计器来推进：
+**先要定哪个属主是权威的**，工具才会知道该报什么。
+
+#### 4.352.4 进度影响：两把尺都不动
+
+**架构尺 97.75% / 四阶段交付尺 99.5% 不动；`audit_open_source.py` 仍报 13 项。**
+
+本刀不消除任何一项，它把「13 项」从一个数字变成**每档代价不同、选项集合不同的清单**——
+而这正是决策 417 缺的：上一轮说这一项"需要作者决定"，却没给出每个决定的**连带代价**。
+
+**审计器报 13 而逐行统计得 16，差的 3 个是门自身与它自己的测试**（`scripts/audit_open_source.py`
+的判据定义处、`tests/test_audit_open_source.py` 的断言里）。**这是有意的排除，理由与
+`DECOY_CREDENTIALS` 同源：一个证明自己拒绝某字面量的检查，必须含有那个字面量。**
+数字对不上时先问"门排除了谁、为什么排除"，再怀疑树。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
