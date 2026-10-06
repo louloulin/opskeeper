@@ -1,4 +1,4 @@
-package agentkernel
+package main
 
 import (
 	"context"

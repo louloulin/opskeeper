@@ -1,4 +1,4 @@
-package agentkernel
+package main
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
 	bizapproval "github.com/vincent-wuhan/opskeeper/core/manager/biz/approval"
 	modelapproval "github.com/vincent-wuhan/opskeeper/core/manager/model/approval"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
@@ -88,7 +89,7 @@ func NewInboxUsecase(uc *bizapproval.Usecase) *InboxUsecase {
 // Propose queues one call and returns the row id a decision will name.
 func (a *InboxUsecase) Propose(ctx context.Context, req ports.ApprovalRequest) (string, error) {
 	if a == nil || a.uc == nil {
-		return "", ErrGateNotWired
+		return "", agentkernel.ErrGateNotWired
 	}
 	payload := agentToolCallPayload{
 		ToolName:    req.ToolName,
@@ -127,7 +128,7 @@ func (a *InboxUsecase) Propose(ctx context.Context, req ports.ApprovalRequest) (
 // cancelled, or the request's own deadline passes.
 func (a *InboxUsecase) Await(ctx context.Context, id string) (ports.Decision, error) {
 	if a == nil || a.uc == nil {
-		return ports.Decision{}, ErrGateNotWired
+		return ports.Decision{}, agentkernel.ErrGateNotWired
 	}
 	now := a.now
 	if now == nil {
@@ -191,7 +192,7 @@ func (a *InboxUsecase) Await(ctx context.Context, id string) (ports.Decision, er
 // reconnected can re-render its queue.
 func (a *InboxUsecase) Open(ctx context.Context, sessionID string) ([]ports.ApprovalRequest, error) {
 	if a == nil || a.uc == nil {
-		return nil, ErrGateNotWired
+		return nil, agentkernel.ErrGateNotWired
 	}
 	if sessionID == "" {
 		return nil, nil
@@ -302,4 +303,4 @@ func decisionNote(row *modelapproval.Approval) string {
 	return fmt.Sprintf("the operator rejected this %s call", row.Title)
 }
 
-var _ ApprovalInbox = (*InboxUsecase)(nil)
+var _ agentkernel.ApprovalInbox = (*InboxUsecase)(nil)

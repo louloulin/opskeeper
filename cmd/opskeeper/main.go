@@ -1906,7 +1906,7 @@ func main() {
 	// needs it, and extended at the MCP registrar below, where those tools
 	// and their risk classes are created.
 	kernelGate := agentkernel.NewDeferredGate(
-		agentkernel.NewInboxGate(agentkernel.NewInboxUsecase(approvalUC)),
+		agentkernel.NewInboxGate(NewInboxUsecase(approvalUC)),
 		selfSettledToolNames(),
 	)
 

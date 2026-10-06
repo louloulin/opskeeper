@@ -13,9 +13,9 @@
 # 三份的实测价：
 #
 #   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed 52 6 0 / 0
-#   docs/manager-split.constrained 55 3 0 / 0
-#   docs/manager-split.release-floor 0 58 0 / 0
+#   docs/manager-split.proposed 50 6 0 / 0
+#   docs/manager-split.constrained 53 3 0 / 0
+#   docs/manager-split.release-floor 0 56 0 / 0
 #
 # **决策 283 重取了这三行，其中本文件的组内 import 从 4 变成 0。** 组内 0 是
 # 一个值得单独说的读数，不是排版事故：这一份的分组依据是「零入向即可证明独立
@@ -209,7 +209,8 @@ independent = aiops, audit, chatdiagnose, cluster, demo, edgeauth, federation, f
         nodefleet,
         scheduler, secret, setting, skill, systemhealth, systemupgrade,
         topology, traces, version, webshell,
-        edge
+        edge,
+        approval
 
 # **决策 273 把 `audit` 从这一组搬进了 `independent`**，于是本组 36 → 37 个域，
 # 而「其余」那一组相应地少了一个。这一搬不是判断，是**读数**：`audit` 的入向
@@ -227,6 +228,23 @@ independent = aiops, audit, chatdiagnose, cluster, demo, edgeauth, federation, f
 # 曾经被锁住。**这个区别的代价上一次被记录是决策 272，把 4 → 0 记成端口而不是
 # 删除；这一刀沿用那个记账方式。**
 #
+# **决策 284 又取了一次：跨组 58 → 56，`approval` 归入 `independent`。**
+# 这是这份文件第四次「树变好」，而**这一次跨组数也变好了**——与前三次都不同。
+# 组内数已经停在 0，所以这一刀只能改变跨组数：它把 `approval` 从 `core` 搬进
+# `independent`，而 `approval` 在 `core` 组里与 `alert` 之间没有任何边，搬进来
+# 之后与 `independent` 组里 11 个域的边全在另一侧，**净效果是跨组少 2**。
+# **一个零入向域归位却让跨组数变好，这件事本身说明「跨组数」在组内为 0 的时候
+# 已经不再度量任何东西**——它度量的是分组与树的偶然重合度。
+#
+# **决策 284 把 `approval` 从 core 组搬进了 `independent`**，于是本组 43 → 44 个域。
+# 这一搬是剩下 3 个非零入度域里唯一一个「切完就归零」的候选，而且它的切法与
+# 前面几条都不同：`aiops -> approval` 的全部内容是**一个住在消费者包里的适配器**
+# （`InboxUsecase`，305 行，读 `model/approval` 的行、调 `Usecase.Propose/Get/List`），
+# 而它唯一的生产调用方**本来就在装配根**。所以这一刀不是设计变更，是把一个放错
+# 位置的文件搬到它唯一调用它的地方——**决策 280 对 `imbridge -> aiops` 做的
+# 是同一件事，账记在两处而形状相同**。`agentkernel.ApprovalInbox`（闸门自己的
+# 三方法端口）与 `ErrGateNotWired` 留在原处，**因为闸门是消费者**。
+#
 # **决策 283 把 `edge` 从 core 组搬进了 `independent`**，于是本组 42 → 43 个域。
 # 这一搬同样是读数而不是判断：`edge` 的入向跨域 import 归零了，而它归零的
 # 方式与上面四个域不同——那四个是**从一开始就在组内、刚变成零入向**，
@@ -237,19 +255,21 @@ independent = aiops, audit, chatdiagnose, cluster, demo, edgeauth, federation, f
 # 搬进 `independent` 不解决它对 `device` 的出向依赖——那是反方向，不影响
 # 「没有东西 import 它」这个定理。
 #
-# 其余 14 个。**这个数字此前写的是 20，账是 9 + 10 + 1，而三项全错**，本轮由闸门
+# 其余 13 个。**这个数字此前写的是 20，账是 9 + 10 + 1，而三项全错**，本轮由闸门
 # 一次点出来，值得把每一项的错法都写下来：
 #
-#   - 应当是 **4** 个入向有边、因而需要真答案的域（`alert` `approval` `device`
-#     `loop`），加起来正好是 `-graph` 报告里 in-degree 非零的那 4 行。
+#   - 应当是 **3** 个入向有边、因而需要真答案的域（`alert` `device` `loop`），
+#     加起来正好是 `-graph` 报告里 in-degree 非零的那 3 行。
 #     **决策 275 让它从 10 变成 9**（`federation` 切掉最后一条入边），
 #     **决策 276、277、280、282、283 各让一个域归零**：`topology`（`aiops -> topology`）、
 #     `hitl`（`aiops -> hitl`）、`aiops` 本身（`imbridge -> aiops`）、以及 `nodefleet`
 #     （`nodeagent -> nodefleet`）、以及 `edge`（`aiops -> edge`）。这五刀把 9 变成 4，
-#     而散文上一轮还停在 9——**因为散文没有随树动，而闸门会**。
-#     **剩下的 4 个里有 3 个是大域**（`device` 28 条入边 / `alert` 18 / `loop` 10），
-#     而它们合计只占全树 20.7%——**「剩下的都在这几个大域里」这句话是错的**：
-#     它们之外还有 11 个域只是入度为零，而不是被依赖。
+#     **决策 284 又让 `approval` 归零**（`aiops -> approval`）——这六刀把 9 变成 3，
+#     而散文上一轮还停在 9，**因为散文没有随树动，而闸门会**。
+#     **剩下的 3 个全都是大域**（`device` 28 条入边 / 2 边、`alert` 18 条 / 2 边、
+#     `loop` 10 条 / 4 边），合计占全树 20.7%——**「剩下的都在这几个大域里」这次
+#     变成了真的，而它在决策 283 结束时还是错的**。**一个判断的真假取决于它
+#     说的是哪一刀之后的树，所以这类判断必须带读数一起说，否则下一次还会错。**
 #   - 10 个 shared 底座组件（`agentteams` `container` `control` `dataguard`
 #     `higress` `knowledge` `migrate` `migrator` `middleware` `observability`）。
 #     它们在 import 图里读作叶子但不是叶子——被依赖不需要声明，所以它们的入度
@@ -264,7 +284,7 @@ independent = aiops, audit, chatdiagnose, cluster, demo, edgeauth, federation, f
 #     错误的两面**。散文里早就把 `agentteams` 点进了那 10 个 shared 组件，**说的
 #     和做的不是同一件事**。
 #
-# 4 + 10 = 14。
+# 3 + 10 = 13。
 #
 # **这段散文此前写的是「其余 25 个 = 13 + 10 + 2」，四个数字全错**，而它错在
 # 一个已经发生过的事件上：它描述的是一个把 `chatdiagnose` 与 `frontierbound`
@@ -276,7 +296,7 @@ independent = aiops, audit, chatdiagnose, cluster, demo, edgeauth, federation, f
 # 它在 import 图里读作叶子——被依赖不需要声明——但它同时被 aiops 与 marketplace
 # 依赖，而且已经是一个独立的 Go module（core/extension），入度在这张图里
 # 不可测这件事本身不该成为不分配它的理由。
-core = agentteams, alert, approval, container, control,
+core = agentteams, alert, container, control,
         dataguard, device,
         higress, knowledge, loop, middleware,
         migrate, migrator, observability

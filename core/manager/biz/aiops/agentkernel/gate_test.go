@@ -3,6 +3,7 @@ package agentkernel
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -64,6 +65,38 @@ func approvalRequest() ports.ApprovalRequest {
 		BlastRadius: domain.RadiusPod,
 		Target:      "web-1",
 		ExpiresAt:   time.Date(2026, 5, 1, 10, 2, 0, 0, time.UTC),
+	}
+}
+
+// TestThisPackageFixtureCoversEveryColumn is this side of a pair.
+//
+// Decision 284 moved the approval-inbox adapter out of this package and into
+// the composition root, which meant the adapter's tests had to take a copy of
+// this package's approvalRequest() fixture — a composition root cannot reach
+// into another package's test files. That made two copies of one fixture, and
+// the first draft of the commit message claimed both were kept honest because
+// each side had a field-walking test. **Only the moved side had one.** The
+// claim was a guess dressed as a measurement, which is the exact shape this
+// ledger has now caught seven times; the difference is that this one was
+// written while describing work I had just done, and I checked it in the same
+// breath in which I wrote it.
+//
+// So this test is here to make the claim true rather than to weaken the claim
+// into something weaker and true. A column added to ports.ApprovalRequest and
+// left at its zero value in either copy now fails on both sides.
+func TestThisPackageFixtureCoversEveryColumn(t *testing.T) {
+	req := approvalRequest()
+	v := reflect.ValueOf(req)
+	ty := v.Type()
+	for i := 0; i < ty.NumField(); i++ {
+		field := ty.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		if v.Field(i).IsZero() {
+			t.Errorf("approvalRequest() leaves ports.ApprovalRequest.%s zero, so the gate tests "+
+				"built on it would pass without asking what the gate does with that column", field.Name)
+		}
 	}
 }
 

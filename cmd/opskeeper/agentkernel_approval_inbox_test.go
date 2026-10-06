@@ -1,4 +1,4 @@
-package agentkernel
+package main
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
 	bizapproval "github.com/vincent-wuhan/opskeeper/core/manager/biz/approval"
 	modelapproval "github.com/vincent-wuhan/opskeeper/core/manager/model/approval"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
@@ -22,6 +24,36 @@ type fakeApprovalRepo struct {
 	created []*modelapproval.Approval
 	decide  func(*modelapproval.Approval)
 	nextID  int
+}
+
+// approvalRequest is a fully-populated ports.ApprovalRequest.
+//
+// It is a second copy of the helper the kernel's own tests carry, and the
+// duplication is a consequence of decision 284 rather than an oversight: the
+// adapter moved to the composition root, and a composition root cannot reach
+// into another package's test files.
+//
+// The two copies are kept honest from opposite ends: this file's
+// TestTheFixtureCoversEveryColumn and that package's
+// TestThisPackageFixtureCoversEveryColumn both walk every exported field of
+// ports.ApprovalRequest and fail on a zero one, so a field added to the port
+// cannot be left at its zero value in either copy.
+//
+// The second of those two tests did not exist when this comment was first
+// written. See that test's own comment for what happened.
+func approvalRequest() ports.ApprovalRequest {
+	return ports.ApprovalRequest{
+		ID:          "call-1",
+		SessionID:   "s-1",
+		ToolName:    "restart_service",
+		Class:       domain.ClassDestructive,
+		Digest:      "digest-of-the-exact-call",
+		Arguments:   []byte(`{"target":"web-1"}`),
+		Summary:     "restart_service on web-1",
+		BlastRadius: domain.RadiusPod,
+		Target:      "web-1",
+		ExpiresAt:   time.Date(2026, 5, 1, 10, 2, 0, 0, time.UTC),
+	}
 }
 
 func newFakeApprovalRepo() *fakeApprovalRepo {
@@ -252,10 +284,10 @@ func TestANilUsecaseIsRefusedRatherThanPassedThrough(t *testing.T) {
 		t.Fatalf("NewInboxUsecase(nil) = %+v, want nil", got)
 	}
 	var a *InboxUsecase
-	if _, err := a.Propose(context.Background(), approvalRequest()); !errors.Is(err, ErrGateNotWired) {
-		t.Fatalf("err = %v, want ErrGateNotWired", err)
+	if _, err := a.Propose(context.Background(), approvalRequest()); !errors.Is(err, agentkernel.ErrGateNotWired) {
+		t.Fatalf("err = %v, want agentkernel.ErrGateNotWired", err)
 	}
-	if _, err := a.Await(context.Background(), "row-1"); !errors.Is(err, ErrGateNotWired) {
-		t.Fatalf("err = %v, want ErrGateNotWired", err)
+	if _, err := a.Await(context.Background(), "row-1"); !errors.Is(err, agentkernel.ErrGateNotWired) {
+		t.Fatalf("err = %v, want agentkernel.ErrGateNotWired", err)
 	}
 }

@@ -181,9 +181,33 @@ var sharedDomains = map[string]string{
 // convenient. A domain that cannot say why it reaches into another one is a
 // domain that should not be reaching.
 var edges = map[edge]string{
-	{"aiops", "alert"}:    "the agent raises and silences alerts through the platform's rules rather than carrying a second alert implementation. One direction only since decision 118, which was the last cycle in the tree: the alert domain used to call the agent kernel's own SpawnRequest/Worker structs, and it now asks for one investigation in its own value types",
-	{"aiops", "approval"}: "a remediation the agent wants to run is queued in the approval domain, which is the HITL path it must not be able to route around",
-	{"aiops", "device"}:   "an alert names a device and a tool call resolves it to a machine; the agent needs the device vocabulary to say which one",
+	{"aiops", "alert"}: "the agent raises and silences alerts through the platform's rules rather than carrying a second alert implementation. One direction only since decision 118, which was the last cycle in the tree: the alert domain used to call the agent kernel's own SpawnRequest/Worker structs, and it now asks for one investigation in its own value types",
+	// The aiops -> approval edge is gone (decision 284), and it is the same
+	// shape decision 280 cut from imbridge -> aiops: the consumer's package
+	// contained a file whose entire content was adapting the producer's
+	// concrete usecase onto the consumer's own port, and whose only
+	// production caller was the composition root.
+	//
+	// The declared reason was true and did not explain the edge. "A
+	// remediation the agent wants to run is queued in the approval domain"
+	// describes the HITL path, and the path still exists -- what disappeared
+	// is that the code implementing one direction of it lived on the wrong
+	// side of the boundary. agentkernel.ApprovalInbox (the gate's three-
+	// method port) and agentkernel.ErrGateNotWired stay where they were,
+	// because the gate is the consumer. The 305-line adapter that reads
+	// model/approval rows and calls usecase.Propose / Get / List moved to
+	// cmd/opskeeper, which is where the only call to it already was.
+	//
+	// Two things are worth writing down. The first is that this file's
+	// comment claimed main.go "wires" an adapter, and for two decisions the
+	// wiring was a direct call to a constructor in the dependency -- a
+	// comment describing an indirection that did not exist. The second is
+	// that the 261 lines of tests moved with it and had to take a copy of
+	// the kernel package's request fixture, because a composition root
+	// cannot reach into another package's test files. Both copies are kept
+	// honest from their own ends by a field-walking test, so a new column
+	// on ports.ApprovalRequest cannot be left zero in either one.
+	{"aiops", "device"}: "an alert names a device and a tool call resolves it to a machine; the agent needs the device vocabulary to say which one",
 	// The aiops -> edge edge is gone (decision 283), and the reason it
 	// survived 272 and 273 is the one those two left standing. Reads and
 	// writes looked like different problems to the earlier cuts, and for
@@ -211,7 +235,7 @@ var edges = map[edge]string{
 	// deletion, and the guard in biz/edge pins the method set and walks
 	// every signature to make sure none of them names a core/manager
 	// package again.
-	{"aiops", "loop"}:     "the agent kernel drives the investigation loop, so the agent asks it for a recovery verdict, a loop toolset and what it learned; one direction only since decision 117. The old reason named a package that does not exist — there is no biz/aiops/loop, loop is its own context at biz/loop",
+	{"aiops", "loop"}: "the agent kernel drives the investigation loop, so the agent asks it for a recovery verdict, a loop toolset and what it learned; one direction only since decision 117. The old reason named a package that does not exist — there is no biz/aiops/loop, loop is its own context at biz/loop",
 
 	{"chatdiagnose", "loop"}: "promoting a chat hands the work to the loop domain, which owns the investigation; the reverse of that edge used to exist because the loop wrote the knowledge base's own rows (decision 114)",
 
