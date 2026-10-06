@@ -611,6 +611,18 @@ deadcode-report: ## 报出生产代码里只有测试引用的符号（报告，
 deadcode-ratchet-check: ## 闸门：不可达符号的总数不得增长（决策 285；逐符号判定仍是报告）
 	go test ./scripts/deadcode/ -count=1 -run 'TestTheUnreachableSymbolCountNeverGrows'
 
+# 一张表只能有一个 GORM 模型。core/domains/model/proposal 与
+# core/manager/model/hitl 的 Proposal.TableName() 都返回 "proposal\”，而两个
+# 结构的列集与主键类型都不同（uint64 vs char(36)）——入度为零的那个从未被使用，
+# 所以没有东西坏过；而一旦有任何代码 import 错的那一个，AutoMigrate 会按它手里
+# 的列集建表，查询会把 char(36) 的主键读进 uint64，两个错误都不提另一个模型。
+# 工具不判断哪个对，那是一次 schema 决定；它只保证这个决定在第二个模型被接进
+# Migrate 之前被做过。
+.PHONY: table-check
+table-check: ## 闸门：一张表不允许被两个 GORM 模型声明（决策 288）
+	go run ./scripts/tablecheck .
+	go test ./scripts/tablecheck/ -count=1
+
 # docs/api 是这个仓库里唯一一处「可以写出一份完整交付、而没有任何东西会红」的地方：
 # harness.md 描述过十三个从未注册的 HTTP 端点，middleware.md 描述过九个，而两者
 # 读起来都像已交付的契约。这道闸门读文档围栏里的每一行 `METHOD /path` 与每一次

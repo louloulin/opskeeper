@@ -697,3 +697,56 @@ func TestTheOnBlockIsNotReadOutOfContext(t *testing.T) {
 		t.Errorf("a commented-out trigger and a later job were read as the push filter: %+v", got)
 	}
 }
+
+// Every other test in this file builds its fixture out of allGates(), so
+// they all agree with the table by construction. That is what makes them good
+// at "if a gate drops out of ci.yml, the check notices" and bad at "if a gate
+// is added to the table and never wired, the check notices" -- the fixture
+// already contains the new gate, because the fixture is generated from the
+// same list the check reads.
+//
+// This one reads the repository's own two files. It is the only test here
+// that can catch a gate which is promised in the table and never invoked,
+// and that is not hypothetical: decision 288 added table-check to
+// DecisionGates() and, while wiring it, found that deadcode-ratchet-check
+// had been invoked by ci.yml since decision 286 without ever being recorded
+// -- which had left ` + "`" + u'make ci-gate-check' + "`" + u'` red for a whole
+// commit. It was found by ` + "`" + u'go run ./scripts/cigate .' + "`" + u', which
+// is to say by this check running against the real repository rather than
+// against a fixture.
+//
+// The scope is deliberately the two halves of check() that read the gate
+// table and the workflow, not all of check(): the other halves reconcile the
+// e2e skip list and the build-tag coverage against the source tree, and
+// copying a repository into a temp directory to satisfy those would make this
+// test a second implementation of the checker. Those halves already run in
+// CI, on the real tree.
+func TestThisRepositoryInvokesEveryGateItPromises(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatalf("read the repository ci.yml: %v", err)
+	}
+	invoked := invokedTargets(string(raw))
+	defined := makeTargets(string(mustReadMakefile(t)))
+
+	for _, g := range allGates() {
+		if !invoked[g.Target] {
+			t.Errorf("%s is in the gate table but ci.yml never runs it; it is green only where "+
+				"somebody remembered to type it, and every fixture in this file is generated from "+
+				"the same table so none of them can see that:\n      %s", g.Target, g.Why)
+		}
+		if !defined[g.Target] {
+			t.Errorf("%s is in the gate table but the Makefile no longer defines it, so the reason "+
+				"recorded for it has nothing to run:\n      %s", g.Target, g.Why)
+		}
+	}
+}
+
+func mustReadMakefile(t *testing.T) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	if err != nil {
+		t.Fatalf("read the repository Makefile: %v", err)
+	}
+	return b
+}

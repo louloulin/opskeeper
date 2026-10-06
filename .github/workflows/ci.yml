@@ -139,6 +139,16 @@ jobs:
       - name: Unreachable symbols do not grow
         run: make deadcode-ratchet-check
 
+      # One table, one GORM model. core/domains/model/proposal and
+      # core/manager/model/hitl both returned the same table name from
+      # TableName(), with different column sets and different primary key
+      # types. The shadow had no importers, so nothing had ever broken --
+      # and neither the compiler nor a migrator names the other model, so
+      # the first real use would have arrived as a missing column rather
+      # than as the duplicate it is (decision 288).
+      - name: No table is claimed by two models
+        run: make table-check
+
       - name: Golden-corpus and diagnostic-axis gates
         run: make eval-gates
 

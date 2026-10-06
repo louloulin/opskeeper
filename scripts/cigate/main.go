@@ -208,6 +208,26 @@ func DecisionGates() []Gate {
 				"acceptance suite drifted to two versions once and each file stayed correct " +
 				"(decision 153)",
 		},
+		{
+			Target: "deadcode-ratchet-check",
+			Why: "a per-symbol reachability walk cannot see six kinds of indirection, so its " +
+				"verdict on any one symbol is a report and stays one. The total is a different " +
+				"question and survives those blind spots: it does not have to be right about any " +
+				"particular symbol, only to notice there are more of them. Wired into CI in " +
+				"decision 286 without being recorded here, which left make ci-gate-check red " +
+				"for one whole commit -- the gate that checks the gates was the thing that " +
+				"caught it, and only because it reads the real ci.yml (decision 288)",
+		},
+		{
+			Target: "table-check",
+			Why: "one table, one GORM model. Two models claiming the same table is two schemas " +
+				"that agree until AutoMigrate writes one of them, and neither the compiler nor " +
+				"the migrator names the other, so the failure arrives as a missing column rather " +
+				"than as the duplicate it is. It was found the hard way: core/domains/model/" +
+				"proposal and core/manager/model/hitl both returned the table name proposal " +
+				"TableName() with different column sets and different primary key types, and " +
+				"the shadow had no importers, so nothing had ever broken (decision 288)",
+		},
 	}
 }
 

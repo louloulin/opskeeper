@@ -201,11 +201,15 @@
 # **FLOOR 集合变小可以是两件完全不同的事**——搬出去了（变好），或者本来就不
 # 是域（更早就不该在里面）。**这一份的表只记「谁在里面」，不记「为什么」，
 # 所以这两种在读数上长得一模一样**，而读这一行的人需要知道是哪一种。
+# 决策 288 属于第二种：`proposal` 是 `core/domains/model/proposal` 的域名，
+# 那个包的 `Proposal.TableName()` 与 `core/manager/model/hitl` 的同名方法
+# 都返回 `"proposal"`——**两个形状不同的模型映射同一张表，而入度为零的那个
+# 从未被任何代码使用**。删掉的是影子，不是功能。
 independent = aiops, audit, chatdiagnose, cluster, demo, edgeauth, federation, federationchild,
         federationlink, flow, frontierbound, grafana, iam, imbridge, incident, integration,
         llmgw, llmpig, logs, marketplace, mcp, metric, monitor, nodeagent,
         hitl,
-        plugin, pluginimport, prometheus, promwrite, proposal, report,
+        plugin, pluginimport, prometheus, promwrite, report,
         nodefleet,
         scheduler, secret, setting, skill, systemhealth, systemupgrade,
         topology, traces, version, webshell,
