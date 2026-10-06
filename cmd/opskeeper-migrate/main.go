@@ -158,6 +158,7 @@ func cmdImport(ctx context.Context, args []string) error {
 	var source, target, token, tenantMapping, snapshot string
 	var dryRun bool
 	var rate int
+	var rollbackDir string
 	var entities multiFlag
 	fs.StringVar(&snapshot, "source", "", "snapshot 文件路径")
 	fs.StringVar(&target, "target", "", "opskeeper base URL（必填）")
@@ -165,6 +166,7 @@ func cmdImport(ctx context.Context, args []string) error {
 	fs.StringVar(&tenantMapping, "tenant-mapping", "", "ops-keeper project_id → opskeeper tenant_id 映射（必填，多租户隔离）")
 	fs.BoolVar(&dryRun, "dry-run", false, "仅校验 + 报告，不实际写入")
 	fs.IntVar(&rate, "rate", 1000, "限速（行/秒）")
+	fs.StringVar(&rollbackDir, "rollback-dir", "", "回滚快照输出目录（缺省写在 --source 旁边）")
 	fs.StringVar(&source, "opskeeper-url", "", "（可选）实时 ops-keeper URL，替代 --source snapshot")
 	fs.Var(&entities, "entity", "限定实体类型（可多次指定；缺省全部）")
 	if err := fs.Parse(args); err != nil {
@@ -184,6 +186,7 @@ func cmdImport(ctx context.Context, args []string) error {
 		Entities:      selectedEntities,
 		DryRun:        dryRun,
 		RatePerSec:    rate,
+		RollbackDir:   rollbackDir,
 	})
 	if err != nil {
 		return err
@@ -196,6 +199,13 @@ func cmdImport(ctx context.Context, args []string) error {
 		fmt.Printf("   新建: %d\n", result.Imported)
 		fmt.Printf("   跳过（幂等命中）: %d\n", result.Skipped)
 		fmt.Printf("   失败: %d\n", result.Failed)
+	}
+	if result.RollbackSnapshot != "" {
+		fmt.Printf("   回滚快照: %s\n", result.RollbackSnapshot)
+		fmt.Printf("   撤销本次导入: opskeeper-migrate rollback --rollback-snapshot %s --target %s\n",
+			result.RollbackSnapshot, target)
+	} else if !dryRun {
+		fmt.Println("   回滚快照: 无（本次没有写入任何一行）")
 	}
 	if len(result.Failures) > 0 {
 		fmt.Println("\n失败详情（前 20 条）：")
@@ -234,6 +244,12 @@ func cmdRollback(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("%s回滚完成\n", map[bool]string{true: "🧪 [DRY-RUN] ", false: "✅ "}[dryRun])
+	if result.Total == 0 {
+		// 这份快照里没有可删的 ID。决策 292 之前这是**每一次** rollback 的
+		// 结果（import 从不写快照），而命令照常报"✅ 回滚完成"。
+		fmt.Println("   ⚠️  这份快照里没有任何可删除的 ID——它不是 import 写出的那一份，")
+		fmt.Println("      或那次导入一行都没有写成功。")
+	}
 	fmt.Printf("   总计: %d\n", result.Total)
 	fmt.Printf("   删除: %d\n", result.Deleted)
 	fmt.Printf("   失败: %d\n", result.Failed)

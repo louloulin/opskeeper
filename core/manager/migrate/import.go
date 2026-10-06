@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/migrate/clients"
@@ -25,6 +26,11 @@ type ImportOptions struct {
 	DryRun bool
 	// RatePerSec 限速（默认 1000 行/秒）。
 	RatePerSec int
+	// RollbackDir 回滚快照的输出目录；空 = 写在源 snapshot 旁边。
+	//
+	// 决策 292 起这不是可选项：一次导入如果写了几百行却没留下删除清单，
+	// 就没有任何办法把它们撤掉。import 每次真的写入之后都会落一份。
+	RollbackDir string
 }
 
 // ImportResult 描述一次导入的统计。
@@ -35,6 +41,10 @@ type ImportResult struct {
 	Failed     int                     // 失败数
 	Failures   []ImportFailure         // 失败详情（前 100 条）
 	CreatedIDs map[EntityType][]string // 新建 ID 列表（rollback 用）
+
+	// RollbackSnapshot 是本次导入写下的回滚快照路径；dry-run 与
+	// 一行未写时为空。**它为空就意味着这次导入没法撤。**
+	RollbackSnapshot string
 }
 
 // ImportFailure 描述一次失败。
@@ -170,6 +180,21 @@ func Import(ctx context.Context, opts ImportOptions) (*ImportResult, error) {
 			result.Imported++
 			result.CreatedIDs[et] = append(result.CreatedIDs[et], createdID)
 		}
+	}
+
+	// 落回滚快照。放在循环之外、返回之前：哪怕导入只成功了一部分，已经写
+	// 进去的那些行也必须有一份删除清单——最需要回滚的恰恰是"导到一半"
+	// 这种情形。
+	if len(result.CreatedIDs) > 0 {
+		dir := opts.RollbackDir
+		if dir == "" {
+			dir = filepath.Dir(opts.Snapshot)
+		}
+		path, err := SaveRollbackSnapshot(BuildRollbackSnapshot(opts.Target, result.CreatedIDs), dir)
+		if err != nil {
+			return result, fmt.Errorf("写回滚快照失败（导入已完成，但撤不回去）: %w", err)
+		}
+		result.RollbackSnapshot = path
 	}
 	return result, nil
 }

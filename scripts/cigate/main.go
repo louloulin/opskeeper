@@ -239,7 +239,10 @@ func DecisionGates() []Gate {
 				"exist rejected most of the mapped fields. The integration test could not " +
 				"catch either, because its mock answers 201 to anything. The gate reads the " +
 				"registry against the routes the tree registers and against the json tags " +
-				"each handler decodes (decision 291)",
+				"each handler decodes. The same gate also runs the import -> rollback " +
+				"round trip: import used to collect the ids it created and never write " +
+				"them anywhere, while rollback only ever read them from a file, so every " +
+				"rollback reported zero and exited successfully (decision 291, 292)",
 		},
 	}
 }

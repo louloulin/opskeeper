@@ -87,6 +87,12 @@ type EntityMeta struct {
 	// 说明端点在，丢字段是另一件事，不写下来的话迁移报告会显示"全部命中"。
 	TargetNote string
 
+	// IdempotencyNote 说明幂等查询为什么在真实 opskeeper 上不成立。
+	//
+	// import 靠 GET {TargetRoute}/by-source-id/{id} 判断这条迁过了没有，
+	// 而这条读路由 manager 没有注册，于是重复导入会重复创建。空 = 路由在。
+	IdempotencyNote string
+
 	// TargetMissing 说明 TargetRoute 为什么为空，写给人看：迁进来的连接
 	// 配置存哪张表、巡检计划与报告计划是不是一回事，这是一次产品决定，
 	// 不是重构可以替谁做的选择。
@@ -103,6 +109,8 @@ var entityRegistry = map[EntityType]EntityMeta{
 		Source:      "users",
 		Target:      "users",
 		TargetRoute: "/v1/users",
+		IdempotencyNote: "manager 没有注册这条实体的 by-source-id 读路由，" +
+			"所以幂等判断在真实 opskeeper 上永远返回「不存在」，重复导入会重复创建。",
 		FieldMap: map[string]string{
 			// POST /v1/users 的请求体是 createUserReq（iam/server/orgs.go），
 			// 它收 display_name 而不是 name。id 与 created_at 由服务端分配，
@@ -118,6 +126,8 @@ var entityRegistry = map[EntityType]EntityMeta{
 		Source:      "projects",
 		Target:      "orgs",
 		TargetRoute: "/v1/orgs",
+		IdempotencyNote: "manager 没有注册这条实体的 by-source-id 读路由，" +
+			"所以幂等判断在真实 opskeeper 上永远返回「不存在」，重复导入会重复创建。",
 		FieldMap: map[string]string{
 			// POST /v1/orgs 的请求体是 createOrgReq（name / description /
 			// parent_id）。owner_id 没有位置：ops-keeper 的项目负责人对应的是

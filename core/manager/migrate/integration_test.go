@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -63,7 +64,11 @@ type mockOpskeeper struct {
 	mu           sync.Mutex
 	byType       map[string][]map[string]any // type -> rows（含 source_id + id）
 	createdTotal int64
+	deletedTotal int64
 	checksTotal  int64
+
+	// deleteOrder 记录 DELETE 到达的顺序，用于断言回滚按依赖的逆序删。
+	deleteOrder []string
 }
 
 func newMockOpskeeper() *mockOpskeeper {
@@ -145,6 +150,22 @@ func (m *mockOpskeeper) Handler() http.Handler {
 				"code": 0,
 				"data": map[string]any{"id": id},
 			})
+		case http.MethodDelete:
+			// 回滚：按 /api/v1/{entity}/{id} 删掉一条。
+			id := subpath
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			m.deleteOrder = append(m.deleteOrder, effEntity)
+			rows := m.byType[effEntity]
+			for i, row := range rows {
+				if fmt.Sprintf("%v", row["id"]) == id {
+					m.byType[effEntity] = append(rows[:i], rows[i+1:]...)
+					atomic.AddInt64(&m.deletedTotal, 1)
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+			}
+			http.NotFound(w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -453,3 +474,109 @@ func TestIntegration_Clients_Direct(t *testing.T) {
 // 它问的是注册表而不是抄一份名字，所以 opskeeper 侧一旦真的有了连接配置
 // 或巡检计划的写入端点，这些用例会跟着把新端点也走一遍，而不用改测试。
 func importableEntities() []migrate.EntityType { return migrate.ImportableEntities() }
+
+// TestIntegration_RollbackRemovesWhatImportCreated 是这条链路的端到端证据。
+//
+// 决策 292 之前这条链是断的：import 把新建的 ID 攒在 result.CreatedIDs 里，
+// 从不写进任何文件，而 rollback 只从文件里读——所以 `opskeeper-migrate rollback`
+// 永远读到 0 行，报一句"总计: 0"然后成功退出。一个永远删不掉任何东西的回滚
+// 命令，与没有回滚命令的区别只在于它让人以为有。
+func TestIntegration_RollbackRemovesWhatImportCreated(t *testing.T) {
+	seed := map[string][]map[string]any{
+		"users": {
+			{"id": 1, "project_id": 42, "email": "alice@example.com", "name": "Alice"},
+			{"id": 2, "project_id": 42, "email": "bob@example.com", "name": "Bob"},
+		},
+		"projects": {
+			{"id": 42, "project_id": 42, "name": "ops-prod"},
+		},
+	}
+	mocks := startMocks(t, seed)
+	dir := t.TempDir()
+	snapshotPath := filepath.Join(dir, "snap.json")
+	ctx := context.Background()
+
+	if _, err := migrate.Export(ctx, migrate.ExportOptions{
+		Output: snapshotPath,
+		Source: mocks.OpsKeeper.URL,
+	}); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	res, err := migrate.Import(ctx, migrate.ImportOptions{
+		Snapshot:      snapshotPath,
+		Target:        mocks.Opskeeper.URL,
+		TenantMapping: "42=1",
+		RatePerSec:    1000,
+		Entities:      []migrate.EntityType{migrate.EntityUsers, migrate.EntityProjects},
+	})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.Imported != 3 {
+		t.Fatalf("Imported=%d want 3", res.Imported)
+	}
+	if res.RollbackSnapshot == "" {
+		t.Fatal("Import wrote 3 rows but produced no rollback snapshot; " +
+			"those 3 rows can now never be removed by this tool")
+	}
+	if _, err := os.Stat(res.RollbackSnapshot); err != nil {
+		t.Fatalf("the rollback snapshot is not on disk: %v", err)
+	}
+	if mocks.OpskeeperH.deletedTotal != 0 {
+		t.Fatalf("Import deleted %d rows; import must not delete", mocks.OpskeeperH.deletedTotal)
+	}
+
+	rb, err := migrate.Rollback(ctx, migrate.RollbackOptions{
+		SnapshotPath: res.RollbackSnapshot,
+		Target:       mocks.Opskeeper.URL,
+	})
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if rb.Total != 3 || rb.Deleted != 3 || rb.Failed != 0 {
+		t.Errorf("Rollback total=%d deleted=%d failed=%v want 3/3/0",
+			rb.Total, rb.Deleted, rb.Failures)
+	}
+	if mocks.OpskeeperH.deletedTotal != 3 {
+		t.Errorf("opskeeper deleted=%d want 3", mocks.OpskeeperH.deletedTotal)
+	}
+
+	// 逆序：projects 依赖 users，先删 projects。
+	if len(mocks.OpskeeperH.deleteOrder) != 3 {
+		t.Fatalf("deleteOrder=%v", mocks.OpskeeperH.deleteOrder)
+	}
+	if mocks.OpskeeperH.deleteOrder[0] != "orgs" {
+		t.Errorf("rollback deleted %s first; orgs depends on users so it must go first, got %v",
+			mocks.OpskeeperH.deleteOrder[0], mocks.OpskeeperH.deleteOrder)
+	}
+}
+
+// TestARollbackSnapshotIsNeverOverwritten 钉住文件名冲突的处理。
+//
+// 秒级时间戳在两次导入落在同一秒时会撞名，而被覆盖的那一份正是"刚刚写进生产
+// 的数据的删除清单"。决策 292 之前的 SaveRollbackSnapshot 直接写同名文件。
+func TestARollbackSnapshotIsNeverOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	var paths []string
+	for i := 0; i < 3; i++ {
+		snap := migrate.BuildRollbackSnapshot("http://target", map[migrate.EntityType][]string{
+			migrate.EntityUsers: {"u-1"},
+		})
+		path, err := migrate.SaveRollbackSnapshot(snap, dir)
+		if err != nil {
+			t.Fatalf("SaveRollbackSnapshot #%d: %v", i, err)
+		}
+		paths = append(paths, path)
+	}
+	seen := map[string]bool{}
+	for _, p := range paths {
+		if seen[p] {
+			t.Fatalf("two rollback snapshots share the path %s; the second overwrote the first", p)
+		}
+		seen[p] = true
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+	}
+}

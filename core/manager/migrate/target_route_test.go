@@ -430,6 +430,33 @@ func sortedKeys(m map[string]bool) []string {
 	return out
 }
 
+// TestTheIdempotencyReadRouteExists 是决策 292 补上的第三问。
+//
+// import 的幂等判断打的是 GET /api/v1/{entity}/by-source-id/{id}，而这条路由
+// 在 manager 里不存在——于是对着真实 opskeeper 跑，EntityExists 永远返回
+// false，重复导入会重复创建。集成测试抓不到，因为它的 mock 实现了这条路由。
+//
+// 这里只要求要么路由在、要么注册表写下了为什么，不替谁去实现那个读端点：
+// 按来源 ID 查询要不要开放、开放给谁，是一次接口决定。
+func TestTheIdempotencyReadRouteExists(t *testing.T) {
+	tree := readTree(t)
+	for _, et := range AllEntityTypes() {
+		meta := GetEntityMeta(et)
+		if !meta.IsImportable() {
+			continue
+		}
+		readRoute := meta.TargetRoute + "/by-source-id/{id}"
+		if _, registered := tree.routes[readRoute]; registered {
+			continue
+		}
+		if strings.TrimSpace(meta.IdempotencyNote) == "" {
+			t.Errorf("%s 的幂等查询端点 %s 在 manager 里没有注册，"+
+				"所以重复导入会重复创建——而注册表没有写下这一点。"+
+				"要么实现这个读端点，要么在 IdempotencyNote 里说清楚。", et, readRoute)
+		}
+	}
+}
+
 // TestAnEntityWithNoRouteSaysWhy 是闸门的另一半：把端点拿掉必须同时给出
 // 一个理由，否则下一个读代码的人只会看到一张空白的表。
 func TestAnEntityWithNoRouteSaysWhy(t *testing.T) {

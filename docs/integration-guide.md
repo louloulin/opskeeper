@@ -201,15 +201,29 @@ opskeeper-migrate verify \
 
 ### 4.4 幂等 + 回滚
 
-- **幂等**：每条记录带 `source_id`，重复导入跳过
-- **回滚**：导入前自动生成 `rollback-snapshot-{timestamp}.json`，可一键回滚
+- **幂等**：每条记录带 `source_id`，重复导入跳过。**注意**：这个查询打的是
+  `GET /api/v1/{entity}/by-source-id/{id}`，而 manager 的路由表里没有这个端点，
+  所以对着真实 opskeeper 跑，幂等判断永远返回"不存在"，重复导入会重复创建。
+  幂等要成立，需要 manager 提供按来源 ID 查询的读端点（一次接口决定）。
+- **回滚**：**导入后**自动写出 `rollback-snapshot-{timestamp}.json`，里面是这次
+  真正新建的 opskeeper ID 列表，可一键撤销。文件名撞名时追加序号，不覆盖旧文件。
 
 ```bash
-# 回滚到导入前状态
+# import 会打印它写下的回滚快照路径
+opskeeper-migrate import \
+  --source snapshot-2026-07-13.json \
+  --target opskeeper://opskeeper-host:8080 \
+  --tenant-mapping "42=1" \
+  --rollback-dir ./rollback
+
+# 撤销那次导入
 opskeeper-migrate rollback \
-  --rollback-snapshot rollback-snapshot-2026-07-13T10-30-00.json \
+  --rollback-snapshot ./rollback/rollback-snapshot-2026-07-13T10-30-00.json \
   --target opskeeper://opskeeper-host:8080
 ```
+
+回滚按**导入顺序的逆序**删除（先建 users 再建 orgs，回滚就先删 orgs），
+并对已经不在的实体按幂等处理。
 
 ### 4.5 限速 + 多租户隔离
 

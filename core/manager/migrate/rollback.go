@@ -41,30 +41,98 @@ type RollbackFailure struct {
 	Reason error
 }
 
-// GenerateRollbackSnapshot 在 import 前生成一份"当前 opskeeper 状态"快照，
-// 用于 import 失败时一键回滚。
+// BuildRollbackSnapshot 把一次导入真正新建出来的 ID 变成一份可回滚的快照。
 //
-// 实际语义：snapshot 记录 import 操作中将创建 / 修改 / 删除的实体 ID 列表。
-// 简化实现：snapshot 记录 (entity_type, opskeeper_id) 映射表 + 原始 ops-keeper payload。
-func GenerateRollbackSnapshot(target, token string) (*Snapshot, error) {
-	// 占位：实际实现应查询 opskeeper 当前相关实体并快照
-	// 这里只创建空 snapshot，import 时填充 CreatedIDs
-	return NewSnapshot(target, "", nil), nil
+// 决策 292 之前这条链是断的：Rollback 从快照里读每行的 "_id"，
+// GenerateRollbackSnapshot 却只返回一份空快照，而 import 从不把它拿到的
+// CreatedIDs 写进任何文件——**所以 `opskeeper-migrate rollback` 永远读到 0 行，
+// 报一句"总计: 0"然后成功退出**。一个永远删不掉任何东西的回滚命令，
+// 与没有回滚命令的区别只在于它让人以为有。
+//
+// 快照的形状是 entity type → [{"_id": "<opskeeper 里的 ID>"}]，也就是 Rollback
+// 读的那一种。这里显式说明这个约定，而不是让两边各自猜：它是这个文件格式里
+// 唯一一处"行里只有一个下划线开头字段"的地方。
+func BuildRollbackSnapshot(target string, created map[EntityType][]string) *Snapshot {
+	snap := NewSnapshot(target, "", nil)
+	// 按 EntityType 的字母序写，让同一份结果每次产生同一个文件内容。
+	types := make([]EntityType, 0, len(created))
+	for et := range created {
+		types = append(types, et)
+	}
+	sort.Slice(types, func(i, j int) bool { return types[i] < types[j] })
+	for _, et := range types {
+		rows := make([]map[string]any, 0, len(created[et]))
+		for _, id := range created[et] {
+			rows = append(rows, map[string]any{"_id": id})
+		}
+		snap.PutEntity(et, rows)
+	}
+	return snap
 }
 
 // SaveRollbackSnapshot 把 rollback snapshot 写到磁盘。
 //
 // 命名约定：rollback-snapshot-{YYYY-MM-DDTHH-MM-SS}.json
+//
+// 秒级的时间戳在两次导入落在同一秒时会互相覆盖——而"覆盖掉上一份回滚快照"
+// 正是这个工具最不能做的事：它删掉的是刚刚写进生产的数据的删除清单。文件名
+// 冲突时追加一个递增后缀，宁可名字长得难看。
 func SaveRollbackSnapshot(snap *Snapshot, dir string) (string, error) {
 	if dir == "" {
 		dir = "."
 	}
 	ts := snap.Header.ExportedAt.UTC().Format("2006-01-02T15-04-05")
-	path := filepath.Join(dir, fmt.Sprintf("rollback-snapshot-%s.json", ts))
+	base := fmt.Sprintf("rollback-snapshot-%s", ts)
+	path := filepath.Join(dir, base+".json")
+	for i := 2; ; i++ {
+		if _, err := os.Stat(path); err != nil {
+			break
+		}
+		path = filepath.Join(dir, fmt.Sprintf("%s-%d.json", base, i))
+	}
 	if err := snap.WriteTo(path); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+// entitiesIn 列出一份快照里出现过的实体类型（字母序）。
+func entitiesIn(snap *Snapshot) []EntityType {
+	out := make([]EntityType, 0, len(snap.Entities))
+	for et := range snap.Entities {
+		out = append(out, et)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// rollbackOrder 把快照里的实体按**导入顺序的逆序**排好。
+//
+// 导入先建被依赖的、再建依赖它的，回滚必须反过来：先删 orgs 再删 users。
+// 快照里出现的实体按 MigrationOrder 定位，取不到位置的排在最后——它们不在
+// 注册表里，端点解析那一步会负责报错。
+func rollbackOrder(snap *Snapshot) []EntityType {
+	order := MigrationOrder()
+	rank := make(map[EntityType]int, len(order))
+	for i, et := range order {
+		rank[et] = i
+	}
+	present := entitiesIn(snap)
+	sort.Slice(present, func(i, j int) bool {
+		ri, oki := rank[present[i]]
+		rj, okj := rank[present[j]]
+		switch {
+		case oki && okj:
+			return ri > rj
+		case oki:
+			return true
+		case okj:
+			return false
+		default:
+			return present[i] < present[j]
+		}
+	})
+	return present
 }
 
 // Rollback 执行回滚：从 rollback snapshot 中读取 created IDs，逐个删除。
@@ -98,20 +166,15 @@ func Rollback(ctx context.Context, opts RollbackOptions) (*RollbackResult, error
 	//
 	// 判据取自快照里实际出现的实体类型，而不是注册表的全体——一份
 	// 只含 users 的回滚快照不该因为 pg_connections 没有落点而拒绝回滚。
-	present := make([]EntityType, 0, len(snap.Entities))
-	for et := range snap.Entities {
-		present = append(present, et)
-	}
-	sort.Slice(present, func(i, j int) bool { return present[i] < present[j] })
-	if err := requireImportable(present); err != nil {
+	if err := requireImportable(entitiesIn(snap)); err != nil {
 		return nil, err
 	}
 
-	for et, ids := range snap.Entities {
-		// 注意：rollback snapshot 的 Entities 字段语义：
-		// key=entity type, value=[created_id] 列表
-		// 但当前 snapshot 设计中 value 是 []map[string]any。
-		// 兼容：仅当 row["_kind"] == "created_id" 时视为 ID 列表
+	// 删除顺序 = 导入顺序的逆序。导入先建 users 再建依赖它们的 orgs，
+	// 回滚就先把 orgs 删掉；反过来删会撞上外键，或者留下一个指向已删用户的
+	// 组织。map 的遍历顺序是随机的，所以这里显式按 MigrationOrder 排。
+	for _, et := range rollbackOrder(snap) {
+		ids := snap.Entities[et]
 		endpoint, eerr := targetEndpoint(et)
 		if eerr != nil {
 			return nil, eerr
