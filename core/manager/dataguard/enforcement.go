@@ -99,22 +99,36 @@ func Claims() []ControlClaim {
 		{
 			ID:     "sensitivity.confidential-reader-role",
 			Claim:  "Confidential data requires the confidential-reader role",
-			Status: StatusInert,
+			Status: StatusEnforced,
 			Probe:  "AllowWithSensitivity",
-			Note: "the check exists — Enforcer.AllowWithSensitivity answers RBAC and then the " +
-				"sensitivity tier, against a per-user, per-org tier table — and nothing calls it. " +
-				"This row was written as declared on the strength of a grep that only looked at " +
-				"this package; the control was one module over and implemented all along, which is " +
-				"the same blindness in the other direction.",
+			Note: "every console tool call now passes a reader-tier gate before the tool runs. " +
+				"cmd/opskeeper assembles it from the label store and the iam enforcer, and " +
+				"decorators.WithSensitivity wraps the tool bag on both the coordinator and the " +
+				"worker path, so a caller whose tier does not reach the resource's label is " +
+				"refused by name. The row was inert until decision 361, which was the first " +
+				"thing in the tree to call the check that had been written for it.",
 		},
 		{
 			ID:     "sensitivity.restricted-reader-role",
-			Claim:  "Restricted data requires the restricted-reader role, and writes need an override",
-			Status: StatusInert,
+			Claim:  "Restricted data requires the restricted-reader role",
+			Status: StatusEnforced,
 			Probe:  "AllowWithSensitivity",
-			Note: "the tier half of this promise is the same unwired check as the confidential " +
-				"row. The write-override half has no implementation at all: the escalation to a " +
-				"dangerous approval exists in PausePolicyImpl, which production never constructs.",
+			Note: "the same gate as the confidential row, and it is a read gate: it asks the " +
+				"enforcer about the read action, which is all the tier table can answer. A call " +
+				"naming several resources is decided by the strictest label in the set, so the " +
+				"order the caller wrote the list in does not decide the answer.",
+		},
+		{
+			ID:    "sensitivity.restricted-write-override",
+			Claim: "writing to a Restricted resource requires an override",
+			Status: StatusDeclared,
+			Note: "this half was split out of the restricted-reader row because the reader gate " +
+				"that now runs does not implement it. The reader gate asks about the read " +
+				"action, and the override a write would need has no code behind it: the " +
+				"escalation to a dangerous approval lives in PausePolicyImpl, which production " +
+				"never constructs, and no write path consults a resource's label at all. A row " +
+				"that said enforced while only its read half ran would be the exact lie this " +
+				"registry exists to prevent.",
 		},
 		{
 			ID:     "sensitivity.top-secret-dual-approval",

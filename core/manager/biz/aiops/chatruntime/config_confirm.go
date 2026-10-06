@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/decorators"
 	aiopsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/aiops"
 )
 
@@ -40,6 +41,11 @@ func (rt *Runtime) tryApplyConfirmedConfigDraft(ctx context.Context, req *Reques
 	if err != nil {
 		return rt.persistAndEmitDirectAssistant(ctx, sess.ID, emit, fmt.Sprintf("确认应用失败：%s", err.Error())), true
 	}
+	// This path reaches the tool without going through the session's decorated
+	// bag, so it has to be offered to the reader-tier gate itself. A tool that
+	// runs here ungated would make the whole gate contingent on which of the
+	// two execution paths a given confirmation happened to take.
+	tool = decorators.WithSensitivity(tool, rt.cfg.Sensitivity)
 
 	callID := "direct_" + uuid.NewString()
 	startedAt := time.Now().UTC()

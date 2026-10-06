@@ -571,6 +571,9 @@ func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userT
 	// transcript. Sharing the parent's would let a worker's read calls
 	// pre-populate (or consume) the coordinator's cap.
 	workerTools = decorators.NewGovernance().WrapAll(workerTools)
+	// Same ordering reason as the coordinator bag: the gate is outermost so
+	// a refusal happens before anything else spends anything.
+	workerTools = decorators.WithSensitivityAll(workerTools, rt.cfg.Sensitivity)
 
 	// The per-call view every tool reads: the persona-filtered bag (so
 	// ToolSearch only offers what this worker may see) plus the live turn's

@@ -43,10 +43,6 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/vincent-wuhan/opskeeper/core/floor/config"
-	"github.com/vincent-wuhan/opskeeper/core/floor/httpserver"
-	"github.com/vincent-wuhan/opskeeper/core/floor/logger"
-	"github.com/vincent-wuhan/opskeeper/core/domains/llmpig"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/auth"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/authzmw"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/dbx"
@@ -59,6 +55,10 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/shutdown"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/workspace"
 	wsfanout "github.com/vincent-wuhan/opskeeper/core/base/pkg/wsfanout"
+	"github.com/vincent-wuhan/opskeeper/core/domains/llmpig"
+	"github.com/vincent-wuhan/opskeeper/core/floor/config"
+	"github.com/vincent-wuhan/opskeeper/core/floor/httpserver"
+	"github.com/vincent-wuhan/opskeeper/core/floor/logger"
 
 	redis "github.com/redis/go-redis/v9"
 	harnessrunner "github.com/vincent-wuhan/opskeeper/core/harness/runner"
@@ -66,18 +66,18 @@ import (
 	"encoding/json"
 	"strconv"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/observability/otelgenai"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/embedding"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/qdrantx"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tracing"
+	"github.com/vincent-wuhan/opskeeper/core/manager/observability/otelgenai"
 
-	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	pkglogquery "github.com/vincent-wuhan/opskeeper/core/base/pkg/logquery"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/notify"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promauth"
 	pkgpromquery "github.com/vincent-wuhan/opskeeper/core/base/pkg/promquery"
 	pkgpromwrite "github.com/vincent-wuhan/opskeeper/core/base/pkg/promwrite"
 	pkgtracequery "github.com/vincent-wuhan/opskeeper/core/base/pkg/tracequery"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	iambizauthz "github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/authz"
@@ -90,19 +90,20 @@ import (
 	iammodel "github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
 	iamserver "github.com/vincent-wuhan/opskeeper/core/manager/iam/server"
 	iamservice "github.com/vincent-wuhan/opskeeper/core/manager/iam/service"
+	"github.com/vincent-wuhan/opskeeper/core/ports"
 
+	managerbizmetric "github.com/vincent-wuhan/opskeeper/core/domains/biz/metric"
+	managerbizpromwrite "github.com/vincent-wuhan/opskeeper/core/domains/biz/promwrite"
+	managermetricdata "github.com/vincent-wuhan/opskeeper/core/domains/data/metric/store"
 	managerbizdemo "github.com/vincent-wuhan/opskeeper/core/manager/biz/demo"
 	managerbizdevice "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
 	managerbizedge "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	changeeventbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge/changeevent"
-	managerbizmetric "github.com/vincent-wuhan/opskeeper/core/domains/biz/metric"
-	managerbizpromwrite "github.com/vincent-wuhan/opskeeper/core/domains/biz/promwrite"
 	managerbiztopology "github.com/vincent-wuhan/opskeeper/core/manager/biz/topology"
 	manageralertdata "github.com/vincent-wuhan/opskeeper/core/manager/data/alert/store"
 	managerdemodata "github.com/vincent-wuhan/opskeeper/core/manager/data/demo"
 	managerdevicedata "github.com/vincent-wuhan/opskeeper/core/manager/data/device/store"
 	manageredgedata "github.com/vincent-wuhan/opskeeper/core/manager/data/edge/store"
-	managermetricdata "github.com/vincent-wuhan/opskeeper/core/domains/data/metric/store"
 	managertopologydata "github.com/vincent-wuhan/opskeeper/core/manager/data/topology/store"
 	managermodelalert "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
 
@@ -115,6 +116,18 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
 	aiopschatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 
+	mcpclient "github.com/vincent-wuhan/opskeeper/core/base/pkg/mcpclient"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promptguard"
+	managerbizgrafana "github.com/vincent-wuhan/opskeeper/core/domains/biz/grafana"
+	managerbizmonitor "github.com/vincent-wuhan/opskeeper/core/domains/biz/monitor"
+	managerbiznodeagent "github.com/vincent-wuhan/opskeeper/core/domains/biz/nodeagent"
+	managerbiznodefleet "github.com/vincent-wuhan/opskeeper/core/domains/biz/nodefleet"
+	managerbizsecret "github.com/vincent-wuhan/opskeeper/core/domains/biz/secret"
+	managerbizsetting "github.com/vincent-wuhan/opskeeper/core/domains/biz/setting"
+	managermonitordata "github.com/vincent-wuhan/opskeeper/core/domains/data/monitor/store"
+	managersecretdata "github.com/vincent-wuhan/opskeeper/core/domains/data/secret/store"
+	managersettingdata "github.com/vincent-wuhan/opskeeper/core/domains/data/setting/store"
+	settingmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/setting"
 	aiopsinvestigator "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/investigator"
 	managerbizaiopsmentions "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/mentions"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
@@ -125,7 +138,6 @@ import (
 	investigator "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert/investigator"
 	managerbizapproval "github.com/vincent-wuhan/opskeeper/core/manager/biz/approval"
 	managerbizchatdiagnose "github.com/vincent-wuhan/opskeeper/core/manager/biz/chatdiagnose"
-	managerbizgrafana "github.com/vincent-wuhan/opskeeper/core/domains/biz/grafana"
 	managerbizhitl "github.com/vincent-wuhan/opskeeper/core/manager/biz/hitl"
 	managerbizimbridge "github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge"
 	managerbizimbridgefeishu "github.com/vincent-wuhan/opskeeper/core/manager/biz/imbridge/provider/feishu"
@@ -138,48 +150,55 @@ import (
 	managerbizloopinvestigatorreal "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop/investigatorreal"
 	managerbizmarketplace "github.com/vincent-wuhan/opskeeper/core/manager/biz/marketplace"
 	managerbizmcp "github.com/vincent-wuhan/opskeeper/core/manager/biz/mcp"
-	managerbizmonitor "github.com/vincent-wuhan/opskeeper/core/domains/biz/monitor"
-	managerbiznodeagent "github.com/vincent-wuhan/opskeeper/core/domains/biz/nodeagent"
-	managerbiznodefleet "github.com/vincent-wuhan/opskeeper/core/domains/biz/nodefleet"
 	managerbizpluginimport "github.com/vincent-wuhan/opskeeper/core/manager/biz/pluginimport"
-	managerbizsecret "github.com/vincent-wuhan/opskeeper/core/domains/biz/secret"
-	managerbizsetting "github.com/vincent-wuhan/opskeeper/core/domains/biz/setting"
 	managerbizskill "github.com/vincent-wuhan/opskeeper/core/manager/biz/skill"
 	managerwebshellbiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/webshell"
 	manageraiopsdata "github.com/vincent-wuhan/opskeeper/core/manager/data/aiops/store"
 	managerapprovaldata "github.com/vincent-wuhan/opskeeper/core/manager/data/approval/store"
 	managerdatachatdiagnosestore "github.com/vincent-wuhan/opskeeper/core/manager/data/chatdiagnose/store"
 	managerdatahitlstore "github.com/vincent-wuhan/opskeeper/core/manager/data/hitl/store"
-	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 	managerimbridgedata "github.com/vincent-wuhan/opskeeper/core/manager/data/imbridge/store"
 	managerknowledgedata "github.com/vincent-wuhan/opskeeper/core/manager/data/knowledge/store"
 	managerdataloopstore "github.com/vincent-wuhan/opskeeper/core/manager/data/loop/store"
 	managermarketplacedata "github.com/vincent-wuhan/opskeeper/core/manager/data/marketplace/store"
 	managermcpdata "github.com/vincent-wuhan/opskeeper/core/manager/data/mcp/store"
-	managermonitordata "github.com/vincent-wuhan/opskeeper/core/domains/data/monitor/store"
-	managersecretdata "github.com/vincent-wuhan/opskeeper/core/domains/data/secret/store"
-	managersettingdata "github.com/vincent-wuhan/opskeeper/core/domains/data/setting/store"
 	managerwebshelldata "github.com/vincent-wuhan/opskeeper/core/manager/data/webshell/store"
 	middlewareregistry "github.com/vincent-wuhan/opskeeper/core/manager/middleware/registry"
 	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/toolset"
-	settingmodel "github.com/vincent-wuhan/opskeeper/core/domains/model/setting"
+	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
-	mcpclient "github.com/vincent-wuhan/opskeeper/core/base/pkg/mcpclient"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promptguard"
 	managerserverimbridge "github.com/vincent-wuhan/opskeeper/core/manager/server/imbridge"
 	managerserverknowledge "github.com/vincent-wuhan/opskeeper/core/manager/server/knowledge"
 	mcpauth "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp/middleware"
 	managerwebshellserver "github.com/vincent-wuhan/opskeeper/core/manager/server/webshell"
 
-	internalagentteams "github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
 	managerbizaudit "github.com/vincent-wuhan/opskeeper/core/domains/biz/audit"
 	managerbizflow "github.com/vincent-wuhan/opskeeper/core/domains/biz/flow"
-	managerbizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
 	managerbizscheduler "github.com/vincent-wuhan/opskeeper/core/domains/biz/scheduler"
 	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
 	repairpreviewcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/repairpreview"
 	manageraudtdata "github.com/vincent-wuhan/opskeeper/core/domains/data/audit/store"
 	managerflowdata "github.com/vincent-wuhan/opskeeper/core/domains/data/flow/store"
+	managerserveraudit "github.com/vincent-wuhan/opskeeper/core/domains/server/audit"
+	managerservercluster "github.com/vincent-wuhan/opskeeper/core/domains/server/cluster"
+	managerserveredgeauth "github.com/vincent-wuhan/opskeeper/core/domains/server/edgeauth"
+	managerserverflow "github.com/vincent-wuhan/opskeeper/core/domains/server/flow"
+	managerserverincident "github.com/vincent-wuhan/opskeeper/core/domains/server/incident"
+	managerserverintegration "github.com/vincent-wuhan/opskeeper/core/domains/server/integration"
+	"github.com/vincent-wuhan/opskeeper/core/domains/server/llmgw"
+	managerserverlogs "github.com/vincent-wuhan/opskeeper/core/domains/server/logs"
+	managerservermetric "github.com/vincent-wuhan/opskeeper/core/domains/server/metric"
+	managermiddleware "github.com/vincent-wuhan/opskeeper/core/domains/server/middleware"
+	managerservermonitor "github.com/vincent-wuhan/opskeeper/core/domains/server/monitor"
+	managerservernodeagent "github.com/vincent-wuhan/opskeeper/core/domains/server/nodeagent"
+	managerserverprom "github.com/vincent-wuhan/opskeeper/core/domains/server/prometheus"
+	managerserversecret "github.com/vincent-wuhan/opskeeper/core/domains/server/secret"
+	managerserversetting "github.com/vincent-wuhan/opskeeper/core/domains/server/setting"
+	managerserversystemupgrade "github.com/vincent-wuhan/opskeeper/core/domains/server/systemupgrade"
+	managerservertraces "github.com/vincent-wuhan/opskeeper/core/domains/server/traces"
+	managerserverversion "github.com/vincent-wuhan/opskeeper/core/domains/server/version"
+	internalagentteams "github.com/vincent-wuhan/opskeeper/core/manager/agentteams"
+	managerbizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
 	managerreportdata "github.com/vincent-wuhan/opskeeper/core/manager/data/report/store"
 	internaldataguard "github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 	internaldataguardheuristic "github.com/vincent-wuhan/opskeeper/core/manager/dataguard/heuristic"
@@ -189,49 +208,31 @@ import (
 	managerserveraiops "github.com/vincent-wuhan/opskeeper/core/manager/server/aiops"
 	managerserveralert "github.com/vincent-wuhan/opskeeper/core/manager/server/alert"
 	managerserverapproval "github.com/vincent-wuhan/opskeeper/core/manager/server/approval"
-	managerserveraudit "github.com/vincent-wuhan/opskeeper/core/domains/server/audit"
 	managerserverchatdiagnose "github.com/vincent-wuhan/opskeeper/core/manager/server/chatdiagnose"
-	managerservercluster "github.com/vincent-wuhan/opskeeper/core/domains/server/cluster"
 	managerserverdataguard "github.com/vincent-wuhan/opskeeper/core/manager/server/dataguard"
 	managerserverdemo "github.com/vincent-wuhan/opskeeper/core/manager/server/demo"
 	managerserverdevice "github.com/vincent-wuhan/opskeeper/core/manager/server/device"
 	managerserveredge "github.com/vincent-wuhan/opskeeper/core/manager/server/edge"
-	managerserveredgeauth "github.com/vincent-wuhan/opskeeper/core/domains/server/edgeauth"
-	managerserverflow "github.com/vincent-wuhan/opskeeper/core/domains/server/flow"
 	managerserverhitl "github.com/vincent-wuhan/opskeeper/core/manager/server/hitl"
-	managerserverincident "github.com/vincent-wuhan/opskeeper/core/domains/server/incident"
-	managerserverintegration "github.com/vincent-wuhan/opskeeper/core/domains/server/integration"
-	"github.com/vincent-wuhan/opskeeper/core/domains/server/llmgw"
-	managerserverlogs "github.com/vincent-wuhan/opskeeper/core/domains/server/logs"
 	managerserverloop "github.com/vincent-wuhan/opskeeper/core/manager/server/loop"
 	managerservermarketplace "github.com/vincent-wuhan/opskeeper/core/manager/server/marketplace"
 	managerservermcp "github.com/vincent-wuhan/opskeeper/core/manager/server/mcp"
-	managerservermetric "github.com/vincent-wuhan/opskeeper/core/domains/server/metric"
-	managermiddleware "github.com/vincent-wuhan/opskeeper/core/domains/server/middleware"
-	managerservermonitor "github.com/vincent-wuhan/opskeeper/core/domains/server/monitor"
-	managerservernodeagent "github.com/vincent-wuhan/opskeeper/core/domains/server/nodeagent"
-	managerserverprom "github.com/vincent-wuhan/opskeeper/core/domains/server/prometheus"
 	managerserverreport "github.com/vincent-wuhan/opskeeper/core/manager/server/report"
-	managerserversecret "github.com/vincent-wuhan/opskeeper/core/domains/server/secret"
-	managerserversetting "github.com/vincent-wuhan/opskeeper/core/domains/server/setting"
 	managerserverskill "github.com/vincent-wuhan/opskeeper/core/manager/server/skill"
 	managerserversystemhealth "github.com/vincent-wuhan/opskeeper/core/manager/server/systemhealth"
-	managerserversystemupgrade "github.com/vincent-wuhan/opskeeper/core/domains/server/systemupgrade"
 	managerservertopology "github.com/vincent-wuhan/opskeeper/core/manager/server/topology"
-	managerservertraces "github.com/vincent-wuhan/opskeeper/core/domains/server/traces"
-	managerserverversion "github.com/vincent-wuhan/opskeeper/core/domains/server/version"
 
 	managerserverplugin "github.com/vincent-wuhan/opskeeper/core/domains/server/plugin"
+	managersvcmetric "github.com/vincent-wuhan/opskeeper/core/domains/service/metric"
+	managersvcplugin "github.com/vincent-wuhan/opskeeper/core/domains/service/plugin"
+	managersvcprom "github.com/vincent-wuhan/opskeeper/core/domains/service/prometheus"
+	managersvcsystemupgrade "github.com/vincent-wuhan/opskeeper/core/domains/service/systemupgrade"
 	managersvcaiops "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
 	managersvcalert "github.com/vincent-wuhan/opskeeper/core/manager/service/alert"
 	managersvcdemo "github.com/vincent-wuhan/opskeeper/core/manager/service/demo"
 	managersvcedge "github.com/vincent-wuhan/opskeeper/core/manager/service/edge"
 	managersvcfb "github.com/vincent-wuhan/opskeeper/core/manager/service/frontierbound"
-	managersvcmetric "github.com/vincent-wuhan/opskeeper/core/domains/service/metric"
-	managersvcplugin "github.com/vincent-wuhan/opskeeper/core/domains/service/plugin"
-	managersvcprom "github.com/vincent-wuhan/opskeeper/core/domains/service/prometheus"
 	managersvcsystemhealth "github.com/vincent-wuhan/opskeeper/core/manager/service/systemhealth"
-	managersvcsystemupgrade "github.com/vincent-wuhan/opskeeper/core/domains/service/systemupgrade"
 
 	// Builtin skill init() blocks register Executors with the shared
 	// core/floor/skill registry. Both manager (metadata) and edge
@@ -1114,7 +1115,7 @@ func main() {
 			ProviderTimeout: time.Duration(cfg.LLM.CallTimeoutSeconds) * time.Second,
 			MaxOutputTokens: cfg.LLM.MaxOutputTokens,
 		},
-		Log:            log,
+		Log: log,
 	})
 	if err != nil {
 		// The two things it refuses to be built without are both constructed
@@ -2003,13 +2004,21 @@ func main() {
 		selfSettledToolNames(),
 	)
 
+	// readerGate is the reader-tier gate the console tool chain passes
+	// through. It is declared here and assigned below, next to the label
+	// store it reads: main builds the chat runtime before Data-Guard is
+	// assembled, so the two halves of the answer do not exist at the same
+	// moment as the question. Nil here is "no tiers configured", and the
+	// chain runs ungated in that case.
+	var readerGate ports.SensitivityGate
 	if kernel.UsesChatRuntime() {
 		rt, rterr := buildAIOpsRuntime(rootCtx, cfg, llmClient, toolsReg, aiopsRepo, fbClient, edgeUC, deviceUC, reg, log, bootstrapSkillReg, bootstrapAgentReg, llmSettingsResolver, kernelWiring{
-			Kernel:     kernel,
-			Models:     modelRegistry,
-			Gate:       kernelGate,
-			Audit:      auditUC,
-			PiGRuntime: pigRuntime,
+			Kernel:      kernel,
+			Models:      modelRegistry,
+			Gate:        kernelGate,
+			Audit:       auditUC,
+			PiGRuntime:  pigRuntime,
+			Sensitivity: readerGate,
 		}, dailyBudget)
 		if rterr != nil {
 			log.Warn("aiops runtime build failed — falling back to legacy kernel", slog.Any("err", rterr))
@@ -2979,6 +2988,27 @@ func main() {
 		log.With(slog.String("comp", "dataguard")),
 	)
 	dataguardHandler := managerserverdataguard.NewHandler(dgLabelMgr)
+	// The reader-tier gate every tool call now passes through (decision 361).
+	//
+	// It is assembled here because this is the one place allowed to hold both
+	// halves: the label store, which knows how sensitive a resource is, and
+	// the iam enforcer, which knows whether this caller may read at that
+	// level. Until now both halves existed and neither was called from the
+	// other side of the wall between them.
+	readerGate = newSensitivityGate(
+		dgLabelMgr,
+		authzEnf,
+		iambizauthz.NewSensitivityTierRepo(db),
+		log.With(slog.String("comp", "sensitivity")),
+	)
+	if readerGate != nil {
+		log.Info("dataguard: reader-tier gate armed on the console tool chain")
+		// The two surfaces that run the tool bag without going through the
+		// chat runtime are wired here, because the gate is built here and a
+		// gate that covers two of four doors is a gate an operator
+		// discovers the hard way.
+		flowInvoker.gate = readerGate
+	}
 	_ = internaldataguard.Public // keep import for Sensitivity type alias
 	// HLD-017 cloud_bash producer: register the execute-on-approve executor
 	// (resolve the bound credential → inject into the Runner sandbox → run)
@@ -3162,7 +3192,7 @@ func main() {
 		if !exists {
 			return nil, managerbizloop.ErrMCPToolNotFound
 		}
-		output, err := tool.InvokableRun(ctx, string(arguments), aiopstoolsbase.WithTenant(tenantID))
+		output, err := aiopstoolsdec.WithSensitivity(tool, readerGate).InvokableRun(ctx, string(arguments), aiopstoolsbase.WithTenant(tenantID))
 		if err != nil {
 			return nil, err
 		}
@@ -4728,6 +4758,10 @@ type kernelWiring struct {
 	// a second extension runner, and a plugin that loaded into it would be
 	// invisible to a turn driven by the first.
 	PiGRuntime *pigcoding.Runtime
+	// Sensitivity is the reader-tier gate every console tool call passes
+	// through. Optional: nil leaves the chain ungated, which is a deployment
+	// with no Data-Guard tiers rather than one where everything is permitted.
+	Sensitivity ports.SensitivityGate
 }
 
 // buildAIOpsRuntime builds the chatruntime.Runtime when
@@ -4981,6 +5015,7 @@ func buildAIOpsRuntime(
 	}
 
 	rt, err := aiopschatruntime.NewRuntime(aiopschatruntime.Config{
+		Sensitivity:      wiring.Sensitivity,
 		SkillRegistry:    skillReg,
 		AgentRegistry:    agentReg,
 		Sessions:         sessions,
@@ -5443,6 +5478,12 @@ type flowToolInvoker struct {
 	// run directly, NO human approval). Wired post-construction once mcpUC
 	// exists. nil → mcp tool nodes error cleanly ("unknown tool").
 	mcp *flowMCPSource
+	// gate is the reader-tier check, wired post-construction for the same
+	// reason mcp is: the Data-Guard halves are not assembled yet when the
+	// invoker is built. nil → this surface runs ungated, which is a
+	// deployment without Data-Guard tiers rather than one where everything is
+	// readable.
+	gate ports.SensitivityGate
 }
 
 func newFlowToolInvoker(reg *aiopstools.Registry, registerer prometheus.Registerer) *flowToolInvoker {
@@ -5510,7 +5551,7 @@ func (s *flowToolInvoker) InvokeTool(ctx context.Context, name string, args json
 	if info, ierr := t.Info(ctx); ierr == nil && len(info.Parameters) > 0 {
 		argsStr = coerceArgsToSchema(argsStr, info.Parameters)
 	}
-	out, err := t.InvokableRun(ctx, argsStr)
+	out, err := aiopstoolsdec.WithSensitivity(t, s.gate).InvokableRun(ctx, argsStr)
 	if err != nil {
 		return nil, err
 	}

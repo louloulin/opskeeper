@@ -201,6 +201,11 @@ type Config struct {
 	// NewRuntime refuses rather than silently answering nothing.
 	Kernel pigagent.Agent
 
+	// Sensitivity is the reader-tier gate every tool call passes through.
+	// Optional: nil leaves the bag ungated, which is a deployment with no
+	// Data-Guard tiers rather than one where everything is permitted.
+	Sensitivity ports.SensitivityGate
+
 	// ToolBag is the pre-decorated BaseTool list the kernel exposes
 	// to the LLM. cmd/opskeeper/main.go assembles this once via
 	// Registry.BuildBaseTools + AppendHostFilesTools + Wrap.
@@ -685,6 +690,11 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	// run ungoverned. One Governance per Handle call = one run, which is
 	// exactly the scope both rules are defined over.
 	sessionToolBag = decorators.NewGovernance().WrapAll(sessionToolBag)
+	// The sensitivity gate wraps after governance so it is the outermost
+	// layer and therefore the first thing a call meets: a refused call must
+	// not have consumed the run's governance budget, and "the gate said no"
+	// is more useful to the model than "the memo said you already asked".
+	sessionToolBag = decorators.WithSensitivityAll(sessionToolBag, rt.cfg.Sensitivity)
 	// AgentID="default" is the virtual top-level persona — same wiring
 	// as the no-agent coordinator (BasePrompt + full toolBag + agent
 	// catalog), but the session keeps "default" so the SPA shows the
