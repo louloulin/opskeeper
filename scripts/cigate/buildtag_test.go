@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -240,4 +241,78 @@ func repoRoot(t *testing.T) string {
 		t.Fatalf("repoRoot produced an absolute path %q; this test must run the way the tool does", rel)
 	}
 	return rel
+}
+
+// A gate whose job is guarded by a clock has never reported anything on a
+// commit, no matter how many times the workflow ran. Saying "all 30 gates are
+// invoked by CI" about such a gate is the claim decisions 163/164 and 377 were
+// written to stop making, so the reader is told which gates those are.
+func TestAGateWaitingForAScheduleIsNamedAsSuch(t *testing.T) {
+	ci, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatalf("read ci.yml: %v", err)
+	}
+	got := ScheduleOnlyGates(string(ci))
+	if len(got) == 0 {
+		t.Fatal("no schedule-only gate found in the real workflow; the reader " +
+			"is back to a single number that cannot tell 'ran' from 'wired'")
+	}
+	found := false
+	for _, g := range got {
+		if g == "e2e-delivery-check" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("e2e-delivery-check is not among the schedule-only gates %v", got)
+	}
+	// And the opposite: a gate a push reaches must not be listed, or the line
+	// stops being a distinction and becomes noise.
+	for _, g := range got {
+		if g == "module-check" {
+			t.Errorf("module-check runs on every push; listing it as schedule-only " +
+				"would make the warning untrustworthy")
+		}
+	}
+}
+
+// The detection has to be able to say "none", or it is not a measurement.
+func TestAPushReachableJobIsNotCalledScheduleOnly(t *testing.T) {
+	const wf = `on:
+  push:
+  schedule:
+    - cron: '17 3 * * *'
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: make module-check
+`
+	if got := ScheduleOnlyGates(wf); len(got) != 0 {
+		t.Errorf("an unguarded job was reported as schedule-only: %v", got)
+	}
+}
+
+// Red-example discipline: the rule is only worth having if it fires when it
+// should. Deleting the `if:` from the real delivery job has to change the
+// answer, or the parser is reading something other than the guard.
+func TestTheGuardIsWhatIsBeingRead(t *testing.T) {
+	base := `jobs:
+  gate:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - run: make %s
+`
+	withGuard := ScheduleOnlyGates(fmt.Sprintf(base, "module-check"))
+	withoutGuard := ScheduleOnlyGates(`jobs:
+  gate:
+    steps:
+      - run: make module-check
+`)
+	if len(withGuard) != 1 {
+		t.Fatalf("a guarded job was not detected: %v", withGuard)
+	}
+	if len(withoutGuard) != 0 {
+		t.Fatalf("removing the guard did not change the answer: %v", withoutGuard)
+	}
 }

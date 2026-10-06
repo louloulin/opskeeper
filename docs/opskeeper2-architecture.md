@@ -6272,6 +6272,137 @@ integration-check: every test behind //go:build integration has run against a re
 但**一次"验证中"被我自己的操作打断，而打断之后我没有立刻意识到那一次的
 结论是"被取消"而不是"通过"**，是一个很容易在别的场景里变成误判的地方。
 本轮的正确顺序应该是：**push 之后不再动仓库，盯到那个 run 出终态。**
+### 4.332 决策 398：`e2e-delivery-check` ——**方案 §六 那一行"节点无云厂商密钥"——从加入 CI 到现在，一次都没有跑过，且在结构上跑不了**
+
+4.331 说 CI 只红在开源门槛 13 处。本轮去取 `broker-arch-report` 的结论
+（4.329 说过那是给 `delivery` job 加矩阵之前必须先读的东西），**读到的是
+一个更基础的问题**。
+
+#### 4.332.1 取数的过程
+
+本机跑 `make broker-arch-report`：
+
+```
+VERDICT: UNKNOWN — the registry did not answer, so this run says nothing about arm64.
+  cause: fetch manifest: ... context deadline exceeded
+```
+
+和 `ci.yml:381-390` 的注释说的一样——开发机在 registry 镜像后面，
+"this one asked and got 403"。**所以本机回答不了这个问题，这是设计好的。**
+那就只能去 CI 找答案，而**找答案的过程本身撞上了一堵墙**。
+
+第一次查：`gh run list --branch feature/pig` → 150 次 run，
+事件分布 `{push: 150}`，**零次 schedule**。
+
+第二次查：去掉分支过滤 → 150 次 run，事件
+`{push: 149, workflow_dispatch: 1}`，**仍然是零次 schedule**，
+而且 150 次全在 `feature/pig` 一个分支上。
+
+第三次查那唯一一次 `workflow_dispatch`（3 天前）→ job 列表里
+**只有 `build + vet + test`，没有 `node delivery`**。查它跑的 commit
+`abb95fa`（2026-10-03），而 `delivery` job 是 `969a49f`（2026-10-05 09:39）
+才加进 `ci.yml` 的——**那次手动触发早于这个 job 存在**。
+
+#### 4.332.2 墙在哪里
+
+```
+默认分支        : main
+远端分支        : feature/pig / main / release/20260920
+feature/pig 领先 main : 402 个提交
+origin/main 的 ci.yml 里 "schedule" 出现次数 : 0
+origin/main 的 ci.yml 里 "node delivery" 出现次数 : 0
+```
+
+**GitHub 的 `schedule` 事件只对默认分支上的 workflow 触发。**
+默认分支是 `main`，而 `main` 上的 `ci.yml` 根本没有 `schedule`，
+也没有 `delivery` job。**而 `delivery` job 在 `feature/pig` 上，
+这个分支领先 402 个提交，从未合并。**
+
+所以那个 cron（`17 3 * * *`，每天 03:17 UTC）在 `969a49f` 之后
+**一次都没有触发过**——不是触发失败了，是**它永远不会为这个分支触发**。
+唯一的另一条路是手动 dispatch，而没有人手动 dispatch 过一个 nightly。
+
+**结论：方案 §六 验收表里"节点上 `/etc/opskeeper-edge` 与进程环境经审计确认无
+云厂商密钥"这一行，从它被写进 CI 的那一天起，没有由 CI 报过一次。**
+
+#### 4.332.3 这是同一个毛病的第三次，而且这次最深
+
+| | 决策 | 形态 |
+|---|---|---|
+| 1 | 348 | 「有测试」和「有东西跑它」是两栏 |
+| 2 | 377 | 一个 e2e 测试的名单是手抄的，漏了一个，它从未在 CI 跑过 |
+| 3 | 359/163/164 | 工作流只监听 `push: [main]`，而活干在 feature/pig 上，**五道闸门挂在一个一次都没执行过的工作流里** |
+| **4** | **本节** | **工作流跑得很勤（150 次），闸门在里面写着，`make` 那行也写着，cigate 也说"都被 CI 调用"——而那个 job 挂在一条只对默认分支生效的时钟上** |
+
+前三次是"忘了接线"，这一次是**接线接得完全正确，而那条线接到一个在本分支上
+永远不通的电源上**。它比前三者更难发现，因为每一条单独看都成立。
+
+#### 4.332.4 而 `cigate` 正在**主动断言**它跑过
+
+`cigate` 的摘要行，每跑一次就打印一次：
+
+```
+cigate: all 30 acceptance gates (4 named by the plan, 26 owned by a decision)
+        are defined and invoked by CI, and every push starts the workflow
+```
+
+`cigate` 解析 `ci.yml` 的方式是**当纯文本扫 `run:` 行里的 `make` 目标**
+（`invokedTargets`，`main.go:560`）。`make e2e-delivery-check` 确实在文件里，
+所以它被计为"invoked"。
+
+**而 `cigate` 全文没有出现过 `schedule`、`cron` 或 `default branch` 任何一个词**
+（本轮 grep 确认，0 命中）。它有 `TriggerReachability` 检查 push 触发
+（决策 163 的产物），**但只问"push 能不能启动工作流"，不问"push 能不能到达
+这个 job"**。
+
+**所以那句话对 29 道成立，对 1 道是假的，而工具每跑一次就把它当真话说一遍。**
+
+#### 4.332.5 本轮改了什么：让那句话变成两句
+
+给 `cigate` 加 `ScheduleOnlyGates`，并把摘要拆成两行。现在它说：
+
+```
+cigate: 29 of 30 acceptance gates (4 named by the plan, 26 owned by a decision)
+        are defined and reachable from a push, and every push starts the workflow
+cigate: 1 gate(s) are wired but no push can reach them -- they wait for a schedule,
+        which GitHub fires only for the default branch, or for a manual dispatch:
+        e2e-delivery-check
+```
+
+**没有让 CI 变红，也没有把那个 job 改成能跑**——那是 4.332.7 那件要人决定的事。
+本轮只做一件本机就能做且确定正确的事：**把一个假的断言改成一个真的断言。**
+工具不能从文件本身判断那个时钟有没有响过（4.332.1 恰好证明了它在本机问不到），
+**而一个问不到的工具不能暗示自己知道。**
+
+三条测试，其中两条做红例验证（把 `ScheduleOnlyGates` 改成返回 `nil`，
+`TestAGateWaitingForAScheduleIsNamedAsSuch` 与 `TestTheGuardIsWhatIsBeingRead`
+立刻 FAIL；第三条"没守卫的 job 不该被列进去"是负向对照，函数被掏空时它
+平凡成立，这是它该有的样子）。恢复后 `scripts/cigate` 全量绿，
+`deadcode-ratchet-check` / `ledger-check` / `ci-gate-check` /
+`promptguard-check` / `plan-security-check` / `compliance-claims-check` 等九道
+本轮逐条重跑，全绿。
+
+#### 4.332.6 于是 arm64 节点 agent 那一项的真实形状，变了两次
+
+- 4.329 我说它「需要一台机器」——**错**，CI 一直有 arm64 runner；
+- 现在它多了一层：**就算给 `delivery` job 加上 arm64 矩阵，那个 job 在
+  `feature/pig` 上也一次都不会跑**。所以顺序是**先让它跑起来，再谈第二个架构**，
+  而"让它跑起来"有一个不需要任何人批准的做法——
+
+  **手动 dispatch 一次。** `workflow_dispatch` 在 `on:` 里已经声明，
+  而 `delivery` job 的守卫是 `schedule || workflow_dispatch`，
+  所以现在就能跑。本轮**没有触发它**，因为那是动别人的 CI 配额、
+  且会拉一个公开registry 的镜像——但**它现在是一个按钮，不是一个愿望**。
+
+#### 4.332.7 两件仍然要人决定的，本轮的结论
+
+1. **feature/pig 与 main 的关系**。402 个提交领先、`main` 上连 `schedule`
+   都没有，nightly 与 `pull_request` 类的东西在合并前都不会为这条分支发生。
+   **是这条分支要合，还是这些验收要在别处重新安排**——这是路线问题。
+2. **`e2e-delivery-check` 每次 push 跑，还是保持 nightly**。
+   `ci.yml:369-373` 写的是「nightly 失败是信息，PR 红是障碍」，
+   理由是公开 registry 的限流不该卡住一个PR。**这个理由本身仍然成立**，
+   但它成立的前提是 nightly **真的会跑**——而它今天不会。
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，

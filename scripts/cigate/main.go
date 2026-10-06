@@ -371,9 +371,23 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Printf("cigate: all %d acceptance gates (%d named by the plan, %d owned by a decision) "+
-		"are defined and invoked by CI, and %s\n",
-		len(allGates()), len(Gates()), len(DecisionGates()), triggerSummary(TriggerReachabilityOf(string(ci))))
+	// The claim is "defined and invoked by CI". That is true of a gate whose
+	// job a push can reach, and it is a different claim for one that waits for
+	// a clock: the command is wired either way, but "invoked" has not happened
+	// and cannot be read off this file. Printing one number for both is how
+	// decisions 163/164 and 377 happened, so the two are named separately.
+	// See ScheduleOnlyGates.
+	pushed := len(allGates()) - len(ScheduleOnlyGates(string(ci)))
+	fmt.Printf("cigate: %d of %d acceptance gates (%d named by the plan, %d owned by a decision) "+
+		"are defined and reachable from a push, and %s\n",
+		pushed, len(allGates()), len(Gates()), len(DecisionGates()),
+		triggerSummary(TriggerReachabilityOf(string(ci))))
+	if waiting := ScheduleOnlyGates(string(ci)); len(waiting) > 0 {
+		fmt.Printf("cigate: %d gate(s) are wired but no push can reach them -- "+
+			"they wait for a schedule, which GitHub fires only for the default branch, "+
+			"or for a manual dispatch: %s\n",
+			len(waiting), strings.Join(waiting, ", "))
+	}
 }
 
 // check reports every gate that is not wired, so one run tells the whole
@@ -1016,4 +1030,87 @@ func isGate(target string, gates []Gate) bool {
 		}
 	}
 	return false
+}
+
+// ScheduleOnlyGates names the acceptance gates that no push can reach.
+//
+// The failure this catches is the same shape as the one TriggerReachability
+// was written for, one level down. That one asked "can a push start the
+// workflow"; this asks "can a push reach *this job*". A job guarded by
+//
+//	if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+//
+// is reachable by hand and by the clock, and by neither on the commit you just
+// pushed. Both routes are real and neither has run: GitHub fires `schedule`
+// only for the workflow file on the repository's default branch, so a job added
+// on a feature branch waits for a merge it has not had, and nobody dispatches a
+// nightly by hand.
+//
+// The cost of not noticing is that the summary line this file prints — "N
+// acceptance gates ... are defined and invoked by CI" — counts a gate that has
+// never reported anything. That is precisely the claim decisions 163/164 and
+// 377 were written to stop making, one job further down the file.
+//
+// So the rule is a report, not a failure. The gate is real and its command is
+// wired; what cannot be established from the file alone is whether the schedule
+// has ever fired for it, and a tool that cannot know must not imply that it has.
+func ScheduleOnlyGates(ci string) []string {
+	lines := strings.Split(ci, "\n")
+
+	// Job keys sit at two-space indentation; a job's `if:` is at four.
+	// Tracking the current job lets a `run:` line be attributed to it.
+	currentJob := ""
+	jobGuarded := false
+	seen := map[string]bool{}
+	var out []string
+
+	for _, raw := range lines {
+		line := strings.TrimRight(raw, " \r")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+
+		switch {
+		case indent == 2 && strings.HasSuffix(trimmed, ":") && !strings.HasPrefix(trimmed, "-"):
+			currentJob = strings.TrimSuffix(trimmed, ":")
+			jobGuarded = false
+			continue
+		case indent == 4 && strings.HasPrefix(trimmed, "if:"):
+			cond := strings.ToLower(trimmed)
+			// A job that mentions push or pull_request in its guard is
+			// reachable without a clock; only the absence of both means
+			// "nothing you do today will run this".
+			jobGuarded = strings.Contains(cond, "schedule") &&
+				!strings.Contains(cond, "push") && !strings.Contains(cond, "pull_request")
+			continue
+		}
+
+		if !jobGuarded {
+			continue
+		}
+		target := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+		if rest, ok := strings.CutPrefix(target, "run:"); ok {
+			target = strings.TrimSpace(rest)
+		}
+		for _, seg := range splitCommands(target) {
+			seg = strings.TrimSpace(seg)
+			if !strings.HasPrefix(seg, "make ") {
+				continue
+			}
+			name := strings.TrimSpace(strings.TrimPrefix(seg, "make "))
+			name = strings.Fields(name + " ")[0]
+			if name == "" || seen[name] {
+				continue
+			}
+			if !isGate(name, allGates()) {
+				continue
+			}
+			seen[name] = true
+			out = append(out, name)
+		}
+		_ = currentJob
+	}
+	return out
 }
