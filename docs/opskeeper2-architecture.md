@@ -5801,6 +5801,97 @@ autonomy 的 argv 约束。** 方案里点名的 `limits.memory` **字段名**�
 工具能力，而不只是这一个。**这是"工具级配额"这个模型在进程内工具上的
 真实边界**，将来若要给进程内工具做上限，做法不会是 rlimit，而是把这类
 工具挪出 edge 进程——那是一个架构决定，不是一个补丁。
+### 4.327 决策 393：上一节那个改动**自己带了一个静默回归**，本轮在合进下一个提交之前抓到了
+
+4.326 改了四个工具的捕获方式。改完跑了全量测试，全绿。**本节记的是
+绿了之后我又做的一件事，以及它找到的东西。**
+
+#### 4.327.1 绿不等于对：先问「我改的那几行被走到了吗」
+
+四个工具的既有测试都存在、调用了 `Execute`、都绿。但本机是 darwin，
+`dmesg`/`strace`/`traceroute` 三个二进制**恰好都存在**（`dmesg` 回了
+`usage: sudo dmesg`），所以它们走的是「跑起来了」的路径。
+
+**这意味着我改的那条判定，在本机根本没有被测到。** 真正需要它的那条路——
+「二进制不存在」——要么不在这台机器上发生，要么发生了但没人断言。
+
+`strace` 那个尤其明显：它的 `Execute` 在本机返回 `{"pid":1,...,"error":"pid 1 not found"}`，
+走的是参数校验分支，**根本到不了 `runCapped`**。一个绿色的、与被改代码无关的测试。
+
+#### 4.327.2 回归是什么
+
+4.326 的 `runCapped` 在 `cmd.Start()` 失败时返回 `nil, nil, err`——
+**stdout 空、stderr 空**。而三个调用方的失败判定都是「stdout 是不是空的」：
+
+```go
+if len(bytes.TrimSpace(errTail)) > 0 && len(out) == 0 { /* 报错 */ }
+```
+
+二进制缺失时 `errTail` 也是空的，**条件不成立**，于是工具走回成功分支。
+
+实测（用 `sos` 在精简容器里缺失这个真实场景去推演，直接探 `runCapped`）：
+
+```
+out="" errTail="" err=exec: "...": executable file not found in $PATH
+```
+
+**改之前**：dmesg 走 `err != nil`，`res.Error` 被填上。
+**改之后**：dmesg 解析一个空字符串，返回 `{"entries":null,"total":0,"truncated":false}`，
+**没有 error 字段**。
+
+后果不是崩溃、不是报错、是**一个看起来完全正常的答案**：在一台没装
+dmesg 的节点上问内核消息，模型收到「0 条」，于是推断内核很安静——
+而真实情况是这个节点根本读不到内核。**一个把「我看不见」报成「我看见了，
+什么都没有」的缺陷。** 诊断类工具说这句话，代价是让人去查一个不存在的问题。
+
+#### 4.327.3 修法：把真实原因放回调用方已经在读的那个槽位
+
+```go
+if err := cmd.Start(); err != nil {
+	// ... returning an empty tail here would make a missing binary look
+	// like a tool that ran and found nothing ...
+	return nil, []byte(err.Error()), err
+}
+```
+
+**不新增返回通道**——四个调用方各自要改判定条件，是把同一个错误在四个地方
+各判一次；把原因放进它们**已经会读**的 stderr 槽，一处改动，四处受益。
+`err` 仍然照原样返回，所以 `traceroute` 那种「非零退出但仍有输出」的行为不受影响。
+
+#### 4.327.4 这条测试被验证过会红
+
+新增 `TestAMissingBinaryIsReportedAsMissing`。按决策 348 之后的规矩，
+新测试要证明自己**不是空过**——所以本轮**把修复回退掉跑了一遍**：
+
+```
+# 回退修复
+--- FAIL: TestAMissingBinaryIsReportedAsMissing
+    a missing binary returned an empty stderr tail; every caller reads that
+    slot to decide failure, so this makes the tool look successful
+# 恢复修复
+--- PASS
+```
+
+**红过、绿了，才算这条测试存在。** 一条只跑绿过的测试，在这份仓库里
+不构成证据——4.326 那条 `TestCappedCaptureHoldsTheLine` 之所以可信，也是因为
+它先证明了子进程**能**突破上界（40MB vs 16MB），否则「没突破」可能只是
+命令压根没起来。
+
+#### 4.327.5 这一节真正要记的不是那个 bug
+
+**4.326 的改动通过了全部测试才进这个提交的下一个 commit，而回归是在
+「测试全绿之后」被找到的。** 也就是说：绿灯不是终点，**「我改的代码被测到了吗」
+是一个独立的问题**，而本仓库里大多数测试不回答它。
+
+判据很简单——**一个只测解析函数的测试，改了捕获路径之后仍然是绿的，
+因为它压根不 spawn 任何东西。** `dmesg_test.go` 测的是 `parseDmesg`，
+`strace_test.go` 测的是 `parseStraceSummary`。它们绿得毫无意见，
+而它们**没有投票权**。
+
+所以这一节的净进展不是「修了一个 bug」，是：
+**新加的两条测试都指向了本轮真实改动的路径（一个测上界、一个测启动失败），
+而不是又给解析函数加了一条同形状的测试。** 这是把 4.387 那个诱饵技巧
+用在自己身上。
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，

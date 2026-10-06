@@ -63,3 +63,29 @@ func runUnbounded(t *testing.T, script string) []byte {
 	}
 	return out
 }
+
+// A tool that never started has no stderr of its own. Every caller decides
+// "did this fail?" by looking at whether stdout came back, so returning an
+// empty tail on a start failure makes a missing binary indistinguishable from
+// a tool that ran correctly and found nothing — dmesg would answer "0 kernel
+// messages" on a host where dmesg is simply not installed, and the model
+// reading that would conclude the kernel is quiet rather than that it cannot
+// look. That regression is silent: no error, no panic, a plausible answer.
+func TestAMissingBinaryIsReportedAsMissing(t *testing.T) {
+	out, errTail, err := runCapped(context.Background(), "opskeeper-no-such-binary")
+	if err == nil {
+		t.Fatalf("starting a missing binary returned no error")
+	}
+	if len(out) != 0 {
+		t.Errorf("a missing binary produced stdout: %q", out)
+	}
+	// The reason has to arrive in the tail, because that is the slot the
+	// tool implementations read. An empty tail here is exactly the bug.
+	if len(errTail) == 0 {
+		t.Fatalf("a missing binary returned an empty stderr tail; every caller " +
+			"reads that slot to decide failure, so this makes the tool look successful")
+	}
+	if !strings.Contains(string(errTail), "opskeeper-no-such-binary") {
+		t.Errorf("the tail does not name what was missing: %q", errTail)
+	}
+}

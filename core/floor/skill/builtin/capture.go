@@ -41,7 +41,15 @@ func runCapped(ctx context.Context, entry string, args ...string) (stdout []byte
 	cmd.Stderr = &cappedBuffer{w: &errBuf, max: skill.MaxSubprocessStderrTail}
 
 	if err := cmd.Start(); err != nil {
-		return nil, nil, err
+		// The child's own stderr is not available when it never started, and
+		// every caller below decides "did this tool fail?" by looking at
+		// whether stdout came back empty. Returning an empty tail here would
+		// make a missing binary look like a tool that ran and found nothing --
+		// dmesg on a host without kernel access would answer "0 messages"
+		// instead of "dmesg is not available", which is the more useful of
+		// those two answers to exactly the wrong question. So the real reason
+		// is handed back in the slot the callers already read.
+		return nil, []byte(err.Error()), err
 	}
 	waitErr := cmd.Wait()
 
