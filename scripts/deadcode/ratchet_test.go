@@ -23,6 +23,19 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 887 → 874 / 606 / 268 as of decision 346: the webssh tunnel surface — six
+// methods and sixteen types — and the thirteen the ratchet could not see.
+//
+// This is the first line in this file that records a deletion of something
+// the report had already counted as **alive**. `ShellOutputRequest` and its
+// two siblings were reachable: manager/frontierbound registers handlers for
+// `shell_output` and `shell_exit`, so the walk arrives and stops. It was
+// right about reachability and wrong about the thing that matters, because
+// no edge has ever sent either message. **A ratchet counts what is
+// unreachable; it cannot count what is reachable and inert.** That gap is
+// now covered by scripts/rpcmatch, which asks the other question — who
+// speaks this on the far side — and which is the only reason the other
+// three of the sixteen were removable with evidence rather than by faith.
 // 889 → 887 / 619 / 268 as of decision 345: two symbols, and the second one
 // is the interesting half. `EnsureRepoSeed` and `WithRepoDeleteHook` existed
 // only to serve the OPSKEEPER_BUILTIN_VAULT_URL seeding path, and ADR-029
@@ -273,8 +286,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 887
-	deadSymbolBudget     = 619
+	unreachableBudget    = 874
+	deadSymbolBudget     = 606
 	testOnlySymbolBudget = 268
 )
 

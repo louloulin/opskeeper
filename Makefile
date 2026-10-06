@@ -640,6 +640,18 @@ route-audit: ## 闸门：每条 mutating 路由都有审计裁决，新路由不
 	go run ./scripts/routeaudit .
 	go test ./scripts/routeaudit/ -count=1
 
+# manager 在隧道上注册的每一个方法，都必须真有生产代码发送它。
+# 决策 346 删掉整块 webssh 线格式时才需要这道闸门：那十六个类型里有十三个
+# deadcode 已经报了，剩下三个**报不出来**——manager 确实注册了 shell_output /
+# shell_exit 的 handler，所以可达性走到那里就停了，而节点侧从来没有发送过它们。
+# 可达性问的是「我能走到它」，这道闸门问的是「对面谁在说这门语言」。
+# 发送方必须落在 core/manager 之外、且必须在调用位置上：边侧 RegisterHandler 是
+# 「边被调用」，测试里的 Call 只证明 API 存在，三者都不算发送方。
+.PHONY: rpc-match-check
+rpc-match-check: ## 闸门：manager 注册的每个隧道方法都有生产发送方（决策 346）
+	go run ./scripts/rpcmatch .
+	go test ./scripts/rpcmatch/ -count=1
+
 # opskeeper-migrate 的目标端点与字段映射必须真实存在。这道闸门做两件事：
 # 注册表里每一条 TargetRoute 都要在 manager 的路由表里注册过；每一条 FieldMap
 # 的目标字段都要是那个端点的 handler 真正解码的请求结构里的 json tag。

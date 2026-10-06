@@ -1526,7 +1526,6 @@ func main() {
 		MetricIngester: metricIngestSvc,
 		PromIngester:   promWiring,
 		PluginConfigUC: pluginConfigUC,
-		WebshellRouter: webshellRouter,
 		ChangeEventUC:  changeEventUC,
 		// AgentEvents routes a node's pushed agent frames to the console
 		// that asked for them. Nil-safe: with it unset the node agents

@@ -51,10 +51,6 @@ type Wiring struct {
 	// MethodGetPluginConfigs so edges can pull their plugin config
 	// snapshot via tunnel.
 	PluginConfigUC PluginConfigFetcher
-	// WebshellRouter routes edge-to-manager shell_output / shell_exit
-	// pushes to the live WebSocket bridge for that session. Optional -
-	// when nil the two handlers don't install and webshell is disabled.
-	WebshellRouter WebshellRouter
 	// ChangeEventUC receives batches of edge change events
 	// (journald / dockerd / packagemgr). Optional - when nil, the
 	// push_change_events handler does not install (A.3 disabled).
@@ -209,14 +205,6 @@ type AgentEventRouter interface {
 	// outcome of a frame for a conversation that has since closed, and is
 	// never an error - see nodefleet.Fleet.DeliverInbound.
 	DeliverInbound(tunnel.AgentEventFrame) bool
-}
-
-// PluginConfigFetcher is the narrow surface frontierbound needs from
-// WebshellRouter is the narrow surface needed by the shell_output /
-// shell_exit handlers - *biz/webshell.Router satisfies it.
-type WebshellRouter interface {
-	DispatchOutput(sid string, data []byte) error
-	DispatchExit(sid string, exitCode int, errMsg string)
 }
 
 // the edge biz PluginConfigUC. *edgebiz.PluginConfigUC satisfies it.
@@ -883,35 +871,6 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 			return json.Marshal(tunnel.AgentToolResponse{Result: out})
 		}); err != nil {
 			return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodAgentTool, err)
-		}
-	}
-
-	// shell_output / shell_exit: edge-to-manager pushes for the WebSSH
-	// streaming layer. Each chunk is routed by SessionID to the live
-	// WebSocket bridge.
-	if w.WebshellRouter != nil {
-		if err := c.Register(ctx, tunnel.MethodShellOutput, func(rpcCtx context.Context, _ uint64, body []byte) ([]byte, error) {
-			var in tunnel.ShellOutputRequest
-			if err := json.Unmarshal(body, &in); err != nil {
-				return nil, fmt.Errorf("shell_output: decode: %w", err)
-			}
-			if err := w.WebshellRouter.DispatchOutput(in.SessionID, in.Data); err != nil {
-				log.Warn("frontierbound: shell_output dispatch",
-					slog.String("session_id", in.SessionID), slog.Any("err", err))
-			}
-			return json.Marshal(tunnel.ShellOutputResponse{})
-		}); err != nil {
-			return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodShellOutput, err)
-		}
-		if err := c.Register(ctx, tunnel.MethodShellExit, func(rpcCtx context.Context, _ uint64, body []byte) ([]byte, error) {
-			var in tunnel.ShellExitRequest
-			if err := json.Unmarshal(body, &in); err != nil {
-				return nil, fmt.Errorf("shell_exit: decode: %w", err)
-			}
-			w.WebshellRouter.DispatchExit(in.SessionID, in.ExitCode, in.Err)
-			return json.Marshal(tunnel.ShellExitResponse{})
-		}); err != nil {
-			return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodShellExit, err)
 		}
 	}
 

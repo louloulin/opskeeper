@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
 	wsfanout "github.com/vincent-wuhan/opskeeper/core/base/pkg/wsfanout"
+	wsmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/webshell"
 )
 
 // Caller is the narrow tunnel surface used to invoke RPCs against
@@ -287,32 +287,18 @@ func (r *Router) HandleRemoteKill(ctx context.Context, sid, reason string) {
 	}
 }
 
-// DispatchOutput routes one stdout chunk. Missing sid is no-op
-// (race: edge pushed after browser closed).
-func (r *Router) DispatchOutput(sid string, data []byte) error {
-	r.mu.RLock()
-	s, ok := r.sinks[sid]
-	r.mu.RUnlock()
-	if !ok {
-		return nil
-	}
-	if v, ok := r.stdoutBytes.Load(sid); ok {
-		atomic.AddUint64(v.(*uint64), uint64(len(data)))
-	}
-	return s.OnOutput(data)
-}
-
-// DispatchExit routes the terminal frame.
-func (r *Router) DispatchExit(sid string, exitCode int, errMsg string) {
-	r.mu.RLock()
-	s, ok := r.sinks[sid]
-	r.mu.RUnlock()
-	if !ok {
-		return
-	}
-	s.OnExit(exitCode, errMsg)
-}
-
+// Decision 346 deleted DispatchOutput / DispatchExit. They were the
+// receiving end of the tunnel's `shell_output` / `shell_exit` pushes,
+// and no edge has ever sent either message — the edge stopped being an
+// SSH client (core/edge/webshell is now a one-screen TCP forwarder), so
+// on the edge there is nothing left that could produce a stdout chunk.
+// The manager's own SSH client pumps to the bridge directly, through
+// AddStdoutBytes below.
+//
+// Deleting them closes a registered write primitive: DispatchOutput
+// wrote bytes into a live operator terminal keyed by a SessionID that
+// arrives on the wire. A handler with no sender is still a door.
+//
 // AddStdoutBytes increments the per-session stdout byte counter. The
 // new HTTP path (manager-side SSH client) calls this directly because
 // it doesn't go through DispatchOutput.

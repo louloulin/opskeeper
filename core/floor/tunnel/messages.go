@@ -25,7 +25,6 @@ const (
 	MethodPushPromSamples  = "push_prom_samples"
 	MethodGetHostLoad      = "get_host_load"
 	MethodGetProcessList   = "get_process_list"
-	MethodGetNetstat       = "get_netstat"
 	// MethodExecuteSkill is the single dispatcher RPC for the skill
 	// framework. Edge agent registers one handler that looks up the
 	// skill key in its local registry — no per-skill wire method.
@@ -54,12 +53,6 @@ const (
 	// (edge → manager):
 	//   shell_output one stdout/stderr chunk
 	//   shell_exit terminal frame with exit code
-	MethodShellOpen   = "shell_open"
-	MethodShellInput  = "shell_input"
-	MethodShellResize = "shell_resize"
-	MethodShellClose  = "shell_close"
-	MethodShellOutput = "shell_output"
-	MethodShellExit   = "shell_exit"
 
 	// MethodAgentUpgrade (manager → edge): swap the running edge binary
 	// to the version at URL after verifying SHA256. Edge stages the new
@@ -86,74 +79,42 @@ const (
 // ---------------------------------------------------------------------
 // webssh
 // ---------------------------------------------------------------------
-
-// ShellOpenRequest is the manager-to-edge request that establishes a
-// new WebSSH session. SSHPass is one-shot and wiped from edge memory
-// after Dial; never logged, never stored.
-type ShellOpenRequest struct {
-	SessionID string `json:"session_id"`
-	Cols      uint16 `json:"cols"`
-	Rows      uint16 `json:"rows"`
-	Term      string `json:"term"`     // e.g. "xterm-256color"
-	SSHHost   string `json:"ssh_host"` // default "127.0.0.1:22"
-	SSHUser   string `json:"ssh_user"`
-	SSHPass   string `json:"ssh_pass"` // wiped after Dial
-}
-
-// ShellOpenResponse acks the SSH session is up. On failure Err is set.
-type ShellOpenResponse struct {
-	Ok  bool   `json:"ok"`
-	Err string `json:"err,omitempty"`
-}
-
-// ShellInputRequest carries a stdin chunk.
-type ShellInputRequest struct {
-	SessionID string `json:"session_id"`
-	Data      []byte `json:"data"`
-}
-
-// ShellInputResponse is empty.
-type ShellInputResponse struct{}
-
-// ShellResizeRequest updates pty window size.
-type ShellResizeRequest struct {
-	SessionID string `json:"session_id"`
-	Cols      uint16 `json:"cols"`
-	Rows      uint16 `json:"rows"`
-}
-
-// ShellResizeResponse is empty.
-type ShellResizeResponse struct{}
-
-// ShellCloseRequest signals manager-side wants the session torn down.
-type ShellCloseRequest struct {
-	SessionID string `json:"session_id"`
-	Reason    string `json:"reason"`
-}
-
-// ShellCloseResponse is empty.
-type ShellCloseResponse struct{}
-
-// ShellOutputRequest is the edge-to-manager push of one stdout chunk.
-// stderr is PTY-merged so the browser sees a single stream.
-type ShellOutputRequest struct {
-	SessionID string `json:"session_id"`
-	Data      []byte `json:"data"`
-}
-
-// ShellOutputResponse is empty.
-type ShellOutputResponse struct{}
-
-// ShellExitRequest is the terminal edge-to-manager frame. After
-// ShellExit no further outputs for this SessionID are valid.
-type ShellExitRequest struct {
-	SessionID string `json:"session_id"`
-	ExitCode  int    `json:"exit_code"`
-	Err       string `json:"err,omitempty"`
-}
-
-// ShellExitResponse is empty.
-type ShellExitResponse struct{}
+//
+// Decision 346 deleted this whole section — six methods and sixteen
+// types. It is worth writing down why, because the shape of it is
+// exactly the case a dead-code report cannot catch.
+//
+// The design these types describe was: **the edge holds the SSH
+// password, dials SSH itself, owns a pty and a session map, and pushes
+// stdout back to the manager** (ShellOpenRequest carried SSHPass, with
+// a comment promising it was "wiped from edge memory after Dial"). It
+// was never built on the edge — MethodShellOpen appears in exactly one
+// commit, the initial publish — and it was then replaced. SSH now
+// lives entirely on the manager (core/manager/server/webshell: ssh.New-
+// ClientConn, PTY, Shell) and the edge is a one-screen TCP forwarder
+// (core/edge/webshell: "the edge has no SSH client, no pty management,
+// no session map"). The credential never crosses to the node, which is
+// the whole reason the replacement is better.
+//
+// A dead-code report sees thirteen of the sixteen types as dead. The
+// other three are unreachable *by its definition* — the manager
+// registers handlers for `shell_output` and `shell_exit`, so the types
+// look used. But **nothing on the edge has ever sent either message**:
+// the edge cannot, because the thing that would produce stdout chunks
+// (an SSH client) no longer exists there.
+//
+// That is the shape worth naming: **code that is reachable, has a
+// registered receiver, and has no counterparty.** A report asks "can I
+// walk to it"; this asks "who on the other end speaks it". Only the
+// second question tells you whether it does anything.
+//
+// It was not harmless to leave registered. `DispatchOutput` writes
+// bytes into a live operator terminal, keyed by a SessionID that
+// arrives on the wire. A handler with no sender is a write primitive
+// into someone's shell waiting for a caller, and the ledger had this
+// family escalated to the operator twice as "删还是接线" — the answer
+// turned out to be neither: the feature it belonged to shipped by
+// another route, and this half was already superseded.
 
 // GetPluginConfigsResponse is the wire snapshot served on
 // MethodGetPluginConfigs. Mirrors biz/edge.WireSnapshot — duplicated

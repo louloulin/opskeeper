@@ -30070,6 +30070,92 @@ routeaudit 分母与读数不变（177 / 127 / 50 / 0）：`deleteRepo` 这一�
 deadcode **889 → 887 / 619 / 268**（连续第二次下降）。
 
 `core/manager`、`core/domains`、`core/base`、`./cmd/...`、`./scripts/...` 全量绿；
+
+#### 4.279 决策 346：webssh 那条线格式——以及一道 deadcode 回答不了的问题
+
+这一族在台账里被**上交过两次**。§19061 那次的原话是：「删不删是一个产品决定，不是代码
+决定：webshell 的交互式终端是打算走这条隧道方法的，还是这条路径已经废了」。
+
+本刀用证据把它关掉：**已经废了，而且是被更好的东西取代的。**
+
+##### 4.279.1 这十六个类型描述的是一个从未在节点上建成的设计
+
+`ShellOpenRequest` 携带 `SSHPass`，注释写着「one-shot and wiped from edge memory after
+Dial」。也就是说，这一代设计是：**边持有 SSH 密码、自己拨号、自己管 pty 与会话表，把
+stdout 推回 manager**。
+
+`git log -S MethodShellOpen --all` 只命中一次提交——最初那次发布。**边侧从未实现过它。**
+而它后来被取代了：SSH 现在完全在 manager 一侧（`core/manager/server/webshell` 的
+`ssh.NewClientConn` + PTY + Shell），边是一个一屏 TCP 转发器（`core/edge/webshell` 的包
+注释：「the edge has no SSH client, no pty management, no session map」）。
+
+取代的理由就写在取代者自己的注释里：**凭据不再跨到节点上。** 这一族不是「还没决定要不要
+做」，是它想解决的问题已经用更好的方式解决完了。
+
+##### 4.279.2 deadcode 报得出十三个，报不出另外三个——而这三个更要紧
+
+`ShellOutputRequest` / `ShellOutputResponse` / `ShellExitRequest` / `ShellExitResponse`
+**不是死的**：manager 的 frontierbound 确实为 `shell_output` 与 `shell_exit` 注册了
+handler，所以可达性走到那里就停下，判定为「活着」。
+
+可达性没有算错。**而它的答案在这里是错的**：节点侧从来没有发送过这两个消息，因为能产生
+stdout 分块的那个东西（节点上的 SSH 客户端）已经不在那里了。
+
+值得命名的是这个形状：**可达、有注册好的接收方、却没有对手方**。报告问的是「我能走到
+它」，这里问的是「对面谁在说这门语言」。只有第二个问题能回答它是否在做事。
+
+而且留着它并不无害：`DispatchOutput` 按线上传来的 `SessionID` 往运维正在用的终端里写
+字节。**一个没有发送方的 handler 是一扇门**，不是一段死代码。所以本刀一并删掉了
+`DispatchOutput` / `DispatchExit` 与 manager 侧那两处注册。
+
+##### 4.279.3 新闸门 `scripts/rpcmatch`：问对面的问题
+
+`make rpc-match-check`。两个集合：
+
+- **接收方**：`core/manager/service/frontierbound` 里 `c.Register(ctx, tunnel.MethodX, …)`；
+- **发送方**：`core/manager` **之外**、生产代码里、且**处于调用位置**的 `tunnel.MethodX`。
+
+三条排除各有一次是被实测挡下来的，记在这里：
+
+1. **`_test.go` 不算发送方。** 测试证明调用 API 存在，不证明生产里有人调用。
+2. **边侧 `RegisterHandler` 不算发送方。** 那是「边被调用」——`MethodGetProcessList`
+   正是 manager→edge 方向，被误当成发送方会让这道闸门对它要抓的那一类完全失效。
+3. **`core/manager` 内部不算发送方。** 接收方和它同处一个进程；这条命名空间同时承载两个
+   方向，只按文本判断方向必然出错。
+
+反方向（发了却没注册）**刻意不查**：同一批常量名两个方向都在用，调用点的文字说明不了
+方向，硬查就是发明一道这道工具看不见的闸门。
+
+当前读数 **11 个注册方法 / 11 个有生产发送方 / 0 孤儿**。单测 6 条，三条变异三次真红
+（去掉 core/manager 排除 / 去掉 `_test.go` 排除 / 发送方退回「被提及」）。
+
+##### 4.279.4 顺带修掉一处：树是带着一道红闸门发出去的
+
+`TestEveryPackagedExtensionMatchesItsCanonicalSource` 在**本刀开始之前就是红的**。
+`plugins/pig-ops/opskeeper-sre-middleware` 的打包副本与规范源 `core/pig/extensions/…`
+漂移了——规范源更新过（那段注释被更正过，正说明「安全检查究竟在哪棵树里」这件事被
+纠正过一次），而 `scripts/sync-pig-ops.sh` 没有跟着跑。
+
+后果不是「文件不一样」：节点上跑的那份副本里，写着**关于安全检查位置的旧说法**。而这条
+漂移正是计划 §3.3「分发前审核」要防的东西——打包副本是节点唯一拿得到的源码。
+
+跑一次 `scripts/sync-pig-ops.sh`（改了 1 个文件）即恢复。
+
+##### 4.279.5 交付
+
+- 删除：`core/floor/tunnel/messages.go` 的 6 个方法常量 + 16 个类型 + `MethodGetNetstat`；
+  `frontierbound` 的两处注册与 `WebshellRouter` 字段/接口；`biz/webshell` 的
+  `DispatchOutput` / `DispatchExit`；`cmd/opskeeper/main.go` 的接线
+- 三处原注释改写为「为什么删」，不留悬空引用
+- 新增 `scripts/rpcmatch`（含 6 条单测）与 `make rpc-match-check`
+- 跑 `scripts/sync-pig-ops.sh` 修复打包漂移
+
+deadcode **887 → 874 / 606 / 268**：这是 ratchet 第一次删除「**报告当时判为活着**」的
+东西，也因此第一次需要说明报告与事实为什么能同时成立。
+
+`core/base`、`core/floor`、`core/domains`、`core/manager`、`core/edge`、`./cmd/...`、
+`./scripts/...` 全量绿；routeaudit exit=0（177 / 127 / 50 / 0）；`make audit-port-check`
+绿；`make ci-gate-check` 绿；ratchet `-count=3` 绿。
 routeaudit exit=0；ratchet `-count=3` 绿。
 ratchet `-count=3` 绿。
 
