@@ -53,6 +53,9 @@ type Service interface {
 	ListPaths(ctx context.Context) (map[string]int, error)
 
 	ListRepos(ctx context.Context) ([]*model.Repository, error)
+	// GetRepo is on this interface so deleteRepo can read the row before it
+	// goes. See the handler for why that ordering is the whole point.
+	GetRepo(ctx context.Context, id uint64) (*model.Repository, error)
 	CreateRepo(ctx context.Context, in biz.CreateRepoInput) (*model.Repository, error)
 	Sync(ctx context.Context, id uint64) (*model.Repository, error)
 	DeleteRepo(ctx context.Context, id uint64) error
@@ -707,6 +710,16 @@ func (h *Handler) deleteRepo(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 345：删之前先读出来。这是本族四条 repo 路由里唯一一行什么都没记的
+	// ——另外三条（create / sync / vault sync）都带 URL，而这一行删完之后链上
+	// 剩下的只是一个自增 id。而这一刀删掉的东西有**分量**：它连带删掉这个仓库
+	// 在 qdrant 里的全部向量点、磁盘上的整份 clone，以及此后每一次 AI 回答
+	// 的检索来源。事后第一个要回答的问题是「删掉的是哪个仓库、里面有多少个
+	// 文件」，这两个答案都在删除的前一刻才拿得到。
+	url, branch, desc, fileCount := "", "", "", 0
+	if prev, err := h.svc.GetRepo(r.Context(), id); err == nil && prev != nil {
+		url, branch, desc, fileCount = prev.URL, prev.Branch, prev.Description, prev.FileCount
+	}
 	if err := h.svc.DeleteRepo(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
@@ -715,7 +728,16 @@ func (h *Handler) deleteRepo(w http.ResponseWriter, r *http.Request) {
 		Action:       auditport.ActionRepoDelete,
 		ResourceType: auditport.ResourceRepo,
 		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: url,
 		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			"url":        url,
+			"branch":     branch,
+			"file_count": fileCount,
+			// 描述是运维当初为什么把这个仓库纳进来的唯一记录，而删除本身
+			// 就是这个理由的终结——即使空串也必须在链上，缺键与空值不是一回事。
+			"description": desc,
+		},
 	})
 	w.WriteHeader(http.StatusNoContent)
 }

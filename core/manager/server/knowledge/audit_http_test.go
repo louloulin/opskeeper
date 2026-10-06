@@ -2,13 +2,21 @@ package knowledge
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
 )
 
 // --- 决策 343：知识文档五条写路由上宿主链 -------------------------------------
@@ -238,4 +246,110 @@ func TestAudit_KnowledgeDocUploadRejected(t *testing.T) {
 	if set {
 		t.Fatal("rejected upload must not mint a row")
 	}
+}
+
+// 决策 345：repo 面四条写路由里，delete 是唯一一行什么都没记的。
+//
+// 另外三条（create / sync / vault sync）都把 URL 写进了 ResourceName——所以这一行
+// 站在旁边就显得特别：**它是这一族里唯一一个「链上只剩一个自增 id」的删除**。
+// 而它删掉的东西有分量：整个仓库在 qdrant 里的向量点、磁盘上的整份 clone，
+// 以及此后每一次检索的来源。
+//
+// repoSvc 遮住 usecase 上的 repo 方法。e2e 夹具建 usecase 时传的是 nil RepoStore
+// （文档那半边从不碰 repo），所以 repo 那半张面需要自己的行——用内嵌指针遮住
+// 而不是重新实现，是为了另外二十个方法仍然是**真的**而不是 stub。
+type repoSvc struct {
+	*biz.Usecase
+	repos map[uint64]*model.Repository
+	next  uint64
+}
+
+func newRepoRouter(t *testing.T) (http.Handler, *repoSvc) {
+	t.Helper()
+	store := newMemVec()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	uc, err := biz.New(context.Background(), nil, store, idEmbed{}, t.TempDir(), log)
+	if err != nil {
+		t.Fatalf("biz.New: %v", err)
+	}
+	svc := &repoSvc{Usecase: uc, repos: map[uint64]*model.Repository{}, next: 40}
+	r := chi.NewRouter()
+	NewHandler(svc).Register(r)
+	return r, svc
+}
+
+func (s *repoSvc) CreateRepo(_ context.Context, in biz.CreateRepoInput) (*model.Repository, error) {
+	s.next++
+	row := &model.Repository{ID: s.next, URL: in.URL, Branch: in.Branch, Description: in.Description}
+	s.repos[row.ID] = row
+	return row, nil
+}
+
+func (s *repoSvc) GetRepo(_ context.Context, id uint64) (*model.Repository, error) {
+	row, ok := s.repos[id]
+	if !ok {
+		return nil, errs.ErrNotFound
+	}
+	return row, nil
+}
+
+func (s *repoSvc) DeleteRepo(_ context.Context, id uint64) error {
+	delete(s.repos, id)
+	return nil
+}
+
+func TestAudit_KnowledgeRepoDelete(t *testing.T) {
+	router, svc := newRepoRouter(t)
+
+	rec := jsonReq(t, router, http.MethodPost, "/v1/knowledge/repos", map[string]any{
+		"url":         "https://git.example.com/ops/runbooks.git",
+		"branch":      "main",
+		"description": "运维 runbook 的上游",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create repo: %d (%s)", rec.Code, rec.Body.String())
+	}
+	created := decodeRepo(t, rec)
+	// A repo that has synced before: the file count is the number of documents
+	// that just stopped being retrievable, and it only exists on the stored row.
+	svc.repos[created.ID].FileCount = 7
+
+	rec, ev, set := auditReq(t, router, http.MethodDelete, "/v1/knowledge/repos/"+idStr(created.ID), "", nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d (%s)", rec.Code, rec.Body.String())
+	}
+	if !set || ev.Action != auditport.ActionRepoDelete {
+		t.Fatalf("delete: set=%v action=%s", set, ev.Action)
+	}
+	if ev.ResourceID != idStr(created.ID) {
+		t.Fatalf("delete: resource id=%q", ev.ResourceID)
+	}
+	// 名字必须在删之前读出来：删完之后链上剩下的只是一个自增 id。
+	if ev.ResourceName != "https://git.example.com/ops/runbooks.git" {
+		t.Fatalf("delete: resource name=%q", ev.ResourceName)
+	}
+	p := docPayload(t, ev)
+	if got := mustKey(t, p, "url"); got != "https://git.example.com/ops/runbooks.git" {
+		t.Fatalf("delete: url=%v", got)
+	}
+	if got := mustKey(t, p, "branch"); got != "main" {
+		t.Fatalf("delete: branch=%v", got)
+	}
+	if got := mustKey(t, p, "file_count"); got != 7 {
+		t.Fatalf("delete: file_count=%v want 7", got)
+	}
+	// 描述是「当初为什么把这个仓库纳进来」的唯一记录，而删除就是那个理由的
+	// 终结。空串也必须在链上：缺键与空值不是一回事。
+	if got := mustKey(t, p, "description"); got != "运维 runbook 的上游" {
+		t.Fatalf("delete: description=%v", got)
+	}
+}
+
+func decodeRepo(t *testing.T, rec *httptest.ResponseRecorder) repoDTO {
+	t.Helper()
+	var d repoDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
+		t.Fatalf("decode repo (%s): %v", rec.Body.String(), err)
+	}
+	return d
 }

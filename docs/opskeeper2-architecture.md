@@ -30011,6 +30011,66 @@ deadcode **902 / 634 → 889 / 621 / 268**。**这是这道 ratchet 第一次往
 一道只会往上走的 ratchet 量的是堆积；至少往下走过一次，它才是一把尺子。
 
 `core/manager`、`core/domains`、`core/base`、`./cmd/...`、`./scripts/...` 全量绿；
+
+#### 4.278 决策 345：repo 面那个「什么都没记」的删除，以及两个只剩注释的扩展点
+
+##### 4.278.1 四条 repo 路由里，只有 delete 是空行
+
+`create` / `sync` / `vault sync` 三条都把 URL 写进了 `ResourceName`，`sync` 还带
+`file_count`。第四条 `DELETE /v1/knowledge/repos/{id}` 只写了三样东西：action、resource
+type、status。**删完之后链上剩下的只是一个自增 id。**
+
+而这一刀删掉的东西有分量：整个仓库在 qdrant 里的**全部向量点**、磁盘上的**整份
+clone**，以及此后每一次 AI 回答的检索来源。事后第一个要回答的问题是「删掉的是哪个
+仓库、里面有多少个文件、为什么当初把它纳进来」——这三个答案都只在删除的前一刻拿得到。
+
+于是按 343 立下的家族规则（删之前先读出名字）：`GetRepo` 被提到 handler 的 Service
+接口上，`url` / `branch` / `file_count` / `description` 四项进链，URL 同时进
+`ResourceName`。`description` 即使是空串也必须在链上——**缺键与空值不是一回事**。
+
+##### 4.278.2 两个只为已删除功能而存在的扩展点
+
+顺着这条线查下去，发现 `EnsureRepoSeed` 与 `WithRepoDeleteHook` **零调用方**，而它们的
+注释都写着「Used at manager boot when an operator-set `OPSKEEPER_BUILTIN_VAULT_URL`…」。
+
+`cmd/opskeeper/main.go:1894` 把真相写在那里：ADR-029 **删掉了那条播种路径**，理由是它
+把 vault 注册成 `knowledge_repos` 一行、泄漏进「代码仓库」列表。换句话说，**这两个
+符号只服务于一个本仓库自己已经删掉的功能，而它们的注释仍在把这件事写成现在时。**
+
+这是决策 344 那条论证再往前一步：**不每个过期的注释都是「守着活物的注释」**。功能被删
+之后留下的 shim 不只是说错了自己的状态，它还**对外宣告一个没人需要关闭的接缝**——下一
+个读到它的人会去把那条已经作废的路径重新接上。
+
+本刀两件事都做了：删掉两个符号与 `onRepoDelete` 字段；把 `DeleteRepo` 的文档注释改成
+它现在的真实理由（URL 快照是为了删除后的取证日志，不是因为 hook）。
+
+##### 4.278.3 交付与验证
+
+- `DeleteRepo` 的 handler 补全审计行；`biz.Usecase` 新增导出的 `GetRepo`
+- 删除 `EnsureRepoSeed` / `WithRepoDeleteHook` / `onRepoDelete` 及其调用
+- `repoSvc` 用**内嵌指针 + 遮蔽**的方式补出 repo 那半张面：e2e 夹具建 usecase 时传的是
+  nil RepoStore，另写一套 stub 会把二十个真方法换成假的，遮蔽不会
+
+五条变异，**五次真红**（断言失败，非编译错误）：
+
+| 变异 | 结果 |
+|---|---|
+| 不预读（`ResourceName` 空） | `delete: resource name=""` |
+| `prev.URL` 写死 | `delete: resource name="x"` |
+| `prev.FileCount` 写 0 | `delete: file_count=0 want 7` |
+| `prev.Branch` 写空 | `delete: branch=` |
+| `prev.Description` 写空 | `delete: description=` |
+
+**其中两次变异编译不过**（`fileCount declared and not used`），不计入——按家族规则，
+编译错误不算红，重写成「常量替换」之后才算。
+
+routeaudit 分母与读数不变（177 / 127 / 50 / 0）：`deleteRepo` 这一条此前已判过，本刀改的
+是它**记了什么**，不是它**有没有记**。
+
+deadcode **889 → 887 / 619 / 268**（连续第二次下降）。
+
+`core/manager`、`core/domains`、`core/base`、`./cmd/...`、`./scripts/...` 全量绿；
+routeaudit exit=0；ratchet `-count=3` 绿。
 ratchet `-count=3` 绿。
 
 

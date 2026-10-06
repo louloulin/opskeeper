@@ -23,6 +23,16 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 889 → 887 / 619 / 268 as of decision 345: two symbols, and the second one
+// is the interesting half. `EnsureRepoSeed` and `WithRepoDeleteHook` existed
+// only to serve the OPSKEEPER_BUILTIN_VAULT_URL seeding path, and ADR-029
+// removed that path — cmd/opskeeper/main.go says so in as many words. Nothing
+// had registered the hook and nothing had called the seeder, so what was left
+// was an extension point with a doc comment describing wiring that the tree
+// had already deleted. Decision 344's argument, one step along: **not every
+// stale comment is the one guarding a live thing**. A shim left after its
+// feature is removed does not merely lie about its own state; it advertises a
+// seam that nobody has to close, and the next reader wires it up.
 // 889 / 621 / 268 as of decision 344: **the first time this ratchet moved down.**
 // Sixteen re-exports were deleted from core/manager/biz/aiops/chatruntime/
 // aliases.go, and every line above this one is a record of the number going
@@ -263,8 +273,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 889
-	deadSymbolBudget     = 621
+	unreachableBudget    = 887
+	deadSymbolBudget     = 619
 	testOnlySymbolBudget = 268
 )
 

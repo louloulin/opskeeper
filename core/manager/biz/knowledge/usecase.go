@@ -32,13 +32,13 @@ import (
 	"time"
 	"unicode"
 
-	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
-	"github.com/vincent-wuhan/opskeeper/core/manager/observability/otelgenai"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/embedding"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/qdrantx"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	incidentcontrol "github.com/vincent-wuhan/opskeeper/core/domains/control/incident"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
+	"github.com/vincent-wuhan/opskeeper/core/manager/observability/otelgenai"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -113,25 +113,12 @@ type Usecase struct {
 	cloneDir string
 	log      *slog.Logger
 
-	// onRepoDelete fires AFTER a successful DeleteRepo with the
-	// deleted repo's URL. Used by main.go to persist a
-	// `knowledge.vault_seed_optout` sentinel so the built-in vault
-	// seed doesn't re-create the row on next boot. Nil = no hook.
-	onRepoDelete func(ctx context.Context, url string)
-	recallRepo   RecallStore
+	recallRepo RecallStore
 }
 
 type RecallStore interface {
 	AppendRecallLogs(ctx context.Context, logs []incidentcontrol.RecallLog) error
 	ListRunbooks(ctx context.Context, tenantID, databaseType, faultFingerprint string) ([]incidentcontrol.Postmortem, error)
-}
-
-// WithRepoDeleteHook registers a callback fired after DeleteRepo
-// succeeds. Used at boot to wire seed-optout persistence; tests can
-// inject a recorder.
-func (u *Usecase) WithRepoDeleteHook(h func(ctx context.Context, url string)) *Usecase {
-	u.onRepoDelete = h
-	return u
 }
 
 func (u *Usecase) WithRecallRepository(repository RecallStore) *Usecase {
@@ -1116,24 +1103,6 @@ type CreateRepoInput struct {
 	Description string
 }
 
-// EnsureRepoSeed idempotently registers a repo by URL. Returns the
-// existing row if one already matches (regardless of branch/description
-// drift — the URL is the natural key). Used at manager boot when an
-// operator-set OPSKEEPER_BUILTIN_VAULT_URL points at a platform-vendor
-// vault (their internal mirror, fork, gitee/gitlab/internal git) so
-// the Knowledge page has a pre-registered row with no manual setup.
-// The default — empty env — is no seed; admins add repos via the UI.
-func (u *Usecase) EnsureRepoSeed(ctx context.Context, in CreateRepoInput) (*model.Repository, error) {
-	url := strings.TrimSpace(in.URL)
-	if url == "" {
-		return nil, fmt.Errorf("%w: url required", errs.ErrInvalid)
-	}
-	if existing, err := u.repo.GetRepoByURL(ctx, url); err == nil && existing != nil {
-		return existing, nil
-	}
-	return u.CreateRepo(ctx, in)
-}
-
 // CreateRepo persists a repo registration. Doesn't sync — caller hits
 // /v1/knowledge/repos/{id}/sync to pull.
 func (u *Usecase) CreateRepo(ctx context.Context, in CreateRepoInput) (*model.Repository, error) {
@@ -1159,6 +1128,14 @@ func (u *Usecase) CreateRepo(ctx context.Context, in CreateRepoInput) (*model.Re
 	return r, nil
 }
 
+// GetRepo returns one registered repo, or nil when there is no such row.
+// It exists for the delete path: decision 345 needs the URL and the file
+// count **before** the row goes, because a chain that records only an
+// auto-increment id cannot answer "which repository was that".
+func (u *Usecase) GetRepo(ctx context.Context, id uint64) (*model.Repository, error) {
+	return u.repo.GetRepo(ctx, id)
+}
+
 // ListRepos returns every registered repo.
 func (u *Usecase) ListRepos(ctx context.Context) ([]*model.Repository, error) {
 	return u.repo.ListRepos(ctx)
@@ -1166,11 +1143,18 @@ func (u *Usecase) ListRepos(ctx context.Context) ([]*model.Repository, error) {
 
 // DeleteRepo removes the registration + every qdrant point owned by
 // it + the on-disk clone. We snapshot the URL BEFORE the row goes so
-// (a) the post-delete forensic log records what was nuked (operators
-// have complained about silent knowledge loss — without this we can't
-// trace which URL the audit-trail repo_id once referred to), and (b)
-// the onRepoDelete hook can persist a seed-optout sentinel scoped to
-// that exact URL.
+// the post-delete forensic log records what was nuked (operators have
+// complained about silent knowledge loss — without this we can't trace
+// which URL the audit-trail repo_id once referred to).
+//
+// Decision 345 deleted the seed-optout hook that used to hang off this
+// function. It existed only for the OPSKEEPER_BUILTIN_VAULT_URL seeding
+// path, and ADR-029 removed that path — `main.go` now explicitly says so
+// ("the old OPSKEEPER_BUILTIN_VAULT_URL path was removed because it
+// registered the vault as a knowledge_repos row and leaked it into
+// Repos"). Nothing had registered the hook, so the second reason this
+// snapshot existed had quietly stopped existing while its comment
+// carried on describing it.
 func (u *Usecase) DeleteRepo(ctx context.Context, id uint64) error {
 	var (
 		deletedURL string
@@ -1198,9 +1182,6 @@ func (u *Usecase) DeleteRepo(ctx context.Context, id uint64) error {
 			slog.Uint64("repo_id", id),
 			slog.String("url", deletedURL),
 			slog.Int("file_count", preRepo.FileCount))
-	}
-	if u.onRepoDelete != nil && deletedURL != "" {
-		u.onRepoDelete(ctx, deletedURL)
 	}
 	return nil
 }
