@@ -23,6 +23,11 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 850 / 582 / 268 as of decision 334: edge_register and edge_delete, the two
+// ends of a node's lifecycle (the middle — bytes, plugins, credential — was
+// written by 332 and 333). Same shape as the lines below: vocabulary
+// re-exports whose writers live in core/manager, outside this module.
+
 // 848 / 580 / 268 as of decision 333: two supply-chain actions
 // (edge_agent_upgrade, edge_package_upgrade), one webshell action
 // (webshell_session_kill), their resource type (webshell_session), and the
@@ -159,8 +164,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 848
-	deadSymbolBudget     = 580
+	unreachableBudget    = 850
+	deadSymbolBudget     = 582
 	testOnlySymbolBudget = 268
 )
 

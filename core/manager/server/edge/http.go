@@ -474,6 +474,21 @@ func (h *Handler) createEdge(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 334：谁把这台机器放进了集群。
+	//
+	// 这一行的响应体里带着 access key 与 secret —— 而**响应体是唯一需要它们
+	// 的地方**。注册是唯一一个「创建即发凭据」的路由，所以这里最容易顺手把
+	// 它们也写进行里；那会让每一个能读链的人拿到一把能冒充这台节点的钥匙，
+	// 而链恰恰是最多人能读的地方。access_key_id 不是秘密（它是标识符，且轮换
+	// 时要靠它指认对象），所以留下。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionEdgeRegister,
+		ResourceType: auditport.ResourceEdge,
+		ResourceID:   strconv.FormatUint(res.Edge.ID, 10),
+		ResourceName: res.Edge.Name,
+		Status:       auditport.StatusSuccess,
+		Payload:      map[string]any{"access_key_id": res.AccessKey},
+	})
 	writeJSON(w, http.StatusCreated, createResp{
 		ID:          res.Edge.ID,
 		Name:        res.Edge.Name,
@@ -565,10 +580,29 @@ func (h *Handler) deleteEdge(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// Read the name **before** the delete. Delete is a soft delete, so the row
+	// survives — but a lookup after it may well not, and a row that says
+	// "node 417 was removed" with no name is exactly the kind of half-record
+	// that makes the next investigation expensive. Failing to read the name is
+	// not a reason to skip the row.
+	edge, _ := h.svc.Get(r.Context(), id)
+	name := ""
+	if edge != nil {
+		name = edge.Name
+	}
 	if err := h.svc.Delete(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}
+	// 决策 334：谁把这台机器摘了出去。名字一起记上——删除之后行里剩下的那个
+	// 数字 id 是这一行唯一的身份，而「哪台机器」正是事后第一个要回答的问题。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionEdgeDelete,
+		ResourceType: auditport.ResourceEdge,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: name,
+		Status:       auditport.StatusSuccess,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -872,12 +906,29 @@ func (h *Handler) batchDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 334：批量删除同样一行一个节点（决策 333 的端口能力）。
+	//
+	// 这一条比批量升级更该如此：批量摘节点是「这台机器从此刻起不再受我们
+	// 管理」的批量宣告，而**一台没有被摘掉的机器会继续心跳、继续拿着旧凭据**。
+	// 只记一行计数的话，事后没人说得清哪些机器还留在集群里。
 	resp := runEdgeBatch(r.Context(), ids, func(ctx context.Context, id uint64) batchResultItem {
 		if err := h.svc.Delete(ctx, id); err != nil {
 			return batchResultItem{ID: id, OK: false, Error: err.Error(), Code: errCode(err)}
 		}
 		return batchResultItem{ID: id, OK: true}
 	})
+	for _, it := range resp.Results {
+		status := auditport.StatusSuccess
+		if !it.OK {
+			status = auditport.StatusFailure
+		}
+		auditport.AddAuditEvent(r, auditport.Event{
+			Action:       auditport.ActionEdgeDelete,
+			ResourceType: auditport.ResourceEdge,
+			ResourceID:   strconv.FormatUint(it.ID, 10),
+			Status:       status,
+		})
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

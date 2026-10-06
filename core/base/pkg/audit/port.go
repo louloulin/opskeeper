@@ -518,6 +518,26 @@ const (
 	// Two actions rather than one `edge_update`: a credential rotation and a
 	// code-enablement decision are asked apart constantly, and folding them
 	// would make both a payload scan.
+	// A node being admitted and a node being removed (决策 334).
+	//
+	// These bracket the whole node lifecycle with the credential rows 332 and
+	// 333 already wrote: a node exists because somebody registered it, and
+	// stops existing because somebody removed it. **The middle of that arc —
+	// which bytes it runs, which plugins are on, whose key it holds — is only
+	// answerable if the two ends are answerable too.**
+	//
+	// Register is its own action rather than a generic edge_create because the
+	// thing being created is a *credential-bearing admission*: the response
+	// carries an access key and a secret that the node will use to prove it is
+	// that node from now on. Nobody asks "which user rows were created today";
+	// they ask "who admitted this host".
+	ActionEdgeRegister = "edge_register"
+	// ActionEdgeDelete covers both the single and the batch removal, and the
+	// batch emits one row per node (决策 333's AddAuditEvent). They are the
+	// same act: the batch route has no meaning of its own that the single one
+	// does not already have.
+	ActionEdgeDelete = "edge_delete"
+
 	ActionEdgeRotateSecret = "edge_rotate_secret"
 	ActionEdgePluginSet    = "edge_plugin_set"
 

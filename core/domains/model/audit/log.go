@@ -198,7 +198,10 @@ const (
 	ActionAgentTeamsTokenIssue = auditport.ActionAgentTeamsTokenIssue
 
 	// 决策 332：两条节点侧后果最重的控制面写路由——谁换了它的凭据、它上面跑什么插件。
+	// 决策 334：节点生命周期两端——谁把它放进来、谁把它摘出去。
 	ActionEdgeRotateSecret = auditport.ActionEdgeRotateSecret
+	ActionEdgeRegister     = auditport.ActionEdgeRegister
+	ActionEdgeDelete       = auditport.ActionEdgeDelete
 	ActionEdgePluginSet    = auditport.ActionEdgePluginSet
 
 	// 决策 333：供应链面（谁把哪段字节推到了哪台机器上）与「谁掐掉了这个会话」。

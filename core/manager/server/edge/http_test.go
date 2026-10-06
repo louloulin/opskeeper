@@ -839,3 +839,98 @@ func TestSinglePackageUpgradeRecordsStagedButNotApplied(t *testing.T) {
 		t.Errorf("payload = %v, want staged=true", ev.Payload)
 	}
 }
+
+// --- 决策 334：节点生命周期两端 --------------------------------------------------
+//
+// 332/333 写的是弧线中段（哪段字节、哪个插件、谁的钥匙）；334 补两端——
+// **谁把这台机器放进来的、谁把它摘出去的**。中间那一段只有在两端可答的时候
+// 才答得完整：一条只有「节点 417」而没有「谁放进来」的记录，等于没有。
+//
+// 注册是全平台唯一一个「创建即发凭据」的路由，所以它也是最容易顺手把密钥写进
+// 审计行的地方——而链恰恰是最多人能读的地方。
+
+func TestRegisterWritesWhoAdmittedTheNodeAndNotItsKey(t *testing.T) {
+	const minted = "sk-live-REGISTER-DO-NOT-LOG"
+	svc := &fakeSvc{createResp: &biz.CreateResult{
+		Edge:      &model.Edge{ID: 21, Name: "prod-web-03"},
+		AccessKey: "AKIAEXAMPLE", SecretKey: minted,
+	}}
+	h := NewHandler(svc, newFakeDeviceRepo(), nil)
+	router := buildRouter(h, tenantctx.Tenant{UserID: 5, Role: "admin"})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges", strings.NewReader(`{"name":"prod-web-03"}`))
+	req = req.WithContext(auditport.WithSlot(req.Context()))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+
+	ev, ok := auditport.GetAuditEvent(req.Context())
+	if !ok {
+		t.Fatal("no row: \"who admitted this host\" is the first question asked of any node")
+	}
+	if ev.Action != auditport.ActionEdgeRegister || ev.ResourceID != "21" || ev.ResourceName != "prod-web-03" {
+		t.Errorf("event = %+v, want edge_register on edge/21 named prod-web-03", ev)
+	}
+	blob := dumpForAssertion(ev.Payload)
+	if strings.Contains(blob, minted) || strings.Contains(blob, "sk-live") {
+		t.Errorf("the minted secret reached the chain: %s", blob)
+	}
+	if !strings.Contains(blob, "AKIAEXAMPLE") {
+		t.Errorf("the access key id was dropped: %s — it is an identifier, not a credential, and it is how a rotation names its target", blob)
+	}
+}
+
+func TestDeleteWritesWhoRemovedTheNodeByName(t *testing.T) {
+	svc := &fakeSvc{getResp: &model.Edge{ID: 7, Name: "prod-db-01"}}
+	h := NewHandler(svc, newFakeDeviceRepo(), nil)
+	router := buildRouter(h, tenantctx.Tenant{UserID: 5, Role: "admin"})
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/edges/7", nil)
+	req = req.WithContext(auditport.WithSlot(req.Context()))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	ev, ok := auditport.GetAuditEvent(req.Context())
+	if !ok {
+		t.Fatal("no row: a node removed without a row is a node that comes back unexplained")
+	}
+	if ev.Action != auditport.ActionEdgeDelete || ev.ResourceName != "prod-db-01" {
+		t.Errorf("event = %+v, want edge_delete carrying the node's name", ev)
+	}
+}
+
+// 批量删除：每台一行。理由与批量升级同一条，但在这里更硬——
+// **一台没被摘掉的机器会继续心跳、继续拿着旧凭据。**
+func TestBatchDeleteLandsOneRowPerNode(t *testing.T) {
+	svc := &fakeSvc{deleteFailIDs: map[uint64]bool{5: true}}
+	h := NewHandler(svc, newFakeDeviceRepo(), nil)
+	router := buildRouter(h, tenantctx.Tenant{UserID: 5, Role: "admin"})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges/batch/delete", strings.NewReader(`{"ids":[5,6]}`))
+	req = req.WithContext(auditport.WithSlot(req.Context()))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	extra := auditport.ExtraAuditEvents(req.Context())
+	if len(extra) != 2 {
+		t.Fatalf("landed %d rows for 2 nodes: %+v", len(extra), extra)
+	}
+	for i, want := range []struct {
+		id     string
+		status string
+	}{{"5", auditport.StatusFailure}, {"6", auditport.StatusSuccess}} {
+		if extra[i].ResourceID != want.id || extra[i].Status != want.status {
+			t.Errorf("row %d = %s/%s, want %s/%s — a node that failed to be removed is still in the fleet",
+				i, extra[i].ResourceID, extra[i].Status, want.id, want.status)
+		}
+		if extra[i].Action != auditport.ActionEdgeDelete {
+			t.Errorf("row %d action = %q", i, extra[i].Action)
+		}
+	}
+}
