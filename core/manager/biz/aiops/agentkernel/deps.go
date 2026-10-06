@@ -44,6 +44,10 @@ type Host struct {
 	Gate ports.ApprovalGate
 	// Budget is consulted before each model call. Optional.
 	Budget ports.BudgetChecker
+	// Spender books settled usage against the same ledger. Optional, and
+	// wired from the same adapter as Budget: a checker without a recorder
+	// beside it is a cap that never moves.
+	Spender ports.TokenRecorder
 	// Recorder observes each call from admission to settle. Optional.
 	Recorder ports.ToolCallRecorder
 }
@@ -67,6 +71,7 @@ func (h Host) Provider() (pigagent.DepsProvider, error) {
 			Audit:    h.Audit,
 			Gate:     h.Gate,
 			Budget:   h.Budget,
+			Spender:  h.Spender,
 			Recorder: h.Recorder,
 		}, nil
 	}, nil
@@ -106,6 +111,17 @@ type TokenBudget interface {
 	Check(ctx context.Context, userID uint64, estPromptTokens int) error
 }
 
+// TokenRecorder is the write half of the ledger behind TokenBudget.
+//
+// It is a separate interface on purpose, and this comment used to say the
+// opposite: it argued that declaring it would be "a method nothing calls",
+// which was true — and was the bug. A checker with no recorder never sees its
+// running total move, so the console's daily cap passed every call it was
+// written to bound. The seam existed and the operator's ceiling did not.
+type TokenRecorder interface {
+	Record(ctx context.Context, userID uint64, tokens int) error
+}
+
 // NewBudget wraps a checker. A nil checker yields nil: see Budget.Checker.
 func NewBudget(checker TokenBudget, userFor func(sessionID string) uint64) *Budget {
 	if checker == nil {
@@ -123,17 +139,43 @@ func (b *Budget) Allow(ctx context.Context, sessionID string) (bool, string) {
 	if b == nil || b.Checker == nil {
 		return true, ""
 	}
-	userID := uint64(0)
-	if b.UserFor != nil {
-		userID = b.UserFor(sessionID)
-	}
-	if err := b.Checker.Check(ctx, userID, 0); err != nil {
+	if err := b.Checker.Check(ctx, b.userFor(sessionID), 0); err != nil {
 		return false, err.Error()
 	}
 	return true, ""
 }
 
+// Record books a settled turn's tokens against the ledger of whoever
+// owns the session.
+//
+// The user bucket is resolved the same way Allow resolves it, so the money a
+// call was checked against and the money it is charged to are the same
+// person's. A ledger whose two halves disagree is a cap that is not
+// enforceable.
+//
+// A checker that cannot record is not an error here: an unbudgeted
+// deployment still runs every turn, and the seam stays honest by reporting
+// that it had nothing to say.
+func (b *Budget) Record(ctx context.Context, sessionID string, tokens int) error {
+	if b == nil || b.Checker == nil || tokens <= 0 {
+		return nil
+	}
+	recorder, ok := b.Checker.(TokenRecorder)
+	if !ok {
+		return nil
+	}
+	return recorder.Record(ctx, b.userFor(sessionID), tokens)
+}
+
+func (b *Budget) userFor(sessionID string) uint64 {
+	if b.UserFor == nil {
+		return 0
+	}
+	return b.UserFor(sessionID)
+}
+
 var _ ports.BudgetChecker = (*Budget)(nil)
+var _ ports.TokenRecorder = (*Budget)(nil)
 
 // TurnToolsFromContext is the ToolSource for a deployment whose caller
 // resolves the bag itself and stamps it on ctx (see ports.WithTurnTools).

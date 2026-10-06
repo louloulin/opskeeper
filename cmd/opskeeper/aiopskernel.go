@@ -116,6 +116,48 @@ type agentKernelInput struct {
 	AfterAssistantRow func(sessionID, messageID string)
 }
 
+// kernelHost binds the services a turn runs against.
+//
+// It is a named function so the binding is assertable. The binding is where
+// the console's daily cap actually exists or does not, and a mistake here —
+// one adapter for the checker and another for the recorder, or a Spender left
+// nil — is invisible at every layer below it: turns run, turns stop when the
+// cap says so, and nothing reports that the cap is not being fed.
+func kernelHost(in agentKernelInput, persister *agentkernel.Persister) agentkernel.Host {
+	var budget ports.BudgetChecker
+	var spender ports.TokenRecorder
+	if adapter := agentkernel.NewBudget(in.Budget, nil); adapter != nil {
+		budget, spender = adapter, adapter
+	}
+	host := agentkernel.Host{
+		// The bag is resolved per turn by chatruntime, which stamps it on
+		// ctx after every filter has settled it (role, persona, write gate,
+		// governance). Resolving it here instead would give every turn the
+		// first caller's view.
+		ToolsFor: agentkernel.TurnToolsFromContext,
+		Audit:    agentkernel.NewAuditLedger(ledgerWriter(in.Audit), chainVerifier(in.Audit)),
+		Gate:     in.Gate,
+		// One adapter for both halves. Two would be two buckets: a turn
+		// could be checked against one ledger and charged to another, and
+		// the cap would then be unenforceable in a way no test of either
+		// half alone would catch.
+		//
+		// Both halves, or neither. NewBudget returns a nil *Budget when no
+		// cap is configured, and assigning that straight into an interface
+		// field yields an interface holding a nil pointer — which passes
+		// every `!= nil` check downstream and only reveals itself when
+		// something calls through it. Leaving both unset is the honest
+		// "no ceiling" answer.
+		Budget:  budget,
+		Spender: spender,
+		// The persister is also the tool-call recorder: a call row is
+		// unreachable without the assistant row id that only the transcript
+		// write observes.
+		Recorder: persister,
+	}
+	return host
+}
+
 // newAgentKernel builds the kernel and the host binding it runs against.
 //
 // It returns the Agent port rather than a concrete kernel because there are
@@ -142,20 +184,7 @@ func newAgentKernel(in agentKernelInput) (pigagent.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	host := agentkernel.Host{
-		// The bag is resolved per turn by chatruntime, which stamps it on
-		// ctx after every filter has settled it (role, persona, write gate,
-		// governance). Resolving it here instead would give every turn the
-		// first caller's view.
-		ToolsFor: agentkernel.TurnToolsFromContext,
-		Audit:    agentkernel.NewAuditLedger(ledgerWriter(in.Audit), chainVerifier(in.Audit)),
-		Gate:     in.Gate,
-		Budget:   agentkernel.NewBudget(in.Budget, nil),
-		// The persister is also the tool-call recorder: a call row is
-		// unreachable without the assistant row id that only the transcript
-		// write observes.
-		Recorder: persister,
-	}
+	host := kernelHost(in, persister)
 	provider, err := host.Provider()
 	if err != nil {
 		return nil, err

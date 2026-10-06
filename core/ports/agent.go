@@ -186,6 +186,20 @@ func (u TranscriptUsage) Total() int {
 // invisible: a turn total that under-reports by the cache component still
 // looks like a number. The provider's own total is preferred whenever it
 // reported one, for the same reason TranscriptUsage.Total does.
+// Billed returns the token count this usage should be charged as.
+//
+// The provider's own total wins when it reported one, for the same reason
+// Add sums reports rather than mixing them: a recomputed number belongs to
+// neither the provider's bill nor the caller's own arithmetic. When the
+// provider was silent the fallback is every component the ledger stores,
+// because a turn that reports no usage is still tokens that were bought.
+func (u TranscriptUsage) Billed() int {
+	if u.ReportedTotal > 0 {
+		return u.ReportedTotal
+	}
+	return u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
+}
+
 func (u *TranscriptUsage) Add(next TranscriptUsage) {
 	if u == nil {
 		return
@@ -203,7 +217,22 @@ func (u *TranscriptUsage) Add(next TranscriptUsage) {
 	}
 }
 
+// TokenRecorder charges settled usage to a budget ledger.
+//
+// It is the other half of BudgetChecker, and it is declared as a separate
+// interface because the two answer different questions at different times:
+// the checker asks "may this call happen" before the provider, the recorder
+// asks "this cost N" after it settled. A cap that is only ever checked is
+// not a cap — the ledger's running total stays at zero and every check
+// passes, which is exactly the failure this interface exists to close.
+type TokenRecorder interface {
+	Record(ctx context.Context, sessionID string, tokens int) error
+}
+
 // BudgetChecker reports whether spend may continue.
+//
+// It is the query half of a budget, and on its own it is not a budget: a
+// checker with no recorder beside it sees a running total that never moves.
 type BudgetChecker interface {
 	// Allow reports whether another model call is permitted. It is
 	// consulted before each round trip so a turn that would blow the

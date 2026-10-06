@@ -190,10 +190,36 @@ func (r *runState) foldUsage(msg agent.AgentMessage) {
 	if asst == nil {
 		return
 	}
+	observed := UsageOf(asst)
 	// The mapper owns the frame, so the running total is published to it
 	// here rather than read back from the run state when done is built.
-	r.usage.Add(UsageOf(asst))
+	r.usage.Add(observed)
 	r.mapper.SetUsage(r.usage, r.model)
+	r.chargeBudget(observed)
+}
+
+// chargeBudget books one settled message against the spend ledger.
+//
+// It charges the message, not the running total, so a long turn's later
+// rounds are counted once each; charging the total here would bill the first
+// reply twice.
+//
+// The error is swallowed deliberately: the provider has already been paid,
+// and no second action would make its bill smaller. Swallowing is not the
+// same as ignoring — a ledger that refuses the charge is logged by whoever
+// wired it, and a nil Spender records nothing at all.
+func (r *runState) chargeBudget(observed ports.TranscriptUsage) {
+	if r.deps.Spender == nil {
+		return
+	}
+	tokens := observed.Billed()
+	if tokens <= 0 {
+		// A provider that reported nothing is not charged a guess. The
+		// gateway takes the same position: inventing a number is how a cap
+		// stops meaning anything.
+		return
+	}
+	_ = r.deps.Spender.Record(context.Background(), r.req.SessionID, tokens)
 }
 
 // persist hands a settled message to the host's write path. A persistence

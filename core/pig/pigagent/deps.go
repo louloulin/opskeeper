@@ -47,6 +47,14 @@ type Deps struct {
 	// Budget is consulted before each model call. Returning false ends the
 	// turn with TurnToolBudget.
 	Budget ports.BudgetChecker
+	// Spender charges each settled model's usage to the budget ledger.
+	// Optional: nil records nothing.
+	//
+	// It sits beside Budget rather than inside it because the two run at
+	// different moments — the checker before the provider, the recorder after
+	// it settles — and a ledger that is checked but never written sees a
+	// running total of zero and lets everything through.
+	Spender ports.TokenRecorder
 	// Recorder observes each admitted tool call from admission to settle.
 	// It is how the console's tool table is populated without the kernel
 	// knowing its schema. Optional: nil records nothing.

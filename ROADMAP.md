@@ -157,6 +157,9 @@ across sections.
     node's own `max_completion_tokens`, never under it; the field a node controls
     to buy tokens is no longer a field only the node honours
   - `☑` per-call max_completion_tokens ceiling reaches the provider
+  - `☑` the console-side daily cap is actually fed — the kernel books each
+    settled reply to the same ledger it checks (决策 358; before this the cap was
+    checked but never recorded, so it never fired on the console)
   - `☐` per-org / per-user monthly cap
   - `◐` graceful degradation before cutoff — answers shorten as a node nears its
     own daily allowance (`OPSKEEPER_LLM_EDGE_DEGRADE_PERCENT`, a quarter of the
