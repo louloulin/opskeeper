@@ -491,18 +491,33 @@ func main() {
 		log.Error("iam: seed role policies", slog.Any("err", err))
 		os.Exit(1)
 	}
-	// ADR-019 tenant_wide 双签策略载入。
-	// 启动时校验 policy/opskeeper/casbin/tenant_wide.json 语法 + 加载，
-	// 缺失时记 warn 不阻断（生产要求文件存在；本地调试允许缺失）。
+	// ADR-019 tenant_wide 双签策略：启动时校验语法。
+	//
+	// 决策 285 改掉了这三条日志的措辞，因为它们原来会说谎。原来打的是
+	// "dual sign policy loaded (N rules)"——一行绿的、像是控制已生效的日志，
+	// 而 dsp 这个局部变量在这一行之后就没有任何消费者：审批走的是
+	// approval 域的 Approve，第一次调用就把 status 写成 approved，
+	// 提案行的存储里也没有放第二个签名人的地方。**一个会把自己记成已启用
+	// 的控制，比一个不存在的控制更危险，因为它让运维不再去查。**
+	//
+	// 这里保留加载与语法校验，是因为规则文件写错了应该在启动时炸而不是在
+	// 第一次用到时炸——**即使那个「用到」还没有发生**。但措辞必须说真话：
+	// 加载成功不等于生效。生效需要提案行能存 N 个签名、approve 路径上累积
+	// 并调用 Validate，两件都还没做，见 biz/hitl/dual_sign.go 的包注释与
+	// TestDualSignCannotBeEnforcedBecauseNowhereStoresTwoSigners。
 	dsp, dsErr := managerbizhitl.LoadDualSignPolicies("policy/opskeeper/casbin/tenant_wide.json")
 	if dsErr != nil {
-		log.Error("hitl: load dual sign policies", slog.Any("err", dsErr))
+		log.Error("hitl: dual sign policy file is unreadable or malformed; it is NOT enforced at "+
+			"runtime either, so this only fails the boot early", slog.Any("err", dsErr))
 		os.Exit(1)
 	}
 	if n := len(dsp.Rules()); n == 0 {
-		log.Warn("hitl: dual sign policy file missing or empty; tenant_wide approvals fall back to single signer")
+		log.Warn("hitl: no dual sign rules; UNENFORCED — every approval is single-signer " +
+			"regardless of this file (decision 285)")
 	} else {
-		log.Info("hitl: dual sign policy loaded", slog.Int("rules", n))
+		log.Warn("hitl: parsed " + strconv.Itoa(n) + " dual sign rules; UNENFORCED — no approve " +
+			"path calls Validate and no proposal row can hold a second signature " +
+			"(decision 285); tenant_wide approvals are single-signer today")
 	}
 	orgRepo := iamdataorg.NewRepo(db)
 	membershipRepo := iamdatamembership.NewRepo(db)

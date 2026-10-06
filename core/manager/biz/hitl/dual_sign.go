@@ -9,7 +9,35 @@
 // 与 PausePolicyImpl.ShouldPause 的关系：
 //   - ShouldPause 决定"要不要停"（输出 PauseReason.Metadata.dual_sign_required）
 //   - DualSignPolicy.Validate 决定"签得够不够"（按角色组覆盖校验）
-//   - HITL Web 通道在签齐时调用 Validate，validate 通过 → resume token 释放
+//
+// **以上是设计。设计没有实现，而这一段曾经写成已实现。**
+//
+// 决策 285 量到的实况（`TestDualSignCannotBeEnforcedBecauseNowhereStoresTwoSigners`
+// 是它的收据）：
+//   - `Validate` 的调用方是 **0 个**。启动时 `cmd/opskeeper` 载入规则文件、
+//     校验语法、打一行 "dual sign policy loaded"，然后那个局部变量出作用域。
+//   - `Service.Approve` 第一次调用就把 `StatusApproved` 写下去并返回。
+//   - `model.Approval` 只有 `ApprovedBy *uint64`，`model.Proposal` 只有
+//     `ApprovedBy *uint64` 与 `ResumedBy *uint64`。**三列都是单值，没有一处
+//     能放下第二个签名**——所以这不是「忘了接线」，是存储里没有接线要用的地方。
+//   - `PausePolicyImpl.ShouldPause` 输出的 `dual_sign_required` 同样没有消费者：
+//     闸门本身由 `pigagent.beforeToolCall` 判定，而它判的是 `read` 与「非 read」，
+//     不读 severity。
+//
+// **因此「高风险动作需要两个不同角色组签核」这条 ADR-019 的核心结论，今天在
+// 本仓里一次都没有生效过。** 唯一生效的审批栅栏是单签的：任何非只读的工具调用
+// 都要一个人批准，批准时 `pigagent` 校验摘要绑定，**没有栅门时直接拒绝**
+// （fail closed，见 `core/pig/pigagent/runstate.go`）。那段栅栏是真的，
+// 本文件曾经描述的那段不是。
+//
+// 要让本文件描述的东西成真，需要三件事同时发生，缺一件就仍然是「配置了但没开」：
+//  1. 存储：给 proposal 行一个能放下 N 个签名人的地方（迁移 + 模型列）；
+//  2. 闸门：approve 路径上累积签名并调用 `Validate`，未签齐时保持 pending
+//     而不是返回；
+//  3. 声明：启动日志与本文件同时改成「已生效」。
+//
+// 第 3 件是前两件的收据，而**它今天已经在说谎**——决策 285 改掉了它，
+// 在实现之前。
 package hitl
 
 import (
