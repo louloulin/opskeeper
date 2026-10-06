@@ -41,6 +41,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -725,16 +726,6 @@ var Verdicts = []Verdict{
 	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/oneoff", Handler: "h.createOneoffTask"},
 	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/{id}/run", Handler: "h.rerunTask"},
 	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/{id}", Handler: "h.deleteTask"},
-	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/node-types", Handler: "h.createNodeType", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/node-types/{name}", Handler: "h.deleteNodeType", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/nodes", Handler: "h.createNode", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/nodes/{id}", Handler: "h.deleteNode", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/nodes/{id}", Handler: "h.updateNode", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relation-types", Handler: "h.createRelationType", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relation-types/{name}", Handler: "h.deleteRelationType", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relations", Handler: "h.createRelation", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relations/{id}", Handler: "h.deleteRelation", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relations/{id}", Handler: "h.updateRelation", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/webshell/http.go", Route: "/v1/webshell/sessions/{id}", Handler: "h.killSession"},
 }
 
@@ -768,6 +759,20 @@ type Result struct {
 	// something about the tree that is no longer true.
 	SlotStale []string
 
+	// Duplicate are keys the table records more than once. Every other check
+	// in this file compares the table against the tree, and a duplicate is
+	// invisible to all of them: `lookup` returns the **first** match, so the
+	// second one is never read, never judged stale, never orphaned — and the
+	// headline counts (`len(Verdicts)-countBacklog()`) silently include it.
+	//
+	// Decision 339 hit exactly this: a script that inserted the ten topology
+	// rows but failed to delete the ten they replaced left the table with 187
+	// entries and the run still printed 177 verdicts, all green, exit 0. The
+	// ten leftovers were not wrong about anything — they were simply never
+	// consulted. **A table that carries a row nobody reads is a claim about the
+	// tree that no check in this file can make**, so it has to be its own check.
+	Duplicate []string
+
 	// Gone are verdicts whose whole file left the tree. Kept apart from
 	// Orphan because the fix differs — a moved handler versus a deleted one —
 	// and because folding the two together would make a deleted package
@@ -787,6 +792,7 @@ type Result struct {
 // excepted when in fact the exception was deleted months ago.
 func (r Result) OK() bool {
 	return len(r.Missing) == 0 && len(r.Stale) == 0 && len(r.Orphan) == 0 &&
+		len(r.Duplicate) == 0 &&
 		len(r.Gone) == 0 && len(r.Unscanned) == 0 && len(r.Unwalkable) == 0 &&
 		len(r.SlotMissing) == 0 && len(r.SlotUnlisted) == 0 && len(r.SlotStale) == 0
 }
@@ -803,6 +809,7 @@ func (r Result) OK() bool {
 // checked.
 func Run(root string) Result {
 	var res Result
+	res.Duplicate = duplicateKeys(Verdicts)
 	seen := map[string]bool{}
 	seenFiles := map[string]bool{}
 
@@ -1119,6 +1126,26 @@ func routeKey(file, route, handler string) string {
 	return file + " " + route + " " + handler
 }
 
+// duplicateKeys returns every key recorded more than once in the table.
+//
+// It reports the key with its occurrence count rather than "this one is
+// duplicated", because the fix is the same either way and the count is what
+// tells a reader whether they left one row behind or ten.
+func duplicateKeys(vs []Verdict) []string {
+	counts := map[string]int{}
+	for _, v := range vs {
+		counts[routeKey(v.File, v.Route, v.Handler)]++
+	}
+	var out []string
+	for key, n := range counts {
+		if n > 1 {
+			out = append(out, key+" — "+strconv.Itoa(n)+" rows")
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func lookup(key string) (Verdict, bool) {
 	for _, v := range Verdicts {
 		if routeKey(v.File, v.Route, v.Handler) == key {
@@ -1160,6 +1187,9 @@ func (r Result) Report(w *os.File) {
 	}
 	for _, o := range r.Orphan {
 		fmt.Fprintf(w, "  orphan:  %s — the route is no longer registered; drop the verdict\n", o)
+	}
+	for _, d := range r.Duplicate {
+		fmt.Fprintf(w, "  DUPLICATE: %s — the table records this key more than once; lookup returns the first, so the rest are never read\n", d)
 	}
 	for _, g := range r.Gone {
 		fmt.Fprintf(w, "  gone:    %s — the whole file left the tree; drop the verdict\n", g)
