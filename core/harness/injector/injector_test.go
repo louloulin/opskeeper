@@ -3,6 +3,7 @@ package injector
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -16,8 +17,13 @@ type fakeInjector struct {
 	cleaned   []string
 }
 
-func (f *fakeInjector) Type() string                         { return f.prefix }
-func (f *fakeInjector) IsAvailable(ctx context.Context) bool { return f.available }
+func (f *fakeInjector) Type() string { return f.prefix }
+func (f *fakeInjector) CheckAvailable(ctx context.Context) error {
+	if f.available {
+		return nil
+	}
+	return fmt.Errorf("%w: fake says no", ErrUnavailable)
+}
 func (f *fakeInjector) Inject(ctx context.Context, spec InjectSpec) (*InjectResult, error) {
 	return &InjectResult{InjectID: "x", Type: spec.Type, StartedAt: time.Now()}, nil
 }

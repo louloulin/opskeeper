@@ -16,31 +16,36 @@ func TestInjector_Type(t *testing.T) {
 	}
 }
 
-func TestInjector_IsAvailable(t *testing.T) {
+// 一个还没接线的注入器必须自报不可用。上一版这个测试断言 IsAvailable() == true，
+// 断言的是一个"它能干活"的谎——而 Inject 那时只是往 map 里写了一行。
+func TestInjector_CheckAvailableRefuses(t *testing.T) {
 	i := New()
-	if !i.IsAvailable(context.Background()) {
-		t.Errorf("expected IsAvailable = true (skeleton)")
+	err := i.CheckAvailable(context.Background())
+	if err == nil {
+		t.Fatal("CheckAvailable returned nil for an injector that touches no real system")
+	}
+	if !errors.Is(err, injector.ErrUnavailable) {
+		t.Fatalf("error = %v, want it to wrap ErrUnavailable", err)
+	}
+	if len(err.Error()) < 40 {
+		t.Fatalf("error = %q, want it to say what is missing", err)
 	}
 }
 
-func TestInjector_Inject_SupportedType(t *testing.T) {
+// 不可用就必须一步都不走。不在这里拦住，一次"注入成功"会一路走到 judge 那里，
+// 变成一个假的回归结论。
+func TestInjector_InjectRefusesWhenUnavailable(t *testing.T) {
 	i := New()
 	res, err := i.Inject(context.Background(), injector.InjectSpec{
 		Type:     "rabbitmq.inject_message_burst",
 		Duration: 30 * time.Second,
 		Params:   map[string]interface{}{"sessions": 5},
 	})
-	if err != nil {
-		t.Fatalf("Inject failed: %v", err)
+	if !errors.Is(err, injector.ErrUnavailable) {
+		t.Fatalf("Inject error = %v, want ErrUnavailable", err)
 	}
-	if res.InjectID == "" {
-		t.Errorf("expected non-empty InjectID")
-	}
-	if res.Type != "rabbitmq.inject_message_burst" {
-		t.Errorf("Type = %q, want %q", res.Type, "rabbitmq.inject_message_burst")
-	}
-	if res.Metadata["skeleton"] != "true" {
-		t.Errorf("expected skeleton marker, got %v", res.Metadata)
+	if res != nil {
+		t.Fatalf("Inject returned a result %+v alongside an error; a refusal must produce nothing", res)
 	}
 }
 
@@ -51,29 +56,6 @@ func TestInjector_Inject_UnsupportedType(t *testing.T) {
 	})
 	if err == nil || !errors.Is(err, injector.ErrUnsupportedType) {
 		t.Errorf("expected ErrUnsupportedType, got %v", err)
-	}
-}
-
-func TestInjector_Inject_GeneratesUniqueIDs(t *testing.T) {
-	i := New()
-	r1, _ := i.Inject(context.Background(), injector.InjectSpec{Type: "rabbitmq.inject_message_burst"})
-	r2, _ := i.Inject(context.Background(), injector.InjectSpec{Type: "rabbitmq.inject_message_burst"})
-	if r1.InjectID == r2.InjectID {
-		t.Errorf("expected unique InjectIDs, got both = %q", r1.InjectID)
-	}
-}
-
-func TestInjector_Inject_HonorsProvidedID(t *testing.T) {
-	i := New()
-	res, err := i.Inject(context.Background(), injector.InjectSpec{
-		InjectID: "test-fixed-id",
-		Type:     "rabbitmq.inject_message_burst",
-	})
-	if err != nil {
-		t.Fatalf("Inject failed: %v", err)
-	}
-	if res.InjectID != "test-fixed-id" {
-		t.Errorf("InjectID = %q, want test-fixed-id", res.InjectID)
 	}
 }
 
@@ -93,28 +75,20 @@ func TestInjector_Cleanup_UnknownIDFails(t *testing.T) {
 	}
 }
 
-func TestInjector_Cleanup_HappyPath(t *testing.T) {
-	i := New()
-	res, _ := i.Inject(context.Background(), injector.InjectSpec{Type: "rabbitmq.inject_message_burst"})
-	if err := i.Cleanup(context.Background(), res.InjectID); err != nil {
-		t.Errorf("Cleanup failed: %v", err)
-	}
-	// 二次清理应失败（幂等：已清理视为 not found）
-	if err := i.Cleanup(context.Background(), res.InjectID); !errors.Is(err, injector.ErrInjectionNotFound) {
-		t.Errorf("second Cleanup: expected ErrInjectionNotFound, got %v", err)
-	}
-}
-
-func TestInjector_AllSupportedTypes(t *testing.T) {
-	i := New()
-	types := []string{
-		"rabbitmq.inject_message_burst",
-	}
-	for _, t_ := range types {
-		_, err := i.Inject(context.Background(), injector.InjectSpec{Type: t_})
-		if err != nil {
-			t.Errorf("Inject(%s) failed: %v", t_, err)
+// 每一个被列出来的类型都必须被同样地拒绝。
+//
+// 上一版这条测试断言"所有支持类型都被骨架接受"——它证明的是一个假动作。
+// 现在骨架不产生任何结果，所以正确的断言是：拒绝不挑类型。
+// 一旦有人接了线，这一条会红，那是它该红的时候。
+func TestInjector_AllSupportedTypesAreRefusedAlike(t *testing.T) {
+	for _, typ := range SupportedTypes() {
+		i := New()
+		_, err := i.Inject(context.Background(), injector.InjectSpec{Type: typ})
+		if !errors.Is(err, injector.ErrUnavailable) {
+			t.Errorf("%s: error = %v, want ErrUnavailable", typ, err)
 		}
 	}
-	t.Logf("rabbitmq: %d supported types all accepted by skeleton", len(types))
+	if len(SupportedTypes()) == 0 {
+		t.Fatal("no supported types listed; the test above would pass on an empty list")
+	}
 }

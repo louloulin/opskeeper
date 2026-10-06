@@ -516,26 +516,46 @@ CI 集成走 7.1 的本地进程，不走 HTTP。未来如果要这个接口，
 
 ### 8.1 Prod 环境注入拦截
 
-`cmd/opskeeper-eval` 的 `inject` 目前是**骨架**：它只接受
-`--case`、`--confirm-prod`、`--target` 三个 flag，打印一行
-`inject: case=... confirm_prod=...` 后返回，不做双人审批、不解析
-`ns=test deploy=order-svc`、不限时。
+`inject` 现在读真实的 case 文件、走真实的注入器注册表路由，
+并按注入器自己的 `CheckAvailable` 决定能不能注入。
 
-因此本节原来写的“拒绝 / 通过”两个样例都不可照抄：
-它们的输出只能由一个尚不存在的实现产生。真实行为：
+**但注入器本身全部是骨架**（见 8.2），所以真注入一定失败，而且是**大声地失败**：
 
 ```bash
-# 尚未实现双人审批，只有一个布尔确认
-$ opskeeper-eval inject --case k8s/pod-oom --target ns=test deploy=order-svc
-inject: case=k8s/pod-oom confirm_prod=false
-(skeleton) — full implementation in Task 2.6
+$ opskeeper-eval inject --case pg/lock-waits
+inject: case=pg/lock-waits env=staging steps=1
+
+inject: 以下 1 步没有执行：
+  step 1  pg.inject_lock_chain             action=inject_lock_chain        duration=3m0s
+      injector: not available in current env: pg injector is a skeleton — 没有配置 admin DSN（需要一条能执行 pg_sleep / pg_terminate_backend 的连接）
+error: inject: 1 of 1 step(s) not executed
 ```
+
+prod 的拦截是真的，且与注入器是否接线无关：
+
+```bash
+$ opskeeper-eval inject --case pg/lock-waits --env prod
+error: refusing to inject in prod without --confirm-prod
+```
+
+**双人审批仍未实现**——只有一个布尔确认 `--confirm-prod`，
+没有第二个人、没有审批记录、没有留痕。
 
 ### 8.2 时间窗限制
 
-**未实现。** `inject` 没有 `--max-duration`，没有时间窗，
-也不会拒绝任何注入。时间窗是这里应该有而没有的东西，
-它需要在 `core/harness/injector` 里实现，不是在 CLI 上加一个 flag。
+**未实现。** `inject` 没有 `--max-duration`，也没有时间窗。
+`InjectSpec.Duration` 已经在库里有字段，case 的 `inject.duration` 也已经
+被解析并打印出来（上面输出里的 `duration=3m0s`）——**但没有任何东西读它**。
+时间窗不是 CLI 上加一个 flag 的事：它需要注入器在超时后自己把故障撤掉，
+而注入器现在连故障都还没有。
+
+`--dry-run` 是这条命令现在唯一能真正完成的事，它不假装任何事：
+
+```bash
+$ opskeeper-eval inject --case pg/lock-waits --dry-run
+inject: case=pg/lock-waits env=staging steps=1
+  step 1  pg.inject_lock_chain             action=inject_lock_chain        duration=3m0s
+```
 
 ### 8.3 审计
 

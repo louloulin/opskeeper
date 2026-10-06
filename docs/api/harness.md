@@ -50,13 +50,29 @@ opskeeper-eval run --suite middleware-baseline --concurrency 4
 
 | flag | 作用 |
 |---|---|
-| `-case` | case id |
-| `-target` | 目标（`ns=test deploy=order-svc` 形式） |
-| `-confirm-prod` | 允许对生产注入。**没有它就注入不了生产**，这是一个必须显式写出来的开关 |
+| `--case` | case id |
+| `--cases-dir` | golden case 目录（默认 `core/harness/cases`） |
+| `--target` | 目标（`ns=test deploy=order-svc` 形式，空格分隔的 `key=value`） |
+| `--env` | 目标环境，默认 `staging` |
+| `--confirm-prod` | 允许对 `prod` 注入。**没有它就注入不了生产**，这是一个必须显式写出来的开关 |
+| `--dry-run` | 读真实的 case、走真实的路由，列出这个 case 会注入什么；不注入 |
 
 ```bash
+# 列出 k8s/pod-oom 会注入什么（这一步现在真的能跑通）
+opskeeper-eval inject --case k8s/pod-oom --dry-run
+
+# 真注入
 opskeeper-eval inject --case k8s/pod-oom --target ns=test deploy=order-svc
 ```
+
+**未交付：六个注入器全部是骨架。** `core/harness/injector` 下的
+pg / redis / host / k8s / rabbitmq / kafka 都不碰任何真实系统——没有 pgx 连接、
+没有 redis 客户端、没有 kubectl、没有 stress-ng。它们通过
+`CheckAvailable` 自报不可用并说明缺什么，`inject` 因此以非零退出，
+把每一步没执行的原因逐条打出来。**不会打印任何"注入成功"。**
+
+一个认不出的类型报 `ErrUnsupportedType` 而不是"不可用"：那是接线问题，
+与当前环境无关，报成不可用会把人引去查环境。
 
 ### 3.3 `judge` — 对已有响应重跑评分
 

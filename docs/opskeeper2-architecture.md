@@ -26661,6 +26661,127 @@ panic: runtime error: invalid memory address or nil pointer dereference
    没有"的能力接上了线，按 §六 的判据这属于阶段 0/2 内部，不改变加权值——
    **但它确实让"leaderboard 回归基线"这句话第一次是真的。**
 
+### 4.230 决策 296：让六个骨架注入器自报不可用——**并把 `inject` 从"打印一行就成功"改成"大声地失败"**
+
+#### 一、起点：决策 294 留下的第一号欠账
+
+决策 294 在「这一刀没有解决的」第一条写下：**`inject` 仍然是骨架**。
+本轮去读它，读到的东西比"骨架"这个词严重：
+
+```go
+func (i *Injector) IsAvailable(ctx context.Context) bool {
+	// 骨架：直接返回 true。完整实现：检查依赖二进制 + 网络连通性 + 权限
+	return true
+}
+```
+
+**六个注入器（pg / redis / host / k8s / rabbitmq / kafka）全部 `return true`。**
+它们的 `Inject` 不碰任何真实系统——没有 pgx 连接、没有 redis 客户端、
+没有 kubectl、没有 stress-ng——只是把一条记录写进内存 map，
+`InjectID` 递增，返回一个 `Metadata: {"skeleton": "true"}` 的结果。
+
+而 `cmdInject` 连这一步都没走：
+
+```go
+fmt.Printf("inject: case=%s confirm_prod=%t\n", *caseID, *confirmProd)
+fmt.Println("(skeleton) — full implementation in Task 2.6")
+return nil
+```
+
+**打印一行，返回 0。** 六个注入器一次都没被调用过。
+`printUsage` 把这个子命令写成"手动触发 fault-injector"，
+`docs/api/harness.md` §3.2 把它写成"允许对生产注入"。
+
+还有三个测试在**断言这个假动作**：`expected skeleton marker`、
+`generates unique ids`、`honors provided id`。
+**它们是绿的，而它们绿着的东西是假的。**
+
+#### 二、这一刀做了什么
+
+1. **`IsAvailable() bool` → `CheckAvailable() error`。**
+   改的不是名字，是**"不可用"这句话有没有地方可说**。
+   bool 类型让六个实现除了 `return true` 什么也写不出来；
+   error 让"缺 admin DSN"这句话有了落点。
+2. **每个 `Inject` 在类型检查之后、动手之前先 `CheckAvailable`。**
+   不可用就 `return nil, err`——**不返回结果，也不留下能被 `Cleanup` 认领的 ID**。
+3. **`InjectSpec` 的类型清单从 switch 的 case 列表变成 `supportedTypes` map
+   + `SupportedTypes()`。** 那份清单此前从不执行也无法查询：
+   调用方想知道"这个 case 到底要注入什么"只能去读源码。
+4. **`cmdInject` 真的接上了注册表**：读 case → `FromSchemaStep` →
+   `Route` → `CheckAvailable` → `Inject`，逐步打印，逐步收集没执行的步骤，
+   最后非零退出并逐条说明原因。新增 `--cases-dir` / `--env` / `--dry-run`，
+   `--target` 真的解析成 `key=value` map。prod 拦截是真的。
+5. **`Registry.Prefixes()`**：路由不到时告诉人"我们认识哪些前缀"。
+6. **`.go-arch-lint.yml` 给 `cmd` 加 `oxharness_injector`**，
+   理由与它早已授权的 `oxharness_schema` / `runner` / `leaderboard` 同一条：
+   `cmd/opskeeper-eval` 是 harness 的 CLI。授权面按实际 import 记。
+
+#### 三、为什么类型检查排在可用性检查前面
+
+一个认不出的类型报 `ErrUnavailable` 是错的：那是**接线问题**，与当前环境无关，
+报成不可用会把人引去查环境、查 DSN、查 kubectl。
+反过来也一样——如果把可用性排在前面，一个拼错的 case 会得到一句
+"pg 注入器是骨架"，而真正的问题是那个类型根本不存在。
+两个错误各有各的修法，混成一个就等于让人白查一轮环境。
+
+#### 四、闸门：8 条新测试 + 6 个包各 2 条改写，三次变异验证都红
+
+`cmd/opskeeper-eval/inject_gate_test.go`（8 条）逐个注入器钉住：
+- 注册表里确实有六个
+- 每一个都自报不可用，且错误里含 `ErrUnavailable` 与 "skeleton"
+- 每一个类型都在被拒绝时**不返回结果**；拒绝后 `Cleanup("")` 仍是 not found
+- `Route` 把自己列出的每个类型都路由回自己
+- **六个**都验"未知类型报 unsupported 而不是 unavailable"（见下）
+- `cmdInject` 对一个真实语料 case 非零退出，错误里含 "not executed"
+- `--dry-run` 成功
+- prod 无 `--confirm-prod` 被拒
+- 未知 case 是错误，不是"没有要注入的东西"
+
+六个注入器包各改写两条：原来断言 `IsAvailable == true` 的那条改成断言它拒绝；
+原来断言"支持类型被骨架接受"的那条改成**断言拒绝不挑类型**
+（并显式检查类型集非空——一条"每个类型都被拒绝"的断言在空集上会通过）。
+
+删掉三条：`GeneratesUniqueIDs` / `HonorsProvidedID` / `Cleanup_HappyPath`
+——它们测的是一段现在走不到、接线之后也未必还是那段代码的记账。
+
+| 变异 | 结果 |
+|---|---|
+| `pg.CheckAvailable` 改成 `return nil` | 红，且**原缺陷逐字复现**：`returned a result &{InjectID:pg-inj-1 … Metadata:map[skeleton:true]} while refusing` |
+| `cmdInject` 的 `if len(blocked) > 0` 改成 `if false &&` | 红：`cmdInject returned nil on a shipped case, want a non-zero exit` |
+| 把 pg 的可用性检查挪到类型检查前面 | 红：`an unknown type was reported as unavailable; the caller would go debug the environment` |
+
+**第三条变异第一次没红**，因为那条测试只试了注册表里的第一个注入器（host），
+而变异动的是 pg。于是改成六个全试——**一条守"顺序"的断言只试一个对象，
+是它最容易有的形状**。
+
+#### 五、读数
+
+| 项 | 变化 |
+|---|---|
+| `cmd/opskeeper-eval` 测试 | 62 → **70 passed**（+8） |
+| `core/harness/injector` 六包 | **50 passed**（改写 12 条、删除 3 条） |
+| `core/harness` 模块 | **220 passed / 14 包** |
+| 脚本测试 | 443（未变） |
+| 死代码 | 777 → **781**（+4，见下） |
+| `core/manager` | 942 文件 / 239,569 行（未变） |
+| 加权进度 | **98.6%，连续第二十二轮未动** |
+
+**死代码为什么涨了 4 个**：守卫之后那段代码——写 active map、生成 InjectID、
+`Cleanup` 认领——在生产路径上现在**真的不可达**了。
+它是诚实的死代码：接线之后会重新变得可达，而在此之前它是一个明摆着的占位。
+**上一版它是"假活"的死代码（被测试调用着，看起来像在工作），
+这一版是"真死"的死代码。** 后者更小、也更清楚该做什么。
+
+#### 六、这一刀没有解决的
+
+1. **注入器仍然不碰任何真实系统。** 缺的是六个各自的一份真实客户端
+   （pgx / go-redis / client-go / amqp / kafkaclient / stress-ng），
+   以及"注入之后按时长自动撤销"这条它至今没有的语义。
+2. **双人审批仍未实现**（只有一个布尔 `--confirm-prod`，无第二人、无记录）。
+3. **`InjectSpec.Duration` 仍然没有任何东西读它。**
+4. **harness 仍然没有 HTTP 接口**（决策 294 已写明）。
+5. **加权 98.6% 与原计划 97.0% 仍是一分未动。**
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

@@ -7,7 +7,7 @@
 //   - 注入类型按 <resource-prefix>.<action> 命名（如 pg.inject_lock_chain）
 //   - Registry 按 prefix 索引，调用方按 type 自动路由
 //   - Cleanup 通过 InjectID 标识（idempotent + context-aware）
-//   - IsAvailable 用于 E2E 前置检查（沙箱/权限/二进制依赖）
+//   - CheckAvailable 用于 E2E 前置检查（沙箱/权限/二进制依赖）
 //
 // 关联 Design Doc：docs/superpowers/specs/2026-07-13-unified-platform-path-a-design.md §2.2
 // 关联 spec：openspec/changes/unified-platform-base-selection/specs/harness-eval-platform/spec.md
@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -78,15 +79,22 @@ type Injector interface {
 	// 路由时按 "type[:prefix_len] == prefix" 匹配。
 	Type() string
 
-	// IsAvailable 检查 injector 在当前环境是否可用。
+	// CheckAvailable 检查 injector 在当前环境是否真的能注入。
 	//
-	// 完整实现：检查必要二进制（psql / redis-cli / kubectl ...）、权限、网络可达。
-	// 骨架实现：返回 true。
-	IsAvailable(ctx context.Context) bool
+	// **它返回 error 而不是 bool，是刻意的。** 上一版是 IsAvailable() bool，
+	// 六个骨架实现全部 `return true`——一个还没接线的东西自称可用，
+	// 而 bool 类型让"不可用"这句话没有地方可说。改成 error 之后，
+	// 不可用必须写出来缺什么（没有 DSN / 没有客户端 / 二进制不在 PATH 上），
+	// 调用方才能把它显示给人。
+	//
+	// 契约：**CheckAvailable 返回非 nil 时，Inject 必须返回 ErrUnavailable。**
+	// 这条由 injector/available_test.go 对每一个已注册的 injector 逐一验证。
+	CheckAvailable(ctx context.Context) error
 
 	// Inject 执行故障注入。
 	//
 	// 返回的 InjectResult 必须包含非空 InjectID，用于后续 Cleanup。
+	// **必须先 CheckAvailable，返回 ErrUnavailable 时不得产生任何副作用。**
 	// 错误：ErrUnsupportedType / ErrUnavailable / ErrInjectionFailed。
 	Inject(ctx context.Context, spec InjectSpec) (*InjectResult, error)
 
@@ -147,6 +155,21 @@ func (r *Registry) Injectors() []Injector {
 	defer r.mu.RUnlock()
 	out := make([]Injector, len(r.injectors))
 	copy(out, r.injectors)
+	return out
+}
+
+// Prefixes 返回已注册的 type 前缀（已排序）。
+//
+// 调用方要在一个类型路由不到时告诉人"我们认识哪些"，
+// 靠数注入器个数是不够的——那是另一个问题的答案。
+func (r *Registry) Prefixes() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0, len(r.injectors))
+	for _, i := range r.injectors {
+		out = append(out, i.Type())
+	}
+	sort.Strings(out)
 	return out
 }
 

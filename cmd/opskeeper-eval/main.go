@@ -26,7 +26,16 @@ import (
 	"time"
 
 	harnessleaderboard "github.com/vincent-wuhan/opskeeper/core/harness/leaderboard"
+
+	"github.com/vincent-wuhan/opskeeper/core/harness/injector"
+	hostinjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/host"
+	k8sinjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/k8s"
+	kafkainjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/mq/kafka"
+	rabbitmqinjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/mq/rabbitmq"
+	pginjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/pg"
+	redisinjector "github.com/vincent-wuhan/opskeeper/core/harness/injector/redis"
 	"github.com/vincent-wuhan/opskeeper/core/harness/runner"
+	"github.com/vincent-wuhan/opskeeper/core/harness/schema"
 )
 
 // version 由 build 阶段注入
@@ -94,7 +103,8 @@ USAGE:
 
 SUBCOMMANDS:
   run          执行单个 case 或 suite
-  inject       手动触发 fault-injector（仅 staging）
+  inject       读 case、路由到注入器；六个注入器全部是骨架，真注入必然非零退出
+               inject --case <id> --dry-run    列出这个 case 会注入什么（这条现在能跑通）
   judge        对已有 incident 报告重跑 judge
   leaderboard  显示排行榜 + 回归基线
                leaderboard --lock-baseline     把当前分数锁成基线
@@ -187,26 +197,121 @@ func cmdRun(ctx context.Context, args []string) error {
 func cmdInject(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("inject", flag.ExitOnError)
 	caseID := fs.String("case", "", "case ID")
-	confirmProd := fs.Bool("confirm-prod", false, "确认在 prod 环境注入（需 double approval）")
-	fs.String("target", "", "target spec（key=value 列表）")
+	casesDir := fs.String("cases-dir", "core/harness/cases", "golden case 目录")
+	env := fs.String("env", "staging", "目标环境（prod 需 --confirm-prod）")
+	confirmProd := fs.Bool("confirm-prod", false, "确认在 prod 环境注入")
+	target := fs.String("target", "", "target spec（key=value 空格分隔，如 ns=test deploy=order-svc）")
+	dryRun := fs.Bool("dry-run", false, "只列出这个 case 会注入什么，不真注入")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *caseID == "" {
 		return fmt.Errorf("--case required")
 	}
-	fmt.Printf("inject: case=%s confirm_prod=%t\n", *caseID, *confirmProd)
-	fmt.Println("(skeleton) — full implementation in Task 2.6")
+	if *env == "prod" && !*confirmProd {
+		return fmt.Errorf("refusing to inject in prod without --confirm-prod")
+	}
+	c, err := schema.NewLoader(*casesDir).LoadByID(*caseID)
+	if err != nil {
+		return fmt.Errorf("inject: load case %s: %w", *caseID, err)
+	}
+	if len(c.Inject) == 0 {
+		return fmt.Errorf("inject: case %s declares no inject step; there is nothing to inject", *caseID)
+	}
+	override, err := parseTarget(*target)
+	if err != nil {
+		return err
+	}
+	reg := newInjectorRegistry()
+
+	fmt.Printf("inject: case=%s env=%s steps=%d\n", *caseID, *env, len(c.Inject))
+	var blocked []string
+	for i, step := range c.Inject {
+		spec, serr := injector.FromSchemaStep(step, 0, *env)
+		if serr != nil {
+			return fmt.Errorf("inject: step %d: %w", i+1, serr)
+		}
+		if len(override) > 0 {
+			if spec.Params == nil {
+				spec.Params = map[string]interface{}{}
+			}
+			spec.Params["target"] = override
+		}
+		impl, action, ok := reg.Route(spec.Type)
+		if !ok {
+			blocked = append(blocked, fmt.Sprintf("  step %d  %s: 没有注册任何处理 %s. 前缀的注入器（已注册：%s）",
+				i+1, spec.Type, prefixOf(spec.Type), strings.Join(reg.Prefixes(), ", ")))
+			continue
+		}
+		line := fmt.Sprintf("  step %d  %-32s action=%-24s duration=%s", i+1, spec.Type, action, spec.Duration)
+		if *dryRun {
+			fmt.Println(line)
+			continue
+		}
+		if aerr := impl.CheckAvailable(ctx); aerr != nil {
+			blocked = append(blocked, fmt.Sprintf("%s\n      %v", line, aerr))
+			continue
+		}
+		res, ierr := impl.Inject(ctx, spec)
+		if ierr != nil {
+			blocked = append(blocked, fmt.Sprintf("%s\n      %v", line, ierr))
+			continue
+		}
+		fmt.Printf("%s  inject_id=%s\n", line, res.InjectID)
+	}
+	if len(blocked) > 0 {
+		fmt.Fprintf(os.Stderr, "\ninject: 以下 %d 步没有执行：\n", len(blocked))
+		for _, b := range blocked {
+			fmt.Fprintln(os.Stderr, b)
+		}
+		return fmt.Errorf("inject: %d of %d step(s) not executed", len(blocked), len(c.Inject))
+	}
 	return nil
 }
 
-// cmdJudge 重跑 judge。
-// cmdLeaderboard — Day 6+ harness loop leaderboard.
+// newInjectorRegistry 装上全部六个注入器。
 //
-// Aggregates harness/result/loop/*.json → harness/result/leaderboard-<date>.md。
-// Renders 4-metric rubric + chat-mode 6-metric extension when present.
-// Cases with recovery_pass_rate < --threshold (default 0.5) are flagged
-// NOT QUALIFIED per spec loop-harness-rubric §"门槛不通过不入榜".
+// 这是本文件第一次真的用上这个注册表：此前 cmdInject 只打印一行
+// "inject: case=... confirm_prod=..." 就返回 0，六个骨架一次都没被调用过，
+// 而 printUsage 把它写成"手动触发 fault-injector"。
+func newInjectorRegistry() *injector.Registry {
+	reg := injector.NewRegistry()
+	for _, impl := range []injector.Injector{
+		hostinjector.New(), pginjector.New(), redisinjector.New(),
+		k8sinjector.New(), rabbitmqinjector.New(), kafkainjector.New(),
+	} {
+		if err := reg.Register(impl); err != nil {
+			// 注册冲突是编程错误，不是运行时状态：拼错前缀会在这里炸，
+			// 而不是等到某个 case 路由不到时被读成"没有这个注入器"。
+			panic(fmt.Sprintf("inject: register %s: %v", impl.Type(), err))
+		}
+	}
+	return reg
+}
+
+// parseTarget 把 "k=v k2=v2" 解析成 map。
+func parseTarget(spec string) (map[string]string, error) {
+	if strings.TrimSpace(spec) == "" {
+		return map[string]string{}, nil
+	}
+	out := map[string]string{}
+	for _, field := range strings.Fields(spec) {
+		k, v, ok := strings.Cut(field, "=")
+		if !ok || k == "" {
+			return nil, fmt.Errorf("--target %q: expected key=value, got %q", spec, field)
+		}
+		out[k] = v
+	}
+	return out, nil
+}
+
+func prefixOf(injectType string) string {
+	if i := strings.IndexByte(injectType, '.'); i >= 0 {
+		return injectType[:i+1]
+	}
+	return injectType
+}
+
 func cmdLeaderboard(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("leaderboard", flag.ExitOnError)
 	dir := fs.String("dir", "harness/result/loop", "LoopResult JSON 目录")
