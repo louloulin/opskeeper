@@ -50,37 +50,11 @@ func TestComplianceTag_Validate(t *testing.T) {
 		t.Error("empty controls should error")
 	}
 }
-
-func TestMarshalUnmarshalComplianceTags(t *testing.T) {
-	tags := []ComplianceTag{
-		{Framework: FrameworkPCIDSS, Controls: []string{"encryption-at-rest"}, Enforced: true},
-		{Framework: FrameworkGDPR, Controls: []string{"subject-erasure"}, Enforced: false},
-	}
-	s, err := MarshalComplianceTags(tags)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s == "" {
-		t.Fatal("marshal returned empty")
-	}
-	got, err := UnmarshalComplianceTags(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 2 || got[0].Framework != FrameworkPCIDSS {
-		t.Errorf("roundtrip failed: %+v", got)
-	}
-
-	empty, _ := MarshalComplianceTags(nil)
-	if empty != "" {
-		t.Errorf("empty marshal should be empty string, got %q", empty)
-	}
-
-	gotEmpty, _ := UnmarshalComplianceTags("")
-	if gotEmpty != nil {
-		t.Errorf("empty unmarshal should be nil, got %v", gotEmpty)
-	}
-}
+// MarshalComplianceTags / UnmarshalComplianceTags 此前在这里有一条往返用例。
+// 它们删掉了（决策 368）：写进那一列的是 label.EncodeJSONTags 产出的 `[]string`，
+// 而它们解析的是 `[]ComplianceTag`——**一条形状对不上的往返测试，测的是
+// 两个函数彼此，而不是测任何一列里真实存在的东西。** 往返测试搬到了 label
+// 包，在真正写进这一列的那对函数上。
 
 func TestDefaultFrameworkControls(t *testing.T) {
 	m := DefaultFrameworkControls()

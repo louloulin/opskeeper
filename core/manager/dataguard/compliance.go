@@ -14,7 +14,6 @@
 package dataguard
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -67,30 +66,25 @@ func (c ComplianceTag) Validate() error {
 	return nil
 }
 
-// MarshalComplianceTags 把 []ComplianceTag 序列化为 JSON（写到
-// DataSensitivityLabel.ComplianceTags）。
-func MarshalComplianceTags(tags []ComplianceTag) (string, error) {
-	if len(tags) == 0 {
-		return "", nil
-	}
-	b, err := json.Marshal(tags)
-	if err != nil {
-		return "", fmt.Errorf("dataguard: marshal compliance tags: %w", err)
-	}
-	return string(b), nil
-}
-
-// UnmarshalComplianceTags 解析 JSON。
-func UnmarshalComplianceTags(raw string) ([]ComplianceTag, error) {
-	if raw == "" {
-		return nil, nil
-	}
-	var tags []ComplianceTag
-	if err := json.Unmarshal([]byte(raw), &tags); err != nil {
-		return nil, fmt.Errorf("dataguard: unmarshal compliance tags: %w", err)
-	}
-	return tags, nil
-}
+// 这里曾经有 MarshalComplianceTags / UnmarshalComplianceTags 两个函数，
+// 解析与序列化 `[]ComplianceTag`（framework + controls + enforced）。
+// **它们一端生产、一端读的不是同一列。**
+//
+// 写进 `DataSensitivityLabel.ComplianceTags` 的是 label.EncodeJSONTags 产出的
+// `[]string`（框架名，字段自己的注释就是这么写的），而 Unmarshal 的是
+// `[]ComplianceTag`。读路径那行是 `tags, _ := dataguard.UnmarshalComplianceTags(...)`
+// ——错误被丢掉，于是**一个贴了 GDPR 标签的资源，在 effective 列表里永远显示
+// 没有标签**，而控制台 POST 上去的那串框架名读回来就没了。
+//
+// 这一次缺陷是被减法审计挖出来的：MarshalComplianceTags 零生产调用方，
+// 而它的孪生 UnmarshalComplianceTags 有一处调用——那一处读的形状和写的
+// 形状对不上。**一个只有自己测试在用的写函数，与一个形状写错了的读函数，
+// 是一对互相背书的死代码。**
+//
+// `ComplianceTag` 这个类型本身留下：它是词表的一部分，`controls` 与 `enforced`
+// 至今没有任何写入方——那正是登记表 `compliance.enforced-tag` 这一行 declared
+// 的内容。留下类型而不是留下两个错的编解码器，是因为**词表可以被登记，
+// 错的实现不能**。
 
 // DefaultFrameworkControls 给出 5 框架的推荐控制项（**不强制**）。
 //

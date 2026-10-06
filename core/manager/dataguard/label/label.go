@@ -356,6 +356,27 @@ func EncodeJSONTags(tags []string) (string, error) {
 	return string(b), nil
 }
 
+// DecodeJSONTags 是 EncodeJSONTags 的对面，读的是**同一个形状**。
+//
+// 它存在的理由是一次真实的缺陷：读路径此前用的是 dataguard.UnmarshalComplianceTags，
+// 它解析的是 `[]ComplianceTag`（framework + controls + enforced），而这一列
+// 写的从来是 `[]string`（框架名，见 store 模型的字段注释）。两者对不上，
+// json.Unmarshal 每次都失败，而调用处写的是 `tags, _ :=` —— **错误被丢掉，
+// 标签永远是空的，没有任何地方会报告这件事**。
+//
+// 写进这一列的形状只有一个，那就是 EncodeJSONTags 产出的那个。读它必须用同一个形状，
+// 而不是另一个更能表达意图的形状。
+func DecodeJSONTags(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, fmt.Errorf("dataguard: decode compliance tags: %w", err)
+	}
+	return out, nil
+}
+
 // ListByResourceType 列出指定资源类型的所有 label。
 func (m *LabelManager) ListByResourceType(ctx context.Context, resourceType, sensitivity string, limit, offset int) ([]*store.DataSensitivityLabel, error) {
 	return m.repo.ListByResourceType(ctx, resourceType, sensitivity, limit, offset)

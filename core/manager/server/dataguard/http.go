@@ -330,7 +330,14 @@ func (h *Handler) listOrGet(w http.ResponseWriter, r *http.Request) {
 		out := make([]EffectiveLabel, 0, len(items))
 		for _, l := range items {
 			eff, conf, via, _ := h.mgr.ResolveEffective(r.Context(), l.ResourceType, l.ResourceID)
-			tags, _ := dataguard.UnmarshalComplianceTags(l.ComplianceTags)
+			// 错误不吞。一个解析不了的列不是"这个资源没有标签"，而是
+			// "我不知道这一列里写了什么"——前者让控制台显示一个空列表，
+			// 后者会让一个贴了 GDPR 标签的资源看起来从未被打过标。
+			tags, tagErr := dglabel.DecodeJSONTags(l.ComplianceTags)
+			if tagErr != nil {
+				writeErr(w, tagErr)
+				return
+			}
 			out = append(out, EffectiveLabel{
 				Label:               l,
 				ComplianceTags:      tags,
@@ -438,11 +445,18 @@ func writeErr(w http.ResponseWriter, err error) {
 
 // EffectiveLabel 是 task 2.7：GET 列表 + effective=true 时返回的扩展行。
 //
-// 与 LabelResponse 区别：列表场景下 ComplianceTags 已是反序列化后的 []ComplianceTag
-// （避免前端再二次 unmarshal）。
+// 与 LabelResponse 区别：列表场景下 ComplianceTags 已从存储列解出（避免前端
+// 二次 unmarshal）。
+//
+// 它的类型是 []string 而不是 []dataguard.ComplianceTag，理由是这一列里装的
+// 就是框架名：写路径只有 label.EncodeJSONTags 一个写入方，它产出的形状是
+// `["GDPR","PCI-DSS"]`。**曾经这里声明成富标签类型，读路径用一个形状对不上的
+// 解码器去解析并把错误丢掉，于是合规标签在读回来时永远是空的**（决策 368）。
+// `controls` 与 `enforced` 至今没有写入方，它们是登记表
+// `compliance.enforced-tag` 那一行 declared 的内容，不是这一行要假装的东西。
 type EffectiveLabel struct {
 	Label               *store.DataSensitivityLabel `json:"label"`
-	ComplianceTags      []dataguard.ComplianceTag   `json:"compliance_tags,omitempty"`
+	ComplianceTags      []string                    `json:"compliance_tags,omitempty"`
 	Effective           string                      `json:"effective_sensitivity"`
 	EffectiveConfidence float64                     `json:"effective_confidence"`
 	ViaInherited        bool                        `json:"via_inherited"`

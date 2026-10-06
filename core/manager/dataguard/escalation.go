@@ -42,33 +42,24 @@ func RequiredClass(s Sensitivity) (domain.ToolClass, bool) {
 	}
 }
 
-// RaisedClass returns the stricter of a proposed class and the class a label
-// demands. It is the one function callers should use; RequiredClass is
-// exported for the places that need the label's opinion on its own.
-func RaisedClass(proposed domain.ToolClass, s Sensitivity) domain.ToolClass {
-	required, ok := RequiredClass(s)
-	if !ok {
-		return proposed
-	}
-	// ClassUnknown is handled apart from the ranking, and it has to be.
-	//
-	// core/domain ranks it WITH destructive on purpose: a plugin that does
-	// not declare its class is not trusted to be read-only. That is the
-	// right rule for admitting a package, and borrowing it here would invert
-	// the control — "the producer said nothing" would outrank "the label
-	// says Restricted", so an unclassified proposal on a Restricted resource
-	// would come out of this function as ClassUnknown, and ClassUnknown on an
-	// approval row means nobody classified it, which means one signature.
-	//
-	// So an undeclared proposal takes the label's word for it.
-	if proposed == domain.ClassUnknown {
-		return required
-	}
-	// Everything else goes through core/domain's ordering, next to the
-	// constants it orders, so a new level between write and destructive
-	// cannot be added without the comparison following it.
-	return domain.Tools{
-		{Class: proposed},
-		{Class: required},
-	}.HighestClass()
-}
+// 曾经这里还有一个 RaisedClass(proposed, sensitivity)，它做的是"取更严者"，
+// 并且带着一整段关于 ClassUnknown 为什么必须单独分支的说明。
+// **它一个生产调用方都没有。** 生产路径是另外两条：
+//
+//	cmd/opskeeper/sensitivityescalator.go  →  RequiredClass（这里）
+//	core/manager/biz/approval.escalate      →  core/domain 的 HighestClass
+//
+// 后者按架构不能 import dataguard——那正是它必须把自己那份写全的原因，
+// 也是决策 363 特意在两处各写一遍 ClassUnknown 分支的原因。
+// 于是"两份"变成了"三份"，而第三份只有它自己的测试在调。
+//
+// 一份只被自己测试证明正确、没有任何调用方用的实现，是这个仓库反复记录的
+// 那一类东西：它从包内读像"已实现"，从包外读像不存在。而它自己的注释写着
+// "It is the one function callers should use"——一句没有任何人核对过的话。
+//
+// 删掉它不丢覆盖：等级→类别的映射由 TestEveryLevelThatPromisesAnEscalation
+// 守着，"标签只能抬不能压"与 ClassUnknown 那两条由真正执行它们的
+// biz/approval 侧用例守着（决策 363 的变异验证证明过：移除那条分支即红）。
+//
+// 而"不能有第三份"的判据已经变成守卫：TestEveryExportedSymbolHereHasA
+// ProductionCaller 会让下一份只被测试调用的导出符号当场失败。
