@@ -13,13 +13,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // fakeDeviceRepo is the in-memory devicebiz.Repo used by handler tests.
@@ -585,4 +586,129 @@ func TestBatchUpgradePackage_NotWired(t *testing.T) {
 	if len(svc.fetchIDs) != 0 {
 		t.Errorf("fetch should not run when resolver missing; got %v", svc.fetchIDs)
 	}
+}
+
+// --- 决策 332：两条最高后果的节点写路由，以及它们「不写什么」 --------------------
+//
+// 331 把 62 条此前不可见的路由摆到台面上，并按后果排了序，第一条是
+// 「谁换了节点的凭据」、第二条是「这台机器上现在跑的是哪个插件」。这两条
+// 此处补的是审计行，而用例真正要钉住的是**行里没有的东西**：
+//
+//	轮换密钥的那一行绝不能包含新密钥；
+//	开关插件的那一行绝不能包含 spec。
+//
+// 前者是常识，后者不是：spec 里可能有凭据（database_metrics 会顺手往密钥库
+// 写条目），而一个只存当前值的字段在 append-only 的链里是负资产——读者会
+// 以为自己读到的是事实，而它可能三个月前就被改过一次了。**一个假装完整的
+// 快照，比一个诚实的「决定」危险。**
+
+type fakePluginCfg struct {
+	gotEdge   uint64
+	gotPlugin string
+	gotInput  biz.SetInput
+}
+
+func (f *fakePluginCfg) ListForUI(context.Context, uint64) ([]biz.PluginRow, error) {
+	return nil, nil
+}
+func (f *fakePluginCfg) Set(_ context.Context, edgeID uint64, plugin string, in biz.SetInput) (*biz.PluginRow, error) {
+	f.gotEdge, f.gotPlugin, f.gotInput = edgeID, plugin, in
+	return &biz.PluginRow{PluginName: plugin, Enabled: in.Enabled}, nil
+}
+func (f *fakePluginCfg) CountByPlugin(context.Context) (map[string]int64, error) {
+	return map[string]int64{}, nil
+}
+
+// callWithSlot issues one request through a slot-bearing context and returns
+// whatever the handler handed to the audit port. Everything else about the
+// request is the same as production; the slot is what a real process installs
+// (决策 321: without it every SetAuditEvent is a no-op).
+func callWithSlot(t *testing.T, h http.Handler, method, path, body string) (*httptest.ResponseRecorder, auditport.Event, bool) {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auditport.WithSlot(req.Context()))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	ev, ok := auditport.GetAuditEvent(req.Context())
+	return rec, ev, ok
+}
+
+func TestRotateSecretWritesARowAndNotTheSecret(t *testing.T) {
+	const minted = "sk-live-DO-NOT-LOG-ME"
+	h := NewHandler(&fakeSvc{rotateResp: minted}, newFakeDeviceRepo(), nil)
+	router := buildRouter(h, tenantctx.Tenant{UserID: 1, Role: "admin"})
+
+	rec, ev, ok := callWithSlot(t, router, http.MethodPost, "/v1/edges/3/rotate-secret", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if !ok {
+		t.Fatal("no audit event: a credential rotation that leaves no row is a rotation nobody can answer for")
+	}
+	if ev.Action != auditport.ActionEdgeRotateSecret || ev.Status != auditport.StatusSuccess {
+		t.Errorf("event = %+v, want a successful edge_rotate_secret", ev)
+	}
+	if ev.ResourceType != auditport.ResourceEdge || ev.ResourceID != "3" {
+		t.Errorf("resource = %s/%s, want edge/3 — the node is the thing whose credential changed", ev.ResourceType, ev.ResourceID)
+	}
+	// The whole point. The secret is in the HTTP response, which is where the
+	// caller needs it; it must not be anywhere the chain will keep it.
+	for _, bucket := range []any{ev.Payload, ev.ResourceName, ev.ErrorMessage} {
+		if strings.Contains(dumpForAssertion(bucket), minted) {
+			t.Errorf("the minted secret reached the audit event (%+v): every chain reader becomes a credential holder", bucket)
+		}
+	}
+}
+
+func TestSetPluginWritesTheDecisionAndNotTheSpec(t *testing.T) {
+	cfg := &fakePluginCfg{}
+	h := NewHandler(&fakeSvc{}, newFakeDeviceRepo(), cfg)
+	router := buildRouter(h, tenantctx.Tenant{UserID: 1, Role: "admin"})
+
+	const spec = `{"dsn":"postgres://ops:hunter2@10.0.0.7:5432/prod"}`
+	rec, ev, ok := callWithSlot(t, router, http.MethodPut, "/v1/edges/9/plugins/database_metrics",
+		`{"enabled":true,"spec":`+spec+`}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if !ok {
+		t.Fatal("no audit event: which plugin runs on which host has to be written down somewhere")
+	}
+	if ev.Action != auditport.ActionEdgePluginSet || ev.Status != auditport.StatusSuccess {
+		t.Errorf("event = %+v, want a successful edge_plugin_set", ev)
+	}
+	if ev.ResourceID != "9" || ev.ResourceName != "database_metrics" {
+		t.Errorf("resource = %s/%s, want 9/database_metrics", ev.ResourceID, ev.ResourceName)
+	}
+	payload, _ := ev.Payload.(map[string]any)
+	if got, _ := payload["enabled"].(bool); !got {
+		t.Errorf("payload = %v, want the decision (enabled=true) on it", ev.Payload)
+	}
+	if strings.Contains(dumpForAssertion(ev.Payload), "hunter2") {
+		t.Errorf("the connection string reached the chain: %v", ev.Payload)
+	}
+	// And the config really did carry the secret through the handler — if this
+	// stops being true the assertion above has stopped proving anything.
+	if cfg.gotInput.Spec["dsn"] == nil {
+		t.Fatal("the fake never received the spec, so the payload assertions above are vacuous")
+	}
+}
+
+// dumpForAssertion renders any event field for a substring search. A helper
+// rather than three fmt calls because the assertion has to be written once and
+// used for all three fields — a check applied to two of three is the kind of
+// check that reads as thorough.
+func dumpForAssertion(v any) string {
+	if v == nil {
+		return ""
+	}
+	if str, ok := v.(string); ok {
+		return str
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

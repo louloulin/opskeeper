@@ -23,6 +23,22 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 843 / 575 / 268 as of decision 332: the two edge actions (edge_rotate_secret,
+// edge_plugin_set). Same shape as every line below it — a new action is a new
+// constant in core/base/pkg/audit, and core/domains/model/audit must re-export
+// every one of them or a caller in this module cannot see it (TestThePort-
+// VocabularyIsFullyReExported is the gate, and it is the reason these two exist
+// even though no core/domains code names them yet: their writers are manager
+// HTTP handlers, which sit outside this module).
+//
+// This decision also showed what the ratchet is for. The first version added
+// the aliases and nothing else, and the growth gate failed by itself. The
+// tempting move was to drop the aliases and let the re-export gate fail
+// instead — two gates, one decision, and the cheaper one to satisfy is the one
+// that was wrong. **A ceiling you can satisfy by deleting the requirement is
+// not a ceiling.** The number moved up by two, in the same commit as the two
+// constants, with a sentence attached, which is the whole contract.
+//
 // 841 / 573 / 268 as of decision 324: the three Higress gateway actions
 // (gateway_login, consumer_create, consumer_delete) and the
 // gateway_consumer resource type.
@@ -136,8 +152,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 841
-	deadSymbolBudget     = 573
+	unreachableBudget    = 843
+	deadSymbolBudget     = 575
 	testOnlySymbolBudget = 268
 )
 

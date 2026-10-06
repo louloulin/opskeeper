@@ -22,13 +22,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
 	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/edge"
 	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/edge"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // roleAdmin is the platform-admin role, named through the vocabulary
@@ -294,6 +295,25 @@ func (h *Handler) setPlugin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 332：这一行回答的是「这台机器上现在跑的是哪个插件」。
+	//
+	// spec 不进 payload。两个原因，第二个才是真的那个：其一，它可能含凭据
+	// （database_metrics 的 spec 会顺手往密钥库里写条目）；其二，一份会被
+	// 反复改写的配置块躺在 append-only 的链里，读者分不清「这一行是最终
+	// 状态」还是「这是三个月前那次」——**一个只有当前值、没有历史的字段，
+	// 在审计链里是负资产，它会让人以为自己知道的是事实。**
+	//
+	// 变更前后的状态各写一行做不到（路由一次只改一个插件），所以这里写的是
+	// 「决定」而不是「结果」：enabled 是这次请求要的，spec 是什么要回查
+	// plugin_configs。宁可承认链上只有决定，也不要伪造一份看起来完整的快照。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionEdgePluginSet,
+		ResourceType: auditport.ResourceEdge,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: name,
+		Status:       auditport.StatusSuccess,
+		Payload:      map[string]any{"enabled": in.Enabled},
+	})
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -522,6 +542,17 @@ func (h *Handler) rotateSecret(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 332：这一行不写「新密钥是什么」，也永远不能写。链上只有
+	// 「id 这台机器的凭据在什么时候被换掉了，由谁换的」——**一个把密钥本身
+	// 写进审计链的审计实现，等于给每个能读链的人发一份凭据**，而能读链的人
+	// 远多于能轮换密钥的人。换掉的旧密钥同样不写：它已经失效，写下来只是让
+	// 链的读者多一份用不上的秘密。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionEdgeRotateSecret,
+		ResourceType: auditport.ResourceEdge,
+		ResourceID:   strconv.FormatUint(id, 10),
+		Status:       auditport.StatusSuccess,
+	})
 	writeJSON(w, http.StatusOK, rotateResp{SecretKey: sk})
 }
 

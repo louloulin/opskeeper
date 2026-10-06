@@ -494,6 +494,32 @@ const (
 	// classed tool arriving on a read-only channel — are both legible
 	// from the payload without a second filter entry.
 	ActionAgentToolCall = "agent_tool_call"
+
+	// The node plane's two console-side rows (决策 332).
+	//
+	// These two were invisible to the audit gate until decision 331 taught the
+	// scanner to read `r.With(...)`, which means that for as long as the
+	// console has had these two buttons, the questions below had no answer
+	// anywhere:
+	//
+	//	"这个节点的凭据是谁换的，什么时候换的" — rotate-secret mints the key a
+	//	  host uses to prove it is that host, and the old one stops working.
+	//	"这台机器上现在跑的是哪个插件" — set-plugin decides what code executes on
+	//	  that host.
+	//
+	// The node_* family above is not a substitute for either. Those are rows a
+	// node writes about work it did itself, and a node cannot write "somebody
+	// in the console turned me on": the node never sees that request arrive as
+	// its own action, and by the time a plugin is running the question is
+	// already historical. **A compromise that wants a foothold starts by
+	// asking which plugin is enabled on which host, and these two rows are the
+	// only place that answer is written down.**
+	//
+	// Two actions rather than one `edge_update`: a credential rotation and a
+	// code-enablement decision are asked apart constantly, and folding them
+	// would make both a payload scan.
+	ActionEdgeRotateSecret = "edge_rotate_secret"
+	ActionEdgePluginSet    = "edge_plugin_set"
 )
 
 // ResourceType buckets used in the resource_type column. Same flat-list

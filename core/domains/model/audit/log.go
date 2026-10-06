@@ -197,6 +197,10 @@ const (
 
 	ActionAgentTeamsTokenIssue = auditport.ActionAgentTeamsTokenIssue
 
+	// 决策 332：两条节点侧后果最重的控制面写路由——谁换了它的凭据、它上面跑什么插件。
+	ActionEdgeRotateSecret = auditport.ActionEdgeRotateSecret
+	ActionEdgePluginSet    = auditport.ActionEdgePluginSet
+
 	ActionMCPToolCall      = auditport.ActionMCPToolCall
 	ActionMCPToolAuthorize = auditport.ActionMCPToolAuthorize
 
