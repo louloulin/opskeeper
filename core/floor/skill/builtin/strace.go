@@ -93,13 +93,10 @@ func (Strace) Execute(ctx context.Context, params json.RawMessage) (json.RawMess
 	if len(out) == 0 {
 		// ptrace 失败常见: "Operation not permitted" / "Permission denied"
 		msg := strings.TrimSpace(string(errTail))
-		if len(msg) > 200 {
-			msg = msg[:200]
-		}
 		if msg == "" {
 			msg = "strace produced no output"
 		}
-		res.Error = msg
+		res.Error = msg[:min(200, len(msg))]
 		return json.Marshal(res)
 	}
 	parseStraceSummary(string(out), &res)

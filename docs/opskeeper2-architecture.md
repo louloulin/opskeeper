@@ -6105,6 +6105,90 @@ left as the next cut rather than shipped as a red nightly"。
 的区分丢了两轮**。4.321 到 4.328 每一节都在写「本轮实跑、全绿」，
 而那些证据没有一条来自 CI——**而 CI 在这整段时间里一直是红的。**
 一份只报本机结果的进度汇报，会让读者以为这条分支可以合并。
+### 4.330 决策 396：我的改动**在 CI 上是红的**，而本地全绿——第四种"绿"，和前三种不一样
+
+4.329 记了「这条分支的 CI 一直红在开源门槛上」，那与本节的改动无关。
+本节是另一件事：**我这两轮改的代码，自己把 CI 弄红了。**
+
+#### 4.330.1 CI 报的失败
+
+run `37499452535`（含本轮全部改动）：
+
+```
+X build + vet + test  in 3m7s
+    ✓ go vet (root module)
+    ✓ Module boundaries
+    ✓ Race detector …
+  X Build and test every module on its own published tags
+    --- FAIL: TestTheUnreachableSymbolCountNeverGrows
+        the tree now has 864 unreachable symbols (600 dead, 264 test-only),
+        over the ratchet of 863 / 600 / 263.
+    make: *** [Makefile:859: module-standalone-check] Error 1
+```
+
+而本轮我跑过的：`core/floor` 全量绿、`-race` 绿、三个模块 build 通过、
+`TestNodeAgentDelivery` 七个子用例全绿、`ledger-check` 绿、
+`plan-security-check` 绿、`compliance-claims-check` 绿。
+
+**七道全绿，CI 红。**
+
+#### 4.330.2 根因：我自己制造了一个孤儿符号
+
+死掉的不是我新写的 `capture.go`——它一行都没进死代码表。是
+`core/floor/skill/builtin/strace.go` 里的 `min`：
+
+```
+core/floor/skill/builtin/strace.go    min:test-only
+```
+
+4.326 改写 strace 的错误处理时，我把原来的
+
+```go
+strings.TrimSpace(string(out))[:min(200, len(out))]
+```
+
+换成了自己写的 `if len(msg) > 200 { msg = msg[:200] }`。
+**`min` 在这个包里原本只有这一个调用点**，我改写它的时候顺手把调用点也改没了，
+于是这个函数变成 test-only。
+
+**这个改写本身没有任何功能上的必要**——`msg[:min(200, len(msg))]` 和
+`if` 版本完全等价，而前者是包里既有的写法。**我为了"改得更清楚"，
+把一个既有惯用法替换成了等价但非惯用的写法，然后失去了唯一一个调用者。**
+
+#### 4.330.3 修法：换回惯用法，不动棘轮
+
+棘轮的失败信息里列了三条出路，第三条是「raise the constants in
+`ratchet_test.go` in the same commit」。**本轮没有走第三条。**
+
+第三条是这道闸门失效的唯一方式，失败信息里原话是
+*"Raising them silently is the one option that undoes this gate: the number only
+means something while moving it costs a sentence."*——而本轮的情况连那句
+"sentence" 都不配：符号是**我十分钟前亲手弄死的**，不是历史积累，
+不是六条不可见路径之一（反射 / linkname / cgo //export / struct-tag 编解码 /
+嵌入方法提升 / build tag），**也不是"故意保留"**。
+
+所以改法是把 `msg[:min(200, len(msg))]` 换回去。**一行。**
+`module-standalone-check` 本地重跑绿（100s），`core/floor` 全量绿。
+
+#### 4.330.4 四种"绿"，这一轮把它们排齐了
+
+前十一轮我一直写「本轮实跑、全绿」，而那条 CI 是红的。本轮把「绿」拆开，
+它其实有四种，**每一种都不能替代下一种**：
+
+| 绿 | 本轮的状态 | 能证明什么 |
+|---|---|---|
+| **本机单元测试** | 绿 | 我改的那几个包没坏 |
+| **本机集成/闸门** | 绿 | 本机能跑的那些闸门没坏 |
+| **CI 单元 + 全部闸门** | **红（本轮修掉）** | 别人机器上、按 CI 的方式跑，也过 |
+| **CI 跨架构 e2e** | 绿（amd64 + arm64 真实 runner） | 换架构也成立 |
+
+**前三轮我只有前两种，就一直在写"全绿"。** 而 deadcode 棘轮是
+`module-standalone-check` 的一部分，本轮我**一次都没跑过那道闸门**——
+我跑的是 `go test ./...`、`-race`、`build`，**都不是它**。
+
+判据因此可以写下来了：**汇报"全绿"时必须说清是哪一种绿。**
+`go test` 绿和 `make module-standalone-check` 绿之间隔着 30 道闸门，
+而本轮那 30 道里有一道是红的，我一句"全量 0 FAIL"就把它盖过去了。
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
