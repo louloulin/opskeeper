@@ -4340,6 +4340,81 @@ NewRedactor(mode) from cmd/main.go」，而这句话是假的：非测试代码�
 
 **而本轮真正改变的一件事是：一类假声明从此会红。** 在此之前，"注释说 A 由 B 接线"
 这句话无论对错都没有任何东西会核对它，而**唯一被核对过的形式是"这个符号死了没有"**。
+### 4.306 决策 372：把方案重新对一遍账——两处「写死的数」，一个都不该由人写
+
+本轮的动作很简单：把 §4.28（决策 90）的方案评估与 §4.40（决策 102）的十条对账
+拿到今天的树上重跑一遍，判据只有一条——**代码在哪、命令输出什么**。上一轮的结论
+不作为证据。跑了 14 道闸门 + 域检查，全绿；台账与源码之间却有两处对不上。
+
+#### 4.306.1 本轮实测
+
+| 命令 | 本轮输出 |
+|---|---|
+| 11 道台账/契约类闸门（`module-check` … `edge-credential-check`） | 全绿 |
+| `eval-gates` + `module-standalone-check` | 全绿（含 9 模块独立 build/test、build-tagged 套件仅编译） |
+| `make domain-check` | `56 domains, 10 shared, 8 declared edges, 0 declared cycles, 0 hard process constraints, 56 production cross-domain imports` |
+
+方案的四条，逐条落到本轮读到的位置：
+
+| 方案条目 | 判定 | 本轮读到的位置 |
+|---|---|---|
+| 0.1/0.2 LLM 网关与节点接入 | 已关 | `core/domains/server/llmgw/`（`llmgw.go` / `wire.go` / `spend.go` / `callbounds.go`），装配在 `cmd/opskeeper/main.go:1117`；端到端在 `tests/agentgateway/`（真 `pig` 进程 × 真网关 handler）；广告地址与注册路由的接缝由 `cmd/opskeeper/llmgateway_advertise_test.go` 钉住 |
+| 0.3 `pig` 进交付物 | 已关 | `Makefile:1065` `build-pig-all`（linux/darwin × amd64/arm64）；`deploy/install/edge/build-edge-bundle.sh:46` 与 `deploy/Dockerfile.opskeeper-edge` 都含 `pig` |
+| 1.1 遥测 spool | 已关 | `core/edge/spool/`（`spool.go` / `policy.go` / `pump.go`）+ `core/edge/telemetrywal/` |
+| 1.2 自治白名单 | 已关 | `core/edge/autonomy/`（`autonomy.go` / `execute.go` / `spool.go`），逃逸用例在 `escape_test.go` |
+| 1.3 幂等与栅栏 | 已关 | `core/edge/policygate/fence_test.go`（三探针）+ `core/edge/autonomy/escape_test.go` |
+| 2.x 注册表 / 结晶 / eval 三维 / MCP | 已关 | `core/manager/biz/aiops/toolregistry/`、`crystallize/` + `crystallizehook/`、`core/harness/judge/diagnostic.go` |
+| 3.x 瘦身 / 联邦 | 代码已在 | 域图 0 对环；`core/domains/service/federationlink/` + `federationchild/` |
+
+#### 4.306.2 发现一：台账引用了一个**不存在**的文件路径
+
+§六 E 行写「发布驱动器落地（`service/plugin/driver.go`）」。实测：
+
+```
+$ ls core/domains/service/plugin/driver.go core/manager/service/plugin/driver.go
+core/domains/service/plugin/driver.go            <- 存在
+core/manager/service/plugin/driver.go: No such file or directory
+```
+
+模块从 `core/manager` 改名为 `core/domains` 之后，台账里的这条少了半截路径。
+它读起来**和一条活路径一模一样**——这正是它能活这么久的原因。
+
+`scripts/ledgercheck/backref_test.go` 只校验**决策号**存在，不校验**文件路径**存在，
+所以这类失效没有任何闸门会响。已修。
+
+#### 4.306.3 发现二：`make --help` 里写死了两个已经漂移的数
+
+`Makefile:607` 的帮助文本自决策 231 起一直写着「57 个域 / 40 条声明边 / 0 对环」，
+而本轮 `make domain-check` 打印的是 **56 个域 / 8 条声明边 / 0 对环**。三个数里错两个。
+
+**修法不是把 57 改成 56。** 改对了这一次，下一次切一条边它又会错，而它的错法和
+上一条完全一样：**人写死的数，工具每天都在改它**。所以改成不写数字，让命令自己
+打印——数只有一个来源。
+
+#### 4.306.4 为什么不给台账加「路径必须存在」的闸门
+
+想过加。量过之后否掉，理由是它会把 272 条**包内相对路径**（`alert/rules.go`、
+`biz/aiops/tools/basetool/basetool.go` 这类，根相对不成立）判成失效，外加
+`/tmp/`、`/var/lib/`、`/etc/opskeeper-edge` 这些**运行时路径**。一条会产生 300 条
+误报的闸门，跑三次就会被加进豁免表，然后永远红着。
+
+窄化到「以仓库一级目录开头且含斜杠」是可行的，但本轮量到的失效数落在个位数，
+**为个位数加一条需要长期维护的解析规则，收益不抵成本**。因此：**这一轮只修事实，
+不建闸门，并把「台账路径不校验」作为既有限制显式记在这里**——它此前只存在于
+`backref_test.go` 的沉默里。
+
+#### 4.306.5 进度与最佳实现
+
+方案（决策 90 + 4.40 十条）的代码侧已经全部落地；本轮把它从「台账里的完成度」
+变成「本轮跑过的命令」。剩下的**不是编码量**，是三种只有人能解的输入：
+
+1. **阶段 0.4 的验收**需要一台能出网的真节点 + 真模型凭据。代码侧没有缺口，
+   差的是一次端到端实跑。
+2. **值侧脱敏**的代价仍需业务判断（漏手机号 vs 抹事故号），详见前几轮记录。
+3. **开源门槛 13 处**是材料与属主问题，不是代码问题。
+
+因此「最佳实现」这一栏本轮为空——**下一刀应该是一次实跑，而不是一次新写**。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
@@ -31572,7 +31647,7 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 | B PiG 适配层 | 20% | **100%** | `pigmodel` / `pigagent` / `pigrpc` / `pigwire` 四件套齐、eino 与 go-openai 清零、内核接缝（决策 32/33）打开、契约套件 `core/pig/pigcontract` 落地（决策 64）、**PiG 已换成固定 tag 并在发布条件下被验证**（决策 65）、**AI 层已原生化：第二套模型词汇全部删除，宿主直接用 PiG 的 `ai` 类型**（决策 67，见 §4.5）。**决策 84 把这个 100% 重新打开：控制面的 turn 仍跑在 `pigagent.Kernel`（自研装配 + `ports` 平行形状）而不是文档里的 `coding.Session`，「彻底改成 pig 风格」这一条尚未完成**。决策 75 当年判「维持 Kernel」的两条理由已在 §4.22 被逐条推翻，方向已定、内核未换，剩三步（拆 Mapper/ports 形状、行 id 改由 `TurnEndEvent` 分配并重验 SSE golden、四处装配重接）。**决策 86 落地了 SDK 驱动**：`pigagent.SessionKernel` 跑 `coding.Session`，与 `Kernel` 并存、共用 `Mapper`/`runState`/`buildPrompt`/`NewAdapters`，逐帧 golden + 逐行 transcript 的差分闸门已绿（见 §4.24）。**决策 86 已完成接线**：驱动由 `OPSKEEPER_AGENT_KERNEL` 选，`pig` 走裸循环、`pig-sdk` 走 `coding.Session`，`newAgentKernel` 返回 `Agent` 接口且宿主绑定对两者相同（§4.24.6）。`pigmcp` **判定不接控制面**（控制面的 MCP 已经过 `basetool` 路径到达 Session driver，再接会产出两份同能力工具），其位置是节点侧 `pig --mode rpc`（§4.24.7）。顺带修掉一个真实数据竞争（`Mapper` 序号计数器在工具 goroutine 上无锁）。**B 阶段已 100%**：`coding` 的形状由 `pigcontract/contract.go` 钉住，类型系统表达不了的四条语义假设由 `pigcontract/session_contract_test.go` 在真 `coding.Session` 上钉住，9 条变异全抓（§4.24.11）。往后只剩**跟随上游增量补钉**，不是缺口 |
 | C 节点 Agent | 20% | **95%** | `pig --mode rpc` 运维 profile + supervisor + `policygate` + 7 个 `agent.*` 隧道方法 + `NodeFleet` + 只读 piglet，三个剧本在新拓扑下通过；连接规模三项（连接池上限 / 心跳重连 / 风暴抑制）已全部落地（决策 78/79）。**决策 85 更正了此处的「剩下」**：MCP 运行时**一直都在**（`mcpclient` + `biz/mcp` + `tools.MCPTool` + 启动期发现），此前把「PiG 没有」误记成「我们没有」。本轮补的第三条路 `core/pig/pigmcp`（PiG 原生工具形状）**已就位，且已判定不接控制面**：控制面的 MCP 已经过 `basetool` 路径到达 Session driver，再接会产出两份同能力工具；它的位置是节点侧 `pig --mode rpc`（§4.24.7）——**这一段此前写「详见 §4.23」是错指**：§4.23 是 MCP 那条修正，与 C 的剩余无关（决策 178）。**C 阶段曾记为剩余的三条现已全部关闭**：连接规模三项（决策 78/79）、节点侧审计回传（决策 126 的 `agent.audit.entries` 全线贯通）、**节点工具链 0/18**（§4.275/4.78 那个上游缺陷随 PiG v0.4.0 修复后，`make pig-tool-scoping-check` 转绿——实测 5 包 / 90 工具全被提供给模型，本轮重跑 21 条全绿）；计划 §五 C 的验收闸门（alert_storm / rca_loop / recovery_verify 三个剧本）在 `core/manager/biz/nodefleet/e2e` 六个剧本全绿且由 CI 每次 push 跑到。**剩下：无计划内未交付项**——本行 95% 扣的是计划外雄心，不是计划 §五 里的欠账（决策 178）。**决策 347 把这三条重跑了一遍，而不是继续引用它们上一次被写下的结论**：`core/domains` 的 `nodefleet` 包全绿（连接池上限 / 心跳重连 / 风暴抑制三项的守卫都在这个包里）、`make pig-tool-scoping-check` 实测 5 包 90 工具全绿、`core/manager/service/frontierbound` 的节点账本九条守卫（`TestANodeRowAndAConsoleRowShareOneChain` 等）全绿，另加本刀读过的 `cmd/opskeeper-edge/agent.go:503`——闸门 socket 在 agent 启动**之前**建好、`toolbroker` 拿同一个 gate 二次复核，所以插件替换掉闸门扩展也绕不过去。**本刀不改这一格，仍是 95%**：§4.64.8 的规矩是「给某一格硬拔高比不改更糟」，而这一格扣的是雄心不是欠账，**扣多少本来就是运营者的判断，不是本仓的测量**；真要改成 100% 动的是这一行与合计（20+20+20+23.75+14.25 = **98.0%**），由 `ledgercheck` 的合成闸门当场验算，不接受只改合计。**剩下：无计划内未交付项**，扣的仍是计划外雄心 |
 | D 插件生态 | 25% | **95%** | B1/B2/B3 全部闭环（opskeeper-sre-readonly 18 + opskeeper-sre-observability 12 + opskeeper-sre-middleware 55 + opskeeper-sre-repair 5 + opskeeper-sre-autonomy 1 = 91 个工具；决策 168 起这 90 个由 `make pig-tool-scoping-check` 对着真二进制逐条核对，而这里此前记的「18 + 12 + 53 + 5」既漏了自治包、也少算了一个中间件工具，§4.108.7）、审核流水线（签名 → 清单 → 准入 → 灰度 → 回滚）、运输通道 6 条路由、`sdk` 三个发布物、**能力声明已从「家族」升级到「逐方法」，五个包的「声明 == 实际」全部有守卫**（决策 69；决策 168 把这道守卫从第一个包扩到全部已发布包，并登记成 CI 决策闸门）。**诊断轴现读数 17/20**（决策 204：`redis.hot_keys` 实现而非改名，退役其 `DiagnosisGaps` 条目，`redis/hot-key` 用例由 GAP 转 ok；余下 3 条 GAP 全部 OWNED——host 家族按设计排除、`kafka.rebalance_history` 需要一个采集器而非 broker 客户端）。**覆盖率闸门从「冻结的 0/20」拆成两条轴，诊断轴成为真正的回归闸门**（决策 87，§4.25），并由它查出一个真实缺陷：`k8s.describe_pod` 被误划为 L2 软写，导致节点只读包发不出这个工具、`k8s/deployment-failed` 无法诊断。**导入器的覆盖面已收口**（决策 88，§4.26）：8 类资源全部派生自 `domain.PackageResources`，`core/pig/pigcontract` 对着 PiG 的 `Kind` 常量逐类核对，`themes` / `agent-environments` 不再被静默丢弃，源 `package.json` 改为「读而不复制」（复制会把清单的发现抑制带到节点上），撞名目录从静默跳过变成可读警告。剩下：更多插件迁移 |
-| E 生态治理 | 15% | **100%** | 兼容矩阵（edge 轴 × PiG 轴）、金融 / SaaS 两个 profile 模板、profile × 实际目录的组合校验（决策 70）、**发布前兼容矩阵 API，管理侧预检与节点裁决共用 `CheckVersions`**（决策 71）、插件 × golden case 覆盖报告、发布全链路（Start/List/Status/Advance/Halt/Rollback）。**兼容矩阵 agent 轴不再是「无法判断」：节点随心跳自报 PiG 构建，控制面一次查询读取（决策 73）**。**计划 E-3「插件纳入黄金集回归」已落地**：`plugin-coverage` 的诊断轴由 `--fail-on-unrecorded-diagnose-gap` 把进构建（§4.25），剩下的 4 个缺口逐条登记在 `pluginmanifest.DiagnosisGaps` 并附理由，登记表两个方向都有守卫。**两个前端页面已经落地**：插件市场 + 同一个页面上的兼容矩阵卡片（决策 82，§4.20）、节点已装插件清单面（决策 83，§4.21）——此前记在这里的「插件市场前端页面、兼容矩阵前端页面」是过期条目，不是欠账。**决策 305 关掉最后一条**：发布驱动器落地（`service/plugin/driver.go`），没有人按 `Advance` 的发布会自己走到舰队，失败节点会 halt 而不是被推进到全量，pending 停滞 `defaultStallAfter` 会 halt 并点名节点（§4.239）。**E 阶段无剩余项** |
+| E 生态治理 | 15% | **100%** | 兼容矩阵（edge 轴 × PiG 轴）、金融 / SaaS 两个 profile 模板、profile × 实际目录的组合校验（决策 70）、**发布前兼容矩阵 API，管理侧预检与节点裁决共用 `CheckVersions`**（决策 71）、插件 × golden case 覆盖报告、发布全链路（Start/List/Status/Advance/Halt/Rollback）。**兼容矩阵 agent 轴不再是「无法判断」：节点随心跳自报 PiG 构建，控制面一次查询读取（决策 73）**。**计划 E-3「插件纳入黄金集回归」已落地**：`plugin-coverage` 的诊断轴由 `--fail-on-unrecorded-diagnose-gap` 把进构建（§4.25），剩下的 4 个缺口逐条登记在 `pluginmanifest.DiagnosisGaps` 并附理由，登记表两个方向都有守卫。**两个前端页面已经落地**：插件市场 + 同一个页面上的兼容矩阵卡片（决策 82，§4.20）、节点已装插件清单面（决策 83，§4.21）——此前记在这里的「插件市场前端页面、兼容矩阵前端页面」是过期条目，不是欠账。**决策 305 关掉最后一条**：发布驱动器落地（`core/domains/service/plugin/driver.go`），没有人按 `Advance` 的发布会自己走到舰队，失败节点会 halt 而不是被推进到全量，pending 停滞 `defaultStallAfter` 会 halt 并点名节点（§4.239）。**E 阶段无剩余项** |
 
 加权合计 ≈ **97.75%**（20×1.00 + 20×1.00 + 20×0.95 + 25×0.95 + 15×1.00；**决策 172 算出 98.0% 是错的，决策 178 更正为 97.0%**，见 §4.108.6；**决策 305 把 E 提到 100% 之后是 97.75%**——此前那三个 5% 里，E 的那一份是唯一的实现项，现已关闭。**这一栏的算术被 `ledgercheck` 的两道闸门看着**：本轮我先写成 97.2%，被当场指出五行自己相加是 97.75%，**一个自己都不等于自己各行之和的合计，比没有合计更糟**）。
 

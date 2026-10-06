@@ -604,7 +604,7 @@ domain-shared-report: ## 列出被多个域共享的数据形状与同名歧义�
 	go run ./scripts/domaincheck . -shared
 
 .PHONY: domain-check
-domain-check: ## 校验 control plane 的域边界（57 个域 / 40 条声明边 / 0 对环，决策 231 起）
+domain-check: ## 校验 control plane 的域边界（决策 231 起；域数/声明边/环的个数由本命令自己打印，不写在这里）
 	go run ./scripts/domaincheck .
 	go test ./scripts/domaincheck/ -count=1
 
