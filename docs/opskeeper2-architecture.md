@@ -8232,6 +8232,66 @@ concurrency group 决定的是「同组里排队与取消谁」，**它没有「
 
 **架构尺 97.75% / 四阶段交付尺 99.5% 不动。** 本刀没有关掉任何计划内未交付项；
 它撤回了两句错话、把一句无法兑现的承诺换成事实，并留下一件明确要人拍的事。
+### 4.356 决策 422：「进了 CI」不等于「在 CI 上执行过」——`module-standalone-check` 曾能吃掉整个 job 的预算，让后面四十个闸门什么都不报告
+
+#### 4.356.1 观察：四十分钟里 run 一个字都没变
+
+上一轮开 PR 后我在等 CI 的终态，取 run 37545048748 的 job 明细：
+
+```
+build + vet + test                              in_progress    23:11:24
+  1..10  Setup/Checkout/vet/Module boundaries   completed/success
+ 11     Build and test every module ...          in_progress
+ 12..43 Race detector、pending-check、ledger ...  pending
+```
+
+而 run 的 `updated_at` 停在 **23:11:27**——**四十分钟没有再动过**。
+同一步在本机（19 个模块，各自 `GOWORK=off` build + test）约 **2.5 分钟**。
+那个 run 最终的结论是 `cancelled`（被下一次 push 取消），所以它**从未给出结论**。
+
+#### 4.356.2 这条更正的是决策 307 自己写下的那句话
+
+决策 307 复验计划 §六 的门槛时写过：
+
+> 三类自治逃逸的测试……**经 `module-standalone-check` 确实进 CI**——不是"仓库里恰好有"。
+
+**准确的说法是：它进了 CI 的 job 定义，但那个 job 在这一步没有产出结论。**
+第 11 步一旦吃光 35 分钟预算，第 12 到 43 步**全部保持 `pending`**，
+run 失败时**没有一条闸门报告过任何东西**——而只读 job 列表的人会把这读成"闸门都过了"。
+
+**「进 CI」与「在 CI 上执行」是两个事件，而当时那句话把前者当成了后者。**
+这是本仓库反复出现的那一类（§4.348 的"分支上没有任何一个提交能满足它"、
+§4.346 的"这些断言从没人看过"）：**一个断言描述了一个配置，而没描述它跑出来的结果。**
+
+#### 4.356.3 修法：拆成独立 job，让慢的那一步不再共享预算
+
+`module-standalone-check` 现在是 `module-standalone` 独立 job，**60 分钟**自己的预算，
+与 `build + vet + test` 并行。新 job **不挂 MySQL service**：它关掉 workspace、
+按发布 tag 构建，本机无数据库也能通过，给它挂一个它并不需要的依赖只是多付成本。
+
+**验证（新 run 37545605453 的 job 列表）**：
+
+```
+every module on its own published tags   in_progress   23:16:45
+build + vet + test                       in_progress   23:16:45
+end-to-end suite (arm64)                 in_progress   23:16:48
+end-to-end suite (amd64)                 in_progress   23:16:45
+```
+
+**拆分生效，而这是本轮唯一可观测的判据**——按决策 421 的教训，
+「我改了一行」不是证据，「CI 上出现了那个 job」才是。
+
+#### 4.356.4 顺带一条：e2e 的两条腿在 CI 上是绿的
+
+上一轮那次查询里，`end-to-end suite (arm64)` 与 `(amd64)` 都是 **`completed/success`**——
+带 MySQL service、带 frontier broker 的端到端，两个架构都跑通了。
+**这是计划 §六「跨架构：amd64 与 arm64 各跑一次完整 e2e」第一次在 CI 上留下绿记录。**
+
+#### 4.356.5 进度影响：两把尺不动
+
+**架构尺 97.75% / 四阶段交付尺 99.5% 不动。** 本刀不关闭任何计划内未交付项；
+它改的是"四十个闸门在 CI 上有没有机会说话"，并更正了一句把配置当结果的断言。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
