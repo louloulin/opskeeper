@@ -11,8 +11,20 @@ import (
 // tests exist to make routeaudit red on purpose, in a scratch tree, four
 // different ways.
 
+// onlyRoot narrows Roots to a single tree for the duration of a test. Roots
+// is now a list of five real trees, and a scratch tree that contains only one
+// of them would otherwise report the other four as unwalkable — which is
+// exactly the signal we want from a real run and pure noise from a fixture.
+func onlyRoot(t *testing.T, tree string) {
+	t.Helper()
+	saved := Roots
+	Roots = []string{tree}
+	t.Cleanup(func() { Roots = saved })
+}
+
 func tree(t *testing.T, files map[string]string) string {
 	t.Helper()
+	onlyRoot(t, "core/manager/server")
 	root := t.TempDir()
 	for rel, body := range files {
 		p := filepath.Join(root, "core", "manager", "server", filepath.FromSlash(rel))
@@ -58,7 +70,7 @@ func (h *Handler) drop(w http.ResponseWriter, r *http.Request) { w.WriteHeader(2
 	})
 	// Same tree, but the table now claims the route is audited.
 	saved := Verdicts
-	Verdicts = append(append([]Verdict{}, saved...), Verdict{File: "widgets/http.go", Route: "/v1/widgets/{id}"})
+	Verdicts = append(append([]Verdict{}, saved...), Verdict{File: "core/manager/server/widgets/http.go", Route: "/v1/widgets/{id}", Handler: "h.drop"})
 	defer func() { Verdicts = saved }()
 
 	res := Run(root)
@@ -84,7 +96,7 @@ func note(w http.ResponseWriter, r *http.Request) { auditport.SetAuditEvent(r, a
 `,
 	})
 	saved := Verdicts
-	Verdicts = append(append([]Verdict{}, saved...), Verdict{File: "widgets/http.go", Route: "/v1/widgets/{id}"})
+	Verdicts = append(append([]Verdict{}, saved...), Verdict{File: "core/manager/server/widgets/http.go", Route: "/v1/widgets/{id}", Handler: "h.drop"})
 	defer func() { Verdicts = saved }()
 
 	res := Run(root)
@@ -129,9 +141,9 @@ func (h *Handler) drop(w http.ResponseWriter, r *http.Request) {
 	saved := Verdicts
 	Verdicts = []Verdict{
 		// Says backlog, but the handler now audits.
-		{File: "widgets/http.go", Route: "/v1/widgets/{id}", Backlog: "left over from an earlier round"},
+		{File: "core/manager/server/widgets/http.go", Route: "/v1/widgets/{id}", Handler: "h.drop", Backlog: "left over from an earlier round"},
 		// For a route that no longer exists.
-		{File: "widgets/http.go", Route: "/v1/widgets/{name}", Backlog: "route was renamed"},
+		{File: "core/manager/server/widgets/http.go", Route: "/v1/widgets/{name}", Handler: "h.drop", Backlog: "route was renamed"},
 	}
 	defer func() { Verdicts = saved }()
 
@@ -162,9 +174,9 @@ func (h *Handler) drop(w http.ResponseWriter, r *http.Request) { auditport.SetAu
 	})
 	saved := Verdicts
 	Verdicts = []Verdict{
-		{File: "widgets/http.go", Route: "/v1/widgets"},
-		{File: "widgets/http.go", Route: "/v1/sprockets/{id}"},
-		{File: "sprockets/http.go", Route: "/v1/sprockets", Backlog: "package deleted in this change"},
+		{File: "core/manager/server/widgets/http.go", Route: "/v1/widgets", Handler: "h.list"},
+		{File: "core/manager/server/widgets/http.go", Route: "/v1/sprockets/{id}", Handler: "h.drop"},
+		{File: "core/manager/server/sprockets/http.go", Route: "/v1/sprockets", Handler: "h.drop", Backlog: "package deleted in this change"},
 	}
 	defer func() { Verdicts = saved }()
 
@@ -194,8 +206,116 @@ func TestTheTableAgreesWithTheRepository(t *testing.T) {
 	for _, s := range res.Stale {
 		t.Errorf("stale: %s", s)
 	}
+	for _, u := range res.Unscanned {
+		t.Errorf("UNSCANNED: %s", u)
+	}
+	for _, e := range res.Unwalkable {
+		t.Errorf("UNWALKABLE: %s", e)
+	}
 	if t.Failed() {
 		t.Fatalf("%d mutating routes are registered, %d verdicts are recorded, %d of them backlog",
 			len(Verdicts), len(Verdicts), countBacklog())
+	}
+}
+
+// Two verbs on one path, two handlers, one of them unaudited. Keying the
+// table on the path alone reported this covered: the first registration won,
+// the second was never looked at, and the run was green. Thirteen paths in
+// this repository are shaped like that, and one of them is
+// `DELETE /v1/im/apps/{id}` — the IM app whose cleartext secret decision 310
+// was about.
+func TestTwoVerbsOnOnePathAreJudgedSeparately(t *testing.T) {
+	root := tree(t, map[string]string{
+		"widgets/http.go": `package widgets
+func (h *Handler) Register(r chi.Router) {
+	r.Put("/v1/widgets/{id}", h.update)
+	r.Delete("/v1/widgets/{id}", h.del)
+}
+func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
+	auditport.SetAuditEvent(r, auditport.Event{})
+}
+func (h *Handler) del(w http.ResponseWriter, r *http.Request) {}
+`,
+	})
+	// The table has an opinion about PUT and nothing at all about DELETE.
+	// Keyed on the path, the PUT verdict answered for both and the run was
+	// green; keyed on the handler, DELETE is a route nobody has judged.
+	saved := Verdicts
+	Verdicts = []Verdict{
+		{File: "core/manager/server/widgets/http.go", Route: "/v1/widgets/{id}", Handler: "h.update"},
+	}
+	defer func() { Verdicts = saved }()
+
+	res := Run(root)
+	if len(res.Missing) != 1 || !strings.Contains(res.Missing[0], "h.del") {
+		t.Fatalf("missing = %v, want the unjudged second handler named", res.Missing)
+	}
+	if strings.Contains(strings.Join(res.Missing, " "), "h.update") {
+		t.Fatalf("missing = %v, want the judged handler left alone", res.Missing)
+	}
+}
+
+// A mutating route in a tree Roots does not name is the exact thing this
+// command exists to catch, and it is how core/domains/server stayed invisible
+// for as long as it did.
+func TestAMutatingRouteOutsideRootsIsReported(t *testing.T) {
+	onlyRoot(t, "core/manager/server")
+	root := t.TempDir()
+	side := filepath.Join(root, "core", "elsewhere", "server")
+	if err := os.MkdirAll(side, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `package elsewhere
+func (h *Handler) Register(r chi.Router) {
+	r.Delete("/v1/things/{id}", h.drop)
+}
+func (h *Handler) drop(w http.ResponseWriter, r *http.Request) {}
+`
+	if err := os.WriteFile(filepath.Join(side, "http.go"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Make the declared root exist, so the only finding is the one under test.
+	if err := os.MkdirAll(filepath.Join(root, "core", "manager", "server"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	saved := Verdicts
+	Verdicts = nil
+	defer func() { Verdicts = saved }()
+
+	res := Run(root)
+	if len(res.Unscanned) != 1 || !strings.Contains(res.Unscanned[0], "core/elsewhere/server/http.go") {
+		t.Fatalf("unscanned = %v, want the tree outside Roots", res.Unscanned)
+	}
+	if res.OK() {
+		t.Fatal("a mutating route outside every declared root was reported as OK")
+	}
+}
+
+// The failure this repository actually hit: a second entry in Roots changed
+// the "roots scanned: 2" line and nothing else, because Run never looped. A
+// root that yields no Go files is a root that was declared and never opened,
+// and it must not read as clean.
+func TestARootThatYieldsNothingIsNotSilentlyClean(t *testing.T) {
+	savedRoots, savedVerdicts := Roots, Verdicts
+	Roots = []string{"core/manager/server", "core/does/not/exist"}
+	Verdicts = nil
+	defer func() { Roots, Verdicts = savedRoots, savedVerdicts }()
+
+	scratch := t.TempDir()
+	live := filepath.Join(scratch, "core", "manager", "server")
+	if err := os.MkdirAll(live, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(live, "http.go"),
+		[]byte("package server\nfunc f() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := Run(scratch)
+	if len(res.Unwalkable) != 1 || !strings.Contains(res.Unwalkable[0], "core/does/not/exist") {
+		t.Fatalf("unwalkable = %v, want only the root that was never opened", res.Unwalkable)
+	}
+	if res.OK() {
+		t.Fatal("a root that was never walked was reported as OK")
 	}
 }

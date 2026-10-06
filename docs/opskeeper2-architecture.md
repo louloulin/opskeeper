@@ -28052,7 +28052,11 @@ inject: fill_disk: free space did not move (3534602240 -> 3537252352)
 
 **一、接收者从硬编码改成通配。** 原来的正则是 `\br\.(Post|Put|Patch|Delete)\("...",\s*handler\)`——只认 `r.`。而注册路由的接收者在真实代码里叫 `router.`、`versioned.`、`mux.`、`api.`。**闸门此前一直在看一棵树里的一小半，而且报出来是绿的**：漏报不会让任何人停下来，它只会让这个数看起来可信。改成匹配任意接收者之后，同一次运行立刻多挖出 `chatdiagnose` / `demo` / `hitl` / `loop` 四棵此前完全不在视野里的树。这条教训和决策 307 同源：*一个「搜不到」的结论，先怀疑搜索范围，再怀疑世界*——只不过这次是反过来的，闸门「没搜到」被当成了「不存在」。
 
-**二、根目录从一棵扩到两棵，并给「没扫」判红。** `Roots` 改为 `core/manager/server` 与 `core/domains/server`；新增 `Unscanned`：任何这两个根之外的 Go 文件注册 mutating 路由即失败。此前根之外的文件是被静默跳过的——又是同一类漏报。
+**二、根目录从一棵扩到两棵，并给「没扫」判红。** *（决策 315 更正：这一条当时只写了一半，下面记着。）* `Roots` 改为 `core/manager/server` 与 `core/domains/server`；新增 `Unscanned` 字段。
+
+> **决策 315 的更正。** 上面第二条里的三件事，有**两件在写的时候并不成立**：`Run` 仍然硬编码 `core/manager/server`，根本没有遍历 `Roots`——所以 `core/domains/server` 那 24 条路由从头到尾没被打开过，而报告照样打印「roots scanned: 2」；`findUnscannedRoots` 这个函数**压根不存在**，`Unscanned` 字段被声明、被打印、被 `OK()` 检查，但**永远为空**，那三项检查全是装饰。同一段文字里还有第四件：`routeReg` 的注释里写着「`core/domains/server/llmgw` 整个文件因此不可见」——这句是真的，但它下面那句「本命令把它报告成 orphan」也是假的，它连 orphan 都不是，它只是不存在。
+>
+> 写下来的时候我把「声明」当成了「实现」。这正是本仓反复出现的那一条：**台账断言「已写」而文件里没有，比没写更坏**——因为它让下一个不再看代码的人相信代码在那里。
 
 **三、报告里补上了 `gone`。** `Report` 此前打印 roots、`MISSING`、`REDUNDANT`，唯独**没有打印 `gone`**（裁决表里登记了但代码里已不存在的路由）。也就是说这个字段一直在被维护、在被写入，却从来没有人看过。
 
@@ -28069,6 +28073,36 @@ inject: fill_disk: free space did not move (3534602240 -> 3537252352)
 **顺带的账。** deadcode ratchet `801 / 534` → `806 / 539`：新增的 5 个是 HITL 提案的 4 个动作常量 + 1 个资源类型常量，与决策 311 / 312 记账的那批同类（只从别的模块经 `core/base/pkg/audit` 再导出读到，本树看不到调用方）。`core/manager` 分母 **945 文件 / 241,249 行 → 946 / 241,731（+1 文件 / +482 行）**，全部是 `server/hitl/audit_test.go` 这一个守卫测试文件——**分母第五次因为补守卫而变大**，与「搬运进度」的关系仍然只是噪声。
 
 **还没做完的（本决策留到下一刀）。** 裁决表目前只有 53 条 manager 版（`File` 仍是相对 `core/manager/server` 的短路径，需要加前缀），`core/domains/server` 的 24 条尚未逐条判定；闸门当前列出的 `MISSING` 里，hitl 这 4 条本轮已修并登记，另外 7 条（`chatdiagnose` 3、`demo` 2、`loop/admin` 2）待判。
+
+### 4.248 决策 315：把「声明过」变成「真的走过」——**闸门最贵的失败模式，是自己报告自己扫过了**
+
+上一条决策 314 写完就提交了，而它里面有三条是假的（见 §4.247 末尾的更正）。本决策把三件事补成真的，顺带挖出两处此前没人知道自己在错。
+
+**一、`Run` 真的遍历 `Roots` 了，并给「没走到」判红。** 键改为**仓库相对路径**（`core/manager/server/alert/http.go`），因为两棵树各自都有一个 `setting/http.go`、一个 `secret/http.go`、一个 `monitor/http.go`——短键本来就无法说明自己说的是哪一棵树，而一条静默匹配到另一棵树的裁决，正是这个命令存在的理由的反面。新增 `Unwalkable`：某个根一个 `.go` 文件都没产出，就是一个被声明但从未被打开的根，判红。`findUnscannedRoots` 这次真的写出来了：根之外任何注册 mutating 路由的 `.go` 文件都进 `UNSCANNED`（排除本命令自身与 `_test.go`）。
+
+**效果是立竿见影的。** `Roots` 一放开，先是多出 3 棵没被声明的树，再加上一旦真去走就暴露的 49 条没有裁决的路由：
+
+- `core/manager/iam/server` —— **17 条** mutating 路由，`resetPassword` / `setRole` / `deleteOrg` / `removeOrgMember` 都在里面。「谁把谁的密码重置了」是控制面最常被追问的一问，而它此前连一张表都没有。
+- `core/manager/higress` —— 3 条，含网关自己的登录与 consumer 增删。
+- `cmd/opskeeper` —— 2 条，handler 是就地写的闭包，闸门能看到的名字只有 `func`。
+
+**二、键里加了 handler——这一条改的是「已经绿灯」的那部分。** 原来的键是 `file + route`，而 PUT 与 DELETE 常注册在同一个路径上，于是 `seen[key]` 让**第一条注册吃掉整条路径**，第二个 handler 从来没被检查过。实测有 **13 条路径**各绑了两个不同 handler，其中就有 `DELETE /v1/im/apps/{id}`——决策 310 追的那条明文 `app_secret`，审计写在了 `PUT` 的 `h.updateApp` 上，`h.deleteApp` 一次都没被看过。键改成 `file + route + handler` 之后，被审计的东西就是被审计的那个函数本身。副作用是双向的：`iam` 的 `h.deleteUser` 与 `h.setRole` 此前因为同路径去重而被误报成「未审计」，改键之后它们**本来就是绿的**，闸门自己纠正了三条假阴性。
+
+**三、115 行裁决表逐条判定，报告开始数洞。** 现在这张表分三类，报告分三行打印：
+
+| 分类 | 条数 | 含义 |
+|---|---|---|
+| audited | **34** | handler 确实调用 `SetAuditEvent`（闸门逐条验过） |
+| settled exemption | **52** | 确实不需要：有写得进去的理由（只读探测、丢缓存、网关信封重复计数） |
+| acknowledged gap | **29** | **就是洞**——该入账而没入账，用 `洞：` 前缀标出来，报告单独计数 |
+
+最后这一行是本决策真正想要的东西。**一个绿灯不该掩盖二十九个洞**，而一张只区分「有理由 / 没理由」的表做不到这件事：它把「我确认它不需要」和「我知道它需要但还没做」压成同一个形状。加前缀不是为了好看，是为了让这二十九条在每次运行时都摆在输出里。
+
+**优先级已经排出来了，按风险而不是按数量**：`secret/http.go` 三条（凭据库，`Fields` 是明文口令的容器，改与删都让依赖它的服务当场失联）→ `iam` 十条（授权的源头动作，`removeOrgMember` 撤权比 `addOrgMember` 授权更需要留痕）→ `nodeagent` 五条（`decide` 与决策 309 同形，是审批按钮）→ 其余。
+
+**闸门证明过会咬人。** 从真实仓库的表里删掉凭据库 `DELETE /v1/secrets/{id}` 那一行，命令立刻红并精确点名 `h.del`。三条新测试各证一件事：同路径两个动词分别判定（删掉 `h.del` 的裁决行，闸门只报 `h.del` 不报 `h.update`）、根之外的 mutating 路由进 `UNSCANNED`、一个走不到的根判 `UNWALKABLE`。全部 3 轮 + `scripts/...` 全量绿，`core/base` / `core/domains` / `core/manager` / `core/edge` 全量 `go test` 绿。
+
+**没有账要记。** 本决策没有新增任何再导出常量，deadcode ratchet 停在 `806 / 539` 不动；`core/manager` 的文件与行数一个字节没变（改动全在 `scripts/` 与台账里）。**这是这个闸门第一次让一个数字变小的时候，账本上什么都不用写。**
 
 ## 六、当前实现进度
 
@@ -32192,6 +32226,21 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
 本轮发现的第三份）之后它会自己变便宜。**顺序反过来是先付贵的、后付便宜的。**
 
 ---
+
+### 审计覆盖面：第三把尺子（决策 315）
+
+前两把尺子量的是「模块切开没有」和「改造走到哪一步」。这一把量的是一个更窄也更硬的问题：**这个仓库里每一个会改状态的 HTTP 路由，在不在审计链上。** 由 `scripts/routeaudit` 产出，每次运行都打印：
+
+| 分类 | 条数 | 占比 | 含义 |
+|---|---|---|---|
+| audited | **34** | 35.1% | handler 确实调用 `SetAuditEvent`，闸门逐条验过 |
+| settled exemption | **52** | 45.2% | 确实不需要，理由写得进去（只读探测、丢缓存、网关信封重复计数） |
+| acknowledged gap | **29** | 25.2% | **就是洞**：该入账而没入账，按 `洞：` 前缀标出并单独计数 |
+| 合计 | **115** | 100% | 5 棵 HTTP 树：`core/manager/server`、`core/domains/server`、`core/manager/iam/server`、`core/manager/higress`、`cmd/opskeeper` |
+
+**35.1% 这个数字要这么读**：它不是「审计覆盖率只有 35%」，而是「**明确知道自己状态的路由占 80.2%**（audited + settled），剩下 25.2% 是自己承认的洞」。决策 311 之前，这个仓库连这张表的形状都没有——`iam` 的 17 条身份写路由、`secret` 的 3 条凭据路由，此前既没有被审计，也没有被列为待办，它们只是**不在任何人的视野里**。把 115 条变成 115 个有名字的判断，本身就是这轮的产出。
+
+**洞的优先级**（按风险而非数量）：`secret/http.go` 三条 → `iam` 十条 → `nodeagent` 五条 → `chatdiagnose` / `demo` / `loop` / `higress` / `cmd` 十一条。详见 §4.248。
 
 ## 七、未来路线图
 
