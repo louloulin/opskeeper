@@ -108,10 +108,16 @@ func TestCloudBashChain_CredentialInjectedOnApprove(t *testing.T) {
 		t.Fatalf("pending count = %d, want 1", len(pending))
 	}
 
-	// 4. Approve → executor runs with the credential injected.
-	out, err := approvalUC.Approve(ctx, 99, a.ID)
+	// 4. Sign → executor runs with the credential injected.
+	//
+	// This was `Approve(ctx, 99, a.ID)` until decision 362, and the rename is
+	// why this file stopped compiling — the plan's own §六 acceptance gate
+	// (make module-standalone-check) was red for a whole decision before
+	// anybody ran it. No dual-sign gate is wired in this test, so one
+	// signature is enough and Sign runs the executor on the first call.
+	out, _, err := approvalUC.Sign(ctx, bizapproval.Signer{UserID: 99, Role: "admin"}, a.ID)
 	if err != nil {
-		t.Fatalf("approve: %v", err)
+		t.Fatalf("sign: %v", err)
 	}
 	if out.Status != "executed" {
 		t.Fatalf("status = %q, want executed; result=%v", out.Status, out.ResultJSON)

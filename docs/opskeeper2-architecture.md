@@ -3572,6 +3572,97 @@ tier 才读得到」这一句现在是真的。词表把读侧与审批侧写在
 **对进度的影响。** 架构尺 97.75% / 四阶段交付尺 99.5% **仍然不动**。本刀动的是
 登记表的**最后一条 inert**：8 行里第一次有 5 行是真的在跑，3 行 declared 各自
 写明了自己缺什么。距离"全部 enforced"还差三行，而那三行缺的是能力不是接线。
+
+### 4.74 决策 364：计划 §六 的验收门槛是红的，而本地十四道闸门全绿——两边看的不是同一棵树
+
+这一刀没有新功能。它把**计划 §六 自己点名的验收门槛**从红变绿，并堵上让它能红一串决策而不被人看见的那个洞。
+
+#### 4.74.1 实况：CI 连红四个决策
+
+```
+decision 358  CI failure
+decision 360  CI failure
+decision 359  CI cancelled
+decision 361  CI failure
+decision 362  CI failure
+```
+
+四次提交的台账都写着「十二道闸门全绿」。**那句话是真的**——十二道确实全绿。
+问题在于那十二道里没有一道编译 `tests/e2e` 与 `tests/integration`。
+
+#### 4.74.2 两个坏掉的包，各坏在一次改名上
+
+| 包 | 断因 | 引入决策 |
+|---|---|---|
+| `tests/integration` | `approvalUC.Approve(ctx, 99, id)` → 决策 362 改成 `Sign(ctx, Signer, id)` | 362 |
+| `tests/e2e` | `leaderboard.NewLeaderboard()` → 决策 295 删掉那个 269 行类型 | 295 |
+
+**决策 295 的判断本身是对的**：那个类型的全部状态在三个 map 里、零生产调用方，
+`printUsage` 里那行「显示排行榜 + 回归基线」是句空话。删它是对的。
+**错的是删掉之后没人跟着改唯一还在调它的地方**——而那个地方因为带
+`//go:build e2e`，`go test ./...` 一行都碰不到。
+
+#### 4.74.3 迁到现存的基线 API 上，而不是把断言删掉
+
+`tests/e2e` 里那 6 条用例断言的每一个行为都还在，只是换了承担者：
+
+| 旧（已删） | 新（决策 295 留下的） |
+|---|---|
+| `Leaderboard.Record` + `Baseline` | `LoopResult` JSON → `NewLoopBoard` → `LockBaseline` |
+| `CheckRegression(case, score)` | `CheckRegressionFor(base, case, baseScore, curScore)` |
+| `FlaggedEntries()` | `Qualified` / `NotQualifiedReason`（准入规则） |
+| 内存 map（进程一退就没） | 基线文件 + `SaveBaseline` / `LoadBaseline` |
+
+**没有一条用例被删掉或放宽**：5% → warn、15% → block、case 之间互不影响、
+基线落盘往返，都还在断言，而且现在断言的是**真的会被 CI 执行的那份实现**。
+
+#### 4.74.4 第三个「声明与实况不符」，方向与前两个相反
+
+包文档写着「NOT QUALIFIED：recovery_pass_rate < 0.5 的 case **不入榜**」，
+而 `Render()` 是把它们**打上 ❌ 与原因、连同专属小节一起渲染出来**。
+
+第一反应是实现错了。读完 `Render` 之后相反：**藏起来更糟**——一个 case 从报告上
+消失，读者无从知道它是没跑还是没通过。所以**实现不动，措辞按实现改正**，
+并把用例改成断言真正该有的东西：它必须出现、必须带标记、必须不计入 `Qualified` 计数。
+
+这是 `compliance.enforced-tag` 那一类问题的轻量版：**一个词汇说得比实现强，
+先分清是哪一边错了**，而不是永远按"实现没做到承诺"处理。
+
+#### 4.74.5 系统性修复：这道门槛现在也编译带 tag 的套件
+
+```
+module-standalone-check  +=  go vet -tags=integration ./tests/integration/
+                             go vet -tags=e2e ./tests/e2e/
+```
+
+`go vet` 编译但不运行：它要的就是"这份代码能不能编译"，**不需要 DSN、不需要
+docker**，因此可以放进每次提交前都跑的那一道。这两个包此前在
+`module-standalone-check` 眼里**根本不存在**——那个循环里的 `go test ./...`
+不编译任何带 build tag 的测试。
+
+#### 4.74.6 改 Makefile 时撞出的第四个洞：闸门把注释读成命令
+
+给 `module-standalone-check` 写解释性注释时，注释里引用了 `` `go test ./...` ``，
+`cigate` 立刻报「`cd . && go test ./...` 这个包没了」——**路径上还带着一个反引号**。
+
+`goTestCommands` 只跳过以 `#` 开头的行，而 make 允许 recipe 里写 `@#`（静默注释）。
+于是**为了解释命令而写的注释，被当成了那条命令**。修的是解析器，不是注释：
+注释先剥 `@` 再判 `#`。配套用例 `TestARecipeCommentIsNotACommand` 的第一版
+**变异存活了**——因为它把注释放在 recipe 首行，而首行被另一条规则（"target 自己的
+选项"）挡住了。把注释挪到真实命令之后，变异才死。**一个因为错误的原因而通过的
+测试，和没有测试是同一件事。**
+
+#### 4.74.7 验证
+
+- `tests/e2e` 6 条 harness 用例全绿（`-tags e2e -run TestHarness`）。
+- `tests/integration` 绿。
+- **十四道闸门全绿**（十二道 + `eval-gates` + `module-standalone-check`）。
+- 变异一道：去掉 `@#` 跳过 → `TestARecipeCommentIsNotACommand` 立刻红。
+
+**对进度的影响。** 架构尺 97.75% / 四阶段交付尺 99.5% **不动**——本刀一个架构边界
+都没动。但它动的是一件更要紧的事：**计划 §六 的验收清单，从这一刀起第一次是全绿的**。
+在那之前，「四阶段交付尺 99.5%」这句话与 CI 上四个红灯同时成立，而没有任何一道
+本地闸门能把这件事说出来。
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，

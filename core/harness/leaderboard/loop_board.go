@@ -4,7 +4,10 @@
 // 中的 LoopResult，输出：
 //
 //  1. 排名（按 4 指标聚合）
-//  2. NOT QUALIFIED 标：recovery_pass_rate < 0.5 的 case 不入榜
+//  2. NOT QUALIFIED 标：recovery_pass_rate < 0.5 的 case 不计入合格数。
+//     它仍然出现在报告里，并被打上 ❌ 与原因——"不入榜"此前写在这里，
+//     而实现是把它标出来而不是藏起来。藏起来更糟：一个 case 从报告上消失，
+//     读者无从知道它是没跑还是没通过。措辞按实现改正，实现不动。
 //  3. Markdown 报告落 harness/result/leaderboard-<date>.md
 //
 // 设计要点（与 path A day 7 任务 7.5 / 7.6 对齐）：

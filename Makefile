@@ -839,6 +839,17 @@ module-standalone-check: ## 关掉 workspace 与代理，按发布条件构建�
 		echo "  standalone: $$m"; \
 		( cd $$m && GOWORK=off go build ./... && GOWORK=off go test ./... -count=1 ) || exit 1; \
 	done
+	@# 决策 364：上面那个循环里的 `go test ./...` **不编译带 build tag 的测试**。
+	# 于是 tests/integration（//go:build integration）与 tests/e2e（//go:build e2e）
+	# 两个包在它眼里根本不存在——而它们各自烂了整整一串决策没人发现：
+	# 决策 295 删掉 `leaderboard.NewLeaderboard`（那个判断本身是对的：零生产调用方），
+	# tests/e2e 仍在调它；决策 362 把 `Approve` 改名 `Sign`，tests/integration 仍在调旧名。
+	# 两次都把 CI 推红了，而本地十二道闸门与九模块 build 全绿。
+	# `go vet` 编译但不运行：它要的就是"这份代码能不能编译"，
+	# 不需要 DSN、不需要 docker，因此可以放进每次提交前都跑的那一道。
+	@echo "  standalone: build-tagged suites (compile only)"
+	@GOWORK=off go vet -tags=integration ./tests/integration/
+	@GOWORK=off go vet -tags=e2e ./tests/e2e/
 	@echo "standalone: every module builds and tests on its own, on the published tags"
 
 # The node builds every packaged plugin extension from source, with the

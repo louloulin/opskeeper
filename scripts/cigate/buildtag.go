@@ -146,7 +146,14 @@ func goTestCommands(src string) []TestCommand {
 	inRecipe := false
 	for lineNo, line := range strings.Split(src, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		// A comment is not a command, including the silenced form make lets
+		// you write inside a recipe: `@# ...` never runs. Skipping only a
+		// leading `#` meant a recipe comment that quoted a command — which
+		// is how people explain what a gate does — was parsed as that
+		// command, package path and all. It surfaced as a dead package
+		// pointing at a path with a backtick in it, which is the least
+		// actionable message this tool can produce.
+		if trimmed == "" || strings.HasPrefix(strings.TrimPrefix(trimmed, "@"), "#") {
 			continue
 		}
 		if line[0] != ' ' && line[0] != '\t' {

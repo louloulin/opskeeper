@@ -230,3 +230,26 @@ func TestTheRealRepositoryHasLivePathsAndTheCheckIsNotVacuous(t *testing.T) {
 			commands, literals)
 	}
 }
+
+// A recipe comment is not a recipe command. make runs nothing on a `@#` line,
+// and this parser used to read the command those comments quote — which is how
+// they are written, since the comment is there to explain the command — as if
+// it were being run. The path it then invented carried a backtick into the
+// "package is gone" report, which is the least actionable thing this tool can
+// say.
+func TestARecipeCommentIsNotACommand(t *testing.T) {
+	// The comment has to come AFTER a real recipe line: a leading one is
+	// skipped for a different reason (a recipe's first line is read as the
+	// target's own options), and a test that passes for the wrong reason is
+	// the same failure this tool exists to catch.
+	mk := "check:\n" +
+		"\tcd core/base && GOWORK=off go test ./pkg/audit/ -count=1\n" +
+		"\t@# 上面那条 `go test ./...` 不编译带 tag 的测试。\n"
+	cmds := goTestCommands(mk)
+	if len(cmds) != 1 {
+		t.Fatalf("read %d command(s) from a recipe with one command and one comment", len(cmds))
+	}
+	if len(cmds[0].Pkgs) != 1 || cmds[0].Pkgs[0] != "./pkg/audit/" {
+		t.Errorf("packages = %v, want only the one the recipe actually runs", cmds[0].Pkgs)
+	}
+}
