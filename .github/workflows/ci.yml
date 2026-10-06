@@ -258,6 +258,9 @@ jobs:
       - name: Node agent is actually offered its package tools
         run: make pig-tool-scoping-check
 
+      - name: Plan security block, named assertion by assertion
+        run: make plan-security-check
+
       - name: Roadmap ticks are witnessed in the shipped surfaces
         run: make roadmap-delivery-check
 

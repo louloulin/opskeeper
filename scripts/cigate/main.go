@@ -139,6 +139,14 @@ func DecisionGates() []Gate {
 				"twenty-eight down with them (decision 173)",
 		},
 		{
+			Target: "plan-security-check",
+			Why: "the plan's section 6 security block says its four lines must be in CI, and they " +
+				"were in the only sense a module-wide test run can be said to include them. " +
+				"Decision 348's rule is that a check nobody invokes owns nothing; here the check was " +
+				"invoked only as a side effect of another one, so deleting any one of the four " +
+				"assertions would have left every gate green (decision 352)",
+		},
+		{
 			Target: "roadmap-delivery-check",
 			Why: "a tick in ROADMAP.md is a claim about what a deployment serves, and for C.1 " +
 				"the claim held for a release while no deployment had ever registered the tool. " +

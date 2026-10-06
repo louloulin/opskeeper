@@ -272,6 +272,22 @@ crystallize-check: ## 结晶：晋升 / 退役 / 拒绝不可用输入 / 草稿�
 # dropped the rest — adding the vendor key it exists to catch left it green.
 # That is the eleventh hole of this shape here, and it was written eleven
 # minutes after the tenth.
+# The plan's security block says these four must be in CI. They were, in the
+# only sense a module-wide test run can be said to include them: somebody
+# running go test ./... happened to touch the packages. Decision 348 recorded
+# why that is not the same thing -- a check that is never invoked owns nothing,
+# and a check that is invoked only as a side effect of another one stops being
+# a check the day that other one is narrowed.
+#
+# So the four lines are named here, each pointing at the assertion rather than
+# at the package, so that deleting the assertion turns this gate red while
+# leaving every other test run green.
+.PHONY: plan-security-check
+plan-security-check: ## 计划 §六 安全专项四条：栅栏三例 / 节点令牌越权 / 自治逃逸三例 / 覆盖率轴是预期值（决策 352）
+	@scripts/plansecurity.sh
+	@$(MAKE) eval-coverage
+	@echo "plan-security-check: the fence holds under replay, under lease expiry and under a sibling; a node's credential drives only its own inference; a tampered argv, an over-wide radius and an undeclared ceiling are each refused; and the diagnosis axis is still the value the plan expects"
+
 .PHONY: edge-credential-check
 edge-credential-check: ## 节点进程读不到任何云厂商凭据（决策 246）
 	cd core/floor/config && GOWORK=off go test ./... -count=1 -run \

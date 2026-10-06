@@ -548,3 +548,95 @@ func TestTheContentFieldIsAcceptedInBothShapes(t *testing.T) {
 		}
 	})
 }
+
+// The plan's security line is "a node's credential must not drive another
+// node's inference", and it has been true here for a structural reason that
+// no test names: chatRequest carries no node identity at all, so the only
+// edge id in the system is the one the credential resolves to. That is worth
+// a test, because the property is invisible in review and one field would
+// undo it — an `edge_id` on the request, read the way `model` is read, would
+// attribute a node's spend to somebody else and let one node exhaust another's
+// budget without ever being wrong about a credential.
+//
+// So the test is behavioural rather than reflective: it spends node A's
+// allowance down to nothing and then asks, with A's credential and a body
+// that names B three different ways, whether B's inference was affected.
+func TestANodesCredentialCannotDriveAnotherNodesInference(t *testing.T) {
+	auth := &stubAuth{edges: map[string]uint64{"ak-a:sk": 11, "ak-b:sk": 22}}
+
+	// One request per minute for node A: the second is over budget and the
+	// first is not, which is the whole shape of the question.
+	limiter := &countingLimiter{
+		allow: map[uint64]int{11: 1, 22: 2},
+		count: map[uint64]int{},
+	}
+
+	completer := &stubCompleter{reply: &pigai.AssistantMessage{}}
+	handler, err := NewHandler(Options{Auth: auth, Completer: completer, Limiter: limiter})
+	if err != nil {
+		t.Fatalf("build the handler: %v", err)
+	}
+
+	body := `{"model":"m","messages":[{"role":"user","content":"hi"}]}`
+	if rec := post(t, handler, "ak-b:sk", body); rec.Code != http.StatusOK {
+		t.Fatalf("node B's own request was refused: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Node B's id, carried by node A's credential, under every spelling a
+	// caller might reach for. None of them is a field the request type has,
+	// which is the point: they must all be inert rather than honoured.
+	spoofed := `{"model":"m","edge_id":22,"node_id":22,"nodeId":22,` +
+		`"messages":[{"role":"user","content":"hi"}]}`
+	if rec := postAt(t, handler, "ak-a:sk", "/v1/chat/completions?edge_id=22&node_id=22", spoofed); rec.Code != http.StatusOK {
+		t.Fatalf("node A's own first request was refused: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(limiter.saw) != 2 || limiter.saw[0] != 22 || limiter.saw[1] != 11 {
+		t.Errorf("the limiter was consulted for %v, want [22 11]; one request spends exactly one "+
+			"node's allowance, and it must be the one its credential belongs to", limiter.saw)
+	}
+
+	// Node A is now spent. Its second request is refused, and node B's second
+	// one is not: a body able to name a node would have spent B's allowance
+	// on A's first request and left B refused here, and A served past its own.
+	if rec := postAt(t, handler, "ak-a:sk", "/v1/chat/completions?edge_id=22", spoofed); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("node A was served past its own limit: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post(t, handler, "ak-b:sk", body); rec.Code != http.StatusOK {
+		t.Errorf("node B was refused because node A spent its allowance: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// countingLimiter admits a fixed number of requests per node and records the
+// order it was consulted in, so a test can see not only what was refused but
+// whose budget paid for it.
+type countingLimiter struct {
+	allow map[uint64]int
+	count map[uint64]int
+	saw   []uint64
+}
+
+func (l *countingLimiter) Allow(_ context.Context, edgeID uint64) (bool, string) {
+	l.saw = append(l.saw, edgeID)
+	if l.count[edgeID] < l.allow[edgeID] {
+		l.count[edgeID]++
+		return true, ""
+	}
+	return false, "per-node request rate exceeded"
+}
+
+// postAt is post with a caller-chosen path, so a test can put an identity in
+// the query string as well as in the body. Both are ways a future change
+// would let one node speak for another, and a test that only exercises one of
+// them is a test that catches half the bug.
+func postAt(t *testing.T, handler *Handler, credential, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	router := chi.NewRouter()
+	handler.Register(router)
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	if credential != "" {
+		req.Header.Set("Authorization", "Bearer "+credential)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
