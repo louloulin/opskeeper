@@ -652,6 +652,13 @@ rpc-match-check: ## 闸门：manager 注册的每个隧道方法都有生产发�
 	go run ./scripts/rpcmatch .
 	go test ./scripts/rpcmatch/ -count=1
 
+# 台账自身的一致性：十五道闸门查的是「这一行写的数是不是这棵树自己的数」。
+# 它们此前既没有 Makefile 目标也不在 CI 里——**十五道从不运行的闸门，与没有闸门等价**，
+# 而其中第十五道当场判出本轮修掉的第二处红（manager 尺寸过期 6 文件 / 2,325 行）。
+.PHONY: ledger-check
+ledger-check: ## 闸门：台账里的数与树自己的数一致（决策 347）
+	go test ./scripts/ledgercheck/ -count=1
+
 # opskeeper-migrate 的目标端点与字段映射必须真实存在。这道闸门做两件事：
 # 注册表里每一条 TargetRoute 都要在 manager 的路由表里注册过；每一条 FieldMap
 # 的目标字段都要是那个端点的 handler 真正解码的请求结构里的 json tag。

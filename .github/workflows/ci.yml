@@ -149,6 +149,14 @@ jobs:
       - name: No table is claimed by two models
         run: make table-check
 
+      # The ledger states numbers about this tree — a manager file count, a
+      # weighted total, a per-stage composition — and fifteen gates check
+      # those numbers against the tree itself. They had no Makefile target
+      # and no CI step, which makes them equivalent to not having them:
+      # gate fifteen was red for as long as it was unreachable.
+      - name: The ledger's numbers are the tree's own numbers
+        run: make ledger-check
+
       # A migration target has to exist, and the fields written into it have
       # to be fields its handler actually decodes. entity.go carried a single
       # free-text Target that import, verify and rollback all pasted into a
