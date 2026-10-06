@@ -23,6 +23,13 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 837 / 569 / 268 as of decision 323: the two hosted-page actions
+// (page_delete, page_share) and the hosted_page resource type.
+//
+// Dead for a reason that is now stated in one place rather than three: these
+// are declared in core/base/pkg/audit and called from cmd/opskeeper, and
+// nothing inside the measured tree reaches across that line.
+//
 // 834 / 566 / 268 as of decision 322: the three panel actions (panel_create,
 // panel_update, panel_delete) and the panel resource type. Four in, four
 // dead — and the mechanism behind that is the one written below it, which
@@ -116,8 +123,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 834
-	deadSymbolBudget     = 566
+	unreachableBudget    = 837
+	deadSymbolBudget     = 569
 	testOnlySymbolBudget = 268
 )
 

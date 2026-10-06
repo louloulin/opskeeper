@@ -314,6 +314,16 @@ const (
 	ActionPanelUpdate = "panel_update"
 	ActionPanelDelete = "panel_delete"
 
+	// Hosted page delete and share (决策 323).
+	//
+	// Share is its own action rather than an update, because it is the one
+	// of the two that reaches outside the trust boundary: it turns a page
+	// only authenticated operators could read into one anybody with the URL
+	// can read for thirty days. The minted token is the credential and does
+	// not go on the chain; the row names the page, the actor and the expiry.
+	ActionPageDelete = "page_delete"
+	ActionPageShare  = "page_share"
+
 	// ActionHITLDecide records a human approve/reject on an AgentTeams task
 	// that is waiting for one. Decision 312.
 	//
@@ -472,6 +482,9 @@ const (
 	// numeric panel id, which is what the route carries and what the
 	// console links to.
 	ResourcePanel = "panel"
+	// ResourceHostedPage names one serve_page artifact. The resource id is
+	// the page id, which is also the path segment on both routes.
+	ResourceHostedPage = "hosted_page"
 	ResourceRule         = "rule"
 	ResourceChannel      = "channel"
 	ResourceRepo         = "repo"

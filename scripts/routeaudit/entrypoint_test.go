@@ -163,3 +163,69 @@ func TestTheEntryPointTableAgreesWithTheRepository(t *testing.T) {
 		t.Fatal("no entry point is recorded as lacking a slot; is that still true?")
 	}
 }
+
+// --- 决策 323：注释不是代码 ---------------------------------------------------
+//
+// 写完「为什么把闭包提成具名函数」那段注释之后，这个命令把注释里那一行
+// `protected.Delete("/v1/pages/{id}", func(...))` 读成了一条真的路由。修法
+// 有两个：删掉注释，或者让闸门别看注释。**删注释是错的**——那段注释是这个文件
+// 里最有用的东西，而一个会因为你写文档而失败的闸门只会让人把文档删掉。
+
+// 7. 注释里的注册样板不是路由。这一条必须真的走 Run()：早先的版本只查了
+// checkEntryPoints 与 packageBodies，两者都不扫描路由，于是把 stripComments
+// 改成什么都不做之后，这条用例仍然是绿的——**它测的不是它说自己测的东西**。
+func TestARouteExampleInACommentIsNotARoute(t *testing.T) {
+	root := tree(t, map[string]string{
+		"widgets/http.go": `package widgets
+
+// Before the change it read:
+//   r.Delete("/v1/pages/{id}", func(w http.ResponseWriter, r *http.Request) {
+//       w.WriteHeader(204)
+//   })
+func (h *Handler) Register(r chi.Router) {
+	r.Delete("/v1/widgets/{id}", h.drop)
+}
+func (h *Handler) drop(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }
+`,
+	})
+	with := EntryPoints
+	defer func() { EntryPoints = with }()
+	EntryPoints = nil
+	res := Run(root)
+	if len(res.Missing) != 1 {
+		t.Fatalf("missing = %v, want exactly the one real route", res.Missing)
+	}
+	if !strings.Contains(res.Missing[0], "/v1/widgets/{id}") {
+		t.Errorf("missing = %q, want the real route", res.Missing[0])
+	}
+	for _, m := range res.Missing {
+		if strings.Contains(m, "/v1/pages/") {
+			t.Errorf("a comment was read as a route: %q", m)
+		}
+	}
+}
+
+// 8. 而注释里的 URL 不会把后面的代码吃掉。
+func TestACommentStripperDoesNotSwallowStrings(t *testing.T) {
+	src := `package p
+
+// see the router table below
+var base = "https://example.com/docs" // and this is a trailing note
+var route = "/v1/things"
+var raw = ` + "`" + `a /* not a comment */ b` + "`" + `
+func f() { router.Delete("/v1/things", h.drop) }
+`
+	got := stripComments(src)
+	if !strings.Contains(got, "https://example.com/docs") {
+		t.Error("a // inside a string literal started a comment")
+	}
+	if !strings.Contains(got, "router.Delete(") {
+		t.Error("the real registration was eaten")
+	}
+	if !strings.Contains(got, "not a comment") {
+		t.Error("/* inside a raw string literal was treated as a comment")
+	}
+	if strings.Contains(got, "trailing note") {
+		t.Error("a trailing line comment survived")
+	}
+}

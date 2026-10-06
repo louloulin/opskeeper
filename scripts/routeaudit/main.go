@@ -55,6 +55,89 @@ import (
 // it fails to fail.
 var routeReg = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\.(Post|Put|Patch|Delete)\("([^"]+)",\s*([A-Za-z0-9_.]+)`)
 
+// stripComments blanks out Go comments while preserving byte offsets, so the
+// regular expressions above keep matching at the same indices as before.
+//
+// It exists because of decision 323. The hosted-page handlers were anonymous
+// closures, and the comment explaining why they were being named contained
+// the literal line `protected.Delete("/v1/pages/{id}", func(...))` — and this
+// command read that comment as a route registration. A gate that indexes
+// documentation is a gate that punishes writing documentation, and the
+// workaround that presents itself first is to delete the comment. That is
+// exactly backwards: the comment was the most useful thing in the file.
+//
+// The scanner is hand-written rather than a regexp because the naive forms
+// both fail on real code. Stripping to "//" breaks every string containing a
+// URL ("https://..." becomes a comment); stripping /* */ breaks raw strings
+// that legitimately contain one. So this walks the source and tracks string,
+// rune and raw-string literals, which is the same discipline gofmt's scanner
+// applies and for the same reason.
+func stripComments(src string) string {
+	out := []byte(src)
+	const (
+		code = iota
+		lineComment
+		blockComment
+		interp
+		rawString
+		runeLit
+	)
+	state := code
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		switch state {
+		case code:
+			switch {
+			case c == '/' && i+1 < len(src) && src[i+1] == '/':
+				state = lineComment
+				out[i], out[i+1] = ' ', ' '
+				i++
+			case c == '/' && i+1 < len(src) && src[i+1] == '*':
+				state = blockComment
+				out[i], out[i+1] = ' ', ' '
+				i++
+			case c == '"':
+				state = interp
+			case c == '`':
+				state = rawString
+			case c == '\'':
+				state = runeLit
+			}
+		case lineComment:
+			if c == '\n' {
+				state = code
+			} else {
+				out[i] = ' '
+			}
+		case blockComment:
+			if c == '*' && i+1 < len(src) && src[i+1] == '/' {
+				out[i], out[i+1] = ' ', ' '
+				i++
+				state = code
+			} else if c != '\n' {
+				out[i] = ' '
+			}
+		case interp:
+			if c == '\\' {
+				i++
+			} else if c == '"' {
+				state = code
+			}
+		case rawString:
+			if c == '`' {
+				state = code
+			}
+		case runeLit:
+			if c == '\\' {
+				i++
+			} else if c == '\'' {
+				state = code
+			}
+		}
+	}
+	return string(out)
+}
+
 // funcDeclReg matches a top-level function or method declaration and
 // captures its receiver type and its name. The optional receiver group is
 // what lets one pattern cover both `func auditApp(` and
@@ -406,10 +489,8 @@ var Verdicts = []Verdict{
 		Backlog: "starts a remediation loop, which can reach the executors the approval inbox guards"},
 	{File: "core/manager/server/loop/http.go", Route: "/v1/recovery/verify", Handler: "h.verifyRecovery",
 		Backlog: "read-mostly recovery verification"},
-	{File: "cmd/opskeeper/main.go", Route: "/v1/pages/{id}", Handler: "func",
-		Backlog: "洞：页面删除。handler 是在 Register 里就地写的闭包，闸门只能看到 `func` 这个名字——这条路由连一个能指认的函数都没有"},
-	{File: "cmd/opskeeper/main.go", Route: "/v1/pages/{id}/share", Handler: "func",
-		Backlog: "洞：页面分享。把一个页面交给别人是外发动作，同上，handler 是就地闭包"},
+	{File: "cmd/opskeeper/main.go", Route: "/v1/pages/{id}", Handler: "deleteHostedPage"},
+	{File: "cmd/opskeeper/main.go", Route: "/v1/pages/{id}/share", Handler: "shareHostedPage"},
 	{File: "core/domains/server/integration/http.go", Route: "/v1/integrations/grafana/sync", Handler: "h.syncGrafana",
 		Backlog: "向外部 Grafana 推 dashboard：一次对本仓不拥有的系统的外写，它自己的变更记录在 Grafana 侧"},
 	{File: "core/domains/server/integration/http.go", Route: "/v1/integrations/grafana/test", Handler: "h.testGrafana",
@@ -450,7 +531,7 @@ var Verdicts = []Verdict{
 	{File: "core/manager/higress/server.go", Route: "/consumers/{name}", Handler: "s.handleAdminDelete",
 		Backlog: "洞：删 consumer 就是抽掉一整条访问路径，而链上看不出是谁删的。与建 consumer 同一个先决条件：进程没有槽（决策 321）"},
 	{File: "core/manager/higress/server.go", Route: "/session/login", Handler: "s.handleLogin",
-		Backlog: "洞：网关登录是这七条里唯一一条凭证写路由，也是唯一一条「有人拿着密码来试」的路由——成功与失败都该留痕，而失败那行正是暴力破解的唯一证据。同一个先决条件：进程没装槽（决策 321）"},
+		Backlog: "洞：网关登录是剩下五条洞里唯一一条凭证写路由，也是唯一一条「有人拿着密码来试」的路由——成功与失败都该留痕，而失败那行正是暴力破解的唯一证据。同一个先决条件：进程没装槽（决策 321）"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/agentteams/token", Handler: "h.issueAgentTeamsToken"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/auth/login", Handler: "h.login"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/auth/refresh", Handler: "h.refresh"},
@@ -583,7 +664,7 @@ func Run(root string) Result {
 				pkg = packageBodies(dir)
 				pkgIndex[dir] = pkg
 			}
-			for _, m := range routeReg.FindAllStringSubmatch(string(src), -1) {
+			for _, m := range routeReg.FindAllStringSubmatch(stripComments(string(src)), -1) {
 				key := routeKey(rel, m[3], m[4])
 				routes++
 				if seen[key] {
@@ -664,7 +745,7 @@ func packageBodies(dir string) map[string]string {
 		if readErr != nil {
 			continue
 		}
-		for k, v := range funcBodiesQualified(string(src)) {
+		for k, v := range funcBodiesQualified(stripComments(string(src))) {
 			out[k] = v
 		}
 	}

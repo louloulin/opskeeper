@@ -3500,13 +3500,7 @@ func main() {
 				w.Header().Set("content-type", "application/json")
 				_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "total": len(items)})
 			})
-			protected.Delete("/v1/pages/{id}", func(w http.ResponseWriter, r *http.Request) {
-				if err := pageStore.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
-				w.WriteHeader(http.StatusNoContent)
-			})
+			protected.Delete("/v1/pages/{id}", deleteHostedPage(pageStore))
 			// Authed in-app read of a page (the SPA fetches this with its bearer
 			// and renders it via iframe srcdoc — the page is NOT public).
 			protected.Get("/pages/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -3524,21 +3518,7 @@ func main() {
 			})
 			// Mint a TTL-bounded public share link for a page (off-platform,
 			// login-free) — mirrors POST /v1/reports/{id}/share.
-			protected.Post("/v1/pages/{id}/share", func(w http.ResponseWriter, r *http.Request) {
-				id := chi.URLParam(r, "id")
-				if _, err := pageStore.readPageHTML(id); err != nil {
-					http.NotFound(w, r)
-					return
-				}
-				exp := time.Now().Add(pageShareTTL)
-				tok := mintPageShareToken(cfg.JWT.Secret, id, exp)
-				w.Header().Set("content-type", "application/json")
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"share_token": tok,
-					"path":        "/api/p/" + tok,
-					"expires_at":  exp.UTC().Format(time.RFC3339),
-				})
-			})
+			protected.Post("/v1/pages/{id}/share", shareHostedPage(pageStore, cfg.JWT.Secret))
 			iamHandler.RegisterProtected(protected)
 			edgeHandler.Register(protected)
 			webshellHandler.Register(protected)
