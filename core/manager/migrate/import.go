@@ -45,6 +45,12 @@ type ImportResult struct {
 	// RollbackSnapshot 是本次导入写下的回滚快照路径；dry-run 与
 	// 一行未写时为空。**它为空就意味着这次导入没法撤。**
 	RollbackSnapshot string
+
+	// Unmigratable 按实体类型记下"目标端不存在、因此迁不过去"的行数。
+	// 只有 dry-run 会填——真跑的时候这类实体在写入前就被整体拒绝，
+	// 不会走到逐行统计那一步。**它为空的 dry-run 报告是可信的；
+	// 它非空而报告说"全部可导入"，那份报告在说谎。**
+	Unmigratable map[EntityType]int
 }
 
 // ImportFailure 描述一次失败。
@@ -105,10 +111,15 @@ func Import(ctx context.Context, opts ImportOptions) (*ImportResult, error) {
 	if len(entities) == 0 {
 		entities = MigrationOrder()
 	}
-	if !opts.DryRun {
-		if err := requireImportable(entities); err != nil {
-			return nil, err
-		}
+	// dry-run 不因为目标端缺失而失败，但**必须把它说出来**：dry-run 的全部
+	// 意义就是"这一步会不会成"，而"这一类根本没有目标端"是最该被 dry-run
+	// 报出来的一条。决策 293 之前这里直接跳过检查，于是 pg_connections 的
+	// 每一行都被记进 result.Imported，CLI 打印「假设可导入: 1」——
+	// 一个把必然失败的迁移报成"假设会成功"的 dry-run，比不 dry 更坏。
+	if opts.DryRun {
+		result.Unmigratable = unmigratableCounts(snap, entities, mapper)
+	} else if err := requireImportable(entities); err != nil {
+		return nil, err
 	}
 
 	for _, et := range entities {
@@ -116,9 +127,9 @@ func Import(ctx context.Context, opts ImportOptions) (*ImportResult, error) {
 		if meta == nil {
 			return nil, fmt.Errorf("未知实体: %s", et)
 		}
-		endpoint, err := targetEndpoint(et)
-		if err != nil && !opts.DryRun {
-			return nil, err
+		endpoint, endpointErr := targetEndpoint(et)
+		if endpointErr != nil && !opts.DryRun {
+			return nil, endpointErr
 		}
 		rows := snap.GetEntity(et)
 		for _, row := range rows {
@@ -144,9 +155,13 @@ func Import(ctx context.Context, opts ImportOptions) (*ImportResult, error) {
 			// 应用 FieldMap
 			translated := applyFieldMap(row, meta.FieldMap)
 
-			// Dry-run: 不实际写入
+			// Dry-run: 不实际写入。目标端不存在的实体不计入 Imported——
+			// 它不是"假设会成功"，是"确定不会成功"，而 Unmigratable 里已经
+			// 按实体计好数了（决策 293）。
 			if opts.DryRun {
-				result.Imported++ // 假设会成功
+				if endpointErr == nil {
+					result.Imported++
+				}
 				continue
 			}
 
@@ -296,6 +311,31 @@ func importableEntityStrings() []string {
 	var out []string
 	for _, et := range ImportableEntities() {
 		out = append(out, string(et))
+	}
+	return out
+}
+
+// unmigratableCounts 数出 dry-run 里那些"目标端不存在"的实体各有多少行。
+//
+// 判据与真跑时一致：TargetRoute 为空。租户映射不成立的行不计入——
+// 那是另一个原因（源数据引用了一个没声明的 project），混进来会把这个
+// 事实藏起来。
+func unmigratableCounts(snap *Snapshot, entities []EntityType, mapper *TenantMapper) map[EntityType]int {
+	out := map[EntityType]int{}
+	for _, et := range entities {
+		if meta := GetEntityMeta(et); meta.IsImportable() {
+			continue
+		}
+		n := 0
+		for _, row := range snap.GetEntity(et) {
+			if _, err := translateTenant(row, mapper); err != nil {
+				continue
+			}
+			n++
+		}
+		if n > 0 {
+			out[et] = n
+		}
 	}
 	return out
 }

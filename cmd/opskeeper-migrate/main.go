@@ -195,6 +195,14 @@ func cmdImport(ctx context.Context, args []string) error {
 	fmt.Printf("   总记录数: %d\n", result.Total)
 	if dryRun {
 		fmt.Printf("   假设可导入: %d\n", result.Imported)
+		if len(result.Unmigratable) > 0 {
+			fmt.Printf("   ⚠️  目标端不存在、迁不过去: %d 行\n", unmigratableTotal(result.Unmigratable))
+			for _, et := range unmigratableOrder(result.Unmigratable) {
+				fmt.Printf("        %s: %d 行（%s）\n", et, result.Unmigratable[et],
+					migrate.GetEntityMeta(et).TargetMissing)
+			}
+			fmt.Println("      上面这些实体的 dry-run 结果不构成「可以导入」的结论。")
+		}
 	} else {
 		fmt.Printf("   新建: %d\n", result.Imported)
 		fmt.Printf("   跳过（幂等命中）: %d\n", result.Skipped)
@@ -343,6 +351,26 @@ func cmdListEntities(_ []string) error {
 			len(order)-len(importable))
 	}
 	return nil
+}
+
+// unmigratableTotal 是迁不过去的行数合计。
+func unmigratableTotal(m map[migrate.EntityType]int) int {
+	n := 0
+	for _, v := range m {
+		n += v
+	}
+	return n
+}
+
+// unmigratableOrder 按依赖顺序列出迁不过去的实体，输出才是稳定的。
+func unmigratableOrder(m map[migrate.EntityType]int) []migrate.EntityType {
+	out := make([]migrate.EntityType, 0, len(m))
+	for _, et := range migrate.MigrationOrder() {
+		if _, ok := m[et]; ok {
+			out = append(out, et)
+		}
+	}
+	return out
 }
 
 func entityStrings(list []migrate.EntityType) []string {

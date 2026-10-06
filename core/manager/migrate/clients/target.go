@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,6 +45,45 @@ func NewTargetClient(baseURL, token string) *TargetClient {
 		},
 	}
 }
+
+// FetchEntity 按来源 ID 取回目标端上的那一条实体。
+//
+// verify 需要它来比对字段——只有"在不在"这个布尔值的话，一行数据被写错了
+// 字段也照样算命中，那份 verify 报告就成了"数量对上了"而不是"内容对上了"。
+// 决策 293 之前 FetchEntity 不存在，而 VerifyResult.FieldDiffs 是一个永远
+// 为空的字段：报告的渲染代码会打印「字段差异: N」，可 N 恒为 0，
+// 于是它读起来像"逐字段核对过且无差异"。
+func (c *TargetClient) FetchEntity(ctx context.Context, entityType, sourceID string) (map[string]any, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		c.baseURL+apiPath(entityType, "by-source-id/"+sourceID), nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ErrTargetEntityNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("opskeeper 返回 %d: %s", resp.StatusCode, string(body))
+	}
+	var row map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&row); err != nil {
+		return nil, fmt.Errorf("解析 opskeeper 响应失败: %w", err)
+	}
+	return row, nil
+}
+
+// ErrTargetEntityNotFound 表示目标端没有这一条。
+var ErrTargetEntityNotFound = errors.New("opskeeper 上没有这一条")
 
 // EntityExists 检查实体是否已存在（幂等校验）。
 //

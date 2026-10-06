@@ -631,9 +631,9 @@ table-check: ## 闸门：一张表不允许被两个 GORM 模型声明（决策 
 # 剩下的三个字段也大半对不上——每一次失败都会被记成一行数据错误，而不是
 # 「这个工具写错了地方」。
 .PHONY: migrate-target-check
-migrate-target-check: ## 闸门：迁移注册表的目标端点与字段映射必须真实存在，且导入写下的行撤得回来（决策 291；决策 292）
+migrate-target-check: ## 闸门：迁移注册表的目标端点与字段映射必须真实存在，导入写下的行撤得回来，且 dry-run / verify 不谎报（决策 291–293）
 	cd core/manager && GOWORK=off go test ./migrate/ -count=1 \
-		-run 'TestEveryMigrationTargetRouteIsRegistered|TestEveryMappedFieldIsAcceptedByTheEndpoint|TestAnEntityWithNoRouteSaysWhy|TestTheIdempotencyReadRouteExists|TestIntegration_RollbackRemovesWhatImportCreated|TestARollbackSnapshotIsNeverOverwritten'
+		-run 'TestEveryMigrationTargetRouteIsRegistered|TestEveryMappedFieldIsAcceptedByTheEndpoint|TestAnEntityWithNoRouteSaysWhy|TestTheIdempotencyReadRouteExists|TestIntegration_RollbackRemovesWhatImportCreated|TestARollbackSnapshotIsNeverOverwritten|TestDryRunDoesNotClaimUnmigratableRowsWillSucceed|TestDryRunOverAMigratableSnapshotHasNothingToHide|TestVerifyReportsFieldDifferences|TestVerifyDoesNotClaimSuccessWhenItCheckedNothing|TestVerifyAgainstALiveSourceNeedsNoSnapshotFile'
 
 # docs/api 是这个仓库里唯一一处「可以写出一份完整交付、而没有任何东西会红」的地方：
 # harness.md 描述过十三个从未注册的 HTTP 端点，middleware.md 描述过九个，而两者

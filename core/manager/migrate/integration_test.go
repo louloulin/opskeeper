@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -578,5 +579,246 @@ func TestARollbackSnapshotIsNeverOverwritten(t *testing.T) {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("stat %s: %v", p, err)
 		}
+	}
+}
+
+// TestDryRunDoesNotClaimUnmigratableRowsWillSucceed 钉住 dry-run 的诚实。
+//
+// 决策 293 之前 dry-run 跳过了 requireImportable，于是目标端不存在的实体
+// 每行都被记进 result.Imported，CLI 打印「假设可导入: 1」——一个把必然
+// 失败的迁移报成"假设会成功"的 dry-run。dry-run 的全部意义就是回答
+// "这一步会不会成"，所以它比真跑更不能撒谎。
+func TestDryRunDoesNotClaimUnmigratableRowsWillSucceed(t *testing.T) {
+	seed := map[string][]map[string]any{
+		"users": {
+			{"id": 1, "project_id": 42, "email": "a@x"},
+		},
+		"pg_connections": {
+			{"id": 1, "project_id": 42, "name": "prod-pg", "host": "pg-1"},
+			{"id": 2, "project_id": 42, "name": "prod-pg-2", "host": "pg-2"},
+		},
+	}
+	mocks := startMocks(t, seed)
+	dir := t.TempDir()
+	snapshotPath := filepath.Join(dir, "snap.json")
+	ctx := context.Background()
+
+	if _, err := migrate.Export(ctx, migrate.ExportOptions{
+		Output: snapshotPath,
+		Source: mocks.OpsKeeper.URL,
+	}); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	res, err := migrate.Import(ctx, migrate.ImportOptions{
+		Snapshot:      snapshotPath,
+		Target:        mocks.Opskeeper.URL,
+		TenantMapping: "42=1",
+		RatePerSec:    1000,
+		DryRun:        true,
+	})
+	if err != nil {
+		t.Fatalf("dry-run must not fail on a missing target endpoint: %v", err)
+	}
+	if res.Imported != 1 {
+		t.Errorf("Imported=%d want 1 (only users has a real endpoint); "+
+			"the two pg_connections rows have no target endpoint at all", res.Imported)
+	}
+	if got := res.Unmigratable[migrate.EntityPGConnections]; got != 2 {
+		t.Errorf("Unmigratable[pg_connections]=%d want 2", got)
+	}
+	if res.Total != 3 {
+		t.Errorf("Total=%d want 3", res.Total)
+	}
+	if mocks.OpskeeperH.createdTotal != 0 {
+		t.Errorf("dry-run must not write: created=%d", mocks.OpskeeperH.createdTotal)
+	}
+}
+
+// TestDryRunOverAMigratableSnapshotHasNothingToHide 是同一道闸门的另一半：
+// 一份全部可导入的快照，Unmigratable 必须是空的——否则上一条测试可以靠
+// "总是返回非空"来通过。
+func TestDryRunOverAMigratableSnapshotHasNothingToHide(t *testing.T) {
+	seed := map[string][]map[string]any{
+		"users": {
+			{"id": 1, "project_id": 42, "email": "a@x"},
+		},
+	}
+	mocks := startMocks(t, seed)
+	dir := t.TempDir()
+	snapshotPath := filepath.Join(dir, "snap.json")
+	ctx := context.Background()
+
+	if _, err := migrate.Export(ctx, migrate.ExportOptions{
+		Output: snapshotPath,
+		Source: mocks.OpsKeeper.URL,
+	}); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	res, err := migrate.Import(ctx, migrate.ImportOptions{
+		Snapshot:      snapshotPath,
+		Target:        mocks.Opskeeper.URL,
+		TenantMapping: "42=1",
+		RatePerSec:    1000,
+		DryRun:        true,
+		Entities:      []migrate.EntityType{migrate.EntityUsers},
+	})
+	if err != nil {
+		t.Fatalf("Import dry-run: %v", err)
+	}
+	if len(res.Unmigratable) != 0 {
+		t.Errorf("Unmigratable=%v want empty", res.Unmigratable)
+	}
+	if res.Imported != 1 {
+		t.Errorf("Imported=%d want 1", res.Imported)
+	}
+}
+
+// TestVerifyReportsFieldDifferences 钉住 verify 比的是内容而不是"在不在"。
+//
+// 决策 293 之前 verify 只问存在性，所以一行被写错字段的记录照样算命中；
+// 而 VerifyResult.FieldDiffs 是一个永远为空的字段，报告的渲染代码会打印
+// 「字段差异: N」，N 恒为 0——一份读起来像"逐字段核对过且无差异"的报告。
+func TestVerifyReportsFieldDifferences(t *testing.T) {
+	seed := map[string][]map[string]any{
+		"users": {
+			{"id": 1, "project_id": 42, "email": "a@x", "name": "Alice"},
+		},
+	}
+	mocks := startMocks(t, seed)
+	dir := t.TempDir()
+	snapshotPath := filepath.Join(dir, "snap.json")
+	ctx := context.Background()
+
+	if _, err := migrate.Export(ctx, migrate.ExportOptions{
+		Output: snapshotPath, Source: mocks.OpsKeeper.URL,
+	}); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if _, err := migrate.Import(ctx, migrate.ImportOptions{
+		Snapshot: snapshotPath, Target: mocks.Opskeeper.URL,
+		TenantMapping: "42=1", RatePerSec: 1000,
+		Entities: []migrate.EntityType{migrate.EntityUsers},
+	}); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	// 目标端那一行被改坏了：email 变了。
+	mocks.OpskeeperH.mu.Lock()
+	for _, row := range mocks.OpskeeperH.byType["users"] {
+		row["email"] = "tampered@x"
+	}
+	mocks.OpskeeperH.mu.Unlock()
+
+	result, err := migrate.Verify(ctx, migrate.VerifyOptions{
+		SnapshotPath: snapshotPath, Target: mocks.Opskeeper.URL,
+		TenantMapping: "42=1",
+		Entities:      []migrate.EntityType{migrate.EntityUsers},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if len(result.FieldDiffs) != 1 {
+		t.Fatalf("FieldDiffs=%d want 1; a row whose email was changed must not "+
+			"read as a clean match", len(result.FieldDiffs))
+	}
+	d := result.FieldDiffs[0]
+	if d.Field != "email" || d.SourceVal != "a@x" || d.TargetVal != "tampered@x" {
+		t.Errorf("diff = %+v, want email a@x -> tampered@x", d)
+	}
+	if report := result.String(); !strings.Contains(report, "字段差异: 1") {
+		t.Errorf("the report does not mention the difference:\n%s", report)
+	}
+}
+
+// TestVerifyDoesNotClaimSuccessWhenItCheckedNothing 是同一道性质最要紧的一问。
+//
+// 决策 293 之前查询失败是一个 `continue`：它既不进 MissingInTarget 也不进
+// 命中，于是一份一次都没核对成功的报告照样印出「✅ 全部命中」。
+func TestVerifyDoesNotClaimSuccessWhenItCheckedNothing(t *testing.T) {
+	seed := map[string][]map[string]any{
+		"users": {
+			{"id": 1, "project_id": 42, "email": "a@x"},
+		},
+	}
+	mocks := startMocks(t, seed)
+	dir := t.TempDir()
+	snapshotPath := filepath.Join(dir, "snap.json")
+	ctx := context.Background()
+
+	if _, err := migrate.Export(ctx, migrate.ExportOptions{
+		Output: snapshotPath, Source: mocks.OpsKeeper.URL,
+	}); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	// 目标端关掉：每一次查询都失败。
+	mocks.Opskeeper.Close()
+
+	result, err := migrate.Verify(ctx, migrate.VerifyOptions{
+		SnapshotPath: snapshotPath, Target: mocks.Opskeeper.URL,
+		TenantMapping: "42=1",
+		Entities:      []migrate.EntityType{migrate.EntityUsers},
+	})
+	if err != nil {
+		t.Fatalf("Verify must not abort when a query fails: %v", err)
+	}
+	if got := result.Unchecked[migrate.EntityUsers]; got != 1 {
+		t.Errorf("Unchecked=%d want 1", got)
+	}
+	report := result.String()
+	if strings.Contains(report, "全部命中") {
+		t.Errorf("a report that checked nothing claims success:\n%s", report)
+	}
+	if !strings.Contains(report, "没能核对") {
+		t.Errorf("the report does not say why:\n%s", report)
+	}
+}
+
+// TestVerifyAgainstALiveSourceNeedsNoSnapshotFile 钉住 verify 的第二种用法。
+//
+// 决策 293 之前 `verify --source <URL>` 必然以「--output 必填」失败：代码先
+// 调了一次 Export 只为了"重新拉取"，而 Export 强制要求 --output。那是
+// docs/integration-guide.md 里写着的用法。注释就写在这次调用的下面，说
+// "Verify 改为直接用客户端拉"——注释说出了要修什么，而修复没做。
+func TestVerifyAgainstALiveSourceNeedsNoSnapshotFile(t *testing.T) {
+	seed := map[string][]map[string]any{
+		"users": {
+			{"id": 1, "project_id": 42, "email": "a@x", "name": "Alice"},
+		},
+	}
+	mocks := startMocks(t, seed)
+	dir := t.TempDir()
+	snapshotPath := filepath.Join(dir, "snap.json")
+	ctx := context.Background()
+
+	if _, err := migrate.Export(ctx, migrate.ExportOptions{
+		Output: snapshotPath, Source: mocks.OpsKeeper.URL,
+	}); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if _, err := migrate.Import(ctx, migrate.ImportOptions{
+		Snapshot: snapshotPath, Target: mocks.Opskeeper.URL,
+		TenantMapping: "42=1", RatePerSec: 1000,
+		Entities: []migrate.EntityType{migrate.EntityUsers},
+	}); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	// 不给 SnapshotPath，只给实时源 URL——这就是文档里那条命令。
+	result, err := migrate.Verify(ctx, migrate.VerifyOptions{
+		Source:        mocks.OpsKeeper.URL,
+		Target:        mocks.Opskeeper.URL,
+		TenantMapping: "42=1",
+		Entities:      []migrate.EntityType{migrate.EntityUsers},
+	})
+	if err != nil {
+		t.Fatalf("verify against a live source: %v", err)
+	}
+	if result.MatchedBySourceID[migrate.EntityUsers] != 1 {
+		t.Errorf("MatchedBySourceID[users]=%d want 1", result.MatchedBySourceID[migrate.EntityUsers])
+	}
+	if len(result.MissingInTarget[migrate.EntityUsers]) != 0 {
+		t.Errorf("MissingInTarget=%v want empty", result.MissingInTarget[migrate.EntityUsers])
 	}
 }

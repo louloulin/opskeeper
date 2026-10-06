@@ -143,7 +143,7 @@ CI → cmd/opskeeper-eval → fault-injector → Coordinator 自主响应
 
 ### 4.1 迁移工具
 
-`opskeeper-migrate-from-opskeeper`（独立 CLI，Task 3.3 产出）。
+`opskeeper-migrate`（独立 CLI，源码在 `cmd/opskeeper-migrate/`）。
 
 ### 4.2 支持的实体（9 类）
 
@@ -172,31 +172,40 @@ CI → cmd/opskeeper-eval → fault-injector → Coordinator 自主响应
 
 ### 4.3 迁移流程
 
+`--tenant-mapping` 的格式是 `<源 project_id>=<目标 tenant_id>`，逗号分隔，
+例如 `42=1,100=2`。**不是** `key:value` 形式。
+
 ```bash
-# 1. 导出 ops-keeper 快照
+# 1. 导出 ops-keeper 快照（--rate 是 import 的标志，export 没有）
 opskeeper-migrate export \
-  --source opskeeper://user:pass@ops-keeper-host:5432/db \
-  --output snapshot-2026-07-13.json \
-  --rate 1000  # 限速 1000 行/秒
+  --source http://ops-keeper-host:3000 \
+  --token "$OPSKEEPER_TOKEN" \
+  --output snapshot-2026-07-13.json
 
 # 2. 在 opskeeper 端校验（dry-run）
+#    目标端不存在的实体不会被计入「假设可导入」，而是单独列出——
+#    dry-run 的作用就是回答"这一步会不会成"，它比真跑更不能撒谎。
 opskeeper-migrate import \
   --source snapshot-2026-07-13.json \
-  --target opskeeper://opskeeper-host:8080 \
-  --tenant-mapping opskeeper-project-id=42:opskeeper-tenant-id=42 \
+  --target http://opskeeper-host:8080 \
+  --tenant-mapping "42=1,100=2" \
   --dry-run
 
-# 3. 实际导入
+# 3. 实际导入（会打印它写下的回滚快照路径）
 opskeeper-migrate import \
   --source snapshot-2026-07-13.json \
-  --target opskeeper://opskeeper-host:8080 \
-  --tenant-mapping opskeeper-project-id=42:opskeeper-tenant-id=42
+  --target http://opskeeper-host:8080 \
+  --tenant-mapping "42=1,100=2" \
+  --rate 1000 \
+  --rollback-dir ./rollback
 
-# 4. 验证
+# 4. 验证：逐字段比对源与目标，报告里区分「缺失」与「没能核对」
+#    两种源 URL 与快照两种给法都支持（--source 是快照路径，
+#    --opskeeper-url 才是实时源）。
 opskeeper-migrate verify \
-  --source opskeeper://... \
-  --target opskeeper://... \
-  --report verify-2026-07-13.html
+  --source snapshot-2026-07-13.json \
+  --target http://opskeeper-host:8080 \
+  --tenant-mapping "42=1,100=2"
 ```
 
 ### 4.4 幂等 + 回滚
