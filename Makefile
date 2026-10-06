@@ -770,6 +770,29 @@ split-cost: ## 给一份分组方案定价：跨组 import 语句数 + 被切断
 	@test -n "$(FILE)" || { echo 'usage: make split-cost FILE=docs/manager-split.proposed'; exit 2; }
 	go run ./scripts/domaincheck . -cut $(FILE)
 
+# The line above is a report on purpose, and the reason it is a report is
+# printed three targets above it: a proposal written on the day it is wrong is a
+# proposal nobody argues with, because the tool that says it is wrong also
+# breaks the build. That reason holds for the number the tool PRINTS.
+#
+# It does not hold for the number the proposal QUOTES. docs/manager-split.proposed
+# opens with a price, and that price sat on 95 / 26 / 4 through twenty-odd cuts
+# after decision 235 that took the real figure to 50 / 6 / 3, with nothing
+# asking. A printed number rots in nobody's memory; a number written into a
+# document is a sentence somebody believes — the same shape as the ledger
+# declaring a count the tree no longer had (decision 402) and a mayDependOn
+# authorising nothing (decision 74).
+#
+# So the split stays a report and the sentence gets a gate. It compares the
+# headline only: the running log under it is history, and history that has been
+# overtaken is correct history. Decision 249's entry sits after decision 257's
+# because the log grew as cuts landed, so a checker reaching for "the last
+# number in the file" would fail a correct document.
+.PHONY: split-price-check
+split-price-check: ## 校验拆分方案头部的价格与树实测一致（决策 404；只查头条，不查历史日志）
+	go run ./scripts/splitprice docs/manager-split.proposed .
+	go test ./scripts/splitprice/ -count=1
+
 # The other half of what split-cost cannot say. That number prices a cut by
 # import edges, which say two packages must be BUILT together and say nothing
 # about whether anyone ever CHANGES them together. The proposal names three

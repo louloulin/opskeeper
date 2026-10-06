@@ -136,6 +136,16 @@ jobs:
       - name: Control-plane domain boundaries
         run: make domain-check
 
+      # The split proposal quotes its own price in its first line, and that
+      # quote sat on 95 / 26 / 4 while the tree had moved to 50 / 6 / 3, with
+      # nothing asking. `split-cost` is a report on purpose -- see the comment
+      # on the target -- but that reasoning covers the number it prints, not
+      # the number a document believes. This is the gate for the sentence
+      # (decision 404). It reads the headline only; the running log under it is
+      # history and is deliberately not checked.
+      - name: Split proposal price matches the tree
+        run: make split-price-check
+
       # The per-symbol reachability verdict stays a report, and always has
       # (decision 199: the walk cannot see six kinds of indirection, and a
       # gate that cries wolf teaches its reader to skip it). What this runs is

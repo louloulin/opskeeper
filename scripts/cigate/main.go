@@ -340,6 +340,16 @@ func DecisionGates() []Gate {
 				"'nothing was built' now skips and 'what was built is wrong' still fails " +
 				"(decisions 134, 348)",
 		},
+		{
+			Target: "split-price-check",
+			Why: "the split proposal states its own price in its first line, and that price sat on " +
+				"95 internal / 26 crossing while the tree had moved to 50 / 6 through the cuts after " +
+				"decision 235. split-cost is a report on purpose, and the reason it is a report -- a " +
+				"proposal written on the day it is wrong is one nobody argues with -- covers the number " +
+				"it prints, not the number a document believes. The gate reads the headline and not the " +
+				"running log beneath it, because that log is history and history that has been overtaken " +
+				"is correct history (decision 404)",
+		},
 	}
 }
 
