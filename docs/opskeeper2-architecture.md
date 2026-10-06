@@ -4415,6 +4415,64 @@ core/manager/service/plugin/driver.go: No such file or directory
 
 因此「最佳实现」这一栏本轮为空——**下一刀应该是一次实跑，而不是一次新写**。
 
+### 4.307 决策 373：把 0.4 的验收**跑**出来——而不是继续说「差一次实跑」
+
+决策 372 结尾写「下一刀应该是一次实跑」。这一轮就实跑，判据是方案 §四 0.4
+与 §六 的端到端那一条。
+
+先说过程，因为结论的说服力全在这里：`go test -tags e2e` 三条用例第一次全红，
+错误是 `Cannot connect to the Docker daemon`——**不是产品缺陷，是这台机器的
+Docker 没起**。起 Docker Desktop（20s）之后原样重跑，全绿。若把第一次的红
+当成「验收不过」而写进台账，本节就会记下一个假的失败；反过来若不看第一次的
+输出直接重跑，本节就会记下一个来源不明的绿。两次输出都得看。
+
+```
+--- PASS: TestTheGatewayServesAStreamToANodeCredential (93.83s)
+--- PASS: TestNodeAgentDelivery (35.71s)
+    --- PASS: the_agent_is_an_independent_process
+    --- PASS: the_node_holds_no_provider_credential
+    --- PASS: the_node's_process_environment_holds_no_provider_credential
+    --- PASS: the_turn_streams_back_on_the_console's_frame_contract
+    --- PASS: the_reply_came_through_the_manager's_gateway
+    --- PASS: a_turn_with_no_watcher_is_refused
+--- PASS: TestANodeKeepsItsTelemetryThroughAnOutage (55.93s)
+    before the outage the center holds 239 series
+    1 row(s) waiting on disk with the link down
+    24 row(s) survived the outage; the center went from 239 to 239 series while the link was down
+    the center went from 239 to 6453 series across the outage; 24 row(s) left the disk
+ok  github.com/vincent-wuhan/opskeeper/tests/e2e  197.212s
+```
+
+#### 4.307.1 0.4 的四条验收逐条落位
+
+| 0.4 原文 | 本轮实测 |
+|---|---|
+| 一台 edge 能通过控制台完成一次真实对话并返回流式输出 | `the reply came through the manager's gateway` + `the turn streams back on the console's frame contract`：真 MySQL 8.0 容器 + 真 frontier edge 容器 + 真 manager，网关那一跳由 `TestTheGatewayServesAStreamToANodeCredential` 单独立证（它断言的是**帧里有内容**，不是状态码 200——决策里记过「写了合法空流并回 200」那类缺陷） |
+| 节点上 `ps` 可见独立 pig 进程 | `the agent is an independent process`，心跳回报 `{degraded:false, running:true, restarts:0, version:0.9.0}` |
+| `/etc/opskeeper-edge` 下无任何云厂商密钥 | `the node holds no provider credential` |
+| （§六 端到端那条）断网场景：遥测落盘 → 恢复回放 | `TestANodeKeepsItsTelemetryThroughAnOutage`：断链期间落盘 1 行、恢复后 24 行离开磁盘、中心 series 239 → 6453 |
+
+#### 4.307.2 一处必须照实说的弱证据
+
+`the node's process environment holds no provider credential` 这条在 macOS 上
+**拿不到另一个进程的真实 environ**，用例自己打印了这一点：
+
+```
+pid 9890: this OS will not show another process's environment; the check above stands on what the harness constructed
+no live process environment was readable on this platform; the constructed environment above is the evidence here
+```
+
+也就是说这条证明的是「我们构造给 `pig` 的那份环境里没有云厂商密钥」，**不是**
+「OS 报告的进程环境里没有」。在 Linux 上才有后者的观测力。台账此前把 0.4 整体
+记成「未做」，本轮把它记成「已做，但其中一条的强度受平台限制」——**比「已做」
+诚实，也比「未做」准确**。
+
+#### 4.307.3 剩下的仍然只有人的输入
+
+0.4 与 §六 的端到端在本轮都有了可复现的执行证据之后，方案里剩下的**没有一项
+是编码量**：`0.4` 的真机（物理机/真实云环境）复跑与 arm64 那一腿（决策 190/191
+已把它变成每天自己回答一次的命令）、值侧脱敏的代价、开源门槛 13 处。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
