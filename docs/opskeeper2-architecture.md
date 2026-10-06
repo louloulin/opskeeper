@@ -8422,6 +8422,102 @@ jq '.steps[]|"\(.number)\t\(.conclusion or .status)\t\(.name)"'
 **这一节自己也犯了一次「看到一个数就下结论」**：我引用的号是"决策号减一"的直觉猜法，
 而决策号与章节号在本台账里**不是同一个数**（决策 414 → §4.348，决策 421 → §4.355）。
 
+### 4.358 决策 424：PR 描述里的数**没有任何闸门守着**——我写进去的「425 个提交」真实值是 436，而这个 PR 在网页上根本没法作为 diff 评审
+
+#### 4.358.1 事情：评审者唯一会读的文档，写着一个几轮前的数
+
+开 PR 时我在描述里写了「领先 `main` **425 个提交**」。那是当时的 `gh api compare` 读数。
+本轮复核时：
+
+```
+local main:  408ca1e      origin/main: fadeafa
+本地 main..feature/pig:  405
+origin/main..feature/pig: 436
+远端 compare: ahead=436
+```
+
+**真实值是 436，而本地 `main` 分支落后 `origin/main` 三十多个提交**——
+所以连"用本地 main 算"这个复核办法也会给出另一个数（405）。
+**两个数都不是我写的那个。**
+
+#### 4.358.2 为什么没有任何东西抓到它
+
+台账里已经有两道同类的闸门，都因为同一个理由存在：决策 347 的 `ledgercheck`
+（台账里的数与树自己的数一致）、决策 404 的 `split-price-check`
+（方案头条的数与树一致）。**它们守的是 tracked tree 里的句子。**
+
+**PR 描述不在 tracked tree 里。** `pending-check` 也管不到它。
+所以这一类句子是这份仓库里**唯一一处完全无人看守的读数**，
+而它恰好是**评审者唯一会读的文档**。
+
+**而它已经漂了**：写入到复核之间隔了几轮 push，
+**每一次 push 都让那个数变大，而没有任何东西会报告它变大了。**
+
+#### 4.358.3 修法与决策 423 相同：不写会漂移的数，写复算它的命令
+
+描述里现在没有提交数，取而代之的是：
+
+```
+git fetch origin main
+git rev-list --count origin/main..feature/pig
+git diff --shortstat origin/main...feature/pig
+```
+
+**一个会过期的数字写进文档，读者没有办法判断它过期了；
+一条命令写进文档，读者跑一次就知道此刻的真值。**
+这与台账里那个反复出现的洞是同一个（§4.346 的发布基线、§4.348 的拆分报价、
+上一条里我自己的章节号）——**区别只在于那些洞当时有闸门可以加，而 PR 描述没有。**
+
+#### 4.358.4 顺带一件对评审有实际影响的事：这个 PR 在网页上不能作为 diff 评审
+
+```
+git diff --shortstat origin/main...feature/pig
+2541 files changed, 304771 insertions(+), 37965 deletions(-)
+```
+
+GitHub 的 PR diff 视图在这个量级会截断（`compare` API 的 `files` 字段最多返回 300 项，
+而实测有 2541 个文件）。所以「Files changed」页**不是完整视图**，
+逐个文件读不现实。描述里因此改为给出**评审路径**：先读台账 §六 与 §四，
+再看本 PR 的 CI 读数，按闸门名回台账搜它自己的理由。
+
+**这不是对评审者的推脱，是一件必须写出来的事实**：
+一个两千五百文件的 PR，评审它的正确单位是**它改变了什么行为**，
+不是它有多少行 diff。
+
+#### 4.358.5 进度影响：两把尺不动
+
+**架构尺 97.75% / 四阶段交付尺 99.5% 不动。** 本刀不关闭任何计划内未交付项；
+它把一份**无人看守的读数**换成了**可复算的命令**，并记下了这个 PR 的真实评审单位。
+
+#### 4.358.6 而本轮 `ledgercheck` 是红的，因为**工作树里有别人的未提交工作**——而它红得对
+
+写完这一节后跑 `make ledger-check`，它报 manager 尺寸漂了：台账写
+`984 文件 / 252,457 行`，树是 `984 / 252,518`。**我没有碰过 `core/manager`**，
+所以第一反应是按闸门的提示去更新那个数。
+
+**先查了工作树，然后停手了：**
+
+```
+ M core/manager/biz/aiops/tools/toolcore/redirect.go   (+113/-...)
+ M core/pig/pigagent/{events,kernel,message,prompt,runstate,session_kernel}.go
+ M core/pig/pigagent/prompt_test.go
+ ?? core/pig/pigagent/thinking.go
+ ?? core/pig/pigagent/thinking_test.go
+```
+
+**这不是我的改动。** `redirect.go` 新增的是 `DispatchDisabledStub`——协调器无法派发时
+告诉模型原因，而不是让它撞上 `Tool AgentTool not found`；`pigagent/` 那批是 thinking。
+
+**所以那个尺寸漂移来自别人正在写的代码，而"更新那个数"等于把一份未完成的工作
+记成既成事实。** 本轮因此**没有**动那一行，让 `ledgercheck` 保持红：
+**工作树不干净时，那些"树自己的数"里有一部分不是树，它是在制品。**
+
+**还有一层更要紧的：本会话早些时候我因为 `git add -A` 把带密钥的运行产物带进过提交，
+而同一招在这里会做一件更糟的事——把别人未提交的工作并进我的 commit。**
+那三个文件此刻还在工作树上，正是因为我一直用**显式路径**提交台账
+（`git add docs/opskeeper2-architecture.md`）。**一个今天已经救过我一次的纪律，
+在同一份工作树上第二次救了它。**
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
