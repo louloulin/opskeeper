@@ -8292,6 +8292,51 @@ end-to-end suite (amd64)                 in_progress   23:16:45
 **架构尺 97.75% / 四阶段交付尺 99.5% 不动。** 本刀不关闭任何计划内未交付项；
 它改的是"四十个闸门在 CI 上有没有机会说话"，并更正了一句把配置当结果的断言。
 
+#### 4.356.6 终态验证：四十个闸门第一次在 CI 上各自报告
+
+run `37545780348`（push `c910832`）的最终 job 列表：
+
+```
+every module on its own published tags   completed/success
+end-to-end suite (amd64)                 completed/success
+end-to-end suite (arm64)                 completed/success
+build + vet + test                       completed/failure
+node delivery (broker, nightly)          completed/skipped
+```
+
+`build + vet + test` 的失败步骤有且只有一个：
+
+```
+FAIL 42: Verify plugins and open-source gate
+```
+
+**所以拆分之后的读数是：四十个闸门在 CI 上全部执行了，唯一红的是那 13 项待作者决定的
+开源违规。** 拆分之前，第 11 步卡住，第 12 到 43 步**从未报告过任何东西**——
+也就是说，**本条之前 CI 上没有任何一次运行产出过"四十个闸门各是什么结论"这个答案**。
+
+而 `every module on its own published tags` **completed/success**：
+**同一步在合并的 job 里四十分钟不给结论，独立成 job 之后几分钟跑完并通过。**
+它本机要 2.5 分钟，CI 上与 runner 竞争只是变慢，**不是它坏**——
+把它和四十个闸门塞进同一个 35 分钟预算，才是那件事。
+
+#### 4.356.7 而验证这一轮的过程里，我又犯了 4.331 记过的那条操作错误
+
+拆分提交之后我推送了一次台账（`c910832`），**那次 push 取消了正在验证的 run
+`37545605453`**——它当时四个 job 都在跑，全部变成 `cancelled`，
+连 `end-to-end suite` 的 arm64 腿也没跑完。
+
+决策 4.331 把这条写成纪律：**push 之后不再动仓库，盯到那个 run 出终态。**
+我上一轮刚在决策 421 里拿它当反面教材，这一轮开头就又犯了。
+
+**这一轮因此多花了一个 run 的时间**（重跑到 `37545780348` 才有上面那组读数）。
+而它同时意外地给决策 421 补了一条**正面证据**：被取消的那次里，
+四个 job 全部 `cancelled` 而新的 push run 进入 `pending`——
+**cancel-in-progress 在同事件内确实生效**（push 之间同组、互相取消），
+**而 push 与 pull_request 之间的两个 run 从头到尾没有互相取消过**（§4.421.2 的结论）。
+
+**一次操作错误买到的证据，比一次正确操作的多**——这不能推广为"错误有益"，
+但它说明**纪律的价值不在于不出错，而在于知道自己出了错并把它记下来**。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
