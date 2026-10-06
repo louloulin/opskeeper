@@ -141,6 +141,10 @@ const (
 	ActionSettingUpdate = auditport.ActionSettingUpdate
 	ActionSettingDelete = auditport.ActionSettingDelete
 
+	ActionSecretCreate = auditport.ActionSecretCreate
+	ActionSecretUpdate = auditport.ActionSecretUpdate
+	ActionSecretDelete = auditport.ActionSecretDelete
+
 	ActionChannelCreate = auditport.ActionChannelCreate
 	ActionChannelUpdate = auditport.ActionChannelUpdate
 	ActionChannelDelete = auditport.ActionChannelDelete
@@ -206,6 +210,7 @@ const (
 	ResourceDevice         = auditport.ResourceDevice
 	ResourceIncident       = auditport.ResourceIncident
 	ResourceSetting        = auditport.ResourceSetting
+	ResourceSecret         = auditport.ResourceSecret
 	ResourceRule           = auditport.ResourceRule
 	ResourceChannel        = auditport.ResourceChannel
 	ResourceRepo           = auditport.ResourceRepo

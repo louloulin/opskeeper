@@ -39,6 +39,8 @@ package audit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 )
 
@@ -123,6 +125,16 @@ const (
 	// Sensitive values are redacted upstream.
 	ActionSettingUpdate = "setting_update"
 	ActionSettingDelete = "setting_delete"
+
+	// Secret vault (HLD-017). The payload carries the credential's name,
+	// type and the *names* of its fields — never their values. What goes in
+	// instead of a value is fields_digest: a SHA-256 over the sorted
+	// name=value pairs, so a later reader can answer "was this credential
+	// rotated, and is it the same one it was last quarter" without the chain
+	// ever holding the secret it is supposed to be protecting.
+	ActionSecretCreate = "secret_create"
+	ActionSecretUpdate = "secret_update"
+	ActionSecretDelete = "secret_delete"
 
 	ActionChannelCreate = "channel_create"
 	ActionChannelUpdate = "channel_update"
@@ -367,6 +379,7 @@ const (
 	ResourceDevice   = "device"
 	ResourceIncident = "incident"
 	ResourceSetting  = "setting"
+	ResourceSecret   = "secret"
 	ResourceRule     = "rule"
 	ResourceChannel  = "channel"
 	ResourceRepo     = "repo"
@@ -509,6 +522,25 @@ type slot struct {
 // the handler returns. It is exported so that the middleware and the
 // handlers share one definition of the slot rather than two that agree
 // today.
+// ValueDigest is what an audit row should carry in place of a value it is not
+// allowed to hold.
+//
+// It exists because the two obvious alternatives are both wrong. Recording
+// nothing makes the row unable to answer "was this rotated, and is it the same
+// one as last quarter". Recording a prefix — the first four characters, say —
+// puts a piece of the secret into a signed, widely readable log, and does it
+// worst exactly where it matters: a short secret is *entirely* a prefix, so
+// the length guard that protects a long one silently stops existing.
+//
+// The digest is a SHA-256 over the raw bytes, hex encoded. It is not a
+// password hash and is not meant to resist an offline guess against a weak
+// secret; it is a stable fingerprint, so that two rows can be compared for
+// equality without either of them being readable.
+func ValueDigest(v string) string {
+	sum := sha256.Sum256([]byte(v))
+	return hex.EncodeToString(sum[:])
+}
+
 func WithSlot(ctx context.Context) context.Context {
 	return context.WithValue(ctx, contextKey{}, &slot{})
 }

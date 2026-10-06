@@ -101,20 +101,30 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	// Hint = first 4 chars of the value when sensitive, else the value
-	// itself (capped). Never store the full secret.
-	hint := req.Value
-	if sensitive && len(req.Value) > 4 {
-		hint = req.Value[:4] + "…"
-	} else if len(hint) > 64 {
-		hint = hint[:64] + "…"
+	// A sensitive value contributes a digest and a length, never any part of
+	// itself. The earlier code took the first four characters, guarded by
+	// `len(value) > 4` — which means a secret of four characters or fewer was
+	// written to the chain in full, and a longer one still leaked its opening
+	// four into a signed log that every reader of the audit table can see.
+	// The digest answers the question the prefix was there to answer
+	// ("did this change?") without holding anything.
+	payload := map[string]any{"category": category, "key": key, "sensitive": sensitive}
+	if sensitive {
+		payload["value_digest"] = auditport.ValueDigest(req.Value)
+		payload["value_len"] = len(req.Value)
+	} else {
+		hint := req.Value
+		if len(hint) > 64 {
+			hint = hint[:64] + "…"
+		}
+		payload["value_hint"] = hint
 	}
 	auditport.SetAuditEvent(r, auditport.Event{
 		Action:       auditport.ActionSettingUpdate,
 		ResourceType: auditport.ResourceSetting,
 		ResourceID:   category + "/" + key,
 		Status:       auditport.StatusSuccess,
-		Payload:      map[string]any{"category": category, "key": key, "sensitive": sensitive, "value_hint": hint},
+		Payload:      payload,
 	})
 	// Return the freshly-masked row so the UI can update its cell without
 	// re-listing the whole category.

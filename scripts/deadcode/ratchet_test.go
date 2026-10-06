@@ -23,6 +23,11 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 810 / 543 as of decision 316: the four new ones are the credential vault's
+// action constants (secret_create / secret_update / secret_delete) plus the
+// secret resource type — the same re-export category decisions 311, 312 and
+// 314 had to account for, read from core/domains through core/base/pkg/audit.
+//
 // 806 / 539 as of decision 314: the five new ones are the AgentTeams HITL
 // proposal action/resource constants (hitl_proposal_{create,approve,reject,
 // expire} + the hitl_proposal resource type). They are read only from the
@@ -32,8 +37,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 806
-	deadSymbolBudget     = 539
+	unreachableBudget    = 810
+	deadSymbolBudget     = 543
 	testOnlySymbolBudget = 270
 )
 

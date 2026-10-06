@@ -4,13 +4,17 @@
 package secret
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	bizsecret "github.com/vincent-wuhan/opskeeper/core/domains/biz/secret"
@@ -55,6 +59,10 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if _, ok := requireAdmin(w, r); !ok {
+		// The refusal itself is a row. "Somebody kept trying" and "nobody
+		// tried" have to look different on the chain, and requireAdmin has
+		// already written the 403 by the time we get here.
+		auditWrite(r, auditport.ActionSecretCreate, "", nil, errs.ErrForbidden)
 		return
 	}
 	var in struct {
@@ -64,19 +72,26 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		Fields      map[string]string `json:"fields"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil {
+		auditWrite(r, auditport.ActionSecretCreate, "", nil, err)
 		writeErr(w, errors.Join(errs.ErrInvalid, err))
 		return
 	}
 	v, err := h.uc.Create(r.Context(), in.Name, in.Type, in.Description, in.Fields)
 	if err != nil {
+		auditWrite(r, auditport.ActionSecretCreate, "", secretPayload(in.Name, in.Type, in.Fields), err)
 		writeErr(w, err)
 		return
 	}
+	payload := secretPayload(in.Name, in.Type, in.Fields)
+	payload["name"] = v.Name
+	payload["type"] = v.Type
+	auditWrite(r, auditport.ActionSecretCreate, strconv.FormatUint(v.ID, 10), payload, nil)
 	writeJSON(w, http.StatusOK, v)
 }
 
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	if _, ok := requireAdmin(w, r); !ok {
+		auditWrite(r, auditport.ActionSecretUpdate, chi.URLParam(r, "id"), nil, errs.ErrForbidden)
 		return
 	}
 	id, err := strconv.ParseUint(chi.URLParam(r, "id"), 10, 64)
@@ -89,30 +104,107 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		Fields      map[string]string `json:"fields"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil {
+		auditWrite(r, auditport.ActionSecretUpdate, strconv.FormatUint(id, 10), nil, err)
 		writeErr(w, errors.Join(errs.ErrInvalid, err))
 		return
 	}
 	if err := h.uc.Update(r.Context(), id, in.Description, in.Fields); err != nil {
+		auditWrite(r, auditport.ActionSecretUpdate, strconv.FormatUint(id, 10),
+			secretPayload("", "", in.Fields), err)
 		writeErr(w, err)
 		return
 	}
+	payload := secretPayload("", "", in.Fields)
+	auditWrite(r, auditport.ActionSecretUpdate, strconv.FormatUint(id, 10), payload, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (h *Handler) del(w http.ResponseWriter, r *http.Request) {
 	if _, ok := requireAdmin(w, r); !ok {
+		auditWrite(r, auditport.ActionSecretDelete, chi.URLParam(r, "id"), nil, errs.ErrForbidden)
 		return
 	}
 	id, err := strconv.ParseUint(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
+		auditWrite(r, auditport.ActionSecretDelete, "", nil, err)
 		writeErr(w, errs.ErrInvalid)
 		return
 	}
 	if err := h.uc.Delete(r.Context(), id); err != nil {
+		auditWrite(r, auditport.ActionSecretDelete, strconv.FormatUint(id, 10), nil, err)
 		writeErr(w, err)
 		return
 	}
+	auditWrite(r, auditport.ActionSecretDelete, strconv.FormatUint(id, 10), nil, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// auditWrite records one vault write.
+//
+// The payload is the whole reason this function exists in this shape. The
+// body of a create or update carries `fields`, a map of plaintext credentials
+// — a database password, an API token — and an audit chain is the last place
+// that should ever hold one. So the payload carries the field *names* and a
+// digest of the values, never the values: fields_digest answers "was this
+// credential rotated, and is it the same one as last quarter" by comparing
+// hashes, which needs no plaintext to compute and no plaintext to read.
+//
+// A digest is not a substitute for a secret being secret. It is over a
+// credential an operator typed, so it is not brute-forceable in the way a
+// password hash of a weak password is — but it is still a stable identifier
+// for "this exact value", and that is exactly the property needed and no
+// more.
+func auditWrite(r *http.Request, action, id string, payload map[string]any, cause error) {
+	status := auditport.StatusSuccess
+	if cause != nil {
+		status = auditport.StatusFailure
+	}
+	ev := auditport.Event{
+		Action:       action,
+		ResourceType: auditport.ResourceSecret,
+		ResourceID:   id,
+		Status:       status,
+		Payload:      payload,
+	}
+	if cause != nil {
+		ev.ErrorMessage = cause.Error()
+	}
+	auditport.SetAuditEvent(r, ev)
+}
+
+// secretPayload describes a set of credential fields without holding any of
+// them. field_names says which keys were written; fields_digest is a SHA-256
+// over the sorted key=value pairs, so two payloads can be compared for
+// equality without either of them being readable.
+func secretPayload(name, credType string, fields map[string]string) map[string]any {
+	payload := map[string]any{}
+	if name != "" {
+		payload["name"] = name
+	}
+	if credType != "" {
+		payload["type"] = credType
+	}
+	if len(fields) == 0 {
+		return payload
+	}
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	payload["field_names"] = keys
+
+	digest := sha256.New()
+	for _, k := range keys {
+		// The separator matters: without it {"ab":"c"} and {"a":"bc"} would
+		// hash the same, and a rotated credential could look unchanged.
+		digest.Write([]byte(k))
+		digest.Write([]byte{0})
+		digest.Write([]byte(fields[k]))
+		digest.Write([]byte{0})
+	}
+	payload["fields_digest"] = hex.EncodeToString(digest.Sum(nil))
+	return payload
 }
 
 // --- auth + json helpers (mirrors server/setting) ---
