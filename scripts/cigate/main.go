@@ -228,6 +228,17 @@ func DecisionGates() []Gate {
 				"instead (decision 186)",
 		},
 		{
+			Target: "race-check",
+			Why: "the plan's phase-B acceptance line says `go test -race`, and the target that " +
+				"runs it existed while nothing invoked it -- so the line had only ever been " +
+				"executed by whoever remembered it. A data race is the one class of defect that " +
+				"passes every functional test this repository has, because a test that does not " +
+				"run two goroutines at once cannot see one; decision 84 found exactly that in the " +
+				"Mapper that numbers SSE frames. It is scoped to the four places where the " +
+				"concurrency is designed rather than incidental, and it costs about two minutes " +
+				"(decision 382)",
+		},
+		{
 			Target: "broker-pin-check",
 			Why: "every file that names the frontier broker names one version, and the shipped " +
 				"spelling (v1.2.5) and the pulled spelling (1.2.5) agree; the release and the " +

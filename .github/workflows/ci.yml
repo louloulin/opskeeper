@@ -125,6 +125,14 @@ jobs:
       - name: Build and test every module on its own published tags
         run: make module-standalone-check
 
+      # The plan's phase-B acceptance line says `go test -race`. A data race is
+      # the one defect class that passes every functional test in this
+      # repository, because a test that does not run two goroutines at once
+      # cannot see one — decision 84 found exactly that in the Mapper that
+      # numbers SSE frames. Two minutes, on every push (decision 382).
+      - name: Race detector on the modules whose concurrency is designed
+        run: make race-check
+
       - name: Control-plane domain boundaries
         run: make domain-check
 

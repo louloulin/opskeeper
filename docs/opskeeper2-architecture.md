@@ -4942,6 +4942,63 @@ never builds or tests it; every gate is still green
 接进任何名单——决策 348 那个「新测试没进 `-run` 所以 CI 不跑」的坑在这里不存在，
 这一点也是量出来的而不是假设的。
 
+### 4.316 决策 382：方案 §五 写着 `go test -race`，而**没有任何 workflow 跑过它**
+
+本轮先去验证一个此前从没验过的怀疑：`core/pig/extensions/*` 与
+`plugins/pig-ops/*/extensions/*` 是两份重复源码树，漂了怎么办。量完发现**已经有
+闸门**（`TestEveryPackagedExtensionMatchesItsCanonicalSource` + 同步脚本），
+两份树逐字节一致（只差 `wire` 的导入路径）。**第四次在这条线上找，什么也没找到。**
+不成立就换下一个，换之前先量——这是这条线教会我的做法。
+
+换到的下一个成立：**方案 §五 的 B 阶段验收写着「`go test -race` 无泄漏」，
+`test-race` 目标一直在 Makefile 里，而 `.github/workflows/` 里没有任何地方调用它。**
+于是这行验收从来没有被任何自动化跑过，只有记得它的人跑过。
+
+**数据竞争是本仓库唯一一类能通过所有功能测试的缺陷**——一个不同时跑两个 goroutine
+的测试看不见它。决策 84 修的那个 Mapper 计数器正是这一类：**它是在别的决策顺手
+修掉的，而不是被某道闸门挡住的。**
+
+#### 4.316.1 先量成本，再决定接不接
+
+| 模块 | `-race` 用时 | 结果 |
+|---|---|---|
+| 根模块 | 1m47s | 绿 |
+| `core/pig` | 5s | 绿 |
+| `core/edge` | 17s | 绿 |
+| `core/manager/biz/loop` | 5s | 绿 |
+
+四个加起来 **2m01s**，而 CI 的 `build-test` job 超时是 35 分钟。
+**「可能会慢」是一个要拿数字去换的借口，不是一个结论**——本轮把这个借口换掉了。
+
+范围只取这四个，因为并发在那儿是**设计出来的**：给 SSE 帧编号的 Mapper、
+supervisor/spool/autonomy 三个 pump、agent 循环。`core/manager` 其余是 handler
+与 store，把它们放进来会让这道闸门从两分钟变成一个不敢设超时的数字。
+
+#### 4.316.2 接进 CI 的那一步是被工具逼出来的
+
+`make race-check` 写完之后，`make ci-gate-check` 立刻报红：
+
+```
+race-check is in the gate table but ci.yml never runs it; it is green only where
+somebody remembered to type it
+```
+
+**这正是这道闸门存在的理由，而它先在闸门身上证明了它自己**：一个「已经存在但没人
+调用」的目标，与一个不存在的目标效果完全相同。登记进 `cigate` 的表 + 在
+`ci.yml` 的 `build-test` job 里加一步之后，闸门数从 **29 变成 30**，
+`cigate: all 30 acceptance gates … are defined and invoked by CI`。
+
+#### 4.316.3 §六 B 阶段那一行现在的准确状态
+
+| 验收闸门 | 状态 |
+|---|---|
+| SSE 帧 golden 逐帧一致 | ✅ 由差分闸门守 |
+| 7 provider 冒烟 | ✅ |
+| **`go test -race` 无泄漏** | ✅ **本轮第一次被任何东西跑过，并且被接进每次 push** |
+
+**这是本轮唯一一条「方案明写、此前从未兑现」的验收项。** 它兑现之后，B 阶段的
+三行验收第一次全部有执行它的东西。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，

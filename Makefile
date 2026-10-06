@@ -103,6 +103,27 @@ version-check: ## 校验发布元数据与源码/插件版本一致（发布期�
 # ----------------------------------------------------------------------------
 
 .PHONY: test test-race test-integration test-e2e test-e2e-live e2e-delivery-check protocol-validate
+
+# 方案 §五 的 B 阶段验收写着「`go test -race` 无泄漏」。`test-race` 这个目标一直
+# 存在，而**没有任何 workflow 调用它**——所以这行验收从来没有被任何东西跑过，
+# 只有记得它的人跑过（决策 382）。
+#
+# 范围是四个地方，因为并发在那儿是**设计出来的**，不是顺带的：core/pig（给 SSE
+# 帧编号的 Mapper 修过一个真实数据竞争，决策 84）、core/edge（supervisor、
+# spool、autonomy 三个 pump）、core/manager/biz/loop（agent 循环），加上根模块。
+# core/manager 其余部分是 handler 与 store，实测这四个加起来约两分钟——**一道
+# 两分钟的闸门不该因为「可能会慢」而不存在**。
+RACE_MODULES := . core/pig core/edge
+.PHONY: race-check
+race-check: ## 方案 §五 B 阶段验收：并发路径上的 go test -race（决策 382）
+	@for m in $(RACE_MODULES); do \
+		echo "  race: $$m"; \
+		( cd $$m && GOWORK=off go test -race ./... -count=1 ) || exit 1; \
+	done
+	@echo "  race: core/manager/biz/loop"
+	@cd core/manager && GOWORK=off go test -race ./biz/loop/... -count=1
+	@echo "race-check: no data race in the modules whose concurrency is designed"
+
 test: ## 单元测试
 	$(MAKE) protocol-validate
 	go test ./...
