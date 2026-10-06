@@ -68,6 +68,8 @@ func main() {
 		err = cmdRun(ctx, args)
 	case "inject":
 		err = cmdInject(ctx, args)
+	case "approve":
+		err = cmdApprove(args)
 	case "judge":
 		err = cmdJudge(ctx, args)
 	case "leaderboard":
@@ -103,7 +105,10 @@ USAGE:
 
 SUBCOMMANDS:
   run          执行单个 case 或 suite
+  approve      签一条双人审批记录（用审批人自己的密钥；不碰任何环境）
+               approve --case <id> --env prod --request-by alice --approve-as bob --out ok.json
   inject       读 case、路由到注入器、真的把它注入目标环境
+               inject --env prod 还需要 --approval <record.json>（决策 303：--confirm-prod 必要但不充分）
                inject --case <id> --dry-run    只列出这个 case 会注入什么
                inject --case <id> --hold 5m    按住故障 5 分钟再撤销（默认进程退出即撤销）
                inject --max-duration 10m       单个故障的时间窗上限（staging 默认 30m，prod 默认 10m）
@@ -201,8 +206,11 @@ func cmdInject(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("inject", flag.ExitOnError)
 	caseID := fs.String("case", "", "case ID")
 	casesDir := fs.String("cases-dir", "core/harness/cases", "golden case 目录")
-	env := fs.String("env", "staging", "目标环境（prod 需 --confirm-prod）")
-	confirmProd := fs.Bool("confirm-prod", false, "确认在 prod 环境注入")
+	env := fs.String("env", "staging", "目标环境（prod 需 --confirm-prod + 双人审批记录）")
+	confirmProd := fs.Bool("confirm-prod", false, "确认在 prod 环境注入（**必要但不充分**：仍需 --approval）")
+	approvalPath := fs.String("approval", "", "双人审批记录（JSON）；prod 必填，用 `approve` 子命令生成")
+	approvalKeys := fs.String("approval-keys", "", "审批密钥目录（默认读 "+approvalKeysEnv+"）")
+	approvalMaxAge := fs.Duration("approval-max-age", 0, "一条审批记录最多算多新（0 = 默认 1h）")
 	target := fs.String("target", "", "target spec（key=value 空格分隔，如 ns=test deploy=order-svc）")
 	dryRun := fs.Bool("dry-run", false, "只列出这个 case 会注入什么，不真注入")
 	hold := fs.Duration("hold", 0, "注入后把这个故障按住多久（0 = 进程退出即消失）")
@@ -213,8 +221,23 @@ func cmdInject(ctx context.Context, args []string) error {
 	if *caseID == "" {
 		return fmt.Errorf("--case required")
 	}
-	if *env == "prod" && !*confirmProd {
-		return fmt.Errorf("refusing to inject in prod without --confirm-prod")
+	if *env == "prod" {
+		if !*confirmProd {
+			return fmt.Errorf("refusing to inject in prod without --confirm-prod")
+		}
+		// 双人审批（决策 303）。它在读 case 之前跑，因为它的全部输入就是
+		// 两个身份与一个文件——而"在碰目标环境之前拒绝"这条在决策 302 里
+		// 已经定过一次规矩了。
+		if *approvalMaxAge <= 0 {
+			*approvalMaxAge = defaultApprovalMaxAge
+		}
+		if err := checkProdApproval(approvalRequest{
+			caseID:   *caseID,
+			env:      *env,
+			operator: os.Getenv(operatorEnv),
+		}, *approvalPath, *approvalKeys, time.Now(), *approvalMaxAge); err != nil {
+			return fmt.Errorf("refusing to inject in prod: %w", err)
+		}
 	}
 	c, err := schema.NewLoader(*casesDir).LoadByID(*caseID)
 	if err != nil {
@@ -340,6 +363,88 @@ func checkInjectCeiling(ceiling, hold time.Duration, steps []schema.InjectStep) 
 				i+1, step.Type, d, ceiling)
 		}
 	}
+	return nil
+}
+
+// cmdApprove 签一条双人审批记录。
+//
+// 没有它，"双人审批"就是一道谁也过不去的门：记录是审批人和发起人之间
+// **唯一的**传递物，而它必须由**审批人自己的密钥**签出来——所以签这一步
+// 只能在审批人自己手上做。
+//
+// 它不碰任何环境，只读一个密钥文件、写一个 JSON。
+func cmdApprove(args []string) error {
+	fs := flag.NewFlagSet("approve", flag.ExitOnError)
+	caseID := fs.String("case", "", "要批准的 case ID")
+	env := fs.String("env", "prod", "目标环境")
+	requestBy := fs.String("request-by", "", "发起人（必须与运行时 OPSKEEPER_HARNESS_OPERATOR 一致）")
+	approveAs := fs.String("approve-as", "", "审批人；密钥从 --approval-keys/<identity>.key 读")
+	keys := fs.String("approval-keys", "", "审批密钥目录（默认读 "+approvalKeysEnv+"）")
+	note := fs.String("note", "", "审批备注（会被签进记录，改一个字签名就失效）")
+	validFor := fs.Duration("valid-for", 0, "这条记录多久之后失效（0 = 默认 1h）")
+	out := fs.String("out", "", "记录写到哪个文件（默认打到 stdout）")
+	now := time.Now()
+	approvedAt := fs.String("approved-at", "",
+		"把 approved_at 钉成这个时刻（RFC3339）；只给测试与事后复核用")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *caseID == "" {
+		return fmt.Errorf("--case required")
+	}
+	if *requestBy == "" {
+		return fmt.Errorf("--request-by required")
+	}
+	if *approveAs == "" {
+		return fmt.Errorf("--approve-as required")
+	}
+	if *approveAs == *requestBy {
+		return fmt.Errorf("%q cannot both request and approve; that is not two-person approval, "+
+			"it is --confirm-prod with a JSON file attached", *approveAs)
+	}
+	key, err := loadApprovalKey(approvalKeysDir(*keys), *approveAs)
+	if err != nil {
+		return err
+	}
+	at := now
+	if *approvedAt != "" {
+		parsed, perr := time.Parse(time.RFC3339, *approvedAt)
+		if perr != nil {
+			return fmt.Errorf("--approved-at %q: %w", *approvedAt, perr)
+		}
+		at = parsed
+	}
+	valid := defaultApprovalAge
+	if *validFor > 0 {
+		valid = *validFor
+	}
+	rec := ApprovalRecord{
+		Case:        *caseID,
+		Env:         *env,
+		RequestedBy: *requestBy,
+		ApprovedBy:  *approveAs,
+		ApprovedAt:  at,
+		ExpiresAt:   at.Add(valid),
+		Note:        *note,
+	}
+	if err := rec.Sign(key); err != nil {
+		return err
+	}
+	blob, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return err
+	}
+	blob = append(blob, '\n')
+	if *out == "" {
+		_, err = os.Stdout.Write(blob)
+		return err
+	}
+	if err := os.WriteFile(*out, blob, 0o600); err != nil {
+		return fmt.Errorf("write approval record: %w", err)
+	}
+	fmt.Printf("approve: 已签一条 %s/%s 的审批（%s 批给 %s），有效期到 %s，写到 %s\n",
+		rec.Env, rec.Case, rec.ApprovedBy, rec.RequestedBy,
+		rec.ExpiresAt.Format(time.RFC3339), *out)
 	return nil
 }
 

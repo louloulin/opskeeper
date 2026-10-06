@@ -421,8 +421,11 @@ confirm，分批等（每批 200）以免在 channel 上堆一个十万深的缓
 ### 4.2 环境限制
 
 - **staging / dev**：默认允许
-- **prod**：必须 `--confirm-prod`。**双人审批仍未实现**——只有一个布尔开关，
-  没有第二个人、没有审批记录、没有留痕
+- **prod**：`--confirm-prod` **必要但不充分**，还必须带一条双人审批记录
+  `--approval <record.json>`（决策 303，见 4.3）。闸门有三条：审批人必须**不是**
+  运行命令的人、记录必须**绑定到这一个 case 与这一个环境**、签名必须由**审批人
+  自己的密钥**验得出。没有操作者身份（`OPSKEEPER_HARNESS_OPERATOR`）时闸门是
+  **关着**的，不是开的
 - **注入时间窗**：**有**（决策 302）。`--max-duration` 是单个故障的时间窗上限，
   staging 默认 30m、prod 默认 10m；`--hold` 与 case 自带的 `duration` 任一超过就
   **在碰目标环境之前**拒绝执行。它**拒绝而不截断**
@@ -675,8 +678,41 @@ $ opskeeper-eval inject --case pg/lock-waits --env prod
 error: refusing to inject in prod without --confirm-prod
 ```
 
-**双人审批仍未实现**——只有一个布尔确认 `--confirm-prod`，
-没有第二个人、没有审批记录、没有留痕。
+### 8.1.1 双人审批（决策 303）
+
+`--confirm-prod` 是一个布尔开关，而**一个布尔开关的签发者与检查者是同一个人**：
+任何能敲这行命令的人都能自己确认自己。审批记录由**审批人自己**签：
+
+```bash
+# 审批人（bob）在自己那一侧签，密钥只有他有
+$ opskeeper-eval approve --case pg/lock-waits --env prod \
+      --request-by alice --approve-as bob --out ok.json
+
+# 发起人（alice）拿着这条记录注入
+$ OPSKEEPER_HARNESS_OPERATOR=alice opskeeper-eval inject \
+      --case pg/lock-waits --env prod --confirm-prod \
+      --approval ok.json --approval-keys ./approval-keys
+```
+
+密钥来自 `--approval-keys/<identity>.key`（或 `OPSKEEPER_HARNESS_APPROVAL_KEYS`）。
+它**必须是审批人自己持有的东西**——如果发起人也持有对方的密钥，
+这道闸门又变回布尔开关了。
+
+四条拒绝，每一条都有测试：
+
+| 拒绝 | 为什么 |
+|---|---|
+| 不知道操作者是谁 | 没法判断审批人是不是第二个人。**缺身份时闸门是关着的** |
+| `approved_by` == 操作者 | 全部要害：一个人既发起又批准 |
+| 记录不是这个 case / 这个环境 | 没绑定的批条批的是所有东西 |
+| 改了签过名的字段 | HMAC 对不上；而且它撞的是**审批人自己**的密钥，挪一个名字就暴露 |
+
+`--approval-max-age`（默认 1h）**压过记录自己写的 `expires_at`**：
+一条写着"有效期到明年"的记录与一条写着"一小时"的记录，在没有上限时是同一样东西。
+这与 §8.2 的时间窗是同一个形状——默认值可以被显式抬高，
+但抬高是一次被记下来的决定。
+
+**时间窗和双人审批不能互相替代**：10 分钟的双人审批仍然可以是 10 分钟的破坏。
 
 ### 8.2 时间窗限制
 

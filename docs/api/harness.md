@@ -75,6 +75,20 @@ opskeeper-eval inject --case pg/lock-waits --hold 3m
 
 | `--hold` | 注入后把故障按住多久，然后逆序撤销（默认 `0` = 进程退出即撤销） |
 | `--max-duration` | **单个故障的时间窗上限**（默认 staging 30m、prod 10m）。`--hold` 与 case 自带的 `duration` 任一超过就**在碰目标环境之前**拒绝执行；**拒绝而不截断**（决策 302） |
+| `--approval` | 双人审批记录（JSON）。**prod 必填**；`--confirm-prod` 必要但不充分（决策 303） |
+| `--approval-keys` | 审批密钥目录（默认 `OPSKEEPER_HARNESS_APPROVAL_KEYS`），里面有 `<identity>.key` |
+| `--approval-max-age` | 一条审批记录最多算多新（默认 1h）。**压过记录自己写的 `expires_at`** |
+
+`opskeeper-eval approve` 签一条记录（用审批人自己的密钥，不碰任何环境）：
+
+| flag | 作用 |
+|---|---|
+| `--case` / `--env` | 这条审批**绑定到**哪一个 case、哪一个环境 |
+| `--request-by` | 发起人（必须与运行时 `OPSKEEPER_HARNESS_OPERATOR` 一致） |
+| `--approve-as` | 审批人；密钥从 `<keys-dir>/<identity>.key` 读。**与 `--request-by` 相同直接拒绝** |
+| `--valid-for` | 有效期（默认 1h） |
+| `--note` | 备注，会被签进记录——改一个字签名就失效 |
+| `--out` | 记录写到哪（默认 stdout） |
 
 **PostgreSQL 这一路是**真实现**（决策 297）。** `core/faults/injector/pg`
 用 pgx 连真库，注入的每一种故障都能从数据库外面看见：
