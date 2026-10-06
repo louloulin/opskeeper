@@ -205,14 +205,21 @@ const (
 
 	// 决策 335：编排面。flow_run 与 flow_test_node 是整个平台后果最重的两行——
 	// 一份编排是一串工具调用，按一次就真的发生。
-	ActionFlowCreate    = auditport.ActionFlowCreate
-	ActionFlowGenerate  = auditport.ActionFlowGenerate
-	ActionFlowUpdate    = auditport.ActionFlowUpdate
-	ActionFlowDelete    = auditport.ActionFlowDelete
-	ActionFlowToggle    = auditport.ActionFlowToggle
-	ActionFlowRun       = auditport.ActionFlowRun
-	ActionFlowTestNode  = auditport.ActionFlowTestNode
-	ActionEdgePluginSet = auditport.ActionEdgePluginSet
+	ActionFlowCreate   = auditport.ActionFlowCreate
+	ActionFlowGenerate = auditport.ActionFlowGenerate
+	ActionFlowUpdate   = auditport.ActionFlowUpdate
+	ActionFlowDelete   = auditport.ActionFlowDelete
+	ActionFlowToggle   = auditport.ActionFlowToggle
+	ActionFlowRun      = auditport.ActionFlowRun
+	ActionFlowTestNode = auditport.ActionFlowTestNode
+
+	// 决策 336：SSH 身份——一把能登上具名主机的私钥。generate 与 create 分开，
+	// 因为只有 generate 是**平台自己铸**的，那把私钥此后再也不会出现。
+	ActionSSHKeyRegister = auditport.ActionSSHKeyRegister
+	ActionSSHKeyGenerate = auditport.ActionSSHKeyGenerate
+	ActionSSHKeyUpdate   = auditport.ActionSSHKeyUpdate
+	ActionSSHKeyDelete   = auditport.ActionSSHKeyDelete
+	ActionEdgePluginSet  = auditport.ActionEdgePluginSet
 
 	// 决策 333：供应链面（谁把哪段字节推到了哪台机器上）与「谁掐掉了这个会话」。
 	ActionEdgeAgentUpgrade    = auditport.ActionEdgeAgentUpgrade

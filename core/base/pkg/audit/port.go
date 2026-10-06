@@ -566,6 +566,24 @@ const (
 	ActionFlowRun      = "flow_run"
 	ActionFlowTestNode = "flow_test_node"
 
+	// SSH identities (决策 336).
+	//
+	// A row here is a private key that can log into a named set of hosts. It
+	// is the one credential surface where **the system itself sometimes mints
+	// the secret** rather than receiving it, which is why generate is not
+	// folded into create: after ssh_key_generate the private key exists
+	// exactly once, in one response body, and never again — so "who minted the
+	// key that is on those hosts, and when" is a question with no other source.
+	//
+	// The rows carry the fingerprint and the host list, never the key material.
+	// The fingerprint answers "is this the same key as last quarter" without
+	// being usable; the host list answers "which machines could this key open",
+	// which is the question that matters when an identity is suspected.
+	ActionSSHKeyRegister = "ssh_key_register"
+	ActionSSHKeyGenerate = "ssh_key_generate"
+	ActionSSHKeyUpdate   = "ssh_key_update"
+	ActionSSHKeyDelete   = "ssh_key_delete"
+
 	ActionEdgeRotateSecret = "edge_rotate_secret"
 	ActionEdgePluginSet    = "edge_plugin_set"
 

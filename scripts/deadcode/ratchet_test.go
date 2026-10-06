@@ -23,6 +23,16 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 862 / 594 / 268 as of decision 336: the four ssh_key_* actions.
+//
+// Worth noting what did *not* happen here: this decision needed a resource type
+// and did not add one, because `ResourceGitKey` had been declared since the
+// vocabulary was first written down and never used by anybody. **A closed
+// vocabulary accumulates the names of things nobody has built yet** — the
+// resource type was written down in anticipation of exactly this surface, and
+// four decisions later it was still dead. Reusing it is the whole reason this
+// line is +4 rather than +5.
+
 // 858 / 590 / 268 as of decision 335: the seven flow actions plus the flow
 // resource type. A flow is an ordered set of tool calls that one click sets
 // off, so flow_run and flow_test_node are the two rows the platform most needs
@@ -170,8 +180,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 858
-	deadSymbolBudget     = 590
+	unreachableBudget    = 862
+	deadSymbolBudget     = 594
 	testOnlySymbolBudget = 268
 )
 
