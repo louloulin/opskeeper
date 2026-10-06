@@ -80,12 +80,21 @@ func Claims() []ControlClaim {
 		{
 			ID:     "compliance.control-catalog",
 			Claim:  "the five frameworks ship a recommended control list",
-			Status: StatusDeclared,
-			Note: "the catalogs exist as a Go function and the tag store round-trips whatever " +
-				"the console posts, but no request path serves them: a one-click list has no " +
-				"route behind it. This row was written as enforced, then as inert (the function " +
-				"turned out to be called only by this registry), and the gate caught both — a " +
-				"status column is worth having only while something checks it.",
+			Status: StatusEnforced,
+			Probe:  "ControlCatalog",
+			Note: "the row was declared because the catalog function was called by this registry " +
+				"and nothing else: a one-click list had no route behind it. Decision 366 added " +
+				"GET /v1/data-guard/compliance/frameworks, and the reason it is not simply the " +
+				"directory served as JSON is that **an unqualified catalog is the same lie in " +
+				"an API costume** — and an API costume is harder to argue with than a comment. " +
+				"Of the sixteen names the five frameworks recommend, fourteen appear nowhere " +
+				"but the catalog function and this registry, one appears only in a form " +
+				"round-trip test, and one only on the public site. So every entry the endpoint " +
+				"returns carries the status this build actually has, computed from this " +
+				"registry rather than from a second list written beside it: a control that is " +
+				"recommended here and enforced nowhere says so in the same response that " +
+				"offers it. The catalog's status is `declared` for all sixteen, which is what " +
+				"the compliance.enforced-tag row says and what the endpoint now says too.",
 		},
 		{
 			ID:     "sensitivity.escalates-severity",

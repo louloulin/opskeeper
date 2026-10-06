@@ -10,6 +10,7 @@
 //	GET    /v1/data-guard/labels?resource_type=&resource_id= 查询
 //	GET    /v1/data-guard/labels?sensitivity=&source= 列表筛选
 //	DELETE /v1/data-guard/labels/{t}/{id} 强制清理（admin 审计）
+//	GET    /v1/data-guard/compliance/frameworks 五个框架的推荐控制项 + 本构建的真实状态
 package dataguard
 
 import (
@@ -44,6 +45,32 @@ func (h *Handler) Register(r chi.Router) {
 	r.Put("/v1/data-guard/labels/{type}/{id}", h.overrideLabel)
 	r.Get("/v1/data-guard/labels", h.listOrGet)
 	r.Delete("/v1/data-guard/labels/{type}/{id}", h.deleteLabel)
+	r.Get("/v1/data-guard/compliance/frameworks", h.listFrameworks)
+}
+
+// FrameworkCatalogResponse 是 GET /v1/data-guard/compliance/frameworks 的响应体。
+//
+// 关键在于每一条控制项都带着 status：目录函数的注释写着"用作 UI 提示 /
+// 一键加载按钮"，于是控制台会把这一串名字摆到操作员面前。**如果不同时告诉她
+// 这 16 条里本构建强制了 0 条，这个端点就是同一个谎的第二个来源**——
+// 而且比注释更难驳回，因为它穿着 API 的外衣。
+type FrameworkCatalogResponse struct {
+	Frameworks []dataguard.FrameworkCatalog `json:"frameworks"`
+}
+
+// listFrameworks 返回目录，每条控制项附它在登记表里的下落。
+//
+// admin-only，与本包其余路由一致。它是静态参考数据、不含任何租户数据，
+// 所以"只读"本身并不构成放开它的理由；真正的理由是**它的消费者就是打标页面**，
+// 而打标页面本身是 admin-only 的。放低权限只会让控制台在另一处再写一遍
+// "这个页面需要 admin"——而那种权限判断写在文档里从来保不住。
+func (h *Handler) listFrameworks(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireAdmin(w, r); !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, FrameworkCatalogResponse{
+		Frameworks: dataguard.ControlCatalog(),
+	})
 }
 
 type caller struct {

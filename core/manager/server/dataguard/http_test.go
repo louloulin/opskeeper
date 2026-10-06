@@ -513,3 +513,72 @@ func TestNonAdminLabelMutationsAreAudited(t *testing.T) {
 }
 
 func ptr(t tenantctx.Tenant) *tenantctx.Tenant { return &t }
+
+// 目录端点的第一条断言不是"它返回了 16 条控制项"，而是"每一条都带着状态"。
+//
+// 一个只把 DefaultFrameworkControls 原样序列化出去的端点，会通过"目录可用"
+// 这条验收，同时把 16 个在本构建里一条都不强制的名字摆到操作员面前——
+// 而这正是这个登记表被写出来要防的那件事，只是搬到了 API 上。
+func TestTheCatalogRouteReturnsWhatThisBuildEnforcesNotJustTheList(t *testing.T) {
+	router, _ := newTestHandlerRouter()
+	rec := issue(t, router, http.MethodGet, "/v1/data-guard/compliance/frameworks", nil, ptrTenant("admin"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body FrameworkCatalogResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v (body = %s)", err, rec.Body.String())
+	}
+	if len(body.Frameworks) != len(dataguard.AllFrameworks) {
+		t.Fatalf("%d framework(s), want %d", len(body.Frameworks), len(dataguard.AllFrameworks))
+	}
+	seen := 0
+	for _, fc := range body.Frameworks {
+		if !fc.Recommended {
+			t.Errorf("%s: recommended = false; the catalog's own comment says these are not "+
+				"enforced, and that sentence has to reach the console too", fc.Framework)
+		}
+		for _, c := range fc.Controls {
+			seen++
+			if c.Status == "" {
+				t.Errorf("%s/%s: the response carries no status", fc.Framework, c.Name)
+			}
+			if c.Status == dataguard.ControlUnclassified {
+				t.Errorf("%s/%s: the console is being offered a control nobody has classified",
+					fc.Framework, c.Name)
+			}
+			if c.RegistryRef == "" {
+				t.Errorf("%s/%s: status %q with no registry row behind it",
+					fc.Framework, c.Name, c.Status)
+			}
+		}
+	}
+	if seen != len(dataguard.DeclaredControls()) {
+		t.Errorf("the route returned %d control(s), the catalogs hold %d",
+			seen, len(dataguard.DeclaredControls()))
+	}
+}
+
+// 这个端点不发任何租户数据，它只是静态参考表。放不放宽到"任何已认证用户"
+// 是一个可以另开的口子，但**现在它与本包其余每一条路由一样是 admin-only**，
+// 而这一致性本身就是理由：它的消费者是打标页面，打标页面是 admin 的。
+// 一个为了"只读"而单独放宽的端点，会在控制台的另一处再写一遍权限判断，
+// 而写在界面里的权限判断从来保不住。
+func TestTheCatalogRouteIsAdminOnlyLikeEveryOtherRouteHere(t *testing.T) {
+	router, _ := newTestHandlerRouter()
+	for _, tc := range []struct {
+		name string
+		ten  *tenantctx.Tenant
+		want int
+	}{
+		{"no tenant at all", nil, http.StatusUnauthorized},
+		{"a plain user", ptrTenant("user"), http.StatusForbidden},
+		{"a viewer", ptrTenant("viewer"), http.StatusForbidden},
+		{"an admin", ptrTenant("admin"), http.StatusOK},
+	} {
+		rec := issue(t, router, http.MethodGet, "/v1/data-guard/compliance/frameworks", nil, tc.ten)
+		if rec.Code != tc.want {
+			t.Errorf("%s: code = %d, want %d", tc.name, rec.Code, tc.want)
+		}
+	}
+}
