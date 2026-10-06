@@ -29,7 +29,7 @@ package pigprofile
 // It was red for a reason that was not ours: PiG's tool-provenance
 // conversion wrote `source` where it read `name`, so every extension tool
 // was misfiled as a built-in and the node profile stripped it (decision
-// 129, docs/opskeeper2-architecture.md §4.67). PiG shipped the fix in
+// 129, docs/opskeeper2-architecture.md §4.265). PiG shipped the fix in
 // v0.4.0; no profile can work around it, and none tries.
 
 import (
@@ -273,7 +273,7 @@ func TestAToolRemovedFromTheReviewSurfaceIsRemovedFromTheMenu(t *testing.T) {
 			"reaching the model means a package can become more capable without anybody "+
 			"accepting the diff. This is what a fix that only makes tools visible — rather "+
 			"than attributing each one to the extension that registered it — produces. "+
-			"See §4.67.4", dropped)
+			"See §4.265.4", dropped)
 	}
 }
 
