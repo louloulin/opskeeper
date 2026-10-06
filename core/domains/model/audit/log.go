@@ -152,6 +152,12 @@ const (
 	ActionOrgMemberUpdate = auditport.ActionOrgMemberUpdate
 	ActionOrgMemberRemove = auditport.ActionOrgMemberRemove
 
+	ActionAgentSessionOpen  = auditport.ActionAgentSessionOpen
+	ActionAgentMessageSend  = auditport.ActionAgentMessageSend
+	ActionAgentSessionStop  = auditport.ActionAgentSessionStop
+	ActionAgentSessionClose = auditport.ActionAgentSessionClose
+	ActionAgentDecide       = auditport.ActionAgentDecide
+
 	ActionChannelCreate = auditport.ActionChannelCreate
 	ActionChannelUpdate = auditport.ActionChannelUpdate
 	ActionChannelDelete = auditport.ActionChannelDelete
@@ -219,6 +225,7 @@ const (
 	ResourceSetting        = auditport.ResourceSetting
 	ResourceSecret         = auditport.ResourceSecret
 	ResourceOrg            = auditport.ResourceOrg
+	ResourceAgentSession   = auditport.ResourceAgentSession
 	ResourceRule           = auditport.ResourceRule
 	ResourceChannel        = auditport.ResourceChannel
 	ResourceRepo           = auditport.ResourceRepo

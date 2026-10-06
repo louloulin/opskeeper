@@ -23,6 +23,19 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 824 / 556 as of decision 318: the five node-agent conversation actions
+// (agent_session_open, agent_message_send, agent_session_stop,
+// agent_session_close, agent_decide) plus the agent_session resource type.
+//
+// All six are called from nodeagent/http.go, which this walk can see — and
+// they still land in the *dead* class, not the reachable one. That is the
+// same shape as decisions 311, 312, 314 and 317: the declarations live in
+// core/base/pkg/audit, and the callers live in core/domains, so within the
+// tree this walk measures there is nothing that reaches them. The first
+// draft of this comment claimed the class split would hold because the
+// constants are called; the count says otherwise, and the count is the
+// thing the gate trips on.
+//
 // 818 / 550 as of decision 317, second pass: the same seven org /
 // membership constants again, this time as the re-exports
 // core/domains/model/audit is required to carry. The rule that caught it
@@ -53,8 +66,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 818
-	deadSymbolBudget     = 550
+	unreachableBudget    = 824
+	deadSymbolBudget     = 556
 	testOnlySymbolBudget = 270
 )
 

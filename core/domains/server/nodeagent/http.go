@@ -31,6 +31,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	"github.com/vincent-wuhan/opskeeper/core/domains/biz/nodeagent"
@@ -76,8 +77,24 @@ type openResp struct {
 func (h *Handler) openSession(w http.ResponseWriter, r *http.Request) {
 	var req openReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionAgentSessionOpen,
+			ResourceType: auditport.ResourceAgentSession,
+		}, errors.Join(errs.ErrInvalid, err))
 		writeErr(w, errors.Join(errs.ErrInvalid, err))
 		return
+	}
+	// The row names the edge, the model and the role, because "which agent,
+	// on which machine, with which brain" is the first thing anybody asks
+	// after an incident and none of it is recoverable from the session id.
+	openPayload := map[string]any{
+		"edge_id":  req.EdgeID,
+		"role":     req.Role,
+		"provider": req.Provider,
+		"model":    req.Model,
+	}
+	if req.SessionID != "" {
+		openPayload["requested_session_id"] = req.SessionID
 	}
 	id, err := h.svc.Open(nodeagent.OpenRequest{
 		EdgeID:    req.EdgeID,
@@ -90,9 +107,20 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionAgentSessionOpen,
+			ResourceType: auditport.ResourceAgentSession,
+			Payload:      openPayload,
+		}, err)
 		writeErr(w, err)
 		return
 	}
+	auditOK(r, auditport.Event{
+		Action:       auditport.ActionAgentSessionOpen,
+		ResourceType: auditport.ResourceAgentSession,
+		ResourceID:   id,
+		Payload:      openPayload,
+	})
 	writeJSON(w, http.StatusOK, openResp{SessionID: id, EdgeID: req.EdgeID})
 }
 
@@ -109,17 +137,56 @@ type messageReq struct {
 func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 	var req messageReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionAgentMessageSend,
+			ResourceType: auditport.ResourceAgentSession,
+			ResourceID:   chi.URLParam(r, "sid"),
+		}, errors.Join(errs.ErrInvalid, err))
 		writeErr(w, errors.Join(errs.ErrInvalid, err))
 		return
 	}
 	if req.Content == "" {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionAgentMessageSend,
+			ResourceType: auditport.ResourceAgentSession,
+			ResourceID:   chi.URLParam(r, "sid"),
+			Payload:      map[string]any{"steer": req.Steer, "content_len": 0},
+		}, fmt.Errorf("%w: content is required", errs.ErrInvalid))
 		writeErr(w, fmt.Errorf("%w: content is required", errs.ErrInvalid))
 		return
 	}
+	// The content is deliberately not in the payload. It is an instruction to
+	// an agent that can run tools, it is unbounded, and operators paste into
+	// it whatever the incident page happened to contain — including, often, a
+	// credential. What the row carries instead is a digest and a length, so
+	// two identical instructions are distinguishable and neither is readable.
+	//
+	// The cost of that choice is real and worth stating: on its own this row
+	// cannot tell a reader *what* was asked. It tells them that something was
+	// asked, by whom, against which session, and the agent's own tool_call
+	// rows carry the consequences. Copying the text here would answer the
+	// first question by creating a second one.
+	sendPayload := map[string]any{
+		"steer":          req.Steer,
+		"content_len":    len(req.Content),
+		"content_digest": auditport.ValueDigest(req.Content),
+	}
 	if err := h.svc.Send(r.Context(), chi.URLParam(r, "sid"), req.Content, req.Steer); err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionAgentMessageSend,
+			ResourceType: auditport.ResourceAgentSession,
+			ResourceID:   chi.URLParam(r, "sid"),
+			Payload:      sendPayload,
+		}, err)
 		writeErr(w, err)
 		return
 	}
+	auditOK(r, auditport.Event{
+		Action:       auditport.ActionAgentMessageSend,
+		ResourceType: auditport.ResourceAgentSession,
+		ResourceID:   chi.URLParam(r, "sid"),
+		Payload:      sendPayload,
+	})
 	// Accepted, not answered. The reply is a stream of frames on the
 	// conversation's SSE endpoint; holding this request open for the
 	// length of an investigation would pin the handler for minutes and
@@ -129,14 +196,33 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) stop(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.Stop(r.Context(), chi.URLParam(r, "sid")); err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionAgentSessionStop,
+			ResourceType: auditport.ResourceAgentSession,
+			ResourceID:   chi.URLParam(r, "sid"),
+		}, err)
 		writeErr(w, err)
 		return
 	}
+	auditOK(r, auditport.Event{
+		Action:       auditport.ActionAgentSessionStop,
+		ResourceType: auditport.ResourceAgentSession,
+		ResourceID:   chi.URLParam(r, "sid"),
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 
 func (h *Handler) close(w http.ResponseWriter, r *http.Request) {
-	h.svc.Close(chi.URLParam(r, "sid"))
+	sid := chi.URLParam(r, "sid")
+	h.svc.Close(sid)
+	// Close cannot fail — it drops a local handle — so it always writes a
+	// success row. A teardown that leaves nothing behind is exactly the kind
+	// of event an operator reconstructs later from "the row is missing".
+	auditOK(r, auditport.Event{
+		Action:       auditport.ActionAgentSessionClose,
+		ResourceType: auditport.ResourceAgentSession,
+		ResourceID:   sid,
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "closed"})
 }
 
@@ -347,12 +433,39 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) {
 	}
 	var req decideReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionAgentDecide,
+			ResourceType: auditport.ResourceAgentSession,
+			ResourceID:   chi.URLParam(r, "sid"),
+		}, errors.Join(errs.ErrInvalid, err))
 		writeErr(w, errors.Join(errs.ErrInvalid, err))
 		return
 	}
 	if req.RequestID == "" {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionAgentDecide,
+			ResourceType: auditport.ResourceAgentSession,
+			ResourceID:   chi.URLParam(r, "sid"),
+		}, fmt.Errorf("%w: request_id is required", errs.ErrInvalid))
 		writeErr(w, fmt.Errorf("%w: request_id is required", errs.ErrInvalid))
 		return
+	}
+	// This is the row the whole exercise is for. Two things in it are
+	// load-bearing:
+	//
+	//   - request_id and digest together answer "which call was approved".
+	//     A row carrying only request_id would let a reader conclude that
+	//     somebody approved *something*; the digest is what pins it to the
+	//     exact arguments the node verified.
+	//   - grant is a boolean on the row rather than two actions, so
+	//     "what did they decide about request N" is one question with one
+	//     answer rather than a filter the reader has to get right.
+	decidePayload := map[string]any{
+		"request_id": req.RequestID,
+		"digest":     req.Digest,
+		"grant":      req.Grant,
+		"decided_by": decidedBy(caller),
+		"note_len":   len(req.Note),
 	}
 	err := h.svc.Decide(r.Context(), chi.URLParam(r, "sid"), domain.AgentDecision{
 		RequestID: req.RequestID,
@@ -362,9 +475,21 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) {
 		Note:      req.Note,
 	})
 	if err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionAgentDecide,
+			ResourceType: auditport.ResourceAgentSession,
+			ResourceID:   chi.URLParam(r, "sid"),
+			Payload:      decidePayload,
+		}, err)
 		writeErr(w, err)
 		return
 	}
+	auditOK(r, auditport.Event{
+		Action:       auditport.ActionAgentDecide,
+		ResourceType: auditport.ResourceAgentSession,
+		ResourceID:   chi.URLParam(r, "sid"),
+		Payload:      decidePayload,
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "applied"})
 }
 

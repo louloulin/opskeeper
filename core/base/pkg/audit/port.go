@@ -118,6 +118,20 @@ const (
 	ActionOrgMemberUpdate = "org_member_update"
 	ActionOrgMemberRemove = "org_member_remove"
 
+	// Node agent conversations. Sending a message is its own action rather
+	// than a field on the session, because it is the moment an instruction
+	// enters the execution plane — everything the agent does afterwards is
+	// downstream of one of these rows.
+	//
+	// approve and reject are one action, not two: the node's ledger and this
+	// chain both need to answer "what did they decide about request N", and
+	// splitting them would make every reader filter before it could read.
+	ActionAgentSessionOpen  = "agent_session_open"
+	ActionAgentMessageSend  = "agent_message_send"
+	ActionAgentSessionStop  = "agent_session_stop"
+	ActionAgentSessionClose = "agent_session_close"
+	ActionAgentDecide       = "agent_decide"
+
 	// Device CRUD. enable / disable / bulk-delete fold into update /
 	// delete + a payload (e.g. {"enabled": false, "count": 3}).
 	ActionDeviceUpdate = "device_update"
@@ -388,22 +402,23 @@ const (
 // ResourceType buckets used in the resource_type column. Same flat-list
 // convention as Action — group in the UI, not in the data.
 const (
-	ResourceUser     = "user"
-	ResourceDevice   = "device"
-	ResourceIncident = "incident"
-	ResourceSetting  = "setting"
-	ResourceSecret   = "secret"
-	ResourceOrg      = "org"
-	ResourceRule     = "rule"
-	ResourceChannel  = "channel"
-	ResourceRepo     = "repo"
-	ResourceSkill    = "skill"
-	ResourceLLM      = "llm"
-	ResourceGitKey   = "git_ssh_key"
-	ResourceGrafana  = "grafana"
-	ResourceRAG      = "rag"
-	ResourceAudit    = "audit"
-	ResourceAuth     = "auth"
+	ResourceUser         = "user"
+	ResourceDevice       = "device"
+	ResourceIncident     = "incident"
+	ResourceSetting      = "setting"
+	ResourceSecret       = "secret"
+	ResourceOrg          = "org"
+	ResourceAgentSession = "agent_session"
+	ResourceRule         = "rule"
+	ResourceChannel      = "channel"
+	ResourceRepo         = "repo"
+	ResourceSkill        = "skill"
+	ResourceLLM          = "llm"
+	ResourceGitKey       = "git_ssh_key"
+	ResourceGrafana      = "grafana"
+	ResourceRAG          = "rag"
+	ResourceAudit        = "audit"
+	ResourceAuth         = "auth"
 	// ResourcePlugin names a plugin release. The resource id is the
 	// package name, which is what an operator searches for.
 	ResourcePlugin = "plugin"
