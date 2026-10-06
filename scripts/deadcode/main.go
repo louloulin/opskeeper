@@ -33,6 +33,7 @@ import (
 	"os"
 	gopath "path"
 	"path/filepath"
+	"regexp"
 
 	"github.com/vincent-wuhan/opskeeper/scripts/internal/modpath"
 	"sort"
@@ -248,10 +249,27 @@ func parseFile(path string) (*fileRecord, error) {
 				})
 			}
 		case *ast.GenDecl:
+			// A doc comment above `type Foo interface{...}` attaches to the
+			// GenDecl, not to the TypeSpec, so reading only s.Doc reads nothing
+			// for the most common shape a declaration takes. That is why the
+			// production-claim gate never once looked at a type's comment — and
+			// why the false claim on Redactor survived a rule written to catch
+			// it: the gate was reading a field that was always empty for types.
+			//
+			// **A check that reads an always-empty field passes for the same
+			// reason a broken instrument reads zero.**
+			groupDoc := docText(n.Doc)
+			if n.Lparen.IsValid() {
+				groupDoc = ""
+			}
 			for _, spec := range n.Specs {
 				switch s := spec.(type) {
 				case *ast.TypeSpec:
-					rec.decls = append(rec.decls, decl{name: s.Name.Name, pos: fset.Position(s.Name.Pos()), doc: docText(s.Doc)})
+					doc := docText(s.Doc)
+					if doc == "" {
+						doc = groupDoc
+					}
+					rec.decls = append(rec.decls, decl{name: s.Name.Name, pos: fset.Position(s.Name.Pos()), doc: doc})
 				case *ast.ValueSpec:
 					for _, nm := range s.Names {
 						rec.decls = append(rec.decls, decl{name: nm.Name, pos: fset.Position(nm.Pos())})
@@ -380,8 +398,8 @@ type result struct {
 	// finding it acted on was a test-only classification — two access
 	// points on a documented control that only tests reach — and the report
 	// could not be counted in the class the finding was in.
-	deadOnlySymbols    int
-	testOnlySymbols    int
+	deadOnlySymbols int
+	testOnlySymbols int
 	// byTier splits those symbols by why they are unreachable.
 	byTier map[verdict]int
 	// unreachableFiles / unreachableLines count only files where every
@@ -738,5 +756,294 @@ func productionClaimViolations(res *result) []claimVerdict {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].path < out[j].path })
+	return out
+}
+
+// --- decision 371: a claim that names where the wiring lives is checkable ---
+//
+// `claimsProduction` above answers "does this comment claim production
+// wiring". The gate that uses it answers "is the symbol unreachable". Those
+// are different questions, and the gap between them is where a false claim
+// survives: **a symbol can be reachable and still not be wired the way its
+// comment says it is.**
+//
+// This repository shipped exactly that. `dataguard.Redactor`'s doc said
+// "Production code wires NewRedactor(mode) from cmd/main.go". `Redactor` is
+// reachable — postmortem.go takes one as a parameter — so the existing gate
+// stayed green while the claim was false: nothing under `cmd/` had ever named
+// the type, and the one place a Redactor is constructed in non-test code is
+// postmortem.go's nil-default, which is `RedactModeNone`.
+//
+// Adding "from cmd/main.go" to the phrase list does not catch that, and this
+// file says so at the point where it would have been tempting: the list is a
+// list, and the reason it missed is not wording. **The gate asked whether the
+// symbol was dead; the defect was that it was alive in the wrong place.**
+//
+// So the second rule reads the claim's *target*: when a doc comment attributes
+// wiring to the assembly root, the assembly root has to name the symbol. That
+// is a local check — no call graph, no reachability analysis — and it is
+// exactly the thing a reader would check by hand before believing the comment.
+
+// wiringVerbs are the ways a sentence can assert that something gets built.
+//
+// They are listed separately from productionClaims on purpose. The earlier
+// version of this rule asked claimsAssemblyRootWiring to call claimsProduction
+// first, and that made it a strict subset of the phrase list — so a comment
+// reading "Production code **wires** NewRedactor(mode) from cmd/main.go"
+// produced no claim, because the list holds "wired from cmd/main.go" and not
+// "wires". **A rule that leans on a phrase list it does not control inherits
+// that list's exact wording as its own blind spot.**
+var wiringVerbs = []string{
+	"wire", "wires", "wired", "wiring",
+	"call from", "called from", "calls from",
+	"construct", "constructs", "constructed",
+	"built in", "created in", "created by", "instantiated",
+	"接", "调用", "构造",
+}
+
+// assemblyRootLocations are the ways a sentence can name where the wiring
+// lives. Unlike productionClaims these are a *location*, and a location can be
+// checked: the assembly root either names the symbol or it does not.
+var assemblyRootLocations = []string{
+	"cmd/", "main.go", "the assembly root", "assembly root", "装配根",
+}
+
+// claimSubjects returns the symbols a sentence asserts are wired from the
+// assembly root, and whether that sentence makes such an assertion at all.
+//
+// The subject is whatever declared symbol the sentence names, not the symbol
+// the comment happens to be attached to. That distinction is the whole point:
+// "Production code wires NewRedactor(mode) from cmd/main.go" sits on Redactor's
+// doc and is a claim about NewRedactor, so asking "does cmd/ name Redactor"
+// would miss it while asking "does cmd/ name a symbol this sentence mentions"
+// catches it.
+//
+// A sentence that names no declared symbol makes no checkable claim, and
+// returns false rather than a vacuous violation. "Call from cmd/main.go once the
+// LLM client is constructed" is an instruction to a human and asserts nothing
+// about any particular symbol — flagging it would be the cry-wolf this file
+// already warns about twice.
+func claimSubjects(sentence string, declared map[string]bool) ([]string, bool) {
+	lowered := strings.ToLower(sentence)
+	wired := false
+	for _, v := range wiringVerbs {
+		if containsWord(sentence, v) {
+			wired = true
+			break
+		}
+	}
+	if !wired {
+		return nil, false
+	}
+	named := false
+	for _, loc := range assemblyRootLocations {
+		if strings.Contains(lowered, strings.ToLower(loc)) {
+			named = true
+			break
+		}
+	}
+	if !named {
+		return nil, false
+	}
+	var subjects []string
+	for _, loc := range identifierRE.FindAllStringIndex(sentence, -1) {
+		ident := sentence[loc[0]:loc[1]]
+		if !declared[ident] {
+			continue
+		}
+		// The symbol has to appear **as code**, not as a word. The first
+		// version took every identifier in the sentence, and a paragraph in
+		// scripts/domaincheck produced "the comment says of is wired from the
+		// assembly root" — `of` is a parameter name somewhere in the tree, and
+		// the sentence was prose about domains rather than a claim about it.
+		//
+		// **A check that reads prose with a code-shaped regex will eventually
+		// find a code-shaped word in the prose**, and the fix is never to widen
+		// the exceptions; it is to require the sentence to name its subject the
+		// way the sentence would name it if it were talking about code.
+		if !namedAsCode(sentence, loc) {
+			continue
+		}
+		subjects = append(subjects, ident)
+	}
+	sort.Strings(subjects)
+	return subjects, len(subjects) > 0
+}
+
+// namedAsCode reports whether an identifier occurrence is written as code:
+// inside backticks, or immediately followed by `(` or `.` (a call or a
+// selector). `NewRedactor(mode)` and `dataguard.Redactor` qualify;
+// the word "of" in an English sentence does not.
+func namedAsCode(sentence string, loc []int) bool {
+	before := strings.TrimRight(sentence[:loc[0]], "` ")
+	if strings.HasSuffix(before, "`") {
+		return true
+	}
+	after := sentence[loc[1]:]
+	return strings.HasPrefix(after, "(") || strings.HasPrefix(after, ".")
+}
+
+// containsWord reports whether needle appears in haystack delimited by
+// non-identifier characters on both sides.
+//
+// The wiring-verb list needs this. "unwired" contains "wired", and a
+// substring match made a sentence about domains that are *not* wired read as a
+// claim that something is — which is the check's whole failure mode inverted.
+func containsWord(haystack, needle string) bool {
+	loweredHay, loweredNeedle := strings.ToLower(haystack), strings.ToLower(needle)
+	for i := 0; i+len(loweredNeedle) <= len(loweredHay); i++ {
+		if loweredHay[i:i+len(loweredNeedle)] != loweredNeedle {
+			continue
+		}
+		if i > 0 && isIdentByte(loweredHay[i-1]) {
+			continue
+		}
+		end := i + len(loweredNeedle)
+		if end < len(loweredHay) && isIdentByte(loweredHay[end]) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func isIdentByte(b byte) bool {
+	return b == '_' ||
+		(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+// identifierRE finds Go identifiers in prose: capitalised or snake_case words
+// that could be a symbol name. It deliberately also matches lowercase words,
+// because this repository spells a great many symbols in snake_case.
+var identifierRE = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+
+// splitSentences breaks a flattened doc comment into sentences on `.` and
+// the CJK full stop. Grouping matters: a comment can carry one true claim and
+// three unrelated sentences, and a rule that reads the whole comment either
+// over- or under-fires depending on which sentence carries the claim.
+func splitSentences(doc string) []string {
+	fields := strings.FieldsFunc(doc, func(r rune) bool {
+		return r == '.' || r == '\n' || r == 0x3002
+	})
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// isThisChecker reports whether a path is this package's own source.
+func isThisChecker(path string) bool {
+	return strings.HasSuffix(filepath.ToSlash(path), "/scripts/deadcode/main.go")
+}
+
+// isAssemblyRootPath reports whether a file lives under a cmd/ directory,
+// which is where a main package is assembled in this repository.
+func isAssemblyRootPath(path string) bool {
+	slashed := filepath.ToSlash(path)
+	return strings.Contains(slashed, "/cmd/") || strings.HasPrefix(slashed, "cmd/")
+}
+
+// assemblyRootClaimViolations returns every symbol whose doc comment says the
+// assembly root wires it while no non-test file under cmd/ names it.
+//
+// Both directions are deliberately quiet. A comment that claims production
+// wiring without naming a location is the existing gate's business, not this
+// one's. And a comment that names the assembly root but not this symbol is
+// ordinary prose — "PostmortemContent is consumed by the loop phase, which the
+// assembly root starts" is true without cmd/ naming PostmortemContent. What
+// this rule forbids is the narrower and much more checkable sentence: *this
+// symbol, wired from over there*, with nothing over there.
+func assemblyRootClaimViolations(records []*fileRecord) []claimVerdict {
+	declared := map[string]bool{}
+	for _, rec := range records {
+		for _, d := range rec.decls {
+			declared[d.name] = true
+		}
+	}
+
+	namedByAssembly := map[string]bool{}
+	for _, rec := range records {
+		if rec.test || !isAssemblyRootPath(rec.path) {
+			continue
+		}
+		for name := range rec.refs {
+			namedByAssembly[name] = true
+		}
+		for qualified := range rec.qualified {
+			if dot := strings.LastIndex(qualified, "."); dot >= 0 {
+				namedByAssembly[qualified[dot+1:]] = true
+			}
+		}
+		// A method reached through a value — reg.SetChatToQueryLLM(llm) — is a
+		// selector on something that is not a package, so it lands in
+		// unattributed rather than in refs or qualified. The first version of
+		// this rule read only the two attributed maps and reported two live
+		// setters as unwired: both are called from cmd/opskeeper/toolwiring.go,
+		// and both calls are exactly the shape this walk cannot attribute.
+		//
+		// **A rule that only sees the references it can name has a blind spot
+		// shaped like the most common call in the tree**, and it cries wolf on
+		// the first well-wired method it meets. Attribution is the right
+		// question when deciding whether a symbol is *used*; it is the wrong
+		// question when deciding whether a file *mentions* it, which is all
+		// this rule asks.
+		for name := range rec.unattributed {
+			namedByAssembly[name] = true
+		}
+	}
+
+	var out []claimVerdict
+	for _, rec := range records {
+		if rec.test {
+			continue
+		}
+		// This file is exempt, and the reason is not politeness: it quotes the
+		// false claim it was written to catch, in the paragraph explaining why
+		// the phrase list missed it. A checker that reads its own source would
+		// otherwise report itself forever, and the fix for that is never to
+		// weaken the rule — it is to exempt the one file that talks about the
+		// rule in the rule's own vocabulary.
+		if isThisChecker(rec.path) {
+			continue
+		}
+		for _, d := range rec.decls {
+			if d.doc == "" {
+				continue
+			}
+			for _, sentence := range splitSentences(d.doc) {
+				subjects, ok := claimSubjects(sentence, declared)
+				if !ok {
+					continue
+				}
+				corroborated := false
+				var uncorroborated []string
+				for _, name := range subjects {
+					if namedByAssembly[name] {
+						corroborated = true
+						break
+					}
+					uncorroborated = append(uncorroborated, name)
+				}
+				if corroborated {
+					continue
+				}
+				out = append(out, claimVerdict{
+					path: rec.path, line: d.pos.Line, name: d.name, doc: d.doc,
+					why: fmt.Sprintf("the comment says %s is wired from the assembly root, "+
+						"and no non-test file under cmd/ names it", strings.Join(uncorroborated, ", ")),
+				})
+				break
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].path != out[j].path {
+			return out[i].path < out[j].path
+		}
+		return out[i].line < out[j].line
+	})
 	return out
 }

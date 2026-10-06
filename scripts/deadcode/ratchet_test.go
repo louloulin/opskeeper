@@ -298,10 +298,16 @@ import (
 // callers in another package's tests, and the walk still counted it dead.
 // **A test in another package makes a symbol reachable from tests; it does not
 // make it reachable from the running binary.**
+// 863 / 600 / 263 as of decision 371: +1 test-only, and it is the new claim
+// rule's own entry point. `assemblyRootClaimViolations` lives in main.go next to
+// `productionClaimViolations`, which the ratchet already counted, and is driven
+// from assemblyroot_test.go — so it lands in the test-only class for the same
+// reason its predecessor did. This is a gate's logic being exercised only by
+// the gate's own test, which is what a gate is.
 const (
-	unreachableBudget    = 862
+	unreachableBudget    = 863
 	deadSymbolBudget     = 600
-	testOnlySymbolBudget = 262
+	testOnlySymbolBudget = 263
 )
 
 // TestTheUnreachableSymbolCountNeverGrows is the gate decision 199 declined to
