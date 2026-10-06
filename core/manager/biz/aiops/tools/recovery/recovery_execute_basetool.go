@@ -37,7 +37,6 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	repairpreview "github.com/vincent-wuhan/opskeeper/core/domains/control/repairpreview"
-	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
@@ -171,7 +170,7 @@ type RecoveryProposalRequest struct {
 	Kind       string
 	Action     string
 	Resource   string
-	Execution  hitlmodel.RecoveryExecutionParameters
+	Execution  RecoveryExecution
 }
 
 // HostProcessTerminator is the only execution seam allowed for kill_process.
@@ -287,15 +286,15 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 	}
 	caller, hasCaller := tenantctx.From(ctx)
 	agentTeamsCaller := hasCaller && caller.AgentTeams != nil
-	if agentTeamsCaller && (params.Command == hitlmodel.RecoveryActionRestartService ||
-		params.Command == hitlmodel.RecoveryActionKillProcess ||
-		params.Command == hitlmodel.RecoveryActionResizePool) &&
+	if agentTeamsCaller && (params.Command == RecoveryActionRestartService ||
+		params.Command == RecoveryActionKillProcess ||
+		params.Command == RecoveryActionResizePool) &&
 		(params.PreviewRunID == "" || params.PreviewCandidateID == "") {
 		return "", fmt.Errorf("%s: preview_run_id and preview_candidate_id are required for this AgentTeams command", ToolNameRecoveryExecute)
 	}
 	if params.SkipAudit && (agentTeamsCaller ||
-		params.Command == hitlmodel.RecoveryActionKillProcess ||
-		params.Command == hitlmodel.RecoveryActionResizePool) {
+		params.Command == RecoveryActionKillProcess ||
+		params.Command == RecoveryActionResizePool) {
 		return "", fmt.Errorf("%s: skip_audit is forbidden for this caller and command", ToolNameRecoveryExecute)
 	}
 	switch params.Command {
@@ -306,7 +305,7 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 			ToolNameRecoveryExecute, params.Command)
 	}
 	switch params.Command {
-	case hitlmodel.RecoveryActionRestartService:
+	case RecoveryActionRestartService:
 		if params.DeviceID == 0 || params.Service == "" || params.Reason == "" ||
 			params.IncidentID != "" || params.FixtureManifestID != "" || params.PoolManifestID != "" {
 			return "", fmt.Errorf("%s: restart_service requires device_id, service, and reason only", ToolNameRecoveryExecute)
@@ -314,7 +313,7 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 		if t.dispatcher == nil {
 			return "", fmt.Errorf("%s: inner dispatcher (host_restart_service) not wired", ToolNameRecoveryExecute)
 		}
-	case hitlmodel.RecoveryActionKillProcess:
+	case RecoveryActionKillProcess:
 		if params.IncidentID == "" || params.FixtureManifestID == "" || params.Reason == "" ||
 			params.DeviceID != 0 || params.Service != "" || params.PoolManifestID != "" {
 			return "", fmt.Errorf("%s: kill_process requires incident_id, fixture_manifest_id, and reason only", ToolNameRecoveryExecute)
@@ -322,7 +321,7 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 		if t.terminator == nil {
 			return "", fmt.Errorf("%s: host fixture terminator not wired", ToolNameRecoveryExecute)
 		}
-	case hitlmodel.RecoveryActionResizePool:
+	case RecoveryActionResizePool:
 		if params.IncidentID == "" || params.PoolManifestID == "" || params.Reason == "" ||
 			params.DeviceID != 0 || params.Service != "" || params.FixtureManifestID != "" {
 			return "", fmt.Errorf("%s: resize_pool requires incident_id, pool_manifest_id, and reason only", ToolNameRecoveryExecute)
@@ -339,8 +338,8 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 	// Audit gate: AgentTeams callers cannot bypass the approved-proposal
 	// check. Offline callers retain the existing explicit drill escape hatch.
 	gated := (!params.SkipAudit && t.auditRepo != nil) || agentTeamsCaller ||
-		params.Command == hitlmodel.RecoveryActionKillProcess ||
-		params.Command == hitlmodel.RecoveryActionResizePool
+		params.Command == RecoveryActionKillProcess ||
+		params.Command == RecoveryActionResizePool
 	if gated && in.ProposalID == "" {
 		return "", errRecoveryProposalRequired
 	}
@@ -352,7 +351,7 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 			IncidentID:        in.IncidentID,
 			FixtureManifestID: params.FixtureManifestID,
 		}
-		if params.Command == hitlmodel.RecoveryActionKillProcess {
+		if params.Command == RecoveryActionKillProcess {
 			fixtureStatus, err := t.terminator.Status(ctx, fixtureRequest)
 			if err != nil {
 				return "", fmt.Errorf("%s: resolve case-owned fixture: %w", ToolNameRecoveryExecute, err)
@@ -364,7 +363,7 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 				return "", fmt.Errorf("%s: recovery target does not exactly match the incident-owned fixture", ToolNameRecoveryExecute)
 			}
 		}
-		if params.Command == hitlmodel.RecoveryActionResizePool {
+		if params.Command == RecoveryActionResizePool {
 			poolStatus, err := t.poolRecoverer.Status(ctx, PoolRecoveryRequest{
 				IncidentID:     in.IncidentID,
 				PoolManifestID: params.PoolManifestID,
@@ -391,10 +390,10 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 		err := t.auditRepo.ReserveApprovedProposal(ctx, RecoveryProposalRequest{
 			ProposalID: in.ProposalID,
 			SessionID:  in.IncidentID,
-			Kind:       hitlmodel.KindAgentTeams,
+			Kind:       proposalKindAgentTeams,
 			Action:     params.Command,
 			Resource:   in.Target,
-			Execution: hitlmodel.RecoveryExecutionParameters{
+			Execution: RecoveryExecution{
 				Command:            params.Command,
 				DeviceID:           params.DeviceID,
 				Service:            params.Service,
@@ -431,7 +430,7 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 		return string(out), nil
 	}
 
-	if params.Command == hitlmodel.RecoveryActionKillProcess {
+	if params.Command == RecoveryActionKillProcess {
 		terminationResult, err := t.terminator.Terminate(ctx, host.HostProcessTerminationRequest{
 			IncidentID:        in.IncidentID,
 			FixtureManifestID: params.FixtureManifestID,
@@ -452,7 +451,7 @@ func (t *RecoveryExecuteTool) InvokableRun(ctx context.Context, argsJSON string,
 		return string(out), nil
 	}
 
-	if params.Command == hitlmodel.RecoveryActionResizePool {
+	if params.Command == RecoveryActionResizePool {
 		recoveryResult, err := t.poolRecoverer.Recover(ctx, PoolRecoveryRequest{
 			IncidentID:     in.IncidentID,
 			PoolManifestID: params.PoolManifestID,

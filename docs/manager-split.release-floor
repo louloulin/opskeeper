@@ -13,9 +13,9 @@
 # 三份的实测价：
 #
 #   候选（第三份就是本文件）                     组内 import   跨组 import   切断的硬约束
-#   docs/manager-split.proposed 88 12 0 / 0
-#   docs/manager-split.constrained 93 7 0 / 0
-#   docs/manager-split.release-floor 83 17 0 / 0
+#   docs/manager-split.proposed 85 12 0 / 0
+#   docs/manager-split.constrained 90 7 0 / 0
+#   docs/manager-split.release-floor 80 17 0 / 0
 #
 # 决策 230 重取了这三行。触发它的是切掉 `flow -> scheduler`（missed-run 端口
 # 下沉到 `core/floor/scheduler`）：proposed 与 constrained 各少一条组内 import，
@@ -195,6 +195,7 @@
 independent = audit, chatdiagnose, cluster, demo, edgeauth, federation, federationchild,
         federationlink, flow, frontierbound, grafana, iam, imbridge, incident, integration,
         llmgw, llmpig, logs, marketplace, mcp, metric, monitor, nodeagent,
+        hitl,
         plugin, pluginimport, prometheus, promwrite, proposal, report,
         scheduler, secret, setting, skill, systemhealth, systemupgrade,
         topology, traces, version, webshell
@@ -244,5 +245,5 @@ independent = audit, chatdiagnose, cluster, demo, edgeauth, federation, federati
 # 不可测这件事本身不该成为不分配它的理由。
 core = agentteams, aiops, alert, approval, container, control,
         dataguard, device, edge,
-        higress, hitl, knowledge, loop, middleware,
+        higress, knowledge, loop, middleware,
         migrate, migrator, nodefleet, observability, pkg

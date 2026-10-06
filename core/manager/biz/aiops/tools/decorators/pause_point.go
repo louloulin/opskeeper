@@ -7,8 +7,6 @@ import (
 	"fmt"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/hitl"
-	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 // PausePoint 是路径 A P1-2 阶段 2 任务 2.2 的工具执行前 PausePoint 装饰器。
@@ -35,12 +33,6 @@ import (
 //   - 命中 pause 后不执行 inner，没有 timeout 计时
 //   - 命中 pause 后写到 proposal 表，不是 chat_tool_calls 执行审计；
 //     proposal 表本身即 pause 的事实源
-
-// PauseCoordinator 是 biz/hitl.Coordinator 对 decorators 的窄接口。
-// *biz/hitl.Coordinator 隐式实现。
-type PauseCoordinator interface {
-	ShouldPause(ctx context.Context, action *hitl.Action) (*hitlmodel.Proposal, error)
-}
 
 // PausePoint 装饰器：在工具执行前调用 coordinator.ShouldPause，命中时
 // 返回 ErrProposalPending 包装错误（含 proposal id）。
@@ -81,9 +73,9 @@ func (p *PausePoint) InvokableRun(ctx context.Context, argsJSON string, opts ...
 	ref, err := p.coord.ShouldPause(ctx, action)
 	if err != nil {
 		// ErrProposalPending 是正常路径 — ref 非 nil
-		if errors.Is(err, hitl.ErrProposalPending) && ref != nil {
+		if errors.Is(err, ErrProposalPending) && ref != nil {
 			return "", fmt.Errorf("%w: proposal_id=%s severity=%s sensitivity=%s tool=%s",
-				hitl.ErrProposalPending,
+				ErrProposalPending,
 				ref.ID, ref.Severity, ref.Sensitivity, info.Name)
 		}
 		// 系统/数据错误：fail-fast，不重试
@@ -102,8 +94,8 @@ func (p *PausePoint) InvokableRun(ctx context.Context, argsJSON string, opts ...
 //   - Resource  ← 从 argsJSON 提取 device_id / host / resource 字段；
 //     取不到时用工具名兜底
 //   - Payload   ← 完整 argsJSON 解析结果（map 形态）
-func buildPauseAction(info *basetool.ToolInfo, argsJSON string) *hitl.Action {
-	action := &hitl.Action{
+func buildPauseAction(info *basetool.ToolInfo, argsJSON string) PauseAction {
+	action := PauseAction{
 		Tool:      info.Name,
 		RiskLevel: classToRiskLevel(info.Class),
 		Payload:   map[string]interface{}{},

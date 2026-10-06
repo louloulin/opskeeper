@@ -8,17 +8,15 @@ import (
 	"testing"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/hitl"
-	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 )
 
 // fakeCoord 是 PauseCoordinator 的最小 stub：返回预设的 (ref, err)。
 type fakeCoord struct {
-	ref *hitlmodel.Proposal
+	ref *PendingProposal
 	err error
 }
 
-func (f *fakeCoord) ShouldPause(_ context.Context, _ *hitl.Action) (*hitlmodel.Proposal, error) {
+func (f *fakeCoord) ShouldPause(_ context.Context, _ PauseAction) (*PendingProposal, error) {
 	return f.ref, f.err
 }
 
@@ -52,16 +50,16 @@ func TestPausePoint_NilRefPassesThrough(t *testing.T) {
 
 func TestPausePoint_PauseReturnsErrProposalPending(t *testing.T) {
 	inner := &fakeTool{name: "host_read", class: "read"}
-	ref := &hitlmodel.Proposal{
+	ref := &PendingProposal{
 		ID:          "prop-abc",
-		Severity:    string(hitlmodel.SeverityDangerous),
-		Sensitivity: string(hitlmodel.SensitivityTopSecret),
+		Severity:    "dangerous",
+		Sensitivity: "top_secret",
 	}
-	coord := &fakeCoord{ref: ref, err: hitl.ErrProposalPending}
+	coord := &fakeCoord{ref: ref, err: ErrProposalPending}
 	wrapped := WithPausePoint(inner, coord)
 	out, err := wrapped.InvokableRun(context.Background(),
 		`{"data_sensitivity":"TopSecret"}`)
-	if !errors.Is(err, hitl.ErrProposalPending) {
+	if !errors.Is(err, ErrProposalPending) {
 		t.Fatalf("err = %v, want ErrProposalPending", err)
 	}
 	if !strings.Contains(err.Error(), "prop-abc") {
@@ -87,7 +85,7 @@ func TestPausePoint_SystemErrorPropagates(t *testing.T) {
 	if err == nil {
 		t.Fatal("system error should propagate")
 	}
-	if errors.Is(err, hitl.ErrProposalPending) {
+	if errors.Is(err, ErrProposalPending) {
 		t.Error("system error must not be ErrProposalPending")
 	}
 	if !errors.Is(err, coordErr) {

@@ -24271,6 +24271,170 @@ toolsReg.SetTopologyGraph(topologyUC)   // topologyUC 是 nil
   **「切一条边换一个域」的收益到这里归零**，剩下的每一刀都要重新算形状。
 
 
+### 4.211 决策 277：切掉 `aiops → hitl`——**一条价 10 的边，承载的东西在生产里从未被构造**
+
+#### 一、这是「切一条边换一个域」的最后一例
+
+决策 276 的 §4.210 八节已经预告过：清单上只剩 `aiops → hitl` 这一条
+「单边 + 低价 + 让一个域入度归零」的边。切完它，剩下 7 个入度非零的域
+**全部是多边域或高入度域**（`device` 2 条入边 / `edge` 2 / `alert` 3 /
+`loop` 4 / `approval` 1 / `nodefleet` 1 / `aiops` 出度 71），
+**「切一条边换一个域」这个收益模型到这里归零**。以后每一刀都要重新算形状，
+不能再按单价从低到高排。
+
+#### 二、第一件事实：这条边承载的闸门，生产里从来没有被构造
+
+动手之前先量调用面，量出来的东西比预期大：
+
+```
+grep -rn "hitl.NewCoordinator" core cmd   →  只有 biz/hitl 自己的定义
+grep -rn "PauseCoordinator" core cmd      →  只有 decorators.Deps 的字段
+                                            和三处注释，没有任何一处赋值
+```
+
+**`Deps.PauseCoordinator` 在全部 5 个 `Deps{}` 字面量里都没有出现。**
+而 `WithPausePoint` 在 `coord == nil` 时退化为 noop——所以
+**`pause_point` 装饰器从来没有被装到任何一条工具链上**。
+
+这和 `ReviewGate` 的处境不同：`ReviewGate` 至少在注释里明说了
+「目前 ReviewSpawner 为 nil，所以尚未在 chat / flow 路径生效」，
+**而 `PausePoint` 的注释把这条链画得整整齐齐，读者会以为它在生效**。
+它上面写着「链位置：tenant_bind → pause_point → review_gate → …」，
+**这条链在生产里只有 6 环，缺的那一环从未被挂上。**
+
+**所以「价 10」这个数字从头到尾买的是编译期耦合，不是运行时耦合。**
+这一刀切掉的是一条**类型依赖**：一个接口的签名里写着别人的两个类型。
+本台账反复说「价格是分组方式的函数，不是树质量的函数」，
+而这一刀给出第四个方向的证据——**价格有时候连运行时的边都不对应**。
+
+**它同时是一个待决项而不是一个已解决项**：把闸门接上是**行为变更**
+（每一次工具调用都可能开始等人），需要单独一刀，而那一刀的前置条件是
+回答「现在到底谁在批准、批准给谁看」。§4.211 八节记下形状，不在这里做。
+
+#### 三、边其实有两处，不是一处
+
+`aiops → hitl` 的生产面有两块，价格 10 里的「8 类型 + 2 方法」大半在第二块：
+
+1. **`decorators/pause_point.go`**——接口 `PauseCoordinator` 收
+   `*hitl.Action`、回 `*hitlmodel.Proposal`，外加一个跨域 sentinel
+   `hitl.ErrProposalPending`。这块是纯接缝。
+2. **`tools/recovery/recovery_execute_basetool.go`**——`RecoveryProposalRequest`
+   带一个 `hitlmodel.RecoveryExecutionParameters` 字段（**9 个字段**），
+   引用 3 个 `RecoveryAction*` 常量与 1 个 `KindAgentTeams`，
+   而这一切是为了调用 `auditRepo.ReserveApprovedProposal`。
+
+**第二块不是接缝，是一份线上契约**：hitl 侧对
+`RecoveryExecutionParameters` 求 `CanonicalJSON()` 摘要，
+用来判断「被批准的那份参数」与「即将执行的那份参数」是不是同一份。
+所以它不能照第一块的做法处理——但它也不需要保留 import，理由见五节。
+
+#### 四、第一块：两个陷阱，其中一个编译期完全安静
+
+端口落在 `decorators/pauseport.go`：`PauseAction`（5 字段）、
+`PendingProposal`（3 字段）、**本包自己的 `ErrProposalPending`**、
+`PauseCoordinator` 接口。sentinel 必须自己有一份，因为装饰器要
+`errors.Is` 它，而 `hitl.ErrProposalPending` 是别人的名字。
+
+**陷阱一：`hitl.Coordinator.ShouldPause` 是 `(proposal, ErrProposalPending)`**——
+proposal 与错误**同时**返回，proposal id 只出现在这一处。
+一个「先判 err 再返回」的转换（`if err != nil { return nil, err }`）
+编译通过、读起来像一句正常的提前返回，**然后把 id 悄悄扔掉**：
+上层拿到的错误只有一句「hitl: proposal pending human decision」，
+没有 id，人没法去看那张 proposal。装饰器里那句
+`errors.Is(err, ErrProposalPending) && ref != nil` 正是靠这个 id 拼消息。
+
+**陷阱二：不能把所有错误都翻译成 pending。** 数据库连不上如果被洗成
+「等人审批」，人会看到一张凭空出现的审批单。转换必须只翻译那一个 sentinel，
+其余原样返回。
+
+**这一刀没有在装配根留适配器**，理由是第二节：`NewCoordinator` 没有生产调用方，
+写一个适配器就是无人引用的代码，而本仓库对死代码的态度是记而不是留
+（§4.116：10 个无人引用的包 / 5,544 行）。转换写在
+`pauseport_hitl_test.go` 里，**并附一条编译期断言
+`var _ hitlPauser = (*hitl.Coordinator)(nil)`**——它说明「这里测的转换，
+就是将来接线时会用的那个」，而这一点不是靠注释，是靠类型检查。
+
+#### 五、第二块：两份形状声明，和钉住它们的三条断言
+
+`recovery` 现在自己声明 `RecoveryExecution`（同样 9 个字段，无 JSON tag）
+与 3 个动作常量 + 1 个 kind 常量；`cmd/opskeeper` 里新增
+`recoveryExecutionTo` 逐字段转换。**同一份形状有两个声明，这是本仓库
+此前没有做过的事**，所以必须说清楚为什么接受：
+
+- **不接受的替代方案一**：保留 import。那就是一条声明边，存在的全部内容
+  是九个字段名。
+- **不接受的替代方案二**：把这份形状搬到 shared 包，两边都引。
+  **这是更好的长期落点，但它改的是 hitl 域自己的模型常驻位置**，
+  是一次比切边更大的动作，不该藏在一次切边里。
+- **接受的**：两份声明 + 三条钉子（`recoverycontract_test.go`）：
+  1. **反射逐字段比对**（名字、顺序、**类型**）——抓「hitl 侧加了字段我方没加」。
+     类型也要比，因为 `uint64` 变成 `string` 时每个字段名仍然对得上，
+     而摘要会变。
+  2. **JSON 键集合比对**——抓 tag 改名。这一条反射抓不到：**tag 不是字段名**，
+     而它才是被摘要和落库的那个形状。
+  3. **四个词表常量按值相等**——动作名漂移的后果是「按一个名字存、按另一个
+     名字派发」，而这个错在节点上执行时才炸。
+
+代价写在这里而不是藏起来：**这份契约从此有两处声明，靠三条测试维持。**
+如果将来有人觉得不值，正确的做法是把两边一起搬进 shared 包，
+**而不是把 import 加回来**。
+
+#### 六、变异跑了五次，五次都被抓
+
+| 变异 | 结果 |
+|---|---|
+| 转换在 pending 分支返回 `nil` 而不是 proposal | `TestTheHitlConversionCarriesTheProposalAlongWithThePendingError` 红 |
+| 转换把**所有**错误都翻译成 pending | `TestTheHitlConversionLeavesEveryOtherErrorAlone` 红 |
+| 转换漏掉 `Sensitivity` | `TestTheHitlConversionCarriesEveryActionField` 红 |
+| `recoveryExecutionTo` 漏掉 `PreviewCandidateID` | `TestRecoveryApprovalQueryFromRequest_PreservesApprovedExecution` 红 |
+| 我方 `RecoveryExecution` 多一个字段（模拟 hitl 侧加了、我方没跟） | `TestTheTwoExecutionShapesAreTheSameShape` 红（`recovery has 10, hitl has 9`） |
+
+**第一个变异是这一刀最值得跑的那一个**，因为它对应的是「一个看起来正确的
+提前返回」。决策 275 与 276 各抓到一句我自己写的假注释，
+**这一刀抓到的是一个真的会发生的写法**。
+
+#### 七、读数
+
+| | 之前 | 之后 |
+|---|---|---|
+| 域 / shared / 声明边 / 环 / 分层 | 57 / 10 / 15 / 0 / 4 | **57 / 10 / 14 / 0 / 4** |
+| 硬约束 | 0 | **0**（未变） |
+| 生产跨域 import | 100 | **97** |
+| 测试专用跨域 import | 120 | **120**（未变：新测试是替换，不是新增文件） |
+| **可证明独立发版的域** | **39 / 57** | **40 / 57** |
+| release floor 体量 | 54,642 行 / 31.7% / 107 包 | **56,964 / 33.0% / 111** |
+| 三份报价 | 88/12/0 · 93/7/0 · 83/17/0 | **85/12/0 · 90/7/0 · 80/17/0** |
+| release-floor 独立组 | 39 个域 | **40 个域** |
+| in-degree 非零的域 | 8 | **7** |
+| `aiops` 出度 | 74 条 import / 6 条边 | **71 / 5** |
+| `core/manager` | 935 文件 / 237,583 行 | **941 文件 / 238,185 行**（+6 个新文件：3 个端口/契约 + 3 个测试） |
+
+**floor 首次越过三成三**（33.0%）。三份报价**同时各降 3，而跨组数仍然一条未动**
+（12 / 7 / 17）——与决策 276 同一个机制：被切掉的 3 条 import 在三份分组里
+都是组内的。**连续两刀都出现「三份同时降、跨组不动」，说明 `aiops` 的出边
+几乎全部指向一个谁都要的域**，所以只要切的是入边，组内 import 就掉一条。
+**这反过来给出了一条排序经验**：`aiops` 的出边是三份报价里最便宜的部分，
+**先切入边比先切 `aiops` 的出边划算**——而 `aiops` 的 5 条出边正好是
+`alert` / `approval` / `device` / `edge` / `loop`，全部指向大域。
+
+#### 八、下一刀，以及这一刀留下的两件事
+
+- **「切一条边换一个域」到此为止**（第一节）。剩下的候选按决策 274 修好后的
+  价目是 `loop → alert`（11）、`aiops → approval`（12，**单边**，
+  `approval` 入度 2 但其中一条来自 aiops，切掉后剩 1 而非 0）、
+  `mcp → loop`（13）、`aiops → edge`（14）、`demo → alert`（15）。
+  **注意 `aiops → approval` 已经不是「单边换域」了**——`approval` 的入度是 2，
+  切掉 aiops 这条之后还剩 1 条，它**不会**进 floor。**这一刀让那张清单
+  从此不再有「稳赚」项**，而这正是第一节那句话的第一次兑现。
+- **两件记下但不在本刀做的事**：
+  1. **把 pause 闸门接上**（第二节）。这是行为变更，需要单独一刀，
+     且前置条件是回答「谁批准、批准给谁看」。
+  2. **把 `RecoveryExecution` 与那四个常量搬进 shared 包**（第五节），
+     消掉两份声明。搬完之后 `recoverycontract_test.go` 的三条断言
+     只保留「JSON 键集合」那一条——另外两条会变成两个包引同一个声明的
+     同义反复，而**同义反复的测试比没有测试更费时间**。
+
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -24319,6 +24483,27 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 加权合计 ≈ **98.6%**（四阶段等比 98 / 100 / 96.7 / 99.7 的均值 98.6）。这一栏按
 决策倒序追加，每一条只说自己动的那一分量：
 
+- **决策 277 切掉了 `aiops → hitl`，而动手前量出来的第一件事是：
+  这条边承载的闸门在生产里从未被构造**——`hitl.NewCoordinator` 零调用方，
+  `Deps.PauseCoordinator` 在全部 5 个 `Deps{}` 字面量里都没有出现，
+  所以 `pause_point` 装饰器从未装到任何一条工具链上，而它的注释把那条链
+  画得整整齐齐。**「价 10」从头到尾买的是编译期耦合，不是运行时耦合。**
+  边其实有两处：装饰器接缝（纯端口 + 本包自己的 sentinel）与 recovery 工具的
+  9 字段线上契约（hitl 侧要靠它的 JSON 摘要判断「批准的就是执行的」）。
+  端口侧两个陷阱：**`(proposal, ErrProposalPending)` 是同时返回的**，
+  「先判 err 再返回」的转换会静默扔掉 proposal id；
+  **不能把所有错误都翻译成 pending**，否则数据库连不上会变成一张凭空出现的
+  审批单。这一刀**没有在装配根留适配器**（没人引用的代码不留），
+  转换写在测试里并附 `var _ hitlPauser = (*hitl.Coordinator)(nil)`
+  编译期断言。契约侧接受两份形状声明，用三条断言钉住：
+  反射逐字段比（名字/顺序/**类型**）、**JSON 键集合**（tag 不是字段名，
+  反射抓不到）、四个词表常量按值相等。**变异跑了五次全抓**，
+  其中第一个（pending 分支返回 nil）正是一个「看起来正确的提前返回」。
+  **可独立发版域 39 → 40**（54,642 → **56,964 行 / 31.7% → 33.0% /
+  107 → 111 包**，**首次越过三成三**），in-degree 非零的域 8 → **7**，
+  三份报价各降 3（85/12/0 · 90/7/0 · 80/17/0）而**跨组数连续两刀未动**。
+  **「切一条边换一个域」到此为止**：剩下的 `aiops → approval` 切掉之后
+  `approval` 入度还剩 1，**它不再换域**（详见 §4.211）。
 - **决策 276 切掉了 `aiops → topology`，而它带来的第一个事实是
   「`model/topology` 与 `biz/topology` 是同一个域」**——这一条此前不在任何
   文档里，是删掉声明边之后 `domaincheck` 立刻报出来的。第一版端口照抄
@@ -27211,7 +27396,7 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
 
 | 读数 | 当前值 | 口径 / 主人 |
 |---|---|---|
-| 控制面域图 | **57 域 / 15 边 / 0 环** | `make domain-check`；`scripts/domaincheck` 的测试逐条核对这三个数。**决策 238 切 `mcp → aiops`（37 → 36）、决策 240 切 `aiops → skill`（36 → 35）、决策 241 切 `marketplace → pluginimport`（35 → 34）、决策 242 切 `grafana → monitor`（34 → 33）、决策 247 切 `agentteams → alert`（33 → 32）、决策 248 切 `webshell → device`（32 → 31）、决策 249 切 `agentteams → mcp`（31 → 30）、决策 251 切 `webshell → edge`（31 → 30）、决策 254 切 `chatdiagnose → aiops`（28 → 27）、决策 253 切 `report → aiops`（29 → 28）、决策 252 切 `pluginimport → aiops`（30 → 29）**、**决策 257 切 `systemhealth → alert`（26 → 25）**、**决策 258 切 `grafana → setting`（25 → 24）**，**决策 259 让 57 域变 56 域、24 边变 22 边——这是第一次域数变化，而它不是切边，是一个只有 110 行的域整体搬回了装配根**（见 §4.193），环数未变。**决策 247 是第一条切完还要把声明与理由一起删掉的边**：`domaincheck` 报「declared but no longer happens」并要求删表项，理由写在命令的输出里——**过期理由比没有理由更糟**（§4.179）。**决策 271 让 56 域变 57 域、22 边变 21 边，shared 从 9 变 10**：容器加载器从 `biz/aiops/chatruntime` 切到新模块 `core/extension/biz/container`，域数加一是因为多了一个真域，边数减一是因为 `marketplace → aiops` 整条消失（marketplace 过去是借 chatruntime 借插件符号的，现在直接读加载器）。新的 `container` 是 **shared**，不是声明边——它同时被 aiops 与 marketplace 依赖，而这两边隔着其他所有边界。**环数与分层深度均未变**。**决策 276 切 `aiops → topology`（16 → 15）：`topology` 入度归零，可证明独立发版的域 38 → 39。**|
+| 控制面域图 | **57 域 / 14 边 / 0 环** | `make domain-check`；`scripts/domaincheck` 的测试逐条核对这三个数。**决策 238 切 `mcp → aiops`（37 → 36）、决策 240 切 `aiops → skill`（36 → 35）、决策 241 切 `marketplace → pluginimport`（35 → 34）、决策 242 切 `grafana → monitor`（34 → 33）、决策 247 切 `agentteams → alert`（33 → 32）、决策 248 切 `webshell → device`（32 → 31）、决策 249 切 `agentteams → mcp`（31 → 30）、决策 251 切 `webshell → edge`（31 → 30）、决策 254 切 `chatdiagnose → aiops`（28 → 27）、决策 253 切 `report → aiops`（29 → 28）、决策 252 切 `pluginimport → aiops`（30 → 29）**、**决策 257 切 `systemhealth → alert`（26 → 25）**、**决策 258 切 `grafana → setting`（25 → 24）**，**决策 259 让 57 域变 56 域、24 边变 22 边——这是第一次域数变化，而它不是切边，是一个只有 110 行的域整体搬回了装配根**（见 §4.193），环数未变。**决策 247 是第一条切完还要把声明与理由一起删掉的边**：`domaincheck` 报「declared but no longer happens」并要求删表项，理由写在命令的输出里——**过期理由比没有理由更糟**（§4.179）。**决策 271 让 56 域变 57 域、22 边变 21 边，shared 从 9 变 10**：容器加载器从 `biz/aiops/chatruntime` 切到新模块 `core/extension/biz/container`，域数加一是因为多了一个真域，边数减一是因为 `marketplace → aiops` 整条消失（marketplace 过去是借 chatruntime 借插件符号的，现在直接读加载器）。新的 `container` 是 **shared**，不是声明边——它同时被 aiops 与 marketplace 依赖，而这两边隔着其他所有边界。**环数与分层深度均未变**。**决策 276 切 `aiops → topology`（16 → 15）：`topology` 入度归零，可证明独立发版的域 38 → 39。****决策 277 切 `aiops → hitl`（15 → 14）：`hitl` 入度归零，可证明独立发版的域 39 → 40，而它承载的闸门在生产里从未被构造。**|
 | 生产跨域 import | **121** | `make domain-check`；`scripts/domaincheck` 的汇总行直接打印它，**决策 250 才让它第一次可被计算**（§4.182），**决策 251 第一次在切边之后动它：126 → 125，决策 252 第二次：125 → 124，决策 253 第三次：124 → 123，决策 254 第四次：123 → 121**。口径：生产文件（`_test.go` 除外）中两端落在不同有界上下文、`to != from`、且**目标不是 9 个 shared 底座**的 import 语句数。它**不是**声明边数（30），**也不是**台账头条「已切 28 / 34」的那个 34——**后者从未有任何量具，是逐次手写累加的**，且 §4.56.8 记的旧读数（42 边时为 19）与今天的 126 **从来不是同一个量**（今天边更少而 import 多 6.6 倍）。三次复现尝试（生产 import 语句 149 / 去重域对 44 / 去重发起文件 85 / 去重被导入包 13）**没有一个等于 19 或 34**。守卫：`scripts/domaincheck/prodimport_test.go` 三条（独立遍历复核 / 非零且严格小于生产 import 总数的上界 / prod 与 test-only 各自独立计数），六次变异实测见 §4.182。**可复现的复核命令**：`GOWORK=off go run ./scripts/domaincheck .` |
 | 开源门槛违规 | **13 项** | `make audit-open-source`；`scripts/audit_open_source.py` 自己核对这一行。**本轮 17 → 13**：自主关掉 4 项明确无争议的（私有演示租户 2 处——`scenario_test.go` 与 `verify-final-demo.sh` 里的私有租户名是自包含合成 fixture，改中性名 `demo-tenant`；赛事语言 2 处——`site/app/live-incident` 的演示页文案与 `archive-route.jsx` 注释，改中性词）。**剩 13 项仍待人拍板**（决策 179）：赛事材料 10 处（`FINAL_DEMO_SCRIPT.md` / `PPT_*.md` / `openspec/changes/**`）与私有属主 3 处（`docs/ACKNOWLEDGMENTS.md` / `site/app/**/open-source`）——前者按规则属「私有交付证据」，改词不足以让它变成产品文档，需决定删/改/从发布集排除；后者「抹掉属主不等于抹掉致谢」（§4.104.9） |
 

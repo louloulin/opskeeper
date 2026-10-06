@@ -150,6 +150,7 @@ import (
 	managerapprovaldata "github.com/vincent-wuhan/opskeeper/core/manager/data/approval/store"
 	managerdatachatdiagnosestore "github.com/vincent-wuhan/opskeeper/core/manager/data/chatdiagnose/store"
 	managerdatahitlstore "github.com/vincent-wuhan/opskeeper/core/manager/data/hitl/store"
+	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 	managerimbridgedata "github.com/vincent-wuhan/opskeeper/core/manager/data/imbridge/store"
 	managerknowledgedata "github.com/vincent-wuhan/opskeeper/core/manager/data/knowledge/store"
 	managerdataloopstore "github.com/vincent-wuhan/opskeeper/core/manager/data/loop/store"
@@ -3933,7 +3934,7 @@ func recoveryApprovalQueryFromRequest(
 		Kind:       request.Kind,
 		Action:     request.Action,
 		Resource:   request.Resource,
-		Execution:  request.Execution,
+		Execution:  recoveryExecutionTo(request.Execution),
 		Now:        now,
 	}
 }
@@ -6720,4 +6721,26 @@ func (a *agentToolUpcall) runMiddlewareTool(ctx context.Context, tool string, ar
 		return nil, false, "", fmt.Errorf("%s ran, but its result could not be encoded for the agent: %w", tool, err)
 	}
 	return body, false, "", nil
+}
+
+// recoveryExecutionTo converts the recovery tool's own parameter struct into
+// the hitl domain's, field by field (decision 277). The two shapes are
+// declared on either side of the boundary on purpose — the hitl one is what
+// gets marshalled and digested, so it cannot move — and the conversion is
+// explicit rather than a cast so that a field added on one side without the
+// other is a compile error here instead of an absent key in the digest.
+// recoverycontract_test.go in the recovery package holds the two shapes
+// against each other; this function is the other half of that pin.
+func recoveryExecutionTo(e recovery.RecoveryExecution) hitlmodel.RecoveryExecutionParameters {
+	return hitlmodel.RecoveryExecutionParameters{
+		Command:            e.Command,
+		DeviceID:           e.DeviceID,
+		Service:            e.Service,
+		Reason:             e.Reason,
+		IncidentID:         e.IncidentID,
+		FixtureManifestID:  e.FixtureManifestID,
+		PoolManifestID:     e.PoolManifestID,
+		PreviewRunID:       e.PreviewRunID,
+		PreviewCandidateID: e.PreviewCandidateID,
+	}
 }

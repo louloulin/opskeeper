@@ -11,7 +11,6 @@ import (
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
-	hitlmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/hitl"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
@@ -377,7 +376,7 @@ func TestRecoveryExecuteTool_ReservesExactProposalAndCompletesExecuted(t *testin
 		ProposalID: "66666666-6666-4666-8666-666666666666",
 		SessionID:  "inc-exact", Kind: "agentteams_hitl",
 		Action: "restart_service", Resource: "host:worker-1",
-		Execution: hitlmodel.RecoveryExecutionParameters{
+		Execution: RecoveryExecution{
 			Command: "restart_service", DeviceID: 7, Service: "nginx", Reason: "exact restart",
 			PreviewRunID: "run-preview-1", PreviewCandidateID: "candidate-a",
 		},
@@ -410,7 +409,7 @@ func TestRecoveryExecuteTool_ReservesExactProposalAndCompletesExecuted(t *testin
 	if check.ProposalID != "66666666-6666-4666-8666-666666666666" ||
 		check.SessionID != "inc-exact" || check.Kind != "agentteams_hitl" ||
 		check.Action != "restart_service" || check.Resource != "host:worker-1" ||
-		check.Execution != (hitlmodel.RecoveryExecutionParameters{
+		check.Execution != (RecoveryExecution{
 			Command: "restart_service", DeviceID: 7, Service: "nginx", Reason: "exact restart",
 			PreviewRunID: "run-preview-1", PreviewCandidateID: "candidate-a",
 		}) {
@@ -696,7 +695,7 @@ func (f *fakeHostFixtureTerminator) Terminate(_ context.Context, request host.Ho
 func TestRecoveryExecuteTool_KillProcessUsesExactApprovedTarget(t *testing.T) {
 	audit := newFakeAuditRepo()
 	audit.approve["host-cpu"] = true
-	approvedExecution := hitlmodel.RecoveryExecutionParameters{
+	approvedExecution := RecoveryExecution{
 		Command: "kill_process", IncidentID: "host-cpu", FixtureManifestID: "f4b1c0a19d3e5f7a",
 		Reason:       "terminate top CPU fixture",
 		PreviewRunID: "run-preview-1", PreviewCandidateID: "candidate-a",
@@ -752,7 +751,7 @@ func TestRecoveryExecuteTool_KillProcessUsesExactApprovedTarget(t *testing.T) {
 func TestRecoveryExecuteTool_KillProcessRejectsTargetMismatchBeforeReservation(t *testing.T) {
 	audit := newFakeAuditRepo()
 	audit.approve["host-cpu"] = true
-	approvedExecution := hitlmodel.RecoveryExecutionParameters{
+	approvedExecution := RecoveryExecution{
 		Command: "kill_process", IncidentID: "host-cpu", FixtureManifestID: "f4b1c0a19d3e5f7a", Reason: "x",
 	}
 	audit.strict["host-cpu"] = RecoveryProposalRequest{
@@ -800,7 +799,7 @@ func (f *fakePoolRecoveryExecutor) Recover(_ context.Context, request PoolRecove
 func TestRecoveryExecuteTool_ResizePoolUsesExactApprovedTargetAndNewProbe(t *testing.T) {
 	audit := newFakeAuditRepo()
 	audit.approve["pg-pool"] = true
-	approvedExecution := hitlmodel.RecoveryExecutionParameters{
+	approvedExecution := RecoveryExecution{
 		Command: "resize_pool", IncidentID: "pg-pool", PoolManifestID: "p4b1c0a19d3e5f7a",
 		Reason: "resize pool and recycle idle sessions",
 	}

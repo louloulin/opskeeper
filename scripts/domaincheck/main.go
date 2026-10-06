@@ -159,7 +159,6 @@ var edges = map[edge]string{
 	{"aiops", "approval"}: "a remediation the agent wants to run is queued in the approval domain, which is the HITL path it must not be able to route around",
 	{"aiops", "device"}:   "an alert names a device and a tool call resolves it to a machine; the agent needs the device vocabulary to say which one",
 	{"aiops", "edge"}:     "the agent's tools address nodes through the edge domain; there is no second worth having notion of 'which node'",
-	{"aiops", "hitl"}:     "an investigation that needs a human hands the request to the human-in-the-loop domain instead of blocking on a channel of its own. One direction only since decision 116: the hitl side had reached back into aiops solely through a migration-and-dual-write window that was never wired and has expired, so the cycle is gone while these three imports stay",
 	{"aiops", "loop"}:     "the agent kernel drives the investigation loop, so the agent asks it for a recovery verdict, a loop toolset and what it learned; one direction only since decision 117. The old reason named a package that does not exist — there is no biz/aiops/loop, loop is its own context at biz/loop",
 
 	{"chatdiagnose", "loop"}: "promoting a chat hands the work to the loop domain, which owns the investigation; the reverse of that edge used to exist because the loop wrote the knowledge base's own rows (decision 114)",
