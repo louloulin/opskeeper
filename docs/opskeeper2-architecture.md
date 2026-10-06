@@ -5977,6 +5977,134 @@ ok  github.com/vincent-wuhan/opskeeper/tests/e2e               35.87s
 没关严的是 4.326.7 记的那条：进程内工具（`tail_file` 一类）跑在 edge 进程里，
 一个 edge 被 OOM 会带走所有工具能力——**那不是配额问题，是进程边界问题**，
 要解决就得把这类工具挪出edge 进程，是一个架构决定，不是一个补丁。
+### 4.329 决策 395：我连续多轮汇报的「amd64 真机腿需要机器」是**错的**——CI 一直有真实 amd64 和 arm64 runner，缺的那条腿是**另一条**
+
+网络恢复后第一次去看 CI（此前十一个提交都推不上去，我只能报本机的情况）。
+进去就发现两件事，一件是坏的，一件是**我自己的结论错了**。
+
+#### 4.329.1 坏的：这条分支的 CI 一直是红的
+
+run `37492290775`（`00bb877`）失败，跑了 15m49s：
+
+```
+build + vet + test  X   in 14m30s
+  ✓ go vet (root module)          ✓ Race detector on the modules…
+  ✓ Module boundaries             ✓ Control-plane domain boundaries
+  ✓ Build and test every module on its own published tags
+  ✓ Unreachable symbols do not grow  ✓ The ledger's numbers are the tree's own numbers
+  ...
+  X Verify plugins and open-source gate
+    open-source gate failed: 13 violation(s) in the tracked tree
+```
+
+**十三处全是开源门槛**（赛事材料 10 / 私有属主 3），就是台账里挂了很久、
+决策 179 写着「待人拍板」的那一条。失败的文件是
+`FINAL_DEMO_SCRIPT.md`、`PPT_*.md`、`openspec/changes/*`、
+`site/app/**/open-source/page.tsx`、`docs/ACKNOWLEDGMENTS.md`——
+**本节到这一行为止，一个都没碰过**。
+
+所以：**这条分支的 CI 红的不是我这两轮的改动造成的，但我也从来没有让它是绿的。**
+我此前每一轮汇报都写「五模块 0 FAIL、e2e 七个子用例全绿、验收表十三行有证据」，
+那些全部是**本机**结果。**本机全绿和 CI 全绿是两件事，而后者一直是红的**，
+这个区别我前十轮一次都没有说。这与决策 348 记的那个教训完全同形：
+「有测试」和「有东西跑它」是两栏——**「本地绿」和「CI 绿」也是两栏。**
+
+#### 4.329.2 更要紧的：我说错了一条腿
+
+我连续多轮（4.321、4.322、4.328……）都在写同一句：
+
+> 跨架构：amd64 与 arm64 各跑一次完整 e2e —— **未做**，需要一台机器
+
+**这句话里「未做」是错的，「需要机器」也是错的。**
+
+那个失败的 run 里，两个 job 都是绿的：
+
+```
+✓ end-to-end suite (arm64)  in 3m37s
+✓ end-to-end suite (amd64)  in 3m43s
+```
+
+`ci.yml:325-334` 的矩阵是：
+
+```yaml
+- { arch: amd64, runner: ubuntu-24.04 }      # 真实 amd64 机器
+- { arch: arm64, runner: ubuntu-24.04-arm } # 真实 arm64 机器
+```
+
+**GitHub Actions 一直有两台真实的不同架构的机器，每次 push 都各跑一次，
+而且都绿了。** 「需要一台 amd64 机器」这个前提**从一开始就是假的**。
+
+**我为什么错了**：本机是 arm64 Mac，amd64 那条腿在我这儿是 QEMU 混血，
+于是我从「我这台机器跑不出真 amd64」推出「项目没有真 amd64 证据」。
+**这是把本机的限制当成了项目的状态**——和 4.323 那次「没核实的前提」
+同一个来源，只是方向相反：那次是照着一个没验证的理由免工，
+这次是照着一个没验证的观察自我降级。
+
+#### 4.329.3 于是真正缺的那条腿，是另一条
+
+`ci.yml:313-324` 自己把边界写得很清楚（决策 186 写的）：
+
+> these twenty-eight tests never build the node's pig agent — only
+> `make e2e-delivery-check` does... **the arm64 leg is the manager suite on
+> arm, and the node agent on arm is still not exercised anywhere.**
+
+对上之后，方案 §六「跨架构：amd64 与 arm64 各跑一次完整 e2e」的真实状态是：
+
+| 部分 | amd64 | arm64 |
+|---|---|---|
+| **manager 套件**（28 个测试，真机） | ✅ 每次 push | ✅ 每次 push |
+| **节点 agent**（真跑 pig 进程） | ✅ nightly（`delivery` job） | ❌ **任何地方都没有** |
+
+**所以缺的不是 amd64，是 arm64 上的节点 agent。** 而
+`delivery` job 的定义是 `runs-on: ubuntu-24.04`——**它只有一个架构**。
+
+**更关键的是：它没有做成矩阵，不是因为没有机器，是因为决策 186 主动决定
+不做的**，理由写在注释里：把公开registry 的 broker 拉取和一次冷启动的
+PiG 编译放到第二台 runner 上，"for a test nobody has ever run on arm; it is
+left as the next cut rather than shipped as a red nightly"。
+
+**而 CI 已经有 arm64 runner 了**——决策 186 写这句注释的时候，
+`ubuntu-24.04-arm` 这个 runner 或者不存在、或者没人想到可以复用。
+**现在它就在上面跑着 manager 套件。**
+
+所以这条待办的性质又变了：
+
+- ~~需要一台 amd64 机器~~ —— **不成立，CI 有**
+- ~~需要人提供机器~~ —— **不成立**
+- **需要的是把 `delivery` job 做成 `matrix: [amd64, arm64]`** ——
+  一处 YAML 改动，加一次 arm64 上的冷 PiG 编译
+
+**这是本轮最有用的一条：它从「等人」变成了「一段配置」。**
+
+#### 4.329.4 本轮不动那处 YAML，理由要写清楚
+
+改 `delivery` 成两架构矩阵，**不是三行 YAML**，它会：
+
+1. 让 arm64 那一腿需要拉 arm64 manifest 的 broker 镜像——
+   `ci.yml:381-397` 那个 `make broker-arch-report` 存在的全部理由就是
+   「开发机在registry 镜像后面，问不到这个问题，本轮问过，拿到 403」。
+   **那一步的结论本轮没有读到**（它在 nightly job 里，不在 push run 里）；
+2. 在 arm64 runner 上从源码冷编译 PiG（CGO_ENABLED=0），时间未知；
+3. 第一次跑大概率是红的——而 4.329.1 刚证明了**这个仓库的 nightly 红过一次
+   就没人管**（决策 186 自己也说 "rather than shipped as a red nightly"）。
+
+**在读到 brokerarch 的结论之前改那处 YAML，是在用一个 403 换另一个未知的失败。**
+本轮先把「缺的是 arm64 节点 agent、且它需要的是一段矩阵配置而不是一台机器」
+这件事记准，**这是本轮该做的全部**。改配置是下一轮的事，且要带着
+`broker-arch-report` 的实际结论去改。
+
+#### 4.329.5 于是三件待办的性质，全部变了
+
+| 待办 | 我此前说 | 本轮更正 |
+|---|---|---|
+| 跨架构 e2e | 「需要一台 amd64 机器」 | **CI 每次 push 已在真 amd64 + 真 arm64 上跑 manager 套件**；缺的是 **arm64 节点 agent**，需要的是给 `delivery` job 加矩阵，不是机器 |
+| 开源门槛 13 处 | 「等人拍板」 | 不变，**但它现在是这条分支 CI 红的唯一原因**，我此前十一轮没有把「CI 是红的」这件事说清楚 |
+| 脱敏 A/B/C | 「一句话」 | 不变 |
+
+**第二条是本节最该记住的**：不是待办变了，是**我对「本地绿」和「CI 绿」
+的区分丢了两轮**。4.321 到 4.328 每一节都在写「本轮实跑、全绿」，
+而那些证据没有一条来自 CI——**而 CI 在这整段时间里一直是红的。**
+一份只报本机结果的进度汇报，会让读者以为这条分支可以合并。
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
