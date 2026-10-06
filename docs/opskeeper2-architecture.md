@@ -4538,6 +4538,49 @@ exit status 3
 | arm64 完整 e2e | ⏳ 需要 linux/arm64 执行环境 | 需要 CI 的 linux 腿或一台 arm64 机器；不是编码量 |
 | broker 镜像架构 | ⏳ 需要能出网的 registry 查询 | 本轮 exit 3，命令行为正确 |
 
+### 4.309 决策 375：0.4 的 e2e 里跑的是不是**真 pig**——查了，而且它顺便就是一次 arm64 全链
+
+决策 373 那次 e2e 的输出里有一处看着不对：节点自报心跳是
+`{running:true, version:"0.9.0"}`，而本轮构建出来的 `pig --version` 是
+`0.4.0+1.0.0`。**一个记 `0.9.0` 的东西很可能不是那个 0.4.0 的 pig**，也就是
+这条验收链上可能挂着一个替身在回答问题。
+
+查了 `tests/e2e/testenv/edge.go:130-161`：不是替身。`PigBinary` 在
+`core/pig` 目录下 `go build github.com/MichaelKinsy/PiG/cmd/pig`（`CGO_ENABLED=0`、
+`GOWORK=off`），把**真 pig** 交给 `OPSKEEPER_EDGE_AGENT_BIN`。
+`0.9.0` 是另一件事：它是 `edge.go:166` 的 `nodeAdvertisedVersion`，被拼进
+**edge 二进制**的 `-ldflags -X main.version=`，与 pig 无关——两个二进制各报各的版本。
+
+**一个版本号对不上就去找替身，是对的；但找到之后要确认它解释的是哪一方。**
+本轮如果停在「对不上」就记成缺陷，会写下一条假结论；如果不查就写「真 pig 已验」，
+则是在没验证的情况下下的结论。两个都不是。
+
+#### 4.309.1 查完之后的意外收获：那本来就是一次 arm64 全链
+
+`PigBinary` 用的是**宿主架构**的 `go build`，本机 `uname -m` = arm64；而 broker
+跑在容器里，本机 Docker 引擎是 `aarch64/linux`。所以决策 373 那次 e2e 的真实拓扑是：
+
+| 部件 | 架构 |
+|---|---|
+| broker（frontier 容器） | linux/arm64 |
+| manager / opskeeper-edge / pig | darwin/arm64（全部宿主原生） |
+
+**方案 §六 的「跨架构：amd64 与 arm64 各跑一次完整 e2e」，arm64 那一半其实
+已经跑过了**，只是当时（以及现在）没有人把架构这件事写下来——不写下来的原因
+很朴素：那条用例的名字里没有架构，而「这台机器是什么架构」这个问题此前从没被
+任何一条断言问过。
+
+#### 4.309.2 这一行的准确状态
+
+| 腿 | 状态 |
+|---|---|
+| arm64 完整 e2e（linux broker + darwin 节点全链） | ✅ 已跑（决策 373，本节补上架构归属） |
+| arm64 二进制可执行 | ✅ 已跑（决策 374） |
+| amd64 完整 e2e | ⏳ 需要 amd64 宿主或可靠模拟；不是编码量 |
+
+台账此前把「跨架构」整行记成未做。准确说法是：**一腿已跑，另一腿缺一个执行
+环境**。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
