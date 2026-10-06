@@ -26,6 +26,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -36,6 +37,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	managermiddleware "github.com/vincent-wuhan/opskeeper/core/domains/server/middleware"
 	"github.com/vincent-wuhan/opskeeper/core/manager/higress"
 )
 
@@ -102,6 +104,17 @@ func runServe(args []string) int {
 	}
 	defer store.Close()
 
+	// The gateway's own audit trail. Mounted here rather than inside the
+	// higress package because installing it is a decision about this
+	// *process* — routes/routeaudit's entry-point table judges that
+	// decision per binary, and a package cannot make it for every deployment
+	// that links it (decision 321, 324).
+	auditSink, err := buildAuditSink(store.DB(), slog.Default())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "higress-console: audit sink: %v\n", err)
+		return 1
+	}
+
 	srv, err := higress.NewServer(higress.Config{
 		Addr:          *addr,
 		Store:         store,
@@ -115,8 +128,13 @@ func runServe(args []string) int {
 	}
 
 	httpSrv := &http.Server{
-		Addr:              *addr,
-		Handler:           srv.Routes(),
+		Addr: *addr,
+		// AuditMiddleware installs the per-request slot the handlers in
+		// package higress write into. Without this line every SetAuditEvent
+		// below it is a documented no-op, and no test in this repository can
+		// see that, because a no-op and a working write look identical from
+		// inside the handler.
+		Handler:           managermiddleware.AuditMiddleware(auditSink)(srv.Routes()),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

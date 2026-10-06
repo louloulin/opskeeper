@@ -1028,6 +1028,18 @@ deps:
   # vocabulary at all.
   shared_observability:
     mayDependOn: [oxpig_ai, oxpig_model]
+  # The gateway console writes host audit rows (decision 324), and the
+  # vocabulary it writes — Action*, Resource*, the slot, the digest — is the
+  # port's, not a local copy of it. That is the whole reason shared_pkg is
+  # reachable from here: a second vocabulary in this package would be a
+  # second thing to keep in step with the chain, and the chain is exactly
+  # what must not drift.
+  #
+  # What this rule deliberately does NOT open is anything else. The gateway
+  # holds no usecase, no repository and no HMAC key: cmd/higress-console
+  # builds those in the assembly root, the same way the control plane does.
+  shared_higress:
+    mayDependOn: [shared_higress, shared_pkg]
   oxfloor:
     # 不得依赖任何 BC。core 契约层 + sdk 是它的全部 opskeeper 依赖；
     # 其余是 yaml / prometheus / geminio 这类第三方库。

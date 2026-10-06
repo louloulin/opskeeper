@@ -32,6 +32,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 )
 
 // Config carries the server's static configuration.
@@ -103,8 +105,65 @@ func NewServer(cfg Config) (*Server, error) {
 			}, []string{"op", "result"}),
 		},
 	}
-	prometheus.MustRegister(s.metrics.resolveOK, s.metrics.resolveMiss, s.metrics.resolveAuthFail, s.metrics.adminOps)
+	// Registering into the default registry is process-wide, and MustRegister
+	// panics on the second Server in the same process. That made this
+	// constructor unusable twice over: a test that builds two servers (to
+	// check one consumer against another, or simply to isolate fixtures)
+	// crashed, and so would any future embedding that ran two gateways in
+	// one binary.
+	//
+	// Reusing the already-registered collector is the right behaviour rather
+	// than a workaround: the metrics describe the process ("higress resolve
+	// outcomes"), so two gateways in one process share one counter, and the
+	// second server's Inc calls land in the series the first one exports.
+	// Handing each server its own collector would mean whichever registered
+	// first exports and the other silently reports zeros forever — the more
+	// confusing of the two failures, because nothing is ever wrong-looking.
+	for _, m := range []struct {
+		what string
+		do   func() error
+	}{
+		{"higress_resolve_total", func() error {
+			return registerOrAdopt(s.metrics.resolveOK, func(cur *prometheus.CounterVec) { s.metrics.resolveOK = cur })
+		}},
+		{"higress_resolve_miss_total", func() error {
+			return registerOrAdopt(s.metrics.resolveMiss, func(cur prometheus.Counter) { s.metrics.resolveMiss = cur })
+		}},
+		{"higress_resolve_auth_fail_total", func() error {
+			return registerOrAdopt(s.metrics.resolveAuthFail, func(cur prometheus.Counter) { s.metrics.resolveAuthFail = cur })
+		}},
+		{"higress_admin_ops_total", func() error {
+			return registerOrAdopt(s.metrics.adminOps, func(cur *prometheus.CounterVec) { s.metrics.adminOps = cur })
+		}},
+	} {
+		if err := m.do(); err != nil {
+			return nil, fmt.Errorf("higress: register %s: %w", m.what, err)
+		}
+	}
 	return s, nil
+}
+
+// registerOrAdopt registers mine, and on a collision points the caller at the
+// collector the default registry already holds.
+//
+// The generic parameter is what makes this correct for both shapes in this
+// package: a *CounterVec and a Counter are different concrete types, and a
+// hand-written type switch over prometheus.Collector gets the interface case
+// wrong — *prometheus.Counter is a pointer to an interface, so a type
+// assertion for it is not expressible.
+func registerOrAdopt[T prometheus.Collector](mine T, adopt func(T)) error {
+	err := prometheus.Register(mine)
+	if err == nil {
+		return nil
+	}
+	var are prometheus.AlreadyRegisteredError
+	if errors.As(err, &are) {
+		if cur, ok := are.ExistingCollector.(T); ok {
+			adopt(cur)
+		}
+		return nil
+	}
+	return err
 }
 
 // Routes returns an http.Handler with all routes mounted.
@@ -136,10 +195,36 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionGatewayLogin,
+			ResourceType: auditport.ResourceAuth,
+		}, err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
+	// The row names the account that was attempted and whether a password
+	// came with it — and nothing else. No password, no digest, no length: a
+	// chain is a durable, widely readable, append-only table, and an HMAC
+	// over "the hash of a password somebody typed" is a grind table. The
+	// failed row is the valuable one; it is the only evidence anywhere that
+	// somebody was guessing this account.
+	//
+	// Built after the decode, not before: an earlier draft of this handler
+	// assembled it above the decoder, and the failure branch then carried an
+	// empty username on every row — a bug no assertion was looking for,
+	// because the assertion that would have caught it (the brute-force
+	// reader's "which account") is the one nobody writes until it is needed.
+	loginPayload := map[string]any{
+		"username":         req.Username,
+		"password_present": req.Password != "",
+	}
 	if req.Username != s.cfg.AdminUser || !hmac.Equal([]byte(req.Password), []byte(s.cfg.AdminPassword)) {
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionGatewayLogin,
+			ResourceType: auditport.ResourceAuth,
+			ResourceID:   req.Username,
+			Payload:      loginPayload,
+		}, errors.New("invalid credentials"))
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
@@ -150,6 +235,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	sig := mac.Sum(nil)
 	token := fmt.Sprintf("%d.%s.%s", id, req.Username, hex.EncodeToString(sig))
 	s.sessions.Store(token, exp)
+	// The minted session token is the credential; it does not go on the
+	// chain. It is already in the Set-Cookie header of this response, which
+	// is the only place it is meant to be.
+	auditOK(r, auditport.Event{
+		Action:       auditport.ActionGatewayLogin,
+		ResourceType: auditport.ResourceAuth,
+		ResourceID:   req.Username,
+		Payload:      loginPayload,
+	})
 	http.SetCookie(w, &http.Cookie{
 		Name:     s.cfg.CookieName,
 		Value:    token,
@@ -267,6 +361,12 @@ func (s *Server) handleAdminCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name == "" || req.Apikey == "" {
 		s.metrics.adminOps.WithLabelValues("create", "bad_request").Inc()
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionConsumerCreate,
+			ResourceType: auditport.ResourceGatewayConsumer,
+			ResourceID:   req.Name,
+			Payload:      map[string]any{"apikey_present": req.Apikey != ""},
+		}, errors.New("name and apikey are required"))
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and apikey are required"})
 		return
 	}
@@ -278,17 +378,46 @@ func (s *Server) handleAdminCreate(w http.ResponseWriter, r *http.Request) {
 		TenantClaim:  req.TenantClaim,
 		MetadataJSON: req.Metadata,
 	}
+	payload := consumerPayload(c)
 	if err := s.cfg.Store.Create(r.Context(), c, req.Apikey); err != nil {
 		if errors.Is(err, ErrConsumerExists) {
 			s.metrics.adminOps.WithLabelValues("create", "conflict").Inc()
+			auditFail(r, auditport.Event{
+				Action:       auditport.ActionConsumerCreate,
+				ResourceType: auditport.ResourceGatewayConsumer,
+				ResourceID:   c.Name,
+				Payload:      payload,
+			}, err)
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
 		s.metrics.adminOps.WithLabelValues("create", "error").Inc()
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionConsumerCreate,
+			ResourceType: auditport.ResourceGatewayConsumer,
+			ResourceID:   c.Name,
+			Payload:      payload,
+		}, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	auditOK(r, auditport.Event{
+		Action:       auditport.ActionConsumerCreate,
+		ResourceType: auditport.ResourceGatewayConsumer,
+		ResourceID:   c.Name,
+		Payload:      payload,
+	})
+	// Read the row back rather than echoing the request struct. Store.Create
+	// takes the consumer by value and stamps the apikey fingerprint on its
+	// own copy, so the caller's `c` has an empty ApikeyHash — and viewOf
+	// slices that field to sixteen characters. Before this line every
+	// successful create panicked on `""[:16]`, which is how the first test
+	// in this package found it (decision 324).
 	s.metrics.adminOps.WithLabelValues("create", "ok").Inc()
+	if created, gerr := s.cfg.Store.Get(r.Context(), c.Name); gerr == nil {
+		writeJSON(w, http.StatusCreated, viewOf(created))
+		return
+	}
 	writeJSON(w, http.StatusCreated, viewOf(c))
 }
 
@@ -323,24 +452,68 @@ func (s *Server) handleAdminGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAdminDelete(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
+	// Read it before removing it. A deleted consumer is a revoked access
+	// path, and after this call nothing in the process still knows which
+	// claims it carried — so without the before-image the row says "someone
+	// removed consumer X" and not "someone removed the worker claim that let
+	// a specific AgentTeams worker reach this gateway".
+	deletePayload := map[string]any{"already_gone": false}
+	if existing, gerr := s.cfg.Store.Get(r.Context(), name); gerr == nil {
+		deletePayload = consumerPayload(existing)
+		deletePayload["already_gone"] = false
+	} else {
+		deletePayload["already_gone"] = true
+	}
 	if err := s.cfg.Store.Delete(r.Context(), name); err != nil {
 		if errors.Is(err, ErrConsumerNotFound) {
 			s.metrics.adminOps.WithLabelValues("delete", "not_found").Inc()
+			auditFail(r, auditport.Event{
+				Action:       auditport.ActionConsumerDelete,
+				ResourceType: auditport.ResourceGatewayConsumer,
+				ResourceID:   name,
+				Payload:      deletePayload,
+			}, err)
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 			return
 		}
 		s.metrics.adminOps.WithLabelValues("delete", "error").Inc()
+		auditFail(r, auditport.Event{
+			Action:       auditport.ActionConsumerDelete,
+			ResourceType: auditport.ResourceGatewayConsumer,
+			ResourceID:   name,
+			Payload:      deletePayload,
+		}, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	auditOK(r, auditport.Event{
+		Action:       auditport.ActionConsumerDelete,
+		ResourceType: auditport.ResourceGatewayConsumer,
+		ResourceID:   name,
+		Payload:      deletePayload,
+	})
 	s.metrics.adminOps.WithLabelValues("delete", "ok").Inc()
 	writeJSON(w, http.StatusOK, map[string]string{"deleted": name})
+}
+
+// fingerprintPrefix shows the first sixteen hex characters of the apikey
+// fingerprint so an operator can match a key from a config file against a row
+// without the row ever carrying enough to be a credential.
+//
+// It is a function rather than a slice because the field is not always long
+// enough: a Consumer built by hand (not read back from the store) has an empty
+// ApikeyHash, and the previous `c.ApikeyHash[:16]` panicked on it.
+func fingerprintPrefix(hash string) string {
+	if len(hash) <= 16 {
+		return hash
+	}
+	return hash[:16] + "…"
 }
 
 func viewOf(c Consumer) map[string]any {
 	return map[string]any{
 		"name":         c.Name,
-		"apikey_hash":  c.ApikeyHash[:16] + "…",
+		"apikey_hash":  fingerprintPrefix(c.ApikeyHash),
 		"jwt_required": c.JWTRequired,
 		"worker_claim": c.WorkerClaim,
 		"role_claim":   c.RoleClaim,

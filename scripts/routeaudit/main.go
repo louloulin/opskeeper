@@ -332,8 +332,7 @@ type EntryPoint struct {
 
 var EntryPoints = []EntryPoint{
 	{File: "cmd/opskeeper/main.go"},
-	{File: "cmd/higress-console/main.go",
-		Slot: "洞：这个进程从 srv.Routes() 直接起服务，中间件一个也没有，所以本包三条 consumer / 网关登录路由写下的行不会落库。先决条件是先给它一个落库端（审计链在这个进程里另起一条还是与控制面共库，是一件要单独立项的事，决策 321 只把缺口记下来）"},
+	{File: "cmd/higress-console/main.go"},
 	{File: "cmd/opskeeper-edge/main.go",
 		Slot: "洞：节点面同样没有装槽。节点自己的账本走 agent.audit.entries 回传，与控制面的 HMAC 链是两条路，所以这个缺口与控制面那几个不是同一个；但「没有槽」这件事此前没有任何地方记着"},
 	{File: "cmd/host-fixture/main.go",
@@ -354,6 +353,10 @@ var entryPointRE = regexp.MustCompile(`chi\.NewRouter\(\)|http\.Server\{`)
 // WithSlot installs it directly. A file that reaches the slot by some third
 // route will be reported as missing a verdict, which is the direction this
 // command errs in.
+//
+// It is matched against comment-stripped source, which is not pedantry: the
+// wiring line in cmd/higress-console carries a comment that names this very
+// middleware, and an unstripped match is satisfied by that comment alone.
 var slotInstallerRE = regexp.MustCompile(`AuditMiddleware|auditport\.WithSlot|audit\.WithSlot`)
 
 // Verdict is the recorded judgement about one route.
@@ -526,12 +529,30 @@ var Verdicts = []Verdict{
 	{File: "core/domains/server/setting/http.go", Route: "/v1/system-settings/{category}/{key}", Handler: "h.delete"},
 	{File: "core/domains/server/systemupgrade/http.go", Route: "/v1/system/upgrade/check", Handler: "h.check",
 		Backlog: "只读检查：问「有没有新版本」，不装任何东西"},
-	{File: "core/manager/higress/server.go", Route: "/consumers", Handler: "s.handleAdminCreate",
-		Backlog: "洞：建 consumer 就是新开一条访问路径与一把密钥。**先决条件不是这个 handler，是它的进程**——cmd/higress-console 从 srv.Routes() 直接起服务，没装审计槽，现在往这里加 SetAuditEvent 只会空转，而闸门会判它已审计。见决策 321 的入口接线表"},
-	{File: "core/manager/higress/server.go", Route: "/consumers/{name}", Handler: "s.handleAdminDelete",
-		Backlog: "洞：删 consumer 就是抽掉一整条访问路径，而链上看不出是谁删的。与建 consumer 同一个先决条件：进程没有槽（决策 321）"},
-	{File: "core/manager/higress/server.go", Route: "/session/login", Handler: "s.handleLogin",
-		Backlog: "洞：网关登录是剩下五条洞里唯一一条凭证写路由，也是唯一一条「有人拿着密码来试」的路由——成功与失败都该留痕，而失败那行正是暴力破解的唯一证据。同一个先决条件：进程没装槽（决策 321）"},
+	// The three Higress rows were the last holes, and they were holes
+	// because of their process rather than their handlers (decisions 321,
+	// 324). Two things were true at once: the handlers could not write a
+	// row because cmd/higress-console installed no audit slot, and the
+	// chain they write into is a separate one — the same chain code over
+	// the gateway's own SQLite file and its own key.
+	//
+	// Why separate rather than shared, since the chain head is a CAS and
+	// two processes on one database would in fact be safe: this process
+	// holds OPSKEEPER_JWT_SECRET, the secret every consumer's apikey is
+	// signed with. A gateway that could append to the control plane's
+	// chain could forge control-plane audit rows, so a compromise here
+	// would silently buy an attacker the ability to rewrite what the
+	// control plane says happened to it.
+	//
+	// Delete carries the before-image (which claims the revoked path
+	// carried) because after the delete the process no longer knows it
+	// either. Login carries the account name and whether a password came
+	// with it, and nothing else: a chain over "the hash of a password
+	// somebody typed" is a grind table, while the failure row is the only
+	// evidence anywhere that this account is being guessed.
+	{File: "core/manager/higress/server.go", Route: "/consumers", Handler: "s.handleAdminCreate"},
+	{File: "core/manager/higress/server.go", Route: "/consumers/{name}", Handler: "s.handleAdminDelete"},
+	{File: "core/manager/higress/server.go", Route: "/session/login", Handler: "s.handleLogin"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/agentteams/token", Handler: "h.issueAgentTeamsToken"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/auth/login", Handler: "h.login"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/auth/refresh", Handler: "h.refresh"},
@@ -795,12 +816,24 @@ func checkEntryPoints(root string) (missing, unlisted, stale []string) {
 			return nil
 		}
 		body, readErr := os.ReadFile(path)
-		if readErr != nil || !entryPointRE.Match(body) {
+		if readErr != nil {
+			return nil
+		}
+		// Comments are stripped here for the same reason decision 323
+		// stripped them from the route scan, and the second failure is the
+		// worse of the two: a comment saying "AuditMiddleware installs the
+		// slot" is enough to satisfy slotInstallerRE, so a process that
+		// dropped the middleware while keeping its explanation of the
+		// middleware reports itself as wired. **A gate that can be
+		// satisfied by documentation is worse than one that miscounts** —
+		// it turns the explanation into the thing being checked.
+		code := stripComments(string(body))
+		if !entryPointRE.MatchString(code) {
 			return nil
 		}
 		key := filepath.ToSlash(rel)
 		verdict, ok := judged[key]
-		installs := slotInstallerRE.Match(body)
+		installs := slotInstallerRE.MatchString(code)
 		if !ok {
 			unlisted = append(unlisted, key+" — it serves HTTP; add it to routeaudit.EntryPoints and write down whether its requests carry the audit slot")
 			return nil

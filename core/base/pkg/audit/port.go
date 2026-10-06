@@ -324,6 +324,24 @@ const (
 	ActionPageDelete = "page_delete"
 	ActionPageShare  = "page_share"
 
+	// Higress gateway console (决策 324). These three are the first rows
+	// written by a process other than the control plane, and they are the
+	// first to live in a chain of their own — see cmd/higress-console's
+	// audit sink for why the gateway does not share the control plane's.
+	//
+	// Login is one action with a success and a failure row rather than a
+	// pair of actions, because the question is "did this attempt get in",
+	// which is one question with one answer per attempt — and the failure
+	// row is the only evidence of a password being guessed. The username
+	// goes on the row (it is an identifier, and the brute-force reader
+	// needs it); the password does not, and neither does a digest of it:
+	// an HMAC chain over "hash of a password somebody typed" is a table an
+	// offline attacker can grind, and the field's only honest entry is
+	// whether one was supplied at all.
+	ActionGatewayLogin   = "gateway_login"
+	ActionConsumerCreate = "consumer_create"
+	ActionConsumerDelete = "consumer_delete"
+
 	// ActionHITLDecide records a human approve/reject on an AgentTeams task
 	// that is waiting for one. Decision 312.
 	//
@@ -485,6 +503,10 @@ const (
 	// ResourceHostedPage names one serve_page artifact. The resource id is
 	// the page id, which is also the path segment on both routes.
 	ResourceHostedPage = "hosted_page"
+	// ResourceGatewayConsumer names one Higress consumer. The resource id is
+	// the consumer name, which is what the gateway's own admin routes key
+	// on and what an operator greps for.
+	ResourceGatewayConsumer = "gateway_consumer"
 	ResourceRule         = "rule"
 	ResourceChannel      = "channel"
 	ResourceRepo         = "repo"

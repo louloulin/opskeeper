@@ -229,3 +229,27 @@ func f() { router.Delete("/v1/things", h.drop) }
 		t.Error("a trailing line comment survived")
 	}
 }
+
+// 9. 注释不能冒充接线。决策 324 把 AuditMiddleware 挂进 cmd/higress-console
+// 时，那一行的注释里就写着这个中间件的名字——而闸门读原始文本，于是把中间件
+// 删掉之后，一句解释它存在的注释仍然让这个进程「看起来已接线」。
+// **一个能被文档满足的闸门，比一个数错的闸门更坏**：它让人去写解释而不是去接线。
+func TestAMiddlewareMentionedOnlyInACommentDoesNotCountAsWired(t *testing.T) {
+	root := entryTree(t, map[string]string{
+		"cmd/thing/main.go": `package main
+
+func main() {
+	mux := chi.NewRouter()
+	// AuditMiddleware installs the slot; we used to mount it here.
+	_ = mux
+	httpSrv := &http.Server{Addr: ":8080"}
+	_ = httpSrv
+}
+`,
+	})
+	onlyEntryPoints(t, EntryPoint{File: "cmd/thing/main.go"})
+	missing, _, _ := checkEntryPoints(root)
+	if len(missing) != 1 || !strings.Contains(missing[0], "cmd/thing/main.go") {
+		t.Fatalf("missing = %v, want the process reported as unwired despite the comment", missing)
+	}
+}

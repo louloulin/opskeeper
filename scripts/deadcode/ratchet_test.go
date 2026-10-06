@@ -23,6 +23,19 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 841 / 573 / 268 as of decision 324: the three Higress gateway actions
+// (gateway_login, consumer_create, consumer_delete) and the
+// gateway_consumer resource type.
+//
+// This is the first decision whose new constants are called from a package
+// that is not reachable from the tree the walk measures AND live in a
+// process that has its own chain: cmd/higress-console writes them into its
+// own SQLite file (decision 324). The dead class is the same shape as every
+// other audit constant here — declared in core/base/pkg/audit, called from a
+// module this walk does not follow — but it is the first time the *reason*
+// is a deployment boundary rather than a module boundary, which is worth
+// writing down before somebody reads the number and assumes otherwise.
+//
 // 837 / 569 / 268 as of decision 323: the two hosted-page actions
 // (page_delete, page_share) and the hosted_page resource type.
 //
@@ -123,8 +136,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 837
-	deadSymbolBudget     = 569
+	unreachableBudget    = 841
+	deadSymbolBudget     = 573
 	testOnlySymbolBudget = 268
 )
 

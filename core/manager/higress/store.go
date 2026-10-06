@@ -83,6 +83,17 @@ func NewStore(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+// DB exposes the underlying handle so the process can put its audit tables in
+// the same SQLite file. It exists because the gateway's audit trail is built
+// from the same chain code as the control plane's (decision 324), and opening
+// a second connection to the same file would have been the alternative — two
+// pools, two sets of busy-timeout settings, and a writer that blocks on a
+// lock the reader did not configure.
+//
+// The consumer store and the audit tables share a file but not a lifecycle:
+// the caller owns migrations for both.
+func (s *Store) DB() *gorm.DB { return s.db }
+
 // Fingerprint returns the SHA-256 hex digest used as apikey hash.
 func Fingerprint(apikey string) string {
 	sum := sha256.Sum256([]byte(apikey))

@@ -172,6 +172,10 @@ const (
 	ActionPageDelete = auditport.ActionPageDelete
 	ActionPageShare  = auditport.ActionPageShare
 
+	ActionGatewayLogin   = auditport.ActionGatewayLogin
+	ActionConsumerCreate = auditport.ActionConsumerCreate
+	ActionConsumerDelete = auditport.ActionConsumerDelete
+
 	ActionChannelCreate = auditport.ActionChannelCreate
 	ActionChannelUpdate = auditport.ActionChannelUpdate
 	ActionChannelDelete = auditport.ActionChannelDelete
@@ -243,6 +247,7 @@ const (
 	ResourceChatConversation = auditport.ResourceChatConversation
 	ResourcePanel            = auditport.ResourcePanel
 	ResourceHostedPage       = auditport.ResourceHostedPage
+	ResourceGatewayConsumer  = auditport.ResourceGatewayConsumer
 	ResourceRule             = auditport.ResourceRule
 	ResourceChannel          = auditport.ResourceChannel
 	ResourceRepo             = auditport.ResourceRepo
