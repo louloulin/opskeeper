@@ -691,14 +691,18 @@ var Verdicts = []Verdict{
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/ssh-identities/{id}", Handler: "h.deleteSSHIdentity"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/ssh-identities/{id}", Handler: "h.updateSSHIdentity"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/upload", Handler: "h.uploadDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules", Handler: "h.createSchedule", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}", Handler: "h.deleteSchedule", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}", Handler: "h.updateSchedule", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}/run-now", Handler: "h.runNow", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}/toggle", Handler: "h.toggleSchedule", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/report/http.go", Route: "/v1/reports", Handler: "h.generateNow", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/report/http.go", Route: "/v1/reports/{id}", Handler: "h.deleteReport", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/report/http.go", Route: "/v1/reports/{id}/share", Handler: "h.shareReport", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	// 决策 337：报表面。shareReport 是这一族里后果最重的一行——它铸出一个
+	// **无需认证**就能读到这份报表的 token，而链不能撤销它，所以这一行唯一不能
+	// 包含的就是那个 token 本身；留下的三样是「谁、何时、哪份、公开到什么时候」。
+	// schedule_* 单独成族：一条 schedule 是一台没人盯着就会自己发报文的机器。
+	{File: "core/manager/server/report/http.go", Route: "/v1/reports", Handler: "h.generateNow"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/reports/{id}", Handler: "h.deleteReport"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/reports/{id}/share", Handler: "h.shareReport"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules", Handler: "h.createSchedule"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}", Handler: "h.updateSchedule"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}", Handler: "h.deleteSchedule"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}/toggle", Handler: "h.toggleSchedule"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}/run-now", Handler: "h.runNow"},
 	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/oneoff", Handler: "h.createOneoffTask", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/{id}", Handler: "h.deleteTask", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/{id}/run", Handler: "h.rerunTask", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},

@@ -18,10 +18,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	bizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	bizreport "github.com/vincent-wuhan/opskeeper/core/manager/biz/report"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
 )
 
 const roleViewer = "viewer"
@@ -140,10 +141,28 @@ func (h *Handler) getReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteReport(w http.ResponseWriter, r *http.Request) {
-	if err := h.uc.DeleteReport(r.Context(), chi.URLParam(r, "id")); err != nil {
+	id := chi.URLParam(r, "id")
+	// 决策 337：先读标题再删。删完之后链上剩下的只是一个 uuid，而
+	// 「删掉的是哪份报表」正是事后第一个要回答的问题。
+	title := ""
+	if rpt, err := h.uc.GetReport(r.Context(), id); err == nil && rpt != nil {
+		title = rpt.Title
+	}
+	if err := h.uc.DeleteReport(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}
+	// **A deleted report does not un-share itself.** The share token and its
+	// expiry live on the row, so deleting the row is what closes the public
+	// URL — which makes "who closed it and when" a question worth a row of its
+	// own rather than a footnote on the delete.
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionReportDelete,
+		ResourceType: auditport.ResourceReport,
+		ResourceID:   id,
+		ResourceName: title,
+		Status:       auditport.StatusSuccess,
+	})
 	writeJSON(w, http.StatusNoContent, nil)
 }
 
@@ -189,15 +208,49 @@ func (h *Handler) generateNow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 337：scope_json 不进链——它是筛选条件，可能含租户内部名字；
+	// 进链的是「谁在什么时候要了一份什么周期、什么时区的报表」，
+	// 报表本身随后会成为一行可查的 report。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionReportGenerate,
+		ResourceType: auditport.ResourceReport,
+		ResourceID:   rpt.ID,
+		Status:       auditport.StatusSuccess,
+		Payload:      map[string]any{"kind": req.Kind, "timezone": req.Timezone},
+	})
 	writeJSON(w, http.StatusAccepted, toReportDetail(rpt))
 }
 
 func (h *Handler) shareReport(w http.ResponseWriter, r *http.Request) {
-	token, err := h.uc.ShareReport(r.Context(), chi.URLParam(r, "id"), h.now())
+	id := chi.URLParam(r, "id")
+	// The report has to be read **before** sharing, because ShareReport writes
+	// the token and the expiry onto the row: after the call the only thing left
+	// to read is the secret itself.
+	title := ""
+	var expires *time.Time
+	if rpt, err := h.uc.GetReport(r.Context(), id); err == nil && rpt != nil {
+		title, expires = rpt.Title, rpt.ShareExpiresAt
+	}
+	token, err := h.uc.ShareReport(r.Context(), id, h.now())
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	// 决策 337：这一行是整个 report 面后果最重的一条，而它**唯一不能包含的
+	// 就是刚刚铸出来的那个 token**。
+	//
+	// token 是一条不需要认证就能读到这份报表的持有者凭证：它在 URL 里、在浏览器
+	// 历史里、在任何抓过这个链接的东西里。而**链不能撤销它**——append-only 是
+	// 这个设计的全部意义，写进去等于把一个可撤销的秘密换成一个永恒的秘密。
+	// 事后要查的是「谁在什么时候公开了哪份报表、公开到什么时候」，这三样都留下了。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionReportShare,
+		ResourceType: auditport.ResourceReport,
+		ResourceID:   id,
+		ResourceName: title,
+		Status:       auditport.StatusSuccess,
+		Payload:      map[string]any{"expires_at": expires, "public_path": "/r/{token}"},
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"share_token": token, "path": "/r/" + token})
 }
 
@@ -271,6 +324,25 @@ func (h *Handler) createSchedule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 337：建一条 schedule 就是**装上一台没人盯着就会自己发报文的机器**。
+	// 链上要留下的是「谁在什么时候装了什么、按什么周期、在哪个时区」——
+	// cron_spec 与 timezone 决定它在运维人员不在场时会做什么，比 description 更要紧。
+	// scope_json 不进链：那是筛选条件里的租户内部名字，而这台机器要发出去。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionScheduleCreate,
+		ResourceType: auditport.ResourceReportSchedule,
+		ResourceID:   strconv.FormatUint(s.ID, 10),
+		ResourceName: s.Name,
+		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			"kind":              s.Kind,
+			"cron_spec":         s.CronSpec,
+			"timezone":          s.Timezone,
+			"enabled":           s.Enabled,
+			"in_app_visible":    s.InAppVisible,
+			"prompt_overridden": s.PromptOverride != nil,
+		},
+	})
 	writeJSON(w, http.StatusCreated, toScheduleView(s))
 }
 
@@ -295,6 +367,23 @@ func (h *Handler) updateSchedule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 337：改 schedule 与建它是同一族后果——把周期从每天改成每分钟，
+	// 或者把 prompt_override 换掉，都是在没有人在场的情况下改掉了将来会发什么。
+	// payload 里带的是**改完之后**的形状：事后要问的是「出事那天它是按什么在跑」。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionScheduleUpdate,
+		ResourceType: auditport.ResourceReportSchedule,
+		ResourceID:   strconv.FormatUint(existing.ID, 10),
+		ResourceName: existing.Name,
+		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			"kind":              existing.Kind,
+			"cron_spec":         existing.CronSpec,
+			"timezone":          existing.Timezone,
+			"in_app_visible":    existing.InAppVisible,
+			"prompt_overridden": existing.PromptOverride != nil,
+		},
+	})
 	writeJSON(w, http.StatusOK, toScheduleView(existing))
 }
 
@@ -304,10 +393,23 @@ func (h *Handler) deleteSchedule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 337：先读名字再删。删完之后链上剩下的只是一个自增 id，
+	// 而「凌晨停掉的是哪台自动发报文的机器」正是事后第一个要回答的问题。
+	name := ""
+	if s, err := h.uc.GetSchedule(r.Context(), id); err == nil && s != nil {
+		name = s.Name
+	}
 	if err := h.uc.DeleteSchedule(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionScheduleDelete,
+		ResourceType: auditport.ResourceReportSchedule,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: name,
+		Status:       auditport.StatusSuccess,
+	})
 	writeJSON(w, http.StatusNoContent, nil)
 }
 
@@ -326,11 +428,25 @@ func (h *Handler) toggleSchedule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errors.Join(errs.ErrInvalid, err))
 		return
 	}
+	// 决策 337：enabled 从来没有和名字一起被记下来过，而「这台机器现在还开着吗」
+	// 是每一次事故前后都要问的问题。停用要先读名字：停掉之后链上只剩一个 id。
+	name := ""
+	if prev, err := h.uc.GetSchedule(r.Context(), id); err == nil && prev != nil {
+		name = prev.Name
+	}
 	s, err := h.uc.SetScheduleEnabled(r.Context(), id, req.Enabled, h.now())
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionScheduleToggle,
+		ResourceType: auditport.ResourceReportSchedule,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: name,
+		Status:       auditport.StatusSuccess,
+		Payload:      map[string]any{"enabled": req.Enabled, "next_fire_at": s.NextFireAt},
+	})
 	writeJSON(w, http.StatusOK, toScheduleView(s))
 }
 
@@ -345,6 +461,22 @@ func (h *Handler) runNow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 337：手动跑一次与 cron 自己跑一次产生**同样一份会发出去的报文**，
+	// 所以它必须有自己的一行，并指向新生成的 report id——事后「这份是哪次跑的」
+	// 就是靠这个 id 而不是靠时间戳猜的。schedule 的名字一并读出来，因为
+	// rpt.ScheduleID 是指针而报表自身没有可读的名字。
+	name := ""
+	if s, err := h.uc.GetSchedule(r.Context(), id); err == nil && s != nil {
+		name = s.Name
+	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionScheduleRun,
+		ResourceType: auditport.ResourceReportSchedule,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: name,
+		Status:       auditport.StatusSuccess,
+		Payload:      map[string]any{"report_id": rpt.ID, "locale": localeFromRequest(r)},
+	})
 	writeJSON(w, http.StatusAccepted, toReportDetail(rpt))
 }
 

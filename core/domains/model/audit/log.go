@@ -221,6 +221,19 @@ const (
 	ActionSSHKeyDelete   = auditport.ActionSSHKeyDelete
 	ActionEdgePluginSet  = auditport.ActionEdgePluginSet
 
+	// 决策 337：报表面。share 是这一族里后果最重的一行——它铸出一个**无需认证**
+	// 就能读到这份报表的 token，而链不能撤销它，所以这一行唯一不能包含的就是
+	// 那个 token 本身。schedule_* 单独成族：一条 schedule 是一台没人盯着就会
+	// 自己发报文的机器，enabled 与 cron_spec 决定它会做什么。
+	ActionReportGenerate = auditport.ActionReportGenerate
+	ActionReportShare    = auditport.ActionReportShare
+	ActionReportDelete   = auditport.ActionReportDelete
+	ActionScheduleCreate = auditport.ActionScheduleCreate
+	ActionScheduleUpdate = auditport.ActionScheduleUpdate
+	ActionScheduleDelete = auditport.ActionScheduleDelete
+	ActionScheduleToggle = auditport.ActionScheduleToggle
+	ActionScheduleRun    = auditport.ActionScheduleRun
+
 	// 决策 333：供应链面（谁把哪段字节推到了哪台机器上）与「谁掐掉了这个会话」。
 	ActionEdgeAgentUpgrade    = auditport.ActionEdgeAgentUpgrade
 	ActionEdgePackageUpgrade  = auditport.ActionEdgePackageUpgrade
@@ -301,4 +314,9 @@ const (
 	ResourceMCPTool          = auditport.ResourceMCPTool
 
 	ResourceAgentTool = auditport.ResourceAgentTool
+
+	// 决策 337：report 与 report_schedule 是两个资源而不是一个——「凌晨三点会发什么」
+	// 要看 schedule，「上周发过什么」要看 report，合成一个就变成载荷扫描。
+	ResourceReport         = auditport.ResourceReport
+	ResourceReportSchedule = auditport.ResourceReportSchedule
 )

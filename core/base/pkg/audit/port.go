@@ -584,6 +584,33 @@ const (
 	ActionSSHKeyUpdate   = "ssh_key_update"
 	ActionSSHKeyDelete   = "ssh_key_delete"
 
+	// The reporting surface (决策 337).
+	//
+	// `shareReport` is the reason this whole family got audited in one go. It
+	// mints a token that makes a report readable **without authentication**
+	// through /r/{token} — a disclosure action wearing the costume of a button,
+	// and the operator question afterwards is always the same two: "who
+	// published this, and until when".
+	//
+	// The row therefore names the report and the expiry and **must not carry
+	// the token**. The token is a bearer credential: it lives in a URL, in
+	// browser history, in anything that ever scraped the link — and an
+	// append-only chain cannot revoke it. Writing it down would trade a
+	// revocable secret for an eternal one.
+	//
+	// schedule_toggle is its own action for the same reason flow_toggle is: an
+	// enabled schedule is what will produce and publish a report unattended on
+	// a cron. "Is this automation armed" is asked before every incident and
+	// after every one.
+	ActionReportGenerate = "report_generate"
+	ActionReportShare    = "report_share"
+	ActionReportDelete   = "report_delete"
+	ActionScheduleCreate = "schedule_create"
+	ActionScheduleUpdate = "schedule_update"
+	ActionScheduleDelete = "schedule_delete"
+	ActionScheduleToggle = "schedule_toggle"
+	ActionScheduleRun    = "schedule_run"
+
 	ActionEdgeRotateSecret = "edge_rotate_secret"
 	ActionEdgePluginSet    = "edge_plugin_set"
 
@@ -688,6 +715,15 @@ const (
 	// second resource type, because an operator filtering "which automation was
 	// this" wants flows, and the run is an attribute of one.
 	ResourceFlow = "flow"
+	// ResourceReport names one rendered report (决策 337). The resource id is
+	// the report's own string id, which is what the delete and share routes
+	// carry in their path.
+	ResourceReport = "report"
+	// ResourceReportSchedule names one recurring report definition (决策 337).
+	// It is a separate resource from the report because an operator filtering
+	// "what will publish at 3am" wants schedules, while "what was published
+	// last week" wants reports; folding them makes both a payload scan.
+	ResourceReportSchedule = "report_schedule"
 
 	// ResourceMCPTool names a tool reached over the MCP endpoint. The
 	// resource id is the tool name the caller asked for, which is what an

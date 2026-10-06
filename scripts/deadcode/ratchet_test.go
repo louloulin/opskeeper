@@ -23,6 +23,16 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 872 / 604 / 268 as of decision 337: the eight report/schedule actions plus
+// two resource types, all re-exported from core/base into core/domains the way
+// every line below is. They read as dead **from inside the core/base tree**
+// because their only readers are in another module — the same category as
+// decisions 311, 312, 335 and 336, and raised in the same commit as the change
+// that caused the growth. The 604 is dead-code growth rather than test-only
+// growth, which is the signature of a vocabulary written ahead of its readers;
+// this one is not speculative, because the eight rows went onto the chain in
+// this same commit.
+//
 // 862 / 594 / 268 as of decision 336: the four ssh_key_* actions.
 //
 // Worth noting what did *not* happen here: this decision needed a resource type
@@ -180,8 +190,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 862
-	deadSymbolBudget     = 594
+	unreachableBudget    = 872
+	deadSymbolBudget     = 604
 	testOnlySymbolBudget = 268
 )
 
