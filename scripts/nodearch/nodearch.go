@@ -36,6 +36,13 @@ const Edge = "opskeeper-edge"
 // different names and only one of them is a command.
 const edgeBuildPrefix = "build-edge"
 
+// agentBuildPrefix is the same idea for the node agent: the binary is `pig`,
+// the target is build-pig-<os>-<arch>. Used by the "nothing was built for
+// this target" skip so its reason names a command that exists — a skip
+// message naming a target the Makefile does not define sends the reader
+// looking for a typo instead of running a build.
+const agentBuildPrefix = "build-pig"
+
 // Target is one cross-compilation destination.
 type Target struct {
 	OS   string
@@ -102,12 +109,12 @@ func (f Finding) String() string { return fmt.Sprintf("%s: %s (%s)", f.Binary, f
 // rule names, kept in one place so a report line and a test assert the same
 // word.
 const (
-	ruleArch         = "arch-mismatch"
+	ruleArch          = "arch-mismatch"
 	ruleUndescribable = "no-build-info"
-	ruleDynamic      = "cgo-enabled"
-	ruleMissing      = "missing-binary"
-	ruleUnreadable   = "unreadable-binary"
-	rulePairArch     = "edge-agent-mismatch"
+	ruleDynamic       = "cgo-enabled"
+	ruleMissing       = "missing-binary"
+	ruleUnreadable    = "unreadable-binary"
+	rulePairArch      = "edge-agent-mismatch"
 )
 
 // CheckOne verifies that a binary is what its directory claims it is: the

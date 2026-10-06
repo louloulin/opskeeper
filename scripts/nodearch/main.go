@@ -54,67 +54,115 @@ func main() {
 	}
 }
 
+// slotName is the file name a slot points at, which is also what the
+// report prints. Derived rather than stored so a slot cannot report one
+// path and skip another.
+func slotName(s Slot) string { return filepath.Base(s.Abs) }
+
+// nonePresent reports whether every slot is absent.
+func nonePresent(slots []Slot) bool {
+	for _, s := range slots {
+		if _, err := os.Stat(s.Abs); err == nil {
+			return false
+		}
+	}
+	return true
+}
+
 // run walks the four target directories and judges what it finds there.
 func run(root, binRoot, goBin string) *Result {
 	res := &Result{}
 	for _, target := range Targets() {
-		infos := map[string]BuildInfo{}
-		read := map[string]bool{}
-		for _, slot := range SlotsFor(binRoot, target) {
-			path := slot.Abs
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				rel = path
-			}
-			rel = filepath.ToSlash(rel)
-
-			// Existence is decided with stat rather than by reading the
-			// exec error. A missing go toolchain and a missing binary
-			// both surface as ENOENT from Start, and conflating them
-			// would let a broken environment report four targets as
-			// "not built" — a build problem — instead of "not checked".
-			if _, err := os.Stat(path); err != nil {
-				if os.IsNotExist(err) {
-					if slot.Required {
-						res.Findings = append(res.Findings, Finding{
-							Binary: rel,
-							Rule:   ruleMissing,
-							Detail: "required node binary absent; a node without it starts and has no AI agent at all",
-						})
-					} else {
-						res.Skipped = append(res.Skipped, Skipped{Binary: rel, Reason: slot.Reason})
-					}
-					continue
-				}
-				res.Findings = append(res.Findings, Finding{
-					Binary: rel, Rule: ruleUnreadable, Detail: err.Error(),
-				})
-				continue
-			}
-			info, err := readBuildInfo(goBin, path)
-			if err != nil {
-				// An unreadable binary is not a pass. Reporting it keeps a
-				// broken toolchain — or a truncated artefact — from reading
-				// as four targets verified.
-				res.Findings = append(res.Findings, Finding{
-					Binary: rel, Rule: ruleUnreadable, Detail: err.Error(),
-				})
-				continue
-			}
-			read[filepath.Base(path)] = true
-			infos[filepath.Base(path)] = info
-			res.Checked++
-			res.Findings = append(res.Findings, CheckOne(rel, target, info)...)
-		}
-		edge, agent := Edge, Agent
-		if read[edge] && read[agent] {
-			res.CheckedPairs++
-			relEdge, _ := filepath.Rel(root, filepath.Join(binRoot, target.String(), edge))
-			res.Findings = append(res.Findings,
-				CheckPair(filepath.ToSlash(relEdge), agent, infos[edge], infos[agent])...)
-		}
+		res.evaluate(root, binRoot, goBin, target)
 	}
 	return res
+}
+
+// evaluate judges one target directory. It is a method rather than an inline
+// loop body because the two verdicts it can reach — "nothing was built here"
+// and "what was built here is wrong" — are the whole point of this gate, and
+// a test that has to build four cross-compiled binaries to reach the first
+// one is a test nobody writes.
+func (res *Result) evaluate(root, binRoot, goBin string, target Target) {
+	slots := SlotsFor(binRoot, target)
+
+	// Nothing built for this target is not the same finding as a broken
+	// build for it. Before decision 348 a directory that did not exist
+	// reported `missing-binary` for the required agent, so the gate was red
+	// on every machine where nobody had run a cross-build — which is every
+	// developer's machine and this repository's CI, and is the most likely
+	// reason nobody had wired it anywhere: a gate that is always red teaches
+	// people to skip it.
+	//
+	// The distinction is narrow on purpose. If *either* slot is present the
+	// target has been built for something, and a missing required agent is
+	// then a real finding. Only a directory where nothing at all was
+	// produced skips, with a reason that names the command to fix it.
+	if nonePresent(slots) {
+		for _, slot := range slots {
+			res.Skipped = append(res.Skipped, Skipped{
+				Binary: filepath.ToSlash(filepath.Join("bin", target.String(), slotName(slot))),
+				Reason: "nothing built for this target; run `make " + agentBuildPrefix + "-" + target.String() + "`",
+			})
+		}
+		return
+	}
+
+	infos := map[string]BuildInfo{}
+	read := map[string]bool{}
+	for _, slot := range slots {
+		path := slot.Abs
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			rel = path
+		}
+		rel = filepath.ToSlash(rel)
+
+		// Existence is decided with stat rather than by reading the
+		// exec error. A missing go toolchain and a missing binary both
+		// surface as ENOENT from Start, and conflating them would let a
+		// broken environment report four targets as "not built" — a build
+		// problem — instead of "not checked".
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				if slot.Required {
+					res.Findings = append(res.Findings, Finding{
+						Binary: rel,
+						Rule:   ruleMissing,
+						Detail: "required node binary absent; a node without it starts and has no AI agent at all",
+					})
+				} else {
+					res.Skipped = append(res.Skipped, Skipped{Binary: rel, Reason: slot.Reason})
+				}
+				continue
+			}
+			res.Findings = append(res.Findings, Finding{
+				Binary: rel, Rule: ruleUnreadable, Detail: err.Error(),
+			})
+			continue
+		}
+		info, err := readBuildInfo(goBin, path)
+		if err != nil {
+			// An unreadable binary is not a pass. Reporting it keeps a
+			// broken toolchain — or a truncated artefact — from reading
+			// as four targets verified.
+			res.Findings = append(res.Findings, Finding{
+				Binary: rel, Rule: ruleUnreadable, Detail: err.Error(),
+			})
+			continue
+		}
+		read[filepath.Base(path)] = true
+		infos[filepath.Base(path)] = info
+		res.Checked++
+		res.Findings = append(res.Findings, CheckOne(rel, target, info)...)
+	}
+	edge, agent := Edge, Agent
+	if read[edge] && read[agent] {
+		res.CheckedPairs++
+		relEdge, _ := filepath.Rel(root, filepath.Join(binRoot, target.String(), edge))
+		res.Findings = append(res.Findings,
+			CheckPair(filepath.ToSlash(relEdge), agent, infos[edge], infos[agent])...)
+	}
 }
 
 // readBuildInfo asks the Go toolchain to describe a binary.

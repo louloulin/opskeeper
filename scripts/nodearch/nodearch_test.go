@@ -329,3 +329,76 @@ func readRepoFile(t *testing.T, rel string) string {
 	}
 	return string(data)
 }
+
+// --- 决策 348：没构建过，与构建坏了，是两件事 -------------------------------
+//
+// Before this, `make node-arch-check` was red on every machine where nobody
+// had run a cross-build, including this repository's CI. A gate that is
+// always red is a gate nobody wires anywhere, and this one had no CI step
+// for exactly that reason — the shape decision 347 found in the ledger
+// package, one level down.
+
+func TestATargetWithNothingBuiltIsSkippedNotFailed(t *testing.T) {
+	binRoot := t.TempDir()
+	slots := SlotsFor(binRoot, Target{OS: "linux", Arch: "amd64"})
+	if !nonePresent(slots) {
+		t.Fatal("an empty bin root must read as nothing built")
+	}
+	res := &Result{}
+	res.evaluate(binRoot, binRoot, goBinForTest(t), Target{OS: "linux", Arch: "amd64"})
+	if len(res.Findings) != 0 {
+		t.Fatalf("nothing was built, so there is nothing to fail: %v", res.Findings)
+	}
+	if len(res.Skipped) != len(slots) {
+		t.Fatalf("skipped %d, want %d", len(res.Skipped), len(slots))
+	}
+	for _, s := range res.Skipped {
+		if !strings.Contains(s.Reason, "nothing built for this target") {
+			t.Fatalf("skip reason does not say why: %q", s.Reason)
+		}
+		if !strings.Contains(s.Reason, "make build-pig-linux-amd64") {
+			t.Fatalf("skip reason must name a command that exists: %q", s.Reason)
+		}
+	}
+}
+
+// The narrow part matters: a directory that has *something* in it has been
+// built for, and a missing agent there is a real finding.
+func TestATargetWithTheEdgeButNoAgentStillFails(t *testing.T) {
+	binRoot := t.TempDir()
+	target := Target{OS: "linux", Arch: "amd64"}
+	dir := filepath.Join(binRoot, target.String())
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, Edge), []byte("not a real binary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	slots := SlotsFor(binRoot, target)
+	if nonePresent(slots) {
+		t.Fatal("the edge exists, so this target has been built for")
+	}
+	res := &Result{}
+	res.evaluate(binRoot, binRoot, goBinForTest(t), target)
+	found := false
+	for _, f := range res.Findings {
+		if f.Rule == ruleMissing && strings.HasSuffix(f.Binary, "/"+Agent) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a built target missing its required agent must fail: %v", res.Findings)
+	}
+}
+
+// goBinForTest returns the toolchain `go version -m` needs. The two tests
+// above reach the unreadable-binary path on purpose — a file that is not a
+// Go binary — so a missing toolchain would produce the same message for a
+// different reason, and the test would stop testing what it says it tests.
+func goBinForTest(t *testing.T) string {
+	t.Helper()
+	if goBin := os.Getenv("GO"); goBin != "" {
+		return goBin
+	}
+	return "go"
+}

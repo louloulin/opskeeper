@@ -157,6 +157,50 @@ jobs:
       - name: The ledger's numbers are the tree's own numbers
         run: make ledger-check
 
+      # Every mutating HTTP route has to carry a written verdict: audited,
+      # or exempt with a reason. This target existed and was not in CI,
+      # which meant the audit surface could grow a route that nobody had
+      # classified — the failure mode decision 309 found by hand.
+      - name: Every mutating route has an audit verdict
+        run: make route-audit
+
+      # Every method the manager registers on the tunnel must have a
+      # sender in production code. Reachability cannot see this: the
+      # webssh handlers were registered, so a walk arrived and stopped,
+      # while no edge had ever sent either message (decision 346).
+      - name: Every registered tunnel method has a production sender
+        run: make rpc-match-check
+
+      # The delivery chain names the right directory for each cross
+      # target; nothing inspected the artefact inside it. This gate reads
+      # `go version -m` out of the binaries themselves, so a host build
+      # written into a cross slot fails here instead of on a customer host
+      # as ENOEXEC. It skips on machines that have run no cross-build —
+      # which includes CI — and says so, rather than reporting a red that
+      # trains people to skip it (decision 348).
+      - name: Node binaries match their target directory
+        run: make node-arch-check
+
+      # Four more check-shaped targets that existed and that no workflow
+      # ran. All four are green, so the fix here is wiring, not repair --
+      # which is the point: a target nobody runs is not a promise, it is a
+      # number somebody typed. ci-gate-check is what keeps this from
+      # quietly growing again (decision 348).
+      - name: The node agent reaches the LLM through the vetted path
+        run: make agent-llm-path-check
+
+      - name: AgentTeams identities are the ones the protocol declares
+        run: make agentteams-identity-check
+
+      - name: Edge credentials are not reachable from the node side
+        run: make edge-credential-check
+
+      - name: Webshell links name files that exist
+        run: make webshell-links-check
+
+      - name: A domain change moves its dependents with it
+        run: make domain-cochange
+
       # A migration target has to exist, and the fields written into it have
       # to be fields its handler actually decodes. entity.go carried a single
       # free-text Target that import, verify and rollback all pasted into a

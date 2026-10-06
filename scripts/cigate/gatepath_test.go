@@ -77,6 +77,32 @@ func TestARecursivePatternIsAnsweredByItsPrefix(t *testing.T) {
 	}
 }
 
+// The false alarm that decision 348 found by wiring a gate into CI for the
+// first time: `edge-credential-check` cds into core/floor/config, which is a
+// package inside the core/floor module rather than a module root, and
+// `go test ./...` from there works. Demanding a go.mod in the anchor reported
+// a live tree as gone -- and a gate that cries wolf on correct input is
+// deleted, which would have taken the path check with it.
+func TestACdAnchorInsideAModuleIsNotAMissingModule(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, []string{"core/floor"}, []string{"core/floor/config"})
+	mk := "check:\n\tcd core/floor/config && GOWORK=off go test ./... -count=1\n"
+	if err := checkGatePackagePaths(root, mk, map[string]bool{"check": true}); err != nil {
+		t.Fatalf("a cd anchor inside a live module was reported as gone: %v", err)
+	}
+}
+
+// The other half, and the rot the check was built for: the anchor is gone
+// altogether, and no ancestor of it carries a go.mod either.
+func TestACdAnchorThatNoLongerBelongsToAnyModuleIsReported(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, []string{"core/floor"}, []string{"core/floor/config"})
+	mk := "check:\n\tcd core/domains/config && GOWORK=off go test ./... -count=1\n"
+	if err := checkGatePackagePaths(root, mk, map[string]bool{"check": true}); err == nil {
+		t.Fatal("a cd anchor that left its module behind was accepted")
+	}
+}
+
 func TestAPackageThatMovedIsReportedWithItsTarget(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root, []string{"core/base"}, []string{"core/base/pkg/promptguard"})

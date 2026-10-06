@@ -34937,3 +34937,119 @@ A 阶段已在决策 63/66 收口，B 阶段在决策 64/65 收口（契约套�
 **结论**：Agent 侧能力几乎 100% 可插件化（约占代码量 60%）；控制面
 （身份/审批/审计/工作流）与数据面（遥测采集）不可插件化。架构上这条边界
 被固化成模块依赖方向——插件能碰的与碰不到的，靠编译器而非纪律保证。
+
+#### 4.281 决策 348：恒红的闸门等于没有闸门，以及 66 个目标里 CI 只调 24 个
+
+##### 4.281.1 起点：一个从未被任何工作流调用过的检查
+
+上一刀收尾时说「剩下的检查留给运营者决定」。这一刀就是那个决定，只是它先撞上了一件
+更基础的事。
+
+`make node-arch-check` 存在，有实现（`scripts/nodearch/`），有 Makefile 目标，也有
+对应的规则说明——**它在任何没有跑过交叉编译的机器上恒红**，而那包括本仓的 CI。
+恒红的来源不是它发现了什么，而是环境：它对四个目标目录逐个 stat 两个二进制，
+没构建过的目录当然没有二进制，于是每个目标各报一条 `missing-binary`。
+
+**恒红的闸门训练出的是「跳过它」。** 所以它从未被接进任何工作流，不是因为没人想到，
+而是因为接进去的那一刻它就是红的，而一个刚接上就红的东西没人会去修——会去的是
+把它摘掉。
+
+##### 4.281.2 「没构建过」与「构建坏了」是两件事
+
+修法是把两者分开，但要窄。判据落在 `nonePresent`：只有当一个目标目录里**两个 slot
+都不存在**时，才判 SKIP 并给出可执行的原因（`make build-pig-<os>-<arch>`）；只要目录里
+**有任何一个**二进制，缺了必需的 `pig` 仍然是 FAIL。
+
+窄是有理由的。一个目录里有东西，说明这个目标**被构建过**；被构建过却少了必需的
+节点 Agent，是一个真发现——节点会启动、会鉴权、会回答「你怎么样」，然后没有任何工具。
+把这种目录也算进 SKIP，等于用一个方便的规则换掉一个真实的告警。
+
+两条断言都做了变异验证并记录输出：去掉 `nonePresent` 判断，
+`TestATargetWithNothingBuiltIsSkippedNotFailed` 红并打印
+`nothing was built, so there is nothing to fail: [linux-amd64/pig: missing-b...]`；
+让 `nonePresent` 在任一 slot 存在时也返回 true，
+`TestATargetWithTheEdgeButNoAgentStillFails` 红并打印
+`the edge exists, so this target has been built for`。还原后 `-count=3` 全绿，
+实测空机器上 `make node-arch-check` exit 0（8 条 SKIP），造一个假的
+`bin/linux-amd64/opskeeper-edge` 之后仍然 FAIL（`pig` 报 `missing-binary`）。
+
+修好之后它才**第一次可以被接进 CI**——而在此之前，它连「红」都不是一个有意义的信号。
+
+##### 4.281.3 写一道新闸门，不等于它会运行
+
+系统清点了一遍接线情况，比预想的更难看：**Makefile 里有 66 个 `.PHONY` 目标，CI 只
+调用其中 24 个**。多数没调用的（`build-*` / `fetch-*` / `docker` / `clean` / `help`）
+是合理的——它们本来就不该每次 push 都跑。但其中有一批是**真正的检查**。
+
+`looksLikeGate` 认的是 `-check` 后缀，仓库里有 **23 个**这样形状的目标，接线前 CI 跑了
+**16 个**。新增的两道（`route-audit` 是上一刀造的，`rpc-match-check` 是决策 346 造的）
+当时也都没接线。
+
+这件事与决策 346 同族但方向相反，也与决策 347 同族但高一层：
+
+- `rpcmatch` 问的是「**有没有人调用你**」；
+- 本刀问的是「**有没有人运行你**」；
+- 再往上一层是「**有没有人接线你**」——`cigate` 一直在答的却是「你被接线的目标，
+  是不是都在它的表里」。
+
+**三种可达性都不是编译器的可达性。** 编译器能看见的是 `Makefile` 里的 `go test`
+指向的包还在不在（`gatepath.go` 已经在管这个），看不见的是这条命令**有没有人敲**。
+
+所以本刀给 `cigate` 补了反向的那一半：`unwiredCheckTargets`——Makefile 里每个
+`-check` 形状的目标，要么 CI 在调，要么必须写进新的 `NotRun` 表并附上理由。
+豁免是允许的，但**必须落字**，因为「故意不接」和「忘了」从外面看一模一样，只有后者会烂。
+
+##### 4.281.4 接上去以后，当场抓到两个真东西
+
+四道实测为绿、此前没人在流水线里跑过的检查一并接进 CI
+（`agent-llm-path-check` / `agentteams-identity-check` / `edge-credential-check` /
+`webshell-links-check`，外加形状不带 `-check` 但性质相同的 `domain-cochange`），
+并按规矩各登记进 `DecisionGates()` 附理由。`cigate` 立刻回报它们「像闸门却不在表里」，
+补完才绿——**这就是这道反向规则在起作用**：不是先写好再去接，是接上之后逼你写下理由。
+
+`edge-credential-check` 接线后触发了另一件事，也正是「接上去」与「存在」的区别：
+
+```
+cigate: 1 CI-reachable go test package path(s) in the Makefile no longer exist:
+  target "edge-credential-check": cd core/floor/config -- no such module directory
+```
+
+而这个目标当时是**绿的**，`make edge-credential-check` 手工跑完全通过。矛盾在于
+`gatepath.go` 的 `isModuleDir` 判的是「这个目录里**自己**有 go.mod」，而
+`core/floor/config` 是 `core/floor` 这个模块下的一个**包**，不是模块根——`cd` 到那里
+跑 `go test ./...` 完全合法。
+
+判据改成 `withinModule`：**目录存在，且从它自己往上到仓库根的任一层有 go.mod**。
+这个判据历史上错过两次，两个方向都错过：更早一版用「目录里有没有 .go 文件」，
+于是把本仓每一个嵌套模块都报成消失（`core/manager` 装着 `biz/` `server/` `model/`，
+自己一个 `.go` 文件都没有——一个模块根如果自带源码，它就不是边界了）。
+
+**两次都是同一个错误：把 `cd` 的落点当成一种「应当长成什么样」的东西来检查，而
+`cd` 的是一个地方，对一个地方该问的是「它还在吗」。** 一道会在正确输入上报错的闸门
+比没有闸门更糟，因为人对假警报的反应是删掉它。
+
+两条新断言同样做了变异验证：把祖先查找砍掉（退回旧行为），
+`TestACdAnchorInsideAModuleIsNotAMissingModule` 红并打印 `no such module directory`；
+`unwiredCheckTargets` 直接 `return nil`，`TestACheckShapedTargetNobodyRunsIsReported` 与
+`TestAnExemptionWithoutAReasonIsReported` 双双红。还原后 `./scripts/...` 全量
+`-count=3` 绿。
+
+##### 4.281.5 剩下两个不接的，和它们的理由
+
+`mysql-migration-check` 需要一台活的 MySQL（`OPSKEEPER_TEST_MYSQL_DSN`），而 per-push
+作业刻意不跑数据库容器；`version-check` 比的是 `RELEASE_VERSION.json` 与
+`git rev-parse HEAD:<tree>`，只在被签名的那个提交上才可能为绿，它其实接在
+`release.yml` 里。两个都记进 `NotRun` 并附理由——**记下来是因为表格腐烂的方式就是
+从「其实接在别处」开始的**，而 `version-check` 恰好就是这一种。
+
+接线后的读数：**23 个 `-check` 形状的目标，21 个在 CI 里跑，剩下 2 个正是 `NotRun`
+里写明理由的那两个**；`cigate` 汇报 **26 道验收闸门**（计划点名的 4 道 + 决策认领的
+22 道）全部有定义且被 CI 调用。
+
+##### 4.281.6 证据
+
+`make ci-gate-check` / `ledger-check` / `route-audit` / `rpc-match-check` /
+`node-arch-check` / `audit-port-check` / `deadcode-ratchet-check` /
+`agent-llm-path-check` / `agentteams-identity-check` / `edge-credential-check` /
+`webshell-links-check` / `domain-cochange` 十二道全绿；六个模块 `go build` 通过，
+测试 4599 + 1022 全绿；ratchet `-count=3` 绿；routeaudit 177 / 127 / 50 / 0。

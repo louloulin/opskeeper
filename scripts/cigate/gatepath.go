@@ -93,7 +93,7 @@ func checkGatePackagePaths(root string, makefileSrc string, reachable map[string
 		// The directory the recipe cds into. A recipe that cannot get there
 		// runs nothing, and this is the module half of the same rot.
 		if p.Module != "." && !deadModules[p.Module] {
-			if !isModuleDir(modPath) {
+			if !withinModule(modPath, root) {
 				deadModules[p.Module] = true
 				dead = append(dead, fmt.Sprintf("target %q: cd %s -- no such module directory",
 					p.Target, p.Module))
@@ -145,18 +145,40 @@ func literalDir(pattern string) string {
 	return p
 }
 
-// isModuleDir reports whether a directory is still a module root.
+// withinModule reports whether a `cd` anchor is somewhere the toolchain can
+// actually build from: an existing directory, with a go.mod in it or in one
+// of its ancestors up to the repository root.
 //
-// The predicate is go.mod, not the presence of Go files, and the first
-// version of this check used dirHasGoFiles here and reported every nested
-// module in the repository as gone: core/manager holds biz/, server/ and
-// model/ but not one .go file of its own, because a module root that had
-// source in it would not be a boundary. A check that fails on correct input
-// is worse than no check, since the response to a false alarm is to delete
-// it.
-func isModuleDir(dir string) bool {
+// Requiring the go.mod to be *in* the anchor was too strict, and it fired on
+// the real Makefile the moment a gate got wired into CI for the first time.
+// `edge-credential-check` cds into core/floor/config, which is a package
+// inside the core/floor module and not a module root of its own; `cd` there
+// and `go test ./...` works, and the check reported it as gone. The earlier
+// version of this predicate was wrong in the other direction -- it looked for
+// .go files, so every nested module in the repository (core/manager holds
+// biz/, server/ and model/ but not one .go file of its own, because a module
+// root that had source in it would not be a boundary) read as dead. Both
+// failures are the same mistake: a cd anchor is a *place*, and the question
+// about a place is whether it is still there, not whether it looks like the
+// kind of place the author expected.
+func withinModule(dir, root string) bool {
 	info, err := os.Stat(dir)
-	return err == nil && info.IsDir() && fileExists(filepath.Join(dir, "go.mod"))
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	for d := dir; ; {
+		if fileExists(filepath.Join(d, "go.mod")) {
+			return true
+		}
+		if d == root {
+			return false
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false
+		}
+		d = parent
+	}
 }
 
 func fileExists(p string) bool {

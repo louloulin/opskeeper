@@ -742,6 +742,72 @@ func TestThisRepositoryInvokesEveryGateItPromises(t *testing.T) {
 	}
 }
 
+// --- 决策 348：写一道闸门，不等于它会运行 ---------------------------------
+//
+// node-arch-check had a recipe, a rule, and no workflow step, because it was
+// red on every machine that had not run a cross-build -- including CI. The
+// repair is two-sided: the gate had to stop being permanently red, and the
+// class of "check-shaped target nobody runs" had to stop being invisible.
+
+func TestACheckShapedTargetNobodyRunsIsReported(t *testing.T) {
+	// A name that is not in the gate tables on purpose: this rule is about
+	// the targets nobody promised anything about, and a fixture drawn from
+	// the real tables stops testing the moment a decision registers one.
+	defined := map[string]bool{"edge-telemetry-check": true, "build-pig-all": true}
+	problems := unwiredCheckTargets(defined, map[string]bool{"build-pig-all": true})
+	if len(problems) != 1 {
+		t.Fatalf("one unwired check-shaped target should be one line, got %d: %v", len(problems), problems)
+	}
+	if !strings.Contains(problems[0], "edge-telemetry-check") {
+		t.Errorf("the report does not name the target to fix:\n%s", problems[0])
+	}
+	if !strings.Contains(problems[0], "NotRun") {
+		t.Errorf("the report must name the two ways out, or the reader invents a third:\n%s", problems[0])
+	}
+}
+
+// Targets that do not read like checks are not in question here. A Makefile
+// with 40 build and fetch targets and no check among them is a Makefile that
+// has simply not written one yet, which is a different conversation.
+func TestATargetThatDoesNotReadLikeACheckIsNotDemanded(t *testing.T) {
+	defined := map[string]bool{"build-pig-all": true, "fetch-deps": true, "clean": true}
+	if problems := unwiredCheckTargets(defined, map[string]bool{}); len(problems) != 0 {
+		t.Fatalf("ordinary targets were demanded a CI step: %v", problems)
+	}
+}
+
+// A target CI already runs is the whole point of the rule, so it must not
+// also show up in the report -- otherwise fixing it once reports it twice.
+func TestACheckThatCIRunsIsNotReported(t *testing.T) {
+	defined := map[string]bool{"edge-telemetry-check": true}
+	if problems := unwiredCheckTargets(defined, map[string]bool{"edge-telemetry-check": true}); len(problems) != 0 {
+		t.Fatalf("a check that CI runs was reported as unwired: %v", problems)
+	}
+}
+
+// The exemption is the escape hatch, so it has to cost something. An entry
+// with no reason is a comment that reads like a decision, and the table
+// rots from exactly that shape.
+func TestAnExemptionWithoutAReasonIsReported(t *testing.T) {
+	defined := map[string]bool{"some-check": true}
+	NotRun["some-check"] = "   "
+	problems := unwiredCheckTargets(defined, map[string]bool{})
+	delete(NotRun, "some-check")
+	if len(problems) != 1 || !strings.Contains(problems[0], "empty reason") {
+		t.Fatalf("an exemption with no reason was accepted: %v", problems)
+	}
+}
+
+// A named gate is already reported by the wired check, with the reason the
+// promise was made. Reporting it here as well would be the same finding
+// twice, and a report that repeats itself is a report people skim.
+func TestANamedGateMissingFromCIIsReportedOnceNotTwice(t *testing.T) {
+	defined := map[string]bool{"node-arch-check": true}
+	if problems := unwiredCheckTargets(defined, map[string]bool{}); len(problems) != 0 {
+		t.Fatalf("a gate the other rule already reports was repeated here: %v", problems)
+	}
+}
+
 func mustReadMakefile(t *testing.T) []byte {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))

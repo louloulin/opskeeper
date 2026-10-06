@@ -244,6 +244,65 @@ func DecisionGates() []Gate {
 				"them anywhere, while rollback only ever read them from a file, so every " +
 				"rollback reported zero and exited successfully (decision 291, 292)",
 		},
+		{
+			Target: "ledger-check",
+			Why: "fifteen assertions about the architecture ledger, none of which anything was " +
+				"running. The ledger is quoted as the record of what was decided, so an " +
+				"assertion that the ledger no longer satisfies is a decision silently " +
+				"un-made, and nothing in the build tree would have said so (decision 347)",
+		},
+		{
+			Target: "route-audit",
+			Why: "every mutating HTTP route must carry a written verdict -- audited, or " +
+				"exempt with a reason. The audit surface could grow a route nobody had " +
+				"classified, and a route that writes without writing to the ledger is " +
+				"invisible exactly when it is wrong (decision 348)",
+		},
+		{
+			Target: "rpc-match-check",
+			Why: "a method the manager registers on the tunnel must have a sender in " +
+				"production code. Reachability cannot see this: the webssh handlers were " +
+				"registered, so a walk arrived and stopped, while no edge had ever sent " +
+				"either message. Writing the gate was not the same as running it -- this " +
+				"table is what forces the second half (decisions 346, 348)",
+		},
+		{
+			Target: "agent-llm-path-check",
+			Why: "the node agent has to reach the model through the one path that was vetted " +
+				"for it. The property was true, and the check existed, and nothing ran the " +
+				"check -- so the property was true by history rather than by construction " +
+				"(decision 348)",
+		},
+		{
+			Target: "agentteams-identity-check",
+			Why: "an AgentTeams identity that drifts from the protocol is an authentication " +
+				"change nobody decided on; the check existed and was green on a developer's " +
+				"machine and on no pull request (decision 348)",
+		},
+		{
+			Target: "edge-credential-check",
+			Why: "a node process that can read a platform cloud credential has turned the " +
+				"agent's tool scope into a suggestion. Wiring this one up is also what " +
+				"exposed the cd-anchor false alarm in scripts/cigate/gatepath.go: it cds " +
+				"into a package inside the core/floor module, and the path check had been " +
+				"requiring a module root there (decisions 246, 348)",
+		},
+		{
+			Target: "webshell-links-check",
+			Why: "a webshell link naming a file that is not in the tree is a 404 a user " +
+				"reports and a maintainer cannot reproduce; the check that says so existed " +
+				"and ran in nobody's pipeline (decision 348)",
+		},
+		{
+			Target: "node-arch-check",
+			Why: "the delivery chain puts binaries in the right per-target directory; " +
+				"nothing inspected the artefact inside it, so a host build written into " +
+				"a cross slot ships silently and fails on a customer host as ENOEXEC. " +
+				"It could not be wired in while it was red on every machine without a " +
+				"cross-build -- a gate that is always red teaches people to skip it -- so " +
+				"'nothing was built' now skips and 'what was built is wrong' still fails " +
+				"(decisions 134, 348)",
+		},
 	}
 }
 
@@ -321,6 +380,16 @@ func check(root string) error {
 				"either add it with its reason or rename it so it does not read like one", target))
 	}
 
+	// The other half of the promise. A target whose name reads like a check
+	// and which no workflow runs is not a promise, it is a number somebody
+	// typed. node-arch-check is the shape this rule was built for: it had
+	// been red on every machine without a cross-build -- including CI -- and
+	// so had never been wired anywhere (decision 348). Exemption is
+	// allowed, but it has to be written down here with a reason, because
+	// "left out on purpose" and "forgotten" look identical from outside and
+	// only the second one rots.
+	problems = append(problems, unwiredCheckTargets(defined, invoked)...)
+
 	// A gate that runs twenty-eight of the suite's thirty tests is only as
 	// honest as the two it skips. That pair is re-derived from the sources
 	// rather than read from the Makefile, because a skip list that checks
@@ -367,6 +436,54 @@ func check(root string) error {
 		return fmt.Errorf("plan acceptance gates are not all wired:\n  %s", strings.Join(problems, "\n  "))
 	}
 	return nil
+}
+
+// NotRun is every check-shaped Makefile target CI does not invoke, each with
+// the reason it is not there.
+//
+// It is a separate table from NotInCI because NotInCI is about the plan's
+// acceptance lines -- promises written in prose, which may or may not have a
+// make target at all -- while this is about targets that exist and go unused.
+// Merging them would lose the distinction that matters here: a target nobody
+// runs is a decision somebody has not made yet, not a decision somebody made
+// and wrote down elsewhere.
+var NotRun = map[string]string{
+	"version-check": "a release-time assertion, not a per-push one: it compares RELEASE_VERSION.json's web_hash and teamharness_source_tree against `git rev-parse HEAD:<tree>`, so it can only be green on the commit that was actually signed. It is not unwired, it is wired in .github/workflows/release.yml where those comparisons mean something; NotInCI already carries the same reasoning in prose (decisions 166, 348)",
+	"mysql-migration-check": "it needs a live MySQL to migrate and roll back against (OPSKEEPER_TEST_MYSQL_DSN), and the per-push job deliberately runs no database container; the same property is covered for the other engines by the gates that do run. Wiring it into a job with a MySQL service is a real change to the pipeline, not a line in this table (decision 348)",
+}
+
+// unwiredCheckTargets reports every check-shaped target no workflow runs and
+// no exemption covers.
+//
+// A target is check-shaped by the same naming rule the reverse-drift check
+// uses, so the two agree on what counts as a check: if `make x-check` is
+// exempt from being promised in one direction, it has to be exempt from being
+// required in the other, and reading one rule for the shape keeps them from
+// drifting apart.
+func unwiredCheckTargets(defined, invoked map[string]bool) []string {
+	var problems []string
+	for target := range defined {
+		if !looksLikeGate(target) || invoked[target] {
+			continue
+		}
+		if isGate(target, allGates()) {
+			// Already reported above, with the reason the promise was made.
+			continue
+		}
+		reason, exempt := NotRun[target]
+		if !exempt {
+			problems = append(problems, fmt.Sprintf(
+				"the Makefile defines %q, it reads like a check, and nothing runs it; wire it "+
+					"into ci.yml, or record it in NotRun with the reason it does not run there", target))
+			continue
+		}
+		if strings.TrimSpace(reason) == "" {
+			problems = append(problems, fmt.Sprintf(
+				"NotRun lists %q with an empty reason; an exemption nobody can check is a "+
+					"shorter comment that reads the same", target))
+		}
+	}
+	return problems
 }
 
 // makeTargets is the set of target names the Makefile defines.
