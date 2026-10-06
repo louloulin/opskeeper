@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -135,6 +136,31 @@ func TestNodeAgentDelivery(t *testing.T) {
 
 	health := edge.WaitForRunningAgent(t, env, login.AccessToken, edgeID, 3*time.Minute)
 	t.Logf("node reports agent health: %s", testenv.MustJSON(health))
+
+	// Which architectures this run covered used to be nobody's knowledge.
+	//
+	// Docker Desktop starts an amd64 image on an arm64 host under emulation,
+	// prints one WARNING on stderr, and carries on. So this acceptance could
+	// pass with a linux/amd64 broker under emulation and a native arm64 node
+	// on the same machine — a mixed leg that satisfies neither half of "run
+	// it on amd64 and on arm64" while reading exactly like one that does.
+	//
+	// The assertion is therefore not "the broker is arm64". It is that the
+	// run *knows* and *says* which architecture each side ran on. A harness
+	// that cannot name its own leg cannot be used to claim one.
+	t.Run("the run declares the architectures it covered", func(t *testing.T) {
+		if frontier.Architecture == "" {
+			t.Fatalf("the harness did not learn the broker's architecture; this run cannot claim a leg")
+		}
+		t.Logf("architecture: node/manager %s (host), broker %s (container)",
+			runtime.GOARCH, frontier.Architecture)
+		if frontier.Architecture == runtime.GOARCH {
+			t.Logf("both sides ran natively on the same architecture")
+		} else {
+			t.Logf("MIXED leg: broker %s under emulation on an %s host — this is not a single-architecture run",
+				frontier.Architecture, runtime.GOARCH)
+		}
+	})
 
 	t.Run("the agent is an independent process", func(t *testing.T) {
 		pids := edge.AgentPIDs(t)

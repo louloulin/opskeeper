@@ -5,6 +5,7 @@ package testenv
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,29 @@ type Frontier struct {
 	// EdgeAddr is host:port for a node to dial (frontier's edgebound
 	// listener, 40012 in the shipped config).
 	EdgeAddr string
+
+	// Architecture is what the broker process actually reports for itself,
+	// read out of the running container with `uname -m`.
+	//
+	// It is a field rather than a comment because the acceptance's own
+	// architecture used to be nobody's knowledge: Docker Desktop happily
+	// starts an amd64 image on an arm64 host under emulation, prints one
+	// WARNING to stderr, and keeps going. So a delivery run on an M-series
+	// Mac could be, without anyone noticing, a run where the broker was
+	// amd64 and everything else was arm64 — and a reader of the green
+	// result had no way to tell which leg they had just verified.
+	Architecture string
+}
+
+// frontierPlatform returns the platform the harness should ask the daemon
+// for, or "" to take the daemon's default.
+//
+// It exists so CI can pin the leg (`OPSKEEPER_E2E_PLATFORM=linux/amd64`)
+// rather than inheriting whatever the developer happens to be running on.
+// Pinning does not report the result, which is why Frontier.Architecture
+// exists too: one asks, the other answers.
+func frontierPlatform() string {
+	return strings.TrimSpace(os.Getenv("OPSKEEPER_E2E_PLATFORM"))
 }
 
 var (
@@ -77,7 +101,8 @@ func sharedFrontier(t *testing.T) *Frontier {
 		defer cancel()
 		container, err := tc.GenericContainer(ctx, tc.GenericContainerRequest{
 			ContainerRequest: tc.ContainerRequest{
-				Image: frontierImage(),
+				Image:         frontierImage(),
+				ImagePlatform: frontierPlatform(),
 				ExposedPorts: []string{
 					"40011/tcp",
 					"40012/tcp",
@@ -113,10 +138,16 @@ func sharedFrontier(t *testing.T) *Frontier {
 			frontierErr = err
 			return
 		}
+		arch, err := containerArchitecture(ctx, container)
+		if err != nil {
+			frontierErr = fmt.Errorf("frontier architecture: %w", err)
+			return
+		}
 		frontierBox = container
 		frontierInst = &Frontier{
-			ServiceAddr: fmt.Sprintf("%s:%s", host, servicePort.Port()),
-			EdgeAddr:    fmt.Sprintf("%s:%s", host, edgePort.Port()),
+			ServiceAddr:  fmt.Sprintf("%s:%s", host, servicePort.Port()),
+			EdgeAddr:     fmt.Sprintf("%s:%s", host, edgePort.Port()),
+			Architecture: arch,
 		}
 	})
 	if frontierErr != nil {
@@ -205,4 +236,53 @@ func WithFrontier(f *Frontier) Option {
 		c.extraEnv["OPSKEEPER_FRONTIER_DISABLED"] = "false"
 		c.extraEnv["OPSKEEPER_FRONTIER_ADDR"] = f.ServiceAddr
 	}
+}
+
+// containerArchitecture asks the running broker what architecture it is.
+//
+// `uname -m` inside the container rather than an inspect call, because the
+// property being asked for is the one the process would act on. A container
+// that fails this is a broker we cannot make claims about, and the harness
+// says so rather than continuing with an unknown leg.
+func containerArchitecture(ctx context.Context, c tc.Container) (string, error) {
+	code, out, err := c.Exec(ctx, []string{"uname", "-m"})
+	if err != nil {
+		return "", fmt.Errorf("exec uname -m: %w", err)
+	}
+	if code != 0 {
+		return "", fmt.Errorf("uname -m exited %d in the broker container", code)
+	}
+	// The exec reader hands back whatever the multiplexed stream carried,
+	// padding and non-printables included, so the value is filtered down to
+	// what an architecture name is made of rather than trimmed: a leading
+	// NUL survives strings.TrimSpace and would end up in the log line and,
+	// worse, in any equality check against runtime.GOARCH.
+	arch := sanitizeArch(readAll(out))
+	if arch == "" {
+		return "", fmt.Errorf("uname -m printed nothing usable in the broker container")
+	}
+	return arch, nil
+}
+
+// sanitizeArch keeps [a-z0-9_] from the first thing that looks like an
+// architecture name and drops the rest.
+func sanitizeArch(raw string) string {
+	var sb strings.Builder
+	for _, r := range raw {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_':
+			sb.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			sb.WriteRune(r + 32)
+		case r == '\n' && sb.Len() > 0:
+			return sb.String()
+		}
+	}
+	return sb.String()
+}
+
+func readAll(r io.Reader) string {
+	var sb strings.Builder
+	_, _ = io.Copy(&sb, r)
+	return sb.String()
 }

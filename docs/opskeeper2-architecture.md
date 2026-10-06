@@ -4581,6 +4581,77 @@ exit status 3
 台账此前把「跨架构」整行记成未做。准确说法是：**一腿已跑，另一腿缺一个执行
 环境**。
 
+### 4.310 决策 376：更正 §4.309——那次 e2e **不是** arm64 全链，是一条混血腿
+
+§4.309 写「决策 373 那次 e2e 的 broker 是 linux/arm64」。**这是错的。**
+本轮实测：
+
+```
+$ docker image inspect singchia/frontier:1.2.5 --format '{{.Architecture}}'
+amd64
+$ docker run --rm --entrypoint sh docker.io/singchia/frontier:1.2.5 -c 'uname -m'
+WARNING: The requested image's platform (linux/amd64) does not match the
+         detected host platform (linux/arm64/v8) and no specific platform was requested
+x86_64
+```
+
+宿主的 Docker 引擎是 `aarch64/linux`，而 `tests/e2e/testenv/frontier.go` 的
+`defaultFrontierImage` 指向的镜像**只有 amd64 可用**（registry 此刻不可达，
+拉不到 arm64 变体）。于是那次 e2e 的真实拓扑是：
+
+| 部件 | 架构 | 是否原生 |
+|---|---|---|
+| broker（frontier 容器） | linux/**amd64**（`x86_64`） | ❌ QEMU 模拟 |
+| manager / opskeeper-edge / pig | darwin/**arm64**（宿主原生） | ✅ |
+
+§4.309 的错误不是记错了一个数，是**它推理的方向反了**：它看到宿主是 arm64、
+就断定容器里的也是 arm64。而这件事 Docker 自己给出的证据就在 stderr 里——
+一条 WARNING，被 harness 完全无视了。**"容器里的架构 = 宿主架构"是一个想当然，
+而这个想当然恰好把一条混血腿写成了一条干净的 arm64 腿。**
+
+#### 4.310.1 真正该修的是「没有人问」
+
+改台账只能改这一次的描述，下次任何人跑 e2e 还是不知道自己在验哪条腿。所以改
+harness，让**每次运行自己报出架构**：
+
+- `testenv.Frontier` 增加 `Architecture` 字段：容器起来之后在里面 exec 一次
+  `uname -m` 取真值。问的是「这个进程会按哪个架构行动」，而不是某个 inspect
+  字段的转述。
+- `frontierPlatform()` + `OPSKEEPER_E2E_PLATFORM`：CI 可以**钉住**一条腿
+  （`OPSKEEPER_E2E_PLATFORM=linux/amd64`），而不是继承开发机的架构。
+  **一个是问，一个是答，两个都需要。**
+- `TestNodeAgentDelivery` 增加子用例 `the run declares the architectures it
+  covered`：断言不是「broker 是 arm64」，而是**这次运行知道自己跑了什么并说出来**。
+  架构不一致时它直说 `MIXED leg`。
+
+本轮跑出来的输出（修复后）：
+
+```
+architecture: node/manager arm64 (host), broker x86_64 (container)
+MIXED leg: broker x86_64 under emulation on an arm64 host — this is not a single-architecture run
+--- PASS: TestNodeAgentDelivery (21.59s)
+```
+
+顺带修掉一个当场看见的输出缺陷：`uname -m` 经 exec 回来带着填充空白，
+`strings.TrimSpace` 去不掉（前导是 NUL），会让日志难看、也让任何与
+`runtime.GOARCH` 的相等判断失真——所以过滤成架构名真正由什么字符组成
+（`[a-z0-9_]`）再取。
+
+#### 4.310.2 方案 §六 那一行的准确状态（第二次改写）
+
+| 腿 | 状态 |
+|---|---|
+| arm64 完整 e2e | ❌ **未跑**（broker 侧没有原生 arm64 可用） |
+| 混血腿（amd64 broker 模拟 + arm64 节点） | ✅ 已跑两次，且现在会自己声明 |
+| amd64 完整 e2e | ❌ 未跑（需要 amd64 宿主或 CI 的 amd64 腿） |
+| arm64 二进制构建与可执行 | ✅ 已跑（决策 374） |
+
+**这一行此前被我写过两次（§4.309 说「arm64 已跑」、更早说「整行未做」），两次
+都不对。** 错因相同：把「台账里写着已完成」或「跑出来是绿的」当成了「架构这一
+格也有证据」。现在这一行里每一格都有它自己的判据，且**混血腿被明确标成既不是
+arm64 也不是 amd64**——这是本轮唯一真正变好的地方：不是多了一个绿，是少了一个
+能被误读成绿的绿。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
