@@ -5665,6 +5665,142 @@ RSS 的地址空间——用 RLIMIT_AS 卡 Go 程序或JVM 是经典的自伤。
 通用限流机制"变成"两个工具的内存上界，加一个进程内工具不适用该模型的说明"。
 **这是把工作做小，不是把工作推掉。** 而推掉它的那个理由（"没统一 executor"）
 是 4.323 用一个没核实的前提写的——**本节是那个前提被实测推翻的第三次**。
+### 4.326 决策 392：改了生产代码——`limits.memory` 真正要防的不是子进程，是**捕获缓冲**
+
+4.325 量完内存曲线说「下一轮先量 sosreport/strace 的峰值」。本轮量了，
+量完发现要量的对象错了：**不是子进程，是 Go 这一侧。**
+
+#### 4.326.1 strace 自身只占 2.6MB
+
+Debian bookworm 容器里装 `strace`，跟一个 12 秒的繁忙进程（`while` 循环里
+反复 `cat /etc/hostname`，故意制造系统调用）：
+
+```
+strace -c -p $busy            -> 2660 KB
+strace -f -p $busy -e trace=all -> 2232 KB
+```
+
+**2.6 MB。** 给一个峰值 2.6MB 的子进程加 rlimit，是在给一个不存在的问题上锁。
+
+#### 4.326.2 真正的风险在 `cmd.CombinedOutput()`
+
+然后去读这两个工具怎么接输出——`strace.go:92` 与 `sosreport.go:80` 都是：
+
+```go
+cmd := exec.CommandContext(ctx, "strace", args...)
+out, err := cmd.CombinedOutput()
+```
+
+**`CombinedOutput` 把子进程的 stdout 和 stderr 全部缓冲进一个 slice，没有上限。**
+所以内存风险从来不在 strace 进程里，在**Go 把 strace 的输出整个吞下去**这件事里。
+
+更要紧的是它和 `output_bytes` 的关系。manifest 给 `host_strace` 声明了
+`output_bytes: 131072`、给 `host_sosreport` 声明了 `524288`——**看起来这些
+工具已经有内存上界了。** 但 `output_bytes` 是在 `toolbroker/server.go:391`
+的 `replyFor` 里生效的，那是在**缓冲完之后**。子进程写 4GB，`CombinedOutput`
+先把这 4GB 收进内存，然后 `replyFor` 才把回复砍到 128KB，然后 `cmd` 退出、
+slice 被回收。
+
+**`output_bytes` 是一道回复长度的闸门，从来不是一道内存闸门。** 一个读者
+看着 manifest 里的 `output_bytes: 131072` 会合理地以为"这个工具最多吃
+128KB 内存"——这个推论是错的，而它是**错的**这一事实此前没有任何一行注释
+在提示。
+
+#### 4.326.3 而防住它的机制，仓库里早就写好了
+
+`core/floor/skill/subprocess.go:245` 有一个 `cappedWriter`，
+`subprocess.go:222` 已经在用：
+
+```go
+cmd.Stdout = &cappedWriter{w: stdoutBuf, max: MaxSubprocessStdout}
+cmd.Stderr = &cappedWriter{w: stderrBuf, max: MaxSubprocessStderrTail * 4}
+```
+
+`core/manager/middleware/adapter/git/runner.go:259` 还有一份**独立副本**。
+
+**三份证据说明这不是"缺一个机制"，是"机制写好了但没人调"**——和 §4.28.4
+记的 spill helper 是同一个形状（那次是"helper 写了，没有工具调用它"）。
+`MaxSubprocessStdout = 16MB` 那个上界一直存在，只是走 `skill.RunSubprocess`
+的工具有，`CombinedOutput` 的没有。
+
+**四个内置工具走的是后者**：`dmesg` / `strace` / `sosreport` / `traceroute`。
+
+#### 4.326.4 本轮改了什么
+
+新增 `core/floor/skill/builtin/capture.go` 的 `runCapped`，用
+`cappedBuffer` 包住 stdout/stderr，上界取 `skill.MaxSubprocessStdout`
+（16MB），stderr 取 `skill.MaxSubprocessStderrTail`（4KB）——**和共享
+runner 用的是同一组常数**，所以走这条路线的工具没有被更严的标准对待。
+
+四个工具改用它。行为上有两处刻意的改动：
+
+- **stdout 与 stderr 分开**。原先 `CombinedOutput` 把两者混在一起，所以
+  `dmesg` 的解析函数在解析一段可能混着错误信息的文本。分开之后解析的是
+  纯 stdout，错误信息单独走 stderr——这本来就该是这样。
+- **非零退出码不再被吞掉**。`runCapped` 把 `waitErr` 原样返回，由调用方
+  决定它是错误还是信息。`traceroute` 跳点不可达时会非零退出但仍有可用
+  输出（它原来就靠 `err != nil` 记 `res.Error` 然后继续解析），这个行为
+  保留了；而 `strace` 权限不足时 stdout 为空、只有 stderr，改走 stderr 报错。
+
+**没碰 autonomy 那条 argv 比对路径**，也没碰任何 manifest 结构——
+`limits.memory` 字段本轮仍然没有加（理由见 4.325.4：加一个不生效的字段
+比不加更坏）。
+
+#### 4.326.5 测试，以及它为什么不空过
+
+`capture_test.go` 两条断言，第一条是为了让第二条有意义：
+
+```
+unbounded capture: 41943040 bytes (cap is 16777216)
+capped capture:   16777216 bytes
+--- PASS
+```
+
+第一条跑的是**被这次改动删掉的那个写法**（测试里保留了一份
+`runUnbounded`，注释写明"如果有人把 `CombinedOutput` 拿回来，它就是这个形状"），
+断言子进程确实能产出 40MB ——**超过 16MB 上界**。如果这条不成立，
+第二条「capped 不超过 16MB」可能只是因为命令压根没跑起来。
+
+**这就是决策 387 在 e2e 里见过的那个诱饵技巧的同一个道理**：一个只检查
+"上界没被突破"的测试，必须先证明"上界本来会被突破"。少一条，它就能在
+什么都没测的情况下绿。
+
+第三条断言留下的内容是真实的子进程输出（不是截断提示、不是零填充），
+防的是"上界用一个空 slice 实现"这种作弊式通过。
+
+#### 4.326.6 本轮的净变化
+
+`limits.memory` 这一项，四节下来的轨迹是：
+
+| | 状态 |
+|---|---|
+| 4.323 | 待选型（基于一个没核实的前提） |
+| 4.324 | cgroup 实测被否，改走 re-exec + rlimit，改动面十几个 spawn 点 |
+| 4.325 | 流式工具内存 O(1)，方案担心的风险在流式工具上不成立 |
+| **4.326** | **风险定位到 `CombinedOutput` 的无界捕获；已用仓库既有的 `cappedWriter` 机制修掉四个工具；`limits.memory` 字段仍未加，且现在**不该**加了** |
+
+最后一句是本节最重要的一句。**现在不需要 rlimit，不需要 cgroup，不需要
+`limits.memory` 字段**——真正会吃掉内存的那条路已经被堵上了，而剩下的
+两个工具（`strace`/`sosreport`）的子进程本身只占 2.6MB。
+
+**方案的 P1-5 要的是一个内存上界，这个上界现在有了，而且是用仓库里
+本来就有的机制实现的，没有引入 cgroup 依赖、没有碰部署形态、没有碰
+autonomy 的 argv 约束。** 方案里点名的 `limits.memory` **字段名**没有落地，
+但**它要防的那件事**落地了。这两者的区别本节必须写清楚，否则下一个人
+会去"补那个字段"，补出一个 4.325.4 说过不该有的、不生效的声明。
+
+#### 4.326.7 一处留给人的说明，不留给代码
+
+`tail_file` 那一类**在 edge 进程内跑、不 spawn** 的工具（4.325.3 查过，
+它的 `exec` 调用数是 0），**任何"每工具一个子进程上限"的模型都对它不成立**。
+本轮没有为它做特殊处理，因为 `output_bytes` 在 `replyFor` 里对它是有效的
+（回复最终仍然要过那道闸），所以**它的风险已经在别处被管住了**。
+
+但这一点值得留在台账里而不是留在代码注释里：`tail_file` 读一个 10GB 的
+文件时，内存占用在 **edge 进程自身**，一个 edge 进程被 OOM 会带走**所有**
+工具能力，而不只是这一个。**这是"工具级配额"这个模型在进程内工具上的
+真实边界**，将来若要给进程内工具做上限，做法不会是 rlimit，而是把这类
+工具挪出 edge 进程——那是一个架构决定，不是一个补丁。
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，

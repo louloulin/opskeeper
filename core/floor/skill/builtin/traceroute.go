@@ -86,8 +86,7 @@ func (Traceroute) Execute(ctx context.Context, params json.RawMessage) (json.Raw
 	start := time.Now()
 	// 优先 traceroute, 退化到 tracepath (busybox).
 	bin, args := pickTracerouteBin(p.MaxHops, p.Host)
-	cmd := exec.CommandContext(ctx, bin, args...)
-	output, err := cmd.CombinedOutput()
+	output, _, err := runCapped(ctx, bin, args...)
 	res := tracerouteResult{
 		Host:       p.Host,
 		DurationMS: time.Since(start).Milliseconds(),

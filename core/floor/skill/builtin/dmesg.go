@@ -2,10 +2,10 @@ package builtin
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/vincent-wuhan/opskeeper/core/floor/skill"
@@ -74,12 +74,11 @@ func (Dmesg) Execute(ctx context.Context, params json.RawMessage) (json.RawMessa
 	}
 
 	args := []string{"-T", "--level=" + p.Levels}
-	cmd := exec.CommandContext(ctx, "dmesg", args...)
-	out, err := cmd.CombinedOutput()
+	out, errTail, _ := runCapped(ctx, "dmesg", args...)
 	res := dmesgResult{}
-	if err != nil {
+	if len(bytes.TrimSpace(errTail)) > 0 && len(out) == 0 {
 		// 常见: 容器里 "dmesg: read kernel buffer failed: Operation not permitted"
-		res.Error = strings.TrimSpace(string(out))
+		res.Error = strings.TrimSpace(string(errTail))
 		return json.Marshal(res)
 	}
 	parseDmesg(string(out), &res, p.MaxLines)

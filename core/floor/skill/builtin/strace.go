@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -89,12 +88,18 @@ func (Strace) Execute(ctx context.Context, params json.RawMessage) (json.RawMess
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(p.DurationSec+2)*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "strace", args...)
-	out, err := cmd.CombinedOutput()
+	out, errTail, _ := runCapped(ctx, "strace", args...)
 	res := straceResult{PID: p.PID, DurationS: p.DurationSec}
-	if err != nil {
+	if len(out) == 0 {
 		// ptrace 失败常见: "Operation not permitted" / "Permission denied"
-		res.Error = err.Error() + ": " + strings.TrimSpace(string(out))[:min(200, len(out))]
+		msg := strings.TrimSpace(string(errTail))
+		if len(msg) > 200 {
+			msg = msg[:200]
+		}
+		if msg == "" {
+			msg = "strace produced no output"
+		}
+		res.Error = msg
 		return json.Marshal(res)
 	}
 	parseStraceSummary(string(out), &res)

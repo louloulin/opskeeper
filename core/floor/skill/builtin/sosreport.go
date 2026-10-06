@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -77,11 +76,10 @@ func (Sosreport) Execute(ctx context.Context, params json.RawMessage) (json.RawM
 	defer cancel()
 
 	start := time.Now()
-	cmd := exec.CommandContext(ctx, "sos", "report", "--batch", "--tmp-dir", p.OutputDir)
-	out, err := cmd.CombinedOutput()
+	out, errTail, _ := runCapped(ctx, "sos", "report", "--batch", "--tmp-dir", p.OutputDir)
 	res := sosreportResult{DurationS: int(time.Since(start).Seconds())}
-	if err != nil {
-		res.Error = strings.TrimSpace(string(out))
+	if len(out) == 0 {
+		res.Error = strings.TrimSpace(string(errTail))
 		return json.Marshal(res)
 	}
 	// sos report 完成后 stdout 含报告路径
