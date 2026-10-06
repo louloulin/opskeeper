@@ -361,6 +361,15 @@ type result struct {
 	files []*fileFinding
 	// deadSymbols counts every unreachable symbol, whole file or not.
 	deadSymbols int
+	// byTierExact splits deadSymbols per symbol rather than per file. The
+	// byTier map below is per file and therefore a coarser measure: a file
+	// with one dead symbol and nine test-only ones lands entirely in the
+	// dead bucket. Decision 285 needed the per-symbol number because the
+	// finding it acted on was a test-only classification — two access
+	// points on a documented control that only tests reach — and the report
+	// could not be counted in the class the finding was in.
+	deadOnlySymbols    int
+	testOnlySymbols    int
 	// byTier splits those symbols by why they are unreachable.
 	byTier map[verdict]int
 	// unreachableFiles / unreachableLines count only files where every
@@ -516,6 +525,14 @@ func analyse(records []*fileRecord) *result {
 			}
 		}
 		res.deadSymbols += len(fs)
+		for _, s := range fs {
+			switch s.why {
+			case dead:
+				res.deadOnlySymbols++
+			case testOnly:
+				res.testOnlySymbols++
+			}
+		}
 		res.byTier[worst(fs)] += len(fs)
 		res.files = append(res.files, f)
 	}
@@ -600,6 +617,7 @@ func collectInterfaceMethods(rec *fileRecord, out map[string]bool) {
 
 func (r *result) print(w *os.File) {
 	fmt.Fprintf(w, "deadcode: %d symbols unreachable from production code\n", r.deadSymbols)
+	fmt.Fprintf(w, "deadcode: of those, %d are dead and %d are test-only\n", r.deadOnlySymbols, r.testOnlySymbols)
 	fmt.Fprintf(w, "deadcode: %d whole files / %d lines are unreachable (%d files name nothing at all, %d are named only by tests)\n",
 		r.unreachableFiles, r.unreachableLines, r.deadFiles, r.testOnlyFiles)
 	for _, f := range r.files {

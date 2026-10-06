@@ -582,14 +582,34 @@ ci-gate-check: ## 校验计划 §六 的验收门槛都已定义并真的被 CI 
 	go run ./scripts/cigate .
 	go test ./scripts/cigate/ -count=1
 
-# Report only, never a gate: a name-based reachability walk cannot see
-# interface satisfaction, reflection, cgo or go:linkname, so a red build on
-# its output would train people to add "trust me" comments. The number it
-# prints is the size of the wire-it-up-or-delete-it backlog, which is what
-# stage 3 needs before choosing between cutting volume and splitting it.
+# The per-symbol verdict is a report and never a gate: a name-based
+# reachability walk cannot see interface satisfaction, reflection, cgo or
+# go:linkname, so a red build on its individual findings would train people to
+# add "trust me" comments. The number it prints is the size of the
+# wire-it-up-or-delete-it backlog, which is what stage 3 needs before choosing
+# between cutting volume and splitting it.
+#
+# Decision 285 split that sentence in two, because it had been costing more
+# than it was worth. A verdict being unreliable does not make a *growth* in
+# verdicts unreliable: the growth still has to be justified by somebody, and
+# the justification was previously being made silently. The report grew, and
+# one of the lines it grew was core/manager/biz/hitl/policy.go's
+# WithDualSignPolicy / ValidateSigners — test-only, i.e. the two access
+# points of a documented control that only tests reach. Nobody read it for
+# three decisions, and meanwhile a boot log said the control was loaded.
+#
+# So the per-symbol verdict stays a report and the total becomes a one-sided
+# ratchet, which is a different question and survives the walk's blind spots:
+# the tool does not have to be right about any particular symbol, it only has
+# to notice that there are more of them. A tree that deletes its way under the
+# pin lowers the pin; nothing here stops that.
 deadcode-report: ## 报出生产代码里只有测试引用的符号（报告，不闸门）
 	go run ./scripts/deadcode . core core/edge core/pig core/manager core/floor core/harness sdk
-	go test ./scripts/deadcode/ -count=1
+	go test ./scripts/deadcode/ -count=1 -skip TestTheUnreachableSymbolCountNeverGrows
+
+.PHONY: deadcode-ratchet-check
+deadcode-ratchet-check: ## 闸门：不可达符号的总数不得增长（决策 285；逐符号判定仍是报告）
+	go test ./scripts/deadcode/ -count=1 -run 'TestTheUnreachableSymbolCountNeverGrows'
 
 # docs/api 是这个仓库里唯一一处「可以写出一份完整交付、而没有任何东西会红」的地方：
 # harness.md 描述过十三个从未注册的 HTTP 端点，middleware.md 描述过九个，而两者

@@ -123,6 +123,22 @@ jobs:
       - name: Control-plane domain boundaries
         run: make domain-check
 
+      # The per-symbol reachability verdict stays a report, and always has
+      # (decision 199: the walk cannot see six kinds of indirection, and a
+      # gate that cries wolf teaches its reader to skip it). What this runs is
+      # the one question that survives those blind spots — may the number of
+      # unreachable symbols grow? It is a one-sided ratchet, so a tree that
+      # deletes its way under the pin is never blocked, only slowed.
+      #
+      # It exists because the verdict file already carried this repository's
+      # most expensive miss: core/manager/biz/hitl/policy.go's
+      # WithDualSignPolicy and ValidateSigners were classified test-only —
+      # the two access points of ADR-019's dual sign, reachable only from
+      # tests — while a boot log line said the policy was loaded. Nobody read
+      # the report for three decisions (decision 285).
+      - name: Unreachable symbols do not grow
+        run: make deadcode-ratchet-check
+
       - name: Golden-corpus and diagnostic-axis gates
         run: make eval-gates
 
