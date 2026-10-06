@@ -455,6 +455,22 @@ type LLMConfig struct {
 	//
 	// env: OPSKEEPER_LLM_EDGE_RPM; default DefaultEdgeRequestsPerMinute.
 	EdgeRequestsPerMinute int
+	// EdgeDailyTokenLimit is the per-node daily token ceiling enforced by the
+	// node-facing gateway, on top of the global DailyTokenLimit.
+	//
+	// The global cap answers "is the cluster safe"; this one answers "is this
+	// node the problem". With only the global cap, a single runaway node
+	// spends the fleet's ceiling and every other node is refused for a reason
+	// that has nothing to do with it — the whole cluster goes quiet because
+	// one machine's agent loop is stuck.
+	//
+	// 0 disables the per-node cap, which is the historical behaviour: the
+	// global cap still applies. Setting it does not weaken the global cap;
+	// both are checked, global first, so the per-node limit can never become
+	// a way around the ceiling.
+	//
+	// env: OPSKEEPER_LLM_EDGE_DAILY_TOKEN_LIMIT; default 0 (no per-node cap).
+	EdgeDailyTokenLimit int
 }
 
 // AdminConfig holds bootstrap admin credentials. Used only by the cloud
@@ -593,6 +609,7 @@ func Load() (*Config, error) {
 	c.LLM.Default = getEnv("OPSKEEPER_LLM_DEFAULT_PROVIDER", "")
 	c.LLM.DailyTokenLimit = getEnvInt("OPSKEEPER_LLM_DAILY_TOKEN_LIMIT", 0)
 	c.LLM.EdgeRequestsPerMinute = getEnvInt("OPSKEEPER_LLM_EDGE_RPM", DefaultEdgeRequestsPerMinute)
+	c.LLM.EdgeDailyTokenLimit = getEnvInt("OPSKEEPER_LLM_EDGE_DAILY_TOKEN_LIMIT", 0)
 
 	c.Admin.Email = getEnv("OPSKEEPER_ADMIN_EMAIL", "")
 	c.Admin.Password = getEnv("OPSKEEPER_ADMIN_PASSWORD", "")

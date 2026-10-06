@@ -146,8 +146,12 @@ across sections.
   - **D.4.9** Proposal audit trail
     - hash-chained entries (ties into I.4)
     - shareable proposal URL for retrospectives
-- **D.5** `□` Cost + token budget controls
-  - per-org / per-user monthly cap
+- **D.5** `◐` Cost + token budget controls
+  - `☑` per-node daily cap, enforced host-side on the gateway (`llmgw.NewAttributedBudget`,
+    `OPSKEEPER_LLM_EDGE_DAILY_TOKEN_LIMIT`) — one runaway node can no longer
+    spend the fleet's ceiling and lock every other node out (决策 355)
+  - `☑` per-call max_completion_tokens ceiling reaches the provider
+  - `☐` per-org / per-user monthly cap
   - per-call hard timeout + token cap
   - graceful degradation (smaller model / fewer iterations) before cutoff
 

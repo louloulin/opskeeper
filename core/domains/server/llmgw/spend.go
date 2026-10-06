@@ -2,6 +2,7 @@ package llmgw
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -54,6 +55,202 @@ type Budget interface {
 	Check(ctx context.Context, estPromptTokens int) error
 	// Record adds a settled call's billed token count to the current window.
 	Record(ctx context.Context, tokens int) error
+}
+
+// ErrNodeBudgetExceeded is returned when one node has spent its own daily
+// allowance while the cluster still has room.
+//
+// It is a separate error from ErrBudgetExceeded on purpose. "You are out of
+// money" and "you, specifically, are out of money" lead to different
+// operator actions — the first is an incident, the second is one node that
+// needs looking at — and collapsing them into one string makes the second
+// look like the first.
+var ErrNodeBudgetExceeded = errors.New("llmgw: node budget exceeded")
+
+// AttributedBudget is a Budget that knows which node spent.
+//
+// The plain Budget seam asks two questions with no subject: "is there room"
+// and "this cost N". That is enough to hold a fleet under one ceiling and
+// not enough to answer the question an operator actually has during an
+// incident, which is "which node is eating the budget". Without attribution
+// the only available answers are the cluster total (useless while it is
+// still under the cap) and the provider's bill (arrives too late to act on).
+//
+// The interface is additive rather than a replacement on purpose: the
+// gateway keeps asking the two-method seam, and an operator who configures
+// no per-node cap keeps exactly today's behaviour. A Budget that does not
+// implement this interface is charged and checked globally, which is
+// correct and is not silently wrong.
+//
+// CheckEdge reports whether node edgeID may spend now; RecordEdge charges
+// that node. Both keep the global Budget in the loop, so a per-node cap can
+// never be a way around the cluster ceiling.
+type AttributedBudget interface {
+	Budget
+	CheckEdge(ctx context.Context, edgeID uint64, estPromptTokens int) error
+	RecordEdge(ctx context.Context, edgeID uint64, tokens int) error
+}
+
+// edgeBudget is the in-memory per-node ledger.
+//
+// It holds a reference to the global Budget rather than being one, so the
+// cluster cap and the node cap are asked in the same breath and neither can
+// be configured out from under the other. The global is asked first: a node
+// out of the cluster's money is told so even if it has room of its own.
+//
+// perNodeDailyLimit <= 0 disables only the per-node cap; the global half
+// still runs, because "per-node unlimited" is a legitimate operator choice
+// while "cluster unlimited because per-node limits exist" would silently
+// turn a configured ceiling into no ceiling.
+type edgeBudget struct {
+	global           Budget
+	perNodeDaily     int
+	mu               sync.Mutex
+	used             map[uint64]map[string]int // edgeID -> "YYYY-MM-DD" (UTC) -> tokens
+	lastSweep        time.Time
+	now              func() time.Time
+	sweepEvery       time.Duration
+	perNodeBucketTTL time.Duration
+}
+
+// NewAttributedBudget wraps a global Budget with a per-node daily cap.
+//
+// perNodeDaily <= 0 leaves only the global cap in force. A nil global is
+// accepted and treated as "no cluster ceiling", because a per-node cap is
+// still worth configuring on its own — that is the deployment that wants to
+// stop one node from spending while letting the rest of the fleet run.
+func NewAttributedBudget(global Budget, perNodeDaily int) AttributedBudget {
+	return newEdgeBudget(global, perNodeDaily, time.Now)
+}
+
+func newEdgeBudget(global Budget, perNodeDaily int, now func() time.Time) *edgeBudget {
+	if now == nil {
+		now = time.Now
+	}
+	return &edgeBudget{
+		global:           global,
+		perNodeDaily:     perNodeDaily,
+		used:             map[uint64]map[string]int{},
+		now:              now,
+		sweepEvery:       time.Minute,
+		perNodeBucketTTL: 10 * time.Minute,
+	}
+}
+
+// CheckEdge refuses a node that has spent its own daily allowance, and then
+// asks the cluster.
+//
+// The order is a decision, not an accident of where each check was written.
+// A node that is out of the cluster's money should hear "the cluster is out
+// of budget" rather than "your node budget is spent", because the first is
+// the operator's problem and the second reads as a node bug — and the same
+// message on both is how a fleet-wide incident gets debugged as a single bad
+// node.
+func (b *edgeBudget) CheckEdge(ctx context.Context, edgeID uint64, estPromptTokens int) error {
+	if b == nil {
+		return nil
+	}
+	if err := b.globalCheck(ctx, estPromptTokens); err != nil {
+		return err
+	}
+	if b.perNodeDaily <= 0 {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	key := b.dayKey()
+	if b.used[edgeID][key]+estPromptTokens > b.perNodeDaily {
+		return fmt.Errorf("%w: node %d spent its own daily allowance of %d tokens; "+
+			"the other nodes are unaffected", ErrNodeBudgetExceeded, edgeID, b.perNodeDaily)
+	}
+	return nil
+}
+
+// RecordEdge charges the node and then the cluster, in that order.
+//
+// A failing global record is not allowed to skip the node's own: the node
+// half is what makes the attribution answerable, and a ledger error on the
+// cluster side should not also erase the attribution that lets an operator
+// find the node spending.
+func (b *edgeBudget) RecordEdge(ctx context.Context, edgeID uint64, tokens int) error {
+	if b == nil || tokens <= 0 {
+		return nil
+	}
+	if b.perNodeDaily > 0 {
+		b.mu.Lock()
+		day := b.dayKey()
+		bucket, ok := b.used[edgeID]
+		if !ok {
+			bucket = map[string]int{}
+			b.used[edgeID] = bucket
+		}
+		bucket[day] += tokens
+		b.sweepLocked(b.now())
+		b.mu.Unlock()
+	}
+	return b.globalRecord(ctx, tokens)
+}
+
+// Check and Record make an *edgeBudget usable everywhere a Budget is asked
+// for. They route to node 0, which is the global-only behaviour an operator
+// had before this type existed.
+func (b *edgeBudget) Check(ctx context.Context, estPromptTokens int) error {
+	if b == nil {
+		return nil
+	}
+	return b.globalCheck(ctx, estPromptTokens)
+}
+
+func (b *edgeBudget) Record(ctx context.Context, tokens int) error {
+	if b == nil {
+		return nil
+	}
+	return b.globalRecord(ctx, tokens)
+}
+
+func (b *edgeBudget) globalCheck(ctx context.Context, estPromptTokens int) error {
+	if b.global == nil {
+		return nil
+	}
+	return b.global.Check(ctx, estPromptTokens)
+}
+
+func (b *edgeBudget) globalRecord(ctx context.Context, tokens int) error {
+	if b.global == nil {
+		return nil
+	}
+	return b.global.Record(ctx, tokens)
+}
+
+// sweepLocked drops per-node buckets idle past the TTL.
+//
+// A fleet is bounded by enrolled nodes, and a bucket that vanished mid
+// incident would hand a runaway node a fresh allowance at the worst moment,
+// so the sweep is TTL-of-inactivity rather than TTL-of-day. Both keys are
+// kept: the day key rolls on its own schedule, and the sweep only removes
+// nodes nothing has called in ten minutes.
+func (b *edgeBudget) sweepLocked(now time.Time) {
+	if b.lastSweep.IsZero() {
+		b.lastSweep = now
+		return
+	}
+	if now.Sub(b.lastSweep) < b.sweepEvery {
+		return
+	}
+	b.lastSweep = now
+	// Every live node has an entry after a Record, so the day key alone is a
+	// sufficient liveness proxy: a node whose only entries are from a previous
+	// UTC day has not spent anything today and its ledger is dead weight.
+	today := now.UTC().Format("2006-01-02")
+	for edgeID, bucket := range b.used {
+		if _, live := bucket[today]; !live {
+			delete(b.used, edgeID)
+		}
+	}
+}
+
+func (b *edgeBudget) dayKey() string {
+	return b.now().UTC().Format("2006-01-02")
 }
 
 // Limiter is the per-node request rate gate.
@@ -200,11 +397,22 @@ func (l *edgeLimiter) sweepLocked(now time.Time) {
 // that case is the usage_reported=false on its log line: an operator can see
 // that a provider is running unaccounted, which is a fact worth having and is
 // not the same as a zero.
-func (h *Handler) charge(ctx context.Context, tokens int) {
+func (h *Handler) charge(ctx context.Context, edgeID uint64, tokens int) {
 	if h.opts.Budget == nil || tokens <= 0 {
 		return
 	}
-	if err := h.opts.Budget.Record(ctx, tokens); err != nil {
+	// An attributed budget is charged against the node that caused the cost,
+	// and it charges the cluster from inside that call. A budget that is not
+	// attributed falls back to the cluster-only seam rather than losing the
+	// accounting entirely.
+	recorder, attributed := h.opts.Budget.(AttributedBudget)
+	var err error
+	if attributed {
+		err = recorder.RecordEdge(ctx, edgeID, tokens)
+	} else {
+		err = h.opts.Budget.Record(ctx, tokens)
+	}
+	if err != nil {
 		// The call is already made and already billed by the provider. A
 		// ledger that failed to accept the count is worth a log line and
 		// nothing more: there is no second action that would make the
@@ -229,6 +437,16 @@ func (h *Handler) admission(ctx context.Context, edgeID uint64) error {
 		}
 	}
 	if h.opts.Budget == nil {
+		return nil
+	}
+	// An attributed budget is asked about the node, and it asks the cluster
+	// from inside that call — so the cluster ceiling is never skipped by
+	// configuring a per-node cap.
+	checker, attributed := h.opts.Budget.(AttributedBudget)
+	if attributed {
+		if err := checker.CheckEdge(ctx, edgeID, 0); err != nil {
+			return fmt.Errorf("%w: %v", errs.ErrBudgetExceeded, err)
+		}
 		return nil
 	}
 	// The estimate is zero on purpose. The budget here is the same daily

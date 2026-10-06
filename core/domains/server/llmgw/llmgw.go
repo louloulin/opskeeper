@@ -308,7 +308,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		slog.Int("completion_tokens", usage.CompletionTokens),
 		slog.Int("total_tokens", usage.TotalTokens))
 	if metered {
-		h.charge(r.Context(), usage.TotalTokens)
+		h.charge(r.Context(), identity.EdgeID, usage.TotalTokens)
 	}
 
 	writeJSON(w, http.StatusOK, reply(id, model, created, settled))
@@ -385,7 +385,7 @@ func (h *Handler) streamCompletion(
 		slog.Int("completion_tokens", usage.CompletionTokens),
 		slog.Int("total_tokens", usage.TotalTokens))
 	if metered {
-		h.charge(r.Context(), usage.TotalTokens)
+		h.charge(r.Context(), identity.EdgeID, usage.TotalTokens)
 	}
 }
 

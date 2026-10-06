@@ -1091,6 +1091,17 @@ func main() {
 		// dereferences itself on the first request of the day.
 		gatewayBudget = globalTokenBudget{inner: dailyBudget}
 	}
+	// The per-node cap wraps whichever budget was built above rather than
+	// replacing it, so a node can be refused for its own spend while the
+	// cluster ceiling stays in force — and, when no global cap is configured
+	// at all, the per-node cap can still be configured on its own.
+	if cfg.LLM.EdgeDailyTokenLimit > 0 {
+		gatewayBudget = llmgw.NewAttributedBudget(gatewayBudget, cfg.LLM.EdgeDailyTokenLimit)
+		log.Info("llm: per-node daily token budget enabled",
+			slog.Int("per_node_daily_limit", cfg.LLM.EdgeDailyTokenLimit),
+			slog.Bool("cluster_cap_configured", gatewayBudget != nil),
+		)
+	}
 	llmGateway, err := llmgw.NewHandler(llmgw.Options{
 		Auth:           edgeAuthn,
 		Completer:      modelRegistry,
