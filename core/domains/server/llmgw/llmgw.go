@@ -116,6 +116,11 @@ type Options struct {
 	// cannot serve. When it is absent the catalogue is empty, which is a
 	// valid OpenAI list and an honest one.
 	DefaultModeler DefaultModeler
+	// Bounds are the per-call ceilings (duration, output tokens). The zero
+	// value bounds nothing, which is the deployment that configured neither
+	// env var; see callbounds.go for why these are enforced here rather than
+	// asked of the node.
+	Bounds CallBounds
 	// Log may be nil.
 	Log *slog.Logger
 }
@@ -256,7 +261,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		Selection: selection,
 		Messages:  messages,
 		Tools:     request.toolSchemas(),
-		Tune:      request.tune(),
+		Tune:      h.opts.Bounds.tune(request.tune()),
 		// The node's own request id would be the honest cache key, but it is
 		// a value the node controls and providers key their cache on it, so
 		// it is left empty rather than forwarded. The registry applies its
@@ -282,11 +287,17 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	created := time.Now().UTC().Unix()
 
 	if request.Stream {
-		h.streamCompletion(w, r, identity, id, model, created, pigReq)
+		if err := h.streamCompletion(w, r, identity, id, model, created, pigReq); err != nil {
+			h.log.Warn("llmgw: stream refused before the first frame",
+				slog.Uint64("edge_id", identity.EdgeID),
+				slog.String("model", model),
+				slog.Any("err", err))
+			writeError(w, err)
+		}
 		return
 	}
 
-	settled, err := h.opts.Completer.Complete(r.Context(), pigReq)
+	settled, err := h.complete(r.Context(), pigReq)
 	if err != nil {
 		h.log.Warn("llmgw: completion failed",
 			slog.Uint64("edge_id", identity.EdgeID),
@@ -328,26 +339,28 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) streamCompletion(
 	w http.ResponseWriter, r *http.Request, identity edgeIdentity,
 	id, model string, created int64, req pigmodel.Request,
-) {
+) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, fmt.Errorf("%w: streaming is not supported by this server", errs.ErrInvalid))
-		return
+		return nil
 	}
 
-	settled, err := h.opts.Completer.Complete(r.Context(), req)
+	// A failure before the first frame is a real HTTP failure, and this
+	// function used to argue otherwise: it claimed the status line had to be
+	// written before the first frame, then wrote 200 and buried the error in
+	// the stream. Nothing had been written yet, so the claim was false, and
+	// the effect was that a hung provider or an exhausted budget reached a
+	// node as "200 OK" with an error object in the body — a node's client
+	// reads that as a stream that started, and the failure becomes a truncated
+	// answer rather than a reason to retry smaller.
+	//
+	// The error object shape is preserved in the non-streaming path, so a
+	// client parsing an OpenAI error still finds one; what it no longer does
+	// is find one behind a success status.
+	settled, err := h.complete(r.Context(), req)
 	if err != nil {
-		// The status line has to be written before the first frame, so a
-		// failure this late cannot become a 500. It is reported inside the
-		// stream instead, which is what a client mid-stream can act on.
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.WriteHeader(http.StatusOK)
-		writeFrame(w, errorFrame(err))
-		fmt.Fprint(w, "data: [DONE]\n\n")
-		flusher.Flush()
-		return
+		return err
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -387,24 +400,7 @@ func (h *Handler) streamCompletion(
 	if metered {
 		h.charge(r.Context(), identity.EdgeID, usage.TotalTokens)
 	}
-}
-
-// errorFrame is an OpenAI-shaped error delivered inside a stream.
-//
-// The OpenAI wire puts the error object beside the chunk shape rather than in
-// it, and a client mid-stream is looking for exactly that key. Emitting an
-// empty choices array instead would parse as "the model finished without
-// saying anything", which is the one reading a caller cannot distinguish from
-// a real empty reply.
-func errorFrame(cause error) map[string]any {
-	message := cause.Error()
-	return map[string]any{
-		"error": map[string]any{
-			"message": message,
-			"type":    "upstream_error",
-			"code":    nil,
-		},
-	}
+	return nil
 }
 
 // newCompletionID mints an id in the shape clients log and correlate on.
@@ -472,6 +468,8 @@ func writeError(w http.ResponseWriter, err error) {
 		kind = "not_found_error"
 	case errors.Is(err, errs.ErrBudgetExceeded), errors.Is(err, errs.ErrTooManyAttempts):
 		kind = "rate_limit_error"
+	case errors.Is(err, errs.ErrUpstreamTimeout):
+		kind = "timeout_error"
 	}
 	writeJSON(w, status, map[string]any{
 		"error": map[string]any{

@@ -150,10 +150,15 @@ across sections.
   - `☑` per-node daily cap, enforced host-side on the gateway (`llmgw.NewAttributedBudget`,
     `OPSKEEPER_LLM_EDGE_DAILY_TOKEN_LIMIT`) — one runaway node can no longer
     spend the fleet's ceiling and lock every other node out (决策 355)
+  - `☑` per-call hard timeout (`OPSKEEPER_LLM_CALL_TIMEOUT_SECONDS`) — a hung
+    provider is abandoned with 504 rather than pinning a connection and a node's
+    investigation open (决策 356)
+  - `☑` per-call token cap (`OPSKEEPER_LLM_MAX_OUTPUT_TOKENS`) — clamped over the
+    node's own `max_completion_tokens`, never under it; the field a node controls
+    to buy tokens is no longer a field only the node honours
   - `☑` per-call max_completion_tokens ceiling reaches the provider
   - `☐` per-org / per-user monthly cap
-  - per-call hard timeout + token cap
-  - graceful degradation (smaller model / fewer iterations) before cutoff
+  - `☐` graceful degradation (smaller model / fewer iterations) before cutoff
 
 ---
 

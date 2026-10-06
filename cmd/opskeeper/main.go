@@ -1108,6 +1108,10 @@ func main() {
 		DefaultModeler: modelRegistry,
 		Budget:         gatewayBudget,
 		Limiter:        llmgw.NewLimiter(cfg.LLM.EdgeRequestsPerMinute),
+		Bounds: llmgw.CallBounds{
+			ProviderTimeout: time.Duration(cfg.LLM.CallTimeoutSeconds) * time.Second,
+			MaxOutputTokens: cfg.LLM.MaxOutputTokens,
+		},
 		Log:            log,
 	})
 	if err != nil {

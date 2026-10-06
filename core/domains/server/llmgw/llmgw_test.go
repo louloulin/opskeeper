@@ -359,7 +359,7 @@ func TestAbsentProviderUsageIsReportedAsAbsent(t *testing.T) {
 // is already written. It is reported as an OpenAI error object in the stream,
 // because an empty choices array would read as "the model said nothing",
 // which is the one reading a caller cannot tell from a real empty reply.
-func TestAnUpstreamFailureInsideAStreamIsAnErrorObject(t *testing.T) {
+func TestAnUpstreamFailureBeforeTheFirstFrameIsAnHTTPFailure(t *testing.T) {
 	completer := &stubCompleter{err: errors.New("provider is out of credit")}
 	handler := newTestHandler(t, &stubAuth{edges: map[string]uint64{"ak:sk": 7}}, completer)
 
@@ -367,10 +367,17 @@ func TestAnUpstreamFailureInsideAStreamIsAnErrorObject(t *testing.T) {
 	rec := post(t, handler, "ak:sk", body)
 	raw := rec.Body.String()
 	if !strings.Contains(raw, `"error"`) || !strings.Contains(raw, "out of credit") {
-		t.Errorf("the stream did not carry the failure as an error object:\n%s", raw)
+		t.Errorf("the failure did not carry the error object shape:\n%s", raw)
 	}
-	if !strings.HasSuffix(raw, "data: [DONE]\n\n") {
-		t.Error("a failed stream must still be terminated by [DONE] so the client stops waiting")
+	// No frame was written, so there is no stream to terminate: [DONE] here
+	// told a client a stream had started and finished, which is the reading
+	// that turns a provider failure into a truncated answer. The status is
+	// what a client acts on, and 200 was the wrong one (decision 356).
+	if rec.Code == http.StatusOK {
+		t.Errorf("a failure before the first frame was reported as 200:\n%s", raw)
+	}
+	if strings.Contains(raw, "[DONE]") {
+		t.Errorf("a stream that never started was terminated by [DONE]:\n%s", raw)
 	}
 }
 

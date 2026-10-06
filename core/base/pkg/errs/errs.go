@@ -23,6 +23,12 @@ var (
 	// rate-limited paths (e.g. login). Distinct from ErrBudgetExceeded
 	// so loggers / metrics can tell anti-bruteforce from quota throttle.
 	ErrTooManyAttempts = errors.New("too many attempts")
+	// ErrUpstreamTimeout is the 504-mapped sentinel for "the thing we called
+	// did not answer in time". It is not ErrTooManyAttempts: that one says
+	// come back later, this one says the call was abandoned, and a client
+	// that retries a timeout at the same size is how a slow provider becomes
+	// an expensive one.
+	ErrUpstreamTimeout = errors.New("upstream timeout")
 )
 
 // HTTPStatus maps known sentinel errors to HTTP status codes.
@@ -45,6 +51,8 @@ func HTTPStatus(err error) int {
 		return http.StatusTooManyRequests
 	case errors.Is(err, ErrEdgeOffline):
 		return http.StatusServiceUnavailable
+	case errors.Is(err, ErrUpstreamTimeout):
+		return http.StatusGatewayTimeout
 	case errors.Is(err, ErrNotWiredYet):
 		return http.StatusNotImplemented
 	default:

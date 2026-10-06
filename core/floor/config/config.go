@@ -471,6 +471,28 @@ type LLMConfig struct {
 	//
 	// env: OPSKEEPER_LLM_EDGE_DAILY_TOKEN_LIMIT; default 0 (no per-node cap).
 	EdgeDailyTokenLimit int
+	// CallTimeoutSeconds is the wall-clock ceiling for one model call served
+	// by the node-facing gateway. 0 means no bound.
+	//
+	// It is a per-call bound rather than a per-node one: a node's agent is a
+	// loop and nothing upstream limits how long one reply takes, so a slow
+	// provider otherwise holds a connection, a goroutine and a node's
+	// investigation open for as long as it likes. A timeout is abandoned,
+	// not deferred, and the node is told which it was so it can retry with
+	// less work instead of at the same size.
+	//
+	// env: OPSKEEPER_LLM_CALL_TIMEOUT_SECONDS; default 0 (unbounded).
+	CallTimeoutSeconds int
+	// MaxOutputTokens is the operator's ceiling on one reply's output
+	// tokens, enforced by clamping a node's own max_completion_tokens down
+	// to it (never up, and never over a smaller value the node asked for).
+	// 0 means the caller's own value stands.
+	//
+	// The field is the one number a node controls that directly buys tokens,
+	// which is why it is clamped on the manager's side rather than trusted.
+	//
+	// env: OPSKEEPER_LLM_MAX_OUTPUT_TOKENS; default 0 (no clamp).
+	MaxOutputTokens int
 }
 
 // AdminConfig holds bootstrap admin credentials. Used only by the cloud
@@ -610,6 +632,8 @@ func Load() (*Config, error) {
 	c.LLM.DailyTokenLimit = getEnvInt("OPSKEEPER_LLM_DAILY_TOKEN_LIMIT", 0)
 	c.LLM.EdgeRequestsPerMinute = getEnvInt("OPSKEEPER_LLM_EDGE_RPM", DefaultEdgeRequestsPerMinute)
 	c.LLM.EdgeDailyTokenLimit = getEnvInt("OPSKEEPER_LLM_EDGE_DAILY_TOKEN_LIMIT", 0)
+	c.LLM.CallTimeoutSeconds = getEnvInt("OPSKEEPER_LLM_CALL_TIMEOUT_SECONDS", 0)
+	c.LLM.MaxOutputTokens = getEnvInt("OPSKEEPER_LLM_MAX_OUTPUT_TOKENS", 0)
 
 	c.Admin.Email = getEnv("OPSKEEPER_ADMIN_EMAIL", "")
 	c.Admin.Password = getEnv("OPSKEEPER_ADMIN_PASSWORD", "")
