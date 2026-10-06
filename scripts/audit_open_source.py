@@ -84,6 +84,17 @@ DECOY_CREDENTIALS = {
         "a sentinel, not a credential: tests/e2e/node_agent_delivery_test.go sets it "
         "and then asserts no node process ever saw it"
     ),
+    "ghp_AAAABBBBCCCCDDDDEEEEFFFF": (
+        "not a credential, and not a new exemption shape either -- it is the same "
+        "reason as the sentinel above, in a second vocabulary. Two tests assert "
+        "that a GitHub-token-shaped string never reaches the audit chain: "
+        "core/domains/server/secret/audit_test.go (a stored secret's every byte) and "
+        "core/manager/server/chatdiagnose/audit_test.go (the user's question text). "
+        "A redaction test has to contain the thing it redacts; deleting the literal "
+        "would delete the assertion. The value is a run of repeated placeholder "
+        "letters, so it cannot be a live token, and the exemption is by exact "
+        "match -- another ghp_ value in either file is still reported."
+    ),
 }
 
 

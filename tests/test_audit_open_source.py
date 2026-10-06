@@ -187,6 +187,34 @@ def test_the_decoy_sentinel_is_exempt_but_a_real_key_is_not(tmp_path: Path) -> N
     assert "leak_test.go" in err
 
 
+def test_the_token_decoy_is_exempt_but_another_token_is_not(tmp_path: Path) -> None:
+    """The GitHub-token decoy is exempt for one exact value, not for the shape.
+
+    Two tests assert a token-shaped string never reaches the audit chain, so the
+    literal has to stay in them. Exempting "ghp_ in a _test.go" instead would
+    delete the rule where it matters most: a real token pasted into a test is
+    the case this gate exists for.
+    """
+    scaffold(tmp_path)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "redaction_test.go").write_text(
+        'const token = "ghp_AAAABBBBCCCCDDDDEEEEFFFF"\n', encoding="utf-8"
+    )
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "decoy token", "--no-gpg-sign")
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 0, err
+
+    (tmp_path / "tests" / "leak_test.go").write_text(
+        'key := "ghp_' + "Z" * 36 + '"\n', encoding="utf-8"
+    )
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "leaked token", "--no-gpg-sign")
+    code, _, err = run(load_auditor(tmp_path))
+    assert code == 1
+    assert "leak_test.go" in err
+
+
 def test_a_test_may_name_what_it_is_testing(tmp_path: Path) -> None:
     """The OnGrid rule and the home-path rule exempt test files, nothing else.
 
