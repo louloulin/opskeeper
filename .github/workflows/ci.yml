@@ -86,6 +86,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+
+  # Every module on its own published tags, on its own clock.
+  #
+  # This used to be step 11 of build-test. It is the longest thing in the file
+  # -- 19 modules, each built and tested with GOWORK=off -- and it ran on the
+  # same 35-minute budget as the forty gates after it. Observed on run
+  # 37545048748: the step started at 23:11:24 and the run's updated_at had not
+  # moved past 23:11:27 for forty minutes, with steps 12 through 43 still
+  # pending. The same target takes about two and a half minutes on a laptop.
+  #
+  # So the failure mode is not that a gate is red. It is that the step before
+  # them all can eat the whole budget, and every gate after it then reports
+  # nothing -- which reads exactly like "the gates passed" to anyone who reads
+  # the job list rather than the step list. A slow check and a set of checks
+  # that never ran should not be the same event, and sharing a timeout made
+  # them one.
+  #
+  # No MySQL service here: module-standalone-check runs with the workspace off
+  # and builds each module from its published tags, and it passes locally with
+  # no database running at all. Adding the service would make this job pay for
+  # a dependency it does not have.
+  module-standalone:
+    name: every module on its own published tags
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build and test every module on its own published tags
+        run: make module-standalone-check
+
   build-test:
     name: build + vet + test
     runs-on: ubuntu-24.04
@@ -143,9 +180,6 @@ jobs:
 
       - name: Module boundaries
         run: make module-check
-
-      - name: Build and test every module on its own published tags
-        run: make module-standalone-check
 
       # The plan's phase-B acceptance line says `go test -race`. A data race is
       # the one defect class that passes every functional test in this
