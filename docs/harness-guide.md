@@ -331,7 +331,8 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 | `host.` | `fill_disk` / `cpu_stress` | ✅ **真实现**（决策 299；**最危险的一个**，见 4.4） |
 | `k8s.` | `cordon_node` / `fill_pv` / `inject_memory_pressure` / `set_bad_image` | 骨架 |
 | `rabbitmq.` | `inject_message_burst` | 骨架 |
-| `kafka.` | `inject_consumer_lag` / `inject_partition_skew` / `kill_broker` | 骨架 |
+| `kafka.` | `inject_consumer_lag` / `inject_partition_skew` | ✅ **真实现**（kafka-go 连真 broker，决策 300） |
+| `kafka.` | `kill_broker` | ⚠️ 大声拒绝：停掉 broker 撤不回来 |
 
 这张表是从代码里读出来的，不是手写的：每个注入器都导出 `SupportedTypes()`，
 而 `cmd/opskeeper-eval` 的测试逐条断言「注册表里的每一个类型都能路由回它自己」——
@@ -353,16 +354,38 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 | `redis.inject_slow_commands` | 一条**没被碰过**的连接的 PING 耗时 ≥ 暂停时长 |
 | `host.fill_disk` | `statfs` 的可用字节前后差值；撤销后至少还回九成 |
 | `host.cpu_stress` | `getrusage` 的 CPU 时间增量；利用率按 worker 归一后不低于 `target_load - 25` 个百分点 |
+| `kafka.inject_consumer_lag` | `OffsetFetch` 的 committed 与 `ListOffsets` 的 latest 之差 ≈ `产出量 × (produce_rate−consume_rate)/produce_rate`（±15%） |
+| `kafka.inject_partition_skew` | 每个分区 `Last − First` 的记录条数；最忙分区 ≥ 次忙 `skew_factor` 倍，且落在 `target_partition` |
 
 连接来自 `OPSKEEPER_HARNESS_PG_DSN` 与
 `OPSKEEPER_HARNESS_REDIS_ADDR`（口令走 `OPSKEEPER_HARNESS_REDIS_PASSWORD`）；
-`host` 来自 `OPSKEEPER_HARNESS_HOST_ROOT`。
+`host` 来自 `OPSKEEPER_HARNESS_HOST_ROOT`；
+`kafka` 来自 `OPSKEEPER_HARNESS_KAFKA_BROKERS`（逗号分隔的 `host:port`）。
 **没设就一步都不走**——`host` 尤其不猜：在节点 agent 上，
 任何形式的默认目录都极可能就是节点的根文件系统。
 
 **"没被碰过的连接"这五个字是慢命令那一条的全部要害**：它是四种 Redis 故障里
 唯一一种影响所有人的，所以它不能靠注入器自证——说"我已经暂停了"没有任何意义，
 要看旁观者的时钟。
+
+### 4.1.1 Kafka 侧为什么有一半类型是拒绝而不是实现
+
+Kafka 的故障内容是**记录**，而记录删不掉。所以这一组的设计不是"怎么造故障"，
+而是"哪些故障造了还能收回来"：
+
+| 注入类型 | 可逆性 | 处置 |
+|---|---|---|
+| `inject_consumer_lag` | **完全可逆**：lag = `latest − committed`，把 committed 提交到头就抹平了，一条记录都不少 | 真实现，且**允许**打在已经存在的 topic 上 |
+| `inject_partition_skew` | **不可逆**：分布本身就是故障，而记录无法删除 | 真实现，但只打在**注入器自己建的** topic 上；case 点名的 topic 只是个人类可读的标签，一条记录都不会多 |
+| `kill_broker` | **不可逆**，且 Kafka 没有"停用单个 broker"的管理调用，从 broker 内部也没有任何办法把它启回来 | **大声拒绝**，并在拒绝理由里说清是设计如此而不是没实现 |
+
+`kill_broker` 那条 `mq/broker-down` case 因此跑不起来——这是有意的：
+注入器宁可交一份"没做"也不交一份"做了但撤不回来"。
+
+**两个实现都有一个共同的坑，已在代码里钉死**：kafka-go 的 `Writer` 默认
+`RequiredAcks: RequireNone`（fire-and-forget），`WriteMessages` 返回 nil **不等于**
+记录落盘——实测 400 条会稳定少 28 条而错误为 nil。所以两条注入的判据分母都取自
+**现读的 offset**，不是"我请求写了几条"，并且少写超过 10% 直接判失败。
 
 ### 4.2 环境限制
 

@@ -173,6 +173,11 @@ func rules() []rule {
 				coreModulePrefix + "/",
 				"github.com/jackc/pgx/",
 				"github.com/redis/go-redis/",
+				// kafka-go 是第四个注入器（决策 300）需要的客户端，与上面
+				// 两个同一类：一个故障目标。选它而不是 confluent-kafka-go
+				// 的理由和 host 不用 stress-ng 一样——关闭是 Close()
+				// 而不是"杀一个子进程然后祈祷"，而且它不需要 cgo。
+				"github.com/segmentio/kafka-go/",
 			},
 			Label: "faults (fault injection)",
 		},

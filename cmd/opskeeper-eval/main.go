@@ -346,7 +346,8 @@ func newInjectorRegistry() *injector.Registry {
 			redisinjector.WithAddr(os.Getenv(redisinjector.AddrEnv)),
 			redisinjector.WithPassword(os.Getenv(redisinjector.PasswordEnv)),
 		),
-		k8sinjector.New(), rabbitmqinjector.New(), kafkainjector.New(),
+		kafkainjector.New(kafkainjector.WithBrokers(splitBrokers(os.Getenv(kafkainjector.BrokersEnv))...)),
+		k8sinjector.New(), rabbitmqinjector.New(),
 	} {
 		if err := reg.Register(impl); err != nil {
 			// 注册冲突是编程错误，不是运行时状态：拼错前缀会在这里炸，
@@ -355,6 +356,20 @@ func newInjectorRegistry() *injector.Registry {
 		}
 	}
 	return reg
+}
+
+// splitBrokers 把逗号分隔的 broker 列表拆开，顺手丢掉空项与空白。
+//
+// 放在装配根而不是让注入器自己拆，是同一条理由：连接参数在命令行可见，
+// 就该在命令行可见。
+func splitBrokers(raw string) []string {
+	var out []string
+	for _, b := range strings.Split(raw, ",") {
+		if b = strings.TrimSpace(b); b != "" {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 // parseTarget 把 "k=v k2=v2" 解析成 map。

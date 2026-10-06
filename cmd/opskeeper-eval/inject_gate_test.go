@@ -87,6 +87,7 @@ var wiredInjectors = map[string]string{
 	"pg.":    pginjector.DSNEnv,
 	"redis.": redisinjector.AddrEnv,
 	"host.":  hostinjector.RootEnv,
+	"kafka.": kafkainjector.BrokersEnv,
 }
 
 // wiredInjectorEnvs 是 wiredInjectors 里那些环境变量的并集。

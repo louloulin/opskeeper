@@ -119,8 +119,27 @@ opskeeper-eval inject --case pg/lock-waits --hold 3m
 哪怕被显式指定；**不越过可用空间地板**（默认 2048MB，写前查一次、每写 1MB 再查一次）。
 case 里的 `path` 只能收窄范围，落在 root 之外会被明确拒绝。
 
-**另外三个（k8s / rabbitmq / kafka）仍然是骨架**，
-它们不碰任何真实系统——没有 kubectl、没有 amqp 客户端、没有 kafkaclient——
+**Kafka 这一路也是真实现**（决策 300），连的是
+`OPSKEEPER_HARNESS_KAFKA_BROKERS`（逗号分隔的 `host:port`）：
+
+| 类型 | 判据 |
+|---|---|
+| `kafka.inject_consumer_lag` | `OffsetFetch` 的 committed 与 `ListOffsets` 的 latest 之差 ≈ `实际产出 × (produce_rate−consume_rate)/produce_rate`（±15%） |
+| `kafka.inject_partition_skew` | 每个分区 `Last − First` 的记录条数；最忙分区 ≥ 次忙 `skew_factor` 倍，且落在 `target_partition` |
+
+它与前三个的差别在于**故障的载体是记录，而记录删不掉**，所以撤销方式决定了
+什么能造、什么不能造：`consumer_lag` 只提交 offset 不读消息，撤销就是把
+committed 提交到头，因此**允许**打在已存在的 topic 上；`partition_skew` 的
+分布本身就是故障，撤销只能是删掉整条 topic，因此只打在注入器自己建的 topic 上，
+case 点名的 topic 只是个人类可读的标签。`kill_broker` **大声拒绝**——Kafka 没有
+停用单个 broker 的管理调用，从 broker 内部也启不回来，造一个撤不回的故障是破坏。
+
+因此 `mq/broker-down` 这条 case 跑不起来。这是有意的：注入器宁可交一份
+"没做"，也不交一份"做了但收不回来"。case 本身没有被删——它还在语料里，
+`CheckAvailable` / `Inject` 会在执行前就说明原因并以非零退出。
+
+**另外两个（k8s / rabbitmq）仍然是骨架**，
+它们不碰任何真实系统——没有 kubectl、没有 amqp 客户端——
 并通过 `CheckAvailable` 说明缺什么。
 
 一个认不出的类型报 `ErrUnsupportedType` 而不是"不可用"：那是接线问题，
