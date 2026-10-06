@@ -56,15 +56,25 @@ import (
 var routeReg = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\.(Post|Put|Patch|Delete)\("([^"]+)",\s*([A-Za-z0-9_.]+)`)
 
 // funcDeclReg matches a top-level function or method declaration and
-// captures its name. The optional receiver group is what lets one pattern
-// cover both `func auditApp(` and `func (h *Handler) createApp(`.
-var funcDeclReg = regexp.MustCompile(`(?m)^func (?:\([^)]*\)[ ]*)?([A-Za-z0-9_]+)\(`)
+// captures its receiver type and its name. The optional receiver group is
+// what lets one pattern cover both `func auditApp(` and
+// `func (h *Handler) createApp(`.
+//
+// The receiver is captured rather than discarded because a package may hold
+// two methods of the same name on different types, and this repository does:
+// core/manager/server/agentteams declares `caller` and `Register` twice,
+// cmd/opskeeper declares `Close` four times. Keying on the bare name would
+// let whichever declaration came last overwrite the others, and the walk
+// would then read one function's body as another's.
+var funcDeclReg = regexp.MustCompile(`(?m)^func (?:\(([^)]*)\)[ ]*)?([A-Za-z0-9_]+)\(`)
 
 // callReg finds the calls a body makes, for the closure walk.
 var callReg = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\(`)
 
 // reachesAudit reports whether calling the named handler ends up calling
-// SetAuditEvent somewhere inside its own file.
+// SetAuditEvent anywhere in the handler's own package.
+//
+// Two properties, and the second one was learned the hard way.
 //
 // The transitive part is not decoration. The handlers this repository added
 // in decisions 309 and 310 do not call SetAuditEvent themselves — they call
@@ -73,17 +83,21 @@ var callReg = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\(`)
 // deliberately to be audited, which is the fastest way to make a gate get
 // switched off.
 //
-// It is a one-file closure, not a package-wide one. That is a real
-// limitation and it is worth being precise about the direction it errs in:
-// a handler that reaches an audit helper through a function in another file
-// is reported as unaudited. That is a false alarm, not a false pass — it
-// can only ever make the gate stricter.
-func reachesAudit(src string, entry string) bool {
+// The package-wide part is not decoration either. An earlier version closed
+// over one file, on the stated grounds that it could only err towards being
+// stricter. That reasoning was wrong in the same way the earlier
+// hard-coded-receiver version was: it assumed the code was laid out the way
+// the gate expected. Decision 317 put auditCall in audit.go and had every
+// handler call it — and the gate reported ten freshly audited identity
+// routes as unaudited, because none of them mentions SetAuditEvent in
+// orgs.go. Go's scope is the package; a gate whose scope is the file is
+// measuring the wrong thing, and file layout is an implementation detail
+// that changes for reasons no reader of the audit table will ever see.
+func reachesAudit(pkg map[string]string, entry string) bool {
 	// The registration reads h.createApp; the declaration reads createApp.
 	if i := strings.LastIndex(entry, "."); i >= 0 {
 		entry = entry[i+1:]
 	}
-	bodies := funcBodies(src)
 	done := map[string]bool{}
 	var visit func(name string, depth int) bool
 	visit = func(name string, depth int) bool {
@@ -91,14 +105,12 @@ func reachesAudit(src string, entry string) bool {
 			return false
 		}
 		done[name] = true
-		body, ok := bodies[name]
-		if !ok {
-			return false
+		for _, body := range bodiesNamed(pkg, name) {
+			if strings.Contains(body, "SetAuditEvent") {
+				return true
+			}
 		}
-		if strings.Contains(body, "SetAuditEvent") {
-			return true
-		}
-		for _, m := range callReg.FindAllStringSubmatch(body, -1) {
+		for _, m := range callReg.FindAllStringSubmatch(joinBodies(bodiesNamed(pkg, name)), -1) {
 			if visit(m[1], depth+1) {
 				return true
 			}
@@ -107,6 +119,33 @@ func reachesAudit(src string, entry string) bool {
 	}
 	return visit(entry, 0)
 }
+
+// bodiesNamed finds every declaration a bare name could refer to: the
+// function of that name, or the method of that name on any type.
+//
+// A name that matches more than one method returns all of them rather than
+// one. That is deliberately generous towards "audited", and the reason is
+// that the alternative — picking one — produces a verdict about a function
+// the caller may never have meant. The two ambiguous cases in this
+// repository (agentteams' `Register`, cmd/opskeeper's `Close`) are entry
+// points with no audit inside, so the generosity does not manufacture a
+// false pass anywhere today; a new one appearing is a reason to look, not a
+// reason to trust the number.
+func bodiesNamed(pkg map[string]string, name string) []string {
+	if body, ok := pkg[name]; ok {
+		return []string{body}
+	}
+	var out []string
+	suffix := "." + name
+	for key, body := range pkg {
+		if strings.HasSuffix(key, suffix) {
+			out = append(out, body)
+		}
+	}
+	return out
+}
+
+func joinBodies(bodies []string) string { return strings.Join(bodies, "\n") }
 
 // funcBodies maps every function name a file defines to its own source text.
 //
@@ -118,15 +157,40 @@ func reachesAudit(src string, entry string) bool {
 // written to be audited — the failure mode that gets a gate switched off.
 func funcBodies(src string) map[string]string {
 	out := map[string]string{}
+	for k, v := range funcBodiesQualified(src) {
+		out[k] = v
+	}
+	return out
+}
+
+// funcBodiesQualified indexes one file's declarations by a key that cannot
+// collide: "Type.Method" for methods, the bare name for functions.
+func funcBodiesQualified(src string) map[string]string {
+	out := map[string]string{}
 	locs := funcDeclReg.FindAllStringSubmatchIndex(src, -1)
 	for i, loc := range locs {
 		end := len(src)
 		if i+1 < len(locs) {
 			end = locs[i+1][0]
 		}
-		out[src[loc[2]:loc[3]]] = src[loc[0]:end]
+		name := src[loc[4]:loc[5]]
+		key := name
+		if loc[2] >= 0 {
+			key = receiverType(src[loc[2]:loc[3]]) + "." + name
+		}
+		out[key] = src[loc[0]:end]
 	}
 	return out
+}
+
+// receiverType reduces a receiver declaration to its bare type name, so that
+// `h *Handler`, `*Handler` and `s Handler` all key as "Handler".
+func receiverType(recv string) string {
+	fields := strings.Fields(recv)
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.TrimLeft(fields[len(fields)-1], "*[]")
 }
 
 // Roots are the trees this command holds to a verdict table.
@@ -340,28 +404,18 @@ var Verdicts = []Verdict{
 		Backlog: "网关自己的登录，由网关自己的凭据校验；调用者身份在上游那一跳已经入账"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/agentteams/token", Handler: "h.issueAgentTeamsToken"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/auth/login", Handler: "h.login"},
-	{File: "core/manager/iam/server/http.go", Route: "/v1/auth/refresh", Handler: "h.refresh",
-		Backlog: "换 token：签发新凭据但不改任何身份状态，login 已经入账，refresh 的那一行记的是「同一个人又来了一次」"},
+	{File: "core/manager/iam/server/http.go", Route: "/v1/auth/refresh", Handler: "h.refresh"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/auth/register", Handler: "h.register"},
-	{File: "core/manager/iam/server/http.go", Route: "/v1/orgs", Handler: "h.createOrg",
-		Backlog: "洞：建组织"},
-	{File: "core/manager/iam/server/http.go", Route: "/v1/orgs/{id}", Handler: "h.updateOrg",
-		Backlog: "洞：改组织"},
-	{File: "core/manager/iam/server/http.go", Route: "/v1/orgs/{id}", Handler: "h.deleteOrg",
-		Backlog: "洞：删组织，连带其成员关系一起消失"},
-	{File: "core/manager/iam/server/http.go", Route: "/v1/orgs/{id}/members", Handler: "h.addOrgMember",
-		Backlog: "洞：加成员。这是授权的源头动作，链上没有它就无法回答「他为什么能看这个租户」"},
-	{File: "core/manager/iam/server/http.go", Route: "/v1/orgs/{id}/members/{user_id}", Handler: "h.updateOrgMember",
-		Backlog: "洞：改成员角色"},
-	{File: "core/manager/iam/server/http.go", Route: "/v1/orgs/{id}/members/{user_id}", Handler: "h.removeOrgMember",
-		Backlog: "洞：移除成员。撤权比授权更需要留痕，而它恰恰没有"},
-	{File: "core/manager/iam/server/http.go", Route: "/v1/users", Handler: "h.createUser",
-		Backlog: "洞：建用户。同文件里 setRole/deleteUser 已入账，建用户反而没有，是一张不完整的表"},
-	{File: "core/manager/iam/server/http.go", Route: "/v1/users/{id}", Handler: "h.updateUser",
-		Backlog: "洞：改用户资料。deleteUser 已入账而 updateUser 没有，同一个资源的两个动词一半有一半没有"},
+	{File: "core/manager/iam/server/http.go", Route: "/v1/orgs", Handler: "h.createOrg"},
+	{File: "core/manager/iam/server/http.go", Route: "/v1/orgs/{id}", Handler: "h.updateOrg"},
+	{File: "core/manager/iam/server/http.go", Route: "/v1/orgs/{id}", Handler: "h.deleteOrg"},
+	{File: "core/manager/iam/server/http.go", Route: "/v1/orgs/{id}/members", Handler: "h.addOrgMember"},
+	{File: "core/manager/iam/server/http.go", Route: "/v1/orgs/{id}/members/{user_id}", Handler: "h.updateOrgMember"},
+	{File: "core/manager/iam/server/http.go", Route: "/v1/orgs/{id}/members/{user_id}", Handler: "h.removeOrgMember"},
+	{File: "core/manager/iam/server/http.go", Route: "/v1/users", Handler: "h.createUser"},
+	{File: "core/manager/iam/server/http.go", Route: "/v1/users/{id}", Handler: "h.updateUser"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/users/{id}", Handler: "h.deleteUser"},
-	{File: "core/manager/iam/server/http.go", Route: "/v1/users/{id}/password", Handler: "h.resetPassword",
-		Backlog: "洞：重置口令。本仓风险最高的一条写路由——「谁重置了谁的密码」答不出，事后无法追责"},
+	{File: "core/manager/iam/server/http.go", Route: "/v1/users/{id}/password", Handler: "h.resetPassword"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/users/{id}/role", Handler: "h.setRole"},
 	{File: "core/manager/server/chatdiagnose/http.go", Route: "/conversations/{id}/promote", Handler: "h.promote",
 		Backlog: "洞：把一轮对话晋升为正式结论"},
@@ -441,6 +495,10 @@ func Run(root string) Result {
 		files := 0
 		routes := 0
 
+		// One index per directory. A directory is a Go package, so this is
+		// the unit within which a handler can reach a helper.
+		pkgIndex := map[string]map[string]string{}
+
 		_ = filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil
@@ -460,6 +518,12 @@ func Run(root string) Result {
 			if readErr != nil {
 				return nil
 			}
+			dir := filepath.Dir(path)
+			pkg, built := pkgIndex[dir]
+			if !built {
+				pkg = packageBodies(dir)
+				pkgIndex[dir] = pkg
+			}
 			for _, m := range routeReg.FindAllStringSubmatch(string(src), -1) {
 				key := routeKey(rel, m[3], m[4])
 				routes++
@@ -470,7 +534,7 @@ func Run(root string) Result {
 					continue
 				}
 				seen[key] = true
-				audited := reachesAudit(string(src), m[4])
+				audited := reachesAudit(pkg, m[4])
 				v, ok := lookup(key)
 				switch {
 				case !ok:
@@ -522,6 +586,29 @@ func Run(root string) Result {
 	sort.Strings(res.Unscanned)
 	sort.Strings(res.Unwalkable)
 	return res
+}
+
+// packageBodies indexes every non-test file in a directory under
+// receiver-qualified keys.
+func packageBodies(dir string) map[string]string {
+	out := map[string]string{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		src, readErr := os.ReadFile(filepath.Join(dir, e.Name()))
+		if readErr != nil {
+			continue
+		}
+		for k, v := range funcBodiesQualified(string(src)) {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // findUnscannedRoots reports Go files outside every root that register a

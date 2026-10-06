@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -121,7 +122,14 @@ func note(w http.ResponseWriter, r *http.Request) { auditport.SetAuditEvent(r, a
 	if !strings.Contains(note, "SetAuditEvent") {
 		t.Fatalf("note holds the caller's text: %q", note)
 	}
-	drop := bodies["drop"]
+	// Methods are keyed by receiver type, so a same-named method on another
+	// type cannot overwrite this one — the reason the index is qualified
+	// rather than bare. (core/manager/server/agentteams really does declare
+	// `Register` twice, in two files of one package.)
+	drop := bodies["Handler.drop"]
+	if drop == "" {
+		t.Fatalf("the method was not indexed under a receiver-qualified key: %v", keysOf(bodies))
+	}
 	if strings.Contains(drop, "SetAuditEvent") {
 		t.Fatalf("drop absorbed the callee's text: %q", drop)
 	}
@@ -215,6 +223,88 @@ func TestTheTableAgreesWithTheRepository(t *testing.T) {
 	if t.Failed() {
 		t.Fatalf("%d mutating routes are registered, %d verdicts are recorded, %d of them backlog",
 			len(Verdicts), len(Verdicts), countBacklog())
+	}
+}
+
+func keysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// A helper in a *sibling file* of the handler is still in the same package,
+// and Go resolves it. Decision 317 found this the hard way: auditCall lives
+// in audit.go, every orgs.go handler calls it, and a gate that closed over
+// one file reported ten freshly audited identity routes as unaudited.
+func TestAnAuditHelperInASiblingFileStillCounts(t *testing.T) {
+	onlyRoot(t, "core/manager/server")
+	root := t.TempDir()
+	dir := filepath.Join(root, "core", "manager", "server", "widgets")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "http.go"), []byte(`package widgets
+func (h *Handler) Register(r chi.Router) {
+	r.Delete("/v1/widgets/{id}", h.drop)
+}
+func (h *Handler) drop(w http.ResponseWriter, r *http.Request) { auditDrop(w, r) }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "audit.go"), []byte(`package widgets
+func auditDrop(w http.ResponseWriter, r *http.Request) { auditport.SetAuditEvent(r, auditport.Event{}) }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	saved := Verdicts
+	Verdicts = []Verdict{
+		{File: "core/manager/server/widgets/http.go", Route: "/v1/widgets/{id}", Handler: "h.drop"},
+	}
+	defer func() { Verdicts = saved }()
+
+	res := Run(root)
+	if len(res.Missing) != 0 {
+		t.Fatalf("missing = %v, want the sibling-file helper recognised", res.Missing)
+	}
+}
+
+// Two same-named methods in one package must not overwrite each other in the
+// index, or the walk reads one function's body as another's.
+func TestTwoMethodsOfOneNameInAPackageDoNotCollide(t *testing.T) {
+	onlyRoot(t, "core/manager/server")
+	root := t.TempDir()
+	dir := filepath.Join(root, "core", "manager", "server", "widgets")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "http.go"), []byte(`package widgets
+func (h *Handler) Register(r chi.Router) {
+	r.Delete("/v1/widgets/{id}", h.drop)
+}
+func (h *Handler) drop(w http.ResponseWriter, r *http.Request) { auditport.SetAuditEvent(r, auditport.Event{}) }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Declared second so that a bare-name index would let it win.
+	if err := os.WriteFile(filepath.Join(dir, "other.go"), []byte(`package widgets
+func (s *Server) drop(w http.ResponseWriter, r *http.Request) {}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	saved := Verdicts
+	Verdicts = []Verdict{
+		{File: "core/manager/server/widgets/http.go", Route: "/v1/widgets/{id}", Handler: "h.drop"},
+	}
+	defer func() { Verdicts = saved }()
+
+	res := Run(root)
+	if len(res.Missing) != 0 {
+		t.Fatalf("missing = %v: a same-named method on another type shadowed the real one", res.Missing)
 	}
 }
 

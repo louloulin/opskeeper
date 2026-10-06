@@ -14,12 +14,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	biz "github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/user"
-	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
-	"github.com/vincent-wuhan/opskeeper/core/manager/iam/service"
 	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/user"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
+	"github.com/vincent-wuhan/opskeeper/core/manager/iam/service"
 )
 
 // loginThrottle caps failed-login bursts to defeat naive bruteforce /
@@ -285,11 +285,19 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	var in refreshReq
 	if err := decode(r, &in); err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionAuthLoginFailed, ResourceType: auditport.ResourceAuth, ResourceID: "", Payload: map[string]any{"flow": "refresh"}}, err)
 		writeErr(w, err)
 		return
 	}
 	pair, err := h.svc.Refresh(r.Context(), in.RefreshToken)
 	if err != nil {
+		// Only the failure is recorded. A successful refresh changes no
+		// identity state, and this repository deliberately dropped
+		// auth_login / auth_logout in May 2026 as noise that drowned out the
+		// mutation signal. A *failed* one is the opposite: a refresh token
+		// that does not verify is either replayed or forged, and that is
+		// exactly the shape the surviving auth_login_failed row was kept for.
+		auditFail(r, auditport.Event{Action: auditport.ActionAuthLoginFailed, ResourceType: auditport.ResourceAuth, ResourceID: "", Payload: map[string]any{"flow": "refresh"}}, err)
 		writeErr(w, err)
 		return
 	}

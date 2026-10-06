@@ -23,6 +23,22 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 818 / 550 as of decision 317, second pass: the same seven org /
+// membership constants again, this time as the re-exports
+// core/domains/model/audit is required to carry. The rule that caught it
+// is TestTheReExportCoversTheWholeVocabulary, and it is worth noting what
+// it means: a new action is not done when pkg/audit declares it, it is done
+// when every module that re-exports the vocabulary has picked it up. The
+// first bump in this decision was taken before that test had run.
+//
+// 811 as of decision 317: the seven new org / membership constants
+// (org_create, org_update, org_delete, org_member_add, org_member_update,
+// org_member_remove, and the org resource type) are all called from
+// orgs.go, which this walk can see, so only the one helper the walk cannot
+// reach — auditRefused, reached solely through a test — enters the count.
+// The class split barely moves because the growth is reachable; the total is
+// what moved, and it is the total the gate trips on.
+//
 // 810 / 543 as of decision 316: the four new ones are the credential vault's
 // action constants (secret_create / secret_update / secret_delete) plus the
 // secret resource type — the same re-export category decisions 311, 312 and
@@ -37,8 +53,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 810
-	deadSymbolBudget     = 543
+	unreachableBudget    = 818
+	deadSymbolBudget     = 550
 	testOnlySymbolBudget = 270
 )
 

@@ -12,11 +12,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	"github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/org"
 	"github.com/vincent-wuhan/opskeeper/core/manager/iam/biz/user"
 	"github.com/vincent-wuhan/opskeeper/core/manager/iam/model"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // ----- DTOs -----
@@ -230,40 +231,53 @@ func (h *Handler) listOrgs(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) createOrg(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
+		auditRefused(r, auditport.Event{Action: auditport.ActionOrgCreate, ResourceType: auditport.ResourceOrg, ResourceID: "", Payload: map[string]any{}})
 		return
 	}
 	svc := h.requireOrgsService(w)
 	if svc == nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgCreate, ResourceType: auditport.ResourceOrg, ResourceID: "", Payload: map[string]any{}}, errs.ErrNotWiredYet)
 		return
 	}
 	var in createOrgReq
 	if err := decode(r, &in); err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgCreate, ResourceType: auditport.ResourceOrg, ResourceID: "", Payload: map[string]any{}}, err)
 		writeErr(w, err)
 		return
 	}
 	o, err := svc.Create(r.Context(), org.CreateInput{Name: in.Name, Description: in.Description, ParentID: in.ParentID})
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgCreate, ResourceType: auditport.ResourceOrg, ResourceID: "", Payload: map[string]any{"name": in.Name}}, err)
 		writeErr(w, err)
 		return
 	}
+	payload := map[string]any{"name": o.Name}
+	if o.ParentID != nil {
+		payload["parent_id"] = *o.ParentID
+	}
+	auditOK(r, auditport.Event{Action: auditport.ActionOrgCreate, ResourceType: auditport.ResourceOrg, ResourceID: auditID(o.ID), Payload: payload})
 	writeJSON(w, http.StatusCreated, toOrgDTO(o))
 }
 
 func (h *Handler) updateOrg(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
+		auditRefused(r, auditport.Event{Action: auditport.ActionOrgUpdate, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}})
 		return
 	}
 	svc := h.requireOrgsService(w)
 	if svc == nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgUpdate, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}}, errs.ErrNotWiredYet)
 		return
 	}
 	id, err := parseID(r)
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgUpdate, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}}, err)
 		writeErr(w, err)
 		return
 	}
 	var in updateOrgReq
 	if err := decode(r, &in); err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgUpdate, ResourceType: auditport.ResourceOrg, ResourceID: auditID(id), Payload: map[string]any{}}, err)
 		writeErr(w, err)
 		return
 	}
@@ -274,29 +288,61 @@ func (h *Handler) updateOrg(w http.ResponseWriter, r *http.Request) {
 		ParentID:    in.ParentID,
 	})
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgUpdate, ResourceType: auditport.ResourceOrg, ResourceID: auditID(id), Payload: orgChangePayload(in)}, err)
 		writeErr(w, err)
 		return
 	}
+	auditOK(r, auditport.Event{Action: auditport.ActionOrgUpdate, ResourceType: auditport.ResourceOrg, ResourceID: auditID(id), Payload: orgChangePayload(in)})
 	writeJSON(w, http.StatusOK, toOrgDTO(o))
+}
+
+// orgChangePayload names the fields the request asked to move, not the
+// fields it happened to move. A caller that sends only a description has not
+// renamed the org, and a row that said it had would be a lie the reader
+// cannot detect.
+func orgChangePayload(in updateOrgReq) map[string]any {
+	fields := []string{}
+	if in.Name != "" {
+		fields = append(fields, "name")
+	}
+	if in.Description != "" {
+		fields = append(fields, "description")
+	}
+	if in.ParentIDSet {
+		fields = append(fields, "parent_id")
+	}
+	return map[string]any{"fields": fields}
 }
 
 func (h *Handler) deleteOrg(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
+		auditRefused(r, auditport.Event{Action: auditport.ActionOrgDelete, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}})
 		return
 	}
 	svc := h.requireOrgsService(w)
 	if svc == nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgDelete, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}}, errs.ErrNotWiredYet)
 		return
 	}
 	id, err := parseID(r)
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgDelete, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}}, err)
 		writeErr(w, err)
 		return
+	}
+	// Look the name up before the delete: afterwards there is nothing left to
+	// ask, and a row that can only say "org 7 is gone" is much less use to
+	// whoever reads it than one that says which org it was.
+	payload := map[string]any{}
+	if before, gErr := svc.Get(r.Context(), id); gErr == nil && before != nil {
+		payload["name"] = before.Name
 	}
 	if err := svc.Delete(r.Context(), id); err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgDelete, ResourceType: auditport.ResourceOrg, ResourceID: auditID(id), Payload: payload}, err)
 		writeErr(w, err)
 		return
 	}
+	auditOK(r, auditport.Event{Action: auditport.ActionOrgDelete, ResourceType: auditport.ResourceOrg, ResourceID: auditID(id), Payload: payload})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -336,32 +382,39 @@ func (h *Handler) listOrgMembers(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) addOrgMember(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
+		auditRefused(r, auditport.Event{Action: auditport.ActionOrgMemberAdd, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}})
 		return
 	}
 	ms := h.svc.Memberships()
 	if ms == nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberAdd, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}}, errs.ErrNotWiredYet)
 		writeErr(w, errs.ErrNotWiredYet)
 		return
 	}
 	orgID, err := parseID(r)
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberAdd, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}}, err)
 		writeErr(w, err)
 		return
 	}
 	var in addMemberReq
 	if err := decode(r, &in); err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberAdd, ResourceType: auditport.ResourceOrg, ResourceID: auditID(orgID), Payload: map[string]any{}}, err)
 		writeErr(w, err)
 		return
 	}
 	if in.UserID == 0 {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberAdd, ResourceType: auditport.ResourceOrg, ResourceID: auditID(orgID), Payload: map[string]any{}}, errs.ErrInvalid)
 		writeErr(w, errs.ErrInvalid)
 		return
 	}
 	row, err := ms.AddOrUpdate(r.Context(), in.UserID, orgID, in.Role)
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberAdd, ResourceType: auditport.ResourceOrg, ResourceID: auditID(orgID), Payload: membershipPayload(in.UserID, in.Role)}, err)
 		writeErr(w, err)
 		return
 	}
+	auditOK(r, auditport.Event{Action: auditport.ActionOrgMemberAdd, ResourceType: auditport.ResourceOrg, ResourceID: auditID(orgID), Payload: membershipPayload(row.UserID, row.Role)})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"user_id": row.UserID,
 		"org_id":  row.OrgID,
@@ -369,60 +422,83 @@ func (h *Handler) addOrgMember(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// membershipPayload is what makes a membership row answerable. The org is
+// the resource; user_id and role are what moved. Both belong in the row,
+// because "an org's membership changed" on its own names nobody.
+func membershipPayload(userID uint64, role string) map[string]any {
+	return map[string]any{"user_id": userID, "role": role}
+}
+
 func (h *Handler) updateOrgMember(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
+		auditRefused(r, auditport.Event{Action: auditport.ActionOrgMemberUpdate, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}})
 		return
 	}
 	ms := h.svc.Memberships()
 	if ms == nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberUpdate, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}}, errs.ErrNotWiredYet)
 		writeErr(w, errs.ErrNotWiredYet)
 		return
 	}
 	orgID, err := parseID(r)
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberUpdate, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}}, err)
 		writeErr(w, err)
 		return
 	}
 	uid, err := parseUserParam(r)
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberUpdate, ResourceType: auditport.ResourceOrg, ResourceID: auditID(orgID), Payload: map[string]any{}}, err)
 		writeErr(w, err)
 		return
 	}
 	var in updateMemberReq
 	if err := decode(r, &in); err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberUpdate, ResourceType: auditport.ResourceOrg, ResourceID: auditID(orgID), Payload: membershipPayload(uid, in.Role)}, err)
 		writeErr(w, err)
 		return
 	}
 	if _, err := ms.AddOrUpdate(r.Context(), uid, orgID, in.Role); err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberUpdate, ResourceType: auditport.ResourceOrg, ResourceID: auditID(orgID), Payload: membershipPayload(uid, in.Role)}, err)
 		writeErr(w, err)
 		return
 	}
+	auditOK(r, auditport.Event{Action: auditport.ActionOrgMemberUpdate, ResourceType: auditport.ResourceOrg, ResourceID: auditID(orgID), Payload: membershipPayload(uid, in.Role)})
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) removeOrgMember(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
+		auditRefused(r, auditport.Event{Action: auditport.ActionOrgMemberRemove, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}})
 		return
 	}
 	ms := h.svc.Memberships()
 	if ms == nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberRemove, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}}, errs.ErrNotWiredYet)
 		writeErr(w, errs.ErrNotWiredYet)
 		return
 	}
 	orgID, err := parseID(r)
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberRemove, ResourceType: auditport.ResourceOrg, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}}, err)
 		writeErr(w, err)
 		return
 	}
 	uid, err := parseUserParam(r)
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberRemove, ResourceType: auditport.ResourceOrg, ResourceID: auditID(orgID), Payload: map[string]any{}}, err)
 		writeErr(w, err)
 		return
 	}
+	// A removal row has no role to record, only the pair that was cut. The
+	// asymmetry with the add/update rows is the point: a reader must not be
+	// able to read a removal as "moved to role ''".
 	if err := ms.Remove(r.Context(), uid, orgID); err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionOrgMemberRemove, ResourceType: auditport.ResourceOrg, ResourceID: auditID(orgID), Payload: map[string]any{"user_id": uid}}, err)
 		writeErr(w, err)
 		return
 	}
+	auditOK(r, auditport.Event{Action: auditport.ActionOrgMemberRemove, ResourceType: auditport.ResourceOrg, ResourceID: auditID(orgID), Payload: map[string]any{"user_id": uid}})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -430,13 +506,19 @@ func (h *Handler) removeOrgMember(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
+		auditRefused(r, auditport.Event{Action: auditport.ActionUserCreate, ResourceType: auditport.ResourceUser, ResourceID: "", Payload: map[string]any{}})
 		return
 	}
 	var in createUserReq
 	if err := decode(r, &in); err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionUserCreate, ResourceType: auditport.ResourceUser, ResourceID: "", Payload: map[string]any{}}, err)
 		writeErr(w, err)
 		return
 	}
+	// The payload carries the email and the role, never the password. An
+	// account-creation row is the one place a leaked password would be worst:
+	// the account is brand new, so nothing else has ever referenced it.
+	payload := map[string]any{"email": in.Email, "role": in.Role}
 	u, err := h.svc.User().Create(r.Context(), user.CreateInput{
 		Email:       in.Email,
 		Password:    in.Password,
@@ -445,6 +527,7 @@ func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
 		Role:        in.Role,
 	})
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionUserCreate, ResourceType: auditport.ResourceUser, ResourceID: "", Payload: payload}, err)
 		writeErr(w, err)
 		return
 	}
@@ -461,29 +544,55 @@ func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
 					h.log.Warn("iam: auto-join default org",
 						"user_id", u.ID,
 						"err", mErr)
+				} else {
+					// The auto-join is a membership grant, and a grant that
+					// only appears in a log line is a grant nobody can find
+					// later. It rides on the create row rather than getting a
+					// second one, because it is part of the same decision.
+					payload["auto_joined_org_id"] = seed.ID
 				}
 			}
 		}
 	}
+	payload["user_id"] = u.ID
+	auditOK(r, auditport.Event{Action: auditport.ActionUserCreate, ResourceType: auditport.ResourceUser, ResourceID: auditID(u.ID), Payload: payload})
 	writeJSON(w, http.StatusCreated, toFullUserDTO(u))
 }
 
 func (h *Handler) updateUser(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
+		auditRefused(r, auditport.Event{Action: auditport.ActionUserUpdate, ResourceType: auditport.ResourceUser, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}})
 		return
 	}
 	id, err := parseID(r)
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionUserUpdate, ResourceType: auditport.ResourceUser, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{}}, err)
 		writeErr(w, err)
 		return
 	}
 	var in updateUserReq
 	if err := decode(r, &in); err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionUserUpdate, ResourceType: auditport.ResourceUser, ResourceID: auditID(id), Payload: map[string]any{}}, err)
 		writeErr(w, err)
 		return
 	}
+	// Which fields the caller asked to move, not which ones it happened to.
+	// The two differ whenever a field is absent from the body, and a row that
+	// claimed a rename that never happened is not a row anybody can correct.
+	changed := []string{}
+	if in.DisplayName != nil {
+		changed = append(changed, "display_name")
+	}
+	if in.Phone != nil {
+		changed = append(changed, "phone")
+	}
+	if in.Status != nil {
+		changed = append(changed, "status")
+	}
+	payload := map[string]any{"fields": changed}
 	u, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionUserUpdate, ResourceType: auditport.ResourceUser, ResourceID: auditID(id), Payload: payload}, err)
 		writeErr(w, err)
 		return
 	}
@@ -496,21 +605,26 @@ func (h *Handler) updateUser(w http.ResponseWriter, r *http.Request) {
 			ph = *in.Phone
 		}
 		if err := h.svc.User().UpdateProfile(r.Context(), id, dn, ph); err != nil {
+			auditFail(r, auditport.Event{Action: auditport.ActionUserUpdate, ResourceType: auditport.ResourceUser, ResourceID: auditID(id), Payload: payload}, err)
 			writeErr(w, err)
 			return
 		}
 	}
 	if in.Status != nil {
 		if err := h.svc.User().SetStatus(r.Context(), id, *in.Status); err != nil {
+			auditFail(r, auditport.Event{Action: auditport.ActionUserUpdate, ResourceType: auditport.ResourceUser, ResourceID: auditID(id), Payload: payload}, err)
 			writeErr(w, err)
 			return
 		}
 	}
 	final, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionUserUpdate, ResourceType: auditport.ResourceUser, ResourceID: auditID(id), Payload: payload}, err)
 		writeErr(w, err)
 		return
 	}
+	payload["status"] = final.Status
+	auditOK(r, auditport.Event{Action: auditport.ActionUserUpdate, ResourceType: auditport.ResourceUser, ResourceID: auditID(id), Payload: payload})
 	writeJSON(w, http.StatusOK, toFullUserDTO(final))
 }
 
@@ -521,21 +635,32 @@ func (h *Handler) updateUser(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
+		auditRefused(r, auditport.Event{Action: auditport.ActionUserUpdate, ResourceType: auditport.ResourceUser, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{"field": "password"}})
 		return
 	}
 	id, err := parseID(r)
 	if err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionUserUpdate, ResourceType: auditport.ResourceUser, ResourceID: chi.URLParam(r, "id"), Payload: map[string]any{"field": "password"}}, err)
 		writeErr(w, err)
 		return
 	}
 	var in resetPasswordReq
 	if err := decode(r, &in); err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionUserUpdate, ResourceType: auditport.ResourceUser, ResourceID: auditID(id), Payload: map[string]any{"field": "password"}}, err)
 		writeErr(w, err)
 		return
 	}
+	// This is the highest-risk write in the control plane, and its row is
+	// therefore the smallest: it says whose password was reset and nothing
+	// else. Not the new password, not a digest of it, not a length. A digest
+	// would answer "is it the same password as before", which nobody is
+	// authorised to ask, and it would still be a stable handle on a value the
+	// vault exists to keep.
 	if err := h.svc.User().ResetPassword(r.Context(), id, in.Password); err != nil {
+		auditFail(r, auditport.Event{Action: auditport.ActionUserUpdate, ResourceType: auditport.ResourceUser, ResourceID: auditID(id), Payload: map[string]any{"field": "password"}}, err)
 		writeErr(w, err)
 		return
 	}
+	auditOK(r, auditport.Event{Action: auditport.ActionUserUpdate, ResourceType: auditport.ResourceUser, ResourceID: auditID(id), Payload: map[string]any{"field": "password"}})
 	w.WriteHeader(http.StatusNoContent)
 }

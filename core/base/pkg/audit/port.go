@@ -105,6 +105,19 @@ const (
 	ActionUserDelete = "user_delete"
 	ActionUserExport = "user_export"
 
+	// Organizations and their memberships. These are separate actions from
+	// the user verbs on purpose: "who moved this person into that org" is a
+	// different question from "who edited that person", and folding both into
+	// user_update made the first one unanswerable. Membership actions carry
+	// user_id in the payload and name the org as the resource, because the
+	// membership is the edge and the org is what it hangs off.
+	ActionOrgCreate       = "org_create"
+	ActionOrgUpdate       = "org_update"
+	ActionOrgDelete       = "org_delete"
+	ActionOrgMemberAdd    = "org_member_add"
+	ActionOrgMemberUpdate = "org_member_update"
+	ActionOrgMemberRemove = "org_member_remove"
+
 	// Device CRUD. enable / disable / bulk-delete fold into update /
 	// delete + a payload (e.g. {"enabled": false, "count": 3}).
 	ActionDeviceUpdate = "device_update"
@@ -380,6 +393,7 @@ const (
 	ResourceIncident = "incident"
 	ResourceSetting  = "setting"
 	ResourceSecret   = "secret"
+	ResourceOrg      = "org"
 	ResourceRule     = "rule"
 	ResourceChannel  = "channel"
 	ResourceRepo     = "repo"
