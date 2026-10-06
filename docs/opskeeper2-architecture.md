@@ -8042,6 +8042,25 @@ pull_request:
 开 PR 不关闭任何计划内未交付项，它降低的是**「425 个提交从未被评审」**这一风险。
 PR #1 上会有两个红：open-source gate（待作者决定）与 `version-check`（按构造红）。
 
+#### 4.353.5 PR #1 上的实际 run（全量枚举，非列表视图）
+
+```
+pull_request runs total=3
+CI               status=in_progress  conclusion=null
+PR Checklist     status=completed    conclusion=failure
+Open source gate status=completed    conclusion=failure
+```
+
+**两个红都是设计中的**：open source gate 红在 13 项待决上，PR Checklist 与它同源；
+CI 仍在跑。**这给了本 PR 一个我在决策 419.2 里没有写进去的实际作用**：
+那 13 项待决此前只活在本地审计器输出里，**现在它们在合并之前会出现在 CI 上**——
+一个不会阻止分支 push、却会阻止合并的红，位置恰好是它该在的地方。
+
+**而这一次查询本身又是一次「数对结论错」的近失**：第一个 `jq` 表达式把两个 workflow 的
+结论打印成 `true`，读起来像两个都成功；重查的 `conclusion` 字段是 `failure`。
+**一个打印出布尔值的聚合查询，和它读起来的样子不一样**——这与 §4.352.1 是同一条：
+先确认这一行的内容是什么，再把它当成结论。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
