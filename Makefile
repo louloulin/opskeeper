@@ -72,7 +72,7 @@ test-plugins: ## 运行插件测试
 	scripts/demo_preflight.sh --help >/dev/null
 	npm test --prefix plugins/opskeeper-teamharness/dashboard
 	$(MAKE) -C plugins/agentteams-plugin-installer self-check
-	$(PYTHON) -m pytest tests/test_deterministic_archive.py tests/test_audit_open_source.py plugins/opskeeper-teamharness
+	$(PYTHON) -m pytest tests/test_deterministic_archive.py tests/test_audit_open_source.py tests/test_check_release_version.py plugins/opskeeper-teamharness
 
 # version-check is deliberately NOT a prerequisite of this target, and its
 # absence is the reason the open-source gate below runs at all.
