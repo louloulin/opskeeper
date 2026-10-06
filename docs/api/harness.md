@@ -106,9 +106,22 @@ opskeeper-eval inject --case pg/lock-waits --hold 3m
 **它写的每一条 key 都带 injectID**（`opskeeper:fault:<injectID>:…`），
 所以"只删自己建的 key"不需要撤销时再核对一次——**归属在命名那一刻就回答完了**。
 
-**另外四个（host / k8s / rabbitmq / kafka）仍然是骨架**，
-它们不碰任何真实系统——没有 kubectl、没有 amqp 客户端、没有 kafkaclient、
-没有 stress-ng——并通过 `CheckAvailable` 说明缺什么。
+**Host 这一路也是**真实现**（决策 299），而且它是六个里最危险的一个。**
+`core/faults/injector/host` 真的写文件系统、真的烧 CPU：
+
+| 类型 | 判据 |
+|---|---|
+| `host.fill_disk` | `statfs` 的可用字节前后差值；撤销后至少还回九成 |
+| `host.cpu_stress` | `getrusage` 的 CPU 时间增量；利用率按 worker 归一后不低于 `target_load - 25` 个百分点 |
+
+它多出三道别的四个不需要的闸门：**只往 `OPSKEEPER_HARNESS_HOST_ROOT`
+指定的目录里写**（不设即不可用，不猜默认目录）；**文件系统根目录被拒绝**，
+哪怕被显式指定；**不越过可用空间地板**（默认 2048MB，写前查一次、每写 1MB 再查一次）。
+case 里的 `path` 只能收窄范围，落在 root 之外会被明确拒绝。
+
+**另外三个（k8s / rabbitmq / kafka）仍然是骨架**，
+它们不碰任何真实系统——没有 kubectl、没有 amqp 客户端、没有 kafkaclient——
+并通过 `CheckAvailable` 说明缺什么。
 
 一个认不出的类型报 `ErrUnsupportedType` 而不是"不可用"：那是接线问题，
 与当前环境无关，报成不可用会把人引去查环境。

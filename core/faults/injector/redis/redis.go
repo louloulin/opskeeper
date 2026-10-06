@@ -192,6 +192,10 @@ func (i *Injector) Inject(ctx context.Context, spec injector.InjectSpec) (*injec
 	defer func() {
 		if l != nil && l.err != nil {
 			_ = i.runRollback(context.Background(), l)
+			// 并且把这一条从账本里划掉——理由见 pg 注入器里同一段注释：
+			// 一次失败的注入留在 Live() 里，Cleanup(id) 就会把它当成
+			// "已生效并被撤销"，而它其实从没成功过。
+			i.forget(l.id)
 		}
 	}()
 
@@ -315,6 +319,17 @@ func (i *Injector) runRollback(ctx context.Context, l *live) error {
 	}
 	l.rollback = nil
 	return errors.Join(errs...)
+}
+
+// forget 划掉一条注入，不撤销它。
+//
+// 它只回答"账本上还有没有这一条"，不碰目标系统——
+// 撤销由 runRollback 负责，两件事分开，所以调用点不会在"忘了撤销"
+// 和"忘了销账"之间只做一半。
+func (i *Injector) forget(id string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	delete(i.live, id)
 }
 
 // Live returns the IDs of the injections currently staged.

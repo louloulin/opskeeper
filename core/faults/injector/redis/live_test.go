@@ -333,3 +333,27 @@ func TestCleanupNeverTouchesAKeyItDidNotCreate(t *testing.T) {
 			"cleanup must only ever delete what it wrote", v, err)
 	}
 }
+
+// 一次失败的注入必须**从账本上消失**。
+//
+// 只撤销、不销账的后果：失败的注入仍然占着 Live() 里的一个名字，
+// Cleanup(id) 会因为"还在账本里"而返回一个成功的撤销——
+// 于是一个从没成功过的东西，看上去像是被正常撤销过了。
+//
+// 判据要挑一个 post-begin 的失败：类型检查与不可用检查都在 begin 之前，
+// 它们天然不会留下账目。
+func TestARefusedInjectionLeavesNoLedgerEntry(t *testing.T) {
+	i := liveInjector(t)
+	// value_size_mb=0 在 CheckAvailable 之后、任何一次 SET 之前被拒。
+	_, err := i.Inject(context.Background(), injector.InjectSpec{
+		Type:     "redis.inject_big_key",
+		Duration: 30 * time.Second,
+		Params:   map[string]any{"value_size_mb": 0},
+	})
+	if err == nil {
+		t.Fatal("Inject accepted value_size_mb=0; want a refusal")
+	}
+	if n := len(i.Live()); n != 0 {
+		t.Errorf("%d injection(s) still recorded after a refusal: %v", n, i.Live())
+	}
+}

@@ -340,7 +340,7 @@ func newInjectorRegistry() *injector.Registry {
 	// pgx.Connect / go-redis 的 Dial 里的事实：命令行看不到它，
 	// 测试也没法用 t.Setenv 钉住它。
 	for _, impl := range []injector.Injector{
-		hostinjector.New(),
+		hostinjector.New(hostinjector.WithRoot(os.Getenv(hostinjector.RootEnv))),
 		pginjector.New(pginjector.WithDSN(os.Getenv(pginjector.DSNEnv))),
 		redisinjector.New(
 			redisinjector.WithAddr(os.Getenv(redisinjector.AddrEnv)),

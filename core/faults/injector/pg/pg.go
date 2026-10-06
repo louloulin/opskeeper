@@ -222,6 +222,14 @@ func (i *Injector) Inject(ctx context.Context, spec injector.InjectSpec) (*injec
 		if l != nil && l.err != nil {
 			// 出错时立刻撤销已经做的那几步，而不是把半截故障留在数据库里。
 			_ = i.runRollback(context.Background(), l)
+			// **并且把这一条从账本里划掉。**
+			//
+			// 只撤销不销账的后果是：一次失败的注入仍然占着 `Live()` 里的一个
+			// 名字，而 `Cleanup(id)` 会因为"还在账本里"而返回一个成功的撤销——
+			// 于是一次从没成功过的东西，看上去像是被正常撤销过了。
+			// 它同时会让"当前有几条故障在生效"这个读数永远只增不减，
+			// 而那个读数是判断一次评测跑得干不干净的依据。
+			i.forget(l.id)
 		}
 	}()
 
@@ -348,6 +356,17 @@ func (i *Injector) runRollback(ctx context.Context, l *live) error {
 	}
 	l.rollback = nil
 	return errors.Join(errs...)
+}
+
+// forget 划掉一条注入，不撤销它。
+//
+// 它只回答"账本上还有没有这一条"，不碰目标系统——
+// 撤销由 runRollback 负责，两件事分开，所以调用点不会在"忘了撤销"
+// 和"忘了销账"之间只做一半。
+func (i *Injector) forget(id string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	delete(i.live, id)
 }
 
 // Live returns the IDs of the injections currently staged.

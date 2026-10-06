@@ -328,7 +328,7 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 | `pg.` | `inject_lock_chain` / `begin_txn_hold` / `hold_old_txn` / `run_slow_queries` / `inject_table_bloat` / `run_autovacuum` | ✅ **真实现**（pgx 连真库，决策 297） |
 | `pg.` | `inject_replica_lag` | ⚠️ 大声拒绝：单节点造不出复制延迟 |
 | `redis.` | `inject_big_key` / `inject_hot_key` / `inject_memory_burst` / `inject_slow_commands` | ✅ **真实现**（go-redis 连真库，决策 298） |
-| `host.` | `fill_disk` / `cpu_stress` | 骨架 |
+| `host.` | `fill_disk` / `cpu_stress` | ✅ **真实现**（决策 299；**最危险的一个**，见 4.4） |
 | `k8s.` | `cordon_node` / `fill_pv` / `inject_memory_pressure` / `set_bad_image` | 骨架 |
 | `rabbitmq.` | `inject_message_burst` | 骨架 |
 | `kafka.` | `inject_consumer_lag` / `inject_partition_skew` / `kill_broker` | 骨架 |
@@ -351,10 +351,14 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 | `redis.inject_hot_key` | `INFO commandstats` 里 `cmdstat_get` 的 calls 增量；`CLIENT LIST` 里有具名连接 |
 | `redis.inject_memory_burst` | `INFO memory` 的 `used_memory` 前后差值 > 0 |
 | `redis.inject_slow_commands` | 一条**没被碰过**的连接的 PING 耗时 ≥ 暂停时长 |
+| `host.fill_disk` | `statfs` 的可用字节前后差值；撤销后至少还回九成 |
+| `host.cpu_stress` | `getrusage` 的 CPU 时间增量；利用率按 worker 归一后不低于 `target_load - 25` 个百分点 |
 
 连接来自 `OPSKEEPER_HARNESS_PG_DSN` 与
 `OPSKEEPER_HARNESS_REDIS_ADDR`（口令走 `OPSKEEPER_HARNESS_REDIS_PASSWORD`）；
-**没设就一步都不走**。
+`host` 来自 `OPSKEEPER_HARNESS_HOST_ROOT`。
+**没设就一步都不走**——`host` 尤其不猜：在节点 agent 上，
+任何形式的默认目录都极可能就是节点的根文件系统。
 
 **"没被碰过的连接"这五个字是慢命令那一条的全部要害**：它是四种 Redis 故障里
 唯一一种影响所有人的，所以它不能靠注入器自证——说"我已经暂停了"没有任何意义，
@@ -366,6 +370,26 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 - **prod**：必须 `--confirm-prod`。**双人审批仍未实现**——只有一个布尔开关，
   没有第二个人、没有审批记录、没有留痕
 - **注入时间窗**：**没有**。`--max-duration` 不存在，命令行不限制时长
+
+### 4.4 `host` 的三道闸门
+
+`host` 是六个里**最危险**的：`fill_disk` 往真实文件系统写真实块，
+做砸了会把 agent 自己所在的那台机器写瘫，而一台瘫掉的机器没有回滚。
+所以这个包的设计由这一条决定，多出三道别的四个不需要的闸门：
+
+1. **只往一个被明确指定的目录里写。** `OPSKEEPER_HARNESS_HOST_ROOT`
+   指哪个就是哪个，不设就是不可用（见上）。
+2. **文件系统根目录被拒绝，哪怕是被显式指定进来的。** 一道
+   `root == "/"` 的检查，位置在 `CheckAvailable` 而不是 `Inject`——
+   因为 `Inject` 的失败会被当成"环境不支持"，而这一次失败的原因是
+   一个配错了的变量。
+3. **不越过可用空间地板。** 写之前查一次，每写 1MB 再查一次。
+   地板默认 2048MB：一个还在跑的 PostgreSQL / Redis 在磁盘被写满时
+   会丢数据或崩溃，而那正是注入之后要诊断的东西。
+
+case 里的 `path` **只能收窄范围，不能扩大**。语料是手写的 YAML，
+而一个能被 case 指到任意目录的"磁盘写满"注入器就是一个能把节点写瘫的工具。
+落在 root 之外的写法不是被忽略，而是被明确拒绝并说出该配什么。
 
 ### 4.3 自动清理
 

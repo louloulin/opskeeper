@@ -370,3 +370,29 @@ func pgxRow(t *testing.T, dsn, sql, arg string, dst *string) error {
 	defer conn.Close(context.Background())
 	return conn.QueryRow(context.Background(), sql, arg).Scan(dst)
 }
+
+// 一次失败的注入必须**从账本上消失**。
+//
+// 上一版只撤销、不销账：失败的注入仍然占着 Live() 里的一个名字，
+// 而 Cleanup(id) 会因为"还在账本里"而返回一个成功的撤销——
+// 于是一个从没成功过的东西，看上去像是被正常撤销过了。
+// 更糟的是"当前有几条故障在生效"这个读数会只增不减，
+// 而它是判断一次评测跑得干不干净的依据。
+//
+// 这条只在"参数错误发生在 begin 之后"时才触发：类型检查与不可用检查
+// 都在 begin 之前，它们天然不会留下账目。所以判据要挑一个 post-begin 的失败。
+func TestARefusedInjectionLeavesNoLedgerEntry(t *testing.T) {
+	i := liveInjector(t)
+	// chain_depth=1 造不出链，而它是在 begin 之后才被检查的。
+	_, err := i.Inject(context.Background(), injector.InjectSpec{
+		Type:     "pg.inject_lock_chain",
+		Duration: 30 * time.Second,
+		Params:   map[string]any{"table": "opskeeper_chain_probe", "chain_depth": 1},
+	})
+	if err == nil {
+		t.Fatal("Inject accepted chain_depth=1; want a refusal")
+	}
+	if n := len(i.Live()); n != 0 {
+		t.Errorf("%d injection(s) still recorded after a refusal: %v", n, i.Live())
+	}
+}
