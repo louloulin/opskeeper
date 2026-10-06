@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/approval"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
@@ -44,6 +45,10 @@ type Usecase struct {
 	// is single-signer, which is what this code did until decision 362 and
 	// what a deployment without a rule file gets.
 	gate Gate
+	// escalator raises a row's risk class from the target's sensitivity
+	// label. nil means this deployment has no labels, and the class the
+	// producer declared stands.
+	escalator Escalator
 }
 
 // NewUsecase wires the repo.
@@ -58,6 +63,13 @@ func NewUsecase(repo Repo, log *slog.Logger) *Usecase {
 // it can be chained onto the constructor at the composition root.
 func (u *Usecase) WithDualSignGate(g Gate) *Usecase {
 	u.gate = g
+	return u
+}
+
+// WithEscalator wires the sensitivity escalation. See Escalator for what nil
+// means, which is not "no escalation".
+func (u *Usecase) WithEscalator(e Escalator) *Usecase {
+	u.escalator = e
 	return u
 }
 
@@ -83,6 +95,21 @@ type ProposeInput struct {
 	// to find out what it is approving is a rule that will be wrong.
 	RiskClass   string
 	BlastRadius string
+
+	// Target is the resource this action reaches, as the bare id a tool call
+	// carries. It is what the operator reads on the card, and it is what the
+	// escalation looks up when EscalationTargets is empty.
+	Target string
+
+	// EscalationTargets is every resource the action reaches, for the calls
+	// that reach more than one — a bash command against twelve devices, a
+	// tool that takes a list. The escalation takes the strictest label across
+	// all of them; Target stays the one an operator sees.
+	//
+	// It is a separate field rather than a list because the two answer
+	// different questions. Collapsing them would either make the card render
+	// twelve targets, or make the gate check one of them.
+	EscalationTargets []string
 }
 
 // Propose records a pending action. Producer-facing (not admin-gated — the
@@ -104,12 +131,95 @@ func (u *Usecase) Propose(ctx context.Context, in ProposeInput) (*model.Approval
 		PayloadJSON: string(payload), Source: src, SessionID: in.SessionID,
 		Status: model.StatusPending, ProposedBy: in.ProposedBy,
 		RiskClass: in.RiskClass, BlastRadius: in.BlastRadius,
+		Target: strings.TrimSpace(in.Target),
+	}
+	// The escalation happens here, at the moment the row is created, and not
+	// when a signer looks at it. A class that could still change between the
+	// proposal and the decision is a class the first signer's decision was not
+	// actually about.
+	raised, byLabel, escErr := u.escalate(ctx, a, in)
+	if escErr != nil {
+		return nil, escErr
+	}
+	a.RiskClass = string(raised)
+	if byLabel {
+		u.log.Info("approval escalated by the target's sensitivity label",
+			slog.String("kind", a.Kind),
+			slog.String("target", a.Target),
+			slog.String("risk_class", a.RiskClass))
 	}
 	if err := u.repo.Create(ctx, a); err != nil {
 		return nil, err
 	}
 	u.log.Info("approval proposed", slog.String("id", a.ID), slog.String("kind", a.Kind), slog.String("title", a.Title))
 	return a, nil
+}
+
+// escalate raises the row's class to whatever its target's label demands.
+//
+// A lookup that fails is not an unlabeled target: treating a label store
+// outage as "this resource is fine" would turn a database blip into an
+// approval that is one signature too easy. The failure is returned, and the
+// caller does not create a row it cannot vouch for.
+func (u *Usecase) escalate(ctx context.Context, a *model.Approval, in ProposeInput) (domain.ToolClass, bool, error) {
+	proposed := domain.ToolClass(a.RiskClass)
+	targets := escalationTargets(a, in)
+	if u.escalator == nil || len(targets) == 0 {
+		return proposed, false, nil
+	}
+	required, labelled, err := u.escalator.ClassFor(ctx, targets)
+	if err != nil {
+		return proposed, false, fmt.Errorf("%w: escalate %s: %v",
+			errs.ErrInvalid, strings.Join(targets, ","), err)
+	}
+	if !labelled || required == "" {
+		return proposed, false, nil
+	}
+	// A proposal that declared no class takes the label's word for it, and it
+	// has to be handled before the ranking rather than after it.
+	//
+	// core/domain ranks ClassUnknown (the empty string, which is what an
+	// undeclared RiskClass parses to) WITH destructive, on purpose: a
+	// producer that says nothing about a tool is not trusted to be
+	// read-only. That is correct for admitting a package. Borrowing it here
+	// inverts this control — "the proposer said nothing" would outrank "the
+	// label says Restricted", the row would be stored with an empty risk
+	// class again, and an empty class on an approval row is precisely the
+	// one-signature row this whole path exists to prevent.
+	if proposed == domain.ClassUnknown {
+		return required, true, nil
+	}
+	// The ordering is core/domain's, next to the constants it orders. This
+	// package deliberately does not import dataguard — the same reason
+	// biz/hitl does not: a label mapping reached for from two places is a
+	// mapping that will be right in one of them.
+	raised := domain.Tools{{Class: proposed}, {Class: required}}.HighestClass()
+	return raised, raised != proposed, nil
+}
+
+// escalationTargets is the set the escalation judges, with blanks dropped and
+// duplicates removed. A producer that named no explicit set falls back to the
+// target it is showing on the card, which is the common case and the one that
+// was true before this existed.
+func escalationTargets(a *model.Approval, in ProposeInput) []string {
+	raw := in.EscalationTargets
+	if len(raw) == 0 {
+		raw = []string{a.Target}
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, t := range raw {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out
 }
 
 // List / Get / CountPending — inbox reads.

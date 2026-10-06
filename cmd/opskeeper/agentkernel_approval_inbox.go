@@ -123,6 +123,10 @@ func (a *InboxUsecase) Propose(ctx context.Context, req ports.ApprovalRequest) (
 		// 迟早会解析错。决策 362 把这两样搬到了列上。
 		RiskClass:   string(req.Class),
 		BlastRadius: string(req.BlastRadius),
+		// The target is what the escalation looks the label up by, so it
+		// has to be a column and not a payload byte — the same correction
+		// decision 362 made for the class itself.
+		Target: req.Target,
 	})
 	if err != nil {
 		return "", err

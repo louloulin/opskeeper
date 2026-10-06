@@ -48,6 +48,16 @@ func (r *fakeRepo) List(_ context.Context, _, _ string, _, _ int) ([]*store.Data
 	}
 	return out, int64(len(out)), nil
 }
+func (r *fakeRepo) StrictestForResourceID(_ context.Context, rid string) ([]*store.DataSensitivityLabel, error) {
+	var out []*store.DataSensitivityLabel
+	for _, l := range r.labels {
+		if l.ResourceID == rid {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
 func (r *fakeRepo) Delete(_ context.Context, rt, rid string) error {
 	if _, ok := r.labels[r.key(rt, rid)]; !ok {
 		return errs.ErrNotFound

@@ -90,14 +90,18 @@ func Claims() []ControlClaim {
 		{
 			ID:     "sensitivity.escalates-severity",
 			Claim:  "TopSecret and Restricted raise a call to dangerous, Confidential to mutating",
-			Status: StatusInert,
-			Probe:  "NewPolicyFromConfig",
-			Note: "PausePolicyImpl implements the mapping and nothing constructs it in production, " +
-				"so a TopSecret resource does not escalate the **approval** it would need. What " +
-				"does run, since decision 361, is the read gate: a TopSecret resource needs a " +
-				"topsecret_reader tier before a tool returns anything. **读侧升级是真的，审批侧" +
-				"升级仍然没有**——而这一行说的是后者：审批的等级由生产者声明的 risk_class 决定，" +
-				"没有任何一处去问这个资源被标成了什么。",
+			Status: StatusEnforced,
+			Probe:  "ClassFor",
+			Note: "the row was inert because PausePolicyImpl implements the mapping and nothing " +
+				"constructs it in production. Decision 363 replaced that with a path that runs: " +
+				"approval.Propose looks the action's target up in the label store before the row " +
+				"exists and stores the raised class, so the signatures a reviewer is asked for " +
+				"are decided by the label rather than by the producer's risk_class. Two failure " +
+				"directions are closed deliberately — a lookup that errors refuses to create the " +
+				"row rather than defaulting to unlabelled, and a label can only raise a class, " +
+				"so labelling a database Internal is not a way to buy a single signature. A call " +
+				"reaching several resources is judged by the strictest label in the set. See also " +
+				"the read half, which has run since decision 361.",
 		},
 		{
 			ID:     "sensitivity.confidential-reader-role",
@@ -127,11 +131,12 @@ func Claims() []ControlClaim {
 			Status: StatusDeclared,
 			Note: "this half was split out of the restricted-reader row because the reader gate " +
 				"that now runs does not implement it. The reader gate asks about the read " +
-				"action, and the override a write would need has no code behind it: the " +
-				"escalation to a dangerous approval lives in PausePolicyImpl, which production " +
-				"never constructs, and no write path consults a resource's label at all. A row " +
-				"that said enforced while only its read half ran would be the exact lie this " +
-				"registry exists to prevent.",
+				"action, and an override is a grant that lets a write through anyway — which is " +
+				"not what decision 363 added. That change raises an approval's class so the " +
+				"write costs more signatures, a different control on a different side of the " +
+				"queue, and it leaves the override this row names with no code behind it. A row " +
+				"that said enforced because the escalation landed would be the exact lie this " +
+				"registry exists to prevent, in the shape this registry was written to catch.",
 		},
 		{
 			ID:     "sensitivity.top-secret-read-gated",

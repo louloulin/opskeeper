@@ -37,6 +37,28 @@ func (r *Repo) Get(ctx context.Context, resourceType, resourceID string) (*DataS
 	return &l, nil
 }
 
+// StrictestForResourceID 返回某个 id 在**所有**资源类型下生效标签里最严格的一条。
+//
+// 为什么需要跨类型：审批行上带着的是一个裸 id（`web-1`），不是
+// `pod:web-1`。调用方知道工具打到了某个东西，却不知道它被登记成哪种资源，
+// 而敏感度标签是按 (类型, id) 存的——于是"这个 id 危不危险"这个问题在没有
+// 类型的输入下无法被回答。
+//
+// 跨类型会撞名：一个叫 `web-1` 的 Pod 和一个叫 `web-1` 的 Service 是两行。
+// 所以这里取**最严格**的一条而不是第一条：撞名时答案偏向更严的那一侧，
+// 漏判的方向因此永远是安全的。排序由调用方按 dataguard 的等级序做，
+// 存储层不复制那份表。
+func (r *Repo) StrictestForResourceID(ctx context.Context, resourceID string) ([]*DataSensitivityLabel, error) {
+	var rows []*DataSensitivityLabel
+	if err := r.db.WithContext(ctx).
+		Where("resource_id = ?", resourceID).
+		Order("confidence DESC").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
 // List 按 sensitivity 过滤（可选）。
 func (r *Repo) List(ctx context.Context, sensitivity string, source string, limit, offset int) ([]*DataSensitivityLabel, int64, error) {
 	if limit <= 0 {

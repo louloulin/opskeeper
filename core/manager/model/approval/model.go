@@ -68,6 +68,16 @@ type Approval struct {
 	RiskClass   string `gorm:"size:32;not null;default:'';index" json:"risk_class,omitempty"`
 	BlastRadius string `gorm:"size:32;not null;default:''" json:"blast_radius,omitempty"`
 
+	// Target is the resource the action reaches — the bare id the tool call
+	// named (`web-1`), not a `type:id` pair.
+	//
+	// It is a column because the escalation that raises a row's risk class
+	// looks the id up in the sensitivity labels, and the labels are keyed by
+	// (type, id). Without this column the only place the target existed was
+	// inside the opaque PayloadJSON, which is the same mistake decision 362
+	// already corrected once for risk_class.
+	Target string `gorm:"size:128;not null;default:'';index" json:"target,omitempty"`
+
 	// Reason is the approver's note / reject rationale. ResultJSON holds
 	// the execution outcome after an approve runs the action.
 	Reason     *string `gorm:"type:text" json:"reason,omitempty"`

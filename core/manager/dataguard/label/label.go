@@ -9,6 +9,7 @@
 package label
 
 import (
+	"strings"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,7 @@ type Repo interface {
 	Get(ctx context.Context, resourceType, resourceID string) (*store.DataSensitivityLabel, error)
 	List(ctx context.Context, sensitivity, source string, limit, offset int) ([]*store.DataSensitivityLabel, int64, error)
 	ListByResourceType(ctx context.Context, resourceType, sensitivity string, limit, offset int) ([]*store.DataSensitivityLabel, error)
+	StrictestForResourceID(ctx context.Context, resourceID string) ([]*store.DataSensitivityLabel, error)
 	Delete(ctx context.Context, resourceType, resourceID string) error
 }
 
@@ -232,6 +234,48 @@ func (m *LabelManager) ResolveEffective(ctx context.Context, resourceType, resou
 	}
 
 	return dataguard.Internal, 0.50, false, nil
+}
+
+// StrictestForResourceID 回答"这个 id 危不危险"，输入里没有资源类型。
+//
+// 它是 ResolveEffective 的无类型版本，而存在的理由是审批链：审批行带的是一个
+// 裸 id，谁也不知道它被登记成 Pod 还是 Service。做法是取所有同名标签里**最严格**
+// 的那条——撞名偏向更严的一侧，漏判的方向因此是安全的。
+//
+// 返回的第二值是"找到了没有"。没找到时调用方不该替它猜一个等级：那是审批
+// 自己的事，它知道自己提议的类别是多少。
+func (m *LabelManager) StrictestForResourceID(ctx context.Context, resourceID string) (dataguard.Sensitivity, bool, error) {
+	resourceID = strings.TrimSpace(resourceID)
+	if resourceID == "" {
+		return "", false, nil
+	}
+	rows, err := m.repo.StrictestForResourceID(ctx, resourceID)
+	if err != nil {
+		return "", false, err
+	}
+	best := dataguard.Sensitivity("")
+	for _, row := range rows {
+		// 与 ResolveEffective 同一套可信度门槛：人工与覆盖标签直接算数，
+		// 启发式标签要够自信。一条 0.4 的启发式 Restricted 不该把一次
+		// 正常发布变成双签。
+		switch row.LabelSource {
+		case string(store.SourceManual), string(store.SourceOverride), string(store.SourceInherited):
+		case string(store.SourceHeuristic):
+			if row.Confidence < 0.85 {
+				continue
+			}
+		default:
+			continue
+		}
+		s, err := dataguard.Parse(row.Sensitivity)
+		if err != nil {
+			continue
+		}
+		if best == "" || s.Compare(best) > 0 {
+			best = s
+		}
+	}
+	return best, best != "", nil
 }
 
 // InheritFromParent 显式触发「子资源继承父资源」打标。

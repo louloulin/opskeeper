@@ -3010,6 +3010,17 @@ func main() {
 		iambizauthz.NewSensitivityTierRepo(db),
 		log.With(slog.String("comp", "sensitivity")),
 	)
+	// The write half of the same promise: an approval whose target carries a
+	// sensitivity label is raised to the class that label demands, which is
+	// what makes a Restricted resource cost two signatures (decision 363).
+	//
+	// Wired here rather than at construction because the label store is
+	// assembled here — and an approval usecase with no escalator is a
+	// deployment whose approvals are classified by their producers alone.
+	if esc := newSensitivityEscalator(dgLabelMgr, log.With(slog.String("comp", "escalate"))); esc != nil {
+		approvalUC.WithEscalator(esc)
+		log.Info("dataguard: sensitivity escalation armed on the approval path")
+	}
 	if readerGate != nil {
 		log.Info("dataguard: reader-tier gate armed on the console tool chain")
 		// The two surfaces that run the tool bag without going through the
@@ -5351,6 +5362,11 @@ func (s hostBashProposerShim) ProposeAndAwait(ctx context.Context, deviceIDs []u
 		// 命中设备数由 payload 决定，而 payload 是审批执行时才读的；这里
 		// 记的是"面向设备"这一类，规则按它决定要不要双签。
 		BlastRadius: "devices",
+		// 一条命令打一批设备时，卡片上显示第一个，升级看全部。
+		// **只查第一个就是决策 361 那个洞**：十二台里那台被标了
+		// Restricted 的，只要排在第二位就绕过去了。
+		Target:            firstDeviceID(deviceIDs),
+		EscalationTargets: deviceIDStrings(deviceIDs),
 	})
 	if err != nil {
 		return "", err
@@ -5468,6 +5484,25 @@ func (s mcpCallerShim) CallMCPTool(ctx context.Context, server, tool string, arg
 
 // mcpProposerShim queues an MCP call into the human approval inbox (default,
 // untrusted path) — same propose-confirm model as cloud_bash.
+// firstDeviceID is the one device a card shows; deviceIDStrings is the set
+// the escalation judges. Splitting them is the point: the display wants one
+// and the gate wants all of them, and a single field would have to be one or
+// the other.
+func firstDeviceID(ids []uint64) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	return strconv.FormatUint(ids[0], 10)
+}
+
+func deviceIDStrings(ids []uint64) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, strconv.FormatUint(id, 10))
+	}
+	return out
+}
+
 type mcpProposerShim struct{ uc *managerbizapproval.Usecase }
 
 func (s mcpProposerShim) ProposeMCPCall(ctx context.Context, server, tool string, args map[string]any, sessionID string, userID uint64) (string, error) {

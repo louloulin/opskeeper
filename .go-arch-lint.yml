@@ -1034,7 +1034,12 @@ deps:
   shared_agentteams:
     mayDependOn: [oxfloor]
   shared_dataguard:
-    mayDependOn: [shared_dataguard, shared_pkg]
+    # 决策 363：escalation.go 要把敏感度等级换算成工具类别（domain.ToolClass），
+    # 而那份等级序在 core/domain 里，紧挨着被它排序的那几个常量。dataguard 自己
+    # 不再复制一份等级表——复制两份的安全映射，迟早只有一份是对的，而操作员读
+    # 的往往不是对的那份。这条授权只为 escalation.go 一个文件，与决策 74 删掉的
+    # 那 104 条零 import 授权方向相反。
+    mayDependOn: [oxcore_domain, shared_dataguard, shared_pkg]
   shared_knowledge:
     mayDependOn: [shared_knowledge, shared_pkg]
   shared_middleware:

@@ -48,6 +48,16 @@ func (r *fakeRepo) List(_ context.Context, sens, src string, _, _ int) ([]*store
 	}
 	return out, int64(len(out)), nil
 }
+func (r *fakeRepo) StrictestForResourceID(_ context.Context, rid string) ([]*store.DataSensitivityLabel, error) {
+	var out []*store.DataSensitivityLabel
+	for _, l := range r.labels {
+		if l.ResourceID == rid {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
 func (r *fakeRepo) Delete(_ context.Context, rt, rid string) error {
 	if _, ok := r.labels[key(rt, rid)]; !ok {
 		return errs.ErrNotFound
@@ -381,3 +391,77 @@ func indexOf(s, sub string) int {
 
 // 修复 typo: datadog_Restricted → dataguard.Restricted
 const datadog_Restricted = dataguard.Restricted
+
+// 审批行上带的是一个裸 id，而标签是按 (类型, id) 存的。这三个用例就是
+// StrictestForResourceID 存在的理由：没有类型可用时，"最严格"是唯一安全的答案。
+func TestStrictestForResourceID_TakesTheStrictestAcrossResourceTypes(t *testing.T) {
+	repo := newFakeRepo()
+	m := NewLabelManager(repo, nil, heuristic.NewCompositeEngine(), silentLogger())
+	ctx := context.Background()
+
+	// 撞名：pod 与 service 用了同一个 id，跨类型撞上了。
+	if err := repo.Create(ctx, &store.DataSensitivityLabel{
+		ResourceType: "pod", ResourceID: "web-1", Sensitivity: "Public",
+		LabelSource: string(store.SourceManual), Confidence: 1.0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(ctx, &store.DataSensitivityLabel{
+		ResourceType: "service", ResourceID: "web-1", Sensitivity: "Restricted",
+		LabelSource: string(store.SourceManual), Confidence: 1.0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s, ok, err := m.StrictestForResourceID(ctx, "web-1")
+	if err != nil || !ok {
+		t.Fatalf("StrictestForResourceID: s=%q ok=%v err=%v", s, ok, err)
+	}
+	if s != dataguard.Restricted {
+		t.Errorf("撞名时取了 %q，应取最严的 Restricted", s)
+	}
+}
+
+// 一条不够自信的启发式标签不能让一次正常发布变成双签——这与 ResolveEffective
+// 是同一套门槛，跨类型版本也不能松。
+func TestStrictestForResourceID_AnUnconfidentHeuristicDoesNotCount(t *testing.T) {
+	repo := newFakeRepo()
+	m := NewLabelManager(repo, nil, heuristic.NewCompositeEngine(), silentLogger())
+	ctx := context.Background()
+
+	if err := repo.Create(ctx, &store.DataSensitivityLabel{
+		ResourceType: "pod", ResourceID: "web-1", Sensitivity: "Public",
+		LabelSource: string(store.SourceManual), Confidence: 1.0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(ctx, &store.DataSensitivityLabel{
+		ResourceType: "secret", ResourceID: "web-1", Sensitivity: "TopSecret",
+		LabelSource: string(store.SourceHeuristic), Confidence: 0.4,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s, ok, err := m.StrictestForResourceID(ctx, "web-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || s != dataguard.Public {
+		t.Errorf("0.4 的启发式 TopSecret 不该算数：s=%q ok=%v", s, ok)
+	}
+}
+
+// 没找到就没找到。调用方知道自己的类别，不该由这一层替它猜一个。
+func TestStrictestForResourceID_UnlabelledIsNotAGuess(t *testing.T) {
+	m := NewLabelManager(newFakeRepo(), nil, heuristic.NewCompositeEngine(), silentLogger())
+
+	for _, tc := range []struct{ name, id string }{
+		{"完全没有标签", "never-seen"},
+		{"空 id", "   "},
+	} {
+		s, ok, err := m.StrictestForResourceID(context.Background(), tc.id)
+		if err != nil || ok || s != "" {
+			t.Errorf("%s：应返回未找到，拿到 s=%q ok=%v err=%v", tc.name, s, ok, err)
+		}
+	}
+}
