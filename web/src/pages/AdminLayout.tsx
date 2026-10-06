@@ -68,9 +68,16 @@ export default function AdminLayout() {
   );
   return (
     <main className="anim-fade flex flex-1 flex-col overflow-hidden">
+      {/* Section title, so it names the SECTION and not the first leaf.
+          It used to read 用户管理 / "Users" unconditionally, which put an
+          <h1>Users</h1> above the audit log, the runtime view and the plugin
+          release console too — every admin page looked like the user list, and
+          a screen-reader user landing on 审计日志 was told they were on Users.
+          Each leaf renders its own PageHeader below, so this one only has to
+          say "you are somewhere under Admin". Matches SettingsLayout. */}
       <PageHeader
-        title={tr('用户管理', 'Admin')}
-        subtitle={isAdmin ? tr('用户 / 组织 / 审计；platform governance', 'Users / orgs / audit — platform governance') : tr('审计与运行时只读视图', 'Audit and runtime read-only view')}
+        title={tr('平台管理', 'Admin')}
+        subtitle={isAdmin ? tr('用户 / 组织 / 审计 / 运行时；platform governance', 'Users / orgs / audit / runtime — platform governance') : tr('审计与运行时只读视图', 'Audit and runtime read-only view')}
       />
 
       <div className="flex-1 overflow-hidden">

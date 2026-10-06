@@ -826,6 +826,77 @@ const pigModuleDir = "core/pig"
 // plugin by construction rather than OpsKeeper application code.
 const pigExtensionSDK = pigModulePrefix + "/extensions/sdk"
 
+// checkPiGSDKPinAgreement reports every module that links the PiG extension
+// SDK against a version the host module does not use.
+//
+// The host is core/pig: build-pig-all cross-compiles the node agent from that
+// module, so the pig a plugin runs beside is built against whatever version
+// core/pig requires. A plugin compiled against a different SDK still builds,
+// still installs and still loads -- the extension host is a subprocess talking
+// JSONL, so a Go type difference is not a wire difference. That is exactly why
+// this needs a check: nothing about the split is visible as a failure.
+//
+// It was visible once, historically. The host moved to v0.4.0 and the sixteen
+// plugin modules stayed on v0.3.0, because scripts/sync-pig-ops.sh wrote the
+// version as a string literal and so re-ran faithfully reproducing the stale
+// pin. A generator that repeats a constant does not report that the constant
+// stopped being true. Both the generator and the drift test now read the
+// version from the canonical module; this check closes the loop by requiring
+// the two sides to agree, so the next bump cannot land on one side only.
+func checkPiGSDKPinAgreement(root string) ([]string, error) {
+	hostVersion, err := pigVersionRequiredBy(filepath.Join(root, filepath.FromSlash(pigModuleDir), "go.mod"), pigModulePrefix)
+	if err != nil {
+		return nil, err
+	}
+	if hostVersion == "" {
+		return nil, fmt.Errorf("%s/go.mod does not require %s, so there is no host version to agree with", pigModuleDir, pigModulePrefix)
+	}
+
+	roots, err := moduleRootsIn(root)
+	if err != nil {
+		return nil, err
+	}
+	var violations []string
+	for _, mod := range roots {
+		gomod := filepath.Join(root, filepath.FromSlash(mod), "go.mod")
+		got, err := pigVersionRequiredBy(gomod, pigExtensionSDK)
+		if err != nil {
+			return nil, err
+		}
+		if got == "" {
+			continue
+		}
+		if got != hostVersion {
+			violations = append(violations, fmt.Sprintf(
+				"%s requires %s %s while %s (the module the node agent is built from) requires %s %s; "+
+					"a plugin compiled against another SDK still installs and still loads, so nothing else "+
+					"reports the split -- bump both, or run scripts/sync-pig-ops.sh after bumping the canonical one",
+				mod, pigExtensionSDK, got, pigModuleDir, pigModulePrefix, hostVersion))
+		}
+	}
+	sort.Strings(violations)
+	return violations, nil
+}
+
+// pigVersionRequiredBy returns the version one module pins for one PiG module,
+// or "" when it pins none. The compare is on the whole module path, so
+// requiring PiG does not read as requiring PiG/extensions/sdk and vice versa.
+func pigVersionRequiredBy(gomod, want string) (string, error) {
+	raw, err := os.ReadFile(gomod)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	re := regexp.MustCompile(`(?m)^\s*(?:require\s+)?` + regexp.QuoteMeta(want) + `\s+(v\S+)`)
+	m := re.FindSubmatch(raw)
+	if m == nil {
+		return "", nil
+	}
+	return string(m[1]), nil
+}
+
 // checkPiGBoundary reports every PiG import held by a module that has not
 // earned the right to one.
 //
@@ -1197,6 +1268,13 @@ func main() {
 		os.Exit(2)
 	}
 	violations = append(violations, pigViolations...)
+
+	sdkPinViolations, err := checkPiGSDKPinAgreement(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "modulecheck: "+err.Error())
+		os.Exit(2)
+	}
+	violations = append(violations, sdkPinViolations...)
 
 	// The cross-module edges that are allowed only from tests get the same
 	// repo-wide treatment: they are about a module boundary, so the module

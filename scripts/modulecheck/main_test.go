@@ -1178,3 +1178,86 @@ func TestTheRootBuildArtifactExemptionsAreJustified(t *testing.T) {
 		}
 	}
 }
+
+// The pin agreement check answers a question nothing else asks: a plugin built
+// against a different SDK than the host still installs and still loads, because
+// the extension host is a subprocess speaking JSONL. The split is invisible
+// everywhere else, which is why it survived the host's move to v0.4.0.
+
+const hostPigMod = "module github.com/vincent-wuhan/opskeeper/core/pig\n\ngo 1.26.0\n\nrequire github.com/MichaelKinsy/PiG v0.4.0\n"
+
+func pluginMod(name, sdkVersion string) string {
+	return "module github.com/vincent-wuhan/opskeeper/" + name + "\n\ngo 1.26.0\n\nrequire github.com/MichaelKinsy/PiG/extensions/sdk " + sdkVersion + "\n"
+}
+
+func TestPiGSDKPinsAgreeWhenEveryPluginMatchesTheHost(t *testing.T) {
+	root := pigFixture(t, map[string]string{
+		"core/pig":                hostPigMod,
+		"plugins/pig-ops/a/ext/x": pluginMod("plugins/pig-ops/a/ext/x", "v0.4.0"),
+		"plugins/pig-ops/b/ext/y": pluginMod("plugins/pig-ops/b/ext/y", "v0.4.0"),
+		"core/manager":            "module github.com/vincent-wuhan/opskeeper/core/manager\n\ngo 1.26.0\n",
+	}, nil)
+	violations, err := checkPiGSDKPinAgreement(root)
+	if err != nil {
+		t.Fatalf("checkPiGSDKPinAgreement: %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("matching pins were reported as a split: %v", violations)
+	}
+}
+
+func TestPiGSDKPinSplitIsReportedWithBothVersions(t *testing.T) {
+	// The message has to name both versions and say what to do, because the
+	// reader hitting this has usually just bumped one side and believes the
+	// other followed.
+	root := pigFixture(t, map[string]string{
+		"core/pig":                hostPigMod,
+		"plugins/pig-ops/a/ext/x": pluginMod("plugins/pig-ops/a/ext/x", "v0.4.0"),
+		"plugins/pig-ops/b/ext/y": pluginMod("plugins/pig-ops/b/ext/y", "v0.3.0"),
+	}, nil)
+	violations, err := checkPiGSDKPinAgreement(root)
+	if err != nil {
+		t.Fatalf("checkPiGSDKPinAgreement: %v", err)
+	}
+	if len(violations) != 1 {
+		t.Fatalf("expected exactly the one split plugin, got %d: %v", len(violations), violations)
+	}
+	msg := violations[0]
+	for _, want := range []string{"v0.3.0", "v0.4.0", "sync-pig-ops.sh"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the report does not mention %q, so a reader cannot act on it: %s", want, msg)
+		}
+	}
+}
+
+// The host requires PiG; a plugin requires PiG/extensions/sdk. Those are two
+// different modules and a check that treated the shorter as a prefix of the
+// longer would read every host module as a stale plugin and fail the whole
+// repository on a clean tree.
+func TestRequiringPiGIsNotRequiringTheExtensionSDK(t *testing.T) {
+	root := pigFixture(t, map[string]string{
+		"core/pig":                hostPigMod,
+		"core/domains":            "module github.com/vincent-wuhan/opskeeper/core/domains\n\ngo 1.26.0\n\nrequire github.com/MichaelKinsy/PiG v0.4.0\n",
+		"plugins/pig-ops/a/ext/x": pluginMod("plugins/pig-ops/a/ext/x", "v0.4.0"),
+	}, nil)
+	violations, err := checkPiGSDKPinAgreement(root)
+	if err != nil {
+		t.Fatalf("checkPiGSDKPinAgreement: %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("requiring PiG was read as requiring the extension SDK: %v", violations)
+	}
+}
+
+// If the host stops requiring PiG, the comparison has nothing to compare
+// against. Reporting that is the honest answer; passing silently would report
+// an agreement that was never checked.
+func TestAHostThatPinsNothingIsAnErrorNotASilentPass(t *testing.T) {
+	root := pigFixture(t, map[string]string{
+		"core/pig":                "module github.com/vincent-wuhan/opskeeper/core/pig\n\ngo 1.26.0\n",
+		"plugins/pig-ops/a/ext/x": pluginMod("plugins/pig-ops/a/ext/x", "v0.4.0"),
+	}, nil)
+	if _, err := checkPiGSDKPinAgreement(root); err == nil {
+		t.Fatal("a host that pins no PiG version was accepted as agreeing with every plugin")
+	}
+}

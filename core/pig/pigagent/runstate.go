@@ -73,6 +73,17 @@ type runState struct {
 	budgetExhausted bool
 	// stopped latches the terminal reason once one is chosen.
 	stopped string
+	// seededPromptPending counts the seeded prompt messages still to be
+	// skipped by the persist hook. PiG emits message_end for every message
+	// it is handed, and message_end is what drives this host's persistence
+	// hook, so without the counter a turn writes back everything it was
+	// just given: the prior transcript (chat_messages grew 4 → 12 → 32 rows
+	// over three turns before this existed), the operator's own message
+	// (already stored by the runtime before the kernel was called), and the
+	// per-turn critical reminder, which the console would then render as a
+	// user utterance. Set to len(prompt) before the run starts and
+	// decremented only here, which is its single consumer.
+	seededPromptPending int
 }
 
 // errorCode is the stable machine-readable failure code space. A console
@@ -227,6 +238,13 @@ func (r *runState) chargeBudget(observed ports.TranscriptUsage) {
 // turn whose transcript was not recorded must not be reported as a success.
 func (r *runState) persist(msg agent.AgentMessage) error {
 	if r.host.persist == nil {
+		return nil
+	}
+	// Everything seeded into the prompt is already accounted for — see the
+	// field comment. Skipping here rather than at the call sites covers both
+	// drivers, which reach persist by different routes.
+	if r.seededPromptPending > 0 {
+		r.seededPromptPending--
 		return nil
 	}
 	return r.host.persist.Persist(context.Background(), r.req.SessionID, toPortsMessage(msg, r.model))

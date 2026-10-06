@@ -58,7 +58,7 @@ func toPortsMessage(msg agent.AgentMessage, model string) ports.AgentMessage {
 				})
 			}
 		}
-		out.Content = text
+		out.Content = stripInlineThinking(text)
 		out.Usage = usagePtr(UsageOf(msg.Assistant))
 		if out.Content == "" && len(out.ToolCalls) == 0 {
 			// Neither text nor a call: nothing to persist, and most

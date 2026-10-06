@@ -624,6 +624,17 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	readOnly := viewerOnly || !writeEnabled
 	if readOnly {
 		sessionToolBag = filterToolsForAgentRole(rt.cfg.ToolBag, nil, isCoordinator, true)
+		// The base prompt tells the coordinator that AgentTool is how every
+		// multi-step diagnosis starts. When the gate strips it, that advice
+		// becomes unactionable, so say so where an operator will find it —
+		// otherwise the only trace is a model quietly answering a shallower
+		// question than the one that was asked.
+		if isCoordinator && !viewerOnly && rt.log != nil {
+			rt.log.Info("chatruntime: subagent dispatch unavailable — agent write actions are disabled",
+				slog.String("session_id", sess.ID),
+				slog.String("hint", "enable 设置 → 助理 → 写操作权限 (agent/write_enabled) to restore AgentTool"),
+			)
+		}
 	}
 	// Resolve the active persona. Sessions with no AgentID still
 	// route through the "default" persona — that's where the curated

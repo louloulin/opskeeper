@@ -210,7 +210,7 @@ func (m *Mapper) Map(ev agent.AgentEvent) []wire.StreamEvent {
 		m.pending += calls
 		f := m.frameLocked(wire.StreamAssistantEnd)
 		f.Assistant = &wire.AssistantFrame{
-			Content:          text,
+			Content:          stripInlineThinking(text),
 			PendingToolCalls: m.pending,
 			CreatedAt:        m.now().UTC().Format(time.RFC3339Nano),
 		}

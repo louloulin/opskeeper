@@ -280,7 +280,11 @@ func (k *SessionKernel) Run(ctx context.Context, req ports.AgentRequest) (*TurnR
 	}()
 
 	consumer := k.consume(sess, gate, turnCtx)
-	messages, runErr := sess.Run(turnCtx, buildPrompt(req))
+	// Same contract as Kernel.Run: the whole seeded prompt is already
+	// accounted for, so none of it may be written back as new rows.
+	prompt := buildPrompt(req)
+	gate.seededPromptPending = len(prompt)
+	messages, runErr := sess.Run(turnCtx, prompt)
 	// RunAgentPrompt flushes at its boundaries and again before it returns,
 	// so by here every event the turn produced has been consumed and
 	// acknowledged. The consumer is idle but still parked on the channel,

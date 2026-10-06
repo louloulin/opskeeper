@@ -412,7 +412,7 @@ export default function NodeAgentsPage() {
   const streaming = bubbles.some((b) => b.streaming);
 
   return (
-    <div className="flex h-full flex-col">
+    <main className="flex h-full flex-col">
       <PageHeader
         title={tr('节点 Agent', 'Node Agents')}
         subtitle={tr(
@@ -613,7 +613,7 @@ export default function NodeAgentsPage() {
           )}
         </div>
       </div>
-    </div>
+    </main>
   );
 }
 

@@ -213,6 +213,15 @@ func (k *Kernel) Run(ctx context.Context, req ports.AgentRequest) (*TurnResult, 
 	}()
 
 	prompt := buildPrompt(req)
+	// PiG persists every message it is handed, and every message in this
+	// prompt is already accounted for: history was stored when it was
+	// produced, the runtime stored the operator's turn before calling us
+	// (runtime.go, the "persist before LLM call" invariant), and the
+	// per-turn reminder must never be stored at all. So the whole seeded
+	// prompt is skipped and only what the model produces from here is
+	// written. Counting len(prompt) rather than re-deriving the split means
+	// the skip cannot drift from what was actually sent.
+	gate.seededPromptPending = len(prompt)
 	run, err := ag.BeginSendMessages(turnCtx, prompt)
 	if err != nil {
 		return failTurn(mapper, sink, fmt.Errorf("pigagent: begin turn: %w", err), true)

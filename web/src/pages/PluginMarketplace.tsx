@@ -47,7 +47,7 @@ export default function PluginMarketplacePage() {
   const { isAdmin } = usePermissions();
 
   return (
-    <div className="flex h-full flex-col">
+    <main className="flex h-full flex-col">
       <PageHeader
         title={tr('插件市场', 'Plugin Marketplace')}
         subtitle={tr(
@@ -68,7 +68,7 @@ export default function PluginMarketplacePage() {
         <CompatibilityCard isAdmin={isAdmin} />
         <NodeInventoryCard isAdmin={isAdmin} />
       </div>
-    </div>
+    </main>
   );
 }
 

@@ -73,7 +73,10 @@ func Gates() []Gate {
 		{
 			Target: "module-check",
 			Why: "only core/pig may import PiG, and core may not reach infrastructure; " +
-				"a break here is a repository-wide PiG upgrade next time instead of a one-module one",
+				"a break here is a repository-wide PiG upgrade next time instead of a one-module one. " +
+				"It also holds every module that links the PiG extension SDK to the same version the host " +
+				"module pins -- a split there installs and loads cleanly every time, because the extension " +
+				"host is a subprocess speaking JSONL, so nothing but this reports it (decision 427)",
 		},
 		{
 			Target: "eval-gates",
