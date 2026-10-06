@@ -90,9 +90,25 @@ opskeeper-eval inject --case pg/lock-waits --hold 3m
 连接来自 `OPSKEEPER_HARNESS_PG_DSN`。**没设就一步都不走**——不设的时候
 `inject` 以非零退出，并把每一步没执行的原因逐条打出来，**不会打印任何"注入成功"**。
 
-**另外五个（redis / host / k8s / rabbitmq / kafka）仍然是骨架**，
-它们不碰任何真实系统——没有 redis 客户端、没有 kubectl、没有 stress-ng——
-并通过 `CheckAvailable` 说明缺什么。
+**Redis 这一路也是**真实现**（决策 298）。** `core/faults/injector/redis`
+用 go-redis 连真库，四种故障的判据都是从旁观连接上读出来的量：
+
+| 类型 | 判据 |
+|---|---|
+| `redis.inject_big_key` | `MEMORY USAGE` ≥ 写入量的一半 |
+| `redis.inject_hot_key` | `INFO commandstats` 里 `cmdstat_get` 的 calls 增量 ≥ 客户端数 |
+| `redis.inject_memory_burst` | `INFO memory` 的 `used_memory` 前后差值 > 0 |
+| `redis.inject_slow_commands` | 一条没被碰过的连接的 PING 耗时 ≥ 暂停时长 |
+
+连接来自 `OPSKEEPER_HARNESS_REDIS_ADDR`（口令走 `OPSKEEPER_HARNESS_REDIS_PASSWORD`）。
+**没设就一步都不走。**
+
+**它写的每一条 key 都带 injectID**（`opskeeper:fault:<injectID>:…`），
+所以"只删自己建的 key"不需要撤销时再核对一次——**归属在命名那一刻就回答完了**。
+
+**另外四个（host / k8s / rabbitmq / kafka）仍然是骨架**，
+它们不碰任何真实系统——没有 kubectl、没有 amqp 客户端、没有 kafkaclient、
+没有 stress-ng——并通过 `CheckAvailable` 说明缺什么。
 
 一个认不出的类型报 `ErrUnsupportedType` 而不是"不可用"：那是接线问题，
 与当前环境无关，报成不可用会把人引去查环境。

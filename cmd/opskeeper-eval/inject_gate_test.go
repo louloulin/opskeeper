@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ import (
 
 // 这一组测试守的是一句话：**环境撑不住注入时，它不许说"注入成功"。**
 //
-// 决策 297 把 pg 从骨架变成了真实现，所以下面这条守的不再是
+// 决策 297 把 pg 与 redis 从骨架变成了真实现，所以下面这条守的不再是
 // "六个都还没接线"，而是"任何一个在环境不支持时都必须拒绝"——
 // 拒绝的理由还必须说清差什么。
 //
@@ -49,7 +50,7 @@ func TestEveryRegisteredInjectorIsPresent(t *testing.T) {
 // 所以下面先把这个状态钉死——不钉的话，开发者本机配了
 // OPSKEEPER_HARNESS_PG_DSN 之后，这条测试会拿他的真库当靶子。
 func TestNoInjectorClaimsItCanInject(t *testing.T) {
-	pinNoPG(t)
+	pinNoBackend(t)
 	for _, impl := range allRegistered() {
 		err := impl.CheckAvailable(context.Background())
 		if err == nil {
@@ -59,12 +60,16 @@ func TestNoInjectorClaimsItCanInject(t *testing.T) {
 		if !errors.Is(err, injector.ErrUnavailable) {
 			t.Errorf("%s: error = %v, want it to wrap ErrUnavailable", impl.Type(), err)
 		}
-		if impl.Type() == "pg." {
-			// pg 的实现是真的，所以它缺的不是"实现"，是连接。
-			// 它必须点名那个环境变量，而不是含糊地说自己是骨架——
-			// 一个已经接好线的注入器说自己是骨架，跟没接线一样误导人。
-			if !strings.Contains(err.Error(), pginjector.DSNEnv) {
-				t.Errorf("pg: error = %q, want it to name %s", err, pginjector.DSNEnv)
+		// 已接线的注入器缺的不是"实现"，是连接，所以它必须点名那个
+		// 环境变量；还没接线的必须说自己是骨架。
+		//
+		// 这张表必须显式列出而不是靠"impl.Type() != ..." 反推：
+		// 反推的那一版在接上第二个注入器时会静默地把要求从
+		// "点名环境变量" 退回成 "说自己是骨架"——而一个已经接好线的
+		// 注入器说自己是骨架，跟没接线一样误导人。
+		if envVar, wired := wiredInjectors[impl.Type()]; wired {
+			if !strings.Contains(err.Error(), envVar) {
+				t.Errorf("%s: error = %q, want it to name %s", impl.Type(), err, envVar)
 			}
 			continue
 		}
@@ -74,18 +79,43 @@ func TestNoInjectorClaimsItCanInject(t *testing.T) {
 	}
 }
 
-// pinNoPG 把 pg 注入器钉在"没有连接"这个状态上。
+// wiredInjectors 是已经接到真实系统上的注入器，以及它们缺的那条环境变量。
+//
+// 它是**数据**而不是散在测试里的 if：每接上一个注入器，
+// 在这里加一行，它"必须点名自己缺什么"这条要求就自动跟着它走。
+var wiredInjectors = map[string]string{
+	"pg.":    pginjector.DSNEnv,
+	"redis.": redisinjector.AddrEnv,
+}
+
+// wiredInjectorEnvs 是 wiredInjectors 里那些环境变量的并集。
+//
+// 下面两条测试要走真实的注入路径，所以必须把**所有**已接线注入器
+// 一起钉住。少钉一个的后果不是测试红，而是测试往开发者的真 Redis 里
+// 写进几个 MB 的数据。
+func wiredInjectorEnvs() []string {
+	out := make([]string, 0, len(wiredInjectors))
+	for _, env := range wiredInjectors {
+		out = append(out, env)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// pinNoBackend 把所有已接线的注入器钉在"没有连接"这个状态上。
 //
 // t.Setenv 设成空串而不是 Unsetenv：New() 读的是 os.Getenv，空串与"没设"
 // 在它眼里是同一件事，于是这一组测试在任何开发机上跑出来的结论都一样。
-func pinNoPG(t *testing.T) {
+func pinNoBackend(t *testing.T) {
 	t.Helper()
-	t.Setenv(pginjector.DSNEnv, "")
+	for _, env := range wiredInjectorEnvs() {
+		t.Setenv(env, "")
+	}
 }
 
 // 不可用就必须一步都不走：既不返回结果，也不留下可被 Cleanup 认领的 ID。
 func TestNoInjectorProducesAResultWhileUnavailable(t *testing.T) {
-	pinNoPG(t)
+	pinNoBackend(t)
 	ctx := context.Background()
 	// 用注册表里**同一批实例**去比：另建一批再比较身份，六个指针两两不等，
 	// 断言会红在一个与被测行为无关的地方——这种失败会让人怀疑被测代码而不是怀疑测试。
@@ -124,7 +154,7 @@ func TestNoInjectorProducesAResultWhileUnavailable(t *testing.T) {
 // 六个都要试。只试注册表里的第一个（host）的话，把 pg 的两个检查调换顺序
 // 这条断言照样是绿的，而它守的正是"顺序"这件事。
 func TestAnUnknownTypeIsReportedAsUnsupportedNotUnavailable(t *testing.T) {
-	pinNoPG(t)
+	pinNoBackend(t)
 	ctx := context.Background()
 	for _, impl := range allRegistered() {
 		_, err := impl.Inject(ctx, injector.InjectSpec{Type: impl.Type() + "does_not_exist"})
@@ -143,7 +173,7 @@ func TestInjectFailsLoudlyOnAShippedCase(t *testing.T) {
 	// 这一条会真的走一遍注入路径，所以必须先把 pg 钉成没有连接：
 	// 否则一个配了 DSN 的开发机上，`go test ./cmd/...` 会把锁链
 	// 打进他自己的开发库，然后把表留在那儿。
-	pinNoPG(t)
+	pinNoBackend(t)
 	err := cmdInject(context.Background(), []string{"--case", "pg/lock-waits", "--cases-dir", shippedCasesDir})
 	if err == nil {
 		t.Fatal("cmdInject returned nil on a shipped case, want a non-zero exit")
@@ -156,7 +186,7 @@ func TestInjectFailsLoudlyOnAShippedCase(t *testing.T) {
 // --dry-run 是这条命令现在唯一能真正完成的事：它读真实的 case 文件、
 // 走真实的注册表路由、打印真实的注入类型，不假装注入发生过。
 func TestInjectDryRunListsRealStepsAndSucceeds(t *testing.T) {
-	pinNoPG(t)
+	pinNoBackend(t)
 	if err := cmdInject(context.Background(),
 		[]string{"--case", "pg/lock-waits", "--cases-dir", shippedCasesDir, "--dry-run"}); err != nil {
 		t.Fatalf("dry-run: %v", err)

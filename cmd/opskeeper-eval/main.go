@@ -335,13 +335,17 @@ func holdFaults(ctx context.Context, staged []stagedFault, hold time.Duration, b
 // 而 printUsage 把它写成"手动触发 fault-injector"。
 func newInjectorRegistry() *injector.Registry {
 	reg := injector.NewRegistry()
-	// DSN 在**装配根**读，不让注入器自己读全局环境。
+	// 连接参数在**装配根**读，不让注入器自己读全局环境。
 	// 两边都读的话，"这台机器上有没有配库"就变成一个藏在
-	// pgx.Connect 里的事实：命令行看不到它，测试也没法用 t.Setenv 钉住它。
+	// pgx.Connect / go-redis 的 Dial 里的事实：命令行看不到它，
+	// 测试也没法用 t.Setenv 钉住它。
 	for _, impl := range []injector.Injector{
 		hostinjector.New(),
 		pginjector.New(pginjector.WithDSN(os.Getenv(pginjector.DSNEnv))),
-		redisinjector.New(),
+		redisinjector.New(
+			redisinjector.WithAddr(os.Getenv(redisinjector.AddrEnv)),
+			redisinjector.WithPassword(os.Getenv(redisinjector.PasswordEnv)),
+		),
 		k8sinjector.New(), rabbitmqinjector.New(), kafkainjector.New(),
 	} {
 		if err := reg.Register(impl); err != nil {

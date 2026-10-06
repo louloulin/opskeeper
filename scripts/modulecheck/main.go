@@ -158,15 +158,21 @@ func rules() []rule {
 			// locks, which cannot be described without a connection.
 			//
 			// It may reach harness for the corpus format it stages from and
-			// one database client, and nothing else — in particular no
-			// control plane, because a fault injector reachable from the
-			// manager is a path to injecting into production that does not
-			// go through approval.
+			// the database clients it stages faults against, and nothing
+			// else — in particular no control plane, because a fault
+			// injector reachable from the manager is a path to injecting
+			// into production that does not go through approval.
+			//
+			// "The clients it stages faults against" is a closed list on
+			// purpose, not a shape: a module whose whole job is to write
+			// into other people's databases must not be able to acquire a
+			// new one by anyone adding a line to a config file.
 			Dir:    "core/faults",
 			Module: "github.com/vincent-wuhan/opskeeper/core/faults",
 			Allowed: []string{
 				coreModulePrefix + "/",
 				"github.com/jackc/pgx/",
+				"github.com/redis/go-redis/",
 			},
 			Label: "faults (fault injection)",
 		},

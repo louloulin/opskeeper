@@ -327,7 +327,7 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 |---|---|---|
 | `pg.` | `inject_lock_chain` / `begin_txn_hold` / `hold_old_txn` / `run_slow_queries` / `inject_table_bloat` / `run_autovacuum` | ✅ **真实现**（pgx 连真库，决策 297） |
 | `pg.` | `inject_replica_lag` | ⚠️ 大声拒绝：单节点造不出复制延迟 |
-| `redis.` | `inject_big_key` / `inject_hot_key` / `inject_memory_burst` / `inject_slow_commands` | 骨架 |
+| `redis.` | `inject_big_key` / `inject_hot_key` / `inject_memory_burst` / `inject_slow_commands` | ✅ **真实现**（go-redis 连真库，决策 298） |
 | `host.` | `fill_disk` / `cpu_stress` | 骨架 |
 | `k8s.` | `cordon_node` / `fill_pv` / `inject_memory_pressure` / `set_bad_image` | 骨架 |
 | `rabbitmq.` | `inject_message_burst` | 骨架 |
@@ -341,9 +341,24 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 自报不可用并说明缺哪个客户端。`inject` 因此以非零退出，逐条打出没执行的原因，
 **不会打印任何"注入成功"**。
 
-**真实现**的意思是：它真的连库、真的改数据，而每一种故障都能从数据库外面看见——
-`pg_locks` 里有没有它、`pg_stat_activity` 里有没有它、表上有没有死元组。
-连接来自 `OPSKEEPER_HARNESS_PG_DSN`；**没设就一步都不走**。
+**真实现**的意思是：它真的连库、真的改数据，而每一种故障都能从数据库外面看见：
+
+| 故障 | 判据（从另一条连接上查） |
+|---|---|
+| `pg.inject_lock_chain` | `pg_stat_activity` 里 `wait_event_type='Lock'` 的 backend 数 > 0 |
+| `pg.inject_table_bloat` | `pg_stat_user_tables.n_dead_tup > 0` |
+| `redis.inject_big_key` | `MEMORY USAGE <key>` ≥ 写入量的一半 |
+| `redis.inject_hot_key` | `INFO commandstats` 里 `cmdstat_get` 的 calls 增量；`CLIENT LIST` 里有具名连接 |
+| `redis.inject_memory_burst` | `INFO memory` 的 `used_memory` 前后差值 > 0 |
+| `redis.inject_slow_commands` | 一条**没被碰过**的连接的 PING 耗时 ≥ 暂停时长 |
+
+连接来自 `OPSKEEPER_HARNESS_PG_DSN` 与
+`OPSKEEPER_HARNESS_REDIS_ADDR`（口令走 `OPSKEEPER_HARNESS_REDIS_PASSWORD`）；
+**没设就一步都不走**。
+
+**"没被碰过的连接"这五个字是慢命令那一条的全部要害**：它是四种 Redis 故障里
+唯一一种影响所有人的，所以它不能靠注入器自证——说"我已经暂停了"没有任何意义，
+要看旁观者的时钟。
 
 ### 4.2 环境限制
 

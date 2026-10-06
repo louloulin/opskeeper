@@ -188,15 +188,15 @@ func release(c *pgx.Conn) {
 // deadlock within deadlock_timeout, and a fault that repairs itself before
 // anyone looks at it is not a fault.
 func (i *Injector) injectLockChain(ctx context.Context, spec injector.InjectSpec, l *live) error {
-	sessions := intParam(spec.Params, "sessions", 5)
-	depth := intParam(spec.Params, "chain_depth", sessions-1)
+	sessions := injector.IntParam(spec.Params, "sessions", 5)
+	depth := injector.IntParam(spec.Params, "chain_depth", sessions-1)
 	if depth > sessions {
 		depth = sessions
 	}
 	if depth < 2 {
 		return fmt.Errorf("inject_lock_chain: chain_depth=%d cannot form a chain; need at least 2", depth)
 	}
-	table := stringParam(spec.Params, "table", "orders")
+	table := injector.StringParam(spec.Params, "table", "orders")
 	conn, err := i.connect(ctx)
 	if err != nil {
 		return err
@@ -381,8 +381,8 @@ func (i *Injector) holdOn(ctx context.Context, l *live, appName string, body fun
 // nothing. It is the shape pg_stat_activity's state='idle in transaction'
 // reports, and it is what stops vacuum from reclaiming anything underneath it.
 func (i *Injector) holdTransaction(ctx context.Context, spec injector.InjectSpec, l *live, typ string) error {
-	tables := stringListParam(spec.Params, "tables", []string{stringParam(spec.Params, "table", "orders")})
-	isolation := stringParam(spec.Params, "isolation", "read committed")
+	tables := injector.StringListParam(spec.Params, "tables", []string{injector.StringParam(spec.Params, "table", "orders")})
+	isolation := injector.StringParam(spec.Params, "isolation", "read committed")
 	if !validIsolation(isolation) {
 		return fmt.Errorf("%s: isolation %q is not one of the four PostgreSQL levels", typ, isolation)
 	}
@@ -390,7 +390,7 @@ func (i *Injector) holdTransaction(ctx context.Context, spec injector.InjectSpec
 	// 原样拼过去的后果是 SET TRANSACTION ISOLATION LEVEL read_committed
 	// 报语法错误——一个只在真库上才暴露的错，而它落在一个 case 会直接失败。
 	isolationSQL := strings.ReplaceAll(isolation, "_", " ")
-	locks := intParam(spec.Params, "lock_count", len(tables))
+	locks := injector.IntParam(spec.Params, "lock_count", len(tables))
 	if locks < 1 {
 		return fmt.Errorf("%s: lock_count=%d", typ, locks)
 	}
@@ -437,15 +437,15 @@ func validIsolation(level string) bool {
 // taken from the case when it gives one, so the diagnosis the agent has to
 // make names the query the operator actually wrote.
 func (i *Injector) runSlowQueries(ctx context.Context, spec injector.InjectSpec, l *live) error {
-	concurrent := intParam(spec.Params, "concurrent", 5)
+	concurrent := injector.IntParam(spec.Params, "concurrent", 5)
 	if concurrent < 1 {
 		return fmt.Errorf("run_slow_queries: concurrent=%d", concurrent)
 	}
-	meanMS := intParam(spec.Params, "mean_duration_ms", 2000)
+	meanMS := injector.IntParam(spec.Params, "mean_duration_ms", 2000)
 	if meanMS < 1 {
 		return fmt.Errorf("run_slow_queries: mean_duration_ms=%d", meanMS)
 	}
-	query := stringParam(spec.Params, "query", "SELECT pg_sleep($1)")
+	query := injector.StringParam(spec.Params, "query", "SELECT pg_sleep($1)")
 	l.table = "n/a (pg_sleep)"
 
 	for n := 0; n < concurrent; n++ {
@@ -514,8 +514,8 @@ const (
 )
 
 func (i *Injector) injectTableBloat(ctx context.Context, spec injector.InjectSpec, l *live) error {
-	table := stringParam(spec.Params, "table", "order_events")
-	updates := intParam(spec.Params, "update_count", 1000)
+	table := injector.StringParam(spec.Params, "table", "order_events")
+	updates := injector.IntParam(spec.Params, "update_count", 1000)
 	if updates < 1 {
 		return fmt.Errorf("inject_table_bloat: update_count=%d", updates)
 	}
@@ -543,7 +543,7 @@ func (i *Injector) injectTableBloat(ctx context.Context, spec injector.InjectSpe
 	} else if len(added) > 0 {
 		l.rollback = append(l.rollback, i.deleteRows(table, added))
 	}
-	if boolParam(spec.Params, "vacuum_disabled", false) {
+	if injector.BoolParam(spec.Params, "vacuum_disabled", false) {
 		if err := i.setAutovacuum(ctx, l, table, false); err != nil {
 			return err
 		}
@@ -588,7 +588,7 @@ func (i *Injector) injectTableBloat(ctx context.Context, spec injector.InjectSpe
 // tuples stay visible. It is a separate injection type because the case file
 // lists it as one, and because "vacuum 卡住" is two faults, not one.
 func (i *Injector) runAutovacuum(ctx context.Context, spec injector.InjectSpec, l *live) error {
-	table := stringParam(spec.Params, "table", "orders")
+	table := injector.StringParam(spec.Params, "table", "orders")
 	conn, err := i.connect(ctx)
 	if err != nil {
 		return err
@@ -647,64 +647,4 @@ func (i *Injector) setAutovacuum(ctx context.Context, l *live, table string, ena
 		return err
 	})
 	return nil
-}
-
-// ------------------------------------------------------------------- params
-
-func intParam(params map[string]any, key string, fallback int) int {
-	if params == nil {
-		return fallback
-	}
-	switch v := params[key].(type) {
-	case int:
-		return v
-	case int64:
-		return int(v)
-	case float64:
-		return int(v)
-	}
-	return fallback
-}
-
-func stringParam(params map[string]any, key, fallback string) string {
-	if params == nil {
-		return fallback
-	}
-	if v, ok := params[key].(string); ok && v != "" {
-		return v
-	}
-	return fallback
-}
-
-func boolParam(params map[string]any, key string, fallback bool) bool {
-	if params == nil {
-		return fallback
-	}
-	if v, ok := params[key].(bool); ok {
-		return v
-	}
-	return fallback
-}
-
-func stringListParam(params map[string]any, key string, fallback []string) []string {
-	if params == nil {
-		return fallback
-	}
-	switch v := params[key].(type) {
-	case []string:
-		if len(v) > 0 {
-			return v
-		}
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok && s != "" {
-				out = append(out, s)
-			}
-		}
-		if len(out) > 0 {
-			return out
-		}
-	}
-	return fallback
 }

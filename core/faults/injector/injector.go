@@ -191,3 +191,77 @@ func (r *Registry) CleanupAll(ctx context.Context) []error {
 	}
 	return errs
 }
+
+// ------------------------------------------------------------------- params
+//
+// 这一段是六个注入器共用的读法：case 的 params 是 `map[string]any`，
+// 而 YAML 与 JSON 解出来的数字可能是 int、int64 或 float64。
+//
+// 它住在共享包里而不是各注入器各抄一份，是因为上一版 pg 把它们放在自己的
+// 包内，于是下一个要连真库的注入器（redis）要么再抄一遍，要么 import 一个
+// 不该 import 的包。**四个取值函数的全部内容就是这几行，抄一遍的代价是
+// 六个包里有六个会各自漂移的版本。**
+
+// IntParam 读一个整数参数，读不到或类型不对就用 fallback。
+func IntParam(params map[string]any, key string, fallback int) int {
+	if params == nil {
+		return fallback
+	}
+	switch v := params[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	}
+	return fallback
+}
+
+// StringParam 读一个非空字符串参数。
+func StringParam(params map[string]any, key, fallback string) string {
+	if params == nil {
+		return fallback
+	}
+	if v, ok := params[key].(string); ok && v != "" {
+		return v
+	}
+	return fallback
+}
+
+// BoolParam 读一个布尔参数。
+func BoolParam(params map[string]any, key string, fallback bool) bool {
+	if params == nil {
+		return fallback
+	}
+	if v, ok := params[key].(bool); ok {
+		return v
+	}
+	return fallback
+}
+
+// StringListParam 读一个字符串列表参数，空列表用 fallback。
+//
+// 两种形状都要认：直接构造的 []string，和从 JSON/YAML 解出来的 []any。
+func StringListParam(params map[string]any, key string, fallback []string) []string {
+	if params == nil {
+		return fallback
+	}
+	switch v := params[key].(type) {
+	case []string:
+		if len(v) > 0 {
+			return v
+		}
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return fallback
+}
