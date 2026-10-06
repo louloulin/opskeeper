@@ -197,3 +197,103 @@ func TestNewRedactor_UnknownModeDefaultsToAll(t *testing.T) {
 		t.Error("defensive copy broke: password no longer matches after mutating SensitiveFieldNames")
 	}
 }
+
+// TestRedactionHandlesQuotedJSONKeys is the defect this round found by
+// measuring, not by reading.
+//
+// In JSON the key carries its own quotes, so `"api_key":"sk-live-…"` has a
+// `"` immediately after the pattern. Reading that as the value separator
+// started the capture at the `:`, and the redactor emitted
+// `{"api_key"<redacted:api_key>sk-live-…"}` — a marker sitting next to a live
+// secret. **A marker beside the secret is worse than no marker**: it tells
+// the reader the value is gone.
+func TestRedactionHandlesQuotedJSONKeys(t *testing.T) {
+	r := NewRedactor(RedactModeAll, false)
+	ctx := context.Background()
+	for _, in := range []string{
+		`{"api_key":"sk-live-9f2a7c","node":"n-1"}`,
+		`"password":"p@ss"`,
+		`api_key="sk-live-9f2a7c"`,
+		`api_key: sk-live-9f2a7c`,
+	} {
+		out := r.RedactString(ctx, in)
+		if strings.Contains(out, "sk-live-9f2a7c") || strings.Contains(out, "p@ss") {
+			t.Errorf("the secret survived redaction\n  in:  %s\n  out: %s", in, out)
+		}
+		if !strings.Contains(out, RedactionMarker) {
+			t.Errorf("nothing was redacted at all\n  in:  %s\n  out: %s", in, out)
+		}
+	}
+}
+
+// TestAnEmptyValueIsNotASecret covers the other thing that fell out of the
+// same measurement: a key with nothing after it used to gain a marker,
+// claiming a redaction that never happened — and doubling on a second pass.
+//
+// Only the end-of-input form is claimed here. `email= password=` is a
+// different shape, the value run swallows the following token, and that one
+// is still wrong; it is left visible rather than folded into this test,
+// because a test that asserts more than the code does is a test that will
+// be edited down instead of the code being fixed.
+func TestAnEmptyValueIsNotASecret(t *testing.T) {
+	r := NewRedactor(RedactModeAll, false)
+	ctx := context.Background()
+	for _, in := range []string{"email=", "api_key=", "token:"} {
+		if out := r.RedactString(ctx, in); out != in {
+			t.Errorf("an empty value was rewritten: %q -> %q", in, out)
+		}
+	}
+}
+
+// TestRedactionIsIdempotent is the property that keeps a second pass over
+// already-redacted text from turning one marker into two.
+func TestRedactionIsIdempotent(t *testing.T) {
+	r := NewRedactor(RedactModeAll, false)
+	ctx := context.Background()
+	for _, in := range []string{
+		"api_key=sk-live-9f2a7c",
+		"user_password=<redacted:password> email=<redacted:email>",
+		"email=",
+	} {
+		once := r.RedactString(ctx, in)
+		twice := r.RedactString(ctx, once)
+		if once != twice {
+			t.Errorf("redacting twice changed the text again\n once:  %q\n twice: %q", once, twice)
+		}
+	}
+}
+
+// TestResidualSeesValuesThatTheKeyValuePassCannot covers the gap the
+// postmortem measurements kept hitting: a real body has an address and a
+// phone number in prose, with no key on their left, so no amount of
+// key/value redaction touches them.
+func TestResidualSeesValuesThatTheKeyValuePassCannot(t *testing.T) {
+	r := NewRedactor(RedactModeAll, false)
+	ctx := context.Background()
+	body := "调用时 api_key=sk-live-9f2a7c。联系人 alice@example.com，手机 13800138000。"
+	if !r.ResidualSensitive(ctx, body) {
+		t.Fatalf("an address and a phone number in prose were not seen")
+	}
+	redacted := r.RedactString(ctx, body)
+	if !r.ResidualSensitive(ctx, redacted) {
+		t.Fatalf("after redacting the key the document is still called clean: %q", redacted)
+	}
+}
+
+// TestTheDetectorDoesNotCryWolf is the other half. The value shapes are
+// deliberately narrow, and this is what keeps them narrow: incident numbers,
+// ports, durations and addresses are exactly what a looser digit rule would
+// eat, and a check that fires on those is a check that gets ignored.
+func TestTheDetectorDoesNotCryWolf(t *testing.T) {
+	r := NewRedactor(RedactModeAll, false)
+	ctx := context.Background()
+	for _, in := range []string{
+		"事故 PG-20261006-001 已复盘",
+		"连接 10.0.0.5:5432 成功，耗时 1200ms",
+		"版本 v2026.09.14-rc4，build 860f152",
+	} {
+		if r.ResidualSensitive(ctx, in) {
+			t.Errorf("operational values were reported as personal data: %q", in)
+		}
+	}
+}

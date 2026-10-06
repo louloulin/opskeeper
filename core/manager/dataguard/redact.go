@@ -25,6 +25,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -94,6 +95,26 @@ type Redactor interface {
 	// in a struct / map) should be redacted. Pure-function helper
 	// exported so report can short-circuit non-sensitive fields.
 	RedactFieldName(name string) (category string, ok bool)
+
+	// ResidualSensitive reports whether RedactString would still change s.
+	//
+	// It is the check a caller needs when it is about to *claim* that a
+	// document is redacted rather than about to redact one. The redaction
+	// marker is written by the redactor, so its presence proves a redaction
+	// pass ran, not that the pass caught everything: a document that also
+	// contains an un-caught value carries the marker and is still full of
+	// whatever the pass missed. Answering "was this redacted?" with "does
+	// it contain the marker" turns that into a false claim, and a false
+	// claim of redaction is worse than an honest gap.
+	//
+	// Implemented as "would redacting still change this", which is only a
+	// valid question because redaction is idempotent. It was not, for a
+	// while: `api_key=<redacted:api_key>` matched again on a second pass
+	// and emitted a second marker, which made this function answer "yes,
+	// still sensitive" for a document that was fully redacted. Fixing the
+	// doubling is what makes the check sound; stripping the markers before
+	// asking would have hidden the same bug behind a special case.
+	ResidualSensitive(ctx context.Context, s string) bool
 }
 
 // redactorImpl is the concrete Redactor. It is goroutine-safe
@@ -144,6 +165,102 @@ func (r *redactorImpl) RedactFieldName(name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// ResidualSensitive implements Redactor.
+//
+// The whole question is answerable in one line only because redaction is
+// idempotent, and that is worth stating rather than leaving as a lucky
+// property: the first version of this function had to strip the markers out
+// before asking, because asking directly answered "yes" for a perfectly
+// redacted document. Stripping papers over the doubling bug instead of
+// fixing it, and leaves a function whose answer depends on markers the
+// redactor produced.
+func (r *redactorImpl) ResidualSensitive(ctx context.Context, s string) bool {
+	if s == "" {
+		return false
+	}
+	if containsPersonalValueShape(s) {
+		return true
+	}
+	if r.mode == RedactModeNone {
+		return false
+	}
+	// The markers come out before the question is asked, and that is not
+	// tidiness — it is what makes the question sound. Asking directly means
+	// asking whether redacting changes the text, and a marker is itself
+	// shaped like a value, so an already-redacted document can answer "yes,
+	// still sensitive" and refuse its own redaction. Stripping first asks
+	// about what is left, which is the part nobody has looked at.
+	stripped := stripRedactionMarkers(s)
+	return stripped != "" && r.RedactString(ctx, stripped) != stripped
+}
+
+// emailShape and mobileShape recognise two value shapes with no key on their
+// left: an address, and a mainland mobile number.
+//
+// They exist for a reason that is not "better redaction". Replacement stays
+// unwired on purpose, because matching values alone also matches incident
+// numbers (`PG-20261006-001`), ports, durations and host addresses, and
+// rewriting those destroys the document — that trade is a business decision
+// and this function is not where it gets made.
+//
+// Detection is the other question entirely. A document that still contains
+// somebody's email address has not been redacted, and saying so costs
+// nothing: nothing is removed, the text is left exactly as it was, and the
+// only thing that changes is whether the artifact is allowed to claim it
+// was. **A detector may be aggressive where a rewriter may not** — one of
+// them can only tell you something, the other can only lose something.
+var (
+	emailShape = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
+	// An 11-digit run starting 1[3-9]. Deliberately narrow: a wider "long
+	// digit run" rule would fire on incident numbers, timestamps and
+	// durations, and a check that cries wolf is a check that gets switched
+	// off.
+	mobileShape = regexp.MustCompile(`(?:^|[^0-9])1[3-9][0-9]{9}(?:[^0-9]|$)`)
+)
+
+func containsPersonalValueShape(s string) bool {
+	return emailShape.MatchString(s) || mobileShape.MatchString(s)
+}
+
+// stripRedactionMarkers removes every "<redacted:…>" span and returns the
+// rest of the document unchanged.
+func stripRedactionMarkers(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for {
+		start := strings.Index(s, RedactionMarker)
+		if start < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		b.WriteString(s[:start])
+		rest := s[start:]
+		end := strings.Index(rest, ">")
+		if end < 0 {
+			// An unterminated marker: nothing after it can be said to belong
+			// to this span, so stop rather than guess.
+			return b.String()
+		}
+		s = rest[end+1:]
+	}
+}
+
+// existingMarkerLen returns the byte length of a redaction marker at the
+// start of s, or 0 when s does not begin with one.
+//
+// Markers are `<redacted:category>` or `<redacted:category:hash>`; the
+// category never contains `>`, so the first one closes the span.
+func existingMarkerLen(s string) int {
+	if !strings.HasPrefix(s, RedactionMarker) {
+		return 0
+	}
+	end := strings.Index(s, ">")
+	if end < 0 {
+		return 0
+	}
+	return end + 1
 }
 
 // RedactString redacts a free-form string. Strategy:
@@ -226,17 +343,33 @@ func redactPattern(s, pat string, mode RedactMode) string {
 		}
 		// Copy everything up to the pattern token.
 		out.WriteString(s[i:idx])
-		// Look for the value separator: = / : / " right after pattern.
+		// Look for the value separator after the pattern.
+		//
+		// The quote case is not a separator at all, and treating it as one
+		// was the worst bug this file had. In JSON the key is quoted, so
+		// `"api_key":"sk-live-…"` puts a `"` immediately after the pattern
+		// — the key's *own closing quote*. Reading that as "separator, value
+		// follows" started the value capture at the `:`, stopped at the
+		// next `"`, and emitted `{"api_key"<redacted:api_key>sk-live-…"}`:
+		// a redaction marker next to a live secret. Measured on a real JSON
+		// body this round. A marker beside the secret is worse than no
+		// marker at all, because it tells the reader the value is gone.
 		j := idx + len(pat)
 		for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
 			j++
+		}
+		if j < len(s) && s[j] == '"' {
+			j++ // the key's own closing quote
+			for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
+				j++
+			}
 		}
 		if j >= len(s) {
 			out.WriteString(s[idx:])
 			break
 		}
 		sep := s[j]
-		if sep != '=' && sep != ':' && sep != '"' {
+		if sep != '=' && sep != ':' {
 			// Not a key-value construct; treat as substring match only.
 			// Copy pattern + continue scanning.
 			out.WriteString(s[idx : idx+len(pat)])
@@ -245,19 +378,14 @@ func redactPattern(s, pat string, mode RedactMode) string {
 		}
 		j++ // skip separator
 		consumedQuote := false
-		// If sep is `=` or `:`, the next non-space char might be `"`
-		// (opening quote of a quoted value). Consume it; otherwise the
-		// subsequent boundary scan would mis-treat `"` as a value end.
-		if sep != '"' {
-			for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
-				j++
-			}
-			if j < len(s) && s[j] == '"' {
-				consumedQuote = true
-				j++ // skip opening quote
-			}
-		} else {
+		// The value may itself be quoted. Consume the opening quote;
+		// otherwise the boundary scan would mis-treat `"` as a value end.
+		for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
+			j++
+		}
+		if j < len(s) && s[j] == '"' {
 			consumedQuote = true
+			j++ // skip opening quote
 		}
 		// Capture value up to boundary.
 		valStart := j
@@ -265,6 +393,30 @@ func redactPattern(s, pat string, mode RedactMode) string {
 			j++
 		}
 		value := s[valStart:j]
+		if value == "" {
+			// Nothing was captured, and that happens in two very different
+			// ways.
+			//
+			// The first is an existing marker: `<` is a value boundary, so in
+			// `api_key=<redacted:api_key>` the captured value is the empty
+			// string sitting in front of it. Measured this round: a second
+			// pass over already-redacted text emitted a *second* marker, so
+			// redacting twice doubled the marker. Redaction has to be
+			// idempotent — not for tidiness, but because "would redacting
+			// change this text?" is the residual question, and it can only
+			// be asked of an idempotent function.
+			if n := existingMarkerLen(s[valStart:]); n > 0 {
+				out.WriteString(s[idx : valStart+n])
+				i = valStart + n
+				continue
+			}
+			// The second is genuinely nothing after the separator. Emitting
+			// a marker for an empty value claims a redaction that never
+			// happened, and on a second pass it doubles like the case above.
+			out.WriteString(s[idx:j])
+			i = j
+			continue
+		}
 		// If closing quote was used, consume it.
 		if consumedQuote && j < len(s) && s[j] == '"' {
 			j++

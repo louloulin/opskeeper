@@ -148,6 +148,24 @@ func Claims() []ControlClaim {
 				"registry exists to prevent, in the shape this registry was written to catch.",
 		},
 		{
+			ID:     "redaction.claim-matches-content",
+			Claim:  "an artifact is only marked redacted when the redactor would find nothing left to change",
+			Status: StatusEnforced,
+			Probe:  "isRedacted",
+			Note: "决策 379。**这一行拆的是上一行的一半**：值侧「替换」仍然不接线，因为它要" +
+				"吃掉事故号、端口、耗时和主机 IP，那是人要拍板的代价；而「这份工件可以声称自己" +
+				"已脱敏」不是取舍，是对的。原来的判据是「正文里有没有 <redacted: 标记」——" +
+				"而实测证明：一遍确实跑了（所以标记在），也确实没抓到散文里的邮箱与手机号。" +
+				"于是 sink 把一份仍然带着个人信息的工件报成 redacted: true，**把一个没人验证过" +
+				"的缺口，换成了一个看起来已经验证过的结论**。现在判据是「没有标记，或者" +
+				"脱敏器还能改动什么」，并把第三种状态（脱敏跑了但没跑完）单列为 " +
+				"redaction_partial，因为「没脱敏」与「脱敏了但漏了」该有的应对不一样。" +
+				"**检测可以激进，替换不能**：检测只会让工件不敢声称自己干净，一个字都不会丢；" +
+				"替换会毁掉文档。所以值侧匹配以窄形状（邮箱、11 位手机号）进的是检测这条路，" +
+				"并有「不得对事故号/端口/耗时/版本号误报」的用例钉住——**一个会误报的检查，" +
+				"是一个会被关掉的检查**。",
+		},
+		{
 			ID:     "sensitivity.top-secret-read-gated",
 			Claim:  "TopSecret data is readable by nobody",
 			Status: StatusEnforced,

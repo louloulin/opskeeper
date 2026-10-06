@@ -437,3 +437,74 @@ func TestScanMarkdownField(t *testing.T) {
 		t.Errorf("missing key = %q", got)
 	}
 }
+
+// TestGitArtifactSink_Save_RefusesToClaimAFalseRedaction is the case that
+// made this field honest.
+//
+// The body is a real postmortem's shape, not a shape invented for the test:
+// `api_key=…` is the key/value construction the redactor matches, so it was
+// replaced and left a marker behind, while the user's email and phone number
+// sat in the prose with no key on their left. The old check asked one
+// question — is the marker there? — and answered true, so the artifact told
+// the store it was redacted while still carrying a person's contact details.
+//
+// Two things are asserted, and the second is the one that matters: the
+// artifact must not claim `redacted`, and it must say *why* it did not,
+// because "a redaction was applied and missed something" and "no redaction
+// was applied" are different facts with different responses.
+func TestGitArtifactSink_Save_RefusesToClaimAFalseRedaction(t *testing.T) {
+	store := gitastore.NewMemoryStore()
+	sink, _ := NewGitArtifactSink(store)
+	doc := &loop.PostmortemDoc{
+		SchemaVersion: loop.ContractSchemaV1,
+		IncidentID:    "INC-PARTIAL-001",
+		Markdown: "# Test\n\n" +
+			"调用时 api_key=<redacted:api_key>。\n" +
+			"联系人 alice@example.com，手机 13800138000。\n",
+		GeneratedAt: time.Now().UTC(),
+		Sources:     []string{"RootCauseJSON"},
+	}
+	if _, err := sink.Save(context.Background(), doc); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	artifact, _ := store.Get(context.Background(), sink.PublicIDPrefix+doc.IncidentID)
+	if artifact.Meta["redacted"] == true {
+		t.Errorf("meta.redacted = true on a document the redactor would still change; " +
+			"a false redaction claim is worse than no claim")
+	}
+	if artifact.Meta["redaction_partial"] != true {
+		t.Errorf("meta.redaction_partial = %v, want true: the marker was there, so this is a "+
+			"redaction that ran and missed something", artifact.Meta["redaction_partial"])
+	}
+	if artifact.Meta["redaction_notice"] != "" {
+		t.Errorf("meta.redaction_notice = %v, want empty while the claim is withheld",
+			artifact.Meta["redaction_notice"])
+	}
+}
+
+// TestGitArtifactSink_Save_UnredactedDocumentClaimsNothing is the other half:
+// a document nobody touched must not be reported as redacted, and must not
+// be reported as partially redacted either — there is no redaction to have
+// missed anything.
+func TestGitArtifactSink_Save_UnredactedDocumentClaimsNothing(t *testing.T) {
+	store := gitastore.NewMemoryStore()
+	sink, _ := NewGitArtifactSink(store)
+	doc := &loop.PostmortemDoc{
+		SchemaVersion: loop.ContractSchemaV1,
+		IncidentID:    "INC-PLAIN-001",
+		Markdown:      "# Test\n\napi_key=sk-live-9f2a7c\n",
+		GeneratedAt:   time.Now().UTC(),
+		Sources:       []string{"RootCauseJSON"},
+	}
+	if _, err := sink.Save(context.Background(), doc); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	artifact, _ := store.Get(context.Background(), sink.PublicIDPrefix+doc.IncidentID)
+	if artifact.Meta["redacted"] != false {
+		t.Errorf("meta.redacted = %v, want false", artifact.Meta["redacted"])
+	}
+	if artifact.Meta["redaction_partial"] != false {
+		t.Errorf("meta.redaction_partial = %v, want false: no redaction ran, so nothing was missed",
+			artifact.Meta["redaction_partial"])
+	}
+}

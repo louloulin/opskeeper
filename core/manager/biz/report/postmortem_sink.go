@@ -18,6 +18,7 @@ import (
 	gitastore "github.com/vincent-wuhan/opskeeper/core/manager/knowledge/gitartifact/store"
 
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
+	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 )
 
 // GitArtifactSink is the default PostmortemSink. It records the
@@ -43,10 +44,29 @@ type GitArtifactSink struct {
 	// Now is the time source for BuildAt. nil = time.Now.
 	Now func() time.Time
 
+	// Redactor answers "would redacting this document still change it".
+	//
+	// It is not used to redact: the sink stores what the postmortem
+	// produced. It is used to decide whether the stored artifact may claim
+	// to be redacted, and a document that carries the redaction marker
+	// alongside something the redactor would still change is exactly the
+	// artifact that must not make that claim. nil = the default
+	// RedactModeAll redactor, which is the strictest question available.
+	Redactor dataguard.Redactor
+
 	// mu protects nothing today (Store is goroutine-safe per its
 	// own contract) but is kept for future fields that need
 	// synchronisation.
 	mu sync.Mutex
+}
+
+// residualRedactor is the redactor used for the "is it still sensitive"
+// question when the sink has none of its own.
+func (s *GitArtifactSink) residualRedactor() dataguard.Redactor {
+	if s.Redactor != nil {
+		return s.Redactor
+	}
+	return dataguard.NewRedactor(dataguard.RedactModeAll, false)
 }
 
 // NewGitArtifactSink constructs the sink. Returns an error when
@@ -85,6 +105,7 @@ func (s *GitArtifactSink) Save(ctx context.Context, doc *loop.PostmortemDoc) (st
 			"loop_version":        "v1",
 			"template_version":    "2026-08-10.v1",
 			"redacted":            s.isRedacted(doc),
+			"redaction_partial":   s.isRedactionPartial(doc),
 			"redaction_notice":    s.redactionNotice(doc),
 			"generated_at":        doc.GeneratedAt,
 			"sources":             doc.Sources,
@@ -109,9 +130,39 @@ func (s *GitArtifactSink) Save(ctx context.Context, doc *loop.PostmortemDoc) (st
 	return sha, nil
 }
 
-// isRedacted inspects the postmortem Markdown for the redact marker.
+// isRedacted reports whether this artifact may claim to be redacted.
+//
+// The marker alone is not enough. The marker is written by a redaction
+// pass, and a pass that ran is not a pass that caught everything: measured
+// on a real postmortem body, `api_key=sk-live-…` was replaced while a
+// user's email and phone number were not — and the marker was there, so a
+// marker-only check reported that artifact as `redacted: true`. A redacted
+// claim that is false is worse than no claim, because it converts an
+// unverified gap into a verified conclusion somebody will stop looking at.
+//
+// So the answer is "no marker" OR "something the redactor would still
+// change". The first half keeps an untouched document from claiming
+// anything; the second half keeps a partly redacted one from claiming too
+// much.
 func (s *GitArtifactSink) isRedacted(doc *loop.PostmortemDoc) bool {
-	return contains(doc.Markdown, "<redacted:")
+	if !contains(doc.Markdown, "<redacted:") {
+		return false
+	}
+	return !s.isRedactionPartial(doc)
+}
+
+// isRedactionPartial reports the case the marker cannot see: the document
+// was redacted, and the redaction did not finish.
+//
+// It is recorded as its own field rather than folded into the notice
+// because the two are different facts for whoever reads the artifact
+// later: "no redaction was applied" and "a redaction was applied and
+// missed something" call for different responses.
+func (s *GitArtifactSink) isRedactionPartial(doc *loop.PostmortemDoc) bool {
+	if !contains(doc.Markdown, "<redacted:") {
+		return false
+	}
+	return s.residualRedactor().ResidualSensitive(context.Background(), doc.Markdown)
 }
 
 // redactionNotice returns a short human-readable tag for the
