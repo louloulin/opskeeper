@@ -69,6 +69,19 @@ func main() {
 		report.Docs, report.Endpoints, report.Subcommands)
 	fmt.Printf("route literals in source: %d   of those registered on a router: %d   "+
 		"eval subcommands found: %d\n", len(report.Routes), len(report.Registered), len(report.Subcommands2))
+	fmt.Printf("command-line flags checked: %d   of those not defined by the binary: %d\n",
+		report.CLIFlags, countFlagFindings(report))
+	if len(report.UnknownSubs) > 0 {
+		names := make([]string, 0, len(report.UnknownSubs))
+		for name := range report.UnknownSubs {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		fmt.Printf("subcommands this command did not recognise (skipped, not failures): %d\n", len(names))
+		for _, name := range names {
+			fmt.Printf("  %s  x%d\n", name, report.UnknownSubs[name])
+		}
+	}
 	if len(report.Missing) > 0 {
 		fmt.Fprintln(os.Stderr, "\nthese claims have nothing behind them:")
 		for _, m := range report.Missing {
@@ -101,12 +114,19 @@ type Report struct {
 	Routes       map[string]bool
 	Registered   map[string]bool
 	Subcommands2 map[string]bool
+	CLIFlags     int
+	UnknownSubs  map[string]int
 	Missing      []Missing
 }
 
 var (
-	// An endpoint line: "GET /api/v1/..." or "POST /v1/..." inside a fence.
-	endpointRE = regexp.MustCompile(`(?m)^\s*(?:GET|POST|PUT|DELETE|PATCH)\s+(/[A-Za-z0-9_\-/{}.:]*)`)
+	// An endpoint line, in either of the two ways a document writes one:
+	// the bare "GET /api/v1/..." form, and the curl form
+	// "curl -X POST https://host/api/v1/...". The second is not optional: the
+	// only REST API harness-guide documents is written entirely as curl
+	// invocations, and a pattern that required the line to begin with the verb
+	// would have read that section as containing no claims at all.
+	endpointRE = regexp.MustCompile(`(?m)(?:^|\s)(?:GET|POST|PUT|DELETE|PATCH)\s+(?:https?://[^\s/]+)?(/[A-Za-z0-9_\-/{}.:]*)`)
 	// A CLI invocation: "opskeeper-eval judge --flags".
 	cliRE = regexp.MustCompile(`opskeeper-eval\s+([a-z][a-z0-9-]*)`)
 	// A route literal: any string starting with "/" that looks like a path.
@@ -120,6 +140,7 @@ func check(root string, verbose bool) (Report, error) {
 		Routes:       map[string]bool{},
 		Registered:   map[string]bool{},
 		Subcommands2: map[string]bool{},
+		UnknownSubs:  map[string]int{},
 	}
 	// The source side first: every route literal and every subcommand.
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -210,7 +231,89 @@ func check(root string, verbose bool) (Report, error) {
 			}
 		}
 	}
+
+	// The command line, over a wider set of documents than the endpoint pass
+	// above. Endpoints are declared in docs/api/ and nowhere else; command
+	// lines are written all over docs/ (integration-guide, harness-guide,
+	// operations-manual), which is why they needed their own sweep.
+	allDocs, err := allDocFiles(root)
+	if err != nil {
+		return report, err
+	}
+	missingFlags, checkedFlags, unknownSubs, err := checkCLIFlags(root, allDocs, os.ReadFile)
+	if err != nil {
+		return report, err
+	}
+	// The endpoint sweep, over the same wider set. Endpoint claims are written
+	// in docs/api/ and also all over docs/ — harness-guide 7.2 posts to
+	// /api/v1/harness/runs, a path no route in this tree serves, and calls it
+	// "REST API（CI 集成）" with a response shape. Same class of claim, same
+	// cost when it is wrong, so it gets the same question.
+	apiDocs := map[string]bool{}
+	for _, d := range docs {
+		apiDocs[d] = true
+	}
+	for _, doc := range allDocs {
+		if apiDocs[doc] {
+			continue
+		}
+		body, rerr := os.ReadFile(doc)
+		if rerr != nil {
+			return report, rerr
+		}
+		report.Docs++
+		rel, _ := filepath.Rel(root, doc)
+		for _, block := range fencedBlocks(string(body), string(body)) {
+			for _, match := range endpointRE.FindAllStringSubmatchIndex(block.body, -1) {
+				report.Endpoints++
+				path := block.body[match[2]:match[3]]
+				if !anyRouteMatches(report.Registered, path) {
+					report.Missing = append(report.Missing, Missing{
+						Doc:   rel,
+						Line:  lineOf(string(body), block.offset+match[0]),
+						Claim: "endpoint " + path,
+					})
+				}
+			}
+		}
+	}
+
+	report.CLIFlags = checkedFlags
+	report.Missing = append(report.Missing, dedupe(missingFlags)...)
+	for name, count := range unknownSubs {
+		report.UnknownSubs[name] = count
+	}
 	return report, nil
+}
+
+// allDocFiles is every markdown file under docs/.
+func allDocFiles(root string) ([]string, error) {
+	var out []string
+	err := filepath.Walk(filepath.Join(root, "docs"), func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			// docs/superpowers/{plans,specs} is a tree of proposals, not of
+			// delivered contracts: a plan document says what someone intends to
+			// build, and a spec says what they decided. Judging them by the same
+			// question as an operations manual would report every unfinished
+			// plan as a defect, and the fix would be to delete the plans.
+			if skipDir(filepath.Base(path)) || proposalDir(path) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".md") {
+			out = append(out, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // anyRouteMatches reports whether one registered route serves a documented
@@ -373,4 +476,60 @@ func stripTestFuncs(text string) string {
 
 func lineOf(text string, index int) int {
 	return strings.Count(text[:index], "\n") + 1
+}
+
+// countFlagFindings is how many of the missing claims are flags rather than
+// endpoints or subcommands, for the one number the summary prints.
+func countFlagFindings(report Report) int {
+	n := 0
+	for _, m := range report.Missing {
+		if strings.Contains(m.Claim, "that flag is not defined") {
+			n++
+		}
+	}
+	return n
+}
+
+// dedupe removes findings that name the same flag on the same line.
+//
+// Closing a shell line continuation can put one flag on the joined line twice if
+// the document wrote it twice, and a reader told the same thing is not told it
+// twice. Distinct flags on one line are all kept: they are distinct defects.
+func dedupe(in []Missing) []Missing {
+	seen := map[string]bool{}
+	out := make([]Missing, 0, len(in))
+	for _, m := range in {
+		key := m.Doc + ":" + itoa(m.Line) + ":" + m.Claim
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, m)
+	}
+	return out
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
+}
+
+// proposalDir is true for the two directories under docs/superpowers that hold
+// proposals rather than documentation of what exists.
+func proposalDir(path string) bool {
+	for _, part := range []string{"docs/superpowers/plans", "docs/superpowers/specs"} {
+		if strings.Contains(filepath.ToSlash(path), part) {
+			return true
+		}
+	}
+	return false
 }

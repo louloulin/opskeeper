@@ -169,7 +169,7 @@ func TestARouteOnlyAssertedInATestIsNotARoute(t *testing.T) {
 func TestASubcommandClaimMustMatchTheDispatch(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"docs/api/cli.md":            "```\nopskeeper-eval judge --input a.json\n```\n",
-		"cmd/opskeeper-eval/main.go": "func main() {\n\tswitch sub {\n\tcase \"judge\":\n\t}\n}\n",
+		"cmd/opskeeper-eval/main.go": "func main() {\n\tswitch sub {\n\tcase \"judge\":\n\t\tfs := flag.NewFlagSet(\"judge\", flag.ExitOnError)\n\t\tfs.StringVar(&in, \"input\", \"\", \"\")\n\t\tfs.Parse(nil)\n\t}\n}\n",
 	})
 	report, err := check(root, false)
 	if err != nil {
@@ -229,5 +229,177 @@ func TestADocumentedParameterIsNotSatisfiedByALiteralSegment(t *testing.T) {
 	}
 	if len(report.Missing) != 1 {
 		t.Fatalf("missing = %v, want the literal segment not to satisfy {id}", claimsOf(t, report))
+	}
+}
+
+// The command line is a claim like any other: a flag written in a document that
+// the binary does not define exits with "flag provided but not defined", and a
+// subcommand it does not dispatch exits 2. These fixtures pin the four shapes
+// that decide whether that finding is real or invented.
+
+func cliTree(doc string) map[string]string {
+	return map[string]string{
+		"docs/guide.md": doc,
+		"cmd/tool/main.go": `import "flag"
+
+func main() {
+	switch os.Args[1] {
+	case "run":
+		fs := flag.NewFlagSet("run", flag.ExitOnError)
+		fs.StringVar(&target, "target", "", "")
+		dir := fs.String("dir", ".", "")
+		_ = dir
+		fs.Parse(os.Args[2:])
+	case "board":
+		fs := flag.NewFlagSet("board", flag.ExitOnError)
+		fs.Float64Var(&threshold, "threshold", 0.5, "")
+		fs.Parse(os.Args[2:])
+	default:
+		fmt.Println("unknown subcommand:", os.Args[1])
+		os.Exit(2)
+	}
+}
+`,
+	}
+}
+
+func TestADocumentedFlagIsCheckedAgainstTheBinaryThatDefinesIt(t *testing.T) {
+	root := writeTree(t, cliTree("```\ntool run --target x --dir y\n```\n"))
+	report, err := check(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Missing) != 0 {
+		t.Fatalf("missing = %v, want the two documented flags to be accepted", claimsOf(t, report))
+	}
+	if report.CLIFlags != 2 {
+		t.Fatalf("CLIFlags = %d, want 2", report.CLIFlags)
+	}
+}
+
+func TestADocumentedFlagTheBinaryDoesNotDefineIsRed(t *testing.T) {
+	root := writeTree(t, cliTree("```\ntool run --targte x\n```\n"))
+	report, err := check(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Missing) != 1 {
+		t.Fatalf("missing = %v, want the misspelled flag reported", claimsOf(t, report))
+	}
+	if !strings.Contains(report.Missing[0].Claim, "--targte") {
+		t.Fatalf("claim = %q, want it to name the flag that is not defined", report.Missing[0].Claim)
+	}
+}
+
+// A longer word that merely starts with a binary name is not an invocation of
+// it. "opskeeper-llm-credentials" is a kubectl secret name, and reading it as
+// "opskeeper llm-credentials" would invent a subcommand out of a string that was
+// never a command.
+func TestABinaryNameInsideALongerWordIsNotAnInvocation(t *testing.T) {
+	root := writeTree(t, cliTree("```\ntool-run-credentials --target x\nkubectl -n opskeeper get secret tool-llm-credentials\n```\n"))
+	report, err := check(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.CLIFlags != 0 {
+		t.Fatalf("CLIFlags = %d, want 0: neither line invokes the binary", report.CLIFlags)
+	}
+	if len(report.Missing) != 0 {
+		t.Fatalf("missing = %v, want nothing reported", claimsOf(t, report))
+	}
+}
+
+// A binary with no subcommand dispatcher has no command table to judge a word
+// against, so the finding is recorded and skipped rather than invented. This is
+// the "opskeeper helm upgrade" shape: helm is somebody else's binary.
+func TestAnUnjudgeableWordIsSkippedRatherThanCalledWrong(t *testing.T) {
+	tree := cliTree("```\ntool helm upgrade -f x.yaml\n```\n")
+	tree["cmd/tool/main.go"] = "package x\n\nfunc main() {}\n"
+	root := writeTree(t, tree)
+	report, err := check(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Missing) != 0 {
+		t.Fatalf("missing = %v, want the word skipped, not called wrong", claimsOf(t, report))
+	}
+	if report.UnknownSubs["tool helm"] != 1 {
+		t.Fatalf("UnknownSubs = %v, want it to record tool helm once", report.UnknownSubs)
+	}
+}
+
+// The same word IS judgeable when the binary does dispatch subcommands: this
+// one prints "unknown subcommand" and exits 2, so the document is describing a
+// command that cannot run.
+func TestASubcommandOutsideAKnownTableIsRed(t *testing.T) {
+	root := writeTree(t, cliTree("```\ntool lock --until 2026-08-01\n```\n"))
+	report, err := check(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Missing) != 1 {
+		t.Fatalf("missing = %v, want the undocumented subcommand reported", claimsOf(t, report))
+	}
+	if !strings.Contains(report.Missing[0].Claim, "tool lock") {
+		t.Fatalf("claim = %q, want it to name the subcommand", report.Missing[0].Claim)
+	}
+}
+
+// A flag defined with the non-Var form (fs.String) is a real flag. Reading only
+// the Var form would report --dir and --threshold as undefined, which is the
+// gate disagreeing with the compiler.
+func TestANonVarFlagIsStillAFlag(t *testing.T) {
+	root := writeTree(t, cliTree("```\ntool board --threshold 0.6\n```\n"))
+	report, err := check(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Missing) != 0 {
+		t.Fatalf("missing = %v, want --threshold accepted", claimsOf(t, report))
+	}
+}
+
+// A string that merely looks like a flag name to some other function is not a
+// flag. errors.New("boom") must not put "boom" in the vocabulary, or a document
+// writing --boom would pass this gate.
+func TestAStringArgumentToAnotherFunctionIsNotAFlag(t *testing.T) {
+	tree := cliTree("```\ntool run --boom\n```\n")
+	tree["cmd/tool/main.go"] = `package x
+
+func main() {
+	switch os.Args[1] {
+	case "run":
+		fs := flag.NewFlagSet("run", flag.ExitOnError)
+		fs.Parse(nil)
+		boom("boom")
+	default:
+		fmt.Println("unknown subcommand:", os.Args[1])
+		os.Exit(2)
+	}
+}
+
+func boom(msg string) error { return nil }
+`
+	root := writeTree(t, tree)
+	report, err := check(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Missing) != 1 {
+		t.Fatalf("missing = %v, want --boom reported as undefined", claimsOf(t, report))
+	}
+}
+
+// A claim only counts inside a fence. A document that says "there is no such
+// flag" in prose is describing an absence, and this gate must not read it as
+// asserting the thing exists.
+func TestACommandLineInProseIsNotAClaim(t *testing.T) {
+	root := writeTree(t, cliTree("there used to be a `tool run --targte x` command; it is gone.\n"))
+	report, err := check(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.CLIFlags != 0 {
+		t.Fatalf("CLIFlags = %d, want 0 for a line outside a fence", report.CLIFlags)
 	}
 }

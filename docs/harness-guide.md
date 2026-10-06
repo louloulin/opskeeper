@@ -24,14 +24,14 @@
 ```bash
 opskeeper-eval --help
 opskeeper-eval list-cases                           # 列出全部 golden case
-opskeeper-eval list-cases --severity P0             # 按严重度
+opskeeper-eval list-cases --filter pg               # 只看 pg 类
 opskeeper-eval run --case pg/long-running-tx        # 跑单个 case
 opskeeper-eval run --suite middleware-baseline      # 跑一组
 opskeeper-eval run --suite full --env staging       # 全量回归
 opskeeper-eval inject --case k8s/pod-oom --env staging  # 仅注入不评分
 opskeeper-eval judge --case pg/long-running-tx --response agent-response.json  # 外部 judge
 opskeeper-eval leaderboard                          # 查看排行榜
-opskeeper-eval leaderboard --since 30d              # 近 30 天
+opskeeper-eval leaderboard --threshold 0.6          # recovery_pass_rate 门槛
 opskeeper-eval plugin-coverage                      # golden case 的能力期望 vs 插件包能力
 opskeeper-eval plugin-coverage --fail-on-gap         # CI：有结构性缺口即非零退出
 opskeeper-eval plugin-coverage --filter host/ --json # 只看主机类，机器可读
@@ -307,8 +307,8 @@ metadata:
 `core/harness/schema/case.schema.json` 是权威 schema。新增 case 自动校验：
 
 ```bash
-opskeeper-eval validate --case pg/long-running-tx
-# → Validation passed
+opskeeper-eval vocabulary --cases-dir core/harness/cases
+# → 加载并校验全部 case；任一个不符合 schema 就非零退出
 ```
 
 校验失败的常见原因：
@@ -432,13 +432,9 @@ Overall: 0.90 (baseline 0.91, Δ -0.01)
 
 ### 6.3 基线更新
 
-```bash
-# 把当前评分设为新基线（每月一次）
-opskeeper-eval leaderboard --lock-baseline
+基线写入与回归检查目前**只存在于库里**：`core/harness/leaderboard` 提供 `SetBaseline` / `Baseline` / `CheckRegression` / `History`，`cmd/opskeeper-eval` 的 `leaderboard` 子命令目前只读 `harness/result/loop` 并渲染一张看板，没有任何 flag 写入或读取基线。本体还没接线，所以这里不写命令行——写一条跑不成的命令，比不写更坏。
 
-# 查看历史基线
-opskeeper-eval leaderboard --baselines
-```
+可用的 leaderboard 参数：`--dir`（LoopResult 目录）、`--out-dir`（Markdown 输出目录）、`--threshold`（recovery_pass_rate 门槛）。
 
 ---
 
@@ -471,10 +467,14 @@ jobs:
           OPSKEEPER_LLM_ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPSKEEPER_LLM_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          ./opskeeper-eval run --suite pr-baseline --env staging --report eval-report.json
+          ./opskeeper-eval run --suite pr-baseline --env staging --output eval-report.json
       - name: Check regression
+        # 当前 leaderboard 只从 harness/result/loop 聚合并渲染一张看板，
+        # 并在 recovery_pass_rate 低于 --threshold 时把 case 标为 NOT QUALIFIED。
+        # “与基线比较”的自动回归检查尚未接线（见 6.3），
+        # 这一步只负责在阀值下非零退出。
         run: |
-          ./opskeeper-eval leaderboard --check-regression --report eval-report.json
+          ./opskeeper-eval leaderboard --threshold 0.5
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
@@ -485,22 +485,10 @@ jobs:
 
 ### 7.2 REST API（CI 集成）
 
-```bash
-# 异步触发评测
-curl -X POST https://ops.example.com/api/v1/harness/runs \
-  -H "Authorization: Bearer $JWT" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "suite": "middleware-baseline",
-    "env": "staging",
-    "webhook_url": "https://ci.example.com/callback"
-  }'
-# → {"run_id": "hr-abc123"}
-
-# 查询进度
-curl https://ops.example.com/api/v1/harness/runs/hr-abc123 \
-  -H "Authorization: Bearer $JWT"
-```
+**未交付。** 这个接口不存在：本仓库里没有任何路由注册
+`/api/v1/harness/runs`（`make apidoc-check` 会报出它）。Harness 目前只有 CLI，
+CI 集成走 7.1 的本地进程，不走 HTTP。未来如果要这个接口，
+需要在 `core/manager` 里真正增加路由与 handler，而不是只在文档里补一段。
 
 详见 [docs/api/harness.md](api/harness.md)。
 
@@ -510,32 +498,26 @@ curl https://ops.example.com/api/v1/harness/runs/hr-abc123 \
 
 ### 8.1 Prod 环境注入拦截
 
-```bash
-# 拒绝：prod 环境 + 未确认
-$ opskeeper-eval inject --case k8s/pod-oom --env prod
-ERROR: prod environment requires --confirm-prod and 2-person approval
+`cmd/opskeeper-eval` 的 `inject` 目前是**骨架**：它只接受
+`--case`、`--confirm-prod`、`--target` 三个 flag，打印一行
+`inject: case=... confirm_prod=...` 后返回，不做双人审批、不解析
+`ns=test deploy=order-svc`、不限时。
 
-# 通过：显式确认 + 审批人
-$ opskeeper-eval inject --case k8s/pod-oom --env prod --confirm-prod \
-    --approver "@alice" --approver "@bob"
-✅ approved, injecting in 30s
+因此本节原来写的“拒绝 / 通过”两个样例都不可照抄：
+它们的输出只能由一个尚不存在的实现产生。真实行为：
+
+```bash
+# 尚未实现双人审批，只有一个布尔确认
+$ opskeeper-eval inject --case k8s/pod-oom --target ns=test deploy=order-svc
+inject: case=k8s/pod-oom confirm_prod=false
+(skeleton) — full implementation in Task 2.6
 ```
 
 ### 8.2 时间窗限制
 
-```bash
-# 默认 5 分钟
-$ opskeeper-eval inject --case pg/lock-table --env staging
-duration=300s
-
-# 调整上限（最大 600s = 10 分钟）
-$ opskeeper-eval inject --case pg/lock-table --env staging --max-duration 600
-duration=600s
-
-# 超过限制被拒
-$ opskeeper-eval inject --case pg/lock-table --env staging --max-duration 1200
-ERROR: max-duration cannot exceed 600s
-```
+**未实现。** `inject` 没有 `--max-duration`，没有时间窗，
+也不会拒绝任何注入。时间窗是这里应该有而没有的东西，
+它需要在 `core/harness/injector` 里实现，不是在 CLI 上加一个 flag。
 
 ### 8.3 审计
 
@@ -552,7 +534,7 @@ logcli query '{app="opskeeper-eval"} |= "inject"' --since=24h
 ### 9.1 贡献流程
 
 1. 在 `core/harness/cases/<resource>/<new-case>/case.yaml` 写新 case
-2. `opskeeper-eval validate --case <new-case>` 校验 schema
+2. `opskeeper-eval vocabulary --cases-dir core/harness/cases` 校验 schema（没有 `validate` 子命令；加载与校验在 schema.Loader 里，任一依赖它的子命令都会拒绝一个不合 schema 的 case）
 3. 在 staging 跑一次：`opskeeper-eval run --case <new-case> --env staging`
 4. PR review + 合并
 5. 纳入下月回归基线

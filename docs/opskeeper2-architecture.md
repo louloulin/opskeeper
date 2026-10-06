@@ -26403,6 +26403,134 @@ for j := c.Line + 1; j < len(lines) && continuationRE.MatchString(lines[c.Line])
 3. **加权 98.6% 与 97.0% 仍是一分未动。**
 
 
+### 4.228 决策 294：让文档里的**命令行**也有闸门——**十一条命令此前一条都跑不起来**
+
+#### 一、起点：决策 293 亲手点名的那个缺口
+
+决策 293 修完 `opskeeper-migrate` 的谎报，在「这一刀没有解决的」第一条写下：
+
+> **`docs/` 里的命令行示例仍然没有闸门**。apidoc 只覆盖 `docs/api/`。
+
+理由当时写得很清楚：扩它"要给命令行的 flag 解析建一套对照"。本轮就是去建
+这套对照的。**结论是它比想象中便宜**——因为 `cmd/` 下每个二进制的 flag 名
+与子命令表，本来就以字面量写在源码里。
+
+#### 二、这道闸门抓到的十一条谎报
+
+`scripts/apidoc` 原本只读 `docs/api/*.md`，命令行示例在它看不见的地方。
+把范围扩到 `docs/**/*.md` 并新建 `scripts/apidoc/cliflags.go` 之后，
+第一次运行就报出 **11 条**：
+
+| 文档写的 | 实际 | 后果 |
+|---|---|---|
+| `list-cases --severity P0` | `list-cases` 只有 `--cases-dir` / `--filter` | 照抄即 `flag provided but not defined` |
+| `leaderboard --since 30d` | 同上，没有 `--since` | 同上 |
+| `leaderboard --lock-baseline` / `--baselines` | 基线 API 只存在于 `core/harness/leaderboard`，**没有任何 flag 读写它** | 同上 |
+| `run --report x.json` | 是 `--output` | 同上 |
+| `leaderboard --check-regression --report x.json` | 两个 flag 都不存在 | 同上 |
+| `inject --approver "@alice" --approver "@bob"` | `inject` 是**骨架**，只有 `--case` / `--confirm-prod` / `--target` | 同上，且文档描述的双人审批根本不存在 |
+| `inject --max-duration 600` | 不存在，也**没有时间窗** | 同上 |
+| `migrate backup --output x.sql` | 子命令叫 `export`，且输出是 `.json` | 退出码 2 |
+| `migrate rollback --to x.sql` | 是 `--rollback-snapshot` + `--target` | 退出码 2 |
+| `eval lock --until 2026-08-01` | 没有 `lock` 子命令 | 退出码 2 |
+| `POST /api/v1/harness/runs`（7.2 REST API） | **本仓库没有任何路由注册它** | 404 |
+
+最后一条是顺带抓到的：为了覆盖 `curl -X POST https://host/path` 这种写法，
+端点正则从「行首是动词」放宽到「行内是动词」，**结果 harness-guide 7.2 那一节
+立刻红了**。那一节标题写着「REST API（CI 集成）」，带完整请求体与响应体
+（`{"run_id": "hr-abc123"}`），而 harness 至今只有 CLI。
+
+**十一处里没有一处是误报。** 逐条打开源码核实过。
+
+#### 三、这一刀做了什么
+
+1. **`scripts/apidoc/cliflags.go`（新）**：从 `cmd/*/main.go` 读出每个二进制的
+   flag 名与子命令表，从 `docs/**/*.md` 的围栏里读出每条命令的每个 `--flag`，
+   逐条比对。
+2. **`Report` 加 `CLIFlags` / `UnknownSubs`**，缺失项并入 `report.Missing`。
+3. **端点扫描也扩到 `docs/**/*.md`**（此前只 `docs/api/`），并支持 curl 形式。
+4. **十一处文档谎报全部改正**。`inject` 的两节改写成"这是骨架，真实行为是
+   这样"；基线那节改成"API 在库里、命令行没接线"；7.2 整节标为**未交付**。
+
+#### 四、三条收窄，每一条都是被现实打出来的
+
+这道闸门如果照最直白的写法写，会立刻被自己的假阳性淹没。收窄不是锦上添花，
+是它能存在的条件：
+
+1. **二进制名必须是一个独立的词。** `opskeeper-llm-credentials` 是 kubectl
+   secret 的名字，不是命令。不要求边界的话，文档里每一个 secret 名都会被读成
+   一次 `opskeeper` 调用。**Go 的 regexp 是 RE2，没有 lookahead**——边界只能
+   由模式**捕获**什么来保证，不能由 `(?!...)` 保证。第一次写成 lookahead 的
+   版本直接 panic。这是本轮唯一一次返工。
+2. **没有子命令词表的二进制，其命令行整条跳过。** `opskeeper helm upgrade`、
+   `opskeeper namespace x` 这类把外部工具夹在中间的写法在文档里成片存在。
+   词表从哪来？`case "..."` 在 Go 里同时是子命令分发和**类型 switch 的分支**：
+   `cmd/opskeeper/main.go` 一个文件里就有三十多个 `case "AgentTool"`、
+   `case "array"`。**把它们当词表，文档里每一个外部工具都会变成一条假阳性。**
+   真正的分发器有一处假货识别不了的地方：它的 `default` 分支会打印
+   `unknown subcommand` 并退出。**只认这个标记的 switch 才是命令表。**
+3. **只认 `FlagSet` 变量上的 flag 名。** "任何方法调用的第一个字符串参数"是
+   一个远宽的形状：`errors.New("boom")`、`fmt.Errorf("x")` 都会被读成一个叫
+   `boom` 的 flag，文档写 `--boom` 就能通过这道闸门。
+   **而且两种定义形式都要读**：`leaderboard` 的 `--dir` / `--out-dir` /
+   `--threshold` 是用 `fs.String("name", ...)` 定义的，只认 `Var` 形式的话，
+   文档写出这三个 flag 反而会被报成"未定义"——**闸门在跟编译器争论**。
+
+另外两处：`docs/superpowers/{plans,specs}` 被排除（那是提案不是交付物，
+按同一把尺子量会把每份未完成的计划都报成缺陷，而"修复"就是删掉计划）；
+围栏外的散文不算声明（文档里写着"以前有个 `--targte` 命令，已经没了"是描述
+一个**不存在**，不是断言它存在）。
+
+#### 五、闸门：七条夹具断言，两次变异验证都红
+
+`scripts/apidoc/main_test.go` 新增 7 条测试（`writeTree` 夹具复用），
+其中两条是**把本轮踩到的坑钉住**：
+
+| 测试 | 钉住什么 |
+|---|---|
+| `TestADocumentedFlagIsCheckedAgainstTheBinaryThatDefinesIt` | 真的 flag 通过，且**计数为 2**（值参数后的第二个 flag 也要被抓到） |
+| `TestADocumentedFlagTheBinaryDoesNotDefineIsRed` | 假 flag 红，且判词点名那个 flag |
+| `TestABinaryNameInsideALongerWordIsNotAnInvocation` | `tool-run-credentials` 不被读成 `tool run-credentials` |
+| `TestAnUnjudgeableWordIsSkippedRatherThanCalledWrong` | 无词表时跳过而不是判错 |
+| `TestASubcommandOutsideAKnownTableIsRed` | 有词表时判错 |
+| `TestANonVarFlagIsStillAFlag` | `fs.String` 定义的 flag 是 flag |
+| `TestAStringArgumentToAnotherFunctionIsNotAFlag` | `boom("boom")` 不产生 flag |
+| `TestACommandLineInProseIsNotAClaim` | 围栏外的散文不是声明 |
+
+| 变异 | 结果 |
+|---|---|
+| 文档里把 `--filter` 拼成 `--fliter` | 红：`harness-guide.md:27 --fliter (that flag is not defined)` |
+| 把 `if cmd.Flags[flag] { continue }` 改成 `if true \|\| ...`，同时保留上面那个错拼 | **绿**——证明词表查询是承重的，也证明"报 0 条"在这道闸门里等于"放过一切" |
+
+第二条变异是本轮更想记下来的：**一个只统计"报了几条"的闸门，在查找被摘掉
+之后会安静地变成一个永远通过的闸门。** 它和决策 291–293 里那三次
+"读到 0 条当成通过"是同一个形状，出现在第四个地方。
+
+顺带修了一条既有测试：`TestASubcommandClaimMustMatchTheDispatch` 的夹具写了
+`--input` 而夹具源码没定义它——**旧闸门不查 flag，所以它一直是绿的**。
+新闸门一接上就红了。这本身就是新闸门有效的一个旁证。
+
+#### 六、读数
+
+| 项 | 变化 |
+|---|---|
+| apidoc 覆盖面 | 3 篇 → **27 篇**；端点声明 3 → 4；命令行 flag 0 → **97 条被核对** |
+| 文档谎报 | **11 处改正**（此前 0 处有闸门） |
+| 脚本测试 | 435 → **443 passed / 15 包** |
+| `core/manager` | 942 文件 / **239,569 行**（未变，本轮只动 `scripts/` 与 `docs/`） |
+| cigate | **18 道**（未新增：命令行检查并入既有的 `apidoc-check`） |
+| 加权进度 | **98.6%，连续第二十轮未动** |
+
+#### 七、这一刀没有解决的
+
+1. **`inject` 仍然是骨架**，文档现在如实这么写了，但功能本身没补。
+   双人审批、时间窗、`--target` 的解析都还没有。
+2. **基线仍然没有命令行入口**：`SetBaseline` / `CheckRegression` 在库里，
+   `leaderboard` 子命令不读写它们。CI 的"回归检查"现在只是阈值判断。
+3. **加权 98.6% 与原计划 97.0% 仍是一分未动。** 本轮改的是文档与闸门，
+   不改交付面；按原判据它不该动，也确实没动。
+4. **五个待拍板的产品决定**（决策 291–293 已记）仍然待拍板。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

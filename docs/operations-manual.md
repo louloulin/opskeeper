@@ -88,7 +88,7 @@ kubectl get pods -n opskeeper
 
 ```bash
 # 1. 备份数据库（前置）
-opskeeper-migrate backup --output backup-$(date +%Y%m%d).sql
+opskeeper-migrate export --output backup-$(date +%Y%m%d).json
 
 # 2. 升级 helm
 helm upgrade opskeeper opskeeper/opskeeper \
@@ -112,7 +112,9 @@ helm history opskeeper -n opskeeper
 helm rollback opskeeper <REVISION> -n opskeeper
 
 # 数据库回滚（若 migration 已执行）
-opskeeper-migrate rollback --to backup-20260713.sql
+opskeeper-migrate rollback \
+  --rollback-snapshot backup-20260713.json \
+  --target opskeeper://opskeeper-host:8080
 ```
 
 ---
@@ -432,8 +434,8 @@ helm upgrade opskeeper opskeeper/opskeeper --set investigator.timeout=300s
 helm upgrade opskeeper opskeeper/opskeeper \
   --set harness.judge.models[0]=claude-sonnet-4-20250514
 
-# 锁定 golden case 不更新
-opskeeper-eval lock --until 2026-08-01
+# 重跑 leaderboard，确认回滚后的评分已恢复
+opskeeper-eval leaderboard
 ```
 
 ### 5.4 数据迁移失败
