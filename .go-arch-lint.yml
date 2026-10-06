@@ -444,12 +444,14 @@ deps:
     # !!! 已知债务：arch-lint 的 mayDependOn 是组件粒度白名单，同组件新增同类导入不会再报警。
     # 每条都对应真实违例文件，manager/iam 迁移到 core/manager 时随条目一起删除：
     #   - manager_data: biz 直接 import data/*/store：proposal/expiry.go、audit/chain.go、audit/usecase.go、edge/changeevent/usecase.go、loop/contractloader/contractloader.go
-    #   - manager_service: core/manager/biz/imbridge/adapter.go 反向 import manager/service/aiops
+    #   - manager_service: 决策 280 删掉。core/manager/biz/imbridge/adapter.go
+    #     反向 import manager/service/aiops，而那个适配器整个搬去了装配根
+    #     （§4.214），所以这条授权今天没有任何 import 在行使。留着就是
+    #     一条没人行使、却能放行下一个同类导入的口子。
     mayDependOn:
       - manager_biz
       - manager_data
       - manager_model
-      - manager_service
       - oxcore_domain
       - oxcore_ports
       - oxcore_wire

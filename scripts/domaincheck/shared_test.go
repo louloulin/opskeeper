@@ -13,9 +13,9 @@ import (
 // by more than one: `Event`, `Rule`, `Usecase`, `Caller`. Each of those was two
 // or more unrelated types that happen to share a name — alert.Event is not
 // audit.Event, marketplace.Caller carries a TenantID that skill.Caller does
-// not. Two are still true, and the note below says why the other two left,
-// because the two ways out look the same from the outside and call for
-// opposite next steps.
+// not. One is still true, and the note below says why the other three left,
+// because the ways out look the same from the outside and call for opposite
+// next steps.
 //
 // That makes them the most dangerous entries in the shared-symbol list, and
 // the reason a shared-symbol ranking cannot be acted on by sorting it. A move
@@ -54,6 +54,15 @@ import (
 //     confuse them. That is a real improvement, and it is not the same thing as
 //     the ambiguity being settled, so the name is unpinned rather than promoted
 //     to a move candidate.
+//   - `Event` is the third, and it is the same shape as `Rule`: decision 280
+//     cut `imbridge -> aiops`, and the two domains that had been selecting two
+//     different `Event` declarations were `aiops` and `demo`. After the cut
+//     both reach the same one, so there is no consumer left in a position to
+//     confuse two same-named types. **The other declaration is still there** —
+//     what a cut removed is the path that put two in front of one consumer,
+//     not a type. So the name is unpinned for the same reason `Rule` was, and
+//     for the same reason that is not the same as "settled": a reader must not
+//     read one target as evidence that a duplicate was deleted.
 //   - `Caller` left the report entirely, for the ordinary reason: fewer than
 //     two consuming domains. It was `aiopsconfig` and `imbridge`, and the
 //     adapter was one of the two. Note what that does NOT mean — the
@@ -88,7 +97,7 @@ func TestTheSameNameSeveralOwnersListIsReal(t *testing.T) {
 	// third state again, with a different cause and a different next step.
 	// The message distinguishes them because "look at this" is only useful
 	// advice if it says which of the two things happened.
-	for _, sym := range []string{"Event", "Usecase"} {
+	for _, sym := range []string{"Usecase"} {
 		if ambiguous[sym] {
 			continue
 		}

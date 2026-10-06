@@ -1983,7 +1983,7 @@ func main() {
 	// Service-account user_id: superuser admin (id=1 on every install
 	// thanks to bootstrap). Future: take from cfg.
 	const imBridgeServiceUserID uint64 = 1
-	imbridgeAgentAdapter := managerbizimbridge.NewAiopsAdapter(aiopsSvc, imBridgeServiceUserID, llmSettingsResolver, log)
+	imbridgeAgentAdapter := newImbridgeAgentAdapter(aiopsSvc, imBridgeServiceUserID, llmSettingsResolver, log)
 	imbridgeSvc := managerbizimbridge.NewBridge(imbridgeRepo, imbridgeAgentAdapter, imBridgeServiceUserID, log)
 	imbridgeHandler := managerserverimbridge.NewHandler(imbridgeSvc, imbridgeRepo, imbridgeUC, log)
 

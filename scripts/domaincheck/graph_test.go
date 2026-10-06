@@ -453,17 +453,27 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// `aiops` follows it up. The graph is one level shallower and not one
 	// dependency weaker; what changed is that a domain nothing depends on
 	// any more no longer holds another one down.
-	if max+1 != 4 {
-		t.Errorf("the tree is %d levels deep, want 4: a level appearing or disappearing changes what a split costs", max+1)
+	//
+	// Decision 280 took it from four to three, and it is the same mechanism a
+	// second time, which is why it is worth saying rather than just moving the
+	// number. That cut removed `imbridge -> aiops`, the last edge into aiops,
+	// so aiops has in-degree zero and drops to level 0. Its other consumer
+	// direction is gone too, so nothing is left holding the level that sat
+	// under it. Three levels with 51 of 57 domains on level 0 is not a graph
+	// that got simpler in a meaningful way — it is a graph where one more
+	// domain has nothing depending on it, and the depth fell because the
+	// thing that was deep was a single chain of length four with two members.
+	if max+1 != 3 {
+		t.Errorf("the tree is %d levels deep, want 3: a level appearing or disappearing changes what a split costs", max+1)
 	}
 	var buf bytes.Buffer
 	g.printStructure(&buf)
 	if !strings.Contains(buf.String(), "the graph is a DAG") {
 		t.Error("the shipped tree is no longer a DAG and the report does not say so")
 	}
-	// 33 = decision 118's 42, plus the edge decision 123 added when the root
+	// 12 = decision 118's 42, plus the edge decision 123 added when the root
 	// side of the cluster channel became a domain of its own, minus the eight
-	// since cut (ten): decision 227 (frontierbound -> metric, whose port moved
+	// since cut: decision 227 (frontierbound -> metric, whose port moved
 	// next to HostMetricPoint in core/floor/tunnel), decision 229
 	// (imbridge -> iam, the only remaining edge that selected nothing but a
 	// constant, cut by moving the role vocabulary down to tenantctx), decision
@@ -536,10 +546,23 @@ func TestTheShippedTreeIsADagFourLevelsDeep(t *testing.T) {
 	// moved there and the domain stopped existing. A cut edge lowers this
 	// number the same way a deleted domain does, and the two are not the same
 	// event — the ledger's 34-of-34 counts cuts, so it needed saying.
+	// Decisions 260 through 280 are not narrated one at a time above. The
+	// shape they share is worth the one paragraph: almost all of them cut a
+	// port down to the columns its consumer actually read, moved the shared
+	// half of the type down to core/domain or core/base so both sides named
+	// the same declaration, and deleted the adapter that the cut made
+	// unnecessary. 276 (aiops -> topology) also established that
+	// `model/<domain>` and `biz/<domain>` are one domain rather than two, so
+	// moving a type across that layer boundary counts for nothing. 279 (loop
+	// -> alert) took loop's out-degree to zero, the only domain in the tree
+	// that has it, and 280 (imbridge -> aiops) took aiops's in-degree to zero
+	// and moved the only remaining `Event` target out of the shared-symbol
+	// trap column.
+	//
 	// A cut edge lowers this number the same way an added one raises it,
 	// which is the whole reason this assertion is written as a number and
 	// not as a direction.
-	if !strings.Contains(buf.String(), "13 edges") {
+	if !strings.Contains(buf.String(), "12 edges") {
 		t.Errorf("the edge count moved; the ledger in docs/opskeeper2-architecture.md is now wrong:\n%s", firstLines(buf.String(), 6))
 	}
 }

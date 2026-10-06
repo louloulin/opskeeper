@@ -255,8 +255,6 @@ var edges = map[edge]string{
 	// package main. That is the cost of a port between two modules that cannot
 	// see each other's assembly, and it is fifteen lines rather than a package.
 
-	{"imbridge", "aiops"}: "the IM bridge delivers an agent finding into a chat channel, so it formats the agent's output",
-
 	{"mcp", "loop"}: "an investigation started over MCP enters the same loop as a chat one",
 
 	{"nodeagent", "nodefleet"}: "the node-agent endpoints are the fleet's session handles",

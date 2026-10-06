@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/imbridge"
 )
 
@@ -40,11 +39,10 @@ type AgentSession interface {
 	// duplicate creation on retries.
 	EnsureSession(ctx context.Context, ownerUserID uint64, label string) (sessionID string, err error)
 	// StreamMessage posts userContent to the given session and calls
-	// emit for each agent event. The bridge ignores everything except
-	// EventAssistant (which carries the assistant text chunks) and
-	// EventDone (terminal). This is a thin wrapper over
-	// service.Service.PostMessageStreamWithOpts.
-	StreamMessage(ctx context.Context, sessionID string, userContent string, emit agent.Emit) error
+	// emit for each event of the run. The bridge ignores everything
+	// except EventAssistant (which carries the assistant text chunks)
+	// and EventDone (terminal) — see StreamEvent.
+	StreamMessage(ctx context.Context, sessionID string, userContent string, emit Emit) error
 }
 
 // Bridge is the singleton wired into manager main.go. Exported methods
@@ -216,7 +214,7 @@ func (b *Bridge) HandleInbound(ctx context.Context, sender Sender, msg InboundMe
 	//    language regardless of persona / model defaults. Empty locale =
 	//    auto = LLM mirrors the user. See [[feedback_ai_output_locale]].
 	editor := newStreamEditor(ctx, sender, msg.ChatID, msg.ReceiveIDType, placeholder, app.DefaultLocale, b.log)
-	emit := func(e agent.Event) {
+	emit := func(e StreamEvent) {
 		editor.OnEvent(e)
 	}
 	userContent := msg.Text

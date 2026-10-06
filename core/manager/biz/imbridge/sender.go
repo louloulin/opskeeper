@@ -6,8 +6,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
 )
 
 // Sender is the platform-agnostic outbound surface. The provider
@@ -66,9 +64,9 @@ func newStreamEditor(ctx context.Context, sender Sender, chatID, receiveIDType, 
 // (terminal — force-flush). Tool calls / task notifications are
 // suppressed in IM for now; they'd be too noisy as inline chat
 // messages.
-func (e *streamEditor) OnEvent(ev agent.Event) {
+func (e *streamEditor) OnEvent(ev StreamEvent) {
 	switch ev.Type {
-	case agent.EventAssistant:
+	case EventAssistant:
 		// Pull the text content out of the event. agent.Event for
 		// assistant carries the persisted assistant turn — we
 		// concatenate its Content field. If the runtime later
@@ -85,12 +83,14 @@ func (e *streamEditor) OnEvent(ev agent.Event) {
 		if shouldFlush {
 			e.flush()
 		}
-	case agent.EventDone:
+	case EventDone:
 		e.flush() // terminal: ensure last chunk lands
 	default:
-		// EventToolStart / EventToolEnd / EventTaskNotification —
+		// tool_start / tool_end / task_notification / approval_pending —
 		// surfaced in the web UI's per-turn timeline; in IM they'd
-		// fragment the message and confuse users. Drop for now.
+		// fragment the message and confuse users. Drop for now. A type
+		// the kernel adds later arrives here by name rather than as a
+		// value that means "one of the unhandled ones".
 	}
 }
 
@@ -151,14 +151,11 @@ func (e *streamEditor) flush() error {
 // EventAssistant payload. The agent runtime stores the full
 // accumulated assistant turn (not per-token deltas) on the event so we
 // can just take it.
-func assistantText(ev agent.Event) string {
-	// agent.Event.Assistant is set on assistant events — see
-	// core/manager/biz/aiops/agent/agent.go. We avoid a direct
-	// type assertion on the field shape to stay forward-compatible:
-	// if the runtime adds richer payloads (citations, attachments)
-	// they live on the same Event struct.
-	if ev.Assistant == nil {
-		return ""
-	}
-	return ev.Assistant.Content
+func assistantText(ev StreamEvent) string {
+	// The port carries the accumulated text directly and an empty string
+	// for every other type, so this is a field read rather than a type
+	// assertion. An assistant frame with no text is indistinguishable
+	// from a non-assistant one here, which is what the caller wants:
+	// both mean "nothing to show yet".
+	return ev.Assistant
 }
