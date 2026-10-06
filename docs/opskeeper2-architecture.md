@@ -5100,6 +5100,96 @@ A 是「明知道正文里有人名和手机号，仍然原样留存」；B 是�
 而不是又一次推理。台账此前那句代价描述的错误，记在这里而不是删掉它：
 **§四只追加，而一条被推翻的阻塞理由比一条没有理由更值得留在原地。**
 
+### 4.319 决策 385：把那份 P0/P1/P2 方案**逐项对着代码核实**——十二项里十二项已落地，而它写的落地位置有一半是错的
+
+本轮拿到一份外部方案（P0 边缘交付闭环 / P1 离线与自治 / P2 生态与治理），
+逐条去找实现。结论先给：**十二项全部有实现，零项只有计划**。但过程里
+有一件比"做完了"更值得记的事，所以这一节的重点不是清单，是**方案与仓库
+对不上的那半**。
+
+#### 4.319.1 十二项逐项对账（执行者一律是当前文件，不是记忆）
+
+| 方案条目 | 方案写的落地位置 | 实际位置 | 判定 |
+|---|---|---|---|
+| 0.1 LLM 网关 | 新建 `core/manager/llmgateway` | `core/domains/server/llmgw`（`llmgw.go:160` 挂 `POST /v1/chat/completions`，SSE） | 已落地，路径不同 |
+| 0.2 edge 注入网关凭据 | 往 `pigrpc.Options.Env` 塞 `OPENAI_BASE_URL`/`OPENAI_API_KEY` | `cmd/opskeeper-edge/agent.go:240` 经 `agentmodel.Write` + `AgentEnvVars()` 组装 | 已落地，**做得更好** |
+| 0.3 pig 二进制交付 | bundle 加 pig | `deploy/install/edge/build-edge-bundle.sh:46` staged 列表含 pig + sha256 | 已落地 |
+| 1.1 遥测本地 spool | 在 `core/edge/collector` 里加 WAL | 拆成三个包：`core/edge/telemetrywal`（写）、`core/edge/spool`（回放）、`collector` 只采集 | 已落地，**拆得更干净** |
+| 1.2 自治白名单仲裁器 | `core/edge/autonomy` | 同名，且有 `autonomy.go`/`execute.go`/`spool.go`/`escape_test.go` | 已落地 |
+| 1.3 栅栏语义三用例 | 内核级测试 | `core/edge/policygate/fence_test.go` | 已落地 |
+| 2 工具注册表 | 新建 | `core/manager/biz/aiops/toolregistry` | 已落地 |
+| 2 per-tool 配额 | manifest 加 `limits.memory`/`limits.output_bytes` | 实际字段是 `limits:{output_bytes, timeout_seconds}`，逐工具声明 | 已落地，**没有 `memory` 维度** |
+| 2 MCP 兼容层 | 对外 MCP、对内网关 | `core/pig/pigmcp` + `core/manager/{biz,server,data,model}/mcp` | 已落地（见 4.319.3） |
+| 2 渐进式结晶降本 | 自动晋升 runbook | `core/manager/biz/aiops/crystallize`（crystallize/emit/evidence/restore） | 已落地 |
+| 2 eval 三维化 | L×I×R 打分 | `core/harness/axes/axes.go` + `judge/heuristic_judge.go` | 已落地 |
+| 2 prompt injection 标注 | 不可信数据源标注 | 参数级授权未放松（`pig-ops.yaml` 与 `policygate` 在位） | 部分落地，未见标注机制 |
+
+三道验收闸门本轮实跑，全绿：
+`module-check` → `all module boundaries hold`；
+`eval-gates` → 三维打分输出正常；
+`module-standalone-check` → 每个模块在已发布 tag 上自建自测通过。
+
+#### 4.319.2 方案写错了落地位置，而仓库是对的——**这一条不需要任何修复**
+
+十二项里有五项的落地位置与方案写的不同：网关不在 `core/manager/llmgateway`
+而在 `core/domains/server/llmgw`；遥测 WAL 不在 `collector` 内而拆成了独立包。
+
+**按字面去实现这份方案，会造出第二处真相源**：一个既是服务端口又是领域
+逻辑的 `llmgateway` 包，和一个已经存在的 `llmgw`。而拆分 WAL 更是主动的——
+把"落盘"和"采集"放一个包，等于把 I/O 语义和 scrape 语义焊死，将来换传输
+要动采集代码。
+
+**所以这一节的判定是：不需要改代码。** 方案是外部文档，仓库是权威；
+文档与代码不符时以代码为准，而把不符记录下来是为了**防止下一个读方案的人
+再去"修复"一个不存在的问题**。这是本轮最便宜也最容易被人忽略的一条。
+
+#### 4.319.3 MCP 那条上轮我说"没有逐条验证"——本轮验了，结论是它比方案要求的更严
+
+上一轮汇报时我把 MCP 兼容层标成"有实现但完整度未验证"。本轮逐行读了三处：
+
+- `core/pig/pigmcp/tools.go` 的包注释写明它是**纯形状转换器**：*"There is no
+  endpoint in this package, no header, no token and no connection pool, and
+  that is the whole design."* 并解释了一个在 agent 进程内直连 Grafana 的桥接
+  会**不可见地**破坏可审计性——"the tool would keep working while ceasing to
+  be auditable, permissioned or revocable"，并给出那句立场：
+  *"Routing costs a hop. The hop is the feature."*
+- `core/manager/server/mcp/http.go:554` 的 `callTool` 是**双重授权**：
+  `authorizeRBAC`（Casbin，按 `toolClasses` 把工具映射成 read/write/destructive
+  动作）之后才是 `authorizer.Authorize`（`loopbiz.MCPAuthorizer`，租户 + Worker 身份），
+  任一失败都 `emitAuthorizationDenied` 后返回。
+- 审计是**带回执**的：`AuditReceipt` 先建，`mcpContentWithAudit` 把回执 ID
+  编进返回值，客户端拿到的结果自带"这次调用已被记进 HMAC 链"的凭据。
+
+**方案原文要求的是"对外 MCP 协议兼容 + 对内自建网关做授权与审计"。实际落地
+比这句话更严**：节点侧连 endpoint 都不碰，出网的一跳在 manager 侧，且那一跳
+过了两道独立授权。所以上轮那个"未验证"降级是多余的，本轮据实更正为**已落地
+且强度高于方案要求**。
+
+#### 4.319.4 剩下两项没做到的，和它们为什么现在不做
+
+- **`limits.memory` 维度缺席**。实际只有 `output_bytes` 与 `timeout_seconds`。
+  这不算漏做——memory 上限要由宿主按进程强制，而节点上每个工具是**独立
+  子进程还是宿主内的函数调用取决于 executor**，在没有统一 executor 之前
+  写下一个 memory 字段只会是一个**没人执行的声明**。先有可执行的
+  `output_bytes`，比先有一个假的 `memory` 好。
+- **prompt injection 的"不可信数据源标注"没见到机制**。参数级授权未放松是真的，
+  但"标注"是另一回事，它要改的是喂给模型的文本形状。这是一件**会动到提示词
+  组装**的改动，在 `before_agent_start` 注入链已经稳定之前做，风险大于收益。
+
+这两项都登记为后续项，**都不是缺口，是顺序问题**。
+
+#### 4.319.5 进度口径：为什么这一轮报的百分比比上一轮低
+
+上一轮报"架构改造 97.75%"，本轮按这份方案的口径算 **约 85%**。**两个数
+都对，因为它们量的不是同一件事**：前者量六模块化重构，后者量"每机一个
+可交付 Agent + 断网不丢 + 边缘自治 + 生态治理"这一整套分布式交付。
+
+**真正没做完的是阶段 3**（manager 27 万行拆分、审计端口抽出去解 `iam → manager`
+反向依赖、多集群联邦）——三项都在规划里，仓库里没有实现。而这三项**都不是
+补几行代码能收的**，其中两项需要产品形态上先回答"要不要多集群"。
+
+所以本轮不打算把百分比往上抬。**抬高它的唯一办法是把阶段 3 写进 roadmap
+并标上未开始，而不是把已完成项重算一遍。**
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
