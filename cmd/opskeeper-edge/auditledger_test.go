@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/edge/auditlog"
+	"github.com/vincent-wuhan/opskeeper/core/edge/auditwire"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
@@ -75,10 +76,8 @@ func ledgerEntry(target string) ports.AuditEntry {
 	}
 }
 
-func newLedgerSender(t *ledgerTunnel, refused *atomic.Uint64) auditEntriesSender {
-	return auditEntriesSender{
-		client: t, edgeID: func() uint64 { return 42 }, log: discardLog(), refused: refused,
-	}
+func newLedgerSender(t *ledgerTunnel, refused *atomic.Uint64) *auditwire.Sender {
+	return auditwire.NewSender(t, func() uint64 { return 42 }, discardLog(), refused)
 }
 
 // The ordinary case: all of it landed, so the pump may forget the batch.
@@ -267,10 +266,8 @@ func TestANodeThatIsNotRegisteredYetKeepsEveryRow(t *testing.T) {
 	// the center answers "took none" until it does.
 	tun := &ledgerTunnel{resp: tunnel.AuditEntriesResponse{Accepted: 0}}
 	pump, err := auditlog.NewPump(auditlog.PumpOptions{
-		Sink: sink,
-		Sender: auditEntriesSender{
-			client: tun, edgeID: func() uint64 { return 0 }, log: discardLog(), refused: &atomic.Uint64{},
-		},
+		Sink:      sink,
+		Sender:    auditwire.NewSender(tun, func() uint64 { return 0 }, discardLog(), &atomic.Uint64{}),
 		Reachable: func() bool { return true },
 		Log:       discardLog(),
 	})

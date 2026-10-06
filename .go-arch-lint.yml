@@ -217,9 +217,20 @@ components:
   oxedge_spool:       { in: core/edge/spool/** }
   # 决策 126：节点自己的账本。它是本仓唯一一份「AI 在这台机器上做了什么」
   # 的落盘证据，所以它的依赖面被压到只有契约层加那份共享 spool：不 import
-  # tunnel（线上的形状转换放在 cmd/opskeeper-edge 的装配根里，与 autonomy
-  # 同一处），不 import manager（链在控制面，节点连它的类型都不需要知道）。
+  # tunnel，不 import manager（链在控制面，节点连它的类型都不需要知道）。
+  # **决策 326 把「线上的形状转换放在 cmd/opskeeper-edge 的装配根里」这半句
+  # 撤掉了**，理由不是它错了，而是它有一个当时看不见的代价：那份转换是这条
+  # 路上唯一一处「ports 词表 → 线形状」的映射，而它住在 package main 里，
+  # 于是**两头的测试都够不着它**——每一跳都有测试，整条路没有。转换被单独
+  # 拆成下面那个组件，账本本身的依赖面一个字没动，那段论证也就继续成立。
   oxedge_auditlog:    { in: core/edge/auditlog/** }
+  # 决策 326：一个函数、一个组件。节点账本行从 ports 词表变成线上形状的那一步。
+  # 它必须同时认得这两样东西（core/ports 与 core/floor/tunnel），所以它不能
+  # 待在任何一个只认得其中一样的地方——放在装配根里它对测试不可见，放在
+  # auditlog 里它会把那份「依赖面越小越好」的论证作废。它不 import manager，
+  # 因为**节点连链长什么样都不需要知道**：它交出去的是一行内容，链接是中心
+  # 盖章的，一个能自己签链的节点就是一个能伪造链的节点。
+  oxedge_auditwire:   { in: core/edge/auditwire/** }
   # 子集群侧的策略联邦代理：回答根下发的策略、汇报自己在 enforce 哪一版。
   # 它的依赖面刻意只有 oxfloor——规则在 floor/federation，线上类型在
   # floor/tunnel，磁盘上的策略树由本包自己管。它不从 core/edge 的任何其他
@@ -671,6 +682,10 @@ deps:
   # 控制面长什么样，而它下面躺着的是节点上唯一一份没有备份的本地数据。
   oxedge_auditlog:
     mayDependOn: [oxcore_ports, oxedge_spool]
+  # 词表加线上形状，就这两样。少一条边就少一次「顺手把链、仓储或 manager
+  # 的类型引进节点侧」的机会——而这个组件存在的全部意义就是**不碰任何存储**。
+  oxedge_auditwire:
+    mayDependOn: [oxcore_ports, oxfloor]
   # 只有 floor。少一条边就少一个「顺手在这里把策略树换成随便什么目录」的
   # 机会——那条路径的检查写在 Store.bound 里，但依赖面本身就是第二道检查。
   manager_federation_child:
@@ -915,6 +930,11 @@ deps:
       - oxedge_biz
       - oxedge_runtime
       - oxedge_service
+      # 决策 326：节点账本那一批行要变成线上形状。转换曾经就写在这个文件里，
+      # 而住在 package main 的代码对两头的测试都不可见——整条路于是没有
+      # 端到端的证据。拆成 oxedge_auditwire 之后，装配根仍然是唯一组装它
+      # 的地方，只是这一步不再只能是「写在这里」。
+      - oxedge_auditwire
       # 决策 98：cmd 是节点面唯一的装配根，自治仲裁器要拿到三样只有这里同时
       # 知道的东西——已准入的清单、agent 的心跳/采集器、以及节点那个
       # sandbox。让仲裁器自己去找这三样，就等于让它变成节点面本身。

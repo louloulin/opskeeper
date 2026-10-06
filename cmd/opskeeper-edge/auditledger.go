@@ -1,15 +1,13 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"sync/atomic"
 
 	"github.com/vincent-wuhan/opskeeper/core/edge/auditlog"
+	"github.com/vincent-wuhan/opskeeper/core/edge/auditwire"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
-	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
 // The node's own ledger, assembled (决策 126).
@@ -41,90 +39,14 @@ import (
 // belongs to this installation and leaves with it.
 const auditLedgerFile = "audit-ledger.jsonl"
 
-// auditEntriesSender hands one batch of the node's ledger to the control
-// plane, which appends it to the tamper-evident chain.
-//
-// The refusals are the interesting half, and they are autonomyReplaySender's
-// three answers with autonomy's reasons:
-//
-//   - The call fails: the tunnel is down again. Error, keep the batch.
-//   - The center took none and refused none: it cannot place the rows yet —
-//     the node has not registered, so the manager has no identity to file
-//     them under. Error, keep the batch, retry. Reading this as a permanent
-//     refusal is how a backlog dies in the first message after a reconnect.
-//   - The center refused some rows for shape. Retrying would ask the same
-//     question forever, so they are counted and passed over. It is loud, it
-//     is counted, and it is on the health line, because a row that goes this
-//     way is a row that will never be evidence.
-type auditEntriesSender struct {
-	client tunnel.Client
-	edgeID func() uint64
-	log    *slog.Logger
-	// refused counts rows the center will never take. A counter rather
-	// than a log line because a node that has been replaying for an hour
-	// should not have to be grepped to find out whether it has been
-	// throwing evidence away.
-	refused *atomic.Uint64
-}
-
-// Send delivers rows in order, or reports that the batch has to come again.
-func (s auditEntriesSender) Send(ctx context.Context, rows []ports.AuditEntry) error {
-	if len(rows) == 0 {
-		return nil
-	}
-	req := tunnel.AuditEntriesRequest{
-		EdgeID:  s.edgeID(),
-		Entries: make([]tunnel.AuditEntry, 0, len(rows)),
-	}
-	for _, r := range rows {
-		req.Entries = append(req.Entries, tunnel.AuditEntry{
-			At:      r.At,
-			Actor:   r.Actor,
-			Action:  string(r.Action),
-			Target:  r.Target,
-			Outcome: r.Outcome,
-			Class:   r.Class,
-			Detail:  r.Detail,
-		})
-	}
-	var resp tunnel.AuditEntriesResponse
-	if err := s.client.Call(ctx, tunnel.MethodAgentAuditEntries, req, &resp); err != nil {
-		// A transport failure and a refused batch must not collapse into
-		// one branch: one is retried, the other is not. The pump's
-		// contract is that a returned error keeps the whole batch.
-		return fmt.Errorf("node ledger: send %d rows: %w", len(rows), err)
-	}
-	switch {
-	case resp.Accepted+resp.Rejected == len(rows):
-		if resp.Rejected > 0 {
-			s.refused.Add(uint64(resp.Rejected))
-			s.log.Warn("the center refused node ledger rows for shape; they will not be retried",
-				slog.Int("accepted", resp.Accepted),
-				slog.Int("rejected", resp.Rejected),
-				slog.String("reason", resp.Reason))
-		}
-		return nil
-	case resp.Accepted == 0 && resp.Rejected == 0:
-		// "Took none of it" is not "refused all of it": the center is not
-		// ready to place these rows, and the honest instruction is to keep
-		// them.
-		return fmt.Errorf("node ledger: the center accepted none of %d rows; the batch stays on disk", len(rows))
-	default:
-		// A count that is neither "all" nor "none" is a center this build
-		// does not understand. Guessing which half it took is how rows are
-		// lost; keeping the whole batch costs one more round trip.
-		return fmt.Errorf("node ledger: the center reported %d accepted and %d rejected of %d rows",
-			resp.Accepted, resp.Rejected, len(rows))
-	}
-}
-
 // auditStack is what a node holds for its own ledger.
 type auditStack struct {
 	sink *auditlog.Sink
 	pump *auditlog.Pump
-	// refused counts rows the center took one look at and would not keep.
-	// Read by Health so the number exists even when nobody reads logs.
-	refused *atomic.Uint64
+	// sender is kept because it owns the refusal counter: the number is
+	// the sender's state, not the stack's, and holding the counter
+	// separately was the shape that let the two drift apart.
+	sender *auditwire.Sender
 }
 
 // buildAuditLedger opens the node's ledger and builds its drain.
@@ -155,12 +77,10 @@ func buildAuditLedger(
 	if err != nil {
 		return nil, fmt.Errorf("node audit ledger: %w", err)
 	}
-	refused := &atomic.Uint64{}
+	sender := auditwire.NewSender(client, obs.EdgeID, log, nil)
 	pump, err := auditlog.NewPump(auditlog.PumpOptions{
-		Sink: sink,
-		Sender: auditEntriesSender{
-			client: client, edgeID: obs.EdgeID, log: log, refused: refused,
-		},
+		Sink:   sink,
+		Sender: sender,
 		// A function rather than a Link: the only question this pump asks
 		// is whether the tunnel is answering. The heartbeat is the witness
 		// that actually proves the manager is there — a socket that has
@@ -177,7 +97,7 @@ func buildAuditLedger(
 		return nil, fmt.Errorf("node audit replay pump: %w", err)
 	}
 	log.Info("node audit ledger open", slog.String("path", sink.Path()))
-	return &auditStack{sink: sink, pump: pump, refused: refused}, nil
+	return &auditStack{sink: sink, pump: pump, sender: sender}, nil
 }
 
 // Health is the shape a node's health page renders, so the numbers exist
@@ -186,7 +106,7 @@ func (a *auditStack) Health() map[string]any {
 	pending, err := a.pump.Pending()
 	out := map[string]any{
 		"pending": pending,
-		"refused": a.refused.Load(),
+		"refused": a.sender.Refused(),
 		"path":    a.sink.Path(),
 	}
 	if err != nil {
