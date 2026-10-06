@@ -29424,7 +29424,80 @@ deadcode ratchet 862 / 594 → **872 / 604**（八个动作 + 两个资源类型
 **剩下的 report 面还有 3 条**：`/v1/tasks/oneoff`、`/v1/tasks/{id}/run`、
 `/v1/tasks/{id}`（`task.go` 里的 `createOneoffTask` / `rerunTask` / `deleteTask`）。
 它们与 schedule 是同一族的后门——**一次性的任务与周期任务发的是同一种报文**，
-而这一族三条至今没有一行审计。下一切口从 task 面三条开始，随后是 topology 的 11 条。
+而这一族三条至今没有一行审计。**决策 338 关掉了这三条**，并且带走了本轮唯一一处
+**带内错误**（见 §4.271.1）；此后下一个切口是 topology 的 11 条。
+
+
+#### 4.271 决策 338：一次性任务面——一个 201 里面藏着的失败
+
+report 面的最后三条在 `task.go` 里，它们与 schedule 是同一族的后门：**发的是同一种
+报文，只是不由 cron 触发**。但这一族的问题与前八条不同——前八条是「该写什么」，
+这一条是「HTTP 说了 201，而运营者点的那件事可能没有发生」。
+
+##### 4.271.1 带内错误：一个成功的外壳包着一个失败的结果
+
+`CreateOneoffTaskAndRun` 先把任务行落库，再 best-effort 地生成报表（这是有意设计：
+生成失败也要留下一个可见的任务让人重跑）。于是它有一个真实的返回形状：
+
+```
+task != nil && err != nil   →   HTTP 201 Created，body 里有一个任务
+```
+
+而**报表不存在**。按 HTTP 状态记账，这一行会永远是成功，于是
+「哪些一次性任务真的产出了报表」变成一次载荷扫描——而载荷里那个
+`report_generated` 字段恰恰是本刀才加的。
+
+所以状态问的是 `err` 而不是 `w.Code`：这个 handler 返回 201 的那一刻，
+它可能已经失败了。`RerunOneoffTask` 是同一个形状，只是外壳是 200。
+决策 335 在编排面上撞见过同一族问题（`flow_test_node` 的 test-node 失败也是
+HTTP 200 + error 字段），本刀是它在报表面的复现——**同一个坑在两个面各踩一次，
+才值得把它写成一条家族规则而不是一次修补**。
+
+失败行还带 `ErrorMessage`：201 的响应体里没有错误，链上只剩一个
+`status=failure` 等于让人猜。
+
+##### 4.271.2 同一个资源的 id，在三条路由上有三种写法
+
+`createOneoffTask` 手上有 `task.ID`（裸 uuid），响应 DTO 写出去的是
+`oneoff:<uuid>`（`model.OneoffTaskRef`），而 `rerunTask` / `deleteTask`
+从路径参数里切出来的是裸 uuid。**三条关于同一个任务的审计行如果各写各的，
+链上就有了三个 id**，而「这些行说的是不是同一件事」从此要靠前缀比对。
+
+本刀统一成**裸 uuid**：它是三条路由都能拿到的那个形状。代价是 create 那一行
+要多切一次前缀，收益是三行可以直接 join。
+
+这条不是推出来的，是测出来的：第一次写的 create 行用了 `task.ID` 带前缀，
+变异测试把 handler 改成前缀版时**测试是绿的**——因为断言写的也是带前缀的版本，
+两边一起错。修正后的断言先剥前缀再比。
+
+##### 4.271.3 五条变异
+
+| 变异 | 结果 |
+|---|---|
+| create 不看 err，恒记 success | 红：`status = "success", want failure` |
+| rerun 不看 err，恒记 success | 红：`status = "success", want failure` |
+| delete 保留 GetTask 但丢掉 title 赋值 | 红：`row name = ""` |
+| create 行的 id 写成带前缀版 | 红：`resource = report_task/"oneoff:..."` |
+| create 失败行丢掉 ErrorMessage | 红：`error message = ""` |
+
+第一条与第二条是本刀的全部价值：**它们证明「状态问 err 不问 HTTP 码」这条规则
+是被守着的**，而不是写在注释里的一句提醒。
+
+##### 4.271.4 分母与闸门
+
+`core/manager` 960 / 245,973 → **961 / 246,286**（+1 文件 / +313 行），新文件是
+`server/report/audit_task_test.go`。
+
+routeaudit 分母不变（177），**audited 102 → 105**，settled 75 → 72，洞仍为 0。
+**report 面 11 条至此全部关闭**（决策 337 八条 + 本刀三条）。剩余 **22 条**：
+topology 11 / knowledge docs 5 / device 3 / federation 4——**其中 topology 是
+唯一还带执行后果的一族**（改一条拓扑关系，下游的关联查询与根因分析都会变），
+下一刀从它开始。
+
+deadcode ratchet 872 / 604 → **876 / 608**（三个动作 + 一个资源类型）。
+
+`core/base`、`core/domains`、`core/manager`、`./cmd/...`、`./scripts/...` 全量绿；
+`make audit-port-check` 绿；routeaudit exit=0；ratchet `-count=3` 绿。
 
 
 ## 六、当前实现进度
@@ -33556,19 +33629,20 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
 
 | 分类 | 条数 | 占比 | 含义 |
 |---|---|---|---|
-| audited | **102** | 57.6% | handler 确实调用 `SetAuditEvent`，闸门逐条验过 |
-| settled exemption | **75** | 42.4% | 确实不需要，理由写得进去（只读探测、丢缓存、网关信封重复计数） |
+| audited | **105** | 59.3% | handler 确实调用 `SetAuditEvent`，闸门逐条验过 |
+| settled exemption | **72** | 40.7% | 确实不需要，理由写得进去（只读探测、丢缓存、网关信封重复计数） |
 | acknowledged gap | **0** | 0% | **没有洞**：该入账而没入账，按 `洞：` 前缀标出并单独计数 |
 | 合计 | **177** | 100% | 5 棵 HTTP 树：`core/manager/server`、`core/domains/server`、`core/manager/iam/server`、`core/manager/higress`、`cmd/opskeeper` |
 
-（决策 331 把分母从 115 抬到 177；决策 332–337 依次换掉其中后果最重的二十九条，
-当前读数 102 / 75 / 0，剩余 **25 条**待审：topology 11 / knowledge docs 5 /
-device 3 / federation 4 / **report task 面 3**——本刀关掉了 report/schedule 十条里的
-八条，task 面三条留到下一刀，理由见 §4.270.4。）
+（决策 331 把分母从 115 抬到 177；决策 332–338 依次换掉其中后果最重的三十二条，
+当前读数 105 / 72 / 0，剩余 **22 条**待审：topology 11 / knowledge docs 5 /
+device 3 / federation 4。**report 面 11 条已全部关闭**——决策 337 关掉 schedule 与
+报表的八条，决策 338 关掉一次性任务面的三条，后者带走了本轮唯一一处**带内错误**
+的记账规则：一个 201 里面可以藏着一个失败，理由见 §4.271.1。）
 
 **这一把尺子到此清零**（决策 324）：115 条 mutating 路由 = audited 65 / settled 50 / **acknowledged gap 0**，每一条都有名字有判定。audited 只到 56.5% 不是因为剩下的没做，而是因为 **settled 是真实存在的 50 条**（只读探测、丢缓存、网关信封重复计数）——**一个从零开始的仓库，第一刀会把大量路由判成 settled（它们确实不需要），后面每一刀才逐条把 settled 换成 audited**。**决策 321 之后这一把尺子自己也被审过两次**：此前「已审计」只意味着 handler 调用了 `SetAuditEvent`，而它在没有槽的进程里是 no-op；现在有入口接线表（五进程 / 三进程无槽 / **零个已承认的洞**）与一条端到端落库测试兜着。**决策 325 把这张表本身也审了**：此前「洞」只意味着表格里写着「洞：」这个前缀，命令从不去问那个进程注册过什么——**`cmd/opskeeper-edge` 那个「洞」被查出来是表格自己写上去的**，它的 HTTP 面只有 `/metrics` 与 `/healthz` 两条只读注册。现在 `洞` 必须由 main.go 里真的注册了 mutating 路由来证明，双向对账（没有路由却记洞 / 有路由却不记洞）都判 stale，见 §4.258。**第三把尺子自己也是一把尺子，决策 321 给它加了一张入口接线表**：此前「已审计」只意味着 handler 调用了 `SetAuditEvent`，而它在没有槽的进程里是 no-op——五个对外进程里有两个没有槽，见 §4.254。audited 在五刀里从 34 涨到 57（决策 316 关掉凭据库三条、决策 317 关掉 iam 十条、决策 318 关掉 nodeagent 五条、决策 319 关掉 loop 两条、决策 320 关掉 chatdiagnose 三条），而 settled 是决策 315 一次性做完的存量判定，所以头一刀比例反而降过一次（35.1% → 32.2%）：**一个从零开始的仓库，第一刀会把大量路由判成 settled（它们确实不需要），后面每一刀才逐条把 settled 换成 audited。**决策 311 之前，这个仓库连这张表的形状都没有——`iam` 的 17 条身份写路由、`secret` 的 3 条凭据路由，此前既没有被审计，也没有被列为待办，它们只是**不在任何人的视野里**。把 115 条变成 115 个有名字的判断，本身就是这轮的产出。
 
-**决策 331 把这个分母从 115 抬到 177，而 audited 比例从 56.5% 掉到 53.1%（94 / 177，332–337 又换回二十九条）**。
+**决策 331 把这个分母从 115 抬到 177，而 audited 比例从 56.5% 掉到 53.1%（94 / 177，332–338 又换回三十二条）**。
 这个比例下降**不是倒退**，是一次「分母此前是错的」被纠正：扫描器认不出 `r.With(...)` 这种
 写法，于是**全树唯一挂了限流的那条路由**，连同另外 61 条带中间件的写路由，一直不在任何人的
 视野里——而其中包含轮换节点密钥、开关节点插件、分享报表、杀掉一个 webshell 会话。
@@ -33577,7 +33651,7 @@ device 3 / federation 4 / **report task 面 3**——本刀关掉了 report/sche
 尺子，报出来的 56.5% 是不该被信的**——这一刀没有把这一格从 1.00 拿下来，因为 1.00 的定义
 是「每一条 mutating 路由都有一个名字和一个判定」，而 177 条现在都有了；它变的是**这 54 条
 判定的内容是「待审」而不是「已审」**，**决策 332–335 已经换掉其中后果最重的十七条**（钥匙、插件、四条升级、killSession、节点注册与摘除、编排面七条，见 §4.265–§4.268），
-剩下 33 条进入「后果低一档但每天都会问」的区间：topology（11）/ report（10）/ knowledge docs（5）/ device（3）/ federation（4），见 §4.264、§4.269。**决策 337 关掉了 report/schedule 的 8 条**（`shareReport` 是全族最重的一行：它铸出的 token **不能进链**，理由见 §4.270.1），剩余 **25 条** = topology 11 / knowledge docs 5 / device 3 / federation 4 / **report task 面 3**。
+剩下 33 条进入「后果低一档但每天都会问」的区间：topology（11）/ report（10）/ knowledge docs（5）/ device（3）/ federation（4），见 §4.264、§4.269。**决策 337 关掉了 report/schedule 的 8 条**（`shareReport` 是全族最重的一行：它铸出的 token **不能进链**，理由见 §4.270.1），**决策 338 关掉了 report task 面 3 条**（带内错误：一个 201 里面可以藏着一个失败，见 §4.271.1），剩余 **22 条** = topology 11 / knowledge docs 5 / device 3 / federation 4——**topology 是其中唯一还带执行后果的一族**，下一刀从它开始。
 
 **洞的优先级**（按风险而非数量）：`secret/http.go` 三条**已关**（决策 316）→ `iam` 十条**已关**（决策 317）→ `nodeagent` 五条**已关**（决策 318）→ `loop/admin` 两条**已关**（决策 319）→ `chatdiagnose` 三条**已关**（决策 320）`monitor` 三条**已关**（决策 322）`cmd/opskeeper` 两条**已关**（决策 323，先把就地闭包提成具名 handler，闸门才指认得到）→ `higress` 三条**已关**（决策 324：落库端 + **独立的链**，因为网关持有 `OPSKEEPER_JWT_SECRET`，让它写控制面的链等于让它伪造控制面的审计）→ **洞 = 0**。下一个缺口不在路由上：`cmd/opskeeper-edge` 的 HTTP 面只有 `/metrics` 与 `/healthz`，**不需要槽**（决策 325 查实，先前那个「洞」是表格自己写的）；而**节点账本这条线已经走完**（决策 326）：`agent.audit.entries` 从闸门到链的每一跳此前都有测试、整条路一次也没被走过，现已补上一条除 socket 外零 stub 的端到端守卫（真闸门 → 真账本 → 真 pump → 真 sender → 真 JSON 线 → 真 handler → 真 SQLite 链，并断言行在链上且与控制台行同链）。**同时更正一句此前的错话**：节点行与控制面行**不是两条链**，`RecordNodeEntries` 走 `EmitWithID`，同一条链同一把钥匙，节点只提供内容、链接由中心盖章。详见 §4.248–§4.259。
 

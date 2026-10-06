@@ -611,6 +611,13 @@ const (
 	ActionScheduleToggle = "schedule_toggle"
 	ActionScheduleRun    = "schedule_run"
 
+	// 决策 338：一次性任务面与 schedule 是同一族的后门——它们发的是同一种报文，
+	// 只是不由 cron 触发。分开命名是为了不和将来的非报表任务（chat_todo 等）
+	// 抢一个 `task_*` 前缀。
+	ActionReportTaskCreate = "report_task_create"
+	ActionReportTaskRerun  = "report_task_rerun"
+	ActionReportTaskDelete = "report_task_delete"
+
 	ActionEdgeRotateSecret = "edge_rotate_secret"
 	ActionEdgePluginSet    = "edge_plugin_set"
 
@@ -724,6 +731,11 @@ const (
 	// "what will publish at 3am" wants schedules, while "what was published
 	// last week" wants reports; folding them makes both a payload scan.
 	ResourceReportSchedule = "report_schedule"
+	// ResourceReportTask names one stored one-off report task (决策 338).
+	// Distinct from report_schedule because the two answer different questions:
+	// a schedule is armed for the future, a task is a past run someone may
+	// re-run — and the re-run button is a mutating route of its own.
+	ResourceReportTask = "report_task"
 
 	// ResourceMCPTool names a tool reached over the MCP endpoint. The
 	// resource id is the tool name the caller asked for, which is what an

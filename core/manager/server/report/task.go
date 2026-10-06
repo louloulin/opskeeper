@@ -11,9 +11,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/report"
 )
 
 // taskIDParam reads the {id} path param and percent-decodes it. The unified task
@@ -132,6 +133,40 @@ func (h *Handler) createOneoffTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 338：这是本刀唯一一处**带内错误**，也是最容易记错的一处。
+	//
+	// 任务行已经落库了，所以 `err != nil && task != nil` 是一个真实存在的状态：
+	// HTTP 仍然是 201 Created，界面上也立刻出现一个任务——但**运营者点的那件事
+	// （要一份报表）没有发生**。按 HTTP 状态记账会把它算成成功，于是
+	// 「哪些任务生成了报表、哪些没有」变成一次载荷扫描。
+	//
+	// 所以状态问的是 err 而不是 w.Code：这个 handler 返回 201 的那一刻，
+	// 它可能已经失败了。
+	status := auditport.StatusSuccess
+	if err != nil {
+		status = auditport.StatusFailure
+	}
+	// scope_json 不进链（同 schedule_create）：那是租户内部的筛选条件。
+	ev := auditport.Event{
+		Action:       auditport.ActionReportTaskCreate,
+		ResourceType: auditport.ResourceReportTask,
+		ResourceID:   task.ID,
+		ResourceName: task.Title,
+		Status:       status,
+		Payload: map[string]any{
+			"report_kind": task.ReportKind,
+			"timezone":    in.Timezone,
+			// 生成成功与否：这一条才是「任务有没有真的产出报表」的答案。
+			"report_generated": err == nil,
+			"task_status":      task.Status,
+		},
+	}
+	if err != nil {
+		// 错误不在响应体里（201 Created 带着一个成功的外壳），所以带上一句，
+		// 免得链上只剩一个 status=failure 让人猜。
+		ev.ErrorMessage = err.Error()
+	}
+	auditport.SetAuditEvent(r, ev)
 	writeJSON(w, http.StatusCreated, taskFromOneoff(task))
 }
 
@@ -180,6 +215,29 @@ func (h *Handler) rerunTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 338：重跑与 create 是同一个带内错误——任务在，报表不一定在。
+	// 而且重跑**不会**覆盖上一次，它再产出一份；所以这一行必须指向本次的产出，
+	// 否则链上分不清「重跑过三次」和「跑过一次」。
+	status := auditport.StatusSuccess
+	if err != nil {
+		status = auditport.StatusFailure
+	}
+	ev := auditport.Event{
+		Action:       auditport.ActionReportTaskRerun,
+		ResourceType: auditport.ResourceReportTask,
+		ResourceID:   u,
+		ResourceName: task.Title,
+		Status:       status,
+		Payload: map[string]any{
+			"report_kind":      task.ReportKind,
+			"report_generated": err == nil,
+			"task_status":      task.Status,
+		},
+	}
+	if err != nil {
+		ev.ErrorMessage = err.Error()
+	}
+	auditport.SetAuditEvent(r, ev)
 	writeJSON(w, http.StatusOK, taskFromOneoff(task))
 }
 
@@ -191,9 +249,23 @@ func (h *Handler) deleteTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errs.ErrInvalid)
 		return
 	}
+	// 决策 338：先读标题再删。删完之后链上剩下的只是一个 uuid，而
+	// 「删掉的是哪次一次性任务」是事后第一个要回答的问题。
+	title := ""
+	if task, err := h.uc.GetTask(r.Context(), u); err == nil && task != nil {
+		title = task.Title
+	}
 	if err := h.uc.DeleteTask(r.Context(), u); err != nil {
 		writeErr(w, err)
 		return
 	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionReportTaskDelete,
+		ResourceType: auditport.ResourceReportTask,
+		ResourceID:   u,
+		ResourceName: title,
+		Status:       auditport.StatusSuccess,
+		Payload:      map[string]any{"reports_kept": true},
+	})
 	writeJSON(w, http.StatusNoContent, nil)
 }

@@ -234,6 +234,12 @@ const (
 	ActionScheduleToggle = auditport.ActionScheduleToggle
 	ActionScheduleRun    = auditport.ActionScheduleRun
 
+	// 决策 338：一次性任务面与 schedule 是同一族的后门——发的是同一种报文，
+	// 只是不由 cron 触发。前缀带 report_ 是为了不和将来的非报表任务抢 task_*。
+	ActionReportTaskCreate = auditport.ActionReportTaskCreate
+	ActionReportTaskRerun  = auditport.ActionReportTaskRerun
+	ActionReportTaskDelete = auditport.ActionReportTaskDelete
+
 	// 决策 333：供应链面（谁把哪段字节推到了哪台机器上）与「谁掐掉了这个会话」。
 	ActionEdgeAgentUpgrade    = auditport.ActionEdgeAgentUpgrade
 	ActionEdgePackageUpgrade  = auditport.ActionEdgePackageUpgrade
@@ -319,4 +325,5 @@ const (
 	// 要看 schedule，「上周发过什么」要看 report，合成一个就变成载荷扫描。
 	ResourceReport         = auditport.ResourceReport
 	ResourceReportSchedule = auditport.ResourceReportSchedule
+	ResourceReportTask     = auditport.ResourceReportTask
 )

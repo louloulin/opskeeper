@@ -703,9 +703,13 @@ var Verdicts = []Verdict{
 	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}", Handler: "h.deleteSchedule"},
 	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}/toggle", Handler: "h.toggleSchedule"},
 	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}/run-now", Handler: "h.runNow"},
-	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/oneoff", Handler: "h.createOneoffTask", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/{id}", Handler: "h.deleteTask", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/{id}/run", Handler: "h.rerunTask", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	// 决策 338：一次性任务面。它与 schedule 是同一族的后门——发的是同一种报文，
+	// 只是不由 cron 触发。create 与 rerun 都有**带内错误**：任务行已经落库，
+	// 报表可能没生成出来，而 HTTP 仍然是 201/200，所以状态问的是 err 而不是
+	// w.Code（详见 §4.271）。
+	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/oneoff", Handler: "h.createOneoffTask"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/{id}/run", Handler: "h.rerunTask"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/{id}", Handler: "h.deleteTask"},
 	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/node-types", Handler: "h.createNodeType", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/node-types/{name}", Handler: "h.deleteNodeType", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/nodes", Handler: "h.createNode", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},

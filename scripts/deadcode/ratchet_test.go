@@ -23,6 +23,12 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 876 / 608 / 268 as of decision 338: the three report_task_* actions plus the
+// report_task resource type, same re-export category as every line below and
+// as decision 337 immediately above. Raised in the same commit as the rows that
+// read them — the constants are dead *from inside core/base* because their only
+// readers are the report handlers in core/manager.
+//
 // 872 / 604 / 268 as of decision 337: the eight report/schedule actions plus
 // two resource types, all re-exported from core/base into core/domains the way
 // every line below is. They read as dead **from inside the core/base tree**
@@ -190,8 +196,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 872
-	deadSymbolBudget     = 604
+	unreachableBudget    = 876
+	deadSymbolBudget     = 608
 	testOnlySymbolBudget = 268
 )
 
