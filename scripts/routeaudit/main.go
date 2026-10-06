@@ -693,15 +693,15 @@ var Verdicts = []Verdict{
 	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}", Handler: "h.update"},
 	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}", Handler: "h.delete"},
 	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}/roles", Handler: "h.updateRoles"},
-	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs", Handler: "h.createDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs/{id}", Handler: "h.deleteDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs/{id}", Handler: "h.updateDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs/{id}/move", Handler: "h.moveDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs", Handler: "h.createDoc"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs/{id}", Handler: "h.deleteDoc"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs/{id}", Handler: "h.updateDoc"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs/{id}/move", Handler: "h.moveDoc"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/ssh-identities", Handler: "h.createSSHIdentity"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/ssh-identities/generate", Handler: "h.generateSSHIdentity"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/ssh-identities/{id}", Handler: "h.deleteSSHIdentity"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/ssh-identities/{id}", Handler: "h.updateSSHIdentity"},
-	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/upload", Handler: "h.uploadDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/upload", Handler: "h.uploadDoc"},
 	// 决策 337：报表面。shareReport 是这一族里后果最重的一行——它铸出一个
 	// **无需认证**就能读到这份报表的 token，而链不能撤销它，所以这一行唯一不能
 	// 包含的就是那个 token 本身；留下的三样是「谁、何时、哪份、公开到什么时候」。

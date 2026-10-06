@@ -23,6 +23,19 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 902 / 634 / 268 as of decision 343: five knowledge_doc_* actions and one
+// knowledge_doc resource type. +6 against +5 routes, and this is the first
+// line in this file where the resource type is doing something rather than
+// papering over a naming gap: the five routes write five *different* things
+// (paste, upload, edit, move, delete) and a chain reader asking "which one
+// was it" needs a resource type that means "a document in the knowledge
+// base" rather than the action alone carrying it. The extra symbol over the
+// route count is the same +1 the last four lines spent, for the same reason.
+// The five actions themselves are pure additions to a closed vocabulary that
+// had no entry for the knowledge base at all — 342's argument, first time it
+// applies to a family with zero pre-existing names: **the knowledge plane was
+// the largest thing in this tree that the chain had no word for**, and a
+// chain that cannot name a thing cannot be audited about it.
 // 896 / 628 / 268 as of decision 342: **+1 against +3 routes**, and that
 // ratio is the whole point of the line. `device_update`, `device_delete` and
 // the `device` resource type have been in the closed vocabulary since it was
@@ -224,8 +237,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 896
-	deadSymbolBudget     = 628
+	unreachableBudget    = 902
+	deadSymbolBudget     = 634
 	testOnlySymbolBudget = 268
 )
 

@@ -657,6 +657,18 @@ const (
 	// 什么资产，所以这一行必须**同时**留下改之前与改之后的两组角色：事后要回答的
 	// 永远是「出事那会儿它是什么角色」。
 	ActionDeviceRolesSet = "device_roles_set"
+	// 决策 343：知识库面。这一族的特殊之处是**后果不在链上，而在模型的后续输出里**
+	// ——知识库的内容进入 RAG，被 AI 用来回答运维问题，所以一份被写错的文档会
+	// 影响此后每一次回答，而链上只有写它的那一行。
+	//
+	// 因此 content 不进链（它是文档正文，且可能很大），进链的是它的**身份**：
+	// 标题、来源（url / path）、标签。「这份知识来自哪个仓库」正是运维要问的，
+	// 而「这份知识写了什么」在链上是正文，那是它自己的地方。
+	ActionKnowledgeDocCreate = "knowledge_doc_create"
+	ActionKnowledgeDocUpload = "knowledge_doc_upload"
+	ActionKnowledgeDocUpdate = "knowledge_doc_update"
+	ActionKnowledgeDocMove   = "knowledge_doc_move"
+	ActionKnowledgeDocDelete = "knowledge_doc_delete"
 
 	ActionEdgeRotateSecret = "edge_rotate_secret"
 	ActionEdgePluginSet    = "edge_plugin_set"
@@ -699,8 +711,10 @@ const (
 // ResourceType buckets used in the resource_type column. Same flat-list
 // convention as Action — group in the UI, not in the data.
 const (
-	ResourceUser         = "user"
-	ResourceDevice       = "device"
+	ResourceUser   = "user"
+	ResourceDevice = "device"
+	// ResourceKnowledgeDoc names one 组织知识库 document (决策 343).
+	ResourceKnowledgeDoc = "knowledge_doc"
 	ResourceIncident     = "incident"
 	ResourceSetting      = "setting"
 	ResourceSecret       = "secret"

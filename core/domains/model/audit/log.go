@@ -130,6 +130,12 @@ const (
 	ActionDeviceUpdate = auditport.ActionDeviceUpdate
 	ActionDeviceDelete = auditport.ActionDeviceDelete
 
+	ActionKnowledgeDocCreate = auditport.ActionKnowledgeDocCreate
+	ActionKnowledgeDocUpload = auditport.ActionKnowledgeDocUpload
+	ActionKnowledgeDocUpdate = auditport.ActionKnowledgeDocUpdate
+	ActionKnowledgeDocMove   = auditport.ActionKnowledgeDocMove
+	ActionKnowledgeDocDelete = auditport.ActionKnowledgeDocDelete
+
 	ActionRuleCreate = auditport.ActionRuleCreate
 	ActionRuleUpdate = auditport.ActionRuleUpdate
 	ActionRuleDelete = auditport.ActionRuleDelete
@@ -308,6 +314,7 @@ const (
 
 	ResourceUser             = auditport.ResourceUser
 	ResourceDevice           = auditport.ResourceDevice
+	ResourceKnowledgeDoc     = auditport.ResourceKnowledgeDoc
 	ResourceIncident         = auditport.ResourceIncident
 	ResourceSetting          = auditport.ResourceSetting
 	ResourceSecret           = auditport.ResourceSecret

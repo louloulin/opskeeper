@@ -30,12 +30,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
-	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
 	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/docextract"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	biz "github.com/vincent-wuhan/opskeeper/core/manager/biz/knowledge"
+	model "github.com/vincent-wuhan/opskeeper/core/manager/model/knowledge"
 )
 
 // Service is the narrow biz surface the handler depends on.
@@ -282,6 +282,24 @@ func (h *Handler) createDoc(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 343：进链的是这份知识的**身份**，不是它的正文。content 不进链——它是
+	// 文档本身，而且可能很大；进链的是标题、来源与标签，而「这份知识来自哪个
+	// 仓库」正是运维会问的第一个问题。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionKnowledgeDocCreate,
+		ResourceType: auditport.ResourceKnowledgeDoc,
+		ResourceID:   strconv.FormatUint(d.ID, 10),
+		ResourceName: d.Title,
+		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			"source_type": d.SourceType,
+			"url":         d.URL,
+			"path":        d.Path,
+			"tags":        d.Tags,
+			// 字符数是「这一行记不下它」的一个可核对的事实，而不是把正文搬进来。
+			"content_chars": len(d.Content),
+		},
+	})
 	writeJSON(w, http.StatusCreated, toDocDTO(d, true))
 }
 
@@ -350,6 +368,26 @@ func (h *Handler) uploadDoc(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 343：上传是这一族最重的一条——**一段外部字节直接进了 AI 的知识**。
+	// 链上要留的是「谁把哪个文件、多大、放在了哪个路径」：文件名与字节数是这段
+	// 字节的全部身份，而正文不是。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionKnowledgeDocUpload,
+		ResourceType: auditport.ResourceKnowledgeDoc,
+		ResourceID:   strconv.FormatUint(d.ID, 10),
+		ResourceName: d.Title,
+		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			"filename": name,
+			// 传进来的字节数与抽取出的字符数是两个不同的量：前者是上传了什么，
+			// 后者是 AI 实际会读到什么（PDF 与 docx 两者差得很远）。
+			"uploaded_bytes":  len(body),
+			"extracted_chars": len(text),
+			"path":            d.Path,
+			"tags":            d.Tags,
+			"source_type":     d.SourceType,
+		},
+	})
 	writeJSON(w, http.StatusCreated, toDocDTO(d, true))
 }
 
@@ -372,6 +410,13 @@ func (h *Handler) updateDoc(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errors.Join(errs.ErrInvalid, err))
 		return
 	}
+	// 决策 343：先读旧的。改正文是一次**改变 AI 今后回答**的操作，而事后要回答的
+	// 是「出事那会儿这份知识写了什么」——正文不进链，所以留下来的是「改过」这个
+	// 事实加上改之前的标题与路径。
+	prevTitle, prevPath, prevContent := "", "", ""
+	if prev, err := h.svc.GetDoc(r.Context(), id); err == nil && prev != nil {
+		prevTitle, prevPath, prevContent = prev.Title, prev.Path, prev.Content
+	}
 	d, err := h.svc.UpdateManualDoc(r.Context(), id, biz.UpdateManualDocInput{
 		TenantID: tenantIDFromRequest(r),
 		Title:    req.Title,
@@ -384,6 +429,28 @@ func (h *Handler) updateDoc(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionKnowledgeDocUpdate,
+		ResourceType: auditport.ResourceKnowledgeDoc,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: d.Title,
+		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			"title_before": prevTitle,
+			"path_before":  prevPath,
+			"path_after":   d.Path,
+			"tags":         d.Tags,
+			"source_type":  d.SourceType,
+			// 三个键在 false 时也必须在：一次把内容改成原样的操作是一次真实
+			// 发生的操作，而缺键在扫链的人眼里等于「没人看过这份文档」。
+			// 比的是**更新之前**那份正文，不是请求里的那份：服务层可以规范化
+			// 输入（去空白、补标题），拿请求去比会把一次没变的编辑报成改过。
+			"content_changed": prevContent != req.Content,
+			"title_changed":   d.Title != prevTitle,
+			"chars_before":    len(prevContent),
+			"chars_after":     len(d.Content),
+		},
+	})
 	writeJSON(w, http.StatusOK, toDocDTO(d, true))
 }
 
@@ -402,11 +469,32 @@ func (h *Handler) moveDoc(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errors.Join(errs.ErrInvalid, err))
 		return
 	}
+	// 决策 343：移动前后各读一次。路径决定这份知识落在树的哪里，而检索可能按路径
+	// 过滤——**一份被移走的文档从此在某些查询里消失**，而链上只有终点的话，
+	// 「它原来在哪」就答不出来。
+	fromPath := ""
+	if prev, err := h.svc.GetDoc(r.Context(), id); err == nil && prev != nil {
+		fromPath = prev.Path
+	}
 	d, err := h.svc.MoveDoc(r.Context(), id, req.Path)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionKnowledgeDocMove,
+		ResourceType: auditport.ResourceKnowledgeDoc,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: d.Title,
+		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			"path_before": fromPath,
+			"path_after":  d.Path,
+			"tags":        d.Tags,
+			"source_type": d.SourceType,
+			"moved":       fromPath != d.Path,
+		},
+	})
 	writeJSON(w, http.StatusOK, toDocDTO(d, false))
 }
 
@@ -416,10 +504,31 @@ func (h *Handler) deleteDoc(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 343：先读出标题、路径与来源再删。删完之后链上剩下的只是一个自增 id，
+	// 而「删掉的是哪份知识、它来自哪里」是事后第一个要回答的问题——**一份被删掉的
+	// 文档不再能被检索到，而 AI 仍然可能按更早的一次回答引用过它**。
+	title, path, sourceType := "", "", ""
+	if prev, err := h.svc.GetDoc(r.Context(), id); err == nil && prev != nil {
+		title, path, sourceType = prev.Title, prev.Path, prev.SourceType
+	}
 	if err := h.svc.DeleteDoc(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionKnowledgeDocDelete,
+		ResourceType: auditport.ResourceKnowledgeDoc,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: title,
+		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			"path":        path,
+			"source_type": sourceType,
+			// 删掉一份文档不等于它此前的引用被撤回：AI 已经按它回答过，
+			// 那些回答还在别人的对话里。这一行说明缺口存在，而不是假装没有。
+			"prior_answers_unchanged": true,
+		},
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
