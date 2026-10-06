@@ -330,11 +330,34 @@ type EntryPoint struct {
 	Slot string
 }
 
+// entryPointSurfaceRE finds a mutating HTTP registration in a main.go. It is
+// routeReg, not a second spelling of it: **the two tables have to agree about
+// what "a mutating route" means**, because decision 325 hangs a hole verdict on
+// this one. A node whose main.go registers a POST and records no slot is a real
+// hole; a node whose main.go registers nothing mutating and records no slot is
+// correct wiring, and the command must be able to tell those apart from the
+// source alone rather than from what the table claims.
+//
+// The blind spot it does not cover is a route registered for all methods —
+// chi's Handle — on a path that mutates. routeReg has never matched that
+// spelling, for the same reason it does not match it on the route side: a
+// catch-all registration says nothing about whether the handler writes. Both
+// tables carry that limitation equally, which is the point; a hole verdict
+// that means "no explicitly method-mutating route is registered here" is a
+// claim the file supports.
+func entryPointMutatingRoutes(code string) []string {
+	var out []string
+	for _, m := range routeReg.FindAllStringSubmatch(code, -1) {
+		out = append(out, m[2]+" "+m[3]+" -> "+m[4])
+	}
+	return out
+}
+
 var EntryPoints = []EntryPoint{
 	{File: "cmd/opskeeper/main.go"},
 	{File: "cmd/higress-console/main.go"},
 	{File: "cmd/opskeeper-edge/main.go",
-		Slot: "洞：节点面同样没有装槽。节点自己的账本走 agent.audit.entries 回传，与控制面的 HMAC 链是两条路，所以这个缺口与控制面那几个不是同一个；但「没有槽」这件事此前没有任何地方记着"},
+		Slot: "无需槽：这个进程对外的 HTTP 面只有 metricsMux 两条——Handle(\"/metrics\") 与 Get(\"/healthz\")，没有一条注册成 Post/Put/Patch/Delete，装槽没有对象可记。节点的写操作不在这张表上：它们走 tunnel 的 RegisterHandler 方法（插件安装、配置下发），留痕走 agent.audit.entries 回传给控制面，与本进程这条只读 HTTP 面无关。此前这里记的是「洞」，而决定 325 查清代码之后发现它不是洞——**那个「洞」是表格自己写上去的，代码从没支持过它**"},
 	{File: "cmd/host-fixture/main.go",
 		Slot: "测试夹具：只在对端测试里起，用来喂协议，不对外，且不持有任何凭据"},
 	{File: "cmd/pool-fixture/main.go",
@@ -346,6 +369,12 @@ var EntryPoints = []EntryPoint{
 // are one-shot tools with no listener at all, and listing them would bury the
 // three that matter.
 var entryPointRE = regexp.MustCompile(`chi\.NewRouter\(\)|http\.Server\{`)
+
+// surfaceReg lists every HTTP route a main.go registers, whatever the method.
+// It exists to make a settled verdict falsifiable: without the actual
+// registrations on screen, "无需槽" is an assertion of the same kind the
+// command exists to distrust.
+var surfaceReg = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\.(Post|Put|Patch|Delete|Get|Handle|HandleFunc)\("([^"]+)"`)
 
 // slotInstallerRE is what "installs the audit slot" means to this command.
 // It is deliberately the two spellings that exist rather than an analysis of
@@ -790,6 +819,25 @@ func packageBodies(dir string) map[string]string {
 // is a separate question and stays separate: a process can serve routes that
 // genuinely need no audit (a liveness probe) and still have to answer the
 // slot question.
+// describeEntrySurface lists the HTTP registrations a main.go actually makes,
+// so a verdict that disagrees with the code says what the code has instead.
+// It reports every method spelling, not only the mutating ones, because the
+// useful half of the answer to "why is this not a hole" is the list of the
+// routes that make it so.
+func describeEntrySurface(code string) string {
+	var out []string
+	for _, re := range []*regexp.Regexp{surfaceReg} {
+		for _, m := range re.FindAllStringSubmatch(code, -1) {
+			out = append(out, m[1]+" "+m[2]+" \""+m[3]+"\"")
+		}
+	}
+	if len(out) == 0 {
+		return "no HTTP registration at all"
+	}
+	sort.Strings(out)
+	return strings.Join(out, ", ")
+}
+
 func checkEntryPoints(root string) (missing, unlisted, stale []string) {
 	judged := map[string]string{}
 	for _, e := range EntryPoints {
@@ -844,6 +892,27 @@ func checkEntryPoints(root string) (missing, unlisted, stale []string) {
 			stale = append(stale, key+" — it installs the audit slot now, so its recorded reason no longer describes it")
 		case !installs && verdict == "":
 			missing = append(missing, key+" — it serves HTTP, installs no audit slot, and has no recorded reason. Every SetAuditEvent under it is a no-op")
+		}
+		// 决策 325：判定必须由代码支持，而不是由表格自己复述。
+		// 此前这一层不存在，于是「洞：」这个前缀是一个可以手写的字符串——
+		// 写上就计数，不写就不计，谁也不会去问这个进程到底注册了什么。
+		// 结果是 cmd/opskeeper-edge 在代码里只暴露两条只读路由的情况下，
+		// 挂着一个被当作「已承认的洞」记了半年。**一个靠复述自己存在的缺口
+		// 不是量具，是许愿**：它只会随表格漂移，而真正会咬人的那种缺口
+		// （装了中间件却仍有路由绕过）恰恰不会被这个前缀挡住。
+		//
+		// 双向：注册了 mutating 路由却不记洞，是漏报；没有注册却记着洞，
+		// 是表格在对代码撒谎。两者都算 stale，因为 stale 的定义就是
+		// 「表格断言了一件代码不再支持的事」。
+		if !installs && verdict != "" {
+			routes := entryPointMutatingRoutes(code)
+			isGap := strings.HasPrefix(verdict, gapPrefix)
+			switch {
+			case isGap && len(routes) == 0:
+				stale = append(stale, key+" — its verdict calls this a hole, but its main.go registers no mutating HTTP route ("+describeEntrySurface(code)+"), so there is nothing for a slot to carry")
+			case !isGap && len(routes) > 0:
+				stale = append(stale, key+" — it registers "+strings.Join(routes, "; ")+" in main.go and installs no audit slot; record that as a hole (洞：) or mount the slot")
+			}
 		}
 		return nil
 	})
@@ -926,8 +995,21 @@ func (r Result) Report(w *os.File) {
 	fmt.Fprintln(w, "routeaudit: every mutating route under "+strings.Join(Roots, ", ")+" has a recorded verdict")
 	fmt.Fprintf(w, "  roots declared: %d, verdicts recorded: %d, of which backlog: %d\n",
 		len(Roots), len(Verdicts), countBacklog())
-	fmt.Fprintf(w, "  processes serving HTTP: %d, of which %d have no audit slot on their requests\n",
-		len(EntryPoints), countSlotGaps())
+	noSlot := countEntryPointsWithoutSlot()
+	fmt.Fprintf(w, "  processes serving HTTP: %d, of which %d carry no audit slot, of which %d are acknowledged holes\n",
+		len(EntryPoints), noSlot, countSlotGaps())
+	if noSlot > 0 {
+		// 这一行是决策 325 的全部意义所在：把「没装槽」和「洞」分开印。
+		// 旧的一行把两者印成同一件事，于是 cmd/opskeeper-edge 那两条只读
+		// 路由读起来像一处待修的缺口，而实际代码里没有任何写操作会经过
+		// 那个进程。**报告的措辞本身就是量具**——它决定了读者看到的是
+		// 一个待办，还是一个已经查清的事实。
+		for _, e := range EntryPoints {
+			if e.Slot != "" {
+				fmt.Fprintf(w, "    %s: %s\n", e.File, e.Slot)
+			}
+		}
+	}
 	fmt.Fprintf(w, "  audited: %d, settled exemption: %d, acknowledged gap: %d\n",
 		len(Verdicts)-countBacklog(), countBacklog()-countGaps(), countGaps())
 	for _, m := range r.Missing {
@@ -963,7 +1045,23 @@ func (r Result) Report(w *os.File) {
 // settled exemption.
 const gapPrefix = "洞："
 
-// countSlotGaps counts the entry points whose requests carry no audit slot.
+// countEntryPointsWithoutSlot counts the processes that serve HTTP without a
+// slot on their requests, settled or not. It is not a gap count: a read-only
+// surface with no slot is correct wiring, and the two must never share a
+// number in a report line.
+func countEntryPointsWithoutSlot() int {
+	n := 0
+	for _, e := range EntryPoints {
+		if e.Slot != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// countSlotGaps counts the entry points whose requests carry no audit slot and
+// are recorded as an acknowledged hole. Decision 325 added the source
+// cross-check that keeps this from being a self-fulfilling count.
 func countSlotGaps() int {
 	n := 0
 	for _, e := range EntryPoints {

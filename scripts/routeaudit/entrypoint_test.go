@@ -157,10 +157,146 @@ func TestTheEntryPointTableAgreesWithTheRepository(t *testing.T) {
 	if len(stale) != 0 {
 		t.Fatalf("stale = %v", stale)
 	}
-	// 并且这个仓库里确实有进程没装槽——如果哪天全装上了，上面那张表
-	// 就该被改掉，而这张用例会先发现「洞：」的理由与事实对不上了。
-	if countSlotGaps() == 0 {
-		t.Fatal("no entry point is recorded as lacking a slot; is that still true?")
+	// 决策 325 把这个断言反过来写了。原来是「确实有一个进程没装槽」——
+	// 那条断言只能靠表格自己成立，而表格是手写的，于是它保护的是一个
+	// 字符串而不是一个事实。查清 cmd/opskeeper-edge 的代码之后发现它只
+	// 暴露两条只读路由，那个「洞」从来没有被代码支持过。
+	//
+	// 现在的断言是：**凡是记着「洞」的进程，它的 main.go 必须真的注册了
+	// mutating 路由**。这条由 checkEntryPoints 在每次运行时对源码验证，
+	// 上面的 stale 为空即已证明；这里再钉一次计数，是为了让「洞归零」
+	// 这件事在报告里可读，而不是只能靠翻代码推。
+	if got := countSlotGaps(); got != 0 {
+		t.Fatalf("countSlotGaps() = %d, want 0: every acknowledged hole must be backed by a real mutating route in main.go", got)
+	}
+	if noSlot := countEntryPointsWithoutSlot(); noSlot == 0 {
+		t.Fatal("countEntryPointsWithoutSlot() = 0; the settled exemptions (fixtures, read-only edge surface) are gone from the table")
+	}
+}
+
+// --- 决策 325：「洞」必须由代码证明 --------------------------------------------
+//
+// 前四刀里最贵的一类是**量具被自己的表满足**。321 是「已审计」而运行时一行
+// 都没写，324 是注释冒充已接线，325 更靠后：命令数「已承认的洞」时只读表格
+// 里有没有「洞：」这个前缀，从不问那个进程注册了什么。于是任何人只要在
+// 表里写上这两个字，就算「如实记录了一个洞」——而 edge 那个洞，代码从来
+// 不支持。
+
+// 10. 一个不注册任何 mutating 路由的进程，不能记「洞」。这条是本刀的正身：
+// edge 的 main.go 只有 Handle("/metrics") 与 Get("/healthz")，而它挂着「洞」。
+func TestAHoleVerdictMustBeBackedByAMutatingRoute(t *testing.T) {
+	onlyEntryPoints(t, EntryPoint{
+		File: "cmd/edge/main.go",
+		Slot: "洞：节点面同样没有装槽",
+	})
+	root := entryTree(t, map[string]string{
+		"cmd/edge/main.go": `package main
+
+func main() {
+	mux := chi.NewRouter()
+	mux.Handle("/metrics", prom.Handler(reg))
+	mux.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+	_ = mux
+}
+`,
+	})
+	missing, unlisted, stale := checkEntryPoints(root)
+	if len(missing) != 0 || len(unlisted) != 0 {
+		t.Fatalf("missing = %v, unlisted = %v, want both empty", missing, unlisted)
+	}
+	if len(stale) != 1 {
+		t.Fatalf("stale = %v, want the unsupported hole reported", stale)
+	}
+	// 报告必须说出代码里实际注册了什么，否则「你记错了」这句话本身
+	// 就是一次猜测，读者没法自己核对。
+	for _, want := range []string{"Get", "/healthz", "Handle", "/metrics"} {
+		if !strings.Contains(stale[0], want) {
+			t.Errorf("stale finding does not show the actual surface (%s): %q", want, stale[0])
+		}
+	}
+}
+
+// 11. 反向：注册了 mutating 路由却不记洞，是漏报，而漏报是这个命令存在的
+// 理由。**装不装中间件是另一道闸门的事，这一道问的是「你的说法有没有依据」**——
+// 一个自称「无需槽」却在 main.go 里 POST 的进程，恰恰是最危险的那种表。
+func TestAMutatingRouteWithASettledVerdictIsStale(t *testing.T) {
+	onlyEntryPoints(t, EntryPoint{File: "cmd/edge/main.go", Slot: "无需槽：只读"})
+	root := entryTree(t, map[string]string{
+		"cmd/edge/main.go": `package main
+
+func main() {
+	mux := chi.NewRouter()
+	mux.Post("/v1/packages", h.install)
+	_ = mux
+}
+`,
+	})
+	_, _, stale := checkEntryPoints(root)
+	if len(stale) != 1 {
+		t.Fatalf("stale = %v, want the unregistered mutation reported", stale)
+	}
+	for _, want := range []string{"/v1/packages", "h.install", "洞："} {
+		if !strings.Contains(stale[0], want) {
+			t.Errorf("stale finding %q does not mention %s", stale[0], want)
+		}
+	}
+}
+
+// 12. 装了槽的进程不参与这道对账：它的请求带槽，写不写由路由表那把尺子判。
+// 这一条挡住的是「把对账加得太宽」——宽到把已经装了槽的进程也拿 mutating
+// 路由去质问，那就不是更严的闸门，是一把坏尺子。
+//
+// **第一版这条用例是空转的**：它给的EntryPoint 只有一个空 Slot，于是
+// 无论对账的 `!installs` 前置条件在不在，它都同样不触发，删掉前置条件它
+// 照样全绿。变异验证撞上这个之后才改成现在这个形状——带理由、装了槽、
+// 又注册了 mutating 路由：正确行为是 1 条 stale（早先那条「它现在装了槽」
+// 的规则），去掉前置条件就变成 2 条。差一条，就分得开。
+func TestASlottedProcessIsNotJudgedOnTheSurfaceCrossCheck(t *testing.T) {
+	onlyEntryPoints(t, EntryPoint{File: "cmd/ops/main.go", Slot: "无需槽：曾经记过"})
+	root := entryTree(t, map[string]string{
+		"cmd/ops/main.go": `package main
+
+func main() {
+	mux := chi.NewRouter()
+	mux.Use(middleware.AuditMiddleware(uc))
+	mux.Post("/v1/things", h.create)
+	_ = mux
+}
+`,
+	})
+	missing, unlisted, stale := checkEntryPoints(root)
+	if len(missing) != 0 || len(unlisted) != 0 {
+		t.Fatalf("missing = %v, unlisted = %v, want both empty", missing, unlisted)
+	}
+	if len(stale) != 1 || !strings.Contains(stale[0], "no longer describes it") {
+		t.Fatalf("stale = %v, want exactly the pre-existing 'it installs the slot now' finding and nothing from the surface cross-check", stale)
+	}
+}
+
+// 13. 注释里写一条 POST 不算注册。321/324 已经把「注释冒充接线」修掉了，
+// 这一条是它的第三条腿：**注释也不能冒充一个洞**。否则把 edge 的「洞」
+// 从理由改写成「这里其实有个 Post」就能骗过对账。
+func TestAMutatingRouteInACommentDoesNotCreateAHole(t *testing.T) {
+	onlyEntryPoints(t, EntryPoint{File: "cmd/edge/main.go", Slot: "洞：曾经有"})
+	root := entryTree(t, map[string]string{
+		"cmd/edge/main.go": `package main
+
+func main() {
+	mux := chi.NewRouter()
+	// mux.Post("/v1/removed", h.gone) was deleted in 决策 318.
+	mux.Get("/healthz", ok)
+	_ = mux
+}
+`,
+	})
+	_, _, stale := checkEntryPoints(root)
+	if len(stale) != 1 {
+		t.Fatalf("stale = %v, want exactly the unsupported hole", stale)
+	}
+	if strings.Contains(stale[0], "/v1/removed") {
+		t.Errorf("a comment was read as a route: %q", stale[0])
 	}
 }
 
