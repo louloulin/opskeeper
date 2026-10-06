@@ -23,6 +23,32 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 889 / 621 / 268 as of decision 344: **the first time this ratchet moved down.**
+// Sixteen re-exports were deleted from core/manager/biz/aiops/chatruntime/
+// aliases.go, and every line above this one is a record of the number going
+// up with a sentence attached. Going down needs the sentence too, but a
+// different one: the number fell because someone read a file, not because a
+// gate fired. A ratchet that only ever goes up measures accretion; one that
+// has gone down at least once is a measurement.
+//
+// The sixteen were the fossils of decision 270, which moved the plugin
+// package shapes into core/extension/biz/container and left this file
+// re-exporting them "because this package has hundreds of references". Every
+// one of those hundreds had by then moved to the new package, which is what
+// the file's own comment predicted and did not notice. **A compatibility
+// shim's own comment is the claim that has to expire** — it is written once,
+// at the moment the move is true, and never checked again.
+//
+// What is new here is not the deletion but the guard: a re-export with no
+// caller was, until this decision, invisible to every gate in the tree. It
+// is now caught by a scoped AST check rather than by name, and that check
+// found three dead aliases (Pack, Provenance, Requires) that this report
+// never listed. The seventeenth candidate, `LoadPluginContainer`, went the
+// other way: this report *did* list it, and calling it dead would have been
+// wrong — it is test-only, and this report keeps the two classes apart for
+// exactly that reason. See §4.277.2. **A report and a gate answer different
+// questions, and the gap between them is where the fossils live** — so does
+// reading a list of names faster than the sentence under it.
 // 902 / 634 / 268 as of decision 343: five knowledge_doc_* actions and one
 // knowledge_doc resource type. +6 against +5 routes, and this is the first
 // line in this file where the resource type is doing something rather than
@@ -237,8 +263,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 902
-	deadSymbolBudget     = 634
+	unreachableBudget    = 889
+	deadSymbolBudget     = 621
 	testOnlySymbolBudget = 268
 )
 

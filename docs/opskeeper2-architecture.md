@@ -29933,6 +29933,86 @@ deadcode ratchet 896 / 628 → **902 / 634**（**+6 对 +5 条路由**，理由�
 `core/base`、`core/domains`、`core/manager`、`./cmd/...`、`./scripts/...` 全量绿；
 `make audit-port-check` 绿；routeaudit exit=0；ratchet `-count=3` 绿。
 
+#### 4.277 决策 344：re-export 的化石——ratchet 第一次往下走
+
+##### 4.277.1 删的是什么
+
+`core/manager/biz/aiops/chatruntime/aliases.go` 曾经有二十四个 re-export，全部指向
+`core/extension/biz/container`——那是决策 270 把插件包形状搬过去时留下的兼容层，文件
+自己的注释写着理由：「this package and its tests have hundreds of references」。
+
+**那些 hundreds 早就搬走了。** 每一个调用方都跟着 270 一起迁到了 `container.X`，
+只有这份别名表留了下来，像一层刷在旧墙上的白灰。本刀删掉其中**十六个**。
+
+留下来的八个不是保守，是它们真的还有人用：`Activation` / `ToolDecl` / `Skill` /
+`Agent` / `LoadWarning` / `LoadAllConfig` / `LoadAll` 本包在用，`ContainerLoader` 被
+`cmd/opskeeper/main.go:2880` 构造，`LoadPluginContainer` 有一个测试在用
+（`biz/marketplace/capability_credentials_test.go:43`）。
+
+**这一族留下的教训只有一句**：兼容 shim 的注释就是那个需要过期的断言。它写在搬迁
+为真的那一刻，此后再没有人检查过，而一个会骗人的注释比没有注释更贵——后来的人
+读到的是「这里有几百个引用」，实际有零个。
+
+##### 4.277.2 报告漏掉的三个，和我差点删错的一个
+
+删之前先写闸门。闸门（`TestNoAliasInThisFileIsUnreferenced`）给出的死集合与
+`scripts/deadcode` 报告**不一致**，两个方向都有：
+
+| | deadcode 报告 | 本刀闸门 | 谁对 |
+|---|---|---|---|
+| `Requires` / `Provenance` / `Pack` | 未列 | 列为死 | **闸门对** |
+| `LoadPluginContainer` | 列为 `test-only` | 放行 | **闸门对**（我错） |
+
+第二行是我自己错的：我照着报告把 `LoadPluginContainer` 一起删了，`go build
+./biz/marketplace/` 直接失败——那个测试正在用它。**一个 test-only 符号不是死符号**，
+而 ratchet 把这两类分开钉着正是为了这个。于是它被留下，并在 aliases.go 里写下了
+为什么留下。
+
+而第一行说明另一件事：**一个报告和一道闸门回答的是不同问题，两者之间的缝就是化石
+住的地方。** 报告问的是「从生产入口出发走不到」，闸门问的是「这个名字有谁在用」，
+而一个被同名的另一个声明顶替的位置会让前者失效。
+
+##### 4.277.3 这道闸门自己写错了三次，三次都是靠变异发现的
+
+闸门的第一版**是绿的，而它要抓的死 alias 就在文件里**。三次错法都记在这里，因为
+每一次都是「看起来对」而不是「忘了」：
+
+1. **把选择器名当成引用**。`container.ContainerKind` 里的 `ContainerKind` 是**另一个
+   包**的声明；把它算成引用，等于「因为被 re-export 的东西活着，所以这个 re-export
+   活着」——而那恰恰是最可能变成化石的情形。
+2. **把同名当成同一个名字**。`core/domain` 有自己的 `ContainerKind`。跨包按名字计数
+   分不清这两个，于是把一个死 alias 读成活的。
+3. **把限定名写死**。本树对同一个包用了两个本地名（`chatruntime` 与
+   `aiopschatruntime`）。
+
+修完之后的口径是**按作用域**的：一个名字算被引用，当且仅当 (a) 它在本包里以裸标识符
+出现，或 (b) 模块内某处出现 `<该文件的本地别名>.<名字>`——本地别名从 import block
+解析，不写死。
+
+**第四次变异没有红，这件事比红的那几次更值得写下来**：把限定名写死成 `chatruntime`
+之后，`ContainerLoader` 依然判活——因为它同时有一个未加别名的调用方
+（`server/marketplace/import_test.go`）和一个加了别名的调用方（`main.go`）。**错的那一版
+是被另一个证人掩盖的错**。所以第 3 条修正不是修一个观察到的失败，是不去犯一个今天
+恰好有人作证的错。
+
+另有一条：`aliasNames` 用 AST 解析而不是正则，因为正则会把文档注释里的名字也算进来
+——而那些名字正是这道测试存在的理由，可能比代码活得久。
+
+##### 4.277.4 交付
+
+- `core/manager/biz/aiops/chatruntime/aliases.go`：24 → 8
+- `core/manager/biz/aiops/chatruntime/aliases_guard_test.go`：新闸门
+- `core/manager/biz/marketplace/repo.go`：两处指向已删别名的注释改正
+- 五条变异，全部真红（断言失败，非编译错误）：类型 alias / 函数值 var / 常量各一，
+  外加两条针对闸门自身的（选择器判定、限定名解析）
+
+deadcode **902 / 634 → 889 / 621 / 268**。**这是这道 ratchet 第一次往下走**，而它需要
+一句与上面每条不同的理由：数字降下来是因为有人读了一个文件，不是因为一道闸门响了。
+一道只会往上走的 ratchet 量的是堆积；至少往下走过一次，它才是一把尺子。
+
+`core/manager`、`core/domains`、`core/base`、`./cmd/...`、`./scripts/...` 全量绿；
+ratchet `-count=3` 绿。
+
 
 ## 六、当前实现进度
 

@@ -97,7 +97,7 @@ type SkillCapabilityRecord struct {
 	ToolClasses      []string         `json:"tool_classes"`
 }
 
-// RequiresRecord mirrors chatruntime.Requires but with empty slices
+// RequiresRecord mirrors container.Requires but with empty slices
 // elided in JSON for smaller wire payloads.
 type RequiresRecord struct {
 	Bins        []string               `json:"bins,omitempty"`
@@ -106,9 +106,10 @@ type RequiresRecord struct {
 }
 
 // CredentialSlotRecord is one credential slot a skill declares
-// (chatruntime.CredentialRequirement), normalised for the binding UI. The
-// inject template is intentionally dropped — the operator only needs the
-// slot key, a label, and the expected field names to pick which stored
+// (container.CredentialRequirement, which chatruntime used to re-export under
+// its own name until decision 344 deleted that alias), normalised for the
+// binding UI. The inject template is intentionally dropped — the operator only
+// needs the slot key, a label, and the expected field names to pick which stored
 // credential fills the slot; injection itself is resolved server-side at
 // exec time from the bound credential's TYPE.
 type CredentialSlotRecord struct {
