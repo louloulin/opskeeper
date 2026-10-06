@@ -132,7 +132,7 @@ func newFederation(t *testing.T) *federation {
 	// that on every test would be testing key distribution rather than the
 	// channel.
 	fed.caller = &fakeCaller{answer: fed.answer}
-	link, err := NewLink(fed.caller, reg, WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	link, err := NewLink(fed.caller, asPort(reg), WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
 	if err != nil {
 		t.Fatalf("NewLink: %v", err)
 	}

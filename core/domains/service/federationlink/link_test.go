@@ -98,7 +98,11 @@ func (r *scriptedRegistrar) Known(id floorfed.ClusterID) bool {
 	return ok
 }
 
-func (r *scriptedRegistrar) Authenticate(id floorfed.ClusterID, token string, claimed floorfed.Cluster) (fedbiz.Member, error) {
+// It answers in Enrolled, the port's own shape, while still keeping enrolled
+// members as fedbiz.Member — because a fake that stored the projection would
+// stop being able to model a registry that knows more than the link asks for,
+// and the point of this type is to be the registry as the link sees it.
+func (r *scriptedRegistrar) Authenticate(id floorfed.ClusterID, token string, claimed floorfed.Cluster) (Enrolled, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.attempts++
@@ -107,11 +111,12 @@ func (r *scriptedRegistrar) Authenticate(id floorfed.ClusterID, token string, cl
 	// fake that told them apart would let an enumeration bug in the link
 	// pass its own tests.
 	if !ok || token != want || token == "" {
-		return fedbiz.Member{}, fedbiz.ErrRefused
+		return Enrolled{}, fedbiz.ErrRefused
 	}
 	m := r.members[id]
 	m.Cluster.Name = claimed.Name
-	return m, nil
+	r.members[id] = m
+	return Enrolled{Acknowledged: m.Acknowledged}, nil
 }
 
 func clusterID(t *testing.T, raw string) floorfed.ClusterID {

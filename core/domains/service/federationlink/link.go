@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	fedbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/federation"
 	floorfed "github.com/vincent-wuhan/opskeeper/core/floor/federation"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
@@ -47,10 +46,31 @@ type Caller interface {
 	Call(ctx context.Context, edgeID uint64, method string, body []byte) ([]byte, error)
 }
 
+// Enrolled is what the root knows about a cluster, as the link needs it.
+//
+// One field, and the field is the whole argument. The registry behind this
+// port also knows the newest version the root ever published, and the link
+// must NOT answer a hello with that number: a child that is already ahead of
+// the ledger would be told it is behind, and a child that trusts the answer
+// would refuse the next push as a replay. That reasoning is three sentences
+// long and it used to live in a comment next to a field on somebody else's
+// struct — `m.Acknowledged`, next to `m.HighestIssued`, `m.Behind()` and
+// `m.LastAck`, none of which this package had any use for.
+//
+// A named field carries the argument with it. A bare uint64 would be shorter
+// and would be one careless edit away from the wrong number, with nothing on
+// screen to say which of the two it should have been.
+type Enrolled struct {
+	// Acknowledged is the last version the child confirmed, which is what
+	// the wire is answered with. Never the newest version this root
+	// published.
+	Acknowledged uint64
+}
+
 // Clusters is the root's own answer to "may this caller act for that
 // cluster, and what do I believe about it".
 type Clusters interface {
-	Authenticate(id floorfed.ClusterID, token string, claimed floorfed.Cluster) (fedbiz.Member, error)
+	Authenticate(id floorfed.ClusterID, token string, claimed floorfed.Cluster) (Enrolled, error)
 	// Known is for the log line this handler writes on a refusal, and
 	// nothing else. See Registry.Known for why the wire cannot answer
 	// this question but the operator's terminal can.
@@ -120,10 +140,15 @@ func NewLink(caller Caller, clusters Clusters, opts ...Option) (*Links, error) {
 	return l, nil
 }
 
-// The Pusher port is satisfied by construction, and the assertion is here
-// rather than in the package that consumes it so that a change to either
-// side fails at compile time instead of at the first publish.
-var _ fedbiz.Pusher = (*Links)(nil)
+// The Pusher port is satisfied by construction, and the assertion used to
+// live here — "rather than in the package that consumes it so that a change
+// to either side fails at compile time instead of at the first publish".
+// It does not any more, and the reason is the only reason this file is not
+// importing the federation domain at all: `Pusher` is declared over there,
+// so an assertion against it is a dependency on it. The guarantee is
+// unchanged and the assertion now lives with the wiring that hands a *Links
+// to that port — cmd/opskeeper/federation_wiring.go — which is a place that
+// already imports both sides and is not itself a bounded context.
 
 // HandleHello answers cluster.hello.
 //
@@ -158,7 +183,7 @@ func (l *Links) hello(edgeID uint64, req tunnel.ClusterHelloRequest) tunnel.Clus
 	if req.ProvisioningToken == "" {
 		return refuseFederation("no provisioning token")
 	}
-	m, err := l.clusters.Authenticate(req.Cluster.ID, req.ProvisioningToken, req.Cluster)
+	enrolled, err := l.clusters.Authenticate(req.Cluster.ID, req.ProvisioningToken, req.Cluster)
 	if err != nil {
 		// The wire gets one sentence for every refusal, whatever went
 		// wrong. The registry does not tell this handler whether the
@@ -194,7 +219,7 @@ func (l *Links) hello(edgeID uint64, req tunnel.ClusterHelloRequest) tunnel.Clus
 	l.log.Info("federation: cluster bound",
 		slog.String("cluster", req.Cluster.ID.String()),
 		slog.Uint64("edge_id", edgeID),
-		slog.Uint64("root_believes", m.Acknowledged),
+		slog.Uint64("root_believes", enrolled.Acknowledged),
 	)
 	return tunnel.ClusterHelloResponse{
 		Accepted: true,
@@ -203,7 +228,7 @@ func (l *Links) hello(edgeID uint64, req tunnel.ClusterHelloRequest) tunnel.Clus
 		// root published. Sending the newer one would tell a child that
 		// is already ahead of the ledger that it is behind, and a child
 		// that trusted that would refuse the next push as a replay.
-		PolicyVersion:    m.Acknowledged,
+		PolicyVersion:    enrolled.Acknowledged,
 		HeartbeatSeconds: int(l.heartbeat / time.Second),
 	}
 }

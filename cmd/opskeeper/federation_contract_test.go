@@ -141,7 +141,7 @@ func newBothEnds(t *testing.T) *bothEnds {
 	if err != nil {
 		t.Fatalf("NewFileDistributor: %v", err)
 	}
-	link, err := managersvcfedlink.NewLink(loop, reg,
+	link, err := managersvcfedlink.NewLink(loop, clusterRegistrar{reg: reg},
 		managersvcfedlink.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
 	if err != nil {
 		t.Fatalf("NewLink: %v", err)

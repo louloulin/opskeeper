@@ -208,7 +208,28 @@ var edges = map[edge]string{
 	// is why the projection is a named type in a package that holds no
 	// storage rather than a widening of the port.
 
-	{"federationlink", "federation"}: "the root side of the cluster channel holds the table of which authenticated caller may act for which child, and it answers that question by asking the federation domain's registry. One direction: the registry does not import the link, because whether a cluster exists is the registry's judgement and reaching a cluster is the link's job (decision 123)",
+	// The federationlink -> federation edge is gone (decision 275), and it is
+	// the cheapest edge in the tree to have ever been — `domaincheck -edges`
+	// priced it at 4 once the pricer itself was fixed (decision 274), which is
+	// why the cut took one sitting where the earlier price of 6 would have
+	// made it look like a decision rather than an afternoon.
+	//
+	// What it cost was two symbols, and only one of them was load-bearing.
+	// The link needed the registry's Member and used one field of it —
+	// Acknowledged, and deliberately not HighestIssued, because a child already
+	// ahead of the ledger must not be told it is behind or it refuses the next
+	// push as a replay. That argument is three sentences long and it now lives
+	// on a one-field struct the link declares for itself, which is the right
+	// place for it: the rule is about what the LINK may say, not about what the
+	// registry knows. The other symbol was `var _ Pusher = (*Links)(nil)`, a
+	// compile-time promise about a port declared in the federation domain; it
+	// moved to the composition root, which is the one place that holds both
+	// ends of it. Moving an assertion does not weaken it.
+	//
+	// The conversion is written twice — once in cmd/opskeeper for production,
+	// once in federationlink's own tests, because core/domains cannot import
+	// package main. That is the cost of a port between two modules that cannot
+	// see each other's assembly, and it is fifteen lines rather than a package.
 
 	{"imbridge", "aiops"}: "the IM bridge delivers an agent finding into a chat channel, so it formats the agent's output",
 

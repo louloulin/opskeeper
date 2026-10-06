@@ -84,12 +84,12 @@ func TestARestartedRootSaysSoRatherThanBlamingTheToken(t *testing.T) {
 	}
 	// Sanity: the child is let in before the restart, so what follows is
 	// the restart and not a mis-built fixture.
-	pre, preLog := capturingLink(t, before)
+	pre, preLog := capturingLink(t, asPort(before))
 	if resp := sayHello(t, pre, childEdgeID, id, token); !resp.Accepted {
 		t.Fatalf("hello refused before the restart: %s\n%s", resp.Reason, preLog)
 	}
 
-	after, buf := capturingLink(t, fedbiz.NewRegistry(nil))
+	after, buf := capturingLink(t, asPort(fedbiz.NewRegistry(nil)))
 	resp := sayHello(t, after, childEdgeID, id, token)
 
 	if resp.Accepted {

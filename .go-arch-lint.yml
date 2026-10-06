@@ -414,8 +414,16 @@ deps:
   # 别的 domains 包，应当在这里被拦下并要求一次说明，而不是被
   # oxdomains_service 那张宽表默默放行。
   manager_federation_link:
+    # 决策 275 删掉 oxdomains_biz：这条边原本授权 link.go 里那个
+    # `fedbiz.Member` 返回类型与 `var _ fedbiz.Pusher = (*Links)(nil)`，
+    # 两者都已不在——前者变成 link 自 declarations 的 Enrolled 投影，
+    # 后者搬到了 cmd/opskeeper/federation_wiring.go（那里同时握着端口两端，
+    # 而它不是限界上下文）。**这条授权是 modulecheck 报出来的，不是人翻出来的**：
+    # 它有一条死授权检测器（"the grant is dead — delete it, or it keeps
+    # authorising the next import for free"）。**决策 273 删 oxdomains_model
+    # 那条时是靠人工遍历 import 做的，而这条工具当时就在仓库里**——记在这里，
+    # 因为「有工具而没用」和「没有工具」是两种不同的欠账，后者不可修。
     mayDependOn:
-      - oxdomains_biz
       - oxfloor
   # manager_biz 额外允许 pigagent/pigwire：内核的宿主绑定（决策 30）必须
   # 拿到 PiG 的事件与内核类型，而 core/pig 不能反向依赖根模块——所以这层

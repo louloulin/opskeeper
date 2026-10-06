@@ -17,6 +17,7 @@ import (
 	"os"
 	"strings"
 
+	floorfed "github.com/vincent-wuhan/opskeeper/core/floor/federation"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 
 	fedbiz "github.com/vincent-wuhan/opskeeper/core/domains/biz/federation"
@@ -185,7 +186,7 @@ func newFederationWiring(fbClient *managersvcfb.Client, log *slog.Logger) (*fede
 		return nil, err
 	}
 
-	link, err := managersvcfedlink.NewLink(fbClient, reg, managersvcfedlink.WithLogger(log))
+	link, err := managersvcfedlink.NewLink(fbClient, clusterRegistrar{reg: reg}, managersvcfedlink.WithLogger(log))
 	if err != nil {
 		return nil, err
 	}
@@ -401,3 +402,67 @@ func federationLedger(log *slog.Logger) *fedbiz.FileLedger {
 	}
 	return ledger
 }
+
+// The two assertions below are the compile-time half of the federationlink
+// cut (decision 275), and they are here rather than in the packages they
+// check for one reason: each names a type from a bounded context this file is
+// allowed to know about and those packages are not.
+//
+// federationlink used to import the federation domain for exactly two things —
+// the Member that Clusters.Authenticate returned, and `var _ fedbiz.Pusher =
+// (*Links)(nil)`. The first became a one-field projection the link declares
+// for itself; the second is a promise about a port declared over here, and a
+// promise can be checked by whoever holds both ends of it. Moving an
+// assertion does not weaken it: the same mismatch fails to compile at wiring
+// time instead, which is where every other mismatch in this file fails.
+//
+// The adapter is fifteen lines and it is in the composition root because that
+// is the one place in the tree permitted to know both bounded contexts. Its
+// test-only twin lives in federationlink's own test files, since core/domains
+// cannot import cmd/opskeeper.
+var (
+	_ managersvcfedlink.Clusters = clusterRegistrar{}
+	_ fedbiz.Pusher              = (*managersvcfedlink.Links)(nil)
+)
+
+// clusterRegistrar is the federation registry seen through the link's port.
+type clusterRegistrar struct {
+	reg *fedbiz.Registry
+}
+
+// Authenticate answers one cluster hello.
+//
+// The error is returned unwrapped on purpose: ErrRefused is one error for an
+// unknown cluster and a wrong token on purpose (see fedbiz.ErrRefused — a
+// caller that can tell them apart learns which clusters exist), and wrapping
+// it here would be the first place that distinction starts to leak.
+func (c clusterRegistrar) Authenticate(id floorfed.ClusterID, token string, claimed floorfed.Cluster) (managersvcfedlink.Enrolled, error) {
+	m, err := c.reg.Authenticate(id, token, claimed)
+	if err != nil {
+		return managersvcfedlink.Enrolled{}, err
+	}
+	return enrolledFrom(m), nil
+}
+
+// enrolledFrom is the whole conversion, as a function, because the one thing
+// that can go wrong in the adapter above is a single field and a function is
+// the only shape a test can pin it on.
+//
+// Acknowledged and never HighestIssued: a child already ahead of the ledger
+// must not be told it is behind, or it refuses the next push as a replay. The
+// argument belongs to the link — it is a rule about what the LINK may say — and
+// this is where the rule becomes a copy.
+//
+// It is extracted from the method rather than inlined because of what an
+// earlier version of this comment claimed and could not back up: that the
+// channel tests would catch a wrong field. They do not. Enrolling a cluster
+// and saying hello exercises both adapters with Acknowledged and HighestIssued
+// equal, so a swap is invisible to every test that exists; swapping the field
+// in both copies passed 23 federationlink tests and the cmd contract test
+// without a word. A rule that nobody can violate without a red test is a
+// comment, and this one is now a function.
+func enrolledFrom(m fedbiz.Member) managersvcfedlink.Enrolled {
+	return managersvcfedlink.Enrolled{Acknowledged: m.Acknowledged}
+}
+
+func (c clusterRegistrar) Known(id floorfed.ClusterID) bool { return c.reg.Known(id) }
