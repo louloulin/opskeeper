@@ -5253,6 +5253,85 @@ A 是「明知道正文里有人名和手机号，仍然原样留存」；B 是�
 于是那份 P0/P1/P2 方案十二项的最终账是：**十二项全部已落地，零缺口。**
 剩下没做的两项（`limits.memory` 维度、阶段 3 拆分与联邦）**都不是这份方案的
 条目**，前者是方案里没有的、我们主动加的约束，后者是方案自己划在阶段 3 的规划。
+### 4.321 决策 387：把「十二项零缺口」从**读代码的结论**升级为**跑出来的结论**——并补上方案验收表里最硬的那条
+
+4.319 逐项对账、4.320 更正了其中一条，两节都建立在**读代码**上。读代码能证明
+"实现存在"，不能证明"实现是绿的"——一个 FAIL 的自治仲裁器和一个 PASS 的自治
+仲裁器，在文件里长得一模一样。本节把证据换成实跑。
+
+#### 4.321.1 五个模块全量测试，0 FAIL
+
+```
+core/base      0 FAIL
+core/edge      0 FAIL
+core/manager   0 FAIL
+core/pig       0 FAIL
+core/harness   0 FAIL
+```
+
+对着方案条目点名的包，逐个确认它们在这次全量里真的绿了：
+
+| 方案条目 | 执行者 | 本轮实测 |
+|---|---|---|
+| 1.2 自治仲裁 | `core/edge/autonomy` | ok 4.5s |
+| 1.3 栅栏语义 | `core/edge/policygate` | ok 6.3s |
+| 1.1 遥测落盘 | `core/edge/telemetrywal` / `spool` | ok 7.9s / 10.6s |
+| 2 成本结晶 | `core/manager/biz/aiops/crystallize` | ok 9.9s |
+| 2 工具注册表 | `core/manager/biz/aiops/toolregistry` | ok 15.8s |
+| 2 MCP | `core/manager/{biz,server}/mcp` + `core/pig/pigmcp` | ok（三处） |
+| 2 eval 三维 | `core/harness/{axes,judge}` | ok |
+| 2 injection 围栏 | `core/base/pkg/promptguard` | ok 4.5s |
+
+**为什么要跑全量而不是点名跑**：点名跑只能证明"我关心的包没坏"，
+而全量的 0 FAIL 顺带证明了**方案条目与包之间没有第二个执行者**——
+如果某条目其实由另一个包实现，全量会把它一起算进来，而点名会漏。
+
+#### 4.321.2 方案 §六最后那行验收门槛，本轮实跑了
+
+方案验收表最后一行：*"节点上 `/etc/opskeeper-edge` 与进程环境经审计确认无云厂商密钥"*。
+
+这一行此前只登记在 `cigate.NotInCI` 里，理由是它带 `e2e` tag、需要 docker
+与真实 broker。**登记不等于验证。** 本轮 docker 可用，实跑：
+
+```
+--- PASS: TestTheGatewayServesAStreamToANodeCredential            14.37s
+--- PASS: TestNodeAgentDelivery                                    9.29s
+    ├ the run declares the architectures it covered
+    ├ the agent is an independent process
+    ├ the node holds no provider credential
+    ├ the node's process environment holds no provider credential
+    ├ the turn streams back on the console's frame contract
+    ├ the reply came through the manager's gateway
+    └ a turn with no watcher is refused
+ok  github.com/vincent-wuhan/opskeeper/tests/e2e                   35.8s
+```
+
+**六个子用例里最值得说的是第四个。** 它断言的不是"目录里没有密钥"，
+而是先往**本进程的环境里放三个诱饵**（`OPENAI_API_KEY` /
+`ANTHROPIC_AUTH_TOKEN` / `AWS_SECRET_ACCESS_KEY`，值都写成
+`*-decoy-must-not-reach-a-node`），然后断言它们**没有**出现在节点 agent 的环境里。
+
+诱饵那一段是精髓，代码注释写得很清楚：如果诱饵不再真的存在于测试进程的环境里，
+后两条断言就会**空过**。也就是说——
+
+> **一个只检查"密钥不在"的测试，必须先证明"密钥本来在"，否则它可能在什么都没检查的情况下通过。**
+
+这是本仓库里我见到的对"测试自身有效性"最认真的一处处理。
+
+#### 4.321.3 但这轮实跑也把上一轮的话又说了一遍：架构是混血的
+
+`the run declares the architectures it covered` 这个子用例是决策 376 加的，
+它自己会打印：
+
+```
+MIXED leg: broker <arch> under emulation on an <arch> host — this is not a single-architecture run
+```
+
+本机是 arm64，broker 那一腿仍是 amd64/QEMU。**所以本轮这7 个 PASS 证明的是
+"功能在这台机器上成立"，不是"功能在 amd64 真实硬件上成立"。**
+
+台账此前记的"arm64 与 amd64 各自的完整 e2e 环境仍需人工提供机器"这条，
+在跑完这一轮之后**依然是那条**，没有被这7 个 PASS 消掉。**跑得多不等于跑全。**
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
