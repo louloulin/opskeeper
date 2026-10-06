@@ -4999,6 +4999,42 @@ somebody remembered to type it
 **这是本轮唯一一条「方案明写、此前从未兑现」的验收项。** 它兑现之后，B 阶段的
 三行验收第一次全部有执行它的东西。
 
+### 4.317 决策 383：把方案 §五 的验收表**逐行对账**——「有测试」和「有东西跑它」是两栏
+
+决策 382 找到一行「方案明写、从未被任何东西跑过」的验收。**那就别再看别的了，
+把这一张表逐行对完**，每行只问两个问题：**这条验收有测试吗？那个测试被什么跑着？**
+第二问才是本轮的新东西——决策 377 之后它已经问出三处了。
+
+| 方案 §五 验收闸门 | 有测试吗 | 谁跑它 | CI 调它吗 |
+|---|---|---|---|
+| A：6 模块 `go build` + 全量 `go test -count=1` 绿 | — | `module-standalone-check`（逐模块独立 build+test） | ✅ |
+| A：arch-lint 拦住所有逆向依赖 | ✅ | `module-check`（modulecheck + go-arch-lint） | ✅ |
+| B：SSE 帧 golden 逐帧一致 | ✅ | `core/pig` 模块的 `go test ./...` | ✅ |
+| B：7 provider 冒烟 | ✅ `pigmodel/smoke_test.go`（文件头一句就是「The Phase B acceptance gate」） | 同上 | ✅ |
+| B：**`go test -race` 无泄漏** | ✅ | **`race-check`（决策 382 本轮接入）** | ✅ **本轮之前：无人** |
+| C：三个剧本 `alert_storm` / `rca_loop` / `recovery_verify` | ✅ `tests/nodeagent_topology/scenarios_test.go` | 根模块 `go test ./...`（`module-standalone-check`） | ✅ |
+| C：pig 崩溃自动重启且 manager 侧状态正确 | ✅ `core/edge/pigsupervisor` | `module-standalone-check` | ✅ |
+| D：能力声明与实际工具集一致（无超权） | ✅ | `pig-tool-scoping-check` | ✅ |
+| D：越权调用被宿主闸门 Block | ✅ `core/edge/policygate/fence_test.go` 8 条 + `autonomy/escape_test.go` | `module-standalone-check` | ✅ |
+| D：审计链完整 | ✅ | `audit-port-check`（13 条） | ✅ |
+| E：安装→审核→灰度→回滚全链路 | ✅ `core/floor/pluginmanifest/rollout_test.go` | `module-standalone-check` + `plugin-extension-build-check` | ✅ |
+| E：版本矩阵兼容性检查 | ✅ `CheckVersions` | `module-standalone-check` | ✅ |
+
+**结论：这张表此前只有一行是空的，而它空的原因是「目标存在、没人调用」——
+不是「测试不存在」。** 本轮补上之后，A–E 五行的验收第一次全部有执行它的东西。
+
+#### 4.317.1 顺带否掉的两个怀疑（第四次、第五次）
+
+对账过程中有两个候选看起来成立，量完都不成立：
+
+1. **`tests/nodeagent_topology` 看起来没人跑**——它不在 Makefile 也不在 ci.yml 里。
+   但它**没有 build tag**，属于根模块，所以 `module-standalone-check` 的
+   `go test ./...` 一直在跑它。实测 `ok … 0.448s`。
+2. **扩展副本可能漂移**（上一轮已否）。
+
+**「一个目录没有被任何 Makefile 目标点名」和「它没被跑」之间隔着一个
+`go test ./...`。** 找洞的时候要量到命令这一层，量到文件这一层会得出相反的结论。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
