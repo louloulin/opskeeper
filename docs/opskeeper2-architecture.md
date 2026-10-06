@@ -7988,6 +7988,60 @@ OPEN_SOURCE_GATE.md / README.md），缺一个就是 `fail()` 直接中止。
 `DECOY_CREDENTIALS` 同源：一个证明自己拒绝某字面量的检查，必须含有那个字面量。**
 数字对不上时先问"门排除了谁、为什么排除"，再怀疑树。
 
+### 4.353 决策 419：PR #1 开了；同时更正一条已经过时的开 PR 理由——**CI 早就覆盖 `feature/pig` 了**
+
+#### 4.353.1 更正：「开 PR 是为了让检查覆盖这个分支」是过时说法
+
+我此前多次建议开 PR，理由是「两道检查尚未覆盖 `feature/pig`」。
+本轮动手前查了 `.github/workflows/ci.yml` 的触发条件，它已经写着：
+
+```
+push:
+pull_request:
+```
+
+**`push:` 不带 `branches:` 白名单，也就是每个分支都触发。** 而 `ci.yml:32-38` 的注释把
+原因写得很清楚：这个文件曾经触发在 `branches: [main]` 上，直到决策 165 才放开，
+因为整条 2.0 线都住在 `feature/pig` 且没有 PR，于是
+`gh api .../actions/runs` 答 `total_count: 0`——**闸门一次都没执行过**。
+
+**所以那条理由在决策 165 之后就不成立了**，而我此后仍把它当理由说了几轮。
+**一条曾经正确的理由不会自己过期，它只是被人反复复述到不再查证**——这与决策 410/411
+撤回的三处"首次"同源：**复述一次是引用，复述三次就变成了一个没人验过的断言。**
+
+`feature/pig` 上的每次 push 早就在跑 CI（决策 410/411 已用 `node delivery` 的实跑确认过）。
+
+#### 4.353.2 但本 PR 该开，理由是另一条，且这一条是可复算的
+
+| 查证 | 读数 |
+|---|---|
+| 全仓库 PR 总数（`state=all`） | **0** |
+| `main...feature/pig` | **ahead 425 / behind 0** |
+
+**425 个提交，在本仓库的历史里从未被任何一个 PR 评审过**，而且 behind 0（合并不冲突）。
+
+这不是"检查没跑到"，是**这批提交没有任何人在一个可评论的上下文里看过**。
+把 PR 描述里那条过时的理由划掉，写上这一条。
+
+#### 4.353.3 四条验收门槛当读数（决策 307 复验过一次，本轮再复验一次）
+
+| 门槛 | 本轮读数 |
+|---|---|
+| `make module-check` | `all module boundaries hold` |
+| `make eval-gates` | **exit 0**；`remediation axis: 0/20`、`joint (passable): 0/20`、`20/20 golden cases servable` |
+| `make module-standalone-check` | `every module builds and tests on its own, on the published tags`（19 个模块，约 2.5 分钟） |
+| `make edge-credential-check` | `the node reads only OPSKEEPER_EDGE_* and never names config.Config` |
+
+**`0/20` 是计划 §六 点名要守的回归基线**（写操作被刻意挡在 upcall 通道外，
+`plugin-coverage` 为 0/20 是安全设计而非缺陷）。它仍是 0/20。
+
+#### 4.353.4 进度影响：两把尺都不动
+
+**架构尺 97.75% / 四阶段交付尺 99.5% 不动；`audit_open_source.py` 仍报 13 项。**
+
+开 PR 不关闭任何计划内未交付项，它降低的是**「425 个提交从未被评审」**这一风险。
+PR #1 上会有两个红：open-source gate（待作者决定）与 `version-check`（按构造红）。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
