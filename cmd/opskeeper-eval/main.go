@@ -103,8 +103,11 @@ USAGE:
 
 SUBCOMMANDS:
   run          执行单个 case 或 suite
-  inject       读 case、路由到注入器；六个注入器全部是骨架，真注入必然非零退出
-               inject --case <id> --dry-run    列出这个 case 会注入什么（这条现在能跑通）
+  inject       读 case、路由到注入器、真的把它注入目标环境
+               inject --case <id> --dry-run    只列出这个 case 会注入什么
+               inject --case <id> --hold 5m    按住故障 5 分钟再撤销（默认进程退出即撤销）
+               inject --max-duration 10m       单个故障的时间窗上限（staging 默认 30m，prod 默认 10m）
+                                              超过就拒绝执行，不截断
   judge        对已有 incident 报告重跑 judge
   leaderboard  显示排行榜 + 回归基线
                leaderboard --lock-baseline     把当前分数锁成基线
@@ -203,6 +206,7 @@ func cmdInject(ctx context.Context, args []string) error {
 	target := fs.String("target", "", "target spec（key=value 空格分隔，如 ns=test deploy=order-svc）")
 	dryRun := fs.Bool("dry-run", false, "只列出这个 case 会注入什么，不真注入")
 	hold := fs.Duration("hold", 0, "注入后把这个故障按住多久（0 = 进程退出即消失）")
+	maxDuration := fs.Duration("max-duration", 0, "单个故障允许活多久的上限（0 = 用该环境的默认上限）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -223,9 +227,23 @@ func cmdInject(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// 时间窗闸门在**碰目标环境之前**跑。
+	//
+	// 顺序不是风格问题：注入是有副作用的，而这一步的判断只需要读 case 文件
+	// 与两个 flag。先注入再拒绝，等于"报了错但环境已经被改了"——而一个刚被
+	// 写满的磁盘不会因为命令行返回非零就自己恢复。
+	if *maxDuration <= 0 {
+		*maxDuration = defaultInjectCeiling(*env)
+	}
+	if err := checkInjectCeiling(*maxDuration, *hold, c.Inject); err != nil {
+		return err
+	}
+
 	reg := newInjectorRegistry()
 
-	fmt.Printf("inject: case=%s env=%s steps=%d\n", *caseID, *env, len(c.Inject))
+	fmt.Printf("inject: case=%s env=%s steps=%d max_duration=%s\n",
+		*caseID, *env, len(c.Inject), *maxDuration)
 	var blocked []string
 	var staged []stagedFault
 	for i, step := range c.Inject {
@@ -279,6 +297,49 @@ func cmdInject(ctx context.Context, args []string) error {
 		return fmt.Errorf("inject: %d of %d step(s) not executed", len(blocked), len(c.Inject))
 	}
 	holdFaults(ctx, staged, *hold, blocked)
+	return nil
+}
+
+// defaultInjectCeiling 是这个命令在每个环境下的默认时间窗上限。
+//
+// prod 严一档，不是"prod 更危险"这种修辞：`host.fill_disk` 在 prod 上
+// 写满的是别人的节点，在 staging 上写满的是一块一次性磁盘。
+func defaultInjectCeiling(env string) time.Duration {
+	if env == "prod" {
+		return 10 * time.Minute
+	}
+	return 30 * time.Minute
+}
+
+// checkInjectCeiling 拒绝任何超过时间窗的注入。
+//
+// 它**拒绝而不截断**。截断看起来更"好用"，但它会让一条 600s 的 case
+// 悄悄变成一个 300s 的故障，而 harness 会拿这个 300s 的结果去判一份
+// 诊断结论——报告出来的时间与真实发生的时间不一样，这比直接报错坏得多。
+//
+// 它查两样：`--hold`（进程按住多久）与每一步 case 自带的 `duration`
+// （注入器自己的自撤销时限）。两者取的是**故障真正活着的时间**——
+// 进程跑着的时候，故障活 `max(duration, hold)`。
+func checkInjectCeiling(ceiling, hold time.Duration, steps []schema.InjectStep) error {
+	if hold > ceiling {
+		return fmt.Errorf("refusing to inject: --hold %s is over the %s time window for this "+
+			"environment; lower --hold or raise --max-duration deliberately (a fault left "+
+			"running for hours can outlive the process that created it: files on disk and "+
+			"messages in a broker are not undone by the injector going away)",
+			hold, ceiling)
+	}
+	for i, step := range steps {
+		d, err := time.ParseDuration(step.Duration)
+		if err != nil {
+			return fmt.Errorf("inject: step %d: invalid duration %q: %w", i+1, step.Duration, err)
+		}
+		if d > ceiling {
+			return fmt.Errorf("refusing to inject: step %d (%s) asks for %s, over the %s time "+
+				"window for this environment; raise --max-duration deliberately if that is "+
+				"really what you want, otherwise this is the wrong case for this run",
+				i+1, step.Type, d, ceiling)
+		}
+	}
 	return nil
 }
 

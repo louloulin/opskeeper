@@ -74,6 +74,7 @@ opskeeper-eval inject --case pg/lock-waits --hold 3m
 而一次在诊断开始之前就自己好了的故障，诊断结论是关于空气的。
 
 | `--hold` | 注入后把故障按住多久，然后逆序撤销（默认 `0` = 进程退出即撤销） |
+| `--max-duration` | **单个故障的时间窗上限**（默认 staging 30m、prod 10m）。`--hold` 与 case 自带的 `duration` 任一超过就**在碰目标环境之前**拒绝执行；**拒绝而不截断**（决策 302） |
 
 **PostgreSQL 这一路是**真实现**（决策 297）。** `core/faults/injector/pg`
 用 pgx 连真库，注入的每一种故障都能从数据库外面看见：
