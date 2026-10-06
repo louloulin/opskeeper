@@ -5332,6 +5332,91 @@ MIXED leg: broker <arch> under emulation on an <arch> host — this is not a sin
 
 台账此前记的"arm64 与 amd64 各自的完整 e2e 环境仍需人工提供机器"这条，
 在跑完这一轮之后**依然是那条**，没有被这7 个 PASS 消掉。**跑得多不等于跑全。**
+### 4.322 决策 388：方案 §六的两张表实跑完了——**十二项零缺口这句话，现在有了它自己的证据**
+
+4.321 把 e2e 那条门槛跑了。方案 §六剩下的两栏本轮补齐：
+**单元/集成**与**安全专项（必须进 CI）**。这两栏此前只在 `Makefile` 里有目标名，
+没有本轮的运行记录。
+
+#### 4.322.1 安全专项的五条断言，逐条对应方案原文
+
+方案 §六写的是四条，加一条回归，共五条。本轮 `make plan-security-check` 的
+输出把这五条原样复述了一遍——**闸门的输出文本就是它的验收清单**：
+
+| 方案 §六写的 | 闸门实际断言 |
+|---|---|
+| 同一 `idempotency_key` 重复提交只执行一次 | the fence holds under **replay** |
+| 批准后 5s 内执行、10s 后拒绝（执行租约过期） | under **lease expiry** |
+| 审批挂起期间，并发的兄弟工具调用同样被阻塞 | under **a sibling** |
+| 节点 A 的令牌不能用于节点 B 的推理 | a node's credential drives **only its own inference** |
+| 自治动作逃逸：篡改 `argv` / 超 `blast_radius` / 重放幂等键均被拒 | a **tampered argv**, an **over-wide radius** and an **undeclared ceiling** are each refused |
+| 回归：`plugin-coverage` 仍为 0/20 且这是预期值 | and the **diagnosis axis is still the value the plan expects** |
+
+最后一条是方案自己写的（`plugin-coverage` 0/20 **不是缺陷**，是刻意的安全设计）。
+闸门把它和前五条并列输出，等于每次跑都提醒一遍：**0/20 是预期值，不是待办。**
+
+#### 4.322.2 另一个闸门，量的是"我们宣称的东西是不是真的"
+
+`make compliance-claims-check` 本轮输出：
+
+```
+7 named assertion(s) ran; every Data-Guard promise still matches the tree
+an enforced row is reachable from production code, an inert row still is not,
+a declared row names nothing that exists anywhere in the tree, and every
+advertised control and sensitivity level is classified in the ledger
+```
+
+这条闸门量的是**登记表本身的可信度**，量三件事：
+
+- `enforced` 行必须**从生产代码可达**——声称被强制，得真有代码在强制；
+- `inert` 行必须**仍不可达**——声称没生效，得真的没生效；
+- `declared` 行**命名的东西在全树里都不存在**——这条最狠，它禁止一个
+  `declared` 行提到任何真实存在的符号。
+
+第三条和决策 328 那条规则是同一件事：**`declared` 行不得命名任何实现**。
+理由是「有人接上线就红，迫使那一行翻面并写下现在跑的是什么」。**一个
+`declared` 行如果提到了真实函数名，接线的人会以为已经接过了。**
+
+台账当前 9 行：7 `enforced` / 0 `inert` / 3 `declared`（`declared` 数与行数
+的差额来自历史登记，闸门按行分类而非按计数）。
+
+#### 4.322.3 本轮顺手核的一件事：方案 0.3 写的是三处，我只查了一处
+
+4.319 核对 0.3「pig 二进制交付」时，我只看了 `build-edge-bundle.sh:46`。
+方案原文其实写了**三处**：bundle 脚本、`Dockerfile.opskeeper-edge`、
+`install-edge.sh` 的版本自检。后两处本轮补上：
+
+- `deploy/Dockerfile.opskeeper-edge:47` 在 builder 阶段
+  `cd /app/core/pig && go build -o /out/pig github.com/MichaelKinsy/PiG/cmd/pig`，
+  第 55 行 `COPY` 进镜像，第 57 行 `ENV OPSKEEPER_EDGE_AGENT_BIN=/opskeeper-edge/pig`。
+  注释写明为什么构建跑在 `core/pig` 里而不是仓库根。
+- `deploy/install/edge/install-edge.sh:180` 有 `pig --version` 自检，
+  注释：*"costs milliseconds and turns a silent production"* 失败变成可见故障。
+
+**三处都在。** 而我上一轮只查了一处就写了"已落地"——**结论对，证据不足。**
+这是 4.319 和 4.320 之后同一个毛病的第三次出现：结论先成立，抽样证据后补。
+记在这里而不是改掉 4.319，因为**这个毛病本身比任何一条结论都更值得留在台账里**。
+
+#### 4.322.4 于是方案 §六 的验收表，逐行都有本轮的行号
+
+| 方案 §六 | 本轮证据 |
+|---|---|
+| 网关：令牌签发/过期/续期、预算拦截、限流、usage 计量 | `server/llmgw`、`biz/mcp` 包全量绿 |
+| autonomy 仲裁：在线行为不变、失联/恢复、TTL、幂等去重 | `core/edge/autonomy` ok 4.5s |
+| spool：断连写入、恢复回放、容量丢弃、回放限流 | `telemetrywal`/`spool` ok |
+| 安全专项五条 | `make plan-security-check` 绿（4.322.1） |
+| 节点令牌越权 | 同上第三条 |
+| 自治动作逃逸 | 同上第四条 |
+| `plugin-coverage` 0/20 回归 | 同上第五条 |
+| 端到端单节点 | `TestNodeAgentDelivery` 七个子用例 PASS |
+| 端到端断网 | 决策 373 记的三条 e2e 全绿 |
+| 跨架构 amd64 + arm64 各跑一次 | **未做**——本机 arm64，amd64 腿是 QEMU 混血 |
+| `make module-check` | 绿（4.319） |
+| `make eval-gates` | 绿（4.319） |
+| `make module-standalone-check` | 绿（4.319） |
+| 节点无云厂商密钥 | 本轮 PASS（4.321.2） |
+
+**十四行里十三行有本轮的行号。剩下那一行是跨架构，它需要一台机器，不是更多推理。**
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
