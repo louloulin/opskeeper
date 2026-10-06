@@ -8149,6 +8149,29 @@ CI  status=completed  conclusion=cancelled
 **一个症状有两个成因，而观察只看到了其中一个**——这是本轮真正的教训，
 也是为什么线索二必须靠全量枚举才浮出来：单看 `pull_request` 视图，两条 run 长得一模一样。
 
+#### 4.354.6 而修这一刀的过程中，`git add -A` 把带密钥的本地运行产物带进了提交
+
+改完 `ci.yml` 后我用了 `git add -A`。它把三样东西一起加了进去：
+
+```
+.devrun/backend.env     含 OPSKEEPER_JWT_SECRET 与 OPSKEEPER_ADMIN_PASSWORD
+.devrun/backend.log     本机运行日志
+.devrun/opskeeper       本机构建出的二进制
+```
+
+**拦下来是因为提交前的 `git show --name-only` 看到了不该有的路径**，而拦得早是因为
+两件事恰好都成立：这个 commit **还没 push**，而 `git log --all -- .devrun` 显示
+**历史上从未提交过这个目录**。两个读数都是查出来的，不是推断的——
+如果没有做后一个查询，"没泄漏"就只是一句我以为的话。
+
+**已 amend**（提交现只含 `ci.yml` / `.gitignore` / 台账），并把 `.devrun/` 写进 `.gitignore`，
+注释里写明它为什么不能进索引。
+
+**这一条与前面四轮的「假新发现」是同一件事的另一个方向**：那几轮的错是**看到一个数就下结论**，
+这一轮的错是**用一个动作（`git add -A`）代替了「我要提交哪些文件」这个决定**。
+`git add -A` 的名字承诺的是「全部」，而它真正的意思是「索引认为该有的全部」——
+**两者在有未跟踪产物时不是一回事，而那句承诺读起来比它的实际行为更宽。**
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
