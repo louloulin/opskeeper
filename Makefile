@@ -840,11 +840,13 @@ module-standalone-check: ## 关掉 workspace 与代理，按发布条件构建�
 		( cd $$m && GOWORK=off go build ./... && GOWORK=off go test ./... -count=1 ) || exit 1; \
 	done
 	@# 决策 364：上面那个循环里的 `go test ./...` **不编译带 build tag 的测试**。
-	# 于是 tests/integration（//go:build integration）与 tests/e2e（//go:build e2e）
-	# 两个包在它眼里根本不存在——而它们各自烂了整整一串决策没人发现：
+	# tests/e2e 整个包在 `//go:build e2e` 后面，所以在那个循环里根本不存在——
 	# 决策 295 删掉 `leaderboard.NewLeaderboard`（那个判断本身是对的：零生产调用方），
-	# tests/e2e 仍在调它；决策 362 把 `Approve` 改名 `Sign`，tests/integration 仍在调旧名。
-	# 两次都把 CI 推红了，而本地十二道闸门与九模块 build 全绿。
+	# tests/e2e 仍在调它，两边都把 CI 推红了而本地十二道闸门与九模块 build 全绿。
+	# 决策 362 把 `Approve` 改名 `Sign` 时坏掉的是 tests/integration，而**它没有
+	# build tag**（决策 377 实测：`grep go:build` 为空，两条用例由根模块的
+	# `go test ./...` 正常执行）。此前这段注释把两个包并列，害得下一个人去查
+	# 一个不存在的洞：注释说「它在循环里不存在」的时候，它其实每次都在跑。
 	# `go vet` 编译但不运行：它要的就是"这份代码能不能编译"，
 	# 不需要 DSN、不需要 docker，因此可以放进每次提交前都跑的那一道。
 	@echo "  standalone: build-tagged suites (compile only)"

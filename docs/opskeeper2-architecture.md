@@ -4709,6 +4709,71 @@ container」。实测：**26** 条只需要容器，2 条需要 broker，1 条�
 `livevalidation` 另一个 build tag 后面且自带 skip。**"28/30" 这个数是在洞存在的
 状态下写下来的**，而它看上去是自洽的——这正是它能活下来的原因。改为 26。
 
+### 4.312 决策 378：顺着上一刀去找第二个洞——**没有洞**，以及一句害我白找的注释
+
+决策 377 找到的是「被排除的测试没人接手」。同一个形状在仓库里应该不止一处，
+所以这一轮去找第二个。**没找到**，而这一轮真正的收获是一条**害我白找的注释**。
+
+#### 4.312.1 找的过程与结论
+
+`cigate` 里有一个检查专治这类事（`checkBuildTagCoverage`）：把所有被
+`//go:build` 挡在默认构建外面的测试文件列出来，看有没有 CI 可达的命令用对应
+tag 编译到它们所在的目录。它的注释写着这个检查抓到过两次「同一个 tag 下漏掉一个
+包」——决策 187 与决策 188。于是第二个候选显然是它：**`tests/integration/` 里的
+`cloudbash_chain_test.go`（两条用例）**。
+
+- `integration-check` 只跑三个包（`core/manager/agentteams`、
+  `core/domains/data/metric/store`、`./cmd/opskeeper`），**没有它**；
+- `test-integration`（`go test -tags=integration ./...`）**不在 CI 任何地方**；
+- `module-standalone-check` 只对它做 `go vet`——**编译但不运行**。
+
+三条证据摆在一起，形状和决策 377 一模一样。**然后实测：**
+
+```
+$ grep -n "go:build" tests/integration/cloudbash_chain_test.go
+（无输出）
+$ go test ./tests/integration/ -count=1 -v
+--- PASS: TestCloudBashChain_CredentialInjectedOnApprove (0.01s)
+--- PASS: TestCloudBashChain_RejectDoesNotRun (0.00s)
+ok  github.com/vincent-wuhan/opskeeper/tests/integration  0.371s
+```
+
+**这个文件根本没有 build tag。** 它是根模块的普通测试，每次 `go test ./...`
+都在跑，CI 的单元 job 也覆盖它。三条证据全都对，只有「它被 tag 挡住了」这一步
+是假的——而那一步是**注释告诉我的**。
+
+#### 4.312.2 害人的那句话在 `Makefile` 里，已经改了
+
+`module-standalone-check` 的注释原本把两个包并列：
+
+> 于是 tests/integration（`//go:build integration`）与 tests/e2e（`//go:build e2e`）
+> 两个包在它眼里根本不存在——而它们各自烂了整整一串决策没人发现
+
+**`tests/e2e` 是对的，`tests/integration` 是错的。** 更能说明问题的是它自己列举的
+证据：决策 362 把 `Approve` 改名 `Sign` 时坏掉的就是 `tests/integration`——
+如果它真的在 `go test ./...` 眼里不存在，那次改名**不可能**把 CI 推红。
+**注释里那条支持它自己的证据，实际上证伪了它自己**，而没人看出来。
+
+已改写为：只有 `tests/e2e` 在 tag 后面；`tests/integration` 没有 tag，
+由根模块的 `go test ./...` 执行，并记下本轮实测。
+
+**一个会让人去查一个不存在的洞的注释，比没有注释更贵。** 它的成本不是它写错了，
+而是它写得很像一条决策记录，于是被当成了事实基础。
+
+#### 4.312.3 顺带把决策 377 修完之后的那笔账算平
+
+| 数量 | 内容 |
+|---|---|
+| 30 | `tests/e2e` 里 `func Test` 的总数 |
+| −1 | `TestMain`（不是用例） |
+| −1 | `TestLiveAgentTeamsValidation`（`//go:build livevalidation` 后面，且自带 skip） |
+| = 28 | 应当被跑到的用例 |
+| 26 + 2 | `e2e-manager-check` 跑 26；`e2e-delivery-check` 跑 gateway + 两条 broker = 其中新增 2 |
+| = 28 | **对上了。修完之后这个包没有一条用例是无人认领的** |
+
+决策 377 修的是「接手的名单会过期」。**结构性地说，现在它不会再过期**：
+接手名单就是排除集本身，加测试只有一处可以写。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
