@@ -28615,6 +28615,99 @@ processes serving HTTP: 5, of which 3 carry no audit slot, of which 0 are acknow
 剩下的不再是「有没有证据」，而是**证据够不够独立**——链的密钥在同进程里、
 回环那条路在测试里而不是真的隧道上。
 
+### 4.260 决策 327：「节点没有链的密钥」——把一句最硬的断言变成可判的
+
+上一刀结尾说剩下的不再是「有没有证据」，而是**证据够不够独立**。这一刀就去查独立性，
+第一个撞上的是本仓关于审计最硬的一句话，它在 §四里以散文形式出现过三次：
+
+> **节点没有链的密钥。**
+
+为什么这句最硬：节点是唯一一台**跑着高权限工具、还自己记账**的机器，而它的行最终
+要进控制面那条链。如果节点能拿到链的密钥，它就能给自己的行盖章——**一个能给自己
+签名的证人不需要被采信**，那条链的全部价值（由中心盖章、中心算链接）当场蒸发。
+而一句英文散文拦不住任何人 import 什么。
+
+查了现状，**事实是好的**：全仓只有两个进程读链的钥匙
+（`cmd/opskeeper` 读 `OPSKEEPER_AUDIT_HMAC_KEY`、`cmd/higress-console` 读
+`OPSKEEPER_HIGRESS_AUDIT_HMAC_KEY`），helm 只把前者发给 manager，边缘 daemonset 里
+没有它。**但这份「好」没有任何东西守着**——下一个在节点侧加一行 `os.Getenv`
+的人不会被任何闸门拦下。
+
+#### 4.260.1 三条守卫，写在持链的那个模块里
+
+`core/domains/biz/audit/chainkey_test.go`：
+
+1. `TestEveryChainKeyEnvVarIsDeclaredWithItsProcess` —— 每个读链钥匙的环境变量都在
+   表里，**而且表里写的进程与代码读到的那一处对得上**（`Process` 单独成列，
+   `Why` 只是理由）。一条钥匙只允许一个读者。
+2. `TestOnlyTheDeclaredHoldersOpenTheChainDoors` —— 通往盖章器的门有**两扇**：
+   外扇 `WithChain(`（装配根用）与内扇 `NewChainStamper(`（只应出现在实现里）。
+   两个方向都对账：多出来的报出来，声明了却不再出现的也报出来。
+3. `TestTheNodeSideCannotReachTheChainKey` —— **本刀的正身**：节点那一侧
+   （`core/edge/**` + `cmd/opskeeper-edge/**`）不构造盖章器、不打开链的选项、
+   不读任何一把链的钥匙、也不 import 持链的域。**四条都断才算数**，
+   因为断掉任意一条，节点就能给自己的行盖章。
+
+闸门放在持链的模块而不是 `scripts/` 下，理由写在 Makefile 的注释里：
+**闸门住在它要看的东西旁边，还是住在离它最远的目录里，决定了有人改那个东西时
+会不会同时看见闸门。**
+
+#### 4.260.2 第一版量具量错了东西——两次
+
+**第一次**：它去找 `NewChainStamper(`，然后发现 `cmd/opskeeper` 与
+`cmd/higress-console` 都不调它——它们调的是导出的门 `WithChain(`，盖章器在门里面
+被造出来。表里那两行当场变成「声明了却不存在」。**一个量具在自己第一版就指认错了
+对象，之后每一条结论都要重新怀疑**，所以改成两扇门一起量，并且把
+`chain.go`（定义处）也写成一行声明——**定义不是调用，但把它藏起来就得靠读语法
+区分两者，那正是让一个闸门以一种新的方式出错的捷径**。
+
+**第二次**：`NewChainStamper` 在 `chain.go` 里被定义，正则把它算成了一处构造。
+诚实的做法不是加一条语法例外，而是承认「定义也是一处出现」，并写清楚
+**key 是非导出字段，「定义在这里」不等于「能用」**——本包能命名这个构造器，
+仍然造不出一个盖章器。
+
+#### 4.260.3 顺带撞出上一刀留下的一处红灯，根因在别人的闸门上
+
+给 Makefile 挂上这三条之后，`make audit-port-check` 红了：
+`manager/service/frontierbound` import 了写入器。这**不是**决策 326 引入的生产依赖
+——那个包的 `autonomyreplay.go` / `nodeledger.go` 走的都是 `auditport`，
+真的 import `core/domains/biz/audit` 的只有新写的那个 e2e 测试文件。
+
+而 `core/base/pkg/audit/writers_test.go` 的 `walkControlPlane` **不排除 `_test.go`**。
+这张表本来就把「a test that needs a real one behind it」写成了合法理由，
+所以正确修法**不是放宽它**，而是照它自己的语义登记，并在后面补一条更严的：
+
+- `throatHolders` 加一行 `manager/service/frontierbound`，理由写明是 e2e 测试；
+- 新增 `testOnlyThroatHolders` 与 `TestTheTestOnlyThroatHoldersReachTheWriterOnlyFromTests`
+  ——**声明只覆盖测试文件，生产文件一个都不许**。
+  没有这一条，那一行就只是一句「豁免」：下一次有人在 frontierbound 的 handler 里
+  直接 `Emit`，闸门照样绿。**一张会随声明一起变宽的表等于没有表。**
+- `rowTypeReaders` 同理加一行：e2e 要断言的不是「Usecase 被调用了」，而是
+  **`PrevHash` 等于上一行的 `Hash`**——这两个字段只长在持久化的行上，端口里没有，
+  所以它确实是个读者而不是命名者。
+
+#### 4.260.4 五次变异，全部验证并记录输出
+
+| 变异 | 结果 |
+|---|---|
+| N1 让节点侧读一把链钥匙 | 两条用例红（`one key, one reader` + `the node side can reach the chain`） |
+| N2 网关不再装配自己的链（声明还在） | 红：`is declared but does none` |
+| N3 第三个进程来读控制面那把钥匙 | 红：`one key, one reader` |
+| N4 让节点侧 import 持链的域 | 红：`the node side can reach the chain` |
+| P1 让 frontierbound 的**生产**文件够到写入器 | 红：`reaches the writer from a production file` |
+
+**P1 的第一次尝试也给了第五次「脚本没报错不等于变异生效」**：那次变异其实注入成功了，
+但我的 `-run` 正则（`'TestOnlyTheThroat|TestNoDomainOutside|TestOnlyTheThroatHolds'`）
+压根没选中这条新用例——`TestTheTestOnlyThroatHolders…` 不含其中任何一个子串。
+**绿的原因是过滤条件写错了，不是量具没在工作**；补上选择器后立刻红。
+
+`make audit-port-check` 全绿（含这三条新用例）；`core/base`、`core/domains`、
+`./scripts/...` 全量绿；deadcode ratchet 未变；`core/manager` 分母本刀未动（955 / 244,053）。
+
+**下一个缺口**：链的**读者**面还只有「谁能 import 行实体」这一条（决策 109 的
+`rowTypeReaders`），而「谁能验证一条链」没有任何量具——`ListChained` 与
+`MaxChainedSeq` 现在对谁开放、网关那条链能不能被控制面读到，都没有判据。
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——

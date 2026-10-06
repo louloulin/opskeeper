@@ -419,9 +419,16 @@ audit-port-check: ## 审计端口：iam 不再反向依赖 manager，词表闭�
 	cd core/base && GOWORK=off go test ./pkg/audit/ -count=1 -run \
 		'TestTheSlotSurvivesEveryContextRewrap|TestOutsideAMiddlewareChainNothingIsRemembered|TestThePortCannotReachTheLedger|TestTheVocabularyIsWellFormed|TestOnlyTheThroatHoldsTheWriter|TestNoDomainOutsideTheListsReachesTheWriter'
 	cd core/domains && GOWORK=off go test ./model/audit/ -count=1 -run 'TestTheReExportCoversTheWholeVocabulary'
+	# 决策 327：「节点没有链的密钥」此前只是台账里的一句话。这三条把它变成
+	# 可判的：哪些环境变量是链的钥匙、通往盖章器的门只有哪两扇、以及节点那一
+	# 侧必须够不到其中任何一样。它们走的是整棵树，所以放在持有盖章器的那个模块
+	# 里而不是 scripts/ 下——**闸门住在它要看的东西旁边，还是住在离它最远的
+	# 目录里，决定了有人改那个东西时会不会同时看见闸门**。
+	cd core/domains && GOWORK=off go test ./biz/audit/ -count=1 -run \
+		'TestEveryChainKeyEnvVarIsDeclaredWithItsProcess|TestOnlyTheDeclaredHoldersOpenTheChainDoors|TestTheNodeSideCannotReachTheChainKey'
 	cd core/domains && GOWORK=off go test ./server/middleware/ -count=1 -run \
 		'TestTheRowAHandlerAsksForIsTheRowTheLedgerGets|TestAnUnannotatedRequestIsNotAudited|TestAFailingRequestIsAuditedAsAFailure'
-	@echo "audit-port-check: the port is BC-free, the vocabulary is closed, only the declared holders reach the writer, the grant is gone and rows still land"
+	@echo "audit-port-check: the port is BC-free, the vocabulary is closed, only the declared holders reach the writer, the grant is gone, rows still land, and the node side cannot reach the chain key"
 
 # 决策 127：迁移必须在**生产的那个方言**上跑一次。
 #

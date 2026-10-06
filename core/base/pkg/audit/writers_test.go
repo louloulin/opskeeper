@@ -84,6 +84,43 @@ var throatHolders = map[string]string{
 		"surfaces ErrChainDisabled, so it holds the usecase rather than a copy of it",
 	"domains/server/plugin": "its test builds a real usecase to assert a plugin release lands in " +
 		"the chain; the production handler uses the port",
+	// 决策 327 加进来的第四个测试持有者，与上面三个理由同形：生产代码走端口，
+	// 只有测试需要真的写入器在后面。frontierbound 的 agent.audit.entries 此前
+	// 从来没有端到端证据（决策 326 之前每一跳都止于一个假），而能证明「一行真的
+	// 落进链里并接上了上一行」的写法只能是拿真的 Usecase。
+	//
+	// **加进来的是测试，不是生产依赖**——所以紧跟着下面那条断言要求它的非测试
+	// 文件一个都不许 import 写入器。一张会随声明一起变宽的表等于没有表：这一行
+	// 若只被当成「豁免」，那么下一次有人在 frontierbound 的 handler 里直接
+	// Emit，闸门照样绿。
+	"manager/service/frontierbound": "its e2e test builds a real usecase to assert a node's ledger " +
+		"row lands in the real chain and links to the row before it (decision 326); every production " +
+		"file in this package goes through auditport and imports the writer none — asserted below",
+}
+
+// testOnlyThroatHolders are the entries whose grant covers their **test**
+// files and nothing else. A grant that is not scoped stops being a judgement
+// and becomes a note.
+var testOnlyThroatHolders = map[string]bool{
+	"manager/service/frontierbound": true,
+}
+
+// TestTheTestOnlyThroatHoldersReachTheWriterOnlyFromTests is what keeps the
+// grant above honest. Without it, "it is only a test" is a sentence; with
+// it, adding a production import to that package turns the tree red.
+func TestTheTestOnlyThroatHoldersReachTheWriterOnlyFromTests(t *testing.T) {
+	files := walkControlPlane(t)
+	for _, pf := range files {
+		if !testOnlyThroatHolders[pf.dir] || strings.HasSuffix(pf.path, "_test.go") {
+			continue
+		}
+		for _, imp := range pf.file.Imports {
+			if target, _ := strconv.Unquote(imp.Path.Value); target == throatPath {
+				t.Errorf("%s reaches the writer from a production file; its grant covers tests only: %s",
+					pf.path, throatHolders[pf.dir])
+			}
+		}
+	}
 }
 
 // rowTypeReaders are the packages allowed to name the persisted row.
@@ -112,6 +149,11 @@ var rowTypeReaders = map[string]string{
 	"domains/biz/audit":         "the writer maps an Event onto the entity",
 	"domains/server/plugin":     "its test asserts on persisted rows",
 	"domains/server/middleware": "its test asserts on the row the middleware emitted",
+	// 决策 326/327：frontierbound 的 e2e 要断言的不是「Usecase 被调用了」，
+	// 而是**链上的列真的接上了**——PrevHash 等于上一行的 Hash。这两个字段只长在
+	// 持久化的行上，端口里没有它们，所以它确实是个读者而不是命名者。
+	"manager/service/frontierbound": "its e2e test reads the chained rows back and asserts the node's " +
+		"rows link to each other; the chain columns exist only on the persisted entity",
 }
 
 // TestOnlyTheThroatHoldsTheWriter is the manager-wide form of the rule
