@@ -253,6 +253,13 @@ const (
 	ActionTopologyNodeTypeCreate     = auditport.ActionTopologyNodeTypeCreate
 	ActionTopologyNodeTypeDelete     = auditport.ActionTopologyNodeTypeDelete
 
+	// 决策 341：联邦面。这一族改的不是本平台的一个对象，而是**另一个集群将要
+	// 执行什么**——一个版本签发下去，一台本仓库不直接管理的机器就换了它允许做的事。
+	ActionFederationClusterEnroll   = auditport.ActionFederationClusterEnroll
+	ActionFederationPolicyPublish   = auditport.ActionFederationPolicyPublish
+	ActionFederationPolicyRedeliver = auditport.ActionFederationPolicyRedeliver
+	ActionFederationPolicyAck       = auditport.ActionFederationPolicyAck
+
 	// 决策 333：供应链面（谁把哪段字节推到了哪台机器上）与「谁掐掉了这个会话」。
 	ActionEdgeAgentUpgrade    = auditport.ActionEdgeAgentUpgrade
 	ActionEdgePackageUpgrade  = auditport.ActionEdgePackageUpgrade
@@ -347,4 +354,8 @@ const (
 	ResourceTopologyRelation     = auditport.ResourceTopologyRelation
 	ResourceTopologyRelationType = auditport.ResourceTopologyRelationType
 	ResourceTopologyNodeType     = auditport.ResourceTopologyNodeType
+
+	// 决策 341：四条联邦路由共用一个资源——「哪个集群正在执行那个版本」是它们的
+	// 第一个问题，而四条路由的路径里带的是同一个 cluster id。
+	ResourceFederationCluster = auditport.ResourceFederationCluster
 )

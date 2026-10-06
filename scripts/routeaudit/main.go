@@ -656,10 +656,6 @@ var Verdicts = []Verdict{
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/repos/{id}", Handler: "h.deleteRepo"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/repos/{id}/sync", Handler: "h.syncRepo"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/vault/sync", Handler: "h.syncVault"},
-	{File: "core/domains/server/federation/http.go", Route: "/clusters", Handler: "h.enroll", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/domains/server/federation/http.go", Route: "/clusters/{id}/policy", Handler: "h.publish", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/domains/server/federation/http.go", Route: "/clusters/{id}/policy/ack", Handler: "h.ack", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/domains/server/federation/http.go", Route: "/clusters/{id}/policy/redeliver", Handler: "h.redeliver", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/domains/server/flow/http.go", Route: "/v1/flows", Handler: "h.create"},
 	{File: "core/domains/server/flow/http.go", Route: "/v1/flows/generate", Handler: "h.generate"},
 	{File: "core/domains/server/flow/http.go", Route: "/v1/flows/{id}", Handler: "h.del"},
@@ -671,6 +667,15 @@ var Verdicts = []Verdict{
 	{File: "core/domains/server/plugin/http.go", Route: "/v1/plugins/releases/{name}/advance", Handler: "h.advance"},
 	{File: "core/domains/server/plugin/http.go", Route: "/v1/plugins/releases/{name}/halt", Handler: "h.halt"},
 	{File: "core/domains/server/plugin/http.go", Route: "/v1/plugins/releases/{name}/rollback", Handler: "h.rollback"},
+	// 决策 341：联邦面四条。这一族改的不是本平台的一个对象，而是**另一个集群将要
+	// 执行什么**——一个版本签发下去，一台本仓库不直接管理的机器就换了它允许做的事。
+	// 四条全部是「带内事实」：HTTP 200 并不等于对方执行了，而 Delivery 的注释
+	// 自己写着「一个签发了版本却没有通知任何人的发布，与一个发布成功，在控制台上
+	// 无法区分」（§4.273）。
+	{File: "core/domains/server/federation/http.go", Route: "/clusters", Handler: "h.enroll"},
+	{File: "core/domains/server/federation/http.go", Route: "/clusters/{id}/policy", Handler: "h.publish"},
+	{File: "core/domains/server/federation/http.go", Route: "/clusters/{id}/policy/ack", Handler: "h.ack"},
+	{File: "core/domains/server/federation/http.go", Route: "/clusters/{id}/policy/redeliver", Handler: "h.redeliver"},
 	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}", Handler: "h.delete", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}", Handler: "h.update", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}/roles", Handler: "h.updateRoles", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},

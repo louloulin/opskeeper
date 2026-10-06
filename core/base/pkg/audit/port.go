@@ -636,6 +636,18 @@ const (
 	ActionTopologyNodeTypeCreate     = "topology_node_type_create"
 	ActionTopologyNodeTypeDelete     = "topology_node_type_delete"
 
+	// 决策 341：联邦面。这一族改的不是本平台的一个对象，而是**另一个集群将要
+	// 执行什么**，所以它是全仓后果最远的一族：一个版本签发下去，一台本仓库不
+	// 直接管理的机器就换了它允许做的事。
+	//
+	// 这一族的四行全部是「带内事实」：HTTP 200 并不等于对方执行了。`Delivery`
+	// 自己的注释写着这件事——「一个签发了版本却没有通知任何人的发布，与一个
+	// 发布成功，在控制台上无法区分」——所以 delivery 的每一个字段都必须进链。
+	ActionFederationClusterEnroll     = "federation_cluster_enroll"
+	ActionFederationPolicyPublish     = "federation_policy_publish"
+	ActionFederationPolicyRedeliver   = "federation_policy_redeliver"
+	ActionFederationPolicyAck         = "federation_policy_ack"
+
 	ActionEdgeRotateSecret = "edge_rotate_secret"
 	ActionEdgePluginSet    = "edge_plugin_set"
 
@@ -762,6 +774,13 @@ const (
 	ResourceTopologyRelation     = "topology_relation"
 	ResourceTopologyRelationType = "topology_relation_type"
 	ResourceTopologyNodeType     = "topology_node_type"
+
+	// ResourceFederationCluster names one enrolled child cluster (决策 341).
+	// The id is the cluster's own identity, which is what every one of the
+	// four federation routes carries in its path — including the policy ones,
+	// because "which cluster is running that version" is the first question
+	// and it has the same answer for all four.
+	ResourceFederationCluster = "federation_cluster"
 
 	// ResourceMCPTool names a tool reached over the MCP endpoint. The
 	// resource id is the tool name the caller asked for, which is what an

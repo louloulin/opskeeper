@@ -33,6 +33,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 
@@ -137,6 +138,22 @@ func (h *Handler) enroll(w http.ResponseWriter, r *http.Request) {
 	// The identity is echoed back from the registry rather than from the
 	// request, so what the operator is shown is what was stored.
 	member, _ := h.svc.Member(id)
+	// 决策 341：enroll 铸出的 provisioning token 与决策 337 的 share token 是
+	// 同一件东西——**一个只出现一次、之后再也拿不回来的持有者凭证**，而且链
+	// 不能撤销它（重新 enroll 会轮换凭据，但链里那一条旧 token 仍然读得出来）。
+	// 所以这一行唯一不能包含的就是它自己铸出来的那个 token。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionFederationClusterEnroll,
+		ResourceType: auditport.ResourceFederationCluster,
+		ResourceID:   id.String(),
+		ResourceName: member.Cluster.Name,
+		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			// 事后要回答的是「谁在什么时候把哪个集群接了进来」——这三样留下了。
+			"enrolled_at":      member.Cluster.JoinedAt,
+			"token_shown_once": true,
+		},
+	})
 	writeJSON(w, http.StatusCreated, enrollResp{Cluster: member.Cluster, ProvisioningToken: token})
 }
 
@@ -224,6 +241,25 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 341：这一行是全仓后果最远的一条。签发成功**不等于**送达，而
+	// Delivery 的注释自己写着：一个签发了版本却没有通知任何人的发布，与一个
+	// 发布成功，在控制台上无法区分。所以 attempted / delivered / verdict
+	// 每一个字段都进链，而不是只记「publish 成功」。
+	//
+	// 注意 status 仍然是 success：版本**确实铸出去了**，签发这件事是完成的；
+	// 没送达是另一件独立的事实。把它记成 failure 会让「谁签发了第 N 版」这条
+	// 查询丢掉一次真实发生的签发——**带内事实有两种，处理正好相反**，
+	// 判据是「运营者点的那件事有没有发生」：report 任务面要的是一份报表，
+	// 没有就是没有；这里要的是一个已签发的决策，没有就是没有。
+	// 所以 publish 记 success + delivery_status 字段，report 任务面记 failure。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionFederationPolicyPublish,
+		ResourceType: auditport.ResourceFederationCluster,
+		ResourceID:   id.String(),
+		ResourceName: memberName(r.Context(), h, id),
+		Status:       auditport.StatusSuccess,
+		Payload:      deliveryPayload(res.Bundle.Version, body.Reason, res.Delivery),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"bundle":         res.Bundle,
 		"highest_issued": res.Member.HighestIssued,
@@ -258,6 +294,17 @@ func (h *Handler) redeliver(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 341：redeliver **复用首次投递的字节而不是重新打包**——重发一次策略
+	// 与再签发一个版本是两件事，而版本号每次重发都往上爬的话，就没有任何东西
+	// 会拒绝它。所以这一行必须带版本号：链上要能数出「这个版本被发了几次」。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionFederationPolicyRedeliver,
+		ResourceType: auditport.ResourceFederationCluster,
+		ResourceID:   id.String(),
+		ResourceName: memberName(r.Context(), h, id),
+		Status:       auditport.StatusSuccess,
+		Payload:      deliveryPayload(res.Bundle.Version, "redeliver", res.Delivery),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"bundle":   res.Bundle,
 		"delivery": res.Delivery,
@@ -296,6 +343,28 @@ func (h *Handler) ack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m, _ := h.svc.Member(id)
+	// 决策 341：ack 记录的是**子集群的回答**，而这个回答可以是否定的。
+	// accepted=false 有两种成因——包坏了与策略拒绝——而两者的下一步动作是同一个：
+	// 不要重试。所以链上要留住 accepted、superseded、live 与 reason，
+	// 而不只是「记了一次 ack」。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionFederationPolicyAck,
+		ResourceType: auditport.ResourceFederationCluster,
+		ResourceID:   id.String(),
+		ResourceName: m.Cluster.Name,
+		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			"version":    body.Outcome.Version,
+			"accepted":   body.Outcome.Accepted,
+			"superseded": body.Outcome.Superseded,
+			// Live 在一次拒绝上是**上一个**版本——而那正是运营者要的答案：
+			// 集群仍在执行某个东西，只是不是这一个。
+			"live":             body.Outcome.Live,
+			"reason":           body.Outcome.Reason,
+			"at":               body.Outcome.At,
+			"behind_after_ack": m.Behind(),
+		},
+	})
 	writeJSON(w, http.StatusOK, viewOf(m))
 }
 
@@ -323,6 +392,84 @@ func (h *Handler) state(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+// memberName reads the enrolled name for an audit row. A cluster that vanished
+// between the write and the read is not an error here — the write is what is
+// being recorded, and the id in ResourceID already identifies it.
+func memberName(ctx context.Context, h *Handler, id floorfed.ClusterID) string {
+	if m, ok := h.svc.Member(id); ok {
+		return m.Cluster.Name
+	}
+	return ""
+}
+
+// deliveryPayload flattens a delivery into one audit row.
+//
+// The four states are spelled out rather than left to a reader's arithmetic
+// over three booleans, because "attempted && !delivered && error != """ and
+// "attempted && !delivered && !accepted" are different worlds — the first is a
+// broken link, the second is a child that said no — and both render as
+// `delivered: false` if the row only carries the flag.
+func deliveryPayload(version uint64, reason string, d fedbiz.Delivery) map[string]any {
+	// The order of these cases is load-bearing, and the first version got it
+	// wrong. `Service.push` fills `Delivery.Error` from **two** different
+	// places: a transport failure, and the root's own ledger refusing to record
+	// an outcome (a replayed version, for instance — the child answered, and
+	// this root then could not acknowledge a version it had already moved
+	// past). Reading `Error != ""` as "transport failed" therefore files a
+	// decision the child actually made under "the link broke", and the two
+	// call for opposite next moves: retry the first, investigate the second.
+	//
+	// So the child's own answer is consulted **first**, and `Error` is only
+	// read for what it still cannot explain. `Retryable == false` means the
+	// child made a decision rather than failing to make one; the version test
+	// keeps a zero-valued verdict out of that branch.
+	state := "unknown"
+	switch decided := !d.Verdict.Retryable && d.Verdict.Outcome.Version > 0; {
+	case !d.Attempted:
+		// The version was issued and nobody was told. This is the state the
+		// Delivery comment singles out, and it must not read as "done".
+		state = "not_attempted"
+	case d.Delivered:
+		state = "delivered"
+	case decided && d.Verdict.Outcome.Accepted:
+		state = "delivered"
+	case decided && d.Verdict.Outcome.Superseded:
+		state = "superseded"
+	case decided:
+		state = "declined"
+	case d.Error != "":
+		state = "transport_failed"
+	}
+	p := map[string]any{
+		"version":         version,
+		"delivery_status": state,
+		"attempted":       d.Attempted,
+		"delivered":       d.Delivered,
+		"retryable":       d.Verdict.Retryable,
+	}
+	if d.Error != "" {
+		p["delivery_error"] = d.Error
+	}
+	if d.Verdict.Outcome.Reason != "" {
+		p["child_reason"] = d.Verdict.Outcome.Reason
+	}
+	if d.Verdict.Error != "" {
+		// The child's own message, which the root does not trust and does not
+		// decide anything with. It is still the only thing that says **why**
+		// the link or the child misbehaved, and a row carrying a bare
+		// `transport_failed` sends the reader to the root's logs for it.
+		p["child_error"] = d.Verdict.Error
+	}
+	if d.Verdict.Outcome.Accepted {
+		p["child_accepted"] = true
+		p["live"] = d.Verdict.Outcome.Live
+	}
+	if reason != "" {
+		p["reason"] = reason
+	}
+	return p
 }
 
 func (h *Handler) requireAdmin(next http.Handler) http.Handler {

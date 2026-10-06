@@ -23,6 +23,14 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 895 / 627 / 268 as of decision 341: four federation actions and one
+// federation_cluster resource type, same re-export category as every line
+// below. +5 against +4 routes, and the extra one is the resource type that
+// lets all four rows name the same thing — "which cluster is running that
+// version" is the first question about a publish, an ack and a redelivery
+// alike, and without one shared resource name each of the four answers it in
+// its own spelling.
+//
 // 890 / 622 / 268 as of decision 339: ten topology_* actions and four topology
 // resource types, same re-export category as every line below and as 337/338
 // immediately above. The growth is dead-code rather than test-only, which is
@@ -205,8 +213,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 890
-	deadSymbolBudget     = 622
+	unreachableBudget    = 895
+	deadSymbolBudget     = 627
 	testOnlySymbolBudget = 268
 )
 
