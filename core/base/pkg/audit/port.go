@@ -618,6 +618,24 @@ const (
 	ActionReportTaskRerun  = "report_task_rerun"
 	ActionReportTaskDelete = "report_task_delete"
 
+	// 决策 339：拓扑面。与前面各族不同，这里改的不是一份产物，而是**平台用来
+	// 推理的那张图**——一条边决定关联查询能不能走到，下游一次根因分析就少一条
+	// 路径。所以这一族的问题不是「记了谁」而是「记了图形的哪一段」。
+	//
+	// relation_type 的两列是全族后果最重的开关：`propagates_failure` 决定这条边
+	// 上的故障**会不会**向上游传播，`direction` 决定往哪边传播。把前者从 true 改成
+	// false，等于让一整条依赖链在根因分析里静默消失，而界面上看不出任何异常。
+	ActionTopologyNodeCreate         = "topology_node_create"
+	ActionTopologyNodeUpdate         = "topology_node_update"
+	ActionTopologyNodeDelete         = "topology_node_delete"
+	ActionTopologyRelationCreate     = "topology_relation_create"
+	ActionTopologyRelationUpdate     = "topology_relation_update"
+	ActionTopologyRelationDelete     = "topology_relation_delete"
+	ActionTopologyRelationTypeCreate = "topology_relation_type_create"
+	ActionTopologyRelationTypeDelete = "topology_relation_type_delete"
+	ActionTopologyNodeTypeCreate     = "topology_node_type_create"
+	ActionTopologyNodeTypeDelete     = "topology_node_type_delete"
+
 	ActionEdgeRotateSecret = "edge_rotate_secret"
 	ActionEdgePluginSet    = "edge_plugin_set"
 
@@ -736,6 +754,14 @@ const (
 	// a schedule is armed for the future, a task is a past run someone may
 	// re-run — and the re-run button is a mutating route of its own.
 	ResourceReportTask = "report_task"
+
+	// 决策 339：拓扑的四个资源。node 与 relation 分开是显然的；分开 node_type 与
+	// relation_type 则是因为**删除的后果不在同一个量级**——删一个 node_type 只是
+	// 图例少了一类，删一个 relation_type 会让它下面的每一条边失去语义。
+	ResourceTopologyNode         = "topology_node"
+	ResourceTopologyRelation     = "topology_relation"
+	ResourceTopologyRelationType = "topology_relation_type"
+	ResourceTopologyNodeType     = "topology_node_type"
 
 	// ResourceMCPTool names a tool reached over the MCP endpoint. The
 	// resource id is the tool name the caller asked for, which is what an

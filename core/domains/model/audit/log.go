@@ -240,6 +240,19 @@ const (
 	ActionReportTaskRerun  = auditport.ActionReportTaskRerun
 	ActionReportTaskDelete = auditport.ActionReportTaskDelete
 
+	// 决策 339：拓扑面十个动作。与前面各族不同，这里改的不是一份产物，而是
+	// **平台用来推理的那张图**——一条边决定关联查询能不能走到。
+	ActionTopologyNodeCreate         = auditport.ActionTopologyNodeCreate
+	ActionTopologyNodeUpdate         = auditport.ActionTopologyNodeUpdate
+	ActionTopologyNodeDelete         = auditport.ActionTopologyNodeDelete
+	ActionTopologyRelationCreate     = auditport.ActionTopologyRelationCreate
+	ActionTopologyRelationUpdate     = auditport.ActionTopologyRelationUpdate
+	ActionTopologyRelationDelete     = auditport.ActionTopologyRelationDelete
+	ActionTopologyRelationTypeCreate = auditport.ActionTopologyRelationTypeCreate
+	ActionTopologyRelationTypeDelete = auditport.ActionTopologyRelationTypeDelete
+	ActionTopologyNodeTypeCreate     = auditport.ActionTopologyNodeTypeCreate
+	ActionTopologyNodeTypeDelete     = auditport.ActionTopologyNodeTypeDelete
+
 	// 决策 333：供应链面（谁把哪段字节推到了哪台机器上）与「谁掐掉了这个会话」。
 	ActionEdgeAgentUpgrade    = auditport.ActionEdgeAgentUpgrade
 	ActionEdgePackageUpgrade  = auditport.ActionEdgePackageUpgrade
@@ -326,4 +339,12 @@ const (
 	ResourceReport         = auditport.ResourceReport
 	ResourceReportSchedule = auditport.ResourceReportSchedule
 	ResourceReportTask     = auditport.ResourceReportTask
+
+	// 决策 339：拓扑的四个资源。node_type 与 relation_type 分开是因为**删除的
+	// 后果不在同一个量级**——删一个 node_type 只是图例少了一类，删一个
+	// relation_type 会让它下面的每一条边失去语义。
+	ResourceTopologyNode         = auditport.ResourceTopologyNode
+	ResourceTopologyRelation     = auditport.ResourceTopologyRelation
+	ResourceTopologyRelationType = auditport.ResourceTopologyRelationType
+	ResourceTopologyNodeType     = auditport.ResourceTopologyNodeType
 )

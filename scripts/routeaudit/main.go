@@ -695,6 +695,21 @@ var Verdicts = []Verdict{
 	// **无需认证**就能读到这份报表的 token，而链不能撤销它，所以这一行唯一不能
 	// 包含的就是那个 token 本身；留下的三样是「谁、何时、哪份、公开到什么时候」。
 	// schedule_* 单独成族：一条 schedule 是一台没人盯着就会自己发报文的机器。
+	// 决策 339：拓扑面十个写路由。与前面各族不同，这里改的不是一份产物，而是
+	// **平台用来推理的那张图**——一条边决定关联查询能不能走到，一次根因分析就少
+	// 一条路径。最重的一行是 relation_type 的创建与删除：propagates_failure 决定
+	// 这一类依赖的故障会不会向上游传播，把它设成 false 等于让一整条链在根因分析里
+	// 静默消失，而没有任何地方会报错（§4.272）。
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/nodes", Handler: "h.createNode"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/nodes/{id}", Handler: "h.updateNode"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/nodes/{id}", Handler: "h.deleteNode"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relations", Handler: "h.createRelation"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relations/{id}", Handler: "h.updateRelation"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relations/{id}", Handler: "h.deleteRelation"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relation-types", Handler: "h.createRelationType"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relation-types/{name}", Handler: "h.deleteRelationType"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/node-types", Handler: "h.createNodeType"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/node-types/{name}", Handler: "h.deleteNodeType"},
 	{File: "core/manager/server/report/http.go", Route: "/v1/reports", Handler: "h.generateNow"},
 	{File: "core/manager/server/report/http.go", Route: "/v1/reports/{id}", Handler: "h.deleteReport"},
 	{File: "core/manager/server/report/http.go", Route: "/v1/reports/{id}/share", Handler: "h.shareReport"},

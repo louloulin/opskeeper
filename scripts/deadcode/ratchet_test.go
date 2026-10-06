@@ -23,6 +23,15 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 890 / 622 / 268 as of decision 339: ten topology_* actions and four topology
+// resource types, same re-export category as every line below and as 337/338
+// immediately above. The growth is dead-code rather than test-only, which is
+// the signature of a vocabulary written ahead of its readers — except this one
+// is not speculative, because the ten rows went onto the chain in this same
+// commit. Worth noting the +14 against +10 routes: the four resource types are
+// what let a reader separate "what was published" from "what will publish",
+// and folding them would have made every one of those ten rows a payload scan.
+//
 // 876 / 608 / 268 as of decision 338: the three report_task_* actions plus the
 // report_task resource type, same re-export category as every line below and
 // as decision 337 immediately above. Raised in the same commit as the rows that
@@ -196,8 +205,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 876
-	deadSymbolBudget     = 608
+	unreachableBudget    = 890
+	deadSymbolBudget     = 622
 	testOnlySymbolBudget = 268
 )
 
