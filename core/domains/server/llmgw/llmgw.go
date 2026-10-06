@@ -283,6 +283,22 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Degradation is applied after admission rather than before it: a node
+	// that was refused never gets here, and a node that was admitted may be
+	// close enough to its own ceiling that the answer should be shorter.
+	// The reason is logged once per degraded call, because "why is this
+	// answer suddenly terse" is a question the agent will otherwise ask
+	// itself every turn.
+	if degrader, ok := h.opts.Budget.(Degrader); ok {
+		if narrowed, degraded := degrader.DegradedTokens(r.Context(), identity.EdgeID); degraded {
+			pigReq.Tune = degrade(pigReq.Tune, narrowed)
+			h.log.Info("llmgw: answer narrowed near the node's daily allowance",
+				slog.Uint64("edge_id", identity.EdgeID),
+				slog.String("model", model),
+				slog.Int("max_output_tokens", narrowed))
+		}
+	}
+
 	id := newCompletionID()
 	created := time.Now().UTC().Unix()
 

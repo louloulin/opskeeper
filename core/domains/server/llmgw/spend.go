@@ -105,6 +105,7 @@ type AttributedBudget interface {
 type edgeBudget struct {
 	global           Budget
 	perNodeDaily     int
+	degradePercent   int
 	mu               sync.Mutex
 	used             map[uint64]map[string]int // edgeID -> "YYYY-MM-DD" (UTC) -> tokens
 	lastSweep        time.Time
@@ -119,17 +120,18 @@ type edgeBudget struct {
 // accepted and treated as "no cluster ceiling", because a per-node cap is
 // still worth configuring on its own — that is the deployment that wants to
 // stop one node from spending while letting the rest of the fleet run.
-func NewAttributedBudget(global Budget, perNodeDaily int) AttributedBudget {
-	return newEdgeBudget(global, perNodeDaily, time.Now)
+func NewAttributedBudget(global Budget, perNodeDaily, degradePercent int) AttributedBudget {
+	return newEdgeBudget(global, perNodeDaily, degradePercent, time.Now)
 }
 
-func newEdgeBudget(global Budget, perNodeDaily int, now func() time.Time) *edgeBudget {
+func newEdgeBudget(global Budget, perNodeDaily, degradePercent int, now func() time.Time) *edgeBudget {
 	if now == nil {
 		now = time.Now
 	}
 	return &edgeBudget{
 		global:           global,
 		perNodeDaily:     perNodeDaily,
+		degradePercent:   degradePercent,
 		used:             map[uint64]map[string]int{},
 		now:              now,
 		sweepEvery:       time.Minute,
@@ -189,6 +191,37 @@ func (b *edgeBudget) RecordEdge(ctx context.Context, edgeID uint64, tokens int) 
 		b.mu.Unlock()
 	}
 	return b.globalRecord(ctx, tokens)
+}
+
+// DegradedTokens reports the smaller output ceiling a node gets once it has
+// spent enough of its own daily allowance.
+//
+// It returns false for a node that has not crossed the line, and false
+// entirely when degradation is not configured — so a deployment that never
+// opted in pays nothing but a map lookup. The threshold is a share of the
+// node's own cap rather than an absolute token count, because a node with a
+// 10k daily cap and a node with a 10M one are in the same situation at
+// different numbers and the situation is what this answers.
+//
+// The degraded size is a quarter of the node's daily allowance: enough head
+// room that the node can still finish several findings, small enough that a
+// node which would have exhausted its allowance answering verbosely now has
+// room to finish the investigation it is halfway through.
+func (b *edgeBudget) DegradedTokens(_ context.Context, edgeID uint64) (int, bool) {
+	if b == nil || b.degradePercent <= 0 || b.perNodeDaily <= 0 {
+		return 0, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	used := b.used[edgeID][b.dayKey()]
+	if used*100 < b.perNodeDaily*b.degradePercent {
+		return 0, false
+	}
+	quarter := b.perNodeDaily / 4
+	if quarter < 1 {
+		quarter = 1
+	}
+	return quarter, true
 }
 
 // Check and Record make an *edgeBudget usable everywhere a Budget is asked

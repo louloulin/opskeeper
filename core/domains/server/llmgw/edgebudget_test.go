@@ -23,7 +23,7 @@ import (
 // as the first is how one bad node gets debugged as a cluster-wide incident.
 func TestTheNodeThatSpentIsRefusedAndTheOthersAreNot(t *testing.T) {
 	global := &stubBudget{}
-	budget := NewAttributedBudget(global, 100)
+	budget := NewAttributedBudget(global, 100, 0)
 	ctx := context.Background()
 
 	if err := budget.RecordEdge(ctx, 7, 101); err != nil {
@@ -56,7 +56,7 @@ func TestTheNodeThatSpentIsRefusedAndTheOthersAreNot(t *testing.T) {
 // become the ceiling the operator thought they still had.
 func TestTheClusterCapStillRefusesANodeWithRoomOfItsOwn(t *testing.T) {
 	global := &stubBudget{allowErr: errs.ErrBudgetExceeded}
-	budget := NewAttributedBudget(global, 1_000_000)
+	budget := NewAttributedBudget(global, 1_000_000, 0)
 
 	err := budget.CheckEdge(context.Background(), 3, 0)
 	if !errors.Is(err, errs.ErrBudgetExceeded) {
@@ -72,7 +72,7 @@ func TestTheClusterCapStillRefusesANodeWithRoomOfItsOwn(t *testing.T) {
 // already paid for.
 func TestChargingANodeAlsoChargesTheCluster(t *testing.T) {
 	global := &stubBudget{}
-	budget := NewAttributedBudget(global, 100)
+	budget := NewAttributedBudget(global, 100, 0)
 
 	if err := budget.RecordEdge(context.Background(), 4, 30); err != nil {
 		t.Fatalf("record: %v", err)
@@ -95,7 +95,7 @@ func TestChargingANodeAlsoChargesTheCluster(t *testing.T) {
 // on both the buffered and the streaming path — a budget that counted only
 // the buffered replies was one a node could bypass by asking for a stream.
 func TestAStreamIsChargedToTheNodeThatAskedForIt(t *testing.T) {
-	budget := NewAttributedBudget(&stubBudget{}, 90)
+	budget := NewAttributedBudget(&stubBudget{}, 90, 0)
 	auth := &stubAuth{edges: map[string]uint64{"ak-sick:sk": 1, "ak-healthy:sk": 2}}
 	handler := gatedHandler(t, auth,
 		&stubCompleter{reply: meteredReply(10, 90, 100)}, budget, nil)
@@ -122,7 +122,7 @@ func TestAStreamIsChargedToTheNodeThatAskedForIt(t *testing.T) {
 // with "zero" would refuse the whole fleet over a missing env var.
 func TestAnUnconfiguredPerNodeCapLeavesOnlyTheClusterCap(t *testing.T) {
 	global := &stubBudget{}
-	budget := NewAttributedBudget(global, 0)
+	budget := NewAttributedBudget(global, 0, 0)
 	ctx := context.Background()
 
 	if err := budget.RecordEdge(ctx, 1, 10_000_000); err != nil {
@@ -140,7 +140,7 @@ func TestAnUnconfiguredPerNodeCapLeavesOnlyTheClusterCap(t *testing.T) {
 // spend is from a previous UTC day is dead weight in a long-running manager.
 func TestPerNodeLedgersOfNodesThatStoppedSpendingAreSwept(t *testing.T) {
 	now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	budget := newEdgeBudget(&stubBudget{}, 100, func() time.Time { return now })
+	budget := newEdgeBudget(&stubBudget{}, 100, 0, func() time.Time { return now })
 	ctx := context.Background()
 
 	if err := budget.RecordEdge(ctx, 5, 10); err != nil {
@@ -166,7 +166,7 @@ func TestPerNodeLedgersOfNodesThatStoppedSpendingAreSwept(t *testing.T) {
 // wants to stop one node from spending while letting the rest of the fleet
 // run. The nil global must not panic and must not refuse.
 func TestAPerNodeCapWorksWithoutAClusterCap(t *testing.T) {
-	budget := NewAttributedBudget(nil, 100)
+	budget := NewAttributedBudget(nil, 100, 0)
 	ctx := context.Background()
 
 	if err := budget.RecordEdge(ctx, 2, 101); err != nil {
@@ -188,7 +188,7 @@ func TestAPerNodeCapWorksWithoutAClusterCap(t *testing.T) {
 // has spent 100 has spent its budget, not exceeded it, and refusing here
 // would make the effective cap 99.
 func TestTheLastCallOfAnAllowanceIsServed(t *testing.T) {
-	budget := NewAttributedBudget(&stubBudget{}, 100)
+	budget := NewAttributedBudget(&stubBudget{}, 100, 0)
 	ctx := context.Background()
 
 	if err := budget.RecordEdge(ctx, 9, 99); err != nil {

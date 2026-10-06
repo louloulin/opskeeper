@@ -1096,9 +1096,11 @@ func main() {
 	// cluster ceiling stays in force — and, when no global cap is configured
 	// at all, the per-node cap can still be configured on its own.
 	if cfg.LLM.EdgeDailyTokenLimit > 0 {
-		gatewayBudget = llmgw.NewAttributedBudget(gatewayBudget, cfg.LLM.EdgeDailyTokenLimit)
+		gatewayBudget = llmgw.NewAttributedBudget(
+			gatewayBudget, cfg.LLM.EdgeDailyTokenLimit, cfg.LLM.EdgeDegradePercent)
 		log.Info("llm: per-node daily token budget enabled",
 			slog.Int("per_node_daily_limit", cfg.LLM.EdgeDailyTokenLimit),
+			slog.Int("degrade_percent", cfg.LLM.EdgeDegradePercent),
 			slog.Bool("cluster_cap_configured", gatewayBudget != nil),
 		)
 	}

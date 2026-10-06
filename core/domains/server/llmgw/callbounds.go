@@ -52,6 +52,48 @@ type CallBounds struct {
 	// MaxOutputTokens is the operator's ceiling on one reply's output
 	// tokens. <=0 means the caller's own value stands.
 	MaxOutputTokens int
+	// DegradePercent is the share of its own daily allowance at which a node
+	// starts getting smaller answers. <=0 disables degradation.
+	//
+	// It exists because a hard cut is the worst way to run out of budget. A
+	// node refused at 100% answers nothing for the rest of the UTC day, which
+	// is the moment a long-running diagnosis needs it most; the same node
+	// kept answering briefly until the line is reached still finishes the
+	// investigation it was halfway through.
+	DegradePercent int
+}
+
+// Degrader narrows one call's output ceiling as its spender nears a limit.
+//
+// It is a separate seam from Budget on purpose: a budget answers "may this
+// call happen" and is asked before the provider, while a degrader answers
+// "how big may this answer be" and is asked after admission passes. Folding
+// the second into the first would make the ledger decide answer sizes, and
+// the ledger is the wrong place to encode an operational preference.
+type Degrader interface {
+	DegradedTokens(ctx context.Context, edgeID uint64) (int, bool)
+}
+
+// degrade wraps an output ceiling with whatever the spender's own ledger says
+// its remaining room justifies.
+//
+// Only ever narrows: a degraded node that asked for 200 tokens keeps its 200,
+// and a degraded node whose own ceiling is already below the degraded one is
+// untouched. The rule is the same one the operator's clamp follows — the
+// gateway stops answers from growing, and never becomes the thing that decides
+// how big they are.
+func degrade(incoming func(*pigai.StreamOptions), degraded int) func(*pigai.StreamOptions) {
+	if degraded <= 0 {
+		return incoming
+	}
+	return func(opts *pigai.StreamOptions) {
+		if incoming != nil {
+			incoming(opts)
+		}
+		if opts.MaxTokens <= 0 || opts.MaxTokens > degraded {
+			opts.MaxTokens = degraded
+		}
+	}
 }
 
 // context returns the call's context and its cancel.

@@ -158,7 +158,11 @@ across sections.
     to buy tokens is no longer a field only the node honours
   - `☑` per-call max_completion_tokens ceiling reaches the provider
   - `☐` per-org / per-user monthly cap
-  - `☐` graceful degradation (smaller model / fewer iterations) before cutoff
+  - `◐` graceful degradation before cutoff — answers shorten as a node nears its
+    own daily allowance (`OPSKEEPER_LLM_EDGE_DEGRADE_PERCENT`, a quarter of the
+    allowance per call), so a running diagnosis finishes instead of being cut off
+    at 100% (决策 357); switching to a smaller **model** is not done — that is a
+    registry concern, not a gateway one
 
 ---
 

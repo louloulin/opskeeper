@@ -471,6 +471,17 @@ type LLMConfig struct {
 	//
 	// env: OPSKEEPER_LLM_EDGE_DAILY_TOKEN_LIMIT; default 0 (no per-node cap).
 	EdgeDailyTokenLimit int
+	// EdgeDegradePercent is the share of a node's own daily allowance at which
+	// its answers start getting shorter (quarter of the allowance per call).
+	// 0 disables it.
+	//
+	// A hard cut is the worst way to run out of budget: a node refused at 100%
+	// answers nothing for the rest of the UTC day, which is when a long
+	// diagnosis needs it most. Short answers up to the line keep an
+	// investigation finishable.
+	//
+	// env: OPSKEEPER_LLM_EDGE_DEGRADE_PERCENT; default 0 (no degradation).
+	EdgeDegradePercent int
 	// CallTimeoutSeconds is the wall-clock ceiling for one model call served
 	// by the node-facing gateway. 0 means no bound.
 	//
@@ -632,6 +643,7 @@ func Load() (*Config, error) {
 	c.LLM.DailyTokenLimit = getEnvInt("OPSKEEPER_LLM_DAILY_TOKEN_LIMIT", 0)
 	c.LLM.EdgeRequestsPerMinute = getEnvInt("OPSKEEPER_LLM_EDGE_RPM", DefaultEdgeRequestsPerMinute)
 	c.LLM.EdgeDailyTokenLimit = getEnvInt("OPSKEEPER_LLM_EDGE_DAILY_TOKEN_LIMIT", 0)
+	c.LLM.EdgeDegradePercent = getEnvInt("OPSKEEPER_LLM_EDGE_DEGRADE_PERCENT", 0)
 	c.LLM.CallTimeoutSeconds = getEnvInt("OPSKEEPER_LLM_CALL_TIMEOUT_SECONDS", 0)
 	c.LLM.MaxOutputTokens = getEnvInt("OPSKEEPER_LLM_MAX_OUTPUT_TOKENS", 0)
 
