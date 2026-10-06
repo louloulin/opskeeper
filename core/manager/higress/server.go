@@ -57,7 +57,28 @@ type Config struct {
 	// plane's chain would not add anything an operator could not already
 	// read, and would put two authorities in one place.
 	Chain auditport.ChainVerifier
+
+	// LoginRPS and LoginBurst bound the one route an unauthenticated caller
+	// can reach that writes to this process's audit chain (决策 330).
+	//
+	// Zero means "use the defaults", not "no limit". **一个从没有人考虑过这件事
+	// 的部署，不应该因此继承一条未认证的写路径**——而"没人配置"是最常见的
+	// 部署状态。Negative disables the limiter outright, which has to be
+	// spelled out because it is the one value that reopens the hole.
+	LoginRPS   float64
+	LoginBurst int
 }
+
+// Defaults for the login limiter. The burst is generous enough for a human
+// who mistypes a password a few times in a row, and the refill is slow
+// enough that a script cannot make meaningful progress through it.
+const (
+	// DefaultLoginRPS and DefaultLoginBurst are exported because they are
+	// policy an operator has to be able to read, name and override — not
+	// an implementation detail of the limiter.
+	DefaultLoginRPS   = 0.2
+	DefaultLoginBurst = 10
+)
 
 // Server is the HTTP layer for the Higress console.
 type Server struct {
@@ -67,6 +88,7 @@ type Server struct {
 	seq          atomic.Uint64
 	startedAt    time.Time
 	metrics      *serverMetrics
+	loginLimit   *loginLimiter
 }
 
 type serverMetrics struct {
@@ -74,6 +96,7 @@ type serverMetrics struct {
 	resolveMiss     prometheus.Counter
 	resolveAuthFail prometheus.Counter
 	adminOps        *prometheus.CounterVec
+	loginThrottled  prometheus.Counter
 }
 
 // NewServer constructs the server from a fully-populated Config.
@@ -98,7 +121,12 @@ func NewServer(cfg Config) (*Server, error) {
 		cfg:          cfg,
 		cookieSecret: pepper[:],
 		startedAt:    time.Now(),
+		loginLimit:   newLoginLimiterFor(cfg),
 		metrics: &serverMetrics{
+			loginThrottled: prometheus.NewCounter(prometheus.CounterOpts{
+				Name: "higress_login_throttled_total",
+				Help: "login attempts refused by the unauthenticated write-path limit",
+			}),
 			resolveOK: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Name: "higress_resolve_total",
 				Help: "consumer resolve outcomes",
@@ -144,6 +172,9 @@ func NewServer(cfg Config) (*Server, error) {
 		{"higress_resolve_auth_fail_total", func() error {
 			return registerOrAdopt(s.metrics.resolveAuthFail, func(cur prometheus.Counter) { s.metrics.resolveAuthFail = cur })
 		}},
+		{"higress_login_throttled_total", func() error {
+			return registerOrAdopt(s.metrics.loginThrottled, func(cur prometheus.Counter) { s.metrics.loginThrottled = cur })
+		}},
 		{"higress_admin_ops_total", func() error {
 			return registerOrAdopt(s.metrics.adminOps, func(cur *prometheus.CounterVec) { s.metrics.adminOps = cur })
 		}},
@@ -183,7 +214,9 @@ func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/healthz", s.handleHealth)
 	r.Get("/metrics", promhttp.Handler().ServeHTTP)
-	r.Post("/session/login", s.handleLogin)
+	// 决策 330：这是整个进程里唯一一个未认证就能写链的入口。限流器挂在它前面，
+	// 所以被挡下的请求根本走不到写行那一步。
+	r.With(s.throttleLogin).Post("/session/login", s.handleLogin)
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/consumers", s.handleResolve)

@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -140,6 +141,23 @@ func runServe(args []string) int {
 		// inside the handler.
 		Handler:           managermiddleware.AuditMiddleware(auditSink)(srv.Routes()),
 		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	// 决策 330：网关这条链此前**没有任何保留期**——每天增长而从不被清理，
+	// 一个长期运行的网关会把它自己的 SQLite 磁盘写满，而一个写满的审计库在
+	// 运维眼里和「审计没开」是一回事。
+	//
+	// 默认关闭，与控制面同语义（0 = 不清理），**这不是疏忽而是一个要被看见的
+	// 选择**：默认开启等于替运维决定多少天的审计历史可以不要，而审计历史恰恰
+	// 是别人不会愿意替他决定的东西。要开就明写。
+	retentionCtx, stopRetention := context.WithCancel(context.Background())
+	defer stopRetention()
+	retentionDays := higressAuditRetentionDays()
+	if retentionDays > 0 {
+		fmt.Printf("[higress-console] audit retention: %d days\n", retentionDays)
+		go func() { _ = auditSink.RunRetention(retentionCtx, retentionDays) }()
+	} else {
+		fmt.Println("[higress-console] audit retention: off (set OPSKEEPER_HIGRESS_AUDIT_RETENTION_DAYS to bound the chain)")
 	}
 
 	stop := make(chan os.Signal, 1)
@@ -354,4 +372,25 @@ func decodeClaims(token string) (jwt.MapClaims, error) {
 func dumpJSON(v any) string {
 	b, _ := json.MarshalIndent(v, "", "  ")
 	return string(b)
+}
+
+// higressAuditRetentionDays reads the gateway's retention window.
+//
+// It returns 0 for "unset" and for "set to 0", which both mean "do not
+// sweep" — the same reading the control plane gives OPSKEEPER_AUDIT_RETENTION_DAYS,
+// deliberately, so that one mental model covers both processes. A value that
+// does not parse is 0 as well, and the startup line says which of the three
+// happened, because **一个被拼错的保留期变量静默地变成「不清理」，比它大声地
+// 失败更贵**：磁盘会慢慢满，而没有人知道为什么。
+func higressAuditRetentionDays() int {
+	raw := os.Getenv("OPSKEEPER_HIGRESS_AUDIT_RETENTION_DAYS")
+	if raw == "" {
+		return 0
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "higress-console: OPSKEEPER_HIGRESS_AUDIT_RETENTION_DAYS=%q is not a number; retention is off\n", raw)
+		return 0
+	}
+	return days
 }

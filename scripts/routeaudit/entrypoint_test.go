@@ -389,3 +389,86 @@ func main() {
 		t.Fatalf("missing = %v, want the process reported as unwired despite the comment", missing)
 	}
 }
+
+// --- 决策 331：接收者是一条链，不是一个标识符 --------------------------------
+//
+// 这一条不是「顺手改改正则」。它是这个工具第二次因为「只看一种写法」而漏掉
+// 一整类路由，而漏掉的方向恰好是**最不该漏的那一类**：带中间件的那些。
+//
+//	POST /session/login 是全树唯一挂了限流器的路由，而 330 给它套上
+// `r.With(s.throttleLogin)` 的那一刻，扫描器就再也看不见它了。工具没有报警——
+// 它只是安静地把这条路由从分母里拿掉了，于是「115 条 mutating 路由全部有裁决」
+// 这句话在限流上线那天起变成了一句假话，而**没有一个人会发现，因为假话和真话
+// 在屏幕上是同一句话**。
+//
+// 62 条此前不可见的路由里，有 8 条本来就是已审计的（插件发布推进、知识来源），
+// 54 条是真正待审的：换节点 agent 版本、轮换节点密钥、开关节点插件、分享报表、
+// 杀掉一个 webshell 会话、登记一把 SSH 身份。这一刀把它们全部写进表里，写成
+// 待审而不是写成「不需要留痕」——**一个刚被发现的东西，先记成欠账，比记成结论
+// 诚实得多**。
+
+func TestAMiddlewareWrappedRouteIsStillARoute(t *testing.T) {
+	src := `package higress
+
+func (s *Server) routes(r chi.Router) {
+	r.With(s.throttleLogin).Post("/session/login", s.handleLogin)
+	r.With(s.requireAdmin).Delete("/consumers/{name}", s.handleAdminDelete)
+	r.Post("/session/logout", s.handleLogout)
+}
+`
+	got := routeReg.FindAllStringSubmatch(stripComments(src), -1)
+	if len(got) != 3 {
+		t.Fatalf("found %d routes, want 3: %v", len(got), got)
+	}
+	for _, m := range got {
+		if m[4] == "" {
+			t.Errorf("route %q matched without a handler", m[3])
+		}
+	}
+	// The wrapped one has to be the one that carries the handler, not a
+	// receiver fragment: `mw.Require(...)` inside the chain must not be able
+	// to satisfy the handler group.
+	if got[0][3] != "/session/login" || got[0][4] != "s.handleLogin" {
+		t.Errorf("first route = %q/%q, want /session/login/s.handleLogin", got[0][3], got[0][4])
+	}
+}
+
+// 决策 331 的另一半：找 Roots 之外的文件那一步读的是**没剥注释的**源码，
+// 于是 authzmw 的包注释里那行用法示例（每个读它的人都会抄的那一行）
+// `r.With(mw.Require("edge:*", "write")).Post("/v1/edges", ...)`
+// 在扫描器学会链式接收者之后开始匹配，工具随即要求给一个**一个路由都没注册的
+// 包**写裁决。这是 323 的失败模式第二次从另一扇门进来：一个索引文档的闸门，
+// 惩罚的正是写文档这件事。两半扫描必须对「什么算一条路由」有同一个答案。
+func TestTheUnscannedWalkIgnoresCommentsToo(t *testing.T) {
+	// tree() builds inside a Root on purpose, so this one writes its own: the
+	// point is to look **outside** the roots.
+	//
+	// The positive control is what makes this test mean something. Without it
+	// the assertion "the walk reported only the real route" also passes when
+	// the walk reports nothing at all, and "ignores comments" and "is blind"
+	// are the same observation from outside.
+	root := t.TempDir()
+	for rel, body := range map[string]string{
+		"core/base/pkg/other/routes.go": "package other\n\nfunc routes(r chi.Router) {\n\tr.Post(\"/v1/real\", h.real)\n}\n",
+		"core/base/pkg/authzmw/middleware.go": `package authzmw
+
+// Usage from cmd/opskeeper:
+//
+//	mw := authzmw.New(authzEnf, log)
+//	r.With(mw.Require("edge:*", "write")).Post("/v1/edges", ...)
+package authzmw
+`,
+	} {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unscanned := findUnscannedRoots(root)
+	if len(unscanned) != 1 || !strings.HasSuffix(unscanned[0], "other/routes.go") {
+		t.Fatalf("findUnscannedRoots = %v, want exactly the file with a real route", unscanned)
+	}
+}

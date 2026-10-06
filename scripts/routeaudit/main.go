@@ -53,7 +53,20 @@ import (
 // seen, and the command reported it as an orphan. **A detector that misses a
 // route produces the most expensive kind of wrong answer**: it does not fail,
 // it fails to fail.
-var routeReg = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\.(Post|Put|Patch|Delete)\("([^"]+)",\s*([A-Za-z0-9_.]+)`)
+// The receiver part is a **chain**, not a bare identifier, because decision
+// 330 wrapped the login route in a middleware:
+//
+//	r.With(s.throttleLogin).Post("/session/login", s.handleLogin)
+//
+// and the first version of this pattern only matched `<ident>.Post(`, so the one
+// route in the tree that had a rate limiter in front of it was the one route the
+// gate stopped seeing. That is the same failure this regexp already failed once
+// (the receiver being hard-coded to `r`), wearing a different hat: a gate that
+// cannot see a route cannot say anything about it, and says nothing loudly.
+// The chain is matched explicitly rather than with a greedy `[^.]*` so that a
+// later `.Post(` on some other object in the same file cannot be absorbed into a
+// receiver it does not belong to.
+var routeReg = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*(?:With|Group|Route|Use)\((?:[^()]|\([^()]*\))*\))*)\.(Post|Put|Patch|Delete)\("([^"]+)",\s*([A-Za-z0-9_.]+)`)
 
 // stripComments blanks out Go comments while preserving byte offsets, so the
 // regular expressions above keep matching at the same indices as before.
@@ -610,6 +623,87 @@ var Verdicts = []Verdict{
 	{File: "core/manager/server/hitl/http.go", Route: "/v1/hitl/proposals/{id}/reject", Handler: "h.reject"},
 	{File: "core/manager/server/loop/admin.go", Route: "/{incident_id}/increment", Handler: "deps.incrementRetryCount"},
 	{File: "core/manager/server/loop/admin.go", Route: "/{incident_id}/reset", Handler: "deps.resetRetryCount"},
+
+	// ------------------------------------------------------------------
+	// Decision 331. The 62 rows below were invisible to this gate until the
+	// scanner learned to read a chained receiver, and that is the whole
+	// reason they are here in one block rather than scattered among the
+	// families above: **they were never judged, and the table is what
+	// "judged" means in this repository.**
+	//
+	// The chain is short enough to read in one sitting and every route in
+	// it is a mutation that reaches something — an agent version, a plugin,
+	// a credential, a report somebody else will read, a webshell somebody
+	// else is sitting in. That is precisely the class this gate exists to
+	// make somebody look at, and for as long as the scanner only matched
+	// `<ident>.Post(`, "look at it" was opt-in by where you happened to
+	// write the middleware.
+	//
+	// They are recorded as backlog rather than as settled exemptions: the
+	// honest claim is "not audited yet", not "does not need a row". Each
+	// one gets its own row in the ledger as it is judged.
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/repos", Handler: "h.createRepo"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/repos/{id}", Handler: "h.deleteRepo"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/repos/{id}/sync", Handler: "h.syncRepo"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/vault/sync", Handler: "h.syncVault"},
+	{File: "core/domains/server/federation/http.go", Route: "/clusters", Handler: "h.enroll", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/domains/server/federation/http.go", Route: "/clusters/{id}/policy", Handler: "h.publish", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/domains/server/federation/http.go", Route: "/clusters/{id}/policy/ack", Handler: "h.ack", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/domains/server/federation/http.go", Route: "/clusters/{id}/policy/redeliver", Handler: "h.redeliver", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/domains/server/flow/http.go", Route: "/v1/flows", Handler: "h.create", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/domains/server/flow/http.go", Route: "/v1/flows/generate", Handler: "h.generate", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/domains/server/flow/http.go", Route: "/v1/flows/{id}", Handler: "h.del", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/domains/server/flow/http.go", Route: "/v1/flows/{id}", Handler: "h.update", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/domains/server/flow/http.go", Route: "/v1/flows/{id}/run", Handler: "h.run", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/domains/server/flow/http.go", Route: "/v1/flows/{id}/test-node", Handler: "h.testNode", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/domains/server/flow/http.go", Route: "/v1/flows/{id}/toggle", Handler: "h.toggle", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/domains/server/plugin/http.go", Route: "/v1/plugins/releases", Handler: "h.start"},
+	{File: "core/domains/server/plugin/http.go", Route: "/v1/plugins/releases/{name}/advance", Handler: "h.advance"},
+	{File: "core/domains/server/plugin/http.go", Route: "/v1/plugins/releases/{name}/halt", Handler: "h.halt"},
+	{File: "core/domains/server/plugin/http.go", Route: "/v1/plugins/releases/{name}/rollback", Handler: "h.rollback"},
+	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}", Handler: "h.delete", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}", Handler: "h.update", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}/roles", Handler: "h.updateRoles", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/edge/http.go", Route: "/v1/edges", Handler: "h.createEdge", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/batch/delete", Handler: "h.batchDelete", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/batch/upgrade", Handler: "h.batchUpgradeAgent", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/batch/upgrade-package", Handler: "h.batchUpgradePackage", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}", Handler: "h.deleteEdge", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}/plugins/{name}", Handler: "h.setPlugin", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}/rotate-secret", Handler: "h.rotateSecret", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}/upgrade", Handler: "h.upgradeAgent", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}/upgrade-package", Handler: "h.upgradePackage", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs", Handler: "h.createDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs/{id}", Handler: "h.deleteDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs/{id}", Handler: "h.updateDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs/{id}/move", Handler: "h.moveDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/ssh-identities", Handler: "h.createSSHIdentity", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/ssh-identities/generate", Handler: "h.generateSSHIdentity", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/ssh-identities/{id}", Handler: "h.deleteSSHIdentity", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/ssh-identities/{id}", Handler: "h.updateSSHIdentity", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/upload", Handler: "h.uploadDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules", Handler: "h.createSchedule", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}", Handler: "h.deleteSchedule", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}", Handler: "h.updateSchedule", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}/run-now", Handler: "h.runNow", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/report-schedules/{id}/toggle", Handler: "h.toggleSchedule", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/reports", Handler: "h.generateNow", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/reports/{id}", Handler: "h.deleteReport", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/reports/{id}/share", Handler: "h.shareReport", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/oneoff", Handler: "h.createOneoffTask", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/{id}", Handler: "h.deleteTask", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/report/http.go", Route: "/v1/tasks/{id}/run", Handler: "h.rerunTask", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/node-types", Handler: "h.createNodeType", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/node-types/{name}", Handler: "h.deleteNodeType", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/nodes", Handler: "h.createNode", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/nodes/{id}", Handler: "h.deleteNode", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/nodes/{id}", Handler: "h.updateNode", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relation-types", Handler: "h.createRelationType", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relation-types/{name}", Handler: "h.deleteRelationType", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relations", Handler: "h.createRelation", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relations/{id}", Handler: "h.deleteRelation", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/topology/http.go", Route: "/v1/topology/relations/{id}", Handler: "h.updateRelation", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
+	{File: "core/manager/server/webshell/http.go", Route: "/v1/webshell/sessions/{id}", Handler: "h.killSession", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 }
 
 // Result is what one run found.
@@ -965,7 +1059,21 @@ func findUnscannedRoots(root string) []string {
 		if readErr != nil {
 			return nil
 		}
-		if routeReg.Match(src) {
+		// Decision 331: this walk reads **raw** source, comments included, and
+		// that used to be invisible. `authzmw`'s package doc carries the usage
+		// line every reader copies from —
+		//
+		//	r.With(mw.Require("edge:*", "write")).Post("/v1/edges", ...)
+		//
+		// — and once the scanner learned chained receivers (same decision, for
+		// the same reason), that comment started matching. The tool then asked
+		// for a verdict on a package that registers no routes at all, which is
+		// decision 323's failure mode arriving for the second time and by a
+		// different door: **a gate that indexes documentation is a gate that
+		// punishes writing documentation.** The main scan already strips
+		// comments before matching; this walk must do the same, or the two
+		// halves of one tool disagree about what a route is.
+		if routeReg.MatchString(stripComments(string(src))) {
 			out = append(out, rel)
 		}
 		return nil
