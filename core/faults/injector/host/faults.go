@@ -328,37 +328,55 @@ func (i *Injector) cpuStress(ctx context.Context, spec injector.InjectSpec, l *l
 	})
 
 	// 采样窗口：故障必须**被量到**才算注入成功，所以这里必须等一段时间。
-	// 1 秒是下限而不是上限——CPU 时间是累积量，给它越短的时间越可能
-	// 在调度还没铺开的时候就去读。
-	const window = time.Second
+	//
+	// 1 秒是**下限**而不是上限——CPU 时间是累积量，给它越短的时间
+	// 越可能在调度还没铺开的时候就去读。原实现只等 1 秒就下判决，
+	// 于是与自己的注释相反：在一台**瞬时**繁忙的机器上（另一个测试
+	// 进程在并行跑、一个 CI 作业刚起步），worker 分到的核比平时少，
+	// 1 秒的读数就落在验收线以下，注入器报"负载比 case 期望的弱"。
+	//
+	// 那句话在**持续**饱和的机器上是对的，而且必须留着：如果这台机器
+	// 本来就被别的负载占着，那么"CPU 打满"这个故障本来就不可能
+	// 归因到我们，多等也等不出来——那种拒绝是诚实的。
+	//
+	// 但**瞬时**繁忙等得出来。所以这里采样到验收线满足为止，
+	// 上限是一个真上限：超过它还在等，只是在等一个不会到来的数。
+	const (
+		sampleTick    = 250 * time.Millisecond
+		sampleFloor   = time.Second
+		sampleCeiling = 10 * time.Second
+	)
+	bar := float64(targetLoad) - 25
 	start := time.Now()
 	startCPU, err := cpuSeconds()
 	if err != nil {
 		return err
 	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(window):
-	}
-	endCPU, err := cpuSeconds()
-	if err != nil {
-		return err
-	}
-	burned := endCPU - startCPU
-	elapsed := time.Since(start)
-	// 判据：这 1 秒里至少烧掉了半个 CPU 秒。
-	//
-	// 不是 1 秒（那要求单核满载，而容器里拿不到满载是常态），
-	// 也不是 0（那正是"负载没起来"）。半个 CPU 秒是一个在
-	// 一核机器上必然达到、在负载完全没起来的机器上必然达不到的数。
-	if burned < 0.5 {
-		return fmt.Errorf("cpu_stress: %d worker(s) burned only %.2f CPU second(s) in %s; "+
-			"the load is not observable", workers, burned, elapsed.Round(time.Millisecond))
+	var burned, elapsed float64
+	util := 0.0
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(sampleTick):
+		}
+		endCPU, err := cpuSeconds()
+		if err != nil {
+			return err
+		}
+		elapsed = time.Since(start).Seconds()
+		burned = endCPU - startCPU
+		util = burned / elapsed / float64(workers) * 100
+		if elapsed >= sampleFloor.Seconds() && util >= bar {
+			break
+		}
+		if time.Since(start) >= sampleCeiling {
+			break
+		}
 	}
 	// 利用率按 worker 归一：一个 worker 在十核机器上跑满仍然是 100% 的
 	// 单 worker 饱和度，用总核数去归一会把一台空闲的大机器读成 10%。
-	util := burned / elapsed.Seconds() / float64(workers) * 100
+	//
 	// 25 个百分点是容差，理由写在 targetLoad 上面。
 	//
 	// 判据在**这里**而不只是在 0.5 那一行，是因为 case 声明了它要什么：
@@ -366,10 +384,24 @@ func (i *Injector) cpuStress(ctx context.Context, spec injector.InjectSpec, l *l
 	// 而是一个比 case 期望温和得多的故障——而一个温和的故障会让诊断
 	// agent 在一个不真实的场景里被判为通过。
 	// 量到的那个数进 result：人能看到它与 target_load 差多少。
-	if util < float64(targetLoad)-25 {
-		return fmt.Errorf("cpu_stress: %d worker(s) reached %.0f%% utilisation in %s, "+
-			"want at least %d%% (tolerance 25 points); the load is weaker than the case asked for",
-			workers, util, elapsed.Round(time.Millisecond), targetLoad)
+	//
+	// 判据是「这 1 秒里至少烧掉了半个 CPU 秒」的下限版本：CPU 时间是
+	// 累积量，无论窗口多长，半个 CPU 秒都是"负载确实跑过"的门槛，
+	// 而它在负载完全没起来的机器上必然达不到。
+	if burned < 0.5 {
+		return fmt.Errorf("cpu_stress: %d worker(s) burned only %.2f CPU second(s) in %s; "+
+			"the load is not observable", workers, burned, time.Duration(elapsed*float64(time.Second)).Round(time.Millisecond))
+	}
+	if util < bar {
+		// 采样上限是 %s 还够不着验收线：这不是"再等一会儿"的问题，
+		// 是这台机器此刻被别人占着，CPU 打满归因不到我们身上。
+		return fmt.Errorf("%w: cpu_stress: %d worker(s) reached %.0f%% utilisation over %s "+
+			"(sampled up to %s), want at least %d%% (tolerance 25 points) — "+
+			"this machine is busy with something else and no amount of waiting will "+
+			"make this fault attributable",
+			ErrMachineBusy, workers, util,
+			time.Duration(elapsed*float64(time.Second)).Round(time.Millisecond),
+			sampleCeiling, targetLoad)
 	}
 	l.utilization = int(util + 0.5)
 	return nil

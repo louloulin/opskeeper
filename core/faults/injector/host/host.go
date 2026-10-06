@@ -131,6 +131,17 @@ func New(opts ...Option) *Injector {
 	return i
 }
 
+// ErrMachineBusy says the machine is too busy to host this fault *right
+// now*, as opposed to the injector being unable to do its job.
+//
+// 这两件事必须能被 caller 分开，因为它们要的后续动作正好相反：
+// 前者是在一台繁忙的机器上重试或者换节点，后者是注入器坏了要去修。
+//
+// 一个两者都报"注入失败"的返回，会让排障的人先去查代码——而代码是对的，
+// 那台机器上此刻根本造不出这个故障。它包着 ErrUnavailable 而不是自成一个
+// 类型：不可用是它的上位判断，这个错误只是把"为什么此刻不可用"说得更细。
+var ErrMachineBusy = fmt.Errorf("%w: 这台机器此刻太忙，这个故障造不出来", injector.ErrUnavailable)
+
 // Type returns the type prefix.
 func (i *Injector) Type() string { return "host." }
 

@@ -354,7 +354,7 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 | `redis.inject_memory_burst` | `INFO memory` 的 `used_memory` 前后差值 > 0 |
 | `redis.inject_slow_commands` | 一条**没被碰过**的连接的 PING 耗时 ≥ 暂停时长 |
 | `host.fill_disk` | `statfs` 的可用字节前后差值；撤销后至少还回九成 |
-| `host.cpu_stress` | `getrusage` 的 CPU 时间增量；利用率按 worker 归一后不低于 `target_load - 25` 个百分点 |
+| `host.cpu_stress` | `getrusage` 的 CPU 时间增量 ≥ 0.5 CPU 秒；利用率按 worker 归一后不低于 `target_load - 25` 个百分点。采样**到验收线为止、上限 10 秒**（决策 306） |
 | `kafka.inject_consumer_lag` | `OffsetFetch` 的 committed 与 `ListOffsets` 的 latest 之差 ≈ `产出量 × (produce_rate−consume_rate)/produce_rate`（±15%） |
 | `kafka.inject_partition_skew` | 每个分区 `Last − First` 的记录条数；最忙分区 ≥ 次忙 `skew_factor` 倍，且落在 `target_partition` |
 | `k8s.cordon_node` | `node.spec.unschedulable == true`；撤销后为 `false`。**已经 cordon 的节点直接拒绝** |
@@ -371,6 +371,23 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 
 **没设就一步都不走**——`host` 尤其不猜：在节点 agent 上，
 任何形式的默认目录都极可能就是节点的根文件系统。
+
+#### 两条会读"整机"的判据：先证明那个数是静的
+
+`host` 这一族里有两条判据量的不是自己造的东西，而是**整台机器 / 整个卷**：
+`cpu_stress` 量的是 CPU 时间占整机核数的比例，`fill_disk` 量的是 `statfs` 的空闲字节。
+这两条在一个"旁边还有别人在忙"的机器上会假红，而红的方式很像真的——
+**这不是阈值不对，是那个数在那半秒里根本不属于我们。**
+
+| 现象 | 处理 |
+|---|---|
+| **瞬时**繁忙（另一个测试进程在并行跑、CI 作业刚起步） | `cpu_stress` **等**：采样到验收线满足为止，上限 10 秒。1 秒是下限不是上限 |
+| **持续**饱和（这台机器本来就被占着） | **大声拒绝**，包成 `ErrMachineBusy`（`ErrUnavailable` 的下位）。`"CPU 打满"`归因不到我们身上，多等也等不出来 |
+| 别的进程在写同一个卷 | `fill_disk` 先连采三次：样本之间动得超过两个块就**跳过**，并把测到的差值写进跳过理由 |
+
+`ErrMachineBusy` 与 `ErrUnavailable` 分开是有用的，因为**"这台机器此刻太忙"
+和"注入器坏了"要的后续动作正好相反**：前者换台机器重试，后者去修代码。
+两者都报成"注入失败"，会把人引去查一份没问题的代码。
 
 **"没被碰过的连接"这五个字是慢命令那一条的全部要害**：它是四种 Redis 故障里
 唯一一种影响所有人的，所以它不能靠注入器自证——说"我已经暂停了"没有任何意义，

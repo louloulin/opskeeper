@@ -34,12 +34,56 @@ func liveInjector(t *testing.T) (*Injector, string) {
 	return i, dir
 }
 
+// requireQuietVolume skips when the volume is being written by somebody else.
+//
+// 这一条和 CPU 那条是同一个道理：判据量的是**全局**量（statfs 的空闲字节），
+// 而别的进程同时在写同一个卷时，这个数的变化不是我们造成的。
+//
+// 观测到的真失败：一次全量 `go test ./...` 与本测试并行跑，编译产物吃掉了
+// 约 7MB，于是撤销之后空闲空间比注入前还低 7MB——文件确实删掉了，
+// 故障确实撤销了，而 `df` 的读数说没有。这不是一条间歇红的阈值不对，
+// 是**这个量在那半秒里根本不属于我们**。
+//
+// 判据是"静"，不是"空"：空闲多与少都不影响能不能量，别的写者才会。
+// 样本之间差得多就跳过，并把测到的差值写进跳过理由——
+// 一个只会说"环境不好"的跳过会让人以为可以随便重试。
+func requireQuietVolume(t *testing.T, dir string) {
+	t.Helper()
+	const (
+		samples   = 3
+		gap       = 100 * time.Millisecond
+		tolerance = 2 * int64(chunkBytes)
+	)
+	var lo, hi int64
+	for i := 0; i < samples; i++ {
+		free, _, err := diskFree(dir)
+		if err != nil {
+			t.Fatalf("statfs: %v", err)
+		}
+		if i == 0 || free < lo {
+			lo = free
+		}
+		if i == 0 || free > hi {
+			hi = free
+		}
+		if i < samples-1 {
+			time.Sleep(gap)
+		}
+	}
+	if hi-lo > tolerance {
+		t.Skipf("skipping: the volume moved by %d bytes over %d samples before we "+
+			"wrote anything, so a free-space reading during the test would not be ours "+
+			"to interpret", hi-lo, samples)
+	}
+}
+
 // 一个 fill 必须真的吃掉磁盘，而且撤销之后一��字节都不剩。
 //
 // 判据是 statfs 的可用字节前后差值——**从外面量**的数。
 // "发起了多少块写" 与 "df 少了多少" 不是同一件事，只有后者是故障。
 func TestAFillDiskActuallyConsumesSpaceAndCleanupGivesItBack(t *testing.T) {
 	i, dir := liveInjector(t)
+	requireQuietVolume(t, dir)
 	before, _, err := diskFree(dir)
 	if err != nil {
 		t.Fatalf("statfs: %v", err)
@@ -252,6 +296,11 @@ func TestACPUStressBurnsRealCPUTimeAndStopsOnCleanup(t *testing.T) {
 		Params:   map[string]any{"workers": workers},
 	})
 	if err != nil {
+		// 这台机器此刻被别人占着，是一个环境事实，不是注入器坏了。
+		// 报成红会让人先去查代码，而代码是对的。
+		if errors.Is(err, ErrMachineBusy) {
+			t.Skipf("skipping: %v", err)
+		}
 		t.Fatalf("inject cpu_stress: %v", err)
 	}
 	if res.Metadata["workers"] != strconv.Itoa(workers) {
@@ -277,6 +326,50 @@ func TestACPUStressBurnsRealCPUTimeAndStopsOnCleanup(t *testing.T) {
 	if grew := after - before; grew > 0.15 {
 		t.Errorf("CPU time still grew by %.2f second(s) 400ms after cleanup; "+
 			"the load did not stop", grew)
+	}
+}
+
+// 机器忙是一个环境事实，不是注入器坏了；两者必须能被 caller 分开，
+// 因为它们要的后续动作正好相反（换台机器重试 vs 去修代码）。
+// 上位关系也得成立：一个只认 ErrUnavailable 的 caller 仍然要看到"不可用"。
+func TestAMachineTooBusyToHostTheFaultIsStillAnUnavailable(t *testing.T) {
+	if !errors.Is(ErrMachineBusy, injector.ErrUnavailable) {
+		t.Fatal("ErrMachineBusy does not satisfy ErrUnavailable; a caller that only " +
+			"knows about ErrUnavailable would see a busy machine as a broken injector")
+	}
+}
+
+// 采样到验收线为止，不等于每次都要等满上限。
+// 这一条是防"把假红换成慢测试"的：安静机器上注入必须照旧一秒左右完成，
+// 否则本轮只是把一条间歇红的断言换成了一条每次都慢的断言。
+func TestAnInjectionOnAQuietMachineDoesNotWaitOutTheSamplingCeiling(t *testing.T) {
+	i, _ := liveInjector(t)
+	workers := runtime.GOMAXPROCS(0)
+	if workers > 2 {
+		workers = 2
+	}
+	start := time.Now()
+	res, err := i.Inject(context.Background(), injector.InjectSpec{
+		Type:     "host.cpu_stress",
+		Duration: 60 * time.Second,
+		Params:   map[string]any{"workers": workers},
+	})
+	took := time.Since(start)
+	if err != nil {
+		if errors.Is(err, ErrMachineBusy) {
+			t.Skipf("skipping: %v", err)
+		}
+		t.Fatalf("inject: %v", err)
+	}
+	defer func() {
+		if err := i.Cleanup(context.Background(), res.InjectID); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	}()
+	// 上限是 10s。一台此刻并不忙的机器应该在两倍下限之内就够到验收线。
+	if took > 3*time.Second {
+		t.Errorf("injection took %s on an idle machine; the sampling loop is waiting "+
+			"out its ceiling instead of stopping as soon as the target is met", took)
 	}
 }
 
