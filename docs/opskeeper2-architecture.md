@@ -6403,6 +6403,129 @@ cigate: 1 gate(s) are wired but no push can reach them -- they wait for a schedu
    `ci.yml:369-373` 写的是「nightly 失败是信息，PR 红是障碍」，
    理由是公开 registry 的限流不该卡住一个PR。**这个理由本身仍然成立**，
    但它成立的前提是 nightly **真的会跑**——而它今天不会。
+### 4.333 决策 399：方案 §六 那一行**第一次真的跑了，而且是绿的**——代价是发现一个诊断步骤把它挡了整整一轮
+
+4.332 说完「它现在是一个按钮，不是一个愿望」之后，本轮按了那个按钮。
+
+#### 4.333.1 第一次 dispatch（run `37505807899`，旧 commit `9408f5e`）
+
+`node delivery (broker, nightly)` **在 32 秒里第一次出现在 CI 的 job 列表里**，
+然后：
+
+```
+Which architectures does the broker image offer?
+  VERDICT: no arm64 linux manifest is offered. An arm64 delivery leg has to
+    build the broker from source first (make docker-build-broker, which follows
+    TARGET_ARCH), or the arm64 leg stays a registered gap. See decision 190.
+  exit status 1
+  make: *** [Makefile:219: broker-arch-report] Error 1
+```
+
+`grep -c "e2e-delivery-check"` = **0**。
+
+**两个结果，一个好消息一个坏消息。**
+
+好消息：**4.329 说必须先读的那个问题，现在有答案了**，而且是在唯一能回答它
+的地方（`ci.yml:381-390` 的注释早就写明"开发机在 registry 镜像后面，
+我们问过，拿到 403"）。答案是 `singchia/frontier:1.2.5` **只提供 linux/amd64**。
+所以 **arm64 节点 agent 那一项，卡在一个第三方镜像上，不在我们能改的地方**——
+决策 186 当初的判断（"留给下一刀，而不是交付一个红的 nightly"）**是对的**。
+
+坏消息：**`e2e-delivery-check` 一次都没跑到**，因为那个诊断步骤红了就停。
+
+#### 4.333.2 而这个坏消息比 4.332 那次更难发现
+
+4.332 说那个 job 挂在一条永远不通的时钟上——**至少那时候它一次都没跑过，
+看不出来它跑起来会怎样**。现在它跑起来了，**而它在 32 秒后停住，
+日志里有一条格式完美的 VERDICT，和一个红色的 job**。
+
+**任何看这份日志的人都会认为"这个 nightly 跑了，它报告了 broker 不支持
+arm64，到此为止"。** 没有人会想到：它存在的那条验收，一次都没被执行。
+
+**一个诊断步骤挡在这个 job 存在的理由前面，让一个跑了、报了、红了的 job，
+看起来像完成了一次检查——而它检查的是别的东西。** 这比 4.332 那种
+"根本没跑"更难发现，因为它有产出。
+
+根因在 `ci.yml:391-397`，决策 190 写的那段注释里有一句：
+*"Swallowing it would make a nightly that learned nothing look like a nightly
+that passed, which is the shape this repository keeps refusing."*
+
+**这个顾虑是对的，但它给出的手段（不加 `continue-on-error`）造成了注释
+想避免的那个后果的近亲**：不是"什么都没学到却像通过了"，而是
+"学到了关于别的东西，于是以为这里检查过了"。**注释里点名要拒绝的形状，
+被它自己推荐的写法制造出来了。**
+
+#### 4.333.3 改法：`continue-on-error` + 末尾重新抬起红
+
+```yaml
+- name: Which architectures does the broker image offer?
+  id: broker_arch
+  continue-on-error: true
+  run: make broker-arch-report
+
+- name: Node delivery and no-cloud-credential assertions
+  run: make e2e-delivery-check
+
+- name: Re-raise the broker architecture verdict
+  if: always() && steps.broker_arch.outcome == 'failure'
+  run: ... exit 1
+```
+
+**`continue-on-error` 在这里不是"吞掉结果"**：末尾那个步骤把红重新抬起，
+所以一个"只学到 no arm64"的 nightly **仍然以红结束**——决策 190 的要求
+一条没让。它改变的只有一件事：**一个关于 broker 镜像的结论，不再决定一条
+关于节点的断言有没有机会跑。**
+
+#### 4.333.4 第二次 dispatch（run `37508841196`，`02fb91d`）——修复生效
+
+```
+X node delivery (broker, nightly) in 3m24s        （上次 32s）
+  Which architectures…   VERDICT: no arm64 …      红，但没停
+  Node delivery…         go test -tags=e2e -count=1 -timeout=20m ./tests/e2e/ \
+                          -run 'TestTheGatewayServesAStreamToANodeCredential|
+                                 TestNodeAgentDelivery|
+                                 TestANodeKeepsItsTelemetryThroughAnOutage'
+                         ok  …/tests/e2e   160.273s          ← 绿
+  Re-raise…              exit 1                             ← job 仍然红
+```
+
+**`TestANodeKeepsItsTelemetryThroughAnOutage` 也在这一次名单里**——那是
+决策 373 实跑过、决策 377 发现**从未进过 CI** 的那条断网落盘回放用例。
+它今天在 CI 上跑了，和另外两条一起，160 秒，全绿。
+
+于是方案 §六 的验收表：
+
+| 验收行 | 本轮之前 | 本轮 |
+|---|---|---|
+| 节点无云厂商密钥（目录 + 进程环境） | **从未报过** | ✅ **160.273s，绿** |
+| 断网落盘与回放 | 同上 | ✅ 同一次运行里，绿 |
+| 跨架构 amd64 + arm64 完整 e2e | 缺 arm64 **节点 agent** | **仍缺，且原因已查清：broker 镜像只有 linux/amd64** |
+
+**第三行的性质又变了**：4.329 我以为是"缺一台机器"，4.332 以为是"缺一段
+矩阵 YAML"，**本轮查清了它是一个第三方镜像的架构清单**。三种说法里，
+只有这一种是可以被证据推翻的，前两种我都不该那么早下结论。
+
+#### 4.333.5 于是现在的账，第一次是完整执行过的账
+
+**方案 §六 的十四行验收表：**
+
+- **十三行**：有 CI 或本机的运行记录
+- **一行（跨架构 arm64 节点 agent）**：**未达成，且已查清阻塞在
+  `singchia/frontier:1.2.5` 不提供 arm64 manifest**。出路写在
+  `brokerarch` 自己的输出里：`make docker-build-broker`（走 `TARGET_ARCH`
+  从源码构建 broker），**或者**把它作为已登记的缺口留着
+
+**这是本项目第一次，方案 §六 的每一行要么被执行过、要么有一个查清了的
+外部阻塞点。** 在此之前，那张表上有一行既没跑过、也没人知道它为什么不跑。
+
+#### 4.333.6 本轮没有做的事，以及为什么
+
+**没有去构建 arm64 的 broker。** `make docker-build-broker` 在技术上是通的
+（`brokerarch` 的输出直接推荐了它），但它意味着把一个第三方组件从源码
+构建并纳入我们自己的交付链——那是**一个供应链决定**，需要知道那个仓库的
+许可证、可复现性、以及出问题时谁能修。本轮不替人做这个决定。
+
+**也没有为了让 job 变绿而去改 brokerarch 的判定。** 它报的是事实。
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
