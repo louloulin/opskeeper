@@ -5190,6 +5190,69 @@ A 是「明知道正文里有人名和手机号，仍然原样留存」；B 是�
 
 所以本轮不打算把百分比往上抬。**抬高它的唯一办法是把阶段 3 写进 roadmap
 并标上未开始，而不是把已完成项重算一遍。**
+### 4.320 决策 386：上一节写「prompt injection 标注未见机制」是**我搜错了**——它已完整落地，且带 15 个测试
+
+4.319.4 记了一条「prompt injection 的不可信数据源标注没见到机制」，并判为
+顺序问题。本节把它更正：**它已实现，位置是 `core/base/pkg/promptguard`
+加 `core/manager/biz/aiops/tools/untrusted_sources.go`，实测 15 个测试全绿。**
+
+#### 4.320.1 错在哪：搜的是关键词，漏了包名
+
+上一轮搜的是 `untrusted|taint|data_source`，命中了 `decorators.MarkUntrusted`
+的**调用点**，却把整件事判成「只有装饰器、没有标注机制」。没往下追的是：
+`MarkUntrusted` 的第二个参数是什么。
+
+`decorators.MarkUntrusted(NewFindLargeFilesTool(...), promptguard.KindTool, fencer)`
+——第二个参数是 `promptguard.Kind`，第三个是 `*promptguard.Fencer`。
+**签名里就写着"标记"和"渲染围栏"，而我只看到了包装，没看被包装的东西是什么。**
+
+一个已经存在的机制被我判成不存在，代价是往台账里写了一条假缺口。
+**假缺口的危害大于漏记**：它会让下一个人以为这里有活要干，
+或者更糟——让人"顺手补上"一个已经存在的实现，做成第二份。
+
+#### 4.320.2 实际的实现，比方案要求的多一层
+
+方案原文：*"告警文本/日志内容/GitHub PR 描述在喂给 LLM 时标注为不可信数据源"*。
+
+落地是三层，而不只是贴个标签：
+
+- **一张封闭表**（`untrusted_sources.go`）。`untrustedOutputs` 列出 29 个工具，
+  逐个标 `Kind`（alert / log / source / tool）。它的表头注释解释了为什么是
+  表而不是构造点各写一次：*"renaming a tool then breaks the build here instead
+  of silently dropping the marking from a tool that still returns foreign text"*。
+  ——**改工具名会让这里编译失败**，而不是静默丢掉标记。
+- **每个块一个随机 id**（`Fencer.Fence`）。围栏不是固定字符串：
+  `<opskeeper-untrusted kind="log" origin="query_logql" id="a3f…">…</…>`。
+  每个块独立 id，所以**一个外部文本不能借用另一个块的 id 来闭合围栏**。
+- **进围栏先转义**（`escapeMarkers`）。正文里出现 `<opskeeper-untrusted`
+  会被转义，`origin` 属性里的 `"` `<` `>` 换行也被剥掉。
+  理由写在代码里：*"a platform string that can close the tag it is written into
+  is a hole all the same"*。
+
+三条对应的测试：`TestABodyContainingTheClosingMarkerCannotCloseTheBlock`、
+`TestAMarkerWithAStaleIDCannotCloseThisBlock`、`TestTheOriginCannotBreakOutOfTheTag`。
+
+#### 4.320.3 一个值得单独记的测试
+
+`TestFencingIsNotRedaction` —— **围栏不是脱敏**。
+
+这条断言的价值在于防止一个很自然的误解：围栏看起来像安全机制，
+于是有人会以为"有了围栏，日志里的密码就安全了"。实际上围栏只告诉模型
+"这段是外部文本"，**正文一个字节都没改**（`TestFencingPreservesTheBodyByteForByte`
+断言逐字节保留）。真正要遮的东西得靠脱敏器。
+
+**把"标记"和"遮蔽"这两件事在测试里分开写死**，比在文档里写一句"围栏不是脱敏"
+更难被绕过——因为想绕过它的人得先改测试，而改测试会留下一条 commit。
+
+#### 4.320.4 更正后的账
+
+4.319 那张表里最后一行「prompt injection 标注 / 部分落地，未见标注机制」
+应改为**已落地**。改的是**判断**，不动原表——§四只追加，而一条被自己推翻的
+判断留在原地，是这份台账里比"从没写错"更值钱的东西。
+
+于是那份 P0/P1/P2 方案十二项的最终账是：**十二项全部已落地，零缺口。**
+剩下没做的两项（`limits.memory` 维度、阶段 3 拆分与联邦）**都不是这份方案的
+条目**，前者是方案里没有的、我们主动加的约束，后者是方案自己划在阶段 3 的规划。
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，
