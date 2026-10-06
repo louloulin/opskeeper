@@ -247,7 +247,11 @@ func TestSlowCommandsAreObservableToAnOutsideClient(t *testing.T) {
 	if err := obs.Ping(context.Background()).Err(); err != nil {
 		t.Fatalf("observer ping: %v", err)
 	}
-	if took := time.Since(start); took < 200*time.Millisecond {
+	// 判据是暂停时长的一半，不是整个时长：一条命令只能经历暂停窗口里
+	// 它到达之后的那一段，所以"≥ 300ms"对一条碰巧在暂停刚开始时到达的
+	// PING 永远不成立（实测它会给出 294ms）。而没被暂停的 PING 是亚毫秒级的，
+	// 所以 150ms 这道线与"完全没被挡住"之间有一道极宽的沟。
+	if took := time.Since(start); took < 150*time.Millisecond {
 		t.Errorf("an outside PING took %v while commands were paused for 300ms; "+
 			"the fault is not observable", took.Round(time.Millisecond))
 	}

@@ -386,9 +386,19 @@ func (i *Injector) keepPaused(l *live, pauser *goredis.Client, pauseMS int, watc
 	}
 }
 
-// waitUntilSlow waits until a plain PING from an untouched client takes
-// longer than pause.
+// waitUntilSlow waits until a plain PING from an untouched client is visibly
+// stuck behind the pause.
+//
+// 判据是**暂停时长的一半**，不是整个暂停时长。理由是一条命令只能经历
+// 暂停窗口里它到达之后的那一段：一条在暂停开始 6ms 后到达的 PING
+// 会被挡住 294ms，而不是 300ms——而 294ms 与 0ms 之间差着四个数量级。
+// 用整个暂停时长当判据，得到的不是更严的断言，而是一个**偶尔为假的**断言
+// （本轮实测 15 轮里红 1 次，报 "took at most 294ms, want at least 300ms"）。
+//
+// 一个没有被暂停的 PING 是亚毫秒级的，所以"至少被挡住一半"与"完全没被挡住"
+// 之间有一道极宽的沟：这条判据在实践中不可能假红。
 func (i *Injector) waitUntilSlow(ctx context.Context, observer *goredis.Client, pause time.Duration, timeout time.Duration) error {
+	bar := pause / 2
 	deadline := time.Now().Add(timeout)
 	var worst time.Duration
 	for {
@@ -398,13 +408,13 @@ func (i *Injector) waitUntilSlow(ctx context.Context, observer *goredis.Client, 
 		if took > worst {
 			worst = took
 		}
-		if err == nil && took >= pause {
+		if err == nil && took >= bar {
 			return nil
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("slow commands: a PING from an outside client took at most %v "+
-				"after %s of pausing, want at least %v; the fault is not observable",
-				worst.Round(time.Millisecond), timeout, pause)
+				"after %s of pausing, want at least %v (half the pause); the fault is not observable",
+				worst.Round(time.Millisecond), timeout, bar.Round(time.Millisecond))
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
