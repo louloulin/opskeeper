@@ -23,6 +23,17 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 896 / 628 / 268 as of decision 342: **+1 against +3 routes**, and that
+// ratio is the whole point of the line. `device_update`, `device_delete` and
+// the `device` resource type have been in the closed vocabulary since it was
+// written down, described in a comment as "Device CRUD … enable / disable /
+// bulk-delete fold into update / delete + a payload" — a surface that did not
+// exist yet. Only `device_roles_set` had to be added, and it is the one that
+// did not exist in any form. This is decision 336's `ResourceGitKey` argument
+// showing up a second time and now being worth a number: **a closed vocabulary
+// accumulates the names of things nobody has built yet**, and reusing them is
+// the difference between a knife adding four symbols and adding one.
+//
 // 895 / 627 / 268 as of decision 341: four federation actions and one
 // federation_cluster resource type, same re-export category as every line
 // below. +5 against +4 routes, and the extra one is the resource type that
@@ -213,8 +224,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 895
-	deadSymbolBudget     = 627
+	unreachableBudget    = 896
+	deadSymbolBudget     = 628
 	testOnlySymbolBudget = 268
 )
 

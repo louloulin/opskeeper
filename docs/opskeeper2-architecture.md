@@ -29758,6 +29758,108 @@ deadcode ratchet 890 / 622 → **895 / 627**（四个动作 + 一个资源类型
 `make audit-port-check` 绿；routeaudit exit=0；ratchet `-count=3` 绿。
 
 
+#### 4.275 决策 342：设备面——全仓唯一一处改权限的写路由
+
+device 的三条写路由里，`PATCH /v1/devices/{id}/roles` 是整个仓库**唯一**一处
+改权限的地方：一台设备的角色（server / storage / network / database）决定它带
+什么工具、能看见什么资产。所以这一行的要求与前几族都不同——不是「记了谁」，
+而是**必须同时留下改之前与改之后的两组角色**。
+
+##### 4.275.1 事后要回答的永远是「出事那会儿它是什么角色」
+
+只记改完之后那一组，答案不成立。所以这一行带 `roles_before` 与 `roles_after`，
+外加两个把它们变成动作的字段：
+
+- `granted`：这次**多出来**的角色（`after - before`），
+- `revoked`：这次**被拿掉**的角色（`before - after`）。
+
+这两个是相反的两件事，而下一步动作也相反：撤销之后要确认那台机器是不是还在用
+它拿掉的那项能力。而「把角色改成它本来的样子」是一次真实发生的操作，所以
+`changed` 这个键**在 false 时也必须在**——缺键在扫链的人眼里等于「没人看过这台
+设备的角色」。
+
+##### 4.275.2 链上的顺序是规范化的，而这是对的
+
+第一版测试断言 `roles_after == ["database","storage"]`（请求顺序），红的：
+`DecodeRoles` 按固定位序输出 `["storage","database"]`。
+
+**这是链该有的形状**，不是缺陷：两次语义相同的请求产生**逐字节相同的一行**，
+于是「角色有没有变」可以靠读而不是靠比较集合。测试改成断言规范序，并在注释里
+写明为什么。
+
+顺带留了一个 `sameRoles`（按内容比较，不按顺序）。**诚实地说：把 `sameRoles`
+改成顺序敏感，这条测试仍然是绿的**——因为 `DecodeRoles` 在比较之前就把两边规范化
+了，两个性质是分开的，这条测试只看得到第一个。留着集合比较是因为 `roles_before`
+万一来自不规范化的地方它仍然对，而**一条看不见那个情形的测试不构成弱化辅助函数的
+理由**。
+
+##### 4.275.3 一件动作删掉的不止一样东西
+
+`Delete` 走的是 `DeleteOfflineWithLinkedEdges`，它做**三件事**：软删这台设备、
+删掉它连着的 junction 边、并调 `RevokeIdentities` **吊销那些边的凭据**。
+
+链上只有一行。凭据被吊销尤其要紧：**那些 edge agent 从此连不上**，而「为什么华东
+那台机器突然掉线」的答案就在这里。行里因此带 `linked_edges_removed` 与
+`linked_credentials_revoked`。
+
+**这是决策 333 立 `ExtraAuditEvents`（一次对 N 个东西的批量操作是 N 个事件）那类
+情形的边界**：本刀没有加第二行，因为那些边与凭据的 id 在删完之后已经无从取得——
+而**一条声称完整而实际不完整的行，比没有这一行更坏**。诚实的做法是把缺口写在行上
+（`linked_credentials_revoked: true` 说明还有别的东西被删了），而不是假装这一行
+就是全部。**真正修法是让 repo 在删除前把那些 id 交出来，那是另一刀。**
+
+##### 4.275.4 词表第三次攒下了没被造出来的东西
+
+加词表时撞上编译错误：`ActionDeviceUpdate` / `ActionDeviceDelete` /
+`ResourceDevice` **早就在封闭词表里**，注释还写着
+
+> Device CRUD. enable / disable / bulk-delete fold into update / delete + a payload
+
+——**而 `enable` / `disable` 至今没有实现**（`updateReq` 只有 name 与 description）。
+
+这是决策 336 的 `ResourceGitKey` 同一件事的第二次出现，而这一次它值得一个数字：
+**三条路由只加了 1 个符号**（`ActionDeviceRolesSet`），ratchet 从 895 → **896**。
+封闭词表会攒下「还没被造出来的东西」的名字，复用它们就是一把刀加四个符号与加一个
+符号的差别。
+
+而那条注释本身还暴露了词表的第二个毛病：**它不只攒名字，还攒没被造出来的字段**
+（`{"enabled": false}` 这个 payload 形状至今没有写入方）。这一条本刀没有处理，
+它更像一个待查的问题而不是一个待写的代码。
+
+##### 4.275.5 八条变异，七红一绿
+
+| 变异 | 结果 |
+|---|---|
+| 改角色前不再读旧角色 | 红：`revoked = [], want ["server"]` |
+| 角色行去掉 `roles_before` | 红：`roles_before = null, want ["server"]` |
+| 角色比较改成顺序敏感 | **绿**——被 `DecodeRoles` 的规范化挡住，见 §4.275.2 |
+| delete 保留读但丢掉记录 | 红：`row name = ""` |
+| delete 行不再说凭据被吊销 | 红：`row has no linked_credentials_revoked key` |
+| update 不再记旧名 | 红：`renamed_from = , want db-node-01` |
+| update 去掉 `description_changed` | 红：`row has no description_changed key` |
+| granted 与 revoked 对调 | 红：`revoked = ["storage","database"]` |
+
+第八条是这一刀最有用的一条：`granted` 与 `revoked` **在一次纯授予里恰好是同一个
+集合的补集关系**，一个写反了的实现只有在「既有授予又有撤销」时才露馅——而一次纯
+撤销就把两个字段区分开了。测试特意用了「先 server、再 database+storage」这一组，
+就是为了让两个字段的值不同。
+
+##### 4.275.6 分母与闸门
+
+`core/manager` 963 / 246,848 → **964 / 247,161**（+1 文件 / +313 行），新文件是
+`server/device/audit_http_test.go`（313 行，6 个测试）——**这一族此前一个测试都没有**。
+
+routeaudit 分母不变（177），**audited 119 → 122**，settled 58 → 55，洞仍为 0。
+剩余 **5 条**：knowledge docs 5。**下一刀从它开始，它将是这条曲线上的最后一块**——
+docs 5 条关掉之后，177 条 mutating 路由的每一条都有名字有判定，而「已审」的比例
+停在 70% 上下的原因就只剩下 settled 那 55 条真实存在的豁免。
+
+deadcode ratchet 895 / 627 → **896 / 628**（**+1 对 +3 条路由**，理由见 §4.275.4）。
+
+`core/base`、`core/domains`、`core/manager`、`./cmd/...`、`./scripts/...` 全量绿；
+`make audit-port-check` 绿；routeaudit exit=0；ratchet `-count=3` 绿。
+
+
 ## 六、当前实现进度
 
 基线：`go build ./...`、`go vet ./...` 通过。测试**必须按模块分别跑**——
@@ -33887,13 +33989,16 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
 
 | 分类 | 条数 | 占比 | 含义 |
 |---|---|---|---|
-| audited | **119** | 67.2% | handler 确实调用 `SetAuditEvent`，闸门逐条验过 |
-| settled exemption | **58** | 32.8% | 确实不需要，理由写得进去（只读探测、丢缓存、网关信封重复计数） |
+| audited | **122** | 68.9% | handler 确实调用 `SetAuditEvent`，闸门逐条验过 |
+| settled exemption | **55** | 31.1% | 确实不需要，理由写得进去（只读探测、丢缓存、网关信封重复计数） |
 | acknowledged gap | **0** | 0% | **没有洞**：该入账而没入账，按 `洞：` 前缀标出并单独计数 |
 | 合计 | **177** | 100% | 5 棵 HTTP 树：`core/manager/server`、`core/domains/server`、`core/manager/iam/server`、`core/manager/higress`、`cmd/opskeeper` |
 
 （决策 331 把分母从 115 抬到 177；决策 332–341 依次换掉其中后果最重的四十六条，
-当前读数 119 / 58 / 0，剩余 **8 条**：knowledge docs 5 / device 3。**联邦面 4 条已
+当前读数 122 / 55 / 0，剩余 **5 条**：knowledge docs 5。**device 面 3 条已关闭**
+（决策 342）——其中 `PATCH .../roles` 是全仓唯一的权限变更入口，而词表里
+`device_update` / `device_delete` / `device` 三个名字早就有了，所以这一刀只加了
+**一个**符号，见 §4.275.4。**联邦面 4 条已
 全部关闭**（决策 341）——它把「签发了」与「对方执行了」分成两件事，且这一族的
 带内处理与 report 任务面**相反**：版本确实铸出去了就记 success，投递事实另用
 `delivery_status` 表达，理由见 §4.274.2。
@@ -33914,7 +34019,7 @@ client 打这条断言——就是那个窗口。它在 `core/edge` 模块里，
 尺子，报出来的 56.5% 是不该被信的**——这一刀没有把这一格从 1.00 拿下来，因为 1.00 的定义
 是「每一条 mutating 路由都有一个名字和一个判定」，而 177 条现在都有了；它变的是**这 54 条
 判定的内容是「待审」而不是「已审」**，**决策 332–335 已经换掉其中后果最重的十七条**（钥匙、插件、四条升级、killSession、节点注册与摘除、编排面七条，见 §4.265–§4.268），
-剩下 33 条进入「后果低一档但每天都会问」的区间：topology（11）/ report（10）/ knowledge docs（5）/ device（3）/ federation（4），见 §4.264、§4.269。**决策 337 关掉了 report/schedule 的 8 条**（`shareReport` 是全族最重的一行：它铸出的 token **不能进链**，理由见 §4.270.1），**决策 338 关掉了 report task 面 3 条**（带内错误：一个 201 里面可以藏着一个失败，见 §4.271.1）。**决策 339 关掉了 topology 面 10 条**（改的是推理用的那张图，见 §4.272.1）。**决策 341 关掉了 federation 面 4 条**（把「签发了」与「对方执行了」分成两件事，见 §4.274.1），剩余 **8 条** = knowledge docs 5 / device 3——**下一刀从 device 3 条开始**，角色决定一台设备能调用什么。**决策 340 没有动任何一条路由**：它给闸门加了一道自己的检查（重复的 key），起因是决策 339 的一次脚本失误把表撑到 187 条而命令照旧报 177、exit 0——**十行表里的断言没有被任何一条对账检查读到过**，见 §4.273.1。
+剩下 33 条进入「后果低一档但每天都会问」的区间：topology（11）/ report（10）/ knowledge docs（5）/ device（3）/ federation（4），见 §4.264、§4.269。**决策 337 关掉了 report/schedule 的 8 条**（`shareReport` 是全族最重的一行：它铸出的 token **不能进链**，理由见 §4.270.1），**决策 338 关掉了 report task 面 3 条**（带内错误：一个 201 里面可以藏着一个失败，见 §4.271.1）。**决策 339 关掉了 topology 面 10 条**（改的是推理用的那张图，见 §4.272.1）。**决策 341 关掉了 federation 面 4 条**（把「签发了」与「对方执行了」分成两件事，见 §4.274.1），**决策 342 关掉了 device 面 3 条**（全仓唯一的权限变更入口，见 §4.275.1），剩余 **5 条** = knowledge docs 5——**这是这条曲线的最后一块**。**决策 340 没有动任何一条路由**：它给闸门加了一道自己的检查（重复的 key），起因是决策 339 的一次脚本失误把表撑到 187 条而命令照旧报 177、exit 0——**十行表里的断言没有被任何一条对账检查读到过**，见 §4.273.1。
 
 **洞的优先级**（按风险而非数量）：`secret/http.go` 三条**已关**（决策 316）→ `iam` 十条**已关**（决策 317）→ `nodeagent` 五条**已关**（决策 318）→ `loop/admin` 两条**已关**（决策 319）→ `chatdiagnose` 三条**已关**（决策 320）`monitor` 三条**已关**（决策 322）`cmd/opskeeper` 两条**已关**（决策 323，先把就地闭包提成具名 handler，闸门才指认得到）→ `higress` 三条**已关**（决策 324：落库端 + **独立的链**，因为网关持有 `OPSKEEPER_JWT_SECRET`，让它写控制面的链等于让它伪造控制面的审计）→ **洞 = 0**。下一个缺口不在路由上：`cmd/opskeeper-edge` 的 HTTP 面只有 `/metrics` 与 `/healthz`，**不需要槽**（决策 325 查实，先前那个「洞」是表格自己写的）；而**节点账本这条线已经走完**（决策 326）：`agent.audit.entries` 从闸门到链的每一跳此前都有测试、整条路一次也没被走过，现已补上一条除 socket 外零 stub 的端到端守卫（真闸门 → 真账本 → 真 pump → 真 sender → 真 JSON 线 → 真 handler → 真 SQLite 链，并断言行在链上且与控制台行同链）。**同时更正一句此前的错话**：节点行与控制面行**不是两条链**，`RecordNodeEntries` 走 `EmitWithID`，同一条链同一把钥匙，节点只提供内容、链接由中心盖章。详见 §4.248–§4.259。
 

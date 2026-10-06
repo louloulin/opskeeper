@@ -358,4 +358,8 @@ const (
 	// 决策 341：四条联邦路由共用一个资源——「哪个集群正在执行那个版本」是它们的
 	// 第一个问题，而四条路由的路径里带的是同一个 cluster id。
 	ResourceFederationCluster = auditport.ResourceFederationCluster
+
+	// 决策 342：device 的动作有两个（device_update / device_delete）早就在词表里，
+	// 本刀只加了 device_roles_set —— 它是全仓权限变更的唯一入口。
+	ActionDeviceRolesSet = auditport.ActionDeviceRolesSet
 )

@@ -17,10 +17,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
-	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
+	auditport "github.com/vincent-wuhan/opskeeper/core/base/pkg/audit"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
+	devicebiz "github.com/vincent-wuhan/opskeeper/core/manager/biz/device"
+	devicemodel "github.com/vincent-wuhan/opskeeper/core/manager/model/device"
 )
 
 // roleAdmin is the platform-admin role, named through the vocabulary
@@ -237,6 +238,22 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 342：带旧名。设备改名之后指纹不变、id 不变，而「这条边原来指的是哪台
+	// 机器」正是事后第一个要回答的问题——链上只剩新名字就答不出来。
+	// `description_changed` 与 topology 的 props_changed 同理：这一次没改也必须
+	// 读 false，而不是缺键。
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionDeviceUpdate,
+		ResourceType: auditport.ResourceDevice,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: name,
+		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			"hostname":            d.Hostname,
+			"renamed_from":        d.Name,
+			"description_changed": desc != d.Description,
+		},
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -251,11 +268,80 @@ func (h *Handler) updateRoles(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errors.Join(errs.ErrInvalid, err))
 		return
 	}
+	// 决策 342：**先读旧角色**。这是全仓唯一一处改权限的写路由，而事后要回答的
+	// 永远是「出事那会儿它是什么角色」——只留改完之后那一组，答案不成立。
+	before := []string(nil)
+	name := ""
+	if d, err := h.uc.Get(r.Context(), id); err == nil && d != nil {
+		before, name = devicemodel.DecodeRoles(d.Roles), d.Name
+	}
 	if err := h.uc.UpdateRoles(r.Context(), id, req.Roles); err != nil {
 		writeErr(w, err)
 		return
 	}
+	after := devicemodel.DecodeRoles(devicemodel.EncodeRoles(req.Roles))
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionDeviceRolesSet,
+		ResourceType: auditport.ResourceDevice,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: name,
+		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			"roles_before": before,
+			"roles_after":  after,
+			// 这两个键在「没有变化」时也必须在：一次把角色改成它本来的样子
+			// 是一次真实发生的操作，而缺键在扫链的人眼里等于「没人看过」。
+			"changed": !sameRoles(before, after),
+			// 授予（after 比 before 多）与撤销（更少）是相反的两件事，
+			// 而下一步动作也相反：撤销之后要确认这台机器是不是还在用它。
+			"granted":  missingFrom(after, before),
+			"revoked":  missingFrom(before, after),
+			"hostname": deviceHostname(r.Context(), h, id),
+		},
+	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// sameRoles compares two decoded role sets by content, not by order: the
+// request is a list, and two lists naming the same roles are the same grant.
+func sameRoles(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[string]bool, len(a))
+	for _, n := range a {
+		set[n] = true
+	}
+	for _, n := range b {
+		if !set[n] {
+			return false
+		}
+	}
+	return true
+}
+
+// missingFrom returns the names in want that are not in have.
+func missingFrom(want, have []string) []string {
+	set := make(map[string]bool, len(have))
+	for _, n := range have {
+		set[n] = true
+	}
+	out := []string{}
+	for _, n := range want {
+		if !set[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// deviceHostname reads the hostname for an audit row. A device that vanished
+// between the write and the read is not an error here — the id identifies it.
+func deviceHostname(ctx context.Context, h *Handler, id uint64) string {
+	if d, err := h.uc.Get(ctx, id); err == nil && d != nil {
+		return d.Hostname
+	}
+	return ""
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
@@ -264,10 +350,35 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// 决策 342：先读出名字、主机名与角色再删。删完之后链上剩下的只是一个自增 id，
+	// 而「删掉的是哪台机器、它当时能干什么」是事后第一个要回答的问题。
+	name, hostname, roles := "", "", []string{}
+	if d, err := h.uc.Get(r.Context(), id); err == nil && d != nil {
+		name, hostname, roles = d.Name, d.Hostname, devicemodel.DecodeRoles(d.Roles)
+	}
 	if err := h.uc.Delete(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}
+	auditport.SetAuditEvent(r, auditport.Event{
+		Action:       auditport.ActionDeviceDelete,
+		ResourceType: auditport.ResourceDevice,
+		ResourceID:   strconv.FormatUint(id, 10),
+		ResourceName: name,
+		Status:       auditport.StatusSuccess,
+		Payload: map[string]any{
+			"hostname": hostname,
+			"roles":    roles,
+			// `Delete` 走的是 DeleteOfflineWithLinkedEdges，而它做的是**三件**
+			// 事情：软删这台设备、删掉它连着的 junction 边、并调
+			// `RevokeIdentities` **吊销那些边的凭据**。一件动作删掉的不止一样
+			// 东西，而链上只有一行——那些边与它们的凭据在链上是空白的，读者却
+			// 会以为链是完整的。凭据被吊销尤其要紧：那些 edge agent 从此连不上，
+			// 而「为什么华东那台机器突然掉线」的答案在这里。
+			"linked_edges_removed":       true,
+			"linked_credentials_revoked": true,
+		},
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 

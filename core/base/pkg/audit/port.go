@@ -643,10 +643,20 @@ const (
 	// 这一族的四行全部是「带内事实」：HTTP 200 并不等于对方执行了。`Delivery`
 	// 自己的注释写着这件事——「一个签发了版本却没有通知任何人的发布，与一个
 	// 发布成功，在控制台上无法区分」——所以 delivery 的每一个字段都必须进链。
-	ActionFederationClusterEnroll     = "federation_cluster_enroll"
-	ActionFederationPolicyPublish     = "federation_policy_publish"
-	ActionFederationPolicyRedeliver   = "federation_policy_redeliver"
-	ActionFederationPolicyAck         = "federation_policy_ack"
+	ActionFederationClusterEnroll   = "federation_cluster_enroll"
+	ActionFederationPolicyPublish   = "federation_policy_publish"
+	ActionFederationPolicyRedeliver = "federation_policy_redeliver"
+	ActionFederationPolicyAck       = "federation_policy_ack"
+	// 决策 342：设备面。`device_update` 与 `device_delete` 早就在词表里
+	// （见上面 Device CRUD 那一组），本刀直接复用——**一个封闭词表会攒下
+	// 「还没被造出来的东西」的名字**，而复用它们正是这一刀是 +1 而不是 +3 的
+	// 原因，与决策 336 复用 `ResourceGitKey` 同一理由。
+	//
+	// 需要新加的只有 `device_roles_set`：它是全仓权限变更的唯一入口——一台设备
+	// 的角色（server / storage / network / database）决定它带什么工具、能看见
+	// 什么资产，所以这一行必须**同时**留下改之前与改之后的两组角色：事后要回答的
+	// 永远是「出事那会儿它是什么角色」。
+	ActionDeviceRolesSet = "device_roles_set"
 
 	ActionEdgeRotateSecret = "edge_rotate_secret"
 	ActionEdgePluginSet    = "edge_plugin_set"

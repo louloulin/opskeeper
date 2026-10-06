@@ -676,9 +676,6 @@ var Verdicts = []Verdict{
 	{File: "core/domains/server/federation/http.go", Route: "/clusters/{id}/policy", Handler: "h.publish"},
 	{File: "core/domains/server/federation/http.go", Route: "/clusters/{id}/policy/ack", Handler: "h.ack"},
 	{File: "core/domains/server/federation/http.go", Route: "/clusters/{id}/policy/redeliver", Handler: "h.redeliver"},
-	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}", Handler: "h.delete", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}", Handler: "h.update", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
-	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}/roles", Handler: "h.updateRoles", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/edge/http.go", Route: "/v1/edges", Handler: "h.createEdge"},
 	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/batch/delete", Handler: "h.batchDelete"},
 	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/batch/upgrade", Handler: "h.batchUpgradeAgent"},
@@ -688,6 +685,14 @@ var Verdicts = []Verdict{
 	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}/rotate-secret", Handler: "h.rotateSecret"},
 	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}/upgrade", Handler: "h.upgradeAgent"},
 	{File: "core/manager/server/edge/http.go", Route: "/v1/edges/{id}/upgrade-package", Handler: "h.upgradePackage"},
+	// 决策 342：设备面三条。其中 PATCH .../roles 是全仓**唯一**一处改权限的写
+	// 路由——一台设备的角色决定它带什么工具、能看见什么资产，所以那一行同时留下
+	// 改之前与改之后的两组角色：事后要回答的永远是「出事那会儿它是什么角色」。
+	// DELETE 走的是 DeleteOfflineWithLinkedEdges，它连带吊销了那些边的凭据，
+	// 而链上只有一行（§4.275）。
+	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}", Handler: "h.update"},
+	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}", Handler: "h.delete"},
+	{File: "core/manager/server/device/http.go", Route: "/v1/devices/{id}/roles", Handler: "h.updateRoles"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs", Handler: "h.createDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs/{id}", Handler: "h.deleteDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
 	{File: "core/manager/server/knowledge/http.go", Route: "/v1/knowledge/docs/{id}", Handler: "h.updateDoc", Backlog: "FAMILY_MISSING；闸门此前根本看不见这条路由——它写在 `r.With(...)` 之后，而扫描器的接收者只认裸标识符，于是「唯一挂了限流的那条路由」恰好成了唯一被漏掉的一类（决策 331）。本刀把它记成待审，而不是假装它已经审过。"},
