@@ -297,3 +297,61 @@ func TestTheDetectorDoesNotCryWolf(t *testing.T) {
 		}
 	}
 }
+
+// TestTheMapPathAndAStringPassTogether is the shape the postmortem service
+// actually uses: RedactMap over the root-cause detail, then RedactString over
+// each top-level string value (core/manager/biz/report/postmortem.go, the
+// two steps it performs one after the other).
+//
+// It is pinned here rather than in that service's tests because the question is
+// about the redactor, and because the answer is worth knowing before anyone
+// wires the service: after the JSON fix, a secret is caught whether it sits
+// under a sensitive key, inside a nested map, or inside a JSON string value —
+// and a host address is *not* touched, which is the whole reason the value-side
+// replacement stays unwired.
+//
+// The one thing that survives is a bare address in prose, which is exactly the
+// gap the redaction.depth-by-sensitivity row still declares. A test that hid
+// that would be worse than no test: it would let the next person read "secrets
+// are redacted" into a sentence whose last clause is false.
+func TestTheMapPathAndAStringPassTogether(t *testing.T) {
+	r := NewRedactor(RedactModeAll, false)
+	ctx := context.Background()
+	detail := map[string]any{
+		"api_key":   "sk-live-9f2a7c",
+		"query":     `{"password":"p@ss","sql":"select 1"}`,
+		"nested":    map[string]any{"token": "abc123"},
+		"json_blob": `{"email":"a@b.com","host":"10.0.0.5"}`,
+		"owner":     "alice@example.com",
+	}
+	out := RedactMap(r, detail)
+	for k, v := range out {
+		if str, ok := v.(string); ok {
+			out[k] = r.RedactString(ctx, str)
+		}
+	}
+	for _, secret := range []string{"sk-live-9f2a7c", "p@ss", "abc123", "a@b.com"} {
+		for k, v := range out {
+			if s, ok := v.(string); ok && strings.Contains(s, secret) {
+				t.Errorf("secret %q survived under key %q: %s", secret, k, s)
+			}
+		}
+	}
+	if nested, ok := out["nested"].(map[string]any); ok {
+		if s, _ := nested["token"].(string); strings.Contains(s, "abc123") {
+			t.Errorf("a nested map value survived: %v", nested)
+		}
+	}
+	if s, _ := out["json_blob"].(string); !strings.Contains(s, "10.0.0.5") {
+		t.Errorf("a host address was redacted along with the secret: %s", s)
+	}
+	// The declared gap, asserted rather than assumed: a bare address in prose
+	// is not replaced. If this ever starts failing, the value-side replacement
+	// has been wired and the redaction.depth-by-sensitivity row can move off
+	// declared — that is a business decision, so it should arrive as a
+	// failing test somebody has to look at.
+	if s, _ := out["owner"].(string); s != "alice@example.com" {
+		t.Errorf("a prose address is now being replaced (%q); value-side replacement is a "+
+			"declared, unapproved change and its arrival should be a deliberate one", s)
+	}
+}
