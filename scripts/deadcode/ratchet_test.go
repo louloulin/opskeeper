@@ -23,9 +23,17 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 806 / 539 as of decision 314: the five new ones are the AgentTeams HITL
+// proposal action/resource constants (hitl_proposal_{create,approve,reject,
+// expire} + the hitl_proposal resource type). They are read only from the
+// other module — core/manager/server/hitl reaches them through
+// core/base/pkg/audit's re-exports — so this walk sees the originals as
+// unreferenced from inside the core/base tree. Same category as the
+// re-exported constants decisions 311 and 312 had to account for, raised in
+// the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 801
-	deadSymbolBudget     = 534
+	unreachableBudget    = 806
+	deadSymbolBudget     = 539
 	testOnlySymbolBudget = 270
 )
 

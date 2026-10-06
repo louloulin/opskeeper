@@ -44,11 +44,16 @@ import (
 	"strings"
 )
 
-// routeReg matches a chi registration: r.Post("/path", h.handler).
-// The receiver name is fixed to `r` because that is what every handler in
-// this tree uses; a different name is a false negative, not a false
-// positive, and this command is built to be additive rather than clever.
-var routeReg = regexp.MustCompile(`\br\.(Post|Put|Patch|Delete)\("([^"]+)",\s*([A-Za-z0-9_.]+)`)
+// routeReg matches a chi registration: <anything>.Post("/path", h.handler).
+//
+// The receiver is deliberately **any identifier** rather than the `r` this
+// tree mostly uses. The first version hard-coded `r`, and core/domains/server/llmgw
+// — a whole LLM-proxy file — was then invisible to the gate while looking fully
+// accounted for: a verdict for its route existed, the route itself was never
+// seen, and the command reported it as an orphan. **A detector that misses a
+// route produces the most expensive kind of wrong answer**: it does not fail,
+// it fails to fail.
+var routeReg = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\.(Post|Put|Patch|Delete)\("([^"]+)",\s*([A-Za-z0-9_.]+)`)
 
 // funcDeclReg matches a top-level function or method declaration and
 // captures its name. The optional receiver group is what lets one pattern
@@ -122,6 +127,20 @@ func funcBodies(src string) map[string]string {
 		out[src[loc[2]:loc[3]]] = src[loc[0]:end]
 	}
 	return out
+}
+
+// Roots are the trees this command holds to a verdict table.
+//
+// Declared rather than discovered, because "which trees" is the part that goes
+// stale quietly. The first version scanned core/manager/server only, and
+// core/domains/server — 24 mutating routes across eight files, including the
+// secret store — was invisible to it. A gate with an unstated scope answers
+// for the part somebody happened to look at, so the scope is a constant
+// somebody has to edit, and findUnscannedRoots fails if a mutating route
+// appears anywhere else.
+var Roots = []string{
+	"core/manager/server",
+	"core/domains/server",
 }
 
 // Verdict is the recorded judgement about one route.
@@ -260,6 +279,10 @@ type Result struct {
 	// Orphan are verdicts whose file still exists but no longer registers
 	// the route.
 	Orphan []string
+	// Unscanned are files outside Roots that register mutating routes.
+	// Any hit fails the run: a new HTTP surface must either join Roots with
+	// its own verdicts, or be shown to register none.
+	Unscanned []string
 	// Gone are verdicts whose whole file left the tree. Kept apart from
 	// Orphan because the fix differs — a moved handler versus a deleted one —
 	// and because folding the two together would make a deleted package
@@ -278,7 +301,8 @@ type Result struct {
 // prevent — it would let a reader conclude an unaudited route is deliberately
 // excepted when in fact the exception was deleted months ago.
 func (r Result) OK() bool {
-	return len(r.Missing) == 0 && len(r.Stale) == 0 && len(r.Orphan) == 0 && len(r.Gone) == 0
+	return len(r.Missing) == 0 && len(r.Stale) == 0 && len(r.Orphan) == 0 &&
+		len(r.Gone) == 0 && len(r.Unscanned) == 0
 }
 
 // Run walks the tree and compares it against the table.
@@ -303,22 +327,22 @@ func Run(root string) Result {
 			return nil
 		}
 		for _, m := range routeReg.FindAllStringSubmatch(string(src), -1) {
-			key := rel + " " + m[2]
+			key := rel + " " + m[3]
 			if seen[key] {
 				// PUT and DELETE on one path share a verdict key. Saying it
 				// twice would be noise that trains people to skim the output.
 				continue
 			}
 			seen[key] = true
-			audited := reachesAudit(string(src), m[3])
+			audited := reachesAudit(string(src), m[4])
 			v, ok := lookup(key)
 			switch {
 			case !ok:
 				res.Missing = append(res.Missing, key+" — no verdict recorded in scripts/routeaudit")
 			case v.Backlog == "" && !audited:
-				res.Missing = append(res.Missing, key+" — recorded as audited, but "+rel+"'s handler "+m[3]+" never calls SetAuditEvent")
+				res.Missing = append(res.Missing, key+" — recorded as audited, but "+rel+"'s handler "+m[4]+" never calls SetAuditEvent")
 			case v.Backlog != "" && audited:
-				res.Stale = append(res.Stale, key+" — "+rel+"'s handler "+m[3]+" calls SetAuditEvent now, so its backlog reason no longer describes it")
+				res.Stale = append(res.Stale, key+" — "+rel+"'s handler "+m[4]+" calls SetAuditEvent now, so its backlog reason no longer describes it")
 			}
 		}
 		return nil
@@ -363,8 +387,9 @@ func lookup(key string) (Verdict, bool) {
 // (a route nobody has judged), then stale and orphan (judgements that no
 // longer describe the tree).
 func (r Result) Report(w *os.File) {
-	fmt.Fprintln(w, "routeaudit: every mutating route under core/manager/server has a recorded verdict")
-	fmt.Fprintf(w, "  verdicts recorded: %d, of which backlog: %d\n", len(Verdicts), countBacklog())
+	fmt.Fprintln(w, "routeaudit: every mutating route under "+strings.Join(Roots, ", ")+" has a recorded verdict")
+	fmt.Fprintf(w, "  roots scanned: %d, verdicts recorded: %d, of which backlog: %d\n",
+		len(Roots), len(Verdicts), countBacklog())
 	for _, m := range r.Missing {
 		fmt.Fprintf(w, "  MISSING: %s\n", m)
 	}
@@ -373,6 +398,12 @@ func (r Result) Report(w *os.File) {
 	}
 	for _, o := range r.Orphan {
 		fmt.Fprintf(w, "  orphan:  %s — the route is no longer registered; drop the verdict\n", o)
+	}
+	for _, g := range r.Gone {
+		fmt.Fprintf(w, "  gone:    %s — the whole file left the tree; drop the verdict\n", g)
+	}
+	for _, u := range r.Unscanned {
+		fmt.Fprintf(w, "  UNSCANNED: %s — add it to routeaudit.Roots and judge its routes\n", u)
 	}
 }
 

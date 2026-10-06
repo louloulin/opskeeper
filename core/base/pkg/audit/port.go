@@ -238,6 +238,21 @@ const (
 	// recorded there is no decision available to put in a name.
 	ActionHITLDecide = "hitl_decide"
 
+	// The AgentTeams HITL proposal surface in core/manager/server/hitl is the
+	// **third** approval-shaped surface in this repository (the approval inbox
+	// of decision 309, agentteams/hitl/decide of decision 312, and this one).
+	// It was invisible until decision 314 widened routeaudit to every HTTP
+	// tree, which is the reason this group carries a comment at all.
+	//
+	// Approve and reject are separate actions for the reason decision 309
+	// gives: they are separately asked questions. Expire is separate for an
+	// extra reason — **expiry is not a human decision at all**, and folding it
+	// in would put rows nobody approved into the answer of "who approved".
+	ActionHITLProposalCreate  = "hitl_proposal_create"
+	ActionHITLProposalApprove = "hitl_proposal_approve"
+	ActionHITLProposalReject  = "hitl_proposal_reject"
+	ActionHITLProposalExpire  = "hitl_proposal_expire"
+
 	// Data-guard labels are the masking rules themselves, so they are
 	// separated from the generic CRUD verbs for the same reason the approval
 	// inbox is: an override can only *lower* a classification, and "who
@@ -376,6 +391,7 @@ const (
 	ResourceIMApp          = "im_app"
 	ResourceAgentTeamsTask = "agentteams_task"
 	ResourceDataGuardLabel = "dataguard_label"
+	ResourceHITLProposal   = "hitl_proposal"
 
 	// ResourceEdge names a node. The resource id is the numeric edge id as
 	// a string, which is how every other edge-scoped row in this table

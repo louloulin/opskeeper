@@ -195,6 +195,10 @@ const (
 	ActionDataGuardLabelSet      = auditport.ActionDataGuardLabelSet
 	ActionDataGuardLabelOverride = auditport.ActionDataGuardLabelOverride
 	ActionDataGuardLabelDelete   = auditport.ActionDataGuardLabelDelete
+	ActionHITLProposalCreate     = auditport.ActionHITLProposalCreate
+	ActionHITLProposalApprove    = auditport.ActionHITLProposalApprove
+	ActionHITLProposalReject     = auditport.ActionHITLProposalReject
+	ActionHITLProposalExpire     = auditport.ActionHITLProposalExpire
 
 	ActionIMAppSecretReveal = auditport.ActionIMAppSecretReveal
 
@@ -218,6 +222,7 @@ const (
 	ResourceIMApp          = auditport.ResourceIMApp
 	ResourceAgentTeamsTask = auditport.ResourceAgentTeamsTask
 	ResourceDataGuardLabel = auditport.ResourceDataGuardLabel
+	ResourceHITLProposal   = auditport.ResourceHITLProposal
 	ResourceMCPTool        = auditport.ResourceMCPTool
 
 	ResourceAgentTool = auditport.ResourceAgentTool
