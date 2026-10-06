@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vincent-wuhan/opskeeper/core/floor/reporoot"
 )
 
 func write(t *testing.T, body string) string {
@@ -119,9 +121,22 @@ func TestAnUnreadablePricerReportFailsWithItsOwnOutput(t *testing.T) {
 // The numbers in the tree, not a fixture. This is the one that would have
 // caught the defect: the proposal said 95/26/4 and the tree says 50/6/3.
 func TestTheProposalInThisRepositoryAgreesWithTheTree(t *testing.T) {
-	root, err := findWork(".")
+	// Not a Skip. This test skipped once, and the skip was green: the walk
+	// looked for go.work, go.work is gitignored, and a checkout or a CI runner
+	// that does not have one reported SKIP for the one case that reads the
+	// real document. A test that cannot find what it needs must fail, because
+	// "did not run" and "passed" print the same thing without -v.
+	// Absolute, because reporoot.Find walks with filepath.Dir and filepath.Dir(".")
+	// is "." — handed a relative start it stops on the first step, which is
+	// how this test skipped the first time it ran.
+	here, err := os.Getwd()
 	if err != nil {
-		t.Skipf("no go.work above the working directory: %v", err)
+		t.Fatalf("Getwd: %v", err)
+	}
+	root, ok := reporoot.Find(here, 16)
+	if !ok {
+		t.Fatalf("no repository root above %s; this test reads the real proposal "+
+			"and must not decline to run", here)
 	}
 	proposal := filepath.Join(root, "docs", "manager-split.proposed")
 	quoted, err := headlinePrice(proposal)

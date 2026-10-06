@@ -31,7 +31,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -148,8 +147,19 @@ var (
 // one number is how the document and the tree come to disagree in the first
 // place.
 func computedPrice(tree, proposal string) (price, error) {
+	// The tree root is the argument, not something to go looking for. An
+	// earlier version walked upwards looking for go.work to find it, and that
+	// was wrong twice over: go.work is gitignored, so a clean clone and CI do
+	// not have one; and a walk that gave up quietly turned the one test that
+	// reads the real proposal into a green SKIP. Every Makefile target runs
+	// from the repository root and already passes the tree in, so there is
+	// nothing to discover.
+	// Dir is the tree, not the process's own working directory: `go test`
+	// runs a package in its own directory, so without this the relative
+	// package path below resolves under scripts/splitprice/ and the pricer
+	// is not found.
 	cmd := exec.Command("go", "run", "./scripts/domaincheck", tree, "-cut", proposal)
-	cmd.Dir = repoRoot(tree)
+	cmd.Dir = tree
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return price{}, fmt.Errorf("domaincheck -cut failed: %v\n%s", err, out)
@@ -195,45 +205,4 @@ func parseCutOutput(out string) (price, error) {
 		return price{}, fmt.Errorf("could not read all three numbers out of domaincheck -cut output:\n%s", out)
 	}
 	return result, nil
-}
-
-// repoRoot walks up from the tree argument to the directory holding
-// go.work, so the pricer runs where its package path resolves. Without this
-// the command only works from the repository root, and a gate that only works
-// from one directory is a gate that stops being run.
-func repoRoot(tree string) string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return tree
-	}
-	if root, err := findWork(dir); err == nil {
-		return root
-	}
-	return dir
-}
-
-// findWork walks up to the directory holding go.work.
-//
-// It absolutises first, and that is not tidiness. A previous version walked
-// the string it was handed, and handed "." — the working directory `go test`
-// runs a package in — `lastSlash(".")` is -1, the parent came out as the empty
-// string, the walk terminated, and the one test that reads the real proposal
-// reported SKIP. It passed. A gate that cannot find its own repository root
-// and quietly declines to run is worse than no gate, because the run is green
-// either way and only the -v output says which happened.
-func findWork(dir string) (string, error) {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return "", err
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(abs, "go.work")); err == nil {
-			return abs, nil
-		}
-		parent := filepath.Dir(abs)
-		if parent == abs {
-			return "", fmt.Errorf("no go.work above %s", abs)
-		}
-		abs = parent
-	}
 }

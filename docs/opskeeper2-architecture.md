@@ -6963,29 +6963,55 @@ MIXED leg: broker x86_64 under emulation on an arm64 host
 取数，**不复制那套算术**——一个数字被两处代码各算一次，
 正是文档与树能对不上的起因。
 
-#### 4.338.4 写这道闸门时抓到的一个更值得记的东西：**假绿**
+#### 4.338.4 写这道闸门时抓到的一个更值得记的东西：**假绿，以及它被抓到的过程**
 
 `TestTheProposalInThisRepositoryAgreesWithTheTree` 是唯一一条读真方案的用例。
-第一次跑，它 **`PASS`**。
+第一次跑，它 **`PASS`**：
 
 ```
 --- SKIP: TestTheProposalInThisRepositoryAgreesWithTheTree
     main_test.go: no go.work above the working directory
 ```
 
-`findWork(".")` 拿到的是 `go test` 运行包时的工作目录，也就是 `"."`。
-`lastSlash(".")` 是 -1，父目录算成空串，遍历终止，函数**返回错误**，
-而调用方把错误当成"跳过"处理。
+**整条命令是绿的，而它一次也没看过真实的方案**——而这份文档在这一轮之前
+正是陈旧的。**一个专门为了抓住这个缺陷而写的闸门，在抓住它之前先自己报了一次绿。**
 
-**于是整条命令是绿的，而它一次也没看过真实的方案。**
-更糟的是这份文档在这一轮之前正是陈旧的——**一个专门为了抓住这个缺陷而写的闸门，
-在抓住它之前先自己报了一次绿。**
+修这个缺陷的过程本身有五步，**每一步都被本仓库已有的某条规则挡住**，所以完整记下来：
 
-修法是 `filepath.Abs` 先 absolutise。`findWork` 的注释里写明了为什么不是洁癖：
-**一个找不到自己仓库根、于是安静地不运行的闸门，比没有闸门更坏**，
-因为两种情况下 `make` 都是绿的，只有 `-v` 才说得出发生了什么。
-决策 164 记过一次同型的（闸门要 `go.work` 而 CI 没有，于是**接进 CI 的
-是一个会跳过的检查**），本条是它的第二次。
+1. **症状**：`findWork(".")` 拿到 `go test` 运行包时的工作目录，也就是 `"."`；
+   `lastSlash(".")` 是 -1，父目录算成空串，遍历终止，函数返回错误，
+   **而调用方把错误当成"跳过"**。
+2. **第一次修**：`filepath.Abs` 先 absolutise。这修好了本机的症状，测试转绿。
+3. **本仓库自己的闸门把更深的那个问题指出来了**：
+   `scripts/modulecheck` 的 `TestTheRepositoryHasNoGoWorkProbes` 报
+   「the real tree still probes for go.work: go.work is gitignored, so a clean
+   clone and CI do not have one, and a test that looks for it fails or skips
+   itself green there. Use core/floor/reporoot.Find, which walks up by tracked
+   markers」。
+   **也就是说：第一次修只让这台机器绿了，而那恰恰是"跳过变绿"的机器。**
+4. **第二次修**：改用 `core/floor/reporoot.Find`（按被跟踪的标记判定）。
+   `scripts/splitprice` 于是第一次 import `core/floor`，arch-lint 立刻拒绝。
+   试过给 `scripts/splitprice/**` 单开一个窄组件——**`scripts: { in: scripts/** }`
+   先认领了这个文件**，窄授权一条 import 也用不上，于是 `modulecheck` 报
+   「the grant is dead」，**正是决策 74 删掉那 104 条空授权时立下的那条规则**。
+5. **最后的修**：`main.go` **根本不去找仓库根**。树根是**调用方传进来的参数**——
+   Makefile 的每个目标本来就在仓库根跑，本来就把树传进来了，**要发现的东西从一开始
+   就不需要发现**。只有测试需要定位，而**测试文件不受 arch-lint 管辖**，
+   于是 `reporoot` 只出现在 `_test.go` 里，零授权、零例外。
+
+**第 3 步是这轮最值钱的一步**：本仓库自己写的那条闸门，拦住的正是本轮新写的
+闸门里的一个假绿。**决策 164 记过一次同型**（闸门要 `go.work` 而 CI 没有，
+于是接进 CI 的是一个会跳过的检查），**本条是它的第二次，而且这次拦的是我自己**。
+
+**由此得到两条可复用的结论**：
+
+- **一个找不到自己仓库根、于是安静地不运行的闸门，比没有闸门更坏**——
+  两种情况下 `make` 都是绿的，只有 `-v` 才说得出发生了什么。
+- **"先 absolutise 再向上找" 是一个症状级的修法。** 真正要问的不是
+  "路径怎么拼"，而是"**我凭什么认为这个文件在每台机器上都存在**"。
+  `go.work` 被 gitignore，于是**它在本机存在、在干净克隆里不存在**，
+  而一个以它为前提的查找在两边分别给出"找到"和"安静地跳过"——
+  **两个绿，而只有一个绿是有意义的。**
 
 #### 4.338.5 净变化
 
@@ -6993,6 +7019,7 @@ MIXED leg: broker x86_64 under emulation on an arm64 host
 |---|---|
 | `docs/manager-split.proposed` 头条 | 95 / 26 / 4 → **50 / 6 / 3**（实测值） |
 | 新增 | `scripts/splitprice`（含 7 条测试，其中 1 条读真方案） |
+| 新增授权 | **零**——`core/floor/reporoot` 只出现在 `_test.go` 里 |
 | 新增闸门 | `make split-price-check`，进 `ci.yml` |
 | `cigate` 读数 | 29 / 30 → **30 / 31**（4 条计划命名 + 27 条决策持有） |
 | 拆分方案本身 | **未动**——分组、批准、第三问（独立发版）都还是原状 |
