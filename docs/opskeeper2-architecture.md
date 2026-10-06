@@ -4652,6 +4652,63 @@ MIXED leg: broker x86_64 under emulation on an arm64 host — this is not a sing
 arm64 也不是 amd64**——这是本轮唯一真正变好的地方：不是多了一个绿，是少了一个
 能被误读成绿的绿。
 
+### 4.311 决策 377：一条 e2e 用例在 CI 里**从来没跑过**——因为「排除」有人守，「谁去跑」没人守
+
+本轮把整条 e2e 套件跑了一遍（不是三条，是全部）：**28 个顶层用例 + 9 个子用例，
+0 失败 0 跳过，121 秒全绿**。跑完之后问了一个此前没人问过的问题——**CI 跑的是
+哪些**。
+
+```
+$ grep -c '^func Test' tests/e2e/*_test.go     # 30 个定义
+$ make e2e-manager-check  → 26 个用例          # -skip '$(E2E_BROKER_TESTS)'
+$ make e2e-delivery-check →  2 个用例          # -run 'TestTheGateway…|TestNodeAgentDelivery'
+```
+
+26 + 2 = 28，**差的正好是 `TestANodeKeepsItsTelemetryThroughAnOutage`**——方案 1.1
+那一条「拔网线 → 遥测落盘 → 恢复回放」的端到端验收。它在 manager 目标里被
+`-skip` 掉了，而 delivery 目标的 `-run` 是**手抄的另一个名字列表**，里面没有它。
+
+于是：**它被 CI 排除了，也不在任何接手它的那个 job 里。** 本地我跑它是绿的
+（决策 373 有输出），所以它看起来没问题；它在 CI 里一次都没有执行过。
+
+#### 4.311.1 为什么已有的闸门没抓住
+
+`scripts/cigate` 有一整个检查（`brokerSkipAgrees`）盯着这件事，它做的判断是：
+「调用 `testenv.SharedFrontier` 的测试集合」↔「`E2E_BROKER_TESTS` 的内容」，
+两个方向都比对，还要求 recipe 真的用上这个变量。**它比得对，比得严。**
+
+而它绿着。因为它守的是**排除那一半**：`E2E_BROKER_TESTS` 说「这两条需要 broker，
+所以从每次 push 里拿掉」。**「拿掉之后谁去跑」是另一份手抄的名字列表，位于另一个
+目标里，与这个变量之间没有任何关联。** 一个正确的排除集 + 一份过期的接手名单 =
+一个谁都不跑的测试，而所有关于排除的检查都通过。
+
+**"排除了，所以有人接手"是一个跨文件的断言，而它此前没有任何一条断言。**
+
+#### 4.311.2 修法：让两个目标共用同一个变量，而不是把名字再抄一遍
+
+- `Makefile`：`e2e-delivery-check` 的 `-run` 改为
+  `'TestTheGatewayServesAStreamToANodeCredential|$(E2E_BROKER_TESTS)'`。
+  以后往排除集里加一个测试，接手名单**自动**跟着变——不是因为我记得改，是它没有
+  第二次可以写的地方。
+- `scripts/cigate` 新增半边检查：`e2e-delivery-check` 的 recipe 必须出现
+  `$(E2E_BROKER_TESTS)`，否则报红，并说清后果（"a test can then be excluded from
+  the per-push job and absent from the job that replaced it"）。
+- 红例夹具：把真实形状（`TestTheGateway…|TestDelivery` 手抄子集）做成测试，
+  证明这条检查会红——**一条只会绿的新检查等于没有检查**。
+
+本轮在**真实仓库**上验过这条闸门会响：把 Makefile 改回手抄子集，
+`go run ./scripts/cigate .` 立刻以那句后果为理由 exit 1；恢复后
+`cigate: all 29 acceptance gates … are defined and invoked by CI`。
+`make e2e-delivery-check` 现在跑 3 条，全绿（127s）。
+
+#### 4.311.3 更正 ci.yml 的一句数
+
+`ci.yml` 的注释写着「Twenty-eight of the thirty e2e tests need nothing but that
+container」。实测：**26** 条只需要容器，2 条需要 broker，1 条（断网回放）本来也
+只需要容器却因为上面的洞没人跑，1 条（`TestLiveAgentTeamsValidation`）在
+`livevalidation` 另一个 build tag 后面且自带 skip。**"28/30" 这个数是在洞存在的
+状态下写下来的**，而它看上去是自洽的——这正是它能活下来的原因。改为 26。
+
 ## 五、插件契约：为什么「插件即 PiG Package」
 
 不新造格式。PiG 是 Pi 的 Go 移植，**Pi 的 TypeScript 扩展原样运行**，

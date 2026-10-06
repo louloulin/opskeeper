@@ -172,7 +172,7 @@ e2e-manager-check: ## 端到端套件（除两条需要隧道 broker 的；CI �
 	go test -tags=e2e -count=1 -timeout=25m ./tests/e2e/ -skip '$(E2E_BROKER_TESTS)'
 
 e2e-delivery-check: ## 节点 Agent 交付闭环（需 Docker；见 tests/e2e/README.md）
-	go test -tags=e2e -count=1 -timeout=20m ./tests/e2e/ -run 'TestTheGatewayServesAStreamToANodeCredential|TestNodeAgentDelivery'
+	go test -tags=e2e -count=1 -timeout=20m ./tests/e2e/ -run 'TestTheGatewayServesAStreamToANodeCredential|$(E2E_BROKER_TESTS)'
 
 # The broker reaches operators two ways — built locally and shipped in the
 # tarball, or pulled from Docker Hub — and upstream spells the two versions

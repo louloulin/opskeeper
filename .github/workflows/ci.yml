@@ -10,10 +10,15 @@ name: CI
 # that it "needs docker + a live test environment". Docker is real — MySQL
 # comes up through testcontainers — but this runner is a docker host, so the
 # stated reason was satisfied by the place the suite was being kept out of.
-# Twenty-eight of the thirty e2e tests need nothing but that container and
+# Twenty-six of the thirty e2e tests need nothing but that container and
 # about fifty seconds, and they cover the plan's section 6 acceptance end to
 # end: login, RBAC, credentials, the gateway streaming to a node credential,
-# MCP, workflows, notifications, RCA, the harness.
+# MCP, workflows, notifications, RCA, the harness. The other four: two need
+# the tunnel broker and run in the delivery job, one is behind the
+# livevalidation build tag, and one (the outage replay) needs only a
+# container but was named in neither job's list until decision 377 — so the
+# count here was 28 while the hole was open, and a self-consistent-looking
+# number is not a measurement.
 #
 # The build step is the multi-module one, and that is not a detail. go.work is
 # gitignored, so CI has no workspace: it resolves the sibling modules and PiG

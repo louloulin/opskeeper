@@ -100,10 +100,20 @@ func writeRepoE2E(t *testing.T, root string) {
 // pass against a Makefile the checker rejects. Tests that delete a gate
 // delete this exact text, so the two cannot drift apart.
 func gateRecipe(target string) string {
-	if target == "e2e-manager-check" {
+	switch target {
+	case "e2e-manager-check":
 		return "E2E_BROKER_TESTS := TestDelivery|TestOfflineReplay\n" +
 			"e2e-manager-check: ## runs the suite\n" +
 			"\tgo test -tags=e2e ./tests/e2e/ -skip '$(E2E_BROKER_TESTS)'\n\n"
+	case "e2e-delivery-check":
+		// The delivery job runs what the per-push job excludes, so its
+		// -run names the same variable. A hand-copied name list here is
+		// the shape that let one broker test run nowhere; the check
+		// below is about exactly that, and its fixture has to be right
+		// for the green case to mean anything.
+		return "e2e-delivery-check: ## runs the broker tests\n" +
+			"\tgo test -tags=e2e ./tests/e2e/ " +
+			"-run 'TestTheGatewayServesAStreamToANodeCredential|$(E2E_BROKER_TESTS)'\n\n"
 	}
 	return target + ": ## does the thing\n\tgo run ./scripts/x .\n\n"
 }
@@ -815,4 +825,30 @@ func mustReadMakefile(t *testing.T) []byte {
 		t.Fatalf("read the repository Makefile: %v", err)
 	}
 	return b
+}
+
+// TestTheDeliveryJobMustRunWhatThePerPushJobExcludes is the red case for the
+// half of the broker list that is about *running* rather than excluding.
+//
+// The fixture is the real one with one edit: e2e-delivery-check names a
+// hand-copied subset of E2E_BROKER_TESTS instead of the variable. Every
+// other check still passes on it — the list still matches the sources, and
+// the manager job still skips it — which is why this hole survived: the
+// test was excluded from CI and absent from the job that replaced it, and
+// nothing was red.
+func TestTheDeliveryJobMustRunWhatThePerPushJobExcludes(t *testing.T) {
+	broken := strings.Replace(repoMakefile(),
+		"-run 'TestTheGatewayServesAStreamToANodeCredential|$(E2E_BROKER_TESTS)'",
+		"-run 'TestTheGatewayServesAStreamToANodeCredential|TestDelivery'", 1)
+	if broken == repoMakefile() {
+		t.Fatalf("the fixture no longer contains the hand-copied -run this test replaces")
+	}
+	err := check(writeRepo(t, broken, repoCI()))
+	if err == nil {
+		t.Fatalf("a delivery job running a hand-copied subset of the broker list was accepted; " +
+			"a test excluded from the per-push job would run nowhere")
+	}
+	if !strings.Contains(err.Error(), "E2E_BROKER_TESTS") {
+		t.Fatalf("reported for the wrong reason: %v", err)
+	}
 }

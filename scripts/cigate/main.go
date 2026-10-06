@@ -662,6 +662,35 @@ func makefileVar(src, name string) (string, bool) {
 	return "", false
 }
 
+// makefileTarget returns a target's own lines: the declaration and the
+// recipe beneath it, up to the next line that is neither blank nor a
+// continued recipe line. Comments and blank lines between targets stop it,
+// which is the right boundary for a Makefile whose targets are separated
+// that way.
+func makefileTarget(src, name string) string {
+	var b strings.Builder
+	in := false
+	for _, line := range strings.Split(src, "\n") {
+		if !in {
+			if strings.HasPrefix(line, name+":") {
+				in = true
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
+			continue
+		}
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !strings.HasPrefix(line, "\t") {
+			break
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 // brokerSkipAgrees is the check on the check.
 //
 // e2e-manager-check excludes the broker tests by a name list in the Makefile.
@@ -711,6 +740,25 @@ func brokerSkipAgrees(root, makefileSrc string) error {
 		problems = append(problems,
 			"make e2e-manager-check does not pass -skip '$(E2E_BROKER_TESTS)', so the list above "+
 				"is maintained correctly and then not used")
+	}
+	// The other end of the same list. Excluding a test from the per-push job
+	// only keeps it running if some other job runs it, and that job's -run
+	// is a second, hand-written copy of the same names. Measured this round:
+	// E2E_BROKER_TESTS named two tests, the manager job skipped both, and
+	// e2e-delivery-check's -run named one — so the other one ran nowhere.
+	// Every check above still passed, because each of them only knows about
+	// the exclusion half.
+	delivery := makefileTarget(makefileSrc, "e2e-delivery-check")
+	switch {
+	case delivery == "":
+		problems = append(problems,
+			"the Makefile has no e2e-delivery-check target, so the broker tests excluded from "+
+				"e2e-manager-check are not run by anything")
+	case !strings.Contains(delivery, "$(E2E_BROKER_TESTS)"):
+		problems = append(problems,
+			"e2e-delivery-check does not name $(E2E_BROKER_TESTS) in its -run, so it runs a "+
+				"hand-copied subset of the list e2e-manager-check excludes; a test can then be "+
+				"excluded from the per-push job and absent from the job that replaced it")
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("the e2e suite's broker exclusion does not match its sources:\n  %s",
