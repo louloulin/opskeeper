@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -125,11 +126,7 @@ func TestDiagnose_MessageTextNeverReachesTheChain(t *testing.T) {
 	if strings.Contains(ev.ErrorMessage, secret) {
 		t.Error("the secret is in the row's error message")
 	}
-	for k, v := range payloadOf3(t, ev) {
-		if s, ok := v.(string); ok && strings.Contains(s, secret) {
-			t.Errorf("payload[%q] carries the message text", k)
-		}
-	}
+	assertNoSecretInPayload3(t, payloadOf3(t, ev), secret, "carries the message text")
 	// 而摘要仍在：不可读，不等于不可比。
 	if payloadOf3(t, ev)["message_digest"] != auditport.ValueDigest("use token "+secret+" to debug") {
 		t.Error("the digest is not of the message that was actually sent")
@@ -265,11 +262,7 @@ func TestPushReport_Audited(t *testing.T) {
 	if p["report_digest"] != auditport.ValueDigest(md) {
 		t.Error("the digest is not of the report that was actually pushed")
 	}
-	for k, v := range p {
-		if s, ok := v.(string); ok && strings.Contains(s, "hunter2") {
-			t.Errorf("payload[%q] carries the report text", k)
-		}
-	}
+	assertNoSecretInPayload3(t, p, "hunter2", "carries the report text")
 	// 服务端确实收到了正文——把正文抽掉不算修好。
 	if svc.lastReport.Markdown != md {
 		t.Errorf("the service was handed %q", svc.lastReport.Markdown)
@@ -294,6 +287,57 @@ func TestPushReport_FailureAudited(t *testing.T) {
 	if ev.ErrorMessage == "" {
 		t.Error("failure row carries no error message")
 	}
+}
+
+// assertNoSecretInPayload3 walks the payload with reflect rather than
+// asserting v.(string). Decision 320 wrote the weak shape here and decision
+// 322 found it the hard way: a mutation that put a *string into the payload
+// passed a string type-assertion untouched, and a fmt.Sprint version passed
+// it too by printing the pointer's address. This one dereferences all the way
+// down, so a leak one pointer, slice or map deep is still a leak.
+func assertNoSecretInPayload3(t *testing.T, payload map[string]any, needle, what string) {
+	t.Helper()
+	for k, v := range payload {
+		if hit, ok := foundInPayload3(reflect.ValueOf(v), needle); ok {
+			t.Errorf("payload[%q] %s: %q", k, what, hit)
+		}
+	}
+}
+
+func foundInPayload3(v reflect.Value, needle string) (string, bool) {
+	if !v.IsValid() {
+		return "", false
+	}
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		if v.IsNil() {
+			return "", false
+		}
+		return foundInPayload3(v.Elem(), needle)
+	case reflect.String:
+		if strings.Contains(v.String(), needle) {
+			return v.String(), true
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			if hit, ok := foundInPayload3(v.Index(i), needle); ok {
+				return hit, true
+			}
+		}
+	case reflect.Map:
+		for _, key := range v.MapKeys() {
+			if hit, ok := foundInPayload3(v.MapIndex(key), needle); ok {
+				return hit, true
+			}
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if hit, ok := foundInPayload3(v.Field(i), needle); ok {
+				return hit, true
+			}
+		}
+	}
+	return "", false
 }
 
 // jsonLiteral 把一段 Markdown 变成合法 JSON 字符串字面量。用它而不是手写引号，

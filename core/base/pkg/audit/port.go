@@ -300,6 +300,20 @@ const (
 	ActionChatPromote  = "chat_promote"
 	ActionChatReport   = "chat_report"
 
+	// Monitor panel CRUD (决策 322). A panel is a saved PromQL query on
+	// somebody's dashboard, and deleting one is the row that disappears
+	// from the board with nothing left on screen to notice it by — so the
+	// delete row carries the title and type of what was removed.
+	//
+	// Update records WHICH fields moved, not their values: a PATCH body is
+	// six pointers, and the PromQL one routinely carries a label whose
+	// value is a tenant token. Naming the fields answers "what changed on
+	// this dashboard" without copying a credential into a signed log —
+	// the same bargain decision 316 struck for the secret store.
+	ActionPanelCreate = "panel_create"
+	ActionPanelUpdate = "panel_update"
+	ActionPanelDelete = "panel_delete"
+
 	// ActionHITLDecide records a human approve/reject on an AgentTeams task
 	// that is waiting for one. Decision 312.
 	//
@@ -454,6 +468,10 @@ const (
 	// filtering "which host session" would otherwise keep meeting rows from
 	// a browser tab. The resource id is the conversation id.
 	ResourceChatConversation = "chat_conversation"
+	// ResourcePanel names one dashboard panel. The resource id is the
+	// numeric panel id, which is what the route carries and what the
+	// console links to.
+	ResourcePanel = "panel"
 	ResourceRule         = "rule"
 	ResourceChannel      = "channel"
 	ResourceRepo         = "repo"

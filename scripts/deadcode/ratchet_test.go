@@ -23,6 +23,12 @@ import (
 // growth. They are pinned because the finding that produced this file was in
 // one of the two classes, and a total cannot tell a reader which one grew. A
 // ratchet on a number nobody can decompose is a number nobody acts on.
+// 834 / 566 / 268 as of decision 322: the three panel actions (panel_create,
+// panel_update, panel_delete) and the panel resource type. Four in, four
+// dead — and the mechanism behind that is the one written below it, which
+// this decision confirmed rather than discovered: the re-export in
+// core/domains/model/audit keeps the copies reachable.
+//
 // 830 / 562 / 268 as of decision 320: the three chat-diagnose actions
 // (chat_diagnose, chat_promote, chat_report) plus the chat_conversation
 // resource type. Four symbols, four dead — exactly the count, and the
@@ -110,8 +116,8 @@ import (
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
 const (
-	unreachableBudget    = 830
-	deadSymbolBudget     = 562
+	unreachableBudget    = 834
+	deadSymbolBudget     = 566
 	testOnlySymbolBudget = 268
 )
 

@@ -165,6 +165,10 @@ const (
 	ActionChatPromote  = auditport.ActionChatPromote
 	ActionChatReport   = auditport.ActionChatReport
 
+	ActionPanelCreate = auditport.ActionPanelCreate
+	ActionPanelUpdate = auditport.ActionPanelUpdate
+	ActionPanelDelete = auditport.ActionPanelDelete
+
 	ActionChannelCreate = auditport.ActionChannelCreate
 	ActionChannelUpdate = auditport.ActionChannelUpdate
 	ActionChannelDelete = auditport.ActionChannelDelete
@@ -234,6 +238,7 @@ const (
 	ResourceOrg              = auditport.ResourceOrg
 	ResourceAgentSession     = auditport.ResourceAgentSession
 	ResourceChatConversation = auditport.ResourceChatConversation
+	ResourcePanel            = auditport.ResourcePanel
 	ResourceRule             = auditport.ResourceRule
 	ResourceChannel          = auditport.ResourceChannel
 	ResourceRepo             = auditport.ResourceRepo
