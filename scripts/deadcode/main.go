@@ -240,6 +240,7 @@ func parseFile(path string) (*fileRecord, error) {
 			if n.Recv != nil && len(n.Recv.List) > 0 {
 				rec.decls = append(rec.decls, decl{
 					name: n.Name.Name, receiver: receiverName(n), pos: fset.Position(n.Name.Pos()),
+					doc: docText(n.Doc),
 				})
 			} else {
 				rec.decls = append(rec.decls, decl{
@@ -250,7 +251,7 @@ func parseFile(path string) (*fileRecord, error) {
 			for _, spec := range n.Specs {
 				switch s := spec.(type) {
 				case *ast.TypeSpec:
-					rec.decls = append(rec.decls, decl{name: s.Name.Name, pos: fset.Position(s.Name.Pos())})
+					rec.decls = append(rec.decls, decl{name: s.Name.Name, pos: fset.Position(s.Name.Pos()), doc: docText(s.Doc)})
 				case *ast.ValueSpec:
 					for _, nm := range s.Names {
 						rec.decls = append(rec.decls, decl{name: nm.Name, pos: fset.Position(nm.Pos())})
@@ -689,6 +690,12 @@ var productionClaims = []string{
 	"the production wiring",
 	"生产构造函数",
 	"生产入口",
+	"call from cmd/main.go",
+	"called from cmd/main.go",
+	"wired from cmd/main.go",
+	"call from main.go",
+	"called from main.go",
+	"wired from main.go",
 }
 
 // claimsProduction reports whether a doc comment asserts production wiring.

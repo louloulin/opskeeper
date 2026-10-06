@@ -3079,6 +3079,16 @@ func main() {
 	})
 	toolsReg.SetCloudBashProposer(cloudBashProposerShim{uc: approvalUC})
 	toolsReg.SetHostBashProposer(hostBashProposerShim{uc: approvalUC})
+	// chat_to_query: the natural-language query tool. It is registered only
+	// when the translator has an LLM client, and the two setters that hand it
+	// one had no caller for the life of the deployment — so ROADMAP C.1,
+	// marked done, was absent from every manager that ever ran. The table, the
+	// store, the translator, the validator and the executor were all built,
+	// migrated and tested; the last twenty lines of wiring were the ones
+	// nobody wrote, and the tool bag is built from whatever the registry holds
+	// at this exact point, so nothing downstream could compensate.
+	toolsReg.SetChatToQueryLLM(modelRegistry)
+	toolsReg.SetChatToQueryTemplateStore(manageraiopsdata.NewQueryTemplateStore(db))
 	// send_im_message: the assistant can proactively push to a configured
 	// channel (飞书/钉钉/…), reusing the same BuildSenderFromChannel path the
 	// alert notifier + flow notify node use.

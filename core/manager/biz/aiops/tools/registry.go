@@ -130,8 +130,6 @@ type Registry struct {
 	llmClient chat2query.LLMClient
 	// tplStore feeds the chat_to_query translation cache. nil-safe.
 	tplStore chat2query.TemplateSink
-	// chatToQueryExec is the prom/log/trace client fan-out executor.
-	chatToQueryExec chat2query.Executor
 
 	// externalBaseTools are composition-root adapters for capabilities owned
 	// by another bounded context. cmd/opskeeper owns the conversion.
@@ -162,9 +160,14 @@ func (r *Registry) SetChatToQueryLLM(c chat2query.LLMClient) { r.llmClient = c }
 // by chat_to_query. nil-safe.
 func (r *Registry) SetChatToQueryTemplateStore(s chat2query.TemplateSink) { r.tplStore = s }
 
-// SetChatToQueryExec wires the prom/log/trace executor fan-out for
-// chat_to_query. nil-safe.
-func (r *Registry) SetChatToQueryExec(e chat2query.Executor) { r.chatToQueryExec = e }
+// There is deliberately no SetChatToQueryExec. There was one, it had no
+// caller for the life of the deployment, and the field it set was therefore
+// nil in every running manager — so BuildBaseTools fell through to
+// constructing a chat2query.QueryExecutor out of the registry's own prom,
+// log and trace clients, which is exactly the executor a deployment wants.
+// A seam that was never taken and whose default is correct is a second way
+// to spell the same executor; the field and the setter are gone rather than
+// left as a promise nobody made good on.
 
 // AppendExternalBaseTool adds a tool assembled by the composition root.
 // Call it during startup before BuildBaseTools.

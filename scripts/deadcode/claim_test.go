@@ -127,3 +127,64 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+// The half of the tree the check did not read. A setter is the shape this
+// gate exists for — a comment that tells the reader which root wires it, and
+// a method that nothing calls — and the walk used to copy the doc comment
+// off top-level functions only, so every method in the repository was
+// examined with a blank string. That is not a gap in the phrase list; it is
+// the phrase list never being consulted for half the declarations, and it is
+// invisible because a symbol the check cannot read produces the same result
+// as a symbol that is honestly documented.
+//
+// It is what let ROADMAP C.1's chat_to_query BaseTool ship as "delivered"
+// while no manager had ever registered it: SetChatToQueryLLM's doc said
+// "Call from cmd/main.go once the LLM client is constructed", and the
+// claim gate passed over the line that said it.
+func TestAMethodsDocCommentIsReadToo(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "seam.go"), []byte(`package p
+
+type Registry struct{}
+
+func (r *Registry) SetThing(t string) {}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "seamdoc.go"), []byte(`package p
+
+// SetOther wires the other thing. Call from cmd/main.go once it exists.
+func (r *Registry) SetOther(t string) {}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	records, err := parseAll([]string{dir})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	claims := productionClaimViolations(analyse(records))
+	if len(claims) != 1 {
+		t.Fatalf("got %d claim violations, want 1: %+v", len(claims), claims)
+	}
+	if claims[0].name != "SetOther" {
+		t.Errorf("the violation names %q, want SetOther", claims[0].name)
+	}
+}
+
+// The two new phrases are what make the fixture above a violation rather
+// than a merely well-commented method, and "call from cmd/main.go" is the
+// exact wording the seam used. They are locked in here because a phrase list
+// nobody asserts is a phrase list that gets edited by accident.
+func TestASetterThatNamesTheAssemblyRootIsAProductionClaim(t *testing.T) {
+	for _, doc := range []string{
+		"SetThing wires the thing. Call from cmd/main.go once it exists.",
+		"SetThing wires the thing. Called from cmd/main.go.",
+		"SetThing wires the thing. Wired from main.go.",
+		"SetThing wires the thing. nil-safe.",
+	} {
+		want := !strings.Contains(doc, "nil-safe")
+		if got := claimsProduction(doc); got != want {
+			t.Errorf("claimsProduction(%q) = %v, want %v", doc, got, want)
+		}
+	}
+}

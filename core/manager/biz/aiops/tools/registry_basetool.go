@@ -252,17 +252,14 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 
 	// 21: chat_to_query — NL → PromQL/LogQL/TraceQL with dry-run +
 	// template cache (ROADMAP C.1). Gated on the LLM client (translator
-	// dependency); templates and exec are nil-safe (fall through to
+	// dependency); the template cache is nil-safe (falls through to the
 	// LLM-only path). When the LLM client is unset the tool is
 	// silently omitted — operators can disable NL→Query entirely by
 	// not constructing the LLM client.
 	if r.llmClient != nil {
 		translator := chat2query.NewTranslator(r.llmClient, "", chat2query.NewPromCatalogFetcher(r.promQuery, r.logQuery, r.traceQuery))
 		validator := chat2query.NewValidator(nil)
-		exec := r.chatToQueryExec
-		if exec == nil {
-			exec = &chat2query.QueryExecutor{Prom: r.promQuery, Logs: r.logQuery, Trace: r.traceQuery}
-		}
+		exec := &chat2query.QueryExecutor{Prom: r.promQuery, Logs: r.logQuery, Trace: r.traceQuery}
 		out = append(out, chat2query.NewChatToQueryTool(translator, validator, r.tplStore, exec, r.log))
 	}
 

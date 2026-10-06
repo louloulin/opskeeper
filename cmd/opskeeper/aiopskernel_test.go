@@ -2,16 +2,20 @@ package main
 
 import (
 	"context"
-	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
+
+	aiopstools "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools"
+	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/chat2query"
 
 	managerbizaiops "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
 	aiopstoolsbase "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/tools/basetool"
 	managersvcaiops "github.com/vincent-wuhan/opskeeper/core/manager/service/aiops"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigagent"
+	"github.com/vincent-wuhan/opskeeper/core/pig/pigai"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigcoding"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 )
@@ -199,3 +203,61 @@ func TestTheSelectedDriverDecidesWhichKernelIsBuilt(t *testing.T) {
 // written. A nil embedded interface also makes an accidental call panic
 // rather than quietly succeed against nothing.
 type stubSessions struct{ managerbizaiops.SessionRepo }
+
+// ROADMAP C.1 is marked ☑ delivered, and the chat_to_query BaseTool it names
+// was absent from every manager that ever ran: the registry registers the
+// tool only when the translator has an LLM client, and the one setter that
+// hands it one had no caller. The table, the store, the translator, the
+// validator and the executor were all built, migrated and tested; the last
+// twenty lines of wiring were the ones nobody wrote.
+//
+// These two tests hold both halves of that. The first is the tool's presence,
+// which is what a delivery claim means; the second is that the documented
+// disable path still works, so the presence cannot be bought by registering
+// the tool unconditionally.
+type stubCompleter struct{}
+
+func (stubCompleter) Complete(context.Context, pigmodel.Request) (*pigai.AssistantMessage, error) {
+	return &pigai.AssistantMessage{}, nil
+}
+
+func toolNames(t *testing.T, bag *aiopstools.ToolBag) []string {
+	t.Helper()
+	var out []string
+	for _, tool := range bag.AllTools() {
+		if tool == nil {
+			continue
+		}
+		info, err := tool.Info(context.Background())
+		if err != nil {
+			t.Fatalf("Info: %v", err)
+		}
+		out = append(out, info.Name)
+	}
+	return out
+}
+
+func TestChatToQueryReachesTheToolBagOnceItsTranslatorIsWired(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelError}))
+	reg := aiopstools.NewRegistry(nil, nil, nil, nil, nil, nil, nil, log)
+	reg.SetChatToQueryLLM(stubCompleter{})
+
+	names := toolNames(t, reg.BuildBaseTools())
+	if !slices.Contains(names, chat2query.ToolNameChatToQuery) {
+		t.Fatalf("the tool bag holds %d tools and none is %s: a BaseTool the roadmap calls "+
+			"delivered, and that no deployment has ever handed the model", len(names), chat2query.ToolNameChatToQuery)
+	}
+}
+
+// The gate on the LLM client is deliberate — an operator disables NL→Query
+// by not constructing the client — so this is the half that must not move.
+func TestChatToQueryIsStillAbsentWhenNoLLMClientIsWired(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelError}))
+	reg := aiopstools.NewRegistry(nil, nil, nil, nil, nil, nil, nil, log)
+
+	names := toolNames(t, reg.BuildBaseTools())
+	if slices.Contains(names, chat2query.ToolNameChatToQuery) {
+		t.Fatalf("%s is present with no LLM client: the tool would be advertised to the model "+
+			"and then fail every call", chat2query.ToolNameChatToQuery)
+	}
+}

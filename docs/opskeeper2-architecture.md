@@ -35155,3 +35155,135 @@ manager 尺寸由闸门自己叫出并重取：**966 → 968 文件 / 247,770 �
 方向与前五次一致**（§六已按闸门自己的口径更新）。
 
 本决策**不改进度百分比**：它不推进计划 §五 的任何一条验收闸门。
+
+#### 4.283 决策 350：一个标着「已交付」却从未被任何部署装上的工具，和一道只读了半棵树的自检闸门
+
+##### 4.283.1 ROADMAP C.1 标着 ☑
+
+`ROADMAP.md` 第 86 行：
+
+```
+- **C.1** `☑` LLM-generated PromQL / LogQL / TraceQL [archived 2026-07-14, c1-nl-query]
+  - `chat_to_query` BaseTool
+```
+
+已交付、已归档。而 `core/manager/biz/aiops/tools/registry_basetool.go` 里它的注册条件是：
+
+```go
+if r.llmClient != nil { ... out = append(out, chat2query.NewChatToQueryTool(...)) }
+```
+
+`llmClient` 只有一个写入点——`SetChatToQueryLLM`——而**那个 setter 在整个部署里没有调用方**。
+于是 `r.llmClient` 在每一个跑过的 manager 上恒为 nil，**这个工具从来没有出现在任何一次
+工具清单里**：不在 `/skills`，不在 MCP `tools/list`，不在模型看到的 tool bag 里。
+
+不是功能没写。翻译器、校验器、dry-run、模板缓存、GORM 存储（`QueryTemplateStore`，
+四条测试齐全）、`Migrate` 里的 `aiops_query_templates` 表、Prom/Log/Trace 执行器——**全套
+都建好了、迁移了、测过了**。差的是装配根里最后二十行接线，而工具袋是在**那一刻**从
+registry 里读出来的，所以下游没有任何一处能补偿。
+
+##### 4.283.2 为什么每一样工具都查不出来
+
+本仓有五道与「工具/能力是否真的在」有关的闸门，它们全都绿：
+
+| 闸门 | 它问的问题 | 为什么没问到这件事 |
+|---|---|---|
+| `deadcode` 报告 | 哪些符号只有测试引用 | **报出来了**（三个 `SetChatToQuery*` 全是 `:dead`），但报告不拦 |
+| `deadcode` 反向闸门 | 自称已接线却不可达的符号 | **没读到方法（method）的文档注释**（见下） |
+| `pig-tool-scoping-check` | 节点 Agent 被提供了插件工具 | 它管的是节点侧的五包 90 工具，不管控制面 |
+| `mcp-surface-check` / `table-check` | MCP 面 / 一表一模型 | 与本工具无关 |
+| `route-audit` | 每条写路由有没有审计判定 | 本工具是只读，且根本没有路由 |
+
+**五道闸门各自问的都是一个正确的问题，而它们的问题拼起来仍然没有覆盖「一个自称已交付的
+能力在生产里存不存在」。** 这和决策 348 的形状是同一个：可达性不是编译器的可达性。
+
+##### 4.283.3 反向闸门只读了半棵树
+
+`scripts/deadcode` 的 `TestNoSymbolClaimsProductionWiringWhileBeingUnreachableFromIt`
+是决策 290 为「文档说有生产接线、而生产里没有」建的闸门。查这一轮时发现它的
+`claimDoc` 对 `SetChatToQueryLLM` 是**空字符串**——而源码里那句
+`// Call from cmd/main.go once the LLM client is constructed. nil-safe.` 明明白白写着。
+
+原因在收集声明的那一段：
+
+```go
+case *ast.FuncDecl:
+    if n.Recv != nil && len(n.Recv.List) > 0 {
+        rec.decls = append(rec.decls, decl{ name: ..., receiver: receiverName(n), pos: ... })  // 没有 doc
+    } else {
+        rec.decls = append(rec.decls, decl{ ..., doc: docText(n.Doc) })
+    }
+```
+
+**方法分支不取 `doc`，`TypeSpec` 分支也不取。** 于是仓库里**每一个方法**都是拿一个空字符串
+去接受检查的——不是短语表漏了，是**短语表对一半的声明从未被查询过**。
+
+这一点特别难看见，因为两种情况的结果一模一样：**一个读不到注释的符号，与一个注释写得
+老老实实的符号，在闸门眼里没有区别**。而决策 290 抓到的是 `NewPostmortemService`——
+一个**顶层函数**，正好落在唯一取了 doc 的那条分支上，所以那道闸门一直是绿的、绿得对，
+只是绿在它能看见的那一半上。
+
+**setter 恰恰是这道闸门最该管的形状**：一个 setter 的文档天然是一句「谁在什么时机调我」，
+而这句话说错了的后果就是本刀这件事。
+
+本刀改了三处：方法分支与 `TypeSpec` 分支取 `doc`；`productionClaims` 增加六个短语
+（`call from cmd/main.go` / `called from cmd/main.go` / `wired from cmd/main.go` 与对应
+的 `main.go` 变体）。之所以敢加：`productionClaimViolations` 只对**不可达**符号生效，
+所以一个真的可达的 setter 无论注释怎么写都不会被报——**加短语不可能误伤**。
+
+现有测试里有一行 `{"NewX is called by main.", false}`，它把这个缺口当成期望值写了下来。
+本刀没有动它——`by main` 与新增的 `from main.go` 是两种说法，加它会把这道闸门变成
+一句注释就报的红。真正被锁进测试的是那六个新短语，以及一条自带夹具的回归测试。
+
+##### 4.283.4 端到端的证据
+
+把装配根里那两行接线撤掉，`TestNoSymbolClaimsProductionWiringWhileBeingUnreachableFromIt`
+**当场红**，并指到 `core/manager/biz/aiops/tools/registry.go:159`——这正是这个形状第一次
+被闸门看见。把接线放回去，绿。这条端到端的红绿是本刀最强的一条证据：它同时证明了三件事
+（工具真的出现过、闸门真的能抓、闸门此前真的看不见）。
+
+##### 4.283.5 顺手删掉的第二个空接缝
+
+`SetChatToQueryExec` 同样没有调用方。它设的字段 `chatToQueryExec` 因此恒为 nil，于是
+`BuildBaseTools` 每次都落进 `if exec == nil` 分支，**用 registry 自己的 prom/log/trace
+客户端现造一个 `QueryExecutor`**——而那正是任何部署都想要的那个执行器。
+
+**一个从未被接过的接缝，且它的默认值恰好是对的，等于用第二种写法重复了同一个执行器。**
+按决策 290 定下的规矩（要么接上，要么在注释里说清它没被接），本刀选择把字段与 setter 一起
+删掉，让 `QueryExecutor` 的构造成为唯一路径。
+
+##### 4.283.6 一个被现有闸门当场抓住的自投
+
+新写的 `aiopskernel_test.go` 里那个 stub 直接 `import "github.com/MichaelKinsy/PiG/ai"`，
+`make module-check` 当场红：
+
+```
+cmd/opskeeper/aiopskernel_test.go: imports "github.com/MichaelKinsy/PiG/ai";
+only core/pig and PiG extensions may reach PiG
+```
+
+改用 `core/pig/pigai` 的别名即可。**这是模块边界在测试里也生效的一个证据**——边界不是
+只对生产代码设的。
+
+##### 4.283.7 变异验证
+
+| 变异 | 红的测试与它的第一行 |
+|---|---|
+| 撤掉方法分支的 `doc: docText(n.Doc)` | `TestAMethodsDocCommentIsReadToo` — `got 0 claim violations, want 1: []` |
+| 撤掉六个新短语 | `TestASetterThatNamesTheAssemblyRootIsAProductionClaim` — `claimsProduction("… Call from cmd/main.go …") = false, want true` |
+| 测试里不调 `SetChatToQueryLLM` | `TestChatToQueryReachesTheToolBagOnceItsTranslatorIsWired` — `the tool bag holds 3 tools and none is chat_to_query` |
+| 把注册条件改成无条件（`if true`） | `TestChatToQueryIsStillAbsentWhenNoLLMClientIsWired` — `chat_to_query is present with no LLM client` |
+
+第二条测试是**故意反着写的**：它钉住「不接 LLM 客户端时工具仍然不出现」，因为那是
+`registry_basetool.go` 注释里写明的关闭开关，而「让工具出现」很容易被改成无条件注册。
+只测存在不测缺席，等于给「永远注册」留了门。
+
+##### 4.283.8 读数
+
+deadcode ratchet **871 → 867（dead 603 → 600）**，**连续第五次下降**；test-only 268 → 267。
+十四道闸门全绿；七个模块 `go build` 通过，测试 1049 + 5002 全绿。
+`core/manager` 尺寸 **968 / 248,014**，与上一刀相同——本刀在 manager 里删了 6 行生产代码
+并补了 6 行解释为什么删，`ledgercheck` 的尺寸闸门因此无话可说。
+
+本决策**不改进度百分比**：它恢复的是一项被标记为已交付、而计划 §五 从未列为验收项的能力。
+但它关闭的是决策 348 那条线的同一个问题——**「有」与「在跑」之间的差距**——的另一个实例。
