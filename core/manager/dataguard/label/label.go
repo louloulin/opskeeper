@@ -9,18 +9,18 @@
 package label
 
 import (
-	"strings"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/heuristic"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/store"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // Repo 是 biz 视角的持久化接口（store 层实现）。

@@ -135,8 +135,8 @@ func Claims() []ControlClaim {
 				"order the caller wrote the list in does not decide the answer.",
 		},
 		{
-			ID:    "sensitivity.restricted-write-override",
-			Claim: "writing to a Restricted resource requires an override",
+			ID:     "sensitivity.restricted-write-override",
+			Claim:  "writing to a Restricted resource requires an override",
 			Status: StatusDeclared,
 			Note: "this half was split out of the restricted-reader row because the reader gate " +
 				"that now runs does not implement it. The reader gate asks about the read " +
@@ -158,6 +158,29 @@ func Claims() []ControlClaim {
 				"它是真的：读 TopSecret 需要 tier，而 grant 这个 tier 是一条独立的、有记录的 " +
 				"管理动作。**「无人可读」不是被实现了，是被撤回了**——一个能兑现的弱承诺比一个 " +
 				"兑现不了的强承诺有用。",
+		},
+		{
+			ID:     "redaction.depth-by-sensitivity",
+			Claim:  "how deeply a value is redacted is decided by the sensitivity of the resource it came from",
+			Status: StatusDeclared,
+			Note: "这一行的原措辞是「Redactor 的文档说生产代码在 cmd/main.go 里接 " +
+				"NewRedactor(mode)」，而那句话是假的——决策 368 把它改成了它真正是的东西。" +
+				"整条脱敏链今天没有被生产代码走到过：非测试代码里唯一构造 Redactor 的地方是 " +
+				"postmortem.go 的 nil 兜底，而那个兜底是 RedactModeNone；它所属的 " +
+				"NewPostmortemService 在测试之外也没有调用方（scripts/deadcode 早就记着这一条，" +
+				"报告不闸门，所以它一直没红）。因此 Sensitivity→RedactMode 的映射没有任何生产 " +
+				"消费者，本轮连同 ModeForSensitivity 与 NewRedactorForSensitivity 一起删除——" +
+				"**留着它们只会让下一个人以为这条链已经接好了**。" +
+				"写这一行不是为了给缺口留个位置，而是为了让「没有接线」这件事出现在一个会被 " +
+				"读到的地方，而不是只出现在一个 git 历史里。" +
+				"**这一行同时记下一个闸门洞**：scripts/deadcode 的 " +
+				"TestNoSymbolClaimsProductionWiringWhileBeingUnreachableFromIt 只在符号" +
+				"**不可达**时才报，而 Redactor 这个类型是可达的（postmortem.go 用它做参数），" +
+				"于是「生产代码在 cmd/main.go 里构造它」这句假话一路绿灯。本轮试过给它补两条短语" +
+				"（「from cmd/main.go」/「from main.go」），放回那句假注释重跑仍然是绿的——" +
+				"**理由与符号是否可达有关，与措辞无关**。补短语是投机，投机性的闸门增强比" +
+				"没有更坏，所以撤回了。真正的洞是：这道闸门分不清「可达」与「按注释说的那样接线」，" +
+				"要补的是判据，不是词表。",
 		},
 		{
 			ID:     "approval.dual-sign",

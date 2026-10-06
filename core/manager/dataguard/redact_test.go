@@ -6,24 +6,13 @@ import (
 	"testing"
 )
 
-func TestModeForSensitivity(t *testing.T) {
-	cases := []struct {
-		s    Sensitivity
-		want RedactMode
-	}{
-		{Public, RedactModeNone},
-		{Internal, RedactModeSummary},
-		{Confidential, RedactModeAll},
-		{Restricted, RedactModeAll},
-		{TopSecret, RedactModeAll},
-		{Sensitivity("Unknown"), RedactModeAll}, // safe default
-	}
-	for _, tc := range cases {
-		if got := ModeForSensitivity(tc.s); got != tc.want {
-			t.Errorf("ModeForSensitivity(%q) = %q, want %q", tc.s, got, tc.want)
-		}
-	}
-}
+// Decision 368 deleted ModeForSensitivity together with its only caller.
+// Its test went with it, and that is the part worth recording: the test
+// asserted that the mapping agreed with a table written next to it, so
+// it could not have caught the mapping being wrong -- **it agreed with
+// whatever the code said**. What replaced it is TestRedactor_TopSecret_
+// StripsDigits, which states the depth and the digit-scrubbing as the
+// behaviour they are supposed to produce, on the Redactor itself.
 
 func TestRedactor_RedactFieldName(t *testing.T) {
 	r := NewRedactor(RedactModeAll, false)
@@ -121,7 +110,7 @@ func TestRedactor_SummaryMode_StableHash(t *testing.T) {
 }
 
 func TestRedactor_TopSecret_StripsDigits(t *testing.T) {
-	r := NewRedactorForSensitivity(TopSecret)
+	r := NewRedactor(RedactModeAll, true)
 	in := "user phone 555-1234 and pin 1234"
 	got := r.RedactString(context.Background(), in)
 	if strings.Contains(got, "555-1234") {

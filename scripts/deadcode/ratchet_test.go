@@ -285,10 +285,23 @@ import (
 // unreferenced from inside the core/base tree. Same category as the
 // re-exported constants decisions 311 and 312 had to account for, raised in
 // the same commit as the change that caused the growth.
+// 862 / 600 / 262 as of decision 368. This pin had stopped meaning anything
+// before this decision touched it: the tree was already ten unreachable
+// symbols under the previous 874 / 606 / 268, and nothing had moved the
+// number, which is exactly the failure the file above argues a ratchet
+// prevents -- **a ceiling nobody re-pins measures nothing.**  Decision 368
+// deletes three (ComplianceOverride, ModeForSensitivity and
+// NewRedactorForSensitivity) and pins the rest, so the gap between "the tree
+// today" and "what the gate permits" is zero again.  Two of the three land in
+// the dead class here and none in the test-only class, which is worth
+// recording because it is counter-intuitive: NewRedactorForSensitivity had two
+// callers in another package's tests, and the walk still counted it dead.
+// **A test in another package makes a symbol reachable from tests; it does not
+// make it reachable from the running binary.**
 const (
-	unreachableBudget    = 874
-	deadSymbolBudget     = 606
-	testOnlySymbolBudget = 268
+	unreachableBudget    = 862
+	deadSymbolBudget     = 600
+	testOnlySymbolBudget = 262
 )
 
 // TestTheUnreachableSymbolCountNeverGrows is the gate decision 199 declined to

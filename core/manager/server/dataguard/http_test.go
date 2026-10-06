@@ -315,24 +315,25 @@ func TestGET_Labels_FilterByResourceType(t *testing.T) {
 	}
 }
 
+// TestGET_Labels_EffectiveParserWithComplianceTags 断言的是**标签真的回来了**，
+// 而不只是 "effective 解析得出来"。
+//
+// 这条用例原来叫这个名字，却只断言 `Effective` 是不是 TopSecret：它建了一份
+// 富标签（framework + controls + enforced）却把它丢掉，POST 的是 `["x"]`，
+// 然后 `_ = tagsJSON` 把没用的那份消音。**一个名字承诺了它没有断言的东西，
+// 比没有这条用例更坏**——读的人以为合规标签这条路被覆盖了。
+//
+// 而它当时是绿的，因为合规标签**当时确实回不来**：读路径用另一个形状解析，
+// 又丢掉错误，于是这一列永远是空的（决策 368）。所以这里断言的是往返，
+// 并且额外钉住"损坏的列不读成空列"。
 func TestGET_Labels_EffectiveParserWithComplianceTags(t *testing.T) {
 	router, _ := newTestHandlerRouter()
-	// 创建带 compliance_tags 的 label
-	tagsJSON, _ := json.Marshal([]map[string]any{
-		{"framework": "PCI-DSS", "controls": []string{"encryption-at-rest"}, "enforced": true},
-		{"framework": "GDPR", "controls": []string{"subject-erasure"}, "enforced": false},
-	})
-	body := LabelRequest{
-		ResourceType: "pg", ResourceID: "tbl_pii", Sensitivity: "TopSecret",
-		ComplianceTags: []string{}, // 留空，让 override body 包含 raw
-	}
-	_ = body
 	req := httptest.NewRequest("POST", "/v1/data-guard/labels",
 		bytes.NewReader([]byte(`{
 			"resource_type":"pg",
 			"resource_id":"tbl_pii",
 			"sensitivity":"TopSecret",
-			"compliance_tags":["x"],
+			"compliance_tags":["PCI-DSS","GDPR"],
 			"notes":"manual"
 		}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -353,23 +354,76 @@ func TestGET_Labels_EffectiveParserWithComplianceTags(t *testing.T) {
 		Items []EffectiveLabel `json:"items"`
 		Total int64            `json:"total"`
 	}
-	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-	if resp.Total < 1 {
-		t.Fatalf("expected ≥1 item, got %d", resp.Total)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode GET body %q: %v", rec.Body.String(), err)
 	}
+	if resp.Total < 1 {
+		t.Fatalf("expected >=1 item, got %d", resp.Total)
+	}
+
+	// 名字里承诺的东西：标签必须回到调用方手里，一个不少、顺序不变。
+	want := []string{"PCI-DSS", "GDPR"}
 	found := false
 	for _, it := range resp.Items {
-		if it.Label != nil && it.Label.ResourceID == "tbl_pii" {
-			found = true
-			if it.Effective != "TopSecret" {
-				t.Errorf("effective = %s, want TopSecret", it.Effective)
+		if it.Label == nil || it.Label.ResourceID != "tbl_pii" {
+			continue
+		}
+		found = true
+		if it.Effective != "TopSecret" {
+			t.Errorf("effective = %s, want TopSecret", it.Effective)
+		}
+		if len(it.ComplianceTags) != len(want) {
+			t.Fatalf("compliance_tags came back as %q, want %q — POST wrote them and "+
+				"nothing removed them, so an empty result here is a broken round trip, "+
+				"not an absent feature", it.ComplianceTags, want)
+		}
+		for i := range want {
+			if it.ComplianceTags[i] != want[i] {
+				t.Errorf("compliance_tags[%d] = %q, want %q", i, it.ComplianceTags[i], want[i])
 			}
 		}
 	}
 	if !found {
-		t.Error("didn't find tbl_pii in effective response")
+		t.Fatal("didn't find tbl_pii in effective response")
 	}
-	_ = tagsJSON // silence unused warning
+}
+
+// TestGET_Labels_EffectiveFailsOnAMalformedComplianceColumn 是上一条声称的另一半。
+//
+// 上一条的第一版注释里写着"额外钉住损坏的列不读成空列"，**而它当时并没有钉住**：
+// 把读路径的错误传播删掉，那条用例照样绿——因为 HTTP 写出的列永远是合法 JSON，
+// 于是 `tagErr` 恒为 nil，错误传播这条分支一次也没被走到。
+//
+// **一个在注释里被断言、而实际没有被覆盖的性质，比没有写更坏**：读的人会以为
+// 它有人看着。所以这里绕过 HTTP 直接往 repo 里写一列别的编码器形状的脏数据，
+// 然后要求这个请求**失败**。
+//
+// 要求它失败而不是返回空标签，是有方向的：让一个"我不知道这一列写了什么"的
+// 资源显示成"这个资源没有标签"，正是当初把 GDPR 标签藏起来的那件事。
+func TestGET_Labels_EffectiveFailsOnAMalformedComplianceColumn(t *testing.T) {
+	router, repo := newTestHandlerRouter()
+
+	// 这一列是另一个包会写的合法 JSON（`[]ComplianceTag` 形状），
+	// 但它不是这一列的形状——store 模型的字段注释写的是 "JSON array of
+	// framework names"。它从外面看不出来坏，这正是它危险的地方。
+	const foreignShape = `[{"framework":"GDPR","controls":["subject-erasure"],"enforced":true}]`
+	if err := repo.Create(context.Background(), &store.DataSensitivityLabel{
+		ResourceType:   "pg",
+		ResourceID:     "tbl_dirty",
+		Sensitivity:    "TopSecret",
+		ComplianceTags: foreignShape,
+	}); err != nil {
+		t.Fatalf("seeding the dirty column: %v", err)
+	}
+
+	rec := issue(t, router, "GET",
+		"/v1/data-guard/labels?resource_type=pg&effective=true", nil, ptrTenant("admin"))
+	if rec.Code == http.StatusOK {
+		t.Fatalf("GET returned %d for a compliance_tags column this build cannot read (%q); "+
+			"it reported it as a resource with no compliance tags, which is the failure "+
+			"this whole column had",
+			rec.Code, foreignShape)
+	}
 }
 
 // --- 决策 312：脱敏规则变更上宿主链 -----------------------------------------

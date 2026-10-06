@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/heuristic"
 	"github.com/vincent-wuhan/opskeeper/core/manager/dataguard/store"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 )
 
 // fakeRepo 是 label.Repo 的 in-memory 实现。
@@ -463,5 +463,85 @@ func TestStrictestForResourceID_UnlabelledIsNotAGuess(t *testing.T) {
 		if err != nil || ok || s != "" {
 			t.Errorf("%s：应返回未找到，拿到 s=%q ok=%v err=%v", tc.name, s, ok, err)
 		}
+	}
+}
+
+// TestTheComplianceTagColumnRoundTrips 钉住写进这一列的形状与读它用的形状
+// 是同一个。
+//
+// 这不是一条"测一下编解码能用"的用例。它的存在理由是一次真缺陷：写的是
+// `[]string`（框架名），读的是 `[]ComplianceTag`（framework + controls +
+// enforced），`json.Unmarshal` 每次都失败，而调用处写的是 `tags, _ :=`。
+// 于是这列**永远读回空标签，而没有任何地方报错**——一个只测编解码各自能用的
+// 测试会把那两半各自钉绿，正好放它过去。
+//
+// 所以断言的是往返，且断言的是**读回来的东西等于写进去的东西**，不是两个函数
+// 各自的返回值。
+func TestTheComplianceTagColumnRoundTrips(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tags []string
+	}{
+		{name: "nil", tags: nil},
+		{name: "empty", tags: []string{}},
+		{name: "one", tags: []string{"PCI-DSS"}},
+		{name: "several", tags: []string{"PCI-DSS", "GDPR", "SOC2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := EncodeJSONTags(tc.tags)
+			if err != nil {
+				t.Fatalf("EncodeJSONTags(%v): %v", tc.tags, err)
+			}
+			decoded, err := DecodeJSONTags(encoded)
+			if err != nil {
+				t.Fatalf("DecodeJSONTags(%q): %v", encoded, err)
+			}
+			if len(decoded) != len(tc.tags) {
+				t.Fatalf("round trip changed the length: wrote %d tags (%q), read %d (%q)",
+					len(tc.tags), encoded, len(decoded), decoded)
+			}
+			for i := range tc.tags {
+				if decoded[i] != tc.tags[i] {
+					t.Errorf("round trip changed tag %d: wrote %q, read %q",
+						i, tc.tags[i], decoded[i])
+				}
+			}
+		})
+	}
+}
+
+// TestDecodeJSONTagsReportsAMalformedColumn 是上面那条的另一半，也是当初缺的那一半。
+//
+// 那一列在损坏时读回空值，调用处又丢掉错误，于是"标签没了"和"这列没有标签"
+// 从外面看一模一样。解析失败必须**说出来**：宁可让读标签的请求失败，也不能让它
+// 安静地返回一份没有标签的标签。
+func TestDecodeJSONTagsReportsAMalformedColumn(t *testing.T) {
+	// 这就是当初写进去的形状——另一个包会写的、合法的 JSON，但它不是这一列的形状。
+	// 它必须被当成损坏，而不是被当成空。
+	const wrongShape = `[{"framework":"PCI-DSS","controls":["mfa-on-write"]}]`
+	if _, err := DecodeJSONTags(wrongShape); err == nil {
+		t.Fatalf("DecodeJSONTags(%s) returned no error; a column written by the other "+
+			"encoder reads back as \"no tags\" instead of as a broken column", wrongShape)
+	}
+	// 只有"没写过东西"不算坏。"没写过东西"和"写了但坏了"必须能分开——
+	// 这正是当初那个缺陷藏身的地方。
+	for _, raw := range []string{"  ", "\t\n", ""} {
+		t.Run("empty:"+raw, func(t *testing.T) {
+			got, err := DecodeJSONTags(raw)
+			if err != nil {
+				t.Errorf("DecodeJSONTags(%q) = %v; an empty column is not a broken column", raw, err)
+			}
+			if len(got) != 0 {
+				t.Errorf("DecodeJSONTags(%q) = %q; an empty column holds no tags", raw, got)
+			}
+		})
+	}
+	for _, raw := range []string{"not json", `["unterminated`, `{}`, `"PCI-DSS"`} {
+		t.Run("broken:"+raw, func(t *testing.T) {
+			if _, err := DecodeJSONTags(raw); err == nil {
+				t.Errorf("DecodeJSONTags(%q) returned no error; broken and empty must not "+
+					"look alike from the outside", raw)
+			}
+		})
 	}
 }

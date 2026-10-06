@@ -50,6 +50,7 @@ func TestComplianceTag_Validate(t *testing.T) {
 		t.Error("empty controls should error")
 	}
 }
+
 // MarshalComplianceTags / UnmarshalComplianceTags 此前在这里有一条往返用例。
 // 它们删掉了（决策 368）：写进那一列的是 label.EncodeJSONTags 产出的 `[]string`，
 // 而它们解析的是 `[]ComplianceTag`——**一条形状对不上的往返测试，测的是

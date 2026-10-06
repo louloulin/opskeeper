@@ -99,14 +99,10 @@ func DefaultFrameworkControls() map[Framework][]string {
 	}
 }
 
-// ComplianceOverride 是 per-edge / per-resource / per-tenant 配置（Phase 2 任务 2.6）。
-//
-// 留作 Phase 2 后续 sub-task：当前仅定义结构 + 字段语义，不接入 cmdpolicy。
-type ComplianceOverride struct {
-	Scope       string    `json:"scope"`    // "edge" / "resource" / "tenant"
-	ScopeID     string    `json:"scope_id"` // 对应 id
-	Framework   Framework `json:"framework"`
-	Action      string    `json:"action"` // "force_enforce" | "soften" | "remove"
-	Reason      string    `json:"reason"`
-	RequestedBy uint64    `json:"requested_by"`
-}
+// Decision 368 deleted ComplianceOverride, which had no reference anywhere in
+// the tree -- not even a test -- and a doc comment that said so outright:
+// "留作 Phase 2 后续 sub-task". **A struct with no consumer is not a phase**;
+// phases live in the ROADMAP, and a struct left in the package reads from the
+// inside as a feature somebody can already configure and from the outside as
+// nothing at all. This is the same shape as RaisedClass in the same decision,
+// one layer down: both were a plan wearing a type's clothes.

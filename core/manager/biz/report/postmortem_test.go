@@ -281,7 +281,7 @@ func TestPostmortemService_Redacted(t *testing.T) {
 		"api_key":       "key-abc",
 		"non_sensitive": "ok",
 	}
-	redactor := dataguard.NewRedactorForSensitivity(dataguard.Confidential)
+	redactor := dataguard.NewRedactor(dataguard.RedactModeAll, false)
 	loaders := &fakeLoaders{
 		rootCause: in.RootCause,
 		critique:  in.Critique,
@@ -327,7 +327,7 @@ func TestPostmortemService_Redacted_TopSecret_StripsDigits(t *testing.T) {
 	in.RootCause.RootCauseObject.Detail = map[string]any{
 		"trace_id": "trace 1234-5678 with counter 9999",
 	}
-	redactor := dataguard.NewRedactorForSensitivity(dataguard.TopSecret)
+	redactor := dataguard.NewRedactor(dataguard.RedactModeAll, true)
 	loaders := &fakeLoaders{
 		rootCause: in.RootCause,
 		critique:  in.Critique,

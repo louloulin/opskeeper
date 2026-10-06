@@ -69,25 +69,17 @@ const (
 	RedactModeAll RedactMode = "all"
 )
 
-// ModeForSensitivity returns the canonical RedactMode for a given
-// sensitivity tier. Centralised so the rule lives in one place.
-func ModeForSensitivity(s Sensitivity) RedactMode {
-	switch s {
-	case Public:
-		return RedactModeNone
-	case Internal:
-		return RedactModeSummary
-	case Confidential, Restricted, TopSecret:
-		return RedactModeAll
-	default:
-		// Unknown tier — default to strongest mode for safety.
-		return RedactModeAll
-	}
-}
-
 // Redactor is the public interface used by report / postmortem to
-// redact structured data. Production code wires NewRedactor(mode)
-// from cmd/main.go; tests can build a Redactor directly.
+// redact structured data.
+//
+// This doc used to say "Production code wires NewRedactor(mode) from
+// cmd/main.go". Nothing does: the only non-test construction of a
+// Redactor is postmortem.go's nil-default, and that default is
+// RedactModeNone -- and NewPostmortemService, the service it belongs
+// to, has no caller outside tests either. **A claim about wiring is
+// the kind of sentence that ages worst**, because nothing recompiles
+// when the thing it names gets unwired. See the redaction.depth-by-
+// sensitivity row in Claims() for where the gap is recorded.
 type Redactor interface {
 	// Mode returns the configured RedactMode.
 	Mode() RedactMode
@@ -129,13 +121,6 @@ func NewRedactor(mode RedactMode, stripDigits bool) Redactor {
 		sensitiveNames: names,
 		stripDigits:    stripDigits,
 	}
-}
-
-// NewRedactorForSensitivity is a convenience helper: builds a
-// Redactor using ModeForSensitivity. stripDigits is true when
-// sensitivity == TopSecret.
-func NewRedactorForSensitivity(s Sensitivity) Redactor {
-	return NewRedactor(ModeForSensitivity(s), s == TopSecret)
 }
 
 // Mode implements Redactor.

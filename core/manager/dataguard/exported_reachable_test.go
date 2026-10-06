@@ -1,14 +1,16 @@
 package dataguard
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
-	"fmt"
 	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vincent-wuhan/opskeeper/core/floor/reporoot"
 )
 
 // 这个包里的每个导出符号都必须有一个**生产调用方**。
@@ -36,6 +38,9 @@ func TestEveryExportedSymbolHereHasAProductionCaller(t *testing.T) {
 			"inspecting nothing; the parser has probably stopped matching")
 	}
 	for name, file := range decls {
+		if isGateVocabulary(name) {
+			continue
+		}
 		if !referencedOutsideTests(t, repoRoot, name) {
 			t.Errorf("%s declares %s, and nothing outside a _test.go file mentions it.\n"+
 				"  A symbol only its own tests reach is not a feature: it reads as "+
@@ -160,31 +165,23 @@ func referencedOutsideTests(t *testing.T, repoRoot, name string) bool {
 	return found
 }
 
-// repoRootOf walks up to the directory holding go.work, falling back to the
-// module's own go.mod. A test that cannot find the repository root is looking
-// at a tree it cannot judge, so it says so rather than passing quietly.
+// repoRootOf hands the walk to core/floor/reporoot rather than re-implementing it.
+//
+// The first version of this guard walked up looking for **go.work**, and
+// `make module-check` rejected it in one line: go.work is gitignored, so a clean
+// clone does not have one, and a test that hunts for it either fails or skips
+// itself green there. A guard that only ever runs on a developer's machine is
+// not the guard the same file claims to be. reporoot walks by tracked markers,
+// which is the same reason `scripts/deadcode` uses ../domaincheck rather than
+// go.work (decision 364).
 func repoRootOf(t *testing.T, dir string) string {
 	t.Helper()
-	for d := dir; ; {
-		if _, err := os.Stat(filepath.Join(d, "go.work")); err == nil {
-			return d
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			break
-		}
-		d = parent
+	root, ok := reporoot.Find(dir, 8)
+	if !ok {
+		t.Fatalf("could not find the repository root from %s, so this guard is about "+
+			"to pass by inspecting nothing", dir)
 	}
-	for d := dir; ; {
-		if _, err := os.Stat(filepath.Join(d, "go.mod")); err == nil {
-			return d
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			t.Fatal("could not find the repository root from " + dir)
-		}
-		d = parent
-	}
+	return root
 }
 
 // declaredNamePositions is the set of identifier positions that belong to a
@@ -235,4 +232,99 @@ func declaredNamePositions(file *ast.File) map[token.Pos]bool {
 		}
 	}
 	return out
+}
+
+// gateVocabulary is the closed list of symbols this package exports for the
+// sake of the gate that guards the registry in enforcement.go, and for nothing
+// else. Two entries, and the reason they need naming rather than deleting is
+// specific: `compliance-claims-check` lives in cmd/opskeeper and reads this
+// registry's vocabulary — StatusInert to compare a row against, DeclaredControls
+// to know which control names the tree has to classify. Delete either and the
+// gate stops guarding the thing it exists to guard.
+//
+// The narrow alternative — exempting "anything a _test.go file in another
+// package mentions" — was rejected because it is not a narrower version of this
+// rule, it is a different and much weaker one: NewRedactorForSensitivity was
+// reachable from two tests in biz/report and was still not a feature, and the
+// first version of this guard reported exactly that. **A test in another package
+// is a consumer, and a consumer that only ever consumes tests is still a
+// consumer of tests.**
+var gateVocabulary = map[string]string{
+	"StatusInert":      "cmd/opskeeper/complianceclaims_test.go",
+	"DeclaredControls": "cmd/opskeeper/complianceclaims_test.go",
+}
+
+func isGateVocabulary(name string) bool {
+	_, ok := gateVocabulary[name]
+	return ok
+}
+
+// TestTheGateVocabularyExemptionIsStillTrue 是那份名单自己的守卫。
+//
+// 一张豁免表如果不检查它所豁免的东西还在被使用，它就是一张永久有效的白名单——
+// 而白名单的失效方向永远是**多**豁免：闸门改了名字、换了位置或者干脆不再读
+// 这两个符号，这两行会安静地继续替它们挡着真正的回归。
+//
+// 所以这一条断言的是名单指向的那个文件**仍然真的在引用那个符号**。删掉闸门里
+// 的一次引用，这里就红，然后要么改名单要么改回去。
+func TestTheGateVocabularyExemptionIsStillTrue(t *testing.T) {
+	root := repoRootOf(t, mustGetwd(t))
+	if len(gateVocabulary) == 0 {
+		t.Fatal("gateVocabulary is empty; either the gate stopped reading this package's " +
+			"vocabulary or the list was emptied without looking")
+	}
+	for name, rel := range gateVocabulary {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(root, rel)
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("gateVocabulary names %s for %s, which does not exist: %v\n"+
+					"  The exemption is now covering a symbol with no justification behind it.",
+					rel, name, err)
+			}
+			if !referencedOutsideTestsInFile(t, path, name) {
+				t.Errorf("%s no longer mentions %s, so exempting it from "+
+					"TestEveryExportedSymbolHereHasAProductionCaller covers nothing.\n"+
+					"  Drop the entry, or point it at wherever the gate reads that symbol now.",
+					rel, name)
+			}
+		})
+	}
+}
+
+// referencedOutsideTestsInFile is referencedOutsideTests restricted to one file,
+// which is what makes an exemption checkable: "you are exempt because that file
+// uses you" is only a statement about the tree while somebody re-reads it.
+func referencedOutsideTestsInFile(t *testing.T, path, name string) bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	declared := declaredNamePositions(file)
+	found := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		ident, ok := n.(*ast.Ident)
+		if !ok || ident.Name != name {
+			return true
+		}
+		if _, isDecl := declared[ident.Pos()]; isDecl {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
+}
+
+func mustGetwd(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
