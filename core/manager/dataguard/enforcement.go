@@ -99,15 +99,22 @@ func Claims() []ControlClaim {
 		{
 			ID:     "sensitivity.confidential-reader-role",
 			Claim:  "Confidential data requires the confidential-reader role",
-			Status: StatusDeclared,
-			Note: "the role name appears in exactly one place — the comment beside the constant. " +
-				"No authorization check reads it.",
+			Status: StatusInert,
+			Probe:  "AllowWithSensitivity",
+			Note: "the check exists — Enforcer.AllowWithSensitivity answers RBAC and then the " +
+				"sensitivity tier, against a per-user, per-org tier table — and nothing calls it. " +
+				"This row was written as declared on the strength of a grep that only looked at " +
+				"this package; the control was one module over and implemented all along, which is " +
+				"the same blindness in the other direction.",
 		},
 		{
 			ID:     "sensitivity.restricted-reader-role",
 			Claim:  "Restricted data requires the restricted-reader role, and writes need an override",
-			Status: StatusDeclared,
-			Note:   "same as above: the role and the override are named in a comment and enforced nowhere.",
+			Status: StatusInert,
+			Probe:  "AllowWithSensitivity",
+			Note: "the tier half of this promise is the same unwired check as the confidential " +
+				"row. The write-override half has no implementation at all: the escalation to a " +
+				"dangerous approval exists in PausePolicyImpl, which production never constructs.",
 		},
 		{
 			ID:     "sensitivity.top-secret-dual-approval",

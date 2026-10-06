@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -282,5 +283,77 @@ func TestEveryClaimSaysWhatIsActuallyTrue(t *testing.T) {
 	}
 	if _, ok := dataguard.Claim("compliance.enforced-tag"); !ok {
 		t.Error("the compliance tag row is missing; it is the one the API field still lies about")
+	}
+}
+
+// backtickedIdentifier pulls the code-shaped words out of a row's prose, which
+// is where a claim names the thing it is about.
+var backtickedIdentifier = regexp.MustCompile("`([A-Za-z_][A-Za-z0-9_.]{3,})`")
+
+// A declared row is the strongest statement in the registry: "there is no
+// code at all". It is also the statement most likely to be wrong, because
+// writing it is cheap and checking it used to mean reading the package the row
+// happens to sit in. This is that check, and it found its own error: two rows
+// written as declared named controls that were implemented one module over.
+func TestADeclaredRowNamesNoFunctionAnywhereInTheTree(t *testing.T) {
+	root := repoRoot(t)
+	files := productionFiles(t, root)
+
+	// Every declaration in the tree, once, so the check below is a lookup
+	// rather than a walk per name.
+	declared := map[string]bool{}
+	for _, file := range files {
+		body, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(body), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if !strings.HasPrefix(trimmed, "func ") {
+				continue
+			}
+			// Both declaration shapes, and the method shape is the one
+			// this extractor first got wrong: for
+			// `func (a *Enforcer) AllowWithSensitivity(` the first "(" it
+			// finds belongs to the receiver, so the name came out empty and
+			// every method in the tree read as undeclared — which is the
+			// same class of mistake as the earlier `) NAME(` probe, and it
+			// hid the exact function this assertion exists to find.
+			rest := strings.TrimPrefix(trimmed, "func ")
+			if strings.HasPrefix(rest, "(") {
+				closing := strings.Index(rest, ")")
+				if closing < 0 {
+					continue
+				}
+				rest = strings.TrimSpace(rest[closing+1:])
+			}
+			idx := strings.Index(rest, "(")
+			if idx < 0 {
+				continue
+			}
+			name := strings.TrimSpace(rest[:idx])
+			if idx := strings.Index(name, "["); idx >= 0 {
+				name = strings.TrimSpace(name[:idx])
+			}
+			if name != "" {
+				declared[name] = true
+			}
+		}
+	}
+	if len(declared) == 0 {
+		t.Fatal("no declarations were found; the check is looking at nothing")
+	}
+
+	for _, claim := range dataguard.Claims() {
+		if claim.Status != dataguard.StatusDeclared {
+			continue
+		}
+		for _, match := range backtickedIdentifier.FindAllStringSubmatch(claim.Claim+" "+claim.Note, -1) {
+			name := match[1]
+			if declared[name] {
+				t.Errorf("%s says there is no code, but it names %q and %q is declared in "+
+					"production code; the row is inert, not declared", claim.ID, name, name)
+			}
+		}
 	}
 }

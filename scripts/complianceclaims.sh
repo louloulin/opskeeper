@@ -21,6 +21,7 @@ names=(
 	TestEveryAdvertisedControlIsClassified
 	TestEverySensitivityLevelThatPromisesAControlIsClassified
 	TestEveryClaimSaysWhatIsActuallyTrue
+	TestADeclaredRowNamesNoFunctionAnywhereInTheTree
 )
 
 for name in "${names[@]}"; do
