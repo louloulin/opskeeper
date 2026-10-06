@@ -302,7 +302,7 @@ func RegisterManagerMetrics(reg *prometheus.Registry, log *slog.Logger) {
 	edgeConns := prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "opskeeper_edge_connections",
-			Help: "Tunnel-connected edges by status (connected|disconnected). Sampled by the tunnel hub every 15s.",
+			Help: "Tunnel-connected edges by status (connected|disconnected). Set on every edge lifecycle transition.",
 		},
 		[]string{"status"},
 	)

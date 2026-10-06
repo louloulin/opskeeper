@@ -981,7 +981,14 @@ func main() {
 	// transport (so a rotation does not re-dial) but re-reads the
 	// credentials, base URL and model list on every request, which is what
 	// makes an admin edit visible without the Invalidate hook above.
-	modelRegistry := pigmodel.NewRegistry(llmpig.SettingsSource(llmSettingsResolver))
+	// The observer is wired here rather than inside pigmodel because only
+	// the manager has a /metrics endpoint. It is also the only layer that
+	// knows the provider id and model id -- those are the output of
+	// resolution -- so this is the first place the numbers exist.
+	modelRegistry := pigmodel.NewRegistry(
+		llmpig.SettingsSource(llmSettingsResolver),
+		pigmodel.WithCallObserver(prom.ObserveLLMCall),
+	)
 	// Close the cached transports on the way out. Without this a rolling
 	// restart leaks one connection pool per provider until the process
 	// exits — invisible in dev, a slow fd leak in production.

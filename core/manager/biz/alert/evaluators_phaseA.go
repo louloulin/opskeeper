@@ -27,7 +27,19 @@ func observeEval(kind string, evalErr *error) func() {
 		if evalErr != nil {
 			e = *evalErr
 		}
+		result := "ok"
+		if e != nil {
+			result = "error"
+		}
 		prom.ObserveAlertEvaluator(kind, time.Since(start).Seconds(), e)
+		// The counter and the histogram are moved together, from the one
+		// closure every Phase-A / Phase-B evaluator already runs, so the
+		// two cannot disagree about which ticks happened. They used to
+		// disagree by construction: the histogram was fed here and
+		// prom.IncAlertEvalTick had no caller at all, so a dashboard
+		// reading alert_eval_ticks_total saw a flat zero next to a
+		// healthy latency series and concluded the evaluator had stopped.
+		prom.IncAlertEvalTick(kind, result)
 	}
 }
 

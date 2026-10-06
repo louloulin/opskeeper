@@ -42,13 +42,53 @@ var (
 type Registry struct {
 	src SettingsSource
 
-	mu    sync.RWMutex
-	cache map[domain.ProviderID]ai.Provider
+	mu       sync.RWMutex
+	cache    map[domain.ProviderID]ai.Provider
+	observer CallObserver
+}
+
+// CallObserver is told about every provider invocation the registry makes,
+// including the ones that fail.
+//
+// It exists because the provider id and the model id are only known here —
+// they are the output of resolution, and every caller above this layer sees
+// a settled reply or an error and nothing in between. The observer is a
+// hook rather than a direct prometheus call for the same reason the rest of
+// this package takes no dependency on a metrics library: a node agent and a
+// manager run the same registry, and only one of them has a /metrics
+// endpoint. The host that has one passes prom.ObserveLLMCall.
+type CallObserver func(provider, model, status string, seconds float64, inputTokens, outputTokens int)
+
+// RegistryOption configures a Registry at construction.
+type RegistryOption func(*Registry)
+
+// WithCallObserver installs the observer Complete reports through.
+func WithCallObserver(fn CallObserver) RegistryOption {
+	return func(r *Registry) { r.observer = fn }
 }
 
 // NewRegistry returns a Registry over src. src must be non-nil.
-func NewRegistry(src SettingsSource) *Registry {
-	return &Registry{src: src, cache: make(map[domain.ProviderID]ai.Provider)}
+func NewRegistry(src SettingsSource, opts ...RegistryOption) *Registry {
+	r := &Registry{src: src, cache: make(map[domain.ProviderID]ai.Provider)}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
+}
+
+// observe reports one provider invocation, if anybody is listening.
+//
+// A nil observer is the normal case for a node agent and for every test
+// that does not care about telemetry, so the call is a nil check and
+// nothing else. The status vocabulary is ok | error: a provider that
+// refuses a request has still consumed an attempt, and a metrics series
+// that only counts successes is how a failing provider stays invisible
+// until an operator reads a log.
+func (r *Registry) observe(model *ai.Model, status string, seconds float64, inputTokens, outputTokens int) {
+	if r.observer == nil || model == nil {
+		return
+	}
+	r.observer(model.Provider.ID(), model.ID, status, seconds, inputTokens, outputTokens)
 }
 
 // Resolve turns a possibly-partial selection into a concrete model ref.

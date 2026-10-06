@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/MichaelKinsy/PiG/ai"
 
@@ -112,11 +113,24 @@ func (r *Registry) Complete(ctx context.Context, req Request) (*ai.AssistantMess
 		return nil, err
 	}
 
+	start := time.Now()
 	stream, err := model.Provider.Stream(ctx, transcript, opts)
 	if err != nil {
+		r.observe(model, "error", time.Since(start).Seconds(), 0, 0)
 		return nil, fmt.Errorf("pigmodel: chat completion: %w", err)
 	}
-	return Settle(stream, ctx)
+	msg, err := Settle(stream, ctx)
+	if err != nil {
+		r.observe(model, "error", time.Since(start).Seconds(), 0, 0)
+		return nil, err
+	}
+	// Usage is read through ReplyUsage rather than off the message type, so
+	// a provider that grows a new component of its usage record is counted
+	// here by construction instead of by a second implementation of the
+	// same accessor.
+	usage := ReplyUsage(msg)
+	r.observe(model, "ok", time.Since(start).Seconds(), usage.Input, usage.Output)
+	return msg, nil
 }
 
 // Transcript normalises a request into PiG's provider-facing transcript.
@@ -198,7 +212,43 @@ func Settle(stream *ai.AssistantMessageEventStream, ctx context.Context) (*ai.As
 	if settled == nil {
 		return nil, fmt.Errorf("pigmodel: empty choices in response")
 	}
+	// ResultContext reports the stream's terminal value and nothing else:
+	// a provider that refused the request settles into an AssistantMessage
+	// carrying StopReasonError and the provider's own text, and
+	// ResultContext hands that back with a nil error. So a 401, a 429 and
+	// a 500 all used to reach every caller as a successful, empty turn --
+	// the one shape that is hardest to diagnose, because the caller's
+	// schema check then reports "the model did not return JSON" and points
+	// at the prompt instead of at the key that expired an hour ago.
+	//
+	// This is the third of the three lies the function's own comment names
+	// -- a stream that settles into an error rather than into a reply. The
+	// other two are checked above; this one was checked nowhere.
+	if err := ProviderTurnError(settled); err != nil {
+		return nil, err
+	}
 	return settled, nil
+}
+
+// ProviderTurnError reports whether a settled turn produced a reply or an
+// excuse, and is the whole of Settle's third check.
+//
+// It is exported and takes a message rather than a stream because the
+// distinction is worth testing directly: a stream that ends in a tool call,
+// in a truncated turn, or in a clean stop is a normal turn, and only the
+// two reasons that mean "nothing was produced" are a provider failure.
+// Reading the value rather than the stream is also what the upstream
+// ResultContext forces -- it reports the terminal message and a nil error,
+// so the reason on that message is the only signal left.
+func ProviderTurnError(settled *ai.AssistantMessage) error {
+	if settled == nil {
+		return nil
+	}
+	if settled.StopReason != ai.StopReasonError && settled.StopReason != ai.StopReasonAborted {
+		return nil
+	}
+	return fmt.Errorf("pigmodel: %s rejected the turn (%s/%s): %s",
+		settled.StopReason, settled.Provider, settled.Model, settled.ErrorMessage)
 }
 
 // ReplyText is the reply's text, with every text block concatenated in the

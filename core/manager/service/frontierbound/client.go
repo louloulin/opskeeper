@@ -11,6 +11,7 @@ import (
 
 	fbsvc "github.com/singchia/frontier/api/dataplane/v1/service"
 	"github.com/singchia/geminio"
+	"github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
 )
 
@@ -55,6 +56,21 @@ type Client struct {
 	mu                sync.RWMutex
 	transportToEdgeID map[uint64]uint64
 	edgeIDToTransport map[uint64]uint64
+	// disconnectedTransports is the set of brokers the manager has seen
+	// go away and not come back. It is what opskeeper_edge_connections
+	// reports on its disconnected series, and it is a set rather than a
+	// counter so a flapping edge occupies one slot instead of inflating
+	// the number on every reconnect.
+	//
+	// The gauge existed, a provisioned Grafana panel queried it, and
+	// nothing ever wrote to it: the panel showed a flat zero for the life
+	// of the deployment, next to a live latency series, and the honest
+	// reading of that pair was "the metric is broken" rather than "no
+	// nodes are connected". The count is kept here because the transport
+	// bindings are already the manager's answer to "which brokers have
+	// proved an edge identity", and a set derived from them cannot drift
+	// from the routing table it describes.
+	disconnectedTransports map[uint64]struct{}
 
 	// offlineMu guards offlineHooks, which is a separate concern from the
 	// transport maps: hooks are registered before Install runs and read
@@ -130,25 +146,27 @@ func New(cfg Config, log *slog.Logger) (*Client, error) {
 		slog.String("addr", cfg.Addr),
 		slog.String("service_name", cfg.ServiceName),
 	)
-	return &Client{
-		svc:               svc,
-		log:               log,
-		transportToEdgeID: make(map[uint64]uint64),
-		edgeIDToTransport: make(map[uint64]uint64),
-	}, nil
+	return newClient(svc, log), nil
 }
 
-// newWithService is the test seam: build a Client around an injected service.
-func newWithService(svc service, log *slog.Logger) *Client {
+// newClient is the one place the Client's maps are made, so the gauge's
+// disconnected set cannot be forgotten by the next constructor added.
+func newClient(svc service, log *slog.Logger) *Client {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Client{
-		svc:               svc,
-		log:               log,
-		transportToEdgeID: make(map[uint64]uint64),
-		edgeIDToTransport: make(map[uint64]uint64),
+		svc:                    svc,
+		log:                    log,
+		transportToEdgeID:      make(map[uint64]uint64),
+		edgeIDToTransport:      make(map[uint64]uint64),
+		disconnectedTransports: make(map[uint64]struct{}),
 	}
+}
+
+// newWithService is the test seam: build a Client around an injected service.
+func newWithService(svc service, log *slog.Logger) *Client {
+	return newClient(svc, log)
 }
 
 // ErrDisabled is returned from any Call / OpenStream / NotifyX on a
@@ -167,12 +185,7 @@ func NewDisabled(log *slog.Logger) *Client {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Client{
-		svc:               nil,
-		log:               log,
-		transportToEdgeID: make(map[uint64]uint64),
-		edgeIDToTransport: make(map[uint64]uint64),
-	}
+	return newClient(nil, log)
 }
 
 // Call invokes a method on a specific edge by ID. The body is treated as
@@ -304,7 +317,6 @@ func (c *Client) bindEdgeTransport(transportID, edgeID uint64) {
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if prevEdgeID, ok := c.transportToEdgeID[transportID]; ok && prevEdgeID != edgeID {
 		delete(c.edgeIDToTransport, prevEdgeID)
 	}
@@ -313,6 +325,13 @@ func (c *Client) bindEdgeTransport(transportID, edgeID uint64) {
 	}
 	c.transportToEdgeID[transportID] = edgeID
 	c.edgeIDToTransport[edgeID] = transportID
+	// An edge that comes back leaves the disconnected set rather than
+	// being counted twice, so the gauge reads "where are they now" and
+	// not "how many times has anything happened".
+	delete(c.disconnectedTransports, transportID)
+	connected, disconnected := len(c.transportToEdgeID), len(c.disconnectedTransports)
+	c.mu.Unlock()
+	prom.SetEdgeConnections(connected, disconnected)
 }
 
 func (c *Client) unbindTransport(transportID uint64) {
@@ -320,13 +339,17 @@ func (c *Client) unbindTransport(transportID uint64) {
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	edgeID, ok := c.transportToEdgeID[transportID]
 	if !ok {
+		c.mu.Unlock()
 		return
 	}
 	delete(c.transportToEdgeID, transportID)
 	delete(c.edgeIDToTransport, edgeID)
+	c.disconnectedTransports[transportID] = struct{}{}
+	connected, disconnected := len(c.transportToEdgeID), len(c.disconnectedTransports)
+	c.mu.Unlock()
+	prom.SetEdgeConnections(connected, disconnected)
 }
 
 func (c *Client) canonicalizeEdgeID(edgeID uint64) uint64 {
