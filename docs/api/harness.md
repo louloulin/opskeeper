@@ -61,7 +61,7 @@ opskeeper-eval run --suite middleware-baseline --concurrency 4
 # 列出 k8s/pod-oom 会注入什么（这一步现在真的能跑通）
 opskeeper-eval inject --case k8s/pod-oom --dry-run
 
-# 真注入（k8s 仍是骨架，这一步会以非零退出并说明缺 kubectl）
+# 真注入（需 KUBECONFIG 指向真 API server；未设则以非零退出并说明缺什么）
 opskeeper-eval inject --case k8s/pod-oom --target ns=test deploy=order-svc
 
 # 真注入并按住（pg 已有真实现；需要 OPSKEEPER_HARNESS_PG_DSN）
@@ -168,8 +168,17 @@ publish 这一步**开 publisher confirm**：不开的时候 `Publish` 只等帧
 "发完了"是一个没人验证过的说法。这与 kafka 那边 `RequiredAcks` 默认
 `RequireNone` 是同一个坑，这次是在写它的时候就知道的。
 
-**另外 k8s 仍然是骨架**，它不碰任何真实系统——没有 kubectl——
-并通过 `CheckAvailable` 说明缺什么。
+k8s 这一路连的是 `KUBECONFIG` 里的**真 API server**（判据见下），没设就一步都不走：
+
+| 注入类型 | 判据（从 API server 另一条连接上读） |
+|---|---|
+| `k8s.cordon_node` | `node.spec.unschedulable == true`，撤销后为 `false`；已经 cordon 的节点直接拒绝 |
+| `k8s.inject_memory_pressure` | `node.status.conditions` 里出现 `MemoryPressure=True`，撤销只摘掉自己加的那一条 |
+| `k8s.set_bad_image` | **大声拒绝**：可观测信号 `ImagePullBackOff` 由真 kubelet 产生 |
+| `k8s.fill_pv` | **大声拒绝**：API 里没有"填满一个卷"这个操作 |
+
+`cordon_node` 遇 `simulate_network_partition: true` 也会拒绝——cordon 不是断网。
+两个"只对自己安全"的理由见 `docs/harness-guide.md` §4.1.3。
 
 一个认不出的类型报 `ErrUnsupportedType` 而不是"不可用"：那是接线问题，
 与当前环境无关，报成不可用会把人引去查环境。

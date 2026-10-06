@@ -329,7 +329,8 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 | `pg.` | `inject_replica_lag` | ⚠️ 大声拒绝：单节点造不出复制延迟 |
 | `redis.` | `inject_big_key` / `inject_hot_key` / `inject_memory_burst` / `inject_slow_commands` | ✅ **真实现**（go-redis 连真库，决策 298） |
 | `host.` | `fill_disk` / `cpu_stress` | ✅ **真实现**（决策 299；**最危险的一个**，见 4.4） |
-| `k8s.` | `cordon_node` / `fill_pv` / `inject_memory_pressure` / `set_bad_image` | 骨架 |
+| `k8s.` | `cordon_node` / `inject_memory_pressure` | ✅ **真实现**（client-go 连真 API server，决策 304） |
+| `k8s.` | `set_bad_image` / `fill_pv` | ⚠️ 大声拒绝：信号由真 kubelet 产生 / API 里没有"填满一个卷"这个操作 |
 | `rabbitmq.` | `inject_message_burst` | ✅ **真实现**（amqp091-go 连真 broker，决策 301） |
 | `kafka.` | `inject_consumer_lag` / `inject_partition_skew` | ✅ **真实现**（kafka-go 连真 broker，决策 300） |
 | `kafka.` | `kill_broker` | ⚠️ 大声拒绝：停掉 broker 撤不回来 |
@@ -356,6 +357,8 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 | `host.cpu_stress` | `getrusage` 的 CPU 时间增量；利用率按 worker 归一后不低于 `target_load - 25` 个百分点 |
 | `kafka.inject_consumer_lag` | `OffsetFetch` 的 committed 与 `ListOffsets` 的 latest 之差 ≈ `产出量 × (produce_rate−consume_rate)/produce_rate`（±15%） |
 | `kafka.inject_partition_skew` | 每个分区 `Last − First` 的记录条数；最忙分区 ≥ 次忙 `skew_factor` 倍，且落在 `target_partition` |
+| `k8s.cordon_node` | `node.spec.unschedulable == true`；撤销后为 `false`。**已经 cordon 的节点直接拒绝** |
+| `k8s.inject_memory_pressure` | `node.status.conditions` 里出现 `MemoryPressure=True`（这正是 kubelet 做的事）；撤销只摘掉自己加的那一条 |
 | `rabbitmq.inject_message_burst` | 独立连接上 `QueueInspect` 的深度**精确等于** `message_count − 1`（那一条被取出来量了字节数）；取出的那条 `len(Body) == message_size_bytes` |
 
 连接来自 `OPSKEEPER_HARNESS_PG_DSN` 与
@@ -364,6 +367,8 @@ opskeeper-eval vocabulary --cases-dir core/harness/cases
 `kafka` 来自 `OPSKEEPER_HARNESS_KAFKA_BROKERS`（逗号分隔的 `host:port`）；
 `rabbitmq` 来自 `OPSKEEPER_HARNESS_RABBITMQ_URL`（完整 AMQP URL，
 **口令不许出现在任何一条会被打印出来的错误里**——错误里只回 host）。
+`k8s` 来自 `KUBECONFIG`（或注入器显式指定的路径）；**同样没设就一步都不走**。
+
 **没设就一步都不走**——`host` 尤其不猜：在节点 agent 上，
 任何形式的默认目录都极可能就是节点的根文件系统。
 
@@ -466,6 +471,51 @@ case 里的 `path` **只能收窄范围，不能扩大**。语料是手写的 YA
 按表名删就是在删别人的东西）。表名走标识符校验，不是标识符直接拒绝。
 
 ---
+
+### 4.1.3 K8s 侧：真 API server，但没有真 kubelet
+
+Kubernetes 这一组能走到"真实现"，靠的不是 minikube，而是 **kwok**：
+它起的是真的 etcd、真的 kube-apiserver、真的 controller/scheduler，
+但节点是**假的**——没有 kubelet 跑在上面。这条路的价值恰恰在于它把两侧分开了：
+
+| 故障内容由谁产生 | 类型 | 处置 |
+|---|---|---|
+| **API server 存的就是故障本身** | `cordon_node`（`spec.unschedulable=true`）、`inject_memory_pressure`（`status.conditions` 里加一条） | ✅ 真实现，撤销就是 patch 回原值 |
+| **由真 kubelet 跑出来** | `set_bad_image`（可观测信号是 `ImagePullBackOff`）、`fill_pv`（卷被写满是数据面的事） | ⚠️ 大声拒绝 |
+
+`set_bad_image` 的拒绝理由值得写全：改 Deployment 的 image 字段**确实**能让它不再指向旧镜像，
+但那验证的是"我刚写的字符串还在"——真正的故障信号 `ImagePullBackOff` 只有真 kubelet 拉镜像失败才会出现。
+**照做一半再报成功是撒谎**，所以拒绝。
+
+**cordon 不是断网**。`cordon_node` 遇 `simulate_network_partition: true`
+（`k8s/node-notready` case 正是这样标参数）会**大声拒绝**：
+cordon 只是让调度器不再往这个节点派新 Pod，节点上已有的 Pod 一个都不动，网络照通。
+照做一半再报成功，等于给 case 盖了一个假的"节点失联"。
+
+**两个只对"自己的"东西才安全的类型**，与 redis 的 `key_prefix`、kafka 的 `topic`、
+rabbitmq 的 `queue` 是同一个形状的第四次出现：
+
+- `cordon_node`：**已经**是 `unschedulable` 的节点直接拒绝——撤销会 `patch false`，
+  等于替运维关掉一个他正在用的维护窗口。
+- `inject_memory_pressure`：撤销只摘掉**自己加的那一条** condition，
+  别的 condition 一条都不动。
+
+#### 三个撞见的真 bug
+
+1. **Node 没有 `spec` 子资源**。`spec` 是 Pod 才有的。带着 subresource 去 patch 会打到
+   `/api/v1/nodes/<name>/spec`，API server 回 404 `the server could not find the requested
+   resource`——一句完全看不出是路径写错的话。
+2. **status 子资源是争用的**。node controller 一直在写它，读-改-写会周期撞
+   `Operation cannot be fulfilled on nodes "...": the object has been modified`
+   （`-count=3` 才稳定逮到）。修法：`patchNodeStatus` 走 `retry.RetryOnConflict`。
+   这个 Conflict 还制造了**第二个**故障：撤销失败后条件留在节点上，下一次运行读到
+   "这个节点已经报着内存压力"并按归属规则拒绝——**一个自造的、假的"这不是我们的节点"**。
+3. **旧的骨架测试自己变成了注入器**。`TestInjector_AllSupportedTypesAreRefusedAlike`
+   原本调 `New()`，而 `New()` 会读 `KUBECONFIG`；测试进程里设了那个环境变量之后，
+   这条**专门用来证明"没有东西被注入"**的测试真的往集群上打了一次 memory pressure，
+   留下的条件又造成了后来那个"已经有 MemoryPressure"的怪失败。
+   现在全部改成 `New(WithKubeconfig(""))` 把状态钉死——
+   **一条想证明"什么都没发生"的测试，必须先保证它确实什么都没做。**
 
 ## 五、Judge 模型
 

@@ -89,6 +89,7 @@ var wiredInjectors = map[string]string{
 	"host.":     hostinjector.RootEnv,
 	"kafka.":    kafkainjector.BrokersEnv,
 	"rabbitmq.": rabbitmqinjector.URLEnv,
+	"k8s.":      k8sinjector.KubeconfigEnv,
 }
 
 // wiredInjectorEnvs 是 wiredInjectors 里那些环境变量的并集。

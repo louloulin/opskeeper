@@ -514,7 +514,7 @@ func newInjectorRegistry() *injector.Registry {
 		),
 		kafkainjector.New(kafkainjector.WithBrokers(splitBrokers(os.Getenv(kafkainjector.BrokersEnv))...)),
 		rabbitmqinjector.New(rabbitmqinjector.WithURL(os.Getenv(rabbitmqinjector.URLEnv))),
-		k8sinjector.New(),
+		k8sinjector.New(k8sinjector.WithKubeconfig(os.Getenv(k8sinjector.KubeconfigEnv))),
 	} {
 		if err := reg.Register(impl); err != nil {
 			// 注册冲突是编程错误，不是运行时状态：拼错前缀会在这里炸，

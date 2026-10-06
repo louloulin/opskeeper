@@ -27120,6 +27120,57 @@ case 里的 `path` 指向的是一个还不存在的子目录，于是它保持�
    而那需要人裁决判据。
 
 
+### 4.238 决策 304：K8s 注入器——**kwok 是一条"真 API server、没有真 kubelet"的路**
+
+`k8s.` 此前是六个注入器里最后一个骨架。把它做成真实现，卡住的不是"怎么改 K8s"，
+而是**磁盘装不下 minikube**。走的是 **kwok**：真的 etcd、真的 kube-apiserver、
+真的 controller/scheduler，3 个 Ready 节点，但**没有 kubelet 跑在节点上**。
+
+这条路的全部价值就在于它把两侧分开了：
+
+| 故障内容由谁产生 | 类型 | 处置 |
+|---|---|---|
+| **API server 存的就是故障本身** | `cordon_node`（`spec.unschedulable=true`）、`inject_memory_pressure`（`status.conditions` 加一条） | ✅ 真实现，判据从第二条连接读回 |
+| **由真 kubelet 跑出来** | `set_bad_image`（信号是 `ImagePullBackOff`）、`fill_pv`（卷被写满是数据面的事） | ⚠️ 大声拒绝 |
+
+`set_bad_image` 的拒绝理由写全：改 Deployment 的 image 字段**确实**能让它不再指向旧镜像，
+但那验证的是"我刚写的字符串还在"——`ImagePullBackOff` 只有真 kubelet 拉镜像失败才会出现。
+**照做一半再报成功是撒谎。** 这是 redis / kafka / rabbitmq 三个"不可逆就拒绝"之外的
+**第四种不可注入**，而且判据不在"撤不回来"上，在"信号从哪来"上。
+
+**cordon 不是断网**：`cordon_node` 遇 `simulate_network_partition: true`
+（`k8s/node-notready` case 正是这么标参数的）**大声拒绝**——cordon 只是让调度器不再派新 Pod，
+节点上已有的 Pod 一个都不动、网络照通。照做一半再报成功，等于给 case 盖了一个假的"节点失联"。
+
+**两个"只对自己安全"的类型，是同一个形状的第四次出现**：redis `key_prefix`（决策 298）、
+kafka `topic`（300）、rabbitmq `queue`（301），现在是 k8s——已经 cordon 的节点直接拒绝
+（撤销 `patch false` 等于替运维关掉一个正在用的维护窗口）；memory pressure 的撤销
+只摘掉自己加的那一条 condition。
+
+**三个撞见的真 bug：**
+
+1. **Node 没有 `spec` 子资源**——`spec` 是 Pod 才有的。带 subresource 去 patch 会打到
+   `/api/v1/nodes/<name>/spec`，API server 回 404 `the server could not find the requested
+   resource`，一句完全看不出是路径写错的话。
+2. **status 子资源是争用的**，且它制造了**第二个故障**。node controller 一直在写它，
+   读-改-写周期撞 `Operation cannot be fulfilled on nodes "...": the object has been modified`
+   （`-count=3` 才稳定逮到，印证教训 2：形状对的判据会偶尔红，所以任何断言当闸门前先 `-count=3`）。
+   修法是 `retry.RetryOnConflict`。但 Conflict 自己留下了一条 condition 在节点上，
+   **下一次运行读到"这个节点已经报着内存压力"并按归属规则拒绝**——一个自造的、
+   假的"这不是我们的节点"。**一个清理失败会伪装成一次归属判断。**
+3. **旧的骨架测试自己变成了注入器**。`TestInjector_AllSupportedTypesAreRefusedAlike`
+   原本调 `New()`，而 `New()` 读 `KUBECONFIG`；测试进程里设了那个环境变量之后，
+   这条**专门用来证明"没有东西被注入"**的测试真的往集群上打了一次 memory pressure，
+   留下的条件又造成了上面那个"已经有 MemoryPressure"的怪失败——**一次失败伪装成第二次失败**。
+   现在全部改成 `New(WithKubeconfig(""))` 把状态钉死。
+   **一条想证明"什么都没发生"的测试，必须先保证它确实什么都没做**——
+   与决策 302 的"拒绝而不截断"同源：拒绝必须真的不留下痕迹。
+
+至此六个注入器 **5/6 真实现**（pg/redis/host/kafka/rabbitmq/k8s 各有真实现，
+k8s 是 2 真 + 2 拒），加权 98.6% 未动的理由与 §4.231 / §4.232 一致：
+剩的是**真 provider key**，外部条件，伪造不了。
+
+
 ### 4.237 决策 303：prod 注入要第二个人——**一个布尔开关的签发者与检查者是同一个人**
 
 §4.2 此前把这一条记成红字：**「双人审批仍未实现——只有一个布尔开关，
@@ -27546,6 +27597,25 @@ E 阶段 85% 里剩下的东西，不是一个量级的工作。
 
 加权合计 ≈ **98.6%**（四阶段等比 98 / 100 / 96.7 / 99.7 的均值 98.6）。这一栏按
 决策倒序追加，每一条只说自己动的那一分量：
+
+- **决策 304 把第六个注入器从骨架做成真实现（k8s：2 真 + 2 大声拒绝）**。
+  走的是 **kwok**（真 etcd + 真 kube-apiserver + 真 controller/scheduler，**没有真 kubelet**），
+  这是磁盘装不下 minikube 时唯一还能拿到真 API server 的路，而它的价值恰恰在
+  "真 API server 与真 kubelet 分离"：**API server 存的就是故障本身**的两个类型
+  （`cordon_node`、`inject_memory_pressure`）真做，判据从第二条连接读回；
+  **信号由真 kubelet 产生**的两个类型（`set_bad_image` 的 `ImagePullBackOff`、
+  `fill_pv`）大声拒绝——这是"不可注入"的**第四种判据**，它不在"撤不回来"上，
+  而在"信号从哪来"上。`cordon_node` 另有一条拒绝：遇 `simulate_network_partition: true`
+  就拒绝，因为 **cordon 不是断网**，照做一半再报成功等于给 case 盖一个假的"节点失联"。
+  至此 **六个注入器 5/6 有真实现**，加权 98.6% 未动的理由不变：剩的是**真 provider key**。
+  本轮撞见三个真 bug，最值得记的是**旧的骨架测试自己变成了注入器**——
+  `TestInjector_AllSupportedTypesAreRefusedAlike` 调 `New()` 而 `New()` 读 `KUBECONFIG`，
+  测试进程里设了那个变量之后，这条**专门用来证明"什么都没被注入"**的测试真的往集群
+  打了一次 memory pressure，留下的条件又制造了一次假的归属拒绝——
+  **一次失败伪装成第二次失败**；现在全部 `New(WithKubeconfig(""))` 钉死状态。
+  另一条是 **status 子资源争用**：node controller 一直在写它，读-改-写周期撞 Conflict
+  （`-count=3` 才稳定逮到），`retry.RetryOnConflict` 修掉之后 Conflict 留下的 condition
+  又制造了第二个故障——**一个清理失败会伪装成一次归属判断**。
 
 - **决策 303 给 prod 注入补上了第二个人，关掉 §4.2 的第二条红项**（"双人审批仍未实现
   ——只有一个布尔开关，没有第二个人、没有审批记录、没有留痕"）。一个布尔开关的问题

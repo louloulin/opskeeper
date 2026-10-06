@@ -181,6 +181,13 @@ func rules() []rule {
 				// amqp091-go 是第五个注入器（决策 301）需要的客户端，同一类：
 				// 一个故障目标。纯 Go、无 cgo，关连接是 Close()。
 				"github.com/rabbitmq/amqp091-go/",
+				// k8s 三个包是第六个注入器（决策 304）需要的客户端：
+				// 对着一个**真的** API server 说话。fake clientset 分不清
+				// NotFound 与 Conflict，而那正是「节点没了」与「有人先改了
+				// 它」的区别——也就是 cordon 的全部要害。
+				"k8s.io/api/",
+				"k8s.io/apimachinery/",
+				"k8s.io/client-go/",
 			},
 			Label: "faults (fault injection)",
 		},
