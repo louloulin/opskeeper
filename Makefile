@@ -288,6 +288,11 @@ plan-security-check: ## 计划 §六 安全专项四条：栅栏三例 / 节点�
 	@$(MAKE) eval-coverage
 	@echo "plan-security-check: the fence holds under replay, under lease expiry and under a sibling; a node's credential drives only its own inference; a tampered argv, an over-wide radius and an undeclared ceiling are each refused; and the diagnosis axis is still the value the plan expects"
 
+.PHONY: compliance-claims-check
+compliance-claims-check: ## 数据护栏词汇的承诺 vs 代码实况：强制 / 惰性 / 仅声明，逐条对着树核对（决策 359）
+	@scripts/complianceclaims.sh
+	@echo "compliance-claims-check: an enforced row is reachable from production code, an inert row still is not, a declared row has no code behind it, and every advertised control and sensitivity level is classified in the ledger"
+
 .PHONY: edge-credential-check
 edge-credential-check: ## 节点进程读不到任何云厂商凭据（决策 246）
 	cd core/floor/config && GOWORK=off go test ./... -count=1 -run \

@@ -24,15 +24,20 @@ const (
 	// Internal 内部数据 — 所有 employee 可访问
 	Internal Sensitivity = "Internal"
 
-	// Confidential 机密数据 — 需要 confidential-reader role
+	// Confidential 机密数据 — **需要 confidential-reader role（未实现）**
 	Confidential Sensitivity = "Confidential"
 
-	// Restricted 受限数据 — 需要 restricted-reader role；写操作需 override
+	// Restricted 受限数据 — **需要 restricted-reader role；写操作需 override（两者都未实现）**
 	Restricted Sensitivity = "Restricted"
 
-	// TopSecret 绝密数据 — 默认无人；写操作强制 override + 双人审批
+	// TopSecret 绝密数据 — **默认无人；写操作强制 override + 双人审批（三者都未实现）**
 	TopSecret Sensitivity = "TopSecret"
 )
+
+// 这四个等级今天实际生效的只有一件事：dataguard 的敏感度词表被 HITL 的暂停
+// 策略读成 severity 升级（TopSecret/Restricted → dangerous，Confidential →
+// mutating）。而**那条暂停策略在生产里没有构造点**，所以升级也没有真正发生。
+// 逐条真相见 enforcement.go 的 `sensitivity.*` 四行。
 
 // rank 将 sensitivity 映射到整数等级（用于 Compare）。
 var rank = map[Sensitivity]int{

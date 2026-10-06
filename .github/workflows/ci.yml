@@ -264,6 +264,9 @@ jobs:
       - name: Roadmap ticks are witnessed in the shipped surfaces
         run: make roadmap-delivery-check
 
+      - name: Data-Guard promises are checked against the tree
+        run: make compliance-claims-check
+
       - name: Plan acceptance gates are wired
         run: make ci-gate-check
 

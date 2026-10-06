@@ -4,8 +4,13 @@
 // 通过把 ComplianceTag 数组序列化进 DataSensitivityLabel.ComplianceTags JSON 列，
 // 资源可一次性声明所适用的合规体系（PCI-DSS / GDPR / 等保 2.0 三级 / HIPAA / SOC2）。
 //
-// Enforced=true 的 tag 会由 cmdpolicy Sandbox 注入硬性约束（如 audit-log
-// 保留期 1y、字段加密）；Enforced=false 的 tag 仅作为元数据 / 报告指标。
+// **Enforced 这个字段今天不强制任何东西。** 它此前被写成"会由 cmdpolicy
+// Sandbox 注入硬性约束（audit-log 保留期 1y、字段加密）"——那是设计，不是实现：
+// 全仓没有任何代码读这个字段，cmdpolicy 里没有合规概念，而保留期与字段加密
+// 两个控制项本身也没有实现可供注入。一个持久化的 `enforced: true` 因此是一枚
+// 徽章，徽章不会让人更安全，只会让人以为更安全。真相登记在
+// enforcement.go 的 `compliance.enforced-tag` 一行，由
+// `make compliance-claims-check` 守着；把哪条控制项接上线，就从那一行里改状态。
 package dataguard
 
 import (
@@ -87,7 +92,7 @@ func UnmarshalComplianceTags(raw string) ([]ComplianceTag, error) {
 	return tags, nil
 }
 
-// DefaultFrameworkControls 给出 5 框架的推荐控制项（不强制）。
+// DefaultFrameworkControls 给出 5 框架的推荐控制项（**不强制**）。
 //
 // 用作 UI 提示 / 一键加载按钮；enforcement 在 Phase 3 SensitivityGate 接入。
 func DefaultFrameworkControls() map[Framework][]string {

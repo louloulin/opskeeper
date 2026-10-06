@@ -155,6 +155,16 @@ func DecisionGates() []Gate {
 				"connected to anything executable (decision 351)",
 		},
 		{
+			Target: "compliance-claims-check",
+			Why: "four Data-Guard promises — an enforced compliance tag, two reader roles, a " +
+				"write override and two approvers — were written in comments and in a persisted " +
+				"flag, and nothing read them. A promise that lives in a comment is not weaker than " +
+				"an implemented control, it is stronger: it looks implemented. The gate reads the " +
+				"registry and the tree together, in both directions, so a row cannot claim " +
+				"enforcement without a production call site and an unimplemented row cannot be " +
+				"forgotten (decision 359)",
+		},
+		{
 			Target: "audit-port-check",
 			Why: "the plan's phase 3 line (extract the audit port and undo the iam -> manager " +
 				"reverse dependency) is a property, and a property nothing re-checks is a comment. " +
@@ -464,7 +474,7 @@ func check(root string) error {
 // runs is a decision somebody has not made yet, not a decision somebody made
 // and wrote down elsewhere.
 var NotRun = map[string]string{
-	"version-check": "a release-time assertion, not a per-push one: it compares RELEASE_VERSION.json's web_hash and teamharness_source_tree against `git rev-parse HEAD:<tree>`, so it can only be green on the commit that was actually signed. It is not unwired, it is wired in .github/workflows/release.yml where those comparisons mean something; NotInCI already carries the same reasoning in prose (decisions 166, 348)",
+	"version-check":         "a release-time assertion, not a per-push one: it compares RELEASE_VERSION.json's web_hash and teamharness_source_tree against `git rev-parse HEAD:<tree>`, so it can only be green on the commit that was actually signed. It is not unwired, it is wired in .github/workflows/release.yml where those comparisons mean something; NotInCI already carries the same reasoning in prose (decisions 166, 348)",
 	"mysql-migration-check": "it needs a live MySQL to migrate and roll back against (OPSKEEPER_TEST_MYSQL_DSN), and the per-push job deliberately runs no database container; the same property is covered for the other engines by the gates that do run. Wiring it into a job with a MySQL service is a real change to the pipeline, not a line in this table (decision 348)",
 }
 
