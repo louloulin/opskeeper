@@ -216,6 +216,63 @@ var Roots = []string{
 	"cmd/opskeeper",
 }
 
+// EntryPoints are the processes in cmd/ that serve HTTP, and whether each one
+// installs the audit slot.
+//
+// This table exists because of decision 321, and the reason it exists is the
+// most expensive failure mode this command has. Until then, "audited" meant
+// "the handler calls SetAuditEvent" — which is true, and worth nothing at all
+// if no middleware ever installed the slot for that request. SetAuditEvent is
+// documented to no-op when there is no slot, so a handler can be perfectly
+// audited and write nothing, and every check above it still passes.
+//
+// That is not hypothetical. cmd/higress-console serves its routes from
+// srv.Routes() with no middleware at all, so the three higress consumer and
+// gateway-login routes cannot have real rows no matter what their handlers
+// do — and had a well-meaning patch added the calls, this command would have
+// reported 60 audited and been wrong about three of them.
+//
+// The verdict is about the *process*, not the route, because that is the grain
+// at which the slot exists. Empty means the file installs it. Anything else is
+// the written reason it does not, and one opening with gapPrefix ("洞：") is
+// a gap this command counts rather than hides. Reusing that prefix rather
+// than a second marker is deliberate: the route table and the process table
+// are asking the same question at two grains, and a reader who has to learn
+// two vocabularies will eventually read the wrong one.
+type EntryPoint struct {
+	// File is the cmd/.../main.go that builds the listener.
+	File string
+	// Slot is the recorded judgement about the audit slot on that process's
+	// requests. Empty means the file installs one.
+	Slot string
+}
+
+var EntryPoints = []EntryPoint{
+	{File: "cmd/opskeeper/main.go"},
+	{File: "cmd/higress-console/main.go",
+		Slot: "洞：这个进程从 srv.Routes() 直接起服务，中间件一个也没有，所以本包三条 consumer / 网关登录路由写下的行不会落库。先决条件是先给它一个落库端（审计链在这个进程里另起一条还是与控制面共库，是一件要单独立项的事，决策 321 只把缺口记下来）"},
+	{File: "cmd/opskeeper-edge/main.go",
+		Slot: "洞：节点面同样没有装槽。节点自己的账本走 agent.audit.entries 回传，与控制面的 HMAC 链是两条路，所以这个缺口与控制面那几个不是同一个；但「没有槽」这件事此前没有任何地方记着"},
+	{File: "cmd/host-fixture/main.go",
+		Slot: "测试夹具：只在对端测试里起，用来喂协议，不对外，且不持有任何凭据"},
+	{File: "cmd/pool-fixture/main.go",
+		Slot: "测试夹具：同上，只用来把连接池灌满"},
+}
+
+// entryPointRE finds a process that serves HTTP. A cmd/*/main.go holding a
+// router or a server literal is one; the other twelve main.go files in cmd/
+// are one-shot tools with no listener at all, and listing them would bury the
+// three that matter.
+var entryPointRE = regexp.MustCompile(`chi\.NewRouter\(\)|http\.Server\{`)
+
+// slotInstallerRE is what "installs the audit slot" means to this command.
+// It is deliberately the two spellings that exist rather than an analysis of
+// the middleware chain: AuditMiddleware installs it as a side effect, and
+// WithSlot installs it directly. A file that reaches the slot by some third
+// route will be reported as missing a verdict, which is the direction this
+// command errs in.
+var slotInstallerRE = regexp.MustCompile(`AuditMiddleware|auditport\.WithSlot|audit\.WithSlot`)
+
 // Verdict is the recorded judgement about one route.
 type Verdict struct {
 	// File is relative to the repository root, e.g.
@@ -392,11 +449,11 @@ var Verdicts = []Verdict{
 	{File: "core/domains/server/systemupgrade/http.go", Route: "/v1/system/upgrade/check", Handler: "h.check",
 		Backlog: "只读检查：问「有没有新版本」，不装任何东西"},
 	{File: "core/manager/higress/server.go", Route: "/consumers", Handler: "s.handleAdminCreate",
-		Backlog: "洞：建 consumer，凭证由网关自己落库，本仓链上看不到是谁建的"},
+		Backlog: "洞：建 consumer 就是新开一条访问路径与一把密钥。**先决条件不是这个 handler，是它的进程**——cmd/higress-console 从 srv.Routes() 直接起服务，没装审计槽，现在往这里加 SetAuditEvent 只会空转，而闸门会判它已审计。见决策 321 的入口接线表"},
 	{File: "core/manager/higress/server.go", Route: "/consumers/{name}", Handler: "s.handleAdminDelete",
-		Backlog: "洞：删 consumer，删的是一整条访问路径"},
+		Backlog: "洞：删 consumer 就是抽掉一整条访问路径，而链上看不出是谁删的。与建 consumer 同一个先决条件：进程没有槽（决策 321）"},
 	{File: "core/manager/higress/server.go", Route: "/session/login", Handler: "s.handleLogin",
-		Backlog: "网关自己的登录，由网关自己的凭据校验；调用者身份在上游那一跳已经入账"},
+		Backlog: "洞：网关登录是这七条里唯一一条凭证写路由，也是唯一一条「有人拿着密码来试」的路由——成功与失败都该留痕，而失败那行正是暴力破解的唯一证据。同一个先决条件：进程没装槽（决策 321）"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/agentteams/token", Handler: "h.issueAgentTeamsToken"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/auth/login", Handler: "h.login"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/auth/refresh", Handler: "h.refresh"},
@@ -412,12 +469,9 @@ var Verdicts = []Verdict{
 	{File: "core/manager/iam/server/http.go", Route: "/v1/users/{id}", Handler: "h.deleteUser"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/users/{id}/password", Handler: "h.resetPassword"},
 	{File: "core/manager/iam/server/http.go", Route: "/v1/users/{id}/role", Handler: "h.setRole"},
-	{File: "core/manager/server/chatdiagnose/http.go", Route: "/conversations/{id}/promote", Handler: "h.promote",
-},
-	{File: "core/manager/server/chatdiagnose/http.go", Route: "/conversations/{id}/reports", Handler: "h.pushReport",
-},
-	{File: "core/manager/server/chatdiagnose/http.go", Route: "/diagnose", Handler: "h.diagnose",
-},
+	{File: "core/manager/server/chatdiagnose/http.go", Route: "/conversations/{id}/promote", Handler: "h.promote"},
+	{File: "core/manager/server/chatdiagnose/http.go", Route: "/conversations/{id}/reports", Handler: "h.pushReport"},
+	{File: "core/manager/server/chatdiagnose/http.go", Route: "/diagnose", Handler: "h.diagnose"},
 	{File: "core/manager/server/demo/http.go", Route: "/v1/demo/incidents/{incident_id}/approve", Handler: "h.approveScenario",
 		Backlog: "演示剧本的批准：数据在 demo 命名空间内，不碰生产；但它走的是同一套审批按钮，链上分不出两者"},
 	{File: "core/manager/server/demo/http.go", Route: "/v1/demo/scenarios/{idempotency_key}/workflow/{stage}", Handler: "h.advanceWorkflow",
@@ -426,10 +480,8 @@ var Verdicts = []Verdict{
 	{File: "core/manager/server/hitl/http.go", Route: "/v1/hitl/proposals/{id}/approve", Handler: "h.approve"},
 	{File: "core/manager/server/hitl/http.go", Route: "/v1/hitl/proposals/{id}/expire", Handler: "h.expire"},
 	{File: "core/manager/server/hitl/http.go", Route: "/v1/hitl/proposals/{id}/reject", Handler: "h.reject"},
-	{File: "core/manager/server/loop/admin.go", Route: "/{incident_id}/increment", Handler: "deps.incrementRetryCount",
-},
-	{File: "core/manager/server/loop/admin.go", Route: "/{incident_id}/reset", Handler: "deps.resetRetryCount",
-},
+	{File: "core/manager/server/loop/admin.go", Route: "/{incident_id}/increment", Handler: "deps.incrementRetryCount"},
+	{File: "core/manager/server/loop/admin.go", Route: "/{incident_id}/reset", Handler: "deps.resetRetryCount"},
 }
 
 // Result is what one run found.
@@ -448,6 +500,20 @@ type Result struct {
 	// Any hit fails the run: a new HTTP surface must either join Roots with
 	// its own verdicts, or be shown to register none.
 	Unscanned []string
+	// SlotMissing are processes that serve HTTP, install no audit slot, and
+	// have no written reason for it. Distinct from the route verdicts above:
+	// those answer "does this handler write a row", this answers "could any
+	// row this process serves a handler ever leave the process".
+	SlotMissing []string
+	// SlotUnlisted are processes that serve HTTP and are not in EntryPoints
+	// at all — a new binary, unjudged.
+	SlotUnlisted []string
+	// SlotStale are EntryPoints whose written reason no longer describes
+	// their file (the process grew a middleware, or an exemption was
+	// deleted). Same reason route Stale fails: the table is asserting
+	// something about the tree that is no longer true.
+	SlotStale []string
+
 	// Gone are verdicts whose whole file left the tree. Kept apart from
 	// Orphan because the fix differs — a moved handler versus a deleted one —
 	// and because folding the two together would make a deleted package
@@ -467,7 +533,8 @@ type Result struct {
 // excepted when in fact the exception was deleted months ago.
 func (r Result) OK() bool {
 	return len(r.Missing) == 0 && len(r.Stale) == 0 && len(r.Orphan) == 0 &&
-		len(r.Gone) == 0 && len(r.Unscanned) == 0 && len(r.Unwalkable) == 0
+		len(r.Gone) == 0 && len(r.Unscanned) == 0 && len(r.Unwalkable) == 0 &&
+		len(r.SlotMissing) == 0 && len(r.SlotUnlisted) == 0 && len(r.SlotStale) == 0
 }
 
 // Run walks every tree in Roots and compares it against the table.
@@ -554,6 +621,7 @@ func Run(root string) Result {
 	}
 
 	res.Unscanned = findUnscannedRoots(root)
+	res.SlotMissing, res.SlotUnlisted, res.SlotStale = checkEntryPoints(root)
 
 	// Orphan means one of two things, and conflating them is what an earlier
 	// version did: the file is gone from the tree, or the file is still there
@@ -604,6 +672,75 @@ func packageBodies(dir string) map[string]string {
 		}
 	}
 	return out
+}
+
+// checkEntryPoints judges the audit slot on every process in cmd/ that serves
+// HTTP.
+//
+// Two directions, and the second is the one that keeps the table honest.
+//
+// The first is discovery: a main.go holding a router or a server literal that
+// nobody judged gets reported, exactly as findUnscannedRoots reports a route
+// tree nobody scanned. The second is staleness: an EntryPoint whose file now
+// installs the slot while its verdict claims it does not is reported, because
+// that verdict has become a claim that the tree contradicts — and a
+// hand-written table whose entries silently rot is the thing decisions 314
+// and 315 were about.
+//
+// What it does NOT do is check that the process's routes are in Roots. Roots
+// is a separate question and stays separate: a process can serve routes that
+// genuinely need no audit (a liveness probe) and still have to answer the
+// slot question.
+func checkEntryPoints(root string) (missing, unlisted, stale []string) {
+	judged := map[string]string{}
+	for _, e := range EntryPoints {
+		judged[e.File] = e.Slot
+	}
+
+	// A synthetic fixture tree has no cmd/ at all, and a table entry that
+	// names a file the fixture never had is not "a binary that was deleted" —
+	// it is a test that did not build the world it is asking about. Without
+	// this guard every fixture in main_test.go would report all five real
+	// binaries as gone, which is the same category of error as decision 315
+	// (a gate reporting on a scope it was not given) pointed the other way.
+	cmdDir := filepath.Join(root, "cmd")
+	if st, err := os.Stat(cmdDir); err != nil || !st.IsDir() {
+		return nil, nil, nil
+	}
+
+	filepath.Walk(cmdDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, "go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return nil
+		}
+		body, readErr := os.ReadFile(path)
+		if readErr != nil || !entryPointRE.Match(body) {
+			return nil
+		}
+		key := filepath.ToSlash(rel)
+		verdict, ok := judged[key]
+		installs := slotInstallerRE.Match(body)
+		if !ok {
+			unlisted = append(unlisted, key+" — it serves HTTP; add it to routeaudit.EntryPoints and write down whether its requests carry the audit slot")
+			return nil
+		}
+		delete(judged, key)
+		switch {
+		case installs && verdict != "":
+			stale = append(stale, key+" — it installs the audit slot now, so its recorded reason no longer describes it")
+		case !installs && verdict == "":
+			missing = append(missing, key+" — it serves HTTP, installs no audit slot, and has no recorded reason. Every SetAuditEvent under it is a no-op")
+		}
+		return nil
+	})
+
+	for key, verdict := range judged {
+		stale = append(stale, fmt.Sprintf("%s — the whole binary is gone; drop the entry point (its reason read: %.40s)", key, verdict))
+	}
+	return missing, unlisted, stale
 }
 
 // findUnscannedRoots reports Go files outside every root that register a
@@ -678,6 +815,8 @@ func (r Result) Report(w *os.File) {
 	fmt.Fprintln(w, "routeaudit: every mutating route under "+strings.Join(Roots, ", ")+" has a recorded verdict")
 	fmt.Fprintf(w, "  roots declared: %d, verdicts recorded: %d, of which backlog: %d\n",
 		len(Roots), len(Verdicts), countBacklog())
+	fmt.Fprintf(w, "  processes serving HTTP: %d, of which %d have no audit slot on their requests\n",
+		len(EntryPoints), countSlotGaps())
 	fmt.Fprintf(w, "  audited: %d, settled exemption: %d, acknowledged gap: %d\n",
 		len(Verdicts)-countBacklog(), countBacklog()-countGaps(), countGaps())
 	for _, m := range r.Missing {
@@ -695,6 +834,15 @@ func (r Result) Report(w *os.File) {
 	for _, e := range r.Unwalkable {
 		fmt.Fprintf(w, "  UNWALKABLE: %s\n", e)
 	}
+	for _, m := range r.SlotMissing {
+		fmt.Fprintf(w, "  NO SLOT:   %s\n", m)
+	}
+	for _, u := range r.SlotUnlisted {
+		fmt.Fprintf(w, "  NO VERDICT: %s\n", u)
+	}
+	for _, t := range r.SlotStale {
+		fmt.Fprintf(w, "  stale slot: %s\n", t)
+	}
 	for _, u := range r.Unscanned {
 		fmt.Fprintf(w, "  UNSCANNED: %s — add it to routeaudit.Roots and judge its routes\n", u)
 	}
@@ -703,6 +851,17 @@ func (r Result) Report(w *os.File) {
 // gapPrefix marks a backlog entry as an acknowledged hole rather than a
 // settled exemption.
 const gapPrefix = "洞："
+
+// countSlotGaps counts the entry points whose requests carry no audit slot.
+func countSlotGaps() int {
+	n := 0
+	for _, e := range EntryPoints {
+		if strings.HasPrefix(e.Slot, gapPrefix) {
+			n++
+		}
+	}
+	return n
+}
 
 func countGaps() int {
 	n := 0
