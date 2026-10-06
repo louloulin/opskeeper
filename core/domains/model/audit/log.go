@@ -292,6 +292,7 @@ const (
 	ActionAgentToolCall = auditport.ActionAgentToolCall
 
 	ActionCrystallizePromote = auditport.ActionCrystallizePromote
+	ActionCrystallizeRelease = auditport.ActionCrystallizeRelease
 
 	ActionApprovalApprove = auditport.ActionApprovalApprove
 	ActionApprovalReject  = auditport.ActionApprovalReject

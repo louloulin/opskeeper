@@ -222,6 +222,20 @@ const (
 	// 那一次尝试本身就是运维想看到的事件。
 	ActionCrystallizePromote = "crystallize_promote"
 
+	// ActionCrystallizeRelease covers the hop after review: a promoted draft
+	// that is on disk, re-admitted by the control plane's own loader, and
+	// started as a rolling release.
+	//
+	// 它与 promote 分成两行，是因为两行回答的是相反的问题。promote 说
+	// 「有一份文档被写下来给人看了」，这一行说「那份被人看过的文档离开了
+	// 审核区，开始变成机器上的行为」。合并成一行，两个问题都答不出来，
+	// 而这一行回答的那个——是谁把一份审过的文件变成了一次全网变更——
+	// 此前链上根本没有答案。
+	//
+	// 失败同样入账，尤其是「草稿不在审核目录」这一种：它不是空操作，
+	// 它是一次有人想把没送审的东西发出去的尝试。
+	ActionCrystallizeRelease = "crystallize_release"
+
 	// The propose-confirm inbox's two decisions (HLD-017).
 	//
 	// 这一对是整张表里**后果最重**的两行，而它们此前完全不在链上。

@@ -459,6 +459,7 @@ var Verdicts = []Verdict{
 	{File: "core/manager/server/alert/http.go", Route: "/v1/alert-rules/{id}", Handler: "h.deleteRule"},
 	{File: "core/manager/server/alert/http.go", Route: "/v1/alert-rules/{id}/enabled", Handler: "h.setRuleEnabled"},
 	{File: "core/manager/server/aiops/crystallized.go", Route: "/v1/loops/crystallized/{name}/promote", Handler: "h.promoteCrystallized"},
+	{File: "core/manager/server/aiops/crystallized.go", Route: "/v1/loops/crystallized/{name}/release", Handler: "h.releaseCrystallized"},
 	{File: "core/manager/server/approval/http.go", Route: "/v1/approvals/{id}/approve", Handler: "h.approve"},
 	{File: "core/manager/server/approval/http.go", Route: "/v1/approvals/{id}/reject", Handler: "h.reject"},
 	{File: "core/manager/server/imbridge/http.go", Route: "/v1/im/apps", Handler: "h.createApp"},

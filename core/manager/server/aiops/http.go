@@ -114,6 +114,10 @@ type Handler struct {
 	// draftRoot is where a promoted draft is written for review; empty = the
 	// promote route answers 503.
 	draftRoot string
+
+	// releaser is the release path, reduced to the one call the crystallised
+	// surface makes; nil = the release route answers 503.
+	releaser DraftReleaser
 }
 
 // NewHandler builds the handler. mentions / catalog may be nil; see

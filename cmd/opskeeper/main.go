@@ -2641,6 +2641,13 @@ func main() {
 	// from a process that is not a booted control plane; see
 	// loop_crystallize.go for what the three decisions are.
 	crystallization, cerr := newLoopCrystallization(middlewareReg, alertRepo, aiopsHandler, log)
+	// The last hop of the crystallisation path: a promoted draft that a human
+	// reviewed and published can be released from the surface that produced
+	// it, instead of being carried by hand to the release page by name. The
+	// release itself is the existing one — same manager, same canary, same
+	// halt-and-rollback, same audit. This only removes the transcription step
+	// between two pages that each already existed and neither knew about.
+	aiopsHandler.SetDraftReleaser(crystallizedReleaser{mgr: pluginReleaseMgr})
 	switch {
 	case cerr != nil:
 		log.Error("loop: crystallize learner init failed; cost crystallisation disabled", slog.Any("err", cerr))

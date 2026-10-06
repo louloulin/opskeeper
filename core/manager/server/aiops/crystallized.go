@@ -391,6 +391,7 @@ func (h *Handler) writePatternsRoutes(r chi.Router) {
 	r.Get("/v1/loops/crystallized", h.crystallized)
 	r.Get("/v1/loops/crystallized/{name}", h.crystallizedOne)
 	r.Post("/v1/loops/crystallized/{name}/promote", h.promoteCrystallized)
+	r.Post("/v1/loops/crystallized/{name}/release", h.releaseCrystallized)
 }
 
 // writeNotWired answers 503 for a crystallised route on a manager that never

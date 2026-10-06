@@ -29,12 +29,14 @@ package main
 // trigger can be named" cannot be true at different times.
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"os"
 	"time"
 
 	"github.com/vincent-wuhan/opskeeper/core/domain"
+	managersvcplugin "github.com/vincent-wuhan/opskeeper/core/domains/service/plugin"
 	managerbizcrystallizehook "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/crystallizehook"
 	manberalbizalert "github.com/vincent-wuhan/opskeeper/core/manager/biz/alert"
 	managerbizloop "github.com/vincent-wuhan/opskeeper/core/manager/biz/loop"
@@ -85,6 +87,46 @@ func crystallizeStatePath() string {
 type crystallizedReviewSurface interface {
 	SetPatterns(managerserveraiops.PatternReader)
 	SetDraftRoot(dir string)
+	SetDraftReleaser(managerserveraiops.DraftReleaser)
+}
+
+// crystallizedReleaser adapts the plugin release manager to the one call the
+// crystallised review surface makes.
+//
+// It exists so the surface does not depend on the release service, and so the
+// release service does not grow a second entry point for the same Start.
+// Every field of the answer is the release manager's own status: this adapter
+// translates shapes and invents nothing, because a release route that
+// reported a plan of its own would be a second answer to "what is happening
+// to the fleet right now".
+type crystallizedReleaser struct {
+	mgr *managersvcplugin.Manager
+}
+
+func (c crystallizedReleaser) StartRelease(
+	_ context.Context, req managerserveraiops.ReleaseRequest, strategy string,
+) (managerserveraiops.ReleaseHandle, error) {
+	status, err := c.mgr.Start(context.Background(), managersvcplugin.StartRequest{
+		Name:      req.Name,
+		Version:   req.Version,
+		URL:       req.URL,
+		SHA256:    req.SHA256,
+		Signature: req.Signature,
+		KeyID:     req.KeyID,
+		Strategy:  strategy,
+		Nodes:     req.Nodes,
+	})
+	if err != nil {
+		return managerserveraiops.ReleaseHandle{}, err
+	}
+	return managerserveraiops.ReleaseHandle{
+		Plugin:   status.Plugin,
+		Version:  status.Version,
+		Strategy: strategy,
+		Wave:     status.Wave,
+		Waves:    status.Waves,
+		Progress: status.Summary,
+	}, nil
 }
 
 // loopCrystallization is what boot hands the orchestrator, plus the learner

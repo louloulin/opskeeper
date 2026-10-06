@@ -26,6 +26,7 @@ import (
 type stubReviewSurface struct {
 	patterns  managerserveraiops.PatternReader
 	draftRoot string
+	releaser  managerserveraiops.DraftReleaser
 	calls     int
 }
 
@@ -36,6 +37,11 @@ func (s *stubReviewSurface) SetPatterns(p managerserveraiops.PatternReader) {
 
 func (s *stubReviewSurface) SetDraftRoot(dir string) {
 	s.draftRoot = dir
+	s.calls++
+}
+
+func (s *stubReviewSurface) SetDraftReleaser(r managerserveraiops.DraftReleaser) {
+	s.releaser = r
 	s.calls++
 }
 
