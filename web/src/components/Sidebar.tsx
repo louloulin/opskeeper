@@ -317,7 +317,7 @@ export function Sidebar() {
           <HardDrive size={16} />
         </Link>
         <Link
-          to="/skills"
+          to="/discover?tab=skills"
           aria-label={tr('技能', 'Skills')}
           className="rounded-lg p-2 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
         >
@@ -487,19 +487,19 @@ export function Sidebar() {
           <SidebarNavItem to="/mcp" icon={Plug} label="MCP" />
         </NavSection>
 
-        {/* Discover —— agent 能拿到什么。三条目的路由维持现状 (/skills /
-            /plugins / /crystallized); 计划中的 /discover?tab=… 形态等
-            Task 20 落地路由时再统一改指。 */}
+        {/* Discover —— agent 能拿到什么。三条链接都指向统一的 /discover 壳,
+            用 ?tab= 定位面板; 旧路由 /skills /plugins /crystallized 保留为
+            保参重定向, 老书签与深链仍然可用。 */}
         <SectionLabel>Discover</SectionLabel>
         <NavSection>
           {/* The marketplace sits here rather than in settings because it
               is the way packages get IN, which is a discover concern; the
               release console that puts them on hosts stays under Admin. */}
-          <SidebarNavItem to="/plugins" icon={Package} label={tr('插件', 'Plugins')} />
-          <SidebarNavItem to="/skills" icon={Wrench} label={tr('技能', 'Skills')} />
+          <SidebarNavItem to="/discover?tab=plugins" icon={Package} label={tr('插件', 'Plugins')} />
+          <SidebarNavItem to="/discover?tab=skills" icon={Wrench} label={tr('技能', 'Skills')} />
           {/* 自愈规则 是另一种"包"的来源: 市场是把它拿进来, 这一页是让平台
               请求人许可它从自己的历史里写出一个来。 */}
-          <SidebarNavItem to="/crystallized" icon={Sparkles} label={tr('自愈规则', 'Runbooks')} />
+          <SidebarNavItem to="/discover?tab=crystals" icon={Sparkles} label={tr('自愈规则', 'Runbooks')} />
         </NavSection>
 
         {/* 运维 —— agent 的观测面与它操作的物理对象。折叠头本身即分组名,

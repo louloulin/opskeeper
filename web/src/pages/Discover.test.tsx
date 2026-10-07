@@ -5,12 +5,13 @@
 // 三张内嵌页面各自都会在挂载时发请求;共享 msw server(`src/test/msw-server.ts`)
 // 是空的,`setup.ts` 又是 onUnhandledRequest:'error',所以缺一个 handler 会当众
 // 炸,而不是静默挂起——这里按每个用例实际挂载的内嵌页把 handler 配齐。
-import { render, screen, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import type { ReactElement } from 'react';
+import { render, screen, within, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { Discover } from './Discover';
+import { CrystalsRedirect, Discover, PluginsRedirect, SkillsRedirect } from './Discover';
 import { server } from '@/test/msw-server';
 
 // SkillsPage 读 `useAuth((s) => s.role)`(Skills.tsx:31);
@@ -36,6 +37,38 @@ function renderAt(entry: string) {
       </Routes>
     </MemoryRouter>,
   );
+}
+
+// The redirect cases mount a legacy path plus the /discover shell, then read
+// where the router ended up. MemoryRouter keeps history in memory and never
+// touches window.location, so a probe reading window.location would stay
+// pinned at jsdom's default and the assertion could never pass — useLocation()
+// reads the router's real state. Precedent: src/pages/Agents.test.tsx:55
+// (LocationProbe).
+function renderRedirect(entry: string, legacyPath: string, node: ReactElement) {
+  const at = { value: '' };
+  function Probe() {
+    const loc = useLocation();
+    at.value = loc.pathname + loc.search;
+    return null;
+  }
+  render(
+    <MemoryRouter initialEntries={[entry]}>
+      <Routes>
+        <Route path={legacyPath} element={node} />
+        <Route
+          path="/discover"
+          element={
+            <>
+              <Discover />
+              <Probe />
+            </>
+          }
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+  return at;
 }
 
 describe('Discover', () => {
@@ -107,5 +140,28 @@ describe('Discover', () => {
     // 所以内嵌的 SkillsPage 真的切到了 install 子界面 —— 那条安装 composer
     // 的 placeholder 只在 install 子 tab 渲染,是稳定的证据。
     expect(screen.getByPlaceholderText(/贴个技能源/)).toBeInTheDocument();
+  });
+
+  // Legacy-route redirects. `/skills?tab=install&q=web` must keep BOTH its
+  // meaningful `tab=install` (the only way to reach SkillsPage's install
+  // sub-surface) and its unrelated `q=web` — the redirect only supplies a
+  // default tab when one is absent, it never overwrites an existing value.
+  it('redirects /skills to /discover preserving the original query', async () => {
+    const at = renderRedirect('/skills?tab=install&q=web', '/skills', <SkillsRedirect />);
+    await waitFor(() => expect(at.value).toContain('/discover'));
+    expect(at.value).toContain('tab=install');
+    expect(at.value).toContain('q=web');
+  });
+
+  it('redirects /plugins to /discover?tab=plugins', async () => {
+    const at = renderRedirect('/plugins', '/plugins', <PluginsRedirect />);
+    await waitFor(() => expect(at.value).toContain('/discover'));
+    expect(at.value).toContain('tab=plugins');
+  });
+
+  it('redirects /crystallized to /discover?tab=crystals', async () => {
+    const at = renderRedirect('/crystallized', '/crystallized', <CrystalsRedirect />);
+    await waitFor(() => expect(at.value).toContain('/discover'));
+    expect(at.value).toContain('tab=crystals');
   });
 });

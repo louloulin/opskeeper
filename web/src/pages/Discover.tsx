@@ -13,7 +13,7 @@
 // here would stack two title bars, and a <main> here would nest a <main>
 // inside a <main>. The root is therefore a plain <div>, leaving the embedded
 // page's <main> as the page's only one.
-import { useSearchParams } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { tr } from '@/i18n/locale';
 import { cn } from '@/lib/cn';
 import SkillsPage from './Skills';
@@ -71,3 +71,24 @@ export function Discover() {
     </div>
   );
 }
+
+// Legacy-route redirects: /skills, /plugins and /crystallized now fold into the
+// single /discover shell. Each only supplies a DEFAULT tab when the incoming
+// URL has none. A legacy deep link that already carries a meaningful `?tab=`
+// must keep it: `/skills?tab=install` is the only entry to SkillsPage's install
+// sub-surface (InstallTab is mounted inside Skills.tsx and is hidden from the
+// visible nav), so overwriting the tab would make that surface unreachable.
+// Discover's own reader falls back to the skills panel for values it does not
+// recognise, so an unknown incoming tab still lands somewhere sensible.
+function redirectTo(tab: DiscoverTab) {
+  return function DiscoverRedirect() {
+    const [sp] = useSearchParams();
+    const params = new URLSearchParams(sp);
+    if (!params.get('tab')) params.set('tab', tab);
+    return <Navigate to={{ pathname: '/discover', search: `?${params.toString()}` }} replace />;
+  };
+}
+
+export const SkillsRedirect = redirectTo('skills');
+export const PluginsRedirect = redirectTo('plugins');
+export const CrystalsRedirect = redirectTo('crystals');

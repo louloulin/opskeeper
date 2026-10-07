@@ -27,6 +27,13 @@ const ROUTE_DEFS: RouteDef[] = [
 
   { path: '/agents', zh: '助理', en: 'Assistants', keywords: ['agents', 'assistant', 'bot', 'zhuli', 'zhushou'], group: 'Agent' },
   { path: '/node-agents', zh: '节点 Agent', en: 'Node Agents', keywords: ['node', 'agent', 'jiedian', 'edge agent'], group: 'Agent' },
+  // 统一的 Discover 壳 + 三条带 tab 的入口(sidebar 三条链接的落点,按 query
+  // 算独立条目)。旧路由 /skills /plugins /crystallized 保留为保参重定向,
+  // 所以它们下面的目录条目也一并保留。
+  { path: '/discover', zh: '发现', en: 'Discover', keywords: ['discover', 'faxian', 'hub'], group: 'Agent' },
+  { path: '/discover?tab=skills', zh: '发现 / 技能', en: 'Discover / Skills', keywords: ['discover', 'skills', 'jineng'], group: 'Agent' },
+  { path: '/discover?tab=plugins', zh: '发现 / 插件', en: 'Discover / Plugins', keywords: ['discover', 'plugins', 'chajian'], group: 'Agent' },
+  { path: '/discover?tab=crystals', zh: '发现 / 自愈规则', en: 'Discover / Runbooks', keywords: ['discover', 'crystallized', 'runbook', 'ziyu'], group: 'Agent' },
   { path: '/plugins', zh: '插件市场', en: 'Plugins', keywords: ['plugins', 'marketplace', 'chajian', 'shichang'], group: 'Agent' },
   { path: '/crystallized', zh: '自愈规则', en: 'Runbooks', keywords: ['crystallized', 'runbook', 'self-heal', 'ziyu', 'guize'], group: 'Agent' },
   { path: '/workflows', zh: '工作流', en: 'Workflows', keywords: ['workflows', 'flow', 'gongzuoliu'], group: 'Agent' },
