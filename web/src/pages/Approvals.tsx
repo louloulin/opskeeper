@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ShieldCheck, RefreshCw, Check, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { ShieldCheck, RefreshCw, Check, X, ChevronDown, ChevronRight, Hourglass } from 'lucide-react';
 import { listApprovals, approveApproval, rejectApproval, type Approval } from '@/api/approvals';
 import { ApiError } from '@/api/client';
 import { useI18n } from '@/i18n/locale';
@@ -12,6 +12,10 @@ import { parseSigners, dualSignState, signerWording } from '@/lib/approvalSigner
 
 const STATUSES = ['pending', 'approved', 'executed', 'rejected', 'failed'] as const;
 
+// 会话级批准结果。审批默认视图过滤 pending,批准后不能用重载列表来体现结果
+// (重载会让已裁决行凭空消失)。按返回行 status 分流并把结果就地留驻,由 outcomes 承载。
+type RowOutcome = { phase: 'waiting' | 'executed' | 'failed'; result?: string };
+
 export default function ApprovalsPage() {
   const { tr } = useI18n();
   const [items, setItems] = useState<Approval[]>([]);
@@ -20,6 +24,7 @@ export default function ApprovalsPage() {
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [outcomes, setOutcomes] = useState<Record<string, RowOutcome>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -42,8 +47,14 @@ export default function ApprovalsPage() {
     if (!window.confirm(tr(`确认批准并执行：${a.title}？`, `Approve and execute: ${a.title}?`))) return;
     setBusy(a.id);
     try {
-      await approveApproval(a.id);
-      await load();
+      const row = await approveApproval(a.id);
+      // 就地替换为返回行,不调用 load()——默认视图过滤 pending,重载会让
+      // 已裁决行凭空消失。按返回行 status 分流,结果留驻可见。
+      setItems((prev) => prev.map((it) => (it.id === a.id ? row : it)));
+      const phase: RowOutcome['phase'] =
+        row.status === 'executed' ? 'executed' : row.status === 'failed' ? 'failed' : 'waiting';
+      setOutcomes((prev) => ({ ...prev, [a.id]: { phase, result: row.result } }));
+      if (phase !== 'waiting') setExpanded((e) => ({ ...e, [a.id]: true }));
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
@@ -108,74 +119,100 @@ export default function ApprovalsPage() {
           </div>
         ) : (
           <div className="space-y-2">
-            {items.map((a) => (
-              <div key={a.id} className="surface-card rounded-2xl p-3">
-                <div className="flex items-start gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setExpanded((e) => ({ ...e, [a.id]: !e[a.id] }))}
-                    className="mt-0.5 text-zinc-500 hover:text-zinc-300"
-                  >
-                    {expanded[a.id] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                  </button>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-zinc-100">{a.title}</span>
-                      <StatusChip status={a.status} tr={tr} />
-                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">{a.kind}</span>
-                    </div>
-                    {a.summary && <div className="mt-1 whitespace-pre-wrap text-[12px] text-zinc-400">{a.summary}</div>}
-                    {(a.blast_radius || a.risk_class || a.target) && (
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                        {a.blast_radius && <Chip tone="warning" dense>{tr('影响面', 'Blast radius')}: {a.blast_radius}</Chip>}
-                        {a.risk_class && <Chip tone={a.risk_class === 'destructive' ? 'danger' : 'default'} dense>{tr('风险等级', 'Risk')}: {a.risk_class}</Chip>}
-                        {a.target && <span className="font-mono text-[11px] text-zinc-400">{a.target}</span>}
+            {items.map((a) => {
+              const outcome = outcomes[a.id];
+              return (
+                <div key={a.id} className="surface-card rounded-2xl p-3">
+                  <div className="flex items-start gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setExpanded((e) => ({ ...e, [a.id]: !e[a.id] }))}
+                      className="mt-0.5 text-zinc-500 hover:text-zinc-300"
+                    >
+                      {expanded[a.id] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-zinc-100">{a.title}</span>
+                        <StatusChip status={a.status} tr={tr} />
+                        <span className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">{a.kind}</span>
                       </div>
-                    )}
-                    <div className="mt-1 text-[11px] text-zinc-600">
-                      {tr('来源', 'source')}: {a.source}
-                      {a.session_id ? ` · ${a.session_id.slice(0, 8)}` : ''} · {new Date(a.created_at).toLocaleString()}
+                      {a.summary && <div className="mt-1 whitespace-pre-wrap text-[12px] text-zinc-400">{a.summary}</div>}
+                      {(a.blast_radius || a.risk_class || a.target) && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          {a.blast_radius && <Chip tone="warning" dense>{tr('影响面', 'Blast radius')}: {a.blast_radius}</Chip>}
+                          {a.risk_class && <Chip tone={a.risk_class === 'destructive' ? 'danger' : 'default'} dense>{tr('风险等级', 'Risk')}: {a.risk_class}</Chip>}
+                          {a.target && <span className="font-mono text-[11px] text-zinc-400">{a.target}</span>}
+                        </div>
+                      )}
+                      <div className="mt-1 text-[11px] text-zinc-600">
+                        {tr('来源', 'source')}: {a.source}
+                        {a.session_id ? ` · ${a.session_id.slice(0, 8)}` : ''} · {new Date(a.created_at).toLocaleString()}
+                      </div>
+                      <SignerProgress approval={a} />
+                      {outcome?.phase === 'waiting' && (
+                        <div className="mt-1.5 flex items-start gap-1.5 text-[11px] text-amber-400">
+                          <Hourglass size={12} className="mt-0.5 shrink-0" />
+                          <span>{tr('你的签名已记录,等待第二位批准人', 'Your signature is recorded — waiting for a second approver')}</span>
+                        </div>
+                      )}
+                      {outcome?.phase === 'executed' && (
+                        <div className="mt-1.5 text-[11px] text-emerald-400">{tr('已执行', 'Executed')}</div>
+                      )}
+                      {outcome?.phase === 'failed' && (
+                        <div className="mt-1.5 text-[11px] text-red-400">{tr('执行失败', 'Failed')}</div>
+                      )}
+                      {expanded[a.id] && (
+                        <div className="mt-2 space-y-1">
+                          <div className="text-[11px] text-zinc-500">{tr('操作内容', 'Action payload')}</div>
+                          <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-950 p-2 text-[10px] text-zinc-400">{prettify(a.payload)}</pre>
+                          {a.result && (
+                            <>
+                              <div className="text-[11px] text-zinc-500">{tr('执行结果', 'Result')}</div>
+                              <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-950 p-2 text-[10px] text-zinc-400">{prettify(a.result)}</pre>
+                            </>
+                          )}
+                          {a.reason && <div className="text-[11px] text-amber-400/80">{tr('原因', 'reason')}: {a.reason}</div>}
+                        </div>
+                      )}
                     </div>
-                    <SignerProgress approval={a} />
-                    {expanded[a.id] && (
-                      <div className="mt-2 space-y-1">
-                        <div className="text-[11px] text-zinc-500">{tr('操作内容', 'Action payload')}</div>
-                        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-950 p-2 text-[10px] text-zinc-400">{prettify(a.payload)}</pre>
-                        {a.result && (
-                          <>
-                            <div className="text-[11px] text-zinc-500">{tr('执行结果', 'Result')}</div>
-                            <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-950 p-2 text-[10px] text-zinc-400">{prettify(a.result)}</pre>
-                          </>
+                    {a.status === 'pending' && (
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {outcome?.phase === 'waiting' ? (
+                          <button
+                            type="button"
+                            disabled
+                            className="inline-flex items-center gap-1 rounded-md border border-emerald-700 bg-emerald-950/30 px-2 py-1 text-[12px] text-emerald-300 disabled:opacity-40"
+                          >
+                            <Check size={13} />
+                            {tr('已签署，等待第二位批准人', 'Signed — awaiting second approver')}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void onApprove(a)}
+                            disabled={busy === a.id}
+                            className="inline-flex items-center gap-1 rounded-md border border-emerald-700 bg-emerald-950/30 px-2 py-1 text-[12px] text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-40"
+                          >
+                            <Check size={13} />
+                            {tr('批准', 'Approve')}
+                          </button>
                         )}
-                        {a.reason && <div className="text-[11px] text-amber-400/80">{tr('原因', 'reason')}: {a.reason}</div>}
+                        <button
+                          type="button"
+                          onClick={() => void onReject(a)}
+                          disabled={busy === a.id}
+                          className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-[12px] text-zinc-400 hover:border-red-800 hover:text-red-400 disabled:opacity-40"
+                        >
+                          <X size={13} />
+                          {tr('拒绝', 'Reject')}
+                        </button>
                       </div>
                     )}
                   </div>
-                  {a.status === 'pending' && (
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => void onApprove(a)}
-                        disabled={busy === a.id}
-                        className="inline-flex items-center gap-1 rounded-md border border-emerald-700 bg-emerald-950/30 px-2 py-1 text-[12px] text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-40"
-                      >
-                        <Check size={13} />
-                        {tr('批准', 'Approve')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void onReject(a)}
-                        disabled={busy === a.id}
-                        className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-[12px] text-zinc-400 hover:border-red-800 hover:text-red-400 disabled:opacity-40"
-                      >
-                        <X size={13} />
-                        {tr('拒绝', 'Reject')}
-                      </button>
-                    </div>
-                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

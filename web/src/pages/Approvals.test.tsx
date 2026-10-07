@@ -5,9 +5,10 @@
 // 页内私有的 StatusChip 仍是老的 `rounded` 小圆角、且没有呼吸点。
 // 下面是让这个漏做项不会再溜回去的护栏。
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ApprovalsPage from './Approvals';
 import { server } from '@/test/msw-server';
@@ -223,5 +224,122 @@ describe('Approvals 双签进度（approval-governance 规格）', () => {
     expect(screen.queryByText(/人已签/)).not.toBeInTheDocument();
     // 不阻塞操作:批准按钮存在且未禁用。
     expect(screen.getByRole('button', { name: '批准' })).toBeEnabled();
+  });
+});
+
+describe('Approvals 部分签署诚实反馈（approval-governance 规格）', () => {
+  beforeEach(() => {
+    localStorage.setItem('opskeeper-locale', 'zh-CN');
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function pendingRow() {
+    return {
+      id: 'a-sign',
+      kind: 'restart_service',
+      title: '重启数据库',
+      summary: '',
+      payload: '{}',
+      source: 'agent',
+      status: 'pending',
+      proposed_by: 1,
+      created_at: FIXED_AT,
+    };
+  }
+
+  it('202(pending): 显示等待第二位批准人,行不消失,批准按钮禁用,且不重载列表', async () => {
+    let listCalls = 0;
+    server.use(
+      http.get('/api/v1/approvals', () => {
+        listCalls += 1;
+        return HttpResponse.json({ items: [pendingRow()] });
+      }),
+      http.post('/api/v1/approvals/a-sign/approve', () =>
+        HttpResponse.json(
+          {
+            ...pendingRow(),
+            status: 'pending',
+            signers: JSON.stringify([{ user_id: 1, role: 'admin', at: '2026-01-02T03:04:05Z' }]),
+          },
+          { status: 202 },
+        ),
+      ),
+    );
+
+    render(
+      <MemoryRouter>
+        <ApprovalsPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('重启数据库');
+    await userEvent.click(screen.getByRole('button', { name: '批准' }));
+
+    expect(await screen.findByText(/你的签名已记录/)).toBeInTheDocument();
+    // 该短语同时出现在「已签署，等待第二位批准人」禁用按钮上,故限定到横幅 span,
+    // 断言等待横幅本身(而非按钮)存在。
+    expect(screen.getByText(/等待第二位批准人/, { selector: 'span' })).toBeInTheDocument();
+    // 就地留驻:行仍在,且没有触发第二次列表拉取。
+    expect(screen.getByText('重启数据库')).toBeInTheDocument();
+    expect(listCalls).toBe(1);
+    // 批准按钮变为禁用的「已签署，等待第二位批准人」（全角逗号，与实现文案一致）。
+    const signed = screen.getByRole('button', { name: /已签署，等待第二位批准人/ });
+    expect(signed).toBeDisabled();
+  });
+
+  it('200(executed): 就地呈现「已执行」+ 结果,且行不消失', async () => {
+    server.use(
+      http.get('/api/v1/approvals', () => HttpResponse.json({ items: [pendingRow()] })),
+      http.post('/api/v1/approvals/a-sign/approve', () =>
+        HttpResponse.json({
+          ...pendingRow(),
+          status: 'executed',
+          result: JSON.stringify({ stdout: 'ok' }),
+        }),
+      ),
+    );
+
+    render(
+      <MemoryRouter>
+        <ApprovalsPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('重启数据库');
+    await userEvent.click(screen.getByRole('button', { name: '批准' }));
+
+    // 行状态已变为 executed,StatusChip 与顶部筛选 tab 也会显示「已执行」;
+    // 限定到横幅 div,断言就地留驻的执行横幅本身存在。
+    expect(await screen.findByText('已执行', { selector: 'div' })).toBeInTheDocument();
+    expect(screen.getByText(/ok/)).toBeInTheDocument();
+    // 行未从 pending 列表消失。
+    expect(screen.getByText('重启数据库')).toBeInTheDocument();
+  });
+
+  it('failed: 就地呈现失败态 + 结果', async () => {
+    server.use(
+      http.get('/api/v1/approvals', () => HttpResponse.json({ items: [pendingRow()] })),
+      http.post('/api/v1/approvals/a-sign/approve', () =>
+        HttpResponse.json({
+          ...pendingRow(),
+          status: 'failed',
+          result: 'boom',
+        }),
+      ),
+    );
+
+    render(
+      <MemoryRouter>
+        <ApprovalsPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('重启数据库');
+    await userEvent.click(screen.getByRole('button', { name: '批准' }));
+
+    // 「失败」单独会命中 StatusChip 与顶部筛选 tab;收窄到横幅特有的「执行失败」。
+    expect(await screen.findByText(/执行失败/)).toBeInTheDocument();
+    expect(screen.getByText(/boom/)).toBeInTheDocument();
   });
 });
