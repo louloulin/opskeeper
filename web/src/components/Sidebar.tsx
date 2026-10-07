@@ -36,6 +36,7 @@ import {
   Sparkles,
   ClipboardCheck,
   Plus,
+  FileBarChart,
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { AgentBadge } from './AgentBadge';
@@ -500,10 +501,11 @@ export function Sidebar() {
           <SidebarNavItem to="/crystallized" icon={Sparkles} label={tr('自愈规则', 'Runbooks')} />
         </NavSection>
 
-        {/* 运维 —— agent 的观测面与它操作的物理对象。设备在前, 拓扑/监控/
-            日志/链路/告警 紧随其后, 保持"先看对象再看数据"的顺序。 */}
-        <SectionLabel>{tr('运维', 'Operations')}</SectionLabel>
-        <NavSection>
+        {/* 运维 —— agent 的观测面与它操作的物理对象。折叠头本身即分组名,
+            展开后 设备在前, 拓扑/监控/日志/链路/告警 紧随其后, 保持"先看对象
+            再看数据"的顺序。storageKey 用 ops: 原来的 devices 与 observability
+            两段被本 IA 合成一段, 1:1 的旧 key 映射已不存在。 */}
+        <CollapsibleSection storageKey="ops" title={tr('运维', 'Operations')} defaultOpen={false}>
           {/* 设备 的角色子项按 presentRoles 过滤: 没有该角色的设备时整条不渲染,
               未分类(零 edge)直接省略, 见上方 presentRoles 的说明。 */}
           <SidebarNavItem to="/devices" icon={HardDrive} label={tr('设备', 'Devices')} />
@@ -524,17 +526,18 @@ export function Sidebar() {
           <SidebarNavItem to="/logs" icon={FileText} label={tr('日志', 'Logs')} />
           <SidebarNavItem to="/traces" icon={Waypoints} label={tr('链路', 'Traces')} />
           <SidebarNavItem to="/alerts" icon={Siren} label={tr('告警', 'Alerts')} badge={incidentOpen} />
-        </NavSection>
+        </CollapsibleSection>
 
         {/* 日常 —— 团队的周期性工作产出。代码仓库与知识库并列, 二者是同一
-            类"喂给 agent 的素材"。 */}
-        <SectionLabel>{tr('日常', 'Daily')}</SectionLabel>
-        <NavSection>
+            类"喂给 agent 的素材"。storageKey 沿用旧的 operations, 保住用户
+            已有的折叠偏好。 */}
+        <CollapsibleSection storageKey="operations" title={tr('日常', 'Daily')} defaultOpen={false}>
           <SidebarNavItem to="/tasks" icon={CalendarClock} label={tr('任务', 'Tasks')} />
           <SidebarNavItem to="/pages" icon={AppWindow} label={tr('产物', 'Artifacts')} />
+          <SidebarNavItem to="/pages?tab=reports" icon={FileBarChart} label={tr('报表', 'Reports')} />
           <SidebarNavItem to="/knowledge" icon={BookOpen} label={tr('知识库', 'Knowledge')} />
           <SidebarNavItem to="/knowledge/repos" icon={GitBranch} label={tr('代码仓库', 'Repos')} />
-        </NavSection>
+        </CollapsibleSection>
 
         {/* 审批 —— 常驻入口, 红点由 Task 10 接。 */}
         <SectionLabel>{tr('审批', 'Approvals')}</SectionLabel>
@@ -762,6 +765,74 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <div className="mt-5 px-2 pb-1.5 text-[13px] font-semibold text-zinc-300">
       {children}
+    </div>
+  );
+}
+
+// CollapsibleSection is the same SectionLabel + NavSection pair, but the
+// header is a button that toggles its children's visibility. State
+// persists in localStorage so users don't have to re-fold their AIOps-
+// supplemental sections (设备 / 监控告警) on every page load.
+//
+// Why we have this: opskeeper is AIOps-first. The agent + context + chat
+// flows are the primary surface; observability + device management are
+// data sources for the agent. Keeping them collapsed by default puts
+// visual weight where the product's value is.
+//
+// The 2.1 IA regroups those same data-source items under a single 运维
+// heading, which is *longer* than either original section — 运维 alone is
+// 10 rows once the device role filters render. That makes the fold more
+// worth keeping, not less, so 运维 and 日常 stay collapsible while the
+// short groups (对话 / Agent / Discover / 审批 / 管理) use SectionLabel.
+function CollapsibleSection({
+  storageKey,
+  title,
+  defaultOpen = false,
+  children,
+}: {
+  storageKey: string;
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(() => {
+    try {
+      const raw = localStorage.getItem(`sidebar.section.${storageKey}`);
+      if (raw === 'open') return true;
+      if (raw === 'closed') return false;
+    } catch {
+      /* localStorage unavailable — fall through to default */
+    }
+    return defaultOpen;
+  });
+  const toggle = () => {
+    setOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(`sidebar.section.${storageKey}`, next ? 'open' : 'closed');
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={toggle}
+        className="group mt-5 flex w-full items-center justify-between px-2 pb-1.5 text-left text-[13px] font-semibold text-zinc-300 transition-colors hover:text-zinc-100"
+      >
+        <span>{title}</span>
+        <ChevronRight
+          size={11}
+          className={cn(
+            'shrink-0 text-zinc-600 transition-transform duration-150 group-hover:text-zinc-400',
+            open && 'rotate-90',
+          )}
+        />
+      </button>
+      {open && <div className="space-y-0.5">{children}</div>}
     </div>
   );
 }

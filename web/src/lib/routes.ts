@@ -51,6 +51,7 @@ const ROUTE_DEFS: RouteDef[] = [
 
   { path: '/tasks', zh: '任务', en: 'Tasks', keywords: ['tasks', 'renwu', 'schedules', 'schedule'], group: '日常' },
   { path: '/pages', zh: '产物', en: 'Artifacts', keywords: ['pages', 'artifacts', 'chanwu', 'serve_page'], group: '日常' },
+  { path: '/pages?tab=reports', zh: '报表', en: 'Reports', keywords: ['reports', 'report', 'baobiao', 'weekly'], group: '日常' },
   { path: '/approvals', zh: '审批', en: 'Approvals', keywords: ['approvals', 'shenpi', 'inbox', 'review'], group: '日常' },
 
   { path: '/settings/health', zh: '设置 / 健康', en: 'Settings / Health', keywords: ['settings', 'health', 'jiankang', 'shezhi'], group: '设置' },
