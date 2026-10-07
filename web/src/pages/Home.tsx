@@ -38,6 +38,25 @@ import { useI18n } from '@/i18n/locale';
 // 偏哲学的（"Production is calm. So are you" / "Reset 之前先 Read"）
 // 撤掉了，节奏不像助理在跟你打招呼。
 type Greeting = { zh: string; en: string };
+
+// NOT_CHATTABLE = 后端 persona 里不该在首页做成快捷卡的（点了都是死路）。
+//   'default'  —— 虚拟 persona。上面那个大输入框 startSession 绑的就是它，
+//     点它的卡 ≡ 在输入框少写一句 prompt，零信息量。
+//   'reporter' —— agents/reporter.md 的 frontmatter 写明「由 report 调度器
+//     / 手动"立即生成"触发（非用户 chat spawn）」且 tools: []。它等的输入是
+//     一份 ReportFacts JSON，由后端调度器喂，用户点开只会得到一个没有工具、
+//     在等不存在输入的死会话。
+//
+// 判据只能是人名 —— critic / reviewer 同样是 tools: [] + read-only，但它们
+// 是完全正常的对话 persona（Manager spawn 后质疑诊断结论 / 二审高危操作），
+// 用 tools.length 或 permission_mode 当判据会误杀。
+//
+// 这是一份前端硬编码的重复真相（仓库既有同类：AgentAvatar.PERSONA_VISUALS
+// 11 条、AGENT_LABELS_ZH/EN、PERSONA_ALIASES），将来若新增非对话 worker
+// persona 需同步此表；根治要后端给 AgentSummary 加 chat_capable 字段，
+// 超出本 change 的零后端约束，已记 deferred。
+const NOT_CHATTABLE = new Set(['default', 'reporter']);
+
 const GREETINGS: Greeting[] = [
   { zh: '听候差遣', en: 'At your service.' },
   { zh: '随时待命', en: 'Ready when you are.' },
@@ -253,12 +272,9 @@ export default function HomePage() {
     let cancelled = false;
     listAgents()
       .then((r) => {
-        // 先 filter 再 slice：'default' 排掉，才不会白占 6 个黄金位之一。
-        // 为什么排它 —— 上面那个大输入框 startSession 绑的就是 agent_id
-        // 'default'，点 default 卡 ≡ 在输入框少写一句 prompt，零信息量。
-        // filter 后再 slice 才能让第 6 格由真正的 persona 补位；反过来
-        // slice 再 filter 永远只有 5 张卡。
-        if (!cancelled) setAgents(r.items.filter((a) => a.name !== 'default').slice(0, 6));
+        // 先 filter 再 slice，排掉的空位才由真正的 persona 补位；反过来
+        // slice 再 filter 会永远少一格。
+        if (!cancelled) setAgents(r.items.filter((a) => !NOT_CHATTABLE.has(a.name)).slice(0, 6));
       })
       .catch(() => {
         if (!cancelled) setAgents([]);
