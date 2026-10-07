@@ -4,7 +4,7 @@
 
 ## 1. Phase 1 · 设计系统(design-system-tokens)
 
-- [ ] 1.1 在 `web/src/styles/index.css` 新增七级圆角阶梯 token `--radius-xs/sm/md/lg/xl/2xl/3xl`(4/8/12/16/24/32/40px),暗/浅双主题均定义
+- [x] 1.1 在 `web/src/styles/index.css` 新增七级圆角阶梯 token `--radius-xs/sm/md/lg/xl/2xl/3xl`(4/8/12/16/24/32/40px),暗/浅双主题均定义
 - [ ] 1.2 在 `web/src/styles/index.css` 新增 `--shadow-card` / `--shadow-pop` 阴影 token(浅色柔和分层 / 深色高对比)
 - [ ] 1.3 扩展品牌紫 50/100/600/700 色阶(#f3f0fe/#e6e0fd/#6d57d9/#5b49b8),接入现有 RGB 三元组语义映射
 - [ ] 1.4 在 `web/tailwind.config.ts` 接入 `borderRadius` 与 `boxShadow` 语义键
