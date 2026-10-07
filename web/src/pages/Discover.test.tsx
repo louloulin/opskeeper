@@ -5,7 +5,7 @@
 // 三张内嵌页面各自都会在挂载时发请求;共享 msw server(`src/test/msw-server.ts`)
 // 是空的,`setup.ts` 又是 onUnhandledRequest:'error',所以缺一个 handler 会当众
 // 炸,而不是静默挂起——这里按每个用例实际挂载的内嵌页把 handler 配齐。
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -60,23 +60,52 @@ describe('Discover', () => {
     );
   });
 
+  // Each case asserts BOTH halves of the shell: the tab that reads as selected
+  // AND the panel it swaps in. `aria-selected={tab === t.id}` and
+  // `{tab === 'x' && <XPage/>}` are two independent derivations from the same
+  // `tab` value, so a case that only checked `aria-selected` would stay green
+  // even if the panel branch regressed (always render <SkillsPage/>, or drop
+  // the panel lines entirely — every page's handlers are registered, so nothing
+  // fails to mount). The panel's `<h1>` comes from the embedded page's own
+  // PageHeader (PageHeader.tsx:32); the shell has none, so it is unambiguous
+  // within the panel — scoping through `role="tabpanel"` keeps the skills case
+  // from colliding with the 技能 tab button's text.
   it('defaults to the skills tab', () => {
     renderAt('/discover');
     expect(screen.getByRole('tab', { name: /技能|Skills/ }).getAttribute('aria-selected')).toBe('true');
+    expect(
+      within(screen.getByRole('tabpanel')).getByRole('heading', { level: 1 }),
+    ).toHaveTextContent('技能');
   });
 
   it('honours ?tab=plugins', () => {
     renderAt('/discover?tab=plugins');
     expect(screen.getByRole('tab', { name: /插件|Plugins/ }).getAttribute('aria-selected')).toBe('true');
+    expect(
+      within(screen.getByRole('tabpanel')).getByRole('heading', { level: 1 }),
+    ).toHaveTextContent('插件市场');
   });
 
   it('honours ?tab=crystals', () => {
     renderAt('/discover?tab=crystals');
     expect(screen.getByRole('tab', { name: /自愈结晶|Crystals/ }).getAttribute('aria-selected')).toBe('true');
+    // 内嵌页标题是「自愈规则 / Crystallised Runbooks」,故意与 Discover 的
+    // tab 标签「自愈结晶」不同——这样 h1 断言不可能撞上 tab 文字。
+    expect(
+      within(screen.getByRole('tabpanel')).getByRole('heading', { level: 1 }),
+    ).toHaveTextContent('自愈规则');
   });
 
-  it('falls back to skills for an unknown tab but keeps install deep links working', () => {
+  it('falls back to skills for ?tab=install and lands on the admin install sub-surface', () => {
     renderAt('/discover?tab=install');
+    // 未知值(tab=install)回落到 skills:tab 亮起、技能面板挂载。
     expect(screen.getByRole('tab', { name: /技能|Skills/ }).getAttribute('aria-selected')).toBe('true');
+    expect(
+      within(screen.getByRole('tabpanel')).getByRole('heading', { level: 1 }),
+    ).toHaveTextContent('技能');
+    // 值留在 URL,且 auth mock 的 role 是 admin(Skills.tsx:32 需要 admin),
+    // 所以内嵌的 SkillsPage 真的切到了 install 子界面 —— 那条安装 composer
+    // 的 placeholder 只在 install 子 tab 渲染,是稳定的证据。
+    expect(screen.getByPlaceholderText(/贴个技能源/)).toBeInTheDocument();
   });
 });
