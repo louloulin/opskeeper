@@ -640,6 +640,17 @@ func printReport(w io.Writer, r Report) {
 				"  ships over time; read the ratios below as how this work was\n"+
 				"  batched on the days it was done, which is a real property and a\n"+
 				"  much smaller one.\n")
+		} else {
+			// Silence is not a state a reader can tell apart from "nobody
+			// checked". The window crossing the threshold is the one moment
+			// the third question -- which domains actually ship on their own
+			// -- stops being unanswerable for lack of history, so it is said
+			// out loud rather than inferred from an absent caveat.
+			fmt.Fprintf(w, "  this window is %d days long, which is long enough for the ratios\n"+
+				"  below to be read as how these domains ship rather than how the work\n"+
+				"  happened to be batched. One axis of evidence, not a verdict: a domain\n"+
+				"  shipping alone in this window still needs a person to say whether it\n"+
+				"  will keep doing so.\n", r.WindowDays)
 		}
 	}
 	fmt.Fprintln(w)

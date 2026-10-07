@@ -381,3 +381,36 @@ func TestSoloDetailPrintsTheDaysAndSaysWhenThereIsNothingToShow(t *testing.T) {
 		t.Errorf("an absent domain produced no explanation:\n%s", out.String())
 	}
 }
+
+// The window crossing seven days is the moment the third question -- which
+// domains actually ship on their own -- stops being unanswerable for lack of
+// history. Before this, maturity was inferred from an absent caveat, which is
+// indistinguishable from nobody having checked. So both branches must be
+// explicit, and exactly one of them must speak.
+func TestAShortWindowSaysTheRatiosCannotCarryAClaimAboutShipping(t *testing.T) {
+	var buf bytes.Buffer
+	printReport(&buf, Report{Commits: 164, Touching: 164, WindowFrom: "2026-10-02", WindowTo: "2026-10-07", WindowDays: 4})
+	out := buf.String()
+	if !strings.Contains(out, "cannot support any claim") {
+		t.Fatalf("a four day window was reported without saying so:\n%s", out)
+	}
+	if strings.Contains(out, "long enough for the ratios") {
+		t.Fatalf("a four day window was reported as mature:\n%s", out)
+	}
+}
+
+func TestAWindowLongEnoughSaysSoOutLoud(t *testing.T) {
+	var buf bytes.Buffer
+	printReport(&buf, Report{Commits: 400, Touching: 400, WindowFrom: "2026-09-20", WindowTo: "2026-10-07", WindowDays: 17})
+	out := buf.String()
+	if !strings.Contains(out, "long enough for the ratios") {
+		t.Fatalf("a seventeen day window did not announce itself as readable:\n%s", out)
+	}
+	// Maturity is not a verdict, and the report must not start sounding like one.
+	if !strings.Contains(out, "still needs a person") {
+		t.Fatalf("a mature window claimed the question answered itself:\n%s", out)
+	}
+	if strings.Contains(out, "cannot support any claim") {
+		t.Fatalf("a mature window still carries the short-window caveat:\n%s", out)
+	}
+}
