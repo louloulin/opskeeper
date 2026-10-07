@@ -20,7 +20,6 @@ import { ChatInput, type ModelSelection } from '@/components/ChatInput';
 import { useModelSelection } from '@/store/modelSelection';
 import { PromptCard } from '@/components/PromptCard';
 import { StatusRow } from '@/components/StatusRow';
-import { Card } from '@/components/ui/Card';
 import { createSession, listModels, type LLMProvider } from '@/api/chat';
 import { setSetting, invalidateLLMRouter } from '@/api/settings';
 import { listEdges } from '@/api/edges';
@@ -305,7 +304,11 @@ export default function HomePage() {
             )}
           </p>
 
-          <Card className="p-2">
+          {/* 只做抬升、不做表面 —— ChatInput 根自带 rounded-2xl +
+              border + bg(ChatInput.tsx:356)，再套一层有底色的卡片就是
+              双框。圆角必须留：阴影画在 wrapper 的 border-box 上，
+              不圆的话阴影是直角矩形，跟里面的圆角输入框对不上。 */}
+          <div className="rounded-2xl transition-shadow focus-within:shadow-pop">
             <ChatInput
               value={draft}
               onChange={setDraft}
@@ -321,7 +324,7 @@ export default function HomePage() {
               webSearchEnabled={webSearchEnabled}
               onWebSearchToggle={setWebSearchEnabled}
             />
-          </Card>
+          </div>
 
           {error && (
             <div
