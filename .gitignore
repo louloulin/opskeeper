@@ -110,7 +110,6 @@ plugins/opskeeper-teamharness/eval/reports/
 # Local build/cache output (not for source control)
 .dist/
 .docker-gocache/
-
 # Private working material. scripts/audit_open_source.py refuses a release
 # that ships any of these, so tracking one of them turns the open-source gate
 # red on every push; the gate was correct and the files were the violation.
@@ -166,3 +165,4 @@ plugins/opskeeper-teamharness/eval/reports/
 # belongs in the index. A `git add -A` before this line existed put all three
 # into a commit; it was caught before it was pushed (decision 420).
 .devrun/
+.worktrees/

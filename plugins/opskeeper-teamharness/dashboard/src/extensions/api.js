@@ -203,6 +203,24 @@ export const opskeeperApi = {
     return jsonFetch('/incidents/' + encodeURIComponent(incident_id));
   },
 
+  // GET /v1/loops/{incident_id}/state → authoritative seven-stage state
+  getIncidentLoopState(incident_id) {
+    const normalizedIncidentId = String(incident_id ?? '').trim();
+    if (!normalizedIncidentId) {
+      return Promise.reject(new Error('incident_id is required'));
+    }
+    return jsonFetch('/loops/' + encodeURIComponent(normalizedIncidentId) + '/state');
+  },
+
+  // GET /v1/loops/{incident_id}/timeline → authoritative transition timeline
+  getIncidentLoopTimeline(incident_id) {
+    const normalizedIncidentId = String(incident_id ?? '').trim();
+    if (!normalizedIncidentId) {
+      return Promise.reject(new Error('incident_id is required'));
+    }
+    return jsonFetch('/loops/' + encodeURIComponent(normalizedIncidentId) + '/timeline');
+  },
+
   // GET /v1/incidents/{incident_id}/archive → sanitized control-plane evidence archive
   getIncidentArchive(incident_id) {
     const normalizedIncidentId = String(incident_id ?? '').trim();

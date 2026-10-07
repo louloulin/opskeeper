@@ -1,0 +1,17 @@
+workflow: full
+phase: build
+build_mode: subagent-driven-development
+build_pause: null
+isolation: worktree
+verify_mode: null
+base_ref: 8774f7b3576bbde9f41a4dab3941f76ca51f1b9e
+design_doc: docs/superpowers/specs/2026-10-01-runtime-management-gap-design.md
+plan: docs/superpowers/plans/2026-10-01-runtime-inventory.md
+verify_result: pending
+verification_report: null
+branch_status: pending
+created_at: 2026-09-30
+verified_at: null
+archived: false
+handoff_context: openspec/changes/runtime-management-gap/.comet/handoff/design-context.json
+handoff_hash: 4167d19323d5679bb894a45f4a5c93b741d1824d75cfcc7beb72efd5c4f4c38b

@@ -11,3 +11,13 @@ export const opskeeperDarkPanelStyle = {
   background: '#111827',
   color: '#f9fafb',
 };
+
+export const opskeeperCommandThemeStyle = {
+  '--ops-status-active': 'var(--primary)',
+  '--ops-status-waiting': 'var(--foreground)',
+  '--ops-status-unknown': 'var(--muted-foreground)',
+  '--ops-surface': 'var(--card)',
+  '--ops-surface-foreground': 'var(--card-foreground)',
+  '--ops-surface-border': 'var(--border)',
+  '--ops-focus-ring': 'var(--primary)',
+};

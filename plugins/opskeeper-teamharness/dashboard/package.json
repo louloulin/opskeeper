@@ -8,7 +8,7 @@
     "dev": "vite --port 5173 --strictPort",
     "build": "vite build",
     "preview": "vite preview --port 5173",
-    "test": "node --test src/extensions/runtime.test.js src/extensions/integration.test.js src/extensions/archive.test.js src/extensions/knowledge.test.js src/extensions/time-format.test.js"
+    "test": "node --test src/extensions/runtime.test.js src/extensions/integration.test.js src/extensions/archive.test.js src/extensions/knowledge.test.js src/extensions/time-format.test.js src/extensions/incident-command-contract.test.js src/extensions/incident-command.test.js"
   },
   "peerDependencies": {
     "react": "^19.0.0",

@@ -1,12 +1,20 @@
 export const OPSKEEPER_TABS = [
-  { id: 'diagnostics', label: '诊断', description: '7 阶段 RCA 与事故闭环' },
-  { id: 'integration', label: '链路自检', description: '房间、AgentTeams、OpsKeeper 与 TeamHarness 只读自检' },
-  { id: 'archive', label: '档案', description: '事故证据链、完整性与复盘反查' },
-  { id: 'runtime', label: 'Runtime', description: '健康、依赖、指标与最近事故' },
-  { id: 'plugins', label: '插件', description: '安装包管理与加载状态' },
+  { id: 'incident-command', label: '事故指挥', description: '七阶段事故闭环与协同读back' },
+  { id: 'evidence-approval', label: '证据审批', description: '审批证据与执行边界' },
+  { id: 'archive-replay', label: '复盘档案', description: '事故证据链、完整性与复盘反查' },
+  { id: 'system-status', label: '系统状态', description: '健康、依赖、指标与最近事故' },
 ];
 
+const OPSKEEPER_TAB_ALIASES = new Map([
+  ['diagnostics', 'incident-command'],
+  ['integration', 'incident-command'],
+  ['plugins', 'incident-command'],
+  ['archive', 'archive-replay'],
+  ['runtime', 'system-status'],
+]);
+
 export function normalizeOpskeeperTab(value) {
-  const tab = OPSKEEPER_TABS.find((item) => item.id === value);
-  return tab ? tab.id : 'diagnostics';
+  return OPSKEEPER_TAB_ALIASES.get(value) ?? (
+    OPSKEEPER_TABS.some((item) => item.id === value) ? value : 'incident-command'
+  );
 }
