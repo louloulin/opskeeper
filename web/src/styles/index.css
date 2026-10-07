@@ -300,6 +300,22 @@ html.light .text-amber-400           { color: rgb(180 83 9); }                 /
 html.light .border-amber-500\/30,
 html.light .border-amber-500\/40     { border-color: rgb(252 211 77); }        /* amber-300 */
 
+/* Tones used by the 11-persona AgentBadge TONE_EDGE map that had no
+   light-mode remap: the border at 500/40 and the ring at 500/20 are
+   mid-saturation shades that stay too dark on a white card, so they
+   drop one step lighter to the -300 shade — same rule as the chip
+   remaps above. */
+html.light .border-violet-500\/40     { border-color: rgb(196 181 253); }       /* violet-300 */
+html.light .border-rose-500\/40       { border-color: rgb(253 164 175); }       /* rose-300 */
+html.light .border-cyan-500\/40       { border-color: rgb(103 232 249); }       /* cyan-300 */
+
+html.light .ring-violet-500\/20      { --tw-ring-color: rgb(196 181 253); }    /* violet-300 */
+html.light .ring-rose-500\/20        { --tw-ring-color: rgb(253 164 175); }    /* rose-300 */
+html.light .ring-amber-500\/20       { --tw-ring-color: rgb(252 211 77); }     /* amber-300 */
+html.light .ring-emerald-500\/20     { --tw-ring-color: rgb(110 231 183); }    /* emerald-300 */
+html.light .ring-sky-500\/20         { --tw-ring-color: rgb(125 211 252); }    /* sky-300 */
+html.light .ring-cyan-500\/20        { --tw-ring-color: rgb(103 232 249); }    /* cyan-300 */
+
 html.light .bg-red-500\/10           { background-color: rgb(254 226 226); }   /* red-100 */
 html.light .text-red-200,
 html.light .text-red-300             { color: rgb(185 28 28); }                /* red-700 */
@@ -420,6 +436,31 @@ html.light .app-header {
      underneath doesn't bleed into the header chrome and make text hard
      to read. */
   background-color: rgb(var(--card) / 0.92);
+}
+
+/* -------------------------------------------------------------------
+   Semantic surface classes (D1 / tasks.md 1.8).
+   Token-driven, so both themes flip automatically (same mechanism as
+   .app-header above). Deliberately NOT stacking bg-zinc-* utilities:
+   the html.light card-shadow fallback (index.css:293-299) only fires on
+   elements carrying bg-zinc-900, so these never render a second
+   shadow in light mode.
+   ------------------------------------------------------------------- */
+.surface-card {
+  background-color: rgb(var(--card));
+  border: 1px solid rgb(var(--border-soft));
+  box-shadow: var(--shadow-card);
+}
+
+.bubble-agent {
+  background-color: rgb(var(--card));
+  border: 1px solid rgb(var(--border-soft));
+}
+
+.bubble-user {
+  background-color: rgb(var(--accent-50));
+  color: rgb(var(--accent-700));
+  border: 1px solid rgb(var(--accent-100));
 }
 
 /* Page-level micro-animations. Respect reduced-motion. */

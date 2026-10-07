@@ -3,14 +3,16 @@ import { cn } from '@/lib/cn';
 
 // Card — unified card surface used across pages (DocCard / AgentCard /
 // IncidentCard / etc.). Visual rules per HLD-style guide:
-//   rounded-2xl + shadow-card + weak semantic border (border-border-soft)
+//   rounded-2xl + .surface-card (which carries the card background, the
+//   weak semantic border and the shadow-card token layer)
 //   default p-4, compact p-3.5
 //   hover (when interactive) hover:border-border hover:bg-card
-// The container no longer hardcodes bg-zinc-*/border-zinc-*: bg-card-soft
-// and border-border-soft are the dual-theme semantic tokens (the tailwind
-// color keys are literally named `card-soft` / `border-soft`, hence the
-// doubled prefix on the border one), so the light-mode zinc remap in
-// index.css is no longer load-bearing here.
+// The container no longer hardcodes bg-zinc-*/border-zinc-*, nor repeats
+// the surface rules as utilities: .surface-card (styles/index.css) is
+// token-driven, so the light/dark flip is automatic and the light-mode
+// zinc remap in index.css is not load-bearing here. The interactive
+// hover utilities stay as utilities — at (0,2,0) they still override
+// the plain (0,1,0) .surface-card rule.
 type CardProps = HTMLAttributes<HTMLDivElement> & {
   /** When true, the card is clickable / hover affordances kick in. */
   interactive?: boolean;
@@ -29,7 +31,7 @@ export function Card({
   return (
     <Tag
       className={cn(
-        'rounded-2xl border border-border-soft bg-card-soft shadow-card',
+        'rounded-2xl surface-card',
         compact ? 'p-3.5' : 'p-4',
         interactive && 'transition-colors hover:border-border hover:bg-card',
         className,
