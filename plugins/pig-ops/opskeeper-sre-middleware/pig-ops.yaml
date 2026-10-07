@@ -25,7 +25,7 @@ apiVersion: opskeeper.io/v1
 kind: Plugin
 metadata:
   name: opskeeper-sre-middleware
-  version: 0.1.1
+  version: 0.1.2
   vendor: opskeeper
   homepage: https://github.com/vincent-wuhan/opskeeper
 spec:

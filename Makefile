@@ -610,6 +610,20 @@ dcell-check: ## 进度表 D「插件生态」那一格的清单式读数（14 �
 # 分类只有三种：repo（本仓现在就能判）、external（证据在本仓之外，必须写清证据与持有人）、
 # judgment（是取舍不是测量，**永不被机器判为完成**）。计分只算 repo 项：把 external 记 0 分会
 # 说平台"完成了九成"，记满分会说审计通过了，两者都不真。
+# 阶段 0 验收链：把"节点能持一次真实对话"这句话接到一条命令上。
+#
+# 退出码是这条命令的契约，而两条常规路径都会把它毁掉：`go run` 把子进程的 3 压成 1，make 把
+# 任何非零变成 2。于是"缺输入"和"检查失败"又变成同一种红，那正是它要区分的两件事。
+# run.sh 用 bash 的 exit 原样传出，所以**CI 要拿得到契约就调 bash scripts/acceptance/run.sh**；
+# 走这个 make 目标时，缺输入会显示成 make 的 Error 3（本机实测退出码 2）。
+#
+#   0  离线检查全过，需要外部输入的也都齐了
+#   3  至少一项缺输入（本仓没坏，这台机器/这次验收凑不齐），逐条点名缺什么
+#   1  至少一项离线检查红了（本仓的缺陷）
+.PHONY: acceptance-stage0
+acceptance-stage0: ## 阶段 0 验收链（退出码 0/3/1 有意义，见上）
+	@bash scripts/acceptance/run.sh
+
 .PHONY: audit-scope
 audit-scope: ## 完成度审计：repo 项闭合率 + 外部项归属（3 条 external / 1 条 judgment）
 	go run ./scripts/audit .

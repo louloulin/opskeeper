@@ -55,6 +55,11 @@ type item struct {
 	// otherwise: "cannot test" is only honest when it says what would.
 	evidence string
 	holder   string
+	// closer names a command in this repository that runs the evidence.
+	// An external item with no command behind it is a wish; one with a
+	// command is a task somebody can pick up. It is printed, never run,
+	// and never scored.
+	closer string
 }
 
 // repoItems are the claims this repository can settle today.
@@ -158,21 +163,24 @@ var externalItems = []item{
 		subject:  "阶段 0 端到端验收：一台 edge 用真实模型凭据完成一次对话",
 		class:    classExternal,
 		evidence: "一个真实 provider 密钥 + 一次 docker compose 起 edge + 一次 SSE 流式回包",
-		holder:   "部署方（密钥持有人）；本仓能测的替代是 delivery 包里那六条配置断言",
+		holder:   "部署方（密钥持有人）",
+		closer:   "bash scripts/acceptance/run.sh —— 退出码 3 即表示缺输入，并逐条点名缺什么",
 	},
 	{
 		id:       "E2",
 		subject:  "中间件适配器与真实 broker / 实例的联调",
 		class:    classExternal,
 		evidence: "一个 Kafka / PostgreSQL / Redis / K8s 实例接一次真实读写",
-		holder:   "部署方；本仓能测的是适配器的参数校验、拒绝路径与文档面计数",
+		holder:   "部署方",
+		closer:   "make test-e2e-live —— 需要 tests/e2e/secrets.local.env，缺哪项会 SKIP 并写明",
 	},
 	{
 		id:       "E3",
 		subject:  "多集群联邦的真实子集群",
 		class:    classExternal,
 		evidence: "第二个控制面进程 + 一次真实策略投递",
-		holder:   "部署方；本仓能测的是签名、摘要先验后解包与投递重放",
+		holder:   "部署方",
+		closer:   "本仓暂无：联邦的真实验收没有命令，这是它与其他两条 external 的区别",
 	},
 }
 
@@ -308,7 +316,8 @@ func main() {
 				fmt.Printf("  open    %-3s %s\n            %s\n", it.id, it.subject, why)
 			}
 		case classExternal:
-			fmt.Printf("  outside %-3s %s\n            evidence: %s\n            held by:   %s\n", it.id, it.subject, it.evidence, it.holder)
+			fmt.Printf("  outside %-3s %s\n            evidence: %s\n            held by:   %s\n            closer:    %s\n",
+				it.id, it.subject, it.evidence, it.holder, it.closer)
 		case classJudgment:
 			fmt.Printf("  call it %-3s %s\n            %s\n", it.id, it.subject, it.evidence)
 		}
