@@ -35,7 +35,7 @@ func TestTheSameCallSubmittedEightTimesIsOneQuestionAndOneExecution(t *testing.T
 		outcome Outcome
 		reason  string
 	}, n)
-	for i := 0; i < n; i++ {
+	submit := func() {
 		go func() {
 			o, r, err := h.gate.Admit(context.Background(), writeCall())
 			if err != nil {
@@ -47,13 +47,28 @@ func TestTheSameCallSubmittedEightTimesIsOneQuestionAndOneExecution(t *testing.T
 			}{o, r}
 		}()
 	}
-	waitFor(t, "the one request the duplicates joined", func() bool {
+	submit()
+
+	waitFor(t, "the first submission to raise its request", func() bool {
 		return len(h.gate.Pending("")) == 1
 	})
+	waitFor(t, "the first submission to render its card", func() bool {
+		return len(h.frames.all()) == 1
+	})
+	for i := 1; i < n; i++ {
+		submit()
+	}
+
 	// A second card would be indistinguishable from a second question in
 	// the operator's queue, which is the whole point.
 	waitFor(t, "the duplicates to have joined", func() bool {
 		return len(h.frames.all()) == 1
+	})
+	waitFor(t, "all duplicate submissions to wait on that request", func() bool {
+		h.gate.mu.Lock()
+		defer h.gate.mu.Unlock()
+		pending, ok := h.gate.byKey[keyOf(writeCall())]
+		return ok && pending.waiters == n
 	})
 
 	pending := h.gate.Pending("")[0]

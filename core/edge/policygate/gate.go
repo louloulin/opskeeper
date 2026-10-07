@@ -250,6 +250,11 @@ type request struct {
 	// resolved carries the decision. Closed exactly once, by Decide or by
 	// the expiry path.
 	resolved chan struct{}
+	// waiters is the number of callers currently blocked on resolved. The
+	// gate uses it only to make concurrent idempotency observable to its
+	// own admission tests: a test must not decide a card before every
+	// duplicate submission has joined it.
+	waiters  int
 	decision ports.Decision
 	reason   string
 }
@@ -589,6 +594,15 @@ func (g *Gate) policyFor(actor string) Policy {
 // the shape: there is no path out of here that lets a call run without
 // either permission or a decision.
 func (g *Gate) wait(ctx context.Context, pending *request) (Outcome, string) {
+	g.mu.Lock()
+	pending.waiters++
+	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		pending.waiters--
+		g.mu.Unlock()
+	}()
+
 	// The deadline is the host's, not the caller's. An agent that gave
 	// itself a generous context must not thereby get a generous approval
 	// window, so the TTL is the binding of the two.
