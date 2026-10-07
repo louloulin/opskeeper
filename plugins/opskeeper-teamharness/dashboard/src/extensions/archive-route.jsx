@@ -41,7 +41,7 @@ export default function OpskeeperArchiveRoute({ api }) {
   const loadIncidents = React.useCallback(async () => {
     setLoadingIncidents(true);
     try {
-      // 演示/决赛场景需要看到最近触发的事故（含尚未走完 RCA 闭环的），
+      // 演示场景需要看到最近触发的事故（含尚未走完 RCA 闭环的），
       // 所以从 /v1/incidents 拉取全量；闭环档案由 /incidents/<id>/archive 二次拉取。
       const items = normalizeArchiveIncidentList(await opskeeperApi.listIncidents({ limit: 100 }));
       setIncidents(items);

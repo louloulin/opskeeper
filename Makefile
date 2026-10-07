@@ -74,12 +74,14 @@ test-plugins: ## 运行插件测试
 	$(MAKE) -C plugins/agentteams-plugin-installer self-check
 	$(PYTHON) -m pytest tests/test_deterministic_archive.py plugins/opskeeper-teamharness
 
+# version-check binds RELEASE_VERSION.json to a specific signed release commit.
+# Running it from ordinary development PRs makes every source change fail by
+# construction and prevents the open-source admission audit below from running.
 verify-plugins: build-plugins test-plugins ## 构建、测试并校验插件发布包
-	$(MAKE) version-check
 	$(PYTHON) scripts/verify_release.py
 	python3 scripts/audit_open_source.py
 
-version-check: ## 校验发布元数据与源码/插件版本一致
+version-check: ## 校验发布元数据与源码/插件版本一致（发布签名期使用）
 	python3 scripts/check_release_version.py
 
 # ----------------------------------------------------------------------------

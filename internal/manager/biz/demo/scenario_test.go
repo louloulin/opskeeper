@@ -309,15 +309,15 @@ func TestPreviewExecutionUsesArchiveTenant(t *testing.T) {
 	})
 	executor := &fakePreviewExecutor{previews: previews}
 	usecase.SetPreviewExecutor(executor)
-	usecase.SetArchiveWriter(&fakeArchiveWriter{}, "goai-demo")
+	usecase.SetArchiveWriter(&fakeArchiveWriter{}, "demo-tenant")
 
 	status, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if status.Status != demomodel.ScenarioStatusAwaitingApproval ||
-		executor.lastInput.TenantID != "goai-demo" ||
-		previews.runs[len(previews.runs)-1].TenantID != "goai-demo" {
+		executor.lastInput.TenantID != "demo-tenant" ||
+		previews.runs[len(previews.runs)-1].TenantID != "demo-tenant" {
 		t.Fatalf("status = %+v input = %+v", status, executor.lastInput)
 	}
 }
@@ -638,7 +638,7 @@ func TestApproveExecutesVerifiedRecoveryAndWritesArchive(t *testing.T) {
 	publisher := &fakeWorkflowPublisher{}
 	usecase.workflowPublisher = publisher
 	archive := &fakeArchiveWriter{}
-	usecase.SetArchiveWriter(archive, "goai-demo")
+	usecase.SetArchiveWriter(archive, "demo-tenant")
 
 	if _, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey); err != nil {
 		t.Fatal(err)
@@ -662,7 +662,7 @@ func TestApproveExecutesVerifiedRecoveryAndWritesArchive(t *testing.T) {
 	}
 	got := make([]string, 0, len(archive.events))
 	for _, event := range archive.events {
-		if event.TenantID != "goai-demo" || event.IncidentID != "100" {
+		if event.TenantID != "demo-tenant" || event.IncidentID != "100" {
 			t.Fatalf("unexpected archive event = %+v", event)
 		}
 		got = append(got, event.EventType)
@@ -691,7 +691,7 @@ func TestApproveResumesAfterPartialRecoveryFailure(t *testing.T) {
 	fixtures := &fakeFixtures{}
 	usecase.fixtures = fixtures
 	archive := &fakeArchiveWriter{}
-	usecase.SetArchiveWriter(archive, "goai-demo")
+	usecase.SetArchiveWriter(archive, "demo-tenant")
 
 	if _, err := usecase.Get(context.Background(), 1, ScenarioID, input.IdempotencyKey); err != nil {
 		t.Fatal(err)
@@ -741,7 +741,7 @@ func TestApproveDoesNotRepeatRecoveredFixtureOperation(t *testing.T) {
 	fixtures := &fakeFixtures{state: "recovered", recoverErr: errors.New("fixture already recovered")}
 	usecase.fixtures = fixtures
 	archive := &fakeArchiveWriter{}
-	usecase.SetArchiveWriter(archive, "goai-demo")
+	usecase.SetArchiveWriter(archive, "demo-tenant")
 
 	run, err := scenarios.GetByIncident(context.Background(), 1, ScenarioID, 100)
 	if err != nil {
@@ -838,7 +838,7 @@ func TestExpiredApprovalClosesScenarioReleasesFixtureAndSkipsRepair(t *testing.T
 func TestAppendArchiveEventUsesStableUUID(t *testing.T) {
 	usecase := &Usecase{clock: realClock{}}
 	archive := &fakeArchiveWriter{}
-	usecase.SetArchiveWriter(archive, "goai-demo")
+	usecase.SetArchiveWriter(archive, "demo-tenant")
 	run := &demomodel.ScenarioRun{TenantID: 1, IncidentID: 83, IdempotencyKey: "final-demo-e82d97d1-20260919T014144Z-3886582"}
 
 	if err := usecase.appendArchiveEvent(
