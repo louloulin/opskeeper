@@ -5,7 +5,7 @@ import { cn } from '@/lib/cn';
 // IncidentCard / etc.). Visual rules per HLD-style guide:
 //   rounded-2xl + shadow-card + weak semantic border (border-border-soft)
 //   default p-4, compact p-3.5
-//   hover (when interactive) hover:border-zinc-700 hover:bg-zinc-900/60
+//   hover (when interactive) hover:border-border hover:bg-card
 // The container no longer hardcodes bg-zinc-*/border-zinc-*: bg-card-soft
 // and border-border-soft are the dual-theme semantic tokens (the tailwind
 // color keys are literally named `card-soft` / `border-soft`, hence the
