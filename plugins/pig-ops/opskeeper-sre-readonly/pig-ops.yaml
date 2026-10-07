@@ -96,4 +96,7 @@ spec:
 
   install:
     strategy: rolling
+    # 这条轴此前整仓没有一条声明，于是兼容矩阵的 pig 那一列永远是绿的——
+    # 一列永远绿的矩阵与没有矩阵不可区分（决策 455）。本仓固定 PiG v0.4.0，就写它。
+    min_pig_version: 0.4.0
     min_edge_version: 0.7.0

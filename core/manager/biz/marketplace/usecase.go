@@ -18,6 +18,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/errs"
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	extcontainer "github.com/vincent-wuhan/opskeeper/core/extension/biz/container"
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 	model "github.com/vincent-wuhan/opskeeper/core/manager/model/marketplace"
 )
 
@@ -957,4 +958,33 @@ func expandShorthandGitURL(raw string) string {
 	// `git clone` produces; clone with or without .git both work.
 	repo = strings.TrimSuffix(repo, ".git")
 	return "https://github.com/" + owner + "/" + repo + ".git"
+}
+
+// Catalog indexes what this tenant can install.
+//
+// The index is read from the tenant's install root — the same directory
+// packages land in — so it cannot drift from what is actually offered the
+// way a second table beside it could. A tenant whose root does not exist
+// yet gets an empty index rather than an error: nobody has installed
+// anything, and that is not a failure an operator can act on.
+//
+// This is the first production caller of pluginmanifest.LoadCatalog. Until
+// this method the loader existed, was exercised by tests, and was reachable
+// from nowhere a user could go.
+func (uc *Usecase) Catalog(ctx context.Context, caller Caller) ([]pluginmanifest.Entry, error) {
+	if caller.UserID == 0 {
+		return nil, fmt.Errorf("%w: caller required", errs.ErrUnauthorized)
+	}
+	root := uc.targetRoot(caller.TenantID)
+	if _, err := os.Stat(root); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	catalog, err := pluginmanifest.LoadCatalog(root)
+	if err != nil {
+		return nil, fmt.Errorf("marketplace: the installed catalog at %s does not validate: %w", root, err)
+	}
+	return catalog.Entries(), nil
 }

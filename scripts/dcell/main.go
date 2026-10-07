@@ -275,6 +275,43 @@ func itemImporter(root string) (string, error) {
 	return symbolPresent(root, "core/manager/biz/pluginimport/importer.go", "func (i *Importer) Import(")
 }
 
+// itemMarketIndex checks the catalog index is reachable from production.
+//
+// Two halves, because either one alone is a class in a library: the usecase
+// method that reads the install root, and the route that serves it. This
+// item was an open one until 决策 455, and the thing it found is the reason
+// it is worth a cell — LoadCatalog had existed the whole time with no
+// production caller, so the index was something only tests could see.
+func itemMarketIndex(root string) (string, error) {
+	if short, err := symbolPresent(root, "core/manager/biz/marketplace/usecase.go", "func (uc *Usecase) Catalog("); err != nil || short != "" {
+		return short, err
+	}
+	return symbolPresent(root, "core/manager/server/marketplace/http.go", "/v1/marketplace/catalog")
+}
+
+// itemCompatMatrix checks that a compatibility matrix exists AND that the
+// fleet's own packages are held to declaring both host floors.
+//
+// The matrix itself was already here — core/domains/service/plugin projects
+// the verdict across the real fleet — so half of this item is deliberately
+// not "build a matrix". The half that was missing is the gate: five
+// packages declared a node floor and nothing declared a PiG floor, so that
+// projection had an axis that could never go red, and an axis that is
+// always green is indistinguishable from no matrix at all.
+//
+// This item was written once against the wrong file. The first version
+// looked for a grid over hypothetical (edge, pig) pairs that this knife had
+// also written, and deleting that duplicate is why the predicate names the
+// service projection instead.
+func itemCompatMatrix(root string) (string, error) {
+	if short, err := symbolPresent(root, "core/domains/service/plugin/compatibility.go",
+		"func (m *Manager) Compatibility("); err != nil || short != "" {
+		return short, err
+	}
+	return symbolPresent(root, "core/floor/pluginmanifest/catalog_test.go",
+		"func TestEveryShippedPackageDeclaresBothHostFloors(")
+}
+
 // itemSDK checks the third-party authoring surface ships its three parts.
 // A plugin author needs a manifest type, a registration call and a version
 // negotiation; two of three is a half-built SDK that still looks finished.
@@ -368,15 +405,21 @@ func items() []item {
 		{"D10", "GAP 理由的规则仍被变异验证", itemGapReasoning},
 		{"D11", "本格的行为闸门仍在册", itemGatesOnRecord},
 		{"D12", "打包副本同步脚本在册", itemPackageSync},
+		{"D13", "插件市场索引有生产接线", itemMarketIndex},
+		{"D14", "兼容矩阵存在且两轴都被声明", itemCompatMatrix},
 	}
 }
 
-// open items are declared, not discovered: the plan asked for a market with
-// a version matrix, and neither a manifest index nor a compatibility check
-// exists yet. They are printed as OPEN and they are why the cell is not 100.
+// open items are declared, not discovered.
+//
+// The index added at 决策 455 reads the tenant's own install root, which is
+// what a package list on a control plane can honestly be built from. What it
+// does not do is index anything OUTSIDE that root: a package uploaded from a
+// remote registry to another tenant, or a build of the fleet's own packages
+// that has not been installed here yet. Saying so as an open cell beats
+// scoring this one 100% and letting a reader infer a market exists.
 var planned = []struct{ id, subject, why string }{
-	{"X1", "插件市场索引", "清单索引与版本矩阵尚无实现，计划第二节点名"},
-	{"X2", "兼容矩阵检查", "PiG 版本与 edge 版本的兼容判定尚无实现"},
+	{"X1", "跨源索引", "索引只覆盖本租户安装根；远端注册表与未安装版本不在其中"},
 }
 
 // symbolPresent reports whether a file exists and still contains a symbol.

@@ -80,6 +80,13 @@ func fixture(t *testing.T) string {
 		"package pluginmanifest\n\ntype GapReason struct{ Reason string; Searched []string }\n")
 	write(t, root, "core/floor/pluginmanifest/coverage_test.go",
 		"package pluginmanifest\n\nfunc gapReasonFailures(root, name string, gap GapReason) []string { return nil }\n\nfunc TestAGapReasonRulesRejectEachHistoricalError(t *testing.T) {}\n")
+	write(t, root, "core/domains/service/plugin/compatibility.go",
+		"package plugin\n\nfunc (m *Manager) Compatibility(ctx context.Context, req Requirement) (Matrix, error) { return Matrix{}, nil }\n")
+	write(t, root, "core/floor/pluginmanifest/catalog_test.go",
+		"package pluginmanifest\n\nfunc TestEveryShippedPackageDeclaresBothHostFloors(t *testing.T) {}\n")
+	write(t, root, "core/manager/biz/marketplace/usecase.go", "package marketplace\n\nfunc (uc *Usecase) Catalog(ctx context.Context, caller Caller) ([]pluginmanifest.Entry, error) { return nil, nil }\n")
+	svcHTTP := routesFixture() + "\nr.Get(\"/v1/marketplace/catalog\", h.catalog)\n"
+	write(t, root, "core/manager/server/marketplace/http.go", svcHTTP)
 	write(t, root, "Makefile", "eval-gates:\npig-tool-scoping-check:\n")
 	write(t, root, "scripts/sync-pig-ops.sh", "#!/bin/sh\n")
 	return root
@@ -150,6 +157,10 @@ func TestEveryPredicateCanGoRed(t *testing.T) {
 		{"D10", "core/floor/pluginmanifest/coverage_test.go", "package pluginmanifest\n"},
 		{"D11", "Makefile", "eval-gates:\n"},
 		{"D12", "scripts/sync-pig-ops.sh", ""},
+		{"D13", "core/manager/server/marketplace/http.go", routesFixture()},
+		{"D13", "core/manager/biz/marketplace/usecase.go", "package marketplace\n"},
+		{"D14", "core/domains/service/plugin/compatibility.go", "package plugin\n"},
+		{"D14", "core/floor/pluginmanifest/catalog_test.go", "package pluginmanifest\n"},
 	}
 	// One item may carry more than one mutation — D10 broke the reason type
 	// and then the rule's proof — so this checks coverage of the items
