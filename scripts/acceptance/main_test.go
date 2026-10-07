@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,13 +144,93 @@ func TestAMissingArtifactFailsRatherThanSkips(t *testing.T) {
 	}
 }
 
-// A needs-input check that runs must be able to pass, or it is not a check.
-func TestTheCredentialCheckPassesWhenTheKeyIsThere(t *testing.T) {
+// A8 used to assert the opposite of what it was for: "a key is present, so
+// pass". That is the check that pins a name instead of a property — the
+// subject line says one thing and the assertion lets a credential that
+// cannot buy a single token through as evidence that the node can hold a
+// conversation. These four replace it, and between them they cover the four
+// outcomes a real call can have.
+
+func TestTheCredentialCheckPassesOnlyWhenAStreamComesBack(t *testing.T) {
 	root := fixture(t)
-	t.Setenv("OPSKEEPER_ACCEPTANCE_PROVIDER_KEY", "test-key")
+	t.Setenv(keyEnv, "test-key-for-the-stream-case")
+	t.Setenv(providerURLEnv, servingSSE(t))
 	if got := statusOf(t, root, "A8"); got != statusPass {
-		t.Errorf("A8 = %s with a key present, want pass", got)
+		t.Errorf("A8 = %s with a working endpoint, want pass", got)
 	}
+}
+
+// The case the old assertion called a pass.
+func TestACredentialThatCannotBuyATokenFails(t *testing.T) {
+	root := fixture(t)
+	t.Setenv(keyEnv, "sk-not-a-real-credential")
+	t.Setenv(providerURLEnv, unauthorized(t, "sk-not-a-real-credential"))
+	if got := statusOf(t, root, "A8"); got != statusFail {
+		t.Errorf("A8 = %s with a key the provider rejects, want FAIL: a credential that is "+
+			"present is not a credential that works", got)
+	}
+}
+
+// 200 with no frames is the failure mode a non-streaming probe would miss,
+// and stage 0's acceptance is explicitly about streaming.
+func TestAnEndpointThatAnswers200WithoutFramesFails(t *testing.T) {
+	root := fixture(t)
+	t.Setenv(keyEnv, "test-key-for-the-silent-endpoint")
+	t.Setenv(providerURLEnv, silentButSuccessful(t))
+	if got := statusOf(t, root, "A8"); got != statusFail {
+		t.Errorf("A8 = %s from a 200 that carried no stream frames, want FAIL", got)
+	}
+}
+
+// Providers quote the key back in their errors, and this command's output is
+// what somebody pastes into a ticket. The redaction is the reason the check
+// may safely report a failure at all.
+func TestAFailedCallNeverPrintsTheCredential(t *testing.T) {
+	root := fixture(t)
+	const key = "sk-leaked-by-the-provider-0123456789"
+	t.Setenv(keyEnv, key)
+	t.Setenv(providerURLEnv, unauthorized(t, key))
+	for _, r := range run(root, stage0Checks) {
+		if r.id == "A8" && strings.Contains(r.reason, key) {
+			t.Fatalf("A8's reason quotes the credential verbatim: %s", r.reason)
+		}
+	}
+}
+
+// servingSSE is an endpoint that behaves like a provider answering a
+// one-token streamed completion.
+func servingSSE(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"k\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/v1"
+}
+
+// unauthorized is an endpoint that rejects the way providers do — by quoting
+// the key back in the message, which is the case redaction exists for.
+func unauthorized(t *testing.T, key string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Incorrect API key provided: ` + key + `"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/v1"
+}
+
+// silentButSuccessful answers 200 and sends nothing a browser or a node would
+// treat as a frame.
+func silentButSuccessful(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("{}"))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/v1"
 }
 
 // The command's whole claim is the distinction between 1 and 3, so the

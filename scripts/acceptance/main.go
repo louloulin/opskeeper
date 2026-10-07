@@ -39,12 +39,18 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 type status int
@@ -266,16 +272,161 @@ var stage0Checks = []check{
 	},
 	{
 		id:      "A8",
-		subject: "一个真实的模型凭据",
+		subject: "一次真实的模型推理",
 		needs:   "一个真实 provider 的 API key（云厂商密钥不得进节点）",
-		how:     "导出 OPSKEEPER_ACCEPTANCE_PROVIDER_KEY 或 …_BASE_URL + …_MODEL 后重跑；本命令只检查存在性，不打印值",
+		how: "导出 OPSKEEPER_ACCEPTANCE_PROVIDER_KEY（可选 OPSKEEPER_ACCEPTANCE_PROVIDER_BASE_URL / " +
+			"…_MODEL / OPSKEEPER_ACCEPTANCE_BASE_URL）后重跑；本命令会真的发一次请求，不打印 key",
 		run: func(root string) (bool, string) {
-			if strings.TrimSpace(os.Getenv("OPSKEEPER_ACCEPTANCE_PROVIDER_KEY")) == "" {
+			key := strings.TrimSpace(os.Getenv(keyEnv))
+			if key == "" {
+				// No key is MISSING, not pass. The contract in run() turns
+				// an empty reason plus a non-empty needs into MISSING, and
+				// that is the honest reading: the chain could not be asked.
 				return false, ""
 			}
-			return true, ""
+			// Present is not working. This is the whole reason the check
+			// exists, so the call is made here rather than merely described
+			// in the subject line.
+			return realInference(key)
 		},
 	},
+}
+
+// The environment this check reads.
+//
+// The four names are separate on purpose. A deployment that wants the
+// evidence to be about the *gateway* rather than about the vendor points
+// OPSKEEPER_ACCEPTANCE_BASE_URL at its own /v1 and supplies the node token —
+// that is the stronger claim, because it exercises the path the node takes.
+// Pointing it straight at the vendor is the weaker claim and the default.
+//
+// The provider defaults are named separately so that a deployment reading
+// this file can tell which of the two it is running: same variable name for
+// both would make the evidence ambiguous.
+const (
+	keyEnv           = "OPSKEEPER_ACCEPTANCE_PROVIDER_KEY"
+	providerURLEnv   = "OPSKEEPER_ACCEPTANCE_PROVIDER_BASE_URL"
+	providerModelEnv = "OPSKEEPER_ACCEPTANCE_PROVIDER_MODEL"
+	baseURLEnv       = "OPSKEEPER_ACCEPTANCE_BASE_URL"
+	modelEnv         = "OPSKEEPER_ACCEPTANCE_MODEL"
+
+	defaultProviderBaseURL = "https://api.openai.com/v1"
+	defaultProviderModel   = "gpt-4o-mini"
+)
+
+// inferenceTimeout bounds the call.
+//
+// It is generous because a cold TLS handshake plus a real provider queue is
+// genuinely slow, and tight enough that a hung endpoint ends the chain
+// rather than the afternoon. The one token this asks for is the cheapest
+// thing a provider will sell; the point is that an answer came back, not how
+// much of it there was.
+const inferenceTimeout = 45 * time.Second
+
+// realInference makes one minimal streamed completion and reports whether it
+// arrived.
+//
+// Why streamed when the claim is only "an answer came back": stage 0's
+// acceptance is explicitly about 流式输出, and a non-streaming probe would
+// pass while the SSE frames the console renders are broken. Asking for a
+// stream and reading the first data line tests both halves for the price of
+// one token.
+//
+// Why the key is scrubbed from every message. Providers echo the credential
+// back in their errors — "Incorrect API key provided: sk-…" is the standard
+// one — and this command's output is the thing a person pastes into a
+// ticket. A check that prints the secret it was given while reporting that
+// the secret did not work is worse than no check.
+func realInference(key string) (bool, string) {
+	base, model := inferenceTarget()
+	endpoint := strings.TrimSuffix(base, "/") + "/chat/completions"
+
+	body, err := json.Marshal(map[string]any{
+		"model":      model,
+		"max_tokens": 1,
+		"stream":     true,
+		"messages": []map[string]string{
+			{"role": "user", "content": "ok"},
+		},
+	})
+	if err != nil {
+		return false, fmt.Sprintf("encoding the request: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), inferenceTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return false, fmt.Sprintf("%s is not a usable url: %v", redact(base, key), err)
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, fmt.Sprintf("%s: %v", redact(base, key), redact(err.Error(), key))
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return false, fmt.Sprintf("%s returned %d: %s", redact(base, key), resp.StatusCode,
+			strings.TrimSpace(redact(string(snippet), key)))
+	}
+
+	// Read enough of the stream to prove frames arrived, then stop. The
+	// LimitReader is what keeps a working endpoint from making this check
+	// cost a full response.
+	prefix, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return false, fmt.Sprintf("%s: reading the stream: %v", redact(base, key), redact(err.Error(), key))
+	}
+	if !strings.Contains(string(prefix), "data:") {
+		return false, fmt.Sprintf("%s answered 200 but sent no stream frames; the first bytes were: %s",
+			redact(base, key), strings.TrimSpace(redact(string(prefix), key)))
+	}
+	return true, ""
+}
+
+// inferenceTarget resolves which endpoint and model this chain should call.
+//
+// Gateway settings win over provider settings when both are present, because
+// the gateway is the path the node takes and evidence about the node is worth
+// more than evidence about the vendor.
+func inferenceTarget() (base, model string) {
+	if v := strings.TrimSpace(os.Getenv(baseURLEnv)); v != "" {
+		base = v
+	} else {
+		base = strings.TrimSpace(os.Getenv(providerURLEnv))
+		if base == "" {
+			base = defaultProviderBaseURL
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv(modelEnv)); v != "" {
+		model = v
+	} else {
+		model = strings.TrimSpace(os.Getenv(providerModelEnv))
+		if model == "" {
+			model = defaultProviderModel
+		}
+	}
+	return base, model
+}
+
+// redact removes the credential from text that is about to be printed.
+//
+// A substring replace rather than a mask, because the useful part of a
+// provider's error is the sentence around the key, and replacing the whole
+// line with asterisks throws that away. An empty or very short key is left
+// alone: replacing a one-character string everywhere would corrupt the
+// message without protecting anything.
+func redact(s, key string) string {
+	if len(key) < 8 {
+		return s
+	}
+	return strings.ReplaceAll(s, key, "<redacted>")
 }
 
 // result is one check's outcome, kept so the tests can assert on the shape
@@ -382,7 +533,12 @@ func main() {
 		chain, len(results)-failed-missing, failed, missing)
 	switch {
 	case failed > 0:
-		fmt.Println("            离线检查红了：这是本仓的缺陷，不是环境问题。")
+		// Deliberately not "这是本仓的缺陷". A needs-input check that ran and
+		// failed — a credential that is present but does not work, a daemon
+		// that is installed but not running — is an environment fact, and a
+		// message that calls every red an in-repository defect teaches the
+		// reader to discount the sentence that matters.
+		fmt.Println("            有检查红了：离线检查红是本仓的缺陷；needs-input 检查红是这台机器的输入不成立——上面那条 reason 写的就是哪一种。")
 		os.Exit(1)
 	case missing > 0:
 		fmt.Println("            缺失的输入已逐条点名。补上再跑一次，才算验收通过。")

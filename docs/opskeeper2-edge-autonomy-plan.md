@@ -114,6 +114,24 @@
 **剩余 2% 的准确内容**：一次**真 provider** 的推理。
 **只有这一条**——其余门槛已有已执行的证据。
 
+**这一条现在有一条命令，而不是一段描述**（决策 467）：
+
+```
+OPSKEEPER_ACCEPTANCE_PROVIDER_KEY=<key> \
+OPSKEEPER_ACCEPTANCE_PROVIDER_BASE_URL=<b64 url> \
+OPSKEEPER_ACCEPTANCE_PROVIDER_MODEL=<model> \
+bash scripts/acceptance/run.sh
+```
+
+`A8` 此前只检查那个环境变量**非空**——填一个 `sk-xxx` 也会 pass。
+它现在**真的发一次流式请求**（`max_tokens: 1`）并要求收到 `data:` 帧，
+所以「凭据在」与「凭据能用」不再是同一句话。
+**退出码 1 表示推理失败**（而不是缺输入），退出码 3 才是「没给 key」。
+
+把 base URL 指到自己的网关（`OPSKEEPER_ACCEPTANCE_BASE_URL` + `OPSKEEPER_ACCEPTANCE_MODEL`）
+是更强的证据：那条路正是节点走的那条。两种写法在本仓里被刻意分成两组变量名，
+因为同一个变量名会让「这条证据说的是网关还是厂商」变得无法分辨。
+
 ## 八、验收门槛（可复跑）
 
 ```
