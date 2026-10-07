@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageBubble, type ConfigDraftResult } from './MessageBubble';
 import type { ChatMessage } from '@/api/chat';
 import { getApproval, approveApproval } from '@/api/approvals';
+import { useApprovalBadge } from '@/store/approvalBadge';
 
 vi.mock('@/api/approvals', () => ({
   getApproval: vi.fn(),
@@ -352,6 +353,61 @@ describe('MessageBubble inline approval card', () => {
 
     await waitFor(() => expect(screen.getByText('已执行')).toBeInTheDocument());
     expect(screen.getAllByText(/opskeeper-dualsign-OK/).length).toBeGreaterThan(0);
+  });
+
+  it('refreshes the global pending-approval badge after an approve', async () => {
+    // 3.4.3: after an approve the sidebar 审批 red dot must reconcile with the
+    // now-decided row. The store's refresh() bails early without a token, so
+    // there is nothing observable in the DOM — assert the call with a spy on
+    // the very same state object the card reaches through getState().
+    vi.mocked(approveApproval).mockResolvedValue({
+      id: 'ap-dualsign',
+      kind: 'cloud_bash',
+      title: 'echo opskeeper-dualsign-OK',
+      summary: '',
+      payload: '{}',
+      source: 'chat',
+      status: 'pending',
+      signers: JSON.stringify([{ user_id: 1, role: 'admin', at: new Date().toISOString() }]),
+      proposed_by: 1,
+      created_at: new Date().toISOString(),
+    });
+
+    const spy = vi.spyOn(useApprovalBadge.getState(), 'refresh').mockResolvedValue();
+
+    render(<MessageBubble message={approvalMessage('ap-dualsign')} />);
+    const user = userEvent.setup();
+    await screen.findByRole('button', { name: /批准并执行/ });
+    await user.click(screen.getByRole('button', { name: /批准并执行/ }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    spy.mockRestore();
+  });
+
+  it('surfaces the blast radius / risk class / target on the approval card', async () => {
+    // 3.4.3: the operator is authorising a change; the radius, risk class and
+    // target are what say how much of the estate it touches. The backend row
+    // already carries them (model.go), so the card renders them on mount.
+    vi.mocked(getApproval).mockResolvedValue({
+      id: 'ap-dualsign',
+      kind: 'cloud_bash',
+      title: 'echo opskeeper-dualsign-OK',
+      summary: '',
+      payload: JSON.stringify({ command: 'echo opskeeper-dualsign-OK' }),
+      source: 'chat',
+      status: 'pending',
+      proposed_by: 1,
+      created_at: new Date().toISOString(),
+      blast_radius: 'node-12 nginx 5s',
+      risk_class: 'destructive',
+      target: 'node-12',
+    });
+
+    render(<MessageBubble message={approvalMessage('ap-dualsign')} />);
+
+    expect(await screen.findByText(/影响面/)).toBeInTheDocument();
+    expect(screen.getByText(/风险等级/)).toBeInTheDocument();
+    expect(screen.getAllByText(/node-12/).length).toBeGreaterThan(0);
   });
 });
 

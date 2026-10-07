@@ -7,10 +7,11 @@ import { approveApproval, rejectApproval, getApproval } from '@/api/approvals';
 import { cn } from '@/lib/cn';
 import { isConfigDraftConfirmationMessage } from '@/lib/configDraftConfirmation';
 import { useI18n } from '@/i18n/locale';
+import { useApprovalBadge } from '@/store/approvalBadge';
 import { personaLabel } from '@/components/AgentBadge';
 import { AgentAvatar } from './AgentAvatar';
 import { DeliverableCard, matchDeliverable } from './DeliverableCard';
-import { Button } from '@/components/ui';
+import { Button, Chip } from '@/components/ui';
 
 export type ConfigDraftResult = {
   kind: 'config_draft';
@@ -540,6 +541,11 @@ function PendingApprovalCard({ approvalID, kind, command }: { approvalID: string
   const [cmd, setCmd] = useState(command);
   const [approvalKind, setApprovalKind] = useState(kind);
   const [creds, setCreds] = useState<string[]>([]);
+  // Risk metadata the backend already returns on the row (approval
+  // model.go:59-79). Absent on rows predating 2d58a31, hence all optional.
+  const [meta, setMeta] = useState<{ blast_radius?: string; risk_class?: string; target?: string } | null>(null);
+  const [payload, setPayload] = useState('');
+  const [showPayload, setShowPayload] = useState(false);
   const isHostBash = approvalKind === 'host_bash';
 
   // Reconcile with the authoritative server status on mount. When chat
@@ -563,6 +569,10 @@ function PendingApprovalCard({ approvalID, kind, command }: { approvalID: string
         } catch {
           /* payload not JSON — leave placeholder */
         }
+        // The row is already in hand — no second request. Risk metadata and
+        // the raw payload feed the impact chips and the 详情 expander below.
+        setMeta({ blast_radius: a.blast_radius, risk_class: a.risk_class, target: a.target });
+        setPayload(a.payload ?? '');
         if (a.status === 'executed') {
           setState('done');
           setResultText(a.result ?? '');
@@ -578,7 +588,11 @@ function PendingApprovalCard({ approvalID, kind, command }: { approvalID: string
       .catch(() => {
         // Genuinely gone (404) or unreachable: never show dead buttons —
         // point the user at the inbox instead of letting a click 404.
-        if (alive) setState('stale');
+        if (alive) {
+          setState('stale');
+          // Decided elsewhere — the sidebar count is certain to be stale.
+          useApprovalBadge.getState().refresh();
+        }
       });
     return () => {
       alive = false;
@@ -605,6 +619,10 @@ function PendingApprovalCard({ approvalID, kind, command }: { approvalID: string
         setState('waiting');
         setSignedCount(signerCount(a.signers));
       }
+      // Any verdict moves the global pending count (executed / failed / just
+      // signed). Fire-and-forget: refresh() never rejects and never blocks the
+      // render; a miss here self-heals on the 30 s poll.
+      useApprovalBadge.getState().refresh();
     } catch (e) {
       setState('error');
       setErrText((e as Error).message);
@@ -615,6 +633,7 @@ function PendingApprovalCard({ approvalID, kind, command }: { approvalID: string
     try {
       await rejectApproval(approvalID, '');
       setState('rejected');
+      useApprovalBadge.getState().refresh();
     } catch (e) {
       setState('error');
       setErrText((e as Error).message);
@@ -644,6 +663,46 @@ function PendingApprovalCard({ approvalID, kind, command }: { approvalID: string
               </span>
             ))}
           </div>
+        )}
+        {(meta?.blast_radius || meta?.risk_class || meta?.target) && (
+          <div className="mb-2 flex flex-wrap items-center gap-1 text-[11px] text-zinc-400">
+            {/* The radius and risk class are the point: the operator is being
+                asked to authorise a change, and this is the only thing that
+                says how much of the estate it touches. Mirrors NodeAgents'
+                approval card. */}
+            {meta.blast_radius && (
+              <Chip tone="warning" dense>
+                {tr('影响面', 'Blast radius')}: {meta.blast_radius}
+              </Chip>
+            )}
+            {meta.risk_class && (
+              <Chip tone={meta.risk_class === 'destructive' ? 'danger' : 'default'} dense>
+                {tr('风险等级', 'Risk')}: {meta.risk_class}
+              </Chip>
+            )}
+            {meta.target && (
+              <span className="rounded bg-zinc-800/60 px-1.5 py-0.5 font-mono text-zinc-300 ring-1 ring-zinc-700/50">
+                {meta.target}
+              </span>
+            )}
+          </div>
+        )}
+        {payload && (
+          <>
+            <button
+              type="button"
+              onClick={() => setShowPayload((v) => !v)}
+              className="mb-1 inline-flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300"
+            >
+              {showPayload ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              {tr('详情', 'Details')}
+            </button>
+            {showPayload && (
+              <pre className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-950 p-2 text-[11px] text-zinc-400">
+                {prettyResult(payload)}
+              </pre>
+            )}
+          </>
         )}
         {state === 'loading' && (
           <div className="flex items-center gap-1.5 text-zinc-500">

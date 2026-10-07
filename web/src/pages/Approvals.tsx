@@ -3,7 +3,7 @@ import { ShieldCheck, RefreshCw, Check, X, ChevronDown, ChevronRight } from 'luc
 import { listApprovals, approveApproval, rejectApproval, type Approval } from '@/api/approvals';
 import { ApiError } from '@/api/client';
 import { useI18n } from '@/i18n/locale';
-import { PageHeader } from '@/components/ui';
+import { Chip, PageHeader } from '@/components/ui';
 
 // Approvals inbox (HLD-017 propose-confirm). Dangerous actions proposed by
 // the agent (or a flow approval node) wait here; an admin approves (→ runs)
@@ -124,6 +124,13 @@ export default function ApprovalsPage() {
                       <span className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">{a.kind}</span>
                     </div>
                     {a.summary && <div className="mt-1 whitespace-pre-wrap text-[12px] text-zinc-400">{a.summary}</div>}
+                    {(a.blast_radius || a.risk_class || a.target) && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        {a.blast_radius && <Chip tone="warning" dense>{tr('影响面', 'Blast radius')}: {a.blast_radius}</Chip>}
+                        {a.risk_class && <Chip tone={a.risk_class === 'destructive' ? 'danger' : 'default'} dense>{tr('风险等级', 'Risk')}: {a.risk_class}</Chip>}
+                        {a.target && <span className="font-mono text-[11px] text-zinc-400">{a.target}</span>}
+                      </div>
+                    )}
                     <div className="mt-1 text-[11px] text-zinc-600">
                       {tr('来源', 'source')}: {a.source}
                       {a.session_id ? ` · ${a.session_id.slice(0, 8)}` : ''} · {new Date(a.created_at).toLocaleString()}
