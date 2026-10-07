@@ -53,6 +53,23 @@
   --danger: 185 28 28;        /* red-700 */
 }
 
+/* -------------------------------------------------------------------
+   Radius ladder (D1 / tasks.md 1.1).
+   Theme-invariant by design: the same 7 steps apply to dark and light,
+   so they are declared once on `:root` — both `:root.dark` and
+   `:root.light` inherit them (this satisfies "暗/浅双主题均定义"
+   without duplicating identical values twice).
+   ------------------------------------------------------------------- */
+:root {
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-2xl: 32px;
+  --radius-3xl: 40px;
+}
+
 html, body, #root {
   height: 100%;
 }
