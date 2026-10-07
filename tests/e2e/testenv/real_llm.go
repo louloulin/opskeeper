@@ -99,3 +99,17 @@ func RealLLMModel() string {
 	}
 	return DefaultRealLLMModel
 }
+
+// UsingRealLLM reports whether this run's manager will call a real engine
+// instead of the fake.
+//
+// It exists for the assertions that only make sense in one of the two modes.
+// A test that hardcodes "the reply contains the string the fake was told to
+// serve" is not wrong in fake mode and is not merely useless in real mode --
+// it is a test that cannot be run at all, which is how the real path would
+// have stayed unexercised: the assertion is the thing that keeps the fake
+// honest, and dropping it to make a real run possible drops the check too.
+func UsingRealLLM() bool {
+	base, err := RealLLMBaseURL()
+	return err == nil && base != ""
+}

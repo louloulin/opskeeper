@@ -62,13 +62,38 @@ mocked at the HTTP layer. The manager binary is the only real one.
 The hard rule: **no real token ever lands in this repo**. Everything that
 hits a real external service is opt-in and skipped when its secret is missing.
 
-### Three modes
+### Four modes
 
 | Mode | What runs | Secret needed | Where secrets live |
 |---|---|---|---|
 | **default** (`make test-e2e`) | mocked-external tests | none | — |
 | **live-X** (`E2E_LIVE_SLACK=1` etc) | one external integration replaced with the real endpoint | only the specific one | `tests/e2e/secrets.local.env` (gitignored) **or** env |
 | **full live** (`E2E_LIVE_ALL=1`) | every external integration live | every secret | same |
+| **real LLM** (`make test-e2e-real-llm BASE_URL=…`) | the model itself is a real local engine instead of the fake | **none** | — |
+
+The last row is the odd one out and deserves the reason. The other three modes
+substitute *external services*; this one substitutes the **model**, which is the
+substitution the delivery acceptance cares about — a fake model accepts every
+request shape, so a translation a real engine would reject passes the whole
+suite and then fails on the first turn in production.
+
+It is also the only mode that requires no secret, and that is deliberate rather
+than lucky: this harness scrubs every credential-shaped variable out of every
+child process, because one property it must demonstrate is that a node holds no
+cloud vendor key. A hosted provider needs a key by definition, so
+`E2E_REAL_LLM_BASE_URL` accepts **loopback only** and refuses anything else with
+the reason attached. Point it at ollama, llama.cpp or vLLM:
+
+```sh
+make test-e2e-real-llm BASE_URL=http://127.0.0.1:11434
+make test-e2e-real-llm BASE_URL=http://127.0.0.1:11434 MODEL=qwen2.5:7b
+```
+
+What a green run establishes, and what it does not, is written down in
+`testenv.RealLLMLimits` rather than left for the next reader to infer from a
+green log. Short version: it proves the translation survives a real inference
+engine; it does not prove any hosted vendor's dialect, and it says nothing about
+answer quality — a local model is a real model and also a weak one.
 
 ### `RequireSecret` pattern
 

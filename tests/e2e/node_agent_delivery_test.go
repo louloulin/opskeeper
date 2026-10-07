@@ -146,7 +146,16 @@ func TestNodeAgentDelivery(t *testing.T) {
 	// harness's fake is wired in as the openai provider. "fake-gpt" is the
 	// same slug the manager's env declares, so the node names a model the
 	// cluster actually has rather than one the gateway has to invent.
-	const model = "fake-gpt"
+	// The node names the model the cluster actually has. With the fake that
+	// is the slug the manager's env declares; pointed at a real engine it is
+	// the engine's model, because the manager resolves the node's request
+	// against its provider and refuses a slug that provider does not offer.
+	model := "fake-gpt"
+	if testenv.UsingRealLLM() {
+		model = testenv.RealLLMModel()
+		t.Logf("this delivery run uses a REAL inference engine (%s): %s",
+			testenv.RealLLMEnv, testenv.RealLLMLimits)
+	}
 	env.FakeLLM().SetLLMReply("节点 Agent 已通过网关完成一次对话。")
 
 	edgeID, access, secret := env.CreateEdge(t, login.AccessToken, "delivery-node")
@@ -346,7 +355,18 @@ func TestNodeAgentDelivery(t *testing.T) {
 		if !containsFrame(seen, "assistant_delta") {
 			t.Errorf("no assistant_delta frame; the reply did not stream\nframes: %v", order)
 		}
-		if got := text.String(); !strings.Contains(got, "网关") {
+		// Two modes, two claims. In fake mode the reply is a known string
+		// and matching it proves the frames carried the model's text rather
+		// than something the harness assembled. With a real engine there is
+		// no such string to match, and the claim becomes the weaker but
+		// still meaningful one: the frames carry generated text at all --
+		// which a gateway that settles an empty reply also satisfies with a
+		// perfectly well-formed stream, so the emptiness check is the point.
+		if got := text.String(); testenv.UsingRealLLM() {
+			if strings.TrimSpace(got) == "" {
+				t.Errorf("a real model answered but no text arrived\nframes: %v", order)
+			}
+		} else if !strings.Contains(got, "网关") {
 			t.Errorf("streamed text is %q, want the model reply the fake served", got)
 		}
 		for _, frame := range seen {
@@ -375,7 +395,10 @@ func TestNodeAgentDelivery(t *testing.T) {
 		if !named {
 			t.Errorf("the gateway served a stream but never named node %d; the node's identity and its model traffic are not the same fact\n=== manager logs ===\n%s", edgeID, logs)
 		}
-		if env.FakeLLM().CallCount() == 0 {
+		// Counting calls on the fake only proves something when the fake is
+		// the upstream. Against a real engine the equivalent evidence is the
+		// gateway line above, which names the edge that was served.
+		if !testenv.UsingRealLLM() && env.FakeLLM().CallCount() == 0 {
 			t.Errorf("the model was never called; the reply did not come from a model")
 		}
 	})

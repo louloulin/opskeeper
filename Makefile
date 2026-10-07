@@ -174,8 +174,8 @@ test-e2e-live: ## E2E live mode（用 tests/e2e/secrets.local.env 打通真实�
 test-e2e-real-llm: ## 用本机真实推理引擎跑一次交付链路（需 Docker；BASE_URL 必填）
 	@test -n "$(BASE_URL)" || { echo "BASE_URL is required, e.g. http://127.0.0.1:11434"; exit 2; }
 	E2E_REAL_LLM_BASE_URL=$(BASE_URL) E2E_REAL_LLM_MODEL=$(or $(MODEL),qwen2.5:1.5b) \
-		go test -tags=e2e -count=1 -timeout=10m -v \
-		-run 'TestTheGatewayServesAStreamToARealModel' ./tests/e2e/
+		go test -tags=e2e -count=1 -timeout=20m -v \
+		-run 'TestTheGatewayServesAStreamToARealModel|TestNodeAgentDelivery' ./tests/e2e/
 
 # 方案 0.4 的验收闸门：真二进制拓扑下的一次真实对话。
 #
