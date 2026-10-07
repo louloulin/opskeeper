@@ -79,15 +79,15 @@ def scaffold(root: Path, *, manifest_overrides: dict | None = None) -> Path:
     (plugin_root / "plugin.yaml").write_text(
         f"metadata:\n  version: {harness_version}\n  name: teamharness\n", encoding="utf-8"
     )
-    (plugin_root / "dashboard/public/plugin.json").write_text(
-        json.dumps(
-            {
-                "version": harness_version,
-                "entry": {"dashboard": f"dist/main-{harness_version}.js"},
-            }
-        ),
-        encoding="utf-8",
-    )
+    dashboard_manifest = {
+        "version": harness_version,
+        "entry": {"dashboard": f"dist/main-{harness_version}.js"},
+    }
+    # Both copies exist in the real tree, and the gate now reads the one that
+    # ships. A scaffold that omits the duplicate would make "no disagreement
+    # finding" vacuously true.
+    (plugin_root / "dashboard/plugin.json").write_text(json.dumps(dashboard_manifest), encoding="utf-8")
+    (plugin_root / "dashboard/public/plugin.json").write_text(json.dumps(dashboard_manifest), encoding="utf-8")
     installer_root = root / "plugins/agentteams-plugin-installer/dashboard/public"
     installer_root.mkdir(parents=True, exist_ok=True)
     (installer_root / "plugin.json").write_text(json.dumps({"version": installer_version}), encoding="utf-8")
@@ -150,9 +150,9 @@ def test_every_drift_is_reported_not_only_the_first(tmp_path, capsys):
     # The plugin side drifts away from the manifest in two places.
     plugin_root = root / "plugins/opskeeper-teamharness"
     (plugin_root / "plugin.yaml").write_text("metadata:\n  version: 1.0.70\n  name: teamharness\n", encoding="utf-8")
-    (plugin_root / "dashboard/public/plugin.json").write_text(
-        json.dumps({"version": "1.0.70", "entry": {"dashboard": "dist/main-1.0.70.js"}}), encoding="utf-8"
-    )
+    moved = {"version": "1.0.70", "entry": {"dashboard": "dist/main-1.0.70.js"}}
+    (plugin_root / "dashboard/plugin.json").write_text(json.dumps(moved), encoding="utf-8")
+    (plugin_root / "dashboard/public/plugin.json").write_text(json.dumps(moved), encoding="utf-8")
 
     module = load_gate()
     assert module.main(root) == 1
@@ -316,3 +316,45 @@ def test_preview_does_not_judge_a_tree_it_would_reject(tmp_path, capsys):
     module = load_gate()
     assert module.main(root, preview=True) == 0
     assert "release version check passed" not in capsys.readouterr().out
+
+
+def test_the_gate_reads_the_copy_that_ships(tmp_path, capsys):
+    """The gate must bind the release to what the runtime loads.
+
+    There are two plugin.json files under dashboard/. build-package.sh puts
+    dashboard/plugin.json into the zip, Dockerfile.opskeeper copies it, and
+    self_check.py reads it -- dashboard/public/plugin.json is copied by vite
+    into dist/ where the zip never looks. The gate used to read the second one,
+    so a release signed after someone bumped only the shipping copy would bind
+    the manifest to a version that nothing ships.
+
+    Here the shipped copy agrees with the manifest and the stray does not, so
+    the verdict has to come from the shipped copy.
+    """
+    root = make_consistent(scaffold(tmp_path / "repo"))
+    (root / "plugins/opskeeper-teamharness/dashboard/public/plugin.json").write_text(
+        json.dumps({"version": "1.0.99", "entry": {"dashboard": "dist/main-1.0.99.js"}}), encoding="utf-8"
+    )
+
+    module = load_gate()
+    assert module.main(root) == 1
+
+    out = capsys.readouterr().out
+    assert "dashboard plugin version drifted" not in out
+    assert "disagrees with the shipped dashboard/plugin.json" in out
+    assert "1.0.99" in out
+
+
+def test_the_shipped_copy_alone_is_enough_to_judge(tmp_path, capsys):
+    """A tree with only the shipping copy must not grow a phantom finding.
+
+    The disagreement check is conditional on the duplicate existing; without
+    this, "delete the stray copy" would turn into a red gate, and the fix for a
+    stale duplicate would be to keep it.
+    """
+    root = make_consistent(scaffold(tmp_path / "repo"))
+    (root / "plugins/opskeeper-teamharness/dashboard/public/plugin.json").unlink()
+
+    module = load_gate()
+    assert module.main(root) == 0
+    assert "disagrees" not in capsys.readouterr().out

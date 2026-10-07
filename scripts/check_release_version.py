@@ -204,9 +204,17 @@ def main(root: Path = ROOT, preview: bool = False) -> int:
     manifest = json.loads((root / "RELEASE_VERSION.json").read_text(encoding="utf-8"))
     root_version = (root / "VERSION").read_text(encoding="utf-8").strip()
     plugin_yaml = (root / "plugins/opskeeper-teamharness/plugin.yaml").read_text(encoding="utf-8")
-    plugin_json = json.loads(
-        (root / "plugins/opskeeper-teamharness/dashboard/public/plugin.json").read_text(encoding="utf-8")
-    )
+    # dashboard/plugin.json is the copy that ships: build-package.sh puts it in
+    # the dashboard zip as plugin.json, Dockerfile.opskeeper copies it, and
+    # self_check.py reads it. dashboard/public/plugin.json is a second copy that
+    # only this gate ever read, and vite copies it into dist/ where the zip
+    # never looks. Reading the public/ copy meant the gate could bind a release
+    # to a version nothing ships -- so the shipping copy is authoritative here,
+    # and the duplicate is checked against it rather than ignored.
+    dashboard_plugin = root / "plugins/opskeeper-teamharness/dashboard/plugin.json"
+    plugin_json = json.loads(dashboard_plugin.read_text(encoding="utf-8"))
+    duplicate = root / "plugins/opskeeper-teamharness/dashboard/public/plugin.json"
+    duplicate_json = json.loads(duplicate.read_text(encoding="utf-8")) if duplicate.exists() else None
     installer_json = json.loads(
         (root / "plugins/agentteams-plugin-installer/dashboard/public/plugin.json").read_text(encoding="utf-8")
     )
@@ -246,6 +254,15 @@ def main(root: Path = ROOT, preview: bool = False) -> int:
     if harness_version is not None:
         require(harness_version == manifest["teamharness_version"], "plugin.yaml version drifted", expected=manifest["teamharness_version"], actual=harness_version)
     require(plugin_json["version"] == manifest["teamharness_version"], "dashboard plugin version drifted", expected=manifest["teamharness_version"], actual=plugin_json["version"])
+    if duplicate_json is not None and duplicate_json != plugin_json:
+        for field in sorted({"version", "entry"} & set(plugin_json) | {"version", "entry"} & set(duplicate_json)):
+            if duplicate_json.get(field) != plugin_json.get(field):
+                require(
+                    False,
+                    f"dashboard/public/plugin.json disagrees with the shipped dashboard/plugin.json ({field})",
+                    expected=f"dashboard/plugin.json {plugin_json.get(field)!r}",
+                    actual=f"dashboard/public/plugin.json {duplicate_json.get(field)!r}",
+                )
     require(installer_json["version"] == manifest["installer_version"], "installer plugin version drifted", expected=manifest["installer_version"], actual=installer_json["version"])
     require(
         plugin_json["entry"]["dashboard"] == f"dist/main-{harness_version}.js",
