@@ -21,6 +21,7 @@ import { useModelSelection } from '@/store/modelSelection';
 import { PromptCard } from '@/components/PromptCard';
 import { StatusRow } from '@/components/StatusRow';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { Chip } from '@/components/ui/Chip';
 // personaLabel resolves an agent_id to its localized display name — same
 // tables AgentBadge renders from. Don't re-declare a mapping here.
 import { personaLabel } from '@/components/AgentBadge';
@@ -28,7 +29,7 @@ import { listAgents, type AgentSummary } from '@/api/agents';
 import { createSession, listModels, type LLMProvider } from '@/api/chat';
 import { setSetting, invalidateLLMRouter } from '@/api/settings';
 import { listEdges } from '@/api/edges';
-import { listIncidents } from '@/api/alerts';
+import { listIncidents, type Incident } from '@/api/alerts';
 import { useApprovalBadge } from '@/store/approvalBadge';
 import { usePermissions } from '@/store/me';
 import { useI18n } from '@/i18n/locale';
@@ -185,9 +186,13 @@ export default function HomePage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [edgeTotal, setEdgeTotal] = useState<number | null>(null);
-  // 首页摘要用的未关闭事件总数。只读 total，pageSize:1 —— 与
-  // incidentBadge 的读法一致，避免为了一个数字拉回一整页。
+  // 首页摘要用的未关闭事件总数 + 「进行中」卡要渲染的那几条 items。
+  // 同一份响应一次 setState：openTotal 是摘要行数字，openIncidents 是卡片列表。
+  // 摘要行**必须**读 total 而不是 openIncidents.length —— 后端
+  // core/manager/server/alert/http.go:171 明确注释过 len(items) 恒 <= page_size，
+  // 拿 items 长度当总数会静默少报。
   const [openTotal, setOpenTotal] = useState(0);
+  const [openIncidents, setOpenIncidents] = useState<Incident[]>([]);
   // 待审批数字复用侧栏的审批 badge store（自带 admin 门禁 + 30s 轮询），
   // 首页不再单独发 /v1/approvals 请求 —— 那条路由每个 handler 都在
   // requireAdmin 之后，非 admin 打过去是必然 403。
@@ -228,14 +233,20 @@ export default function HomePage() {
         // On failure, assume servers exist so we don't show the empty-state CTA on a transient error.
         if (!cancelled) setEdgeTotal(null);
       });
-    listIncidents({ status: 'open', pageSize: 1 })
+    // pageSize 5 —— 「进行中」卡要渲染前几条 items。仍留在 Task 12 留下的这个
+    // effect 里（它有 cancelled 守卫）；另起一个 effect 会重复发请求且缺守卫。
+    listIncidents({ status: 'open', pageSize: 5 })
       .then((r) => {
-        if (!cancelled) setOpenTotal(r.total ?? 0);
+        if (cancelled) return;
+        setOpenTotal(r.total ?? 0);
+        setOpenIncidents(r.items ?? []);
       })
       .catch(() => {
         // Best-effort chrome — the header summary keeps its previous number
         // rather than blanking. /alerts surfaces the real error if clicked.
-        if (!cancelled) setOpenTotal(0);
+        if (cancelled) return;
+        setOpenTotal(0);
+        setOpenIncidents([]);
       });
     listModels()
       .then((cat) => {
@@ -434,7 +445,57 @@ export default function HomePage() {
             </section>
           )}
 
+          {/* 「进行中」：未关闭事件 + 待审批入口。刻意不带 mt-* —— 它紧挨着
+              上面 persona section 的底部，再叠一层上边距会把两节撕开。
+              审批只渲染**一张**泛化卡，不拉列表：/v1/approvals 每个 handler
+              都在 requireAdmin 之后，首页再发一次请求非 admin 必然 403
+              （Task 12 刚把这条请求整个删掉）。数字复用侧栏 badge store。 */}
+          {(openIncidents.length > 0 || (isAdmin && pendingApprovals > 0)) && (
+            <section>
+              <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                {tr('进行中', 'In progress')}
+              </h2>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {openIncidents.map((inc) => (
+                  <button
+                    key={inc.id}
+                    type="button"
+                    onClick={() => navigate(`/incidents/${inc.id}`)}
+                    className="surface-card flex items-center gap-3 rounded-2xl px-4 py-3 text-left transition-colors hover:border-border hover:bg-card"
+                  >
+                    <span className="flex-1 truncate text-sm text-zinc-200">{inc.summary}</span>
+                    {/* IncidentSeverity 带 `| string` 兜底，不是穷尽联合类型 ——
+                        所以只判 critical，其余一律 warning，不写 switch。 */}
+                    <Chip tone={inc.severity === 'critical' ? 'danger' : 'warning'}>
+                      {inc.severity}
+                    </Chip>
+                  </button>
+                ))}
+                {isAdmin && pendingApprovals > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => navigate('/approvals')}
+                    className="surface-card flex items-center gap-3 rounded-2xl px-4 py-3 text-left transition-colors hover:border-border hover:bg-card"
+                  >
+                    <span className="flex-1 text-sm text-zinc-200">
+                      ⏸ {tr('等你审批', 'Waiting for your approval')} · {pendingApprovals}{' '}
+                      {tr('项', 'items')}
+                    </span>
+                    <span className="text-xs text-zinc-400">
+                      {tr('去审批', 'Review')} →
+                    </span>
+                  </button>
+                )}
+              </div>
+            </section>
+          )}
+
           <div className="mt-10">
+            {/* 「试试这些」= 下面这组既有 PromptCard（samplePrompts(4)）。
+                tasks.md 2.6 说的「建议提示词卡」由它满足，本任务不新增第二组。 */}
+            <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              {tr('试试这些', 'Try these')}
+            </h2>
             {showEmptyState ? (
               <button
                 type="button"
