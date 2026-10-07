@@ -147,7 +147,7 @@ var repoItems = []item{
 		class:   classRepo,
 		done: func(root string) (bool, string, error) {
 			return declared(root, "core/floor/pluginmanifest",
-				"func LoadCatalogRoots(", "the index reads one directory: the cluster-wide and image-baked roots a tenant can also install from are not in it")
+				"func LoadCatalogSources(", "the index reads one directory: the cluster-wide and image-baked roots a tenant can also install from are not in it")
 		},
 	},
 }
@@ -176,11 +176,13 @@ var externalItems = []item{
 	},
 	{
 		id:       "E4",
-		subject:  "远程来源自身的索引：远程 registry 还没有一份可列举的清单",
-		evidence: "一个远程 registry 暴露一份包清单，且 GET /v1/marketplace/catalog 把它们并进索引",
+		subject:  "远程来源自身的索引在真实部署中被读回",
+		evidence: "一个远程 registry 把索引服务出去，且 GET /v1/marketplace/catalog 把它并进索引并据此完成一次安装",
 		class:    classExternal,
-		holder:   "registry 一侧（外部系统）",
-		closer:   "本仓暂无：LoadCatalogRoots 已经把多根这件事做完，剩下的半是别人提供一个可列举的远端清单——本仓没有可调的远端",
+		holder:   "部署方（registry 侧与控制面侧各一次真实部署）",
+		closer:   "仓内两端已齐（决策 466）：产出 go run ./scripts/registryindex，消费 " +
+			"OPSKEEPER_MARKETPLACE_REGISTRIES。剩下的只是部署时把前者服务出去、后者指过去 —— " +
+			"这一条现在的诚实说法是「本仓没有可调的远端」指的不是缺代码，而是缺一次真实部署",
 	},
 	{
 		id:       "E3",

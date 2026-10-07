@@ -46,6 +46,12 @@ const (
 	// OriginBuiltin is an image-baked root, read-only by construction:
 	// nothing installs into it and nothing uninstalls from it.
 	OriginBuiltin = "builtin"
+	// OriginRegistry is a remote registry's own listing. It ranks below
+	// every local root because every local root is a copy this control
+	// plane holds while a registry entry is a claim made by something
+	// else; when the two disagree about a name, the answer to "what will
+	// this tenant install" is the copy that is already here.
+	OriginRegistry = "registry"
 )
 
 // Root is one directory the index reads.

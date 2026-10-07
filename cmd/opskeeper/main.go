@@ -2924,6 +2924,19 @@ func main() {
 		}
 	}
 	mpPinnedKey := os.Getenv("OPSKEEPER_MARKETPLACE_PINNED_PUBKEY")
+	// Remote registry indexes, in "name=url" form, comma separated:
+	//
+	//   OPSKEEPER_MARKETPLACE_REGISTRIES=opskeeper-official=https://internal/registry/index.json,mirror=https://mirror/index.json
+	//
+	// The name is checked against the marketplace allowlist (AllowedSources)
+	// when a row is installed, so a registry becomes usable by being *named*
+	// here and *allowed* there — configuring a URL is not on its own a grant.
+	// That split is deliberate: pointing the catalog at a registry is a normal
+	// operation, admitting an install from it is a policy decision.
+	mpRegistries := parseRegistryIndexes(os.Getenv("OPSKEEPER_MARKETPLACE_REGISTRIES"))
+	if len(mpRegistries) > 0 {
+		log.Info("marketplace registries", slog.Int("count", len(mpRegistries)))
+	}
 	// Skill roots — see boot LoadAll block downstream for the full
 	// rationale. Defined here too because marketplace UC is wired
 	// before that block runs.
@@ -2941,6 +2954,7 @@ func main() {
 		AllowedSources:       []string{"opskeeper-official", "local"},
 		RequireSignedSources: mpRequireSigned,
 		SignaturePinnedKey:   mpPinnedKey,
+		RegistryIndexes:      mpRegistries,
 		DevMode:              mpDevMode,
 	}, log.With(slog.String("comp", "marketplace")))
 	// Legacy container -> PiG package conversion (PLAN D2). The route is
@@ -4303,6 +4317,37 @@ func (a edgeAuthAdapter) AuthenticateEdge(ctx context.Context, accessKey, secret
 // falling back to "" if all are empty. Used at the LLM provider wiring
 // site to layer "config → env default → hard-coded default" without
 // nesting ternaries.
+// parseRegistryIndexes reads the registry env var.
+//
+// A malformed entry is dropped with a nil result rather than guessed at. The
+// cost of dropping is a registry the operator configured that silently does
+// not appear; the cost of guessing is fetching a URL nobody wrote down, which
+// is the kind of thing an allowlist exists to prevent. Either way the caller
+// logs the count, so a config that parsed to nothing is visible at boot.
+func parseRegistryIndexes(v string) []managerbizmarketplace.RegistryIndex {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil
+	}
+	var out []managerbizmarketplace.RegistryIndex
+	for _, part := range strings.Split(v, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		name, url, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		name, url = strings.TrimSpace(name), strings.TrimSpace(url)
+		if name == "" || url == "" {
+			continue
+		}
+		out = append(out, managerbizmarketplace.RegistryIndex{Name: name, URL: url})
+	}
+	return out
+}
+
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {

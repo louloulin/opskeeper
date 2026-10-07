@@ -1030,7 +1030,17 @@ deps:
   oxpig_ext:
     mayDependOn: [oxcore_wire]
   scripts:
-    mayDependOn: [shared_agentteams]
+    # oxfloor 和 oxplugin_sdk 是 scripts/registryindex 的两条授权，决策 466。
+    #
+    # 产出 registry 索引的那个脚本必须用和消费端**同一份**清单解析器
+    # （sdk.Decode）与**同一份**优先级/摘要实现（pluginmanifest.TreeDigest、
+    # LoadCatalogSources）。它自己写一份解析器，就等于给"索引里写的清单"和
+    # "节点最终读的清单"之间造了一条新通路 —— 而那条通路正是本条判据要防的。
+    #
+    # oxcore_domain 只是 sdk.Decode 的返回类型，经由 type 推断落到 import 上；
+    # 没有它脚本无法声明自己读出来的清单。scripts 整体仍然不得依赖任何管理面
+    # 或节点面组件，这条授权不放宽到那里。
+    mayDependOn: [shared_agentteams, oxfloor, oxplugin_sdk, oxcore_domain]
   shared_agentteams:
     mayDependOn: [oxfloor]
   shared_dataguard:

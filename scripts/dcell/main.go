@@ -309,7 +309,7 @@ func itemMultiRootIndex(root string) (string, error) {
 	// file that holds the labels would report a green for a loader that is
 	// not there.
 	if short, err := symbolPresent(root, "core/floor/pluginmanifest/manifest.go",
-		"func LoadCatalogRoots("); err != nil || short != "" {
+		"func LoadCatalogSources("); err != nil || short != "" {
 		return short, err
 	}
 	for _, needle := range []string{
@@ -446,6 +446,7 @@ func items() []item {
 		{"D13", "插件市场索引有生产接线", itemMarketIndex},
 		{"D14", "兼容矩阵存在且两轴都被声明", itemCompatMatrix},
 		{"D15", "索引覆盖本租户安装根之外的根", itemMultiRootIndex},
+		{"D16", "远端注册表索引：产出端与消费端都在册", itemRemoteRegistryIndex},
 	}
 }
 
@@ -459,18 +460,80 @@ func items() []item {
 // X1 originally read "the index covers only this tenant's install root".
 // 决策 459 made that half false — the index now reads the tenant root, the
 // cluster-wide root and the image-baked ones, and D15 is the cell that
-// measures it. What is still true is the other half, and it is the half no
-// amount of reading local directories can close: a remote registry's own
-// listable index. Reading it needs a remote system this repository does not
-// have, so it is the same fact as the audit's E4 and is named as such.
+// measures it. What remained was the other half: a remote registry's own
+// listable index.
+//
+// 决策 466 then made the reason itself wrong, which is the second time this
+// cell's prose has been the defect. The reason said "this repository does not
+// have a remote to call", and the repository can now both emit the document
+// (scripts/registryindex) and read one back (marketplace's RegistryIndexes).
+// A reason that describes a limitation of the reader when the limitation is
+// of the reader's imagination is worse than an admission, because it is acted
+// on: it says stop, and it says stop while the work is in fact possible.
+//
+// So the cell split. D16 measures the in-repo half, which is now decidable and
+// measured. X1 keeps only what genuinely needs another system: a registry
+// serving an index over a network to a control plane that reads it.
 var planned = []struct{ id, subject, why, closer string }{
 	{
-		"X1", "远端注册表的索引",
-		"索引读的是磁盘上的根：租户的、集群级的、镜像内置的都在里面，一个远端" +
-			"注册表自己那份可列举的清单不在",
-		"同 audit 的 E4：需要 registry 一侧暴露一份包清单。本仓没有可调的远端，" +
-			"所以这条只能由部署侧提供",
+		"X1", "远端注册表的索引在真实部署中被读",
+		"仓内的两端都齐了（产出见 D16 的 scripts/registryindex，消费见 core/manager " +
+			"的 RegistryIndexes）。剩下的不是本仓能关的：要有一次跨网络的读取，" +
+			"即一份由部署侧服务出去的索引，被另一个部署读回来并据此安装",
+		"同 audit 的 E4 的剩余部分：需要一个真的把索引服务出来的 registry，和一个" +
+			"真的从网络读它的控制面。仓内已经能产出和消费，所以部署时只要把 " +
+			"OPSKEEPER_MARKETPLACE_REGISTRIES 指过去即可",
 	},
+}
+
+// itemRemoteRegistryIndex checks that a registry index is both produced and
+// consumed by this tree.
+//
+// Why this is a cell rather than another line of X1's reason. X1 said the
+// missing half was "a remote registry's own listable index, and reading it
+// needs a remote system this repository does not have". That reason was true
+// about the network and false about the repository: the repository can now
+// emit the document (scripts/registryindex) and read one back
+// (marketplace's RegistryIndexes), so the part that is genuinely external is
+// only the deployment that serves one across a network. Splitting the cell is
+// what stops the number from hiding behind a reason that used to be
+// convenient.
+//
+// Both ends are checked because either alone is the failure this cell exists
+// to catch. A reader with no producer on this tree means the only index it
+// has ever seen was written by a test, which is exactly the state that let
+// the previous reason go stale. A producer with no reader means the
+// repository publishes something nothing on it consumes.
+//
+// The reader is checked for its parser and its wiring, not for its tests: the
+// behaviour is pinned in core/floor/pluginmanifest and core/manager/biz/marketplace,
+// and a census that re-ran those tests would be a second, slower, less
+// informative copy of them.
+func itemRemoteRegistryIndex(root string) (string, error) {
+	// The document itself, and the rule that a listing may not contradict
+	// the manifest behind it.
+	if short, err := symbolPresent(root, "core/floor/pluginmanifest/index.go",
+		"func ParseIndex("); err != nil || short != "" {
+		return short, err
+	}
+	// The producer.
+	if short, err := symbolPresent(root, "scripts/registryindex/main.go",
+		"func build("); err != nil || short != "" {
+		return short, err
+	}
+	// The consumer, and the precedence rule that keeps a remote claim from
+	// displacing a copy this control plane holds.
+	if short, err := symbolPresent(root, "core/floor/pluginmanifest/manifest.go",
+		"func LoadCatalogSources("); err != nil || short != "" {
+		return short, err
+	}
+	if short, err := symbolPresent(root, "core/floor/pluginmanifest/catalog.go",
+		`OriginRegistry = "registry"`); err != nil || short != "" {
+		return short, err
+	}
+	// The production wiring: a consumer nothing configures is a consumer that
+	// never runs, and this cell has already caught one of those.
+	return symbolPresent(root, "cmd/opskeeper/main.go", "OPSKEEPER_MARKETPLACE_REGISTRIES")
 }
 
 // symbolPresent reports whether a file exists and still contains a symbol.

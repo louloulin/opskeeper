@@ -42,15 +42,21 @@ import (
 //
 // Updating this table is the deliberate act. Reading it as "regenerate"
 // would be exactly the discipline it removes.
+// 0.2.0 is the first release in which the tool sets below did not change but
+// the packages did change as *offers*: they are now rows in a registry index
+// this repository emits, so a version number identifies not just a tool set
+// but a set that a remote catalogue can list and a node can fetch. A node
+// that saw 0.1.2 saw an unpublishable directory; one that sees 0.2.0 sees
+// something with a tree digest attached.
 var released = map[string]struct {
 	Version   string
 	ToolNames string // hex of the sorted, newline-joined tool names
 }{
-	"opskeeper-sre-autonomy":      {"0.1.2", "350b0b5e81ed3de5e8d8a50f4ba9d6a1942f6cbc32bdd42398ad3073d4e0db05"},
-	"opskeeper-sre-middleware":    {"0.1.2", "8bc8c3e7a4d39e4f5db42cf2d01ad57349277d586725e8b965abc70c0d5eb536"},
-	"opskeeper-sre-observability": {"0.1.2", "1b2616a8c3c80e3507dd3ffa6c9b10d2e8cfbe250eb4193fe71c2464849a9b48"},
-	"opskeeper-sre-readonly":      {"0.1.4", "d6876e4ca87c01e0ef9b77b3be554915e05583c65e459439e5a0e4ba87aaf15f"},
-	"opskeeper-sre-repair":        {"0.1.2", "010722d4295dd64769e7965359698c5a90d37222741304063ab5a22763a9a08f"},
+	"opskeeper-sre-autonomy":      {"0.2.0", "350b0b5e81ed3de5e8d8a50f4ba9d6a1942f6cbc32bdd42398ad3073d4e0db05"},
+	"opskeeper-sre-middleware":    {"0.2.0", "8bc8c3e7a4d39e4f5db42cf2d01ad57349277d586725e8b965abc70c0d5eb536"},
+	"opskeeper-sre-observability": {"0.2.0", "1b2616a8c3c80e3507dd3ffa6c9b10d2e8cfbe250eb4193fe71c2464849a9b48"},
+	"opskeeper-sre-readonly":      {"0.2.0", "d6876e4ca87c01e0ef9b77b3be554915e05583c65e459439e5a0e4ba87aaf15f"},
+	"opskeeper-sre-repair":        {"0.2.0", "010722d4295dd64769e7965359698c5a90d37222741304063ab5a22763a9a08f"},
 }
 
 // toolNames is the package's declared inventory, in manifest order.

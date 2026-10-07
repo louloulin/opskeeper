@@ -85,12 +85,20 @@ func fixture(t *testing.T) string {
 	write(t, root, "core/floor/pluginmanifest/catalog_test.go",
 		"package pluginmanifest\n\nfunc TestEveryShippedPackageDeclaresBothHostFloors(t *testing.T) {}\n")
 	write(t, root, "core/floor/pluginmanifest/manifest.go",
-		"package pluginmanifest\n\nfunc LoadCatalogRoots(roots ...Root) (Catalog, error) { return Catalog{}, nil }\n")
-	write(t, root, "core/floor/pluginmanifest/catalog.go",
-		"package pluginmanifest\n\nconst (\n\tOriginTenant = \"tenant\"\n\tOriginSystem = \"system\"\n\tOriginBuiltin = \"builtin\"\n)\n")
+		"package pluginmanifest\n\nfunc LoadCatalogSources(remote []Plugin, roots ...Root) (Catalog, error) { return Catalog{}, nil }\n")
+
 	write(t, root, "core/manager/biz/marketplace/usecase.go", "package marketplace\n\nfunc (uc *Usecase) Catalog(ctx context.Context, caller Caller) ([]pluginmanifest.Entry, error) { return nil, nil }\n\nfunc (uc *Usecase) catalogRoots(tenantID uint64) []pluginmanifest.Root { return nil }\n")
 	svcHTTP := routesFixture() + "\nr.Get(\"/v1/marketplace/catalog\", h.catalog)\n"
 	write(t, root, "core/manager/server/marketplace/http.go", svcHTTP)
+	// D16's four points: the document, the producer, the loader, and the
+	// production wiring. All four are needed for the cell to hold, so all
+	// four appear here and each gets its own mutation below.
+	write(t, root, "core/floor/pluginmanifest/index.go",
+		"package pluginmanifest\n\nfunc ParseIndex(data []byte) (Index, error) { return Index{}, nil }\n")
+	write(t, root, "core/floor/pluginmanifest/catalog.go", "package pluginmanifest\n\nconst (\n\tOriginTenant = \"tenant\"\n\tOriginSystem = \"system\"\n\tOriginBuiltin = \"builtin\"\n\tOriginRegistry = \"registry\"\n)\n")
+	write(t, root, "scripts/registryindex/main.go",
+		"package main\n\nfunc build(registry, baseURL, root string) (pluginmanifest.Index, error) { return pluginmanifest.Index{}, nil }\n")
+	write(t, root, "cmd/opskeeper/main.go", "package main\n\nconst _ = \"OPSKEEPER_MARKETPLACE_REGISTRIES\"\n")
 	write(t, root, "Makefile", "eval-gates:\npig-tool-scoping-check:\n")
 	write(t, root, "scripts/sync-pig-ops.sh", "#!/bin/sh\n")
 	return root
@@ -168,6 +176,11 @@ func TestEveryPredicateCanGoRed(t *testing.T) {
 		{"D15", "core/floor/pluginmanifest/manifest.go", "package pluginmanifest\n"},
 		{"D15", "core/floor/pluginmanifest/catalog.go", "package pluginmanifest\n"},
 		{"D15", "core/manager/biz/marketplace/usecase.go", "package marketplace\n"},
+		{"D16", "core/floor/pluginmanifest/index.go", "package pluginmanifest\n"},
+		{"D16", "scripts/registryindex/main.go", "package main\n"},
+		{"D16", "core/floor/pluginmanifest/manifest.go", "package pluginmanifest\n"},
+		{"D16", "core/floor/pluginmanifest/catalog.go", "package pluginmanifest\n"},
+		{"D16", "cmd/opskeeper/main.go", "package main\n"},
 	}
 	// One item may carry more than one mutation — D10 broke the reason type
 	// and then the rule's proof — so this checks coverage of the items

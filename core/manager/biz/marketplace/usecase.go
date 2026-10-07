@@ -79,6 +79,17 @@ type Config struct {
 	// http.DefaultClient. Tests inject a stub server here.
 	HTTPClient *http.Client
 
+	// RegistryIndexes are the remote registries whose index documents this
+	// deployment reads. They are consulted to answer "what is on offer",
+	// never to answer "what is installed": every row they contribute
+	// ranks below the roots above, so a package already on this machine
+	// always wins the name.
+	//
+	// A registry that is unreachable is logged and skipped. One third
+	// party's outage must not take the local index down with it — the
+	// operator still has to install the pack that is already staged.
+	RegistryIndexes []RegistryIndex
+
 	// GitCmd is the git binary used for SourceTypeGit. Empty → "git".
 	// Tests override this to point at a fake or skip the network.
 	GitCmd string
@@ -86,6 +97,24 @@ type Config struct {
 	// Now returns the wall time recorded on each install row. nil →
 	// time.Now. Tests inject a fixed time.
 	Now func() time.Time
+}
+
+// RegistryIndex is one remote registry: the label Install's allowlist knows
+// it by, and where its index document is fetched from.
+//
+// The two are kept as separate fields rather than deriving the name from the
+// URL because the allowlist check is on the *label*: a registry cannot become
+// installable by choosing a friendlier hostname, and an operator reading the
+// allowlist has to be able to check it against a config value rather than
+// against a parse of somebody else's URL.
+type RegistryIndex struct {
+	// Name must appear in AllowedSources for a row from this registry to be
+	// installable. It is not required to be present for the rows to be
+	// *listed*: an operator is entitled to see what a registry offers even
+	// before an administrator decides to allow it.
+	Name string
+	// URL is the absolute http(s) URL of a pluginmanifest.Index document.
+	URL string
 }
 
 // Usecase is the marketplace orchestrator. Concurrency-safe via the
@@ -493,14 +522,22 @@ type RegistryEntry struct {
 }
 
 // Registries returns the static allowlist for the SPA "where can I
-// install from" picker. Today: every entry in cfg.AllowedSources
-// becomes a Name=Source, URL="" row; DevMode flips Allowed=true
-// across the board. Real registry URLs come from a follow-up PR.
+// install from" picker. Every entry in cfg.AllowedSources becomes a row,
+// and a source that has a configured registry index carries that index's
+// URL — which is what lets an operator see where an offer comes from
+// instead of being handed a name with no address behind it.
 func (uc *Usecase) Registries(_ context.Context, _ Caller) AllowedRegistries {
 	out := AllowedRegistries{}
+	urls := make(map[string]string, len(uc.cfg.RegistryIndexes))
+	for _, reg := range uc.cfg.RegistryIndexes {
+		if reg.Name != "" {
+			urls[reg.Name] = reg.URL
+		}
+	}
 	for _, name := range uc.cfg.AllowedSources {
 		out.Items = append(out.Items, RegistryEntry{
 			Name:    name,
+			URL:     urls[name],
 			Allowed: true,
 		})
 	}
@@ -978,17 +1015,118 @@ func expandShorthandGitURL(raw string) string {
 //
 // Precedence between roots is the loader's (tenant > system > builtin),
 // and a row that hides a same-named package from a lower root is marked
-// shadowed — see pluginmanifest.LoadCatalogRoots.
+// shadowed — see pluginmanifest.LoadCatalogSources.
 func (uc *Usecase) Catalog(ctx context.Context, caller Caller) ([]pluginmanifest.Entry, error) {
 	if caller.UserID == 0 {
 		return nil, fmt.Errorf("%w: caller required", errs.ErrUnauthorized)
 	}
-	catalog, err := pluginmanifest.LoadCatalogRoots(uc.catalogRoots(caller.TenantID)...)
+	roots := uc.catalogRoots(caller.TenantID)
+	// The remote half is fetched first and independently of the local half,
+	// so that the local read's outcome does not depend on the network at
+	// all. remotePlugins never returns an error by design — see it.
+	remote := uc.remotePlugins(ctx)
+	catalog, err := pluginmanifest.LoadCatalogSources(remote, roots...)
 	if err != nil {
 		return nil, fmt.Errorf("marketplace: the installed catalog does not validate: %w", err)
 	}
 	return catalog.Entries(), nil
 }
+
+// registryFetchTimeout bounds one registry read.
+//
+// The default HTTPClient has no timeout, and a registry that accepts the
+// connection and then stalls would hold the catalog request open
+// indefinitely — a listing page is a page an operator is waiting on. The
+// per-request context is used instead of mutating the injected client,
+// because the same client serves tarball downloads that legitimately take
+// much longer than an index fetch.
+const registryFetchTimeout = 10 * time.Second
+
+// remotePlugins reads every configured registry's index.
+//
+// It deliberately has no error return. A registry that is down, slow, or
+// serving a document this build cannot parse is a fact about that registry,
+// and returning it would fail the whole listing — including the local rows
+// that have nothing to do with it. The failure is logged with the registry's
+// name, which is the thing an operator needs in order to tell "nothing is on
+// offer" apart from "the registry I was told to read did not answer".
+//
+// What is lost by swallowing the error is bounded: a registry whose index
+// this build rejects contributes no rows, so the worst case is an operator
+// not seeing packages that exist. The alternative — failing the request —
+// costs them the packages they can already see and could install. Trading a
+// missing row for a missing listing is the cheaper of the two, but only
+// because the log names which registry went quiet.
+func (uc *Usecase) remotePlugins(ctx context.Context) []pluginmanifest.Plugin {
+	if len(uc.cfg.RegistryIndexes) == 0 {
+		return nil
+	}
+	client := uc.cfg.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	out := make([]pluginmanifest.Plugin, 0, len(uc.cfg.RegistryIndexes))
+	for _, reg := range uc.cfg.RegistryIndexes {
+		if reg.URL == "" {
+			continue
+		}
+		items, err := uc.fetchRegistryIndex(ctx, client, reg)
+		if err != nil {
+			uc.log.Warn("marketplace: a configured registry did not answer; its rows are "+
+				"absent from this listing, everything else is unaffected",
+				slog.String("registry", reg.Name),
+				slog.String("url", reg.URL),
+				slog.String("error", err.Error()))
+			continue
+		}
+		out = append(out, items...)
+	}
+	return out
+}
+
+// fetchRegistryIndex reads and validates one registry's index document.
+func (uc *Usecase) fetchRegistryIndex(ctx context.Context, client *http.Client, reg RegistryIndex) ([]pluginmanifest.Plugin, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, registryFetchTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, reg.URL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("registry %q: the url is not a request: %w", reg.Name, err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("registry %q: %w", reg.Name, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("registry %q: status %d", reg.Name, resp.StatusCode)
+	}
+	// Bounded so a registry that streams without end is a read that fails,
+	// not a listing that never returns. The bound is generous next to the
+	// ten-second whole-request budget above.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRegistryIndexBytes))
+	if err != nil {
+		return nil, fmt.Errorf("registry %q: reading the body: %w", reg.Name, err)
+	}
+
+	idx, err := pluginmanifest.ParseIndex(body)
+	if err != nil {
+		return nil, fmt.Errorf("registry %q: %w", reg.Name, err)
+	}
+	return idx.Plugins(), nil
+}
+
+// maxRegistryIndexBytes caps an index document.
+//
+// Every row carries a whole manifest, so the honest size of an index grows
+// with the catalogue rather than with a constant. This is not a limit that
+// any real catalogue is expected to reach; it exists so that the failure
+// mode of a hostile or broken endpoint is a rejected read rather than an
+// unbounded allocation in a request handler.
+const maxRegistryIndexBytes = 16 << 20
 
 // catalogRoots lists the directories this tenant's index is read from, most
 // preferred first, with the tenant root deduplicated against the roots it

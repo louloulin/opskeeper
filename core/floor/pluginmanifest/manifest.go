@@ -32,7 +32,7 @@ type Plugin struct {
 	// for a single-root load, which has only one root to name.
 	Origin string
 	// Shadowed reports that another root carried a package of the same
-	// name and this one won on precedence. See LoadCatalogRoots.
+	// name and this one won on precedence. See LoadCatalogSources.
 	Shadowed bool
 	// Root is the plugin's directory on disk.
 	Root string
@@ -241,22 +241,25 @@ func LoadCatalog(base string) (Catalog, error) {
 	return Catalog{Plugins: plugins}, nil
 }
 
-// LoadCatalogRoots reads several roots into one catalog.
+// LoadCatalogSources reads several roots, and what a remote registry has
+// already published, into one catalog.
 //
-// The single-root loader is kept because single-root is the real shape of a
-// small deployment and because two readers of one directory do not need a
-// precedence rule. Where it is not the shape — a control plane that has a
+// The single-root loader above is kept because single-root is the real shape
+// of a small deployment and because two readers of one directory do not need
+// a precedence rule. Where it is not the shape — a control plane that has a
 // cluster-wide root and a per-tenant root — one reader per directory would
 // publish two catalogs and leave a client to merge them, which is the
 // client-side version of the bug this function exists to remove.
 //
-// Precedence is by Root.Label and is fixed, not argument order:
+// Precedence is by origin label and is fixed, not argument order:
 //
-//	tenant  >  system  >  builtin
+//	tenant  >  system  >  builtin  >  registry
 //
 // A tenant's copy of a package is the one that runs, so it wins over the
 // cluster-wide copy; the cluster-wide copy wins over an image-baked one
-// because the baked one cannot be upgraded by an operator at all. The
+// because the baked one cannot be upgraded by an operator at all. A remote
+// row is a claim somebody else makes about a name, and the local roots are
+// copies this control plane holds, so the registry loses to all three. The
 // losing row is dropped from the catalog and recorded on the winner as
 // Shadowed, so "I am looking at an override" is a fact in the index rather
 // than something a reader reconstructs from having read two directories.
@@ -265,14 +268,58 @@ func LoadCatalog(base string) (Catalog, error) {
 // single-root loader refuses a whole set over one bad manifest, and a
 // multi-root index that silently dropped the bad one would be answering a
 // different question from the one its own admission path asks.
-func LoadCatalogRoots(roots ...Root) (Catalog, error) {
+//
+// A caller with no configured registry passes a nil remote. There is
+// deliberately no second function for that case: LoadCatalogRoots used to be
+// one, and it survived long after production stopped calling it, which the
+// dead-code ratchet reported as a test-only symbol — a second name for one
+// behaviour, with a gate's worth of references keeping it alive.
+// LoadCatalogSources combines local roots with offerings a remote registry
+// has already published.
+//
+// The remote half arrives as Plugins rather than as a URL because fetching is
+// the caller's business and this is a decision about which copy answers a
+// name. Keeping the two apart is what lets a caller fetch three registries in
+// parallel, decide for itself what a slow one should cost, and still get one
+// precedence rule rather than one per call site.
+//
+// The order of roots is not the precedence; Root.Label is. See rank below.
+func LoadCatalogSources(remote []Plugin, roots ...Root) (Catalog, error) {
 	byName := map[string]Plugin{}
 	shadowed := map[string]bool{}
-	// rank is lower-is-higher. An unknown label ranks below builtin, which
-	// means a typo in a label demotes that root instead of silently
+	// rank is lower-is-higher. An unknown label ranks below the registry,
+	// which means a typo in a label demotes that root instead of silently
 	// outranking the tenant's.
-	rank := map[string]int{OriginTenant: 0, OriginSystem: 1, OriginBuiltin: 2}
+	rank := map[string]int{OriginTenant: 0, OriginSystem: 1, OriginBuiltin: 2, OriginRegistry: 3}
+	admit := func(p Plugin, label string) {
+		// The origin is stamped before anything is compared. It used to be
+		// stamped only on the first row for a name, which meant every later
+		// contender was ranked under the empty string — a key absent from
+		// rank, so it scored 0 and beat everything, including a tenant's own
+		// copy. The second root read won regardless of its label, and the
+		// row that won was reported as having no origin at all.
+		p.Origin = label
+		name := p.Name()
+		prev, held := byName[name]
+		if !held {
+			byName[name] = p
+			return
+		}
+		// Both sources carry the name. The better-ranked row stays; the
+		// other one is not a row of its own any more, it is a fact about
+		// the row that won.
+		if rank[prev.Origin] >= rank[label] {
+			byName[name] = p
+		}
+		shadowed[name] = true
+	}
 
+	// Remote first, so that a local root always finds the name already held
+	// and wins it. The order is otherwise irrelevant because admit() ranks;
+	// putting the cheap half first is only about not doing work twice.
+	for _, p := range remote {
+		admit(p, OriginRegistry)
+	}
 	for _, r := range roots {
 		if r.Path == "" {
 			continue
@@ -285,22 +332,7 @@ func LoadCatalogRoots(roots ...Root) (Catalog, error) {
 			return Catalog{}, fmt.Errorf("root %s (%s): %w", r.Path, r.Label, err)
 		}
 		for _, p := range plugins {
-			name := p.Name()
-			prev, held := byName[name]
-			if !held {
-				p.Origin = r.Label
-				byName[name] = p
-				continue
-			}
-			// Both roots carry the name. The better-ranked row stays; the
-			// other one is not a row of its own any more, it is a fact
-			// about the row that won.
-			winner := p
-			if rank[prev.Origin] < rank[r.Label] {
-				winner = prev
-			}
-			shadowed[name] = true
-			byName[name] = winner
+			admit(p, r.Label)
 		}
 	}
 

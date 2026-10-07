@@ -21,7 +21,7 @@ apiVersion: opskeeper.io/v1
 kind: Plugin
 metadata:
   name: opskeeper-sre-observability
-  version: 0.1.2
+  version: 0.2.0
   vendor: opskeeper
   homepage: https://github.com/vincent-wuhan/opskeeper
 spec:

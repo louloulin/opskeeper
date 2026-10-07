@@ -96,7 +96,7 @@ func fixture(t *testing.T) string {
 	writeFile(t, root, "core/manager/middleware/adapter/mq/rebalance.go",
 		"package mq\n\nfunc NewRebalanceHistoryStore() {}\n\nfunc (c *kafkaClient) StartRebalanceSampler() {}\n")
 	writeFile(t, root, "core/floor/pluginmanifest/manifest.go",
-		"package pluginmanifest\n\nfunc LoadCatalogRoots() {}\n")
+		"package pluginmanifest\n\nfunc LoadCatalogSources() {}\n")
 	return root
 }
 
