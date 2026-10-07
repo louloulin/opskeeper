@@ -45,8 +45,8 @@
 ### 3.3 Discover(discover-hub)
 
 - [x] 3.3.1 新建 `pages/Discover.tsx`:Tab 聚合技能/插件市场/自愈结晶既有组件与数据接口,支持 `?tab=` 直达
-- [ ] 3.3.2 旧路由(技能/插件/结晶)重定向到 `/discover` 并保留 query 参数,路由表集中管理
-- [ ] 3.3.3 Discover Tab 切换与重定向测试
+- [x] 3.3.2 旧路由(技能/插件/结晶)重定向到 `/discover` 并保留 query 参数,路由表集中管理
+- [x] 3.3.3 Discover Tab 切换与重定向测试
 
 ### 3.4 事件群聊视图(incident-group-view)
 
