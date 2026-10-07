@@ -184,6 +184,7 @@ var toolCapabilities = map[string]string{
 	"kafka.broker_skew":         CapKafka,
 	"kafka.consumer_lag":        CapKafka,
 	"kafka.partition_skew":      CapKafka,
+	"kafka.rebalance_history":   CapKafka,
 	"kafka.topic_list":          CapKafka,
 	"rabbitmq.cluster_info":     CapRabbitMQ,
 	"rabbitmq.consumer_status":  CapRabbitMQ,
@@ -664,21 +665,29 @@ var DiagnosisGaps = map[string]GapReason{
 	// decisions, and a decision that has been carried out still sitting on
 	// it is a second, quieter way for the list to start lying.
 	//
-	// The one below is still undecided and still belongs here: it names a
-	// capability nothing in this build implements, which makes it a
-	// decision about the corpus or the tool name rather than a packaging
-	// backlog item. It stays visible so the decision cannot be lost by
-	// going unrecorded.
-	"kafka.rebalance_history": {
-		Reason: "Kafka exposes the CURRENT consumer assignment and no history of it. " +
-			"Answering this needs a collector that stores successive DescribeGroups results, " +
-			"which is a collector's job and not a broker client's; undecided",
-		// The one gap that genuinely is a collector's job, and the one place
-		// where that sentence is the conclusion rather than a guess: the
-		// capability does not exist on either plane, so there is nothing to
-		// misattribute. Both homes were read to establish that.
-		Searched: []string{"core/edge/collector", "core/floor/skill/builtin"},
-	},
+	// kafka.rebalance_history was on this list until 决策 453, and its reason
+	// is worth keeping in the file even though the entry is not. It read:
+	// "Answering this needs a collector that stores successive
+	// DescribeGroups results, which is a collector's job and not a broker
+	// client's; undecided."
+	//
+	// **That sentence was the third time this file said "it needs a
+	// collector" and the third time it was wrong in the same way.** The two
+	// above are host.host_files and the top_cpu_procs pair: a bounded walk
+	// turned out to be a tool, and a /proc ranking turned out to be a tool.
+	// Here the gap was real — Kafka has no endpoint for a group's past
+	// assignments, so *something* has to remember them — and the conclusion
+	// still did not follow. Remembering them is a store fed by the same
+	// DescribeGroups call the adapter already makes, owned by the same
+	// client, kept bounded, and throttled. That is a collector in every
+	// sense except the word, and putting the word in the reason is what
+	// stopped anyone from writing it.
+	//
+	// The three records are kept together deliberately. The reusable part is
+	// not any one gap: it is that **"nothing exposes this" and "this is not
+	// a tool" are two different sentences, and only the first one is ever
+	// evidence.** A reason that concludes "somebody else's job" from "no
+	// endpoint" has skipped the step where the endpoint would be built.
 }
 
 // ExplainDiagnosisGap returns the recorded reason an expectation is an

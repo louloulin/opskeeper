@@ -100,6 +100,8 @@ spec:
     - { name: kafka.broker_skew, class: read }
     - { name: kafka.consumer_lag, class: read }
     - { name: kafka.partition_skew, class: read }
+    # 由连续采样的 DescribeGroups 得出，不是 broker 的一次调用；窗口从 OpsKeeper 首次观测该组开始
+    - { name: kafka.rebalance_history, class: read }
     - { name: kafka.topic_list, class: read }
     - { name: mq.broker_status, class: read }
     - { name: mq.connect, class: read }

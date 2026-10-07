@@ -76,7 +76,10 @@ func fixture(t *testing.T) string {
 	for _, f := range []string{"manifest.go", "register.go", "negotiate.go"} {
 		write(t, root, filepath.Join("sdk", f), "package sdk\n")
 	}
-	write(t, root, "core/floor/pluginmanifest/coverage.go", "package pluginmanifest\n\nvar DiagnosisGaps = []struct{ Reason, Searched string }{\n\t{Reason: \"r\", Searched: []string{\"core/edge\", \"core/floor\"}},\n}\n")
+	write(t, root, "core/floor/pluginmanifest/coverage.go",
+		"package pluginmanifest\n\ntype GapReason struct{ Reason string; Searched []string }\n")
+	write(t, root, "core/floor/pluginmanifest/coverage_test.go",
+		"package pluginmanifest\n\nfunc gapReasonFailures(root, name string, gap GapReason) []string { return nil }\n\nfunc TestAGapReasonRulesRejectEachHistoricalError(t *testing.T) {}\n")
 	write(t, root, "Makefile", "eval-gates:\npig-tool-scoping-check:\n")
 	write(t, root, "scripts/sync-pig-ops.sh", "#!/bin/sh\n")
 	return root
@@ -144,14 +147,24 @@ func TestEveryPredicateCanGoRed(t *testing.T) {
 		{"D8", "core/manager/server/marketplace/import.go", "package marketplace\n"},
 		{"D9", "sdk/negotiate.go", ""},
 		{"D10", "core/floor/pluginmanifest/coverage.go", "package pluginmanifest\n"},
+		{"D10", "core/floor/pluginmanifest/coverage_test.go", "package pluginmanifest\n"},
 		{"D11", "Makefile", "eval-gates:\n"},
 		{"D12", "scripts/sync-pig-ops.sh", ""},
 	}
-	if len(cases) != len(items()) {
-		t.Fatalf("%d mutation cases for %d items", len(cases), len(items()))
+	// One item may carry more than one mutation — D10 broke the reason type
+	// and then the rule's proof — so this checks coverage of the items
+	// rather than an equality of counts.
+	covered := map[string]bool{}
+	for _, tc := range cases {
+		covered[tc.id] = true
+	}
+	for _, it := range items() {
+		if !covered[it.id] {
+			t.Errorf("item %s has no mutation case", it.id)
+		}
 	}
 	for _, tc := range cases {
-		t.Run(tc.id, func(t *testing.T) {
+		t.Run(tc.id+"/"+filepath.Base(tc.rel), func(t *testing.T) {
 			root := fixture(t)
 			if tc.body == "" {
 				if err := os.Remove(filepath.Join(root, tc.rel)); err != nil {

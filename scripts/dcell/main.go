@@ -287,22 +287,43 @@ func itemSDK(root string) (string, error) {
 	return "", nil
 }
 
-// itemGapReasoning checks that a recorded diagnosis gap carries the two
-// places a reviewer must be able to check. The reason text itself is not
-// machine-checkable and is not checked here — the shape is.
+// itemGapReasoning checks that a recorded diagnosis gap still has to say
+// where it looked — and, since the table is empty, that the RULE is still
+// checked rather than only written down.
+//
+// The predicate changed when 决策 453 closed the last gap. It used to look
+// for a Searched entry in coverage.go, which is a check on one entry; with
+// the table empty there is no entry to look at, and a predicate pointed at a
+// map that is meant to stay empty would be a check that fails the moment the
+// repository succeeds. So the claim became the rule plus its proof: the
+// reason type still carries the field, the failure function is still there,
+// and the mutations are still asserted.
 func itemGapReasoning(root string) (string, error) {
-	path := filepath.Join(root, "core", "floor", "pluginmanifest", "coverage.go")
-	raw, err := os.ReadFile(path)
+	body, err := readFileOrFail(root, "core/floor/pluginmanifest/coverage.go")
 	if err != nil {
 		return "", err
 	}
-	body := string(raw)
-	for _, want := range []string{"Searched:", "core/edge", "core/floor"} {
-		if !strings.Contains(body, want) {
-			return "coverage.go no longer records " + strconv(want) + " on a gap reason", nil
+	if !strings.Contains(body, "Searched []string") {
+		return "GapReason no longer carries the Searched list", nil
+	}
+	test, err := readFileOrFail(root, "core/floor/pluginmanifest/coverage_test.go")
+	if err != nil {
+		return "", err
+	}
+	for _, want := range []string{"func gapReasonFailures(", "TestAGapReasonRulesRejectEachHistoricalError"} {
+		if !strings.Contains(test, want) {
+			return "the gap-reason rules are no longer proven by " + strconv(want), nil
 		}
 	}
 	return "", nil
+}
+
+func readFileOrFail(root, rel string) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 // itemGatesOnRecord checks the two behavioural gates that back this cell are
@@ -344,7 +365,7 @@ func items() []item {
 		{"D7", "审核第三段：节点侧准入", itemEdgeAdmit},
 		{"D8", "存量容器导入器接线", itemImporter},
 		{"D9", "第三方 sdk 三个发布物", itemSDK},
-		{"D10", "GAP 理由带着可查的出处", itemGapReasoning},
+		{"D10", "GAP 理由的规则仍被变异验证", itemGapReasoning},
 		{"D11", "本格的行为闸门仍在册", itemGatesOnRecord},
 		{"D12", "打包副本同步脚本在册", itemPackageSync},
 	}

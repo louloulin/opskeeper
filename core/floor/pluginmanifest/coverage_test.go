@@ -749,33 +749,100 @@ func TestTheDiagnosisGapLedgerHasNoStaleEntries(t *testing.T) {
 //     Skipping either one is how a shipped implementation goes unread.
 func TestAGapReasonSaysWhereItLooked(t *testing.T) {
 	if len(DiagnosisGaps) == 0 {
-		t.Skip("no gaps are recorded, so there is nothing here to hold to account")
+		t.Skip("no gaps are recorded, so there is nothing here to hold to account; " +
+			"TestAGapReasonRulesRejectEachHistoricalError holds the rules themselves so this skip " +
+			"does not quietly retire them")
 	}
 	root := repoRoot(t)
 	for name, gap := range DiagnosisGaps {
-		if len(gap.Searched) == 0 {
-			t.Errorf("DiagnosisGaps[%s] records no Searched list. Its reason is %q — and a claim "+
-				"that nothing serves a capability, with nothing to show where that was looked "+
-				"for, is the shape of both errors this gate exists to catch.",
-				name, gap.Reason)
-			continue
+		for _, failure := range gapReasonFailures(root, name, gap) {
+			t.Error(failure)
 		}
-		for _, where := range gap.Searched {
-			if _, err := os.Stat(filepath.Join(root, where)); err != nil {
-				t.Errorf("DiagnosisGaps[%s] says it was read in %q, which does not exist. "+
-					"A search list naming a place nobody looked is worse than no list: it is "+
-					"evidence for a search that did not happen.", name, where)
+	}
+}
+
+// gapReasonFailures returns one sentence per rule a recorded gap breaks, and
+// nothing when it breaks none.
+//
+// It is a function rather than an inline loop because the map was emptied in
+// 决策 453 — every owned gap is now closed — and an inline loop over an empty
+// map is a loop that no longer runs. Extracting the rules keeps them provable
+// against entries that do not exist any more, which is exactly the class of
+// entry the rules were written for.
+func gapReasonFailures(root, name string, gap GapReason) []string {
+	var failures []string
+	if len(gap.Searched) == 0 {
+		return append(failures, fmt.Sprintf("DiagnosisGaps[%s] records no Searched list. Its reason is %q — and a claim "+
+			"that nothing serves a capability, with nothing to show where that was looked "+
+			"for, is the shape of both errors this gate exists to catch.", name, gap.Reason))
+	}
+	for _, where := range gap.Searched {
+		if _, err := os.Stat(filepath.Join(root, where)); err != nil {
+			failures = append(failures, fmt.Sprintf("DiagnosisGaps[%s] says it was read in %q, which does not exist. "+
+				"A search list naming a place nobody looked is worse than no list: it is "+
+				"evidence for a search that did not happen.", name, where))
+		}
+	}
+	for _, home := range capabilityHomes {
+		if !searchedUnder(gap.Searched, home) {
+			failures = append(failures, fmt.Sprintf("DiagnosisGaps[%s] claims nothing serves it but never says it looked in %q. "+
+				"That omission is not hypothetical: host.host_files claimed nothing anywhere "+
+				"reads a file inventory for a node, while core/edge/host_files implemented "+
+				"find_large_files, du_summary and stat_file.", name, home))
+		}
+	}
+	return failures
+}
+
+// TestAGapReasonRulesRejectEachHistoricalError runs the rules against the
+// shapes that actually got written, so retiring the last entry does not
+// retire the check with it.
+//
+// Each case is an error this repository made, not an invented one: no
+// Searched list at all, a path that does not exist, and the omission of one
+// capability home — which is the exact shape of the host.host_files reason,
+// where only core/floor was listed and core/edge was never read.
+func TestAGapReasonRulesRejectEachHistoricalError(t *testing.T) {
+	root := repoRoot(t)
+	good := GapReason{
+		Reason:   "nothing on either plane serves this",
+		Searched: []string{"core/edge/collector", "core/floor/skill/builtin"},
+	}
+	if failures := gapReasonFailures(root, "good", good); len(failures) != 0 {
+		t.Fatalf("a well-formed gap was rejected: %v", failures)
+	}
+	cases := []struct {
+		name string
+		gap  GapReason
+		want string
+	}{
+		{
+			name: "no Searched list at all",
+			gap:  GapReason{Reason: "nothing anywhere serves this"},
+			want: "records no Searched list",
+		},
+		{
+			name: "a path nobody looked in",
+			gap:  GapReason{Reason: "r", Searched: []string{"core/edge/does_not_exist", "core/floor/skill/builtin"}},
+			want: "does not exist",
+		},
+		{
+			name: "only one capability home",
+			gap:  GapReason{Reason: "r", Searched: []string{"core/floor/skill/builtin"}},
+			want: "never says it looked in",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			failures := gapReasonFailures(root, tc.name, tc.gap)
+			if len(failures) == 0 {
+				t.Fatalf("the rule accepted a gap that breaks it")
 			}
-		}
-		for _, home := range capabilityHomes {
-			if !searchedUnder(gap.Searched, home) {
-				t.Errorf("DiagnosisGaps[%s] claims nothing serves it but never says it looked in %q. "+
-					"That omission is not hypothetical: host.host_files claimed nothing anywhere "+
-					"reads a file inventory for a node, while core/edge/host_files implemented "+
-					"find_large_files, du_summary and stat_file.",
-					name, home)
+			joined := strings.Join(failures, "\n")
+			if !strings.Contains(joined, tc.want) {
+				t.Errorf("failure does not say %q: %s", tc.want, joined)
 			}
-		}
+		})
 	}
 }
 
@@ -789,29 +856,30 @@ func searchedUnder(list []string, home string) bool {
 	return false
 }
 
-// TestTheDiagnosisAxisHoldsAtSeventeen pins the number the two tests above
+// TestTheDiagnosisAxisHoldsAtTwenty pins the number the two tests above
 // imply, so that a package change moves this line in the diff rather than
 // turning up one day in a report nobody reads.
 //
 // It is a count rather than a boolean on purpose. "Every gap is owned" is
 // satisfied just as well by a fleet that serves nothing, because nothing
 // would be left to own. Pinning the count is what distinguishes a gate from
-// a rubber stamp.
+// a rubber stamp — and pinning it at twenty, the total, turns the count into
+// a floor that can only be broken by giving capability back.
 //
-// Seventeen, not sixteen (决策 204): redis.hot_keys was implemented rather
-// than renamed away, which retired its DiagnosisGaps entry and closed the
-// redis/hot-key case. A rise here is a deliberate act — the other two tests
-// in this file both fail if a gap is closed without its entry being
-// retired, and this one fails if the count moves without either of those.
-func TestTheDiagnosisAxisHoldsAtNineteen(t *testing.T) {
-	// Seventeen until 决策 450, when the read-only package shipped the
-	// node's own process ranking (host/cpu-spike), then eighteen, and
-	// nineteen at 决策 451 when it shipped a bounded file inventory
-	// (host/disk-full). The other two tests in this file fail if a gap
-	// closes without its DiagnosisGaps entry being retired, and this one
-	// fails if the count moves without either of those — so the number
-	// cannot drift silently.
-	const want = 19
+// The climb: seventeen until 决策 204 (redis.hot_keys implemented rather than
+// renamed away), eighteen at 决策 450 (the node's own process ranking,
+// host/cpu-spike), nineteen at 决策 451 (a bounded file inventory,
+// host/disk-full), twenty at 决策 453 (a rebalance history built from
+// sampled DescribeGroups, mq/broker-down) — which emptied DiagnosisGaps.
+//
+// Emptying it is why this test is now a floor and not a middle. When the
+// table held its last entry, an empty map was a legitimate state to be
+// suspicious of; with the table empty, DiagnosisGaps is expected to stay
+// empty, and the two tests that enforce both directions are the ones that
+// make that meaningful. A floor nobody watches is a floor that is only ever
+// hit by accident, so this one keeps the number explicit.
+func TestTheDiagnosisAxisHoldsAtTwenty(t *testing.T) {
+	const want = 20
 	plugins := shippedPlugins(t)
 	diagnosable, total := 0, 0
 	walkCaseFiles(t, func(caseID, _ string, raw []byte) {

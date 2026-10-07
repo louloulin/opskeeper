@@ -40,6 +40,17 @@ import (
 type kafkaClient struct {
 	client *kafka.Client
 	seeds  []string
+	// history holds the rebalance history this client has observed.
+	// See rebalance.go for why this is built from successive DescribeGroups
+	// answers rather than asked of the broker.
+	history *RebalanceHistory
+	// lastSample throttles sampling. Sampling is not free — it is one
+	// ListGroups plus one DescribeGroups per group — and a diagnostic tool
+	// may be called several times a second during an incident. The interval
+	// is a lower bound on how often the history may miss a rebalance, and
+	// it is deliberately a field rather than a constant so the sampling
+	// cost is visible wherever the client is built.
+	lastSample time.Time
 }
 
 // newKafkaClient parses "kafka://host1:9092,host2:9092".
@@ -67,8 +78,9 @@ func newKafkaClient(dsn string, timeout time.Duration) (*kafkaClient, error) {
 		return nil, errors.New("mq: kafka DSN lists no brokers")
 	}
 	return &kafkaClient{
-		client: &kafka.Client{Addr: kafka.TCP(seeds...), Timeout: timeout},
-		seeds:  seeds,
+		client:  &kafka.Client{Addr: kafka.TCP(seeds...), Timeout: timeout},
+		seeds:   seeds,
+		history: NewRebalanceHistory(defaultHistoryEvents, defaultHistoryAge),
 	}, nil
 }
 
@@ -80,6 +92,111 @@ func newKafkaClient(dsn string, timeout time.Duration) (*kafkaClient, error) {
 // may be using, and leaving the method absent would make the MQ adapter's
 // Close branch on the backend.
 func (c *kafkaClient) close() {}
+
+// defaultHistoryEvents and defaultHistoryAge bound the rebalance history.
+//
+// The bounds are the policy this build ships, not a derivation: 64 events per
+// group covers a group that rebalances on every deploy across a day, and 24
+// hours is the window an incident review actually asks about. Both are
+// constructor arguments so a deployment that wants a different one can have
+// it without the sampling logic changing.
+const (
+	defaultHistoryEvents = 64
+	defaultHistoryAge    = 24 * time.Hour
+	// sampleInterval throttles how often a read may trigger a sample.
+	sampleInterval = 15 * time.Second
+)
+
+// groupStates asks the broker what every consumer group currently looks like.
+//
+// The error is returned rather than swallowed. A history that filled in the
+// gaps when DescribeGroups failed would look like a group that stopped
+// rebalancing, which is the one conclusion this feature must never support:
+// absence of evidence is not evidence of absence.
+func (c *kafkaClient) groupStates(ctx context.Context) ([]GroupState, error) {
+	listed, err := c.client.ListGroups(ctx, &kafka.ListGroupsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("mq: cannot list consumer groups: %w", err)
+	}
+	ids := make([]string, 0, len(listed.Groups))
+	for _, g := range listed.Groups {
+		ids = append(ids, g.GroupID)
+	}
+	sort.Strings(ids)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	described, err := c.client.DescribeGroups(ctx, &kafka.DescribeGroupsRequest{GroupIDs: ids})
+	if err != nil {
+		return nil, fmt.Errorf("mq: cannot describe %d consumer group(s): %w", len(ids), err)
+	}
+	states := make([]GroupState, 0, len(described.Groups))
+	for _, dg := range described.Groups {
+		if dg.Error != nil {
+			return nil, fmt.Errorf("mq: consumer group %s: %w", dg.GroupID, dg.Error)
+		}
+		state := GroupState{Group: dg.GroupID, State: dg.GroupState}
+		for _, m := range dg.Members {
+			member := MemberState{
+				ID:         m.MemberID,
+				ClientID:   m.ClientID,
+				Host:       m.ClientHost,
+				Assignment: map[string][]int{},
+			}
+			for _, t := range m.MemberAssignments.Topics {
+				list := append([]int(nil), t.Partitions...)
+				sort.Ints(list)
+				member.Assignment[t.Topic] = list
+			}
+			state.Members = append(state.Members, member)
+		}
+		sort.Slice(state.Members, func(i, j int) bool { return state.Members[i].ID < state.Members[j].ID })
+		states = append(states, state)
+	}
+	return states, nil
+}
+
+// sampleRebalances records one round of group states, throttled.
+//
+// It returns the error rather than logging it: the caller is a read that the
+// agent is waiting on, and a read that quietly did extra work it could not
+// do should say so. Throttling is the only reason this returns early without
+// an error.
+func (c *kafkaClient) sampleRebalances(ctx context.Context) error {
+	now := time.Now()
+	if !c.lastSample.IsZero() && now.Sub(c.lastSample) < sampleInterval {
+		return nil
+	}
+	c.lastSample = now
+	states, err := c.groupStates(ctx)
+	if err != nil {
+		return err
+	}
+	for _, st := range states {
+		c.history.Record(st, now)
+	}
+	return nil
+}
+
+// rebalanceHistory answers the history question for one group.
+func (c *kafkaClient) rebalanceHistory(ctx context.Context, p params, limit int) ([]map[string]any, string, error) {
+	group, err := p.requireString("group")
+	if err != nil {
+		return nil, "", fmt.Errorf("%w (a rebalance history belongs to one consumer group; without a group there is nothing to look back at)", err)
+	}
+	// Sampling here as well as on the reads makes the tool useful on first
+	// use: an agent that asks the question during an incident gets at least
+	// the sample taken at that moment, instead of an empty answer it would
+	// have to reason about.
+	if err := c.sampleRebalances(ctx); err != nil {
+		return nil, "", err
+	}
+	since := time.Duration(0)
+	if v, err := intArg(p, "since_minutes", 0, 0); err == nil && v > 0 {
+		since = time.Duration(v) * time.Minute
+	}
+	return c.history.rebalanceRows(group, since, limit)
+}
 
 func (c *kafkaClient) probe(ctx context.Context) error {
 	_, err := c.client.Metadata(ctx, &kafka.MetadataRequest{})
