@@ -1,8 +1,9 @@
 // Agents 页面测试 — 覆盖「点击助理卡片查看定义详情」链路，并验证
 // 按 source 区分的编辑路径（user 直接编辑 / 内置预置 fork 成自定义）。
-import { render, screen, within } from '@testing-library/react';
+import { useEffect } from 'react';
+import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -37,6 +38,25 @@ const userAgent = {
 };
 
 const listURL = '/api/v1/skills';
+
+// MemoryRouter doesn't expose navigation on its own, so mount a tiny probe
+// inside the same router tree to observe pathname changes. No new deps.
+function LocationProbe({ onPath }: { onPath: (p: string) => void }) {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    onPath(pathname);
+  }, [pathname, onPath]);
+  return null;
+}
+
+function renderWithRouter(onPath: (p: string) => void) {
+  return render(
+    <MemoryRouter>
+      <AgentsPage />
+      <LocationProbe onPath={onPath} />
+    </MemoryRouter>,
+  );
+}
 
 describe('AgentsPage', () => {
   beforeEach(() => {
@@ -82,5 +102,46 @@ describe('AgentsPage', () => {
     expect(within(dialog).getByText(/你是数据库专家/)).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: /编辑/ })).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: /复制为自定义助理/ })).not.toBeInTheDocument();
+  });
+
+  it('卡片展示 Agent 头像、工具 Chip 与「开始对话」按钮', async () => {
+    renderWithRouter(vi.fn());
+
+    // 档案墙卡片：头像 + 本地化名 + 描述 + 工具 Chip
+    await screen.findByText('SRE 专家');
+    expect(screen.getAllByTestId('agent-avatar').length).toBeGreaterThan(0);
+    // 工具集以 Chip 呈现（diskAgent.tools = ['query_promql', 'query_incidents']）
+    expect(screen.getByText('query_promql')).toBeInTheDocument();
+    expect(screen.getByText('query_incidents')).toBeInTheDocument();
+    // 「开始对话」CTA
+    expect(screen.getAllByText('开始对话').length).toBeGreaterThan(0);
+  });
+
+  it('开始对话 creates a persona session and navigates to the chat', async () => {
+    const onNavigateChange = vi.fn();
+    server.use(
+      http.post('/api/v1/chat/sessions', () =>
+        HttpResponse.json({ id: 's-new', user_id: 1, title: 'x', agent_id: 'specialist-sre' }),
+      ),
+    );
+    renderWithRouter(onNavigateChange);
+    await userEvent.click((await screen.findAllByText('开始对话'))[0]);
+    await waitFor(() => expect(onNavigateChange).toHaveBeenCalledWith('/chat/s-new'));
+  });
+
+  it('keeps the user on the page and shows an inline error when the session cannot be created', async () => {
+    const onNavigateChange = vi.fn();
+    server.use(
+      http.post('/api/v1/chat/sessions', () =>
+        HttpResponse.json({ message: '创建失败' }, { status: 500 }),
+      ),
+    );
+    renderWithRouter(onNavigateChange);
+    await userEvent.click((await screen.findAllByText('开始对话'))[0]);
+
+    expect(await screen.findByText(/失败/)).toBeInTheDocument();
+    expect(onNavigateChange).not.toHaveBeenCalledWith('/chat/s-new');
+    // 失败时不弹详情：卡片点击未被按钮的 stopPropagation 之外的行为触发
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });
