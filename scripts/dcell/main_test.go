@@ -99,9 +99,56 @@ func fixture(t *testing.T) string {
 	write(t, root, "scripts/registryindex/main.go",
 		"package main\n\nfunc build(registry, baseURL, root string) (pluginmanifest.Index, error) { return pluginmanifest.Index{}, nil }\n")
 	write(t, root, "cmd/opskeeper/main.go", "package main\n\nconst _ = \"OPSKEEPER_MARKETPLACE_REGISTRIES\"\n")
+	// D13, D15 and D17 all read the same real file, so the fixture carries
+	// all of them; a second fixture file for the same path would mean one of
+	// the cells is tested against a tree that does not exist.
+	write(t, root, "core/manager/biz/marketplace/usecase.go", usecaseFixture(""))
+
 	write(t, root, "Makefile", "eval-gates:\npig-tool-scoping-check:\n")
 	write(t, root, "scripts/sync-pig-ops.sh", "#!/bin/sh\n")
 	return root
+}
+
+// usecaseFixture builds the marketplace usecase fixture with one D17 element
+// optionally left out.
+//
+// D17's needles all live in one file, so a mutation that replaces the whole
+// file proves none of them individually — the cell would go red for a reason
+// unrelated to the needle a reader came to inspect, which is the same
+// vacuousness this file's other mutation cases are written against. Naming
+// the element to omit makes each of them demonstrably load-bearing.
+func usecaseFixture(omit string) string {
+	keep := func(key string) bool { return omit != key }
+
+	var b strings.Builder
+	b.WriteString("package marketplace\n\n")
+	// D13 and D15 read this file too.
+	b.WriteString("func (uc *Usecase) Catalog(ctx context.Context, caller Caller) " +
+		"([]pluginmanifest.Entry, error) { return nil, nil }\n\n")
+	b.WriteString("func (uc *Usecase) catalogRoots(tenantID uint64) []pluginmanifest.Root { return nil }\n\n")
+
+	if keep("resolve") {
+		b.WriteString("func (uc *Usecase) resolveRegistryItem(ctx context.Context, src Source) " +
+			"(pluginmanifest.IndexItem, error) { return pluginmanifest.IndexItem{}, nil }\n\n")
+	}
+	if keep("verify") {
+		b.WriteString("func (uc *Usecase) verifyRegistryPackage(dir string, item pluginmanifest.IndexItem) error {\n")
+		if keep("digest") {
+			b.WriteString("\tgot, err := pluginmanifest.TreeDigest(dir)\n\t_, _ = got, err\n")
+		}
+		if keep("manifest-read") {
+			b.WriteString("\tshipped, err := os.ReadFile(filepath.Join(dir, \"pig-ops.yaml\"))\n\t_ = shipped\n\t_ = err\n")
+		}
+		if keep("manifest-compare") {
+			b.WriteString("\tif string(shipped) != item.ManifestYAML {\n\t\treturn nil\n\t}\n")
+		}
+		b.WriteString("\treturn nil\n}\n\n")
+	}
+	if keep("call") {
+		b.WriteString("func (uc *Usecase) fetch(ctx context.Context, src Source) {\n" +
+			"\titem, err := uc.resolveRegistryItem(ctx, src)\n\t_, _ = item, err\n}\n")
+	}
+	return b.String()
 }
 
 func byID(t *testing.T, id string) item {
@@ -181,6 +228,12 @@ func TestEveryPredicateCanGoRed(t *testing.T) {
 		{"D16", "core/floor/pluginmanifest/manifest.go", "package pluginmanifest\n"},
 		{"D16", "core/floor/pluginmanifest/catalog.go", "package pluginmanifest\n"},
 		{"D16", "cmd/opskeeper/main.go", "package main\n"},
+		{"D17", "core/manager/biz/marketplace/usecase.go", usecaseFixture("resolve")},
+		{"D17", "core/manager/biz/marketplace/usecase.go", usecaseFixture("verify")},
+		{"D17", "core/manager/biz/marketplace/usecase.go", usecaseFixture("digest")},
+		{"D17", "core/manager/biz/marketplace/usecase.go", usecaseFixture("manifest-read")},
+		{"D17", "core/manager/biz/marketplace/usecase.go", usecaseFixture("manifest-compare")},
+		{"D17", "core/manager/biz/marketplace/usecase.go", usecaseFixture("call")},
 	}
 	// One item may carry more than one mutation — D10 broke the reason type
 	// and then the rule's proof — so this checks coverage of the items

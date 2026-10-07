@@ -447,6 +447,7 @@ func items() []item {
 		{"D14", "兼容矩阵存在且两轴都被声明", itemCompatMatrix},
 		{"D15", "索引覆盖本租户安装根之外的根", itemMultiRootIndex},
 		{"D16", "远端注册表索引：产出端与消费端都在册", itemRemoteRegistryIndex},
+		{"D17", "索引里的包可以真的装上，且装之前验摘要与清单", itemRegistryInstall},
 	}
 }
 
@@ -534,6 +535,46 @@ func itemRemoteRegistryIndex(root string) (string, error) {
 	// The production wiring: a consumer nothing configures is a consumer that
 	// never runs, and this cell has already caught one of those.
 	return symbolPresent(root, "cmd/opskeeper/main.go", "OPSKEEPER_MARKETPLACE_REGISTRIES")
+}
+
+// itemRegistryInstall checks that a row in a registry index can be installed,
+// and that the two checks which make installing from an index mean anything
+// are on the path rather than in a comment.
+//
+// The distinction from D16 is the whole point. D16 measures that the repository
+// can produce an index and read one back — a catalogue. This measures that
+// the catalogue is not the end of the road: a row naming a url and a digest
+// leads to a package on disk, and the bytes that land are the bytes the row
+// described.
+//
+// Both checks are named individually because either one alone leaves the path
+// open. The digest alone catches a substituted archive but not a registry
+// that publishes a manifest which is not in the package it points at; the
+// manifest comparison alone catches nothing, because a substituted archive
+// carries whatever manifest the substitutor chose. So a census that checked
+// only the first would report a green for a path where the governance
+// manifest an operator reviewed is not the one the node installs.
+func itemRegistryInstall(root string) (string, error) {
+	// The resolution: label, pack and version in, one row out.
+	if short, err := symbolPresent(root, "core/manager/biz/marketplace/usecase.go",
+		"func (uc *Usecase) resolveRegistryItem("); err != nil || short != "" {
+		return short, err
+	}
+	// The two verifications, by their own names. A single function holding
+	// only the digest would leave the second unreachable, and the census
+	// would still be green.
+	if short, err := symbolPresent(root, "core/manager/biz/marketplace/usecase.go",
+		"func (uc *Usecase) verifyRegistryPackage("); err != nil || short != "" {
+		return short, err
+	}
+	for _, needle := range []string{"pluginmanifest.TreeDigest(dir)", "pig-ops.yaml", "item.ManifestYAML"} {
+		if short, err := symbolPresent(root, "core/manager/biz/marketplace/usecase.go", needle); err != nil || short != "" {
+			return short, err
+		}
+	}
+	// The path itself, not just the helpers beside it.
+	return symbolPresent(root, "core/manager/biz/marketplace/usecase.go",
+		"item, err := uc.resolveRegistryItem(ctx, src)")
 }
 
 // symbolPresent reports whether a file exists and still contains a symbol.
