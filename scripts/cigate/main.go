@@ -285,6 +285,13 @@ func DecisionGates() []Gate {
 				"rollback reported zero and exited successfully (decision 291, 292)",
 		},
 		{
+			Target: "tag-format-check",
+			Why: "the release workflows stated their tag grammar in bash, once per job, and " +
+				"those copies demanded rc.4 while every tag this repository names is " +
+				"written rc4 -- so both publish jobs would exit 2 on the repository's own " +
+				"VERSION, and nothing looked at tag shape at all (decision 433)",
+		},
+		{
 			Target: "ledger-check",
 			Why: "fifteen assertions about the architecture ledger, none of which anything was " +
 				"running. The ledger is quoted as the record of what was decided, so an " +

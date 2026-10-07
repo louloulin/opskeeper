@@ -72,7 +72,7 @@ test-plugins: ## 运行插件测试
 	scripts/demo_preflight.sh --help >/dev/null
 	npm test --prefix plugins/opskeeper-teamharness/dashboard
 	$(MAKE) -C plugins/agentteams-plugin-installer self-check
-	$(PYTHON) -m pytest tests/test_deterministic_archive.py tests/test_audit_open_source.py tests/test_check_release_version.py plugins/opskeeper-teamharness
+	$(PYTHON) -m pytest tests/test_deterministic_archive.py tests/test_audit_open_source.py tests/test_check_release_version.py tests/test_release_tag_and_signing.py plugins/opskeeper-teamharness
 
 # version-check is deliberately NOT a prerequisite of this target, and its
 # absence is the reason the open-source gate below runs at all.
@@ -97,6 +97,18 @@ verify-plugins: build-plugins test-plugins ## 构建、测试并校验插件发�
 
 version-check: ## 校验发布元数据与源码/插件版本一致（发布期门槛，见 .github/workflows/release.yml）
 	python3 scripts/check_release_version.py
+
+# 发布流水线把 tag 语法写在 bash 里，本仓的 VERSION 与之曾不一致（rc4 vs rc.4），
+# 两个 job 的 Resolve tag 都会 exit 2。这道闸门把工作流自己写的语法读回来，
+# 用 VERSION、manifest 与全部 4 个历史 changelog tag 当证人（决策 433）。
+tag-format-check: ## 发布 tag 语法与本仓自己的版本一致（读工作流里的语法）
+	python3 scripts/check_tag_format.py
+
+# 写签名元数据：树能推出来的值由它抄，推不出来的（tag、版本号）由人给。
+# 刻意不 commit、不打 tag、不碰 plugin.yaml 与 dashboard/plugin.json——那两份
+# 在 backend_commit 之后改动就越界，而"下一个版本号是多少"是发布决定。
+sign-release: ## 写签名元数据：make sign-release TAG=v2026.10.01-rc5（默认 dry-run）
+	python3 scripts/sign_release.py --tag "$(TAG)" --dry-run
 
 # 签名前先看要改什么：把 manifest 与树的每一处漂移并排列出，标出签名时该写进
 # RELEASE_VERSION.json 的值。刻意不做成闸门、也刻意不接 CI——它是给人读的

@@ -243,6 +243,9 @@ jobs:
       - name: The ledger's numbers are the tree's own numbers
         run: make ledger-check
 
+      - name: The release tag grammar accepts this repository's own versions
+        run: make tag-format-check
+
       # Every mutating HTTP route has to carry a written verdict: audited,
       # or exempt with a reason. This target existed and was not in CI,
       # which meant the audit surface could grow a route that nobody had
