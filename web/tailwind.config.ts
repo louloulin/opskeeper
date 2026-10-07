@@ -20,6 +20,10 @@ const config: Config = {
         'text-faint': 'rgb(var(--text-faint) / <alpha-value>)',
         accent: 'rgb(var(--accent) / <alpha-value>)',
         'accent-fg': 'rgb(var(--accent-fg) / <alpha-value>)',
+        'accent-50': 'rgb(var(--accent-50) / <alpha-value>)',
+        'accent-100': 'rgb(var(--accent-100) / <alpha-value>)',
+        'accent-600': 'rgb(var(--accent-600) / <alpha-value>)',
+        'accent-700': 'rgb(var(--accent-700) / <alpha-value>)',
         info: 'rgb(var(--info) / <alpha-value>)',
         warn: 'rgb(var(--warn) / <alpha-value>)',
         ok: 'rgb(var(--ok) / <alpha-value>)',
@@ -27,6 +31,24 @@ const config: Config = {
       },
       animation: {
         'pulse-dot': 'pulse-dot 1.4s ease-in-out infinite',
+      },
+      borderRadius: {
+        // Namespaced on purpose: overriding the default md/lg/xl/2xl
+        // keys would resize `rounded-lg` in ~80 existing components
+        // site-wide. `s.*` yields rounded-s-xs … rounded-s-3xl.
+        s: {
+          xs: '4px',
+          sm: '8px',
+          md: '12px',
+          lg: '16px',
+          xl: '24px',
+          '2xl': '32px',
+          '3xl': '40px',
+        },
+      },
+      boxShadow: {
+        card: 'var(--shadow-card)',
+        pop: 'var(--shadow-pop)',
       },
       keyframes: {
         'pulse-dot': {
