@@ -27,7 +27,7 @@ export const TONE_CLASS: Record<PersonaTone, string> = {
   cyan: 'bg-cyan-500/10 text-cyan-300',
 };
 
-const PERSONA_VISUALS: Record<string, PersonaVisual> = {
+export const PERSONA_VISUALS: Record<string, PersonaVisual> = {
   'incident-investigator': { icon: Radar, tone: 'violet' },
   critic: { icon: Gavel, tone: 'rose' },
   reviewer: { icon: ShieldCheck, tone: 'amber' },

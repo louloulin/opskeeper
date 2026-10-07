@@ -1,6 +1,7 @@
 import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { AgentAvatar } from './AgentAvatar';
+import { AgentAvatar, PERSONA_VISUALS } from './AgentAvatar';
+import { personaLabel } from './AgentBadge';
 
 // lucide-react stamps `lucide-<kebab-name>` on every icon's <svg>. Asserting
 // on that class (rather than "some svg exists") is what makes these cases
@@ -84,5 +85,19 @@ describe('AgentAvatar', () => {
     expect(large.firstElementChild).toHaveClass('rounded-rk-md');
     expect(small.firstElementChild?.className).not.toContain('rounded-s-');
     expect(large.firstElementChild?.className).not.toContain('rounded-s-');
+  });
+});
+
+// personaLabel (AgentBadge) must resolve a display name for every persona
+// the design system knows about. A persona present in PERSONA_VISUALS but
+// missing from AGENT_LABELS_ZH/EN falls through personaLabel's unknown-id
+// branch and renders the raw agent_id — the exact drift that shipped
+// critic / verifier / reporter unlocalized (Task 14C regression guard).
+describe('personaLabel coverage', () => {
+  it('resolves a localized label for every key in PERSONA_VISUALS', () => {
+    const zhOnly = (zh: string) => zh;
+    for (const agentId of Object.keys(PERSONA_VISUALS)) {
+      expect(personaLabel(agentId, zhOnly), `${agentId} label`).not.toBe(agentId);
+    }
   });
 });

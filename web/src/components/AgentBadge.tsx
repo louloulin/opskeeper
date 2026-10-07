@@ -26,6 +26,9 @@ const AGENT_LABELS_ZH: Record<string, string> = {
   'specialist-network': '网络专家',
   'specialist-disk': '磁盘专家',
   reviewer: '审核员',
+  critic: '评审员',
+  verifier: '验证员',
+  reporter: '报告员',
 };
 const AGENT_LABELS_EN: Record<string, string> = {
   default: 'Default',
@@ -36,6 +39,9 @@ const AGENT_LABELS_EN: Record<string, string> = {
   'specialist-network': 'Network specialist',
   'specialist-disk': 'Disk specialist',
   reviewer: 'Reviewer',
+  critic: 'Critic',
+  verifier: 'Verifier',
+  reporter: 'Reporter',
 };
 
 // Border + ring tint per persona tone. Kept as full literal class names
