@@ -44686,8 +44686,9 @@ broker**（它只 `testenv.Start` + 一次 `/v1/chat/completions` 流式调用�
 上一节写完 §4.407 后，我按自己说的"下一步"去问 GitHub：**那 33 条在 2.0 代码上
 真的执行过吗。**
 
-第一次查我查错了仓库：remote 是 `louloulin/opskeeper`，而我查的是
-`vincent-wuhan/opskeeper`——后者是上游（前者是它的分叉，id 1376906944）。
+第一次查我查错了仓库：本仓的 remote 指向**它自己**（一个分叉，GitHub repo id
+1376906944），而我查的是**上游**那个 `vincent-wuhan/opskeeper`——上游是本仓的
+parent。
 在上游那份记录里，`feature/pig` 有 27 次 `pull_request`、**0 次 `push`**，
 看起来正好印证我上一节想说的话。
 
@@ -44751,10 +44752,49 @@ but the tree has 996 / 255875
 #### 六、读数
 
 - **`gates-report` 本机：30 passed / 1 failed / 1 NEEDS-INPUT / 3 exempt。**
-- **CI（`louloulin/opskeeper`，`34381ff` push）：失败** —— `race-check` 与
+- **CI（本仓，`34381ff` 的 push 运行）：失败** —— `race-check` 与
   `module-standalone-check`，红因是本节这条，已在本节修掉。
 - `cigate` **33/34**；`audit` 本仓 **6/6**、external **5**；
   `dcell-check` **17/18 = 94.4%**；诊断轴 **20/20**；工具 **94**。
 - **manager 996 文件 / 255,875 行**（本刀没碰 `core/manager`）。
 - 本刀不增加任何阶段百分比。**它把一个我上一刀亲手写进台账的假数改回了真数，
   并且是在 CI 已经红着的时候。**
+
+### 4.409 决策 475：我在记录那个错误的时候，又造了一个发布门违规
+
+§4.408 是「我把脏工作区的读数当成树的读数」。写完之后 CI 又红了一条，
+`Open source gate`：
+
+```
+private repository owner found in docs/opskeeper2-architecture.md: <私有属主名>
+```
+
+**是我在 §4.408 里写下的。** 我要讲清"我查错了仓库"，就得说清是哪个仓库对哪个仓库，
+于是我把**本仓的属主名**写进了台账——而那个名字是发布审计的一条硬规则，
+它本来就在仓库的禁用词表里。
+
+修法不是"下次注意"，是**不写属主名也能把这件事讲清楚**：本仓是分叉、
+上游是 parent、repo id 是 1376906944。这些说的是同一件事实，而其中只有前者是
+一个要发布的文件里不该出现的东西。
+
+#### 一、这一节的两件事是同一件
+
+§4.408 的错是**取数时用了错的对象**；这一节的错是**写文档时用了不该出现在
+文档里的名字**。两件事的共同点：**我在做一个动作的时候，没有问那个动作的产物
+要经过哪几道闸门。** 取数要过 ledgercheck，命名要过 audit_open_source，
+而我在写下它们的当时只想着"把话说清楚"。
+
+#### 二、还有一处我改不掉
+
+**那条属主名已经进了 git 历史**（提交 `c1c5c5c` 的信息里）。发布审计查的是
+tracked tree 而不是提交信息，所以门是绿的；但历史里留着它，是这一刀**没有修掉**
+的东西。改写已推送的历史需要 force-push 一个共享分支，那不是我单方面该做的事。
+**记在这里，而不是假装修掉了。**
+
+#### 三、读数
+
+- `audit_open_source` **绿**（3195 个文本文件 0 违规）。
+- `gates-report` 本机：**30 passed / 1 failed / 1 NEEDS-INPUT / 3 exempt**。
+- `cigate` 33/34；`audit` 本仓 6/6、external 5；`dcell-check` 17/18 = 94.4%；
+  诊断轴 20/20；工具 94；manager 996 文件 / 255,929 行。
+- 本刀不增加任何阶段百分比。
