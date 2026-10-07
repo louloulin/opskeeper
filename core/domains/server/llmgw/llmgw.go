@@ -397,6 +397,39 @@ func (h *Handler) streamCompletion(
 			Choices: []chatChoice{{Index: 0, Delta: &chatMessage{Role: roleAssistant, Content: contentText(text)}}},
 		})
 	}
+	// Tool calls go out as deltas, which is where the OpenAI wire puts them
+	// and therefore where a client looks for them. This frame used to be
+	// absent entirely: the settled reply's tool calls reached the node only
+	// inside the *final* chunk's `message`, a field most streaming clients
+	// never read because they assemble an assistant turn from deltas.
+	//
+	// The consequence was not a crash and not an error. A node's agent asked
+	// for a tool, the gateway answered 200 with a well-formed stream carrying
+	// no tool call and no text, and the agent concluded the turn had nothing
+	// to say. Every tool-using turn on every node therefore ended in silence,
+	// and every test in this repository passed -- because every one of them
+	// ran a model that never chose to call a tool. The non-streaming path
+	// below has always been correct, which is what made the bug invisible
+	// from the other direction: the two paths disagreed and only the one the
+	// product actually uses was wrong.
+	// The arguments are re-encoded by assistantWire rather than here, so the
+	// delta and the final chunk cannot disagree about how a decoded argument
+	// object becomes a JSON string -- a disagreement that would show up as a
+	// tool that runs with different arguments depending on which frame a
+	// client read.
+	wire := assistantWire(settled)
+	for index := range wire.ToolCalls {
+		calls := []chatToolCall{wire.ToolCalls[index]}
+		position := index
+		calls[0].Index = &position
+		writeFrame(w, chatChunk{
+			ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
+			Choices: []chatChoice{{Index: 0, Delta: &chatMessage{
+				Role:      roleAssistant,
+				ToolCalls: calls,
+			}}},
+		})
+	}
 	writeFrame(w, finalChunk(id, model, created, settled))
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()

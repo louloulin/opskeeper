@@ -42331,3 +42331,97 @@ ok  github.com/vincent-wuhan/opskeeper/tests/e2e  52.815s
 `MODEL=`），一次跑完网关一跳与完整交付链路。`tests/e2e/README.md` 的模式表从三行变
 四行，并写明第四行**为什么是唯一不需要密钥的**——因为它只接受回环端点，而 harness 的
 承诺是节点不持有任何云厂商密钥。
+
+### 4.378 决策 444：把节点 Agent 的工具调用空洞关掉——**它不是"覆盖率不够"，是流式路径上根本没有这个字段**
+
+#### 一、缺陷本体：`streamCompletion` 从不发 `tool_calls`
+
+`core/domains/server/llmgw` 的流式路径只发两种帧：带 `role` 的首帧，以及
+`ReplyText` 的内容帧。**`ReplyToolCalls` 从来没有进过流**。
+
+后果链条是闭合的、且完全不报错：
+
+- 节点 Agent **永远流式请求**（这是 pig 客户端的做法，不是可选项）；
+- 流里没有工具调用 → pig 收到一个「空回复」的完整回合；
+- 空回复 = 回合结束 → **每一轮用工具的对话都以沉默收场**；
+- 没有 panic、没有 5xx、没有超时。日志干净。
+
+**全仓测试当时全绿**，因为没有任何一个假模型会选工具。这条缺陷存活到今天，靠的不是
+疏忽，而是「假模型让这个分支永远走不到」。
+
+#### 二、决定性证据：PiG 只读 `delta`，从不读最终帧
+
+不能假设「最终帧里有 tool_calls 就够了」。去 PiG 客户端源码查证：
+
+- `ai/openai.go:1963` 从 **`delta.tool_calls`** 读，按 `tc.Index` / `tc.ID` 建索引；
+- `grep "choice.Message" ai/openai.go` → **零命中**，即最终帧那条非流式路径 PiG 根本
+  不消费；
+- PiG 的 wire 类型是 `Index *int \`json:"index"\``——**没有 `omitempty`**。
+
+所以流里必须带 `index`，而且必须按 OpenAI 线协议放在 delta 里。**只补最终帧是无效修复**，
+这正是我最初想当然的地方。
+
+#### 三、连同被更正的一条错误断言
+
+`llmgw_test.go` 里原本写着「tool calls 不走流式」——**这条断言本身是错的**，它把缺陷
+写成了规格。本次一并更正为：断言 delta 带 `tool_calls`、`index` 存在且顺序正确、`ID`
+与 `Name` 非空。
+
+同一次改动里 `chatToolCall.Index` 从 `int` 改成 `*int`。**这不是风格问题**：值类型无法
+区分「没有 index」与「index 是 0」，而后者是合法的第一个工具调用。指针是线协议要求的。
+
+参数编解码**复用** `assistantWire(settled).ToolCalls`，不在 delta 帧里再编一次——否则
+delta 与最终帧可能对「一个已解码的参数对象如何变成 JSON 字符串」产生分歧，症状是**同
+一个工具在不同帧读到的参数不一样**。
+
+#### 四、两次差点误判，都是反向检验救下来的
+
+| 我差点下的结论 | 事实 | 我怎么被纠正的 |
+|---|---|---|
+| 节点 Agent 只有两个工具，是网关没下发插件工具 | e2e 夹具 `writeAdmittedPackage` 声明的 `tools` 本来就是**空集**；`codemode` + `tool_search` 是 pig 自带的 | 逐条回查夹具源码 |
+| `pig-ops.yaml` 的 `tools` 写成字符串数组即可 | 它是 `[]domain.ToolDecl` **对象形状**（`{name, class}`）；写成字符串会让节点 fail-closed **拒掉整个包** | 查 manifest 的强类型校验 |
+
+第二条尤其值得记：**错误写法不会降级，会让整包安装失败**。这类"看起来更自然"的写法是
+插件生态最容易踩的坑。
+
+#### 五、证明边界写进了代码，不只写在台账里
+
+新测试 `tests/e2e/node_agent_tool_call_test.go` 的文档注释引用
+`testenv.ToolCallLimits`，所以这个常量必须真实存在，并且明确写出**证明到哪**：
+
+**证明**：节点 pig 广告工具 → 工具调用以 `delta.tool_calls` 过线 → pig 自己的工具循环
+执行它 → 结果以 tool 角色消息回到对话 → 这一回合因此是**两次**模型调用。
+
+**不证明**：插件工具经 `policygate`/`gatesocket` 到达模型（夹具没有真实扩展）、manifest
+声明会变成真实工具（manifest 是承诺，得由扩展兑现）、以及任何写操作的 blast radius /
+审批 / 审计。
+
+写路径另有 `pig-tool-scoping-check` 与 policygate 单测覆盖。**不让一句"工具往返通了"
+被读成"插件通了"。**
+
+#### 六、变异验证：这个 e2e 精确地守着这一行
+
+把 delta 帧循环改成空循环（即回到修复前的行为）后单跑该测试：
+
+```
+--- FAIL: TestTheNodeAgentCallsAToolAndGetsAnAnswerBack (25.31s)
+    node_agent_tool_call_test.go:83: the model was called 1 time(s); a turn that
+    called a tool and read the answer costs two
+```
+
+失败点正是它该守的那一处，不是别的。随后恢复。全量 e2e 123s 绿，`ledgercheck` 绿，
+`cigate` 绿。
+
+`cigate` 第一次**红了**，并且指出的是真问题：新测试用了 `SharedFrontier`，因此属于需要
+broker 容器的那一类，必须进 `E2E_BROKER_TESTS`，否则 CI 的 e2e job 会因为一个与改动无关
+的镜像拉取限流而失败。已加入。
+
+#### 七、读数
+
+**分数不动**：阶段 0 = 98%、阶段 1 = 100%、阶段 2 = 100%、阶段 3 = 100.0%，加权
+≈ 99.5%；架构尺 A–E = 97.75%。
+
+理由是决策 443 已经写明：那一格的残余措辞有歧义（`§4.107.6` 的"模型是替的"已不成立
+vs `§四` 行末的"真 provider key 那一条"字面成立），**那是产品决定，不是我能单方面拍的**。
+本刀关掉的是一个独立于该歧义、且本仓能自己关掉的缺陷——它不构成"阶段 0 该满分"的
+证据，只构成"那个沉默回合不再是静默的"这一条证据。

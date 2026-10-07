@@ -52,6 +52,16 @@ type FakeLLM struct {
 	// test tells "the model was called again after the tool answered"
 	// from "the model answered once and the tool never ran".
 	gotMessages []int
+	// gotToolResults records the content of every tool-role message, in
+	// order. Message *counts* were enough for every assertion that existed
+	// while nothing ever called a tool, but the one question a tool-using
+	// turn raises is whether the result came back at all -- and a count
+	// cannot tell "one more message" from "one more message, and it is the
+	// answer to the call". Recording the content is what makes that
+	// answerable, and it is deliberately not a parsed struct: a harness that
+	// handed back a tidy object would be testing a convenience the wire does
+	// not offer.
+	gotToolResults []string
 	// hold parks the next completion until the test releases it. See
 	// HoldNextCall.
 	hold *LLMHold
@@ -67,7 +77,8 @@ type FakeLLM struct {
 // both produce a cheerful 200 from a permissive stub, and an agent that then
 // "works" in tests and fails on the first real call.
 func invalidChatRequest(model string, messages []struct {
-	Role string `json:"role"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }, tools []struct {
 	Function struct {
 		Name string `json:"name"`
@@ -178,6 +189,37 @@ type LLMToolCall struct {
 	Arguments string
 }
 
+// ToolCallLimits is the boundary of what the fake tool round trip proves, and
+// it is deliberately narrower than what a reader might assume from the words
+// "tool call".
+//
+// What it DOES prove, end to end through the real gateway and the real node
+// agent process:
+//
+//   - the node's pig advertises tools to the model, and the advertisement
+//     arrives (ToolsAdvertised);
+//   - a streamed tool call survives the OpenAI wire as delta.tool_calls with
+//     a usable index, id and name;
+//   - the agent's own loop runs the tool and appends the result to the
+//     conversation as a tool-role message that the model reads on the next
+//     turn (ToolResults);
+//   - the turn therefore costs two model calls, not one.
+//
+// What it does NOT prove, because the e2e fixtures have no extension loaded:
+//
+//   - that an opskeeper extension's tool reaches the agent through the
+//     policygate whitelist and the gate socket. The tools advertised here are
+//     the agent's own `codemode` and `tool_search`, not plugin tools;
+//   - that plugin manifest declarations produce real tools. The package
+//     manifest written by writeAdmittedPackage declares tools, and the
+//     manifest is a promise -- nothing in this fixture fulfils it;
+//   - anything about blast radius, approval, or audit of a write tool.
+//
+// The write path has its own coverage in pig-tool-scoping-check and the
+// policygate unit tests. This constant exists so a future reader cannot
+// accidentally promote "the tool loop round-trips" into "plugins work".
+const ToolCallLimits = `a tool round trip through the node agent, not a plugin tool`
+
 // NewFakeLLM starts an httptest.Server that speaks enough of the
 // OpenAI/Anthropic completion shape to satisfy the manager's chatruntime.
 func NewFakeLLM() *FakeLLM {
@@ -220,6 +262,18 @@ func (f *FakeLLM) SetToolScript(calls ...LLMToolCall) {
 }
 
 // ToolsAdvertised returns the tool names each request carried, in order.
+// ToolResults returns the content of every tool-role message this fake has
+// been sent, in order.
+//
+// It is the accessor a tool-using turn needs and that a message count could
+// never replace: the claim being made is "the agent ran something and its
+// result came back", and only the content of the result carries that.
+func (f *FakeLLM) ToolResults() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.gotToolResults...)
+}
+
 func (f *FakeLLM) ToolsAdvertised() [][]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -259,7 +313,8 @@ func (f *FakeLLM) openaiChat(w http.ResponseWriter, r *http.Request) {
 		Model    string `json:"model"`
 		Stream   bool   `json:"stream"`
 		Messages []struct {
-			Role string `json:"role"`
+			Role    string `json:"role"`
+			Content string `json:"content"`
 		} `json:"messages"`
 		Tools []struct {
 			Function struct {
@@ -297,6 +352,11 @@ func (f *FakeLLM) openaiChat(w http.ResponseWriter, r *http.Request) {
 	f.calls++
 	f.gotModels = append(f.gotModels, req.Model)
 	f.gotMessages = append(f.gotMessages, len(req.Messages))
+	for _, message := range req.Messages {
+		if message.Role == "tool" {
+			f.gotToolResults = append(f.gotToolResults, message.Content)
+		}
+	}
 	f.gotTools = append(f.gotTools, names)
 	reply := f.reply
 	var call *LLMToolCall

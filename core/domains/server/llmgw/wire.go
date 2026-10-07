@@ -83,6 +83,16 @@ type chatMessage struct {
 
 // chatToolCall is a tool call the model made, on the way back in.
 type chatToolCall struct {
+	// Index is the streaming delta's position, and it is a pointer so that
+	// "no index" (the non-streaming message shape, where OpenAI omits the
+	// field entirely) stays distinguishable from "index zero".
+	//
+	// That distinction is not cosmetic. PiG's own client reads streamed tool
+	// calls from `delta.tool_calls` and keys the fragments by this field
+	// (ai/openai.go: openai.go's stream loop indexes `partialsByWireIndex`),
+	// so an `omitempty` integer would drop index 0 -- the first and most
+	// common tool call -- and leave the client unable to place it.
+	Index    *int           `json:"index,omitempty"`
 	ID       string         `json:"id"`
 	Type     string         `json:"type"`
 	Function chatToolCallFn `json:"function"`

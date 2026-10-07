@@ -200,7 +200,7 @@ test-e2e-real-llm: ## 用本机真实推理引擎跑一次交付链路（需 Doc
 # a broker-dependent test and not listing it here is red; listing a test that
 # does not need the broker is also red, because that is how a real regression
 # gets skipped to make a pipeline green.
-E2E_BROKER_TESTS := TestNodeAgentDelivery|TestANodeKeepsItsTelemetryThroughAnOutage
+E2E_BROKER_TESTS := TestNodeAgentDelivery|TestANodeKeepsItsTelemetryThroughAnOutage|TestTheNodeAgentCallsAToolAndGetsAnAnswerBack
 
 # The rest of the end-to-end suite, on every push.
 #

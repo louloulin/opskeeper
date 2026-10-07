@@ -189,6 +189,13 @@ type EdgeOptions struct {
 	// would make "the log drained" true of a log that was never
 	// written to in the first place.
 	CollectorMode string
+	// PackageTools names the tools the node's admitted package declares.
+	// Empty -- the harness default, and what a governance-only package
+	// looks like -- means the node's agent is offered no plugin tool at
+	// all. A test about the tool path has to name one out loud, because a
+	// node with an empty tool list makes "the agent called a tool" true of
+	// nothing.
+	PackageTools []string
 	// CollectorInterval is how often the node samples. Empty leaves the
 	// production default (10s), which is longer than these tests wait.
 	CollectorInterval time.Duration
@@ -235,7 +242,7 @@ func StartEdge(t *testing.T, env *Env, bearer string, opts EdgeOptions) *Edge {
 		}
 	}
 	edge.TelemetryWALDir = filepath.Join(edge.WorkDir, "telemetry")
-	packageRoot := writeAdmittedPackage(t, filepath.Join(edge.WorkDir, "packages"))
+	packageRoot := writeAdmittedPackage(t, filepath.Join(edge.WorkDir, "packages"), opts.PackageTools...)
 
 	collectorMode := opts.CollectorMode
 	if collectorMode == "" {
@@ -547,11 +554,30 @@ func (e *Env) StreamConversation(t *testing.T, bearer, sessionID string) (<-chan
 // The tool call is the next increment of this acceptance, and when it comes
 // it belongs to a package with real extensions in it. A green conversation
 // here must not be read as "tools work on a node".
-func writeAdmittedPackage(t *testing.T, base string) string {
+func writeAdmittedPackage(t *testing.T, base string, tools ...string) string {
 	t.Helper()
 	root := filepath.Join(base, "e2e-delivery")
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		t.Fatalf("testenv: create package root: %v", err)
+	}
+	// The declared tool list is a parameter rather than a constant because the
+	// empty list is what most of these tests want and the non-empty one is
+	// the only way to ask the question this fixture exists for -- whether a
+	// tool the node was offered is one the agent can actually be made to
+	// call. Baking in either value would make the other kind of test
+	// impossible to write.
+	// Object form, not a bare string list: the manifest's tool entry is a
+	// ToolDecl, and the node's validation refuses a string where it expects
+	// one. Getting this shape wrong does not merely fail the test -- it fails
+	// the *node*, which comes up with no agent at all, so a fixture written
+	// from a guess about the schema reads exactly like a broken product.
+	toolList := "[]"
+	if len(tools) > 0 {
+		decls := make([]string, 0, len(tools))
+		for _, name := range tools {
+			decls = append(decls, fmt.Sprintf("{name: %s, class: read}", name))
+		}
+		toolList = "[" + strings.Join(decls, ", ") + "]"
 	}
 	manifest := `apiVersion: opskeeper.io/v1
 kind: Plugin
@@ -563,7 +589,7 @@ spec:
   targets: [edge]
   safety_level: L1
   capabilities: [read]
-  tools: []
+  tools: ` + toolList + `
   required_scopes: []
   audit:
     emits: true

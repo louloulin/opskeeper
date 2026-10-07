@@ -311,9 +311,31 @@ func TestAStreamingReplyIsAWellFormedFrameSequence(t *testing.T) {
 			if choice.Delta.Content != "" {
 				sawText = true
 			}
-			if choice.Delta.ToolCalls != nil {
-				t.Errorf("a delta carried tool calls: %+v; tool calls are not streamed, they "+
-					"arrive whole in the final frame", choice.Delta)
+			for i, call := range choice.Delta.ToolCalls {
+				// This assertion used to say the opposite -- that tool calls
+				// are not streamed and arrive whole in the final frame --
+				// and it was wrong, in a way the rest of the repository
+				// could not catch. PiG's OpenAI client assembles a tool call
+				// from `delta.tool_calls`, keyed by this index and the call
+				// id, and never reads the final frame's `message` (see
+				// ai/openai.go's stream loop). A gateway that put them only
+				// there therefore answered every tool-using turn with a
+				// well-formed stream the node read as silence.
+				//
+				// The index is checked as present rather than as a value,
+				// because the field is a pointer upstream and `omitempty`
+				// on a plain int would drop index 0 -- the first tool call,
+				// and the most common one.
+				if call.Index == nil {
+					t.Errorf("a streamed tool call carried no index: %+v; the client keys "+
+						"streamed fragments by it and cannot place one without it", call)
+				} else if *call.Index != i {
+					t.Errorf("tool call %d carries index %d; a client accumulating fragments "+
+						"by index would attach this one to the wrong call", i, *call.Index)
+				}
+				if call.ID == "" || call.Function.Name == "" {
+					t.Errorf("a streamed tool call is incomplete: %+v", call)
+				}
 			}
 		}
 	}
