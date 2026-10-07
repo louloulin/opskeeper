@@ -38,9 +38,9 @@
 
 ### 3.2 Agent 档案墙(agents-gallery)
 
-- [ ] 3.2.1 Agents 页卡片网格:AgentAvatar + persona 名 + 职责说明 + 工具集 Chip + 最近关联事件,覆盖 11 persona
-- [ ] 3.2.2 每卡「开始对话」动作(创建会话并跳转,失败给出错误提示不跳转)
-- [ ] 3.2.3 档案墙渲染与开始对话测试
+- [x] 3.2.1 Agents 页卡片网格:AgentAvatar + persona 名 + 职责说明 + 工具集 Chip + 最近关联事件,覆盖 11 persona
+- [x] 3.2.2 每卡「开始对话」动作(创建会话并跳转,失败给出错误提示不跳转)
+- [x] 3.2.3 档案墙渲染与开始对话测试
 
 ### 3.3 Discover(discover-hub)
 
