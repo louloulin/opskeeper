@@ -2,6 +2,12 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { DeliverableCard, matchDeliverable } from './DeliverableCard';
 
+// getLocale() falls back to autoDetectLocale() when localStorage is empty,
+// which resolves to en-US outside a CN timezone. The card button assertion is
+// on the Chinese label 打开, so pin the locale explicitly instead of relying
+// on detection — same precedent as SessionList.test.tsx.
+localStorage.setItem('opskeeper-locale', 'zh-CN');
+
 describe('matchDeliverable', () => {
   it('recognizes hosted pages and reports', () => {
     expect(matchDeliverable('/pages/12')).toEqual({ type: 'page', id: 12, href: '/pages/12' });

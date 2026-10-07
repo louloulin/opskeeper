@@ -354,3 +354,50 @@ describe('MessageBubble inline approval card', () => {
     expect(screen.getAllByText(/opskeeper-dualsign-OK/).length).toBeGreaterThan(0);
   });
 });
+
+describe('MessageBubble deliverable link rendering', () => {
+  beforeEach(() => {
+    localStorage.setItem('opskeeper-locale', 'zh-CN');
+  });
+
+  it('renders a hosted-page markdown link as a DeliverableCard, not an anchor', () => {
+    const { container } = render(
+      <MessageBubble
+        message={{
+          id: 'assistant-deliverable',
+          role: 'assistant',
+          content: '报告已生成：[查看托管页](/pages/12)',
+          pending: false,
+        }}
+      />,
+    );
+
+    // Card affordances render...
+    expect(screen.getByText('托管页 #12')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '打开' })).toBeInTheDocument();
+    // ...and the underlying markdown anchor is replaced (no <a href="/pages/12">).
+    expect(container.querySelector('a[href="/pages/12"]')).toBeNull();
+  });
+
+  it('keeps a non-deliverable markdown link as a plain anchor with no target attr', () => {
+    const { container } = render(
+      <MessageBubble
+        message={{
+          id: 'assistant-plain-link',
+          role: 'assistant',
+          content: '请先到[设置页](/settings)调整阈值。',
+          pending: false,
+        }}
+      />,
+    );
+
+    const link = container.querySelector('a[href="/settings"]');
+    expect(link).not.toBeNull();
+    // Pre-refactor fallback is verbatim: same markup, children preserved,
+    // and no target attribute was ever added.
+    expect(link?.textContent).toBe('设置页');
+    expect(link?.hasAttribute('target')).toBe(false);
+    // No deliverable card is produced for a plain link.
+    expect(screen.queryByRole('button', { name: '打开' })).not.toBeInTheDocument();
+  });
+});
