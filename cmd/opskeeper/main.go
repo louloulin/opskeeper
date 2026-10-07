@@ -3047,6 +3047,23 @@ func main() {
 		workspaceRoot = "/var/lib/opskeeper/workspace"
 	}
 	wsMgr := workspace.New(workspaceRoot)
+	// Eagerly create the workspace root so an unwritable state dir surfaces at
+	// STARTUP with the env var that fixes it — not at execute time, after a
+	// human already approved a change and the chat is blocked on it. The
+	// workspace default is a container path (/var/lib/opskeeper) that a
+	// non-root local/bare-metal run cannot write; serve_page and the
+	// marketplace skills root already warn at startup for the same reason
+	// (see toolwiring.apply and the marketplace wiring). An empty
+	// OPSKEEPER_WORKSPACE_ROOT disables the workspace (temp-dir fallback),
+	// so there is nothing to check in that case.
+	if workspaceRoot != "" {
+		if err := os.MkdirAll(workspaceRoot, 0o750); err != nil {
+			log.Warn("cloud_bash workspace: mkdir root failed; approved cloud_bash commands will fail to execute",
+				slog.String("dir", workspaceRoot),
+				slog.String("hint", "set OPSKEEPER_WORKSPACE_ROOT to a writable path"),
+				slog.Any("err", err))
+		}
+	}
 	approvalUC.RegisterExecutor("cloud_bash", func(ctx context.Context, payloadJSON string) (string, error) {
 		var p cloudBashPayload
 		if err := json.Unmarshal([]byte(payloadJSON), &p); err != nil {

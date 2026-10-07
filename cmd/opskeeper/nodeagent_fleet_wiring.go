@@ -8,6 +8,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/domains/biz/nodeagent"
 	"github.com/vincent-wuhan/opskeeper/core/domains/biz/nodefleet"
 	"github.com/vincent-wuhan/opskeeper/core/floor/tunnel"
+	frontierbound "github.com/vincent-wuhan/opskeeper/core/manager/service/frontierbound"
 	"github.com/vincent-wuhan/opskeeper/core/ports"
 )
 
@@ -70,11 +71,13 @@ func (a nodeAgentFleetAdapter) Decide(ctx context.Context, edgeID uint64, sessio
 }
 
 func (a nodeAgentFleetAdapter) State(ctx context.Context, edgeID uint64) (*ports.ProcessState, error) {
-	return a.fleet.State(ctx, edgeID)
+	ps, err := a.fleet.State(ctx, edgeID)
+	return ps, translateBrokerError(err)
 }
 
 func (a nodeAgentFleetAdapter) Health(ctx context.Context, edgeID uint64) (*tunnel.AgentHealthResponse, error) {
-	return a.fleet.Health(ctx, edgeID)
+	h, err := a.fleet.Health(ctx, edgeID)
+	return h, translateBrokerError(err)
 }
 
 func (a nodeAgentFleetAdapter) Close(edgeID uint64, sessionID string) {
@@ -99,6 +102,23 @@ func translateFleetError(err error) error {
 		// it with a bare sentinel would have made the console's answer right
 		// and the diagnosis impossible.
 		return errors.Join(nodeagent.ErrConversationLimit, err)
+	}
+	return err
+}
+
+// translateBrokerError maps the frontier broker's "I am disabled" answer onto
+// nodeagent's own vocabulary, so the console can tell a node that refused
+// (a real answer) from a control plane that cannot reach any node at all.
+// Without this the broker's sentinel reaches the HTTP layer unrecognised and
+// renders as a 500 "internal" error — which reads as a server bug when it is
+// a configuration state. Join rather than Replace so ErrDisabled stays in the
+// chain for the log.
+func translateBrokerError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, frontierbound.ErrDisabled) {
+		return errors.Join(nodeagent.ErrBrokerUnavailable, err)
 	}
 	return err
 }

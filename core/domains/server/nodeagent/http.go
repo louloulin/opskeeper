@@ -367,6 +367,14 @@ func writeErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, nodeagent.ErrNoSession):
 		code, status = "no_session", http.StatusNotFound
+	case errors.Is(err, nodeagent.ErrBrokerUnavailable):
+		// 503 rather than 500: nothing is wrong with the request and no node
+		// refused — the control plane cannot reach any node because the
+		// frontier broker is disabled or down. Reporting it as an internal
+		// error sends an operator to the manager's logs for what is a
+		// configuration / transport state the console already knows how to
+		// render ("broker unavailable") and retry later.
+		code, status = "broker_unavailable", http.StatusServiceUnavailable
 	case errors.Is(err, nodeagent.ErrSessionExists):
 		code, status = "session_exists", http.StatusConflict
 	case errors.Is(err, nodeagent.ErrConversationLimit):

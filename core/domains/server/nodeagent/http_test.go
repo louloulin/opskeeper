@@ -615,3 +615,54 @@ func TestAFullFleetIsReportedAsTooManyRequests(t *testing.T) {
 		})
 	}
 }
+
+// A broker that is disabled is not a server bug. Before this mapping the
+// frontier adapter's ErrDisabled reached writeErr unrecognised and rendered as
+// 500 "internal", which sends an operator to the manager's logs for what is a
+// transport/configuration state the console already knows how to render and
+// retry. Pin the status AND the machine-readable code the console branches on.
+func TestABrokerDownIsServiceUnavailableNotAnInternalError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "bare sentinel",
+			err:  nodeagent.ErrBrokerUnavailable,
+		},
+		{
+			// The shape production actually produces: the composition-root
+			// adapter joins its own sentinel onto the frontier one, and the
+			// biz layer wraps with context. errors.Is has to see through both,
+			// or the mapping silently stops the first time anyone adds a
+			// wrapping layer.
+			name: "joined with frontier disabled and wrapped",
+			err: fmt.Errorf("state edge 1: %w",
+				errors.Join(nodeagent.ErrBrokerUnavailable, errors.New("frontierbound: disabled"))),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeErr(rec, tc.err)
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+			}
+			var body struct {
+				Error struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if body.Error.Code != "broker_unavailable" {
+				t.Errorf("code = %q, want %q", body.Error.Code, "broker_unavailable")
+			}
+			if !strings.Contains(body.Error.Message, "broker") {
+				t.Errorf("message = %q, want it to name the broker", body.Error.Message)
+			}
+		})
+	}
+}

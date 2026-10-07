@@ -56,6 +56,16 @@ var ErrConversationLimit = errors.New("nodeagent: conversation limit reached")
 // ErrNoSession means the console named a conversation nobody has open.
 var ErrNoSession = errors.New("nodeagent: no such conversation")
 
+// ErrBrokerUnavailable means the control plane cannot reach a node agent at
+// all because the frontier broker is disabled or down — not because any
+// particular node refused. It is this package's sentinel for the same port
+// rule as ErrConversationLimit: the console has to be able to tell "this node
+// answered and said no" (a real answer, rendered as one) apart from "the
+// transport is not there" (nothing to ask, rendered as unavailable). The
+// frontier adapter's own ErrDisabled travels in the wrapped error and in the
+// log; the console HTTP layer only needs to branch on this.
+var ErrBrokerUnavailable = errors.New("nodeagent: broker unavailable")
+
 // DefaultQueueDepth bounds how many frames a slow console may fall behind
 // by.
 //
