@@ -711,6 +711,21 @@ domain-check: ## 校验 control plane 的域边界（决策 231 起；域数/声
 # promised gate is missing from either -- it does not re-run the gates, since
 # CI runs them three lines above and the answer is on the same page.
 .PHONY: ci-gate-check
+# gates-report：把 33 道门真跑一遍，一张表、一行一道。
+#
+# 它是**本地**工具，不进 CI：CI 已经一道一道地跑这些门，而并发地把它们
+# 收在一道命令里，正是 CI 的做法；这条命令的价值恰恰在于顺序执行且全部
+# 跑完，让「33 把里有几把红、红的是树还是这台机器」有一个人人能复现的答案。
+#
+# 它什么都不存。不写文件、不记分、不留一个明天会过期的摘要——决策 462 花一刀
+# 删掉的正是那种「写进文档就没人重算的数」。
+#
+# 红门的判定权不在这条命令手里：它打印结果和那道门自己的理由，把「树的问题」
+# 与「这台机器的状态」留给人判断。把一个缺失的 MySQL 说成「仓库坏了」，
+# 是这条命令能犯的最坏的错，所以它不犯。
+.PHONY: gates-report
+gates-report:
+	go run ./scripts/gatereport -timeout 30m .
 ci-gate-check: ## 校验计划 §六 的验收门槛都已定义并真的被 CI 调用（决策 163）
 	go run ./scripts/cigate .
 	go test ./scripts/cigate/ -count=1

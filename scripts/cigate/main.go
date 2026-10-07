@@ -47,6 +47,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/vincent-wuhan/opskeeper/scripts/internal/gatename"
 )
 
 // Gate is one acceptance gate the plan names, and why it has to run somewhere
@@ -151,11 +153,11 @@ func DecisionGates() []Gate {
 		},
 		{
 			Target: "dcell-check",
-			Why: "the plugin-ecosystem census reads 15 of 16 cells and that number is quoted in the " +
-				"ledger, but the score barely moves when a cell's reason goes stale rather than its " +
-				"verdict -- decision 462 found one that had been claiming the index reads a single " +
-				"root for a whole knife after that was no longer true, and nothing in CI could see it, " +
-				"because the census itself was not run by anything (decision 462)",
+			Why: "the plugin-ecosystem census is a score the ledger quotes, and the score barely " +
+				"moves when a cell's reason goes stale rather than its verdict -- decision 462 found " +
+				"one that had been claiming the index reads a single root for a whole knife after " +
+				"that stopped being true, and nothing in CI could have seen it, because the census " +
+				"itself was not run by anything (decision 462)",
 		},
 		{
 			Target: "roadmap-delivery-check",
@@ -463,7 +465,7 @@ func check(root string) error {
 	// table says it matters and the Makefile disagrees. Reported, not fixed,
 	// because only a human knows which of the two is wrong.
 	for target := range invoked {
-		if _, exempt := SelfExempt[target]; isGate(target, allGates()) || exempt || !looksLikeGate(target) {
+		if _, exempt := gatename.SelfExempt[target]; isGate(target, allGates()) || exempt || !looksLikeGate(target) {
 			continue
 		}
 		problems = append(problems, fmt.Sprintf(
@@ -529,19 +531,10 @@ func check(root string) error {
 	return nil
 }
 
-// NotRun is every check-shaped Makefile target CI does not invoke, each with
-// the reason it is not there.
-//
-// It is a separate table from NotInCI because NotInCI is about the plan's
-// acceptance lines -- promises written in prose, which may or may not have a
-// make target at all -- while this is about targets that exist and go unused.
-// Merging them would lose the distinction that matters here: a target nobody
-// runs is a decision somebody has not made yet, not a decision somebody made
-// and wrote down elsewhere.
-var NotRun = map[string]string{
-	"version-check":         "a release-time assertion, not a per-push one: it compares RELEASE_VERSION.json's web_hash and teamharness_source_tree against `git rev-parse HEAD:<tree>`, so it can only be green on the commit that was actually signed. It is not unwired, it is wired in .github/workflows/release.yml where those comparisons mean something; NotInCI already carries the same reasoning in prose (decisions 166, 348)",
-	"mysql-migration-check": "it needs a live MySQL to migrate and roll back against (OPSKEEPER_TEST_MYSQL_DSN), and the per-push job deliberately runs no database container; the same property is covered for the other engines by the gates that do run. Wiring it into a job with a MySQL service is a real change to the pipeline, not a line in this table (decision 348)",
-}
+// NotRun and SelfExempt are the two exemption tables, and they live in
+// scripts/internal/gatename rather than here: they are properties of the
+// gates, not of this checker, and the gate report has to honour the same
+// ones or it would run a target this command says nobody runs.
 
 // unwiredCheckTargets reports every check-shaped target no workflow runs and
 // no exemption covers.
@@ -561,16 +554,16 @@ func unwiredCheckTargets(defined, invoked map[string]bool) []string {
 			// Already reported above, with the reason the promise was made.
 			continue
 		}
-		reason, exempt := NotRun[target]
+		reason, exempt := gatename.NotRun[target]
 		if !exempt {
 			problems = append(problems, fmt.Sprintf(
 				"the Makefile defines %q, it reads like a check, and nothing runs it; wire it "+
-					"into ci.yml, or record it in NotRun with the reason it does not run there", target))
+					"into ci.yml, or record it in gatename.NotRun with the reason it does not run there", target))
 			continue
 		}
 		if strings.TrimSpace(reason) == "" {
 			problems = append(problems, fmt.Sprintf(
-				"NotRun lists %q with an empty reason; an exemption nobody can check is a "+
+				"gatename.NotRun lists %q with an empty reason; an exemption nobody can check is a "+
 					"shorter comment that reads the same", target))
 		}
 	}
@@ -584,24 +577,7 @@ func unwiredCheckTargets(defined, invoked map[string]bool) []string {
 // in the first token, and reading the second as a target would let this check
 // report a target "defined" that no recipe will ever run. `.PHONY` and other
 // dot-targets are excluded, and a commented line is not a definition.
-func makeTargets(src string) map[string]bool {
-	out := map[string]bool{}
-	for _, line := range strings.Split(src, "\n") {
-		if line == "" || line[0] == ' ' || line[0] == '\t' || line[0] == '#' {
-			continue
-		}
-		i := strings.IndexByte(line, ':')
-		if i < 0 || i+1 < len(line) && line[i+1] == '=' {
-			continue
-		}
-		name := strings.TrimSpace(line[:i])
-		if name == "" || strings.HasPrefix(name, ".") || strings.ContainsAny(name, "=?$") {
-			continue
-		}
-		out[name] = true
-	}
-	return out
-}
+func makeTargets(src string) map[string]bool { return gatename.MakeTargets(src) }
 
 // invokedTargets is every make target ci.yml runs.
 //
@@ -832,22 +808,11 @@ func brokerSkipAgrees(root, makefileSrc string) error {
 	return nil
 }
 
-// SelfExempt is what checks gates without being a gate the plan promises.
-//
-// Recorded rather than skipped by a name rule, because "this check is about
-// the wiring of gates, not itself a promised gate" and "somebody added a
-// -check target and forgot the table" are the same shape from the outside,
-// and the second is how this exemption becomes a hole.
-var SelfExempt = map[string]string{
-	"ci-gate-check": "this checker: it answers whether the promised gates run, so it is not one of them",
-}
-
-// looksLikeGate is the naming shape the reverse-drift rule watches. A target
-// ending in -check or named check reads like an acceptance gate to anyone
-// scanning ci.yml, so one that is not in Gates() is worth a second look.
-func looksLikeGate(target string) bool {
-	return strings.HasSuffix(target, "-check") || target == "check"
-}
+// looksLikeGate is the reverse-drift rule's naming shape. The rule itself and
+// the reason it is loose live in scripts/internal/gatename, because the gate
+// report needs the same answer and two copies would be two opinions about
+// which targets are gates.
+func looksLikeGate(target string) bool { return gatename.LooksLikeGate(target) }
 
 // allGates is both tables, in the order they run: the plan's gates first,
 // then the decision-owned ones. Every rule that has to see the whole set --
