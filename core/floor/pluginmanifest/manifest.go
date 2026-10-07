@@ -28,6 +28,12 @@ const ManifestFile = sdk.ManifestFile
 
 // Plugin is a validated plugin ready for admission.
 type Plugin struct {
+	// Origin is which root a multi-root load read this plugin from. Empty
+	// for a single-root load, which has only one root to name.
+	Origin string
+	// Shadowed reports that another root carried a package of the same
+	// name and this one won on precedence. See LoadCatalogRoots.
+	Shadowed bool
 	// Root is the plugin's directory on disk.
 	Root string
 	// Manifest is the parsed and structurally validated declaration.
@@ -233,6 +239,78 @@ func LoadCatalog(base string) (Catalog, error) {
 		return Catalog{}, err
 	}
 	return Catalog{Plugins: plugins}, nil
+}
+
+// LoadCatalogRoots reads several roots into one catalog.
+//
+// The single-root loader is kept because single-root is the real shape of a
+// small deployment and because two readers of one directory do not need a
+// precedence rule. Where it is not the shape — a control plane that has a
+// cluster-wide root and a per-tenant root — one reader per directory would
+// publish two catalogs and leave a client to merge them, which is the
+// client-side version of the bug this function exists to remove.
+//
+// Precedence is by Root.Label and is fixed, not argument order:
+//
+//	tenant  >  system  >  builtin
+//
+// A tenant's copy of a package is the one that runs, so it wins over the
+// cluster-wide copy; the cluster-wide copy wins over an image-baked one
+// because the baked one cannot be upgraded by an operator at all. The
+// losing row is dropped from the catalog and recorded on the winner as
+// Shadowed, so "I am looking at an override" is a fact in the index rather
+// than something a reader reconstructs from having read two directories.
+//
+// An absent root is skipped. An *invalid* package is still fatal: the
+// single-root loader refuses a whole set over one bad manifest, and a
+// multi-root index that silently dropped the bad one would be answering a
+// different question from the one its own admission path asks.
+func LoadCatalogRoots(roots ...Root) (Catalog, error) {
+	byName := map[string]Plugin{}
+	shadowed := map[string]bool{}
+	// rank is lower-is-higher. An unknown label ranks below builtin, which
+	// means a typo in a label demotes that root instead of silently
+	// outranking the tenant's.
+	rank := map[string]int{OriginTenant: 0, OriginSystem: 1, OriginBuiltin: 2}
+
+	for _, r := range roots {
+		if r.Path == "" {
+			continue
+		}
+		plugins, err := LoadAll(r.Path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return Catalog{}, fmt.Errorf("root %s (%s): %w", r.Path, r.Label, err)
+		}
+		for _, p := range plugins {
+			name := p.Name()
+			prev, held := byName[name]
+			if !held {
+				p.Origin = r.Label
+				byName[name] = p
+				continue
+			}
+			// Both roots carry the name. The better-ranked row stays; the
+			// other one is not a row of its own any more, it is a fact
+			// about the row that won.
+			winner := p
+			if rank[prev.Origin] < rank[r.Label] {
+				winner = prev
+			}
+			shadowed[name] = true
+			byName[name] = winner
+		}
+	}
+
+	out := make([]Plugin, 0, len(byName))
+	for _, p := range byName {
+		p.Shadowed = shadowed[p.Name()]
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
+	return Catalog{Plugins: out}, nil
 }
 
 // Describe renders a one-line summary for CLI output and log lines.

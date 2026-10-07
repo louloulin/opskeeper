@@ -61,8 +61,9 @@ func TestOnlyRepoItemsAreScored(t *testing.T) {
 	}
 	// Pinned, and it moves when a claim is closed — which is the whole
 	// point of the number. It was 2 when the audit was written (A1 and A2),
-	// and 4 after 决策 457 closed the two rebalance-history items.
-	const wantClosed = 4
+	// and 4 after 决策 457 closed the two rebalance-history items, then 5
+	// once 决策 459 closed B3.
+	const wantClosed = 5
 	if closed != wantClosed {
 		t.Errorf("closed = %d, want %d. A move in either direction is news: "+
 			"up means a claim was closed, down means one of them stopped being true.", closed, wantClosed)
@@ -94,8 +95,8 @@ func fixture(t *testing.T) string {
 	}
 	writeFile(t, root, "core/manager/middleware/adapter/mq/rebalance.go",
 		"package mq\n\nfunc NewRebalanceHistoryStore() {}\n\nfunc (c *kafkaClient) StartRebalanceSampler() {}\n")
-	writeFile(t, root, "core/manager/biz/marketplace/usecase.go",
-		"package marketplace\n\nfunc (uc *Usecase) CatalogFromSources() {}\n")
+	writeFile(t, root, "core/floor/pluginmanifest/manifest.go",
+		"package pluginmanifest\n\nfunc LoadCatalogRoots() {}\n")
 	return root
 }
 
@@ -120,7 +121,7 @@ func TestTheFixtureClosesEverythingAndEveryClaimCanBeBroken(t *testing.T) {
 		{"A2", filepath.Join("plugins", "pig-ops", "c", "pig-ops.yaml"), "spec:\n  install:\n    min_edge_version: 0.8.0\n", "一个包丢了 pig 下限"},
 		{"B1", "core/manager/middleware/adapter/mq/rebalance.go", "package mq\n\nfunc (c *kafkaClient) StartRebalanceSampler() {}\n", "持久化实现被删"},
 		{"B2", "core/manager/middleware/adapter/mq/rebalance.go", "package mq\n\nfunc NewRebalanceHistoryStore() {}\n", "定时器实现被删"},
-		{"B3", "core/manager/biz/marketplace/usecase.go", "package marketplace\n", "跨源索引实现被删"},
+		{"B3", "core/floor/pluginmanifest/manifest.go", "package pluginmanifest\n", "多根索引实现被删"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.id+"/"+tc.comment, func(t *testing.T) {

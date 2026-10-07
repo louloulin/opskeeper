@@ -146,8 +146,8 @@ var repoItems = []item{
 		subject: "市场索引覆盖本租户安装根之外的来源",
 		class:   classRepo,
 		done: func(root string) (bool, string, error) {
-			return declared(root, "core/manager/biz/marketplace",
-				"func (uc *Usecase) CatalogFromSources(", "the index reads one directory: remote registries and uninstalled builds are not in it")
+			return declared(root, "core/floor/pluginmanifest",
+				"func LoadCatalogRoots(", "the index reads one directory: the cluster-wide and image-baked roots a tenant can also install from are not in it")
 		},
 	},
 }
@@ -173,6 +173,14 @@ var externalItems = []item{
 		evidence: "一个 Kafka / PostgreSQL / Redis / K8s 实例接一次真实读写",
 		holder:   "部署方",
 		closer:   "make test-e2e-live —— 需要 tests/e2e/secrets.local.env，缺哪项会 SKIP 并写明",
+	},
+	{
+		id:       "E4",
+		subject:  "远程来源自身的索引：远程 registry 还没有一份可列举的清单",
+		evidence: "一个远程 registry 暴露一份包清单，且 GET /v1/marketplace/catalog 把它们并进索引",
+		class:    classExternal,
+		holder:   "registry 一侧（外部系统）",
+		closer:   "本仓暂无：LoadCatalogRoots 已经把多根这件事做完，剩下的半是别人提供一个可列举的远端清单——本仓没有可调的远端",
 	},
 	{
 		id:       "E3",

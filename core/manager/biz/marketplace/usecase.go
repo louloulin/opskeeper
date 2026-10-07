@@ -962,29 +962,61 @@ func expandShorthandGitURL(raw string) string {
 
 // Catalog indexes what this tenant can install.
 //
-// The index is read from the tenant's install root — the same directory
-// packages land in — so it cannot drift from what is actually offered the
-// way a second table beside it could. A tenant whose root does not exist
-// yet gets an empty index rather than an error: nobody has installed
-// anything, and that is not a failure an operator can act on.
+// Every root a package can be installed from is read, not just the tenant's
+// own. The route answers "what can this tenant install", and in a
+// multi-tenant deployment the cluster-wide root is installable by every
+// tenant; reading only the tenant's root answered "what has this tenant
+// already installed" while claiming the stronger question. A deployment
+// that installs into one root (single-tenant, or TenantSkillsRoot unset)
+// reads one root, because targetRoot then *is* the system root and listing
+// it twice would shadow every row with itself.
 //
-// This is the first production caller of pluginmanifest.LoadCatalog. Until
-// this method the loader existed, was exercised by tests, and was reachable
-// from nowhere a user could go.
+// Roots are read from disk rather than from a table beside them, so the
+// index cannot drift from what is actually offered. A root that does not
+// exist is skipped rather than an error: nobody has installed anything
+// there, and that is not a failure an operator can act on.
+//
+// Precedence between roots is the loader's (tenant > system > builtin),
+// and a row that hides a same-named package from a lower root is marked
+// shadowed — see pluginmanifest.LoadCatalogRoots.
 func (uc *Usecase) Catalog(ctx context.Context, caller Caller) ([]pluginmanifest.Entry, error) {
 	if caller.UserID == 0 {
 		return nil, fmt.Errorf("%w: caller required", errs.ErrUnauthorized)
 	}
-	root := uc.targetRoot(caller.TenantID)
-	if _, err := os.Stat(root); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	catalog, err := pluginmanifest.LoadCatalog(root)
+	catalog, err := pluginmanifest.LoadCatalogRoots(uc.catalogRoots(caller.TenantID)...)
 	if err != nil {
-		return nil, fmt.Errorf("marketplace: the installed catalog at %s does not validate: %w", root, err)
+		return nil, fmt.Errorf("marketplace: the installed catalog does not validate: %w", err)
 	}
 	return catalog.Entries(), nil
+}
+
+// catalogRoots lists the directories this tenant's index is read from, most
+// preferred first, with the tenant root deduplicated against the roots it
+// happens to equal.
+//
+// The dedupe is by cleaned path because the two roots are frequently the
+// same directory in a single-tenant deployment, and a root listed twice
+// would mark every one of its own rows shadowed — an index that says
+// "everything here overrides something" while overriding nothing.
+func (uc *Usecase) catalogRoots(tenantID uint64) []pluginmanifest.Root {
+	var out []pluginmanifest.Root
+	seen := map[string]bool{}
+	add := func(path, label string) {
+		if path == "" {
+			return
+		}
+		clean := filepath.Clean(path)
+		if seen[clean] {
+			return
+		}
+		seen[clean] = true
+		out = append(out, pluginmanifest.Root{Path: path, Label: label})
+	}
+
+	add(uc.targetRoot(tenantID), pluginmanifest.OriginTenant)
+	add(uc.cfg.SystemSkillsRoot, pluginmanifest.OriginSystem)
+	for _, r := range uc.cfg.BuiltinSkillsRoots {
+		add(r, pluginmanifest.OriginBuiltin)
+	}
+	return out
 }

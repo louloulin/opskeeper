@@ -25,6 +25,45 @@ import (
 // would make the control plane's pre-flight and the node's refusal able to
 // disagree, which is the failure versionmatrix_test.go exists to prevent.
 
+// Origin names where a row of the index came from.
+//
+// The index used to read exactly one directory, which was honest about what
+// it did and wrong about what it claimed: the route is "the packages this
+// tenant can install", and a multi-tenant deployment has more than one
+// directory a package can be installed from. A package sitting in the
+// cluster-wide root is installable by every tenant and was invisible to
+// every one of them.
+//
+// The label is per root, not per package, because that is the fact an
+// operator acts on: "which of these came from the cluster root" is a
+// question about the fleet, and it is the question that decides whether
+// uninstalling a row means anything to anybody else.
+const (
+	// OriginTenant is the caller's own install root.
+	OriginTenant = "tenant"
+	// OriginSystem is the cluster-wide root every tenant sees.
+	OriginSystem = "system"
+	// OriginBuiltin is an image-baked root, read-only by construction:
+	// nothing installs into it and nothing uninstalls from it.
+	OriginBuiltin = "builtin"
+)
+
+// Root is one directory the index reads.
+//
+// Precedence is explicit rather than implied by argument order, because the
+// answer to "a package by this name is in both roots" is a product decision
+// (the tenant's copy is the one that runs) and a decision that depends on
+// the order a caller happened to pass its arguments is a decision nobody
+// wrote down.
+type Root struct {
+	// Path is the directory to read. Empty or absent is skipped, so a
+	// deployment that configures no builtin roots does not have to filter
+	// them out itself.
+	Path string
+	// Label is the Origin constant this root contributes.
+	Label string
+}
+
 // Entry is one row of the index.
 //
 // The compatibility question — can THIS node host that package — is not
@@ -42,6 +81,19 @@ type Entry struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
 	Vendor  string `json:"vendor,omitempty"`
+	// Origin is which root this row was read from — see the Origin
+	// constants. Empty is a row read before this field existed, which no
+	// current caller produces; it is rendered rather than inferred so a
+	// client never has to guess between "cluster-wide" and "unknown".
+	Origin string `json:"origin,omitempty"`
+	// Shadowed reports that a lower-precedence root also carries a package
+	// of this name and this row won.
+	//
+	// Without it a tenant that overrode a cluster-wide package has no way
+	// to tell that the row it is looking at hides another one. The flag is
+	// per row rather than a catalog-level count because a count cannot be
+	// acted on: "3 of 40 rows shadow something" does not say which 3.
+	Shadowed bool `json:"shadowed,omitempty"`
 	// Targets are the planes the package asked to run on.
 	Targets []string `json:"targets"`
 	// SafetyLevel and Capability are the manifest's own claim about how
@@ -78,6 +130,8 @@ func (c Catalog) Entries() []Entry {
 	for _, p := range c.Plugins {
 		e := Entry{
 			Name:           p.Name(),
+			Origin:         p.Origin,
+			Shadowed:       p.Shadowed,
 			Version:        p.Manifest.Metadata.Version,
 			Vendor:         p.Manifest.Metadata.Vendor,
 			Targets:        targetNames(p.Targets()),
