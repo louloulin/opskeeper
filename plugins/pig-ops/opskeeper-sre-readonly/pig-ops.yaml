@@ -8,7 +8,7 @@ apiVersion: opskeeper.io/v1
 kind: Plugin
 metadata:
   name: opskeeper-sre-readonly
-  version: 0.1.0
+  version: 0.1.1
   vendor: opskeeper
   homepage: https://github.com/vincent-wuhan/opskeeper
 spec:

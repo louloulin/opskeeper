@@ -130,15 +130,24 @@ func TestAPluginToolCrossesTheGateAndRunsOnTheNodeHost(t *testing.T) {
 			"and the ledger does not name it\nledger: %s", ledger)
 	}
 	t.Log("the host adjudicated the call and allowed it, with the file as the target")
+	// The node's own log of the two legs after the gate, printed on every
+	// run rather than only on failure: this is the line that says whether
+	// the broker dispatched the call at all, and the difference between
+	// "the broker never saw it" and "the broker ran it and the answer was
+	// empty" is the whole of what is left to find.
+	logs := edge.Logs()
+	if len(logs) > 4000 {
+		logs = logs[len(logs)-4000:]
+	}
+	t.Logf("node log tail:\n%s", logs)
 
-	// HELD BACK at the last hop, not passing. The gate leg is proven above;
-	// the broker leg is not. Measured on 2026-10-07: PiG renders the tool
-	// result as "(no tool output)", i.e. the tool produced nothing at all,
-	// and the node's ledger shows no second entry for the execution. So the
-	// call is adjudicated and then stops between the gate and the answer.
-	// See ledger section 4.380 (decision 446).
-	t.Skip("the tool result comes back empty: the gate allows the call and nothing runs it " +
-		"(ledger 4.380 / decision 446). Everything above the skip is proven on every run.")
+	// The gate leg is proven above and the broker leg is proven by the
+	// sentinel below. There was a third leg between them that looked like
+	// both: the call was adjudicated and executed, and the agent still
+	// rendered "(no tool output)". The extensions answered in their own
+	// JSON rather than in the shape the runtime reads a tool result in,
+	// and it decodes that shape by ignoring every field it does not know.
+	// See ledger section 4.381 (decision 447).
 
 	// Step two: the host ran it, and its output came back. Not "the agent
 	// tried something" -- the string in the result is the one this test

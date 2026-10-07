@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.73 — 2026-10-07
+
+- Bump the TeamHarness plugin version to 1.0.73 across `plugin.yaml`, the
+  dashboard package/manifest (including the versioned `dist/main-1.0.73.js`
+  entry), and the qwenpaw adapter (`plugin.json` + `plugin.py`).
+- No runtime behaviour change in this plugin. The accompanying backend work
+  is the node agent plugin tool result fix: the five `pig-ops` packages
+  returned their payload in their own JSON shape rather than in the shape the
+  agent runtime reads a tool result in, so the runtime decoded it into an
+  empty result and told the model "(no tool output)". The fix and its
+  end-to-end proof live in the Go tree; those packages go 0.1.0 -> 0.1.1.
+
 ## 1.0.72 — 2026-10-07
 
 - Bump the TeamHarness plugin version to 1.0.72 across `plugin.yaml`, the
