@@ -9,6 +9,7 @@ import { isConfigDraftConfirmationMessage } from '@/lib/configDraftConfirmation'
 import { useI18n } from '@/i18n/locale';
 import { personaLabel } from '@/components/AgentBadge';
 import { AgentAvatar } from './AgentAvatar';
+import { DeliverableCard, matchDeliverable } from './DeliverableCard';
 import { Button } from '@/components/ui';
 
 export type ConfigDraftResult = {
@@ -132,7 +133,20 @@ function AssistantBubble({ message, agentId, onConfirmConfigDraft }: Props & { a
             </span>
           ) : (
             <div className="md-body text-zinc-100">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ href, children }) => {
+                    const info = href ? matchDeliverable(href) : null;
+                    if (info) return <DeliverableCard info={info} />;
+                    // Non-deliverable links keep their pre-refactor behavior verbatim —
+                    // same markup, no target attr.
+                    return <a href={href}>{children}</a>;
+                  },
+                }}
+              >
+                {message.content}
+              </ReactMarkdown>
             </div>
           )}
         </div>
