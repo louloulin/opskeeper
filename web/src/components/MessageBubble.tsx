@@ -191,17 +191,15 @@ function ToolCallSummaryBlock({
   }
   const configDraft = !isError ? asConfigDraft(call.result) : null;
   return (
-    <div
-      className={cn(
-        'w-full overflow-hidden rounded-lg bg-zinc-900/40 text-xs ring-1',
-        isError ? 'ring-red-500/30' : 'ring-zinc-800/80',
-      )}
-    >
+    <div className="flex w-full flex-col gap-1">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label={tr(`工具调用 ${call.name}`, `Tool call ${call.name}`)}
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-zinc-300 hover:bg-zinc-800/40"
+        className={cn(
+          'flex w-full items-center gap-2 rounded-rk-md border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-left text-xs text-zinc-300 hover:bg-zinc-800/40',
+          isError && 'ring-1 ring-red-500/30',
+        )}
       >
         <StatusIcon status={status} />
         <Wrench size={12} className="text-zinc-500" />
@@ -233,7 +231,7 @@ function ToolCallSummaryBlock({
         <ConfigDraftCard draft={configDraft} onConfirm={onConfirmConfigDraft} />
       )}
       {open && (
-        <div className="border-t border-zinc-800/80 bg-zinc-950/40 px-3 py-2">
+        <div className="rounded-rk-sm bg-zinc-950/60 p-3 text-xs">
           {call.arguments !== undefined && (
             <div className="mb-2">
               <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-500">{tr('参数', 'Arguments')}</div>
