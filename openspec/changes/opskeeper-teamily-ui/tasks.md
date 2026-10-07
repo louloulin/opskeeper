@@ -17,7 +17,7 @@
 
 ## 2. Phase 2 · 布局与导航(navigation-layout)
 
-- [ ] 2.1 重排 `Sidebar.tsx` IA:新对话主 CTA 置顶,分组为 对话/Agent/Discover/运维/日常/审批/管理,确认全部既有路由可达
+- [x] 2.1 重排 `Sidebar.tsx` IA:新对话主 CTA 置顶,分组为 对话/Agent/Discover/运维/日常/审批/管理,确认全部既有路由可达
 - [ ] 2.2 审批项提升为侧栏常驻项 + 待审批未读红点计数(数据源为待审批 proposal 数量)
 - [ ] 2.3 升级会话列表项:AgentAvatar + persona 名 + 标题摘要,hover 完整标题,激活高亮
 - [ ] 2.4 Home 页改版:按时段问候语 + 未关闭事件/待审批计数摘要 + 大输入框(@提及 + 模型选择)
