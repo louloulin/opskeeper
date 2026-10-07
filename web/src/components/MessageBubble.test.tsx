@@ -375,13 +375,16 @@ describe('MessageBubble inline approval card', () => {
 
     const spy = vi.spyOn(useApprovalBadge.getState(), 'refresh').mockResolvedValue();
 
-    render(<MessageBubble message={approvalMessage('ap-dualsign')} />);
-    const user = userEvent.setup();
-    await screen.findByRole('button', { name: /批准并执行/ });
-    await user.click(screen.getByRole('button', { name: /批准并执行/ }));
+    try {
+      render(<MessageBubble message={approvalMessage('ap-dualsign')} />);
+      const user = userEvent.setup();
+      await screen.findByRole('button', { name: /批准并执行/ });
+      await user.click(screen.getByRole('button', { name: /批准并执行/ }));
 
-    await waitFor(() => expect(spy).toHaveBeenCalled());
-    spy.mockRestore();
+      await waitFor(() => expect(spy).toHaveBeenCalled());
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('surfaces the blast radius / risk class / target on the approval card', async () => {
@@ -407,7 +410,11 @@ describe('MessageBubble inline approval card', () => {
 
     expect(await screen.findByText(/影响面/)).toBeInTheDocument();
     expect(screen.getByText(/风险等级/)).toBeInTheDocument();
-    expect(screen.getAllByText(/node-12/).length).toBeGreaterThan(0);
+    // The blast-radius chip's text is "影响面: node-12 nginx 5s", so a broad
+    // /node-12/ match stayed green even with the target span deleted. The
+    // exact-match text node "node-12" is produced only by the target span
+    // (meta.target), so this genuinely constrains the target rendering.
+    expect(screen.getByText('node-12')).toBeInTheDocument();
   });
 });
 
