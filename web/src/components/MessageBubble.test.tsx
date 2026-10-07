@@ -416,6 +416,32 @@ describe('MessageBubble inline approval card', () => {
     // (meta.target), so this genuinely constrains the target rendering.
     expect(screen.getByText('node-12')).toBeInTheDocument();
   });
+
+  it('waiting 态的已签人数取自共享 parseSigners', async () => {
+    vi.mocked(approveApproval).mockResolvedValue({
+      id: 'ap-dualsign',
+      kind: 'cloud_bash',
+      title: 'echo opskeeper-dualsign-OK',
+      summary: '',
+      payload: '{}',
+      source: 'chat',
+      status: 'pending',
+      signers: JSON.stringify([
+        { user_id: 1, role: 'admin', at: new Date().toISOString() },
+        { user_id: 2, role: 'admin', at: new Date().toISOString() },
+      ]),
+      proposed_by: 1,
+      created_at: new Date().toISOString(),
+    });
+
+    render(<MessageBubble message={approvalMessage('ap-dualsign')} />);
+    const user = userEvent.setup();
+    await screen.findByRole('button', { name: /批准并执行/ });
+    await user.click(screen.getByRole('button', { name: /批准并执行/ }));
+
+    await waitFor(() => expect(screen.getByText(/2 人已签/)).toBeInTheDocument());
+    expect(screen.getByText(/第二位批准人/)).toBeInTheDocument();
+  });
 });
 
 describe('MessageBubble deliverable link rendering', () => {

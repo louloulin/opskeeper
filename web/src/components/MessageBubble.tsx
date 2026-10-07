@@ -6,6 +6,7 @@ import type { ChatMessage, ToolCallSummary } from '@/api/chat';
 import { approveApproval, rejectApproval, getApproval } from '@/api/approvals';
 import { cn } from '@/lib/cn';
 import { isConfigDraftConfirmationMessage } from '@/lib/configDraftConfirmation';
+import { parseSigners } from '@/lib/approvalSigners';
 import { useI18n } from '@/i18n/locale';
 import { useApprovalBadge } from '@/store/approvalBadge';
 import { personaLabel } from '@/components/AgentBadge';
@@ -515,20 +516,6 @@ function argCommandText(args: unknown): string {
   return '';
 }
 
-// signerCount parses the Signer[] JSON string the API carries on approvals
-// that already have signatures. Lenient by design: a missing or malformed
-// field just means "unknown count", and 1 is the honest floor for a row we
-// ourselves just signed.
-function signerCount(signersJson?: string): number {
-  if (!signersJson) return 1;
-  try {
-    const arr = JSON.parse(signersJson);
-    return Array.isArray(arr) && arr.length > 0 ? arr.length : 1;
-  } catch {
-    return 1;
-  }
-}
-
 // PendingApprovalCard renders an in-conversation approve/reject prompt for a
 // proposed cloud_bash command. Approve runs the command (the backend executor
 // runs synchronously) and shows the result inline; reject discards it.
@@ -617,7 +604,7 @@ function PendingApprovalCard({ approvalID, kind, command }: { approvalID: string
         setErrText(a.result ?? 'failed');
       } else {
         setState('waiting');
-        setSignedCount(signerCount(a.signers));
+        setSignedCount(parseSigners(a.signers).signers.length);
       }
       // Any verdict moves the global pending count (executed / failed / just
       // signed). Fire-and-forget: refresh() never rejects and never blocks the
