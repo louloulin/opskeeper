@@ -42152,3 +42152,101 @@ path being green says nothing about surviving a real provider:
 加权 ≈ 99.5%。第一把尺（架构 A–E）不变：97.75%。
 
 **阶段 0 那 2% 仍然是「一次真 provider 的真实推理」这一条，需要外部 key，本仓造不出来。**
+
+### 4.376 决策 442：那 2% 一直写的是「需要一把 key」——本机本来就有一台真实推理引擎，而它不需要 key
+
+#### 一、连续三轮说同一句话，本轮去查了它到底成不成立
+
+前两轮的结尾都是：「阶段 0 剩下的 2% 需要真provider key，本仓造不出来」。说了两遍
+就该怀疑这句话本身，而不是把它当既成事实往下传。
+
+于是去查「真 provider key」到底指什么。`make test-e2e-live` 走
+`tests/e2e/secrets.local.env`，模板里那一节写的是：
+
+```
+ANTHROPIC_API_KEY=      ANTHROPIC_BASE_URL=
+ZHIPU_API_KEY=          ZHIPU_BASE_URL=
+OPENAI_API_KEY=         OPENAI_BASE_URL=
+```
+
+**三个都是 `BASE_URL` + `KEY` 的 OpenAI 兼容形状。**也就是说这条路径要的不是「某个厂商」，
+而是「一个 OpenAI 兼容端点」。而本机：
+
+```
+$ curl -s http://127.0.0.1:11434/api/tags
+{"models":[{"name":"qwen2.5:1.5b", ..., "capabilities":["completion","tools"]}]}
+```
+
+**ollama 在跑，`qwen2.5:1.5b` 带 tools 能力，且它不需要任何凭据。**「需要一把云厂商
+key」这个前提是错的——错在把「provider」读成了「托管厂商」。
+
+#### 二、于是补上那条从未存在过的能力，并让它只接受回环
+
+`tests/e2e/testenv/real_llm.go`：`E2E_REAL_LLM_BASE_URL` 指向本机引擎时，manager 的
+OpenAI provider 改指它，其余 provider 仍旧走 fake。**只接受回环地址，这不是谨慎而是
+设计**——harness 会把每一个 credential 形状的变量从所有子进程里剔掉
+（`credentialShapedEnv`），因为它必须证明节点环境里没有云厂商密钥，而托管 provider
+按定义就需要一把 key。放行托管端点只有两种结局：把密钥混进一次必须证明「无密钥」的
+运行，或者把 harness 推向「在测试目录里存密钥」。两种都不值这一条断言。
+
+`make test-e2e-real-llm BASE_URL=http://127.0.0.1:11434` 是入口。
+
+#### 三、第一次真跑就红了一次，红得有价值
+
+```
+llmgw: stream refused before the first frame
+  model="fake-gpt"  err="pigmodel: model not offered by provider: fake-gpt"
+```
+
+请求打到了**真的 provider 解析层**，被真的规则拒了——这正是假模型永远不会发生的事。
+把请求里的模型名换成真实模型名之后：
+
+```
+real inference: 31 chars of generated text from http://127.0.0.1:11434
+--- PASS: TestTheGatewayServesAStreamToARealModel (20.08s)
+```
+
+断言两件事，都不是「状态码是 200」：**生成文本里不含 fake 的 canned 串**（否则说明
+manager 根本没走到真引擎，这个测试的全部主张就是假的），以及**解析 SSE 后真的有字符**
+（一个把回复 settle 成空块的网关会写出语法完美而内容为空的流，状态码测不出这个）。
+
+#### 四、这一刀我自己写错过一次测试期望，代码是对的
+
+`://nope` 这条用例我期望报「not a loopback address」，实跑报的是
+`is not a URL: parse "://nope": missing protocol scheme`——它在 `url.Parse` 就失败了，
+压根没走到回环判断。**是期望写错，不是代码错**。探针确认后改期望，并补了一条
+`http://`（无 host）走「不是回环」分支，两条路径都留着。
+
+守卫做过变异验证：把回环判断短路掉，`a_hosted_provider` /
+`a_loopback-looking_name_in_a_hosted_host` / `a_private_lan_address` / `no_host_at_all`
+四条一起红。其中 `localhost.evil.example` 那条是承重的——**朴素的子串检查会放它过**。
+
+#### 五、这一刀**不动**阶段 0 的分数，理由要说清楚
+
+**阶段 0 仍然是 98%。** §六 那一格写的是「剩下的 2% 是真 provider key 那一条」，而
+本刀用的**不是** provider key，是一台本机引擎。所以按台账自己的判据，这一格**没有**被
+这一刀推进——**改了分数就正是我连续三轮在犯的那个错**（把「我做了一件事」记成「这一格
+动了」）。
+
+但有一件事确实变了，而且它是这刀真正的产出：
+
+> **那 2% 不再被「拿不到 key」卡住了。** 它现在卡的是一个**选择**而不是一个**障碍**——
+> 要对某个托管厂商的方言取证，只需要一个环境变量。
+
+而且要诚实说清这刀**证明了什么、没证明什么**（写进 `testenv.RealLLMLimits`，让下一个
+读者不必从一条绿日志里反推）：
+
+| 证明了 | 没证明 |
+|---|---|
+| 我们的请求形状被一个**真实推理引擎**接受 | 任何**具体托管厂商**接受同样的形状 |
+| 流式帧由**真实 token 生成**产生，不是桩写的字符串 | 答案好不好（本机模型既是真模型，也是弱模型） |
+| 工具声明被真实模型的 tool-calling 协议接受 | 托管厂商的分词器/方言差异 |
+
+**把「真实推理」当成「托管厂商兼容」来引用，正是这条常量存在要防的事。**
+
+#### 六、读数
+
+四阶段权威读数**不变**：阶段 0 = 98%、阶段 1 = 100%、阶段 2 = 100%、阶段 3 = 100.0%，
+加权 ≈ 99.5%。第一把尺（架构 A–E）不变：97.75%。
+
+全量 `go test -tags e2e ./tests/e2e/...` 128s 绿（未设该变量时行为完全不变）。

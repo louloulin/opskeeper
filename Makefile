@@ -161,6 +161,22 @@ test-e2e: ## E2E（默认 fakes，无外部凭证；catalog: docs/test/e2e-catal
 test-e2e-live: ## E2E live mode（用 tests/e2e/secrets.local.env 打通真实外部服务）
 	E2E_LIVE_ALL=1 go test -tags=e2e -count=1 -timeout=15m ./tests/e2e/...
 
+# 方案 0.4 的第三条断言此前只跑过假模型。这个目标把上游换成一台**本机**推理
+# 引擎（ollama / llama.cpp / vLLM），跑一次不被替代的推理。
+#
+# 只接受回环地址，这不是谨慎而是设计：harness 会把每一个 credential 形状的
+# 变量从所有子进程里剔掉，因为它必须证明节点环境里没有云厂商密钥，而托管
+# provider 按定义就需要一把 key。理由见 tests/e2e/testenv/real_llm.go。
+#
+#   make test-e2e-real-llm BASE_URL=http://127.0.0.1:11434
+#   make test-e2e-real-llm BASE_URL=http://127.0.0.1:11434 MODEL=qwen2.5:7b
+.PHONY: test-e2e-real-llm
+test-e2e-real-llm: ## 用本机真实推理引擎跑一次交付链路（需 Docker；BASE_URL 必填）
+	@test -n "$(BASE_URL)" || { echo "BASE_URL is required, e.g. http://127.0.0.1:11434"; exit 2; }
+	E2E_REAL_LLM_BASE_URL=$(BASE_URL) E2E_REAL_LLM_MODEL=$(or $(MODEL),qwen2.5:1.5b) \
+		go test -tags=e2e -count=1 -timeout=10m -v \
+		-run 'TestTheGatewayServesAStreamToARealModel' ./tests/e2e/
+
 # 方案 0.4 的验收闸门：真二进制拓扑下的一次真实对话。
 #
 # 与 test-e2e 分开，是因为它要 Docker（frontier broker 容器）、要真构建

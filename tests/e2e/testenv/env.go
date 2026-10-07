@@ -134,6 +134,24 @@ func Start(t *testing.T, opts ...Option) *Env {
 	}
 	env.httpBase = fmt.Sprintf("http://127.0.0.1:%d", port)
 
+	// The upstream the manager's OpenAI provider resolves to. It is the fake
+	// unless an operator pointed this run at a local inference engine, in
+	// which case the manager talks to a real model and the fake keeps
+	// answering only the providers nobody switched over.
+	//
+	// A bad value fails the run here rather than falling back to the fake:
+	// an operator who asked for a real model and silently got the stub would
+	// read a green run as evidence for a claim the run never tested.
+	openAIKey, openAIBaseURL, openAIModel := "fake-test-key", env.llm.URL()+"/v1", "fake-gpt"
+	if real, err := RealLLMBaseURL(); err != nil {
+		t.Fatalf("testenv: %v", err)
+	} else if real != "" {
+		openAIKey = "local-engine-no-secret"
+		openAIBaseURL = real + "/v1"
+		openAIModel = RealLLMModel()
+		t.Logf("testenv: manager will call a REAL inference engine at %s (%s)", real, RealLLMLimits)
+	}
+
 	managerEnv := map[string]string{
 		"OPSKEEPER_HTTP_ADDR":           fmt.Sprintf("127.0.0.1:%d", port),
 		"OPSKEEPER_METRICS_ADDR":        fmt.Sprintf("127.0.0.1:%d", metricsPort),
@@ -148,9 +166,9 @@ func Start(t *testing.T, opts ...Option) *Env {
 		"OPSKEEPER_PROM_QUERY_URL":      env.prom.URL(),
 		"OPSKEEPER_LOG_QUERY_URL":       "", // Loki disabled in default e2e
 		"OPSKEEPER_TRACE_QUERY_URL":     "",
-		"OPSKEEPER_OPENAI_API_KEY":      "fake-test-key",
-		"OPSKEEPER_OPENAI_BASE_URL":     env.llm.URL() + "/v1",
-		"OPSKEEPER_OPENAI_MODEL":        "fake-gpt",
+		"OPSKEEPER_OPENAI_API_KEY":      openAIKey,
+		"OPSKEEPER_OPENAI_BASE_URL":     openAIBaseURL,
+		"OPSKEEPER_OPENAI_MODEL":        openAIModel,
 		"OPSKEEPER_ANTHROPIC_API_KEY":   "fake-test-key",
 		"OPSKEEPER_ANTHROPIC_BASE_URL":  env.llm.URL(),
 		"OPSKEEPER_ANTHROPIC_MODEL":     "claude-fake",
