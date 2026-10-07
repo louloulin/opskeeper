@@ -289,6 +289,44 @@ func itemMarketIndex(root string) (string, error) {
 	return symbolPresent(root, "core/manager/server/marketplace/http.go", "/v1/marketplace/catalog")
 }
 
+// itemMultiRootIndex checks that the marketplace index reads every root a
+// tenant can install from, not just its own.
+//
+// The single-root reader was correct about what it did and wrong about what
+// it claimed: the route is "the packages this tenant can install", and in a
+// multi-tenant deployment the cluster-wide root is installable by every
+// tenant. A package sitting there was invisible to every one of them while
+// the route's own name said otherwise.
+//
+// All three origin labels are checked, not just the function. A
+// multi-root loader with two of the three roots is a loader whose
+// precedence has nothing to order, and a census that only looked for the
+// function name would report that as done.
+func itemMultiRootIndex(root string) (string, error) {
+	// Two files, and that is not tidiness: the loader sits beside LoadCatalog
+	// in manifest.go and the origin vocabulary beside Entry in catalog.go,
+	// because they answer different questions. Checking the function in the
+	// file that holds the labels would report a green for a loader that is
+	// not there.
+	if short, err := symbolPresent(root, "core/floor/pluginmanifest/manifest.go",
+		"func LoadCatalogRoots("); err != nil || short != "" {
+		return short, err
+	}
+	for _, needle := range []string{
+		`OriginTenant = "tenant"`,
+		`OriginSystem = "system"`,
+		`OriginBuiltin = "builtin"`,
+	} {
+		if short, err := symbolPresent(root, "core/floor/pluginmanifest/catalog.go", needle); err != nil || short != "" {
+			return short, err
+		}
+	}
+	// The wiring, not just the loader: a loader with three roots that
+	// production still calls with one is the same bug one layer down.
+	return symbolPresent(root, "core/manager/biz/marketplace/usecase.go",
+		"func (uc *Usecase) catalogRoots(")
+}
+
 // itemCompatMatrix checks that a compatibility matrix exists AND that the
 // fleet's own packages are held to declaring both host floors.
 //
@@ -407,19 +445,32 @@ func items() []item {
 		{"D12", "打包副本同步脚本在册", itemPackageSync},
 		{"D13", "插件市场索引有生产接线", itemMarketIndex},
 		{"D14", "兼容矩阵存在且两轴都被声明", itemCompatMatrix},
+		{"D15", "索引覆盖本租户安装根之外的根", itemMultiRootIndex},
 	}
 }
 
 // open items are declared, not discovered.
 //
-// The index added at 决策 455 reads the tenant's own install root, which is
-// what a package list on a control plane can honestly be built from. What it
-// does not do is index anything OUTSIDE that root: a package uploaded from a
-// remote registry to another tenant, or a build of the fleet's own packages
-// that has not been installed here yet. Saying so as an open cell beats
-// scoring this one 100% and letting a reader infer a market exists.
-var planned = []struct{ id, subject, why string }{
-	{"X1", "跨源索引", "索引只覆盖本租户安装根；远端注册表与未安装版本不在其中"},
+// An open cell carries a closer for the same reason the audit's external
+// items do: a cell that says only what is missing gives its reader nothing
+// to do, and a cell whose reason has gone stale is worse than no cell —
+// the reader acts on it. Both happened to this one.
+//
+// X1 originally read "the index covers only this tenant's install root".
+// 决策 459 made that half false — the index now reads the tenant root, the
+// cluster-wide root and the image-baked ones, and D15 is the cell that
+// measures it. What is still true is the other half, and it is the half no
+// amount of reading local directories can close: a remote registry's own
+// listable index. Reading it needs a remote system this repository does not
+// have, so it is the same fact as the audit's E4 and is named as such.
+var planned = []struct{ id, subject, why, closer string }{
+	{
+		"X1", "远端注册表的索引",
+		"索引读的是磁盘上的根：租户的、集群级的、镜像内置的都在里面，一个远端" +
+			"注册表自己那份可列举的清单不在",
+		"同 audit 的 E4：需要 registry 一侧暴露一份包清单。本仓没有可调的远端，" +
+			"所以这条只能由部署侧提供",
+	},
 }
 
 // symbolPresent reports whether a file exists and still contains a symbol.
@@ -465,7 +516,7 @@ func main() {
 		fmt.Printf("  OPEN %-3s %s\n         %s\n", it.id, it.subject, shortfall)
 	}
 	for _, p := range planned {
-		fmt.Printf("  OPEN %-3s %s\n         %s\n", p.id, p.subject, p.why)
+		fmt.Printf("  OPEN %-3s %s\n         %s\n         closer: %s\n", p.id, p.subject, p.why, p.closer)
 		open++
 	}
 	total := len(list) + len(planned)
