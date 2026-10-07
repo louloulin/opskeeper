@@ -65,6 +65,6 @@
 ## 4. 收尾验证
 
 - [x] 4.1 `pnpm dev` 双主题 + 中英双语逐页走查七个原型对应页面
-- [ ] 4.2 对照原型图核对:圆角阶梯、阴影层次、AgentAvatar 三处一致性、气泡形态、交付物卡
+- [x] 4.2 对照原型图核对:圆角阶梯、阴影层次、AgentAvatar 三处一致性、气泡形态、交付物卡
 - [ ] 4.3 与 teamily.ai 截图并排比对 Home/Chat/Agents 三页(圆角、密度、气泡、卡片层级)
 - [ ] 4.4 全量 `pnpm test` / `pnpm typecheck` / `pnpm lint` 通过
