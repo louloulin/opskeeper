@@ -13,7 +13,7 @@
 - [x] 1.7 新建 `AgentAvatar` 组件:32/40px 圆角方形、11 persona 角色→lucide 图标映射、角色色浅底、预留 avatar 字段(存在时优先渲染)
 - [x] 1.8 抽出聊天气泡样式 token(用户右对齐 accent-50 底 / Agent 左对齐 card 底,角落差异化圆角)
 - [x] 1.9 为 AgentAvatar 补单元测试(角色图标渲染、avatar 字段优先与回退)
-- [ ] 1.10 验证:pnpm test / typecheck / lint 全绿;浅色主题抽查 Traces 表格、代码块、xterm 无「浅底浅字」
+- [x] 1.10 验证:pnpm test / typecheck / lint 全绿;浅色主题抽查 Traces 表格、代码块、xterm 无「浅底浅字」
 
 ## 2. Phase 2 · 布局与导航(navigation-layout)
 
@@ -24,6 +24,8 @@
 - [x] 2.5 Home 页「你的 Agent」快捷卡行:persona 卡点击复用 `createSession({ title, agent_id })` 模式直达对话
 - [x] 2.6 Home 页「进行中」事项卡(运行中事件 / 待审批项,可跳转)与「试试这些」建议提示词卡
 - [x] 2.7 会话列表项渲染测试(头像、persona 名、摘要、激活态)
+- [x] 2.8 接通 Home 路由:`App.tsx` 注册 `/home`,侧栏「首页」导航项与折叠栏图标指向它(2.4/2.5/2.6 的成果此前不可达,scope 追加)
+- [x] 2.9 补齐 persona 本地化标签:`AgentBadge` 两张标签表补 critic/verifier/reporter(评审员/验证员/报告员)+ 防回归断言覆盖 `PERSONA_VISUALS` 全部键(2.5 走查暴露的既有缺陷,scope 追加)
 
 ## 3. Phase 3 · 核心体验页
 
