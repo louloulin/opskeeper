@@ -63,7 +63,7 @@
 | MCP 兼容层 | 完成 | `core/pig/pigmcp` |
 | 渐进式结晶降本 | 完成 | `cmd/opskeeper/loop_crystallize.go` |
 | eval 三维化 | 完成 | `cmd/opskeeper-eval/axes.go`：Localization × Identification × Reason |
-| 只读边界不得放开 | **保持不变，且有守卫** | `make eval-coverage` 的联合判定恒为 0/20，闸门挂在诊断轴上（会动），写通道由 upcall 通道对任何包一律拒绝 |
+| 只读边界不得放开 | **保持不变，且有守卫** | `make eval-coverage` 实测输出三行：**诊断轴 17/20**、**修复轴 0/20**、**联合 0/20**。**联合那个 0 是刻意的**：写操作一律经审批通道执行，打包成节点插件等于开出第二扇没有队列的门，所以 upcall 通道对任何包一律拒绝非只读工具。闸门挂在**诊断轴**上（会动：现在是 17/20，三个未覆盖的案例各自的缺口与理由记在 `pluginmanifest.DiagnosisGaps`） |
 
 ---
 
