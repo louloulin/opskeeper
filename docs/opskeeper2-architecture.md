@@ -43821,3 +43821,80 @@ A4 那条检查要验"env 模板里不得出现像真密钥的字面量"，于�
 基线很远（2737 个路径里 1685 个在边界外），这是**发布时机的属性而不是缺陷**。但它同时报出
 `plugin.yaml` 的版本从 `1.0.59` 漂到 `1.0.75` 而发布元数据没跟上——**这与决策 458 修的 pig-ops
 插件版本是同一类问题的另一半**，且它**由一条一直在红的尺指着**，不是被漏掉的。
+
+### 4.397 决策 463：那个"待查"不是结论——PiG 版本夹具与无人运行的 census
+
+#### 一、上一刀留了四个"待查"，那不是结论
+
+决策 462 把 33 把尺跑了一遍，七红。里面四行当时写的是"待查"：`race-check`、
+`integration-check`、`ci-gate-check`、`module-standalone-check`。**把判定留给下一刀，等于这一刀
+交了一份没做完的清单**——而"待查"和"查过了，是环境问题"在读者眼里长得一样。
+
+查完的结果分三类，没有第四类：
+
+| 尺 | 真实判定 |
+|---|---|
+| `integration-check` | **环境**：与 `mysql-migration-check` 同因，要一个 MySQL DSN |
+| `race-check` | **环境**：磁盘被 race 构建缓存占满（`no space left on device`）。`go clean -cache` 之后 `scripts/modulecheck` 在 `-race` 下是绿的 |
+| `module-standalone-check` | **真缺陷，见下** |
+| `ci-gate-check` | **真缺口，见下** |
+
+#### 二、夹具写死的 PiG 版本，恰好是这个会话自己造出来的
+
+`module-standalone-check` 红在三条准入测试上，错误信息是：
+
+> opskeeper-sre-readonly is a boot package and no longer passes this node's review:
+> this node runs PiG 0.3.0, but the package needs at least 0.4.0
+
+`cmd/opskeeper-edge/plugininstall_test.go` 的夹具写死 `const testPigVersion = "0.3.0"`，而**决策 455
+刚给五个包补上 `min_pig_version: 0.4.0`**。所以：**这一刀的版本改动，把上一刀的夹具变成了假的。**
+
+这不是巧合，是 `TestMain` 上方那段注释**早就预言过**的失败：
+
+> The agent's version is a second number from a second binary. A fixture node that
+> stated only the edge's would refuse every package that declares a min_pig_version —
+> **and, worse, would look like it had checked something.**
+
+"看起来像它检查过了什么"正是实际发生的事：三条测试红了，红的原因与它们各自要验的东西毫无关系。
+
+**修法不是把字面量从 0.3.0 改成 0.4.0。** 那样下一次 PiG 升版会原样再来一遍，而这一刀已经证明
+写死的数字会过期。改法是**从根 `go.mod` 读**——那是唯一决定这棵树对着哪个 PiG 构建的地方。
+读不到就是硬停，不是退回一个猜的数。
+
+另加一条直接的不变式测试：夹具版本必须**不低于每个已发布包声明的下限**。因为"从 go.mod 读"本身
+也不够——一个包可以把下限声明得比 pin 更高。变异验过：把夹具改回 0.3.0，五个包逐个点名红。
+
+**顺带一个解析器的坑**：第一版只接受恰好两段字段，而 go.mod 那行写的是
+`github.com/MichaelKinsy/PiG v0.4.0 // indirect`——三段。于是它报"这棵树没有依赖 PiG"。
+**一个把 `// indirect` 当成行尾注释剔掉之前的解析错误，症状是"依赖不存在"**，方向完全相反。
+
+#### 三、`dcell-check` 是一条只有我记得跑的尺
+
+`ci-gate-check` 说：Makefile 定义了 `dcell-check`，它看起来像一道 check，**没有任何东西运行它**。
+
+这句话对这一刀尤其刺眼：D 格的读数（15/16）我一路在引用，而**它只在我手动跑它时为真**。
+上一刀我发现一条格子在报过时的理由——**那条理由能过期这么久的直接原因，就是这道 census
+没有任何 owner**。
+
+处理是接线而不是豁免：`ci.yml` 加一步，`cigate` 的 `DecisionGates()` 里写下理由。理由写的是
+**这一类失败为什么只有这道尺能看见**——格子变红时分母会动，格子的话变陈旧时分数几乎不动。
+
+`ci-gate-check` 现在是：**33 / 34 门被一次 push 触发**，余下 `e2e-delivery-check` 是合法的
+定时/手动任务（GitHub 只对默认分支发定时）。
+
+#### 四、读数
+
+这一刀动的都是尺与夹具，**没有动任何能力**：
+
+- `module-standalone-check` **红 → 绿**（真缺陷已修）
+- `ci-gate-check` **红 → 绿**（`dcell-check` 接进 CI）
+- `race-check` 仍是环境判定，清理构建缓存后其失败的那一包在 `-race` 下为绿
+- `audit-scope` 本仓可判项 5/5、`dcell-check` 15/16 = 93.8%、架构尺 A–E = 97.75%、
+  诊断轴 20/20、插件工具 94 —— 全部不变
+
+**manager 尺寸不变**（992 文件 / 254,706 行）：本刀改的是 `cmd/opskeeper-edge` 的测试与
+`scripts/`，都不在那个分母里。
+
+**一个不能记成好消息的事实**：本地磁盘在这轮被 race 构建缓存占满到 97%。`go clean -cache` 之后
+`scripts/modulecheck` 在 `-race` 下是绿的，**所以那条 `no space left on device` 与代码无关**——
+但它也说明**这台机器现在跑不动完整的 `race-check`**，那 10G 缓存是它的直接原因。

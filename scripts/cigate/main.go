@@ -150,6 +150,14 @@ func DecisionGates() []Gate {
 				"assertions would have left every gate green (decision 352)",
 		},
 		{
+			Target: "dcell-check",
+			Why: "the plugin-ecosystem census reads 15 of 16 cells and that number is quoted in the " +
+				"ledger, but the score barely moves when a cell's reason goes stale rather than its " +
+				"verdict -- decision 462 found one that had been claiming the index reads a single " +
+				"root for a whole knife after that was no longer true, and nothing in CI could see it, " +
+				"because the census itself was not run by anything (decision 462)",
+		},
+		{
 			Target: "roadmap-delivery-check",
 			Why: "a tick in ROADMAP.md is a claim about what a deployment serves, and for C.1 " +
 				"the claim held for a release while no deployment had ever registered the tool. " +
