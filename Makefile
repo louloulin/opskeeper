@@ -588,6 +588,20 @@ arch-lint-run: ## 不安装、直接用 go run 跑 go-arch-lint（首次需要�
 module-check: ## 校验 OpsKeeper 2.0 模块边界（唯一 PiG 导入点 / core 无基础设施依赖）
 	go run ./scripts/modulecheck .
 
+# 进度表「插件生态」那一格此前记 95%，剩余栏写的是「更多插件迁移」——没有清单、
+# 没有验收线、没有可判定的完成标志，于是工具数从 91 推到 92、诊断轴从 17/20 推到
+# 18/20 的两刀都没让它动过。一格量不到自身进展，等于教所有人忽略它。
+#
+# 这个目标把那格改写成一份清单：每条都是计划为插件生态点名的交付物，各带一条对着
+# 当前工作树求值的判据，得分是闭合比例。加一个包、加一条路由、加一道守卫，它会动；
+# 别的不会动。
+#
+# 它量的是仓库状态，不是运行时行为。行为那一半仍然属于 eval-gates（诊断轴）与
+# pig-tool-scoping-check（对着真二进制核工具集）。本格是一次点名册，不是证明。
+.PHONY: dcell-check
+dcell-check: ## 进度表 D「插件生态」那一格的清单式读数（12 条判据 + 2 条未做）
+	go run ./scripts/dcell .
+
 # The release chain already puts the right binary in the right directory --
 # build-edge-bundle.sh derives its source dir from the arch argument it is
 # handed -- and nothing anywhere checks the artefact inside it. Four
