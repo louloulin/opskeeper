@@ -313,10 +313,17 @@ import (
 // assert that the run passed, not that nothing the run sent was something a
 // real provider would have rejected, which is the property the fixture exists
 // to check.
+// 866 / 598 / 268 as of decision 445: after the tool-call boundary moved back
+// into the test that it describes, the remaining growth is two test fixture
+// accessors. `UsingRealLLM` lets external e2e tests choose the real-engine
+// path, while `FakeLLM.ToolResults` is the only observable that distinguishes
+// "one more message" from "the tool result returned to the model". Both live
+// in non-test files because external e2e packages must import them, and both
+// are therefore test-only by this walk's definition.
 const (
-	unreachableBudget    = 864
-	deadSymbolBudget     = 600
-	testOnlySymbolBudget = 264
+	unreachableBudget    = 866
+	deadSymbolBudget     = 598
+	testOnlySymbolBudget = 268
 )
 
 // TestTheUnreachableSymbolCountNeverGrows is the gate decision 199 declined to

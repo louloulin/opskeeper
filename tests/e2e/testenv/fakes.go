@@ -189,37 +189,6 @@ type LLMToolCall struct {
 	Arguments string
 }
 
-// ToolCallLimits is the boundary of what the fake tool round trip proves, and
-// it is deliberately narrower than what a reader might assume from the words
-// "tool call".
-//
-// What it DOES prove, end to end through the real gateway and the real node
-// agent process:
-//
-//   - the node's pig advertises tools to the model, and the advertisement
-//     arrives (ToolsAdvertised);
-//   - a streamed tool call survives the OpenAI wire as delta.tool_calls with
-//     a usable index, id and name;
-//   - the agent's own loop runs the tool and appends the result to the
-//     conversation as a tool-role message that the model reads on the next
-//     turn (ToolResults);
-//   - the turn therefore costs two model calls, not one.
-//
-// What it does NOT prove, because the e2e fixtures have no extension loaded:
-//
-//   - that an opskeeper extension's tool reaches the agent through the
-//     policygate whitelist and the gate socket. The tools advertised here are
-//     the agent's own `codemode` and `tool_search`, not plugin tools;
-//   - that plugin manifest declarations produce real tools. The package
-//     manifest written by writeAdmittedPackage declares tools, and the
-//     manifest is a promise -- nothing in this fixture fulfils it;
-//   - anything about blast radius, approval, or audit of a write tool.
-//
-// The write path has its own coverage in pig-tool-scoping-check and the
-// policygate unit tests. This constant exists so a future reader cannot
-// accidentally promote "the tool loop round-trips" into "plugins work".
-const ToolCallLimits = `a tool round trip through the node agent, not a plugin tool`
-
 // NewFakeLLM starts an httptest.Server that speaks enough of the
 // OpenAI/Anthropic completion shape to satisfy the manager's chatruntime.
 func NewFakeLLM() *FakeLLM {

@@ -26,8 +26,9 @@ import (
 // that declared a tool in the package manifest and hoped an extension would
 // appear behind it would be testing a fixture's imagination -- the manifest is
 // a promise, and nothing produces the tool but a real extension. What this
-// establishes is the round trip, and testenv.ToolCallLimits says exactly how
-// far that reaches.
+// establishes is the node-agent tool round trip, not plugin delivery: the
+// called tool is the agent's own `tool_search`, no extension is loaded, and
+// manifest declarations do not by themselves create a tool.
 func TestTheNodeAgentCallsAToolAndGetsAnAnswerBack(t *testing.T) {
 	frontier := testenv.SharedFrontier(t)
 	env := testenv.Start(t, testenv.WithFrontier(frontier))
