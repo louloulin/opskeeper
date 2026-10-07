@@ -32,7 +32,7 @@
 ### 3.1 对话页(chat-conversation)
 
 - [x] 3.1.1 MessageBubble:Agent 消息改为左对齐 card 气泡 + AgentAvatar 头行(保留流式/滚动/既有断言)
-- [ ] 3.1.2 工具调用卡嵌套圆角化:单行摘要默认折叠,点击展开输入/结果,失败态视觉标识
+- [x] 3.1.2 工具调用卡嵌套圆角化:单行摘要默认折叠,点击展开输入/结果,失败态视觉标识
 - [ ] 3.1.3 新建 DeliverableCard 组件,识别 serve_page/reports/pages 链接渲染交付物卡,非交付物链接回退普通链接
 - [ ] 3.1.4 为 DeliverableCard 补测试(识别渲染 + 普通链接回退)
 
