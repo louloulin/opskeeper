@@ -188,24 +188,33 @@ func sameSet(a, b map[string]bool) bool {
 	return true
 }
 
-// RebalanceHistory is a bounded, in-memory record of observed changes.
+// RebalanceHistory is a bounded record of observed changes.
 //
-// It is in memory on purpose for the first cut and the limitation is worth
-// being blunt about: a control-plane restart loses the window, and the query
-// tool reports the window it actually holds rather than implying continuity
-// it cannot offer. Persisting this needs a retention policy and a size
-// budget that belong to the deployment, not to this file.
+// In memory by default; when a store is attached (NewRebalanceHistoryStore)
+// every change is also written through, and a group nobody has seen since the
+// last restart is loaded from disk the first time it is asked about. The
+// trimming, diffing and querying are the same code either way — persistence
+// is the only difference — so the two configurations cannot drift apart in
+// what they report.
 type RebalanceHistory struct {
 	mu sync.Mutex
 	// latest is the last state seen per group, so a sample that changed
 	// nothing costs one comparison rather than an event row.
 	latest map[string]GroupState
 	events map[string][]RebalanceEvent
+	// loadErr holds a per-group read failure from the store, so the refusal
+	// a caller gets can name the cause instead of only the absence.
+	loadErr map[string]error
 	// maxEvents and maxAge bound each group independently. A group with a
 	// rebalance every second and a group with one a week are both served by
 	// the same limits without either crowding the other out.
 	maxEvents int
 	maxAge    time.Duration
+	// store is nil for the in-memory history. Write failures do not fail a
+	// Record: the sample is still true in memory, and a history that
+	// refuses to observe because a disk is full would turn a storage problem
+	// into a diagnostics outage. The failure is surfaced by the next load.
+	store rebalanceStore
 }
 
 // NewRebalanceHistory returns a history keeping maxEvents per group and
@@ -220,6 +229,7 @@ func NewRebalanceHistory(maxEvents int, maxAge time.Duration) *RebalanceHistory 
 	return &RebalanceHistory{
 		latest:    map[string]GroupState{},
 		events:    map[string][]RebalanceEvent{},
+		loadErr:   map[string]error{},
 		maxEvents: maxEvents,
 		maxAge:    maxAge,
 	}
@@ -235,6 +245,20 @@ func (h *RebalanceHistory) Record(cur GroupState, at time.Time) (RebalanceEvent,
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	prev, seen := h.latest[cur.Group]
+	if !seen && h.store != nil {
+		// Load before diffing, not only before answering. Without this a
+		// restarted process diffs the first sample of its new life against
+		// nothing and reports the group's entire membership as having
+		// joined — a rebalance that never happened, dated to the restart.
+		loaded, latest, err := h.store.load(cur.Group)
+		if err != nil {
+			h.loadErr[cur.Group] = err
+		} else if len(loaded) > 0 {
+			h.events[cur.Group] = loaded
+			h.latest[cur.Group] = latest
+			prev, seen = latest, true
+		}
+	}
 	if seen {
 		event, changed := diffGroups(prev, cur)
 		if !changed {
@@ -244,13 +268,33 @@ func (h *RebalanceHistory) Record(cur GroupState, at time.Time) (RebalanceEvent,
 		h.events[cur.Group] = append(h.events[cur.Group], event)
 		h.trimLocked(cur.Group, at)
 		h.latest[cur.Group] = cur
+		h.persistLocked(cur.Group)
 		return event, true
 	}
 	event := RebalanceEvent{At: at, To: cur.State, Joined: memberIDs(cur), ToFP: cur.Fingerprint()}
 	h.events[cur.Group] = append(h.events[cur.Group], event)
 	h.trimLocked(cur.Group, at)
 	h.latest[cur.Group] = cur
+	h.persistLocked(cur.Group)
 	return event, true
+}
+
+// persistLocked writes the group through to the store, if there is one.
+func (h *RebalanceHistory) persistLocked(group string) {
+	if h.store == nil {
+		return
+	}
+	delete(h.loadErr, group)
+	_ = h.store.save(group, h.events[group], h.latest[group])
+}
+
+// LoadError returns why a persisted window could not be read, if it could
+// not. The query path refuses in that case; this is for the caller that wants
+// the sentence rather than the refusal.
+func (h *RebalanceHistory) LoadError(group string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.loadErr[group]
 }
 
 func (h *RebalanceHistory) trimLocked(group string, now time.Time) {
@@ -281,6 +325,21 @@ func (h *RebalanceHistory) Query(group string, since time.Duration, limit int) (
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	rows, seen := h.events[group]
+	if !seen && h.store != nil {
+		loaded, latest, err := h.store.load(group)
+		if err != nil {
+			// An unreadable window is reported as unreadable, which the
+			// caller turns into a refusal. Reporting it as "no history"
+			// would be the one answer that is never right.
+			h.loadErr[group] = err
+			return nil, false
+		}
+		if len(loaded) > 0 {
+			h.events[group] = loaded
+			h.latest[group] = latest
+			rows, seen = loaded, true
+		}
+	}
 	if !seen {
 		return nil, false
 	}

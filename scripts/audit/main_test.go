@@ -59,8 +59,13 @@ func TestOnlyRepoItemsAreScored(t *testing.T) {
 	if total != len(repoItems) {
 		t.Errorf("denominator %d, want %d repo items", total, len(repoItems))
 	}
-	if closed != 2 {
-		t.Errorf("closed = %d, want 2 (A1 and A2 are the two that are done)", closed)
+	// Pinned, and it moves when a claim is closed — which is the whole
+	// point of the number. It was 2 when the audit was written (A1 and A2),
+	// and 4 after 决策 457 closed the two rebalance-history items.
+	const wantClosed = 4
+	if closed != wantClosed {
+		t.Errorf("closed = %d, want %d. A move in either direction is news: "+
+			"up means a claim was closed, down means one of them stopped being true.", closed, wantClosed)
 	}
 }
 

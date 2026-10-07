@@ -29,6 +29,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -44,6 +46,12 @@ type kafkaClient struct {
 	// See rebalance.go for why this is built from successive DescribeGroups
 	// answers rather than asked of the broker.
 	history *RebalanceHistory
+	// samplerStop and samplerDone are the background sampler's lifetime. The
+	// sampler runs on its own context rather than the one Connect was given,
+	// because Connect's context belongs to the request that opened the
+	// connection and a control plane holds that connection for weeks.
+	samplerStop chan struct{}
+	samplerDone chan struct{}
 	// lastSample throttles sampling. Sampling is not free — it is one
 	// ListGroups plus one DescribeGroups per group — and a diagnostic tool
 	// may be called several times a second during an incident. The interval
@@ -54,6 +62,30 @@ type kafkaClient struct {
 }
 
 // newKafkaClient parses "kafka://host1:9092,host2:9092".
+// HistoryDirEnv names the directory the rebalance history is persisted in.
+//
+// Empty, or unset, means in-memory only: a deployment that has not chosen a
+// directory gets the behaviour that needs no configuration, and the tool
+// reports a window that starts when the process does. It is an environment
+// variable rather than a Config field because the broker connections are
+// declared per resource type (a DSN per connection) and there is no other
+// place an operator already configures them.
+const HistoryDirEnv = "OPSKEEPER_MQ_HISTORY_DIR"
+
+// newHistory builds the history this connection will keep.
+//
+// A configured directory that cannot be created is an error, and the
+// connection refuses: falling back to memory would give a deployment that
+// asked for persistence a history that silently forgets everything on a
+// permission problem.
+func newHistory() (*RebalanceHistory, error) {
+	dir := strings.TrimSpace(os.Getenv(HistoryDirEnv))
+	if dir == "" {
+		return NewRebalanceHistory(defaultHistoryEvents, defaultHistoryAge), nil
+	}
+	return NewRebalanceHistoryStore(filepath.Join(dir, "rebalance"), defaultHistoryEvents, defaultHistoryAge)
+}
+
 func newKafkaClient(dsn string, timeout time.Duration) (*kafkaClient, error) {
 	_, rest, _ := strings.Cut(dsn, "://")
 	if strings.Contains(rest, "@") {
@@ -77,21 +109,76 @@ func newKafkaClient(dsn string, timeout time.Duration) (*kafkaClient, error) {
 	if len(seeds) == 0 {
 		return nil, errors.New("mq: kafka DSN lists no brokers")
 	}
+	history, err := newHistory()
+	if err != nil {
+		return nil, err
+	}
 	return &kafkaClient{
 		client:  &kafka.Client{Addr: kafka.TCP(seeds...), Timeout: timeout},
 		seeds:   seeds,
-		history: NewRebalanceHistory(defaultHistoryEvents, defaultHistoryAge),
+		history: history,
 	}, nil
 }
 
-// close is a no-op, and deliberately so.
+// close stops the background sampler and does nothing else, deliberately.
 //
 // kafka-go's Client holds no connections: every call dials, speaks and
 // returns the connection to a shared pool that is closed when the process
-// exits. Inventing a teardown here would close a pool the rest of the process
-// may be using, and leaving the method absent would make the MQ adapter's
-// Close branch on the backend.
-func (c *kafkaClient) close() {}
+// exits. Inventing a connection teardown here would close a pool the rest of
+// the process may be using.
+//
+// What it does own is the sampler goroutine, and a goroutine that outlives
+// the connection it samples for is a goroutine that keeps calling a broker
+// nobody is using any more — so this stops it and waits for it to exit.
+func (c *kafkaClient) close() {
+	if c.samplerStop == nil {
+		return
+	}
+	close(c.samplerStop)
+	<-c.samplerDone
+	c.samplerStop = nil
+	c.samplerDone = nil
+}
+
+// StartRebalanceSampler samples the groups on a timer until the connection
+// closes.
+//
+// Sampling used to hang off the read path, which is wrong in the direction
+// that matters during an incident: the group nobody has asked about is
+// exactly the one whose rebalance nobody will be able to see afterwards. The
+// read path still samples — a tool call answers from the freshest sample it
+// can take — but it no longer decides whether a history exists.
+//
+// A sample that fails is skipped rather than retried in a loop: DescribeGroups
+// against an unreachable broker fails immediately, and hammering it every
+// interval would turn a broker outage into load on the thing already in
+// trouble. The next tick tries again.
+func (c *kafkaClient) StartRebalanceSampler(interval time.Duration) {
+	if c.samplerStop != nil {
+		return
+	}
+	if interval <= 0 {
+		interval = sampleInterval
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	c.samplerStop, c.samplerDone = stop, done
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), interval)
+				_ = c.sampleRebalances(ctx)
+				cancel()
+			}
+		}
+	}()
+}
 
 // defaultHistoryEvents and defaultHistoryAge bound the rebalance history.
 //
