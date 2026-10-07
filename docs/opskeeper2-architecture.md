@@ -42525,3 +42525,99 @@ extensionDiagnostics 就退出）。我们这里**没有退出、没有任何 st
 而它是不成立的。这不改变任何一格的分数（那些格子衡量的不是这条），但它意味着**阶段 0
 剩下的那 2% 之外，还有一处此前被当作已完成的部分其实是空的**。把空的地方算作空，比把
 清单当事实更接近这个台账存在的理由。
+
+### 4.380 决策 446：把决策 445 的结论**推翻**——插件扩展一直都加载了，是节点把包写在了 PiG 从不读的那条路径上
+
+#### 一、445 错在哪，以及它是怎么错的
+
+445 记的是「节点从来没有加载过任何插件扩展」，并列了一张排除表。那张表里的**每一条排除都是
+真的**，结论却是错的。三处更正，按发现顺序：
+
+| 445 的说法 | 实测 | 错的性质 |
+|---|---|---|
+| `pig verify <包>` FAIL 说明这个包形态不被接受 | 属实，但**与节点无关**：那是 `pig install` 校验路径把包当作一个 Node 扩展，节点根本不走它 | 把一条旁证当成了主证 |
+| `pig status` 报扩展 enabled + health "" 而模型拿不到工具 | 属实，但**被误读为「加载了却没给模型」**；真实情况是它们被**整体过滤掉了，从未进入加载** | 症状描述对，机制判断错 |
+| 「去掉 `pi` 块、换成 settings 的 `extensions`、开 trust、手工 go build 都不变」 | 都属实，**而且正因为如此才误导**：settings 的 `extensions` 在 PiG 里根本不是「扩展源列表」，而是某个目录下的**成员过滤**，所以那次实验是无效实验 | 用一个无效实验排除了一整类原因 |
+
+真正的转折是一次**对照实验**：用 `pig extension init` 生成 PiG 自己的最小 Go 扩展，`-e` 直接加载，
+**它自己的 `mini_ping` 工具同样不出现**。于是问题从「我们的包/我们的扩展」变成了
+「PiG 的 RPC 模式在什么条件下才把扩展工具交给模型」。
+
+而**工具其实一直在模型请求里**——我此前读的是提示词里渲染出来的工具小节（只列内置的
+codemode 与 tool_search），不是真实请求的 `tools` 数组。假模型记录到的真实数组是：
+
+```
+read, bash, edit, write, mini_ping, expand_topology, find_outlier_edges,
+find_topology_node, get_topology, host_dmesg, host_grep_file, host_lsof,
+host_mtr, host_netns_inspect, host_probe_dns, host_probe_http, host_probe_tcp,
+host_read_journal, host_sosreport, host_strace, host_tail_file, host_traceroute,
+query_alert_rules
+```
+
+**18 个 SRE 工具一个不少**。所以「扩展没加载」是错的，「工具没到模型」也是错的。
+
+#### 二、真正的根因：一个作用域，一条路径，两个都要对上
+
+PiG 只从两处读设置（`internal/codingagent/settings.go`）：
+
+| 作用域 | 路径 | 载入条件 |
+|---|---|---|
+| AGENT | `<AgentDir>/settings.json` | 无条件 |
+| PROJECT | `<Cwd>/.pig/settings.json` | discovery 列表须含 `workspace`，**且项目须被信任** |
+
+节点两处都没对：
+
+1. 它把包清单写进 `<Cwd>/.pig/settings.json`，也就是 **PROJECT 作用域**；
+2. 而节点 profile 的 discovery 是 `[user]` —— 那是刻意的，用来关掉环境目录的自动发现；
+3. PiG 的 `PackageScopeEnabled` 把 project 映射到 `workspace`，于是**每一个已准入的包
+   在载入时被整体过滤**，一个不剩。
+
+PROJECT 作用域还叠了第二道门：项目设置只对**被信任的项目**可见，而节点没有回答信任提示的
+通道。所以即使把 discovery 放开，一个真实节点仍然会加载不到。
+
+**修法**：包清单写进 **AGENT 作用域**，也就是 `<AgentDir>/settings.json`。改动落在
+`cmd/opskeeper-edge/agentconfig.go` 的 `agentSettingsPath`：
+
+- 配置了 agent scope（`OPSKEEPER_EDGE_AGENT_CONFIG_DIR`）→ 写 `<scope>/settings.json`；
+- 没配置 → 保持原来的 `<Cwd>/.pig/settings.json`（行为不变，仍然可加载、仍然可审查）。
+
+profile 仍留在 `<Cwd>/.pig/`，因为它是按 `--piglet <path>` 传进去的，不参与作用域解析；
+把它搬走只会让两件事看起来相关，而它们无关。
+
+#### 三、实测：修复后插件工具第一次真的到达模型
+
+同一个端到端验收（已发布包 + 真实扩展 + 真实宿主执行器）：
+
+```
+host_tail_file was offered by the agent (advertised sets: 2)
+the host adjudicated the call and allowed it, with the file as the target
+```
+
+第二行来自节点自己的审计账本：`action: tool_call, outcome: allowed, target: <证据文件>`。
+**这一行只能由宿主写**——插件没有账本写权限——所以它证明这次调用确实跨过了 socket、
+在宿主侧被裁决，而不是在 agent 进程内部被处理掉。
+
+到这一步，「节点上的 SRE 工具集从未被模型看到过」这句话**不再成立**：它现在被看到了，
+被调用了，也被宿主裁决了。
+
+#### 四、还没关掉的最后一跳（不掩饰）
+
+工具**结果仍然是空的**：PiG 把它渲染成 `(no tool output)`，也就是执行器返回了空；节点账本里
+也没有第二条记录（执行本身没有落账）。所以现在是：
+
+- 已证明：扩展加载 → 工具被提供 → 模型调用 → **gate 裁决放行**；
+- 未证明：**broker 执行 → 宿主执行器 → 结果回灌**。
+
+下一刀要查的是 broker 那一段：扩展进程拿到 `OPSKEEPER_TOOL_SOCKET` 后拨号、宿主
+`toolbroker` 的分发与授权、以及为什么一次被放行的调用没有产生第二条账本记录。测试为此
+保留在最后一跳之前 `t.Skip`，理由写在文件里；跳过之前的所有断言**每次运行都在跑**。
+
+#### 五、读数
+
+**分数不变**：阶段 0 = 98%、阶段 1 = 100%、阶段 2 = 100%、阶段 3 = 100.0%，加权
+≈ 99.5%；架构尺 A–E = 97.75%。
+
+但 445 第五节那句话要**撤回**：它说「阶段 0 那 2% 之外还有一处此前被当作已完成的部分其实
+是空的」。那个判断建立在错误结论上，因此不成立。真正成立的是更小也更重要的一句：
+**这一格里的证据曾经是假的，现在是真的了，而把假的当真的那个过程，本身就是这个台账存在的
+理由。**

@@ -2729,8 +2729,9 @@ func main() {
 	// ConversationRepo: SQL-backed (data/chatdiagnose/store) when
 	// sqlDB is set, falls back to in-memory fakes otherwise so the
 	// service stays exercisable in dev/test.
-	// KBLookup / ChatRuntime / AuditLogger: no-op stubs for now;
-	// replaced by real impls in Day 7+ chatruntime-side integration.
+	// KBLookup / ChatRuntime / AuditLogger are the real adapters wired
+	// above; chatDiagRuntime degrades to a nil-runtime ReAct when no LLM
+	// is configured, which the biz layer handles.
 	var chatDiagRepo managerbizchatdiagnose.ConversationRepo
 	if db != nil {
 		chatDiagRepo = managerdatachatdiagnosestore.NewConversationRepoDB(db)
@@ -2749,13 +2750,29 @@ func main() {
 		chatDiagReAct.rt = chatRT
 	}
 	chatDiagRuntime := chatDiagReAct
+	// Feature switches. Without this option the service keeps the zero
+	// ChatFeatureFlag and POST /chat/diagnose 403s for the life of the
+	// process — the flag had no other injection point. Promote stays on
+	// by default (biz default) and only turns off when explicitly set to
+	// "false"; diagnose and KB-first default off, matching the biz docs.
+	chatDiagFlag := managerbizchatdiagnose.ChatFeatureFlag{
+		ChatDiagnoseEnabled: os.Getenv("OPSKEEPER_CHAT_DIAGNOSE_ENABLED") == "true",
+		KBFirstEnabled:      os.Getenv("OPSKEEPER_CHAT_KB_FIRST_ENABLED") == "true",
+		ChatPromoteEnabled:  os.Getenv("OPSKEEPER_CHAT_PROMOTE_ENABLED") != "false",
+	}
 	chatDiagSvc := managerbizchatdiagnose.NewChatDiagnoseService(
 		chatDiagRepo,
 		chatDiagKB,
 		chatDiagRuntime,
 		chatDiagLoopAdapter,
 		chatDiagAudit,
+		managerbizchatdiagnose.WithFeatureFlag(chatDiagFlag),
 	)
+	if chatDiagFlag.ChatDiagnoseEnabled {
+		log.Info("chat diagnose entry enabled (OPSKEEPER_CHAT_DIAGNOSE_ENABLED=true)",
+			"kb_first", chatDiagFlag.KBFirstEnabled,
+			"promote", chatDiagFlag.ChatPromoteEnabled)
+	}
 
 	// Loop HTTP handler — three routes (trigger / timeline / verify).
 	// Day 6+: VerifyRecoveryCaller is wired to the real

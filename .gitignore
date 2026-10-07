@@ -166,3 +166,8 @@ plugins/opskeeper-teamharness/eval/reports/
 # into a commit; it was caught before it was pushed (decision 420).
 .devrun/
 .worktrees/
+# >>> Comet managed project state >>>
+!/.comet/
+/.comet/*
+!/.comet/config.yaml
+# <<< Comet managed project state <<<

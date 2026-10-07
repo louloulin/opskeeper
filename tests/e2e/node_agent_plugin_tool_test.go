@@ -43,25 +43,6 @@ import (
 // reads a file the test wrote, so the sentinel string in the result can only
 // have come from the host opening that path.
 func TestAPluginToolCrossesTheGateAndRunsOnTheNodeHost(t *testing.T) {
-	// HELD BACK, not passing. Measured on 2026-10-07 against PiG 0.4.0: an
-	// agent started exactly as a node starts it -- this package, the
-	// generated profile, the gateway endpoint -- is offered codemode and
-	// tool_search and NOTHING else. Every extension in the package is
-	// skipped silently: no error, no exit, no stderr, and `pig status`
-	// still reports every one of them enabled and healthy. `pig verify`
-	// refuses the package outright ("declares pi.extensions directories with
-	// no extension entry file"), while the same command on the extension
-	// directory alone passes. See ledger section 4.379 (decision 445).
-	//
-	// It is skipped rather than committed red because a permanently red
-	// suite is a suite people delete, and it is not committed green
-	// because that is the exact lie this repository keeps having to undo:
-	// a test that cannot fail is worse than no test. Everything below the
-	// skip is the acceptance as it should read the day the agent actually
-	// loads a package's extensions -- the first line that asserts a plugin
-	// tool was offered is the line that will go green.
-	t.Skip("the agent loads no extension from a package: measured against PiG 0.4.0, " +
-		"ledger 4.379 / decision 445. Every assertion below is the acceptance for the fix.")
 	frontier := testenv.SharedFrontier(t)
 	env := testenv.Start(t, testenv.WithFrontier(frontier))
 	login := env.LoginAdmin()
@@ -133,6 +114,32 @@ func TestAPluginToolCrossesTheGateAndRunsOnTheNodeHost(t *testing.T) {
 	}
 	t.Logf("host_tail_file was offered by the agent (advertised sets: %d)", len(advertised))
 
+	// Step two: the host ADJUDICATED it. The gate's verdict is written to
+	// the node's audit ledger by the host, from the host's own gate event --
+	// the agent cannot write that line, so its presence is evidence that
+	// the call crossed the socket and was decided there rather than
+	// somewhere inside the agent process.
+	ledger := testenv.ReadFileOrEmpty(t, filepath.Join(edge.WorkDir, "audit-ledger.jsonl"))
+	if !strings.Contains(ledger, `"action":"tool_call"`) || !strings.Contains(ledger, `"outcome":"allowed"`) {
+		t.Fatalf("the node's audit ledger records no allowed tool_call; the gate either refused "+
+			"the declared read tool or the call never reached it\nledger: %s\nnode logs:\n%s",
+			ledger, edge.Logs())
+	}
+	if !strings.Contains(ledger, "gate-evidence.log") {
+		t.Fatalf("the allowed call carries no target; the model asked for the evidence file "+
+			"and the ledger does not name it\nledger: %s", ledger)
+	}
+	t.Log("the host adjudicated the call and allowed it, with the file as the target")
+
+	// HELD BACK at the last hop, not passing. The gate leg is proven above;
+	// the broker leg is not. Measured on 2026-10-07: PiG renders the tool
+	// result as "(no tool output)", i.e. the tool produced nothing at all,
+	// and the node's ledger shows no second entry for the execution. So the
+	// call is adjudicated and then stops between the gate and the answer.
+	// See ledger section 4.380 (decision 446).
+	t.Skip("the tool result comes back empty: the gate allows the call and nothing runs it " +
+		"(ledger 4.380 / decision 446). Everything above the skip is proven on every run.")
+
 	// Step two: the host ran it, and its output came back. Not "the agent
 	// tried something" -- the string in the result is the one this test
 	// wrote into a file only the node host could open.
@@ -144,8 +151,9 @@ func TestAPluginToolCrossesTheGateAndRunsOnTheNodeHost(t *testing.T) {
 	joined := strings.Join(results, "\n")
 	if !strings.Contains(joined, sentinel) {
 		t.Fatalf("host_tail_file was called but its answer never carried the sentinel; the "+
-			"round trip stopped somewhere between the gate, the broker and the executor\nresults: %v\nnode logs:\n%s",
-			results, edge.Logs())
+			"round trip stopped somewhere between the gate, the broker and the executor\nresults: %v\n"+
+			"audit ledger:\n%s\nnode logs:\n%s",
+			results, testenv.ReadFileOrEmpty(t, filepath.Join(edge.WorkDir, "audit-ledger.jsonl")), edge.Logs())
 	}
 	t.Logf("the host executed the tool and the sentinel came back through the gate: %d result(s)", len(results))
 
