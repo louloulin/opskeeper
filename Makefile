@@ -599,8 +599,20 @@ module-check: ## 校验 OpsKeeper 2.0 模块边界（唯一 PiG 导入点 / core
 # 它量的是仓库状态，不是运行时行为。行为那一半仍然属于 eval-gates（诊断轴）与
 # pig-tool-scoping-check（对着真二进制核工具集）。本格是一次点名册，不是证明。
 .PHONY: dcell-check
-dcell-check: ## 进度表 D「插件生态」那一格的清单式读数（12 条判据 + 2 条未做）
+dcell-check: ## 进度表 D「插件生态」那一格的清单式读数（14 条判据 + 1 条未做）
 	go run ./scripts/dcell .
+
+# 完成度审计：把剩下的开口逐条分类，并给外部项写清"什么证据能关掉它、证据在谁手里"。
+#
+# 诊断轴到 20/20 之后，剩下的开口性质变了——多数不再是"缺能力"，而是"缺本仓产不出的证据"：
+# 真密钥、真 Docker、真 broker。而这些此前是散在正文里的句子，和能力缺口长得一模一样。
+#
+# 分类只有三种：repo（本仓现在就能判）、external（证据在本仓之外，必须写清证据与持有人）、
+# judgment（是取舍不是测量，**永不被机器判为完成**）。计分只算 repo 项：把 external 记 0 分会
+# 说平台"完成了九成"，记满分会说审计通过了，两者都不真。
+.PHONY: audit-scope
+audit-scope: ## 完成度审计：repo 项闭合率 + 外部项归属（3 条 external / 1 条 judgment）
+	go run ./scripts/audit .
 
 # The release chain already puts the right binary in the right directory --
 # build-edge-bundle.sh derives its source dir from the arch argument it is
