@@ -253,7 +253,12 @@ export default function HomePage() {
     let cancelled = false;
     listAgents()
       .then((r) => {
-        if (!cancelled) setAgents(r.items.slice(0, 6));
+        // 先 filter 再 slice：'default' 排掉，才不会白占 6 个黄金位之一。
+        // 为什么排它 —— 上面那个大输入框 startSession 绑的就是 agent_id
+        // 'default'，点 default 卡 ≡ 在输入框少写一句 prompt，零信息量。
+        // filter 后再 slice 才能让第 6 格由真正的 persona 补位；反过来
+        // slice 再 filter 永远只有 5 张卡。
+        if (!cancelled) setAgents(r.items.filter((a) => a.name !== 'default').slice(0, 6));
       })
       .catch(() => {
         if (!cancelled) setAgents([]);
@@ -322,8 +327,6 @@ export default function HomePage() {
   }
 
   const showEmptyState = edgeTotal === 0;
-
-
   return (
     <main className="flex flex-1 flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto">
@@ -381,6 +384,40 @@ export default function HomePage() {
             </div>
           )}
 
+          {/* 「你的 Agent」快捷卡：点一下直接开一个绑定该 persona 的新会话。
+              位置在提示词卡之上 —— 这一节最该被先看到的入口就是 persona，
+              提示词卡是退而求其次的备选。
+              用原生 <button> 而不是 <Card>：Card 的 as prop 只允许
+              div/section/article，渲染不出 button，而这个卡必须键盘可达。
+              .surface-card 提供卡面 + 弱边框，hover 用与 Card.tsx
+              interactive 分支一致的语义 token。 */}
+          {agents.length > 0 && (
+            <section className="mt-10">
+              <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                {tr('你的 Agent', 'Your agents')}
+              </h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                {agents.map((a) => {
+                  const busy = startingAgent === a.name;
+                  return (
+                    <button
+                      key={a.name}
+                      type="button"
+                      disabled={busy || startingAgent !== null}
+                      onClick={() => void startWith(a.name)}
+                      className="surface-card flex flex-col items-center gap-2 rounded-2xl px-3 py-4 transition-colors hover:border-border hover:bg-card disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <AgentAvatar agentId={a.name} size={40} />
+                      <span className="truncate text-xs text-zinc-300">
+                        {personaLabel(a.name, tr)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
           <div className="mt-10">
             {showEmptyState ? (
               <button
@@ -416,38 +453,6 @@ export default function HomePage() {
               </div>
             )}
           </div>
-
-          {/* 「你的 Agent」快捷卡：点一下直接开一个绑定该 persona 的新会话。
-              用原生 <button> 而不是 <Card>：Card 的 as prop 只允许
-              div/section/article，渲染不出 button，而这个卡必须键盘可达。
-              .surface-card 提供卡面 + 弱边框，hover 用与 Card.tsx
-              interactive 分支一致的语义 token。 */}
-          {agents.length > 0 && (
-            <section className="mt-8">
-              <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
-                {tr('你的 Agent', 'Your agents')}
-              </h2>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-                {agents.map((a) => {
-                  const busy = startingAgent === a.name;
-                  return (
-                    <button
-                      key={a.name}
-                      type="button"
-                      disabled={busy || startingAgent !== null}
-                      onClick={() => void startWith(a.name)}
-                      className="surface-card flex flex-col items-center gap-2 rounded-2xl px-3 py-4 transition-colors hover:border-border hover:bg-card disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <AgentAvatar agentId={a.name} size={40} />
-                      <span className="truncate text-xs text-zinc-300">
-                        {personaLabel(a.name, tr)}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          )}
         </div>
       </div>
     </main>
