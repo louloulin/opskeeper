@@ -22,7 +22,8 @@ export type AppRoute = {
 type RouteDef = { path: string; zh: string; en: string; keywords?: string[]; group: AppRouteGroup };
 
 const ROUTE_DEFS: RouteDef[] = [
-  { path: '/dashboard', zh: '仪表盘', en: 'Dashboard', keywords: ['dashboard', 'overview', 'home', 'shouye', 'yibiaopan'], group: '主页' },
+  { path: '/home', zh: '首页', en: 'Home', keywords: ['home', 'teamily', 'workbench', 'shouye'], group: '主页' },
+  { path: '/dashboard', zh: '仪表盘', en: 'Dashboard', keywords: ['dashboard', 'overview', 'yibiaopan'], group: '主页' },
 
   { path: '/agents', zh: '助理', en: 'Assistants', keywords: ['agents', 'assistant', 'bot', 'zhuli', 'zhushou'], group: 'Agent' },
   { path: '/node-agents', zh: '节点 Agent', en: 'Node Agents', keywords: ['node', 'agent', 'jiedian', 'edge agent'], group: 'Agent' },

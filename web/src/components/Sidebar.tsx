@@ -275,7 +275,7 @@ export function Sidebar() {
           <PanelLeftOpen size={16} />
         </button>
         <Link
-          to="/dashboard"
+          to="/home"
           aria-label={tr('首页', 'Home')}
           className="rounded-lg p-2 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
         >
@@ -437,7 +437,7 @@ export function Sidebar() {
 
         {/* L1 顶级入口 — 不缩进，直接可点 */}
         <div className="mt-3 space-y-0.5">
-          <SidebarNavItem to="/dashboard" icon={Home} label={tr('首页', 'Home')} exact level={1} />
+          <SidebarNavItem to="/home" icon={Home} label={tr('首页', 'Home')} exact level={1} />
           <SidebarNavItem to="/dashboard" icon={LayoutDashboard} label={tr('仪表盘', 'Dashboard')} level={1} />
         </div>
 

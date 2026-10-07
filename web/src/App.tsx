@@ -103,8 +103,12 @@ export default function App() {
           </RequireAuth>
         }
       >
+        {/* `/` still redirects to /dashboard on purpose: the console is the
+            existing primary entry IA. The Teamily-style workbench lives at
+            /home and is reachable from the sidebar's 首页 entry. */}
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/home" element={<HomePage />} />
         <Route path="/chat/:sessionId" element={<ChatThreadPage />} />
         {/* /edges is the legacy route, kept as an alias to /devices for
             backward-compatible bookmarks; the canonical name post-split
