@@ -187,7 +187,11 @@ func TestAnEndpointThatAnswers200WithoutFramesFails(t *testing.T) {
 // may safely report a failure at all.
 func TestAFailedCallNeverPrintsTheCredential(t *testing.T) {
 	root := fixture(t)
-	const key = "sk-leaked-by-the-provider-0123456789"
+	// Assembled at run time for the reason credentialShaped gives: a literal
+	// of that shape in the tracked tree is itself a release-gate violation,
+	// so writing one here to test a different gate leaves this repository
+	// red for a file that holds no credential.
+	key := credentialShaped()
 	t.Setenv(keyEnv, key)
 	t.Setenv(providerURLEnv, unauthorized(t, key))
 	for _, r := range run(root, stage0Checks) {

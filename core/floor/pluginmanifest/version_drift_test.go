@@ -25,6 +25,8 @@ package pluginmanifest
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -126,5 +128,56 @@ func TestShippedPackageVersionTracksItsTools(t *testing.T) {
 			t.Errorf("released records %q, which no longer ships under plugins/pig-ops. "+
 				"Remove the record rather than leaving it to vouch for a package that is gone.", name)
 		}
+	}
+}
+
+// The version lives in two files, and only one of them is authoritative.
+//
+// pig-ops.yaml is the governance sidecar the host admits against, signs,
+// lists in the catalogue and pins in a registry index. package.json is the
+// Pi manifest the agent runtime mounts, and it carries a version field too.
+// Nothing in this tree reads that field, which is exactly the problem: an
+// ungoverned number that nothing checks is free to drift, and it did —
+// the five packages shipped 0.1.0 there while the manifests they govern
+// said 0.2.0. Both were true of the same package at the same time.
+//
+// The drift is not harmless even though nothing reads it. package.json is
+// what a third party sees when they read the package rather than the
+// governance sidecar, and "0.1.0" is a version number that names a
+// different set of contents. So the fix is not "delete the field" — it is
+// to bind it to the field that is authoritative, so that the next bump
+// cannot leave it behind again.
+func TestEveryPackageManifestVersionEqualsItsGovernanceVersion(t *testing.T) {
+	for _, p := range shippedPlugins(t) {
+		t.Run(p.Name(), func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join(p.Root, "package.json"))
+			if os.IsNotExist(err) {
+				// A package with no Pi manifest declares its resources some
+				// other way and has no second version to disagree with.
+				return
+			}
+			if err != nil {
+				t.Fatalf("read package.json: %v", err)
+			}
+			var doc struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			}
+			if err := json.Unmarshal(raw, &doc); err != nil {
+				t.Fatalf("parse package.json: %v", err)
+			}
+			if doc.Name != "" && doc.Name != p.Name() {
+				t.Errorf("package.json names the package %q while the governance manifest "+
+					"names it %q; two names for one package is the same defect as two versions, "+
+					"and it is resolved the same way — by editing package.json to match", doc.Name, p.Name())
+			}
+			if got, want := doc.Version, p.Manifest.Metadata.Version; got != want {
+				t.Errorf("package.json says version %q while the governance manifest says %q.\n"+
+					"The manifest is authoritative: it is what the host admits, signs, lists and "+
+					"pins. package.json is a second number that names the same package, and a "+
+					"reader who trusts it is reading a version of contents that does not exist. "+
+					"Set it to %q — the same value, in both files.", got, want, want)
+			}
+		})
 	}
 }
