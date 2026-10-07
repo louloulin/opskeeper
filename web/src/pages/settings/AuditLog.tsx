@@ -67,9 +67,13 @@ export default function SettingsAuditLog() {
       </div>
     );
   }
+  // These wrappers are <div>, not <main>: this page is only ever mounted as
+  // a child route of AdminLayout, which already renders the section <main>.
+  // A <main> here nested two landmarks inside one another, so the audit log
+  // reported two page regions to assistive tech instead of one.
   if (!isAdmin) {
     return (
-      <main className="anim-fade flex flex-1 flex-col overflow-hidden p-6">
+      <div className="anim-fade flex flex-1 flex-col overflow-hidden p-6">
         <Card className="p-6">
           <EmptyState
             icon={Shield}
@@ -77,12 +81,12 @@ export default function SettingsAuditLog() {
             hint={tr('只有管理员可以查看审计日志。', 'Only admins can view the audit log.')}
           />
         </Card>
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className="anim-fade flex flex-1 flex-col overflow-hidden p-6">
+    <div className="anim-fade flex flex-1 flex-col overflow-hidden p-6">
       <PageHeader
         title={tr('审计日志', 'Audit log')}
         subtitle={tr(
@@ -204,7 +208,7 @@ export default function SettingsAuditLog() {
       </Card>
 
       {selected && <DetailDrawer row={selected} onClose={() => setSelected(null)} />}
-    </main>
+    </div>
   );
 }
 

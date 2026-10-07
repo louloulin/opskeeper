@@ -210,7 +210,24 @@ func directReadToolNames(rows []capabilityDigestRow) []string {
 	return names
 }
 
+// isDigestBuiltin decides which tools the capability digest enumerates.
+//
+// ToolSearch is included by name, on top of the core tier, because the
+// digest is the section the prompt presents as authoritative ("本轮可见能力
+// （动态）") and the whole deferral design depends on it: specialty tools
+// ship with a redacted schema and are reachable ONLY by asking ToolSearch
+// for them. Listing every reachable tool while omitting the one tool that
+// unlocks the rest tells the model the others do not exist.
+//
+// Verified against MiniMax-M3: asked to draft an alert rule, it reported
+// "创建告警规则所需的三个工具本轮不可见" and refused, because the digest it
+// was told to trust showed 3 tools (AgentTool / SendMessage / TaskStop) and
+// no way to look for more. ToolSearch was in the tools array the whole time —
+// it had simply been filtered out of the list it was supposed to be read from.
 func isDigestBuiltin(name string) bool {
+	if name == "ToolSearch" {
+		return true
+	}
 	return aiopstools.IsCoreToolName(name)
 }
 

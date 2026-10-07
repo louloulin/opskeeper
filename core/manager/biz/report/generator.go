@@ -355,17 +355,25 @@ func (g *workerGenerator) buildPrompt(rpt *model.Report, facts *ReportFacts) str
 }
 
 // localeDirective renders an explicit output-language line for the
-// narrative + advice (the LLM-authored prose). Empty/unknown → "" so the
-// persona's implicit language wins. Mirrors investigator.localeDirective.
+// narrative + advice (the LLM-authored prose).
+//
+// The empty case used to return "", on the comment's theory that "the persona's
+// implicit language wins". With OPSKEEPER_DEFAULT_LOCALE unset, a daily report
+// generated for a Chinese console came back with an English headline and four
+// English narrative paragraphs — verified against MiniMax-M3, whose default
+// prose language is English. So the empty case now states Chinese out loud.
+//
+// It keeps its own tag parse rather than calling the chat runtime's resolver:
+// sharing that would mean report → aiops, and that edge was deliberately
+// severed in decision 252 (scripts/domaincheck holds the graph). The two
+// copies are pinned separately — see locale_test.go in all four packages — so
+// they cannot drift apart unnoticed again, which is what let them drift.
 func localeDirective(locale string) string {
-	primary := strings.ToLower(strings.SplitN(strings.TrimSpace(locale), "-", 2)[0])
-	switch primary {
+	switch primarySubtag(locale) {
 	case "en":
 		return "LANGUAGE: Write the narrative headline, all narrative paragraphs, and every advice item in English. The facts data + persona description are in Chinese; render their meaning in English and never echo raw Chinese prose. Leave identifiers, hostnames, and metric names verbatim."
-	case "zh":
-		return "LANGUAGE: 叙事 headline、所有叙事段落、以及每条 advice 全部用简体中文撰写。"
 	default:
-		return ""
+		return "LANGUAGE: 叙事 headline、所有叙事段落、以及每条 advice 全部用简体中文撰写。标题、正文与建议均不得出现整句英文。"
 	}
 }
 
@@ -475,4 +483,13 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// primarySubtag reduces a locale tag to its language subtag, so "en-US",
+// "en_GB" and "EN" all select English. Underscores are normalised because
+// Windows and several HTTP stacks send them.
+func primarySubtag(locale string) string {
+	l := strings.ToLower(strings.TrimSpace(locale))
+	l = strings.ReplaceAll(l, "_", "-")
+	return strings.SplitN(l, "-", 2)[0]
 }

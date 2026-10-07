@@ -114,6 +114,7 @@ import (
 	managerbizaiops "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
 	aiopsagent "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
+	aiopschatprompt "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatprompt"
 	aiopschatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
 
 	mcpclient "github.com/vincent-wuhan/opskeeper/core/base/pkg/mcpclient"
@@ -2248,11 +2249,14 @@ func main() {
 				MaxConcurrent:      maxCC,
 				// Fall-back language for auto-fire + backfill (no request
 				// context, no Accept-Language). Manual triggers override per
-				// request. Default "en" so a fresh deployment matches the
-				// English SPA by default; ops sets OPSKEEPER_DEFAULT_LOCALE=zh
-				// for an explicitly Chinese-default install.
-				// See [[feedback_ai_output_locale]].
-				DefaultLocale: firstNonEmpty(os.Getenv("OPSKEEPER_DEFAULT_LOCALE"), "en"),
+				// request. The fallback used to be "en", argued as "match
+				// the English SPA" — but the SPA localises itself from the
+				// operator's timezone and a zh-CN console was still getting
+				// English AI prose, because the default only ever reached
+				// the headless paths. It is now the same DefaultLocale the
+				// four locale resolvers share; OPSKEEPER_DEFAULT_LOCALE still
+				// overrides it. See [[feedback_ai_output_locale]].
+				DefaultLocale: firstNonEmpty(os.Getenv("OPSKEEPER_DEFAULT_LOCALE"), aiopschatprompt.DefaultLocale),
 			}, log)
 			// Same InvestigationRepo also implements the
 			// related-alerts query (same DB handle, different method).
@@ -2294,7 +2298,7 @@ func main() {
 			managerreportdata.NewFactsCollector(db, reportProm),
 			reportRunner{rt: reportRT},
 			managerbizreport.GeneratorConfig{
-				DefaultLocale: firstNonEmpty(os.Getenv("OPSKEEPER_DEFAULT_LOCALE"), "en"),
+				DefaultLocale: firstNonEmpty(os.Getenv("OPSKEEPER_DEFAULT_LOCALE"), aiopschatprompt.DefaultLocale),
 				PublicURL:     cfg.PublicURL,
 			},
 			log,
@@ -2309,7 +2313,7 @@ func main() {
 	}
 	reportUC := managerbizreport.NewUsecase(reportRepo, reportGen, uuid.NewString).
 		WithReadRepo(reportRepo).
-		WithDefaultLocale(firstNonEmpty(os.Getenv("OPSKEEPER_DEFAULT_LOCALE"), "en"))
+		WithDefaultLocale(firstNonEmpty(os.Getenv("OPSKEEPER_DEFAULT_LOCALE"), aiopschatprompt.DefaultLocale))
 	if reportSchedulerReady {
 		reportScheduler = managerbizreport.NewScheduler(reportUC, log)
 		// Worker is registered with leader.Manager further down; for

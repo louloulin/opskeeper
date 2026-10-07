@@ -977,7 +977,14 @@ func complexCoordinatorHint(low, original string) bool {
 		strings.Contains(original, "优先级") || strings.Contains(original, "风险") || strings.Contains(original, "回滚") ||
 		strings.Contains(original, "处置") || strings.Contains(original, "修复") || strings.Contains(original, "报告") ||
 		strings.Contains(original, "交接") || strings.Contains(original, "容量") || strings.Contains(original, "噪音") ||
-		strings.Contains(original, "噪声") || strings.Contains(original, "草拟") || strings.Contains(original, "传播路径") ||
+		// "起草" is the ordinary Chinese word for drafting; "草拟" next to
+		// it is a rare synonym nobody types. Without 起草 a request to draft
+		// an alert rule matched alertRulesIntent but NOT complexHint, so the
+		// intent filter collapsed the coordinator to the single read-only
+		// query_alert_rules — leaving the draft/apply tools unreachable on
+		// exactly the request they exist for.
+		strings.Contains(original, "噪声") || strings.Contains(original, "草拟") || strings.Contains(original, "起草") ||
+		strings.Contains(original, "新建规则") || strings.Contains(original, "传播路径") ||
 		strings.Contains(original, "取证") || strings.Contains(original, "健康检查") || strings.Contains(original, "证据链") ||
 		strings.Contains(original, "排查") || strings.Contains(original, "综合判断") || strings.Contains(original, "判断")
 }

@@ -63,6 +63,40 @@ type Paragraph struct {
 	Entities []EntityRef `json:"entities,omitempty"`
 }
 
+// UnmarshalJSON accepts both paragraph shapes an LLM produces for
+// "paragraphs": the documented object, and the bare string that the field
+// name invites on its own.
+//
+// This is not defensive padding. A model asked for narrative.paragraphs
+// reads "paragraphs" and emits ["first paragraph.", "second paragraph."] —
+// a perfectly reasonable reading, and a strictly poorer one than the object
+// form only because it carries no entity tokens. Without this the whole
+// report dies at ParseContent: verified against MiniMax-M3, which returned
+// strings and took a daily report from HTTP 202 straight to status=failed
+// with "cannot unmarshal string into ... Paragraph". One optional field's
+// shape cost the entire document.
+//
+// The string form carries exactly what Text needs, so the coercion is
+// lossless in the direction that matters; entities stay absent, which is
+// what a bare string could never have expressed anyway.
+func (p *Paragraph) UnmarshalJSON(b []byte) error {
+	// A JSON string is the shorthand; everything else takes the struct path.
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		p.Text = s
+		p.Entities = nil
+		return nil
+	}
+	// Alias sheds this method so the struct branch doesn't recurse into it.
+	type paragraphAlias Paragraph
+	var a paragraphAlias
+	if err := json.Unmarshal(b, &a); err != nil {
+		return err
+	}
+	*p = Paragraph(a)
+	return nil
+}
+
 type EntityRef struct {
 	Key  string `json:"key"`  // "edge:7" | "incident:1234"
 	Name string `json:"name"` // display name

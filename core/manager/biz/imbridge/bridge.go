@@ -229,17 +229,19 @@ func (b *Bridge) HandleInbound(ctx context.Context, sender Sender, msg InboundMe
 }
 
 // localeDirective renders the language hint we append to the user content
-// before handing to the agent. Empty locale = "" (no directive, LLM
-// mirrors). Mirrors the RCA-side helper in alert/investigator but framed
-// for chat replies, not RCA reports — see [[feedback_ai_output_locale]].
+// before handing to the agent. The empty case now returns the Chinese
+// directive instead of "" ("no directive, LLM mirrors") — but the model mirrors
+// its own training mix, not the operator, and MiniMax-M3's is English. Framed
+// for chat replies, not RCA reports — see [[feedback_ai_output_locale]]. It
+// keeps its own parse rather than sharing the chat runtime's resolver, because
+// that would add an imbridge → aiops edge this tree deliberately severed
+// (decision 252).
 func localeDirective(locale string) string {
-	switch strings.ToLower(strings.TrimSpace(locale)) {
+	switch primarySubtag(locale) {
 	case "en":
 		return "(LANGUAGE: Respond in English regardless of the language the system prompt or persona examples use.)"
-	case "zh":
-		return "（LANGUAGE：请用简体中文回复，无论 system prompt 或 persona 中的示例用什么语言。）"
 	default:
-		return ""
+		return "（LANGUAGE：请用简体中文回复，无论 system prompt 或 persona 中的示例用什么语言。）"
 	}
 }
 
@@ -306,4 +308,12 @@ func shortChatLabel(id string) string {
 		return id
 	}
 	return id[:4] + "…" + id[len(id)-4:]
+}
+
+// primarySubtag reduces a locale tag to its language subtag, so "en-US",
+// "en_GB" and "EN" all select English.
+func primarySubtag(locale string) string {
+	l := strings.ToLower(strings.TrimSpace(locale))
+	l = strings.ReplaceAll(l, "_", "-")
+	return strings.SplitN(l, "-", 2)[0]
 }

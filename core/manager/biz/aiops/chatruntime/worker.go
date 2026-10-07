@@ -754,6 +754,25 @@ var coordinatorOnlyTools = map[string]bool{
 	"AgentTool":   true,
 	"SendMessage": true,
 	"TaskStop":    true,
+	// ToolSearch belongs here for the same reason the trio above does: it is
+	// control plane, not business logic, so a persona whitelist must not be
+	// able to strip it.
+	//
+	// It is not in the toolbag's "core" tier (toolbag.go deliberately keeps it
+	// out — it is force-loaded via WithExtra so deferral cannot redact the one
+	// tool that un-redacts everything else). But the coordinator whitelist is
+	// built from that core tier plus a small extra list, and ToolSearch was in
+	// neither, so the persona filter removed it. With it gone every
+	// specialty-tier tool became permanently unreachable: the coordinator
+	// could no longer ask for the schema of draft_config_change /
+	// apply_config_change / list_metric_catalog, so the alert-rule
+	// draft → human-confirm → apply loop could not be started from chat at
+	// all. Verified against MiniMax-M3, which reported those three tools as
+	// "本轮不可见" and refused the task rather than inventing a draft.
+	//
+	// Workers deliberately do NOT get it: a worker runs with its own curated
+	// bag and is not meant to go discovering more tools mid-task.
+	"ToolSearch": true,
 }
 
 // alwaysAvailableTools survive the read-only strip (write gate OFF / viewer)

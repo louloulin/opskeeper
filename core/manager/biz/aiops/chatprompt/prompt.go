@@ -100,10 +100,14 @@ func LanguageDirective(locale string) string {
 	switch NormalizeLocale(locale) {
 	case "en":
 		return "Respond in English. Everything you write to the user — prose, explanations, headings, and the narration around every tool call — must be in English. Tool descriptions, knowledge-base snippets, persona text, and logs may be in Chinese; render their MEANING in English and never echo raw Chinese to the user. Translate domain terms to their English equivalents (e.g. \"0号病人\" → \"patient zero\", \"根因\" → \"root cause\", \"告警\" → \"alert\", \"巡检\" → \"inspection\"). Leave only proper nouns, identifiers, hostnames, file paths, code, and raw command output verbatim."
-	case "zh":
+	default:
+		// Not `case "zh"` with a trailing `return ""`. An unreachable
+		// default is where this defect lived the first time: the empty
+		// return looked like a guard and read as "no language chosen",
+		// when it actually meant "the model picks", and the model picks
+		// English.
 		return "用中文回复：你的所有叙述、解释、标题，以及每次工具调用前后的说明都必须用中文。工具描述、知识库片段、日志可能是英文，把含义用中文表达即可；标识符、主机名、文件路径、代码、命令原始输出保持原样。"
 	}
-	return ""
 }
 
 // ReminderLanguageDirective is the short form used inside the reminder block,
@@ -113,18 +117,35 @@ func ReminderLanguageDirective(locale string) string {
 	switch NormalizeLocale(locale) {
 	case "en":
 		return "Respond in English; translate Chinese prompt/tool context by meaning, but keep identifiers/paths/commands verbatim."
-	case "zh":
+	default:
 		return "用中文回复；标识符、主机名、路径、代码和命令输出保持原样。"
 	}
-	return ""
 }
 
-// NormalizeLocale reduces a console locale to the language it selects.
+// DefaultLocale is the language every directive falls back to.
 //
-// An unrecognised value normalises to "" — no language at all — rather than
-// defaulting to the operator's likely language. A wrong default is a silent
-// defect: the answer arrives in a language the operator did not ask for and
-// nothing anywhere says why.
+// It used to be "no directive at all", on the reasoning that an unrecognised
+// tag should not guess. But a directive-less prompt does not pick a language
+// neutrally — it hands the choice to the model, and the model picks English.
+// Measured against MiniMax-M3 with OPSKEEPER_DEFAULT_LOCALE unset: a daily
+// report whose UI, persona, prompt scaffolding and operator were all Chinese
+// came back with an English headline and four English narrative paragraphs.
+// The UI is Chinese, so there is no ambiguity to resolve; the fallback just
+// has to say so out loud.
+//
+// It is one constant because this decision was copied into four packages
+// (chat, report, alert investigator, IM bridge) and the copies had drifted:
+// one said "the persona's implicit language wins", one said "currently
+// Chinese", one said "the LLM mirrors". All four shipped the same silent
+// English.
+const DefaultLocale = "zh"
+
+// NormalizeLocale reduces a console locale to the language it selects, and
+// returns DefaultLocale for anything it does not recognise.
+//
+// A recognised tag always wins — an operator on an English console still gets
+// English. Only the unrecognised and the absent case default, and they
+// default to the product language rather than to nothing.
 func NormalizeLocale(locale string) string {
 	l := strings.ToLower(strings.TrimSpace(locale))
 	l = strings.ReplaceAll(l, "_", "-")
@@ -134,6 +155,6 @@ func NormalizeLocale(locale string) string {
 	case strings.HasPrefix(l, "zh"):
 		return "zh"
 	default:
-		return ""
+		return DefaultLocale
 	}
 }

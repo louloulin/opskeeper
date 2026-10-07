@@ -155,3 +155,47 @@ func TestBuildToolCapabilityDigest_TruncatesLargeDynamicSets(t *testing.T) {
 		t.Fatalf("digest should truncate and point to ToolSearch, got:\n%s", got)
 	}
 }
+
+// ToolSearch is the only route to every specialty-tier tool: they ship with
+// a redacted schema, so without it they are unreachable no matter what else
+// is in the bag. The digest is the section the prompt tells the model to
+// treat as authoritative, so ToolSearch missing from it reads as "no such
+// tool" — which is what MiniMax-M3 concluded when it refused to draft an
+// alert rule as "本轮不可见".
+//
+// The gate that dropped it is `Origin == "" && !isDigestBuiltin(name)`, and
+// ToolSearch is deliberately absent from the core tier (toolbag.go explains
+// it is force-loaded via WithExtra instead), so isDigestBuiltin said no.
+func TestBuildToolCapabilityDigest_AlwaysListsToolSearch(t *testing.T) {
+	// Origin "" is the real ToolSearch shape — that is what tripped the gate.
+	bag := []basetool.BaseTool{
+		&originTool{name: "query_devices", class: "read", origin: basetool.OriginBuiltin},
+		&originTool{name: "ToolSearch", class: "read", origin: ""},
+	}
+	got := buildToolCapabilityDigest(bag)
+	if !strings.Contains(got, "ToolSearch [builtin/read]") {
+		t.Fatalf("digest must list ToolSearch — it is the only route to specialty tools:\n%s", got)
+	}
+}
+
+func TestIsDigestBuiltin_ToolSearchIsAlwaysBuiltin(t *testing.T) {
+	if !isDigestBuiltin("ToolSearch") {
+		t.Error("isDigestBuiltin(ToolSearch) = false; the discovery tool must never be filtered out of the digest")
+	}
+}
+
+// "起草" is how operators actually ask for a draft. The hint list carried the
+// rare synonym "草拟" instead, so a draft request matched alertRulesIntent
+// without matching complexHint and the intent filter cut the coordinator down
+// to the single read-only query_alert_rules.
+func TestComplexCoordinatorHint_MatchesOrdinaryChineseDrafting(t *testing.T) {
+	for _, text := range []string{
+		"请帮我起草一条新的告警规则",
+		"帮忙新建规则：设备 15 分钟无心跳",
+		"Please draft an alert rule",
+	} {
+		if !complexCoordinatorHint(strings.ToLower(text), text) {
+			t.Errorf("complexCoordinatorHint(%q) = false; a drafting request must route to the control tools", text)
+		}
+	}
+}

@@ -68,26 +68,73 @@ func TestTheReminderCarriesThePersonaThenTheHints(t *testing.T) {
 	}
 }
 
-func TestAnUnrecognisedLocaleAddsNoDirective(t *testing.T) {
-	// Guessing a language from an unrecognised tag answers an operator in a
-	// language they did not ask for, and nothing anywhere says why.
-	if NormalizeLocale("fr-FR") != "" || NormalizeLocale("") != "" || NormalizeLocale("   ") != "" {
-		t.Fatalf("an unrecognised locale normalised to a language")
+// TestAnUnrecognisedLocaleFallsBackToChinese pins the empty case, which used
+// to be the whole defect.
+//
+// The old contract returned "" here and called it the safe choice: "guessing a
+// language answers an operator in a language they did not ask for". But an
+// empty directive is not a neutral — it hands the decision to the model, and
+// the model answers in English. Verified against MiniMax-M3 with no locale
+// anywhere: a Chinese-console daily report came back with an English headline
+// and four English paragraphs.
+//
+// A RECOGNISED tag still wins in both directions. English operators keep
+// English; this only decides the case where nothing was asked for.
+func TestAnUnrecognisedLocaleFallsBackToChinese(t *testing.T) {
+	for _, in := range []string{"fr-FR", "", "   ", "pt-BR", "xx"} {
+		if got := NormalizeLocale(in); got != DefaultLocale {
+			t.Fatalf("NormalizeLocale(%q) = %q, want the default %q", in, got, DefaultLocale)
+		}
 	}
 	for _, tc := range []struct{ in, want string }{
 		{"zh-CN", "zh"}, {"zh_CN", "zh"}, {"ZH", "zh"},
 		{"en-US", "en"}, {"en_GB", "en"}, {"en", "en"},
-		{"zh-Hant", "zh"}, {"pt-BR", ""},
+		{"zh-Hant", "zh"}, {"pt-BR", DefaultLocale},
 	} {
 		if got := NormalizeLocale(tc.in); got != tc.want {
 			t.Fatalf("NormalizeLocale(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
-	if d := LanguageDirective("fr-FR"); d != "" {
-		t.Fatalf("a directive was invented for an unknown locale: %q", d)
+	if DefaultLocale != "zh" {
+		t.Fatalf("DefaultLocale = %q, want zh", DefaultLocale)
 	}
-	if d := LanguageDirective("zh-CN"); !strings.Contains(d, "用中文回复") {
-		t.Fatalf("the Chinese directive is missing: %q", d)
+	for _, locale := range []string{"", "fr-FR", "zh-CN"} {
+		if d := LanguageDirective(locale); !strings.Contains(d, "用中文回复") {
+			t.Fatalf("LanguageDirective(%q) did not force Chinese: %q", locale, d)
+		}
+		if d := ReminderLanguageDirective(locale); !strings.Contains(d, "用中文回复") {
+			t.Fatalf("ReminderLanguageDirective(%q) did not force Chinese: %q", locale, d)
+		}
+	}
+	// The English console keeps working — a default must not become a ban.
+	if d := LanguageDirective("en-US"); !strings.Contains(d, "Respond in English") {
+		t.Fatalf("an explicit English locale stopped producing an English directive: %q", d)
+	}
+}
+
+// TestEveryLocaleResolverForcesChinese covers the four copies of this
+// decision. They lived in four packages and had drifted: each returned "" on
+// the empty case and each claimed in its own comment that some other layer
+// would decide. None of them decided, and all four shipped English prose.
+//
+// This test cannot reach three of them across their package boundaries, so it
+// pins the shared resolver they all call plus the text they all fall back to.
+// The per-package tests assert each of them resolved their own empty case.
+func TestEveryLocaleResolverForcesChinese(t *testing.T) {
+	dir := LanguageDirective("")
+	if !strings.Contains(dir, "用中文回复") {
+		t.Fatalf("the shared directive is not Chinese: %q", dir)
+	}
+	// The reminder variant is what actually reaches a long session, where
+	// the system prompt has scrolled out of attention.
+	rem := ReminderLanguageDirective("")
+	if !strings.Contains(rem, "用中文回复") {
+		t.Fatalf("the per-turn reminder is not Chinese: %q", rem)
+	}
+	// The reminder block itself must lead with the language rule.
+	block := SystemReminder(Turn{Locale: ""})
+	if !strings.Contains(block, "用中文回复") {
+		t.Fatalf("the reminder block does not re-assert the language: %q", block)
 	}
 }
 

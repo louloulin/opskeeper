@@ -55,6 +55,73 @@ type FakeLLM struct {
 	// hold parks the next completion until the test releases it. See
 	// HoldNextCall.
 	hold *LLMHold
+	// refusals records every request this fake rejected as one a real
+	// provider would refuse. See Refusals.
+	refusals []string
+}
+
+// invalidChatRequest returns why a chat request would be refused, or "".
+//
+// Each rule is one a provider enforces, and each exists because the failure it
+// catches is invisible otherwise: an empty model and an empty conversation
+// both produce a cheerful 200 from a permissive stub, and an agent that then
+// "works" in tests and fails on the first real call.
+func invalidChatRequest(model string, messages []struct {
+	Role string `json:"role"`
+}, tools []struct {
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
+}) string {
+	if model == "" {
+		return "model is required"
+	}
+	if len(messages) == 0 {
+		return "messages must not be empty"
+	}
+	for i, message := range messages {
+		if message.Role == "" {
+			return fmt.Sprintf("messages[%d] has no role", i)
+		}
+	}
+	for i, tool := range tools {
+		if tool.Function.Name == "" {
+			return fmt.Sprintf("tools[%d] has no function name", i)
+		}
+	}
+	return ""
+}
+
+// Refusals returns the reasons this fake refused a request, in order.
+//
+// It exists so a test can assert the property that matters: not merely that
+// the run passed, but that nothing the run sent was something a real provider
+// would have rejected.
+func (f *FakeLLM) Refusals() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.refusals...)
+}
+
+// refuse answers the way a provider would and remembers why.
+//
+// The body is OpenAI-shaped on purpose: a client that recovers from an error
+// reads `error.message`, and a stub returning a bare string would let that
+// recovery path go untested until the first real 400.
+func (f *FakeLLM) refuse(w http.ResponseWriter, reason string) {
+	f.mu.Lock()
+	f.refusals = append(f.refusals, reason)
+	f.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]any{
+			"message": reason,
+			"type":    "invalid_request_error",
+			"param":   nil,
+			"code":    nil,
+		},
+	})
 }
 
 // LLMHold parks one completion.
@@ -200,7 +267,26 @@ func (f *FakeLLM) openaiChat(w http.ResponseWriter, r *http.Request) {
 			} `json:"function"`
 		} `json:"tools"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	// The decode error used to be discarded, which made this fake accept a
+	// body that no provider would serve: no model, no messages, a tool
+	// without a function name, or something that is not JSON at all. A stub
+	// that accepts everything proves the pipe is open and nothing about
+	// whether our request would survive a real provider -- and the thing
+	// that breaks is the translation, not the connection.
+	//
+	// So the rules below are the minimum a provider actually enforces. They
+	// are deliberately not exhaustive: this fake is a gate on shape, not a
+	// second implementation of OpenAI. Every refusal is recorded, so a test
+	// that starts failing says which request was refused rather than just
+	// that it was.
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		f.refuse(w, fmt.Sprintf("request body is not a JSON object: %v", err))
+		return
+	}
+	if reason := invalidChatRequest(req.Model, req.Messages, req.Tools); reason != "" {
+		f.refuse(w, reason)
+		return
+	}
 
 	names := make([]string, 0, len(req.Tools))
 	for _, tool := range req.Tools {

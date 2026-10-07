@@ -454,7 +454,17 @@ func (r *runState) result(messages []agent.AgentMessage) *TurnResult {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if asst := messages[i].Assistant; asst != nil {
 			res.Reply = asst
-			res.Content = ai.ContentText(asst.Content)
+			// Stripped here too, not just in toPortsMessage and the
+			// Mapper. Those two cover the paths that reach an operator —
+			// the console stream and the chat_messages row — but the
+			// caller of this method gets a third, separate copy, and for
+			// a worker that copy IS the AgentTool result handed back to
+			// the coordinator. Left raw, a sub-agent's <think> block
+			// landed verbatim in chat_tool_calls.result_json and in the
+			// coordinator's prompt on every later turn: reasoning this
+			// package deliberately withholds everywhere else, reintroduced
+			// through the one path that skipped the filter.
+			res.Content = stripInlineThinking(ai.ContentText(asst.Content))
 			break
 		}
 	}

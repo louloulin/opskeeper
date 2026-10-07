@@ -59,3 +59,41 @@ func TestFilterToolsForAgentRole_DynamicReadTools(t *testing.T) {
 		t.Errorf("viewer must drop a DESTRUCTIVE dynamic tool")
 	}
 }
+
+// A persona whitelist must not be able to remove ToolSearch from the
+// coordinator's bag.
+//
+// The shipped "default" coordinator persona is built from the toolbag's core
+// tier plus a small extra list, and ToolSearch is in neither by design — it is
+// force-loaded via WithExtra so deferral cannot redact the one tool that
+// un-redacts everything else. The persona filter read that omission as "not
+// available" and stripped it, which is what made every specialty tool
+// (draft_config_change, apply_config_change, list_metric_catalog) permanently
+// unreachable from chat: the coordinator had no way to ask for their schemas.
+//
+// Verified against MiniMax-M3, which refused an alert-rule drafting task as
+// "本轮不可见" rather than fabricating a draft.
+func TestFilterToolsForAgentRole_CoordinatorKeepsToolSearchDespiteWhitelist(t *testing.T) {
+	bag := []basetool.BaseTool{
+		&originTool{name: "query_devices", class: "read"},
+		&originTool{name: "ToolSearch", class: "read"},
+		&originTool{name: "AgentTool", class: "write"},
+	}
+	// A whitelist that predates this fix: no ToolSearch in it.
+	persona := &Agent{Name: "default", Tools: []string{"query_devices"}}
+
+	out := filterToolsForAgentRole(bag, persona, true, false)
+	if !toolbagHas(out, "ToolSearch") {
+		t.Fatalf("persona whitelist stripped ToolSearch from the coordinator: %+v", out)
+	}
+	if !toolbagHas(out, "query_devices") {
+		t.Fatalf("whitelisted tool should survive: %+v", out)
+	}
+
+	// A worker is different: it runs a curated bag and must NOT go
+	// discovering tools mid-task.
+	workerOut := filterToolsForAgentRole(bag, persona, false, false)
+	if toolbagHas(workerOut, "ToolSearch") {
+		t.Errorf("worker must not receive ToolSearch: %+v", workerOut)
+	}
+}

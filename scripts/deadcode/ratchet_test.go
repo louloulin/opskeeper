@@ -304,10 +304,19 @@ import (
 // from assemblyroot_test.go — so it lands in the test-only class for the same
 // reason its predecessor did. This is a gate's logic being exercised only by
 // the gate's own test, which is what a gate is.
+// 864 / 600 / 264 as of decision 400: +1 test-only, and it is the same shape
+// as the entry above. `FakeLLM.Refusals` lives in fakes.go — a non-test file,
+// because the fake has to be constructible from an external test package —
+// and is called only from fakellm_strict_test.go. So the walk reaches it from
+// the tests and from nowhere else, which is precisely the definition of this
+// class. It earns its place there: without it the strict-mode test can only
+// assert that the run passed, not that nothing the run sent was something a
+// real provider would have rejected, which is the property the fixture exists
+// to check.
 const (
-	unreachableBudget    = 863
+	unreachableBudget    = 864
 	deadSymbolBudget     = 600
-	testOnlySymbolBudget = 263
+	testOnlySymbolBudget = 264
 )
 
 // TestTheUnreachableSymbolCountNeverGrows is the gate decision 199 declined to

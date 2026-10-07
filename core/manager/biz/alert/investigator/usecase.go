@@ -26,9 +26,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 	managerprom "github.com/vincent-wuhan/opskeeper/core/floor/prom"
 	alertmodel "github.com/vincent-wuhan/opskeeper/core/manager/model/alert"
-	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tenantctx"
 )
 
 // Repo is the persistence contract — implemented by
@@ -807,19 +807,20 @@ func renderAlertPrompt(in *alertmodel.Incident, locale string) string {
 }
 
 // localeDirective renders an explicit "write the report in <lang>" line
-// from a locale tag. Empty / unknown locales fall through to "" so the
-// persona's implicit language wins (currently Chinese — see
-// agents/incident-investigator.md). Accepts "en" / "en-US" / "zh" /
-// "zh-CN" etc.; only the primary subtag matters.
+// from a locale tag. The empty case now returns the Chinese directive rather
+// than "", which is how an English RCA report shipped into a Chinese console:
+// this function's comment used to claim the persona decides, and annotated that
+// claim "(currently Chinese — see agents/incident-investigator.md)". That
+// annotation was about the persona FILE, not about the model's behaviour.
+// Accepts "en" / "en-US" / "zh" / "zh-CN" etc. It keeps its own parse rather
+// than sharing the chat runtime's resolver, because that would add an
+// alert → aiops edge this tree deliberately severed (decision 252).
 func localeDirective(locale string) string {
-	primary := strings.ToLower(strings.SplitN(strings.TrimSpace(locale), "-", 2)[0])
-	switch primary {
+	switch primarySubtag(locale) {
 	case "en":
 		return "LANGUAGE: Write the entire final report in English. Every field — root cause, causal chain, evidence summaries, suggested actions — must be English. The persona description happens to be Chinese; ignore that and respond in English."
-	case "zh":
-		return "LANGUAGE: 全程用简体中文撰写最终报告（根因 / 因果链 / 证据 / 建议动作 各字段都用中文）。"
 	default:
-		return ""
+		return "LANGUAGE: 全程用简体中文撰写最终报告（根因 / 因果链 / 证据 / 建议动作 各字段都用中文）。"
 	}
 }
 
@@ -992,4 +993,12 @@ func onlyChars(s, allowed string) bool {
 		}
 	}
 	return s != ""
+}
+
+// primarySubtag reduces a locale tag to its language subtag, so "en-US",
+// "en_GB" and "EN" all select English.
+func primarySubtag(locale string) string {
+	l := strings.ToLower(strings.TrimSpace(locale))
+	l = strings.ReplaceAll(l, "_", "-")
+	return strings.SplitN(l, "-", 2)[0]
 }

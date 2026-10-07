@@ -14,6 +14,31 @@ import (
 	"github.com/vincent-wuhan/opskeeper/tests/e2e/testenv"
 )
 
+// assertNoRefusedModelCalls asserts the property the substituted model cannot
+// prove by passing.
+//
+// Everything else these tests check is about the delivery path, and the fake
+// LLM is what stands in for the provider. A fake that answers every request
+// proves the pipe is open and says nothing about whether the request would
+// survive a real one -- and the thing that breaks in production is the
+// translation, not the connection. So the fake refuses what a provider
+// refuses (see testenv.FakeLLM.Refusals) and this turns that record into an
+// assertion at the point where it is still cheap to read.
+//
+// The failure message names the request that was refused rather than only
+// saying that one was, because a refusal list is a specification of what to
+// fix and a count is not.
+func assertNoRefusedModelCalls(t *testing.T, env *testenv.Env) {
+	t.Helper()
+	refusals := env.FakeLLM().Refusals()
+	if len(refusals) == 0 {
+		return
+	}
+	t.Fatalf("this run sent %d request(s) a real provider would have refused, "+
+		"so the delivery path being green says nothing about surviving a real provider:\n  - %s\n%s",
+		len(refusals), strings.Join(refusals, "\n  - "), env.ManagerLogs())
+}
+
 // TestTheGatewayServesAStreamToANodeCredential isolates the first hop.
 //
 // The delivery path has three hops — node agent to gateway, gateway to
@@ -71,6 +96,7 @@ func TestTheGatewayServesAStreamToANodeCredential(t *testing.T) {
 		t.Fatalf("the stream carried no model text; a gateway that answers 200 with an "+
 			"empty stream is indistinguishable, to every client, from a broken one\nbody: %s", stream)
 	}
+	assertNoRefusedModelCalls(t, env)
 }
 
 // The delivery acceptance, run against real processes.
@@ -371,6 +397,7 @@ func TestNodeAgentDelivery(t *testing.T) {
 			t.Errorf("an unwatched turn returned %d, want 409 not_streaming (body=%s)", status, testenv.MustJSON(body))
 		}
 	})
+	assertNoRefusedModelCalls(t, env)
 }
 
 // openConversation opens a node conversation and returns its id.
