@@ -49,6 +49,29 @@ const TONE_EDGE: Record<PersonaTone, string> = {
   cyan: 'border-cyan-500/40 ring-cyan-500/20',
 };
 
+// personaLabel resolves an agent_id to its localized display name using the
+// same two tables AgentBadge renders from, falling back to the raw agent_id
+// so a persona added later still shows something instead of blank.
+//
+// The optional `translate` argument exists because trInline reads
+// localStorage once at call time and never re-reads on locale change. A
+// component that wants to repaint when the user flips the language must pass
+// its own useI18n() `tr`; callers without that need (module-level constants,
+// AgentBadge itself, which already re-renders via useI18n) can omit it.
+// See src/i18n/locale.ts on the standalone tr caveat.
+//
+// Empty string for a falsy agent_id: an unset agent_id has no persona to
+// name, and the row that renders this shouldn't grow a "default" label just
+// to fill space.
+export function personaLabel(
+  agentId?: string | null,
+  translate: (zh: string, en: string) => string = trInline,
+): string {
+  if (!agentId) return '';
+  const zh = AGENT_LABELS_ZH[agentId];
+  return zh ? translate(zh, AGENT_LABELS_EN[agentId] ?? zh) : agentId;
+}
+
 export function AgentBadge({
   agentId,
   size = 'xs',
@@ -60,8 +83,7 @@ export function AgentBadge({
 }) {
   const { tr } = useI18n();
   if (!agentId) return null;
-  const zh = AGENT_LABELS_ZH[agentId];
-  const label = zh ? trInline(zh, AGENT_LABELS_EN[agentId] ?? zh) : agentId;
+  const label = personaLabel(agentId);
   const { icon: Icon, tone } = personaVisual(agentId);
   const base = cn(
     'inline-flex items-center gap-1 rounded-md border ring-1 ring-inset',

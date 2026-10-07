@@ -28,8 +28,6 @@ import {
   GitBranch,
   ChevronDown,
   ChevronRight,
-  Pencil,
-  Trash2,
   Share2,
   Plug,
   Package,
@@ -39,7 +37,7 @@ import {
   FileBarChart,
 } from 'lucide-react';
 import { Avatar } from './Avatar';
-import { AgentBadge } from './AgentBadge';
+import { SessionList } from './SessionList';
 import { OpskeeperLogo } from './OpskeeperLogo';
 import { useI18n } from '@/i18n/locale';
 import { useThemeMode } from '@/store/mode';
@@ -52,7 +50,7 @@ import { useIncidentBadge } from '@/store/incidentBadge';
 import { useApprovalBadge } from '@/store/approvalBadge';
 import { useMe, usePermissions } from '@/store/me';
 import { useChatSessions, invalidateChatSessions } from '@/store/chatSessions';
-import { createSession, deleteSession, renameSession, type ChatSession } from '@/api/chat';
+import { createSession, deleteSession, type ChatSession } from '@/api/chat';
 import { Button } from '@/components/ui/Button';
 import { listEdges, type EdgeRole } from '@/api/edges';
 import { onDevicesChanged } from '@/lib/events';
@@ -448,21 +446,19 @@ export function Sidebar() {
             也没有改动任何一条 route 字符串 —— 变的只是归属。
             组名 Agent / Discover 保持英文, 与既有 SectionLabel 一致。 */}
 
-        {/* 对话 —— 会话列表。Task 11 会把它换成独立的 SessionList 组件;
-            本任务先保持现有内联实现 (useChatSessions + 删除/重命名) 原样。 */}
+        {/* 对话 —— 会话列表。行本身的视觉(AgentAvatar 32 + persona 名 +
+            标题摘要)与重命名 / 删除交互都在 SessionList 里; 这里只负责
+            切片的条数、空态、展开按钮和删除 modal。传入的是
+            visibleSessions 而不是 sessions, 否则 5 条上限会静默失效。 */}
         <SectionLabel>{tr('对话', 'Chats')}</SectionLabel>
         <div className="ml-2 space-y-0.5">
           {sessions.length === 0 ? (
             <div className="px-2 py-1.5 text-[12px] text-zinc-600">{tr('暂无会话', 'No sessions yet')}</div>
           ) : (
-            visibleSessions.map((s, index) => (
-              <SessionRow
-                key={s.id}
-                session={s}
-                index={index}
-                onDelete={() => setDeleteTarget(s)}
-              />
-            ))
+            <SessionList
+              sessions={visibleSessions}
+              onDelete={(s) => setDeleteTarget(s)}
+            />
           )}
           {hasMoreSessions ? (
             <button
@@ -582,144 +578,6 @@ export function Sidebar() {
         />
       )}
     </aside>
-  );
-}
-
-function SessionRow({
-  session,
-  index,
-  onDelete,
-}: {
-  session: ChatSession;
-  index: number;
-  onDelete: () => void;
-}) {
-  const { tr } = useI18n();
-  const fallbackTitle = tr(`会话 ${index + 1}`, `Session ${index + 1}`);
-  const displayTitle = session.title || fallbackTitle;
-  const [renaming, setRenaming] = useState(false);
-  const [draft, setDraft] = useState(session.title || '');
-  const [saving, setSaving] = useState(false);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-
-  // When external session title changes (e.g. another tab renamed it
-  // and invalidateChatSessions refetched) sync the draft so the next
-  // edit starts from the latest value rather than a stale string.
-  useEffect(() => {
-    if (!renaming) setDraft(session.title || '');
-  }, [session.title, renaming]);
-
-  const enterRename = () => {
-    setDraft(session.title || '');
-    setRenaming(true);
-    // focus + select on next tick so the input is mounted.
-    setTimeout(() => inputRef.current?.select(), 0);
-  };
-
-  const cancelRename = () => {
-    setRenaming(false);
-    setDraft(session.title || '');
-  };
-
-  const commit = async () => {
-    const t = draft.trim();
-    if (t === '' || t === (session.title || '')) {
-      cancelRename();
-      return;
-    }
-    setSaving(true);
-    try {
-      await renameSession(session.id, t);
-      invalidateChatSessions();
-      setRenaming(false);
-    } catch {
-      // Keep editor open on failure so the user can retry.
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (renaming) {
-    return (
-      <div className="group relative">
-        <div className="flex items-center gap-1.5 rounded-md bg-zinc-800/80 py-1 pl-2 pr-7">
-          <input
-            ref={inputRef}
-            value={draft}
-            disabled={saving}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => void commit()}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                void commit();
-              } else if (e.key === 'Escape') {
-                e.preventDefault();
-                cancelRename();
-              }
-            }}
-            className="w-full bg-transparent text-[13px] text-zinc-100 outline-none placeholder:text-zinc-600"
-            placeholder={fallbackTitle}
-            maxLength={256}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="group relative">
-      <NavLink
-        to={`/chat/${session.id}`}
-        title={displayTitle}
-        onDoubleClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          enterRename();
-        }}
-        className={({ isActive }) =>
-          cn(
-            'flex items-center gap-1.5 truncate rounded-md py-1.5 pl-2 pr-12 text-[13px] text-zinc-400 transition-colors',
-            'hover:bg-zinc-800/60 hover:text-zinc-100',
-            isActive && 'bg-zinc-800/80 text-zinc-100'
-          )
-        }
-      >
-        <span className="truncate">{displayTitle}</span>
-        <AgentBadge agentId={session.agent_id} />
-      </NavLink>
-      <button
-        type="button"
-        aria-label={tr('重命名会话', 'Rename session')}
-        title={tr('双击会话名也可重命名', 'Double-click the title to rename')}
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          enterRename();
-        }}
-        className={cn(
-          'absolute right-7 top-1/2 -translate-y-1/2 rounded p-1 text-zinc-600 transition-opacity',
-          'opacity-0 hover:bg-zinc-800 hover:text-zinc-200 focus:opacity-100 group-hover:opacity-100'
-        )}
-      >
-        <Pencil size={12} />
-      </button>
-      <button
-        type="button"
-        aria-label={tr('删除会话', 'Delete session')}
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          onDelete();
-        }}
-        className={cn(
-          'absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-zinc-600 transition-opacity',
-          'opacity-0 hover:bg-red-900/30 hover:text-red-300 focus:opacity-100 group-hover:opacity-100'
-        )}
-      >
-        <Trash2 size={12} />
-      </button>
-    </div>
   );
 }
 
