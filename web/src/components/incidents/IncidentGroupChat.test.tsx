@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { HttpResponse, http } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { server } from '@/test/msw-server';
 import type { IncidentEvent } from '@/api/alerts';
@@ -46,6 +46,15 @@ function stub(init: {
 }
 
 describe('IncidentGroupChat', () => {
+  // Pin the locale so persona labels are deterministic: getLocale() would
+  // otherwise fall back to autoDetectLocale(), which keys off the host
+  // timezone (Asia/Shanghai → zh-CN) and then the browser language (jsdom
+  // default en-US). A non-CN TZ would render 'Incident investigator' and the
+  // zh assertion below would fail — same pin as MessageBubble.test.tsx.
+  beforeEach(() => {
+    localStorage.setItem('opskeeper-locale', 'zh-CN');
+  });
+
   it('renders system chips for events and message bubbles for chat', async () => {
     stub({
       events: [
