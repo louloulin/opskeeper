@@ -566,8 +566,44 @@ func assembleCoverage(caseID string, out CaseCoverage, idx fleetIndex) CaseCover
 	return out
 }
 
+// GapReason is one recorded gap: the sentence a reader acts on, and the
+// list of places that were read before somebody wrote that sentence.
+//
+// The second half exists because the first half was wrong twice, in the same
+// shape, and nothing caught either time. Both mistakes read a gap off the
+// report and concluded that a capability lived somewhere nobody was looking
+// — once for redis.kill_client (「the adapter has it, no package ships it」)
+// and once for host.host_files, where the reason said "nothing anywhere reads
+// a file inventory for a node" while core/edge/host_files was implementing
+// find_large_files, du_summary and stat_file.
+//
+// **A gate over a number cannot catch this**, because the number was right:
+// that capability really was unreachable from a node. What was wrong was the
+// sentence beside it, and sentences are not counted.
+//
+// So the sentence now has to carry its own evidence. Searched is where the
+// author looked, it is checked rather than trusted, and an absence claim
+// that does not name both capability homes fails — which is the discipline
+// that would have surfaced core/edge/host_files before 决策 451 rather than
+// after it.
+type GapReason struct {
+	// Reason is what the report prints and what an operator acts on.
+	Reason string
+	// Searched is every tree location consulted before concluding that
+	// nothing ships this. Every entry must exist, and the set must cover
+	// both capability homes — see TestAGapReasonSaysWhereItLooked.
+	Searched []string
+}
+
+// capabilityHomes are the two places a NODE-side capability can live. A gap
+// that claims nothing serves it has to have looked in both: the edge owns the
+// node's handlers and collectors, the floor owns the skills an agent is
+// offered, and missing either one is how a shipped implementation goes
+// unread as absent.
+var capabilityHomes = []string{"core/edge", "core/floor"}
+
 // DiagnosisGaps names the root causes no shipped package serves, each with
-// the reason it is not served.
+// the reason it is not served and the places that were read to say so.
 //
 // It is a ledger rather than a tolerance because the diagnosis axis is the
 // half of the coverage report that is supposed to be complete, and a gate
@@ -582,7 +618,7 @@ func assembleCoverage(caseID string, out CaseCoverage, idx fleetIndex) CaseCover
 // at exactly the moment nobody is looking at that tool any more. Both
 // directions are tested, so a fix that lands without its decision being
 // retired fails.
-var DiagnosisGaps = map[string]string{
+var DiagnosisGaps = map[string]GapReason{
 	// host.host_processes and host.top_cpu_procs were on this list until
 	// 决策 450, and the reason they were here is the reason they now are not.
 	// The host adapter is excluded from node packages as a family — it runs
@@ -633,14 +669,23 @@ var DiagnosisGaps = map[string]string{
 	// decision about the corpus or the tool name rather than a packaging
 	// backlog item. It stays visible so the decision cannot be lost by
 	// going unrecorded.
-	"kafka.rebalance_history": "Kafka exposes the CURRENT consumer assignment and no history of it. Answering this needs a collector that stores successive DescribeGroups results, which is a collector's job and not a broker client's; undecided",
+	"kafka.rebalance_history": {
+		Reason: "Kafka exposes the CURRENT consumer assignment and no history of it. " +
+			"Answering this needs a collector that stores successive DescribeGroups results, " +
+			"which is a collector's job and not a broker client's; undecided",
+		// The one gap that genuinely is a collector's job, and the one place
+		// where that sentence is the conclusion rather than a guess: the
+		// capability does not exist on either plane, so there is nothing to
+		// misattribute. Both homes were read to establish that.
+		Searched: []string{"core/edge/collector", "core/floor/skill/builtin"},
+	},
 }
 
 // ExplainDiagnosisGap returns the recorded reason an expectation is an
 // owned gap rather than an unexplained one.
 func ExplainDiagnosisGap(expectation string) (string, bool) {
-	reason, ok := DiagnosisGaps[expectation]
-	return reason, ok
+	gap, ok := DiagnosisGaps[expectation]
+	return gap.Reason, ok
 }
 
 // explainGap says why one expectation is not served.

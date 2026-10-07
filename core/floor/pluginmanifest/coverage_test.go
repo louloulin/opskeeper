@@ -713,7 +713,7 @@ func TestTheDiagnosisGapLedgerHasNoStaleEntries(t *testing.T) {
 			actual[want] = caseID
 		}
 	})
-	for name, reason := range DiagnosisGaps {
+	for name, gap := range DiagnosisGaps {
 		if _, still := actual[name]; !still {
 			why := ""
 			if caseID, found := actual[name]; found {
@@ -722,9 +722,71 @@ func TestTheDiagnosisGapLedgerHasNoStaleEntries(t *testing.T) {
 			t.Errorf("DiagnosisGaps names %s, but no shipped case currently fails on it (%s). "+
 				"Either the capability is served now — delete the entry — or the case stopped "+
 				"asking for it, which is a corpus change somebody should make deliberately. "+
-				"Its recorded reason was: %s", name, why, reason)
+				"Its recorded reason was: %s", name, why, gap.Reason)
 		}
 	}
+}
+
+// TestAGapReasonSaysWhereItLooked is the gate for the thing the other two in
+// this file structurally cannot see.
+//
+// Those two ask whether a gap is still open and whether it is still live.
+// Both were green, correctly, while DiagnosisGaps said "nothing anywhere
+// reads a file inventory for a node" and core/edge/host_files sat in the
+// tree implementing three of them. **The number was right and the sentence
+// was wrong**, and a test over numbers has nothing to say about a sentence.
+//
+// So every gap now carries the places that were read before somebody wrote
+// it, and this test holds three things at once:
+//
+//   - the list is not empty, because a gap asserted without saying where you
+//     looked is an opinion wearing a ledger's clothes;
+//   - every path it names still exists, because a Searched list naming a
+//     directory that was deleted is evidence of a search nobody ran;
+//   - and it covers BOTH capability homes, because "nothing anywhere serves
+//     this" is precisely the claim that misses one. The edge owns the node's
+//     handlers and collectors; the floor owns the skills an agent is offered.
+//     Skipping either one is how a shipped implementation goes unread.
+func TestAGapReasonSaysWhereItLooked(t *testing.T) {
+	if len(DiagnosisGaps) == 0 {
+		t.Skip("no gaps are recorded, so there is nothing here to hold to account")
+	}
+	root := repoRoot(t)
+	for name, gap := range DiagnosisGaps {
+		if len(gap.Searched) == 0 {
+			t.Errorf("DiagnosisGaps[%s] records no Searched list. Its reason is %q — and a claim "+
+				"that nothing serves a capability, with nothing to show where that was looked "+
+				"for, is the shape of both errors this gate exists to catch.",
+				name, gap.Reason)
+			continue
+		}
+		for _, where := range gap.Searched {
+			if _, err := os.Stat(filepath.Join(root, where)); err != nil {
+				t.Errorf("DiagnosisGaps[%s] says it was read in %q, which does not exist. "+
+					"A search list naming a place nobody looked is worse than no list: it is "+
+					"evidence for a search that did not happen.", name, where)
+			}
+		}
+		for _, home := range capabilityHomes {
+			if !searchedUnder(gap.Searched, home) {
+				t.Errorf("DiagnosisGaps[%s] claims nothing serves it but never says it looked in %q. "+
+					"That omission is not hypothetical: host.host_files claimed nothing anywhere "+
+					"reads a file inventory for a node, while core/edge/host_files implemented "+
+					"find_large_files, du_summary and stat_file.",
+					name, home)
+			}
+		}
+	}
+}
+
+// searchedUnder reports whether any listed path is inside the named home.
+func searchedUnder(list []string, home string) bool {
+	for _, where := range list {
+		if where == home || strings.HasPrefix(where, home+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // TestTheDiagnosisAxisHoldsAtSeventeen pins the number the two tests above
