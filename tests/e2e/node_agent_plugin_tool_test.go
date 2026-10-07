@@ -147,7 +147,7 @@ func TestAPluginToolCrossesTheGateAndRunsOnTheNodeHost(t *testing.T) {
 	// rendered "(no tool output)". The extensions answered in their own
 	// JSON rather than in the shape the runtime reads a tool result in,
 	// and it decodes that shape by ignoring every field it does not know.
-	// See ledger section 4.381 (decision 447).
+	// See ledger section 4.382 (decision 448).
 
 	// Step two: the host ran it, and its output came back. Not "the agent
 	// tried something" -- the string in the result is the one this test
