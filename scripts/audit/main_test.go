@@ -61,9 +61,11 @@ func TestOnlyRepoItemsAreScored(t *testing.T) {
 	}
 	// Pinned, and it moves when a claim is closed — which is the whole
 	// point of the number. It was 2 when the audit was written (A1 and A2),
-	// and 4 after 决策 457 closed the two rebalance-history items, then 5
-	// once 决策 459 closed B3.
-	const wantClosed = 5
+	// 4 after 决策 457 closed the two rebalance-history items, 5 once
+	// 决策 459 closed B3, and 6 once 决策 469 added A3 — which closed the
+	// moment it was written, because the tree was already free of the
+	// wording it forbids.
+	const wantClosed = 6
 	if closed != wantClosed {
 		t.Errorf("closed = %d, want %d. A move in either direction is news: "+
 			"up means a claim was closed, down means one of them stopped being true.", closed, wantClosed)
@@ -122,6 +124,10 @@ func TestTheFixtureClosesEverythingAndEveryClaimCanBeBroken(t *testing.T) {
 		{"B1", "core/manager/middleware/adapter/mq/rebalance.go", "package mq\n\nfunc (c *kafkaClient) StartRebalanceSampler() {}\n", "持久化实现被删"},
 		{"B2", "core/manager/middleware/adapter/mq/rebalance.go", "package mq\n\nfunc NewRebalanceHistoryStore() {}\n", "定时器实现被删"},
 		{"B3", "core/floor/pluginmanifest/manifest.go", "package pluginmanifest\n", "多根索引实现被删"},
+		{"A3", "core/manager/biz/skill/service.go",
+			"package skill\n\nvar _ = errs.ErrForbidden\n\nfunc deny() error {\n" +
+				"\treturn fmt.Errorf(\"%w: dangerous skills require SOP signature (not implemented)\", errs.ErrForbidden)\n}\n",
+			"一条策略被说成缺失的功能"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.id+"/"+tc.comment, func(t *testing.T) {
@@ -144,5 +150,50 @@ func TestTheFixtureClosesEverythingAndEveryClaimCanBeBroken(t *testing.T) {
 				t.Errorf("%s went red without saying what is missing", tc.id)
 			}
 		})
+	}
+}
+
+// A comment that explains the rule is not a violation of it.
+//
+// The first version of A3 flagged core/manager/biz/skill/service.go because
+// the comment introducing the corrected refusal contains the phrase the
+// refusal must not contain. The fix that version invited was to delete the
+// explanation — so this is pinned, because "the rule punishes its own
+// documentation" is a bug in the rule and not in the documentation.
+func TestAMentionInACommentIsNotAnOffence(t *testing.T) {
+	root := fixture(t)
+	writeFile(t, root, "core/manager/biz/skill/service.go",
+		"package skill\n\nvar _ = errs.ErrForbidden\n\nfunc deny() error {\n"+
+			"\t// an operator reading \"not implemented\" would file it as a bug\n"+
+			"\treturn fmt.Errorf(\"%w: dangerous skills are refused by policy (PR-G4)\", errs.ErrForbidden)\n}\n")
+
+	ok, why, err := noMisleadingRefusal(root)
+	if err != nil {
+		t.Fatalf("noMisleadingRefusal: %v", err)
+	}
+	if !ok {
+		t.Errorf("a comment mentioning the forbidden phrase was reported as an offence: %s", why)
+	}
+}
+
+// And the rule has to survive the shape that hides things from a line-based
+// scan: ErrForbidden on one line and the phrase on another. Reporting nothing
+// there would be a false pass, which is the one outcome a gate must not have.
+func TestASplitRefusalIsStillCaught(t *testing.T) {
+	root := fixture(t)
+	writeFile(t, root, "core/manager/biz/skill/service.go",
+		"package skill\n\nvar _ = errs.ErrForbidden\n\nfunc deny() error {\n"+
+			"\treturn fmt.Errorf(\"%w: dangerous skills are refused because the gate is not implemented yet\",\n"+
+			"\t\terrs.ErrForbidden)\n}\n")
+
+	ok, why, err := noMisleadingRefusal(root)
+	if err != nil {
+		t.Fatalf("noMisleadingRefusal: %v", err)
+	}
+	if ok {
+		t.Error("a refusal whose phrase sits on a different line from ErrForbidden went unreported")
+	}
+	if why == "" {
+		t.Error("the item went red without saying what was found")
 	}
 }

@@ -30,6 +30,7 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -124,6 +125,12 @@ var repoItems = []item{
 		},
 	},
 	{
+		id:      "A3",
+		subject: "面向调用者的拒绝不把一条策略说成一项缺失的功能",
+		class:   classRepo,
+		done:    noMisleadingRefusal,
+	},
+	{
 		id:      "B1",
 		subject: "重平衡历史跨控制面重启保留",
 		class:   classRepo,
@@ -150,6 +157,140 @@ var repoItems = []item{
 				"func LoadCatalogSources(", "the index reads one directory: the cluster-wide and image-baked roots a tenant can also install from are not in it")
 		},
 	},
+}
+
+// noMisleadingRefusal looks for one specific way a caller is misled.
+//
+// A refusal that says "not implemented" describes a capability that is
+// missing. A refusal that is really a policy — "denied until X lands" — has
+// the same effect on the reader and the opposite meaning: one produces a bug
+// report against a decision nobody is going to revisit, the other produces the
+// question the reader actually has, which is under what condition the answer
+// changes.
+//
+// This is a separate item rather than a clause inside A1 or A2 because those
+// read a registry and this walks the tree, and because it is a different kind
+// of thing: every other repo item checks that something exists, and this one
+// checks that something says the truth.
+//
+// The scan is over core/ and cmd/ rather than the whole tree, deliberately.
+// plugins/pig-ops carries vendored copies of the extensions and web/ carries a
+// build of somebody else's stylesheets; a rule whose reach is wider than its
+// evidence is a rule that gets switched off. The baseline is zero, so no
+// allowlist is needed and a new offender is unambiguous.
+//
+// What it does not check: whether the policy the message describes is the
+// policy the code implements. That is what the unit tests beside the gate are
+// for; this only insists that the message does not lie about the *kind* of
+// thing it is.
+func noMisleadingRefusal(root string) (bool, string, error) {
+	phrases := []string{"not implemented", "unimplemented", "not yet implemented"}
+	for _, dir := range []string{"core", "cmd"} {
+		base := filepath.Join(root, dir)
+		if _, err := os.Stat(base); err != nil {
+			// A tree without that root is a fixture, not a failure. An item
+			// that cannot be evaluated says so by finding nothing to say.
+			continue
+		}
+		offender, err := misleadingRefusalIn(base)
+		if err != nil {
+			return false, "", err
+		}
+		if offender == "" {
+			continue
+		}
+		for _, phrase := range phrases {
+			if !strings.Contains(offender, phrase) {
+				continue
+			}
+			return false, fmt.Sprintf("%s refuses with %q: a refusal that names a missing feature reads "+
+				"as a bug rather than as the policy it is — say under what condition the answer changes",
+				dir, phrase), nil
+		}
+	}
+	return true, "", nil
+}
+
+// misleadingRefusalIn returns the first offending line under base, or "".
+//
+// The scan is line-based on purpose: a file-level match would report a 400-line
+// file as "the offender", and a rule that names a file instead of a line is a
+// rule people stop reading. The fallback to a file-level match exists because a
+// multi-line Errorf can put ErrForbidden on one line and the phrase on another
+// — finding both in one file and refusing to report it would be a false pass,
+// which is the one failure mode a gate must not have.
+func misleadingRefusalIn(base string) (string, error) {
+	phrases := []string{"not implemented", "unimplemented", "not yet implemented"}
+	fileHasBoth := ""
+	hit := ""
+
+	err := filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "node_modules" || (strings.HasPrefix(d.Name(), ".") && d.Name() != ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+		body, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		// Comment lines are removed first, and this is not a detail: the
+		// first version of this rule flagged a file because a *comment*
+		// explaining why the message must not say "not implemented" contained
+		// the phrase. A rule that punishes its own documentation is a rule
+		// whose fix is to delete the documentation.
+		//
+		// Only whole-line comments are dropped, by their leading "//". A
+		// line that merely contains "//" — a URL, say — is kept, because
+		// dropping it would create exactly the false pass this item exists to
+		// avoid. Block comments are not handled; none of the refusals in
+		// this tree sit inside one, and adding a parser here would be a
+		// second Go front end for a rule about strings.
+		code := make([]string, 0, 64)
+		for _, line := range strings.Split(string(body), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+				continue
+			}
+			code = append(code, strings.ToLower(line))
+		}
+		lower := strings.Join(code, "\n")
+		if !strings.Contains(lower, "errforbidden") {
+			return nil
+		}
+		for _, line := range code {
+			if !strings.Contains(line, "errforbidden") {
+				continue
+			}
+			for _, phrase := range phrases {
+				if strings.Contains(line, phrase) {
+					hit = line
+					return filepath.SkipAll
+				}
+			}
+		}
+		if fileHasBoth == "" {
+			for _, phrase := range phrases {
+				if strings.Contains(lower, phrase) {
+					fileHasBoth = phrase
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if hit != "" {
+		return hit, nil
+	}
+	return fileHasBoth, nil
 }
 
 // externalItems are the ones a real environment decides.
@@ -180,7 +321,7 @@ var externalItems = []item{
 		evidence: "一个远程 registry 把索引服务出去，且 GET /v1/marketplace/catalog 把它并进索引并据此完成一次安装",
 		class:    classExternal,
 		holder:   "部署方（registry 侧与控制面侧各一次真实部署）",
-		closer:   "仓内两端已齐（决策 466）：产出 go run ./scripts/registryindex，消费 " +
+		closer: "仓内两端已齐（决策 466）：产出 go run ./scripts/registryindex，消费 " +
 			"OPSKEEPER_MARKETPLACE_REGISTRIES。剩下的只是部署时把前者服务出去、后者指过去 —— " +
 			"这一条现在的诚实说法是「本仓没有可调的远端」指的不是缺代码，而是缺一次真实部署",
 	},
