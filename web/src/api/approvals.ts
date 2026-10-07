@@ -13,6 +13,9 @@ export interface Approval {
   source: string;
   session_id?: string;
   status: 'pending' | 'approved' | 'rejected' | 'executed' | 'failed';
+  // JSON string of Signer[] (user_id/role/at); present once signatures exist.
+  // A pending row with one signer means dual-sign is still waiting for another.
+  signers?: string;
   proposed_by: number;
   approved_by?: number;
   reason?: string;

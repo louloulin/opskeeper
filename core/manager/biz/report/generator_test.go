@@ -228,6 +228,13 @@ func TestExtractJSON(t *testing.T) {
 		"```json\n{\"a\":1}\n```":            `{"a":1}`,
 		"```\n{\"a\":1}\n```":                `{"a":1}`,
 		"here you go:\n{\"a\":1}\nthat's it": `{"a":1}`,
+		// MiniMax-M3 has shipped both of these in real daily reports; each
+		// used to kill the whole document at ParseContent. The invalid byte
+		// is dropped but the ASCII byte that followed it survives.
+		"{\"a\":[1,2,],\"b\":2,}":      `{"a":[1,2],"b":2}`,
+		"{\"t\":\"a, } still here\",}": `{"t":"a, } still here"}`,
+		"{\"t\":\"bad \xc3( byte\"}":   `{"t":"bad ( byte"}`,
+		"{\"a\":[\"x\"]\xe8\n}":        "{\"a\":[\"x\"]\n}",
 	}
 	for in, want := range cases {
 		if got := extractJSON(in); got != want {

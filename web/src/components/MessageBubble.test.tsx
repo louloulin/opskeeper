@@ -4,6 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MessageBubble, type ConfigDraftResult } from './MessageBubble';
 import type { ChatMessage } from '@/api/chat';
+import { getApproval, approveApproval } from '@/api/approvals';
+
+vi.mock('@/api/approvals', () => ({
+  getApproval: vi.fn(),
+  approveApproval: vi.fn(),
+  rejectApproval: vi.fn(),
+}));
 
 afterEach(() => {
   cleanup();
@@ -223,5 +230,87 @@ describe('MessageBubble config draft card', () => {
 
     expect(screen.getByText('Create metric_raw rule')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /确认应用|Apply/ })).toBeInTheDocument();
+  });
+});
+
+function approvalMessage(approvalID: string): ChatMessage {
+  return {
+    id: `approval-${approvalID}`,
+    role: 'tool',
+    kind: 'tool_card',
+    tool_call: {
+      id: `call-${approvalID}`,
+      name: 'cloud_bash',
+      status: 'success',
+      result: { status: 'pending_approval', approval_id: approvalID, kind: 'cloud_bash' },
+      arguments: { command: 'echo opskeeper-dualsign-OK' },
+    },
+  };
+}
+
+describe('MessageBubble inline approval card', () => {
+  beforeEach(() => {
+    localStorage.setItem('opskeeper-locale', 'zh-CN');
+    vi.mocked(getApproval).mockResolvedValue({
+      id: 'ap-dualsign',
+      kind: 'cloud_bash',
+      title: 'echo opskeeper-dualsign-OK',
+      summary: '',
+      payload: JSON.stringify({ command: 'echo opskeeper-dualsign-OK' }),
+      source: 'chat',
+      status: 'pending',
+      proposed_by: 1,
+      created_at: new Date().toISOString(),
+    });
+  });
+
+  it('keeps the card honest on a first dual-sign signature: waiting, never 已执行', async () => {
+    // Destructive commands need two signatures from two users; the first
+    // approve returns HTTP 202 with status still pending and the command
+    // NOT run. The card must say so instead of claiming 已执行.
+    vi.mocked(approveApproval).mockResolvedValue({
+      id: 'ap-dualsign',
+      kind: 'cloud_bash',
+      title: 'echo opskeeper-dualsign-OK',
+      summary: '',
+      payload: '{}',
+      source: 'chat',
+      status: 'pending',
+      signers: JSON.stringify([{ user_id: 1, role: 'admin', at: new Date().toISOString() }]),
+      proposed_by: 1,
+      created_at: new Date().toISOString(),
+    });
+
+    render(<MessageBubble message={approvalMessage('ap-dualsign')} />);
+    const user = userEvent.setup();
+    await screen.findByRole('button', { name: /批准并执行/ });
+    await user.click(screen.getByRole('button', { name: /批准并执行/ }));
+
+    await waitFor(() => expect(screen.getByText(/已记录你的签名/)).toBeInTheDocument());
+    expect(screen.getByText(/第二位批准人/)).toBeInTheDocument();
+    expect(screen.queryByText('已执行')).not.toBeInTheDocument();
+  });
+
+  it('shows 已执行 with the result once the row actually executed', async () => {
+    vi.mocked(approveApproval).mockResolvedValue({
+      id: 'ap-dualsign',
+      kind: 'cloud_bash',
+      title: 'echo opskeeper-dualsign-OK',
+      summary: '',
+      payload: '{}',
+      source: 'chat',
+      status: 'executed',
+      result: JSON.stringify({ stdout: 'opskeeper-dualsign-OK\n', exit_code: 0 }),
+      proposed_by: 1,
+      created_at: new Date().toISOString(),
+    });
+
+    render(<MessageBubble message={approvalMessage('ap-dualsign')} />);
+    const user = userEvent.setup();
+    await screen.findByRole('button', { name: /批准并执行/ });
+    await user.click(screen.getByRole('button', { name: /批准并执行/ }));
+
+    await waitFor(() => expect(screen.getByText('已执行')).toBeInTheDocument());
+    expect(screen.getAllByText(/opskeeper-dualsign-OK/).length).toBeGreaterThan(0);
   });
 });

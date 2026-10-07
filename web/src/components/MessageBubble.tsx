@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Wrench, ChevronDown, ChevronRight, Loader2, AlertCircle, CheckCircle2, ShieldAlert, Check, X, XCircle } from 'lucide-react';
+import { Wrench, ChevronDown, ChevronRight, Loader2, AlertCircle, CheckCircle2, ShieldAlert, Check, X, XCircle, Hourglass } from 'lucide-react';
 import type { ChatMessage, ToolCallSummary } from '@/api/chat';
 import { approveApproval, rejectApproval, getApproval } from '@/api/approvals';
 import { cn } from '@/lib/cn';
@@ -479,14 +479,29 @@ function argCommandText(args: unknown): string {
   return '';
 }
 
+// signerCount parses the Signer[] JSON string the API carries on approvals
+// that already have signatures. Lenient by design: a missing or malformed
+// field just means "unknown count", and 1 is the honest floor for a row we
+// ourselves just signed.
+function signerCount(signersJson?: string): number {
+  if (!signersJson) return 1;
+  try {
+    const arr = JSON.parse(signersJson);
+    return Array.isArray(arr) && arr.length > 0 ? arr.length : 1;
+  } catch {
+    return 1;
+  }
+}
+
 // PendingApprovalCard renders an in-conversation approve/reject prompt for a
 // proposed cloud_bash command. Approve runs the command (the backend executor
 // runs synchronously) and shows the result inline; reject discards it.
 function PendingApprovalCard({ approvalID, kind, command }: { approvalID: string; kind: string; command: string }) {
   const { tr } = useI18n();
-  const [state, setState] = useState<'loading' | 'idle' | 'busy' | 'done' | 'rejected' | 'error' | 'stale'>('loading');
+  const [state, setState] = useState<'loading' | 'idle' | 'busy' | 'done' | 'waiting' | 'rejected' | 'error' | 'stale'>('loading');
   const [resultText, setResultText] = useState('');
   const [errText, setErrText] = useState('');
+  const [signedCount, setSignedCount] = useState(0);
   const [cmd, setCmd] = useState(command);
   const [approvalKind, setApprovalKind] = useState(kind);
   const [creds, setCreds] = useState<string[]>([]);
@@ -540,12 +555,20 @@ function PendingApprovalCard({ approvalID, kind, command }: { approvalID: string
     setState('busy');
     try {
       const a = await approveApproval(approvalID);
-      if (a.status === 'failed') {
+      // Only an executed row may claim 已执行. A destructive command is
+      // dual-sign: the first signature returns HTTP 202 with the row still
+      // pending, and the command has NOT run. Rendering that as 已执行 told
+      // the operator the work was done when it was still queued for a second
+      // approver — so pending gets its own honest state instead.
+      if (a.status === 'executed') {
+        setState('done');
+        setResultText(a.result ?? '');
+      } else if (a.status === 'failed') {
         setState('error');
         setErrText(a.result ?? 'failed');
       } else {
-        setState('done');
-        setResultText(a.result ?? '');
+        setState('waiting');
+        setSignedCount(signerCount(a.signers));
       }
     } catch (e) {
       setState('error');
@@ -619,6 +642,17 @@ function PendingApprovalCard({ approvalID, kind, command }: { approvalID: string
           </div>
         )}
         {state === 'busy' && <div className="flex items-center gap-1.5 text-zinc-400"><Loader2 size={12} className="animate-spin" />{tr('执行中…', 'Running…')}</div>}
+        {state === 'waiting' && (
+          <div className="flex items-start gap-1.5 text-amber-400">
+            <Hourglass size={12} className="mt-0.5 shrink-0" />
+            <span>
+              {tr(
+                `已记录你的签名（${signedCount} 人已签）。危险命令需第二位批准人确认后才会执行。`,
+                `Your signature is recorded (${signedCount} so far). A second approver must confirm before the command runs.`,
+              )}
+            </span>
+          </div>
+        )}
         {state === 'rejected' && <div className="text-zinc-500">{tr('已拒绝，未执行', 'Rejected — not run')}</div>}
         {state === 'error' && <div className="break-all text-red-400">{errText}</div>}
         {state === 'done' && (
