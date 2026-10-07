@@ -741,13 +741,15 @@ func TestTheDiagnosisGapLedgerHasNoStaleEntries(t *testing.T) {
 // redis/hot-key case. A rise here is a deliberate act — the other two tests
 // in this file both fail if a gap is closed without its entry being
 // retired, and this one fails if the count moves without either of those.
-func TestTheDiagnosisAxisHoldsAtEighteen(t *testing.T) {
+func TestTheDiagnosisAxisHoldsAtNineteen(t *testing.T) {
 	// Seventeen until 决策 450, when the read-only package shipped the
-	// node's own process ranking and host/cpu-spike became diagnosable from
-	// a node. The other two tests in this file fail if a gap closes without
-	// its DiagnosisGaps entry being retired, and this one fails if the count
-	// moves without either of those — so the number cannot drift silently.
-	const want = 18
+	// node's own process ranking (host/cpu-spike), then eighteen, and
+	// nineteen at 决策 451 when it shipped a bounded file inventory
+	// (host/disk-full). The other two tests in this file fail if a gap
+	// closes without its DiagnosisGaps entry being retired, and this one
+	// fails if the count moves without either of those — so the number
+	// cannot drift silently.
+	const want = 19
 	plugins := shippedPlugins(t)
 	diagnosable, total := 0, 0
 	walkCaseFiles(t, func(caseID, _ string, raw []byte) {

@@ -8,7 +8,7 @@ apiVersion: opskeeper.io/v1
 kind: Plugin
 metadata:
   name: opskeeper-sre-readonly
-  version: 0.1.2
+  version: 0.1.3
   vendor: opskeeper
   homepage: https://github.com/vincent-wuhan/opskeeper
 spec:
@@ -56,6 +56,7 @@ spec:
     - { name: find_topology_node,  class: read }  # where one component lives
     - { name: get_topology,        class: read }  # the whole graph
     - { name: host_dmesg,          class: read , limits: {output_bytes: 262144, timeout_seconds: 60}}  # kernel ring buffer
+    - { name: host_file_inventory,  class: read , limits: {output_bytes: 262144, timeout_seconds: 120}}  # where the space under a path went
     - { name: host_grep_file,      class: read , limits: {output_bytes: 262144, timeout_seconds: 120}}  # search across log files
     - { name: host_lsof,           class: read , limits: {output_bytes: 262144, timeout_seconds: 60}}  # open files per process
     - { name: host_mtr,            class: read , limits: {output_bytes: 65536, timeout_seconds: 120}}  # combined traceroute and loss

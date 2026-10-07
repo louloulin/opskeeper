@@ -167,6 +167,33 @@ var tools = []toolSpec{
 }`,
 	},
 	{
+		Name:        "host_file_inventory",
+		Label:       "文件空间盘点",
+		Description: "盘点一个目录树占用了多少空间：按大小排的目录小计 + 最大的文件. 诊断磁盘满 / 空间暴涨时定位到具体路径. NOT for: 按内容搜索 (host_grep_file).",
+		Parameters: `{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "目录绝对路径"
+    },
+    "top_n": {
+      "type": "integer",
+      "description": "每张榜返回条数, 默认 20, 上限 100"
+    },
+    "max_depth": {
+      "type": "integer",
+      "description": "目录小计的最大深度, 默认 3, 上限 8"
+    },
+    "min_size_bytes": {
+      "type": "integer",
+      "description": "文件榜的最小字节数, 默认 0"
+    }
+  },
+  "required": ["path"]
+}`,
+	},
+	{
 		Name:        "host_grep_file",
 		Label:       "文件正则搜索",
 		Description: "在文件 / 目录树里按正则搜索 (grep -nE). 返回匹配的 line_num + line + 命中数. NOT for: 大文件全量读取 (tail_file) / 二进制 (strings).",

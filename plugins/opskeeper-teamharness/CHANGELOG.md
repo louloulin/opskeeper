@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.75 — 2026-10-07
+
+- Bump the TeamHarness plugin version to 1.0.75 across `plugin.yaml`, the
+  dashboard package/manifest (including the versioned `dist/main-1.0.75.js`
+  entry), and the qwenpaw adapter (`plugin.json` + `plugin.py`).
+- No runtime behaviour change in this plugin. The accompanying backend work
+  is a bounded file inventory on the read-only node package: it accounts for
+  the space under a path (directory subtotals rolled up to the root, plus the
+  largest files), which is what makes `host/disk-full` diagnosable from a
+  node. That package goes 0.1.2 -> 0.1.3.
+
 ## 1.0.74 — 2026-10-07
 
 - Bump the TeamHarness plugin version to 1.0.74 across `plugin.yaml`, the

@@ -93,25 +93,26 @@ const (
 // `query_change_events` wrong.
 var toolCapabilities = map[string]string{
 	// --- opskeeper-sre-readonly ---
-	"expand_topology":    CapTopology,
-	"find_outlier_edges": CapTopology,
-	"find_topology_node": CapTopology,
-	"get_topology":       CapTopology,
-	"query_alert_rules":  CapAlert,
-	"host_dmesg":         CapHost,
-	"host_grep_file":     CapHost,
-	"host_lsof":          CapHost,
-	"host_mtr":           CapHost,
-	"host_netns_inspect": CapHost,
-	"host_probe_dns":     CapHost,
-	"host_probe_http":    CapHost,
-	"host_probe_tcp":     CapHost,
-	"host_read_journal":  CapHost,
-	"host_sosreport":     CapHost,
-	"host_strace":        CapHost,
-	"host_tail_file":     CapHost,
-	"host_top_processes": CapHost,
-	"host_traceroute":    CapHost,
+	"expand_topology":     CapTopology,
+	"find_outlier_edges":  CapTopology,
+	"find_topology_node":  CapTopology,
+	"get_topology":        CapTopology,
+	"query_alert_rules":   CapAlert,
+	"host_dmesg":          CapHost,
+	"host_file_inventory": CapHost,
+	"host_grep_file":      CapHost,
+	"host_lsof":           CapHost,
+	"host_mtr":            CapHost,
+	"host_netns_inspect":  CapHost,
+	"host_probe_dns":      CapHost,
+	"host_probe_http":     CapHost,
+	"host_probe_tcp":      CapHost,
+	"host_read_journal":   CapHost,
+	"host_sosreport":      CapHost,
+	"host_strace":         CapHost,
+	"host_tail_file":      CapHost,
+	"host_top_processes":  CapHost,
+	"host_traceroute":     CapHost,
 
 	// --- opskeeper-sre-observability ---
 	"analyze_database_status": CapDatabase,
@@ -382,6 +383,14 @@ var ExpectationAliases = map[string]string{
 	// carries claims coverage that does not exist on the machine it runs on.
 	"host.host_processes": "host_top_processes",
 	"host.top_cpu_procs":  "host_top_processes",
+	// A file inventory, which is the whole of what host/disk-full's
+	// host.host_files asks for. The control plane's host.old_log_files
+	// answers a narrower question — which logs are OLD — and is excluded
+	// with the rest of that family, so until this shipped there was no read
+	// on either side that accounted for a tree. Same rule as the two above:
+	// the entry appears because the tool exists, not because the name is
+	// close.
+	"host.host_files": "host_file_inventory",
 
 	// The git-artifact linker is reached through one tool. The case names
 	// the linker's API because that is the capability under test; the
@@ -593,11 +602,22 @@ var DiagnosisGaps = map[string]string{
 	// It is the reason the alias rule reads the way it does, so it is worth
 	// naming here: an alias is a claim, and a claim may only follow delivery.
 	//
-	// host.host_files stays. It is a different gap with a different reason:
+	// host.host_files was here until 决策 451 for the same shape of reason:
 	// the adapter's host.old_log_files answers a narrower question (which
-	// OLD logs), so nothing on either side reads a file inventory for a
-	// node, and that is a collector's job rather than a tool's.
-	"host.host_files": "no read equivalent exists on either side. The adapter's host.old_log_files answers a narrower question (which old logs) and is excluded with the rest of the host family, and nothing anywhere reads a file inventory for a node",
+	// logs are OLD) and is excluded with that family, so nothing on either
+	// side accounted for a TREE. What was written above it then was "that is
+	// a collector's job rather than a tool's" — **and that sentence was the
+	// wrong call, made for a good reason and still wrong.** The reason was
+	// sound: a walk has to be bounded or it never returns. The conclusion
+	// did not follow. A bounded walk is a tool, and shipping one turned
+	// host/disk-full from a GAP into a case a node can answer, which is the
+	// second consecutive time in this file that "it needs a collector" was
+	// read off a gap and mistaken for a verdict.
+	//
+	// Recorded because the reasoning error is the reusable part: **"this
+	// thing is expensive to do" is not "this thing is somebody else's
+	// job"**, and the second time it appeared it was written with the
+	// first time's gap record directly above it.
 
 	// redis.hot_keys was on this list until 决策 204: the case asked for a
 	// name no adapter registered, and the entry above recorded the choice

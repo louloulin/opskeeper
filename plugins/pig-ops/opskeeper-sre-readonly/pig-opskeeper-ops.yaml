@@ -76,6 +76,7 @@ extensions:
       - find_topology_node
       - get_topology
       - host_dmesg
+      - host_file_inventory
       - host_grep_file
       - host_lsof
       - host_mtr
