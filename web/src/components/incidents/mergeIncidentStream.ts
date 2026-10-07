@@ -52,6 +52,15 @@ export function isCriticalEventType(eventType: string): boolean {
   return CRITICAL_EVENT_TYPES.has(eventType);
 }
 
+// Timestamps are RFC3339 and may mix precision (Go omits the fractional part
+// when nanoseconds are zero: `…00.500Z` vs `…00Z`) and may carry a non-UTC
+// offset (`+08:00`). Comparing the strings lexicographically misorders both,
+// so compare instants.
+function instant(ts: string): number {
+  const t = Date.parse(ts);
+  return Number.isNaN(t) ? 0 : t;
+}
+
 export function mergeIncidentStream(
   events: IncidentEvent[],
   _sessions: ChatSession[],
@@ -77,5 +86,5 @@ export function mergeIncidentStream(
     }
   }
 
-  return items.sort((a, b) => a.ts.localeCompare(b.ts));
+  return items.sort((a, b) => instant(a.ts) - instant(b.ts));
 }

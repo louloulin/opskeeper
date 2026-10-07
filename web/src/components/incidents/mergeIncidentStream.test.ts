@@ -59,4 +59,27 @@ describe('mergeIncidentStream', () => {
     // 过程性噪声,折叠
     expect(isCriticalEventType('repeat_suppressed')).toBe(false);
   });
+
+  it('orders mixed-precision timestamps by instant, not lexicographically', () => {
+    // Go omits the fractional part when nanoseconds are zero, so the same feed
+    // can carry both `…00.500Z` and `…00Z`. Lexicographically `.` sorts before
+    // `Z`, which would put the later instant first.
+    const items = mergeIncidentStream(
+      [ev('firing', '2026-10-07T10:00:00.500Z')],
+      [],
+      [{ session: { id: 's1', user_id: 1, title: 't' }, messages: [msg('m1', '2026-10-07T10:00:00Z')] }],
+    );
+    expect(items.map((i) => i.type)).toEqual(['message', 'event']);
+  });
+
+  it('orders timestamps carrying a non-UTC offset by instant', () => {
+    // 10:00+08:00 is 02:00Z — earlier than the 05:00Z message below, even
+    // though its hour digits are larger.
+    const items = mergeIncidentStream(
+      [ev('firing', '2026-10-07T10:00:00+08:00')],
+      [],
+      [{ session: { id: 's1', user_id: 1, title: 't' }, messages: [msg('m1', '2026-10-07T05:00:00Z')] }],
+    );
+    expect(items.map((i) => i.type)).toEqual(['event', 'message']);
+  });
 });
