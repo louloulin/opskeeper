@@ -445,13 +445,16 @@ export default function HomePage() {
             </section>
           )}
 
-          {/* 「进行中」：未关闭事件 + 待审批入口。刻意不带 mt-* —— 它紧挨着
-              上面 persona section 的底部，再叠一层上边距会把两节撕开。
+          {/* 「进行中」：未关闭事件 + 待审批入口。mt-8 是**分层间距**（32px），
+              不是把两节撕开 —— 上面 persona section 有 mt-10 顶部但没有底部间距，
+              两节又都带 <h2>，0 间距读起来像渲染坏了。persona 降级不渲染时
+              （listAgents 失败 → setAgents([])）上方是摘要行的 mb-8，同为 32px，
+              两种路径间距一致，不需要额外的条件类名。
               审批只渲染**一张**泛化卡，不拉列表：/v1/approvals 每个 handler
               都在 requireAdmin 之后，首页再发一次请求非 admin 必然 403
               （Task 12 刚把这条请求整个删掉）。数字复用侧栏 badge store。 */}
           {(openIncidents.length > 0 || (isAdmin && pendingApprovals > 0)) && (
-            <section>
+            <section className="mt-8">
               <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
                 {tr('进行中', 'In progress')}
               </h2>
@@ -491,11 +494,6 @@ export default function HomePage() {
           )}
 
           <div className="mt-10">
-            {/* 「试试这些」= 下面这组既有 PromptCard（samplePrompts(4)）。
-                tasks.md 2.6 说的「建议提示词卡」由它满足，本任务不新增第二组。 */}
-            <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
-              {tr('试试这些', 'Try these')}
-            </h2>
             {showEmptyState ? (
               <button
                 type="button"
@@ -517,17 +515,26 @@ export default function HomePage() {
                 </span>
               </button>
             ) : (
-              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                {prompts.map((p) => (
-                  <PromptCard
-                    key={p.titleEn}
-                    title={tr(p.titleZh, p.titleEn)}
-                    description={tr(p.descZh, p.descEn)}
-                    icon={p.icon}
-                    onClick={() => void startSession(tr(p.promptZh, p.promptEn))}
-                  />
-                ))}
-              </div>
+              <>
+                {/* 「试试这些」= 下面这组既有 PromptCard（samplePrompts(4)）。
+                    tasks.md 2.6 说的「建议提示词卡」由它满足，本任务不新增第二组。
+                    标题必须留在**非空分支**里：外层那个 div-10 里是三元，零设备时
+                    渲染的是 onboarding CTA，挂着「试试这些」标题会与内容对不上。 */}
+                <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  {tr('试试这些', 'Try these')}
+                </h2>
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  {prompts.map((p) => (
+                    <PromptCard
+                      key={p.titleEn}
+                      title={tr(p.titleZh, p.titleEn)}
+                      description={tr(p.descZh, p.descEn)}
+                      icon={p.icon}
+                      onClick={() => void startSession(tr(p.promptZh, p.promptEn))}
+                    />
+                  ))}
+                </div>
+              </>
             )}
           </div>
         </div>
