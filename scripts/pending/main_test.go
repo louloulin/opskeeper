@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +12,7 @@ import (
 // ledger and the auditor. Everything else is irrelevant to the check, and a
 // fixture that copies the real tree would let a passing test mean "the real
 // list happens to be well shaped" instead of "the check rejects a bad list".
-func repoWith(t *testing.T, ledgerBody string, auditorOutput string) string {
+func repoWith(t *testing.T, ledgerBody string, auditorOutput string, auditorExit ...int) string {
 	t.Helper()
 	root := t.TempDir()
 	for _, dir := range []string{"docs", "scripts"} {
@@ -22,14 +23,20 @@ func repoWith(t *testing.T, ledgerBody string, auditorOutput string) string {
 	if err := os.WriteFile(filepath.Join(root, ledgerPath), []byte(ledgerBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	shebang := "#!/bin/sh\ncat <<'AUDITOR_EOF'\n" + auditorOutput + "\nAUDITOR_EOF\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(root, auditor), []byte(shebang), 0o755); err != nil {
+	exit := 1
+	if len(auditorExit) > 0 {
+		exit = auditorExit[0]
+	}
+	script := fmt.Sprintf("import sys\nsys.stdout.write(%q)\nsys.exit(%d)\n", auditorOutput+"\n", exit)
+	if err := os.WriteFile(filepath.Join(root, auditor), []byte(script), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return root
 }
 
 const elevenViolations = "open-source gate failed: 11 violation(s) in the tracked tree\n  - whatever: token\n"
+
+const zeroViolations = "open-source gate passed: 3142 text files audited in the tracked tree\n"
 
 func goodLedger(declared string) string {
 	return "# 六、当前实现进度\n\n" + sectionHead + "\n\n" +
@@ -45,6 +52,12 @@ func run(t *testing.T, root string) error {
 func TestAWellShapedListPasses(t *testing.T) {
 	if err := run(t, repoWith(t, goodLedger("11"), elevenViolations)); err != nil {
 		t.Fatalf("a well shaped list was rejected: %v", err)
+	}
+}
+
+func TestAnAuditorSuccessMeansZeroViolations(t *testing.T) {
+	if err := run(t, repoWith(t, goodLedger("0"), zeroViolations, 0)); err != nil {
+		t.Fatalf("a clean auditor run was rejected instead of counting as zero: %v", err)
 	}
 }
 

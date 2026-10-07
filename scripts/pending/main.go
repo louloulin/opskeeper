@@ -107,11 +107,11 @@ func auditorCount(root string) (int, error) {
 	cmd := exec.Command("python3", filepath.Join(root, auditor))
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return 0, nil
+	}
 	// A non-zero exit is the expected state while items are pending; the count
 	// is what matters, and it is printed either way.
-	if out == nil && err != nil {
-		return 0, err
-	}
 	return parseCount(string(out))
 }
 
