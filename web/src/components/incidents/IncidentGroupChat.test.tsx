@@ -95,7 +95,11 @@ describe('IncidentGroupChat', () => {
     // Wait for the feed to load before asserting the human is present: with
     // the pre-§4 member logic the empty pre-load feed rendered 「你」 as the
     // `['default']` fallback, so only the post-load frame discriminates.
-    await screen.findByText('incident-investigator');
+    // The member row must render the *localized persona name* (personaLabel),
+    // not the raw agent_id: '故障诊断' is the zh label for
+    // 'incident-investigator', whose raw id leaking here was the defect.
+    await screen.findByText('故障诊断');
+    expect(screen.queryByText('incident-investigator')).not.toBeInTheDocument();
     // Synchronous on purpose — a findByText here would resolve against the
     // pre-load fallback frame and would not guard the fixed-human behavior.
     expect(screen.getByText('你')).toBeInTheDocument();

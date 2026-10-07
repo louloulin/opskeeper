@@ -10,6 +10,7 @@ import {
 import { fetchLoopTimeline } from '@/api/loops';
 import { usePoll } from '@/lib/usePoll';
 import { cn } from '@/lib/cn';
+import { personaLabel } from '@/components/AgentBadge';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { ChatInput } from '@/components/ChatInput';
 import { MessageBubble } from '@/components/MessageBubble';
@@ -141,7 +142,7 @@ export function IncidentGroupChat({ incidentId }: { incidentId: number }) {
         {members.map((id) => (
           <span key={id} className="flex items-center gap-1.5 text-xs text-zinc-400">
             <AgentAvatar agentId={id} size={32} />
-            {id}
+            {personaLabel(id, tr)}
           </span>
         ))}
       </div>
