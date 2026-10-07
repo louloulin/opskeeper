@@ -9,7 +9,7 @@
 - [x] 1.3 扩展品牌紫 50/100/600/700 色阶(#f3f0fe/#e6e0fd/#6d57d9/#5b49b8),接入现有 RGB 三元组语义映射
 - [x] 1.4 在 `web/tailwind.config.ts` 接入 `borderRadius` 与 `boxShadow` 语义键
 - [x] 1.5 同步扩展浅色 zinc 重映射兜底块,保证新增浅底色类在浅色主题下正确
-- [ ] 1.6 升级 ui/ 原语:Button 主按钮 pill + 次级 rounded-lg 描边;Card rounded-2xl + shadow-card;Chip rounded-full 角色色浅底(props 向后兼容)
+- [x] 1.6 升级 ui/ 原语:Button 主按钮 pill + 次级 rounded-lg 描边;Card rounded-2xl + shadow-card;Chip rounded-full 角色色浅底(props 向后兼容)
 - [ ] 1.7 新建 `AgentAvatar` 组件:32/40px 圆角方形、11 persona 角色→lucide 图标映射、角色色浅底、预留 avatar 字段(存在时优先渲染)
 - [ ] 1.8 抽出聊天气泡样式 token(用户右对齐 accent-50 底 / Agent 左对齐 card 底,角落差异化圆角)
 - [ ] 1.9 为 AgentAvatar 补单元测试(角色图标渲染、avatar 字段优先与回退)
