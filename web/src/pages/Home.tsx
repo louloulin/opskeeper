@@ -20,9 +20,13 @@ import { ChatInput, type ModelSelection } from '@/components/ChatInput';
 import { useModelSelection } from '@/store/modelSelection';
 import { PromptCard } from '@/components/PromptCard';
 import { StatusRow } from '@/components/StatusRow';
+import { Card } from '@/components/ui/Card';
 import { createSession, listModels, type LLMProvider } from '@/api/chat';
 import { setSetting, invalidateLLMRouter } from '@/api/settings';
 import { listEdges } from '@/api/edges';
+import { listIncidents } from '@/api/alerts';
+import { useApprovalBadge } from '@/store/approvalBadge';
+import { usePermissions } from '@/store/me';
 import { useI18n } from '@/i18n/locale';
 
 // Hero 标语 —— 全部走"助理向用户报到"语气：听候差遣 / 今天能做些什么 /
@@ -141,6 +145,16 @@ function samplePrompts(n: number): typeof PROMPT_POOL {
   return pool.slice(0, n);
 }
 
+// 时段问候（眉标）。tr 作为参数传入 —— locale.ts 的 tr 只在调用时读取
+// 当前语言，模块作用域调用会被求值一次并冻在首次加载的语言上。
+function greetingFor(hour: number, tr: (zh: string, en: string) => string): string {
+  if (hour < 5) return tr('凌晨好', 'Still up');
+  if (hour < 11) return tr('早上好', 'Good morning');
+  if (hour < 13) return tr('中午好', 'Good noon');
+  if (hour < 18) return tr('下午好', 'Good afternoon');
+  return tr('晚上好', 'Good evening');
+}
+
 export default function HomePage() {
   const { tr } = useI18n();
   const navigate = useNavigate();
@@ -148,6 +162,14 @@ export default function HomePage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [edgeTotal, setEdgeTotal] = useState<number | null>(null);
+  // 首页摘要用的未关闭事件总数。只读 total，pageSize:1 —— 与
+  // incidentBadge 的读法一致，避免为了一个数字拉回一整页。
+  const [openTotal, setOpenTotal] = useState(0);
+  // 待审批数字复用侧栏的审批 badge store（自带 admin 门禁 + 30s 轮询），
+  // 首页不再单独发 /v1/approvals 请求 —— 那条路由每个 handler 都在
+  // requireAdmin 之后，非 admin 打过去是必然 403。
+  const pendingApprovals = useApprovalBadge((s) => s.pending);
+  const { isAdmin } = usePermissions();
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   // Model selection lives in a persisted store (shared with ChatThread), so a
   // pick survives navigation + reload and the launched session inherits it.
@@ -162,6 +184,8 @@ export default function HomePage() {
   // 进首页时随机一条问候 + 4 张 prompt 卡；mount 期间不变。
   const greetingPair = useMemo(() => GREETINGS[Math.floor(Math.random() * GREETINGS.length)], []);
   const greeting = tr(greetingPair.zh, greetingPair.en);
+  // 时段问候在渲染期求值（而非模块作用域），语言切换后才会跟着重绘。
+  const hourGreeting = greetingFor(new Date().getHours(), tr);
   // Pin the webpage-generator card first, then 3 random suggestions.
   const prompts = useMemo(() => samplePrompts(4), []);
 
@@ -174,6 +198,15 @@ export default function HomePage() {
       .catch(() => {
         // On failure, assume servers exist so we don't show the empty-state CTA on a transient error.
         if (!cancelled) setEdgeTotal(null);
+      });
+    listIncidents({ status: 'open', pageSize: 1 })
+      .then((r) => {
+        if (!cancelled) setOpenTotal(r.total ?? 0);
+      })
+      .catch(() => {
+        // Best-effort chrome — the header summary keeps its previous number
+        // rather than blanking. /alerts surfaces the real error if clicked.
+        if (!cancelled) setOpenTotal(0);
       });
     listModels()
       .then((cat) => {
@@ -252,25 +285,43 @@ export default function HomePage() {
         <div className="mx-auto flex w-full max-w-3xl flex-col items-stretch px-6 pb-16 pt-16 sm:pt-20">
           <StatusRow />
 
-          <h1 className="mb-8 mt-8 text-center text-3xl font-semibold tracking-tight text-zinc-100">
+          <p className="mt-8 text-center text-sm text-zinc-500">
+            {hourGreeting}
+          </p>
+
+          <h1 className="mb-2 mt-1 text-center text-3xl font-semibold tracking-tight text-zinc-100">
             {greeting}
           </h1>
 
-          <ChatInput
-            value={draft}
-            onChange={setDraft}
-            onSubmit={(p) => {
-              setDraft('');
-              void startSession(p.text);
-            }}
-            disabled={submitting}
-            autoFocus
-            providers={providers}
-            selectedModel={selectedModel}
-            onModelChange={handleModelChange}
-            webSearchEnabled={webSearchEnabled}
-            onWebSearchToggle={setWebSearchEnabled}
-          />
+          <p className="mb-8 text-center text-sm text-zinc-400">
+            {tr('未关闭事件', 'Open incidents')}:{' '}
+            <span className="text-zinc-200">{openTotal}</span>
+            {isAdmin && (
+              <>
+                {' · '}
+                {tr('待审批', 'Pending approvals')}:{' '}
+                <span className="text-zinc-200">{pendingApprovals}</span>
+              </>
+            )}
+          </p>
+
+          <Card className="p-2">
+            <ChatInput
+              value={draft}
+              onChange={setDraft}
+              onSubmit={(p) => {
+                setDraft('');
+                void startSession(p.text);
+              }}
+              disabled={submitting}
+              autoFocus
+              providers={providers}
+              selectedModel={selectedModel}
+              onModelChange={handleModelChange}
+              webSearchEnabled={webSearchEnabled}
+              onWebSearchToggle={setWebSearchEnabled}
+            />
+          </Card>
 
           {error && (
             <div
