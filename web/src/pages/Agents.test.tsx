@@ -19,12 +19,23 @@ vi.mock('@/store/auth', () => ({
   getRefreshToken: () => null,
 }));
 
+// 故意给到 5 个工具：超过 MAX_VISIBLE_TOOLS(4)，卡片必须把多出来的
+// 折叠成 "+N" Chip，否则只读标识 / +N 这两个行为删掉也没测试会发现。
+const diskAgentTools = [
+  'query_promql',
+  'query_incidents',
+  'list_alerts',
+  'get_service_health',
+  'restart_service',
+];
+const diskHiddenToolCount = diskAgentTools.length - 4;
+
 const diskAgent = {
   name: 'specialist-sre',
   description: 'SRE 专家：黄金四信号 / SLO / 错误预算。',
   when_to_use: '当任务围绕系统是否健康时派给我。',
   system_prompt: '# SRE 专家\n你是 SRE 专家，优先看黄金四信号。',
-  tools: ['query_promql', 'query_incidents'],
+  tools: diskAgentTools,
   permission_mode: 'read-only',
   source: 'disk',
 };
@@ -110,23 +121,54 @@ describe('AgentsPage', () => {
     // 档案墙卡片：头像 + 本地化名 + 描述 + 工具 Chip
     await screen.findByText('SRE 专家');
     expect(screen.getAllByTestId('agent-avatar').length).toBeGreaterThan(0);
-    // 工具集以 Chip 呈现（diskAgent.tools = ['query_promql', 'query_incidents']）
+    // 工具集以 Chip 呈现
     expect(screen.getByText('query_promql')).toBeInTheDocument();
     expect(screen.getByText('query_incidents')).toBeInTheDocument();
     // 「开始对话」CTA
     expect(screen.getAllByText('开始对话').length).toBeGreaterThan(0);
   });
 
+  // 裁决 §3 要求卡片改造后「保留」这两个行为；它们都是删掉也不影响
+  // 其他用例的隐性依赖，所以各自都要有断言兜住。
+  it('只读标识保留在卡片上，只对 permission_mode=read-only 的助理出现', async () => {
+    renderWithRouter(vi.fn());
+
+    await screen.findByText('SRE 专家');
+    expect(screen.getByText('只读')).toBeInTheDocument();
+    // userAgent 没有 permission_mode，不应带只读标识 → 全页只 diskAgent 一处
+    expect(screen.getAllByText('只读')).toHaveLength(1);
+  });
+
+  it('超过上限的工具折叠成 +N Chip', async () => {
+    renderWithRouter(vi.fn());
+
+    await screen.findByText('SRE 专家');
+    // diskAgent.tools 有 5 个，上限 4 → 折叠出 +1
+    expect(screen.getByText(`+${diskHiddenToolCount}`)).toBeInTheDocument();
+    // userAgent 只有 1 个工具不该有 +N → 全页只有溢出那张卡带 +1
+    expect(screen.getAllByText(`+${diskHiddenToolCount}`)).toHaveLength(1);
+  });
+
   it('开始对话 creates a persona session and navigates to the chat', async () => {
     const onNavigateChange = vi.fn();
+    let postedBody: Record<string, unknown> | null = null;
     server.use(
-      http.post('/api/v1/chat/sessions', () =>
-        HttpResponse.json({ id: 's-new', user_id: 1, title: 'x', agent_id: 'specialist-sre' }),
-      ),
+      http.post('/api/v1/chat/sessions', async ({ request }) => {
+        postedBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({
+          id: 's-new',
+          user_id: 1,
+          title: 'x',
+          agent_id: 'specialist-sre',
+        });
+      }),
     );
     renderWithRouter(onNavigateChange);
+    // 第一张卡是 specialist-sre（按 builtinRank 排在自定义助理之前）
     await userEvent.click((await screen.findAllByText('开始对话'))[0]);
     await waitFor(() => expect(onNavigateChange).toHaveBeenCalledWith('/chat/s-new'));
+    // 会话必须绑定被点那张卡的 persona，否则「persona 会话」名不副实
+    expect(postedBody).toMatchObject({ agent_id: diskAgent.name });
   });
 
   it('keeps the user on the page and shows an inline error when the session cannot be created', async () => {
@@ -141,7 +183,7 @@ describe('AgentsPage', () => {
 
     expect(await screen.findByText(/失败/)).toBeInTheDocument();
     expect(onNavigateChange).not.toHaveBeenCalledWith('/chat/s-new');
-    // 失败时不弹详情：卡片点击未被按钮的 stopPropagation 之外的行为触发
+    // 失败时不弹详情：按钮的 stopPropagation 生效，没有误触发卡片的 onView
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

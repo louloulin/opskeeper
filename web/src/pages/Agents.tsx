@@ -255,6 +255,12 @@ function builtinRank(name: string): number {
   return idx === -1 ? BUILTIN_ORDER.length : idx;
 }
 
+// MAX_VISIBLE_TOOLS caps how many tool Chips a card spells out; the rest
+// fold into a single "+N" Chip so a long tool table can't blow out the
+// card. Module scope (not inside the component) so it isn't rebuilt on
+// every render and so tests can reason about the cap.
+const MAX_VISIBLE_TOOLS = 4;
+
 const SHORT_LABELS = new Proxy({} as Record<string, string>, {
   get: (_t, key: string) => {
     const zh = SHORT_LABELS_ZH[key];
@@ -280,8 +286,7 @@ function AgentCard({
   const [err, setErr] = useState<string | null>(null);
   const tools = agent.tools ?? [];
   const toolCount = tools.length;
-  // 档案墙：工具集只列前 4 个，其余折叠成 +N，避免长工具表撑爆卡片。
-  const MAX_VISIBLE_TOOLS = 4;
+  // 档案墙：工具集只列前 MAX_VISIBLE_TOOLS 个，其余折叠成 +N，避免长工具表撑爆卡片。
   const visibleTools = tools.slice(0, MAX_VISIBLE_TOOLS);
   const hiddenToolCount = toolCount - visibleTools.length;
   const isUser = agent.source === 'user';
