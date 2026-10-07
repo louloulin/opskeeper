@@ -108,7 +108,7 @@ export default function ApprovalsPage() {
         ) : (
           <div className="space-y-2">
             {items.map((a) => (
-              <div key={a.id} className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+              <div key={a.id} className="surface-card rounded-2xl p-3">
                 <div className="flex items-start gap-3">
                   <button
                     type="button"
