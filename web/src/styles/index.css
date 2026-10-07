@@ -445,22 +445,33 @@ html.light .app-header {
    the html.light card-shadow fallback (index.css:293-299) only fires on
    elements carrying bg-zinc-900, so these never render a second
    shadow in light mode.
+
+   Wrapped in `@layer components` on purpose. These are (0,1,0) rules, so
+   a caller that passes an override utility to <Card> (e.g.
+   `border-red-700/40 bg-red-900/20`) is (0,1,0) as well — source order
+   would decide, and `cn()` is a plain concat with no tailwind-merge, so
+   className order cannot save it. Unlayered CSS outranks *every* layer,
+   which would have made these beat all utilities. In `components` they
+   sit below `utilities`, so callers win and hover utilities (0,2,0) still
+   win on top.
    ------------------------------------------------------------------- */
-.surface-card {
-  background-color: rgb(var(--card));
-  border: 1px solid rgb(var(--border-soft));
-  box-shadow: var(--shadow-card);
-}
+@layer components {
+  .surface-card {
+    background-color: rgb(var(--card));
+    border: 1px solid rgb(var(--border-soft));
+    box-shadow: var(--shadow-card);
+  }
 
-.bubble-agent {
-  background-color: rgb(var(--card));
-  border: 1px solid rgb(var(--border-soft));
-}
+  .bubble-agent {
+    background-color: rgb(var(--card));
+    border: 1px solid rgb(var(--border-soft));
+  }
 
-.bubble-user {
-  background-color: rgb(var(--accent-50));
-  color: rgb(var(--accent-700));
-  border: 1px solid rgb(var(--accent-100));
+  .bubble-user {
+    background-color: rgb(var(--accent-50));
+    color: rgb(var(--accent-700));
+    border: 1px solid rgb(var(--accent-100));
+  }
 }
 
 /* Page-level micro-animations. Respect reduced-motion. */
