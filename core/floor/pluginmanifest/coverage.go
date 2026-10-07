@@ -110,6 +110,7 @@ var toolCapabilities = map[string]string{
 	"host_sosreport":     CapHost,
 	"host_strace":        CapHost,
 	"host_tail_file":     CapHost,
+	"host_top_processes": CapHost,
 	"host_traceroute":    CapHost,
 
 	// --- opskeeper-sre-observability ---
@@ -371,6 +372,17 @@ var ExpectationAliases = map[string]string{
 	// connection to a host-exporter to learn its own load.
 	"host.host_load": "get_host_load",
 
+	// A node's own process ranking is what these two expectations mean on a
+	// node. They are hosted in the control plane — host.host_processes and
+	// host.top_cpu_procs both read the host the control plane was pointed at,
+	// not the one the agent is running on — so a node could report "this
+	// node's CPU is at 98%" and have no way to name the process responsible.
+	// The package now ships that read, and until it did these were recorded
+	// as OWNED-but-absent rather than aliased: an alias to a tool no node
+	// carries claims coverage that does not exist on the machine it runs on.
+	"host.host_processes": "host_top_processes",
+	"host.top_cpu_procs":  "host_top_processes",
+
 	// The git-artifact linker is reached through one tool. The case names
 	// the linker's API because that is the capability under test; the
 	// package ships the adapter that carries it.
@@ -562,23 +574,30 @@ func assembleCoverage(caseID string, out CaseCoverage, idx fleetIndex) CaseCover
 // directions are tested, so a fix that lands without its decision being
 // retired fails.
 var DiagnosisGaps = map[string]string{
-	// Two names for one missing capability. The host adapter is excluded
-	// from node packages as a family, and for a written reason: it executes
+	// host.host_processes and host.top_cpu_procs were on this list until
+	// 决策 450, and the reason they were here is the reason they now are not.
+	// The host adapter is excluded from node packages as a family — it runs
 	// as root on whatever host the control plane was pointed at, so its
-	// reads answer about that host rather than about the node the agent is
-	// running on. A node learns about itself through the read-only
-	// package's own probes (host_lsof, host_read_journal, host_strace, …)
-	// and through get_host_load, which is why host.host_load is covered and
-	// these two are not.
+	// reads answer about THAT host, not about the node the agent is running
+	// on — and a node learns about itself through the read-only package's
+	// own probes. A node could therefore report its own CPU at 98% and have
+	// no way to name the process responsible, which is a diagnosis that
+	// stops one step short of the fix.
 	//
-	// host.top_cpu_procs is also a rename: the adapter's own name for the
-	// same read is host.top_processes. It is deliberately not aliased,
-	// because an alias would report the capability as covered by a tool no
-	// node has — the same reason redis.kill_client is not aliased to
-	// redis.client_kill.
-	"host.host_processes": "the host family is excluded from node packages: the adapter executes as root on whatever host the control plane was pointed at, so its reads answer about that host rather than about the node the agent runs on. A node's own view is the read-only package's probes and get_host_load",
-	"host.top_cpu_procs":  "same as host.host_processes, and additionally a rename: the adapter calls this read host.top_processes. Not aliased, because an alias would claim coverage from a tool no node ships",
-	"host.host_files":     "no read equivalent exists on either side. The adapter's host.old_log_files answers a narrower question (which old logs) and is excluded with the rest of the host family, and nothing anywhere reads a file inventory for a node",
+	// 决策 450 implemented the read rather than renaming the case:
+	// opskeeper-sre-readonly now ships host_top_processes, which ranks the
+	// NODE's own processes by CPU or memory straight out of /proc. The two
+	// expectations became aliases at the same moment and not before — the
+	// note above them used to say an alias would claim coverage from a tool
+	// no node ships, and that sentence was true until the tool shipped.
+	// It is the reason the alias rule reads the way it does, so it is worth
+	// naming here: an alias is a claim, and a claim may only follow delivery.
+	//
+	// host.host_files stays. It is a different gap with a different reason:
+	// the adapter's host.old_log_files answers a narrower question (which
+	// OLD logs), so nothing on either side reads a file inventory for a
+	// node, and that is a collector's job rather than a tool's.
+	"host.host_files": "no read equivalent exists on either side. The adapter's host.old_log_files answers a narrower question (which old logs) and is excluded with the rest of the host family, and nothing anywhere reads a file inventory for a node",
 
 	// redis.hot_keys was on this list until 决策 204: the case asked for a
 	// name no adapter registered, and the entry above recorded the choice

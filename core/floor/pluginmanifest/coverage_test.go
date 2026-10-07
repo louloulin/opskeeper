@@ -100,33 +100,86 @@ func TestAHostCaseIsCoveredOnlyByTheToolsTheFleetActuallyShips(t *testing.T) {
 	// a statement about a prefix, wearing the costume of a statement about
 	// a capability.
 	//
-	// What is true, and what is asserted now: exactly one of the three is
-	// served, through an alias rather than a literal name, and the other two
-	// are reported as gaps with a reason that names the method.
+	// What was true until 决策 450: exactly one of the three was served,
+	// through an alias rather than a literal name, and the other two were
+	// reported as gaps with a reason that named the method.
+	//
+	// What is true now, and what is asserted now: all three are served, and
+	// the two that arrived second are served by the SAME tool the node really
+	// ships — host_top_processes, which ranks the node's own processes out of
+	// /proc. The assertion below is still about the fleet and not about a
+	// prefix: if the package declared the tool and the package did not load,
+	// the second half of this test fails first, and these three come back as
+	// gaps.
 	plugins := shippedPlugins(t)
 	cov := CoverageOf("host/cpu-spike",
 		[]string{"host.host_load", "host.host_processes", "host.top_cpu_procs"}, plugins)
 
-	if want := []string{"host.host_processes", "host.top_cpu_procs"}; !equalStrings(cov.Uncovered, want) {
-		t.Errorf("uncovered = %v, want %v", cov.Uncovered, want)
+	if len(cov.Uncovered) != 0 {
+		t.Errorf("uncovered = %v, want none: the read-only package ships the process ranking", cov.Uncovered)
 	}
-	if want := []string{"host.host_load"}; !equalStrings(cov.Covered, want) {
+	if want := []string{"host.host_load", "host.host_processes", "host.top_cpu_procs"}; !equalStrings(cov.Covered, want) {
 		t.Errorf("covered = %v, want %v", cov.Covered, want)
+	}
+	if len(cov.Reasons) != 0 {
+		t.Errorf("a fully covered case carries %d reasons: %v", len(cov.Reasons), cov.Reasons)
+	}
+	// Two packages serve this case now, and saying one is the claim that was
+	// wrong before 决策 450 in a different shape: it dropped a package that
+	// does answer two of the three questions.
+	if want := []string{observabilityProfile, readOnlyProfile}; !equalStrings(cov.Packages, want) {
+		t.Errorf("packages = %v, want %v — host load is the observability package's and the "+
+			"process ranking is the read-only package's", cov.Packages, want)
+	}
+}
+
+func TestTheProcessRankingIsReachedByNameAndNotByFamily(t *testing.T) {
+	// The first half of the case above is satisfied by the prefix `host`.
+	// This half is the one that can tell a real tool from a real claim: the
+	// expectation has to resolve to a tool that a shipped package declares,
+	// and it has to resolve through the alias table rather than by matching
+	// the family — which is exactly the join that made this case look
+	// covered before anything could serve it.
+	plugins := shippedPlugins(t)
+	for _, tc := range []struct{ expectation, tool string }{
+		{"host.host_processes", "host_top_processes"},
+		{"host.top_cpu_procs", "host_top_processes"},
+	} {
+		tool, pkg, ok := ToolServing(tc.expectation, indexFleet(plugins).byTool)
+		if !ok {
+			t.Errorf("%s is not served by any shipped tool", tc.expectation)
+			continue
+		}
+		if tool != tc.tool {
+			t.Errorf("%s resolved to %q, want %q", tc.expectation, tool, tc.tool)
+		}
+		if pkg != readOnlyProfile {
+			t.Errorf("%s is served by %q, want %q", tc.expectation, pkg, readOnlyProfile)
+		}
+	}
+}
+
+func TestANodeSideExpectationIsNotCreditedToAReadNoNodeCarries(t *testing.T) {
+	// The other half of the alias rule: an alias may only point at a tool a
+	// shipped package declares. Remove the package from the fleet and the
+	// expectation has to come back as a gap with its reason, not as coverage
+	// credited to whatever remains.
+	plugins := shippedPlugins(t)
+	withoutReadonly := make([]Plugin, 0, len(plugins))
+	for _, p := range plugins {
+		if p.Name() != readOnlyProfile {
+			withoutReadonly = append(withoutReadonly, p)
+		}
+	}
+	cov := CoverageOf("host/cpu-spike",
+		[]string{"host.host_load", "host.host_processes", "host.top_cpu_procs"}, withoutReadonly)
+
+	if want := []string{"host.host_processes", "host.top_cpu_procs"}; !equalStrings(cov.Uncovered, want) {
+		t.Errorf("uncovered = %v, want %v: the aliases point at a tool that is not in this fleet",
+			cov.Uncovered, want)
 	}
 	if len(cov.Reasons) != len(cov.Uncovered) {
 		t.Fatalf("Reasons has %d entries for %d uncovered expectations", len(cov.Reasons), len(cov.Uncovered))
-	}
-	// The reason has to name the method that is missing. A reason that
-	// named only the family would send a reader to package the wrong tool,
-	// which is the failure this rewrite exists to make impossible.
-	for _, r := range cov.Reasons {
-		if !strings.Contains(r, "host_processes") && !strings.Contains(r, "top_cpu_procs") {
-			t.Errorf("reason %q does not name the method it is explaining", r)
-		}
-	}
-	if want := []string{observabilityProfile}; !equalStrings(cov.Packages, want) {
-		t.Errorf("packages = %v, want %v — host load is the observability package's, "+
-			"and the alias is what points at it", cov.Packages, want)
 	}
 }
 
@@ -339,10 +392,15 @@ func TestTheCoverageOfARealCaseFileIsWhatTheFileSays(t *testing.T) {
 	// Expect.RemediationOptions). What matters is that the four real
 	// expectations land the way the shipped tools say they should: one
 	// covered through its alias, three not covered at all.
-	if want := []string{"host.host_processes", "host.kill_process", "host.test_user_ssh_accessible", "host.top_cpu_procs"}; !equalStrings(cov.Uncovered, want) {
+	// 决策 450 removed the two process expectations from that list: the
+	// read-only package now ships the ranking, so they resolve through the
+	// alias table to a tool a node carries. What is left uncovered is the
+	// remediation (host.kill_process — a write, and deliberately not on any
+	// node) and the prerequisite that arrived with the broad parse.
+	if want := []string{"host.kill_process", "host.test_user_ssh_accessible"}; !equalStrings(cov.Uncovered, want) {
 		t.Errorf("uncovered = %v, want %v", cov.Uncovered, want)
 	}
-	if want := []string{"host.host_load"}; !equalStrings(cov.Covered, want) {
+	if want := []string{"host.host_load", "host.host_processes", "host.top_cpu_procs"}; !equalStrings(cov.Covered, want) {
 		t.Errorf("covered = %v, want %v", cov.Covered, want)
 	}
 }
@@ -683,8 +741,13 @@ func TestTheDiagnosisGapLedgerHasNoStaleEntries(t *testing.T) {
 // redis/hot-key case. A rise here is a deliberate act — the other two tests
 // in this file both fail if a gap is closed without its entry being
 // retired, and this one fails if the count moves without either of those.
-func TestTheDiagnosisAxisHoldsAtSeventeen(t *testing.T) {
-	const want = 17
+func TestTheDiagnosisAxisHoldsAtEighteen(t *testing.T) {
+	// Seventeen until 决策 450, when the read-only package shipped the
+	// node's own process ranking and host/cpu-spike became diagnosable from
+	// a node. The other two tests in this file fail if a gap closes without
+	// its DiagnosisGaps entry being retired, and this one fails if the count
+	// moves without either of those — so the number cannot drift silently.
+	const want = 18
 	plugins := shippedPlugins(t)
 	diagnosable, total := 0, 0
 	walkCaseFiles(t, func(caseID, _ string, raw []byte) {

@@ -87,6 +87,7 @@ extensions:
       - host_sosreport
       - host_strace
       - host_tail_file
+      - host_top_processes
       - host_traceroute
       - query_alert_rules
 

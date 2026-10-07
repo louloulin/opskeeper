@@ -8,7 +8,7 @@ apiVersion: opskeeper.io/v1
 kind: Plugin
 metadata:
   name: opskeeper-sre-readonly
-  version: 0.1.1
+  version: 0.1.2
   vendor: opskeeper
   homepage: https://github.com/vincent-wuhan/opskeeper
 spec:
@@ -67,6 +67,7 @@ spec:
     - { name: host_sosreport,      class: read , limits: {output_bytes: 524288, timeout_seconds: 600}}  # support bundle summary
     - { name: host_strace,         class: read , limits: {output_bytes: 131072, timeout_seconds: 300}}  # syscall trace of a pid
     - { name: host_tail_file,      class: read , limits: {output_bytes: 262144, timeout_seconds: 60}}  # follow a log file
+    - { name: host_top_processes,  class: read , limits: {output_bytes: 131072, timeout_seconds: 30}}  # this node's own processes, ranked by cpu or memory
     - { name: host_traceroute,     class: read , limits: {output_bytes: 65536, timeout_seconds: 120}}  # path to a host, hop by hop
     - { name: query_alert_rules,   class: read }  # what is firing
 

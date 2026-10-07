@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.74 — 2026-10-07
+
+- Bump the TeamHarness plugin version to 1.0.74 across `plugin.yaml`, the
+  dashboard package/manifest (including the versioned `dist/main-1.0.74.js`
+  entry), and the qwenpaw adapter (`plugin.json` + `plugin.py`).
+- No runtime behaviour change in this plugin. The accompanying backend work
+  is the node-side process ranking: `opskeeper-sre-readonly` now ships
+  `host_top_processes`, which ranks a node's own processes by CPU or memory
+  straight out of `/proc`, so `host/cpu-spike` is diagnosable from the node
+  rather than only from the control plane. That package goes 0.1.1 -> 0.1.2.
+
 ## 1.0.73 — 2026-10-07
 
 - Bump the TeamHarness plugin version to 1.0.73 across `plugin.yaml`, the

@@ -429,6 +429,29 @@ var tools = []toolSpec{
 }`,
 	},
 	{
+		Name:        "host_top_processes",
+		Label:       "节点进程排行",
+		Description: "按 CPU 或内存列出本节点进程 (pid/命令/用户/百分比). 诊断 CPU 飙高 / 内存吃紧时定位到具体进程. NOT for: 打开文件查询 (host_lsof).",
+		Parameters: `{
+  "type": "object",
+  "properties": {
+    "sort_by": {
+      "type": "string",
+      "enum": ["cpu", "mem"],
+      "description": "排序依据: cpu (默认) 或 mem"
+    },
+    "top_n": {
+      "type": "integer",
+      "description": "返回条数, 默认 20, 上限 100"
+    },
+    "interval_ms": {
+      "type": "integer",
+      "description": "两次采样间隔毫秒, 默认 500, 上限 5000; CPU 百分比是这个窗口内的速率"
+    }
+  }
+}`,
+	},
+	{
 		Name:        "host_traceroute",
 		Label:       "网络路由追踪",
 		Description: "追踪到目标 host 的网络路由跳点 (traceroute -n -w 2 -q 1). 诊断路由环路 / 高延迟跳点 / 跨运营商丢包. NOT for: ICMP 被防火墙阻断 (用 mtr 更鲁棒) / 单点延迟 (probe_tcp).",
