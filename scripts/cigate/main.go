@@ -40,8 +40,11 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -413,23 +416,113 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	report(os.Stdout, string(ci))
+}
+
+// report prints what this tool has to say.
+//
+// It is a function rather than three Printfs in main because the sentence it
+// prints is the deliverable, and a deliverable that cannot be called is a
+// deliverable that cannot be tested: a test written against the wording went
+// green while the wording was still the old, wrong one, because it exercised
+// the helper behind the sentence and not the sentence. What the reader reads
+// is what the tests read.
+func report(w io.Writer, ci string) {
 	// The claim is "defined and invoked by CI". That is true of a gate whose
 	// job a push can reach, and it is a different claim for one that waits for
 	// a clock: the command is wired either way, but "invoked" has not happened
 	// and cannot be read off this file. Printing one number for both is how
 	// decisions 163/164 and 377 happened, so the two are named separately.
 	// See ScheduleOnlyGates.
-	pushed := len(allGates()) - len(ScheduleOnlyGates(string(ci)))
-	fmt.Printf("cigate: %d of %d acceptance gates (%d named by the plan, %d owned by a decision) "+
+	pushed := len(allGates()) - len(ScheduleOnlyGates(ci))
+	fmt.Fprintf(w, "cigate: %d of %d acceptance gates (%d named by the plan, %d owned by a decision) "+
 		"are defined and reachable from a push, and %s\n",
 		pushed, len(allGates()), len(Gates()), len(DecisionGates()),
-		triggerSummary(TriggerReachabilityOf(string(ci))))
-	if waiting := ScheduleOnlyGates(string(ci)); len(waiting) > 0 {
-		fmt.Printf("cigate: %d gate(s) are wired but no push can reach them -- "+
-			"they wait for a schedule, which GitHub fires only for the default branch, "+
-			"or for a manual dispatch: %s\n",
-			len(waiting), strings.Join(waiting, ", "))
+		triggerSummary(TriggerReachabilityOf(ci)))
+	waiting := ScheduleOnlyGates(ci)
+	if len(waiting) == 0 {
+		return
 	}
+	fmt.Fprintf(w, "cigate: %d gate(s) are wired but no push can reach them: %s\n",
+		len(waiting), strings.Join(waiting, ", "))
+	fmt.Fprintf(w, "cigate:   a schedule reaches them only for the workflow file on the default "+
+		"branch. %s\n", scheduleReaches(ci, waiting))
+	fmt.Fprintf(w, "cigate:   `wired` here means the command and the tests are in this tree. It "+
+		"does not mean this has ever reported anything.\n")
+}
+
+// scheduleReaches answers whether the clock would ever fire for these gates.
+//
+// The previous wording of this line was "they wait for a schedule". That
+// reads as "the job is in place, the clock simply has not come round yet",
+// which is a promise about the future that this repository cannot make:
+// GitHub fires `schedule` only for the workflow file **on the default
+// branch**, and on this repository the default branch is `main`, which is
+// hundreds of commits behind and whose copy of the workflow does not contain
+// these jobs at all. The clock is not late; it is pointed at a file that does
+// not have them.
+//
+// So this asks the question it can actually answer, and says which file it
+// looked at. Where the default branch's copy is unavailable it reports that
+// rather than assuming either answer — a tool that cannot know must not imply
+// that it knows, which is the same rule ScheduleOnlyGates was written under.
+func scheduleReaches(ci string, gates []string) string {
+	head, err := gitOutput("rev-parse", "--abbrev-ref", "origin/HEAD")
+	branch := strings.TrimSpace(head)
+	if err != nil || branch == "" {
+		return fmt.Sprintf("the default branch could not be read (%v), so whether these have ever "+
+			"run is unknown from here; read %s on whichever branch GitHub calls default", err, ciFile)
+	}
+	return scheduleReachesFor(branch, gates)
+}
+
+// scheduleReachesFor is the answer given a known default branch, split out so
+// the "that file could not be read" arm is reachable from a test. Both arms
+// of this function are claims about a file, and a claim about a file nobody
+// read is the failure mode worth testing directly.
+func scheduleReachesFor(branch string, gates []string) string {
+	raw, err := gitOutput("show", branch+":"+ciFile)
+	if err != nil {
+		return fmt.Sprintf("the default branch is %s but its copy of %s could not be read (%v), "+
+			"so whether these have ever run is unknown from here", branch, ciFile, err)
+	}
+	absent := []string{}
+	for _, g := range gates {
+		if !strings.Contains(raw, g) {
+			absent = append(absent, g)
+		}
+	}
+	if len(absent) == 0 {
+		return fmt.Sprintf("the default branch is %s and its %s does name all of them, so the clock "+
+			"will reach them once that copy is the one running", branch, ciFile)
+	}
+	return fmt.Sprintf("the default branch is %s, and its %s names NONE of them (%s). The clock is "+
+		"pointed at a file that does not have these jobs, so on this branch it will never fire for "+
+		"them. They run by hand (workflow_dispatch), or once this branch is merged into %s",
+		branch, ciFile, strings.Join(absent, ", "), branch)
+}
+
+// ciFile is the workflow this tool reasons about. It is named once because
+// the question above is about a specific file, and a reader who cannot see
+// which file was checked cannot trust the answer.
+const ciFile = ".github/workflows/ci.yml"
+
+// gitOutput runs git and returns stdout, or an error including stderr. The
+// stderr is kept because the useful part of "rev-parse: ambiguous argument"
+// is the sentence naming what it could not resolve.
+func gitOutput(args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+	}
+	return string(out), nil
 }
 
 // check reports every gate that is not wired, so one run tells the whole

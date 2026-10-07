@@ -326,6 +326,19 @@ var externalItems = []item{
 			"这一条现在的诚实说法是「本仓没有可调的远端」指的不是缺代码，而是缺一次真实部署",
 	},
 	{
+		id:       "E5",
+		subject:  "节点交付闭环（make e2e-delivery-check）从未在 2.0 代码上执行过一次",
+		class:    classExternal,
+		evidence: "一次真的跑起来：节点进程环境与安装目录经审计无云厂商密钥，且四个用例经 frontier broker 往返",
+		holder:   "部署方（一次带 broker 容器的真实运行）",
+		closer: "make e2e-delivery-check —— 命令在本仓、测试在 tests/e2e/、断言是真的（" +
+			"node_agent_delivery_test.go:214/233 分别审安装目录与进程环境）。它没跑过的原因是 " +
+			"承载它的 job 挂在 schedule 上，而 GitHub 只对**默认分支**的 workflow 文件发 schedule：" +
+			"默认分支是 main，main 落后本分支 529 个提交，其 .github/workflows/ci.yml 只有 72 行 " +
+			"且根本没有 delivery job。所以这不是「等一个时钟」，是「那个 job 在本分支上永远不会被时钟点到」。" +
+			"本仓能做的都做了；剩下的要么把 main 与本分支合流，要么由部署方手动 dispatch",
+	},
+	{
 		id:       "E3",
 		subject:  "多集群联邦的真实子集群",
 		class:    classExternal,

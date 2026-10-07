@@ -44581,3 +44581,98 @@ A6 的候选列表是手写的。**它是构建规则输出路径的第二份真
   本仓做不了。**这一刀关掉的是"本仓已具备却报缺失"这个状态**，不是"还没具备"。
   方案 §六 架构尺那 2.25% 也仍是那两条架构腿（arm64 / amd64 完整 e2e），
   本机没有原生 broker 镜像，那是环境不是代码。
+
+### 4.407 决策 473：那条验收从来没有跑过，而账面上写的是「等一个时钟」
+
+方案 §六 的验收门槛最后一句是「节点上 `/etc/opskeeper-edge` 与进程环境经审计确认无云
+厂商密钥」。**这句话在本仓有一个真的家**：`make e2e-delivery-check`，
+`tests/e2e/node_agent_delivery_test.go:214/233` 分别审安装目录与进程环境，
+断言写得扎实（decoy 凭据三种形状：精确厂商 key、只有令牌臂能抓的、以及名字里
+没有 key 的云前缀）。
+
+**但它一次都没有运行过。**
+
+#### 一、`cigate` 说的理由是错的
+
+`cigate` 一直报「1 gate(s) are wired but no push can reach them —— they wait for a
+schedule, which GitHub fires only for the default branch, or for a manual dispatch」。
+
+**这句话听起来像「job 已就位，时钟还没转到位」。** 实测不是：
+
+- `origin/main` 落后本分支 **529** 个提交；
+- `origin/main:.github/workflows/ci.yml` 只有 **72 行**，
+  `rg 'delivery|schedule|e2e-delivery'` 在里面**一条都没有**。
+
+GitHub 只对**默认分支上那份 workflow 文件**发 `schedule`。所以**时钟指向的是一份
+根本没有这个 job 的文件**——不是钟慢，是钟对着另一份文件。
+
+这与决策 165 修掉的是**同一个陷阱的另一半**：那次修的是 `push`/`pull_request` 的
+分支白名单（「whitelist of one branch is a promise about where work happens」），
+`schedule` 这一半没人看见。
+
+#### 二、把「等一个时钟」换成它查得到的话
+
+`cigate` 现在自己 `git rev-parse --abbrev-ref origin/HEAD` 读默认分支、
+`git show <default>:.github/workflows/ci.yml` 读那份文件，然后说它看见了什么：
+
+```
+cigate: 1 gate(s) are wired but no push can reach them: e2e-delivery-check
+cigate:   a schedule reaches them only for the workflow file on the default branch.
+          the default branch is origin/main, and its .github/workflows/ci.yml names NONE
+          of them (e2e-delivery-check). The clock is pointed at a file that does not
+          have these jobs, so on this branch it will never fire for them. They run by
+          hand (workflow_dispatch), or once this branch is merged into origin/main
+cigate:   `wired` here means the command and the tests are in this tree. It does not
+          mean this has ever reported anything.
+```
+
+**读不到那份文件时报「unknown from here」，不猜。** 这与 `ScheduleOnlyGates` 顶上
+那条规则同源：不能知道的事不能说成知道，也不能说成相反。
+
+#### 三、测试第一次写错了层，被变异抓到
+
+第一版测试直接调 `scheduleReaches(...)`。**把输出退回旧措辞，这条测试照样绿**——
+它测的是背后的推理，不是读者读到的那句话。**一个测不到交付物的测试，
+对交付物变更是免疫的。**
+
+所以把 `main()` 里那三句 `Printf` 抽成 `report(io.Writer, string)`，测试打真实输出。
+变异验证：退回旧措辞，两条测试同时红（一条说"旧措辞回来了"，一条说
+"这个 job 在默认分支上不存在，而那句话让读者以为时钟会够到它"）。
+
+另加一条 `TestAnUnreadableDefaultBranchIsReportedAsUnknownNotAsAbsence`：
+用一个不存在的分支名逼出「读不到」那条臂，断言它**不**说 `names NONE of them`
+——那是对一份它从未读过的文件下结论。
+
+#### 四、它现在是 audit 的一条 external（E5）
+
+之前 E1–E4 都没登记它，于是它在账面上看起来像「已接线、只差点一次运行」。
+新增 **E5**，写明命令在本仓、测试在 `tests/e2e/`、断言是真的，以及为什么没跑过。
+`audit` 读数因此从 4 条 external 变 **5 条**，本仓可判项仍 **6/6**。
+
+#### 五、顺带实测：那条 e2e 里有一条根本不需要 broker
+
+`e2e-delivery-check` 的 `-run` 是
+`TestTheGatewayServesAStreamToANodeCredential|$(E2E_BROKER_TESTS)`，
+看起来两拨都归 nightly。实跑第一条：**17 秒通过，只需 MySQL 容器，不需要 frontier
+broker**（它只 `testenv.Start` + 一次 `/v1/chat/completions` 流式调用）。
+而它本来就在 per-push 的 `e2e-manager-check` 里（不在 `E2E_BROKER_TESTS` 跳过名单），
+所以第一跳网关其实**已经在每次 push 上验了**。真正需要 broker 的是另外 4 条。
+
+**这不是缺陷**（它没被漏掉），但它说明「e2e-delivery-check = 都要 broker」是一个
+想当然的读法。记下来是因为下一次有人想拆分这个 job 时，容易从这里开始拆错。
+
+#### 六、读数
+
+- `cigate` **33/34**，且现在说清了那 1 条为什么到不了。
+- `audit` 本仓可判项 **6/6**；external **4 → 5**（新增 E5）。
+- `gates-report`：**30 passed / 1 failed / 1 NEEDS-INPUT / 3 exempt**。
+  **那一条红不是本刀的**：`core/manager/biz/report` 的 `TestExtractJSON`，
+  红的两条用例是并发 agent 此刻**尚未提交**的新增（`generator_test.go` 的 diff 里
+  那四行 MiniMax-M3 复现用例），它自己两条期望与它刚写的实现不符。
+  它的文件在 `scripts/` 之外，本刀没有碰。
+- `pending-check` 绿；`audit_open_source` 绿（3195 文件 0 违规）；
+  `dcell-check` **17/18 = 94.4%**；诊断轴 **20/20**；工具 **94**。
+- **manager 996 文件 / 255,928 行——不变**，本刀没碰 `core/manager`。
+- **本刀不增加任何阶段百分比。** 它把一条**从未报过任何东西**的验收，
+  从「等一个时钟」改成了「时钟对着另一份文件」——而这条差别决定了
+  要不要合 main，而合不合 main 是一件本仓单方面做不了的事。

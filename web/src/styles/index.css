@@ -369,6 +369,11 @@ html.light .bg-violet-900\/40            { background-color: rgb(237 233 254); }
 html.light .bg-indigo-900,
 html.light .bg-indigo-950                { background-color: rgb(224 231 255); }  /* indigo-100 */
 
+/* (b2) persona tone tints — AgentAvatar 6 底盘 (D2)。bg-violet/rose-500/10
+   此前没有浅色映射,在浅底卡片上会渲染成深紫/深玫红方块。 */
+html.light .bg-violet-500\/10          { background-color: rgb(237 233 254); }  /* violet-100 */
+html.light .bg-rose-500\/10            { background-color: rgb(255 228 230); }  /* rose-100 */
+
 /* (c) remaining pale semantic text -> -700 (AA contrast on white) */
 html.light .text-red-400                 { color: rgb(185 28 28); }   /* red-700 */
 html.light .text-emerald-400             { color: rgb(4 120 87); }    /* emerald-700 */
