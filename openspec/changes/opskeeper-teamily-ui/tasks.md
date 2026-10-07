@@ -6,7 +6,7 @@
 
 - [x] 1.1 在 `web/src/styles/index.css` 新增七级圆角阶梯 token `--radius-xs/sm/md/lg/xl/2xl/3xl`(4/8/12/16/24/32/40px),暗/浅双主题均定义
 - [x] 1.2 在 `web/src/styles/index.css` 新增 `--shadow-card` / `--shadow-pop` 阴影 token(浅色柔和分层 / 深色高对比)
-- [ ] 1.3 扩展品牌紫 50/100/600/700 色阶(#f3f0fe/#e6e0fd/#6d57d9/#5b49b8),接入现有 RGB 三元组语义映射
+- [x] 1.3 扩展品牌紫 50/100/600/700 色阶(#f3f0fe/#e6e0fd/#6d57d9/#5b49b8),接入现有 RGB 三元组语义映射
 - [ ] 1.4 在 `web/tailwind.config.ts` 接入 `borderRadius` 与 `boxShadow` 语义键
 - [ ] 1.5 同步扩展浅色 zinc 重映射兜底块,保证新增浅底色类在浅色主题下正确
 - [ ] 1.6 升级 ui/ 原语:Button 主按钮 pill + 次级 rounded-lg 描边;Card rounded-2xl + shadow-card;Chip rounded-full 角色色浅底(props 向后兼容)
