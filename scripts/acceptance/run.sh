@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# 构建并执行阶段 0 验收链，原样传出退出码。
+# 构建并执行一条验收链，原样传出退出码。
+#
+#   bash scripts/acceptance/run.sh                                  # 阶段 0
+#   bash scripts/acceptance/run.sh --chain=federation \
+#        --root-env=/etc/opskeeper/root.env \
+#        --child-env=/etc/opskeeper/child.env
 #
 # 为什么要有这个包装：
 #   - `go run` 会把子进程的 3 压成 1；
@@ -11,5 +16,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BIN="$(mktemp -t opskeeper-acceptance)"
 trap 'rm -f "$BIN"' EXIT
 go build -o "$BIN" "$ROOT/scripts/acceptance" || exit 1
-"$BIN" "$ROOT"
+if [[ $# -eq 0 ]]; then
+	"$BIN" "$ROOT"
+else
+	"$BIN" "$ROOT" "$@"
+fi
 exit $?

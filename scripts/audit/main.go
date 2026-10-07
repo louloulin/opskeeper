@@ -188,7 +188,7 @@ var externalItems = []item{
 		class:    classExternal,
 		evidence: "第二个控制面进程 + 一次真实策略投递",
 		holder:   "部署方",
-		closer:   "本仓暂无：联邦的真实验收没有命令，这是它与其他两条 external 的区别",
+		closer:   "bash scripts/acceptance/run.sh --chain=federation --root-env=… --child-env=… —— 五条离线检查随时可跑，三条要一份真的双控制面部署；F8 读子集群的 live 链接，那是策略抵达执行点的证据",
 	},
 }
 

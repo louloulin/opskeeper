@@ -48,7 +48,7 @@ func fixture(t *testing.T) string {
 
 func byID(t *testing.T, id string) check {
 	t.Helper()
-	for _, c := range checks {
+	for _, c := range stage0Checks {
 		if c.id == id {
 			return c
 		}
@@ -141,7 +141,7 @@ func TestTheCredentialCheckPassesWhenTheKeyIsThere(t *testing.T) {
 // The command's whole claim is the distinction between 1 and 3, so the
 // classification of every check is asserted on the real tree too.
 func TestTheRealTreeHasNoSilentPass(t *testing.T) {
-	for _, r := range run("../..") {
+	for _, r := range run("../..", stage0Checks) {
 		if r.st == statusPass && byID(t, r.id).needs != "" {
 			continue // a needs-input check may legitimately pass here
 		}

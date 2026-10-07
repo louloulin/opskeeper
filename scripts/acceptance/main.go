@@ -1,5 +1,15 @@
-// Command acceptance runs the stage-0 acceptance chain: everything that has
-// to be true before "one edge, on a node, talks to a model" can be said.
+// Command acceptance runs an acceptance chain: everything that has to be
+// true before a claim about delivery can be said out loud.
+//
+// Two chains ship:
+//
+//	stage0     one edge, on a node, talks to a model
+//	federation two control planes, one policy delivery
+//
+// They are separate because their evidence is separate. The stage-0 chain
+// is about artefacts and one machine; the federation chain is about two
+// processes that usually live on two hosts, and its inputs are therefore
+// read from two env files rather than from the process environment.
 //
 // Why this exists. The delivery pieces were all built and separately
 // asserted — the bundle stages pig, the image copies it, the installer
@@ -69,7 +79,7 @@ type check struct {
 	run func(root string) (bool, string)
 }
 
-var checks = []check{
+var stage0Checks = []check{
 	{
 		id:      "A1",
 		subject: "edge bundle 的分发表里有 pig，且标记为 required",
@@ -282,7 +292,7 @@ type result struct {
 // A check whose input is missing is reported MISSING with the input's name,
 // never as a pass: a chain that silently skips three of its steps and exits
 // zero is a chain that reports success it did not verify.
-func run(root string) []result {
+func run(root string, checks []check) []result {
 	out := make([]result, 0, len(checks))
 	for _, c := range checks {
 		ok, reason := c.run(root)
@@ -313,11 +323,45 @@ func read(root, rel string) (string, error) {
 }
 
 func main() {
-	root := "."
-	if len(os.Args) > 1 {
-		root = os.Args[1]
+	chain := "stage0"
+	var rootEnv, childEnv string
+	var positional []string
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		switch {
+		case arg == "--chain=federation":
+			chain = "federation"
+		case strings.HasPrefix(arg, "--root-env="):
+			rootEnv = strings.TrimPrefix(arg, "--root-env=")
+		case strings.HasPrefix(arg, "--child-env="):
+			childEnv = strings.TrimPrefix(arg, "--child-env=")
+		case strings.HasPrefix(arg, "-"):
+			fmt.Fprintf(os.Stderr, "acceptance: unknown flag %q\n", arg)
+			os.Exit(2)
+		default:
+			positional = append(positional, arg)
+		}
 	}
-	results := run(root)
+	root := "."
+	if len(positional) > 0 {
+		root = positional[0]
+	}
+
+	// A flag that the chosen chain does not read is a usage error, not
+	// something to accept and drop: an operator who passed --child-env
+	// and got a clean stage-0 run would conclude the federation chain had
+	// been checked, which is the opposite of what happened.
+	if chain != "federation" && (rootEnv != "" || childEnv != "") {
+		fmt.Fprintf(os.Stderr, "acceptance: --root-env / --child-env only apply to --chain=federation (chain is %q)\n", chain)
+		os.Exit(2)
+	}
+
+	checks, err := chainChecks(chain, rootEnv, childEnv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "acceptance: %v\n", err)
+		os.Exit(2)
+	}
+	results := run(root, checks)
 	failed, missing := 0, 0
 	for _, r := range results {
 		line := fmt.Sprintf("  %-7s %-3s %s", r.st, r.id, r.subject)
@@ -334,7 +378,8 @@ func main() {
 	}
 
 	sort.SliceStable(results, func(i, j int) bool { return results[i].id < results[j].id })
-	fmt.Printf("\nacceptance: %d passed, %d failed, %d need an input this machine may not have\n", len(results)-failed-missing, failed, missing)
+	fmt.Printf("\nacceptance[%s]: %d passed, %d failed, %d need an input this machine may not have\n",
+		chain, len(results)-failed-missing, failed, missing)
 	switch {
 	case failed > 0:
 		fmt.Println("            离线检查红了：这是本仓的缺陷，不是环境问题。")
