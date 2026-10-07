@@ -4,7 +4,7 @@
 // 这条要求此前漏做:提交 6bca872 只把外层条目容器换成了 surface-card 大卡,
 // 页内私有的 StatusChip 仍是老的 `rounded` 小圆角、且没有呼吸点。
 // 下面是让这个漏做项不会再溜回去的护栏。
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
@@ -230,7 +230,6 @@ describe('Approvals 双签进度（approval-governance 规格）', () => {
 describe('Approvals 部分签署诚实反馈（approval-governance 规格）', () => {
   beforeEach(() => {
     localStorage.setItem('opskeeper-locale', 'zh-CN');
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -252,6 +251,7 @@ describe('Approvals 部分签署诚实反馈（approval-governance 规格）', (
   }
 
   it('202(pending): 显示等待第二位批准人,行不消失,批准按钮禁用,且不重载列表', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm');
     let listCalls = 0;
     server.use(
       http.get('/api/v1/approvals', () => {
@@ -277,6 +277,8 @@ describe('Approvals 部分签署诚实反馈（approval-governance 规格）', (
     );
     await screen.findByText('重启数据库');
     await userEvent.click(screen.getByRole('button', { name: '批准' }));
+    // 批准改走应用内确认:点击弹窗的「确认批准并执行」才真正发请求。
+    await userEvent.click(await screen.findByRole('button', { name: /确认批准并执行/ }));
 
     expect(await screen.findByText(/你的签名已记录/)).toBeInTheDocument();
     // 该短语同时出现在「已签署，等待第二位批准人」禁用按钮上,故限定到横幅 span,
@@ -288,9 +290,12 @@ describe('Approvals 部分签署诚实反馈（approval-governance 规格）', (
     // 批准按钮变为禁用的「已签署，等待第二位批准人」（全角逗号，与实现文案一致）。
     const signed = screen.getByRole('button', { name: /已签署，等待第二位批准人/ });
     expect(signed).toBeDisabled();
+    // 不再使用浏览器原生确认对话框。
+    expect(confirmSpy).not.toHaveBeenCalled();
   });
 
   it('200(executed): 就地呈现「已执行」+ 结果,且行不消失', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm');
     server.use(
       http.get('/api/v1/approvals', () => HttpResponse.json({ items: [pendingRow()] })),
       http.post('/api/v1/approvals/a-sign/approve', () =>
@@ -309,6 +314,7 @@ describe('Approvals 部分签署诚实反馈（approval-governance 规格）', (
     );
     await screen.findByText('重启数据库');
     await userEvent.click(screen.getByRole('button', { name: '批准' }));
+    await userEvent.click(await screen.findByRole('button', { name: /确认批准并执行/ }));
 
     // 行状态已变为 executed,StatusChip 与顶部筛选 tab 也会显示「已执行」;
     // 限定到横幅 div,断言就地留驻的执行横幅本身存在。
@@ -316,9 +322,11 @@ describe('Approvals 部分签署诚实反馈（approval-governance 规格）', (
     expect(screen.getByText(/ok/)).toBeInTheDocument();
     // 行未从 pending 列表消失。
     expect(screen.getByText('重启数据库')).toBeInTheDocument();
+    expect(confirmSpy).not.toHaveBeenCalled();
   });
 
   it('failed: 就地呈现失败态 + 结果', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm');
     server.use(
       http.get('/api/v1/approvals', () => HttpResponse.json({ items: [pendingRow()] })),
       http.post('/api/v1/approvals/a-sign/approve', () =>
@@ -337,9 +345,80 @@ describe('Approvals 部分签署诚实反馈（approval-governance 规格）', (
     );
     await screen.findByText('重启数据库');
     await userEvent.click(screen.getByRole('button', { name: '批准' }));
+    await userEvent.click(await screen.findByRole('button', { name: /确认批准并执行/ }));
 
     // 「失败」单独会命中 StatusChip 与顶部筛选 tab;收窄到横幅特有的「执行失败」。
     expect(await screen.findByText(/执行失败/)).toBeInTheDocument();
     expect(screen.getByText(/boom/)).toBeInTheDocument();
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('Approvals 应用内确认（approval-governance 规格）', () => {
+  beforeEach(() => {
+    localStorage.setItem('opskeeper-locale', 'zh-CN');
+  });
+
+  function row() {
+    return {
+      id: 'a-confirm',
+      kind: 'restart_service',
+      title: '重启数据库',
+      summary: '',
+      payload: '{}',
+      source: 'agent',
+      status: 'pending',
+      proposed_by: 1,
+      created_at: FIXED_AT,
+    };
+  }
+
+  it('批准: 出现应用内确认,焦点在「取消」,且不调用 window.confirm', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    server.use(http.get('/api/v1/approvals', () => HttpResponse.json({ items: [row()] })));
+
+    render(
+      <MemoryRouter>
+        <ApprovalsPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('重启数据库');
+    await userEvent.click(screen.getByRole('button', { name: '批准' }));
+
+    // 应用内确认出现(弹窗内「确认批准并执行」)。
+    expect(await screen.findByRole('button', { name: /确认批准并执行/ })).toBeInTheDocument();
+    // 默认焦点不在肯定动作上:焦点落在「取消」。
+    expect(screen.getByRole('button', { name: '取消' })).toHaveFocus();
+    // 不再使用浏览器原生对话框。
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('拒绝: 应用内 textarea 采集原因并在确认后提交,不调用 window.prompt', async () => {
+    const promptSpy = vi.spyOn(window, 'prompt');
+    let body: { reason?: string } | null = null;
+    server.use(
+      http.get('/api/v1/approvals', () => HttpResponse.json({ items: [row()] })),
+      http.post('/api/v1/approvals/a-confirm/reject', async ({ request }) => {
+        body = (await request.json()) as { reason?: string };
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+
+    render(
+      <MemoryRouter>
+        <ApprovalsPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('重启数据库');
+    await userEvent.click(screen.getByRole('button', { name: '拒绝' }));
+
+    const box = await screen.findByPlaceholderText('拒绝原因（可选）');
+    await userEvent.type(box, '风险过高');
+    await userEvent.click(screen.getByRole('button', { name: /确认拒绝/ }));
+
+    await waitFor(() => expect(body).toEqual({ reason: '风险过高' }));
+    expect(promptSpy).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
   });
 });

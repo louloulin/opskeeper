@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ShieldCheck, RefreshCw, Check, X, ChevronDown, ChevronRight, Hourglass } from 'lucide-react';
 import { listApprovals, approveApproval, rejectApproval, type Approval } from '@/api/approvals';
 import { ApiError } from '@/api/client';
 import { useI18n } from '@/i18n/locale';
-import { Chip, PageHeader } from '@/components/ui';
+import { Button, Chip, PageHeader } from '@/components/ui';
+import { Modal } from '@/components/Modal';
 import { parseSigners, dualSignState, signerWording } from '@/lib/approvalSigners';
 
 // Approvals inbox (HLD-017 propose-confirm). Dangerous actions proposed by
@@ -25,6 +26,23 @@ export default function ApprovalsPage() {
   const [err, setErr] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [outcomes, setOutcomes] = useState<Record<string, RowOutcome>>({});
+  const [confirmKind, setConfirmKind] = useState<'approve' | 'reject' | null>(null);
+  const [confirmTarget, setConfirmTarget] = useState<Approval | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+
+  const openConfirm = useCallback((kind: 'approve' | 'reject', a: Approval) => {
+    setConfirmKind(kind);
+    setConfirmTarget(a);
+    setRejectReason('');
+  }, []);
+  // 稳定引用:Modal 的聚焦 effect 依赖 onClose,若每次渲染都换新函数会重跑 effect,
+  // 打字时(受控 textarea 每次输入都触发重渲染)把焦点反复抢回「取消」。
+  const closeConfirm = useCallback(() => {
+    setConfirmKind(null);
+    setConfirmTarget(null);
+    setRejectReason('');
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -43,8 +61,9 @@ export default function ApprovalsPage() {
     void load();
   }, [load]);
 
-  const onApprove = async (a: Approval) => {
-    if (!window.confirm(tr(`确认批准并执行：${a.title}？`, `Approve and execute: ${a.title}?`))) return;
+  const onApprove = (a: Approval) => openConfirm('approve', a);
+
+  const doApprove = async (a: Approval) => {
     setBusy(a.id);
     try {
       const row = await approveApproval(a.id);
@@ -59,19 +78,26 @@ export default function ApprovalsPage() {
       setErr(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
       setBusy('');
+      closeConfirm();
     }
   };
 
-  const onReject = async (a: Approval) => {
-    const reason = window.prompt(tr('拒绝原因（可选）', 'Reject reason (optional)')) ?? '';
+  const onReject = (a: Approval) => openConfirm('reject', a);
+
+  const doReject = async (a: Approval) => {
     setBusy(a.id);
     try {
-      await rejectApproval(a.id, reason);
-      await load();
+      await rejectApproval(a.id, rejectReason);
+      // 就地更新为已拒绝并展开,让原因可见;不调用 load()。
+      setItems((prev) =>
+        prev.map((it) => (it.id === a.id ? { ...it, status: 'rejected', reason: rejectReason } : it)),
+      );
+      setExpanded((e) => ({ ...e, [a.id]: true }));
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
       setBusy('');
+      closeConfirm();
     }
   };
 
@@ -216,6 +242,61 @@ export default function ApprovalsPage() {
           </div>
         )}
       </div>
+
+      <Modal
+        open={confirmKind !== null}
+        onClose={closeConfirm}
+        title={confirmTarget?.title}
+        size="sm"
+        initialFocusRef={cancelRef}
+        footer={
+          <>
+            <Button ref={cancelRef} onClick={closeConfirm}>
+              {tr('取消', 'Cancel')}
+            </Button>
+            {confirmKind === 'approve' ? (
+              <Button variant="primary" onClick={() => confirmTarget && void doApprove(confirmTarget)}>
+                {tr('确认批准并执行', 'Confirm approve & run')}
+              </Button>
+            ) : (
+              <Button variant="danger" onClick={() => confirmTarget && void doReject(confirmTarget)}>
+                {tr('确认拒绝', 'Confirm reject')}
+              </Button>
+            )}
+          </>
+        }
+      >
+        {confirmKind === 'approve' ? (
+          <div className="space-y-2 text-[13px] text-zinc-300">
+            <p>{tr('批准后将立即执行下列操作，请确认影响范围。', 'Approving runs the action immediately — confirm the impact below.')}</p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {confirmTarget?.blast_radius && (
+                <Chip tone="warning" dense>
+                  {tr('影响面', 'Blast radius')}: {confirmTarget.blast_radius}
+                </Chip>
+              )}
+              {confirmTarget?.risk_class && (
+                <Chip tone={confirmTarget.risk_class === 'destructive' ? 'danger' : 'default'} dense>
+                  {tr('风险等级', 'Risk')}: {confirmTarget.risk_class}
+                </Chip>
+              )}
+              {confirmTarget?.target && (
+                <span className="font-mono text-[11px] text-zinc-400">{confirmTarget.target}</span>
+              )}
+            </div>
+          </div>
+        ) : (
+          <label className="block text-[13px] text-zinc-300">
+            <span className="mb-1 block">{tr('拒绝原因（可选）', 'Reject reason (optional)')}</span>
+            <textarea
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder={tr('拒绝原因（可选）', 'Reject reason (optional)')}
+              className="h-24 w-full resize-none rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-zinc-500"
+            />
+          </label>
+        )}
+      </Modal>
     </main>
   );
 }
