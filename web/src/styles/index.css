@@ -32,6 +32,13 @@
      near-black canvas without a visible grey rim. */
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-pop: 0 8px 24px rgb(0 0 0 / 0.5);
+  /* Accent scale (D1). Light-band steps, identical in both themes:
+     they are surfaces (chips / user bubble), so they must stay pale
+     regardless of mode; --accent-700 is the AA text color on them. */
+  --accent-50: 243 240 254;
+  --accent-100: 230 224 253;
+  --accent-600: 109 87 217;
+  --accent-700: 91 73 184;
 }
 
 /* Light theme. Tuned for "GitHub-light / Linear-light" feel:
@@ -58,6 +65,13 @@
   /* Light: soft slate layering — barely-there so dense tables stay calm. */
   --shadow-card: 0 1px 3px rgb(16 24 40 / 0.06), 0 1px 2px rgb(16 24 40 / 0.04);
   --shadow-pop: 0 8px 24px rgb(16 24 40 / 0.12);
+  /* Accent scale (D1). Light-band steps, identical in both themes:
+     they are surfaces (chips / user bubble), so they must stay pale
+     regardless of mode; --accent-700 is the AA text color on them. */
+  --accent-50: 243 240 254;
+  --accent-100: 230 224 253;
+  --accent-600: 109 87 217;
+  --accent-700: 91 73 184;
 }
 
 /* -------------------------------------------------------------------
