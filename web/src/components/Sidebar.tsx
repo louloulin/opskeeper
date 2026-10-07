@@ -49,6 +49,7 @@ import type { IconType } from '@/lib/icon';
 import { useAuth } from '@/store/auth';
 import { useUi } from '@/store/ui';
 import { useIncidentBadge } from '@/store/incidentBadge';
+import { useApprovalBadge } from '@/store/approvalBadge';
 import { useMe, usePermissions } from '@/store/me';
 import { useChatSessions, invalidateChatSessions } from '@/store/chatSessions';
 import { createSession, deleteSession, renameSession, type ChatSession } from '@/api/chat';
@@ -74,6 +75,10 @@ export function Sidebar() {
   // Unack'd incident count drives the red pill on 告警 items + a dot on
   // the collapsed icon-rail. Polled by useIncidentBadge in Layout.
   const incidentOpen = useIncidentBadge((s) => s.openCount);
+  // Pending-approval count drives the red pill on the 审批中心 item.
+  // Polled by useApprovalBadge in Layout; the store itself only calls
+  // /approvals/count for admins, matching the group guard below.
+  const approvalsPending = useApprovalBadge((s) => s.pending);
   const [showAllSessions, setShowAllSessions] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ChatSession | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -539,11 +544,23 @@ export function Sidebar() {
           <SidebarNavItem to="/knowledge/repos" icon={GitBranch} label={tr('代码仓库', 'Repos')} />
         </CollapsibleSection>
 
-        {/* 审批 —— 常驻入口, 红点由 Task 10 接。 */}
-        <SectionLabel>{tr('审批', 'Approvals')}</SectionLabel>
-        <NavSection>
-          <SidebarNavItem to="/approvals" icon={ClipboardCheck} label={tr('审批中心', 'Approvals')} />
-        </NavSection>
+        {/* 审批 —— 常驻入口 + 待审批红点。整个分组对非 admin 隐藏:
+            /v1/approvals 的每个 handler 都在 requireAdmin 之后, 所以非
+            admin 点进去必然 403。SectionLabel 一起包住, 否则非 admin 会
+            看到一个空标题。store 里的 role 门禁是独立的第二道保险。 */}
+        {isAdmin && (
+          <>
+            <SectionLabel>{tr('审批', 'Approvals')}</SectionLabel>
+            <NavSection>
+              <SidebarNavItem
+                to="/approvals"
+                icon={ClipboardCheck}
+                label={tr('审批中心', 'Approvals')}
+                badge={approvalsPending}
+              />
+            </NavSection>
+          </>
+        )}
       </nav>
 
       {/* 管理 —— 留在 footer 区: 这些是低频入口, 不该和上面的工作面抢视觉权重。 */}
