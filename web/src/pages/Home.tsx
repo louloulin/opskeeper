@@ -20,6 +20,11 @@ import { ChatInput, type ModelSelection } from '@/components/ChatInput';
 import { useModelSelection } from '@/store/modelSelection';
 import { PromptCard } from '@/components/PromptCard';
 import { StatusRow } from '@/components/StatusRow';
+import { AgentAvatar } from '@/components/AgentAvatar';
+// personaLabel resolves an agent_id to its localized display name — same
+// tables AgentBadge renders from. Don't re-declare a mapping here.
+import { personaLabel } from '@/components/AgentBadge';
+import { listAgents, type AgentSummary } from '@/api/agents';
 import { createSession, listModels, type LLMProvider } from '@/api/chat';
 import { setSetting, invalidateLLMRouter } from '@/api/settings';
 import { listEdges } from '@/api/edges';
@@ -179,6 +184,12 @@ export default function HomePage() {
   const selectedModel = storeModel ?? catalogDefault;
   // SearXNG ships zero-key zero-quota in our compose stack — leave on by default.
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
+  // 「你的 Agent」快捷卡。persona id 就是 AgentSummary.name（没有单独的
+  // id 字段）—— 与 Agents.tsx 的 createSession({ agent_id: agent.name }) 一致。
+  const [agents, setAgents] = useState<AgentSummary[]>([]);
+  // 防连点：正在建会话的 persona id。刻意不复用 submitting —— 那是主
+  // 输入框的语义，两者不该互相锁死。
+  const [startingAgent, setStartingAgent] = useState<string | null>(null);
 
   // 进首页时随机一条问候 + 4 张 prompt 卡；mount 期间不变。
   const greetingPair = useMemo(() => GREETINGS[Math.floor(Math.random() * GREETINGS.length)], []);
@@ -235,6 +246,23 @@ export default function HomePage() {
     };
   }, []);
 
+  // persona 快捷卡。best-effort: 拉不到就整段不渲染，绝不把首页拖进错误态。
+  // 取后端返回的前 6 个 —— Agents.tsx 的 builtinRank/BUILTIN_ORDER 排序是
+  // 该文件的模块私有，本任务不动它（顺序可能与档案墙不一致，已记 deferred）。
+  useEffect(() => {
+    let cancelled = false;
+    listAgents()
+      .then((r) => {
+        if (!cancelled) setAgents(r.items.slice(0, 6));
+      })
+      .catch(() => {
+        if (!cancelled) setAgents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Persist a home-page pick as the GLOBAL default (default_provider +
   // <provider>_default_model) so every server-side LLM consumer that doesn't
   // pin a model — the RCA investigator worker, query_translate — and the chat
@@ -276,7 +304,25 @@ export default function HomePage() {
     }
   }
 
+  // 从 persona 快捷卡直达一个新会话。失败复用首页既有的 error 展示块
+  // （上面那个 role="alert"），不再造第二套错误 UI。成功后直接导航 —— 没有
+  // initialPrompt 可传，所以不需要 state 参数。
+  async function startWith(agentName: string) {
+    if (startingAgent) return;
+    setError(null);
+    setStartingAgent(agentName);
+    try {
+      const label = personaLabel(agentName, tr);
+      const session = await createSession({ title: label.slice(0, 30), agent_id: agentName });
+      navigate(`/chat/${session.id}`);
+    } catch (err) {
+      setError((err as Error).message || tr('创建会话失败', 'Failed to create session'));
+      setStartingAgent(null);
+    }
+  }
+
   const showEmptyState = edgeTotal === 0;
+
 
   return (
     <main className="flex flex-1 flex-col overflow-hidden">
@@ -370,6 +416,38 @@ export default function HomePage() {
               </div>
             )}
           </div>
+
+          {/* 「你的 Agent」快捷卡：点一下直接开一个绑定该 persona 的新会话。
+              用原生 <button> 而不是 <Card>：Card 的 as prop 只允许
+              div/section/article，渲染不出 button，而这个卡必须键盘可达。
+              .surface-card 提供卡面 + 弱边框，hover 用与 Card.tsx
+              interactive 分支一致的语义 token。 */}
+          {agents.length > 0 && (
+            <section className="mt-8">
+              <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                {tr('你的 Agent', 'Your agents')}
+              </h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                {agents.map((a) => {
+                  const busy = startingAgent === a.name;
+                  return (
+                    <button
+                      key={a.name}
+                      type="button"
+                      disabled={busy || startingAgent !== null}
+                      onClick={() => void startWith(a.name)}
+                      className="surface-card flex flex-col items-center gap-2 rounded-2xl px-3 py-4 transition-colors hover:border-border hover:bg-card disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <AgentAvatar agentId={a.name} size={40} />
+                      <span className="truncate text-xs text-zinc-300">
+                        {personaLabel(a.name, tr)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
         </div>
       </div>
     </main>
