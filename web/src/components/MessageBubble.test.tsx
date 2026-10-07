@@ -248,6 +248,46 @@ function approvalMessage(approvalID: string): ChatMessage {
   };
 }
 
+describe('MessageBubble agent bubble form', () => {
+  beforeEach(() => {
+    localStorage.setItem('opskeeper-locale', 'zh-CN');
+  });
+
+  const assistantMessage: ChatMessage = {
+    id: 'assistant-persona',
+    role: 'assistant',
+    content: '磁盘使用率已达 92%，建议清理日志。',
+    created_at: '2026-10-07T09:41:00Z',
+    pending: false,
+  };
+
+  it('renders the agent avatar and persona head row when agentId is set', () => {
+    render(<MessageBubble message={assistantMessage} agentId="specialist-disk" />);
+
+    expect(screen.getByTestId('agent-avatar')).toBeInTheDocument();
+    expect(screen.getByText('磁盘专家')).toBeInTheDocument();
+    expect(screen.getByText('09:41')).toBeInTheDocument();
+    expect(screen.getByText(/磁盘使用率已达/)).toBeInTheDocument();
+  });
+
+  it('keeps the bubble-agent semantic class and drops the head row without agentId', () => {
+    const { container } = render(<MessageBubble message={assistantMessage} />);
+
+    expect(container.querySelector('.bubble-agent')).not.toBeNull();
+    expect(screen.queryByTestId('agent-avatar')).not.toBeInTheDocument();
+    expect(screen.queryByText('磁盘专家')).not.toBeInTheDocument();
+    expect(screen.getByText(/磁盘使用率已达/)).toBeInTheDocument();
+  });
+
+  it('renders the user bubble with the bubble-user semantic class', () => {
+    const { container } = render(
+      <MessageBubble message={{ id: 'user-bubble-user', role: 'user', content: '看一下磁盘' }} />,
+    );
+
+    expect(container.querySelector('.bubble-user')).not.toBeNull();
+  });
+});
+
 describe('MessageBubble inline approval card', () => {
   beforeEach(() => {
     localStorage.setItem('opskeeper-locale', 'zh-CN');

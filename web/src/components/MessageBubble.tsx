@@ -7,6 +7,8 @@ import { approveApproval, rejectApproval, getApproval } from '@/api/approvals';
 import { cn } from '@/lib/cn';
 import { isConfigDraftConfirmationMessage } from '@/lib/configDraftConfirmation';
 import { useI18n } from '@/i18n/locale';
+import { personaLabel } from '@/components/AgentBadge';
+import { AgentAvatar } from './AgentAvatar';
 import { Button } from '@/components/ui';
 
 export type ConfigDraftResult = {
@@ -33,7 +35,12 @@ type Props = {
   onConfirmConfigDraft?: ConfirmConfigDraft;
 };
 
-export function MessageBubble({ message, onConfirmConfigDraft }: Props) {
+// MessageBubble additionally takes the session's pinned persona so the
+// assistant side can render the messenger-style avatar + name head row.
+// Only AssistantBubble consumes it; user/tool rows keep their signatures.
+type MessageBubbleProps = Props & { agentId?: string | null };
+
+export function MessageBubble({ message, agentId, onConfirmConfigDraft }: MessageBubbleProps) {
   if (message.kind === 'tool_card' && message.tool_call) {
     return <ToolCallSummaryBlock call={fromSummary(message.tool_call)} onConfirmConfigDraft={onConfirmConfigDraft} />;
   }
@@ -48,7 +55,7 @@ export function MessageBubble({ message, onConfirmConfigDraft }: Props) {
   ) {
     return null;
   }
-  return <AssistantBubble message={message} onConfirmConfigDraft={onConfirmConfigDraft} />;
+  return <AssistantBubble message={message} agentId={agentId} onConfirmConfigDraft={onConfirmConfigDraft} />;
 }
 
 // fromSummary maps the wire-level ToolCallSummary (server SSE shape) to
@@ -79,11 +86,12 @@ function UserBubble({ message }: Props) {
   const { tr } = useI18n();
   const content = compactUserContent(message.content ?? '', tr);
 
-  // Codex-style: small, compact zinc chip pinned right. No accent color
-  // — keeps the visual weight on the assistant content below.
+  // Codex-style: small, compact chip pinned right. `.bubble-user` (Task 8)
+  // carries the accent background/color/border — zinc bg/text/ring must
+  // NOT come back here or utilities would repaint the accent bubble.
   return (
     <div className="flex justify-end">
-      <div className="max-w-[78%] rounded-2xl rounded-br-md bg-zinc-800/80 px-3.5 py-2 text-[14px] leading-relaxed text-zinc-100 ring-1 ring-zinc-700/60">
+      <div className="bubble-user max-w-[78%] rounded-2xl rounded-br-md px-4 py-2.5 text-[14px] leading-relaxed">
         {content}
       </div>
     </div>
@@ -98,25 +106,40 @@ function compactUserContent(
   return tr('确认创建这条告警规则', 'Confirm creating this alert rule');
 }
 
-function AssistantBubble({ message, onConfirmConfigDraft }: Props) {
-  // Codex-style: no rounded card around assistant prose. Render markdown
-  // flush against the column so headings/lists/code blocks read like a
-  // document. Tool calls (when attached) appear as their own rows inside
-  // the same column, matching the doc-card aesthetic.
+function AssistantBubble({ message, agentId, onConfirmConfigDraft }: Props & { agentId?: string | null }) {
+  const { tr } = useI18n();
+  // Messenger-style: persona avatar + name/time head row on the left, prose
+  // in a rounded `.bubble-agent` bubble. When the session has no pinned
+  // persona (agentId falsy) the avatar row is dropped and the bubble still
+  // renders — a default conversation reads as plain content, not a
+  // "默认助理" row on every turn. Preserved from the doc-style form: the
+  // pending branch (loading dots instead of empty markdown), the `md-body`
+  // wrapper (markdown typography), and the tool_calls map below the bubble.
   return (
-    <div className="flex flex-col items-stretch gap-2">
-      {message.pending ? (
-        <span className="text-zinc-500">
-          <PendingDots />
-        </span>
-      ) : (
-        <div className="md-body text-zinc-100">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+    <div className="flex w-full items-start gap-2.5">
+      {agentId ? <AgentAvatar agentId={agentId} size={32} className="mt-0.5" /> : null}
+      <div className="min-w-0 max-w-[78%] space-y-1">
+        {agentId ? (
+          <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+            <span className="text-zinc-400">{personaLabel(agentId, tr)}</span>
+            {message.created_at ? <span>{message.created_at.slice(11, 16)}</span> : null}
+          </div>
+        ) : null}
+        <div className="bubble-agent rounded-2xl rounded-bl-md px-4 py-2.5">
+          {message.pending ? (
+            <span className="text-zinc-500">
+              <PendingDots />
+            </span>
+          ) : (
+            <div className="md-body text-zinc-100">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+            </div>
+          )}
         </div>
-      )}
-      {message.tool_calls?.map((tc, i) => (
-        <ToolCallSummaryBlock key={`${tc.name}-${i}`} call={tc} onConfirmConfigDraft={onConfirmConfigDraft} />
-      ))}
+        {message.tool_calls?.map((tc, i) => (
+          <ToolCallSummaryBlock key={`${tc.name}-${i}`} call={tc} onConfirmConfigDraft={onConfirmConfigDraft} />
+        ))}
+      </div>
     </div>
   );
 }

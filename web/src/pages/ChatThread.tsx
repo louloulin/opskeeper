@@ -530,6 +530,7 @@ export default function ChatThreadPage() {
                 <MessageBubble
                   key={m.id}
                   message={m}
+                  agentId={sessionAgentID}
                   onConfirmConfigDraft={isViewer ? undefined : confirmConfigDraft}
                 />
               ))
