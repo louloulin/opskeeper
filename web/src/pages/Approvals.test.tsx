@@ -165,3 +165,63 @@ describe('Approvals 状态标签 pill（console-reskin 规格）', () => {
     expect(screen.getByText('已拒绝')).toBeInTheDocument();
   });
 });
+
+describe('Approvals 双签进度（approval-governance 规格）', () => {
+  beforeEach(() => {
+    localStorage.setItem('opskeeper-locale', 'zh-CN');
+  });
+
+  function withSigners(id: string, title: string, signers?: string) {
+    // 复用文件顶部的 approval() 形状,补上 signers 字段。
+    return {
+      id,
+      kind: 'restart_service',
+      title,
+      summary: '',
+      payload: '{}',
+      source: 'agent',
+      status: 'pending',
+      signers,
+      proposed_by: 1,
+      created_at: FIXED_AT,
+    };
+  }
+
+  function renderWith(rows: unknown[]) {
+    server.use(http.get('/api/v1/approvals', () => HttpResponse.json({ items: rows })));
+    return render(
+      <MemoryRouter>
+        <ApprovalsPage />
+      </MemoryRouter>,
+    );
+  }
+
+  it('部分签署: 显示 N 人已签 / 需 2 人,并列出签署人角色与时间', async () => {
+    const signers = JSON.stringify([{ user_id: 1, role: 'admin', at: '2026-01-02T03:04:05Z' }]);
+    renderWith([withSigners('a-partial', '重启数据库', signers)]);
+
+    await screen.findByText('重启数据库');
+    expect(screen.getByText('1 人已签 / 需 2 人')).toBeInTheDocument();
+    // 签署人角色出现(admin 以 role 渲染)。
+    expect(screen.getByText(/admin/)).toBeInTheDocument();
+  });
+
+  it('无签署(空数组): 显示签署要求,且不展示签署人', async () => {
+    renderWith([withSigners('a-none', '扩容节点池', '[]')]);
+
+    await screen.findByText('扩容节点池');
+    expect(screen.getByText(/需 2 位批准人/)).toBeInTheDocument();
+    // 空数组下没有签署人行,admin 不应出现在该卡内。
+    expect(screen.queryByText(/admin/)).not.toBeInTheDocument();
+  });
+
+  it('不可解析: 中性显示「签署状态未知」,不显示人数,且按钮仍可用', async () => {
+    renderWith([withSigners('a-unknown', '清理磁盘', '{bad json')]);
+
+    await screen.findByText('清理磁盘');
+    expect(screen.getByText('签署状态未知')).toBeInTheDocument();
+    expect(screen.queryByText(/人已签/)).not.toBeInTheDocument();
+    // 不阻塞操作:批准按钮存在且未禁用。
+    expect(screen.getByRole('button', { name: '批准' })).toBeEnabled();
+  });
+});

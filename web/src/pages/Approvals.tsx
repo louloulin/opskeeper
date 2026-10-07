@@ -4,6 +4,7 @@ import { listApprovals, approveApproval, rejectApproval, type Approval } from '@
 import { ApiError } from '@/api/client';
 import { useI18n } from '@/i18n/locale';
 import { Chip, PageHeader } from '@/components/ui';
+import { parseSigners, dualSignState, signerWording } from '@/lib/approvalSigners';
 
 // Approvals inbox (HLD-017 propose-confirm). Dangerous actions proposed by
 // the agent (or a flow approval node) wait here; an admin approves (→ runs)
@@ -135,6 +136,7 @@ export default function ApprovalsPage() {
                       {tr('来源', 'source')}: {a.source}
                       {a.session_id ? ` · ${a.session_id.slice(0, 8)}` : ''} · {new Date(a.created_at).toLocaleString()}
                     </div>
+                    <SignerProgress approval={a} />
                     {expanded[a.id] && (
                       <div className="mt-2 space-y-1">
                         <div className="text-[11px] text-zinc-500">{tr('操作内容', 'Action payload')}</div>
@@ -234,4 +236,31 @@ function prettify(s: string): string {
   } catch {
     return s;
   }
+}
+
+// SignerProgress 呈现一行审批的双签进度,取自共享基元 approvalSigners。
+// decided(非 pending) 不渲染;unknown 作中性提示,不禁用任何操作按钮。
+function SignerProgress({ approval }: { approval: Approval }) {
+  const { tr } = useI18n();
+  const state = dualSignState(approval);
+  if (state === 'decided') return null;
+  const { signers } = parseSigners(approval.signers);
+  const w = signerWording(state, signers.length);
+  return (
+    <div className="mt-1.5 space-y-0.5 text-[11px]">
+      <div className={state === 'partial' ? 'text-amber-400/90' : 'text-zinc-500'}>
+        {tr(w.zh, w.en)}
+      </div>
+      {state === 'partial' && (
+        <ul className="flex flex-wrap gap-x-3 gap-y-0.5 text-zinc-500">
+          {signers.map((s, i) => (
+            <li key={`${s.user_id}-${i}`} className="font-mono">
+              {s.role ?? String(s.user_id)}
+              {s.at ? ` · ${new Date(s.at).toLocaleString()}` : ''}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
