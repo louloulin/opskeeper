@@ -34,21 +34,6 @@ const principles = [
   'Plugins (agentteams-plugin-installer, opskeeper-teamharness) are first-party open source, not vendored binaries.',
 ];
 
-const acknowledgedProjects = [
-  {
-    name: 'OpenBuddy',
-    href: 'https://github.com/louloulin/OpenBuddy',
-    description:
-      'A Pi-native open-source AI workspace built on a microkernel-plus-plugin architecture: 100% MIT, fully readable and auditable code, a forkable customizable UI, and an extensible capability mesh that keeps your AI workspace under your control.',
-  },
-  {
-    name: 'upup',
-    href: 'https://github.com/louloulin/upup',
-    description:
-      'A Pi-native AI investment agent built on the Pi runtime, covering deep investment research, valuation, and portfolio risk management for A-shares, Hong Kong, and US stocks in one place.',
-  },
-];
-
 const contributingTracks = [
   {
     icon: Code2,
@@ -178,40 +163,13 @@ export default function OpenSourcePage() {
               <div className="mt-6 rounded-xl border border-white/10 bg-white/[0.03] p-5">
                 <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-white">
                   <Heart className="h-4 w-4 text-accent-300" />
-                  Special thanks to
-                  <a
-                    href="https://github.com/louloulin"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-accent-200 transition hover:border-accent-300/40 hover:text-accent-100"
-                  >
-                    <Github className="h-3.5 w-3.5" />
-                    louloulin
-                  </a>
-                  <span className="text-ink-300">and the Lumos group they belong to.</span>
+                  Special thanks to the wider open-source community.
                 </div>
                 <p className="mt-3 text-sm leading-6 text-ink-300">
-                  Lumos is an informal group of AI-native enthusiasts who enjoy researching AI,
-                  multi-agent systems, and related topics, then open-sourcing mature products from
-                  their work. Here are some interesting projects from louloulin worth exploring.
+                  Architectural writing, interaction examples, and automation tooling from the
+                  community informed early exploration. Personal repositories are intentionally
+                  omitted from this public page.
                 </p>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  {acknowledgedProjects.map((project) => (
-                    <a
-                      key={project.name}
-                      href={project.href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="group rounded-lg border border-white/10 bg-ink-950/40 p-4 transition hover:border-accent-300/40"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold text-white">{project.name}</span>
-                        <Github className="h-4 w-4 text-ink-400 transition group-hover:text-accent-200" />
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-ink-300">{project.description}</p>
-                    </a>
-                  ))}
-                </div>
               </div>
             </div>
             <div className="md:col-span-4">

@@ -34,19 +34,6 @@ const principles = [
   '插件（agentteams-plugin-installer、opskeeper-teamharness）是一方开源代码，不是 vendored 二进制。',
 ];
 
-const acknowledgedProjects = [
-  {
-    name: 'OpenBuddy',
-    href: 'https://github.com/louloulin/OpenBuddy',
-    description: '原生基于 Pi 框架打造的微内核 + 插件架构开源 AI 工作台，100% MIT 协议；代码全可读可审计、UI 可 fork 二次定制、能力网格可自由扩展，让你的 AI 工作台真正由你做主。',
-  },
-  {
-    name: 'upup',
-    href: 'https://github.com/louloulin/upup',
-    description: 'Pi-native AI 投资智能体，构建在 Pi runtime 之上，一站式覆盖 A股、港股、美股深度投研、估值与组合风险管理。',
-  },
-];
-
 const contributingTracks = [
   {
     icon: Code2,
@@ -172,39 +159,11 @@ export default function OpenSourceZhPage() {
               <div className="mt-6 rounded-xl border border-white/10 bg-white/[0.03] p-5">
                 <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-white">
                   <Heart className="h-4 w-4 text-accent-300" />
-                  特别感谢
-                  <a
-                    href="https://github.com/louloulin"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-accent-200 transition hover:border-accent-300/40 hover:text-accent-100"
-                  >
-                    <Github className="h-3.5 w-3.5" />
-                    louloulin
-                  </a>
-                  <span className="text-ink-300">及其所属的 Lumos 组织。</span>
+                  特别感谢更广泛的开源社区。
                 </div>
                 <p className="mt-3 text-sm leading-6 text-ink-300">
-                  Lumos 是一个由 AI Native 爱好者组成的非正式群体，喜欢研究 AI、多智能体等方向，
-                  并把研究过程中沉淀出的成熟产品开放出来。下面是 louloulin 一些有趣的开源成果，欢迎关注了解。
+                  社区中的架构文章、交互示例与自动化工具为早期探索提供了参考。本页刻意不列出个人仓库，以守住公开发布边界。
                 </p>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  {acknowledgedProjects.map((project) => (
-                    <a
-                      key={project.name}
-                      href={project.href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="group rounded-lg border border-white/10 bg-ink-950/40 p-4 transition hover:border-accent-300/40"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold text-white">{project.name}</span>
-                        <Github className="h-4 w-4 text-ink-400 transition group-hover:text-accent-200" />
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-ink-300">{project.description}</p>
-                    </a>
-                  ))}
-                </div>
               </div>
             </div>
             <div className="md:col-span-4">

@@ -3,13 +3,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { BusinessCard } from '@/components/demo/business-card';
+import { CommandStageTimeline } from '@/components/demo/command-stage-timeline';
+import { IncidentCommandBar } from '@/components/demo/incident-command-bar';
 import { PreviewDecisionCard } from '@/components/demo/preview-decision-card';
-import { StageRail } from '@/components/demo/stage-rail';
 import { CodeBlock } from '@/components/code-block';
 import { Section } from '@/components/section';
+import { fromDemoScenario } from '@opskeeper/incident-command';
+import type { IncidentCommandView } from '@opskeeper/incident-command/types';
 import {
   BUSINESS_SECTIONS,
   type BusinessSection,
+  type BusinessSnapshotObservation,
   type BusinessSnapshot,
   type ScenarioStatus,
   type WorkflowStage,
@@ -30,6 +34,16 @@ type DemoLink = {
   href: string;
   emphasis?: 'primary' | 'secondary';
 };
+
+function snapshotObservation(
+  section: BusinessSection,
+  state: SnapshotState,
+): BusinessSnapshotObservation {
+  if (state.snapshot) return { ...state.snapshot, error_code: state.errorCode };
+  return { section, error_code: state.errorCode ?? 'not_observed' };
+}
+
+const projectDemoScenario = fromDemoScenario as (input?: unknown) => IncidentCommandView;
 
 
 const activeStages: WorkflowStage[] = [
@@ -79,7 +93,7 @@ const demoLinks: Record<DemoLocale, DemoLink[]> = {
       label: '监控看板',
       description: '主看板：确认连接池 4/4、等待队列与查询错误率',
       href: 'https://teams.yueming.xin/grafana/d/opskeeper-pgpool-live/?orgId=1&from=now-15m&to=now&refresh=5s',
-      emphasis: 'primary',
+      emphasis: 'secondary',
     },
     {
       label: 'Manager 状态',
@@ -118,7 +132,7 @@ const demoLinks: Record<DemoLocale, DemoLink[]> = {
       label: 'Monitoring',
       description: 'Primary board: verify pool 4/4, wait queue, and query errors',
       href: 'https://teams.yueming.xin/grafana/d/opskeeper-pgpool-live/?orgId=1&from=now-15m&to=now&refresh=5s',
-      emphasis: 'primary',
+      emphasis: 'secondary',
     },
     {
       label: 'Manager status',
@@ -298,6 +312,22 @@ export default function LiveIncidentPage() {
   const serviceStatus = scenarioErrorCode
     ? translate('异常', 'Error')
     : scenario ? stageCopy[locale][scenario.status] ?? translate('运行中', 'Running') : translate('待初始化', 'Not initialized');
+  const snapshots = useMemo(
+    () => BUSINESS_SECTIONS.map((section, index) => snapshotObservation(
+      section,
+      snapshotStates[index],
+    )),
+    [snapshotStates],
+  );
+  const commandView = useMemo(
+    () => scenario
+      ? projectDemoScenario({
+          scenario,
+          snapshots,
+        })
+      : null,
+    [scenario, snapshots],
+  );
 
   return (
     <Section className="py-12 md:py-16">
@@ -305,7 +335,7 @@ export default function LiveIncidentPage() {
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-2xl">
             <p className="font-mono text-xs uppercase tracking-wider text-accent-300">
-              {translate('决赛演示 · PostgreSQL 连接池耗尽', 'Final Demo · PostgreSQL pool exhaustion')}
+              {translate('演示场景 · PostgreSQL 连接池耗尽', 'Demo · PostgreSQL pool exhaustion')}
             </p>
             <h1 className="mt-3 text-balance text-3xl font-semibold tracking-tight text-white sm:text-4xl">
               {translate('业务体感与事故闭环控制台', 'Business Impact & Incident Console')}
@@ -376,10 +406,17 @@ export default function LiveIncidentPage() {
         </div>
       </header>
 
+      {commandView && (
+        <div className="mt-8 space-y-6">
+          <IncidentCommandBar view={commandView} locale={locale} />
+          <CommandStageTimeline stages={commandView.stageTimeline} locale={locale} />
+        </div>
+      )}
+
       <section className="mt-8" aria-labelledby="business-title">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 id="business-title" className="text-2xl font-semibold text-white">{translate('真实业务查询', 'Real business queries')}</h2>
+            <h2 id="business-title" className="text-xl font-medium text-white">{translate('真实业务查询', 'Real business queries')}</h2>
             <p className="mt-2 text-sm text-ink-300">{translate('三张卡片独立轮询，共用同一个被施加压力的应用连接池。', 'Three cards poll independently through the same stressed application pool.')}</p>
           </div>
           <p className="text-xs text-ink-400">{translate('每 3 秒轮询 · 2 秒客户端超时', '3-second polling · 2-second client timeout')}</p>
@@ -408,12 +445,11 @@ export default function LiveIncidentPage() {
       </section>
 
       <div className="mt-8 grid gap-6 xl:grid-cols-[1.15fr_1fr]">
-        <StageRail status={scenario?.status} locale={locale} />
         <PreviewDecisionCard decision={scenario?.preview_decision ?? null} locale={locale} />
       </div>
 
       <section className="mt-8" aria-labelledby="links-title">
-        <h2 id="links-title" className="text-2xl font-semibold text-white">{translate('演示切换入口', 'Demo switch entries')}</h2>
+        <h2 id="links-title" className="text-xl font-medium text-white">{translate('上下文证据与恢复入口', 'Contextual evidence and recovery links')}</h2>
         <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {demoLinks[locale].map((link) => (
             <a
@@ -422,15 +458,10 @@ export default function LiveIncidentPage() {
               target="_blank"
               rel="noreferrer noopener"
               className={cn(
-                'group rounded-xl border p-5 transition-colors',
-                link.emphasis === 'primary'
-                  ? 'border-accent-500/50 bg-accent-500/10 hover:border-accent-500/70 hover:bg-accent-500/15'
-                  : link.emphasis === 'secondary'
-                    ? 'border-white/20 bg-white/[0.05] hover:border-white/30 hover:bg-white/[0.07]'
-                    : 'border-white/10 bg-white/[0.03] hover:border-accent-500/40 hover:bg-white/[0.05]',
+                'group rounded-xl border border-white/10 bg-white/[0.03] p-4 transition-colors hover:border-white/25 hover:bg-white/[0.05]',
               )}
             >
-              <p className="text-base font-semibold text-white">{link.label}</p>
+              <p className="text-sm font-semibold text-white">{link.label}</p>
               <p className="mt-2 text-sm text-ink-300">{link.description}</p>
               <p className="mt-3 break-all font-mono text-xs text-ink-500">{link.href}</p>
             </a>

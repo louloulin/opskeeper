@@ -10,6 +10,12 @@ export type BusinessSnapshot = {
   generated_at: string;
 };
 
+export type BusinessSnapshotObservation = {
+  section: BusinessSection;
+  latency_ms?: number;
+  error_code?: string;
+};
+
 export const SCENARIO_STAGES = [
   'starting',
   'awaiting_alert',
