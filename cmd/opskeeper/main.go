@@ -67,8 +67,10 @@ import (
 	"strconv"
 
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/embedding"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/miniredisx"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/qdrantx"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/tracing"
+	"github.com/vincent-wuhan/opskeeper/core/base/pkg/vecstore"
 	"github.com/vincent-wuhan/opskeeper/core/manager/observability/otelgenai"
 
 	pkglogquery "github.com/vincent-wuhan/opskeeper/core/base/pkg/logquery"
@@ -364,8 +366,23 @@ func main() {
 	// historical single-replica behaviour with no Redis dependency at
 	// all must set OPSKEEPER_LEADER_ENABLED=false (and the embedded
 	// compose already does so).
+	// Embedded mode (OPSKEEPER_EMBEDDED=true): Redis runs inside this
+	// process on a free loopback port, so no container is needed. It
+	// speaks real TCP, so the client below is unchanged — only Addr.
+	redisAddr := cfg.Redis.Addr
+	if cfg.Redis.Embedded {
+		mr, err := miniredisx.Start()
+		if err != nil {
+			log.Error("embedded redis", slog.Any("err", err))
+			os.Exit(1)
+		}
+		defer mr.Close()
+		redisAddr = mr.Addr()
+		log.Info("embedded redis enabled", slog.String("addr", redisAddr))
+	}
+
 	redisCli := redis.NewClient(&redis.Options{
-		Addr:         cfg.Redis.Addr,
+		Addr:         redisAddr,
 		Password:     cfg.Redis.Password,
 		DB:           cfg.Redis.DB,
 		DialTimeout:  cfg.Redis.Pool.DialTimeout,
@@ -375,9 +392,12 @@ func main() {
 
 	// WebSocket / 流式会话跨副本 fan-out（spec: openspec/changes/websocket-fanout）。
 	// 复用 platform-base-ha 已有的 Redis 客户端；PodID 与 leader.Manager 同源。
+	// 内嵌模式是单副本，没有第二个实例需要广播，因此跳过订阅。
 	wsfanoutMetrics := wsfanout.NewMetrics(prometheus.NewRegistry())
 	wsfanoutWiring := wsfanout.NewWiring(redisCli, wsfanout.NewPodID(os.Getenv(wsfanout.EnvInstanceIDOverride)), wsfanoutMetrics, log.With(slog.String("comp", "wsfanout")))
-	go wsfanoutWiring.Control().SubscribeLoop(rootCtx)
+	if !cfg.Redis.Embedded {
+		go wsfanoutWiring.Control().SubscribeLoop(rootCtx)
+	}
 	// Best-effort ping so misconfiguration surfaces in boot logs. We
 	// don't fail boot — leader election itself will retry on every
 	// electLoop tick. Done synchronously so the operator sees the
@@ -1896,16 +1916,34 @@ func main() {
 		Dim:      embDim,
 		Log:      log.With(slog.String("comp", "embedding")),
 	})
-	qdrantURL := os.Getenv("OPSKEEPER_QDRANT_URL")
-	if qdrantURL == "" {
-		qdrantURL = "http://qdrant:6333"
-	}
 	var (
 		knowledgeUC *managerbizknowledge.Usecase
 		// qdrantClient 在更广作用域声明，供 chatdiagnose KB wire-up 复用
 		//（core/manager/data/chatdiagnose/store.NewQdrantPatternRepo 需要同一个 client）
-		qdrantClient = qdrantx.New(qdrantURL, log.With(slog.String("comp", "qdrant")))
+		qdrantClient qdrantx.Store
+		// qdrantURL 只在 qdrant 后端下有值；内嵌后端没有外部服务，
+		// systemhealth 靠 VectorBackend 判断是否还需要探测它。
+		qdrantURL string
 	)
+	// 两种后端实现同一个端口（qdrantx.Store）：默认内嵌 chromem 让全新
+	// checkout 无需任何外部服务；设置 OPSKEEPER_VECTOR_BACKEND=qdrant
+	// 切回外部 qdrant 部署。
+	if cfg.Vector.Backend == "chromem" {
+		vec, vecErr := vecstore.NewChromem(cfg.Vector.ChromemDir, log.With(slog.String("comp", "vector")))
+		if vecErr != nil {
+			log.Error("knowledge: open embedded vector store", slog.Any("err", vecErr))
+			os.Exit(1)
+		}
+		qdrantClient = vec
+		log.Info("knowledge: embedded vector store enabled",
+			slog.String("dir", cfg.Vector.ChromemDir))
+	} else {
+		qdrantURL = os.Getenv("OPSKEEPER_QDRANT_URL")
+		if qdrantURL == "" {
+			qdrantURL = "http://qdrant:6333"
+		}
+		qdrantClient = qdrantx.New(qdrantURL, log.With(slog.String("comp", "qdrant")))
+	}
 	{
 		// Build with a nil embedder when one isn't configured — the
 		// usecase exposes read paths (ListDocs/Repos/GetDoc/ListPaths)
@@ -1933,10 +1971,9 @@ func main() {
 			// GitHub-PAT-via-GIT_ASKPASS resolver wiring
 			// removed. SSH-style repos use ssh_identities; HTTPS auth
 			// returns in P3 via credential.helper.
-			// Built-in vault seed (ADR-029) — default-on, source fixed to
-			// the public github.com/builtin://vault with the embedded
-			// snapshot as the offline fallback. The source is NOT operator-
-			// configurable: the old OPSKEEPER_BUILTIN_VAULT_URL "point it at a
+			// Built-in vault seed (ADR-029) — default-on, source fixed to the
+			// snapshot embedded in the binary (go:embed). The source is NOT
+			// operator-configurable: the old OPSKEEPER_BUILTIN_VAULT_URL "point it at a
 			// git mirror" path was removed because it registered the vault as
 			// a knowledge_repos row and leaked it into the 代码仓库 / Repos
 			// list — Repos is for user code the Agent analyzes, never platform
@@ -1945,10 +1982,9 @@ func main() {
 			// Why default-on: empty knowledge bases at first boot were
 			// repeatedly mistaken for "RAG broke" — the operator expects at
 			// least the platform playbooks to be there. The background sync
-			// (cloud clone, embedded fallback) must not stall the HTTP
-			// listener, so it runs in a goroutine and only when the vault
-			// isn't already indexed. The Knowledge page "云端同步" button
-			// re-runs the same SyncBuiltinVault path on demand.
+			// must not stall the HTTP listener, so it runs in a goroutine and
+			// only when the vault isn't already indexed. The Knowledge page's
+			// 内置知识库 sync button re-runs the same SyncBuiltinVault path on demand.
 			if seed := strings.TrimSpace(os.Getenv("OPSKEEPER_BUILTIN_VAULT_SEED")); seed == "-" || strings.EqualFold(seed, "off") {
 				log.Info("knowledge: built-in vault seed disabled via env")
 			} else {
@@ -2815,6 +2851,7 @@ func main() {
 		FrontierDisabled:    cfg.FrontierClient.Disabled,
 		LLMConfigured:       cfg.OpenAI.APIKey != "",
 		EmbeddingConfigured: embErr == nil,
+		VectorBackend:       cfg.Vector.Backend,
 		QdrantURL:           qdrantURL,
 		QdrantCollection:    managerbizknowledge.CollectionName,
 	}, managersvcsystemhealth.Dependencies{
