@@ -31,7 +31,7 @@ export function Card({
       className={cn(
         'rounded-2xl border border-border-soft bg-card-soft shadow-card',
         compact ? 'p-3.5' : 'p-4',
-        interactive && 'transition-colors hover:border-zinc-700 hover:bg-zinc-900/60',
+        interactive && 'transition-colors hover:border-border hover:bg-card',
         className,
       )}
       {...rest}
