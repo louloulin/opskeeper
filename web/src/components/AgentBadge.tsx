@@ -64,7 +64,7 @@ export function AgentBadge({
   const label = zh ? trInline(zh, AGENT_LABELS_EN[agentId] ?? zh) : agentId;
   const { icon: Icon, tone } = personaVisual(agentId);
   const base = cn(
-    'inline-flex items-center gap-1 rounded-md ring-1 ring-inset',
+    'inline-flex items-center gap-1 rounded-md border ring-1 ring-inset',
     TONE_EDGE[tone],
     TONE_CLASS[tone],
   );

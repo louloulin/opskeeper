@@ -53,7 +53,7 @@ export function personaVisual(agentId?: string | null): PersonaVisual {
   return PERSONA_VISUALS[normalized] ?? PERSONA_VISUALS.default;
 }
 
-const BOX_CLASS: Record<32 | 40, string> = { 32: 'h-8 w-8 rounded-s-sm', 40: 'h-10 w-10 rounded-s-md' };
+const BOX_CLASS: Record<32 | 40, string> = { 32: 'h-8 w-8 rounded-rk-sm', 40: 'h-10 w-10 rounded-rk-md' };
 const ICON_CLASS: Record<32 | 40, string> = { 32: 'h-4 w-4', 40: 'h-5 w-5' };
 
 export function AgentAvatar({

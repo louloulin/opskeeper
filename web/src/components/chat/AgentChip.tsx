@@ -1,7 +1,7 @@
 // AgentChip — @agent 前端 chip 渲染。
 // 用于在聊天输入 / 已渲染消息中，把用户输入的 @sre-agent / @reporter /
 // @incident-investigator / @critic / @loop-controller 等前缀可视化为
-// indigo 配色的紧凑 chip。
+// persona 角色色（AgentAvatar 的 tone）的紧凑 chip——不再是固定 indigo。
 //
 // 设计要点：
 //   - 不参与路由：路由由后端 MentionedAgent 解析（Day 2.7 后端部分）
