@@ -198,6 +198,11 @@ function statusLabel(s: string, tr: (zh: string, en: string) => string): string 
   }
 }
 
+// console-reskin delta spec：状态标签用 rounded-full 胶囊 + 呼吸点。
+// 呼吸点复用 tailwind.config.ts 里既有的 pulse-dot keyframes（纯 opacity 明暗，
+// 不是缩放/位移），并用内置 motion-safe 变体卡在 prefers-reduced-motion 之外——
+// 开了「减少动态效果」的用户看到的是一个静止的圆点，而不是被动画反复闪。
+// 圆点颜色与所在状态的语义色同系，不另引入色板。
 function StatusChip({ status, tr }: { status: string; tr: (zh: string, en: string) => string }) {
   const cls =
     status === 'pending'
@@ -207,7 +212,20 @@ function StatusChip({ status, tr }: { status: string; tr: (zh: string, en: strin
         : status === 'failed'
           ? 'bg-red-900/40 text-red-300'
           : 'bg-zinc-800 text-zinc-400';
-  return <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${cls}`}>{statusLabel(status, tr)}</span>;
+  const dot =
+    status === 'pending'
+      ? 'bg-amber-400'
+      : status === 'executed' || status === 'approved'
+        ? 'bg-emerald-400'
+        : status === 'failed'
+          ? 'bg-red-400'
+          : 'bg-zinc-500';
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${cls}`}>
+      <span className={`h-1 w-1 shrink-0 rounded-full motion-safe:animate-pulse-dot ${dot}`} aria-hidden="true" />
+      {statusLabel(status, tr)}
+    </span>
+  );
 }
 
 function prettify(s: string): string {
