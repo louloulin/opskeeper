@@ -98,7 +98,106 @@ def allowed_release_delta(path: str) -> bool:
     )
 
 
-def main(root: Path = ROOT) -> int:
+def render_preview(
+    manifest: dict,
+    findings: Findings,
+    *,
+    plugin_yaml: str,
+    plugin_json: dict,
+    installer_json: dict,
+    harness_version: str | None,
+    web_tree: str,
+    harness_tree: str,
+    root: Path,
+) -> None:
+    """Print, field by field, what the tree says against what the manifest says.
+
+    A drifted field is shown with the value signing would have to write. A
+    field that already agrees is shown as agreeing, because "nothing to do
+    here" is information too: it is what stops someone from touching a file
+    that is not part of the drift.
+    """
+    try:
+        declared = yaml_metadata_version(plugin_yaml)
+    except ValueError:
+        declared = "<unreadable>"
+
+    rows = [
+        ("VERSION", (root / "VERSION").read_text(encoding="utf-8").strip(), manifest["release_tag"], True),
+        ("manifest version", manifest["version"], manifest["release_tag"].removeprefix("v"), False),
+        ("plugin.yaml version", declared, manifest["teamharness_version"], True),
+        ("dashboard plugin version", plugin_json["version"], manifest["teamharness_version"], True),
+        ("installer plugin version", installer_json["version"], manifest["installer_version"], True),
+        ("web_hash", web_tree, manifest["web_hash"], True),
+        ("teamharness_source_tree", harness_tree, manifest.get("teamharness_source_tree"), True),
+        ("backend_commit", manifest["backend_commit"], "the commit the release branch forks from", False),
+    ]
+    print("release preflight: manifest versus tree")
+    print(f"  {'field':<26} {'tree says':<44} manifest says")
+    for name, tree_value, manifest_value, is_drift in rows:
+        if is_drift and tree_value != manifest_value:
+            mark = "  <-- signing must set this to the tree's value"
+        elif name in {"VERSION", "manifest version"}:
+            mark = "  (a release decision: the tag is not derivable from the tree)"
+        else:
+            mark = ""
+        print(f"  {name:<26} {tree_value:<44} {manifest_value}{mark}")
+
+    if harness_version is not None:
+        expected_entry = f"dist/main-{harness_version}.js"
+        entry = plugin_json["entry"]["dashboard"]
+        note = "" if entry == expected_entry else f"  <-- signing must set it to {expected_entry}"
+        print(f"  {'dashboard entry':<26} {entry:<44} {expected_entry}{note}")
+
+    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    for label, needle in (
+        ("CHANGELOG version heading", manifest["version"]),
+        ("CHANGELOG backend binding", manifest["backend_commit"]),
+        ("CHANGELOG plugin binding", manifest["teamharness_version"]),
+    ):
+        present = needle in changelog
+        print(f"  {label:<26} {'present' if present else 'MISSING':<44} {needle}")
+
+    backend_commit = manifest["backend_commit"]
+    if not commit_exists(backend_commit, root=root):
+        print()
+        print("  the recorded backend_commit is not in this history, so the source")
+        print("  boundary cannot be measured; with OPSKEEPER_REQUIRE_FULL_HISTORY=1")
+        print("  that is a hard failure rather than a skipped check.")
+        return
+    changed = run("git", "diff", "--name-only", backend_commit, "HEAD", root=root).stdout.splitlines()
+    outside = sorted(path for path in changed if not allowed_release_delta(path))
+    print()
+    print(f"  source boundary: {len(changed)} changed path(s) since backend_commit, "
+          f"{len(outside)} outside it")
+    if outside:
+        print("  signing means moving backend_commit forward to a commit where the")
+        print("  remainder is release metadata, docs, tests and _test.go only:")
+        for path in outside[:10]:
+            print(f"    - {path}")
+        if len(outside) > 10:
+            print(f"    ... and {len(outside) - 10} more")
+        print("  choosing where that line falls is a release decision, not a default.")
+
+
+def main(root: Path = ROOT, preview: bool = False) -> int:
+    """Verify the release metadata, or print what signing would have to write.
+
+    `preview` exists because the five findings this gate can report are all of
+    the form "the manifest says X, the tree says Y" -- and answering "what is Y"
+    is the whole job of the person signing. Reading Y out of a red log means
+    running the gate, copying a hash by hand, pushing, and running it again,
+    which is the same five-round trip the reporting fix was meant to end.
+
+    So preview prints the tree's own value beside the manifest's for every
+    field that drifts, and never guesses the two it cannot know: the tag and
+    the version. Those are release decisions, and a tool that invented them
+    would be inventing a release.
+
+    Preview shares this module's constants and its arithmetic on purpose. A
+    second script that recomputed the hashes would be a second thing that can
+    disagree with the gate -- the shape this repository keeps paying for.
+    """
     findings = Findings()
     require = findings.require
 
@@ -160,6 +259,12 @@ def main(root: Path = ROOT) -> int:
     require(web_tree == manifest["web_hash"], "web source tree hash drifted", expected=manifest["web_hash"], actual=web_tree)
     require(manifest.get("teamharness_source_tree") == harness_tree, "TeamHarness source tree hash drifted", expected=harness_tree, actual=manifest.get("teamharness_source_tree"))
 
+    if preview:
+        render_preview(manifest, findings, plugin_yaml=plugin_yaml, plugin_json=plugin_json,
+                       installer_json=installer_json, harness_version=harness_version,
+                       web_tree=web_tree, harness_tree=harness_tree, root=root)
+        return 0
+
     backend_commit = manifest["backend_commit"]
     if commit_exists(backend_commit, root=root):
         ancestry = run("git", "merge-base", "--is-ancestor", backend_commit, "HEAD", root=root).returncode == 0
@@ -191,4 +296,12 @@ def main(root: Path = ROOT) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="print what signing would have to write, and exit 0 without judging",
+    )
+    raise SystemExit(main(preview=parser.parse_args().preview))

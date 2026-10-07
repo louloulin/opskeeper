@@ -240,3 +240,79 @@ def test_the_source_boundary_rule_keeps_its_meaning(path, allowed):
     """
     module = load_gate()
     assert module.allowed_release_delta(path) is allowed
+
+
+def test_preview_names_the_values_signing_would_have_to_write(tmp_path, capsys):
+    """The red log says a field drifted; only the tree says what it drifted to.
+
+    Answering that question by reading the log means running the gate, copying
+    a hash by hand, pushing, and running it again -- the five-round trip the
+    reporting fix exists to end. So preview prints the tree's own value next to
+    the manifest's, for every field that drifts.
+    """
+    root = make_consistent(scaffold(tmp_path / "repo"))
+    (root / "plugins/opskeeper-teamharness/plugin.yaml").write_text(
+        "metadata:\n  version: 1.0.70\n  name: teamharness\n", encoding="utf-8"
+    )
+
+    module = load_gate()
+    assert module.main(root, preview=True) == 0
+
+    out = capsys.readouterr().out
+    assert "1.0.70" in out and "1.0.59" in out
+    assert "signing must set this to the tree's value" in out
+    web_tree = subprocess.run(
+        ["git", "rev-parse", "HEAD:web"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    assert web_tree in out
+
+
+def test_preview_marks_a_field_that_agrees_as_agreeing(tmp_path, capsys):
+    """Silence is information: it is what stops a field being touched needlessly.
+
+    A preview that marks everything would be read as "all of this must change",
+    and someone would bump an installer version that has not moved.
+    """
+    root = make_consistent(scaffold(tmp_path / "repo"))
+    (root / "plugins/opskeeper-teamharness/plugin.yaml").write_text(
+        "metadata:\n  version: 1.0.71\n  name: teamharness\n", encoding="utf-8"
+    )
+
+    module = load_gate()
+    assert module.main(root, preview=True) == 0
+
+    out = capsys.readouterr().out
+    installer_line = next(line for line in out.splitlines() if "installer plugin version" in line)
+    assert "signing must set" not in installer_line
+
+
+def test_preview_refuses_to_invent_the_tag(tmp_path, capsys):
+    """The tag is a release decision, so the tool must not propose one.
+
+    VERSION cannot be derived from the tree at all -- every candidate is
+    equally consistent with the evidence. A preview that printed a plausible
+    new tag would be manufacturing a release, and its number would be read as
+    a proposal rather than a fact.
+    """
+    root = make_consistent(scaffold(tmp_path / "repo"))
+
+    module = load_gate()
+    assert module.main(root, preview=True) == 0
+
+    out = capsys.readouterr().out
+    version_line = next(line for line in out.splitlines() if line.strip().startswith("VERSION"))
+    assert "release decision" in version_line
+
+
+def test_preview_does_not_judge_a_tree_it_would_reject(tmp_path, capsys):
+    """Preview reports; the gate judges. Mixing the two makes CI ambiguous.
+
+    If preview returned the gate's verdict, a CI step wired to it would stop
+    failing on development commits -- which is precisely the arrangement that
+    put a release-time assertion in front of every push before.
+    """
+    root = scaffold(tmp_path / "repo", manifest_overrides={"license": "MIT"})
+
+    module = load_gate()
+    assert module.main(root, preview=True) == 0
+    assert "release version check passed" not in capsys.readouterr().out

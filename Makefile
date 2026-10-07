@@ -98,6 +98,12 @@ verify-plugins: build-plugins test-plugins ## 构建、测试并校验插件发�
 version-check: ## 校验发布元数据与源码/插件版本一致（发布期门槛，见 .github/workflows/release.yml）
 	python3 scripts/check_release_version.py
 
+# 签名前先看要改什么：把 manifest 与树的每一处漂移并排列出，标出签名时该写进
+# RELEASE_VERSION.json 的值。刻意不做成闸门、也刻意不接 CI——它是给人读的
+# 报告，而 tag 与版本号是发布决定，报告不替人决定（决策 431）。
+release-preflight: ## 签名前清单：manifest 与树的逐项对照（只报告，不判定）
+	python3 scripts/check_release_version.py --preview
+
 # ----------------------------------------------------------------------------
 # test
 # ----------------------------------------------------------------------------
