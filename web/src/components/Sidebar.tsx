@@ -34,6 +34,8 @@ import {
   Plug,
   Package,
   Sparkles,
+  ClipboardCheck,
+  Plus,
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { AgentBadge } from './AgentBadge';
@@ -48,7 +50,8 @@ import { useUi } from '@/store/ui';
 import { useIncidentBadge } from '@/store/incidentBadge';
 import { useMe, usePermissions } from '@/store/me';
 import { useChatSessions, invalidateChatSessions } from '@/store/chatSessions';
-import { deleteSession, renameSession, type ChatSession } from '@/api/chat';
+import { createSession, deleteSession, renameSession, type ChatSession } from '@/api/chat';
+import { Button } from '@/components/ui/Button';
 import { listEdges, type EdgeRole } from '@/api/edges';
 import { onDevicesChanged } from '@/lib/events';
 
@@ -150,6 +153,15 @@ export function Sidebar() {
     setUserMenuOpen(false);
     logout();
     navigate('/login');
+  };
+
+  // 新对话 CTA — creates an empty session and jumps straight into it, the
+  // same shape as Home.tsx's startSession minus the initial prompt: from the
+  // sidebar there is no typed content to hand over, so the thread opens empty
+  // and ChatThread owns everything from there.
+  const startNewChat = async () => {
+    const s = await createSession({ title: tr('新对话', 'New chat').slice(0, 30), agent_id: 'default' });
+    navigate(`/chat/${s.id}`);
   };
 
   const { preference: themePref, resolved: themeMode, cycle: cycleTheme } = useThemeMode();
@@ -406,73 +418,33 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 overflow-y-auto px-2 pb-3">
+        {/* 新对话 是侧栏里唯一的主 CTA: 想开新线程时不需要先想清楚该落在哪个
+            页面, 一个动作直达一个空会话。 */}
+        <div className="mt-3">
+          <Button
+            variant="primary"
+            className="w-full justify-center"
+            onClick={() => void startNewChat()}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {tr('新对话', 'New chat')}
+          </Button>
+        </div>
+
         {/* L1 顶级入口 — 不缩进，直接可点 */}
-        <div className="mt-1 space-y-0.5">
+        <div className="mt-3 space-y-0.5">
           <SidebarNavItem to="/dashboard" icon={Home} label={tr('首页', 'Home')} exact level={1} />
           <SidebarNavItem to="/dashboard" icon={LayoutDashboard} label={tr('仪表盘', 'Dashboard')} level={1} />
         </div>
 
-        {/* AIOps 是主舞台 — Agent (运行) 与 知识库 / 代码仓库 (素材) 顶级并列，
-            观测数据 (设备 / 监控告警) 折叠在下方做数据源。 */}
-        <SectionLabel>Agent</SectionLabel>
-        <NavSection>
-          <SidebarNavItem to="/agents" icon={Bot} label={tr('助理', 'Assistants')} />
-          {/* A node agent is a running agent on an edge rather than a
-              definition in the catalog, so it sits beside 助理 rather than
-              inside it: the two pages answer different questions and an
-              operator looking for "what can I install" should not have to
-              scroll past "what is running right now". */}
-          <SidebarNavItem to="/node-agents" icon={Server} label={tr('节点 Agent', 'Node Agents')} />
-          {/* The marketplace sits here rather than in settings because it
-              is the way packages get IN, which is an agent concern; the
-              release console that puts them on hosts stays under Admin. */}
-          <SidebarNavItem to="/plugins" icon={Package} label={tr('插件市场', 'Plugins')} />
-          {/* 自愈规则 sits beside the marketplace because it is the other
-              way a package can be born: the marketplace takes one IN, and
-              this page is where the platform asks a human to let it write
-              one OUT of its own history. */}
-          <SidebarNavItem to="/crystallized" icon={Sparkles} label={tr('自愈规则', 'Runbooks')} />
-          <SidebarNavItem to="/workflows" icon={Route} label={tr('工作流', 'Workflows')} />
-          <SidebarNavItem to="/skills" icon={Wrench} label={tr('技能', 'Skills')} />
-          <SidebarNavItem to="/mcp" icon={Plug} label="MCP" />
-        </NavSection>
+        {/* IA 重排 (2.1): 对话 / Agent / Discover / 运维 / 日常 / 审批 六组,
+            管理留在底部 footer 区。分组取代了旧的扁平堆叠, 但**没有新增页面**,
+            也没有改动任何一条 route 字符串 —— 变的只是归属。
+            组名 Agent / Discover 保持英文, 与既有 SectionLabel 一致。 */}
 
-        <SectionLabel>{tr('知识库', 'Knowledge')}</SectionLabel>
-        <NavSection>
-          <SidebarNavItem to="/knowledge" icon={BookOpen} label={tr('知识库', 'Knowledge')} />
-          <SidebarNavItem to="/knowledge/repos" icon={GitBranch} label={tr('代码仓库', 'Repos')} />
-        </NavSection>
-
-        <CollapsibleSection storageKey="devices" title={tr('设备', 'Devices')} defaultOpen={false}>
-          <SidebarNavItem to="/devices" icon={HardDrive} label={tr('全部', 'All')} />
-          {presentRoles.has('server') && (
-            <SidebarNavItem to="/devices?roles=server" icon={Server} label={tr('服务器', 'Servers')} />
-          )}
-          {presentRoles.has('storage') && (
-            <SidebarNavItem to="/devices?roles=storage" icon={Boxes} label={tr('存储', 'Storage')} />
-          )}
-          {presentRoles.has('database') && (
-            <SidebarNavItem to="/devices?roles=database" icon={Database} label={tr('数据库', 'Databases')} />
-          )}
-          {presentRoles.has('network') && (
-            <SidebarNavItem to="/devices?roles=network" icon={Network} label={tr('网络设备', 'Network')} />
-          )}
-          <SidebarNavItem to="/topology" icon={Share2} label={tr('拓扑', 'Topology')} />
-        </CollapsibleSection>
-
-        <CollapsibleSection storageKey="observability" title={tr('监控告警', 'Observability')} defaultOpen={false}>
-          <SidebarNavItem to="/monitor" icon={ChartLine} label={tr('监控', 'Monitor')} />
-          <SidebarNavItem to="/logs" icon={FileText} label={tr('日志', 'Logs')} />
-          <SidebarNavItem to="/traces" icon={Waypoints} label={tr('链路', 'Traces')} />
-          <SidebarNavItem to="/alerts" icon={Siren} label={tr('告警', 'Alerts')} badge={incidentOpen} />
-        </CollapsibleSection>
-
-        <CollapsibleSection storageKey="operations" title={tr('日常', 'Daily')} defaultOpen={false}>
-          <SidebarNavItem to="/tasks" icon={CalendarClock} label={tr('任务', 'Tasks')} />
-          <SidebarNavItem to="/pages" icon={AppWindow} label={tr('产物', 'Artifacts')} />
-        </CollapsibleSection>
-
-        <SectionLabel>{tr('会话', 'Sessions')}</SectionLabel>
+        {/* 对话 —— 会话列表。Task 11 会把它换成独立的 SessionList 组件;
+            本任务先保持现有内联实现 (useChatSessions + 删除/重命名) 原样。 */}
+        <SectionLabel>{tr('对话', 'Chats')}</SectionLabel>
         <div className="ml-2 space-y-0.5">
           {sessions.length === 0 ? (
             <div className="px-2 py-1.5 text-[12px] text-zinc-600">{tr('暂无会话', 'No sessions yet')}</div>
@@ -497,9 +469,83 @@ export function Sidebar() {
             </button>
           ) : null}
         </div>
+
+        {/* Agent —— agent 怎么定义、在哪跑、怎么编排。MCP 是 agent 的外部工具
+            接线面, 与助理同属 agent 侧, 所以留在这里而不是挪去管理。 */}
+        <SectionLabel>Agent</SectionLabel>
+        <NavSection>
+          <SidebarNavItem to="/agents" icon={Bot} label={tr('助理', 'Assistants')} />
+          {/* A node agent is a running agent on an edge rather than a
+              definition in the catalog, so it sits beside 助理 rather than
+              inside it: the two pages answer different questions and an
+              operator looking for "what can I install" should not have to
+              scroll past "what is running right now". */}
+          <SidebarNavItem to="/node-agents" icon={Server} label={tr('节点 Agent', 'Node Agents')} />
+          <SidebarNavItem to="/workflows" icon={Route} label={tr('工作流', 'Workflows')} />
+          <SidebarNavItem to="/mcp" icon={Plug} label="MCP" />
+        </NavSection>
+
+        {/* Discover —— agent 能拿到什么。三条目的路由维持现状 (/skills /
+            /plugins / /crystallized); 计划中的 /discover?tab=… 形态等
+            Task 20 落地路由时再统一改指。 */}
+        <SectionLabel>Discover</SectionLabel>
+        <NavSection>
+          {/* The marketplace sits here rather than in settings because it
+              is the way packages get IN, which is a discover concern; the
+              release console that puts them on hosts stays under Admin. */}
+          <SidebarNavItem to="/plugins" icon={Package} label={tr('插件', 'Plugins')} />
+          <SidebarNavItem to="/skills" icon={Wrench} label={tr('技能', 'Skills')} />
+          {/* 自愈规则 是另一种"包"的来源: 市场是把它拿进来, 这一页是让平台
+              请求人许可它从自己的历史里写出一个来。 */}
+          <SidebarNavItem to="/crystallized" icon={Sparkles} label={tr('自愈规则', 'Runbooks')} />
+        </NavSection>
+
+        {/* 运维 —— agent 的观测面与它操作的物理对象。设备在前, 拓扑/监控/
+            日志/链路/告警 紧随其后, 保持"先看对象再看数据"的顺序。 */}
+        <SectionLabel>{tr('运维', 'Operations')}</SectionLabel>
+        <NavSection>
+          {/* 设备 的角色子项按 presentRoles 过滤: 没有该角色的设备时整条不渲染,
+              未分类(零 edge)直接省略, 见上方 presentRoles 的说明。 */}
+          <SidebarNavItem to="/devices" icon={HardDrive} label={tr('设备', 'Devices')} />
+          {presentRoles.has('server') && (
+            <SidebarNavItem to="/devices?roles=server" icon={Server} label={tr('服务器', 'Servers')} />
+          )}
+          {presentRoles.has('storage') && (
+            <SidebarNavItem to="/devices?roles=storage" icon={Boxes} label={tr('存储', 'Storage')} />
+          )}
+          {presentRoles.has('database') && (
+            <SidebarNavItem to="/devices?roles=database" icon={Database} label={tr('数据库', 'Databases')} />
+          )}
+          {presentRoles.has('network') && (
+            <SidebarNavItem to="/devices?roles=network" icon={Network} label={tr('网络设备', 'Network')} />
+          )}
+          <SidebarNavItem to="/topology" icon={Share2} label={tr('拓扑', 'Topology')} />
+          <SidebarNavItem to="/monitor" icon={ChartLine} label={tr('监控', 'Monitor')} />
+          <SidebarNavItem to="/logs" icon={FileText} label={tr('日志', 'Logs')} />
+          <SidebarNavItem to="/traces" icon={Waypoints} label={tr('链路', 'Traces')} />
+          <SidebarNavItem to="/alerts" icon={Siren} label={tr('告警', 'Alerts')} badge={incidentOpen} />
+        </NavSection>
+
+        {/* 日常 —— 团队的周期性工作产出。代码仓库与知识库并列, 二者是同一
+            类"喂给 agent 的素材"。 */}
+        <SectionLabel>{tr('日常', 'Daily')}</SectionLabel>
+        <NavSection>
+          <SidebarNavItem to="/tasks" icon={CalendarClock} label={tr('任务', 'Tasks')} />
+          <SidebarNavItem to="/pages" icon={AppWindow} label={tr('产物', 'Artifacts')} />
+          <SidebarNavItem to="/knowledge" icon={BookOpen} label={tr('知识库', 'Knowledge')} />
+          <SidebarNavItem to="/knowledge/repos" icon={GitBranch} label={tr('代码仓库', 'Repos')} />
+        </NavSection>
+
+        {/* 审批 —— 常驻入口, 红点由 Task 10 接。 */}
+        <SectionLabel>{tr('审批', 'Approvals')}</SectionLabel>
+        <NavSection>
+          <SidebarNavItem to="/approvals" icon={ClipboardCheck} label={tr('审批中心', 'Approvals')} />
+        </NavSection>
       </nav>
 
+      {/* 管理 —— 留在 footer 区: 这些是低频入口, 不该和上面的工作面抢视觉权重。 */}
       <div className="mb-4 border-t border-zinc-800/60 p-2">
+        <SectionLabel>{tr('管理', 'Admin')}</SectionLabel>
         {isAdmin && (
           <SidebarNavItem to="/admin/users" icon={UsersRound} label={tr('用户管理', 'Users & Orgs')} level={2} />
         )}
@@ -716,68 +762,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <div className="mt-5 px-2 pb-1.5 text-[13px] font-semibold text-zinc-300">
       {children}
-    </div>
-  );
-}
-
-// CollapsibleSection is the same SectionLabel + NavSection pair, but the
-// header is a button that toggles its children's visibility. State
-// persists in localStorage so users don't have to re-fold their AIOps-
-// supplemental sections (设备 / 监控告警) on every page load.
-//
-// Why we have this: opskeeper is AIOps-first. The agent + context + chat
-// flows are the primary surface; observability + device management are
-// data sources for the agent. Keeping them collapsed by default puts
-// visual weight where the product's value is.
-function CollapsibleSection({
-  storageKey,
-  title,
-  defaultOpen = false,
-  children,
-}: {
-  storageKey: string;
-  title: string;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(() => {
-    try {
-      const raw = localStorage.getItem(`sidebar.section.${storageKey}`);
-      if (raw === 'open') return true;
-      if (raw === 'closed') return false;
-    } catch {
-      /* localStorage unavailable — fall through to default */
-    }
-    return defaultOpen;
-  });
-  const toggle = () => {
-    setOpen((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(`sidebar.section.${storageKey}`, next ? 'open' : 'closed');
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  };
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={toggle}
-        className="group mt-5 flex w-full items-center justify-between px-2 pb-1.5 text-left text-[13px] font-semibold text-zinc-300 transition-colors hover:text-zinc-100"
-      >
-        <span>{title}</span>
-        <ChevronRight
-          size={11}
-          className={cn(
-            'shrink-0 text-zinc-600 transition-transform duration-150 group-hover:text-zinc-400',
-            open && 'rotate-90',
-          )}
-        />
-      </button>
-      {open && <div className="space-y-0.5">{children}</div>}
     </div>
   );
 }
