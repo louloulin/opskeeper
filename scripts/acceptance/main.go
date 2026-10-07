@@ -48,6 +48,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -233,15 +234,7 @@ var stage0Checks = []check{
 		run: func(root string) (bool, string) {
 			bin := strings.TrimSpace(os.Getenv("OPSKEEPER_PIG_BIN"))
 			if bin == "" {
-				for _, candidate := range []string{
-					filepath.Join(root, "bin", "pig"),
-					filepath.Join(root, "core", "pig", "bin", "pig"),
-				} {
-					if _, err := os.Stat(candidate); err == nil {
-						bin = candidate
-						break
-					}
-				}
+				bin = pigBinaries(root)
 			}
 			if bin == "" {
 				return false, ""
@@ -546,4 +539,35 @@ func main() {
 	default:
 		fmt.Println("            交付链上的每一项都在这里成立。")
 	}
+}
+
+// pigBinaries reports where a locally built node agent can be found on this
+// machine, or "" when there is none.
+//
+// It derives the cross-compiled location from the same shape the Makefile's
+// build-pig-* rules write to — bin/<goos>-<goarch>/pig — rather than keeping
+// its own list of paths. That list is what this function replaced: it held
+// bin/pig and core/pig/bin/pig, and no build rule in this repository writes
+// either one. So on a tree where `make build-pig-all` had been run and four
+// working binaries were sitting in bin/, this check still reported MISSING
+// and named a build command as the remedy — advice that was already
+// satisfied. A checker whose search path is a hand-maintained copy of a build
+// rule's output path is a second source of truth about where the binary
+// lands, and that copy was wrong.
+//
+// The two historical locations are still tried, after the derived one, so a
+// tree that puts the binary somewhere else by hand is not newly broken by
+// this. What is gone is the claim that those two are where it goes.
+func pigBinaries(root string) string {
+	// The derived path comes first: it is the one the build rules write.
+	for _, candidate := range []string{
+		filepath.Join(root, "bin", runtime.GOOS+"-"+runtime.GOARCH, "pig"),
+		filepath.Join(root, "bin", "pig"),
+		filepath.Join(root, "core", "pig", "bin", "pig"),
+	} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
 }

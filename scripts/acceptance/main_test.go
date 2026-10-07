@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -250,5 +251,39 @@ func TestTheRealTreeHasNoSilentPass(t *testing.T) {
 		if r.reason == "" {
 			t.Errorf("%s is %s with no reason; every non-pass names what is missing", r.id, r.st)
 		}
+	}
+}
+
+// A check that is only ever exercised in its failing state is a check nobody
+// knows works. A6 had no test at all for the passing case, and that is how a
+// search path that no build rule produces survived: the one assertion about
+// it was that it reports MISSING on an empty fixture — which it did,
+// correctly, for a fixture with no binary anywhere.
+//
+// The binary is named at the path a build rule writes, derived from the same
+// GOOS/GOARCH, so this test does not hardcode a machine either. The shape is
+// what matters, and the shape is what the Makefile and the check now share.
+func TestALocallyBuiltPigIsFoundWhereTheBuildRulesWriteIt(t *testing.T) {
+	root := fixture(t)
+
+	if got := statusOf(t, root, "A6"); got != statusMissing {
+		t.Fatalf("A6 on a tree with no binary = %s, want MISSING", got)
+	}
+
+	rel := filepath.Join("bin", runtime.GOOS+"-"+runtime.GOARCH, "pig")
+	write(t, root, rel, "#!/bin/sh\necho 0.4.0+1.0.0\n")
+	// The executable bit is part of the claim, not decoration: A6 execs the
+	// binary, so a fixture written 0644 fails for a reason that has nothing
+	// to do with the path this test is about. A real build product is 0755.
+	if err := os.Chmod(filepath.Join(root, rel), 0o755); err != nil {
+		t.Fatalf("chmod the fixture binary: %v", err)
+	}
+
+	t.Setenv("OPSKEEPER_PIG_BIN", "")
+	if got := statusOf(t, root, "A6"); got != statusPass {
+		t.Fatalf("A6 with a binary at the path the build rules write (%s) = %s, want PASS.\n"+
+			"This is the case that was broken: the binary was on disk and the check could not "+
+			"see it, because the check looked somewhere the build never writes.",
+			filepath.Join(root, rel), got)
 	}
 }
