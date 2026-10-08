@@ -23,9 +23,17 @@ describe('ReportHostedView', () => {
     expect(scroller.className).toContain('overflow-y-auto');
     expect(screen.getByText('集群平稳')).toBeInTheDocument();
   });
+  // 回归防护:maxHeight="none" 必须**不套任何壳**。只断言 style.maxHeight
+  // 是弱断言——若有人把该分支"简化"成始终渲染包裹 div,包裹层因为没有
+  // maxHeight 同样返回 '',三条断言照样全绿,而独立报表页会凭空多出一层
+  // DOM,改动 ReportDetail.tsx:115 外层 flex-1 overflow-y-auto 的滚动路径。
+  // 断言壳自身的 className 不存在,与 ReportContentView 内部结构解耦。
   it('renders unbounded for the standalone report page', () => {
     const { container } = render(<ReportHostedView content={content} maxHeight="none" />);
-    expect((container.firstElementChild as HTMLElement).style.maxHeight).toBe('');
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.style.maxHeight).toBe('');
+    expect(root.className).not.toContain('overflow-y-auto');
+    expect(root.className).not.toContain('pr-1');
     expect(screen.getByText('集群平稳')).toBeInTheDocument();
   });
   it('honours an explicit maxHeight override', () => {
