@@ -32,6 +32,7 @@ import {
 import { cn } from '@/lib/cn';
 import { Modal } from '@/components/Modal';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { useAgents, avatarFor } from '@/store/agents';
 import { Button, Card, Chip, EmptyState, PageHeader } from '@/components/ui';
 import {
   createUserAgent,
@@ -282,6 +283,7 @@ function AgentCard({
 }) {
   const { tr } = useI18n();
   const navigate = useNavigate();
+  const byName = useAgents((s) => s.byName);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const tools = agent.tools ?? [];
@@ -316,7 +318,7 @@ function AgentCard({
     <Card className="flex cursor-pointer flex-col transition-colors hover:bg-zinc-800/40" onClick={onView}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex items-center gap-3">
-          <AgentAvatar agentId={agent.name} size={40} />
+          <AgentAvatar agentId={agent.name} size={40} avatar={avatarFor(byName, agent.name)} />
           <div className="min-w-0">
             <div className="truncate text-sm font-medium text-zinc-100" title={agent.name}>
               {displayName}

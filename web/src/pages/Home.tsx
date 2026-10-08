@@ -21,6 +21,7 @@ import { useModelSelection } from '@/store/modelSelection';
 import { PromptCard } from '@/components/PromptCard';
 import { StatusRow } from '@/components/StatusRow';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { useAgents, avatarFor } from '@/store/agents';
 import { Chip } from '@/components/ui/Chip';
 // personaLabel resolves an agent_id to its localized display name — same
 // tables AgentBadge renders from. Don't re-declare a mapping here.
@@ -182,6 +183,7 @@ function greetingFor(hour: number, tr: (zh: string, en: string) => string): stri
 export default function HomePage() {
   const { tr } = useI18n();
   const navigate = useNavigate();
+  const byName = useAgents((s) => s.byName);
   const [draft, setDraft] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -434,7 +436,7 @@ export default function HomePage() {
                       onClick={() => void startWith(a.name)}
                       className="surface-card flex flex-col items-center gap-2 rounded-2xl px-3 py-4 transition-colors hover:border-border hover:bg-card disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <AgentAvatar agentId={a.name} size={40} />
+                      <AgentAvatar agentId={a.name} size={40} avatar={avatarFor(byName, a.name)} />
                       <span className="truncate text-xs text-zinc-300">
                         {personaLabel(a.name, tr)}
                       </span>

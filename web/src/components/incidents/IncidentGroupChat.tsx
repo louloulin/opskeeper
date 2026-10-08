@@ -12,6 +12,7 @@ import { usePoll } from '@/lib/usePoll';
 import { cn } from '@/lib/cn';
 import { personaLabel } from '@/components/AgentBadge';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { useAgents, avatarFor } from '@/store/agents';
 import { ChatInput } from '@/components/ChatInput';
 import { MessageBubble } from '@/components/MessageBubble';
 import { PhaseIndicator } from '@/components/dpo';
@@ -44,6 +45,7 @@ function instant(s?: string): number {
 }
 
 export function IncidentGroupChat({ incidentId }: { incidentId: number }) {
+  const byName = useAgents((s) => s.byName);
   const [feed, setFeed] = useState<ChatFeed>(EMPTY_FEED);
   const [phases, setPhases] = useState<Awaited<ReturnType<typeof fetchLoopTimeline>>['phases']>([]);
   const [draft, setDraft] = useState('');
@@ -136,12 +138,12 @@ export function IncidentGroupChat({ incidentId }: { incidentId: number }) {
       <div className="flex items-center gap-2 px-1">
         <span className="text-xs text-zinc-500">{tr('成员', 'Members')}</span>
         <span className="flex items-center gap-1.5 text-xs text-zinc-400">
-          <AgentAvatar agentId="default" size={32} />
+          <AgentAvatar agentId="default" size={32} avatar={avatarFor(byName, 'default')} />
           {tr('你', 'You')}
         </span>
         {members.map((id) => (
           <span key={id} className="flex items-center gap-1.5 text-xs text-zinc-400">
-            <AgentAvatar agentId={id} size={32} />
+            <AgentAvatar agentId={id} size={32} avatar={avatarFor(byName, id)} />
             {personaLabel(id, tr)}
           </span>
         ))}

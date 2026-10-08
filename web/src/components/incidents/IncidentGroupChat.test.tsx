@@ -1,11 +1,12 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { HttpResponse, http } from 'msw';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { server } from '@/test/msw-server';
 import type { IncidentEvent } from '@/api/alerts';
 import type { ChatMessage, ChatSession } from '@/api/chat';
+import { useAgents } from '@/store/agents';
 import { IncidentGroupChat } from './IncidentGroupChat';
 
 // ChatInput renders a <Link> in its "no model configured" dropdown branch;
@@ -149,4 +150,29 @@ describe('IncidentGroupChat', () => {
     expect(messagePosts[0].content).toBe('磁盘为什么满？');
     await waitFor(() => expect(textarea).toHaveValue(''));
   });
+
+  it('passes the persona avatar through to the members row', async () => {
+    useAgents.setState({
+      byName: {
+        'incident-investigator': {
+          name: 'incident-investigator',
+          description: '',
+          avatar: '🛰️',
+        },
+      },
+    });
+    stub({ sessions: [{ id: 's1', user_id: 1, title: 'a', agent_id: 'incident-investigator' }] });
+
+    renderChat();
+
+    // 成员行在 feed 加载后才渲染 agent 头像；等本地化 persona 名出现再断言，
+    // 避免命中加载前的「你」回退帧。此时至少有一个 avatar 应渲染 emoji。
+    await screen.findByText('故障诊断');
+    const avatars = screen.getAllByTestId('agent-avatar');
+    expect(avatars.some((el) => el.textContent?.includes('🛰️'))).toBe(true);
+  });
+});
+
+afterEach(() => {
+  useAgents.setState({ byName: {}, loaded: false, loading: null });
 });

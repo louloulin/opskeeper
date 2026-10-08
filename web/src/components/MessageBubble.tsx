@@ -11,6 +11,7 @@ import { parseSigners } from '@/lib/approvalSigners';
 import { useI18n } from '@/i18n/locale';
 import { useApprovalBadge } from '@/store/approvalBadge';
 import { personaLabel } from '@/components/AgentBadge';
+import { useAgents, avatarFor } from '@/store/agents';
 import { AgentAvatar } from './AgentAvatar';
 import { DeliverableCard, DeliverableSequence, matchDeliverable } from './DeliverableCard';
 import { Button, Chip } from '@/components/ui';
@@ -135,6 +136,7 @@ function hasDeliverableLink(node: Element | undefined): boolean {
 
 function AssistantBubble({ message, agentId, onConfirmConfigDraft }: Props & { agentId?: string | null }) {
   const { tr } = useI18n();
+  const byName = useAgents((s) => s.byName);
   // Messenger-style: persona avatar + name/time head row on the left, prose
   // in a rounded `.bubble-agent` bubble. When the session has no pinned
   // persona (agentId falsy) the avatar row is dropped and the bubble still
@@ -144,7 +146,9 @@ function AssistantBubble({ message, agentId, onConfirmConfigDraft }: Props & { a
   // wrapper (markdown typography), and the tool_calls map below the bubble.
   return (
     <div className="flex w-full items-start gap-2.5">
-      {agentId ? <AgentAvatar agentId={agentId} size={32} className="mt-0.5" /> : null}
+      {agentId ? (
+        <AgentAvatar agentId={agentId} size={32} className="mt-0.5" avatar={avatarFor(byName, agentId)} />
+      ) : null}
       <div className="min-w-0 max-w-[78%] space-y-1">
         {agentId ? (
           <div className="flex items-center gap-2 text-[11px] text-zinc-500">

@@ -1,7 +1,8 @@
 import { render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
 import { SessionList } from './SessionList';
+import { useAgents } from '@/store/agents';
 import type { ChatSession } from '@/api/chat';
 
 // getLocale() falls back to autoDetectLocale() when localStorage is empty,
@@ -53,4 +54,17 @@ describe('SessionList', () => {
     const inactive = screen.getByText('磁盘打满的排查过程').closest('[data-session-id]');
     expect(inactive?.getAttribute('data-active')).toBe('false');
   });
+
+  it('passes the persona avatar through to AgentAvatar for a known agent_id', () => {
+    useAgents.setState({
+      byName: { 'specialist-sre': { name: 'specialist-sre', description: '', avatar: '📈' } },
+    });
+    renderList();
+    // sessions[0].agent_id 为 'specialist-sre'，应渲染 emoji 头像而非角色图标。
+    expect(screen.getAllByTestId('agent-avatar')[0].textContent).toContain('📈');
+  });
+});
+
+afterEach(() => {
+  useAgents.setState({ byName: {}, loaded: false, loading: null });
 });

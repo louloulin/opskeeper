@@ -18,6 +18,7 @@ import { useI18n } from '@/i18n/locale';
 import { cn } from '@/lib/cn';
 import { renameSession, type ChatSession } from '@/api/chat';
 import { invalidateChatSessions } from '@/store/chatSessions';
+import { useAgents, avatarFor } from '@/store/agents';
 
 export function SessionList({
   sessions,
@@ -47,6 +48,7 @@ function SessionRow({
 }) {
   const { tr } = useI18n();
   const location = useLocation();
+  const byName = useAgents((s) => s.byName);
   const fallbackTitle = tr(`会话 ${index + 1}`, `Session ${index + 1}`);
   const displayTitle = session.title || fallbackTitle;
   // personaLabel is handed the reactive `tr` (not the module-level one) so
@@ -147,7 +149,7 @@ function SessionRow({
               )
             }
           >
-            <AgentAvatar agentId={session.agent_id} size={32} />
+            <AgentAvatar agentId={session.agent_id} size={32} avatar={avatarFor(byName, session.agent_id)} />
             <span className="min-w-0 flex-1">
               {persona && (
                 <span className="block truncate text-[11px] leading-tight text-zinc-500">{persona}</span>
