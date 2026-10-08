@@ -461,10 +461,9 @@ describe('MessageBubble deliverable link rendering', () => {
       />,
     );
 
-    // Card affordances render...
-    expect(screen.getByText('托管页 #a3f9c2d81b7e4056c9d0e1f2')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '打开' })).toBeInTheDocument();
-    // ...and the underlying markdown anchor is replaced (no <a href="/pages/a3f9c2d81b7e4056c9d0e1f2">).
+    // 类型 chip + 动作在,缩略未进视口不 fetch(jsdom 无 IO → 恒不可见)
+    expect(screen.getByText('托管页')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新窗口打开' })).toBeInTheDocument();
     expect(container.querySelector('a[href="/pages/a3f9c2d81b7e4056c9d0e1f2"]')).toBeNull();
   });
 
