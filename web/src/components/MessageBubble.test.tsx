@@ -540,6 +540,45 @@ describe('MessageBubble deliverable link rendering', () => {
     expect(container.querySelector('p div')).toBeNull(); // <p> 之下不得再有块级元素
     expect(container.querySelector('.md-p-card')).not.toBeNull();
   });
+
+  it('renders a bold-wrapped report card without nesting block content inside a <p>', async () => {
+    // 回归锁定:卡链接被行内包裹元素(这里是 **[…]** → <strong>)套住时,p 覆盖
+    // 的判定必须递归到后代才找得到那个 <a>。只看直接子节点会漏,产出
+    // <p><strong><span card><span preview><div>,正是要禁掉的那棵树。
+    // `**[链接](…)**` 是模型输出的常规形态,不是构造出来的边角形状。
+    const UUID = '9c4d2b0f-5e6a-4c7d-9f10-2b3c4d5e6f70';
+    server.use(http.get('/api/v1/reports/:id', () => HttpResponse.json({
+      id: UUID, title: '10月8日日报', kind: 'daily', status: 'ready', summary: '',
+      period_start: '', period_end: '', generated_at: '2026-10-08T09:00:00Z',
+      created_at: '2026-10-08T09:00:00Z', content_md: '', timezone: 'Asia/Shanghai',
+      content: {
+        version: '1', hero: [], narrative: { headline: '集群平稳' },
+        resource: { available: false, cpu_avg: 0, cpu_peak: 0, mem_avg: 0, mem_peak: 0, disk_avg: 0, disk_peak: 0 },
+        fleet: { total: 3, online: 2 },
+        actions_summary: { mutating_total: 0, mutating_approved: 0, safe_total: 1 },
+        assets: { new_agents: 0, new_skills: 0, new_repos: 0 },
+        usage: { sessions: 1, prompt_tokens: 10, completion_tokens: 5 },
+      },
+    })));
+    stubIntersectionObserver();
+    const { container } = render(
+      <MessageBubble
+        message={{
+          id: 'assistant-bold-report-preview',
+          role: 'assistant',
+          content: `报告：**[查看报表](/reports/${UUID})**`,
+          pending: false,
+        }}
+      />,
+    );
+    triggerVisibleAt(0);
+    await waitFor(() => expect(screen.getByText('日报')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('deliverable-card-header'));
+    await waitFor(() => expect(screen.getByTestId('deliverable-preview')).toBeInTheDocument());
+    expect(screen.getByText('集群平稳')).toBeInTheDocument();
+    expect(container.querySelector('.md-p-card')).not.toBeNull();
+    expect(container.querySelector('p div')).toBeNull(); // <p> 之下不得再有块级元素
+  });
 });
 
 describe('MessageBubble deliverable in-place preview', () => {

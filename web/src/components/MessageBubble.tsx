@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import type { Element } from 'hast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Wrench, ChevronDown, ChevronRight, Loader2, AlertCircle, CheckCircle2, ShieldAlert, Check, X, XCircle, Hourglass } from 'lucide-react';
@@ -111,24 +112,25 @@ function compactUserContent(
 
 // react-markdown 把 `components` 里的内联覆盖当作普通组件塞进树里,真正的
 // `<DeliverableCard/>` 要等渲染期才展开 —— 所以 p 覆盖拿到的 children 里是 `a`
-// 覆盖函数本身,按组件类型认卡是认不出来的。改读 markdown 节点:直接取子节点里
-// <a> 的 href,用同一个 matchDeliverable 判定。这样「这个段落会产出交付物卡」与
+// 覆盖函数本身,按组件类型认卡是认不出来的。改读 markdown 节点:在子树里找 href
+// 能匹配的 <a>,用同一个 matchDeliverable 判定。这样「这个段落会产出交付物卡」与
 // a 覆盖的判定条件是同一段代码,两者永远不会漂移。
-// react-markdown 传了 passNode,所以 p 覆盖拿得到原始 hast 节点。
-type HastNode = {
-  type: string;
-  tagName?: string;
-  properties?: Record<string, unknown>;
-  children?: HastNode[];
-};
-
-function paragraphHasDeliverable(node: HastNode | undefined): boolean {
-  return !!node?.children?.some(
-    (child) =>
-      child.type === 'element' &&
-      child.tagName === 'a' &&
-      matchDeliverable(String(child.properties?.href ?? '')) !== null,
-  );
+// 必须递归:卡链接常被行内元素包着(`**[查看报表](…)**` → <strong>、
+// `*看[这里](…)*` → <em>),只看直接子节点会漏,漏判就会渲染出非法的
+// <p><strong><span card><span preview><div>。
+// react-markdown 传了 passNode,所以 p 覆盖拿得到原始 hast 节点;用 hast 自己的
+// Element 类型,不做手写窄类型 + 断言 —— 后者在 hast 形状变化时会静默判 false,
+// 正好退化成要避免的那棵树。
+function hasDeliverableLink(node: Element | undefined): boolean {
+  if (!node) return false;
+  // 深度优先遍历整棵子树。普通 markdown 嵌套很浅,不做深度上限。
+  for (const child of node.children) {
+    if (child.type !== 'element') continue; // 文本节点没有 children
+    const href = child.properties?.href;
+    if (child.tagName === 'a' && matchDeliverable(typeof href === 'string' ? href : '') !== null) return true;
+    if (hasDeliverableLink(child)) return true;
+  }
+  return false;
 }
 
 function AssistantBubble({ message, agentId, onConfirmConfigDraft }: Props & { agentId?: string | null }) {
@@ -169,10 +171,10 @@ function AssistantBubble({ message, agentId, onConfirmConfigDraft }: Props & { a
                   },
                   // 交付物卡卡内报表预览是成片的块级内容(<div>),而卡整体被上面的 a
                   // 覆盖塞进 ReactMarkdown 的 <p> 里。不换掉这个 <p>,真实 DOM 就是
-                  // <p><span><div>,非法嵌套。判定见 paragraphHasDeliverable。
+                  // <p><span><div>,非法嵌套。判定见 hasDeliverableLink。
                   // 不带卡的段落仍是真正的 <p>,markdown 排版不受影响。
                   p: ({ node, children }) =>
-                    paragraphHasDeliverable(node as HastNode | undefined) ? (
+                    hasDeliverableLink(node) ? (
                       <div className="md-p-card">{children}</div>
                     ) : (
                       <p>{children}</p>

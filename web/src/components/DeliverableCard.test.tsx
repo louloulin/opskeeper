@@ -265,7 +265,9 @@ describe('DeliverableCard in-place preview', () => {
     await waitFor(() => expect(screen.getByText('加载失败')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('deliverable-card-header'));
     expect(screen.getByTestId('deliverable-preview').textContent).toContain('加载失败');
-    screen.getByRole('button', { name: '新窗口打开' }).click();
+    // 必须用 fireEvent:原生 .click() 的 React 状态更新不会在 act() 之外 flush,
+    // 下面那条 preview 断言会对着旧树求值,删掉 stopPropagation 也照样通过。
+    fireEvent.click(screen.getByRole('button', { name: '新窗口打开' }));
     expect(open).toHaveBeenCalledWith(`/pages/${HEX24}`, '_blank');
     // 锁死 stopPropagation:删掉它,出口按钮的 click 会冒泡到卡头并收起就地预览,
     // 而上面的 open 断言照样成立 —— 没有这条断言,spec 里「出口不打扰预览」是裸的。
