@@ -1,7 +1,7 @@
 import { renderHook } from '@testing-library/react';
 import { describe, expect, it, afterEach } from 'vitest';
 import { THUMB_CAP, shouldRenderThumb, useInViewOnce } from './deliverableLazy';
-import { stubIntersectionObserver, triggerVisibleAt, unstubIntersectionObserver } from '@/test/mockIO';
+import { stubIntersectionObserver, triggerVisibleAt, unstubIntersectionObserver, getIOInstance } from '@/test/mockIO';
 
 afterEach(unstubIntersectionObserver);
 
@@ -15,6 +15,11 @@ describe('shouldRenderThumb / THUMB_CAP', () => {
   });
   it('rejects invalid negative indexes', () => {
     expect(shouldRenderThumb(-1)).toBe(false);
+  });
+  it('honours an explicit cap instead of the default', () => {
+    expect(shouldRenderThumb(1, 2)).toBe(true);
+    expect(shouldRenderThumb(1, 1)).toBe(false);
+    expect(shouldRenderThumb(0, 0)).toBe(false);
   });
 });
 
@@ -47,5 +52,13 @@ describe('useInViewOnce', () => {
     const ref = { current: document.createElement('div') };
     const { result } = renderHook(() => useInViewOnce(ref));
     expect(result.current).toBe(false);
+  });
+  it('disconnects the observer on unmount', () => {
+    stubIntersectionObserver();
+    const ref = { current: document.createElement('div') };
+    const { unmount } = renderHook(() => useInViewOnce(ref));
+    // 卸载前尚未触发任何回调,disconnect 只能来自 effect 清理
+    unmount();
+    expect(getIOInstance(0).disconnect).toHaveBeenCalled();
   });
 });

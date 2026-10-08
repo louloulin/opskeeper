@@ -38,3 +38,11 @@ export function unstubIntersectionObserver() {
   vi.unstubAllGlobals();
   instances = [];
 }
+
+// 只读访问第 index 个观察器实例:用于断言 stub 自身的契约(如 unmount 后的
+// disconnect),不产生回调、不断言调用顺序。index 越界抛错,便于定位。
+export function getIOInstance(index: number) {
+  const io = instances[index];
+  if (!io) throw new Error(`no IntersectionObserver instance at ${index}; created: ${instances.length}`);
+  return io;
+}
