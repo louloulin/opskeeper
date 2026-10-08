@@ -34,20 +34,31 @@ export function extractHtmlTitle(html: string): string {
 type LoadState = 'idle' | 'loading' | 'ready' | 'failed';
 
 // --- 单条消息交付物序号(缩略上限用,design §5;Task 7 由 MessageBubble 接线)---
-// 卡片首次渲染时 claim 一个序号;没有 Provider(单测直渲染)时序号恒为 0。
-const SequenceCtx = createContext<(() => number) | null>(null);
+// 卡片按 href 向 Provider 领取序号:同一 href 在同一 Provider 内永远拿到同一个序号。
+// 键必须是 href 而不是「首次渲染自增计数」——StrictMode(dev,web/src/main.tsx)会把
+// 组件渲染两次,第二次渲染时卡片的 useRef 被重建回初值,自增式 claim 会让每张卡
+// 烧掉两个序号,实测 3 张卡的序号变成 [1,3,5],THUMB_CAP=3 最终只渲染 1 个窗格。
+// 幂等 claim 让双重渲染拿回同一个序号;即使 Provider 自己的 ref 也在这轮被重建,
+// Map 从空表重来也只是重新分配 0,1,2… 顺序,两种情况都拿到契约要求的上限行为。
+const SequenceCtx = createContext<((key: string) => number) | null>(null);
 
 export function DeliverableSequence({ children }: { children: ReactNode }) {
-  const counter = useRef(0);
-  const claim = useCallback(() => counter.current++, []);
+  const allocated = useRef(new Map<string, number>());
+  const claim = useCallback((key: string) => {
+    const existing = allocated.current.get(key);
+    if (existing !== undefined) return existing;
+    // 序号只在首次领取时分配,之后该 href 永远复用同一格(重复链接同一交付物只占一格)。
+    const next = allocated.current.size;
+    allocated.current.set(key, next);
+    return next;
+  }, []);
   return <SequenceCtx.Provider value={claim}>{children}</SequenceCtx.Provider>;
 }
 
 export function DeliverableCard({ info }: { info: DeliverableInfo }) {
   const claim = useContext(SequenceCtx);
-  const indexRef = useRef(-1);
-  if (claim && indexRef.current < 0) indexRef.current = claim();
-  const index = claim ? indexRef.current : 0;
+  // 无 Provider(单测直渲染、未接线的旧调用点)时序号恒为 0,缩略照常允许。
+  const index = claim ? claim(info.href) : 0;
   const thumbAllowed = shouldRenderThumb(index);
 
   const cardRef = useRef<HTMLSpanElement>(null);

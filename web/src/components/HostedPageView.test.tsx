@@ -40,6 +40,19 @@ describe('HostedPageView thumbnail mode', () => {
     const iframe = document.querySelector('iframe')!;
     expect(iframe.style.transform).toBe('scale(0.3)');
   });
+
+  // 回归防护:交付物卡被 ReactMarkdown 注入到 <p> 里的 <a> 位置,缩略模式若返回
+  // div,ready 后 DOM 就是 <p><span><span><div> —— 非法嵌套,浏览器会重排节点
+  // 并丢掉 iframe 的父级尺寸。用 span + display:block 保住块级占位,顺带断言
+  // 定位参照系(relative)仍在,Pages 列表页的等比缩放不会退化。
+  it('roots thumbnail mode in a block span, never a div', () => {
+    const { container } = render(<HostedPageView html={HTML} />);
+    const wrapper = container.firstElementChild!;
+    expect(wrapper.tagName).toBe('SPAN');
+    expect(wrapper.className).toContain('block');
+    expect(wrapper.className).toContain('relative');
+    expect(container.querySelectorAll('div')).toHaveLength(0);
+  });
 });
 
 describe('HostedPageView full-size mode', () => {

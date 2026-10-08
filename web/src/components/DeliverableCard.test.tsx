@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse, delay } from 'msw';
-import { DeliverableCard, extractHtmlTitle, matchDeliverable } from './DeliverableCard';
+import { DeliverableCard, DeliverableSequence, extractHtmlTitle, matchDeliverable } from './DeliverableCard';
 import { server } from '@/test/msw-server';
 import { stubIntersectionObserver, triggerVisibleAt, unstubIntersectionObserver } from '@/test/mockIO';
 
@@ -150,6 +151,43 @@ describe('DeliverableCard thumbnails', () => {
     triggerVisibleAt(0);
     await waitFor(() => expect(document.querySelector('iframe')).not.toBeNull());
     expect(screen.getByText('托管页')).toBeInTheDocument(); // 类型 chip 仍在
-    expect(screen.queryByText('巡检日报页')).not.toBeInTheDocument(); // 无标题 → 留空
+    // 断言整条头部的确切文本而不是「某个标题不存在」:只断言 queryByText('巡检日报页')
+    // 会放过任何别的编造标题。头部此刻必须是 类型 chip + href + 出口按钮,chip 与
+    // href 之间没有标题节点 —— 头部文本一变就失败,这就是「不编造」的约束本身。
+    expect(screen.getByTestId('deliverable-card-header').textContent).toBe(
+      `托管页${pageInfo.href}新窗口打开`,
+    );
+  });
+});
+
+describe('DeliverableSequence thumbnail cap', () => {
+  const infos = [
+    'a3f9c2d81b7e4056c9d0e1f2',
+    'b4e0d3f92c8a5167d0f2a3b4',
+    'c5f1e40a83d9b6278e103b4c5',
+    'd602f51b94eac7389f214c5d6',
+    'e713a62cab5fd849a0325d6e7',
+  ].map((id) => ({ type: 'page' as const, id, href: `/pages/${id}` }));
+
+  // 回归防护:StrictMode 会把组件渲染两次。若序号用「首次渲染自增计数」领取,
+  // 第二次渲染时卡片的 useRef 被重建回初值,每张卡会再领一次,3 张卡的序号变成
+  // [1,3,5],THUMB_CAP=3 只剩 1 个窗格 —— 实际表现是每条消息只有第一张卡有缩略。
+  // 必须包 StrictMode 测,否则普通单次渲染下序号式 claim 看起来完全正常。
+  it('caps at 3 panes for 5 cards under StrictMode (double render must not burn slots)', () => {
+    render(
+      <StrictMode>
+        <DeliverableSequence>
+          {infos.map((info) => (
+            <DeliverableCard key={info.href} info={info} />
+          ))}
+        </DeliverableSequence>
+      </StrictMode>,
+    );
+    expect(screen.getAllByTestId('deliverable-thumb')).toHaveLength(3);
+  });
+
+  it('gives a card with no provider the same index-0 thumbnail as before', () => {
+    render(<DeliverableCard info={infos[0]} />);
+    expect(screen.getAllByTestId('deliverable-thumb')).toHaveLength(1);
   });
 });
