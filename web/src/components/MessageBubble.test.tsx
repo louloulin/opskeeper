@@ -485,7 +485,8 @@ describe('MessageBubble deliverable link rendering', () => {
     // and no target attribute was ever added.
     expect(link?.textContent).toBe('设置页');
     expect(link?.hasAttribute('target')).toBe(false);
-    // No deliverable card is produced for a plain link.
-    expect(screen.queryByRole('button', { name: '打开' })).not.toBeInTheDocument();
+    // No deliverable card is produced for a plain link. 对齐当前按钮名
+    // 「新窗口打开」:沿用旧名「打开」会让这条断言无条件通过(按钮已改名)。
+    expect(screen.queryByRole('button', { name: '新窗口打开' })).not.toBeInTheDocument();
   });
 });
