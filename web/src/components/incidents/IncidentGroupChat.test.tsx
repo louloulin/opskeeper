@@ -259,6 +259,50 @@ describe('IncidentGroupChat', () => {
     await screen.findByText('成员');
     expect(screen.queryByTestId('crystal-milestone-pulse')).not.toBeInTheDocument();
   });
+
+  it('keeps message order and content identical regardless of animation classes', async () => {
+    stub({
+      events: [
+        {
+          id: 1,
+          incident_id: 1,
+          event_type: 'firing',
+          title: '告警触发',
+          actor_type: 'system',
+          occurred_at: '2026-10-07T10:00:00Z',
+          created_at: '2026-10-07T10:00:00Z',
+        },
+      ],
+      sessions: [{ id: 's1', user_id: 1, title: 'a', agent_id: 'incident-investigator' }],
+      messages: {
+        s1: [
+          { id: 'm1', role: 'assistant', content: '第一条', created_at: '2026-10-07T10:01:00Z' },
+          { id: 'm2', role: 'assistant', content: '第二条', created_at: '2026-10-07T10:02:00Z' },
+        ],
+      },
+    });
+    renderChat();
+    const first = await screen.findByText('第一条');
+    const second = await screen.findByText('第二条');
+    // DOM 顺序即消息顺序（未因动效改序）。
+    expect(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('the entry animation class is reduced-motion gated by index.css, not a bare animation', async () => {
+    stub({
+      sessions: [{ id: 's1', user_id: 1, title: 'a', agent_id: 'incident-investigator' }],
+      messages: {
+        s1: [{ id: 'm1', role: 'assistant', content: 'x', created_at: '2026-10-07T10:01:00Z' }],
+      },
+    });
+    renderChat();
+    const text = await screen.findByText('x');
+    const wrapper = text.closest('.anim-rise');
+    // .anim-rise 在 index.css 的 @media (prefers-reduced-motion: no-preference) 内定义：
+    // 类名是自研类（非 Tailwind 工具类），不得写成 motion-safe:anim-rise。
+    expect(wrapper?.className).not.toContain('motion-safe:anim-rise');
+    expect(wrapper?.className).toContain('anim-rise');
+  });
 });
 
 afterEach(() => {
