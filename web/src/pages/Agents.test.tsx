@@ -8,6 +8,7 @@ import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AgentsPage from './Agents';
+import { useAgents } from '@/store/agents';
 import { server } from '@/test/msw-server';
 
 vi.mock('@/store/auth', () => ({
@@ -72,6 +73,7 @@ function renderWithRouter(onPath: (p: string) => void) {
 describe('AgentsPage', () => {
   beforeEach(() => {
     localStorage.setItem('opskeeper-locale', 'zh-CN');
+    useAgents.setState({ byName: {}, loaded: false, loading: null });
     server.use(
       http.get('/api/v1/agents', () =>
         HttpResponse.json({ items: [diskAgent, userAgent], total: 2 }),
@@ -126,6 +128,21 @@ describe('AgentsPage', () => {
     expect(screen.getByText('query_incidents')).toBeInTheDocument();
     // 「开始对话」CTA
     expect(screen.getAllByText('开始对话').length).toBeGreaterThan(0);
+  });
+
+  it('passes the persona avatar through from the store to the gallery-wall card', async () => {
+    // 档案墙（Agents）是 spec「各展示位一致渲染」列出的四处之一：
+    // store 中同一 persona 的 avatar 必须原样透传到卡片头像。
+    useAgents.setState({
+      byName: {
+        'specialist-sre': { name: 'specialist-sre', description: '', avatar: '📡' },
+      },
+    });
+    renderWithRouter(vi.fn());
+
+    await screen.findByText('SRE 专家');
+    const avatars = screen.getAllByTestId('agent-avatar');
+    expect(avatars.some((el) => el.textContent?.includes('📡'))).toBe(true);
   });
 
   // 裁决 §3 要求卡片改造后「保留」这两个行为；它们都是删掉也不影响

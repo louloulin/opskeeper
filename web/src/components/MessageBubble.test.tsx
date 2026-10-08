@@ -7,6 +7,7 @@ import { MessageBubble, type ConfigDraftResult } from './MessageBubble';
 import type { ChatMessage } from '@/api/chat';
 import { getApproval, approveApproval } from '@/api/approvals';
 import { useApprovalBadge } from '@/store/approvalBadge';
+import { useAgents } from '@/store/agents';
 import { server } from '@/test/msw-server';
 import { stubIntersectionObserver, triggerVisibleAt, unstubIntersectionObserver } from '@/test/mockIO';
 
@@ -19,6 +20,7 @@ vi.mock('@/api/approvals', () => ({
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  useAgents.setState({ byName: {}, loaded: false, loading: null });
 });
 
 const supportedKinds = [
@@ -272,6 +274,19 @@ describe('MessageBubble agent bubble form', () => {
     expect(screen.getByText('磁盘专家')).toBeInTheDocument();
     expect(screen.getByText('09:41')).toBeInTheDocument();
     expect(screen.getByText(/磁盘使用率已达/)).toBeInTheDocument();
+  });
+
+  it('passes the persona avatar through from the store to the head-row avatar', () => {
+    // 聊天头行（MessageBubble）是 spec「各展示位一致渲染」列出的四处之一：
+    // store 中同一 persona 的 avatar 必须原样透传到 AgentAvatar。
+    useAgents.setState({
+      byName: {
+        'specialist-disk': { name: 'specialist-disk', description: '', avatar: '💾' },
+      },
+    });
+    render(<MessageBubble message={assistantMessage} agentId="specialist-disk" />);
+
+    expect(screen.getByTestId('agent-avatar').textContent).toContain('💾');
   });
 
   it('keeps the bubble-agent semantic class and drops the head row without agentId', () => {

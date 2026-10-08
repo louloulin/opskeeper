@@ -23,13 +23,13 @@
 - [x] 4.2 typing 呼吸点:Agent 回复中呈现(复用 pulse-dot),回复完成后消失
 - [x] 4.3 事件群聊阶段推进过渡动效
 - [x] 4.4 结晶徽标脉冲:与 `Approvals.tsx:353` StatusChip 语汇一致,缺口 keyframes 仅在此新增
-- [ ] 4.5 全量验证动效不改变信息结构:无动效状态下排序、内容可见性一致
+- [x] 4.5 全量验证动效不改变信息结构:无动效状态下排序、内容可见性一致（IncidentGroupChat「keeps message order and content identical regardless of animation classes」断言消息 DOM 顺序不受动效影响）
 
 ## 5. 测试
 
-- [ ] 5.1 扩展测试:四处展示位同 persona 渲染同一头像;avatar 失败回退角色图标
-- [ ] 5.2 扩展测试:降级映射仅覆盖内置 persona,非内置 persona 回退角色图标不编造
-- [ ] 5.3 扩展测试:typing 指示出现/消失;motion-safe 下无动画
+- [x] 5.1 扩展测试:四处展示位同 persona 渲染同一头像;avatar 失败回退角色图标（SessionList / MessageBubble / Agents / IncidentGroupChat 各一处 avatar 透传断言;AgentAvatar「avatar 图片加载失败回退角色图标」覆盖 onError）
+- [x] 5.2 扩展测试:降级映射仅覆盖内置 persona,非内置 persona 回退角色图标不编造（agents.test.ts「avatarFor 对未知 agentId 返回 undefined,别名先归一」「空白 avatar 视作缺失」;Q1 裁定未启用前端降级映射,avatarFor 纯查表不编造）
+- [x] 5.3 扩展测试:typing 指示出现/消失;motion-safe 下无动画
 - [ ] 5.4 保活既有测试:`AgentAvatar`、`MessageBubble`、`IncidentGroupChat`、`Agents` 既有断言不得破;不得删除任何既有测试用例
 
 ## 6. 验证与走查
