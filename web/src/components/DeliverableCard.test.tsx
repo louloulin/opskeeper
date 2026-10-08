@@ -50,6 +50,10 @@ describe('matchDeliverable', () => {
     expect(matchDeliverable('/pages/settings')).toBeNull();
     expect(matchDeliverable('/settings')).toBeNull();
     expect(matchDeliverable('https://example.com')).toBeNull();
+    // FIX 2:报表 id 必须是小写 UUID(8-4-4-4-12)。收紧前 `[0-9a-f-]{16,64}` 会把全连字符
+    // 的串也当成卡(如 16 个 '-'),那绝不可能是真实 id(uuid.NewString 不会产出)。
+    expect(matchDeliverable('/reports/----------------')).toBeNull();
+    expect(matchDeliverable('/reports/7b2c1a9e-3f4d-4c5b-8e9f')).toBeNull(); // 段数不对
   });
   // 回归锁定(spec 7.5「断言第三方链接不渲染 iframe」的白名单另一半):白名单的判据
   // 是 href 以 `/pages/<hex>` / `/reports/<id>` **开头**的站内相对路径,不是「路径里
@@ -305,5 +309,35 @@ describe('DeliverableCard in-place preview', () => {
     expect(open).toHaveBeenCalledWith(`/pages/${HEX24}`, '_blank');
     expect(screen.getByTestId('deliverable-preview')).toBeInTheDocument();
     open.mockRestore();
+  });
+
+  // FIX 1 回归:卡片只露出一角时 IO 以 isIntersecting=false 回执,visible 恒 false。用户点开
+  // 卡头是一次显式展开,必须无条件取数;修前 `!visible` 短路 → state 停在 idle → 预览永久 spinner。
+  it('fetches and previews on expand even when the card never reported intersecting (visible stays false)', async () => {
+    stubIntersectionObserver();
+    render(<DeliverableCard info={pageInfo} />);
+    triggerVisibleAt(0, false); // 交集比 < 0.1:负回执,some() 不翻转
+    expect(pageHits).toBe(0); // 缩略仍懒挂载:未可见、未展开时不取数
+    expect(screen.queryByTestId('deliverable-preview')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('deliverable-card-header'));
+
+    await waitFor(() => expect(pageHits).toBe(1)); // 显式展开无条件取数
+    const preview = screen.getByTestId('deliverable-preview');
+    await waitFor(() => expect(preview.querySelector('iframe')).not.toBeNull()); // 落地内容,不是 spinner
+  });
+
+  // FIX 3 回归:报表 status:'ready' 但 content 为空 —— 取数成功但无内容。修前落到 failed 占位,
+  // 把一次成功的取数谎报成「加载失败」;必须给诚实的空态,且不得移除「新窗口打开」出口。
+  it('shows an honest empty state when a ready report has no content (not "加载失败")', async () => {
+    stubIntersectionObserver();
+    render(<DeliverableCard info={reportInfo} />);
+    triggerVisibleAt(0);
+    await waitFor(() => expect(screen.getByText('日报')).toBeInTheDocument()); // 缩略 ready
+    fireEvent.click(screen.getByTestId('deliverable-card-header'));
+    const preview = screen.getByTestId('deliverable-preview');
+    expect(preview.textContent).toContain('报告暂无内容');
+    expect(preview.textContent).not.toContain('加载失败');
+    expect(screen.getByRole('button', { name: '新窗口打开' })).toBeInTheDocument(); // 出口仍在
   });
 });

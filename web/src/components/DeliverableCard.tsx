@@ -13,7 +13,9 @@ import { ReportHostedView } from './ReportHostedView';
 import { Button } from './ui/Button';
 
 const PAGE_RE = /^\/pages\/([0-9a-f]{16,64})$/;
-const REPORT_RE = /^\/reports\/([0-9a-f-]{16,64})$/;
+// FIX 2:报表 id 是小写 UUID(8-4-4-4-12),对齐后端 uuid.NewString。收紧前 `[0-9a-f-]{16,64}`
+// 会把全连字符(如 16 个 '-')这类绝不可能是真实 id 的串也成卡。
+const REPORT_RE = /^\/reports\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
 export type DeliverableInfo = { type: 'page' | 'report'; id: string; href: string };
 
@@ -84,10 +86,12 @@ export function DeliverableCard({ info }: { info: DeliverableInfo }) {
   }, []);
 
   // 三态状态机:visible 之前不发请求(idle);失败不重试,降级占位 + 保留出口。
-  // 取数条件含 expanded:缩略被上限挡掉的紧凑卡,用户点开预览仍要能拿到数据。
+  // FIX 1:显式展开(expanded)必须无条件取数——卡片只露出一角时 IO 因交集比 < 0.1 报
+  // isIntersecting=false,visible 恒 false(且展开后卡变高,交集更低,无法自愈);修前
+  // `!visible` 短路会让 state 停在 idle,预览永久 spinner。缩略本身仍按 visible 懒挂载。
   useEffect(() => {
-    if (!visible || state !== 'idle') return;
-    if (!thumbAllowed && !expanded) return;
+    if (state !== 'idle') return;
+    if (!(expanded || (visible && thumbAllowed))) return;
     setState('loading');
     if (info.type === 'page') {
       fetchPageHTML(info.id)
@@ -183,8 +187,11 @@ export function DeliverableCard({ info }: { info: DeliverableInfo }) {
               <TypePlaceholder type="report" line1={tr('报告生成中…', 'Report is generating…')} />
             ) : report.content ? (
               <ReportHostedView content={report.content} />
+            ) : report.status === 'failed' ? (
+              <TypePlaceholder type="report" failed />
             ) : (
-              <TypePlaceholder type={info.type} failed />
+              // FIX 3:ready 但 content 为空 =「取到但无内容」,与取数失败不同,不能谎报「加载失败」。
+              <TypePlaceholder type="report" line1={tr('报告暂无内容', 'No content in this report')} />
             )
           ) : (
             <TypePlaceholder type={info.type} failed />
