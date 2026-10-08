@@ -171,6 +171,17 @@ describe('IncidentGroupChat', () => {
     const avatars = screen.getAllByTestId('agent-avatar');
     expect(avatars.some((el) => el.textContent?.includes('🛰️'))).toBe(true);
   });
+
+  it('renders the role icon (no broken image / no invented avatar) when the store has no avatar', async () => {
+    stub({ sessions: [{ id: 's1', user_id: 1, title: 'a', agent_id: 'incident-investigator' }] });
+
+    renderChat();
+
+    await screen.findByText('故障诊断');
+    // 未 seed store → avatarFor 返回 undefined → 渲染图标，无 emoji、无 <img>
+    const avatars = screen.getAllByTestId('agent-avatar');
+    for (const a of avatars) expect(a.querySelector('img')).toBeNull();
+  });
 });
 
 afterEach(() => {

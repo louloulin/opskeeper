@@ -1,21 +1,21 @@
 ## 1. 前置核查
 
-- [ ] 1.1 核查后端 avatar 链路可行性:`agents/*.md` frontmatter 读入点、`AgentSummary`(`web/src/api/agents.ts:11-33`)与后端列表 API 字段透出改动范围,形成 Q1 结论(走完整链路或前端降级先行),写回 design.md
-- [ ] 1.2 盘点 `AgentAvatar` 既有实现(`avatar?: string` prop、onError 回退)与四处展示位传参现状,确认哪些调用点已可直接消费 avatar、哪些缺数据
+- [x] 1.1 核查后端 avatar 链路可行性:`agents/*.md` frontmatter 读入点、`AgentSummary`(`web/src/api/agents.ts:11-33`)与后端列表 API 字段透出改动范围,形成 Q1 结论(走完整链路或前端降级先行),写回 design.md
+- [x] 1.2 盘点 `AgentAvatar` 既有实现(`avatar?: string` prop、onError 回退)与四处展示位传参现状,确认哪些调用点已可直接消费 avatar、哪些缺数据
 
 ## 2. avatar 数据链路
 
-- [ ] 2.1 按 1.1 结论实现首选链路:`agents/*.md` frontmatter 增加 `avatar:` 槽(emoji 或图片 URL),后端读入并在 Agent 列表 API 透出;`AgentSummary` 补充 `avatar?: string` 可选字段(向后兼容)
-- [ ] 2.2 实现降级映射:后端未就绪时前端维护内置 11 个 persona 的 persona→avatar 本地映射(仅内置、不支持自定义);后端就绪后移除映射
-- [ ] 2.3 为内置 11 个 persona 选定默认 avatar(emoji 优先,规避外链不可达风险)
+- [x] 2.1 按 1.1 结论实现首选链路:`agents/*.md` frontmatter 增加 `avatar:` 槽(emoji 或图片 URL),后端读入并在 Agent 列表 API 透出;`AgentSummary` 补充 `avatar?: string` 可选字段(向后兼容)
+- [x] 2.2 实现降级映射:后端未就绪时前端维护内置 11 个 persona 的 persona→avatar 本地映射(仅内置、不支持自定义);后端就绪后移除映射（Q1 裁定走完整后端链路，该降级映射未启用，故无需移除）
+- [x] 2.3 为内置 11 个 persona 选定默认 avatar(emoji 优先,规避外链不可达风险)
 
 ## 3. 四处展示位一致性
 
-- [ ] 3.1 侧栏会话列表(`SessionList.tsx:150`)消费 avatar 渲染
-- [ ] 3.2 聊天头行(`MessageBubble.tsx:123`)消费 avatar 渲染
-- [ ] 3.3 档案墙(`Agents.tsx:319`)与 Home(`Home.tsx:437`)消费 avatar 渲染
-- [ ] 3.4 群聊成员行(`IncidentGroupChat.tsx:139,144`)消费 avatar 渲染
-- [ ] 3.5 验证 avatar 图片加载失败时全部展示位回退角色图标、无破图(onError 路径)
+- [x] 3.1 侧栏会话列表(`SessionList.tsx:150`)消费 avatar 渲染
+- [x] 3.2 聊天头行(`MessageBubble.tsx:123`)消费 avatar 渲染
+- [x] 3.3 档案墙(`Agents.tsx:319`)与 Home(`Home.tsx:437`)消费 avatar 渲染
+- [x] 3.4 群聊成员行(`IncidentGroupChat.tsx:139,144`)消费 avatar 渲染
+- [x] 3.5 验证 avatar 图片加载失败时全部展示位回退角色图标、无破图(onError 路径)
 
 ## 4. 群聊动效
 
