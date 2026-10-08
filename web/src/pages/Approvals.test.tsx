@@ -422,3 +422,66 @@ describe('Approvals 应用内确认（approval-governance 规格）', () => {
     promptSpy.mockRestore();
   });
 });
+
+describe('Approvals 危险动作确认防重复提交（approval-governance 规格）', () => {
+  beforeEach(() => {
+    localStorage.setItem('opskeeper-locale', 'zh-CN');
+  });
+
+  function row() {
+    return {
+      id: 'a-double',
+      kind: 'restart_service',
+      title: '重启数据库',
+      summary: '',
+      payload: '{}',
+      source: 'agent',
+      status: 'pending',
+      proposed_by: 1,
+      created_at: FIXED_AT,
+    };
+  }
+
+  // 移除 window.confirm 后,确认动作改为应用内弹窗按钮。危险动作的批准是
+  // 破坏性的、后端不保证幂等,而 doApprove 直到 finally 才关弹窗——请求在途时
+  // 弹窗仍挂着、确认按钮仍可点。这里让 approve 请求悬停在途,验证确认按钮
+  // 与行内按钮一样绑定 busy 守卫:快速双击只应发出一次 approve 请求。
+  it('请求在途时确认按钮禁用,双击只发出一次 approve 请求', async () => {
+    // approve 请求保持在途,直到测试放行,才能观察到「请求进行中」这一窗口。
+    let releaseApprove!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseApprove = resolve;
+    });
+    let approveCalls = 0;
+    server.use(
+      http.get('/api/v1/approvals', () => HttpResponse.json({ items: [row()] })),
+      http.post('/api/v1/approvals/a-double/approve', async () => {
+        approveCalls += 1;
+        await gate;
+        return HttpResponse.json({ ...row(), status: 'executed', result: '{}' });
+      }),
+    );
+
+    render(
+      <MemoryRouter>
+        <ApprovalsPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('重启数据库');
+    await userEvent.click(screen.getByRole('button', { name: '批准' }));
+
+    const confirmBtn = await screen.findByRole('button', { name: /确认批准并执行/ });
+    // 第一次点击:发起请求,但它被 gate 拦住仍在途。
+    await userEvent.click(confirmBtn);
+    // 请求在途时,确认按钮应绑定 busy 守卫而禁用(与行内「批准」按钮同款);
+    // 未绑定时按钮仍可点,下面这一击会再发一次请求。
+    await userEvent.click(confirmBtn);
+    // 关键断言:危险动作只提交一次。
+    expect(approveCalls).toBe(1);
+    expect(confirmBtn).toBeDisabled();
+
+    // 放行请求,收尾(避免悬空的未决 fetch 泄漏到后续测试)。
+    releaseApprove();
+    await waitFor(() => expect(screen.getByText('重启数据库')).toBeInTheDocument());
+  });
+});

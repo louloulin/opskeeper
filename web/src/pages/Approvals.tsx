@@ -255,11 +255,19 @@ export default function ApprovalsPage() {
               {tr('取消', 'Cancel')}
             </Button>
             {confirmKind === 'approve' ? (
-              <Button variant="primary" onClick={() => confirmTarget && void doApprove(confirmTarget)}>
+              <Button
+                variant="primary"
+                disabled={busy === confirmTarget?.id}
+                onClick={() => confirmTarget && void doApprove(confirmTarget)}
+              >
                 {tr('确认批准并执行', 'Confirm approve & run')}
               </Button>
             ) : (
-              <Button variant="danger" onClick={() => confirmTarget && void doReject(confirmTarget)}>
+              <Button
+                variant="danger"
+                disabled={busy === confirmTarget?.id}
+                onClick={() => confirmTarget && void doReject(confirmTarget)}
+              >
                 {tr('确认拒绝', 'Confirm reject')}
               </Button>
             )}
