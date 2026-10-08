@@ -50,4 +50,23 @@ describe('HostedPageView full-size mode', () => {
     expect(iframe.style.transform).toBe('');
     expect(iframe.style.height).toBe('60vh');
   });
+
+  // 无障碍名称回归防护：弹窗 iframe 的 title 曾经是动态的 preview.title，
+  // 抽出共享组件时被写死成 "page preview"。全尺寸模式改为消费可选 title prop，
+  // 缺省仍回落到 "page preview"，保证既有调用点与既有断言向后兼容。
+  it('uses the caller-provided accessible title', () => {
+    render(<HostedPageView html={HTML} title="季度报告" height="60vh" />);
+    expect(document.querySelector('iframe')!.getAttribute('title')).toBe('季度报告');
+  });
+  it('falls back to "page preview" when no title is provided', () => {
+    render(<HostedPageView html={HTML} height="60vh" />);
+    expect(document.querySelector('iframe')!.getAttribute('title')).toBe('page preview');
+  });
+});
+
+describe('HostedPageView thumbnail mode accessible name', () => {
+  it('keeps the hardcoded "thumbnail" name even when a title is passed', () => {
+    render(<HostedPageView html={HTML} title="季度报告" />);
+    expect(document.querySelector('iframe')!.getAttribute('title')).toBe('thumbnail');
+  });
 });

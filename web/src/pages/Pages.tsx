@@ -350,7 +350,7 @@ export default function PagesPage() {
                 <Loader2 size={16} className="mr-2 animate-spin" /> {tr('加载中…', 'Loading…')}
               </div>
             ) : (
-              <HostedPageView html={previewHtml} height="60vh" />
+              <HostedPageView html={previewHtml} title={preview.title || 'page'} height="60vh" />
             )}
           </div>
         </Modal>

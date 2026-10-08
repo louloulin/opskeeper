@@ -15,7 +15,7 @@ export function computeScale(containerWidth: number): number {
   return containerWidth / THUMB_W;
 }
 
-export function HostedPageView({ html, height }: { html: string; height?: number | string }) {
+export function HostedPageView({ html, height, title }: { html: string; height?: number | string; title?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(DEFAULT_THUMB_SCALE);
 
@@ -34,7 +34,9 @@ export function HostedPageView({ html, height }: { html: string; height?: number
   if (height != null) {
     return (
       <iframe
-        title="page preview"
+        // 全尺寸模式的 iframe 承载具体页面（预览弹窗），无障碍名称由调用方给；
+        // 缺省回落到通用名，保证既有调用点不传也能拿到有意义的名字。
+        title={title ?? 'page preview'}
         srcDoc={html}
         sandbox=""
         className="w-full rounded-md border border-zinc-800 bg-white"
