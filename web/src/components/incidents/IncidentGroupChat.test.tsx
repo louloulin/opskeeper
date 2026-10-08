@@ -239,6 +239,26 @@ describe('IncidentGroupChat', () => {
     release();
     await waitFor(() => expect(screen.queryByText(/调查中|Investigating/)).not.toBeInTheDocument());
   });
+
+  it('pulses the crystallization milestone (recovered/success) badge, motion-safe', async () => {
+    stub();
+    server.use(
+      http.get('/api/v1/loops/1/timeline', () =>
+        HttpResponse.json({ phases: [{ phase: 'recovered', status: 'success' }] }),
+      ),
+    );
+    renderChat();
+    const pulse = await screen.findByTestId('crystal-milestone-pulse');
+    expect(pulse.className).toContain('motion-safe:');
+    expect(pulse.className).toContain('animate-pulse-dot');
+  });
+
+  it('does not render the crystallization pulse when no recovered/success phase exists', async () => {
+    stub();
+    renderChat();
+    await screen.findByText('成员');
+    expect(screen.queryByTestId('crystal-milestone-pulse')).not.toBeInTheDocument();
+  });
 });
 
 afterEach(() => {

@@ -131,7 +131,16 @@ export function IncidentGroupChat({ incidentId }: { incidentId: number }) {
     <div className="flex flex-col gap-3">
       <div className="surface-card flex items-center gap-1 overflow-x-auto rounded-2xl px-3 py-2">
         {phases.map((p) => (
-          <PhaseIndicator key={p.phase} phase={p.phase} status={p.status} className="shrink-0" />
+          <span key={p.phase} className="inline-flex shrink-0 items-center gap-1.5">
+            <PhaseIndicator phase={p.phase} status={p.status} className="shrink-0" />
+            {p.phase === 'recovered' && p.status === 'success' && (
+              <span
+                data-testid="crystal-milestone-pulse"
+                className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 motion-safe:animate-pulse-dot"
+                aria-hidden="true"
+              />
+            )}
+          </span>
         ))}
       </div>
 
