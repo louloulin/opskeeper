@@ -6,16 +6,18 @@ import { BarChart3, FileText } from 'lucide-react';
 import { tr } from '@/i18n/locale';
 import { Button } from './ui/Button';
 
-const PAGE_RE = /^\/pages\/(\d+)(\/view)?$/;
-const REPORT_RE = /^\/reports\/(\d+)$/;
+// 识别面只匹配真实产物 id 形态:托管页为 24 位十六进制(serve_page),
+// 报表为 UUID 形态;不再匹配纯数字 id,也不接受不存在的 /view 子路径。
+const PAGE_RE = /^\/pages\/([0-9a-f]{16,64})$/;
+const REPORT_RE = /^\/reports\/([0-9a-f-]{16,64})$/;
 
-export type DeliverableInfo = { type: 'page' | 'report'; id: number; href: string };
+export type DeliverableInfo = { type: 'page' | 'report'; id: string; href: string };
 
 export function matchDeliverable(href: string): DeliverableInfo | null {
   const page = PAGE_RE.exec(href);
-  if (page) return { type: 'page', id: Number(page[1]), href };
+  if (page) return { type: 'page', id: page[1], href };
   const report = REPORT_RE.exec(href);
-  if (report) return { type: 'report', id: Number(report[1]), href };
+  if (report) return { type: 'report', id: report[1], href };
   return null;
 }
 

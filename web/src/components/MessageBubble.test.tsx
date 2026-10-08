@@ -455,17 +455,17 @@ describe('MessageBubble deliverable link rendering', () => {
         message={{
           id: 'assistant-deliverable',
           role: 'assistant',
-          content: '报告已生成：[查看托管页](/pages/12)',
+          content: '报告已生成：[查看托管页](/pages/a3f9c2d81b7e4056c9d0e1f2)',
           pending: false,
         }}
       />,
     );
 
     // Card affordances render...
-    expect(screen.getByText('托管页 #12')).toBeInTheDocument();
+    expect(screen.getByText('托管页 #a3f9c2d81b7e4056c9d0e1f2')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '打开' })).toBeInTheDocument();
-    // ...and the underlying markdown anchor is replaced (no <a href="/pages/12">).
-    expect(container.querySelector('a[href="/pages/12"]')).toBeNull();
+    // ...and the underlying markdown anchor is replaced (no <a href="/pages/a3f9c2d81b7e4056c9d0e1f2">).
+    expect(container.querySelector('a[href="/pages/a3f9c2d81b7e4056c9d0e1f2"]')).toBeNull();
   });
 
   it('keeps a non-deliverable markdown link as a plain anchor with no target attr', () => {
