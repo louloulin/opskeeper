@@ -182,6 +182,26 @@ describe('IncidentGroupChat', () => {
     const avatars = screen.getAllByTestId('agent-avatar');
     for (const a of avatars) expect(a.querySelector('img')).toBeNull();
   });
+
+  it('wraps each chat message in a motion-safe entry animation (.anim-rise)', async () => {
+    stub({
+      sessions: [{ id: 's1', user_id: 1, title: 'a', agent_id: 'incident-investigator' }],
+      messages: {
+        s1: [
+          {
+            id: 'm1',
+            role: 'assistant',
+            content: '根因是磁盘写满',
+            created_at: '2026-10-07T10:01:00Z',
+          },
+        ],
+      },
+    });
+    renderChat();
+    const text = await screen.findByText('根因是磁盘写满');
+    const wrapper = text.closest('.anim-rise');
+    expect(wrapper).not.toBeNull();
+  });
 });
 
 afterEach(() => {

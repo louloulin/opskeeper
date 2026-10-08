@@ -164,11 +164,9 @@ export function IncidentGroupChat({ incidentId }: { incidentId: number }) {
               <span>{item.payload.occurred_at.slice(11, 16)}</span>
             </div>
           ) : (
-            <MessageBubble
-              key={`m-${item.payload.sessionId}-${item.payload.id}`}
-              message={item.payload}
-              agentId={item.payload.agentId}
-            />
+            <div key={`m-${item.payload.sessionId}-${item.payload.id}`} className="anim-rise">
+              <MessageBubble message={item.payload} agentId={item.payload.agentId} />
+            </div>
           ),
         )}
       </div>
