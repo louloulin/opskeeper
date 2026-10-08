@@ -86,6 +86,25 @@ describe('AgentAvatar', () => {
     expect(small.firstElementChild?.className).not.toContain('rounded-s-');
     expect(large.firstElementChild?.className).not.toContain('rounded-s-');
   });
+
+  it('renders an emoji avatar as text, not an <img>, when it is not an http(s) URL', () => {
+    const { container } = render(<AgentAvatar agentId="default" avatar="🛰️" />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.textContent).toContain('🛰️');
+  });
+
+  it('renders an https URL avatar as an <img>', () => {
+    const { container } = render(<AgentAvatar agentId="default" avatar="https://x/y.png" />);
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute('src')).toBe('https://x/y.png');
+  });
+
+  it('falls back to the role icon when avatar is absent', () => {
+    const { container } = render(<AgentAvatar agentId="default" />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(iconClass(container)).toContain('lucide-bot');
+  });
 });
 
 // personaLabel (AgentBadge) must resolve a display name for every persona

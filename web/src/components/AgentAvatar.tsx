@@ -47,14 +47,19 @@ const PERSONA_ALIASES: Record<string, string> = {
   'loop-controller': 'default',
 };
 
+export function normalizeAgentId(agentId?: string | null): string {
+  if (!agentId) return 'default';
+  return PERSONA_ALIASES[agentId] ?? agentId;
+}
+
 export function personaVisual(agentId?: string | null): PersonaVisual {
-  if (!agentId) return PERSONA_VISUALS.default;
-  const normalized = PERSONA_ALIASES[agentId] ?? agentId;
+  const normalized = normalizeAgentId(agentId);
   return PERSONA_VISUALS[normalized] ?? PERSONA_VISUALS.default;
 }
 
 const BOX_CLASS: Record<32 | 40, string> = { 32: 'h-8 w-8 rounded-rk-sm', 40: 'h-10 w-10 rounded-rk-md' };
 const ICON_CLASS: Record<32 | 40, string> = { 32: 'h-4 w-4', 40: 'h-5 w-5' };
+const EMOJI_CLASS: Record<32 | 40, string> = { 32: 'text-[18px] leading-none', 40: 'text-[22px] leading-none' };
 
 export function AgentAvatar({
   agentId,
@@ -70,7 +75,9 @@ export function AgentAvatar({
 }) {
   const { icon: Icon, tone } = personaVisual(agentId);
   const [imgBroken, setImgBroken] = useState(false);
-  const showImage = Boolean(avatar) && !imgBroken;
+  const isUrl = Boolean(avatar) && /^https?:\/\//i.test(avatar as string);
+  const showImage = isUrl && !imgBroken;
+  const showEmoji = Boolean(avatar) && !isUrl;
 
   return (
     <span
@@ -89,6 +96,10 @@ export function AgentAvatar({
           className="h-full w-full object-cover"
           onError={() => setImgBroken(true)}
         />
+      ) : showEmoji ? (
+        <span className={EMOJI_CLASS[size]} aria-hidden="true">
+          {avatar}
+        </span>
       ) : (
         <Icon className={ICON_CLASS[size]} aria-hidden="true" />
       )}
