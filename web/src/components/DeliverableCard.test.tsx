@@ -1,5 +1,5 @@
 import { StrictMode } from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse, delay } from 'msw';
 import { DeliverableCard, DeliverableSequence, extractHtmlTitle, matchDeliverable } from './DeliverableCard';
@@ -189,5 +189,84 @@ describe('DeliverableSequence thumbnail cap', () => {
   it('gives a card with no provider the same index-0 thumbnail as before', () => {
     render(<DeliverableCard info={infos[0]} />);
     expect(screen.getAllByTestId('deliverable-thumb')).toHaveLength(1);
+  });
+});
+
+describe('DeliverableCard in-place preview', () => {
+  it('expands the page preview in place with the shared renderer, without navigating', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    stubIntersectionObserver();
+    render(<DeliverableCard info={pageInfo} />);
+    triggerVisibleAt(0);
+    await waitFor(() => expect(document.querySelector('iframe')).not.toBeNull()); // 缩略 ready
+    fireEvent.click(screen.getByTestId('deliverable-card-header'));
+    const preview = screen.getByTestId('deliverable-preview');
+    expect(preview).toBeInTheDocument();
+    const iframe = preview.querySelector('iframe')!;
+    expect(iframe).not.toBeNull();
+    expect(iframe.getAttribute('sandbox')).toBe(''); // 预览 iframe 同样收紧
+    expect(open).not.toHaveBeenCalled(); // 就地展开,不导航
+    open.mockRestore();
+  });
+
+  it('collapses the preview on second click', async () => {
+    stubIntersectionObserver();
+    render(<DeliverableCard info={pageInfo} />);
+    triggerVisibleAt(0);
+    await waitFor(() => expect(document.querySelector('iframe')).not.toBeNull());
+    fireEvent.click(screen.getByTestId('deliverable-card-header'));
+    expect(screen.getByTestId('deliverable-preview')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('deliverable-card-header'));
+    expect(screen.queryByTestId('deliverable-preview')).not.toBeInTheDocument();
+  });
+
+  it('expands the report preview with the shared bounded renderer (480px)', async () => {
+    server.use(http.get('/api/v1/reports/:id', () => HttpResponse.json({
+      ...REPORT_READY,
+      content: {
+        version: '1', hero: [], narrative: { headline: '集群平稳' },
+        resource: { available: false, cpu_avg: 0, cpu_peak: 0, mem_avg: 0, mem_peak: 0, disk_avg: 0, disk_peak: 0 },
+        fleet: { total: 3, online: 2 },
+        actions_summary: { mutating_total: 0, mutating_approved: 0, safe_total: 1 },
+        assets: { new_agents: 0, new_skills: 0, new_repos: 0 },
+        usage: { sessions: 1, prompt_tokens: 10, completion_tokens: 5 },
+      },
+    })));
+    stubIntersectionObserver();
+    render(<DeliverableCard info={reportInfo} />);
+    triggerVisibleAt(0);
+    await waitFor(() => expect(screen.getByText('日报')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('deliverable-card-header'));
+    await waitFor(() => expect(screen.getByTestId('deliverable-preview')).toBeInTheDocument());
+    const preview = screen.getByTestId('deliverable-preview');
+    expect(screen.getByText('集群平稳')).toBeInTheDocument(); // ReportContentView 内容
+    const scroller = preview.querySelector('div[style]') as HTMLElement | null;
+    expect(scroller?.style.maxHeight).toBe('480px'); // 不撑破消息流
+  });
+
+  it('shows the generating placeholder in the preview while the report has no content', async () => {
+    server.use(http.get('/api/v1/reports/:id', () => HttpResponse.json(REPORT_GENERATING)));
+    stubIntersectionObserver();
+    render(<DeliverableCard info={reportInfo} />);
+    triggerVisibleAt(0);
+    await waitFor(() => expect(screen.getByText('报告生成中…')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('deliverable-card-header'));
+    const preview = screen.getByTestId('deliverable-preview');
+    expect(preview.textContent).toContain('报告生成中…');
+    expect(preview.querySelector('iframe')).toBeNull();
+  });
+
+  it('failed preview keeps the 新窗口打开 exit (no dead end)', async () => {
+    server.use(http.get('/api/pages/:id', () => HttpResponse.text('', { status: 404 })));
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    stubIntersectionObserver();
+    render(<DeliverableCard info={pageInfo} />);
+    triggerVisibleAt(0);
+    await waitFor(() => expect(screen.getByText('加载失败')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('deliverable-card-header'));
+    expect(screen.getByTestId('deliverable-preview').textContent).toContain('加载失败');
+    screen.getByRole('button', { name: '新窗口打开' }).click();
+    expect(open).toHaveBeenCalledWith(`/pages/${HEX24}`, '_blank');
+    open.mockRestore();
   });
 });

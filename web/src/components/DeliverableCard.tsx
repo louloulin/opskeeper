@@ -9,6 +9,7 @@ import { fetchPageHTML } from '@/api/pages';
 import { getReport, type ReportDetail, type ReportKind } from '@/api/reports';
 import { shouldRenderThumb, useInViewOnce } from './deliverableLazy';
 import { HostedPageView } from './HostedPageView';
+import { ReportHostedView } from './ReportHostedView';
 import { Button } from './ui/Button';
 
 const PAGE_RE = /^\/pages\/([0-9a-f]{16,64})$/;
@@ -67,6 +68,8 @@ export function DeliverableCard({ info }: { info: DeliverableInfo }) {
   const [pageTitle, setPageTitle] = useState('');
   const [html, setHtml] = useState<string | null>(null);
   const [report, setReport] = useState<ReportDetail | null>(null);
+  // 展开态:点击卡头就地开预览,复用独立页的同一渲染器,不做导航。
+  const [expanded, setExpanded] = useState(false);
 
   // 卸载后不再 setState。用 ref 而不是 effect 局部 `let alive`:下面取数 effect 的
   // 依赖含 state,setState('loading') 会让它重跑并 cleanup 掉局部 alive,响应回来后
@@ -81,8 +84,10 @@ export function DeliverableCard({ info }: { info: DeliverableInfo }) {
   }, []);
 
   // 三态状态机:visible 之前不发请求(idle);失败不重试,降级占位 + 保留出口。
+  // 取数条件含 expanded:缩略被上限挡掉的紧凑卡,用户点开预览仍要能拿到数据。
   useEffect(() => {
-    if (!visible || state !== 'idle' || !thumbAllowed) return;
+    if (!visible || state !== 'idle') return;
+    if (!thumbAllowed && !expanded) return;
     setState('loading');
     if (info.type === 'page') {
       fetchPageHTML(info.id)
@@ -102,7 +107,7 @@ export function DeliverableCard({ info }: { info: DeliverableInfo }) {
         })
         .catch(() => aliveRef.current && setState('failed'));
     }
-  }, [visible, thumbAllowed, state, info.type, info.id]);
+  }, [visible, thumbAllowed, state, info.type, info.id, expanded]);
 
   const Icon = info.type === 'page' ? FileText : BarChart3;
   const typeLabel = info.type === 'page' ? tr('托管页', 'Hosted page') : tr('报表', 'Report');
@@ -113,7 +118,17 @@ export function DeliverableCard({ info }: { info: DeliverableInfo }) {
     <span ref={cardRef} data-testid="deliverable-card" className="surface-card my-1.5 block rounded-rk-md">
       <span
         data-testid="deliverable-card-header"
-        className="flex items-center gap-3 px-3 py-2.5"
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setExpanded((v) => !v);
+          }
+        }}
+        className="flex cursor-pointer items-center gap-3 px-3 py-2.5 hover:bg-zinc-800/30"
       >
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-rk-sm bg-accent-50 text-accent-700">
           <Icon className="h-4 w-4" aria-hidden="true" />
@@ -125,7 +140,13 @@ export function DeliverableCard({ info }: { info: DeliverableInfo }) {
           </span>
           <span className="block truncate text-[11px] text-zinc-500">{info.href}</span>
         </span>
-        <Button variant="ghost" onClick={() => window.open(info.href, '_blank')}>
+        <Button
+          variant="ghost"
+          onClick={(e) => {
+            e.stopPropagation();
+            window.open(info.href, '_blank');
+          }}
+        >
           {tr('新窗口打开', 'Open in new tab')}
         </Button>
       </span>
@@ -140,6 +161,29 @@ export function DeliverableCard({ info }: { info: DeliverableInfo }) {
           {state === 'failed' && <TypePlaceholder type={info.type} failed />}
           {state === 'ready' && info.type === 'page' && html != null && <HostedPageView html={html} />}
           {state === 'ready' && info.type === 'report' && report != null && <ReportThumb report={report} />}
+        </span>
+      )}
+      {expanded && (
+        <span data-testid="deliverable-preview" className="mx-3 mb-2.5 block rounded-rk-sm border border-zinc-800 bg-zinc-950/40 p-2">
+          {state === 'idle' || state === 'loading' ? (
+            <span className="flex h-24 items-center justify-center text-zinc-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+            </span>
+          ) : state === 'failed' ? (
+            <TypePlaceholder type={info.type} failed />
+          ) : info.type === 'page' && html != null ? (
+            <HostedPageView html={html} height="60vh" />
+          ) : info.type === 'report' && report != null ? (
+            report.status === 'pending' || report.status === 'generating' ? (
+              <TypePlaceholder type="report" line1={tr('报告生成中…', 'Report is generating…')} />
+            ) : report.content ? (
+              <ReportHostedView content={report.content} />
+            ) : (
+              <TypePlaceholder type={info.type} failed />
+            )
+          ) : (
+            <TypePlaceholder type={info.type} failed />
+          )}
         </span>
       )}
     </span>

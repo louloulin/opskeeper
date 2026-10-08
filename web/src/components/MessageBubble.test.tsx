@@ -1,11 +1,14 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { http, HttpResponse } from 'msw';
 
 import { MessageBubble, type ConfigDraftResult } from './MessageBubble';
 import type { ChatMessage } from '@/api/chat';
 import { getApproval, approveApproval } from '@/api/approvals';
 import { useApprovalBadge } from '@/store/approvalBadge';
+import { server } from '@/test/msw-server';
+import { stubIntersectionObserver, triggerVisibleAt, unstubIntersectionObserver } from '@/test/mockIO';
 
 vi.mock('@/api/approvals', () => ({
   getApproval: vi.fn(),
@@ -488,5 +491,41 @@ describe('MessageBubble deliverable link rendering', () => {
     // No deliverable card is produced for a plain link. 对齐当前按钮名
     // 「新窗口打开」:沿用旧名「打开」会让这条断言无条件通过(按钮已改名)。
     expect(screen.queryByRole('button', { name: '新窗口打开' })).not.toBeInTheDocument();
+  });
+});
+
+describe('MessageBubble deliverable in-place preview', () => {
+  const HEX = 'a3f9c2d81b7e4056c9d0e1f2';
+
+  beforeEach(() => {
+    localStorage.setItem('opskeeper-locale', 'zh-CN');
+    stubIntersectionObserver();
+    server.use(http.get('/api/pages/:id', () =>
+      HttpResponse.text('<!doctype html><html><head><title>预览页</title></head><body><h1>ok</h1></body></html>')));
+  });
+  afterEach(() => {
+    unstubIntersectionObserver();
+    server.resetHandlers();
+  });
+
+  it('expands the preview inside the bubble without navigating away', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const { container } = render(
+      <MessageBubble
+        message={{
+          id: 'assistant-preview',
+          role: 'assistant',
+          content: `报告已生成：[查看托管页](/pages/${HEX})`,
+          pending: false,
+        }}
+      />,
+    );
+    triggerVisibleAt(0);
+    await waitFor(() => expect(document.querySelector('iframe')).not.toBeNull());
+    fireEvent.click(screen.getByTestId('deliverable-card-header'));
+    expect(screen.getByTestId('deliverable-preview')).toBeInTheDocument();
+    expect(container.querySelector('.bubble-agent')).not.toBeNull(); // 消息流仍在原地
+    expect(open).not.toHaveBeenCalled();
+    open.mockRestore();
   });
 });
