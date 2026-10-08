@@ -6,7 +6,7 @@ import { fullDateTime } from '@/lib/format';
 import { usePoll } from '@/lib/usePoll';
 import { usePermissions } from '@/store/me';
 import { useI18n } from '@/i18n/locale';
-import { ReportContentView } from '@/components/ReportContent';
+import { ReportHostedView } from '@/components/ReportHostedView';
 import { deleteReport, getReport, shareReport, type ReportDetail } from '@/api/reports';
 
 export default function ReportDetailPage() {
@@ -125,7 +125,7 @@ export default function ReportDetailPage() {
               {tr('报告生成中，请稍候…', 'Report is being generated…')}
             </div>
           ) : (
-            <ReportContentView content={report.content} />
+            <ReportHostedView content={report.content} maxHeight="none" />
           )}
 
           {/* Delivery status panel (PR-7) */}
