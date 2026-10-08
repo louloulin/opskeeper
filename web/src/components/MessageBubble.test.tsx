@@ -452,6 +452,12 @@ describe('MessageBubble deliverable link rendering', () => {
     localStorage.setItem('opskeeper-locale', 'zh-CN');
   });
 
+  // 报表那条用例 stub 了 IO 与 msw handler,两者都是全局的,不能漏给下一个 describe。
+  afterEach(() => {
+    unstubIntersectionObserver();
+    server.resetHandlers();
+  });
+
   it('renders a hosted-page markdown link as a DeliverableCard, not an anchor', () => {
     const { container } = render(
       <MessageBubble
@@ -491,6 +497,48 @@ describe('MessageBubble deliverable link rendering', () => {
     // No deliverable card is produced for a plain link. 对齐当前按钮名
     // 「新窗口打开」:沿用旧名「打开」会让这条断言无条件通过(按钮已改名)。
     expect(screen.queryByRole('button', { name: '新窗口打开' })).not.toBeInTheDocument();
+    // 反向锁定:带交付物卡的段落被换成 <div> 之后,没有卡的段落必须仍是真正的 <p>,
+    // 否则 markdown 排版基础(以及 .md-body p 的间距规则)对普通文本就失效了。
+    expect(container.querySelector('p')).not.toBeNull();
+  });
+
+  it('renders a report card preview without nesting block content inside a <p>', async () => {
+    // 报表预览走 ReportHostedView/ReportContentView,内部是成片的 <div>。卡片整体
+    // 被 ReactMarkdown 注入 <p>,若段落还是 <p>,真实 DOM 就是 <p><span><div> —— 非法
+    // 嵌套,dev 每展开一次报表卡就报一次 validateDOMNesting。MessageBubble 的 p 覆盖
+    // 把带卡的段落换成 <div class="md-p-card">,这里断言换掉之后 <p> 下面没有块级内容。
+    const UUID = '7b2c1a9e-3f4d-4c5b-8e9f-0a1b2c3d4e5f';
+    server.use(http.get('/api/v1/reports/:id', () => HttpResponse.json({
+      id: UUID, title: '10月8日日报', kind: 'daily', status: 'ready', summary: '',
+      period_start: '', period_end: '', generated_at: '2026-10-08T09:00:00Z',
+      created_at: '2026-10-08T09:00:00Z', content_md: '', timezone: 'Asia/Shanghai',
+      content: {
+        version: '1', hero: [], narrative: { headline: '集群平稳' },
+        resource: { available: false, cpu_avg: 0, cpu_peak: 0, mem_avg: 0, mem_peak: 0, disk_avg: 0, disk_peak: 0 },
+        fleet: { total: 3, online: 2 },
+        actions_summary: { mutating_total: 0, mutating_approved: 0, safe_total: 1 },
+        assets: { new_agents: 0, new_skills: 0, new_repos: 0 },
+        usage: { sessions: 1, prompt_tokens: 10, completion_tokens: 5 },
+      },
+    })));
+    stubIntersectionObserver();
+    const { container } = render(
+      <MessageBubble
+        message={{
+          id: 'assistant-report-preview',
+          role: 'assistant',
+          content: `报告已生成：[查看报表](/reports/${UUID})`,
+          pending: false,
+        }}
+      />,
+    );
+    triggerVisibleAt(0);
+    await waitFor(() => expect(screen.getByText('日报')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('deliverable-card-header'));
+    await waitFor(() => expect(screen.getByTestId('deliverable-preview')).toBeInTheDocument());
+    expect(screen.getByText('集群平稳')).toBeInTheDocument();
+    expect(container.querySelector('p div')).toBeNull(); // <p> 之下不得再有块级元素
+    expect(container.querySelector('.md-p-card')).not.toBeNull();
   });
 });
 

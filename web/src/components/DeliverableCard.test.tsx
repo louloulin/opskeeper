@@ -267,6 +267,31 @@ describe('DeliverableCard in-place preview', () => {
     expect(screen.getByTestId('deliverable-preview').textContent).toContain('加载失败');
     screen.getByRole('button', { name: '新窗口打开' }).click();
     expect(open).toHaveBeenCalledWith(`/pages/${HEX24}`, '_blank');
+    // 锁死 stopPropagation:删掉它,出口按钮的 click 会冒泡到卡头并收起就地预览,
+    // 而上面的 open 断言照样成立 —— 没有这条断言,spec 里「出口不打扰预览」是裸的。
+    expect(screen.getByTestId('deliverable-preview')).toBeInTheDocument();
+    open.mockRestore();
+  });
+
+  it('keeps the exit usable by keyboard: Enter opens a new tab and does not collapse the preview', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    stubIntersectionObserver();
+    render(<DeliverableCard info={pageInfo} />);
+    triggerVisibleAt(0);
+    await waitFor(() => expect(document.querySelector('iframe')).not.toBeNull());
+    fireEvent.click(screen.getByTestId('deliverable-card-header'));
+    expect(screen.getByTestId('deliverable-preview')).toBeInTheDocument();
+
+    // jsdom 不会把 keyDown 合成为 click,这里显式补上浏览器的真实序列:按钮上
+    // Enter keydown(其默认行为就是激活)→ click。回归锁定点:keydown 从按钮冒泡
+    // 到卡头,若卡头仍无条件 preventDefault + 切换,下面的 preview 断言会挂 ——
+    // 键盘用户唯一的出口会静默失效。
+    const exit = screen.getByRole('button', { name: '新窗口打开' });
+    fireEvent.keyDown(exit, { key: 'Enter' });
+    fireEvent.click(exit);
+
+    expect(open).toHaveBeenCalledWith(`/pages/${HEX24}`, '_blank');
+    expect(screen.getByTestId('deliverable-preview')).toBeInTheDocument();
     open.mockRestore();
   });
 });

@@ -545,6 +545,11 @@ select:focus-visible {
 }
 .md-body p { margin: 0 0 0.6em 0; }
 .md-body p:last-child { margin-bottom: 0; }
+/* .md-p-card — 带交付物卡的段落被 MessageBubble 的 p 覆盖换成 <div>(报表预览是
+   块级内容,不能待在 <p> 里)。间距与上面两条逐字对齐,否则段落间距会悄悄消失。
+   margin 与主题无关,所以只在基础块里给一份,不需要 html.light 平行规则。 */
+.md-body .md-p-card { margin: 0 0 0.6em 0; }
+.md-body .md-p-card:last-child { margin-bottom: 0; }
 .md-body h1, .md-body h2, .md-body h3 {
   font-weight: 600;
   margin: 0.8em 0 0.4em;

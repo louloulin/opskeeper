@@ -123,6 +123,11 @@ export function DeliverableCard({ info }: { info: DeliverableInfo }) {
         aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
         onKeyDown={(e) => {
+          // 只响应打在卡头自身的按键。出口是卡头里一个真实的 <button>,它的 keydown
+          // 会冒泡上来:Enter/Space 在按钮上的默认行为就是激活,若卡头继续
+          // preventDefault + 切换,键盘用户唯一的出口会被静默吞掉(鼠标点击不受
+          // 影响,click 那侧有 stopPropagation)。
+          if (e.target !== e.currentTarget) return;
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             setExpanded((v) => !v);

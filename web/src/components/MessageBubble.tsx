@@ -109,6 +109,28 @@ function compactUserContent(
   return tr('确认创建这条告警规则', 'Confirm creating this alert rule');
 }
 
+// react-markdown 把 `components` 里的内联覆盖当作普通组件塞进树里,真正的
+// `<DeliverableCard/>` 要等渲染期才展开 —— 所以 p 覆盖拿到的 children 里是 `a`
+// 覆盖函数本身,按组件类型认卡是认不出来的。改读 markdown 节点:直接取子节点里
+// <a> 的 href,用同一个 matchDeliverable 判定。这样「这个段落会产出交付物卡」与
+// a 覆盖的判定条件是同一段代码,两者永远不会漂移。
+// react-markdown 传了 passNode,所以 p 覆盖拿得到原始 hast 节点。
+type HastNode = {
+  type: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  children?: HastNode[];
+};
+
+function paragraphHasDeliverable(node: HastNode | undefined): boolean {
+  return !!node?.children?.some(
+    (child) =>
+      child.type === 'element' &&
+      child.tagName === 'a' &&
+      matchDeliverable(String(child.properties?.href ?? '')) !== null,
+  );
+}
+
 function AssistantBubble({ message, agentId, onConfirmConfigDraft }: Props & { agentId?: string | null }) {
   const { tr } = useI18n();
   // Messenger-style: persona avatar + name/time head row on the left, prose
@@ -145,6 +167,16 @@ function AssistantBubble({ message, agentId, onConfirmConfigDraft }: Props & { a
                     // same markup, no target attr.
                     return <a href={href}>{children}</a>;
                   },
+                  // 交付物卡卡内报表预览是成片的块级内容(<div>),而卡整体被上面的 a
+                  // 覆盖塞进 ReactMarkdown 的 <p> 里。不换掉这个 <p>,真实 DOM 就是
+                  // <p><span><div>,非法嵌套。判定见 paragraphHasDeliverable。
+                  // 不带卡的段落仍是真正的 <p>,markdown 排版不受影响。
+                  p: ({ node, children }) =>
+                    paragraphHasDeliverable(node as HastNode | undefined) ? (
+                      <div className="md-p-card">{children}</div>
+                    ) : (
+                      <p>{children}</p>
+                    ),
                 }}
               >
                 {message.content}
