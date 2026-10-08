@@ -1,7 +1,7 @@
 ## 1. 前置核查
 
 - [x] 1.1 已定案(design 阶段,2026-10-08):前端路由表(`web/src/App.tsx:98-187`)无 postmortem / 工作流产物路由,`/workflows/:id` 为流程定义编辑器非产物页,`/pages/:id` 无 `/view` 子路由——白名单保持 `/pages`、`/reports` 两条,不扩充识别面;但 id 匹配正则需修正为真实产物 id 形态(见 6.1)
-- [ ] 1.2 通读 `DeliverableCard.tsx`(41 行)与 `MessageBubble.tsx:142-143` 换卡点,确认既有「普通链接回退」用例的断言位置,作为改造后不得回归的基线
+- [x] 1.2 通读 `DeliverableCard.tsx`(41 行)与 `MessageBubble.tsx:142-143` 换卡点,确认既有「普通链接回退」用例的断言位置,作为改造后不得回归的基线
 
 ## 2. 共享只读渲染器抽取
 
@@ -32,8 +32,8 @@
 ## 6. 识别面与安全边界
 
 - [x] 6.1 修正 `matchDeliverable` 白名单正则至真实产物 id 形态(既有 `\d+` 正则从未命中过任何真实链接,属已确认的定性缺陷):`/pages/<hex24>` 与 `/reports/<uuid>` 分别以 `/^\/pages\/[0-9a-f]{16,64}$/` 与 `/^\/reports\/[0-9a-f-]{16,64}$/` 匹配,移除不存在的 `(\/view)?` 分支;非白名单链接 MUST 回退普通 `<a>` 且行为与改造前一致(spec:普通链接回退)
-- [ ] 6.2 校验所有承载托管页 HTML 的 iframe `sandbox` 为空值,不授予脚本/表单/弹窗(spec:托管页 iframe 沙箱收紧)
-- [ ] 6.3 确认第三方外部链接不会进入任何 iframe(spec:第三方链接不使用 iframe)
+- [x] 6.2 校验所有承载托管页 HTML 的 iframe `sandbox` 为空值,不授予脚本/表单/弹窗(spec:托管页 iframe 沙箱收紧)
+- [x] 6.3 确认第三方外部链接不会进入任何 iframe(spec:第三方链接不使用 iframe)
 
 ## 7. 测试
 
@@ -41,12 +41,12 @@
 - [x] 7.2 扩展测试覆盖缩略类型分流:托管页走 iframe 真实缩略、报表走类型占位且不出现 img 截图元素
 - [x] 7.3 扩展测试覆盖三态:loading 呈现加载态、ready 渲染内容、failed 降级为占位且「新窗口打开」仍可用
 - [x] 7.4 扩展测试覆盖懒挂载与数量上限:视口外不加载、超限部分收敛为紧凑卡
-- [ ] 7.5 断言 iframe `sandbox` 属性存在且为空值;断言第三方链接不渲染 iframe
-- [ ] 7.6 保活既有测试:普通链接回退、页面与报表独立页既有断言均不得因抽取共享组件而破;不得删除任何既有测试用例
+- [x] 7.5 断言 iframe `sandbox` 属性存在且为空值;断言第三方链接不渲染 iframe
+- [x] 7.6 保活既有测试:普通链接回退、页面与报表独立页既有断言均不得因抽取共享组件而破;不得删除任何既有测试用例
 
 ## 8. 验证与走查
 
-- [ ] 8.1 `cd web && pnpm test` 全绿(exit 0),`pnpm typecheck` exit 0,`pnpm build` exit 0
+- [x] 8.1 `cd web && pnpm test` 全绿(exit 0),`pnpm typecheck` exit 0,`pnpm build` exit 0
 - [ ] 8.2 浅色 / 深色双主题走查:缩略窗格与卡片配色正确,加载态与占位无深浅错配
 - [ ] 8.3 中英双语走查:卡片文案、加载态、失败提示语汇一致
-- [ ] 8.4 复核 Non-Goals 全部未破:`git diff --stat` 显示零 `core/`、`cmd/` 改动,`web/package.json` 未新增依赖,产物页功能未变
+- [x] 8.4 复核 Non-Goals 全部未破:`git diff --stat` 显示零 `core/`、`cmd/` 改动,`web/package.json` 未新增依赖,产物页功能未变
