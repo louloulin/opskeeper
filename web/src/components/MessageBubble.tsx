@@ -12,7 +12,7 @@ import { useI18n } from '@/i18n/locale';
 import { useApprovalBadge } from '@/store/approvalBadge';
 import { personaLabel } from '@/components/AgentBadge';
 import { AgentAvatar } from './AgentAvatar';
-import { DeliverableCard, matchDeliverable } from './DeliverableCard';
+import { DeliverableCard, DeliverableSequence, matchDeliverable } from './DeliverableCard';
 import { Button, Chip } from '@/components/ui';
 
 export type ConfigDraftResult = {
@@ -159,30 +159,32 @@ function AssistantBubble({ message, agentId, onConfirmConfigDraft }: Props & { a
             </span>
           ) : (
             <div className="md-body text-zinc-100">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={{
-                  a: ({ href, children }) => {
-                    const info = href ? matchDeliverable(href) : null;
-                    if (info) return <DeliverableCard info={info} />;
-                    // Non-deliverable links keep their pre-refactor behavior verbatim —
-                    // same markup, no target attr.
-                    return <a href={href}>{children}</a>;
-                  },
-                  // 交付物卡卡内报表预览是成片的块级内容(<div>),而卡整体被上面的 a
-                  // 覆盖塞进 ReactMarkdown 的 <p> 里。不换掉这个 <p>,真实 DOM 就是
-                  // <p><span><div>,非法嵌套。判定见 hasDeliverableLink。
-                  // 不带卡的段落仍是真正的 <p>,markdown 排版不受影响。
-                  p: ({ node, children }) =>
-                    hasDeliverableLink(node) ? (
-                      <div className="md-p-card">{children}</div>
-                    ) : (
-                      <p>{children}</p>
-                    ),
-                }}
-              >
-                {message.content}
-              </ReactMarkdown>
+              <DeliverableSequence>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    a: ({ href, children }) => {
+                      const info = href ? matchDeliverable(href) : null;
+                      if (info) return <DeliverableCard info={info} />;
+                      // Non-deliverable links keep their pre-refactor behavior verbatim —
+                      // same markup, no target attr.
+                      return <a href={href}>{children}</a>;
+                    },
+                    // 交付物卡卡内报表预览是成片的块级内容(<div>),而卡整体被上面的 a
+                    // 覆盖塞进 ReactMarkdown 的 <p> 里。不换掉这个 <p>,真实 DOM 就是
+                    // <p><span><div>,非法嵌套。判定见 hasDeliverableLink。
+                    // 不带卡的段落仍是真正的 <p>,markdown 排版不受影响。
+                    p: ({ node, children }) =>
+                      hasDeliverableLink(node) ? (
+                        <div className="md-p-card">{children}</div>
+                      ) : (
+                        <p>{children}</p>
+                      ),
+                  }}
+                >
+                  {message.content}
+                </ReactMarkdown>
+              </DeliverableSequence>
             </div>
           )}
         </div>

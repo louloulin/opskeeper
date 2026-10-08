@@ -616,3 +616,50 @@ describe('MessageBubble deliverable in-place preview', () => {
     open.mockRestore();
   });
 });
+
+describe('MessageBubble deliverable thumbnails: lazy mount + cap', () => {
+  // 5 个互不相同的 hex24 产物 id。
+  const HEX_IDS = [
+    'a3f9c2d81b7e4056c9d0e1f2',
+    'b3f9c2d81b7e4056c9d0e1f2',
+    'c3f9c2d81b7e4056c9d0e1f2',
+    'd3f9c2d81b7e4056c9d0e1f2',
+    'e3f9c2d81b7e4056c9d0e1f2',
+  ];
+  const deliverableMessage = {
+    id: 'assistant-many-deliverables',
+    role: 'assistant' as const,
+    content: HEX_IDS.map((id, i) => `[页面${i}](/pages/${id})`).join('\n'),
+    pending: false,
+  };
+
+  beforeEach(() => {
+    localStorage.setItem('opskeeper-locale', 'zh-CN');
+    stubIntersectionObserver();
+    server.use(http.get('/api/pages/:id', ({ params }) =>
+      HttpResponse.text(`<!doctype html><html><head><title>页面 ${String(params.id)}</title></head><body></body></html>`)));
+  });
+  afterEach(unstubIntersectionObserver);
+
+  it('renders thumb panes for the first 3 cards and compact cards beyond', () => {
+    const { container } = render(<MessageBubble message={deliverableMessage} />);
+    expect(container.querySelectorAll('[data-testid="deliverable-card"]')).toHaveLength(5);
+    expect(screen.getAllByTestId('deliverable-thumb')).toHaveLength(3); // 前 3 张(含 idle 占位)
+    expect(screen.getAllByRole('button', { name: '新窗口打开' })).toHaveLength(5); // 动作全部可用
+  });
+
+  it('loads thumbnail content only when a card enters the viewport', async () => {
+    render(<MessageBubble message={deliverableMessage} />);
+    triggerVisibleAt(0); // 仅第一张卡可见
+    await waitFor(() => expect(document.querySelectorAll('iframe')).toHaveLength(1));
+    expect(document.querySelectorAll('iframe')).toHaveLength(1); // 其余卡零 fetch 零 iframe
+  });
+
+  it('compact cards beyond the cap expand their preview on demand', async () => {
+    render(<MessageBubble message={deliverableMessage} />);
+    triggerVisibleAt(3); // 第 4 张(超限紧凑卡)进入视口
+    fireEvent.click(screen.getAllByTestId('deliverable-card-header')[3]);
+    await waitFor(() =>
+      expect(screen.getAllByTestId('deliverable-preview')[0].querySelector('iframe')).not.toBeNull());
+  });
+});
