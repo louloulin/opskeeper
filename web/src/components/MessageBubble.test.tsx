@@ -502,6 +502,34 @@ describe('MessageBubble deliverable link rendering', () => {
     expect(container.querySelector('p')).not.toBeNull();
   });
 
+  it('keeps a third-party absolute link as a plain anchor and renders no iframe', () => {
+    // 上面那条锁的是「站内非交付物路径」。这条锁的是形状相同但指向外部的链接:
+    // `https://evil.example.com/pages/<hex24>` 的 path 与托管页一模一样,若换卡判定
+    // 只看路径不看 origin(或正则丢掉 `^`),外部页面就会被当成交付物 —— 消息里出现
+    // 一张指向 evil.example.com 的卡片,进而用 sandbox iframe 去取第三方 HTML。
+    // 第三方内容绝不进入本应用的 iframe/卡片管线,只留普通外链。
+    const HEX24 = 'a3f9c2d81b7e4056c9d0e1f2';
+    const href = `https://evil.example.com/pages/${HEX24}`;
+    const { container } = render(
+      <MessageBubble
+        message={{
+          id: 'assistant-third-party-deliverable',
+          role: 'assistant',
+          content: `参考这份材料：[外部页面](${href})`,
+          pending: false,
+        }}
+      />,
+    );
+
+    const link = container.querySelector(`a[href="${href}"]`);
+    expect(link).not.toBeNull();
+    expect(link?.textContent).toBe('外部页面');
+    expect(link?.hasAttribute('target')).toBe(false); // 沿用普通外链,不加 target
+    // 无卡片、无 iframe:这是「第三方链接不渲染 iframe」这条 spec 的 DOM 级断言。
+    expect(container.querySelector('[data-testid="deliverable-card"]')).toBeNull();
+    expect(container.querySelector('iframe')).toBeNull();
+  });
+
   it('renders a report card preview without nesting block content inside a <p>', async () => {
     // 报表预览走 ReportHostedView/ReportContentView,内部是成片的 <div>。卡片整体
     // 被 ReactMarkdown 注入 <p>,若段落还是 <p>,真实 DOM 就是 <p><span><div> —— 非法

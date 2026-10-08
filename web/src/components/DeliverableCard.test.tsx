@@ -51,6 +51,16 @@ describe('matchDeliverable', () => {
     expect(matchDeliverable('/settings')).toBeNull();
     expect(matchDeliverable('https://example.com')).toBeNull();
   });
+  // 回归锁定(spec 7.5「断言第三方链接不渲染 iframe」的白名单另一半):白名单的判据
+  // 是 href 以 `/pages/<hex>` / `/reports/<id>` **开头**的站内相对路径,不是「路径里
+  // 有这么一段」。第三方域 `https://evil.example.com/pages/<hex24>` 的 path 形状与
+  // 托管页完全一样;若 PAGE_RE / REPORT_RE 丢掉 `^`(或任何让 exec 能在中段命中的
+  // 改动),它就会被当成交付物,消息里出现一个指向外部站点的卡片 + sandbox iframe。
+  // 这里两条都必须返回 null,否则上面的「recognizes」用例仍然绿 —— 只有本条会红。
+  it('rejects third-party absolute URLs whose path matches the whitelist shape', () => {
+    expect(matchDeliverable(`https://evil.example.com/pages/${HEX24}`)).toBeNull();
+    expect(matchDeliverable(`https://evil.example.com/reports/${UUID}`)).toBeNull();
+  });
 });
 
 describe('extractHtmlTitle', () => {
