@@ -202,6 +202,43 @@ describe('IncidentGroupChat', () => {
     const wrapper = text.closest('.anim-rise');
     expect(wrapper).not.toBeNull();
   });
+
+  it('shows a typing indicator while the agent reply is in flight, then removes it', async () => {
+    stub();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    server.use(
+      http.post('/api/v1/chat/sessions', () =>
+        HttpResponse.json({ id: 's-new', user_id: 1, title: '事件追问', agent_id: 'default' }),
+      ),
+      http.post('/api/v1/chat/sessions/:id/messages', async () => {
+        await gate;
+        return HttpResponse.json({
+          session_id: 's-new',
+          assistant_message: { id: 'a1', content: '收到', created_at: '2026-10-07T10:02:00Z' },
+          tool_calls: [],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          iterations: 1,
+        });
+      }),
+    );
+
+    renderChat();
+    const textarea = await screen.findByRole('textbox', { name: /消息输入框|message input/i });
+    fireEvent.change(textarea, { target: { value: '磁盘为什么满？' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    // typing 指示出现，且呼吸点带 motion-safe 前缀（对齐 Approvals.test 的呼吸点断言）。
+    const typing = await screen.findByText(/调查中|Investigating/);
+    expect(typing.closest('[data-testid="typing-indicator"]')).not.toBeNull();
+    const dot = screen
+      .getByTestId('typing-indicator')
+      .querySelector('.animate-pulse-dot, .motion-safe\\:animate-pulse-dot');
+    expect(dot?.className, '呼吸点未做 motion-safe 门控').toContain('motion-safe:');
+
+    release();
+    await waitFor(() => expect(screen.queryByText(/调查中|Investigating/)).not.toBeInTheDocument());
+  });
 });
 
 afterEach(() => {

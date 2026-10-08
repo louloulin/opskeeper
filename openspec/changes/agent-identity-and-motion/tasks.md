@@ -20,7 +20,7 @@
 ## 4. 群聊动效
 
 - [x] 4.1 群聊消息进入动效:fade+上移,复用 `.anim-rise`/`.anim-fade`,motion-safe
-- [ ] 4.2 typing 呼吸点:Agent 回复中呈现(复用 pulse-dot),回复完成后消失
+- [x] 4.2 typing 呼吸点:Agent 回复中呈现(复用 pulse-dot),回复完成后消失
 - [ ] 4.3 事件群聊阶段推进过渡动效
 - [ ] 4.4 结晶徽标脉冲:与 `Approvals.tsx:353` StatusChip 语汇一致,缺口 keyframes 仅在此新增
 - [ ] 4.5 全量验证动效不改变信息结构:无动效状态下排序、内容可见性一致

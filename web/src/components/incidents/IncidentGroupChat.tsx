@@ -169,6 +169,18 @@ export function IncidentGroupChat({ incidentId }: { incidentId: number }) {
             </div>
           ),
         )}
+        {sending && (
+          <div
+            data-testid="typing-indicator"
+            className="anim-fade flex items-center gap-2 px-1 py-1 text-[11px] text-zinc-500"
+          >
+            <span
+              className="inline-block h-1.5 w-1.5 rounded-full bg-zinc-400 motion-safe:animate-pulse-dot"
+              aria-hidden="true"
+            />
+            <span>{tr('调查中…', 'Investigating…')}</span>
+          </div>
+        )}
       </div>
 
       {sendError && (
