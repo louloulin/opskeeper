@@ -24,10 +24,14 @@ export function stubIntersectionObserver() {
 }
 
 // 触发第 index 个创建的观察器回调(实例按创建顺序入数组 = 卡片挂载顺序)。
-export function triggerVisibleAt(index: number) {
+// isIntersecting 默认 true:既有调用方 triggerVisibleAt(i) 语义不变;传 false 构造
+// 非命中 entry,用于覆盖 useInViewOnce 的 entries.some() 否定分支。返回被触发的实例,
+// 便于测试断言 disconnect 等契约。
+export function triggerVisibleAt(index: number, isIntersecting: boolean = true) {
   const io = instances[index];
   if (!io) throw new Error(`no IntersectionObserver instance at ${index}; created: ${instances.length}`);
-  act(() => io.callback([{ isIntersecting: true, target: document.body }]));
+  act(() => io.callback([{ isIntersecting, target: document.body }]));
+  return io;
 }
 
 export function unstubIntersectionObserver() {

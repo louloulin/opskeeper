@@ -24,9 +24,10 @@ describe('useInViewOnce', () => {
     const ref = { current: document.createElement('div') };
     const { result } = renderHook(() => useInViewOnce(ref));
     expect(result.current).toBe(false);
-    triggerVisibleAt(0);
+    const io = triggerVisibleAt(0);
     expect(result.current).toBe(true);
-    // 单次触发:再次回调(已 disconnect)不再产生变化
+    // 单次触发:命中后必须断开观察器,不再产生后续变化
+    expect(io.disconnect).toHaveBeenCalled();
     triggerVisibleAt(0);
     expect(result.current).toBe(true);
   });
@@ -35,8 +36,12 @@ describe('useInViewOnce', () => {
     const ref = { current: document.createElement('div') };
     const { result } = renderHook(() => useInViewOnce(ref));
     expect(result.current).toBe(false);
-    // 无可见实例可触发时只应保持 false——用「触发 0 号仍为 false 前先回调非命中」覆盖:
-    // 直接构造非命中路径由组件桩的 callback 无法触达,故这里以「未触发保持 false」收口。
+    // 非命中不得误翻 visible
+    triggerVisibleAt(0, false);
+    expect(result.current).toBe(false);
+    // 同一实例随后命中才翻转——证明 false 分支确实走了 .some() 的否定路径
+    triggerVisibleAt(0, true);
+    expect(result.current).toBe(true);
   });
   it('stays invisible without IntersectionObserver (jsdom default)', () => {
     const ref = { current: document.createElement('div') };
