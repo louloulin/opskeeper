@@ -6,7 +6,7 @@
 
 ## 2. 技能目录一键安装
 
-- [ ] 2.1 `api/marketplace.ts` 新增 `getMarketplaceCatalog()` client 函数(按后端 `GET /v1/marketplace/catalog` 真实响应形态校准)
+- [x] 2.1 `api/marketplace.ts` 新增 `getMarketplaceCatalog()` client 函数(按后端 `GET /v1/marketplace/catalog` 真实响应形态校准)
 - [ ] 2.2 Extensions tab 新增目录区:可安装包卡片 + 「安装」动作(复用 Modal 确认,禁 window.confirm)→ `installPack` → 就地转已启用,enabled 态与 `listInstalledPacks` 对账
 - [ ] 2.3 卡片内联三态 installing/enabled/failed,失败可重试;非 admin 禁用安装入口并说明原因
 
