@@ -7,7 +7,7 @@
 
 ## 2. 待审批队列事实(后端唯一增量)
 
-- [ ] 2.1 `core/manager/biz/report/facts.go` 新增「当前待审批队列」事实:当前 pending 审批数 + 双签进度(已签/需签),纯 SQL 计算注入,与既有 ReportFacts 同风格;不引入 LLM 产出数字
+- [x] 2.1 `core/manager/biz/report/facts.go` 新增「当前待审批队列」事实:当前 pending 审批计数(总数 / 零签署 / 部分已签,不含需签数),纯 SQL 计算注入,与既有 ReportFacts 同风格;不引入 LLM 产出数字
 
 ## 3. 三节模板与生成
 

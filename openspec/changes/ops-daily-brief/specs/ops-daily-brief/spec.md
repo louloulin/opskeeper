@@ -24,11 +24,11 @@
 - **THEN** 可回看往期简报,复用报表列表
 
 ### Requirement: 当前待审批队列事实
-报表事实层(`core/manager/biz/report/facts.go`)SHALL 新增「当前待审批队列」事实:当前 pending 审批数与双签进度(已签/需签),以纯 SQL 计算,与既有 ReportFacts 同风格注入,MUST NOT 由 LLM 产出该数字。
+报表事实层(`core/manager/biz/report/facts.go`)SHALL 新增「当前待审批队列」事实:当前 pending 审批计数(总数 / 零签署 / 部分已签),以纯 SQL 计算,与既有 ReportFacts 同风格注入。该事实只带计数,MUST NOT 暴露「所需签署人数」(需签口径由前端策略常量 `DUAL_SIGN_REQUIRED` 负责),MUST NOT 由 LLM 产出该数字。
 
 #### Scenario: 待审批事实注入
 - **WHEN** 简报或任何 report 生成
-- **THEN** 待审批节使用 SQL 计算的 pending 数与双签进度事实,不使用 LLM 生成的数字
+- **THEN** 待审批节使用 SQL 计算的 pending 计数事实(总数 / 零签署 / 部分已签),不使用 LLM 生成的数字
 
 ### Requirement: 无源小节不渲染
 结晶自愈次数与今日值班两节无持久数据源(结晶 Ledger 为刻意内存态、无 oncall 排班数据),本期模板 SHALL 不渲染这两节,MUST NOT 出现「数据源建设中」之外的占位或编造数字;待对应数据源落地后另立 change 补节。

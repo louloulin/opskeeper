@@ -6,7 +6,7 @@
 
 - **复用既有 report 机器做预设化**:`ReportKind='daily'` + `cron_spec`(默认 09:00,Q4 定案)+ `agent_persona`(复用既有 `reporter`,不新建 persona 文件)+ `prompt_override`(三节模板)全部是既有调度字段,零调度模型改动
 - **简报模板三节**:昨夜事件摘要(KeyIncidents)/ 待审批项(pending 队列事实 + 周期计数)/ 告警趋势与今日关注(AlertCounts + Advice);无源两节(结晶自愈次数、今日值班)不渲染,待数据源落地另立 change
-- **后端唯一增量**:报表事实层(`core/manager/biz/report/facts.go`)新增「当前待审批队列」SQL 事实(pending 数 + 双签进度已签/需签)
+- **后端唯一增量**:报表事实层(`core/manager/biz/report/facts.go`)新增「当前待审批队列」SQL 事实(pending 计数:总数 / 零签署 / 部分已签,不含需签数)
 - **一键预设入口**:Tasks.tsx 报表调度页预填 kind=daily / 09:00 / 默认飞书渠道(Q4 定案)/ persona reporter / prompt_override 三节模板,经既有 schedule 创建接口提交,零新端点
 - **推送复用**既有 report delivery 通道(`delivery.go` channel fan-out),未配置渠道仅生成不推送;夜间不推送由 09:00 cron 保证
 
