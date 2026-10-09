@@ -5,7 +5,8 @@
 // ("@{type}:{id}({label})",由 ChatInput 写入),工具调用存在于
 // assistant 的 tool_calls[] 或流式合成的 tool_card 行。面板是「屏幕上
 // 已有内容」的只读视图,不发起任何请求。
-import type { ChatMessage, MentionType } from '@/api/chat';
+import type { ChatMessage, MentionType, ToolCallSummary } from '@/api/chat';
+import { toolGroupKey } from './toolSkill';
 
 export type MentionRef = {
   type: MentionType;
@@ -64,7 +65,59 @@ function deriveMentions(messages: ChatMessage[]): MentionRef[] {
   return out;
 }
 
-// deriveKnowledgeRefs 在 Task 2 实现;此处先返回空数组以满足 mentions 单测。
-function deriveKnowledgeRefs(_messages: ChatMessage[]): KnowledgeRef[] {
-  return [];
+// toolCallsOf 展开一条消息携带的全部 ToolCallSummary —— assistant 气泡的
+// tool_calls[] 与流式合成的 tool_card 行(tool_call)统一取齐。
+function toolCallsOf(m: ChatMessage): ToolCallSummary[] {
+  const out: ToolCallSummary[] = [];
+  if (m.tool_calls) out.push(...m.tool_calls);
+  if (m.tool_call) out.push(m.tool_call);
+  return out;
+}
+
+function deriveKnowledgeRefs(messages: ChatMessage[]): KnowledgeRef[] {
+  const out: KnowledgeRef[] = [];
+  const seen = new Set<string>();
+  messages.forEach((m, index) => {
+    for (const tc of toolCallsOf(m)) {
+      // 类别映射而非白名单:复用 toolGroupKey,'knowledge' 类新工具自动纳入。
+      if (toolGroupKey(tc.name) !== 'knowledge') continue;
+      const key = `${tc.name}|${stableArgs(tc.arguments)}`;
+      if (seen.has(key)) continue; // 按 工具名+关键参数 去重,首次出现胜出
+      seen.add(key);
+      out.push({
+        name: tc.name,
+        status: tc.status,
+        durationMs: tc.duration_ms,
+        sourceIndex: index,
+        messageId: m.id,
+        toolCallId: tc.id,
+      });
+    }
+  });
+  return out;
+}
+
+// stableArgs 序列化工具参数用于去重。参数来自服务端 SSE 帧(已是 JSON),
+// 同一调用形状键序稳定;缺失参数一律折成 "null",两条都缺席时可去重。
+function stableArgs(args: unknown): string {
+  try {
+    return JSON.stringify(args ?? null);
+  } catch {
+    return '';
+  }
+}
+
+// mentionRoute 把一个提及对象映射到 SPA 中既有的详情路由。rule / file
+// 无逐 id 详情页,落到最接近的既有列表页。
+export function mentionRoute(type: MentionType, id: string): string {
+  switch (type) {
+    case 'device':
+      return `/devices/${encodeURIComponent(id)}`;
+    case 'incident':
+      return `/alerts/incidents/${encodeURIComponent(id)}`;
+    case 'rule':
+      return '/alerts/rules';
+    case 'file':
+      return '/logs';
+  }
 }
