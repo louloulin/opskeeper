@@ -310,9 +310,27 @@ function CatalogCard({
   onInstalled: () => void | Promise<void>;
 }) {
   const { tr } = useI18n();
+  const [phase, setPhase] = useState<'idle' | 'confirm' | 'installing' | 'failed'>('idle');
+  const [failText, setFailText] = useState<string | null>(null);
   const isRegistry = entry.origin === 'registry';
   // registry 行但无法唯一归因(0 或多于 1 个可用 registry)→ 不可安装。
   const unresolvable = isRegistry && installSource === null;
+
+  const runInstall = useCallback(async () => {
+    if (!installSource) return;
+    setPhase('installing');
+    setFailText(null);
+    try {
+      await installPack(installSource);
+      setPhase('idle');
+      // 重新拉取 installed,对账键 pack_id===entry.name 命中 → 卡片转「已安装」。
+      await onInstalled();
+    } catch (e) {
+      setFailText(errorToast(e, 'install'));
+      setPhase('failed'); // 失败不刷新,停在卡片上,用户留在本页
+    }
+  }, [installSource, onInstalled]);
+
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-zinc-800/60 bg-zinc-950/40 p-3">
       <div className="flex items-center gap-2">
@@ -336,11 +354,71 @@ function CatalogCard({
           <span className="text-[11px] text-zinc-600">{tr('无法确定来源 registry', 'Cannot attribute to a registry')}</span>
         ) : !isAdmin ? (
           <span className="text-[11px] text-zinc-600">{tr('仅 admin 可执行安装', 'Admin only')}</span>
+        ) : phase === 'installing' ? (
+          <Button variant="subtle" disabled>
+            <Loader2 size={11} className="animate-spin" />
+            {tr('安装中…', 'Installing…')}
+          </Button>
+        ) : phase === 'failed' ? (
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-red-300">{failText}</span>
+            {/* 重试同样走应用内确认,保持「零 window.confirm」不变量 */}
+            <Button variant="subtle" onClick={() => setPhase('confirm')}>{tr('重试', 'Retry')}</Button>
+          </div>
         ) : (
-          <Button variant="subtle" disabled>{tr('安装', 'Install')}</Button>
+          <Button variant="subtle" onClick={() => setPhase('confirm')}>{tr('安装', 'Install')}</Button>
         )}
       </div>
+
+      <InstallConfirmModal
+        open={phase === 'confirm'}
+        entry={entry}
+        registry={installSource?.registry ?? ''}
+        onCancel={() => setPhase('idle')}
+        onConfirm={() => void runInstall()}
+      />
     </div>
+  );
+}
+
+function InstallConfirmModal({
+  open,
+  entry,
+  registry,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  entry: CatalogEntry;
+  registry: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { tr } = useI18n();
+  return (
+    <Modal
+      open={open}
+      onClose={onCancel}
+      size="sm"
+      title={tr(`安装 ${entry.name}?`, `Install ${entry.name}?`)}
+      footer={
+        <>
+          <Button onClick={onCancel} variant="ghost">{tr('取消', 'Cancel')}</Button>
+          <Button onClick={onConfirm} variant="subtle">
+            <PlugZap size={12} /> {tr('确认安装', 'Install')}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-2 text-sm text-zinc-300">
+        <div className="font-mono text-xs text-zinc-100">
+          {entry.name} <span className="text-zinc-500">v{entry.version}</span>
+        </div>
+        <p className="text-[11px] text-zinc-500">
+          {tr(`来源 registry：${registry}`, `Registry: ${registry}`)}
+        </p>
+      </div>
+    </Modal>
   );
 }
 

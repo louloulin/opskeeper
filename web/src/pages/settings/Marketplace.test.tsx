@@ -391,6 +391,79 @@ describe('SettingsMarketplace', () => {
     expect(screen.getByRole('button', { name: /^重试$/ })).toBeInTheDocument();
   });
 
+  it('install from the catalog goes through an in-app Modal (no window.confirm) and sends the registry payload', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true); // 若被调用即失败
+    let installBody: unknown = null;
+    let installed: typeof etcdPack[] = [];
+    server.use(
+      http.get(installedURL, () => HttpResponse.json({ items: installed })),
+      http.get(registriesURL, () => HttpResponse.json({ items: registryOfficial })),
+      http.get(catalogURL, () =>
+        HttpResponse.json({ items: [catalogFixture({ name: 'opskeeper-sre-readonly', origin: 'registry' })], total: 1 }),
+      ),
+      http.post(installURL, async ({ request }) => {
+        installBody = await request.json();
+        installed = [etcdPack]; // 对账后转已安装
+        return HttpResponse.json({ pack: etcdPack, capabilities: etcdCapabilities, warnings: [] });
+      }),
+    );
+    render(<MemoryRouter><SettingsMarketplace /></MemoryRouter>);
+    await screen.findByText('opskeeper-sre-readonly');
+
+    // Scope to the catalog card: the InstallCard also renders a global「安装」
+    // button, so a page-wide query would double-match.
+    const catalog = screen.getByText(/可安装目录/).closest('section')!;
+    await userEvent.click(within(catalog).getByRole('button', { name: /^安装$/ }));
+
+    // 应用内 Modal,而非 window.confirm
+    const dialog = await screen.findByRole('dialog');
+    expect(confirmSpy).not.toHaveBeenCalled();
+    // 标题与正文都含包名,用 getAllByText;来源行是正文独有,可唯一锁定。
+    expect(within(dialog).getAllByText(/opskeeper-sre-readonly/).length).toBeGreaterThan(0);
+    expect(within(dialog).getByText(/来源 registry/)).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole('button', { name: /确认安装|Install/ }));
+
+    await waitFor(() =>
+      expect(installBody).toEqual({
+        type: 'registry',
+        registry: 'opskeeper-official',
+        pack_id: 'opskeeper-sre-readonly',
+        version: '0.2.0',
+      }),
+    );
+    confirmSpy.mockRestore();
+  });
+
+  it('shows a failure state with retry when the catalog install fails, and stays on the page', async () => {
+    let calls = 0;
+    server.use(
+      http.get(installedURL, () => HttpResponse.json({ items: [] })),
+      http.get(registriesURL, () => HttpResponse.json({ items: registryOfficial })),
+      http.get(catalogURL, () =>
+        HttpResponse.json({ items: [catalogFixture({ name: 'opskeeper-sre-readonly', origin: 'registry' })], total: 1 }),
+      ),
+      http.post(installURL, () => {
+        calls += 1;
+        return calls === 1
+          ? HttpResponse.json({ error: 'conflict' }, { status: 409 })
+          : HttpResponse.json({ pack: etcdPack, capabilities: etcdCapabilities, warnings: [] });
+      }),
+    );
+    render(<MemoryRouter><SettingsMarketplace /></MemoryRouter>);
+    await screen.findByText('opskeeper-sre-readonly');
+    const catalog = screen.getByText(/可安装目录/).closest('section')!;
+    await userEvent.click(within(catalog).getByRole('button', { name: /^安装$/ }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /确认安装|Install/ }));
+
+    // 失败态 + 重试入口,不静默吞掉
+    const retry = await screen.findByRole('button', { name: /重试|Retry/ });
+    // 重试重新触发一次安装(再次经应用内确认)
+    await userEvent.click(retry);
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /确认安装|Install/ }));
+    await waitFor(() => expect(calls).toBe(2));
+  });
+
   it('signature_state badge variants', () => {
     const { rerender, container } = render(<SignatureBadge state="verified" />);
     expect(container).toHaveTextContent('verified');
