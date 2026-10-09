@@ -49,18 +49,15 @@ type ReportFacts struct {
 	// over the period. The "用了多少" row.
 	Usage UsageFacts `json:"usage"`
 
-	// PendingApprovals is a point-in-time snapshot of the approval inbox
-	// queue — NOT period-scoped, unlike every other fact. It answers "what
-	// is still waiting right now", which is what the daily brief's
-	// 待审批项 section needs.
+	// PendingApprovals 是审批收件箱队列的时点快照 —— 与其它所有事实不同,
+	// 它不按周期(period)过滤。它回答的是「此刻还有什么在等待」,这正是
+	// 日报「待审批项」一节所需要的。
 	//
-	// It carries counts only and never a "required signature count". The
-	// approval domain deliberately does not expose a per-row requirement:
-	// the rule lives in the hitl gate (biz/approval Gate), not on the row,
-	// and the frontend renders "需签 2" from its own policy constant
-	// (web/src/lib/approvalSigners.ts DUAL_SIGN_REQUIRED). Inventing a
-	// "required" number here would be a second source for a policy this
-	// layer does not own.
+	// 它只携带计数,绝不携带「所需签署人数」。审批域刻意不在单行上暴露
+	// 签署要求:该规则活在 hitl gate(biz/approval Gate)里,不在审批行上;
+	// 前端也用自身策略常量渲染「需签 2」(web/src/lib/approvalSigners.ts
+	// DUAL_SIGN_REQUIRED)。在此处虚构一个「需签」数字,会让一个本层并不
+	// 拥有的策略出现第二个来源。
 	PendingApprovals PendingApprovals `json:"pending_approvals"`
 }
 
@@ -78,10 +75,9 @@ type UsageFacts struct {
 	CompletionTokens int64 `json:"completion_tokens"`
 }
 
-// PendingApprovals is the current pending-approval queue, a point-in-time
-// snapshot. Total = rows with status=pending; Unsigned = of those, zero
-// signers; Partial = of those, >=1 signer (dual-sign waiting for another).
-// No "required" number: see the field comment on ReportFacts.
+// PendingApprovals 是当前待审批队列,一个时点快照。Total = status=pending
+// 的行数;Unsigned = 其中零签署的行数;Partial = 其中已 ≥1 人签署、仍未满签
+// 的行数(双签等待第二签)。不含「需签」数:参见 ReportFacts 上的字段注释。
 type PendingApprovals struct {
 	Total    int `json:"total"`
 	Unsigned int `json:"unsigned"`

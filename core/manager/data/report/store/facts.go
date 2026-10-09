@@ -368,17 +368,16 @@ func (c *FactsCollector) collectActions(ctx context.Context, p bizreport.Period)
 	return sum
 }
 
-// --- pending approval queue (approvals table) ---
+// --- 待审批队列(approvals 表) ---
 
-// collectPendingApprovals counts the current approval inbox queue. Unlike
-// the other collectors it is NOT period-scoped: the brief's 待审批项
-// section asks what is waiting now, not what happened in the window.
-// Query failure (or a missing table) degrades to the zero queue, the same
-// stance every other collector takes.
+// collectPendingApprovals 统计当前审批收件箱队列。与其它 collector 不同,
+// 它不按周期过滤:日报「待审批项」一节问的是此刻在等待什么,而不是窗口内
+// 发生了什么。查询失败(或表缺失)降级为零队列,与其它所有 collector 的
+// 处理姿态一致。
 //
-// The status literal "pending" must match model/approval.StatusPending.
-// The store queries tables by name and does not import the approval model,
-// exactly as collectActions does with chat_mutating_proposals.
+// 状态字面量 "pending" 必须与 model/approval.StatusPending 一致。store 按
+// 表名查询、不 import 审批模型,与 collectActions 对 chat_mutating_proposals
+// 的做法完全相同。
 func (c *FactsCollector) collectPendingApprovals(ctx context.Context) bizreport.PendingApprovals {
 	var out bizreport.PendingApprovals
 	var rows []struct {
@@ -401,11 +400,10 @@ func (c *FactsCollector) collectPendingApprovals(ctx context.Context) bizreport.
 	return out
 }
 
-// signerCount is len() of the decoded signer array — the same number
-// biz/approval.Sign counts (it stores the deduped Signer list). It is a
-// count, not a re-parse of signer semantics: no signer field is read or
-// reinterpreted. An absent/unreadable column counts as zero, the same safe
-// direction approval's decodeSigners takes.
+// signerCount 是解码后签署人数组的 len() —— 与 biz/approval.Sign 统计的数
+// 字相同(它存的是去重后的 Signer 列表)。它只是一个计数,不是对签署语义的
+// 重新解析:不读取、不重新解释任何签署者字段。列缺失/不可读计为零,与
+// approval 的 decodeSigners 所取的同一安全方向一致。
 func signerCount(raw *string) int {
 	if raw == nil || *raw == "" {
 		return 0
