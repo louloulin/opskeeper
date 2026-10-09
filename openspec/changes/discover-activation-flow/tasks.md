@@ -27,3 +27,13 @@
 - [x] 5.1 `cd web && pnpm test` 全绿(exit 0),`pnpm typecheck` exit 0,`pnpm build` exit 0
 - [x] 5.2 双主题 + 中英双语走查:目录卡片、三态、禁用说明、草稿状态、链接正确
 - [x] 5.3 复核 Non-Goals 全部未破:无第二套插件/发布模型、未新建 Tab、无计费、零 `window.confirm`、未改 Crystallized「本页不 install」设计决策、零后端改动
+
+## 6. 代码审查结论(review_mode: standard)
+
+build 出口轻量审查(请求一次,覆盖整个 change,只查正确性/安全/边界):**0 Critical / 0 Important / 5 Minor**,裁决「Ready to merge」。5 项 Minor 全部接受,影响范围为可用性打磨,不涉及正确性、安全或数据丢失,不阻塞进入 verify:
+
+1. `settings/Marketplace.tsx:319-331` runInstall 在 `await onInstalled()` 前先置 `setPhase('idle')`,refetch 往返期间「安装」按钮短暂可点,理论上可重复触发 → 后端 409 兜底。接受:后端已幂等拒绝,无数据损坏;修复属打磨。
+2. `settings/Marketplace.tsx:285` 卡片 `key={e.name}` 假设名唯一,跨 registry 同名会 React key 冲突;冲突行本就 `unresolvable`。接受:低概率、无功能损失。
+3. `settings/Marketplace.tsx:354` 有单一可用 registry 但 `version` 为空时标签显示「无法确定来源 registry」,真实原因是缺版本号。接受:文案精度问题,不误导到危险动作。
+4. `settings/Marketplace.tsx:237` `listRegistries().catch(() => [])` 吞掉瞬时错误,registry 行全体降级为 unresolvable 且无「registries 调用本身失败」提示。接受:降级方向保守(不误报可安装)。
+5. `settings/Marketplace.tsx:340,343-344` `entry.origin/safety_level/capability` 渲染未翻译的英文枚举。接受:属数据值而非界面文案,不破双语走查结论。
