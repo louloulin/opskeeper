@@ -48,6 +48,20 @@ type ReportFacts struct {
 	// Usage is the platform-usage signal: chat sessions + LLM token spend
 	// over the period. The "用了多少" row.
 	Usage UsageFacts `json:"usage"`
+
+	// PendingApprovals is a point-in-time snapshot of the approval inbox
+	// queue — NOT period-scoped, unlike every other fact. It answers "what
+	// is still waiting right now", which is what the daily brief's
+	// 待审批项 section needs.
+	//
+	// It carries counts only and never a "required signature count". The
+	// approval domain deliberately does not expose a per-row requirement:
+	// the rule lives in the hitl gate (biz/approval Gate), not on the row,
+	// and the frontend renders "需签 2" from its own policy constant
+	// (web/src/lib/approvalSigners.ts DUAL_SIGN_REQUIRED). Inventing a
+	// "required" number here would be a second source for a policy this
+	// layer does not own.
+	PendingApprovals PendingApprovals `json:"pending_approvals"`
 }
 
 // AssetFacts counts platform assets created within the period.
@@ -62,6 +76,16 @@ type UsageFacts struct {
 	Sessions         int   `json:"sessions"`
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
+}
+
+// PendingApprovals is the current pending-approval queue, a point-in-time
+// snapshot. Total = rows with status=pending; Unsigned = of those, zero
+// signers; Partial = of those, >=1 signer (dual-sign waiting for another).
+// No "required" number: see the field comment on ReportFacts.
+type PendingApprovals struct {
+	Total    int `json:"total"`
+	Unsigned int `json:"unsigned"`
+	Partial  int `json:"partial"`
 }
 
 // ResourceFacts is the fleet resource trend over the period. Available

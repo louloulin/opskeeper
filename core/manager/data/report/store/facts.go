@@ -56,6 +56,7 @@ func (c *FactsCollector) Collect(ctx context.Context, period, prev bizreport.Per
 	}
 	facts.Incidents = incidents
 	facts.Actions = c.collectActions(ctx, period)
+	facts.PendingApprovals = c.collectPendingApprovals(ctx)
 	facts.AlertCounts = c.collectAlertCounts(ctx, period, scope)
 	facts.Fleet = c.collectFleet(ctx)
 	facts.Changes = c.collectChanges(ctx, period)
@@ -365,6 +366,55 @@ func (c *FactsCollector) collectActions(ctx context.Context, p bizreport.Period)
 		Count(&safe).Error
 	sum.SafeTotal = int(safe)
 	return sum
+}
+
+// --- pending approval queue (approvals table) ---
+
+// collectPendingApprovals counts the current approval inbox queue. Unlike
+// the other collectors it is NOT period-scoped: the brief's 待审批项
+// section asks what is waiting now, not what happened in the window.
+// Query failure (or a missing table) degrades to the zero queue, the same
+// stance every other collector takes.
+//
+// The status literal "pending" must match model/approval.StatusPending.
+// The store queries tables by name and does not import the approval model,
+// exactly as collectActions does with chat_mutating_proposals.
+func (c *FactsCollector) collectPendingApprovals(ctx context.Context) bizreport.PendingApprovals {
+	var out bizreport.PendingApprovals
+	var rows []struct {
+		SignersJSON *string
+	}
+	if err := c.db.WithContext(ctx).Table("approvals").
+		Select("signers_json").
+		Where("status = ?", "pending").
+		Find(&rows).Error; err != nil {
+		return out
+	}
+	out.Total = len(rows)
+	for _, r := range rows {
+		if signerCount(r.SignersJSON) == 0 {
+			out.Unsigned++
+		} else {
+			out.Partial++
+		}
+	}
+	return out
+}
+
+// signerCount is len() of the decoded signer array — the same number
+// biz/approval.Sign counts (it stores the deduped Signer list). It is a
+// count, not a re-parse of signer semantics: no signer field is read or
+// reinterpreted. An absent/unreadable column counts as zero, the same safe
+// direction approval's decodeSigners takes.
+func signerCount(raw *string) int {
+	if raw == nil || *raw == "" {
+		return 0
+	}
+	var arr []json.RawMessage
+	if err := json.Unmarshal([]byte(*raw), &arr); err != nil {
+		return 0
+	}
+	return len(arr)
 }
 
 func (c *FactsCollector) collectAlertCounts(ctx context.Context, p bizreport.Period, scope bizreport.Scope) map[string]int {
