@@ -6,7 +6,7 @@
 
 - 会话侧新增上下文面板:宽屏为对话页右列,窄屏为可折叠侧板;默认折叠,记忆展开态
 - **@提及对象**:解析消息中的结构化 mention token `@{type}:{id}({label})`(`ChatInput.tsx:229` 写入,`:163` recomputeMentionContext),按 device/incident/rule/file 去重列出,点击跳详情
-- **知识引用**:从消息内联 `tool_calls[]` 识别知识检索类工具(如 query_knowledge)的调用与命中,列出被引用文档
+- **知识引用**:从消息内联 `tool_calls[]` 按工具类别映射识别知识检索类工具(如 query_knowledge)的调用,列出该次调用的工具名 / 状态 / 耗时(工具级粒度;文档级明细见 Design Doc §8 Implementation Divergence)
 - 核心推导为纯函数 `deriveSessionContext(messages) → { mentions[], knowledgeRefs[] }`,与 UI 解耦、可单测
 - (设计阶段 DF1:原设想的「结晶命中」节移出本期——结晶为 incident 闭环事后 hook,不出现在聊天消息流,无法零接口反推;结晶浏览由 Discover/自愈规则页覆盖)
 
