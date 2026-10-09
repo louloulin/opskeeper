@@ -11,18 +11,18 @@
 
 ## 3. 三节模板与生成
 
-- [ ] 3.1 复用既有 `reporter` persona,不新建 persona 文件;三节模板经 schedule `prompt_override` 注入(昨夜事件摘要/待审批项/告警趋势与今日关注),与 ContentJSON schema 脚手架兼容,不引入新 Content 字段
-- [ ] 3.2 平静态:当日无事件与待审批时 Hero 呈现「平静」;数字无来源留空(防幻觉契约);无源两节不渲染
-- [ ] 3.3 简报作为 report 交付物落库,复用报表列表回看与 D1 交付物卡呈现(零额外工作,验证回归)
+- [x] 3.1 复用既有 `reporter` persona,不新建 persona 文件;三节模板经 schedule `prompt_override` 注入(昨夜事件摘要/待审批项/告警趋势与今日关注),与 ContentJSON schema 脚手架兼容,不引入新 Content 字段
+- [x] 3.2 平静态:当日无事件与待审批时 Hero 呈现「平静」;数字无来源留空(防幻觉契约);无源两节不渲染
+- [x] 3.3 简报作为 report 交付物落库,复用报表列表回看与 D1 交付物卡呈现(零额外工作,验证回归)
 
 ## 4. 调度预设与推送
 
 - [ ] 4.1 Tasks.tsx 报表调度页新增一键「创建每日值班简报」预设:预填 kind=daily / cron 09:00 / 默认飞书渠道 / persona=reporter / prompt_override 三节模板,经既有 schedule 创建接口提交;预设参数可在既有 schedule 编辑界面修改;不新建后端端点
-- [ ] 4.2 推送复用 `delivery.go` channel fan-out:生成完成后经默认飞书渠道推送一句话摘要+回链,正文留在平台内;渠道未配置仅生成不推送、不报错(既有行为);夜间不推送由 09:00 cron 保证
+- [x] 4.2 推送复用 `delivery.go` channel fan-out:生成完成后经默认飞书渠道推送一句话摘要+回链,正文留在平台内;渠道未配置仅生成不推送、不报错(既有行为);夜间不推送由 09:00 cron 保证
 
 ## 5. 测试
 
-- [ ] 5.1 后端测试:pending 审批队列 SQL 事实单测;三节生成断言;无事件平静态;渠道未配置降级(既有行为回归)
+- [x] 5.1 后端测试:pending 审批队列 SQL 事实单测;三节生成断言;无事件平静态;渠道未配置降级(既有行为回归)
 - [ ] 5.2 前端测试:预设入口创建 schedule 参数断言(kind/cron/渠道/persona/prompt_override);既有 Tasks/Reports 测试只更新不删,不得删除任何既有测试用例
 
 ## 6. 验证与走查
