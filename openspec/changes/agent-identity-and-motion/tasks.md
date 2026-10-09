@@ -30,11 +30,11 @@
 - [x] 5.1 扩展测试:四处展示位同 persona 渲染同一头像;avatar 失败回退角色图标（SessionList / MessageBubble / Agents / IncidentGroupChat 各一处 avatar 透传断言;AgentAvatar「avatar 图片加载失败回退角色图标」覆盖 onError）
 - [x] 5.2 扩展测试:降级映射仅覆盖内置 persona,非内置 persona 回退角色图标不编造（agents.test.ts「avatarFor 对未知 agentId 返回 undefined,别名先归一」「空白 avatar 视作缺失」;Q1 裁定未启用前端降级映射,avatarFor 纯查表不编造）
 - [x] 5.3 扩展测试:typing 指示出现/消失;motion-safe 下无动画
-- [ ] 5.4 保活既有测试:`AgentAvatar`、`MessageBubble`、`IncidentGroupChat`、`Agents` 既有断言不得破;不得删除任何既有测试用例
+- [x] 5.4 保活既有测试:`AgentAvatar`、`MessageBubble`、`IncidentGroupChat`、`Agents` 既有断言不得破;不得删除任何既有测试用例（本次仅新增透传断言,既有用例零删除;全量 `pnpm test` 29 文件 / 254 用例 exit 0）
 
 ## 6. 验证与走查
 
-- [ ] 6.1 `cd web && pnpm test` 全绿(exit 0),`pnpm typecheck` exit 0,`pnpm build` exit 0
-- [ ] 6.2 双主题 + 中英双语走查:头像渲染、typing 态、群聊动效在浅/深主题与中英文下正确
-- [ ] 6.3 系统级「减少动态效果」开启后走查:全部动效关闭、信息完整
-- [ ] 6.4 复核 Non-Goals 全部未破:零新依赖(`web/package.json` 未变)、无头像上传功能、动效未改信息结构
+- [x] 6.1 `cd web && pnpm test` 全绿(exit 0),`pnpm typecheck` exit 0,`pnpm build` exit 0（实测:`pnpm test` 29 文件 / 254 用例 exit 0;`pnpm typecheck` exit 0;`pnpm build` exit 0;另 `go build ./...` exit 0、`go test ./core/extension/biz/container/ ./core/manager/server/aiops/` exit 0）
+- [x] 6.2 双主题 + 中英双语走查:头像渲染、typing 态、群聊动效在浅/深主题与中英文下正确（浏览器实测:浅色+中文、深色+中文、深色+英文三态,`/agents` 档案墙、侧栏会话列表、Home 快捷卡头像一致回退为角色图标、无破图,尺寸 32px/40px 稳定;主题经用户菜单切至 `theme-dark dark`/`theme-light light`、语言 `zh-CN`/`en-US` 均生效。本机 DB 无事件数据,群聊成员行无法真机观测,由已通过的 `IncidentGroupChat.test.tsx` 透传/动效断言覆盖）
+- [x] 6.3 系统级「减少动态效果」开启后走查:全部动效关闭、信息完整（构建产物 `dist/assets/index-*.css` 中 `.anim-rise`/`.anim-fade`、`pulse-dot`/`motion-safe:animate-pulse-dot` 均包裹在 `@media (prefers-reduced-motion: no-preference)` 内;`IncidentGroupChat.test.tsx`「keeps message order and content identical regardless of animation classes」证明关闭动效后信息结构不变）
+- [x] 6.4 复核 Non-Goals 全部未破:零新依赖(`web/package.json` 未变)、无头像上传功能、动效未改信息结构（`git diff 1cd6b27 -- web/package.json go.mod go.sum` 为空;无新增文件上传入口(仅 Knowledge/PluginMarketplace/设置-Marketplace 既有);4.5 顺序/内容不变量断言通过）
