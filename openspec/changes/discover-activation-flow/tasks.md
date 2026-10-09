@@ -19,11 +19,11 @@
 
 ## 4. 测试
 
-- [ ] 4.1 扩展测试:覆盖 spec 全部场景(目录安装/Modal 确认/非 admin 禁用/就地迁移/失败重试/草稿状态持久与诚实标注/发布控制台链接/promote 不可用禁用/插件只读)
-- [ ] 4.2 保活既有测试:Discover/Skills/PluginMarketplace/Crystallized 既有断言不得破;不得删除任何既有测试用例
+- [x] 4.1 扩展测试:覆盖 spec 全部场景(目录安装/Modal 确认/非 admin 禁用/就地迁移/失败重试/草稿状态持久与诚实标注/发布控制台链接/promote 不可用禁用/插件只读)
+- [x] 4.2 保活既有测试:Discover/Skills/PluginMarketplace/Crystallized 既有断言不得破;不得删除任何既有测试用例
 
 ## 5. 验证与走查
 
-- [ ] 5.1 `cd web && pnpm test` 全绿(exit 0),`pnpm typecheck` exit 0,`pnpm build` exit 0
-- [ ] 5.2 双主题 + 中英双语走查:目录卡片、三态、禁用说明、草稿状态、链接正确
-- [ ] 5.3 复核 Non-Goals 全部未破:无第二套插件/发布模型、未新建 Tab、无计费、零 `window.confirm`、未改 Crystallized「本页不 install」设计决策、零后端改动
+- [x] 5.1 `cd web && pnpm test` 全绿(exit 0),`pnpm typecheck` exit 0,`pnpm build` exit 0
+- [x] 5.2 双主题 + 中英双语走查:目录卡片、三态、禁用说明、草稿状态、链接正确
+- [x] 5.3 复核 Non-Goals 全部未破:无第二套插件/发布模型、未新建 Tab、无计费、零 `window.confirm`、未改 Crystallized「本页不 install」设计决策、零后端改动
