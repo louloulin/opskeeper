@@ -341,3 +341,24 @@ describe('DeliverableCard in-place preview', () => {
     expect(screen.getByRole('button', { name: '新窗口打开' })).toBeInTheDocument(); // 出口仍在
   });
 });
+
+// phase4-ui-deepening:D1 一致性可见契约 —— 类型徽标走 Chip 原语、卡面圆角走 rk
+// 阶梯 token。徽标由手写 pill 改为 <Chip> 后,形态与全站 chip 一致(rounded-full);
+// 缩略/预览的边框从裸 zinc-800 收敛到 border-border token。
+describe('DeliverableCard chrome consistency', () => {
+  it('renders the type badge through the Chip primitive (rounded-full, not a hand-rolled pill)', () => {
+    render(<DeliverableCard info={pageInfo} />);
+    const badge = screen.getByText('托管页');
+    expect(badge.className).toContain('rounded-full'); // Chip 原语形态
+    expect(badge.className).not.toContain('rounded-rk-'); // 不再是手写 pill
+  });
+
+  it('uses rk radius tokens and token borders on the card surfaces', () => {
+    render(<DeliverableCard info={pageInfo} />);
+    expect(screen.getByTestId('deliverable-card').className).toContain('rounded-rk-md');
+    const thumb = screen.getByTestId('deliverable-thumb');
+    expect(thumb.className).toContain('rounded-rk-sm');
+    expect(thumb.className).toContain('border-border'); // token 边框
+    expect(thumb.className).not.toContain('border-zinc-800'); // 不再是裸 zinc
+  });
+});

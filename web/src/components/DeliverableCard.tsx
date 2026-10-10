@@ -11,6 +11,7 @@ import { shouldRenderThumb, useInViewOnce } from './deliverableLazy';
 import { HostedPageView } from './HostedPageView';
 import { ReportHostedView } from './ReportHostedView';
 import { Button } from './ui/Button';
+import { Chip } from './ui/Chip';
 
 const PAGE_RE = /^\/pages\/([0-9a-f]{16,64})$/;
 // FIX 2:报表 id 是小写 UUID(8-4-4-4-12),对齐后端 uuid.NewString。收紧前 `[0-9a-f-]{16,64}`
@@ -144,7 +145,7 @@ export function DeliverableCard({ info }: { info: DeliverableInfo }) {
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
-            <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">{typeLabel}</span>
+            <Chip>{typeLabel}</Chip>
             {title ? <span className="block truncate text-xs font-medium text-zinc-200">{title}</span> : null}
           </span>
           <span className="block truncate text-[11px] text-zinc-500">{info.href}</span>
@@ -160,11 +161,11 @@ export function DeliverableCard({ info }: { info: DeliverableInfo }) {
         </Button>
       </span>
       {thumbAllowed && (
-        <span data-testid="deliverable-thumb" className="mx-3 mb-2.5 block h-40 overflow-hidden rounded-rk-sm border border-zinc-800">
+        <span data-testid="deliverable-thumb" className="mx-3 mb-2.5 block h-40 overflow-hidden rounded-rk-sm border border-border">
           {state === 'idle' && <span className="block h-full w-full bg-zinc-900/40" />}
           {state === 'loading' && (
             <span className="flex h-full w-full items-center justify-center bg-zinc-900/40 text-zinc-500">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-4 w-4 motion-safe:animate-spin" />
             </span>
           )}
           {state === 'failed' && <TypePlaceholder type={info.type} failed />}
@@ -173,10 +174,10 @@ export function DeliverableCard({ info }: { info: DeliverableInfo }) {
         </span>
       )}
       {expanded && (
-        <span data-testid="deliverable-preview" className="mx-3 mb-2.5 block rounded-rk-sm border border-zinc-800 bg-zinc-950/40 p-2">
+        <span data-testid="deliverable-preview" className="mx-3 mb-2.5 block rounded-rk-sm border border-border bg-zinc-950/40 p-2">
           {state === 'idle' || state === 'loading' ? (
             <span className="flex h-24 items-center justify-center text-zinc-500">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-4 w-4 motion-safe:animate-spin" />
             </span>
           ) : state === 'failed' ? (
             <TypePlaceholder type={info.type} failed />
