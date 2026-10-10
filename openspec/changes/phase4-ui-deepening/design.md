@@ -27,14 +27,13 @@
 - 键盘与语义：标签加 `id`/`aria-controls`/roving `tabIndex`，面板加 `id`/`aria-labelledby`；左右方向键切换并让焦点跟随。焦点可见性由全局 `*:focus-visible` 规则提供，不额外加样式。
 - 路由行为不变（`?tab=` 读写逻辑一字未动）。
 
-### 5. 日报预设入口（`pages/Tasks.tsx:154-176`）
-- 该按钮现与上下两个普通项类名完全相同。给它加可辨识度：强调色图标已有（`text-sky-400/80`），补一项轻分隔（`border-t border-zinc-800/60` 或 `mt`）与 `rounded-rk-sm`，或给标题加 accent 色。**不改文案、不改 onClick、不改 `dailyBriefSeed` 载荷。**
+### 5. 日报预设入口（`pages/Tasks.tsx`）
+- 该按钮原与上下两个普通项类名完全相同。加一条轻分隔（`border-t border-zinc-800/60`）把它与普通新建项区分开。强调色图标已有（`text-sky-400/80`）。**不改文案、不改 onClick、不改 `dailyBriefSeed` 载荷。**
 
-### 6. 简报卡（`components/ReportCards.tsx`、`components/ReportContent.tsx`）
-- 容器从 `rounded-xl border border-zinc-800/60 bg-zinc-900/40` 迁移到 `surface-card rounded-rk-lg`。
-- 统计格 `bg-zinc-900/40` → `surface-card` 变体；硬编码状态色（`bg-red-400`/`bg-amber-400`/`text-indigo-300`）→ `danger`/`warn`/`info` 语义 token。
-- 与交付物卡（D1）同款 chrome，使简报卡不再像「另一个系统」。
-- 这两个文件当前**无** co-located 测试，改动风险低；新增断言以锁定 chrome。
+### 6. 简报卡（`components/ReportCards.tsx`、`components/ReportContent.tsx`）—— **本次不做（实现期发现，已从 delta spec 移除）**
+- 两者的容器（ReportCards 卡格 `rounded-xl + bg-zinc-900/40`；ReportContent 的四行统计卡）**已被浅色 shim 正确覆盖**（`index.css:142,180` 明确映射 `.bg-zinc-900\/40`）——不存在浅色下「深卡压浅底」缺陷，迁移到 `surface-card`（不透明）只是半透明改不透明，属**无 bug 可修的纯改外观**。
+- ReportContent 的四行配色（indigo/rose/violet/cyan）是 HLD-014 刻意设计的报告正文语汇，非应用语义色；ReportCards 无 co-located 测试（渲染卡格需 ResizeObserver 桩），本会话又无法目视验证。收益不可验证、下行风险真实，故不动。
+- 用户在聊天里看到的「简报卡」实为 D1 交付物卡（`ReportHostedView` 嵌在 `DeliverableCard` 预览里），已在 §1 覆盖。
 
 ### 7. ui 原语（`components/ui/Button.tsx`）—— **本次不做（实现期发现，已从 delta spec 移除）**
 - 原计划把 ghost/danger/subtle 的裸 `zinc-*` 收敛到 token。实现期核实后放弃：

@@ -18,11 +18,10 @@
 - [x] 4.1 `web/src/pages/Discover.tsx`：标签条对齐页边距（`ml-6 mt-4`）；`id`/`aria-controls`/`aria-labelledby`/roving `tabIndex` 关联；左右方向键切换（焦点跟随）
 - [x] 4.2 追加断言（不得破坏既有 `?tab=` 路由与 `aria-selected` 断言）
 
-## 5. 日报预设与简报卡
+## 5. 日报预设入口
 
-- [ ] 5.1 `web/src/pages/Tasks.tsx`：日报预设项加视觉可辨识（强调色图标/轻分隔/圆角），文案与 onClick 与 `dailyBriefSeed` 载荷不变
-- [ ] 5.2 `web/src/components/ReportCards.tsx`、`ReportContent.tsx`：容器迁移到 `surface-card rounded-rk-*`；硬编码状态色改语义 token
-- [ ] 5.3 追加断言锁定简报卡 chrome 与预设入口可辨识
+- [x] 5.1 `web/src/pages/Tasks.tsx`：日报预设项加轻分隔（`border-t`）与相邻普通新建项区分，文案与 onClick 与 `dailyBriefSeed` 载荷不变
+- [x] 5.2 追加断言锁定预设入口可辨识（不破坏既有预填/载荷断言）
 
 ## 6. 全量验证与走查
 

@@ -88,4 +88,16 @@ describe('每日值班简报预设', () => {
     await waitFor(() => expect(body).not.toBeNull());
     expect(body).toHaveProperty('channel_ids', []);
   });
+
+  // phase4-ui-deepening:一键预设项与相邻两个普通新建项区分开(一条分隔线),
+  // 让它读起来像一个「预设」而非第三个等价动作。文案与点击行为不变。
+  it('预设入口与普通新建项视觉可辨识(有分隔线)', async () => {
+    server.use(...listHandlers([FEISHU]));
+    renderTasks();
+    await userEvent.click(await screen.findByRole('button', { name: /新建任务|New task/ }));
+    const label = await screen.findByText(/每日值班简报|Daily on-call brief/);
+    const btn = label.closest('button');
+    expect(btn).not.toBeNull();
+    expect(btn?.className).toContain('border-t'); // 与上方普通项分隔
+  });
 });

@@ -11,7 +11,7 @@ Phase 4 的五个 UI 表面（交付物卡、AgentAvatar、ContextPanel 会话�
 - **ContextPanel**：裸 `rounded`/`rounded-md` 统一为 `rounded-rk-*`；列表项补 hover，知识引用项可跳转；分区标题层级统一；窄屏可折叠宽度。保持只读（分区内不引入按钮）。
 - **Discover**：标签条与内容面板视觉衔接（消除双重 chrome）；补 `focus-visible`、方向键切换与 `aria-controls`/`role=tabpanel` 关联。
 - **日报预设入口**：在「新建任务」下拉中与相邻普通项视觉可辨识（强调色图标 / 轻分隔 / 圆角），文案、点击行为与提交载荷保持不变。
-- **简报卡**：`ReportCards`/`ReportContent` 从早期 `rounded-xl` + 裸 `zinc` 迁移到 `surface-card`/`rounded-rk-*`/语义色，与 D1 交付物卡同款 chrome。
+- **简报卡**：**本次不做** —— `ReportCards`/`ReportContent` 已被浅色 shim 正确覆盖（`index.css:142,180`），迁移属无 bug 可修的纯改外观，且本会话无法目视验证（见 design.md §6）。聊天内的简报卡实为 D1 交付物卡，已在交付物卡项覆盖。
 - （原「ui 原语去裸 zinc」一项在实现期撤销：token 非等价替换会静默改变外观，见 design.md §7。）
 
 ## Capabilities
@@ -22,10 +22,10 @@ Phase 4 的五个 UI 表面（交付物卡、AgentAvatar、ContextPanel 会话�
 
 ### Modified Capabilities
 
-- `design-system-tokens`：新增「五处表面视觉一致性」要求（交付物卡与简报卡共用交付物 chrome、AgentAvatar 环与可访问性、ContextPanel 圆角与只读、Discover 标签可达性、日报预设可辨识）。delta spec 见 `specs/design-system-tokens/spec.md`。
+- `design-system-tokens`：新增「表面视觉一致性」要求（交付物卡视觉一致性、AgentAvatar 细环、ContextPanel 圆角与只读、Discover 标签可达性、日报预设可辨识）。delta spec 见 `specs/design-system-tokens/spec.md`。
 
 ## Impact
 
-- **代码**：`web/src/components/{DeliverableCard,AgentAvatar,ContextPanel}.tsx`、`web/src/components/{ReportCards,ReportContent}.tsx`、`web/src/pages/{Discover,Tasks}.tsx`、必要时 `web/src/styles/index.css`（仅新增必要 token 类，不改动既有 light 重映射块的语义）。
+- **代码**：`web/src/components/{DeliverableCard,AgentAvatar,ContextPanel}.tsx`、`web/src/pages/{Discover,Tasks}.tsx`。
 - **测试**：不得删除任何既有测试用例；`AgentAvatar.test.tsx`/`DeliverableCard.test.tsx`/`ContextPanel.test.tsx`/`Discover.test.tsx` 的既有断言不得被削弱。新增断言一律追加。
 - **无后端改动、无新依赖、无信息架构变化、无新增功能。**

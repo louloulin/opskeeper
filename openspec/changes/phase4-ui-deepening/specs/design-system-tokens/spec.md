@@ -1,20 +1,16 @@
 ## ADDED Requirements
 
-### Requirement: 交付物卡与简报卡共用交付物 chrome
+### Requirement: 交付物卡视觉一致性
 
-交付物卡（DeliverableCard）类型徽标 SHALL 复用 `Chip` 原语，不得手写重复的 pill 标记；卡内所有容器、缩略图与展开预览 MUST 使用 `rounded-rk-*` 与 `border-soft` token，不得混用裸 `rounded`；加载态动画 MUST 受 `motion-safe` 约束。日报简报卡（ReportCards/ReportContent）SHALL 复用同一套容器 chrome（`surface-card` + `rounded-rk-*` + `shadow-card`），其状态色 MUST 取自语义 token（ok/warn/danger/info）而非硬编码颜色类。
+交付物卡（DeliverableCard）类型徽标 SHALL 复用 `Chip` 原语，不得手写重复的 pill 标记；卡内缩略图与展开预览 MUST 使用 `rounded-rk-*` 与 token 边框，不得混用裸 `rounded` 或裸 `zinc` 边框；加载态动画 MUST 受 `motion-safe` 约束。
 
 #### Scenario: 类型徽标使用 Chip 原语
 - **WHEN** 渲染交付物卡的类型徽标（如 report / page）
 - **THEN** 徽标由 `Chip` 原语渲染，圆角为 `rounded-full`，浅底色调与全站 Chip 一致
 
-#### Scenario: 卡内圆角 token 化
-- **WHEN** 检查交付物卡的容器、缩略图与展开预览
-- **THEN** 全部使用 `rounded-rk-*`，深/浅主题下无半径或描边不一致
-
-#### Scenario: 简报卡与交付物卡同款
-- **WHEN** 打开一份日报简报
-- **THEN** 其容器与 D1 交付物卡使用相同的 `surface-card` 圆角与阴影，统计格状态色取自语义 token
+#### Scenario: 卡内圆角与边框 token 化
+- **WHEN** 检查交付物卡的缩略图与展开预览
+- **THEN** 使用 `rounded-rk-*` 与 `border-border` token，深/浅主题下无半径或描边不一致
 
 ### Requirement: AgentAvatar 视觉层次
 

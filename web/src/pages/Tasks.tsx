@@ -162,7 +162,7 @@ function TaskList() {
                         setSeed(dailyBriefSeed(channels, tr(DAILY_BRIEF_NAME_ZH, DAILY_BRIEF_NAME_EN)));
                         setCreating(true);
                       }}
-                      className="flex w-full items-start gap-2.5 px-3 py-2 text-left hover:bg-zinc-800"
+                      className="flex w-full items-start gap-2.5 border-t border-zinc-800/60 px-3 py-2 text-left hover:bg-zinc-800"
                     >
                       <Newspaper size={14} className="mt-0.5 shrink-0 text-sky-400/80" />
                       <span>
