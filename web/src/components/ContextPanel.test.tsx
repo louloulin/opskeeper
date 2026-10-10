@@ -69,4 +69,20 @@ describe('ContextPanel', () => {
     expect(useContextPanel.getState().expanded).toBe(true);
     expect(localStorage.getItem('opskeeper.context-panel') ?? '').toContain('"expanded":true');
   });
+
+  // phase4-ui-deepening:圆角收敛到 rk 阶梯 —— 折叠按钮与行项不得再用裸 rounded/rounded-md。
+  it('行项与折叠按钮使用 rk 圆角 token,无裸 rounded 残留', () => {
+    renderPanel(sample);
+    const link = within(screen.getByTestId('context-mentions')).getByRole('link');
+    expect(link.className).toContain('rounded-rk-sm');
+    expect(link.className).not.toContain('rounded-md');
+
+    const row = screen.getByTestId('context-knowledge').querySelector('div');
+    expect(row?.className).toContain('rounded-rk-sm');
+    expect(row?.className).not.toContain('rounded-md');
+
+    const toggle = screen.getByRole('button', { name: /收起上下文面板|collapse context panel/i });
+    expect(toggle.className).toContain('rounded-rk-sm');
+    expect(toggle.className).not.toMatch(/(^|\s)rounded(\s|$)/); // 无裸 rounded
+  });
 });

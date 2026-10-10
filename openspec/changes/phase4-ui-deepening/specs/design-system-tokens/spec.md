@@ -26,11 +26,11 @@ AgentAvatar SHALL 呈现与角色色一致的同色低透明度细环（`ring-1 
 
 ### Requirement: 会话上下文面板视觉一致性与只读性
 
-ContextPanel SHALL 使用 `rounded-rk-*` 统一圆角，不得使用裸 `rounded`/`rounded-md`；列表项 SHALL 提供 hover 反馈，知识引用项 SHALL 可跳转并具 `focus-visible` 样式；分区标题的字号/字重 MUST 与控制台其余面板一致。面板 MUST 保持只读——任何分区内 MUST NOT 引入 button 元素。
+ContextPanel SHALL 用 `rounded-rk-*` 统一列表项与折叠按钮的圆角，不得使用裸 `rounded`/`rounded-md`；面板 MUST 保持只读——任何分区内 MUST NOT 引入 button 元素。
 
 #### Scenario: 面板圆角统一
 - **WHEN** 展开会话上下文面板
-- **THEN** 容器、行项与折叠按钮均为 `rounded-rk-*`，无裸 `rounded` 残留
+- **THEN** 行项与折叠按钮均为 `rounded-rk-*`（rk 阶梯 token），无裸 `rounded` 残留
 
 #### Scenario: 只读不破
 - **WHEN** 检查上下文面板的提及与知识分区

@@ -78,7 +78,7 @@ export function ContextPanel({ context }: { context: SessionContext }) {
           aria-label={expanded ? tr('收起上下文面板', 'Collapse context panel') : tr('展开上下文面板', 'Expand context panel')}
           onClick={toggle}
           className={cn(
-            'rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200',
+            'rounded-rk-sm p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200',
             !expanded && 'mx-auto',
           )}
         >
@@ -110,7 +110,7 @@ export function ContextPanel({ context }: { context: SessionContext }) {
                           to={mentionRoute(m.type, m.id)}
                           data-message-id={m.messageId}
                           data-source-index={m.sourceIndex}
-                          className="flex items-center gap-2 rounded-md px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-900"
+                          className="flex items-center gap-2 rounded-rk-sm px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-900"
                         >
                           {mentionIcon(m.type)}
                           <span className="truncate">{m.label}</span>
@@ -133,7 +133,7 @@ export function ContextPanel({ context }: { context: SessionContext }) {
                       key={`${k.name}-${i}`}
                       data-message-id={k.messageId}
                       data-source-index={k.sourceIndex}
-                      className="flex items-center gap-2 rounded-md px-2 py-1 text-xs text-zinc-200"
+                      className="flex items-center gap-2 rounded-rk-sm px-2 py-1 text-xs text-zinc-200"
                     >
                       <BookOpen size={13} className="shrink-0 text-zinc-400" />
                       <span className="truncate">{k.name}</span>

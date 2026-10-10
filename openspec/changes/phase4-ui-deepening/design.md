@@ -17,10 +17,8 @@
 - 代表发言人时补 `aria-label={角色名}`；纯装饰语境保持 `aria-hidden`。**注意**：既有测试锁定了 `bg-violet-500/10`、`h-8/h-10`、`rounded-rk-sm/rk-md`，且断言 className 不得含 `rounded-s-`——新增类只能追加，不能替换这些。
 
 ### 3. ContextPanel（`components/ContextPanel.tsx`）
-- 裸 `rounded`/`rounded-md` → `rounded-rk-sm`；折叠按钮、行项统一。
-- 行项补 `hover:bg-zinc-900`（已部分存在）与知识引用项的可点击跳转（保留 `href`，补 hover 与 focus-visible）。
-- 分区标题（现 `text-[11px] uppercase tracking-wide`）与行字号层级统一到控制台惯例。
-- 窄屏：`w-72`/`w-11` 增加一个更窄断点，避免挤压聊天区。
+- 裸 `rounded`/`rounded-md` → `rounded-rk-sm`：折叠按钮与两类行项统一到 rk 阶梯。
+- 知识引用项**不做**跳转改造：它们是纯 `<div>`、没有路由目标，加跳转即新增功能（用户已排除「不要新增功能」）；给非交互行项加 hover 亦会误导为可点。故本表面只做圆角 token 收敛。
 - **硬约束**：面板只读——既有测试断言「分区内零 button」，任何新增都不得引入 button。
 
 ### 4. Discover（`pages/Discover.tsx`）

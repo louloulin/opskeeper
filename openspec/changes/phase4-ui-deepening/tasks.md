@@ -10,8 +10,8 @@
 
 ## 3. ContextPanel
 
-- [ ] 3.1 `web/src/components/ContextPanel.tsx`：裸 `rounded`/`rounded-md` → `rounded-rk-sm`；行项与知识引用项补 hover；分区标题层级统一
-- [ ] 3.2 追加断言（不得破坏「分区内零 button」只读断言与既有 href/`data-message-id` 断言）
+- [x] 3.1 `web/src/components/ContextPanel.tsx`：裸 `rounded`/`rounded-md` → `rounded-rk-sm`（折叠按钮 + 两类行项）
+- [x] 3.2 追加断言（不得破坏「分区内零 button」只读断言与既有 href/`data-message-id` 断言）
 
 ## 4. Discover
 
