@@ -59,11 +59,3 @@ Discover 标签条 SHALL 与内容面板视觉衔接，消除标签条与内嵌�
 #### Scenario: 预设入口可辨识
 - **WHEN** 打开「新建任务」下拉
 - **THEN** 日报预设项与普通「定时任务」项在视觉上可区分，点击后仍预填 daily / 09:00 / 飞书渠道 / 三节模板
-
-### Requirement: ui 原语去裸 zinc
-
-`web/src/components/ui/` 下的原语（Button 的 ghost/danger/subtle 等）SHALL 使用 token 类而非裸 `zinc-*`，以保证双主题一致；原语的 props 接口 MUST 保持向后兼容，既有调用点无需改动即可获得新形态。
-
-#### Scenario: ghost 按钮 token 化
-- **WHEN** 渲染 Button variant=ghost
-- **THEN** 其边框与底色取自 token，在深/浅主题下均正确，props 调用点无需改动

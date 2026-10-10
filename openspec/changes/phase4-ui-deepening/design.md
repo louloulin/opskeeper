@@ -37,8 +37,12 @@
 - 与交付物卡（D1）同款 chrome，使简报卡不再像「另一个系统」。
 - 这两个文件当前**无** co-located 测试，改动风险低；新增断言以锁定 chrome。
 
-### 7. ui 原语（`components/ui/Button.tsx`）
-- ghost（`border-zinc-700 bg-zinc-900`）/danger/subtle 收敛到 token：`border-border bg-card` 等；`text-*` 用 `--text` 系。保持 props 接口不变（32 处调用点无需改动）。
+### 7. ui 原语（`components/ui/Button.tsx`）—— **本次不做（实现期发现，已从 delta spec 移除）**
+- 原计划把 ghost/danger/subtle 的裸 `zinc-*` 收敛到 token。实现期核实后放弃：
+  1. **token 不等于等价替换。** 深色主题下 `--border`(40,40,50) 比 `border-zinc-700`(63,63,70) 暗、`--text-muted`(zinc-400) 比 `text-zinc-300` 暗、`hover:bg-border/40` 比 `hover:bg-zinc-800` 弱——转换会**静默改变每个 Button 的外观**（ghost 55 处、danger 18 处、subtle 14 处）。
+  2. **subtle 依赖专用兜底规则。** 浅色 shim 为 `bg-zinc-100 text-zinc-900` 写了独立复合选择器（`index.css:157-167`）承载「深色上的亮 pill」这一反向语义，没有反向 surface token，转换需新增 token。
+  3. **本会话无法目视验证**（鉴权门），做全局性改色风险不可控；代码库 shim 注释本身也把这次迁移标注为多日重构、暂缓。
+- 结论：原语保持现状（裸 zinc 由 shim 保证双主题正确）。该要求已从 delta spec 删除，属**范围收缩**而非新增。
 
 ## 测试策略
 
