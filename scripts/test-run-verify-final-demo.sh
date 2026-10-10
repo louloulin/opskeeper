@@ -243,7 +243,7 @@ pass_test "wrapper passes MANAGER_AUTH_TOKEN, DEMO_API_TOKEN, PLUGIN_HEALTH_TOKE
 # ---------------------------------------------------------------------------
 expected_order=(
   "MANAGER_URL=https://opskeeper.yueming.xin"
-  "HOME_URL=https://home.yueming.xin"
+  "HOME_URL=https://opskeeper.yueming.xin/live-incident"
   "TEAMS_URL=https://teams.yueming.xin"
   "ROOMS_URL=https://rooms.yueming.xin"
   "OPSKEEPER_URL=https://opskeeper.yueming.xin"
@@ -287,7 +287,7 @@ pass_test "idempotency key has the expected prefix and timestamp tail"
 # ---------------------------------------------------------------------------
 # Test 6b: ALERT_FINGERPRINT is derived from the idempotency key, so it is
 # unique per run, stable across the idempotent retry, and always matches the
-# validFingerprint regex (sha256:<64hex>) in internal/manager/biz/demo/scenario.go.
+# validFingerprint regex (sha256:<64hex>) in core/manager/biz/demo/scenario.go.
 # ---------------------------------------------------------------------------
 alert_value=$(grep '^ALERT_FINGERPRINT=' "$recorded" | head -1 | cut -d= -f2-)
 if [[ ! "$alert_value" =~ ^sha256:[0-9a-f]{64}$ ]]; then

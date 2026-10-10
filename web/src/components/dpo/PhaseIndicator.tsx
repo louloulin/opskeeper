@@ -57,7 +57,11 @@ export function PhaseIndicator({ phase, status, duration, className }: PhaseIndi
     <div className={cn('flex items-center gap-2', className)}>
       <PhaseStatusDot status={status} />
       <span className="text-sm font-medium text-zinc-100">{tr(label, labelEn)}</span>
-      <Chip tone={STATUS_TONE[status]} dense>
+      <Chip
+        tone={STATUS_TONE[status]}
+        dense
+        className="motion-safe:transition-colors motion-safe:duration-200"
+      >
         {status}
       </Chip>
       {duration && (

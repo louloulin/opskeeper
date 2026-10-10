@@ -149,8 +149,8 @@ export default function KnowledgeReposPage() {
             <h1 className="mt-1 text-base font-semibold text-zinc-100">{tr('代码仓库', 'Code repos')}</h1>
             <p className="mt-0.5 text-xs text-zinc-500">
               {tr(
-                '添加的 git 仓库 · sync 后 .md / .yaml / .json 文件会进知识库供 LLM 检索',
-                'Added git repos · after sync, .md / .yaml / .json files enter the knowledge base for LLM retrieval',
+                '添加的 git 仓库 · sync 后 .md / .txt / .rst 文件会进知识库供 LLM 检索',
+                'Added git repos · after sync, .md / .txt / .rst files enter the knowledge base for LLM retrieval',
               )}
             </p>
           </div>
@@ -399,7 +399,7 @@ function RepoCreator({ onClose, onCreated }: { onClose: () => void; onCreated: (
           />
         </label>
         <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-[11px] text-zinc-500">
-          {tr('仅索引：', 'Indexed only: ')}<span className="font-mono">.md / .txt / .rst / .yaml / .yml / .toml / .json</span>
+          {tr('仅索引：', 'Indexed only: ')}<span className="font-mono">.md / .txt / .rst</span>
           {tr('；忽略 ', '; ignored: ')}<span className="font-mono">.git / vendor / node_modules / dist / build</span>
           {tr('。单文件 ≤256KiB；单仓库 ≤2000 文件。', '. Per-file ≤256 KiB; per-repo ≤2000 files.')}
         </div>
@@ -464,7 +464,7 @@ function DeleteRepoDialog({ repo, onClose, onDone }: { repo: KnowledgeRepo; onCl
 
 // SSHIdentitiesCard — phase 1. Manages stored SSH private
 // keys + the hosts they auth against. Lives in this page so all git
-// auth config (HTTPS PAT card above + SSH keys here) is one stop.
+// auth config (the repo form above + SSH keys here) is one stop.
 function SSHIdentitiesCard() {
   const { tr } = useI18n();
   const [open, setOpen] = useState(false);

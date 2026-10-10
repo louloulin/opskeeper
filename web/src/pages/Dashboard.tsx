@@ -379,7 +379,7 @@ export default function DashboardPage() {
                   {tr('平均 CPU · 平均 MEM · 在线设备', 'Avg CPU · Avg MEM · Online')}
                 </span>
               </div>
-              <div className="flex-1 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+              <div className="flex-1 overflow-hidden surface-card rounded-2xl p-4">
                 <ClusterTrend
                   cpu={cpuTrend}
                   mem={memTrend}
@@ -648,7 +648,7 @@ function ClusterPosture({
   );
 
   return (
-    <div className="flex h-full flex-col justify-between gap-4 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+    <div className="flex h-full flex-col justify-between gap-4 surface-card rounded-2xl p-4">
       <div className="flex items-baseline gap-2">
         <span className="text-2xl font-semibold tabular-nums text-zinc-100">
           {initialLoading ? '—' : onlineCount}
@@ -774,7 +774,7 @@ function KpiCard({
     : '—';
 
   return (
-    <div className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+    <div className="flex flex-col surface-card rounded-2xl p-4">
       <div className="text-xs text-zinc-500">{label}</div>
       <div
         className={cn(
@@ -854,7 +854,7 @@ function AlertSeverityCard({
   const sum = data.reduce((acc, d) => acc + d.value, 0);
 
   return (
-    <section className="rounded-xl border border-zinc-800 bg-zinc-900/40">
+    <section className="surface-card rounded-2xl">
       <header className="flex items-center justify-between border-b border-zinc-800/60 px-4 py-3">
         <h2 className="text-sm font-medium uppercase tracking-wider text-zinc-300">
           {tr('告警分级', 'Alerts by severity')}
@@ -966,7 +966,7 @@ function NoisyRulesCard({
   }, [incidents]);
 
   return (
-    <section className="rounded-xl border border-zinc-800 bg-zinc-900/40">
+    <section className="surface-card rounded-2xl">
       <header className="flex items-center justify-between border-b border-zinc-800/60 px-4 py-3">
         <h2 className="text-sm font-medium uppercase tracking-wider text-zinc-300">
           {tr('告警源 top 5', 'Top 5 noisy rules')}

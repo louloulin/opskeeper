@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
 import { ChatInput, type ModelSelection, type SubmitPayload } from '@/components/ChatInput';
 import { MessageBubble, type ConfigDraftResult } from '@/components/MessageBubble';
 import { AgentBadge } from '@/components/AgentBadge';
+import { ContextPanel } from '@/components/ContextPanel';
+import { deriveSessionContext } from '@/lib/sessionContext';
 import { PageHeader } from '@/components/ui';
 import {
   getMessages,
@@ -35,6 +37,9 @@ export default function ChatThreadPage() {
   const sessionAgentID = sessionMeta?.agent_id;
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // 会话上下文依据由已渲染的消息流反推;只读、零请求。memo 以 messages
+  // 引用为键——轮询在内容不变时已跳过 setMessages,故此处不会空转。
+  const sessionContext = useMemo(() => deriveSessionContext(messages), [messages]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -507,7 +512,8 @@ export default function ChatThreadPage() {
     );
 
   return (
-    <main className="flex flex-1 flex-col overflow-hidden">
+    <main className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 flex-col overflow-hidden">
         <PageHeader
           className="px-6 py-3"
           title={
@@ -530,6 +536,7 @@ export default function ChatThreadPage() {
                 <MessageBubble
                   key={m.id}
                   message={m}
+                  agentId={sessionAgentID}
                   onConfirmConfigDraft={isViewer ? undefined : confirmConfigDraft}
                 />
               ))
@@ -583,6 +590,9 @@ export default function ChatThreadPage() {
             />
           </div>
         </div>
-      </main>
+      </div>
+
+      <ContextPanel context={sessionContext} />
+    </main>
   );
 }

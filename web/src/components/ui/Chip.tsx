@@ -18,14 +18,14 @@ const TONE_CLASS: Record<ChipTone, string> = {
   warning: 'bg-amber-500/10 text-amber-300',
   danger: 'bg-red-500/10 text-red-300',
   info: 'bg-sky-500/10 text-sky-300',
-  accent: 'bg-indigo-500/10 text-indigo-300',
+  accent: 'bg-accent-50 text-accent-700',
 };
 
 export function Chip({ tone = 'default', dense, className, ...rest }: ChipProps) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded text-[10px]',
+        'inline-flex items-center gap-1 rounded-full text-[10px]',
         dense ? 'px-1 py-0' : 'px-1.5 py-0.5',
         TONE_CLASS[tone],
         className,

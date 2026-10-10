@@ -27,6 +27,14 @@ export function buildInvestigationRequest(incident = {}) {
     ? incident.correlation_hints
     : {};
   const correlationHints = { ...existingHints };
+  const explicitResourceType = String(
+    labels.resource_type || incident.target_type || incident.resource_type || '',
+  ).trim().toLowerCase();
+  const inferableTarget = String(labels.target || incident.target_name || incident.target_id || '').toLowerCase();
+  const inferableRule = String(
+    incident.rule_key || incident.alertname || labels.alertname || '',
+  ).toLowerCase();
+  const inferableScenario = String(labels.scenario || '').toLowerCase();
   const hints = {
     incident_id: labels.incident_id || incidentId,
     target: labels.target || incident.target_name || incident.target_id,
@@ -34,7 +42,9 @@ export function buildInvestigationRequest(incident = {}) {
     fault_family: labels.fault_family,
     source_id: labels.source_id || incident.source_id || 'dashboard',
     device_id: labels.device_id || incident.target_id || incidentId,
-    resource_type: labels.resource_type || incident.target_type || 'unknown',
+    resource_type: explicitResourceType && explicitResourceType !== 'unknown'
+      ? explicitResourceType
+      : inferResourceType(inferableTarget, inferableRule, inferableScenario),
   };
   for (const [key, value] of Object.entries(hints)) {
     if (value !== undefined && value !== null && value !== '') {
@@ -42,6 +52,17 @@ export function buildInvestigationRequest(incident = {}) {
     }
   }
   return { incident_id: incidentId, alert_group: alertGroup, correlation_hints: correlationHints };
+}
+
+function inferResourceType(target, rule, scenario) {
+  const postgresSignals = [target, rule, scenario];
+  if (postgresSignals.some((value) => value.startsWith('pg:') || value.includes('postgres'))) {
+    return 'pg';
+  }
+  if (postgresSignals.some((value) => value.includes('pg-'))) {
+    return 'pg';
+  }
+  return 'unknown';
 }
 
 async function pluginManagerFetch(path, init = {}) {
@@ -180,6 +201,24 @@ export const opskeeperApi = {
   // GET /v1/mcp/get_incident_detail → full incident doc
   getIncident(incident_id) {
     return jsonFetch('/incidents/' + encodeURIComponent(incident_id));
+  },
+
+  // GET /v1/loops/{incident_id}/state → authoritative seven-stage state
+  getIncidentLoopState(incident_id) {
+    const normalizedIncidentId = String(incident_id ?? '').trim();
+    if (!normalizedIncidentId) {
+      return Promise.reject(new Error('incident_id is required'));
+    }
+    return jsonFetch('/loops/' + encodeURIComponent(normalizedIncidentId) + '/state');
+  },
+
+  // GET /v1/loops/{incident_id}/timeline → authoritative transition timeline
+  getIncidentLoopTimeline(incident_id) {
+    const normalizedIncidentId = String(incident_id ?? '').trim();
+    if (!normalizedIncidentId) {
+      return Promise.reject(new Error('incident_id is required'));
+    }
+    return jsonFetch('/loops/' + encodeURIComponent(normalizedIncidentId) + '/timeline');
   },
 
   // GET /v1/incidents/{incident_id}/archive → sanitized control-plane evidence archive

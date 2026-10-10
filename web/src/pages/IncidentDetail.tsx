@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { Modal } from '@/components/Modal';
+import { IncidentGroupChat } from '@/components/incidents/IncidentGroupChat';
 import { cn } from '@/lib/cn';
 import { openObservabilityUrl, buildExploreUrl } from '@/lib/drilldown';
 import { relativeTime } from '@/lib/format';
@@ -77,6 +78,9 @@ export default function IncidentDetailPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [action, setAction] = useState<ActionKind | null>(null);
+  // Incident detail defaults to the group-chat view; the original timeline
+  // page lives behind the "详情 / Details" segment.
+  const [segment, setSegment] = useState<'chat' | 'detail'>('chat');
 
   const fetchAll = useCallback(
     async (silent = false) => {
@@ -147,15 +151,43 @@ export default function IncidentDetailPage() {
           {loading && !incident ? (
             <div className="flex h-60 items-center justify-center text-sm text-zinc-500">{tr('加载中…', 'Loading…')}</div>
           ) : incident ? (
-            <div className="space-y-6 px-6 py-6">
-              <InvestigationReportPanel incidentId={incident.id} />
-              <AIInitialDiagnosisPanel incident={incident} events={events} />
-              <AgentTimelinePanel incidentId={incident.id} />
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
-                <Timeline events={events} />
-                <Sidebar2 incident={incident} />
+            <>
+              <div
+                role="tablist"
+                className="mx-6 mt-6 mb-4 flex w-fit gap-1 rounded-rk-md bg-zinc-900/60 p-1"
+              >
+                {([['chat', '群聊', 'Group chat'], ['detail', '详情', 'Details']] as const).map(([id, zh, en]) => (
+                  <button
+                    key={id}
+                    role="tab"
+                    type="button"
+                    aria-selected={segment === id}
+                    onClick={() => setSegment(id)}
+                    className={cn(
+                      'rounded-full px-3 py-1.5 text-xs',
+                      segment === id ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-400 hover:text-zinc-200',
+                    )}
+                  >
+                    {tr(zh, en)}
+                  </button>
+                ))}
               </div>
-            </div>
+              {segment === 'chat' ? (
+                <div className="px-6 pb-6">
+                  <IncidentGroupChat incidentId={incident.id} />
+                </div>
+              ) : (
+                <div className="space-y-6 px-6 py-6">
+                  <InvestigationReportPanel incidentId={incident.id} />
+                  <AIInitialDiagnosisPanel incident={incident} events={events} />
+                  <AgentTimelinePanel incidentId={incident.id} />
+                  <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
+                    <Timeline events={events} />
+                    <Sidebar2 incident={incident} />
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             !err && (
               <div className="flex h-60 items-center justify-center text-sm text-zinc-500">{tr('未找到 incident', 'Incident not found')}</div>

@@ -25,14 +25,14 @@ import { NavLink, Outlet } from 'react-router-dom';
 import {
   Building2,
   Loader2,
+  Package,
   ScrollText,
   Server,
-  Shield,
   Users as UsersIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import type { IconType } from '@/lib/icon';
-import { Card, EmptyState, PageHeader } from '@/components/ui';
+import { PageHeader } from '@/components/ui';
 import { tr } from '@/i18n/locale';
 import { usePermissions } from '@/store/me';
 
@@ -53,32 +53,32 @@ function railItems(): RailItem[] {
     // the same rail. The icon (Server) is shared with the Manager
     // card on the page itself.
     { to: 'runtime', icon: Server, label: tr('运行时版本', 'Runtime / Version'), hint: tr('Manager / Worker / 插件 / 服务端 组合 + 健康检查 + 一次完整恢复操作', 'Manager / Worker / plugin / server composition + health + recovery example') },
+    // A plugin release is the widest-blast-radius action the console can
+    // take — it puts new code, including L2 tools that can restart
+    // services, onto hosts. That is why it is in Admin next to the audit
+    // log rather than in Settings next to the marketplace.
+    { to: 'plugins', icon: Package, label: tr('插件发布', 'Plugin releases'), hint: tr('把插件包推到节点舰队：逐波推进 / 停止 / 回滚', 'Push plugin packages to the fleet: advance / halt / roll back') },
   ];
 }
 
 export default function AdminLayout() {
-  const items = railItems();
   const { isAdmin } = usePermissions();
-  // route-level gate. The sidebar already hides /admin/* for
-  // non-admins, but a stale deep-link / typed URL still lands here —
-  // show an EmptyState rather than rendering the rail + outlet (which
-  // would just stack child EmptyStates and look weird).
-  if (!isAdmin) {
-    return (
-      <main className="anim-fade flex flex-1 flex-col overflow-hidden p-6">
-        <Card className="p-6">
-          <EmptyState
-            icon={Shield}
-            title={tr('需要管理员权限', 'Admin permission required')}
-            hint={tr('只有管理员（admin）才能访问用户管理。请联系管理员授予权限。', 'Only admins can access user management. Ask an admin to grant permission.')}
-          />
-        </Card>
-      </main>
-    );
-  }
+  const items = railItems().filter(
+    (item) => isAdmin || item.to === 'audit' || item.to === 'runtime',
+  );
   return (
     <main className="anim-fade flex flex-1 flex-col overflow-hidden">
-      <PageHeader title={tr('用户管理', 'Admin')} subtitle={tr('用户 / 组织 / 审计；platform governance', 'Users / orgs / audit — platform governance')} />
+      {/* Section title, so it names the SECTION and not the first leaf.
+          It used to read 用户管理 / "Users" unconditionally, which put an
+          <h1>Users</h1> above the audit log, the runtime view and the plugin
+          release console too — every admin page looked like the user list, and
+          a screen-reader user landing on 审计日志 was told they were on Users.
+          Each leaf renders its own PageHeader below, so this one only has to
+          say "you are somewhere under Admin". Matches SettingsLayout. */}
+      <PageHeader
+        title={tr('平台管理', 'Admin')}
+        subtitle={isAdmin ? tr('用户 / 组织 / 审计 / 运行时；platform governance', 'Users / orgs / audit / runtime — platform governance') : tr('审计与运行时只读视图', 'Audit and runtime read-only view')}
+      />
 
       <div className="flex-1 overflow-hidden">
         <div className="grid h-full grid-cols-1 lg:grid-cols-[240px_1fr]">

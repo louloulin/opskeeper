@@ -5,10 +5,11 @@
 // shared ReportCards, scoped by schedule_id).
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, CalendarClock, ChevronDown, ChevronRight, Loader2, Pencil, Play, Plus, Power, Trash2, Zap } from 'lucide-react';
+import { ArrowLeft, CalendarClock, ChevronDown, ChevronRight, Loader2, Newspaper, Pencil, Play, Plus, Power, Trash2, Zap } from 'lucide-react';
 import { Modal } from '@/components/Modal';
 import { ReportCards } from '@/components/ReportCards';
 import { cn } from '@/lib/cn';
+import { DAILY_BRIEF_NAME_EN, DAILY_BRIEF_NAME_ZH, dailyBriefSeed } from '@/lib/dailyBrief';
 import { fullDateTime } from '@/lib/format';
 import { usePermissions } from '@/store/me';
 import { useI18n } from '@/i18n/locale';
@@ -58,6 +59,7 @@ function TaskList() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<ReportSchedule | null>(null);
   const [creating, setCreating] = useState(false);
+  const [seed, setSeed] = useState<Partial<ScheduleInput> | null>(null);
   const [oneoffOpen, setOneoffOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -151,6 +153,23 @@ function TaskList() {
                       <span>
                         <span className="block text-xs text-zinc-100">{tr('定时任务', 'Scheduled task')}</span>
                         <span className="block text-[11px] text-zinc-500">{tr('按日报 / 周报 / 月报周期自动生成', 'Auto-generate on a daily / weekly / monthly cadence')}</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setSeed(dailyBriefSeed(channels, tr(DAILY_BRIEF_NAME_ZH, DAILY_BRIEF_NAME_EN)));
+                        setCreating(true);
+                      }}
+                      className="flex w-full items-start gap-2.5 border-t border-zinc-800/60 px-3 py-2 text-left hover:bg-zinc-800"
+                    >
+                      <Newspaper size={14} className="mt-0.5 shrink-0 text-sky-400/80" />
+                      <span>
+                        <span className="block text-xs text-zinc-100">{tr('每日值班简报', 'Daily on-call brief')}</span>
+                        <span className="block text-[11px] text-zinc-500">
+                          {tr('一键预填:每天 09:00 汇总昨夜事件与待审批,推送到飞书', 'One-click preset: 09:00 digest of last night + pending approvals, to Feishu')}
+                        </span>
                       </span>
                     </button>
                   </div>
@@ -252,13 +271,16 @@ function TaskList() {
           <ScheduleForm
             channels={channels}
             initial={editing}
+            seed={creating ? seed : null}
             onClose={() => {
               setCreating(false);
               setEditing(null);
+              setSeed(null);
             }}
             onSaved={() => {
               setCreating(false);
               setEditing(null);
+              setSeed(null);
               void load();
             }}
           />
@@ -494,21 +516,23 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 function ScheduleForm({
   channels,
   initial,
+  seed,
   onClose,
   onSaved,
 }: {
   channels: Channel[];
   initial: ReportSchedule | null;
+  seed?: Partial<ScheduleInput> | null;
   onClose(): void;
   onSaved(): void;
 }) {
   const { tr } = useI18n();
-  const [name, setName] = useState(initial?.name ?? '');
-  const [kind, setKind] = useState<ReportKind>(initial?.kind ?? 'weekly');
-  const [cron, setCron] = useState(initial?.cron_spec ?? '');
-  const [tz, setTz] = useState(initial?.timezone ?? DEFAULT_TZ);
-  const [chanIDs, setChanIDs] = useState<number[]>(initial?.channel_ids ?? []);
-  const [promptOverride, setPromptOverride] = useState(initial?.prompt_override ?? '');
+  const [name, setName] = useState(initial?.name ?? seed?.name ?? '');
+  const [kind, setKind] = useState<ReportKind>(initial?.kind ?? seed?.kind ?? 'weekly');
+  const [cron, setCron] = useState(initial?.cron_spec ?? seed?.cron_spec ?? '');
+  const [tz, setTz] = useState(initial?.timezone ?? seed?.timezone ?? DEFAULT_TZ);
+  const [chanIDs, setChanIDs] = useState<number[]>(initial?.channel_ids ?? seed?.channel_ids ?? []);
+  const [promptOverride, setPromptOverride] = useState(initial?.prompt_override ?? seed?.prompt_override ?? '');
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
