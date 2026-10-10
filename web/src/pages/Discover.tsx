@@ -14,6 +14,7 @@
 // inside a <main>. The root is therefore a plain <div>, leaving the embedded
 // page's <main> as the page's only one.
 import { Navigate, useSearchParams } from 'react-router-dom';
+import type { KeyboardEvent } from 'react';
 import { tr } from '@/i18n/locale';
 import { cn } from '@/lib/cn';
 import SkillsPage from './Skills';
@@ -44,15 +45,35 @@ export function Discover() {
     );
   };
 
+  // 左右方向键在标签间移动(标准 tablist 键盘契约),焦点跟随选中项。
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    e.preventDefault();
+    const i = TABS.findIndex((t) => t.id === tab);
+    const delta = e.key === 'ArrowRight' ? 1 : -1;
+    const next = TABS[(i + delta + TABS.length) % TABS.length].id;
+    select(next);
+    e.currentTarget.querySelector<HTMLButtonElement>(`#discover-tab-${next}`)?.focus();
+  };
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <div role="tablist" className="flex gap-1 self-start rounded-rk-md bg-zinc-900/60 p-1">
+      {/* 标签条对齐控制台页边距(PageHeader 用 px-6);self-start 保持 pill 宽度自适应 */}
+      <div
+        role="tablist"
+        aria-label={tr('扩展面', 'Extensions')}
+        onKeyDown={onKeyDown}
+        className="ml-6 mt-4 flex gap-1 self-start rounded-rk-md bg-zinc-900/60 p-1"
+      >
         {TABS.map((t) => (
           <button
             key={t.id}
+            id={`discover-tab-${t.id}`}
             role="tab"
             type="button"
             aria-selected={tab === t.id}
+            aria-controls={`discover-panel-${t.id}`}
+            tabIndex={tab === t.id ? 0 : -1}
             onClick={() => select(t.id)}
             className={cn(
               'rounded-full px-3 py-1.5 text-xs transition-colors',
@@ -63,7 +84,12 @@ export function Discover() {
           </button>
         ))}
       </div>
-      <div role="tabpanel" className="flex flex-1 flex-col overflow-hidden">
+      <div
+        id={`discover-panel-${tab}`}
+        role="tabpanel"
+        aria-labelledby={`discover-tab-${tab}`}
+        className="flex flex-1 flex-col overflow-hidden"
+      >
         {tab === 'skills' && <SkillsPage />}
         {tab === 'plugins' && <PluginMarketplacePage />}
         {tab === 'crystals' && <CrystallizedPage />}

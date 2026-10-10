@@ -6,7 +6,7 @@
 // 是空的,`setup.ts` 又是 onUnhandledRequest:'error',所以缺一个 handler 会当众
 // 炸,而不是静默挂起——这里按每个用例实际挂载的内嵌页把 handler 配齐。
 import type { ReactElement } from 'react';
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -140,6 +140,24 @@ describe('Discover', () => {
     // 所以内嵌的 SkillsPage 真的切到了 install 子界面 —— 那条安装 composer
     // 的 placeholder 只在 install 子 tab 渲染,是稳定的证据。
     expect(screen.getByPlaceholderText(/贴个技能源/)).toBeInTheDocument();
+  });
+
+  // phase4-ui-deepening:标签条键盘可达(左右方向键)+ 标签/面板关联。
+  it('associates each tab with its panel and moves with arrow keys', async () => {
+    renderAt('/discover');
+    const skills = screen.getByRole('tab', { name: /技能|Skills/ });
+    expect(skills).toHaveAttribute('aria-controls', 'discover-panel-skills');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'discover-panel-skills');
+    // roving tabindex:仅活动标签可 Tab 聚焦
+    expect(skills).toHaveAttribute('tabindex', '0');
+    expect(screen.getByRole('tab', { name: /插件|Plugins/ })).toHaveAttribute('tabindex', '-1');
+
+    skills.focus();
+    fireEvent.keyDown(skills, { key: 'ArrowRight' });
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /插件|Plugins/ }).getAttribute('aria-selected')).toBe('true'),
+    );
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'discover-tab-plugins');
   });
 
   // Legacy-route redirects. `/skills?tab=install&q=web` must keep BOTH its

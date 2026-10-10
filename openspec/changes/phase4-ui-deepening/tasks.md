@@ -15,8 +15,8 @@
 
 ## 4. Discover
 
-- [ ] 4.1 `web/src/pages/Discover.tsx`：标签条与内容面板视觉衔接；补 `focus-visible`；`aria-controls`/`role=tabpanel` 关联；左右方向键切换
-- [ ] 4.2 追加断言（不得破坏既有 `?tab=` 路由与 `aria-selected` 断言）
+- [x] 4.1 `web/src/pages/Discover.tsx`：标签条对齐页边距（`ml-6 mt-4`）；`id`/`aria-controls`/`aria-labelledby`/roving `tabIndex` 关联；左右方向键切换（焦点跟随）
+- [x] 4.2 追加断言（不得破坏既有 `?tab=` 路由与 `aria-selected` 断言）
 
 ## 5. 日报预设与简报卡
 

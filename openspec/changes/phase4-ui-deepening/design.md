@@ -22,9 +22,10 @@
 - **硬约束**：面板只读——既有测试断言「分区内零 button」，任何新增都不得引入 button。
 
 ### 4. Discover（`pages/Discover.tsx`）
-- 标签条（`rounded-rk-md bg-zinc-900/60 p-1` + 内层 `rounded-full`）与嵌入式页面的自带 `PageHeader` 形成双重 chrome：收紧内嵌页头部与标签条的视觉衔接（间距/分隔），不改路由。
-- 补 `focus-visible:ring` 焦点样式；标签容器补 `role="tablist"` 语义，标签补 `aria-controls`，面板补 `id` + `role="tabpanel"`。
-- 左右方向键在标签间移动焦点并切换（标准 tablist 行为）。
+- 标签条原本左对齐贴边（root 无 padding）→ 补 `ml-6 mt-4` 对齐控制台页边距（PageHeader 用 `px-6`）。
+- 「消除双重 chrome」**不做**：内嵌三页各自渲染自己的 PageHeader，消除它必须改那三张页面，超出本 change「五处表面」范围。
+- 键盘与语义：标签加 `id`/`aria-controls`/roving `tabIndex`，面板加 `id`/`aria-labelledby`；左右方向键切换并让焦点跟随。焦点可见性由全局 `*:focus-visible` 规则提供，不额外加样式。
+- 路由行为不变（`?tab=` 读写逻辑一字未动）。
 
 ### 5. 日报预设入口（`pages/Tasks.tsx:154-176`）
 - 该按钮现与上下两个普通项类名完全相同。给它加可辨识度：强调色图标已有（`text-sky-400/80`），补一项轻分隔（`border-t border-zinc-800/60` 或 `mt`）与 `rounded-rk-sm`，或给标题加 accent 色。**不改文案、不改 onClick、不改 `dailyBriefSeed` 载荷。**

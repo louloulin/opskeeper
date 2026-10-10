@@ -36,17 +36,17 @@ ContextPanel SHALL 用 `rounded-rk-*` 统一列表项与折叠按钮的圆角，
 - **WHEN** 检查上下文面板的提及与知识分区
 - **THEN** 分区内无任何 button 元素（只读展示）
 
-### Requirement: Discover 标签条视觉衔接与键盘可达
+### Requirement: Discover 标签条键盘可达与面板关联
 
-Discover 标签条 SHALL 与内容面板视觉衔接，消除标签条与内嵌页面头部形成的双重 chrome；活动标签 MUST 具明确填充对比。标签切换 SHALL 支持左右方向键，MUST 提供 `focus-visible` 焦点样式，且标签与面板 SHALL 通过 `role="tablist"`/`aria-controls`/`role="tabpanel"` 关联。既有 `?tab=` 路由行为 MUST 保持不变。
+Discover 标签条 SHALL 支持左右方向键在标签间移动并切换，活动标签 MUST 持 roving `tabIndex`（活动=0，其余=-1），焦点对键盘用户 MUST 可见（由全局 `*:focus-visible` token 规则提供）。每个标签 SHALL 通过 `aria-controls` 关联其面板，面板 SHALL 持 `id`、`role="tabpanel"` 与 `aria-labelledby`。标签条 SHALL 对齐控制台页边距，活动标签 MUST 具明确填充对比。既有 `?tab=` 路由行为 MUST 保持不变。
 
 #### Scenario: 方向键切换标签
 - **WHEN** 焦点在 Discover 标签条上并按左右方向键
-- **THEN** 焦点与选中标签随之移动，对应面板切换，`aria-selected` 同步更新
+- **THEN** 选中标签随之移动，对应面板切换，`aria-selected` 与 `aria-labelledby` 同步更新
 
-#### Scenario: 焦点可见
-- **WHEN** 键盘 Tab 聚焦到某个标签
-- **THEN** 该标签呈现可见的 `focus-visible` 焦点环
+#### Scenario: 标签与面板关联
+- **WHEN** 检查 Discover 的活动标签与面板
+- **THEN** 活动标签的 `aria-controls` 等于面板 `id`，面板具 `role="tabpanel"` 且 `aria-labelledby` 指向该标签，非活动标签 `tabIndex=-1`
 
 ### Requirement: 日报预设入口视觉可辨识
 
