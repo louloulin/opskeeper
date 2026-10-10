@@ -16,17 +16,13 @@
 - **WHEN** 打开一份日报简报
 - **THEN** 其容器与 D1 交付物卡使用相同的 `surface-card` 圆角与阴影，统计格状态色取自语义 token
 
-### Requirement: AgentAvatar 视觉层次与可访问性
+### Requirement: AgentAvatar 视觉层次
 
-AgentAvatar SHALL 在与 `surface-card` 邻接时呈现与角色色一致的细环/描边以消除扁平感；当头像代表一条消息的发言人时 SHALL 提供可访问名称标签，纯装饰语境 SHALL 保持 `aria-hidden`。角色色 tone MUST 与 `Chip` 语义色同源，但可见色调 MUST 保持与本规范既有 AgentAvatar 定义一致。
-
-#### Scenario: 发言人头像带可访问标签
-- **WHEN** AgentAvatar 代表一条消息的发言人渲染
-- **THEN** 该头像带可访问的角色名称标签，屏幕阅读器可读出
+AgentAvatar SHALL 呈现与角色色一致的同色低透明度细环（`ring-1 ring-inset`，约 /20）以消除扁平感，使头像在与 `surface-card` 邻接处保有边界定义；细环 MUST 在深/浅主题下均可见，头像可见色调 MUST 保持与本规范既有 AgentAvatar 定义一致。头像在发言人姓名已作为可见文本呈现的语境中 MUST 保持装饰性（图标 `aria-hidden`），不得重复播报名称。
 
 #### Scenario: 邻接卡片不扁平
 - **WHEN** AgentAvatar 与 `surface-card` 容器相邻呈现
-- **THEN** 头像带与角色色一致的细环，视觉层次与卡片协调，深/浅主题均可见
+- **THEN** 头像带与角色色一致的低透明度细环，视觉层次与卡片协调，深/浅主题均可见
 
 ### Requirement: 会话上下文面板视觉一致性与只读性
 

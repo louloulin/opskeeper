@@ -105,6 +105,17 @@ describe('AgentAvatar', () => {
     expect(container.querySelector('img')).toBeNull();
     expect(iconClass(container)).toContain('lucide-bot');
   });
+
+  // phase4-ui-deepening:头像与 surface-card 邻接时补同色细环,消除扁平感。
+  // (原先还打算加可访问名,但发言人姓名在各调用点已是可见文本,给头像再加
+  //  aria-label 会造成屏幕阅读器重复播报 —— 保持图标 aria-hidden 才是正解。)
+  it('carries a same-hue hairline ring so it keeps definition next to a card', () => {
+    const { container } = render(<AgentAvatar agentId="incident-investigator" />);
+    const cls = container.firstElementChild?.className ?? '';
+    expect(cls).toContain('ring-1');
+    expect(cls).toContain('ring-inset');
+    expect(cls).toContain('ring-violet-500/20');
+  });
 });
 
 // personaLabel (AgentBadge) must resolve a display name for every persona

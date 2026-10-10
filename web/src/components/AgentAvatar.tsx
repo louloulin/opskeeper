@@ -16,15 +16,18 @@ export type PersonaTone = 'violet' | 'rose' | 'amber' | 'emerald' | 'sky' | 'cya
 
 export type PersonaVisual = { icon: LucideIcon; tone: PersonaTone };
 
-// Pale fill + 300 icon. The html.light remap (index.css) flips both to
-// -100 fill / -700 icon, so avatars stay legible in either theme.
+// Pale fill + 300 icon + hairline same-hue ring. The html.light remap
+// (index.css) flips fill/icon to -100 fill / -700 icon, so avatars stay
+// legible in either theme. The `ring-1 ring-inset` at /20 gives the avatar
+// a defined edge without a hard border, so it doesn't read flat when it sits
+// next to a `surface-card` (the former look had no rim at all).
 export const TONE_CLASS: Record<PersonaTone, string> = {
-  violet: 'bg-violet-500/10 text-violet-300',
-  rose: 'bg-rose-500/10 text-rose-300',
-  amber: 'bg-amber-500/10 text-amber-300',
-  emerald: 'bg-emerald-500/10 text-emerald-300',
-  sky: 'bg-sky-500/10 text-sky-300',
-  cyan: 'bg-cyan-500/10 text-cyan-300',
+  violet: 'bg-violet-500/10 text-violet-300 ring-1 ring-inset ring-violet-500/20',
+  rose: 'bg-rose-500/10 text-rose-300 ring-1 ring-inset ring-rose-500/20',
+  amber: 'bg-amber-500/10 text-amber-300 ring-1 ring-inset ring-amber-500/20',
+  emerald: 'bg-emerald-500/10 text-emerald-300 ring-1 ring-inset ring-emerald-500/20',
+  sky: 'bg-sky-500/10 text-sky-300 ring-1 ring-inset ring-sky-500/20',
+  cyan: 'bg-cyan-500/10 text-cyan-300 ring-1 ring-inset ring-cyan-500/20',
 };
 
 export const PERSONA_VISUALS: Record<string, PersonaVisual> = {

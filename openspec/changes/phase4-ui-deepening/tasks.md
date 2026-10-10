@@ -5,8 +5,8 @@
 
 ## 2. AgentAvatar
 
-- [ ] 2.1 `web/src/components/AgentAvatar.tsx`：与 `surface-card` 邻接补同色细环；代表发言人时补 `aria-label`，装饰语境保持 `aria-hidden`
-- [ ] 2.2 追加断言（不得改动既有锁定的 `bg-violet-500/10`、`h-8/h-10`、`rounded-rk-sm/rk-md`，不得让 className 含 `rounded-s-`）
+- [x] 2.1 `web/src/components/AgentAvatar.tsx`：补同色低透明度细环（`ring-1 ring-inset`），消除邻接 card 的扁平感；不放 `aria-label`（发言人姓名已是可见文本，避免重复播报）
+- [x] 2.2 追加断言（不得改动既有锁定的 `bg-violet-500/10`、`h-8/h-10`、`rounded-rk-sm/rk-md`，不得让 className 含 `rounded-s-`）
 
 ## 3. ContextPanel
 
