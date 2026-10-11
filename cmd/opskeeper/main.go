@@ -114,6 +114,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 
 	managerbizaiops "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
+	aiopsdatasource "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/datasource"
 	aiopsagent "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
 	aiopschatprompt "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatprompt"
@@ -1690,24 +1691,41 @@ func main() {
 	// callback chain checks before each ChatModel turn — see Phase 4 cbDeps
 	// build below where the checker is set when the limit > 0.
 	aiopsRepo := manageraiopsdata.NewBizRepo(db)
+	// The observability query backends are microkernel plugins, not three
+	// inline fields. Each configured backend is admitted and activated into a
+	// control-plane datasource host, and the tool registry reads the resolved
+	// Set — so query_promql / query_logql / query_traceql register for exactly
+	// the signals a backend was provided for. That is the same conditional
+	// registration the three nil checks gave, expressed once, and it is what
+	// makes a fourth backend (VictoriaMetrics, Elasticsearch) a new plugin
+	// rather than a fourth field here.
+	dsHost := aiopsdatasource.NewHost(log.With(slog.String("comp", "datasource")))
+	dsBackends := aiopsdatasource.Backends{}
 	// PromQuerier is the interface tools/registry takes; passing a typed-nil
-	// *Client would yield a non-nil interface and bypass the conditional
-	// tool registration. Explicitly hand it nil when Prom is disabled.
-	var promQuerier aiopstools.PromQuerier
+	// *Client would yield a non-nil interface and bypass the conditional tool
+	// registration, so a disabled backend stays nil all the way through.
 	if promQueryClient != nil {
-		promQuerier = promQueryClient
+		dsBackends.Prom = promQueryClient
 	}
-	// LogQuerier / TraceQuerier mirror the same pattern: build a client
-	// only when the URL is configured so the corresponding query_logql /
-	// query_traceql tools register conditionally.
-	var logQuerier aiopstools.LogQuerier
+	// LogQuerier / TraceQuerier mirror the same pattern: build a client only
+	// when the URL is configured.
 	if cfg.Logs.URL != "" {
-		logQuerier = pkglogquery.New(cfg.Logs.URL, log.With(slog.String("comp", "aiops-logquery")))
+		dsBackends.Logs = pkglogquery.New(cfg.Logs.URL, log.With(slog.String("comp", "aiops-logquery")))
 	}
-	var traceQuerier aiopstools.TraceQuerier
 	if cfg.Traces.URL != "" {
-		traceQuerier = pkgtracequery.New(cfg.Traces.URL, log.With(slog.String("comp", "aiops-tracequery")))
+		dsBackends.Traces = pkgtracequery.New(cfg.Traces.URL, log.With(slog.String("comp", "aiops-tracequery")))
 	}
+	dsSet, dsErr := aiopsdatasource.Activate(dsHost, dsBackends)
+	if dsErr != nil {
+		log.Error("datasource activation", slog.Any("err", dsErr))
+		os.Exit(1)
+	}
+	log.Info("datasource plugins active",
+		slog.Any("plugins", dsHost.Live()),
+		slog.Bool("prom", dsSet.Prom() != nil),
+		slog.Bool("loki", dsSet.Logs() != nil),
+		slog.Bool("tempo", dsSet.Traces() != nil),
+	)
 	// The one tool-registry wiring for this binary, as a value rather than
 	// as a constructor call: the fields that exist now are filled now, and
 	// the ones that only exist after the approval queue, the alert channel
@@ -1717,9 +1735,9 @@ func main() {
 		Caller:  fbClient,
 		Edges:   edgeUC,
 		Devices: deviceUC,
-		Prom:    promQuerier,
-		Logs:    logQuerier,
-		Trace:   traceQuerier,
+		Prom:    dsSet.Prom(),
+		Logs:    dsSet.Logs(),
+		Trace:   dsSet.Traces(),
 		Alerts:  alertUC,
 		Log:     log,
 	}
@@ -2547,14 +2565,14 @@ func main() {
 	// one metric and a log line, which cannot tell a bloated table from a
 	// stuck vacuum from a slow query.
 	var loopInvestigatorToolset managerbizloop.InvestigatorToolset = managerbizloop.NoopInvestigatorToolset{}
-	if promQuerier != nil || logQuerier != nil {
+	if dsSet.Prom() != nil || dsSet.Logs() != nil {
 		// The labels source is what lets a remediation dispatch name the
 		// object it acts on. Without it the evidence chain holds only a
 		// metric and a log line, and every write action refuses at
 		// dispatch for want of a pod name, queue or unit the firing alert
 		// already carried.
 		loopInvestigatorToolset = managerbizloopinvestigatorreal.NewWithLabels(
-			promQuerier, logQuerier, managerbizloop.NewAlertLabelsAdapter(loopAlertReader{repo: alertRepo}), log).
+			dsSet.Prom(), dsSet.Logs(), managerbizloop.NewAlertLabelsAdapter(loopAlertReader{repo: alertRepo}), log).
 			// The probes are how the investigation learns which table is
 			// bloating and which node is NotReady, instead of inferring
 			// it from a restart rate that looks the same either way.

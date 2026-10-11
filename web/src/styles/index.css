@@ -669,9 +669,13 @@ html.light .md-body th {
  * a solid gray ring. Outline stays bright + thin so the viewport edge
  * is unambiguous. */
 .react-flow__minimap-mask {
-  fill: rgba(0, 0, 0, 0.55);
-  stroke: rgb(161, 161, 170); /* zinc-400 */
-  stroke-width: 1;
+  /* React Flow v12 paints its own light-grey mask (rgba(240,240,240,0.6))
+     through a higher-precedence rule, so a plain declaration here loses and
+     the minimap renders as a pale slab in dark mode. !important is the only
+     hook available for this element. */
+  fill: rgba(0, 0, 0, 0.45) !important;
+  stroke: rgba(255, 255, 255, 0.14) !important;
+  stroke-width: 1 !important;
 }
 /* Light-theme overrides — flip Controls + MiniMap to the matching
  * palette. Without these the dark rules above stay applied and the
@@ -697,9 +701,9 @@ html.light .react-flow__minimap {
   border: 1px solid rgb(203, 213, 225); /* slate-300 */
 }
 html.light .react-flow__minimap-mask {
-  fill: rgba(15, 23, 42, 0.18); /* slate-900 at low alpha — dim the non-viewport */
-  stroke: rgb(71, 85, 105); /* slate-600 outline */
-  stroke-width: 1;
+  fill: rgba(15, 23, 42, 0.1) !important; /* slate-900 at low alpha — dim the non-viewport */
+  stroke: rgba(15, 23, 42, 0.18) !important;
+  stroke-width: 1 !important;
 }
 
 /* --- Report PDF export (HLD-014). window.print() isolates the report

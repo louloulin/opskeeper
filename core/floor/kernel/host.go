@@ -33,12 +33,23 @@ type Policy struct {
 	GrantedScopes domain.Scopes
 }
 
+// Registrar is the scoped view a contribution registers through.
+//
+// It is not the registry. The host hands each contribution a registrar that
+// stamps the package's own name on every entry, so a contribution cannot
+// file an entry under another package's name — which would be a way to make
+// a rollback remove something it did not install, or leave behind something
+// it did.
+type Registrar interface {
+	Register(kind Kind, name string, impl any) error
+}
+
 // Contribution is what a plugin package contributes when it is activated.
 //
-// A package implements this once. Register is handed the registry and adds
-// whatever entries the package contributes; the kernel does not care which
-// kinds, only that every entry is recorded against the package's name so
-// the whole thing can be rolled back.
+// A package implements this once. Register is handed a scoped registrar and
+// adds whatever entries the package contributes; the kernel does not care
+// which kinds, only that every entry is recorded against the package's name
+// so the whole thing can be rolled back.
 type Contribution interface {
 	// PluginName is the manifest name this contribution belongs to. It is
 	// the key the registry records every entry under, so a rollback removes
@@ -47,7 +58,18 @@ type Contribution interface {
 	// Register adds the package's entries. Returning an error rolls the
 	// whole package back: the host removes every entry this Register wrote
 	// before it returns.
-	Register(reg *Registry) error
+	Register(r Registrar) error
+}
+
+// scopedRegistrar stamps one package's name onto every entry registered
+// through it.
+type scopedRegistrar struct {
+	reg    *Registry
+	plugin string
+}
+
+func (s scopedRegistrar) Register(kind Kind, name string, impl any) error {
+	return s.reg.Register(Entry{Kind: kind, Name: name, Plugin: s.plugin, Impl: impl})
 }
 
 // Admitted is a package the host has accepted, paired with its contribution.
@@ -136,7 +158,7 @@ func (h *Host) Activate(ctx context.Context, p pluginmanifest.Plugin, c Contribu
 		return fmt.Errorf("kernel: plugin %q is already active", p.Name())
 	}
 
-	if err := c.Register(h.reg); err != nil {
+	if err := c.Register(scopedRegistrar{reg: h.reg, plugin: p.Name()}); err != nil {
 		// Roll back whatever Register managed to write before it failed.
 		removed := h.reg.RemovePlugin(p.Name())
 		h.log.Warn("plugin activation failed; rolled back",

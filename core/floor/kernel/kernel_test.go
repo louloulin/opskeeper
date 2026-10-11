@@ -39,13 +39,12 @@ type contrib struct {
 
 func (c *contrib) PluginName() string { return c.name }
 
-func (c *contrib) Register(reg *Registry) error {
+func (c *contrib) Register(r Registrar) error {
 	for i, e := range c.entries {
 		if c.failAt >= 0 && i == c.failAt {
 			return errors.New("contribution: deliberate failure")
 		}
-		e.Plugin = c.name
-		if err := reg.Register(e); err != nil {
+		if err := r.Register(e.Kind, e.Name, e.Impl); err != nil {
 			return err
 		}
 		c.regCount++
@@ -295,6 +294,22 @@ func TestActivateRefusesNameMismatch(t *testing.T) {
 	}
 	if reg.Len() != 0 {
 		t.Fatal("a name-mismatched activation must write nothing")
+	}
+}
+
+func TestRegistrarStampsPluginName(t *testing.T) {
+	reg := NewRegistry()
+	h := NewHost(reg, edgePolicy(), nil)
+	// A contribution never sees Entry; it registers through the scoped
+	// registrar, which stamps the package's own name. So an entry cannot be
+	// filed under a name that would confuse a rollback.
+	if err := h.Activate(context.Background(), manifest("obs", domain.TargetEdge, domain.SafetyL1, nil),
+		&contrib{name: "obs", failAt: -1, entries: []Entry{dsEntry("prom")}}); err != nil {
+		t.Fatal(err)
+	}
+	e, _ := reg.Lookup(KindDatasource, "prom")
+	if e.Plugin != "obs" {
+		t.Fatalf("entry plugin = %q; want obs (the registrar must stamp the package name)", e.Plugin)
 	}
 }
 
