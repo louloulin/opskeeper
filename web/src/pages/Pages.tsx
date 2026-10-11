@@ -264,12 +264,23 @@ export default function PagesPage() {
           <div className="py-16 text-center text-xs text-zinc-500">{tr('加载中…', 'Loading…')}</div>
         ) : items.length === 0 ? (
           <EmptyState
+            icon={AppWindow}
             title={tr('还没有生成的页面', 'No generated pages yet')}
             hint={tr('让工作流或助理用 serve_page 生成一个网页报告，它会出现在这里。', 'Have a workflow or the assistant generate a web report via serve_page — it shows up here.')}
             className="flex flex-col items-center gap-2 py-20 text-center"
           />
         ) : shown.length === 0 ? (
-          <div className="py-16 text-center text-xs text-zinc-500">{tr('无匹配的页面', 'No matching pages')}</div>
+          <EmptyState
+            icon={Search}
+            title={tr('没有匹配的页面', 'No pages match your search')}
+            hint={tr(`没有页面匹配「${search}」`, `Nothing matched “${search}”`)}
+            className="flex flex-col items-center gap-2 py-20 text-center"
+            action={
+              <Button variant="ghost" onClick={() => setSearch('')}>
+                {tr('清除搜索', 'Clear search')}
+              </Button>
+            }
+          />
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {shown.map((p) => (

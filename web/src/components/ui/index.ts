@@ -3,6 +3,7 @@
 // /ui/* for the implementations.
 export { Card } from './Card';
 export { Chip } from './Chip';
+export { DependencyNotice, classifyDependencyError } from './DependencyNotice';
 export { EmptyState } from './EmptyState';
 export { LoadingState } from './LoadingState';
 export { PageHeader } from './PageHeader';

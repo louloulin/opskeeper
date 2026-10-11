@@ -334,7 +334,9 @@ function UserTable({
                   )}
                 </td>
                 <td className="px-4 py-2.5">
-                  <Chip tone={u.status === 'active' ? 'success' : 'warning'}>{u.status}</Chip>
+                  <Chip tone={u.status === 'active' ? 'success' : 'warning'}>
+                    {u.status === 'active' ? tr('已启用', 'active') : tr('已停用', 'disabled')}
+                  </Chip>
                 </td>
                 <td className="px-4 py-2.5">
                   <div className="flex items-center gap-1">

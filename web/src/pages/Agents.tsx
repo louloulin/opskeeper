@@ -318,7 +318,7 @@ function AgentCard({
     <Card
       role="button"
       tabIndex={0}
-      className="flex cursor-pointer flex-col transition-colors hover:bg-zinc-800/40"
+      className="group flex cursor-pointer flex-col transition-colors hover:bg-zinc-800/40"
       onClick={onView}
       onKeyDown={(e) => {
         // 只响应打在卡片自身的按键：内部的编辑/删除按钮有自己的激活行为，
@@ -405,19 +405,24 @@ function AgentCard({
         )}
       </div>
       <div className="mt-4">
-        <Button
-          variant="primary"
+        {/* The card itself is the click target (role="button" above), so a
+            filled accent CTA on each of a dozen cards turned the grid into
+            purple soup. This stays a quiet pill and only picks up the brand
+            tint on hover/focus — the header's 「新建助理」 remains the one
+            loud CTA on the page. */}
+        <button
+          type="button"
           onClick={(e) => {
             e.stopPropagation();
             void onUse();
           }}
           disabled={busy}
           title={tr('用此助理开新会话', 'Start a new session with this assistant')}
-          className="w-full justify-center"
+          className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-zinc-700/70 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-accent/50 hover:bg-accent/10 hover:text-accent focus-visible:border-accent/50 disabled:opacity-40"
         >
           <MessageSquarePlus size={11} />
           {busy ? tr('创建中…', 'Creating…') : tr('开始对话', 'Start chatting')}
-        </Button>
+        </button>
       </div>
     </Card>
   );

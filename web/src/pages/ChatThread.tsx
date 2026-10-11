@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
+import { CornerDownLeft, Sparkles } from 'lucide-react';
 import { ChatInput, type ModelSelection, type SubmitPayload } from '@/components/ChatInput';
 import { MessageBubble, type ConfigDraftResult } from '@/components/MessageBubble';
 import { AgentBadge } from '@/components/AgentBadge';
@@ -530,7 +531,35 @@ export default function ChatThreadPage() {
             {loading ? (
               <div className="text-center text-sm text-zinc-500">{tr('加载中…', 'Loading…')}</div>
             ) : messages.length === 0 ? (
-              <div className="text-center text-sm text-zinc-500">{tr('这是一个新的会话，发条消息试试。', "This is a new session — try sending a message.")}</div>
+              // First-run state of the flagship surface — it was a single
+              // faint line of text. Give it a little structure and teach the
+              // two things a new operator needs (mentions, newline key)
+              // without adding any new capability.
+              <div className="flex flex-col items-center justify-center gap-3 py-20 text-center">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-card">
+                  <Sparkles size={20} className="text-accent" />
+                </div>
+                <div className="text-sm font-medium text-zinc-200">
+                  {tr('开始一个新会话', 'Start a new session')}
+                </div>
+                <div className="max-w-md text-xs leading-relaxed text-zinc-500">
+                  {tr(
+                    '用一句话说清你想排查或了解的问题。输入 @ 可以带上设备与资源，AI 会自己挑工具去查。',
+                    'Describe what you want to investigate in one sentence. Type @ to pull in devices and resources — the agent picks its own tools.',
+                  )}
+                </div>
+                <div className="mt-1 flex items-center gap-3 text-[11px] text-zinc-600">
+                  <span className="inline-flex items-center gap-1">
+                    <CornerDownLeft size={11} /> {tr('发送', 'Send')}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <kbd className="rounded border border-zinc-700 px-1">Shift</kbd>
+                    <span>+</span>
+                    <kbd className="rounded border border-zinc-700 px-1">Enter</kbd>
+                    {tr('换行', 'newline')}
+                  </span>
+                </div>
+              </div>
             ) : (
               messages.map((m) => (
                 <MessageBubble

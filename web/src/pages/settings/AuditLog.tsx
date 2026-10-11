@@ -116,7 +116,7 @@ export default function SettingsAuditLog() {
             onChange={(e) => setFilter((f) => ({ ...f, action: e.target.value || undefined }))}
             className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-zinc-600 cursor-pointer"
           >
-            <option value="">{tr('全部 action', 'All actions')}</option>
+            <option value="">{tr('全部动作', 'All actions')}</option>
             {actionOptions.map((a) => (
               <option key={a} value={a}>{actionLabel(a)}</option>
             ))}
@@ -160,11 +160,11 @@ export default function SettingsAuditLog() {
             <tr>
               <th className="px-3 py-2">{tr('时间', 'Time')}</th>
               <th className="px-3 py-2">{tr('用户', 'Actor')}</th>
-              <th className="px-3 py-2">action</th>
+              <th className="px-3 py-2">{tr('动作', 'Action')}</th>
               <th className="px-3 py-2">{tr('资源', 'Resource')}</th>
               <th className="px-3 py-2">{tr('结果', 'Status')}</th>
               <th className="px-3 py-2">IP</th>
-              <th className="px-3 py-2" />
+              <th className="whitespace-nowrap px-3 py-2" />
             </tr>
           </thead>
           <tbody>
@@ -176,8 +176,13 @@ export default function SettingsAuditLog() {
                   {row.role && <div className="text-[11px] text-zinc-500">{row.role}</div>}
                 </td>
                 <td className="px-3 py-2">
+                  {/* Label first, raw action underneath — but only when they
+                      differ, else unmapped actions render the same string
+                      twice (which read as a bug on the walkthrough). */}
                   <div className="text-zinc-200">{actionLabel(row.action)}</div>
-                  <div className="font-mono text-[11px] text-zinc-500">{row.action}</div>
+                  {actionLabel(row.action) !== row.action && (
+                    <div className="font-mono text-[11px] text-zinc-500">{row.action}</div>
+                  )}
                 </td>
                 <td className="px-3 py-2">
                   <div className="text-zinc-300">{resourceLabel(row.resource_type)}</div>
@@ -189,7 +194,7 @@ export default function SettingsAuditLog() {
                   <StatusChip status={row.status} />
                 </td>
                 <td className="px-3 py-2 font-mono text-xs text-zinc-400">{row.ip || '—'}</td>
-                <td className="px-3 py-2 text-right">
+                <td className="whitespace-nowrap px-3 py-2 text-right">
                   <Button variant="ghost" onClick={() => setSelected(row)}>
                     {tr('详情', 'Detail')}
                   </Button>

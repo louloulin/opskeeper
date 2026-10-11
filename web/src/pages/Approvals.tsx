@@ -3,7 +3,7 @@ import { ShieldCheck, RefreshCw, Check, X, ChevronDown, ChevronRight, Hourglass 
 import { listApprovals, approveApproval, rejectApproval, type Approval } from '@/api/approvals';
 import { ApiError } from '@/api/client';
 import { useI18n } from '@/i18n/locale';
-import { Button, Chip, EmptyState, LoadingState, PageHeader } from '@/components/ui';
+import { Button, Chip, DependencyNotice, EmptyState, LoadingState, PageHeader } from '@/components/ui';
 import { Modal } from '@/components/Modal';
 import { parseSigners, dualSignState, signerWording } from '@/lib/approvalSigners';
 
@@ -135,13 +135,21 @@ export default function ApprovalsPage() {
       />
 
       <div className="flex-1 overflow-auto px-6 py-4">
-        {err && <div className="mb-3 rounded-md border border-red-900/50 bg-red-950/30 px-3 py-2 text-[12px] text-red-400">{err}</div>}
+        {err && <DependencyNotice className="mb-3" message={err} />}
         {loading ? (
           <LoadingState />
         ) : items.length === 0 ? (
           <EmptyState
             icon={ShieldCheck}
             title={status === 'pending' ? tr('没有待确认的操作', 'No actions awaiting approval') : tr('暂无记录', 'Nothing here')}
+            hint={
+              status === 'pending'
+                ? tr(
+                    'Agent / 工作流提交的危险操作会先落到这里，人工批准后才执行。',
+                    'Risky operations submitted by agents / workflows land here first and only run after a human approves.',
+                  )
+                : tr('换个状态页签看看，或等新的操作提交上来。', 'Try another status tab, or wait for new operations to come in.')
+            }
           />
         ) : (
           <div className="space-y-2">

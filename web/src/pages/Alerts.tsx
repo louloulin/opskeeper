@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, ListTodo, RefreshCw, Siren, X } from 'lucide-react';
 import { Modal } from '@/components/Modal';
-import { EmptyState, LoadingState } from '@/components/ui';
+import { Button, DependencyNotice, EmptyState, LoadingState } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { relativeTime } from '@/lib/format';
 import { usePoll } from '@/lib/usePoll';
@@ -196,11 +196,7 @@ export default function AlertsPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {err && (
-            <div className="m-6 rounded-lg border border-red-500/40 bg-red-500/5 px-4 py-3 text-sm text-red-300">
-              {tr('加载失败：', 'Load failed: ')}{err}
-            </div>
-          )}
+          {err && <DependencyNotice className="m-6" message={err} />}
           {loading ? (
             <LoadingState />
           ) : items.length === 0 ? (
@@ -209,6 +205,27 @@ export default function AlertsPage() {
               iconClassName="text-emerald-500/60"
               title={tr('当前没有匹配的告警', 'No matching alerts right now')}
               hint={tr('所有规则未触发，或当前筛选下没有 incident', 'No rules have fired, or no incidents match the current filter')}
+              action={
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  {(statusFilter || severityFilter) && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setStatusFilter('');
+                        setSeverityFilter('');
+                      }}
+                    >
+                      {tr('清除筛选，看全部', 'Clear filters, show all')}
+                    </Button>
+                  )}
+                  <Link
+                    to="/alerts/rules"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/10 px-2.5 py-1.5 text-xs font-medium text-accent hover:bg-accent/20"
+                  >
+                    <ListTodo size={12} /> {tr('查看告警规则', 'View alert rules')}
+                  </Link>
+                </div>
+              }
             />
           ) : (
             <table className="w-full text-sm">

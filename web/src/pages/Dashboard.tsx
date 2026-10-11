@@ -281,7 +281,7 @@ export default function DashboardPage() {
   }, []);
 
   const lastRefreshedLabel = lastRefreshedAt
-    ? formatRefreshedAgo(now.getTime() - lastRefreshedAt.getTime())
+    ? formatRefreshedAgo(now.getTime() - lastRefreshedAt.getTime(), tr)
     : tr('尚未刷新', 'not refreshed yet');
 
   return (
@@ -1032,13 +1032,12 @@ function severityRank(s: string): number {
   }
 }
 
-function formatRefreshedAgo(deltaMs: number): string {
-  if (!Number.isFinite(deltaMs) || deltaMs < 0) return 'just now';
+function formatRefreshedAgo(deltaMs: number, tr: (zh: string, en: string) => string): string {
+  if (!Number.isFinite(deltaMs) || deltaMs < 5_000) return tr('刚刚', 'just now');
   const sec = Math.floor(deltaMs / 1000);
-  if (sec < 5) return 'just now';
-  if (sec < 60) return `${sec}s ago`;
+  if (sec < 60) return tr(`${sec} 秒前`, `${sec}s ago`);
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
+  if (min < 60) return tr(`${min} 分钟前`, `${min}m ago`);
   const hr = Math.floor(min / 60);
-  return `${hr}h ago`;
+  return tr(`${hr} 小时前`, `${hr}h ago`);
 }

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, CalendarClock, ChevronDown, ChevronRight, Loader2, Newspaper, Pencil, Play, Plus, Power, Trash2, Zap } from 'lucide-react';
 import { Modal } from '@/components/Modal';
-import { useConfirm } from '@/components/ui';
+import { Button, EmptyState, useConfirm } from '@/components/ui';
 import { ReportCards } from '@/components/ReportCards';
 import { cn } from '@/lib/cn';
 import { DAILY_BRIEF_NAME_EN, DAILY_BRIEF_NAME_ZH, dailyBriefSeed } from '@/lib/dailyBrief';
@@ -192,8 +192,31 @@ function TaskList() {
         {loading ? (
           <div className="py-16 text-center text-sm text-zinc-500">{tr('加载中…', 'Loading…')}</div>
         ) : items.length === 0 ? (
-          <div className="mx-auto max-w-2xl rounded-lg border border-dashed border-zinc-800 py-16 text-center text-sm text-zinc-400">
-            {tr('还没有任务。点「立即生成」做一次性报告，或「新建定时任务」排期。', 'No tasks yet. Click "Run now" for a one-shot, or create a scheduled task.')}
+          <div className="mx-auto max-w-2xl rounded-lg border border-dashed border-zinc-800 py-14">
+            {/* Carries the two real entry points instead of describing a
+                button the reader then has to go hunt for in the header
+                menu. Copy matches the menu items verbatim. */}
+            <EmptyState
+              icon={CalendarClock}
+              title={tr('还没有任务', 'No tasks yet')}
+              hint={tr(
+                '任务 = 一次性报告 + 定时排期。马上生成一份，或让日报 / 周报按周期自动产出。',
+                'A task is a one-shot report or a recurring schedule. Generate one now, or let it run on a daily / weekly cadence.',
+              )}
+              className="flex flex-col items-center justify-center gap-2 px-6 text-center"
+              action={
+                canMutate ? (
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <Button variant="primary" onClick={() => setOneoffOpen(true)}>
+                      <Zap size={12} /> {tr('立即生成（一次性）', 'Run now (one-shot)')}
+                    </Button>
+                    <Button variant="ghost" onClick={() => setCreating(true)}>
+                      <CalendarClock size={12} /> {tr('定时任务', 'Scheduled task')}
+                    </Button>
+                  </div>
+                ) : null
+              }
+            />
           </div>
         ) : (
           <div className="overflow-hidden surface-card rounded-rk-lg">
