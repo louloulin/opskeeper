@@ -15,6 +15,7 @@ import { useAgents, avatarFor } from '@/store/agents';
 import { AgentAvatar } from './AgentAvatar';
 import { DeliverableCard, DeliverableSequence, matchDeliverable } from './DeliverableCard';
 import { Button, Chip } from '@/components/ui';
+import { blastRadiusLabel, riskClassLabel, riskClassTone } from '@/lib/riskClass';
 
 export type ConfigDraftResult = {
   kind: 'config_draft';
@@ -699,12 +700,12 @@ function PendingApprovalCard({ approvalID, kind, command }: { approvalID: string
                 approval card. */}
             {meta.blast_radius && (
               <Chip tone="warning" dense>
-                {tr('影响面', 'Blast radius')}: {meta.blast_radius}
+                {tr('影响面', 'Blast radius')}: {blastRadiusLabel(meta.blast_radius, tr)}
               </Chip>
             )}
             {meta.risk_class && (
-              <Chip tone={meta.risk_class === 'destructive' ? 'danger' : 'default'} dense>
-                {tr('风险等级', 'Risk')}: {meta.risk_class}
+              <Chip tone={riskClassTone(meta.risk_class)} dense>
+                {tr('风险等级', 'Risk')}: {riskClassLabel(meta.risk_class, tr)}
               </Chip>
             )}
             {meta.target && (

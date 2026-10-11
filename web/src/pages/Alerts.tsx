@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, ListTodo, RefreshCw, Siren, X } from 'lucide-react';
+import { CheckCircle2, ListTodo, RefreshCw } from 'lucide-react';
 import { Modal } from '@/components/Modal';
-import { Button, DependencyNotice, EmptyState, LoadingState } from '@/components/ui';
+import { Button, DependencyNotice, EmptyState, IncidentStatusBadge as StatusBadge, LoadingState, SeverityBadge } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { relativeTime } from '@/lib/format';
 import { usePoll } from '@/lib/usePoll';
@@ -12,8 +12,6 @@ import {
   localizedRuleName,
   resolveIncident,
   type Incident,
-  type IncidentSeverity,
-  type IncidentStatus,
 } from '@/api/alerts';
 import { listEdges } from '@/api/edges';
 import { ApiError } from '@/api/client';
@@ -236,10 +234,10 @@ export default function AlertsPage() {
                   <th className="px-4 py-2 font-medium">{tr('摘要', 'Summary')}</th>
                   <th className="px-4 py-2 font-medium">{tr('目标', 'Target')}</th>
                   <th className="px-4 py-2 font-medium">{tr('状态', 'Status')}</th>
-                  <th className="px-4 py-2 font-medium">{tr('触发', 'Fired')}</th>
-                  <th className="px-4 py-2 font-medium">{tr('最近', 'Last')}</th>
-                  <th className="px-4 py-2 font-medium">{tr('次数', 'Count')}</th>
-                  <th className="px-4 py-2 text-right font-medium">{tr('操作', 'Actions')}</th>
+                  <th className="whitespace-nowrap px-4 py-2 font-medium">{tr('触发', 'Fired')}</th>
+                  <th className="whitespace-nowrap px-4 py-2 font-medium">{tr('最近', 'Last')}</th>
+                  <th className="whitespace-nowrap px-4 py-2 font-medium">{tr('次数', 'Count')}</th>
+                  <th className="whitespace-nowrap px-4 py-2 text-right font-medium">{tr('操作', 'Actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -504,35 +502,7 @@ function FilterGroup({
   );
 }
 
-function SeverityBadge({ severity }: { severity: IncidentSeverity }) {
-  const styles =
-    severity === 'critical'
-      ? 'bg-red-500/15 text-red-300 ring-red-500/40'
-      : severity === 'warning'
-      ? 'bg-amber-500/10 text-amber-300 ring-amber-500/30'
-      : 'bg-zinc-800 text-zinc-300 ring-zinc-700';
-  return (
-    <span className={cn('inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset', styles)}>
-      {severity === 'critical' ? <Siren size={11} /> : <AlertTriangle size={11} />}
-      {severity}
-    </span>
-  );
-}
+// SeverityBadge / StatusBadge now live in components/ui/IncidentBadges so
+// the alerts list and the incident detail page can't drift apart again.
 
-function StatusBadge({ status }: { status: IncidentStatus }) {
-  const styles =
-    status === 'open'
-      ? 'bg-red-500/10 text-red-300 ring-red-500/30'
-      : status === 'acknowledged'
-      ? 'bg-blue-500/10 text-blue-300 ring-blue-500/30'
-      : status === 'silenced'
-      ? 'bg-zinc-700 text-zinc-300 ring-zinc-600'
-      : 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30';
-  return (
-    <span className={cn('inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset', styles)}>
-      {status === 'resolved' ? <CheckCircle2 size={11} /> : status === 'silenced' ? <X size={11} /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
-      {status}
-    </span>
-  );
-}
 

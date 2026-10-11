@@ -345,12 +345,12 @@ export default function AlertRulesPage() {
               <thead className="sticky border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
                 <tr>
                   <th className="whitespace-nowrap px-6 py-2.5 font-medium">{tr('来源', 'Source')}</th>
-                  <th className="whitespace-nowrap py-2.5 font-medium">{tr('类型', 'Type')}</th>
-                  <th className="whitespace-nowrap py-2.5 font-medium">{tr('规则键 · 名称', 'Rule key · Name')}</th>
-                  <th className="whitespace-nowrap py-2.5 font-medium">{tr('范围', 'Scope')}</th>
-                  <th className="whitespace-nowrap py-2.5 font-medium">{tr('级别', 'Severity')}</th>
-                  <th className="whitespace-nowrap py-2.5 font-medium">{tr('条件摘要', 'Condition')}</th>
-                  <th className="whitespace-nowrap py-2.5 font-medium">{tr('状态', 'Status')}</th>
+                  <th className="whitespace-nowrap py-2.5 pr-4 font-medium">{tr('类型', 'Type')}</th>
+                  <th className="whitespace-nowrap py-2.5 pr-4 font-medium">{tr('规则键 · 名称', 'Rule key · Name')}</th>
+                  <th className="whitespace-nowrap py-2.5 pr-4 font-medium">{tr('范围', 'Scope')}</th>
+                  <th className="whitespace-nowrap py-2.5 pr-4 font-medium">{tr('级别', 'Severity')}</th>
+                  <th className="whitespace-nowrap py-2.5 pr-4 font-medium">{tr('条件摘要', 'Condition')}</th>
+                  <th className="whitespace-nowrap py-2.5 pr-4 font-medium">{tr('状态', 'Status')}</th>
                   <th className="whitespace-nowrap px-6 py-2.5 text-right font-medium">{tr('操作', 'Actions')}</th>
                 </tr>
               </thead>
@@ -485,7 +485,7 @@ function RuleRow({
           </span>
         )}
       </td>
-      <td className="py-2.5">
+      <td className="whitespace-nowrap py-2.5 pr-4">
         <div className="flex flex-wrap items-center gap-1">
           {desc.meta && (
             <span
@@ -505,14 +505,14 @@ function RuleRow({
           </span>
         </div>
       </td>
-      <td className="whitespace-nowrap py-2.5">
+      <td className="whitespace-nowrap py-2.5 pr-4">
         <div className="flex flex-col leading-tight">
           <span className="text-xs text-zinc-200">{localizedRuleName(rule.rule_key, rule.name)}</span>
           <span className="font-mono text-[10px] text-zinc-500">{rule.rule_key}</span>
         </div>
       </td>
-      <td className="whitespace-nowrap py-2.5 text-xs text-zinc-300">{scopeLabel}</td>
-      <td className="whitespace-nowrap py-2.5">
+      <td className="whitespace-nowrap py-2.5 pr-4 text-xs text-zinc-300">{scopeLabel}</td>
+      <td className="whitespace-nowrap py-2.5 pr-4">
         <span
           className={cn(
             'rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset',
@@ -526,10 +526,10 @@ function RuleRow({
           {rule.severity}
         </span>
       </td>
-      <td className="py-2.5 text-zinc-400">
+      <td className="py-2.5 pr-4 text-zinc-400">
         <code className="text-[11px]">{summarizeRule(rule)}</code>
       </td>
-      <td className="whitespace-nowrap py-2.5">
+      <td className="whitespace-nowrap py-2.5 pr-4">
         <button
           type="button"
           onClick={() => onToggle(!rule.enabled)}

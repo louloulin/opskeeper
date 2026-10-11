@@ -6,6 +6,7 @@ import { useI18n } from '@/i18n/locale';
 import { Button, Chip, DependencyNotice, EmptyState, LoadingState, PageHeader } from '@/components/ui';
 import { Modal } from '@/components/Modal';
 import { parseSigners, dualSignState, signerWording } from '@/lib/approvalSigners';
+import { blastRadiusLabel, riskClassLabel, riskClassTone } from '@/lib/riskClass';
 
 // Approvals inbox (HLD-017 propose-confirm). Dangerous actions proposed by
 // the agent (or a flow approval node) wait here; an admin approves (→ runs)
@@ -174,8 +175,8 @@ export default function ApprovalsPage() {
                       {a.summary && <div className="mt-1 whitespace-pre-wrap text-[12px] text-zinc-400">{a.summary}</div>}
                       {(a.blast_radius || a.risk_class || a.target) && (
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                          {a.blast_radius && <Chip tone="warning" dense>{tr('影响面', 'Blast radius')}: {a.blast_radius}</Chip>}
-                          {a.risk_class && <Chip tone={a.risk_class === 'destructive' ? 'danger' : 'default'} dense>{tr('风险等级', 'Risk')}: {a.risk_class}</Chip>}
+                          {a.blast_radius && <Chip tone="warning" dense>{tr('影响面', 'Blast radius')}: {blastRadiusLabel(a.blast_radius, tr)}</Chip>}
+                          {a.risk_class && <Chip tone={riskClassTone(a.risk_class)} dense>{tr('风险等级', 'Risk')}: {riskClassLabel(a.risk_class, tr)}</Chip>}
                           {a.target && <span className="font-mono text-[11px] text-zinc-400">{a.target}</span>}
                         </div>
                       )}
@@ -288,12 +289,12 @@ export default function ApprovalsPage() {
             <div className="flex flex-wrap items-center gap-1.5">
               {confirmTarget?.blast_radius && (
                 <Chip tone="warning" dense>
-                  {tr('影响面', 'Blast radius')}: {confirmTarget.blast_radius}
+                  {tr('影响面', 'Blast radius')}: {blastRadiusLabel(confirmTarget.blast_radius, tr)}
                 </Chip>
               )}
               {confirmTarget?.risk_class && (
-                <Chip tone={confirmTarget.risk_class === 'destructive' ? 'danger' : 'default'} dense>
-                  {tr('风险等级', 'Risk')}: {confirmTarget.risk_class}
+                <Chip tone={riskClassTone(confirmTarget.risk_class)} dense>
+                  {tr('风险等级', 'Risk')}: {riskClassLabel(confirmTarget.risk_class, tr)}
                 </Chip>
               )}
               {confirmTarget?.target && (

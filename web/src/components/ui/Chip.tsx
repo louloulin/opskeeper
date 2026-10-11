@@ -4,7 +4,7 @@ import { cn } from '@/lib/cn';
 // Chip — small pill for inline metadata (tags, role labels, count chips).
 // Default tone uses zinc-800/60 + zinc-400 text per the visual spec; add
 // a `tone` for semantic colour (success / warning / danger / info).
-type ChipTone = 'default' | 'success' | 'warning' | 'danger' | 'info' | 'accent';
+export type ChipTone = 'default' | 'success' | 'warning' | 'danger' | 'info' | 'accent';
 
 type ChipProps = HTMLAttributes<HTMLSpanElement> & {
   tone?: ChipTone;

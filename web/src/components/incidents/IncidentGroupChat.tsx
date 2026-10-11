@@ -17,7 +17,35 @@ import { ChatInput } from '@/components/ChatInput';
 import { MessageBubble } from '@/components/MessageBubble';
 import { PhaseIndicator } from '@/components/dpo';
 import { getLocale, tr } from '@/i18n/locale';
+import { stampTime } from '@/lib/format';
 import { mergeIncidentStream, type SessionMessages } from './mergeIncidentStream';
+
+// Event rows used to print `title` — the rule key — so a firing, its
+// webhook receipt and the human ack all rendered as three identical
+// "PGLockWaitLongTransaction" pills. Read the event_type instead: it is
+// what actually happened, and the rule name is already in the page header.
+const EVENT_LABEL: Record<string, { zh: string; en: string }> = {
+  firing: { zh: '告警触发', en: 'Alert fired' },
+  'alert.received': { zh: '收到告警', en: 'Alert received' },
+  acknowledged: { zh: '已确认', en: 'Acknowledged' },
+  resolved: { zh: '已解决', en: 'Resolved' },
+  silenced: { zh: '已静默', en: 'Silenced' },
+  escalated: { zh: '已升级', en: 'Escalated' },
+  reopened: { zh: '重新触发', en: 'Reopened' },
+  created: { zh: '事件创建', en: 'Incident created' },
+  closed: { zh: '事件关闭', en: 'Incident closed' },
+};
+
+function eventLabel(
+  e: { event_type: string; actor_type: string; title?: string; message?: string; reason?: string },
+  trFn: (zh: string, en: string) => string,
+): string {
+  const known = EVENT_LABEL[e.event_type];
+  const base = known ? trFn(known.zh, known.en) : (e.message ?? e.title ?? e.event_type);
+  // A user-driven event is worth attributing — "已确认" alone hides who did it.
+  const prefix = e.actor_type === 'user' ? trFn('操作人 · ', 'Operator · ') : '';
+  return e.reason ? `${prefix}${base} · ${e.reason}` : `${prefix}${base}`;
+}
 
 const EVENT_LIMIT = 200;
 const MESSAGE_TAIL = 100;
@@ -166,11 +194,15 @@ export function IncidentGroupChat({ incidentId }: { incidentId: number }) {
               className="flex items-center justify-center gap-2 py-1 text-[11px] text-zinc-500"
             >
               <span
-                className={cn('rounded-full bg-zinc-900/60 px-2 py-0.5', item.collapsed && 'opacity-70')}
+                className={cn(
+                  'rounded-full bg-zinc-900/60 px-2 py-0.5',
+                  item.collapsed && 'opacity-70',
+                )}
+                title={item.payload.reason || item.payload.event_type}
               >
-                {item.payload.title ?? item.payload.message ?? item.payload.event_type}
+                {eventLabel(item.payload, tr)}
               </span>
-              <span>{item.payload.occurred_at.slice(11, 16)}</span>
+              <span className="tabular-nums">{stampTime(item.payload.occurred_at)}</span>
             </div>
           ) : (
             <div key={`m-${item.payload.sessionId}-${item.payload.id}`} className="anim-rise">
