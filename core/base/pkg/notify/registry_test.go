@@ -93,7 +93,7 @@ func TestNewFromConfigBuildsTheSameChannels(t *testing.T) {
 
 func TestRegisterThenBuildThirdPartyChannel(t *testing.T) {
 	typ := "third-party-test-channel"
-	if _, err := buildChannel(ChannelSpec{Type: typ, Name: "x", URL: "https://example.test"}, nil); err == nil {
+	if _, err := BuildChannel(ChannelSpec{Type: typ, Name: "x", URL: "https://example.test"}, nil); err == nil {
 		t.Skip("channel type already registered by another test")
 	}
 	err := RegisterChannel(typ, func(s ChannelSpec, _ *slog.Logger) (Sender, error) {
@@ -102,7 +102,7 @@ func TestRegisterThenBuildThirdPartyChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	s, err := buildChannel(ChannelSpec{Type: typ, Name: "tp", URL: "https://example.test/hook"}, nil)
+	s, err := BuildChannel(ChannelSpec{Type: typ, Name: "tp", URL: "https://example.test/hook"}, nil)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}

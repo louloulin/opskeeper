@@ -96,8 +96,13 @@ func RegisteredChannels() []string {
 	return out
 }
 
-// buildChannel builds one channel through the registry.
-func buildChannel(spec ChannelSpec, log *slog.Logger) (Sender, error) {
+// BuildChannel builds one channel through the registry.
+//
+// It is exported because the alert delivery path builds a channel from a
+// persisted row rather than from process config, and that path should reach
+// the same registry this one does — one place decides which channel types
+// exist.
+func BuildChannel(spec ChannelSpec, log *slog.Logger) (Sender, error) {
 	channelMu.RLock()
 	f, ok := channelFactories[spec.Type]
 	channelMu.RUnlock()
@@ -126,7 +131,7 @@ func NewRouterFromSpecs(enabled bool, timeout time.Duration, defaults []string, 
 		if spec.URL == "" && spec.Type != "telegram" {
 			continue
 		}
-		sender, err := buildChannel(spec, log)
+		sender, err := BuildChannel(spec, log)
 		if err != nil {
 			if log != nil {
 				log.Warn("notification channel skipped", slog.String("type", spec.Type), slog.String("name", spec.Name), slog.Any("err", err))

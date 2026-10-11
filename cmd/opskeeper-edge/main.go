@@ -25,6 +25,7 @@ import (
 	edgebiz "github.com/vincent-wuhan/opskeeper/core/edge/biz"
 	edgecollector "github.com/vincent-wuhan/opskeeper/core/edge/collector"
 	edgehostfiles "github.com/vincent-wuhan/opskeeper/core/edge/host_files"
+	edgepluginhost "github.com/vincent-wuhan/opskeeper/core/edge/pluginhost"
 	edgeplugins "github.com/vincent-wuhan/opskeeper/core/edge/plugins"
 	edgeplugincustommetrics "github.com/vincent-wuhan/opskeeper/core/edge/plugins/custommetrics"
 	edgeplugindatabasemetrics "github.com/vincent-wuhan/opskeeper/core/edge/plugins/databasemetrics"
@@ -338,6 +339,35 @@ func main() {
 	})
 	for _, p := range registered {
 		supervisor.Register(p)
+	}
+
+	// The node's plugin host: load any edge-targeted collector packages from
+	// the configured directory. The first-party collectors above are the
+	// preinstalled set; this is how a deployment adds a collector without
+	// rebuilding the node binary — a package whose spec.targets include edge
+	// is admitted through the same gate a tool package passes, and its
+	// collector is registered with the supervisor the same way.
+	//
+	// The directory is optional and env-gated: a node with no third-party
+	// collector packages has none, and a missing directory is not an error.
+	if dir := envOr("OPSKEEPER_EDGE_PLUGINS_DIR", ""); dir != "" {
+		if _, statErr := os.Stat(dir); statErr == nil {
+			ph := edgepluginhost.New(dir, edgepluginhost.EdgePolicy(), supervisor, pluginLog.With(slog.String("comp", "pluginhost")))
+			rep, loadErr := ph.Load(context.Background())
+			if loadErr != nil {
+				log.Error("edge plugin load", slog.String("dir", dir), slog.Any("err", loadErr))
+			} else if len(rep.Activated) > 0 || len(rep.Refused) > 0 {
+				log.Info("edge plugins loaded",
+					slog.String("dir", dir),
+					slog.Any("activated", rep.Activated),
+					slog.Any("skipped", rep.Skipped),
+					slog.Any("no_activator", rep.NoActivator),
+					slog.Int("refused", len(rep.Refused)),
+				)
+			}
+		} else {
+			log.Warn("edge plugin directory does not exist", slog.String("dir", dir))
+		}
 	}
 	// Ship per-plugin health on every heartbeat so the manager / UI can
 	// see which plugins are running vs. crashed (and why) instead of
