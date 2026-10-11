@@ -3,7 +3,7 @@ import { ShieldCheck, RefreshCw, Check, X, ChevronDown, ChevronRight, Hourglass 
 import { listApprovals, approveApproval, rejectApproval, type Approval } from '@/api/approvals';
 import { ApiError } from '@/api/client';
 import { useI18n } from '@/i18n/locale';
-import { Button, Chip, PageHeader } from '@/components/ui';
+import { Button, Chip, EmptyState, LoadingState, PageHeader } from '@/components/ui';
 import { Modal } from '@/components/Modal';
 import { parseSigners, dualSignState, signerWording } from '@/lib/approvalSigners';
 
@@ -137,12 +137,12 @@ export default function ApprovalsPage() {
       <div className="flex-1 overflow-auto px-6 py-4">
         {err && <div className="mb-3 rounded-md border border-red-900/50 bg-red-950/30 px-3 py-2 text-[12px] text-red-400">{err}</div>}
         {loading ? (
-          <div className="flex h-40 items-center justify-center text-sm text-zinc-500">{tr('加载中…', 'Loading…')}</div>
+          <LoadingState />
         ) : items.length === 0 ? (
-          <div className="flex h-40 flex-col items-center justify-center gap-2 text-zinc-600">
-            <ShieldCheck size={28} className="text-zinc-700" />
-            <div className="text-[13px]">{status === 'pending' ? tr('没有待确认的操作', 'No actions awaiting approval') : tr('暂无记录', 'Nothing here')}</div>
-          </div>
+          <EmptyState
+            icon={ShieldCheck}
+            title={status === 'pending' ? tr('没有待确认的操作', 'No actions awaiting approval') : tr('暂无记录', 'Nothing here')}
+          />
         ) : (
           <div className="space-y-2">
             {items.map((a) => {
