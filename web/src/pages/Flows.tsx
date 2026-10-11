@@ -8,7 +8,7 @@ import { Loader2, Play, Plus, Route as WorkflowIcon, Search, Sparkles, Trash2 } 
 import { createFlow, deleteFlow, generateFlow, listFlows, runFlow, toggleFlow, type Flow } from '@/api/flows';
 import { useI18n } from '@/i18n/locale';
 import { useAuth } from '@/store/auth';
-import { PageHeader, Button } from '@/components/ui';
+import { PageHeader, Button, useConfirm } from '@/components/ui';
 import { Modal } from '@/components/Modal';
 import { cn } from '@/lib/cn';
 
@@ -93,8 +93,15 @@ export default function FlowsPage() {
     }
   };
 
+  const confirm = useConfirm();
   const onDelete = async (f: Flow) => {
-    if (!window.confirm(tr(`删除工作流「${f.name}」？运行历史一并不可见。`, `Delete workflow "${f.name}"?`))) return;
+    const ok = await confirm({
+      title: tr('删除工作流', 'Delete workflow'),
+      message: tr(`删除工作流「${f.name}」？运行历史一并不可见。`, `Delete workflow "${f.name}"? Its run history becomes invisible.`),
+      confirmLabel: tr('删除', 'Delete'),
+      danger: true,
+    });
+    if (!ok) return;
     setBusyId(f.id);
     try {
       await deleteFlow(f.id);

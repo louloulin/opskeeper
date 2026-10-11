@@ -15,6 +15,7 @@ import {
 import { cn } from '@/lib/cn';
 import { fullDateTime } from '@/lib/format';
 import { Modal } from '@/components/Modal';
+import { useConfirm } from '@/components/ui';
 import {
   createRepo,
   createSSHIdentity,
@@ -490,8 +491,15 @@ function SSHIdentitiesCard() {
     if (open) void refresh();
   }, [open, refresh]);
 
+  const confirm = useConfirm();
   const onDelete = async (id: number) => {
-    if (!window.confirm(tr('删除该 SSH 凭证？后续指向其 hosts 的仓库会同步失败。', 'Delete this SSH identity? Subsequent syncs to its hosts will fail.'))) return;
+    const ok = await confirm({
+      title: tr('删除 SSH 凭证', 'Delete SSH identity'),
+      message: tr('删除该 SSH 凭证？后续指向其 hosts 的仓库会同步失败。', 'Delete this SSH identity? Subsequent syncs to its hosts will fail.'),
+      confirmLabel: tr('删除', 'Delete'),
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await deleteSSHIdentity(id);
       await refresh();

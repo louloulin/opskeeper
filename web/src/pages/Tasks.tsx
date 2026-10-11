@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, CalendarClock, ChevronDown, ChevronRight, Loader2, Newspaper, Pencil, Play, Plus, Power, Trash2, Zap } from 'lucide-react';
 import { Modal } from '@/components/Modal';
+import { useConfirm } from '@/components/ui';
 import { ReportCards } from '@/components/ReportCards';
 import { cn } from '@/lib/cn';
 import { DAILY_BRIEF_NAME_EN, DAILY_BRIEF_NAME_ZH, dailyBriefSeed } from '@/lib/dailyBrief';
@@ -86,6 +87,7 @@ function TaskList() {
       /* ignore */
     }
   }, []);
+  const confirm = useConfirm();
   const onToggle = useCallback(
     async (task: UnifiedTask) => {
       if (task.schedule_id == null) return;
@@ -96,12 +98,18 @@ function TaskList() {
   );
   const onDelete = useCallback(
     async (task: UnifiedTask) => {
-      if (!window.confirm(tr('删除这个任务？', 'Delete this task?'))) return;
+      const ok = await confirm({
+        title: tr('删除任务', 'Delete task'),
+        message: tr('删除这个任务？', 'Delete this task?'),
+        confirmLabel: tr('删除', 'Delete'),
+        danger: true,
+      });
+      if (!ok) return;
       if (task.kind === 'oneoff') await deleteTask(task.id);
       else if (task.schedule_id != null) await deleteSchedule(task.schedule_id);
       void load();
     },
-    [load, tr],
+    [load, tr, confirm],
   );
 
   return (

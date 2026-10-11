@@ -12,7 +12,7 @@ import { deletePage, fetchPageHTML, listPages, sharePage, type HostedPage } from
 import { cn } from '@/lib/cn';
 import { useI18n } from '@/i18n/locale';
 import { useAuth } from '@/store/auth';
-import { PageHeader, Button, EmptyState } from '@/components/ui';
+import { PageHeader, Button, EmptyState, useConfirm } from '@/components/ui';
 import { Modal } from '@/components/Modal';
 import { ReportCards } from '@/components/ReportCards';
 import { HostedPageView } from '@/components/HostedPageView';
@@ -123,8 +123,15 @@ export default function PagesPage() {
     };
   }, [preview]);
 
+  const confirm = useConfirm();
   const onDelete = async (p: HostedPage) => {
-    if (!window.confirm(tr(`删除页面「${p.title || p.id}」？分享链接将立即失效。`, `Delete page "${p.title || p.id}"? Its share links die immediately.`))) return;
+    const ok = await confirm({
+      title: tr('删除页面', 'Delete page'),
+      message: tr(`删除页面「${p.title || p.id}」？分享链接将立即失效。`, `Delete page "${p.title || p.id}"? Its share links die immediately.`),
+      confirmLabel: tr('删除', 'Delete'),
+      danger: true,
+    });
+    if (!ok) return;
     setBusyId(p.id);
     try {
       await deletePage(p.id);
@@ -155,7 +162,12 @@ export default function PagesPage() {
       try {
         await navigator.clipboard.writeText(link);
       } catch {
-        window.prompt(tr('复制此公开分享链接：', 'Copy this public share link:'), link);
+        await confirm({
+          title: tr('公开分享链接', 'Public share link'),
+          message: <span className="break-all font-mono text-xs text-zinc-400">{link}</span>,
+          alertOnly: true,
+          confirmLabel: tr('知道了', 'OK'),
+        });
       }
       setCopiedId(p.id);
       window.setTimeout(() => setCopiedId((c) => (c === p.id ? null : c)), 2200);

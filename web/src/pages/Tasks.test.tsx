@@ -7,6 +7,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 
 import TasksPage from './Tasks';
+import { ConfirmProvider } from '@/components/ui';
 import { server } from '@/test/msw-server';
 import { DAILY_BRIEF_PROMPT } from '@/lib/dailyBrief';
 
@@ -30,7 +31,9 @@ const SLACK = { id: 9, name: 'Slack', type: 'slack', enabled: true, created_at: 
 function renderTasks() {
   return render(
     <MemoryRouter>
-      <TasksPage />
+      <ConfirmProvider>
+        <TasksPage />
+      </ConfirmProvider>
     </MemoryRouter>,
   );
 }

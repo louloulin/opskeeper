@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, Download, RefreshCw, Share2, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useConfirm } from '@/components/ui';
 import { fullDateTime } from '@/lib/format';
 import { usePoll } from '@/lib/usePoll';
 import { usePermissions } from '@/store/me';
@@ -32,6 +33,7 @@ export default function ReportDetailPage() {
   // Poll while the report is still being generated.
   usePoll(load, report && (report.status === 'pending' || report.status === 'generating') ? 4_000 : 0);
 
+  const confirm = useConfirm();
   const onShare = useCallback(async () => {
     const res = await shareReport(id);
     const url = `${window.location.origin}${res.path}`;
@@ -40,10 +42,16 @@ export default function ReportDetailPage() {
   }, [id]);
 
   const onDelete = useCallback(async () => {
-    if (!window.confirm(tr('删除这份报告？', 'Delete this report?'))) return;
+    const ok = await confirm({
+      title: tr('删除报告', 'Delete report'),
+      message: tr('删除这份报告？', 'Delete this report?'),
+      confirmLabel: tr('删除', 'Delete'),
+      danger: true,
+    });
+    if (!ok) return;
     await deleteReport(id);
     window.location.href = '/pages?tab=reports';
-  }, [id, tr]);
+  }, [id, tr, confirm]);
 
   if (loading) {
     return (
