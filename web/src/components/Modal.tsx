@@ -93,7 +93,7 @@ export function Modal({ open, onClose, title, children, footer, size = 'md', res
         ref={panelRef}
         style={userWidth != null ? { width: userWidth, maxWidth: 'none' } : undefined}
         className={cn(
-          'anim-scale relative flex max-h-[90vh] w-full flex-col rounded-2xl border border-zinc-800 bg-zinc-900 shadow-2xl',
+          'anim-scale relative flex max-h-[90vh] w-full flex-col rounded-2xl surface-card shadow-pop',
           size === 'sm' && 'max-w-sm',
           size === 'md' && 'max-w-md',
           size === 'lg' && 'max-w-2xl',

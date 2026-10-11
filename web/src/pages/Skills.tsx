@@ -7,6 +7,7 @@ import { listFlowTools, type FlowToolMeta } from '@/api/flows';
 import { createSession, listModels, type LLMProvider } from '@/api/chat';
 import { ApiError } from '@/api/client';
 import { Modal } from '@/components/Modal';
+import { EmptyState, LoadingState } from '@/components/ui';
 import { ChatInput, type ModelSelection } from '@/components/ChatInput';
 import { useModelSelection } from '@/store/modelSelection';
 import { useI18n } from '@/i18n/locale';
@@ -365,9 +366,15 @@ function CatalogTab() {
             </div>
           )}
           {loading ? (
-            <div className="flex h-40 items-center justify-center text-sm text-zinc-500">{tr('加载中…', 'Loading…')}</div>
+            <LoadingState />
           ) : filtered.length === 0 ? (
-            <EmptyState hasItems={items.length > 0} />
+            <EmptyState
+              icon={Wrench}
+              title={items.length > 0 ? tr('没有匹配的技能', 'No matching skills') : tr('还没有 skill 注册', 'No skills registered yet')}
+              hint={items.length > 0
+                ? tr('换个关键字或清除分类筛选', 'Try a different keyword or clear filters')
+                : tr('设备注册自己的 capability 后会出现在这里', 'Skills appear here once a device registers its capabilities')}
+            />
           ) : (
             <div className="overflow-hidden rounded-xl border border-zinc-800/60 bg-zinc-900/30">
               <table className="w-full text-sm">
@@ -652,15 +659,3 @@ function SkillDetailModal({ skill, onClose }: { skill: SkillSummary; onClose(): 
   );
 }
 
-function EmptyState({ hasItems }: { hasItems: boolean }) {
-  const { tr } = useI18n();
-  return (
-    <div className="flex h-60 flex-col items-center justify-center gap-2 text-zinc-500">
-      <Wrench size={28} className="text-zinc-600" />
-      <div className="text-sm">{hasItems ? tr('没有匹配的技能', 'No matching skills') : tr('还没有 skill 注册', 'No skills registered yet')}</div>
-      <div className="text-[11px] text-zinc-600">
-        {hasItems ? tr('换个关键字或清除分类筛选', 'Try a different keyword or clear filters') : tr('设备注册自己的 capability 后会出现在这里', 'Skills appear here once a device registers its capabilities')}
-      </div>
-    </div>
-  );
-}
