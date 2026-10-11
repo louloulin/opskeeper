@@ -376,7 +376,7 @@ function CatalogTab() {
                 : tr('设备注册自己的 capability 后会出现在这里', 'Skills appear here once a device registers its capabilities')}
             />
           ) : (
-            <div className="overflow-hidden rounded-xl border border-zinc-800/60 bg-zinc-900/30">
+            <div className="overflow-hidden surface-card rounded-rk-lg">
               <table className="w-full text-sm">
                 <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
                   <tr className="whitespace-nowrap">

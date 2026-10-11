@@ -275,7 +275,7 @@ export default function PagesPage() {
             {shown.map((p) => (
               <div
                 key={p.id}
-                className="group flex flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/40 transition-colors hover:border-zinc-700"
+                className="group flex flex-col overflow-hidden surface-card rounded-rk-lg transition-colors hover:border-zinc-700"
               >
                 <button
                   type="button"

@@ -546,7 +546,7 @@ export default function NodeAgentsPage() {
             />
           ) : (
             <>
-              <div className="flex-1 space-y-3 overflow-auto rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-4">
+              <div className="flex-1 space-y-3 overflow-auto surface-card rounded-rk-lg p-4">
                 {bubbles.length === 0 ? (
                   <p className="text-xs text-zinc-500">
                     {attached

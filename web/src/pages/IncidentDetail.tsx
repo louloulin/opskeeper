@@ -932,13 +932,13 @@ function Timeline({ events }: { events: IncidentEvent[] }) {
   const { tr } = useI18n();
   if (events.length === 0) {
     return (
-      <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-6 text-sm text-zinc-500">
+      <div className="surface-card rounded-rk-lg p-6 text-sm text-zinc-500">
         {tr('暂无事件记录', 'No event records')}
       </div>
     );
   }
   return (
-    <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40">
+    <div className="surface-card rounded-rk-lg">
       <div className="border-b border-zinc-800/60 px-4 py-2.5 text-[11px] uppercase tracking-wider text-zinc-500">
         {tr(`时间线 · ${events.length}`, `Timeline · ${events.length}`)}
       </div>
@@ -994,7 +994,7 @@ function Sidebar2({ incident }: { incident: Incident }) {
   const labelKeys = Object.keys(labels).sort();
   return (
     <aside className="space-y-4">
-      <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40">
+      <section className="surface-card rounded-rk-lg">
         <div className="border-b border-zinc-800/60 px-4 py-2.5 text-[11px] uppercase tracking-wider text-zinc-500">
           Labels
         </div>
@@ -1015,7 +1015,7 @@ function Sidebar2({ incident }: { incident: Incident }) {
       </section>
 
       {incident.runbook_url && (
-        <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 px-4 py-3">
+        <section className="surface-card rounded-rk-lg px-4 py-3">
           <div className="text-[11px] uppercase tracking-wider text-zinc-500">{tr('说明 / Runbook', 'Notes / Runbook')}</div>
           {/^https?:\/\//i.test(incident.runbook_url.trim()) ? (
             <a
@@ -1035,7 +1035,7 @@ function Sidebar2({ incident }: { incident: Incident }) {
       )}
 
       {incident.dedupe_key && (
-        <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 px-4 py-3">
+        <section className="surface-card rounded-rk-lg px-4 py-3">
           <div className="text-[11px] uppercase tracking-wider text-zinc-500">Dedupe key</div>
           <div className="mt-1 break-all font-mono text-[11px] text-zinc-400">{incident.dedupe_key}</div>
         </section>
@@ -1073,7 +1073,7 @@ function ImpactPanel({ deviceID }: { deviceID: number }) {
   }, [deviceID]);
   if (nodeID === undefined) {
     return (
-      <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 px-4 py-3">
+      <section className="surface-card rounded-rk-lg px-4 py-3">
         <div className="text-[11px] uppercase tracking-wider text-zinc-500">{tr('影响面', 'Impact')}</div>
         <div className="mt-2 text-xs text-zinc-500">{tr('解析中…', 'Resolving…')}</div>
       </section>
@@ -1081,7 +1081,7 @@ function ImpactPanel({ deviceID }: { deviceID: number }) {
   }
   if (nodeID === null) return null;
   return (
-    <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 px-4 py-3">
+    <section className="surface-card rounded-rk-lg px-4 py-3">
       <div className="mb-2 text-[11px] uppercase tracking-wider text-zinc-500">
         {tr('影响面（拓扑邻居）', 'Impact (Topology neighbours)')}
       </div>

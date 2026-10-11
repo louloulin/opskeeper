@@ -196,7 +196,7 @@ function TaskList() {
             {tr('还没有任务。点「立即生成」做一次性报告，或「新建定时任务」排期。', 'No tasks yet. Click "Run now" for a one-shot, or create a scheduled task.')}
           </div>
         ) : (
-          <div className="overflow-hidden rounded-xl border border-zinc-800/60 bg-zinc-900/40">
+          <div className="overflow-hidden surface-card rounded-rk-lg">
             <table className="w-full text-sm">
               <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
                 <tr>

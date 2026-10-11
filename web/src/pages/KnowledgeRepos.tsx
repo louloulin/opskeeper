@@ -250,7 +250,7 @@ function RepoCard({
 }) {
   const { tr } = useI18n();
   return (
-    <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+    <section className="surface-card rounded-rk-lg p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate font-mono text-sm text-zinc-100" title={repo.url}>
@@ -509,7 +509,7 @@ function SSHIdentitiesCard() {
   };
 
   return (
-    <section className="mb-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
+    <section className="mb-4 surface-card rounded-rk-lg">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
