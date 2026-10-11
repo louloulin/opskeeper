@@ -113,12 +113,14 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigcoding"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 
+	"github.com/vincent-wuhan/opskeeper/core/floor/kernel"
 	managerbizaiops "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
-	aiopsdatasource "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/datasource"
 	aiopsagent "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
 	aiopschatprompt "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatprompt"
 	aiopschatruntime "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/chatruntime"
+	aiopsdatasource "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/datasource"
+	"github.com/vincent-wuhan/opskeeper/core/manager/middleware/pluginhost"
 
 	mcpclient "github.com/vincent-wuhan/opskeeper/core/base/pkg/mcpclient"
 	"github.com/vincent-wuhan/opskeeper/core/base/pkg/promptguard"
@@ -1726,6 +1728,40 @@ func main() {
 		slog.Bool("loki", dsSet.Logs() != nil),
 		slog.Bool("tempo", dsSet.Traces() != nil),
 	)
+
+	// The manager plugin host: load any manager-targeted packages from the
+	// configured directory. This is the control plane's half of the plugin
+	// story — the node has always been able to host a package; this lets the
+	// manager do the same, through the same manifest and the same gate.
+	//
+	// The directory is optional and env-gated: a deployment with no
+	// third-party manager packages has none, and a missing directory is not
+	// an error (it is the default state). A package whose manifest is above
+	// the control-plane ceiling, or aimed at an edge, is reported and
+	// skipped rather than stopping the others.
+	if dir := os.Getenv("OPSKEEPER_MANAGER_PLUGINS_DIR"); dir != "" {
+		if _, statErr := os.Stat(dir); statErr == nil {
+			ph := pluginhost.New(dir, kernel.Policy{
+				Target:         domain.TargetManager,
+				MaxSafetyLevel: domain.SafetyL2,
+				MaxBlastRadius: domain.RadiusSingleNS,
+			}, log.With(slog.String("comp", "pluginhost")))
+			rep, loadErr := ph.Load(context.Background())
+			if loadErr != nil {
+				log.Error("manager plugin load", slog.String("dir", dir), slog.Any("err", loadErr))
+			} else {
+				log.Info("manager plugins loaded",
+					slog.String("dir", dir),
+					slog.Any("activated", rep.Activated),
+					slog.Any("skipped", rep.Skipped),
+					slog.Any("no_activator", rep.NoActivator),
+					slog.Int("refused", len(rep.Refused)),
+				)
+			}
+		} else {
+			log.Warn("manager plugin directory does not exist", slog.String("dir", dir))
+		}
+	}
 	// The one tool-registry wiring for this binary, as a value rather than
 	// as a constructor call: the fields that exist now are filled now, and
 	// the ones that only exist after the approval queue, the alert channel
