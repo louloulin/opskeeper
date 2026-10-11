@@ -368,7 +368,7 @@ export default function AlertRulesPage() {
                         await setRuleEnabled(rule.id, next);
                         fetchRules(true);
                       } catch (e) {
-                        alert(e instanceof ApiError ? e.message : (e as Error).message);
+                        setErr(e instanceof ApiError ? e.message : (e as Error).message);
                       }
                     }}
                   />
@@ -428,7 +428,7 @@ export default function AlertRulesPage() {
                     setConfirmDelete(null);
                     fetchRules(true);
                   } catch (e) {
-                    alert(e instanceof ApiError ? e.message : (e as Error).message);
+                    setErr(e instanceof ApiError ? e.message : (e as Error).message);
                   }
                 }}
                 className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-400"
