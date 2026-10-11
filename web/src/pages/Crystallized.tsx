@@ -333,9 +333,20 @@ function DetailDrawer({ name, onClose }: { name: string; onClose: () => void }) 
     };
   }, [name]);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/50" onClick={onClose}>
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={tr('自愈规则详情', 'Runbook detail')}
         className="flex h-full w-full max-w-2xl flex-col border-l border-zinc-800 bg-zinc-950"
         onClick={(e) => e.stopPropagation()}
       >

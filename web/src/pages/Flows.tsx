@@ -210,6 +210,7 @@ export default function FlowsPage() {
                   <button
                     type="button"
                     title={tr('运行', 'Run')}
+                    aria-label={tr('运行', 'Run')}
                     disabled={busyId === f.id || !f.enabled}
                     onClick={() => void onRun(f)}
                     className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-indigo-400 disabled:opacity-40"
@@ -227,6 +228,7 @@ export default function FlowsPage() {
                   <button
                     type="button"
                     title={tr('删除', 'Delete')}
+                    aria-label={tr('删除', 'Delete')}
                     disabled={busyId === f.id}
                     onClick={() => void onDelete(f)}
                     className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400"

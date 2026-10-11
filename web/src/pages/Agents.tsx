@@ -341,7 +341,8 @@ function AgentCard({
                 onEdit();
               }}
               title={tr('编辑', 'Edit')}
-              className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+              aria-label={tr('编辑', 'Edit')}
+              className="rounded-rk-sm p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
             >
               <Pencil size={11} />
             </button>
@@ -354,7 +355,8 @@ function AgentCard({
                 onDelete();
               }}
               title={isUser ? tr('删除', 'Delete') : tr('从助理列表中移除（重启后内置 persona 会自动加载回来）', 'Remove from the list (built-in personas reload automatically on restart)')}
-              className="rounded p-1 text-zinc-500 hover:bg-red-900/30 hover:text-red-300"
+              aria-label={isUser ? tr('删除', 'Delete') : tr('从助理列表中移除', 'Remove from the list')}
+              className="rounded-rk-sm p-1 text-zinc-500 hover:bg-red-900/30 hover:text-red-300"
             >
               <Trash2 size={11} />
             </button>

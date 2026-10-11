@@ -238,15 +238,26 @@ function DetailDrawer({ row, onClose }: { row: AuditLog; onClose: () => void }) 
   } catch {
     /* keep raw */
   }
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/40" onClick={onClose}>
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={tr('审计详情', 'Audit detail')}
         className="h-full w-full max-w-lg overflow-y-auto bg-zinc-950 p-4 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-base font-semibold">{tr('审计详情', 'Audit detail')}</h2>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose} aria-label={tr('关闭', 'Close')}>
             <X size={14} />
           </Button>
         </div>
