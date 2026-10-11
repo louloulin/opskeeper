@@ -8,3 +8,4 @@ export { LoadingState } from './LoadingState';
 export { PageHeader } from './PageHeader';
 export { Button } from './Button';
 export { RoleSelect, type RoleFilterValue } from './RoleSelect';
+export { ConfirmProvider, useConfirm, type ConfirmOptions } from './confirm';

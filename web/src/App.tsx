@@ -1,6 +1,7 @@
 import { lazy, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation, useSearchParams } from 'react-router-dom';
 import { Layout } from '@/components/Layout';
+import { ConfirmProvider } from '@/components/ui';
 import { useAuth } from '@/store/auth';
 
 const LoginPage = lazy(() => import('@/pages/Login'));
@@ -95,7 +96,8 @@ export default function App() {
   const forceLoginForm = searchParams.get('account') === 'switch';
 
   return (
-    <Routes>
+    <ConfirmProvider>
+      <Routes>
       <Route
         path="/login"
         element={
@@ -236,6 +238,7 @@ export default function App() {
         }
       />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
-    </Routes>
+      </Routes>
+    </ConfirmProvider>
   );
 }
