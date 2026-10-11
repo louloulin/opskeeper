@@ -426,8 +426,9 @@ function IconBtn({ children, title, onClick, danger }: { children: ReactNode; ti
     <button
       type="button"
       title={title}
+      aria-label={title}
       onClick={onClick}
-      className={cn('rounded p-1.5 text-zinc-400 hover:bg-zinc-800', danger ? 'hover:text-red-300' : 'hover:text-zinc-200')}
+      className={cn('rounded-rk-sm p-1.5 text-zinc-400 hover:bg-zinc-800', danger ? 'hover:text-red-300' : 'hover:text-zinc-200')}
     >
       {children}
     </button>
