@@ -315,7 +315,21 @@ function AgentCard({
   }, [agent.name, busy, navigate, tr]);
 
   return (
-    <Card className="flex cursor-pointer flex-col transition-colors hover:bg-zinc-800/40" onClick={onView}>
+    <Card
+      role="button"
+      tabIndex={0}
+      className="flex cursor-pointer flex-col transition-colors hover:bg-zinc-800/40"
+      onClick={onView}
+      onKeyDown={(e) => {
+        // 只响应打在卡片自身的按键：内部的编辑/删除按钮有自己的激活行为，
+        // 冒泡上来若再触发会双开详情。
+        if (e.target !== e.currentTarget) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onView();
+        }
+      }}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex items-center gap-3">
           <AgentAvatar agentId={agent.name} size={40} avatar={avatarFor(byName, agent.name)} />

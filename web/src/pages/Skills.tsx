@@ -458,7 +458,19 @@ function CategoryChip({
 function SkillRow({ skill, displayName, onView }: { skill: SkillSummary; displayName?: string; onView(): void }) {
   const { tr } = useI18n();
   return (
-    <tr className="cursor-pointer transition-colors hover:bg-zinc-900/40" onClick={onView}>
+    <tr
+      role="button"
+      tabIndex={0}
+      className="cursor-pointer transition-colors hover:bg-zinc-900/40"
+      onClick={onView}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onView();
+        }
+      }}
+    >
       <td className="whitespace-nowrap px-4 py-1.5 pl-8">
         <span className="text-xs text-zinc-200">{displayName ?? skill.name}</span>
         <div className="font-mono text-[10px] text-zinc-600" title={skill.key}>

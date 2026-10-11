@@ -154,14 +154,25 @@ export default function IncidentDetailPage() {
             <>
               <div
                 role="tablist"
+                aria-label={tr('事件视图', 'Incident view')}
+                onKeyDown={(e) => {
+                  if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+                  e.preventDefault();
+                  const next = segment === 'chat' ? 'detail' : 'chat';
+                  setSegment(next);
+                  e.currentTarget.querySelector<HTMLButtonElement>(`#incident-tab-${next}`)?.focus();
+                }}
                 className="mx-6 mt-6 mb-4 flex w-fit gap-1 rounded-rk-md bg-zinc-900/60 p-1"
               >
                 {([['chat', '群聊', 'Group chat'], ['detail', '详情', 'Details']] as const).map(([id, zh, en]) => (
                   <button
                     key={id}
+                    id={`incident-tab-${id}`}
                     role="tab"
                     type="button"
                     aria-selected={segment === id}
+                    aria-controls={`incident-panel-${id}`}
+                    tabIndex={segment === id ? 0 : -1}
                     onClick={() => setSegment(id)}
                     className={cn(
                       'rounded-full px-3 py-1.5 text-xs',
@@ -173,11 +184,11 @@ export default function IncidentDetailPage() {
                 ))}
               </div>
               {segment === 'chat' ? (
-                <div className="px-6 pb-6">
+                <div id="incident-panel-chat" role="tabpanel" aria-labelledby="incident-tab-chat" className="px-6 pb-6">
                   <IncidentGroupChat incidentId={incident.id} />
                 </div>
               ) : (
-                <div className="space-y-6 px-6 py-6">
+                <div id="incident-panel-detail" role="tabpanel" aria-labelledby="incident-tab-detail" className="space-y-6 px-6 py-6">
                   <InvestigationReportPanel incidentId={incident.id} />
                   <AIInitialDiagnosisPanel incident={incident} events={events} />
                   <AgentTimelinePanel incidentId={incident.id} />
