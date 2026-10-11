@@ -381,7 +381,7 @@ function SessionTable({
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-zinc-800/60 text-left text-[11px] uppercase tracking-wide text-zinc-500">
+          <tr className="border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
             <th className="px-4 py-2.5 font-medium">{tr('状态', 'Status')}</th>
             <th className="px-4 py-2.5 font-medium">{tr('用户', 'User')}</th>
             <th className="px-4 py-2.5 font-medium">{tr('设备', 'Device')}</th>

@@ -378,7 +378,7 @@ function CatalogTab() {
           ) : (
             <div className="overflow-hidden surface-card rounded-rk-lg">
               <table className="w-full text-sm">
-                <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
+                <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
                   <tr className="whitespace-nowrap">
                     <th className="px-4 py-2.5 text-left">{tr('名称', 'Name')}</th>
                     <th className="px-4 py-2.5 text-left">{tr('运行位置', 'Runs on')}</th>
@@ -608,7 +608,7 @@ function SkillDetailModal({ skill, onClose }: { skill: SkillSummary; onClose(): 
           ) : (
             <div className="overflow-hidden rounded-md border border-zinc-800">
               <table className="w-full text-xs">
-                <thead className="border-b border-zinc-800 bg-zinc-950/40 text-[10px] uppercase tracking-wider text-zinc-500">
+                <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
                   <tr>
                     <th className="px-3 py-1.5 text-left">{tr('名称', 'Name')}</th>
                     <th className="px-3 py-1.5 text-left">{tr('类型', 'Type')}</th>

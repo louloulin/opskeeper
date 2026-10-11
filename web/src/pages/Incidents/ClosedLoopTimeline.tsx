@@ -250,7 +250,7 @@ function RubricCard({ label, value }: { label: string; value: string }) {
         'bg-zinc-900/40 border border-zinc-800/60 rounded-md px-3 py-2.5',
       )}
     >
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+      <div className="border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
         {label}
       </div>
       <div className="mt-0.5 text-base font-semibold text-zinc-100 font-mono tabular-nums">

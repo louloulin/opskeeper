@@ -770,7 +770,7 @@ function DocCard({
           <div className="truncate text-sm font-medium text-zinc-100" title={localizedDocTitle(doc)}>
             {localizedDocTitle(doc)}
           </div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] uppercase tracking-wider text-zinc-500">
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
             <span className={sourceBadge.cls}>{sourceBadge.label}</span>
             {doc.path && (
               <span className="rounded bg-zinc-800/60 px-1.5 py-0.5 font-normal normal-case text-zinc-300">

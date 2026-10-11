@@ -156,7 +156,7 @@ export default function SettingsAuditLog() {
 
       <Card className="mt-3 flex-1 overflow-auto">
         <table className="min-w-full text-left text-[13px]">
-          <thead className="sticky top-0 z-10 bg-zinc-900 text-zinc-400">
+          <thead className="sticky z-10 border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
             <tr>
               <th className="px-3 py-2">{tr('时间', 'Time')}</th>
               <th className="px-3 py-2">{tr('用户', 'Actor')}</th>

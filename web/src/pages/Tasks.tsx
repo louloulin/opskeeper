@@ -198,7 +198,7 @@ function TaskList() {
         ) : (
           <div className="overflow-hidden surface-card rounded-rk-lg">
             <table className="w-full text-sm">
-              <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
+              <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
                 <tr>
                   <th className="px-5 py-3 text-left font-medium">{tr('名称', 'Name')}</th>
                   <th className="px-4 py-3 text-left font-medium">{tr('类型', 'Type')}</th>

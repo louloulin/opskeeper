@@ -337,7 +337,7 @@ function AgentCard({
             <div className="truncate text-sm font-medium text-zinc-100" title={agent.name}>
               {displayName}
             </div>
-            <div className="mt-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-zinc-500">
+            <div className="mt-0.5 flex items-center gap-1.5 border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
               <span className="font-mono normal-case tracking-normal text-zinc-600">
                 {agent.name}
               </span>

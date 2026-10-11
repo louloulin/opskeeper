@@ -453,7 +453,7 @@ export default function EdgesPage() {
 
           <div className="overflow-hidden surface-card rounded-rk-lg">
             <table className="w-full text-sm">
-              <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
+              <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
                 <tr>
                   <th className="w-10 px-4 py-2.5 text-left">
                     <input

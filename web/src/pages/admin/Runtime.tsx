@@ -132,7 +132,7 @@ function DeploymentGrid({ resp }: { resp: DeploymentResponse }) {
         <div className="flex items-center gap-2 mb-2">
           <Server className="h-4 w-4 text-indigo-400" />
           <div className="text-sm font-medium">Manager</div>
-          <span className="ml-auto text-[10px] uppercase tracking-wider text-zinc-500">runtime</span>
+          <span className="ml-auto border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">runtime</span>
         </div>
         <Row k="version" v={resp.manager_version || '—'} mono />
         <Row k="go" v={resp.go_version} mono />
@@ -143,7 +143,7 @@ function DeploymentGrid({ resp }: { resp: DeploymentResponse }) {
         <div className="flex items-center gap-2 mb-2">
           <GitBranch className="h-4 w-4 text-emerald-400" />
           <div className="text-sm font-medium">TeamHarness Plugin</div>
-          <span className="ml-auto text-[10px] uppercase tracking-wider text-zinc-500">disk</span>
+          <span className="ml-auto border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">disk</span>
         </div>
         <Row k="id" v={resp.plugin.id} />
         <Row k="name" v={resp.plugin.name} />
@@ -170,7 +170,7 @@ function HealthCard({ health }: { health: HealthSummary }) {
         {(['db','prom','logs','traces','llm'] as const).map((k) => (
           <div key={k} className={cn('px-2 py-1.5 rounded border text-center text-xs',
             STATUS_TONE[health[k] || ''] || STATUS_TONE.pending)}>
-            <div className="text-[10px] uppercase tracking-wider text-zinc-500">{k}</div>
+            <div className="border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">{k}</div>
             <div className="font-mono">{health[k] || '—'}</div>
           </div>
         ))}
@@ -186,11 +186,11 @@ function DependenciesCard({ deps }: { deps: DeployDependency[] }) {
       <div className="flex items-center gap-2 mb-2">
         <Database className="h-4 w-4 text-amber-400" />
         <div className="text-sm font-medium">Deploy Dependencies</div>
-        <span className="ml-auto text-[10px] uppercase tracking-wider text-zinc-500">env</span>
+        <span className="ml-auto border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">env</span>
       </div>
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-zinc-500 text-[10px] uppercase tracking-wider">
+          <tr className="border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
             <th className="text-left py-1">name</th>
             <th className="text-left py-1">configured</th>
             <th className="text-left py-1">required</th>
@@ -231,7 +231,7 @@ function RecoveryExampleCard({ rec }: { rec: RecoveryOperation }) {
       <div className="flex items-center gap-2 mb-2">
         <ShieldCheck className="h-4 w-4 text-emerald-400" />
         <div className="text-sm font-medium">Recovery Example</div>
-        <span className="ml-auto text-[10px] uppercase tracking-wider text-zinc-500">Main scenario</span>
+        <span className="ml-auto border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">Main scenario</span>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
         <KPI label="incident" value={rec.incident_id} />
@@ -252,7 +252,7 @@ function RecoveryExampleCard({ rec }: { rec: RecoveryOperation }) {
       </div>
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-zinc-500 text-[10px] uppercase tracking-wider">
+          <tr className="border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
             <th className="text-left py-1">phase</th>
             <th className="text-left py-1">role</th>
             <th className="text-left py-1">skill_ver</th>
@@ -278,7 +278,7 @@ function RecoveryExampleCard({ rec }: { rec: RecoveryOperation }) {
       </table>
       {rec.evidence && Object.keys(rec.evidence).length > 0 && (
         <div className="mt-3">
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">evidence_refs</div>
+          <div className="border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500 mb-1">evidence_refs</div>
           <div className="flex flex-wrap gap-1">
             {Object.entries(rec.evidence).map(([k, v]) => (
               <span key={k} className="px-1.5 py-0.5 text-[10px] rounded border border-zinc-700 font-mono text-zinc-400">{k}: {v}</span>
@@ -296,7 +296,7 @@ function SkillsCard({ skills }: { skills: SkillVersion[] }) {
       <div className="flex items-center gap-2 mb-2">
         <Bot className="h-4 w-4 text-fuchsia-400" />
         <div className="text-sm font-medium">Worker Skills</div>
-        <span className="ml-auto text-[10px] uppercase tracking-wider text-zinc-500">skill_meta.yaml</span>
+        <span className="ml-auto border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">skill_meta.yaml</span>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
         {skills.map((s) => (
@@ -322,7 +322,7 @@ function Row({ k, v, mono = false }: { k: string; v: string; mono?: boolean }) {
 function KPI({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
     <div className="px-2 py-1.5 rounded border border-zinc-800/60 bg-zinc-900/40">
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</div>
+      <div className="border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">{label}</div>
       <div className={cn('mt-0.5 text-sm font-mono', tone && STATUS_TONE[tone] ? '' : 'text-zinc-100')}>{value}</div>
     </div>
   );

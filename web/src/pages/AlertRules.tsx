@@ -342,7 +342,7 @@ export default function AlertRulesPage() {
             </div>
           ) : (
             <table className="w-full text-sm">
-              <thead className="sticky top-0 border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
+              <thead className="sticky border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
                 <tr>
                   <th className="px-6 py-2.5 font-medium">{tr('来源', 'Source')}</th>
                   <th className="py-2.5 font-medium">{tr('类型', 'Type')}</th>

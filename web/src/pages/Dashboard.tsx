@@ -663,7 +663,7 @@ function ClusterPosture({
 
       <div>
         <div className="mb-1 flex items-center justify-between">
-          <span className="text-[10px] uppercase tracking-wider text-zinc-500">
+          <span className="border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
             {tr('在线数 · 24h', 'Online count · 24h')}
           </span>
           <span className="text-[10px] tabular-nums text-zinc-600">
@@ -705,7 +705,7 @@ function ClusterPosture({
       </div>
 
       <div>
-        <div className="mb-1.5 text-[10px] uppercase tracking-wider text-zinc-500">{tr('角色分布', 'Role distribution')}</div>
+        <div className="mb-1.5 border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">{tr('角色分布', 'Role distribution')}</div>
         <div className="flex flex-wrap gap-1.5">
           {roles.length === 0 ? (
             <span className="text-[11px] text-zinc-600">—</span>
