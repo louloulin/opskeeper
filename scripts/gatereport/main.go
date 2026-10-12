@@ -202,7 +202,13 @@ func runOne(root, target string, budget time.Duration) result {
 	defer cancel()
 
 	started := time.Now()
-	cmd := exec.CommandContext(ctx, "make", target)
+	// --no-print-directory because GNU make 4.x (Linux CI) narrates
+	// "Entering/Leaving directory" when its working directory changes, and
+	// this tool reads the first line a gate prints as that gate's verdict.
+	// A silent gate would then report make's chatter as what it said — the
+	// exact failure the column is supposed to make impossible. The flag is
+	// accepted by make 3.81 too, so a macOS run and a Linux run agree.
+	cmd := exec.CommandContext(ctx, "make", "--no-print-directory", target)
 	cmd.Dir = root
 	// A gate is allowed to say it needs something. Its output is captured
 	// rather than streamed so the report stays one table; a gate that
