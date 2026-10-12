@@ -11,15 +11,13 @@
 // PR-9 of introduces the kernel switch. The service holds:
 //
 //   - legacyAgent: the pre-PR-9 agent.Agent for-loop kernel.
-//   - runtime: the new chatruntime.Runtime graph kernel.
-//   - kernel: "legacy" | "graph" | "pig" — picks which kernel runs. Both
-//     chatruntime values now run the PiG loop; "graph" is the retired
-//     spelling and is accepted for a deployment whose env predates the
-//     rename.
+//   - runtime: the chatruntime.Runtime compatibility shell.
+//   - kernel: "legacy" | "graph" | "pig" | "pig-sdk" — 选择实际运行的内核。
+//     所有走 runtime 的值都运行 PiG loop；"graph" 是为历史部署保留的拼写。
 //
-// Default = "legacy" so the cutover is opt-in via OPSKEEPER_AGENT_KERNEL.
-// The HTTP handler is unchanged: the SSE frame names emitted by both
-// kernels are byte-equal so the SPA round-trips without changes.
+// 未设置 OPSKEEPER_AGENT_KERNEL 时默认为 "pig-sdk"；无法识别的值回退
+// "legacy"，避免拼写错误静默切换驱动器。HTTP 处理器保持不变：各内核
+// 输出的 SSE 帧名字节一致，SPA 往返无需改动。
 //
 // The eino ReAct graph that used to sit under chatruntime.Runtime is gone;
 // the runtime drives the PiG kernel directly. Nothing here rebuilds it.

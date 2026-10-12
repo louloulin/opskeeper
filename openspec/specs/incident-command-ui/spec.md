@@ -125,4 +125,3 @@ Incident Command UI SHALL be presentation-only and MUST NOT execute repairs, byp
 - **WHEN** authoritative runtime/task readback is available
 - **THEN** command or system status can show health, claim, lease, checkpoint, recovery, or version-drift context
 - **AND** detailed runtime administration remains outside primary incident navigation
-
