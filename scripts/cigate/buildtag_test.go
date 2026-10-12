@@ -351,7 +351,17 @@ func TestTheScheduleLineNamesTheJobTheDefaultBranchDoesNotHave(t *testing.T) {
 	head, err := gitOutput("rev-parse", "--abbrev-ref", "origin/HEAD")
 	branch := strings.TrimSpace(head)
 	if err != nil || branch == "" {
-		t.Fatalf("could not read the default branch: %v", err)
+		// A checkout that never resolved origin/HEAD — a fork's pull-request
+		// CI is the common case — cannot say what the default branch has.
+		// That is the same class of unreadable as the file below it, and
+		// "unknown" is the only honest answer for both. Failing here would
+		// make a fork's tree unmergeable over a fact about the checkout
+		// rather than about the sentence under test.
+		if !strings.Contains(got, "unknown from here") {
+			t.Errorf("the default branch could not be resolved (%v) but the line says %q; "+
+				"an unknown branch is unknown, not evidence of anything", err, got)
+		}
+		return
 	}
 	raw, err := gitOutput("show", branch+":"+ciFile)
 	if err != nil {
