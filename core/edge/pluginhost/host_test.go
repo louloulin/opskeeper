@@ -9,6 +9,7 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/edge/plugins"
 	"github.com/vincent-wuhan/opskeeper/core/floor/kernel"
+	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 )
 
 // ── fakes ───────────────────────────────────────────────────────────────────
@@ -72,7 +73,7 @@ func TestLoadActivatesCollectorAndRegistersIt(t *testing.T) {
 	writePackage(t, base, "vec", manifestYAML("vec", "edge", "L1"))
 
 	sink := &fakeSink{}
-	h := New(base, EdgePolicy(), sink, nil)
+	h := New(base, mustPolicy(t), sink, nil)
 	h.RegisterActivator("vec", collectorActivator("vec", "logs"))
 
 	rep, err := h.Load(context.Background())
@@ -92,7 +93,7 @@ func TestLoadSkipsManagerPackages(t *testing.T) {
 	writePackage(t, base, "manager-only", manifestYAML("manager-only", "manager", "L1"))
 
 	sink := &fakeSink{}
-	h := New(base, EdgePolicy(), sink, nil)
+	h := New(base, mustPolicy(t), sink, nil)
 	h.RegisterActivator("manager-only", collectorActivator("manager-only", "logs"))
 
 	rep, err := h.Load(context.Background())
@@ -114,7 +115,7 @@ func TestCollectorAboveCeilingIsRefused(t *testing.T) {
 	writePackage(t, base, "greedy", manifestYAML("greedy", "edge", "L3"))
 
 	sink := &fakeSink{}
-	h := New(base, EdgePolicy(), sink, nil)
+	h := New(base, mustPolicy(t), sink, nil)
 	h.RegisterActivator("greedy", collectorActivator("greedy", "logs"))
 
 	rep, err := h.Load(context.Background())
@@ -133,7 +134,7 @@ func TestContributionWithoutCollectorErrors(t *testing.T) {
 	base := t.TempDir()
 	writePackage(t, base, "empty", manifestYAML("empty", "edge", "L1"))
 
-	h := New(base, EdgePolicy(), &fakeSink{}, nil)
+	h := New(base, mustPolicy(t), &fakeSink{}, nil)
 	// A contribution that registers no collector must fail activation, not
 	// silently activate with nothing behind it.
 	h.RegisterActivator("empty", func() kernel.Contribution {
@@ -159,7 +160,7 @@ func TestCollectorSetIsStableOrder(t *testing.T) {
 	writePackage(t, base, "b", manifestYAML("b", "edge", "L1"))
 
 	sink := &fakeSink{}
-	h := New(base, EdgePolicy(), sink, nil)
+	h := New(base, mustPolicy(t), sink, nil)
 	h.RegisterActivator("a", collectorActivator("a", "zzz"))
 	h.RegisterActivator("b", collectorActivator("b", "mmm"))
 	h.RegisterActivator("c", collectorActivator("c", "aaa"))
@@ -184,12 +185,28 @@ func TestCollectorContributionRejectsNilCollector(t *testing.T) {
 	}
 }
 
-func TestEdgePolicyIsL1(t *testing.T) {
-	p := EdgePolicy()
-	if p.Target != domain.TargetEdge {
-		t.Fatalf("Target = %q; want edge", p.Target)
+func TestDefaultPolicyComesFromTheProfile(t *testing.T) {
+	pol, err := EdgePolicyFor(DefaultProfile)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if p.MaxSafetyLevel != domain.SafetyL1 {
-		t.Fatalf("MaxSafetyLevel = %q; want L1 — a collector produces telemetry and nothing else", p.MaxSafetyLevel)
+	if pol.Target != domain.TargetEdge {
+		t.Fatalf("Target = %q; want edge", pol.Target)
+	}
+	// The ceiling is the profile's, not this package's. That is the whole
+	// fix: a policy written here made a real node refuse every shipped
+	// package, because it was a statement about one person's guess at what
+	// a node runs rather than about what the fleet said it will host.
+	profile, err := pluginmanifest.ProfileForName(string(DefaultProfile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pol.MaxSafetyLevel != profile.Policy().MaxSafetyLevel {
+		t.Fatalf("ceiling = %q; want the profile's %q (the policy must be the profile's, not a local constant)",
+			pol.MaxSafetyLevel, profile.Policy().MaxSafetyLevel)
+	}
+	if pol.MaxBlastRadius != profile.Policy().MaxBlastRadius {
+		t.Fatalf("max radius = %q; want the profile's %q",
+			pol.MaxBlastRadius, profile.Policy().MaxBlastRadius)
 	}
 }

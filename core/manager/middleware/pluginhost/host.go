@@ -28,6 +28,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/vincent-wuhan/opskeeper/core/domain"
 	"github.com/vincent-wuhan/opskeeper/core/floor/kernel"
 	"github.com/vincent-wuhan/opskeeper/core/floor/pluginmanifest"
 )
@@ -38,6 +39,43 @@ import (
 // twice — a test, a reload — gets a fresh contribution each time rather than
 // one whose internal state has already been mutated by the first activation.
 type Activator func() kernel.Contribution
+
+// ToolPackageContribution registers the tools a package declares.
+//
+// A package whose manifest lists tools has something to contribute even when
+// this build registered no activator for it: its tool declarations. That is
+// what puts the node's tool surface — the shipped plugins/pig-ops packages —
+// into the same registry its collectors appear in, so "what does this node
+// offer" is one question with one answer.
+//
+// The implementation is not here: the kernel holds the class and limits, and
+// a call reaches the host's own implementation by name, which is the
+// invariant the gate enforces.
+type ToolPackageContribution struct {
+	// Plugin is the manifest name this contribution belongs to.
+	Plugin string
+	// Tools are the declarations from the manifest's spec.tools.
+	Tools []domain.ToolDecl
+}
+
+func (c ToolPackageContribution) PluginName() string { return c.Plugin }
+
+func (c ToolPackageContribution) Register(r kernel.Registrar) error {
+	for _, t := range c.Tools {
+		if err := r.Register(kernel.KindTool, t.Name, kernel.ToolDeclaration{Class: t.Class, Limits: t.Limits}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// toolPackageActivator builds the contribution for a package that declares
+// tools but has no registered activator.
+func toolPackageActivator(p pluginmanifest.Plugin) Activator {
+	return func() kernel.Contribution {
+		return ToolPackageContribution{Plugin: p.Name(), Tools: p.Manifest.Spec.Tools}
+	}
+}
 
 // Host admits and activates manager-targeted packages from a directory.
 type Host struct {
@@ -78,6 +116,11 @@ func (h *Host) Registry() *kernel.Registry { return h.kern.Registry() }
 // Kernel returns the underlying kernel host, for a caller that needs to
 // deactivate a package or read the live set.
 func (h *Host) Kernel() *kernel.Host { return h.kern }
+
+// Inventory returns this host's capability set: which packages it admitted
+// and what each registered. It is the diagnostic surface — "what can this
+// deployment reach" is otherwise knowable only by reading Go source.
+func (h *Host) Inventory() kernel.Inventory { return h.kern.Inventory() }
 
 // RegisterActivator registers how the package named name contributes.
 //
@@ -145,8 +188,16 @@ func (h *Host) Load(ctx context.Context) (Report, error) {
 		}
 		act, ok := activators[name]
 		if !ok {
-			rep.NoActivator = append(rep.NoActivator, name)
-			continue
+			// No registered activator. A package that declares tools still
+			// has something to contribute — its tool declarations, so the
+			// node's tool surface lands in the same registry its collectors
+			// do. A package with neither an activator nor declared tools is
+			// reported as such: this build was not compiled to run it.
+			if len(p.Manifest.Spec.Tools) == 0 {
+				rep.NoActivator = append(rep.NoActivator, name)
+				continue
+			}
+			act = toolPackageActivator(p)
 		}
 		if err := h.kern.Activate(ctx, p, act()); err != nil {
 			rep.Refused[name] = err.Error()

@@ -113,7 +113,6 @@ import (
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigcoding"
 	"github.com/vincent-wuhan/opskeeper/core/pig/pigmodel"
 
-	"github.com/vincent-wuhan/opskeeper/core/floor/kernel"
 	managerbizaiops "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops"
 	aiopsagent "github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agent"
 	"github.com/vincent-wuhan/opskeeper/core/manager/biz/aiops/agentkernel"
@@ -776,6 +775,7 @@ func main() {
 	// promTester is wired below if cfg.Prom.Enabled — left nil for the
 	// disabled case so the integration handler can 503 cleanly.
 	var integrationHandler *managerserverintegration.Handler
+	var capabilityHandler *managerserversystemhealth.CapabilitiesHandler
 
 	// Embedded-Grafana SA bootstrap. Runs in a goroutine because:
 	//   1. Grafana container often isn't healthy yet when manager boots
@@ -1701,7 +1701,16 @@ func main() {
 	// registration the three nil checks gave, expressed once, and it is what
 	// makes a fourth backend (VictoriaMetrics, Elasticsearch) a new plugin
 	// rather than a fourth field here.
-	dsHost := aiopsdatasource.NewHost(log.With(slog.String("comp", "datasource")))
+	// ONE control-plane kernel host. The observability datasources and any
+	// manager-targeted package register into the SAME registry, so the
+	// capability inventory answers "what can this deployment reach" in one
+	// place rather than one answer per subsystem — and a package's entry
+	// sits beside a datasource's entry, on the same rollback path.
+	pluginLog := log.With(slog.String("comp", "pluginhost"))
+	managerPluginsDir := os.Getenv("OPSKEEPER_MANAGER_PLUGINS_DIR")
+	ph := pluginhost.New(managerPluginsDir, aiopsdatasource.ManagerPolicy(), pluginLog)
+	capabilityHandler = managerserversystemhealth.NewCapabilitiesHandler(ph)
+
 	dsBackends := aiopsdatasource.Backends{}
 	// PromQuerier is the interface tools/registry takes; passing a typed-nil
 	// *Client would yield a non-nil interface and bypass the conditional tool
@@ -1717,13 +1726,14 @@ func main() {
 	if cfg.Traces.URL != "" {
 		dsBackends.Traces = pkgtracequery.New(cfg.Traces.URL, log.With(slog.String("comp", "aiops-tracequery")))
 	}
-	dsSet, dsErr := aiopsdatasource.Activate(dsHost, dsBackends)
+	dsSet, dsErr := aiopsdatasource.Activate(ph.Kernel(), dsBackends)
 	if dsErr != nil {
 		log.Error("datasource activation", slog.Any("err", dsErr))
 		os.Exit(1)
 	}
-	log.Info("datasource plugins active",
-		slog.Any("plugins", dsHost.Live()),
+	log.Info("control-plane plugin capabilities",
+		slog.Any("plugins", ph.Kernel().Live()),
+		slog.Any("kind_counts", ph.Kernel().Inventory().KindCounts),
 		slog.Bool("prom", dsSet.Prom() != nil),
 		slog.Bool("loki", dsSet.Logs() != nil),
 		slog.Bool("tempo", dsSet.Traces() != nil),
@@ -1739,13 +1749,8 @@ func main() {
 	// an error (it is the default state). A package whose manifest is above
 	// the control-plane ceiling, or aimed at an edge, is reported and
 	// skipped rather than stopping the others.
-	if dir := os.Getenv("OPSKEEPER_MANAGER_PLUGINS_DIR"); dir != "" {
+	if dir := managerPluginsDir; dir != "" {
 		if _, statErr := os.Stat(dir); statErr == nil {
-			ph := pluginhost.New(dir, kernel.Policy{
-				Target:         domain.TargetManager,
-				MaxSafetyLevel: domain.SafetyL2,
-				MaxBlastRadius: domain.RadiusSingleNS,
-			}, log.With(slog.String("comp", "pluginhost")))
 			rep, loadErr := ph.Load(context.Background())
 			if loadErr != nil {
 				log.Error("manager plugin load", slog.String("dir", dir), slog.Any("err", loadErr))
@@ -1979,25 +1984,32 @@ func main() {
 		// systemhealth 靠 VectorBackend 判断是否还需要探测它。
 		qdrantURL string
 	)
-	// 两种后端实现同一个端口（qdrantx.Store）：默认内嵌 chromem 让全新
-	// checkout 无需任何外部服务；设置 OPSKEEPER_VECTOR_BACKEND=qdrant
-	// 切回外部 qdrant 部署。
-	if cfg.Vector.Backend == "chromem" {
-		vec, vecErr := vecstore.NewChromem(cfg.Vector.ChromemDir, log.With(slog.String("comp", "vector")))
-		if vecErr != nil {
-			log.Error("knowledge: open embedded vector store", slog.Any("err", vecErr))
-			os.Exit(1)
-		}
-		qdrantClient = vec
-		log.Info("knowledge: embedded vector store enabled",
-			slog.String("dir", cfg.Vector.ChromemDir))
-	} else {
-		qdrantURL = os.Getenv("OPSKEEPER_QDRANT_URL")
-		if qdrantURL == "" {
-			qdrantURL = "http://qdrant:6333"
-		}
-		qdrantClient = qdrantx.New(qdrantURL, log.With(slog.String("comp", "qdrant")))
+	// 两种后端实现同一个端口（qdrantx.Store），由 vecstore 注册表按名字构建：
+	// 默认（未设置 OPSKEEPER_VECTOR_BACKEND）是外部 qdrant，可被多副本共享；
+	// chromem 是内嵌后端，让全新 checkout 无需任何外部服务。第三个后端是
+	// 向注册表登记一个工厂，不是在这里加一个新分支。
+	qdrantURL = os.Getenv("OPSKEEPER_QDRANT_URL")
+	if qdrantURL == "" {
+		qdrantURL = "http://qdrant:6333"
 	}
+	vectorBackend := cfg.Vector.Backend
+	if vectorBackend == "" {
+		vectorBackend = "qdrant"
+	}
+	vec, vecErr := vecstore.Build(vectorBackend, vecstore.Config{
+		QdrantURL:  qdrantURL,
+		ChromemDir: cfg.Vector.ChromemDir,
+	}, log.With(slog.String("comp", "vector")))
+	if vecErr != nil {
+		log.Error("knowledge: open vector store",
+			slog.String("backend", vectorBackend), slog.Any("err", vecErr))
+		os.Exit(1)
+	}
+	qdrantClient = vec
+	log.Info("knowledge: vector store enabled",
+		slog.String("backend", vectorBackend),
+		slog.String("url", qdrantURL),
+		slog.String("dir", cfg.Vector.ChromemDir))
 	{
 		// Build with a nil embedder when one isn't configured — the
 		// usecase exposes read paths (ListDocs/Repos/GetDoc/ListPaths)
@@ -3776,6 +3788,9 @@ func main() {
 			}
 			settingHandler.Register(protected)
 			integrationHandler.Register(protected)
+			if capabilityHandler != nil {
+				capabilityHandler.Register(protected)
+			}
 			marketplaceHandler.Register(protected)
 			pluginReleaseHandler.Register(protected)
 			// Every route here is admin: enrolment mints a credential
