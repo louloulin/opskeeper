@@ -172,3 +172,6 @@ plugins/opskeeper-teamharness/eval/reports/
 # refuses to ship — see the block above, which reached the same conclusion for
 # the other private working material. A whitelist here does not narrow the
 # auditor; it only makes the gate red on every push.
+
+# codegraph 本地 daemon 的 PID/套接字状态,含私有路径,不得入版本库
+.codegraph/daemon.pid
