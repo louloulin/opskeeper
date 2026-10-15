@@ -25,6 +25,7 @@ import { Button, Card, Chip, EmptyState } from '@/components/ui';
 import { Modal } from '@/components/Modal';
 import { cn } from '@/lib/cn';
 import { useI18n } from '@/i18n/locale';
+import { usePermissions } from '@/store/me';
 
 const PROVIDER_META: Record<IMProvider, { labelZh: string; labelEn: string; icon: typeof MessageSquareShare; hintZh: string; hintEn: string }> = {
   feishu: {
@@ -59,6 +60,7 @@ const PROVIDER_META: Record<IMProvider, { labelZh: string; labelEn: string; icon
 
 export default function SettingsChannels() {
   const { tr } = useI18n();
+  const { isAdmin } = usePermissions();
   const [items, setItems] = useState<IMApp[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -125,9 +127,9 @@ export default function SettingsChannels() {
             <RefreshCw size={12} className={cn(refreshing && 'animate-spin')} />
             {tr('刷新', 'Refresh')}
           </Button>
-          <Button variant="primary" onClick={() => setEditing('create')}>
+          {isAdmin && <Button variant="primary" onClick={() => setEditing('create')}>
             <Plus size={12} /> {tr('新建', 'New')}
-          </Button>
+          </Button>}
         </div>
 
         {loading ? (
@@ -148,7 +150,7 @@ export default function SettingsChannels() {
           <Card className="overflow-hidden p-0">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-zinc-800/60 text-left text-[11px] uppercase tracking-wide text-zinc-500">
+                <tr className="border-b border-zinc-800/60 bg-zinc-950/40 text-left text-[11px] uppercase tracking-wider text-zinc-500">
                   <th className="px-4 py-2.5 font-medium">{tr('平台', 'Provider')}</th>
                   <th className="px-4 py-2.5 font-medium">{tr('名称', 'Name')}</th>
                   <th className="px-4 py-2.5 font-medium">app_id</th>
@@ -188,12 +190,12 @@ export default function SettingsChannels() {
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5">
                         <div className="flex items-center gap-1">
-                          <Button onClick={() => setEditing(a)} title={tr('编辑', 'Edit')}>
+                          {isAdmin && <Button onClick={() => setEditing(a)} title={tr('编辑', 'Edit')}>
                             <Pencil size={11} /> {tr('编辑', 'Edit')}
-                          </Button>
-                          <Button onClick={() => setDeleting(a)} variant="danger" title={tr('删除', 'Delete')}>
+                          </Button>}
+                          {isAdmin && <Button onClick={() => setDeleting(a)} variant="danger" title={tr('删除', 'Delete')}>
                             <Trash2 size={11} /> {tr('删除', 'Delete')}
-                          </Button>
+                          </Button>}
                         </div>
                       </td>
                     </tr>

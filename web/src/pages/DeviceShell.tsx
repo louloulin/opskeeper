@@ -32,7 +32,7 @@ import {
 import { getToken } from '@/store/auth';
 import { usePermissions } from '@/store/me';
 import { tr as trInline, useI18n } from '@/i18n/locale';
-import { Card, EmptyState, PageHeader } from '@/components/ui';
+import { Card, EmptyState, PageHeader, useConfirm } from '@/components/ui';
 import { Shield } from 'lucide-react';
 
 type ConnectInputs = {
@@ -64,15 +64,21 @@ function ansiDim(s: string): string {
   return `\x1b[2m${s}\x1b[0m`;
 }
 
+// Viewer is read-only, and the page refuses to mount the terminal for one —
+// the backend rejects too (skill execute / shell open both require
+// non-viewer), but stopping at the page boundary keeps the user from staring
+// at a half-loaded terminal that 403s on connect.
+//
+// The gate lives in its OWN component on purpose. Inside DeviceShellBody it
+// would have to run between useParams and useState, and every hook after the
+// early return — 18 of them, plus the effects that own the WebSocket — would
+// become conditional. That is not a lint nit: a viewer whose role loads after
+// first paint goes from 18 hooks to 0 mid-mount, React discards the hook
+// state, and the WS cleanup that was registered never runs. Splitting means
+// the body only ever mounts for a role that will keep it mounted.
 export default function DeviceShellPage() {
   const { tr } = useI18n();
   const { canMutate } = usePermissions();
-  // viewer is read-only. Short-circuit before any WS setup
-  // happens — backend rejects too (skill execute / shell open both
-  // require non-viewer), but stopping at the page boundary keeps the
-  // user from staring at a half-loaded terminal that 403s on connect.
-  const { deviceId = '' } = useParams<{ deviceId: string }>();
-  const navigate = useNavigate();
   if (!canMutate) {
     return (
       <main className="anim-fade flex flex-1 flex-col overflow-hidden p-6">
@@ -87,7 +93,15 @@ export default function DeviceShellPage() {
       </main>
     );
   }
+  return <DeviceShellBody />;
+}
 
+// DeviceShellBody owns everything that must not run for a viewer: the device
+// lookup, the xterm instance, and the WebSocket lifecycle.
+function DeviceShellBody() {
+  const { tr } = useI18n();
+  const { deviceId = '' } = useParams<{ deviceId: string }>();
+  const navigate = useNavigate();
   const [edge, setEdge] = useState<Edge | null>(null);
   const [edgeError, setEdgeError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(true);
@@ -386,11 +400,18 @@ export default function DeviceShellPage() {
     [deviceId, openConnection],
   );
 
-  const handleManualClose = useCallback(() => {
-    if (!confirm(tr('确定要关闭终端会话？', 'Close this terminal session?'))) return;
+  const confirm = useConfirm();
+  const handleManualClose = useCallback(async () => {
+    const ok = await confirm({
+      title: tr('关闭终端会话', 'Close terminal session'),
+      message: tr('确定要关闭终端会话？', 'Close this terminal session?'),
+      confirmLabel: tr('关闭', 'Close'),
+      danger: true,
+    });
+    if (!ok) return;
     teardown();
     navigate('/devices');
-  }, [navigate, teardown]);
+  }, [navigate, teardown, confirm]);
 
   const handleReconnect = useCallback(() => {
     teardown();

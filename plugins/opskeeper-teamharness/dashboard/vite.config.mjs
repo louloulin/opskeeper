@@ -8,6 +8,11 @@ import { resolve } from 'path';
 // 不打包 zustand/mitt（运行时由 host 提供；vite-plugin-host-react 注入 externals）。
 export default defineConfig({
   plugins: [hostReact(), react()],
+  resolve: {
+    alias: {
+      '@opskeeper/incident-command': resolve(__dirname, '../../../shared/incident-command/index.js'),
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,

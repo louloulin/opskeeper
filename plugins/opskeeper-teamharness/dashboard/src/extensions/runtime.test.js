@@ -18,7 +18,8 @@ import {
   resolvePluginManagerBase,
   xhrTransport,
 } from './api.js';
-import { normalizeOpskeeperTab } from './tabs.js';
+import { OPSKEEPER_TABS, normalizeOpskeeperTab } from './tabs.js';
+import { opskeeperCommandThemeStyle } from './plugin-theme.js';
 
 test('uses the foreground token for muted plugin text', () => {
   const extensionsDir = fileURLToPath(new URL('./', import.meta.url));
@@ -159,6 +160,7 @@ test('propagates PG pool incident bindings into investigation hints', () => {
     labels: {
       incident_id: 'incident-live-pool-smoke',
       target: 'pg:pool-fixture',
+      scenario: 'pg-pool-exhaustion',
       pool_manifest_id: '7f5c60e593e68840f974789166cc3374',
       fault_family: 'capacity/connection_pool',
     },
@@ -172,7 +174,7 @@ test('propagates PG pool incident bindings into investigation hints', () => {
       fault_family: 'capacity/connection_pool',
       source_id: 'dashboard',
       device_id: '36',
-      resource_type: 'unknown',
+      resource_type: 'pg',
     },
   });
 });
@@ -247,11 +249,29 @@ test('deduplicates concurrent investigations for one incident', async () => {
 });
 
 test('normalizes the unified OpsKeeper entry tab', () => {
-  assert.equal(normalizeOpskeeperTab('runtime'), 'runtime');
-  assert.equal(normalizeOpskeeperTab('archive'), 'archive');
-  assert.equal(normalizeOpskeeperTab('plugins'), 'plugins');
-  assert.equal(normalizeOpskeeperTab('integration'), 'integration');
-  assert.equal(normalizeOpskeeperTab('unknown'), 'diagnostics');
+  assert.equal(normalizeOpskeeperTab('diagnostics'), 'incident-command');
+  assert.equal(normalizeOpskeeperTab('integration'), 'incident-command');
+  assert.equal(normalizeOpskeeperTab('plugins'), 'incident-command');
+  assert.equal(normalizeOpskeeperTab('archive'), 'archive-replay');
+  assert.equal(normalizeOpskeeperTab('runtime'), 'system-status');
+  assert.equal(normalizeOpskeeperTab('unknown'), 'incident-command');
+});
+
+test('uses incident-command primary tab identifiers', () => {
+  assert.deepEqual(OPSKEEPER_TABS.map((tab) => tab.id), [
+    'incident-command',
+    'evidence-approval',
+    'archive-replay',
+    'system-status',
+  ]);
+});
+
+test('defines scoped incident command semantic tokens', () => {
+  assert.match(opskeeperCommandThemeStyle['--ops-status-active'], /var\(--/u);
+  assert.match(opskeeperCommandThemeStyle['--ops-status-waiting'], /var\(--/u);
+  assert.match(opskeeperCommandThemeStyle['--ops-status-unknown'], /var\(--/u);
+  assert.match(opskeeperCommandThemeStyle['--ops-surface'], /var\(--/u);
+  assert.match(opskeeperCommandThemeStyle['--ops-focus-ring'], /var\(--/u);
 });
 
 test('archive readback uses the Manager proxy endpoint', async () => {

@@ -30,6 +30,13 @@ export const metadata = {
   title: 'OpsKeeper：授权可控、全程可审计的多智能体运维事件响应平台',
   description:
     'OpsKeeper 是授权可控、全程可审计的多智能体运维事件响应平台。闭环式 告警 → 证据 → RCA → 提案 → 人工审批 → 窄域授权恢复 → 独立验证 → 审计复盘。',
+  alternates: {
+    canonical: '/',
+    languages: {
+      en: '/en',
+      'zh-CN': '/',
+    },
+  },
 };
 
 const phases = [
@@ -181,7 +188,7 @@ export default function HomeZhPage() {
               <Button href="/zh/platform" variant="secondary">
                 查看闭环工作流
               </Button>
-              <Button href="/zh/demo" variant="ghost">
+              <Button href="/live-incident" variant="ghost">
                 体验在线演示
               </Button>
               <Button href="https://github.com/vincent-wuhan/opskeeper" variant="ghost" external>
@@ -368,7 +375,7 @@ export default function HomeZhPage() {
               <li className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-accent-400" /> pg-replica-replay-lag</li>
             </ul>
             <div className="mt-8">
-              <Button href="/zh/docs/getting-started" variant="secondary">
+              <Button href="/live-incident" variant="secondary">
                 跑一遍演示
               </Button>
               <Button href="/zh/demo" variant="ghost">

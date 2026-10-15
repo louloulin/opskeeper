@@ -108,18 +108,19 @@ services:
       # default chat provider's model — no separate model config needed.
       OPSKEEPER_INVESTIGATOR_ENABLED: ${OPSKEEPER_INVESTIGATOR_ENABLED:-true}
       OPSKEEPER_INVESTIGATOR_MIN_SEVERITY: ${OPSKEEPER_INVESTIGATOR_MIN_SEVERITY:-warning}
-      # AIOps agent kernel. "graph" enables the eino graph kernel +
-      # SkillRegistry.Resolve activation-keyword filter (skills with
-      # activation:keyword stay out of the prompt unless the user query
-      # mentions a keyword) + ToolBag deferral pipeline. "legacy" =
-      # historical for-loop runner with all tools always full-schema.
-      # Default flipped to graph 2026-05-08; flip to legacy to bisect.
-      OPSKEEPER_AGENT_KERNEL: ${OPSKEEPER_AGENT_KERNEL:-graph}
+      # AIOps agent 内核：graph 是为历史部署保留的拼写，等价于 PiG loop；
+      # pig 使用裸 PiG loop；未设置时默认使用 pig-sdk coding.Session 驱动；
+      # legacy 是 2.0 前的兼容循环；无法识别的值同样回退 legacy，
+      # 并在启动日志中告警。
+      OPSKEEPER_AGENT_KERNEL: ${OPSKEEPER_AGENT_KERNEL:-pig-sdk}
       # ToolBag deferral threshold. When tool count > this, specialty-tier
       # tools get redacted schemas (LLM must call ToolSearch to expand).
       # Default 30 is fine until marketplace grows the bag past it.
       OPSKEEPER_TOOLBAG_DEFERRAL_THRESHOLD: ${OPSKEEPER_TOOLBAG_DEFERRAL_THRESHOLD:-30}
       # Knowledge base / RAG: qdrant vector store + embedding provider.
+      # The backend is pinned to qdrant because this package ships the
+      # qdrant service below; the default is the embedded chromem engine,
+      # which is for single-binary runs and ignores OPSKEEPER_QDRANT_URL.
       # OPSKEEPER_QDRANT_URL is the qdrant HTTP endpoint (in-cluster, no
       # external port). OPSKEEPER_EMBEDDING_PROVIDER picks the embedding
       # model: empty = "openai" path using OPSKEEPER_OPENAI_API_KEY +
@@ -127,6 +128,7 @@ services:
       # OpenAI /embeddings shape). The embedding model defaults to a
       # 1024-dim model; OPSKEEPER_EMBEDDING_DIM keeps the qdrant collection
       # in sync if you switch.
+      OPSKEEPER_VECTOR_BACKEND: ${OPSKEEPER_VECTOR_BACKEND:-qdrant}
       OPSKEEPER_QDRANT_URL: ${OPSKEEPER_QDRANT_URL:-http://qdrant:6333}
       OPSKEEPER_EMBEDDING_PROVIDER: ${OPSKEEPER_EMBEDDING_PROVIDER:-openai}
       OPSKEEPER_EMBEDDING_MODEL: ${OPSKEEPER_EMBEDDING_MODEL:-text-embedding-3-small}
@@ -249,6 +251,36 @@ services:
       # else a generated page 404s the moment the manager container is
       # recreated and its "open generated page" link goes dead.
       - ${OPSKEEPER_DATA_DIR:-/var/lib/opskeeper}/pages:/var/lib/opskeeper/pages
+      # Knowledge-base git clones (knowledgeUsecase cloneDir, default
+      # /var/lib/opskeeper/repos). Dockerfile.opskeeper creates this
+      # directory and says "bind-mount this in production to keep them
+      # across container restarts"; until now the manifest did not. WITHOUT
+      # this mount every registered repo has to be re-cloned on `compose up`,
+      # and the reindex that follows a clone is the expensive half.
+      - ${OPSKEEPER_DATA_DIR:-/var/lib/opskeeper}/repos:/var/lib/opskeeper/repos
+      # Agent-teams plugin root (OPSKEEPER_PLUGINS_DIR, default
+      # /var/lib/opskeeper/plugins) — the same shape as the skills mount
+      # above and by the same omission: plugins are installed over the HTTP
+      # API and land here, and the helm chart already bind-mounts this
+      # directory, so the two deployment shapes disagreed about whether it
+      # matters. Both are wrong: the container's writable layer does not
+      # survive `compose up`.
+      - ${OPSKEEPER_DATA_DIR:-/var/lib/opskeeper}/plugins:/var/lib/opskeeper/plugins
+      # Multi-cluster federation membership (OPSKEEPER_FEDERATION_LEDGER,
+      # default /var/lib/opskeeper/federation/ledger.json). A root that
+      # forgets its cluster re-enrols everyone and rotates every token, so
+      # this file is the one whose loss is a security event rather than a
+      # chore. Note the mount is the DEFAULT path: pointing the variable
+      # somewhere else means mounting somewhere else too.
+      - ${OPSKEEPER_DATA_DIR:-/var/lib/opskeeper}/federation:/var/lib/opskeeper/federation
+      # Cost-crystallisation ledger (OPSKEEPER_CRYSTALLIZE_STATE, default
+      # /var/lib/opskeeper/crystallize/ledger.json). It holds the promotion
+      # streak that decides when a repeatedly-proven fix is written down as
+      # a runbook, and promotion needs three consecutive clean recoveries —
+      # so a deployment that restarts more often than a fault recurs never
+      # reaches it, with nothing in the logs to say why. Same note as
+      # above about the default path.
+      - ${OPSKEEPER_DATA_DIR:-/var/lib/opskeeper}/crystallize:/var/lib/opskeeper/crystallize
     logging:
       driver: json-file
       options:
@@ -260,7 +292,7 @@ services:
     # (images/Dockerfile.frontier) and shipped in the release tarball —
     # Docker Hub pull is not relied upon. Pinned tag is
     # bumped via Makefile var FRONTIER_VERSION.
-    image: singchia/frontier:v1.2.4
+    image: singchia/frontier:v1.2.5
     container_name: opskeeper-frontier
     restart: unless-stopped
     volumes:

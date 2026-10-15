@@ -22,7 +22,7 @@ HOST_OPSKEEPER_ENV="${OPSKEEPER_HOST_OPSKEEPER_ENV:-${HOST_CONFIG_DIR}/final-dem
 HOST_MANAGER_JWT="${HOST_CONFIG_DIR}/opskeeper-final-demo-e2e.jwt"
 CONTAINER_NAME="${OPSKEEPER_CONTAINER_NAME:-opskeeper}"
 CONTAINER_SCRIPT="${OPSKEEPER_CONTAINER_SCRIPT:-/src/scripts/verify-final-demo.sh}"
-HOME_URL="${OPSKEEPER_HOME_URL:-https://home.yueming.xin/live-incident}"
+HOME_URL="${OPSKEEPER_HOME_URL:-https://opskeeper.yueming.xin/live-incident}"
 # Container-internal staging directory for EVIDENCE_OUTPUT. The inner script
 # writes the JSON file here (as `nonroot`, this is always writable). After
 # `docker exec` returns, the wrapper copies the file to HOST_EVIDENCE_DIR via
@@ -90,7 +90,7 @@ EVIDENCE_OUT="${CONTAINER_EVIDENCE_DIR}/verify-final-demo-${UTC_STAMP}.json"
 mkdir -p "$HOST_EVIDENCE_DIR"
 
 SCENARIO_IDEMPOTENCY_KEY="final-demo-e82d97d1-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-# validFingerprint (internal/manager/biz/demo/scenario.go) accepts only hex or
+# validFingerprint (core/manager/biz/demo/scenario.go) accepts only hex or
 # sha256:<64hex>. The previous "pg-pool-waiters-<utc>-<pid>" string failed that
 # check and Manager responded with HTTP 400 invalid_request. Derive the alert
 # fingerprint from the idempotency key so it is unique per run, stable across
